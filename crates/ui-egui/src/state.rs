@@ -99,9 +99,6 @@ pub struct Panels {
     /// (#6760). Only a view of the moment: not saved, and the panels' own flags stay untouched.
     #[serde(skip)]
     pub full_screen_chrome: bool,
-    /// The right dock's icon rail. An app that embeds PhotoCraft's UI can hide it for a simpler view.
-    #[serde(default = "yes")]
-    pub rail: bool,
     /// The title bar with the in-window menus. An app that embeds PhotoCraft's UI and draws its own
     /// bar can hide it; the caption buttons of a custom title bar go with it.
     #[serde(default = "yes")]
@@ -137,22 +134,22 @@ impl Default for Panels {
     fn default() -> Self {
         Self {
             layers: true,
-            history: false,
+            history: true,
             properties: true,
             color: true,
-            navigator: false,
+            navigator: true,
             toolbar: true,
             options_bar: true,
             status_bar: true,
             brush_settings: false,
-            brushes: false,
+            // The default's icon column: Navigator · History · Brushes (plan B1).
+            brushes: true,
             character: false,
             toolbar_double: false,
             toolbar_side: ToolbarSide::Start,
             dock: true,
             hidden_by_tab: None,
             full_screen_chrome: false,
-            rail: true,
             menu_bar: true,
             gradient_editor: false,
             context_task_bar: true,
@@ -531,6 +528,12 @@ pub struct UiState {
     /// One-frame focus/raise request from an explicit panel reveal.
     #[serde(skip)]
     pub docking_reveal: Option<String>,
+    /// The theme the current workspace was converted from the native dock state under, while it
+    /// is still that untouched conversion. Once something modifies the workspace this is `None`:
+    /// a modified layout keeps its shape when the theme changes, while a pristine one re-converts
+    /// (the per-frame layout it replaces would have re-derived the Studio Properties float).
+    #[serde(skip)]
+    pub docking_pristine_theme: Option<crate::theme::ThemeKind>,
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
@@ -706,6 +709,7 @@ impl Default for UiState {
             docking_generation: 0,
             docking_collapsed: Vec::new(),
             docking_reveal: None,
+            docking_pristine_theme: None,
             color_panel: Default::default(),
             color_panel_synced: None,
             brush_section: 0,

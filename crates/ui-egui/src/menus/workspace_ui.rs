@@ -215,10 +215,9 @@ fn new_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
     let prefs = app.session.prefs().clone();
     let mut ws = json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingReturns": app.ui.docking_returns, "dockingCollapsed": app.ui.docking_collapsed});
     crate::dock::keep_newer(app, &mut ws);
-    // The icon rail and menu bar flags belong to an embedding app's session, not to a saved
-    // layout: a workspace never brings back a window without its menus.
+    // The menu bar flag belongs to an embedding app's session, not to a saved layout: a
+    // workspace never brings back a window without its menus.
     if let Some(panels) = ws.get_mut("panels").and_then(Value::as_object_mut) {
-        panels.remove("rail");
         panels.remove("menu_bar");
     }
     if p.get("keyboardShortcuts").and_then(Value::as_bool) == Some(true) {
@@ -535,7 +534,7 @@ mod tests {
 
     #[test]
     fn saved_workspaces_preserve_host_chrome_on_select_and_reset() {
-        for (menu_bar, rail) in [(false, false), (false, true), (true, false), (true, true)] {
+        for menu_bar in [false, true] {
             for legacy_flags in [false, true] {
                 let (mut app, ctx) = app();
                 app.ui.panels.history = true;
@@ -543,31 +542,28 @@ mod tests {
                 app.ui.timeline.open = true;
                 crate::menus::invoke(&mut app, &ctx, "window.workspace.newWorkspace", json!({"name": "Host layout"})).unwrap();
                 let saved = app.session.prefs().workspaces["Host layout"].clone();
-                assert!(saved["panels"].get("menu_bar").is_none() && saved["panels"].get("rail").is_none());
+                assert!(saved["panels"].get("menu_bar").is_none());
                 if legacy_flags {
                     app.session.prefs.edit(|p| {
                         let panels = &mut p.workspaces.get_mut("Host layout").unwrap()["panels"];
                         panels["menu_bar"] = json!(!menu_bar);
-                        panels["rail"] = json!(!rail);
                     });
                 }
                 app.ui.panels.menu_bar = menu_bar;
-                app.ui.panels.rail = rail;
                 crate::menus::invoke(&mut app, &ctx, "window.workspace.painting", json!({})).unwrap();
                 crate::menus::invoke(&mut app, &ctx, "window.workspace.select", json!({"name": "Host layout"})).unwrap();
-                assert_eq!((app.ui.panels.menu_bar, app.ui.panels.rail), (menu_bar, rail), "select: legacy_flags={legacy_flags}");
+                assert_eq!(app.ui.panels.menu_bar, menu_bar, "select: legacy_flags={legacy_flags}");
                 let restored = json!({"dock": app.ui.dock, "dockTabs": app.ui.dock_tabs, "timelineOpen": app.ui.timeline.open});
                 for key in ["dock", "dockTabs", "timelineOpen"] {
                     assert_eq!(restored[key], saved[key], "select restores {key}");
                 }
                 assert!(app.ui.panels.history && app.ui.panels.navigator);
                 app.ui.panels.menu_bar = !menu_bar;
-                app.ui.panels.rail = !rail;
                 app.ui.panels.history = false;
                 app.ui.panels.navigator = false;
                 app.ui.timeline.open = false;
                 crate::menus::invoke(&mut app, &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
-                assert_eq!((app.ui.panels.menu_bar, app.ui.panels.rail), (!menu_bar, !rail), "reset: legacy_flags={legacy_flags}");
+                assert_eq!(app.ui.panels.menu_bar, !menu_bar, "reset: legacy_flags={legacy_flags}");
                 let restored = json!({"dock": app.ui.dock, "dockTabs": app.ui.dock_tabs, "timelineOpen": app.ui.timeline.open});
                 for key in ["dock", "dockTabs", "timelineOpen"] {
                     assert_eq!(restored[key], saved[key], "reset restores {key}");
@@ -578,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_workspace_keeps_host_menu_and_rail_hidden_in_the_rendered_ui() {
+    fn saved_workspace_keeps_host_menu_hidden_in_the_rendered_ui() {
         let mut failures = Vec::new();
         for theme in crate::theme::ThemeKind::ALL {
             for width in [800.0, 1200.0] {
@@ -591,7 +587,6 @@ mod tests {
                     // The workspace's docks, not the Home screen (which draws none).
                     app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
                     app.ui.panels.menu_bar = false;
-                    app.ui.panels.rail = false;
                     app
                 });
                 let ctx = h.ctx.clone();
@@ -602,11 +597,7 @@ mod tests {
                 if egui::containers::panel::PanelState::load(&h.ctx, crate::panels::panel_state_id(&h.ctx, "title_bar")).is_some() {
                     failures.push(format!("{theme:?}, width={width}: title_bar is drawn"));
                 }
-                // The rail is drawn inside the canvas panel: find it by a button only it has.
-                if egui_kittest::kittest::Queryable::query_by_label(&h, "Color & Swatches").is_some() {
-                    failures.push(format!("{theme:?}, width={width}: rail is drawn"));
-                }
-                if h.state().ui.panels.menu_bar || h.state().ui.panels.rail {
+                if h.state().ui.panels.menu_bar {
                     failures.push(format!("{theme:?}, width={width}: host flags were overwritten"));
                 }
             }
@@ -628,7 +619,7 @@ mod tests {
         inv(&mut app, "window.workspace.newWorkspace", json!({"name": "Retouch", "keyboardShortcuts": true})).unwrap();
         assert_eq!(app.ui.workspace, "Retouch");
         let saved = &app.session.prefs().workspaces["Retouch"]["panels"];
-        assert!(saved.get("menu_bar").is_none() && saved.get("rail").is_none(), "embedding-only flags are not saved");
+        assert!(saved.get("menu_bar").is_none(), "embedding-only flags are not saved");
         assert!(inv(&mut app, "window.workspace.newWorkspace", json!({"name": "Painting"})).is_err());
         assert!(inv(&mut app, "window.workspace.newWorkspace", json!({"name": " "})).is_err());
         // The current workspace can't be deleted.

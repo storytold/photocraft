@@ -910,6 +910,7 @@ fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
 pub fn apply_workspace(app: &mut PhotocraftApp) {
     // Saved workspaces (Window › Workspace › New Workspace…) restore their own layout.
     if crate::workspace_ui::apply_custom(app) {
+        app.ui.docking_pristine_theme = None;
         return;
     }
     // Presets use the default group order, heights and tabs (Reset brings everything back).
@@ -930,14 +931,21 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
         // Color includes Swatches; Navigator keeps the pixel canvas easy to inspect.
         "Pixel Art" => (true, true, true, false, false),
         "Motion" => (false, false, true, false, true),
-        _ => (false, true, true, false, true),
+        // The default carries Photoshop's icon column: Navigator · History · Brushes (plan B1).
+        _ => (true, true, true, true, true),
     };
     p.navigator = nav;
     p.color = color;
     p.layers = layers;
     p.history = history;
     p.properties = props;
+    // Only the default shows the icon column (Navigator · History · Brushes); the presets keep
+    // their own panels, so Brushes must not leak in from an earlier switch.
+    p.brushes = matches!(app.ui.workspace.as_str(), "" | "Essentials");
     p.character = app.ui.workspace == "Graphic and Web";
+    // Presets return to the untouched conversion: the next frame re-derives the layout the
+    // per-frame native dock state describes.
+    app.ui.docking_pristine_theme = None;
     // Timeline is a floating panel, not a dock group. Showing it does not create or edit
     // a document timeline; changing away from Motion closes it just like its Close button.
     app.ui.timeline.open = app.ui.workspace == "Motion";

@@ -65,12 +65,12 @@ fn docking_a_floating_group_docks_all_of_its_panels() {
 }
 
 #[test]
-fn floating_panel_rail_toggle_closes_the_float_window() {
+fn window_menu_toggle_closes_the_float_window() {
     let mut app = app();
     app.run("window.panel.float", json!({"panel":"properties","x":50,"y":70,"width":330,"height":410})).unwrap();
     assert!(lay(&app).floating.iter().any(|g| g.contains("properties")));
 
-    rail_click(&mut app, Group::Properties);
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.panel.properties", json!({})).unwrap();
 
     assert!(lay(&app).floating.iter().all(|g| !g.contains("properties")));
     assert!(lay(&app).contains(&"adjustments".into()));
@@ -163,12 +163,24 @@ fn canvas_side(layout: &Layout<String>) -> Layout<String> {
 #[test]
 fn a_fresh_launch_draws_the_native_groups_beside_the_protected_canvas() {
     let mut h = harness(app(), vec2(1280.0, 800.0));
-    assert!(h.state().ui.docking.is_none(), "drawing the default does not customize the workspace");
-    let layout = legacy(h.state());
+
+    // The workspace is drawn with the first frame, so every reader sees one source.
+    assert!(h.state().ui.docking.is_some(), "the native dock is materialized as the workspace");
+    let layout = h.state().ui.docking.as_ref().unwrap().layout.clone();
+    assert_eq!(layout, legacy(h.state()), "the workspace is the native dock's conversion");
+
     assert!(valid(&layout));
     assert_eq!(
         root_groups(&layout),
-        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["layers", "channels", "paths"]]
+        [
+            vec!["color", "swatches", "gradients", "patterns"],
+            vec!["properties", "adjustments"],
+            vec!["layers", "channels", "paths"],
+            // The default's icon column, between the dock and the canvas.
+            vec!["navigator", "histogram", "info"],
+            vec!["history", "actions", "layerComps"],
+            vec!["brushes"],
+        ]
     );
     assert!(in_dock_column(&layout, "layers"), "the groups are a dock column: {layout:?}");
     let canvas = canvas_rect(&h);
@@ -181,7 +193,7 @@ fn a_fresh_launch_draws_the_native_groups_beside_the_protected_canvas() {
         assert!(h.state_mut().run(command, json!({"panel": CANVAS})).is_err(), "{command}");
     }
     h.state_mut().run("window.panel.move", json!({"panel":"layers","anchor":CANVAS,"zone":"center"})).unwrap_err();
-    assert!(h.state().ui.docking.is_none(), "a refused command leaves the default");
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, layout, "a refused command leaves the default");
 
     let mut studio = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     studio.ui.theme = crate::theme::ThemeKind::Studio;
@@ -190,9 +202,12 @@ fn a_fresh_launch_draws_the_native_groups_beside_the_protected_canvas() {
     assert_eq!((window.id, window.panels().cloned().collect::<Vec<_>>()), (PROPERTIES_WINDOW, vec!["properties".to_string(), "adjustments".into()]));
     assert_eq!(legacy(&studio).floating, layout.floating, "the same window every frame");
 
-    h.state_mut().ui.dock.set_collapsed(Group::Color, true);
+    let workspace = h.state().ui.docking.clone().unwrap();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.panel.group", json!({"panel": "color", "operation": "collapse"})).unwrap();
     h.run_steps(2);
-    assert!(collapsed_members(h.state(), &legacy(h.state())).contains("swatches"));
+    assert!(group_minimized(h.state(), Group::Color), "the native collapse is the workspace's minimize");
+    assert!(collapsed_members(h.state(), &workspace.layout).contains("swatches"));
     let color = tab_rect(&h, "color");
     assert!(tab_rect(&h, "properties").top() - color.bottom() < 12.0, "a collapsed group shows only its tabs");
 }
@@ -202,6 +217,12 @@ fn a_fresh_launch_draws_the_native_groups_beside_the_protected_canvas() {
 #[test]
 fn a_panel_never_laid_out_opens_in_its_default_group_and_side() {
     let mut app = app();
+    // The default's own icon column carries Navigator, History and Brushes (plan B1); hide them
+    // all so the icon column is gone and the probe's "never laid out" default-place semantics
+    // are back.
+    app.ui.panels.navigator = false;
+    app.ui.panels.history = false;
+    app.ui.panels.brushes = false;
     app.ui.docking = Some(Workspace::new(legacy(&app)));
     app.run("window.panel.activate", json!({"panel":"navigator"})).unwrap();
     let layout = lay(&app);
@@ -242,22 +263,24 @@ fn a_tab_dropped_on_the_canvas_floats_there_and_redocks() {
 
 #[test]
 fn brushes_tab_drag_opens_above_the_canvas_and_can_redock_into_another_tab_group() {
+    // The default gives brushes its own iconic group in the icon column, so the drag that
+    // "opens it above the canvas" drags the group's grip (grip floats the whole group onto the
+    // canvas; a drag then back over an open tab group redocks it).
     let mut app = app();
     crate::menus::invoke(&mut app, &egui::Context::default(), "window.panel.brushes", json!({})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
     let canvas = canvas_rect(&h);
-    let source = tab_rect(&h, "brushes").center();
-    // The outer edge band along the canvas column's top.
-    drag(&mut h, source, egui::pos2(canvas.center().x, canvas.top() + 6.0));
+    let from = hit_rect(&h, craft_ui::docking::Hit::DragBar("brushes".into())).center();
+    drag(&mut h, from, egui::pos2(canvas.center().x, canvas.top() + 6.0));
     let layout = lay(h.state());
     assert!(canvas_side(layout).contains(&"brushes".to_string()), "{layout:?}");
     assert!(!layout.floating.iter().any(|window| window.contains("brushes")));
     let canvas_body = last_bodies(&h.ctx).into_iter().find(|(id, _)| id == CANVAS).expect("the canvas is drawn").1;
-    assert!(tab_rect(&h, "brushes").bottom() <= canvas_body.top(), "brushes is above the canvas");
+    assert!(hit_rect(&h, craft_ui::docking::Hit::DragBar("brushes".into())).bottom() <= canvas_body.top(), "brushes is above the canvas");
 
-    let source = tab_rect(&h, "brushes").center();
+    let from = hit_rect(&h, craft_ui::docking::Hit::DragBar("brushes".into())).center();
     let destination = tab_rect(&h, "layers").center();
-    drag(&mut h, source, destination);
+    drag(&mut h, from, destination);
     let layout = lay(h.state());
     assert!(in_dock_column(layout, "brushes"));
     assert!(valid(layout));
@@ -368,6 +391,7 @@ fn floating_group_titles_are_opaque_in_studio_themes() {
 #[test]
 fn escape_cancels_the_first_drag_without_replacing_the_legacy_workspace() {
     let mut h = harness(app(), vec2(1280.0, 800.0));
+    let default = h.state().ui.docking.as_ref().unwrap().layout.clone();
     let source = h.query_all_by_label("Layers").find(|node| node.rect().height() <= 45.0).unwrap().rect().center();
     h.event(Event::PointerMoved(source));
     h.run_steps(1);
@@ -375,13 +399,13 @@ fn escape_cancels_the_first_drag_without_replacing_the_legacy_workspace() {
     h.run_steps(1);
     h.event(Event::PointerMoved(source - vec2(90.0, 0.0)));
     h.run_steps(2);
-    assert!(h.state().ui.docking.is_none(), "a drag changes nothing before its drop");
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, default, "a drag changes nothing before its drop");
     h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
     h.run_steps(1);
-    assert!(h.state().ui.docking.is_none());
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, default);
     h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
-    assert!(h.state().ui.docking.is_none());
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, default);
 }
 
 #[test]
@@ -609,19 +633,103 @@ fn legacy_control_updates_authoritative_custom_visibility_and_selection_atomical
 }
 
 #[test]
+fn legacy_collapse_updates_every_split_native_group_and_clears_stale_entries() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"color","anchor":"layers","zone":"top"})).unwrap();
+    assert!(!group_members(lay(&app), "swatches").contains(&"color".to_owned()));
+    let ctx = egui::Context::default();
+    let mut dock = app.ui.dock.clone();
+    dock.set_collapsed(Group::Color, true);
+    assert_eq!(control_set(&mut app, &ctx, json!({"dock":dock}))["ok"], true);
+    assert!(group_minimized(&app, Group::Color), "every custom group containing Color panels is minimized");
+
+    let mut dock = app.ui.dock.clone();
+    dock.set_collapsed(Group::Color, false);
+    assert_eq!(control_set(&mut app, &ctx, json!({"dock":dock}))["ok"], true);
+    assert!(!group_minimized(&app, Group::Color));
+    assert!(app.ui.docking_collapsed.iter().all(|id| !["color", "swatches", "gradients", "patterns"].contains(&id.as_str())));
+
+    app.run("window.panel.group", json!({"panel":"layers","operation":"collapse"})).unwrap();
+    let layers = group_members(lay(&app), "layers");
+    assert!(layers.iter().all(|panel| app.ui.docking_collapsed.contains(panel)));
+    let mut dock = app.ui.dock.clone();
+    dock.set_collapsed(Group::Layers, false);
+    assert_eq!(control_set(&mut app, &ctx, json!({"dock":dock}))["ok"], true);
+    assert!(layers.iter().all(|panel| !collapsed_members(&app, lay(&app)).contains(panel)));
+}
+
+#[test]
+fn legacy_collapse_rejects_conflicting_native_states_in_one_custom_group_atomically() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"color","anchor":"layers"})).unwrap();
+    assert!(group_members(lay(&app), "color").contains(&"layers".to_owned()));
+    let before = serde_json::to_value(&app.ui).unwrap();
+    let ctx = egui::Context::default();
+    let mut dock = app.ui.dock.clone();
+    dock.set_collapsed(Group::Color, true);
+
+    assert_eq!(control_set(&mut app, &ctx, json!({"dock":dock}))["ok"], false);
+    assert_eq!(serde_json::to_value(&app.ui).unwrap(), before);
+
+    let mut floating = self::app();
+    floating.run("window.panel.float", json!({"panel":"swatches"})).unwrap();
+    let before = serde_json::to_value(&floating.ui).unwrap();
+    let mut dock = floating.ui.dock.clone();
+    dock.set_collapsed(Group::Color, true);
+    assert_eq!(control_set(&mut floating, &ctx, json!({"dock":dock}))["ok"], false);
+    assert_eq!(serde_json::to_value(&floating.ui).unwrap(), before);
+}
+
+#[test]
+fn legacy_tab_selection_clears_collapse_for_the_selected_custom_group() {
+    let mut app = app();
+    app.ui.theme = crate::theme::ThemeKind::ProMedium;
+    app.run("window.panel.move", json!({"panel":"color","anchor":"layers","zone":"top"})).unwrap();
+    app.run("window.panel.group", json!({"panel":"swatches","operation":"collapse"})).unwrap();
+    let swatches = group_members(lay(&app), "swatches");
+    assert!(swatches.iter().all(|panel| app.ui.docking_collapsed.contains(panel)));
+    let ctx = egui::Context::default();
+
+    assert_eq!(control_set(&mut app, &ctx, json!({"dockTabs":{"color":1}}))["ok"], true);
+
+    assert!(panel_active(lay(&app), "swatches"));
+    assert!(swatches.iter().all(|panel| !collapsed_members(&app, lay(&app)).contains(panel)));
+}
+
+#[test]
+fn legacy_visibility_expands_every_split_custom_group_for_native_group() {
+    let mut app = app();
+    app.ui.theme = crate::theme::ThemeKind::ProMedium;
+    app.run("window.panel.move", json!({"panel":"color","anchor":"layers","zone":"top"})).unwrap();
+    let color = group_members(lay(&app), "color");
+    let swatches = group_members(lay(&app), "swatches");
+    app.run("window.panel.group", json!({"panel":"swatches","operation":"collapse"})).unwrap();
+    assert!(swatches.iter().all(|panel| collapsed_members(&app, lay(&app)).contains(panel)));
+    let ctx = egui::Context::default();
+
+    assert_eq!(control_set(&mut app, &ctx, json!({"panels":{"color":true}}))["ok"], true);
+
+    let collapsed = collapsed_members(&app, lay(&app));
+    assert!(color.iter().all(|panel| !collapsed.contains(panel)));
+    assert!(swatches.iter().all(|panel| !collapsed.contains(panel)));
+}
+
+#[test]
 fn legacy_dock_width_is_consumed_by_custom_renderer_and_clamped_to_existing_range() {
     let mut app = app();
     app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
     let ctx = h.ctx.clone();
     // A 1280-point window: the dock may take all but 400 points (#7896), so 700 is no longer
-    // cut to 520.
-    for (requested, expected) in [(410.0, 410.0), (700.0, 700.0), (900.0, 880.0), (20.0, 250.0)] {
+    // cut to 520. The dock's own 220-point column minimum plus the 36-point default icon
+    // column put the low floor at 256.
+    for (requested, expected) in [(410.0, 410.0), (700.0, 700.0), (900.0, 880.0), (20.0, 256.0)] {
         assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":requested}))["ok"], true);
         h.run_steps(2);
         let Some(Node::Split { second, .. }) = &lay(h.state()).root else { panic!("expected the canvas split") };
         let Node::Dock { columns, .. } = second.as_ref() else { panic!("expected the dock") };
-        assert!((columns[0].width - expected).abs() < 1.0, "{} / {expected}", columns[0].width);
+        let total: f32 = columns.iter().map(|column| if column.iconic { column.iconic_width.unwrap_or(36.0).clamp(36.0, 240.0) } else { column.width }).sum();
+        assert!((total - expected).abs() < 1.0, "{} / {expected}", total);
         assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
     }
 }
@@ -639,6 +747,18 @@ fn explicit_reveal_activates_existing_tab_and_expands_custom_group() {
     let before = app.ui.docking.clone();
     assert!(app.run("window.panel.layers", json!({"show":"yes"})).is_err());
     assert_eq!(app.ui.docking, before);
+}
+
+#[test]
+fn explicit_expand_clears_a_minimized_group_imported_from_the_native_dock() {
+    let mut app = app();
+    app.ui.dock.set_collapsed(Group::Color, true);
+    app.ui.docking = Some(legacy_workspace(&app));
+    assert!(group_minimized(&app, Group::Color));
+
+    app.run("window.panel.group", json!({"panel":"swatches","operation":"expand"})).unwrap();
+
+    assert!(!group_minimized(&app, Group::Color));
 }
 
 // #2455 in a custom workspace: the pro Color field fills a tall floating group, not 120 pt.
@@ -697,12 +817,11 @@ fn custom_group_commands_preserve_members_and_workspace_timeline() {
 }
 
 #[test]
-fn customized_panel_menus_and_rail_remain_reachable_after_float_and_restore() {
+fn customized_panel_menus_remain_reachable_after_float_and_restore() {
     let mut app = app();
     app.run("window.panel.float", json!({"panel":"swatches","x":20,"y":40})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
     assert!(h.query_all_by_label("Panel menu").count() > 0);
-    assert!(h.query_all_by_label("Color & Swatches").count() > 0);
     let floating = floating_rect(&h, "swatches");
     let first = h.query_all_by_label("Panel menu").find(|node| floating.contains_rect(node.rect())).unwrap().rect().center();
     h.hover_at(first);
@@ -813,13 +932,12 @@ fn custom_workspace_saves_shared_layout_and_timeline_without_embedding_flags() {
     let mut app = app();
     app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
     app.ui.timeline.open = true;
-    app.ui.panels.rail = false;
     app.ui.panels.menu_bar = false;
     let ctx = egui::Context::default();
     crate::menus::invoke(&mut app, &ctx, "window.workspace.newWorkspace", json!({"name":"Docked Motion"})).unwrap();
     let saved = app.session.prefs().workspaces.get("Docked Motion").unwrap().clone();
     assert!(saved["docking"].is_object() && saved["timelineOpen"] == true);
-    assert!(saved["panels"].get("rail").is_none() && saved["panels"].get("menu_bar").is_none());
+    assert!(saved["panels"].get("menu_bar").is_none());
     let layout = app.ui.docking.clone();
     app.ui.workspace = "Motion".into();
     crate::menus::apply_workspace(&mut app);
@@ -901,9 +1019,11 @@ fn main_workspace_file_loads_as_the_default_and_saves_as_a_workspace() {
     assert!(app.ui.docking.is_none() && app.ui.docking_returns.is_empty() && app.ui.docking_collapsed.is_empty());
     let workspace = legacy_workspace(&app);
     let layout = &workspace.layout;
+    // The default has the icon column, so the shown History group lands beside the canvas; the
+    // main column keeps Color, Properties and Layers.
     assert_eq!(
         root_groups(layout),
-        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["history", "actions"], vec!["layers", "channels"]]
+        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["layers", "channels"], vec!["history", "actions"]]
     );
     assert!(in_dock_column(layout, "layers") && panel_active(layout, "actions"));
     for (panel, _, _) in PANELS {
@@ -933,8 +1053,57 @@ fn the_native_dock_width_sizes_the_default_column() {
     h.run_steps(2);
     let Some(Node::Split { second, .. }) = &lay(h.state()).root else { panic!("expected the canvas split") };
     let Node::Dock { columns, .. } = second.as_ref() else { panic!("expected the dock") };
-    assert_eq!(columns[0].width, 380.0);
+    let pro = h.state().ui.theme.is_pro();
+    assert_eq!(columns.len(), 2);
+    assert!(!columns[0].iconic);
+    assert!(columns[1].iconic);
+    assert!((columns[0].width - 380.0).abs() < 1.0, "the remembered native width sizes the expanded column, got {}", columns[0].width);
+    assert!((columns[1].width - default_width(pro)).abs() < 1.0, "the icon column's expanded width is preserved, got {}", columns[1].width);
+    assert_eq!(columns[1].iconic_width, None, "the icon column's collapsed width remains the renderer default");
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
+}
+
+#[test]
+fn a_custom_workspace_discards_a_pending_native_dock_width() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
+    let width_before = dock_width(&app);
+    let ctx = egui::Context::default();
+    let key = crate::panels::panel_state_id(&ctx, "dock");
+    let state = egui::PanelState { outer_rect: egui::Rect::from_min_size(egui::pos2(860.0, 0.0), vec2(420.0, 700.0)) };
+    ctx.data_mut(|data| data.insert_persisted(key, state));
+    app.last_canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(800.0, 600.0));
+
+    native_dock_width(&mut app, &ctx);
+
+    assert!((dock_width(&app) - width_before).abs() < 0.5, "a custom workspace keeps its saved width");
+    assert!(ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "discarded native width is consumed");
+}
+
+#[test]
+fn studio_native_width_waits_until_the_canvas_is_ready() {
+    let mut app = app();
+    app.ui.theme = crate::theme::ThemeKind::Studio;
+    app.last_canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(800.0, 600.0));
+    assert!(app.drop_canvas_rect.is_none());
+    let ctx = egui::Context::default();
+    let key = crate::panels::panel_state_id(&ctx, "dock");
+    let state = egui::PanelState { outer_rect: egui::Rect::from_min_size(egui::pos2(420.0, 0.0), vec2(380.0, 700.0)) };
+    ctx.data_mut(|data| data.insert_persisted(key, state));
+
+    native_dock_width(&mut app, &ctx);
+
+    assert!(app.ui.docking.is_none(), "migration must not commit before the Studio canvas is ready");
+    assert!(ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some(), "the native width remains pending");
+
+    app.drop_canvas_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(800.0, 600.0)));
+    native_dock_width(&mut app, &ctx);
+
+    let columns = end_columns_of(&app.ui.docking.as_ref().unwrap().layout);
+    assert!((columns[0].width - 380.0).abs() < 1.0);
+    assert!((columns[1].width - default_width(false)).abs() < 1.0);
+    assert_eq!(columns[1].iconic_width, None);
+    assert!(ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
 }
 
 /// The dock-edge layout is only chosen for a horizontal root split whose canvas side is the lone
@@ -1163,8 +1332,7 @@ fn the_dock_edge_handle_resizes_and_a_locked_workspace_refuses_it() {
         }
         let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
         let stored = dock_width(h.state());
-        let rail = if h.state().ui.panels.rail { if h.state().ui.theme.is_pro() { 36.0 } else { 44.0 } } else { 0.0 };
-        let edge = 1280.0 - (stored + rail);
+        let edge = 1280.0 - stored;
         drag(&mut h, pos2(edge, 400.0), pos2(edge + 60.0, 400.0));
         let resized = dock_width(h.state());
         h.run_steps(4);
@@ -1172,8 +1340,8 @@ fn the_dock_edge_handle_resizes_and_a_locked_workspace_refuses_it() {
         (stored, resized, settled)
     };
 
-    let (_, resized, settled) = drag_once(false);
-    assert!(resized < 290.0, "dragging right should shrink the dock, got {resized}");
+    let (stored, resized, settled) = drag_once(false);
+    assert!(resized < stored, "dragging right should shrink the dock, got {resized} from {stored}");
     assert!((settled - resized).abs() < 1.0, "the resized width must not snap back: {resized} then {settled}");
 
     let (locked_stored, locked_resized, locked_settled) = drag_once(true);
@@ -1233,8 +1401,7 @@ fn disabling_the_ui_cancels_a_dock_edge_drag() {
     h.run_steps(4);
     let stored = dock_width(h.state());
     let before = h.state().session.prefs().panel_layout.clone();
-    let rail = if h.state().ui.panels.rail { if h.state().ui.theme.is_pro() { 36.0 } else { 44.0 } } else { 0.0 };
-    let edge = 1280.0 - (stored + rail);
+    let edge = 1280.0 - stored;
     h.event(Event::PointerMoved(pos2(edge, 400.0)));
     h.run_steps(1);
     h.event(Event::PointerButton { pos: pos2(edge, 400.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -1288,6 +1455,7 @@ fn ui_set_dock_width_scales_every_column() {
             _ => root,
         };
         let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns.truncate(1);
         columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 180.0));
     }
     app.ui.docking = Some(Workspace::new(layout));
@@ -1360,6 +1528,7 @@ fn ui_set_dock_width_queues_and_scales_every_column_when_drawn() {
             _ => root,
         };
         let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns.truncate(1);
         columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 180.0));
     }
     app.ui.docking = Some(Workspace::new(layout));
@@ -1399,7 +1568,6 @@ fn a_narrow_window_keeps_the_canvas_minimum() {
         columns[0].width = 520.0;
     }
     app.ui.docking = Some(Workspace::new(layout));
-    app.ui.panels.rail = true;
     let h = dock_panel_harness(app, vec2(700.0, 600.0), crate::theme::ThemeKind::ProMedium);
     let panel = crate::panels::dock_panel_width(&h.ctx);
     let toolbar = crate::panels::toolbar::toolbar_width(h.state().ui.theme.is_pro(), h.state().ui.panels.toolbar_double);
@@ -1422,7 +1590,6 @@ fn an_empty_dock_keeps_the_parent_layout_for_toolbar_and_canvas() {
         floating: Vec::new(),
     };
     app.ui.docking = Some(Workspace::new(layout));
-    app.ui.panels.rail = false;
     let mut ready = false;
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         move |ui, app: &mut PhotocraftApp| {
@@ -1446,36 +1613,52 @@ fn an_empty_dock_keeps_the_parent_layout_for_toolbar_and_canvas() {
 }
 
 /// An empty dock must still run the docking pass, because Studio draws its floating Properties
-/// group from it, and the zero-width dock must not lose it with or without the rail.
+/// group from it, and the zero-width dock must not lose it.
 #[test]
 fn an_empty_dock_still_draws_studio_floating_properties() {
-    for rail in [true, false] {
-        let mut app = app();
-        let layout = Layout {
-            root: Some(Node::Split {
-                axis: SplitAxis::Horizontal,
-                size: SplitSize::FixedSecond(0.0),
-                first: Box::new(Node::Tabs { panels: vec![CANVAS.to_owned()], active: 0 }),
-                second: Box::new(Node::Dock { side: Side::End, columns: Vec::new() }),
-            }),
-            floating: vec![Floating::single(vec!["properties".to_owned()], 0, [120.0, 160.0, 320.0, 440.0])],
+    let mut app = app();
+    let layout = Layout {
+        root: Some(Node::Split {
+            axis: SplitAxis::Horizontal,
+            size: SplitSize::FixedSecond(0.0),
+            first: Box::new(Node::Tabs { panels: vec![CANVAS.to_owned()], active: 0 }),
+            second: Box::new(Node::Dock { side: Side::End, columns: Vec::new() }),
+        }),
+        floating: vec![Floating::single(vec!["properties".to_owned()], 0, [120.0, 160.0, 320.0, 440.0])],
+    };
+    app.ui.docking = Some(Workspace::new(layout));
+    let h = dock_panel_harness(app, vec2(1280.0, 800.0), crate::theme::ThemeKind::Studio);
+    assert!(dock_is_empty(h.state()), "the dock is empty");
+    assert!(show_dock_calls(&h.ctx) > 0, "the docking pass must still run for floating windows");
+    let rect = floating_rect(&h, "properties");
+    assert!(rect.is_positive(), "floating Properties must be drawn, got {rect:?}");
+}
+
+/// Strip the default layout's dock to its first (main) column, for tests that treat one column
+/// as the whole dock.
+fn single_main_column(app: PhotocraftApp) -> (PhotocraftApp, Layout<String>) {
+    let layout = legacy(&app);
+    let expanded;
+    let mut layout = layout;
+    {
+        let root = layout.root.as_mut().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
         };
-        app.ui.docking = Some(Workspace::new(layout));
-        app.ui.panels.rail = rail;
-        let h = dock_panel_harness(app, vec2(1280.0, 800.0), crate::theme::ThemeKind::Studio);
-        assert!(dock_is_empty(h.state()), "rail={rail}: the dock is empty");
-        assert!(show_dock_calls(&h.ctx) > 0, "rail={rail}: the docking pass must still run for floating windows");
-        let rect = floating_rect(&h, "properties");
-        assert!(rect.is_positive(), "rail={rail}: floating Properties must be drawn, got {rect:?}");
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        expanded = columns[0].width;
+        columns.truncate(1);
     }
+    let _ = expanded;
+    (app, layout)
 }
 
 /// A column collapsed to icons reserves its `iconic_width`, not the expanded width; resizing the
 /// edge keeps that iconic width in step.
 #[test]
 fn an_iconic_dock_column_takes_its_iconic_width() {
-    let mut app = app();
-    let mut layout = legacy(&app);
+    let (mut app, mut layout) = single_main_column(app());
     {
         let root = layout.root.as_mut().expect("the legacy layout has a root");
         let dock = match root {
@@ -1522,8 +1705,7 @@ fn an_iconic_dock_column_takes_its_iconic_width() {
 /// the renderer's 36-point default rather than the expanded width.
 #[test]
 fn an_iconic_only_dock_keeps_its_narrow_panel() {
-    let mut app = app();
-    let layout = legacy(&app);
+    let (mut app, layout) = single_main_column(app());
     let panel = {
         let root = layout.root.as_ref().expect("the legacy layout has a root");
         let dock = match root {
@@ -1548,17 +1730,15 @@ fn an_iconic_only_dock_keeps_its_narrow_panel() {
     app.ui.docking = Some(workspace);
     assert!((dock_width(&app) - 36.0).abs() < 0.5, "an unset iconic width displays 36 points, got {}", dock_width(&app));
     let h = dock_panel_harness(app, vec2(1280.0, 800.0), crate::theme::ThemeKind::ProMedium);
-    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
     let drawn = crate::panels::dock_panel_width(&h.ctx);
-    assert!((drawn - (36.0 + rail)).abs() < 2.0, "the iconic panel is its 36 points plus the rail ({rail}), got {drawn}");
+    assert!((drawn - 36.0).abs() < 2.0, "the iconic panel is its 36 points, got {drawn}");
     assert!(drawn < 120.0, "the iconic panel must not take the expanded minimum, got {drawn}");
 }
 
 /// Stored iconic widths are clamped to the renderer's 36..240 bounds.
 #[test]
 fn iconic_widths_follow_the_renderer_clamp() {
-    let mut app = app();
-    let mut layout = legacy(&app);
+    let (mut app, mut layout) = single_main_column(app());
     {
         let root = layout.root.as_mut().expect("the legacy layout has a root");
         let dock = match root {
@@ -1611,6 +1791,17 @@ fn iconic_cap_surplus_goes_to_expandable_columns() {
     let mut app = app();
     let mut layout = legacy(&app);
     let used: std::collections::HashSet<String> = layout.panels().into_iter().map(|panel| panel.to_string()).collect();
+    // The dealt-with context: this test sets up [iconic 240, extra 220] itself, so the default's
+    // own icon column must not add a third one.
+    {
+        let root = layout.root.as_mut().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns.truncate(1);
+    }
     let extra = PANELS.iter().map(|(id, _, _)| *id).find(|id| !used.contains(*id)).expect("a free panel id");
     {
         let root = layout.root.as_mut().expect("the legacy layout has a root");
@@ -1654,11 +1845,11 @@ fn dock_panel_draws_the_actual_minimum_during_and_after_a_drag() {
             _ => root,
         };
         let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns.truncate(1);
         columns.push(Column::new(vec![craft_ui::docking::Group::new(vec![extra.to_owned()], 0)], 180.0));
     }
     app.ui.docking = Some(Workspace::new(layout));
     let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
-    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
     let start = begin_outer_resize(&mut h);
     let edge = start.x;
     h.event(Event::PointerMoved(pos2(edge + 240.0, start.y)));
@@ -1666,13 +1857,13 @@ fn dock_panel_draws_the_actual_minimum_during_and_after_a_drag() {
     let during = dock_width(h.state());
     let drawn = crate::panels::dock_panel_width(&h.ctx);
     assert!((during - 440.0).abs() < 1.0, "the model stops at the 440-point minimum, got {during}");
-    assert!((drawn - (during + rail)).abs() < 2.0, "the panel follows the stored width, got {drawn} for {during}+{rail}");
+    assert!((drawn - during).abs() < 2.0, "the panel follows the stored width, got {drawn} for {during}");
     h.event(Event::PointerButton { pos: pos2(edge + 240.0, start.y), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(1);
     let after = dock_width(h.state());
     assert!((after - during).abs() < 1.0, "the release keeps the model width, got {after} then {during}");
     let drawn = crate::panels::dock_panel_width(&h.ctx);
-    assert!((drawn - (after + rail)).abs() < 2.0, "the release frame follows the stored width, got {drawn} for {after}+{rail}");
+    assert!((drawn - after).abs() < 2.0, "the release frame follows the stored width, got {drawn} for {after}");
 }
 
 /// A workspace replacement during a drag invalidates the stored gesture before it can write.
@@ -1686,7 +1877,9 @@ fn replacing_the_workspace_cancels_the_dock_drag() {
         h.event(Event::PointerMoved(start + vec2(20.0, 0.0)));
         h.run_steps(1);
         let mut replacement = legacy(h.state());
-        dock_columns_mut(replacement.root.as_mut().expect("root")).expect("end dock")[0].width = 520.0;
+        let columns = dock_columns_mut(replacement.root.as_mut().expect("root")).expect("end dock");
+        columns.truncate(1);
+        columns[0].width = 520.0;
         let generation = h.state().ui.docking_generation;
         crate::dock::apply(h.state_mut(), &json!({"docking": Workspace::new(replacement)}));
         assert_eq!(h.state().ui.docking_generation, generation.wrapping_add(1));
@@ -1904,14 +2097,13 @@ fn end_dock_setter_reports_legacy_noop_and_rejects_without_mutation() {
 #[test]
 fn an_idle_expanded_dock_uses_its_stored_width_not_the_gesture_minimum() {
     let mut h = dock_edge_harness(app_with_columns(&[220.0], false), vec2(1280.0, 800.0));
-    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
-    assert!((allocated_dock(&h).width() - 220.0 - rail).abs() < 1.0);
+    assert!((allocated_dock(&h).width() - 220.0).abs() < 1.0);
     assert_eq!(dock_width(h.state()), 220.0);
     let start = begin_outer_resize(&mut h);
     assert_eq!(dock_width(h.state()), 220.0, "the press records the existing idle width");
     release_outer_resize(&mut h, start);
     assert_eq!(dock_width(h.state()), 250.0, "even an unmoved gesture applies the resize minimum");
-    assert!((allocated_dock(&h).width() - 250.0 - rail).abs() < 1.0);
+    assert!((allocated_dock(&h).width() - 250.0).abs() < 1.0);
     h.run_steps(2);
     assert_eq!(dock_width(h.state()), 250.0, "idle keeps the normalized gesture result");
 }
@@ -1923,26 +2115,23 @@ fn release_only_position_updates_model_and_actual_geometry_on_that_frame() {
     for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
         let _direction = crate::direction::direction_scope(dir);
         for theme in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Classic] {
-            for rail in [false, true] {
-                let mut app = app_with_columns(&[400.0], false);
-                app.ui.panels.rail = rail;
-                app.ui.theme = theme;
-                let rw = if rail { if theme.is_pro() { 36.0 } else { 44.0 } } else { 0.0 };
-                let mut h = dock_panel_harness(app, vec2(1280.0, 800.0), theme);
-                let start = begin_outer_resize(&mut h);
-                let sign = if crate::direction::is_rtl() { 1.0 } else { -1.0 };
-                h.event(Event::PointerMoved(start + vec2(sign * 30.0, 0.0)));
-                h.run_steps(1);
-                assert!((dock_width(h.state()) - 430.0).abs() < 0.5);
-                assert!((allocated_dock(&h).width() - 430.0 - rw).abs() < 1.0);
-                release_outer_resize(&mut h, start + vec2(sign * 80.0, 0.0));
-                assert!(!crate::panels::dock_edge_drag_active(&h.ctx));
-                assert!((dock_width(h.state()) - 480.0).abs() < 0.5, "the release-only position is applied immediately");
-                let released = allocated_dock(&h);
-                assert!((released.width() - 480.0 - rw).abs() < 1.0, "the rail is counted once");
-                h.run_steps(2);
-                assert!((allocated_dock(&h).width() - released.width()).abs() < 0.5, "idle does not jump");
-            }
+            let (mut app, layout) = single_main_column(app_with_columns(&[400.0], false));
+            app.ui.theme = theme;
+            let _ = layout;
+            let mut h = dock_panel_harness(app, vec2(1280.0, 800.0), theme);
+            let start = begin_outer_resize(&mut h);
+            let sign = if crate::direction::is_rtl() { 1.0 } else { -1.0 };
+            h.event(Event::PointerMoved(start + vec2(sign * 30.0, 0.0)));
+            h.run_steps(1);
+            assert!((dock_width(h.state()) - 430.0).abs() < 0.5);
+            assert!((allocated_dock(&h).width() - 430.0).abs() < 1.0);
+            release_outer_resize(&mut h, start + vec2(sign * 80.0, 0.0));
+            assert!(!crate::panels::dock_edge_drag_active(&h.ctx));
+            assert!((dock_width(h.state()) - 480.0).abs() < 0.5, "the release-only position is applied immediately");
+            let released = allocated_dock(&h);
+            assert!((released.width() - 480.0).abs() < 1.0, "the resized width is drawn");
+            h.run_steps(2);
+            assert!((allocated_dock(&h).width() - released.width()).abs() < 0.5, "idle does not jump");
         }
     }
 }
@@ -1951,7 +2140,6 @@ fn release_only_position_updates_model_and_actual_geometry_on_that_frame() {
 /// rail and a stored 520-point dock column, after the frames that draw it.
 fn narrow_dock_harness(width: f32) -> Harness<'static, PhotocraftApp> {
     let mut app = app_with_columns(&[400.0], false);
-    app.ui.panels.rail = true;
     app.ui.panels.toolbar_double = false;
     app.ui.panels.toolbar_side = crate::state::ToolbarSide::Right;
     let mut ready = false;
@@ -2033,7 +2221,7 @@ fn a_narrow_window_draws_a_stored_dock_width_narrower_without_losing_it() {
     let dock = allocated_dock(&h);
     let model = dock_width(h.state());
     assert!((model - 520.0).abs() < 0.5, "the model keeps the request, got {model}");
-    assert!(dock.width() - 36.0 <= 364.5, "the drawn dock column fits beside the toolbox and canvas, got {dock:?}");
+    assert!(dock.width() <= 400.5, "the drawn dock column fits beside the toolbox and canvas, got {dock:?}");
     assert!(canvas.width() >= 199.5, "the canvas keeps its 200-point minimum, got {canvas:?} beside {dock:?}");
     assert!(!canvas.intersect(dock).is_positive(), "the dock never overlaps the canvas: {canvas:?}, {dock:?}");
     // The fitted column lays its chrome out inside the dock, so here nothing needs the clip.
@@ -2041,7 +2229,7 @@ fn a_narrow_window_draws_a_stored_dock_width_narrower_without_losing_it() {
     h.set_size(vec2(1280.0, 600.0));
     h.run_steps(3);
     assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "growing the window keeps the stored width");
-    assert!((allocated_dock(&h).width() - 520.0 - 36.0).abs() < 1.0, "a wide window draws the stored width again, got {:?}", allocated_dock(&h));
+    assert!((allocated_dock(&h).width() - 520.0).abs() < 1.0, "a wide window draws the stored width again, got {:?}", allocated_dock(&h));
 }
 
 /// With no room left for the dock column, its controls' full rects run past the panel edge and
@@ -2077,10 +2265,9 @@ fn external_width_requests_supersede_held_and_release_first_gestures() {
             h.run_steps(1);
         }
         assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "the request is installed on its first frame");
-        let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
         assert!(
-            (allocated_dock(&h).width() - 520.0 - rail).abs() < 1.0,
-            "release_first={release_first}: the FIRST processing frame allocates the requested model width plus one rail, got {:?}",
+            (allocated_dock(&h).width() - 520.0).abs() < 1.0,
+            "release_first={release_first}: the FIRST processing frame allocates the requested model width, got {:?}",
             allocated_dock(&h),
         );
         if !release_first {
@@ -2106,7 +2293,9 @@ fn active_iconic_resize_is_cancelled_when_the_window_narrows() {
         let before = dock_width(h.state());
         let expanded = end_columns(h.state())[0].width;
         assert!((before - 140.0).abs() < 0.5);
-        h.set_size(vec2(300.0, 600.0));
+        // Without the rail the iconic minimum is exactly 36: a window narrower than
+        // 40 (toolbar) + 200 (canvas minimum) + 36 leaves the column infeasible.
+        h.set_size(vec2(240.0, 600.0));
         if release_first {
             release_outer_resize(&mut h, start + vec2(100.0, 0.0));
         } else {
@@ -2129,14 +2318,17 @@ fn active_iconic_resize_is_cancelled_when_the_window_narrows() {
 /// Several iconic columns disable resizing when the window cannot fit their combined minimum.
 #[test]
 fn multiple_iconic_columns_disable_resizing_below_their_combined_minimum() {
-    let mut h = dock_edge_harness(app_with_columns(&[100.0, 100.0], true), vec2(342.0, 600.0));
+    // Two 36-point minimums plus the toolbar and canvas minimum, one point short, so the
+    // combined iconic minimum cannot fit.
+    let width = crate::panels::toolbar::toolbar_width(true, false) + crate::panel_docking::CANVAS_MIN_WIDTH + 2.0 * 36.0 - 1.0;
+    let mut h = dock_edge_harness(app_with_columns(&[100.0, 100.0], true), vec2(width, 600.0));
     let original = dock_width(h.state());
     let start = outer_handle(&h).center();
     h.event(Event::PointerMoved(start));
     h.run_steps(1);
     h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.run_steps(1);
-    assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "50 available points cannot fit two 36-point columns");
+    assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "the window cannot fit two 36-point columns");
     h.event(Event::PointerMoved(start + vec2(100.0, 0.0)));
     h.run_steps(1);
     release_outer_resize(&mut h, start + vec2(120.0, 0.0));
@@ -2147,51 +2339,47 @@ fn multiple_iconic_columns_disable_resizing_below_their_combined_minimum() {
 }
 
 /// With the dock, toolbar and canvas composed in a narrow window, the canvas keeps its minimum
-/// width and the model keeps its column minimums, in both directions and themes, with and without
-/// the rail.
+/// width and the model keeps its column minimums, in both directions and themes.
 #[test]
-fn constrained_composed_layout_reserves_the_canvas_with_or_without_a_rail() {
+fn constrained_composed_layout_reserves_the_canvas() {
     for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
         let _direction = crate::direction::direction_scope(dir);
         for theme in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Classic] {
-            for rail in [false, true] {
-                let mut app = app_with_columns(&[290.0, 220.0], false);
-                app.ui.panels.rail = rail;
-                app.ui.theme = theme;
-                app.ui.panels.toolbar_side = if crate::direction::is_rtl() { crate::state::ToolbarSide::Left } else { crate::state::ToolbarSide::Right };
-                let mut ready = false;
-                let mut h = Harness::builder().with_size(vec2(400.0, 600.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-                    move |ui, app: &mut PhotocraftApp| {
-                        if !ready {
-                            PhotocraftApp::setup_context(ui.ctx(), theme);
-                            ready = true;
-                            return;
-                        }
-                        crate::panels::dock_panel(app, ui);
-                        crate::panels::toolbar(app, ui);
-                        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-                            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("constrained-canvas-rect"), ui.max_rect()));
-                        });
-                    },
-                    app,
-                );
-                h.run_steps(4);
-                let assert_geometry = |h: &Harness<'static, PhotocraftApp>| {
-                    let canvas = h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("constrained-canvas-rect")).unwrap());
-                    assert!(canvas.width() >= 199.5, "rail={rail}, dir={dir:?}: canvas {canvas:?}, dock {:?}", allocated_dock(h));
-                    assert!((dock_width(h.state()) - 510.0).abs() < 0.5, "the constrained display does not corrupt model minima");
-                    assert!(allocated_dock(h).width() <= 144.5, "actual allocation, not requested width");
-                };
-                assert_geometry(&h);
-                let start = outer_handle(&h).center();
-                h.event(Event::PointerMoved(start));
-                h.run_steps(1);
-                h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-                h.run_steps(1);
-                assert!(!crate::panels::dock_edge_drag_active(&h.ctx));
-                release_outer_resize(&mut h, start + vec2(60.0, 0.0));
-                assert_geometry(&h);
-            }
+            let mut app = app_with_columns(&[290.0, 220.0], false);
+            app.ui.theme = theme;
+            app.ui.panels.toolbar_side = if crate::direction::is_rtl() { crate::state::ToolbarSide::Left } else { crate::state::ToolbarSide::Right };
+            let mut ready = false;
+            let mut h = Harness::builder().with_size(vec2(400.0, 600.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+                move |ui, app: &mut PhotocraftApp| {
+                    if !ready {
+                        PhotocraftApp::setup_context(ui.ctx(), theme);
+                        ready = true;
+                        return;
+                    }
+                    crate::panels::dock_panel(app, ui);
+                    crate::panels::toolbar(app, ui);
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("constrained-canvas-rect"), ui.max_rect()));
+                    });
+                },
+                app,
+            );
+            h.run_steps(4);
+            let assert_geometry = |h: &Harness<'static, PhotocraftApp>| {
+                let canvas = h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("constrained-canvas-rect")).unwrap());
+                assert!(canvas.width() >= 199.5, "dir={dir:?}, {theme:?}: canvas {canvas:?}, dock {:?}", allocated_dock(h));
+                assert!((dock_width(h.state()) - 510.0).abs() < 0.5, "the constrained display does not corrupt model minima");
+                assert!(allocated_dock(h).width() <= 144.5, "actual allocation, not requested width");
+            };
+            assert_geometry(&h);
+            let start = outer_handle(&h).center();
+            h.event(Event::PointerMoved(start));
+            h.run_steps(1);
+            h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            assert!(!crate::panels::dock_edge_drag_active(&h.ctx));
+            release_outer_resize(&mut h, start + vec2(60.0, 0.0));
+            assert_geometry(&h);
         }
     }
 }
@@ -2204,18 +2392,17 @@ fn queued_external_width_precedes_but_does_not_eagerly_consume_native_migration(
     app.last_canvas_rect = egui::Rect::NOTHING;
     let mut h = dock_edge_harness(app, vec2(1280.0, 800.0));
     assert!(!h.state().last_canvas_rect.is_positive(), "the dock-only harness has not laid out a canvas");
-    assert!(h.state().ui.docking.is_none());
+    assert!(h.state().ui.docking.is_some(), "the workspace is drawn from the first frame");
     let key = crate::panels::panel_state_id(&h.ctx, "dock");
     let state = egui::PanelState { outer_rect: egui::Rect::from_min_size(egui::pos2(900.0, 0.0), vec2(380.0, 700.0)) };
     h.ctx.data_mut(|data| data.insert_persisted(key, state));
     h.run_steps(1);
-    assert!(h.state().ui.docking.is_none(), "native migration still waits for canvas readiness");
+    assert!(h.state().ui.docking.is_some(), "the workspace draws anyway; the native state waits for the canvas");
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some());
     crate::panels::request_dock_width(&h.ctx, 520.0);
     h.run_steps(1);
     assert!((dock_width(h.state()) - 520.0).abs() < 0.5, "the explicit request takes precedence over the old native width");
-    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
-    assert!((allocated_dock(&h).width() - 520.0 - rail).abs() < 1.0, "first-frame allocation uses that same width");
+    assert!((allocated_dock(&h).width() - 520.0).abs() < 1.0, "first-frame allocation uses that same width");
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "the migrated state is consumed once");
     h.run_steps(2);
     assert!((dock_width(h.state()) - 520.0).abs() < 0.5);
@@ -2240,19 +2427,20 @@ fn explicit_legacy_noop_width_supersedes_native_migration_with_ready_canvas() {
             app.session.prefs.edit(|prefs| prefs.workspace_locked = locked);
             let mut h = if compact { dock_edge_harness(app, vec2(1280.0, 800.0)) } else { harness(app, vec2(1280.0, 800.0)) };
             assert!(h.state().last_canvas_rect.is_positive());
-            assert!(h.state().ui.docking.is_none());
+            assert!(h.state().ui.docking.is_some(), "the workspace is drawn from the first frame");
+            let before = h.state().ui.docking.as_ref().unwrap().layout.clone();
             let requested = dock_width(h.state());
             let key = remember_native_width_for_request_test(&h.ctx, 380.0);
             let ctx = h.ctx.clone();
             assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":requested}))["ok"], true);
             h.run_steps(1);
             assert_eq!(dock_width(h.state()), requested, "compact={compact}, locked={locked}: migration cannot override an explicit legacy no-op");
-            assert!(h.state().ui.docking.is_none(), "a same-width request must not customize the legacy workspace");
+            assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, before, "a same-width request must not change the workspace");
             assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
             assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
             h.run_steps(2);
             assert_eq!(dock_width(h.state()), requested);
-            assert!(h.state().ui.docking.is_none());
+            assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, before);
         }
     }
 }
@@ -2273,14 +2461,15 @@ fn explicit_legacy_noop_width_supersedes_native_migration_after_canvas_becomes_r
         h.run_steps(1);
         assert!(!h.state().last_canvas_rect.is_positive());
         assert_eq!(dock_width(h.state()), requested);
-        assert!(h.state().ui.docking.is_none());
+        assert!(h.state().ui.docking.is_some(), "the workspace is drawn from the first frame");
+        let before = h.state().ui.docking.as_ref().unwrap().layout.clone();
         let native_retained_after_request = h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some();
         assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
         h.state_mut().last_canvas_rect = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 600.0));
         h.run_steps(1);
         assert_eq!(dock_width(h.state()), requested, "locked={locked}: later canvas readiness cannot revive the superseded native width");
         assert!(!native_retained_after_request, "consuming the explicit request retires native migration even before canvas readiness");
-        assert!(h.state().ui.docking.is_none(), "the legacy no-op still must not customize the workspace");
+        assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, before, "the legacy no-op still must not change the workspace");
         assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none());
     }
 }
@@ -2292,6 +2481,7 @@ fn explicit_width_request_preserves_queue_and_native_state_until_invalid_workspa
     // The current width (a legacy no-op) and a changed one.
     for changed in [false, true] {
         let mut h = dock_edge_harness(app(), vec2(1280.0, 800.0));
+        let default = h.state().ui.docking.as_ref().unwrap().layout.clone();
         let requested = if changed { 520.0 } else { dock_width(h.state()) };
         let key = remember_native_width_for_request_test(&h.ctx, 380.0);
         let invalid = Workspace::new(Layout { root: None, floating: Vec::new() });
@@ -2315,7 +2505,7 @@ fn explicit_width_request_preserves_queue_and_native_state_until_invalid_workspa
             dock_width(h.state())
         );
         if !changed {
-            assert!(h.state().ui.docking.is_none(), "the legacy no-op does not customize the workspace");
+            assert_eq!(h.state().ui.docking.as_ref().unwrap().layout, default, "the legacy no-op does not change the workspace");
         }
         assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none(), "changed={changed}: the queued request is consumed");
         assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "changed={changed}: the native state is retired");
@@ -2340,7 +2530,7 @@ fn explicit_width_requests_retire_native_state_even_when_clamped_or_empty() {
         if empty {
             assert_eq!(h.state().ui.docking, before, "an empty dock still has no width to change");
         } else {
-            assert_eq!(dock_width(h.state()), 250.0, "the existing request clamp remains unchanged");
+            assert_eq!(dock_width(h.state()), 256.0, "the 220-point column minimum plus the icon column remain the floor");
         }
     }
 }
@@ -2360,12 +2550,315 @@ fn native_migration_still_waits_and_runs_without_an_accepted_explicit_request() 
         }
         assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
         h.run_steps(1);
-        assert!(h.state().ui.docking.is_none());
+        assert!(h.state().ui.docking.is_some(), "the workspace is drawn from the first frame");
         assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_some(), "absent/rejected requests do not discard a pending migration");
         h.state_mut().last_canvas_rect = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 600.0));
         h.run_steps(1);
-        assert_eq!(dock_width(h.state()), 380.0);
+        let columns = dock_columns(h.state());
+        assert_eq!(columns.len(), 2);
+        assert!((columns[0].width - 380.0).abs() < 1.0, "the saved native width is restored to the expanded column");
+        assert!((columns[1].width - default_width(h.state().ui.theme.is_pro())).abs() < 1.0, "the icon column's expanded width is preserved");
+        assert_eq!(columns[1].iconic_width, None, "the icon column's collapsed width is preserved");
+        assert!((dock_width(h.state()) - 380.0 - ICONIC_WIDTH).abs() < 1.0);
         assert!(h.state().ui.docking.is_some());
         assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "the unchanged native migration consumes its state once");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The icon column (plan B5): the default dock's inner column, «/», drags, flyouts and old files.
+
+/// The end dock's columns of `layout`, for the dock model the app builds or saves.
+fn end_columns_of(layout: &Layout<String>) -> &[Column<String>] {
+    match layout.root.as_ref().and_then(end_dock_node) {
+        Some(Node::Dock { columns, .. }) => columns,
+        other => panic!("the end dock is missing: {other:?}"),
+    }
+}
+
+/// The end dock's columns as the app draws them: the workspace when there is one, else the
+/// native layout.
+fn dock_columns(app: &PhotocraftApp) -> Vec<Column<String>> {
+    let layout = match &app.ui.docking {
+        Some(workspace) => workspace.layout.clone(),
+        None => legacy(app),
+    };
+    end_columns_of(&layout).to_vec()
+}
+
+fn panels_of(column: &Column<String>) -> Vec<String> {
+    column.groups.iter().flat_map(|group| group.panels.iter().cloned()).collect()
+}
+
+fn click(h: &mut Harness<'static, PhotocraftApp>, at: Pos2) {
+    h.event(Event::PointerMoved(at));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+/// A column's «/» button. Every column draws one, and each bar's hit names the column's first
+/// panel, so the button is the one whose panel sits in that column.
+fn column_collapse_button(h: &Harness<'static, PhotocraftApp>, column: usize) -> egui::Rect {
+    let main = panels_of(&dock_columns(h.state())[column]);
+    let buttons: Vec<(craft_ui::docking::Hit<String>, egui::Rect)> = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id())
+        .into_iter()
+        .filter(|(hit, _)| matches!(hit, craft_ui::docking::Hit::Collapse(_)))
+        .collect();
+    assert_eq!(buttons.len(), 2, "one «/» button per column, drawn: {buttons:?}");
+    let button = buttons.into_iter().find(|(hit, _)| matches!(hit, craft_ui::docking::Hit::Collapse(panel) if main.contains(panel)));
+    let Some((_, rect)) = button else { panic!("column {column} has no «/» button") };
+    rect
+}
+
+/// The default dock is the panel column and, between it and the canvas, the icon column of
+/// `ICON_PANEL_GROUPS`: exactly the icon width in both themes, and no panel in both columns.
+#[test]
+fn the_default_dock_holds_the_icon_column_beside_the_canvas_in_both_themes() {
+    for theme in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Studio] {
+        let pro = theme.is_pro();
+        let mut app = app();
+        app.ui.theme = theme;
+        let columns = dock_columns(&app);
+        assert_eq!(columns.len(), 2, "{theme:?}: {columns:?}");
+        assert!(!columns[0].iconic, "{theme:?}: the panel column stays expanded");
+        assert!(columns[1].iconic, "{theme:?}: the column beside the canvas is the icon column");
+        assert_eq!(columns[1].iconic_width, None, "{theme:?}: the renderer sizes the icons until the user drags");
+        let main = panels_of(&columns[0]);
+        let icons = panels_of(&columns[1]);
+        for panel in &icons {
+            assert!(!main.contains(panel), "{theme:?}: {panel} is in both columns: {columns:?}");
+        }
+        assert_eq!(icons, ["navigator", "histogram", "info", "history", "actions", "layerComps", "brushes"], "{theme:?}: {columns:?}");
+        // « expands to full bodies: the icon column keeps the panel column's expanded width.
+        assert_eq!(columns[0].width, default_width(pro), "{theme:?}");
+        assert_eq!(columns[1].width, default_width(pro), "{theme:?}");
+        assert_eq!(
+            display_width(&columns[0]) + display_width(&columns[1]),
+            default_width(pro) + ICONIC_WIDTH,
+            "{theme:?}: the icon column takes exactly {ICONIC_WIDTH} points of the dock"
+        );
+        // And it is drawn as icons: the icon column's panels have icons, not tabs.
+        let h = dock_panel_harness(app, vec2(1400.0, 900.0), theme);
+        for panel in ["navigator", "history", "brushes"] {
+            hit_rect(&h, craft_ui::docking::Hit::Icon(panel.to_owned()));
+        }
+        let hits = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id());
+        for panel in ["navigator", "history", "brushes"] {
+            assert!(!hits.iter().any(|(hit, _)| *hit == craft_ui::docking::Hit::Tab(panel.to_owned())), "{theme:?}: {panel} is drawn as a tab, not an icon");
+        }
+        tab_rect(&h, "layers");
+    }
+}
+
+#[test]
+fn an_icon_only_default_layout_keeps_an_expanded_width_for_docking_actions() {
+    let mut app = app();
+    for group in [Group::Color, Group::Properties, Group::Character, Group::Layers] {
+        *group.shown_mut(&mut app.ui.panels) = false;
+    }
+    let layout = super::default_layout::layout(&app, false);
+    let Some(Node::Split { second, .. }) = &layout.root else { panic!("the canvas is beside the icon dock") };
+    let Node::Dock { columns, .. } = second.as_ref() else { panic!("the icon dock is present") };
+    assert_eq!(columns.len(), 1);
+    assert!(columns[0].iconic);
+    assert!(columns[0].width > 0.0, "the icon column retains an expanded width");
+    assert!((display_width(&columns[0]) - ICONIC_WIDTH).abs() < 0.5, "the icon column still displays at its collapsed width");
+
+    app.ui.docking = Some(Workspace::new(layout));
+    assert!(valid_workspace(app.ui.docking.as_ref().unwrap()), "the icon-only default layout is valid");
+    assert!(app.run("window.panel.group", json!({"panel":"navigator","operation":"expand"})).is_ok());
+}
+
+/// A panel drags out of the icon column into the panel column and back: the two columns are one
+/// dock, not a rail beside it.
+#[test]
+fn a_panel_drags_from_the_icon_column_to_the_panel_column_and_back() {
+    let mut h = harness(app(), vec2(1400.0, 900.0));
+    assert!(panels_of(&dock_columns(h.state())[1]).contains(&"navigator".to_owned()));
+    let icon = hit_rect(&h, craft_ui::docking::Hit::Icon("navigator".into())).center();
+    let onto_layers = tab_rect(&h, "layers").center();
+    drag(&mut h, icon, onto_layers);
+    let columns = dock_columns(h.state());
+    assert!(panels_of(&columns[0]).contains(&"navigator".to_owned()), "the panel left the icon column: {columns:?}");
+    assert!(!panels_of(&columns[1]).contains(&"navigator".to_owned()), "{columns:?}");
+    // Back onto an icon: it joins the icon column again.
+    let tab = tab_rect(&h, "navigator").center();
+    let onto = hit_rect(&h, craft_ui::docking::Hit::Icon("history".into())).center();
+    drag(&mut h, tab, onto);
+    let columns = dock_columns(h.state());
+    assert!(panels_of(&columns[1]).contains(&"navigator".to_owned()), "the panel did not come back: {columns:?}");
+    assert!(!panels_of(&columns[0]).contains(&"navigator".to_owned()), "{columns:?}");
+}
+
+/// Dragging the icon column's grip moves the whole group, tabs and all, into the panel column.
+#[test]
+fn a_group_drags_from_the_icon_column_to_the_panel_column() {
+    let mut h = harness(app(), vec2(1400.0, 900.0));
+    let grip = hit_rect(&h, craft_ui::docking::Hit::IconGrip("navigator".into())).center();
+    let onto_layers = tab_rect(&h, "layers").center();
+    drag(&mut h, grip, onto_layers);
+    let columns = dock_columns(h.state());
+    for panel in ["navigator", "histogram", "info"] {
+        assert!(panels_of(&columns[0]).contains(&panel.to_owned()), "{panel} did not move: {columns:?}");
+        assert!(!panels_of(&columns[1]).contains(&panel.to_owned()), "{panel} stayed behind: {columns:?}");
+    }
+}
+
+/// The column bar's « collapses the panel column to icons and » expands it again, saving the
+/// choice: the expanded width is remembered while it is collapsed.
+#[test]
+fn the_column_bar_collapses_the_panel_column_and_the_choice_is_saved() {
+    let mut h = harness(app(), vec2(1400.0, 900.0));
+    let pro = h.state().ui.theme.is_pro();
+    assert!(!dock_columns(h.state())[0].iconic);
+    assert_eq!(dock_width(h.state()), default_width(pro) + ICONIC_WIDTH);
+    let collapse = column_collapse_button(&h, 0).center();
+    click(&mut h, collapse);
+    let columns = dock_columns(h.state());
+    assert!(columns[0].iconic, "« did not collapse the panel column: {columns:?}");
+    assert_eq!(columns[0].width, default_width(pro), "the expanded width is kept while collapsed");
+    assert_eq!(dock_width(h.state()), 2.0 * ICONIC_WIDTH);
+    let saved = serde_json::to_value(&h.state().ui).expect("the workspace state serializes");
+    let loaded: crate::state::UiState = serde_json::from_value(saved).expect("the workspace state loads again");
+    assert_eq!(loaded.docking, h.state().ui.docking, "the collapsed column does not survive a save and load");
+    let collapse = column_collapse_button(&h, 0).center();
+    click(&mut h, collapse);
+    assert!(!dock_columns(h.state())[0].iconic, "» did not expand the panel column");
+    assert_eq!(dock_width(h.state()), default_width(pro) + ICONIC_WIDTH);
+}
+
+/// The icon column's own «/» expands it to full panel bodies, at the width its panels need, and
+/// back to icons: a collapsed icon column is how a narrow dock is won back.
+#[test]
+fn the_icon_columns_button_expands_it_to_full_panel_bodies() {
+    let mut h = harness(app(), vec2(1400.0, 900.0));
+    let pro = h.state().ui.theme.is_pro();
+    assert!(dock_columns(h.state())[1].iconic);
+    let expand = column_collapse_button(&h, 1).center();
+    click(&mut h, expand);
+    let columns = dock_columns(h.state());
+    assert!(!columns[1].iconic, "the icon column's «/» did not expand it: {columns:?}");
+    assert_eq!(columns[1].width, default_width(pro), "it expands to the width its bodies need");
+    assert_eq!(dock_width(h.state()), 2.0 * default_width(pro), "both columns are bodies now");
+    // Its panels are drawn as tabs with bodies, not as icons.
+    tab_rect(&h, "navigator");
+    let collapse = column_collapse_button(&h, 1).center();
+    click(&mut h, collapse);
+    assert!(dock_columns(h.state())[1].iconic, "it did not go back to icons");
+    assert_eq!(dock_width(h.state()), default_width(pro) + ICONIC_WIDTH);
+}
+
+/// Window › on a panel of the icon column that its icon does not show (Histogram, behind
+/// Navigator) opens the column's flyout with that panel: the menu reaches every panel, as it does
+/// for a tabbed column.
+#[test]
+fn the_window_menu_opens_a_panel_inside_the_icon_columns_flyout() {
+    let mut h = harness(app(), vec2(1400.0, 900.0));
+    assert!(panels_of(&dock_columns(h.state())[1]).contains(&"histogram".to_owned()));
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.panel.histogram", json!({})).expect("the panel command runs");
+    h.run_steps(2);
+    assert_eq!(craft_ui::docking::flyout::<String>(&h.ctx, area_id()).as_deref(), Some("histogram"));
+    let columns = dock_columns(h.state());
+    assert!(panels_of(&columns[1]).contains(&"histogram".to_owned()), "the panel left the icon column: {columns:?}");
+    assert!(columns[1].iconic, "the column stays an icon column: {columns:?}");
+}
+
+/// A collapse request with bad params is an error the agent can act on, never a panic, and it
+/// leaves the columns alone.
+#[test]
+fn collapse_requests_with_bad_params_are_errors_and_change_nothing() {
+    let mut app = app();
+    let before = dock_columns(&app);
+    for params in [
+        json!({}),
+        json!({"action": "iconic"}),
+        json!({"action": {"SetIconic": {"iconic": true}}}),
+        json!({"action": {"SetIconic": {"panel": 7, "iconic": true}}}),
+        json!({"action": {"SetIconic": {"panel": "noSuchPanel", "iconic": true}}}),
+        json!({"action": {"SetIconic": {"panel": "navigator", "iconic": "yes"}}}),
+    ] {
+        let result = app.run("window.panel.layout", params.clone());
+        assert!(result.is_err(), "{params} did not fail: {result:?}");
+        assert_eq!(dock_columns(&app), before, "{params} changed the dock");
+    }
+    let columns = dock_columns(&app);
+    assert!(columns.iter().all(|column| !column.iconic || column == &before[1]), "the icon column is untouched: {columns:?}");
+}
+
+/// A workspace saved before the icon column existed has one column and loads as it was saved; the
+/// default is not imposed on it.
+#[test]
+fn a_saved_workspace_with_one_column_loads_without_an_icon_column() {
+    let (mut app, layout) = single_main_column(app());
+    assert_eq!(end_columns_of(&layout).len(), 1);
+    app.ui.docking = Some(craft_ui::docking::Workspace::new(layout));
+    let h = harness(app, vec2(1400.0, 900.0));
+    let columns = dock_columns(h.state());
+    assert_eq!(columns.len(), 1, "a saved one-column workspace gains an icon column: {columns:?}");
+    assert!(!columns[0].iconic);
+    tab_rect(&h, "layers");
+}
+
+/// Preferences saved while the icon rail existed still load: the retired `rail` key is ignored,
+/// not an error that discards the rest of the file.
+#[test]
+fn preferences_saved_with_the_retired_rail_key_still_load() {
+    let mut saved = serde_json::to_value(crate::state::UiState::default()).expect("the defaults serialize");
+    saved["panels"]["rail"] = json!(false);
+    let ui: crate::state::UiState = serde_json::from_value(saved).expect("a prefs file with the retired rail key loads");
+    assert!(ui.panels.layers && ui.panels.navigator, "the other panel flags survive");
+    assert!(ui.docking.is_none(), "the dock's layout comes from the workspace or the native default");
+}
+
+/// Right to left mirrors the dock: the icon column still sits between the panel column and the
+/// canvas, and the model's column order does not change.
+#[test]
+fn the_icon_column_mirrors_with_the_reading_direction() {
+    for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+        let _direction = crate::direction::direction_scope(dir);
+        let h = harness(app(), vec2(1400.0, 900.0));
+        let columns = dock_columns(h.state());
+        assert_eq!(columns.len(), 2, "{dir:?}: {columns:?}");
+        assert!(columns[1].iconic, "{dir:?}: the model keeps its column order: {columns:?}");
+        let icon_x = hit_rect(&h, craft_ui::docking::Hit::Icon("navigator".into())).center().x;
+        let tab_x = tab_rect(&h, "layers").center().x;
+        // The harness window is 1400 points wide; the dock must stay in its start half.
+        let middle = 700.0;
+        if crate::direction::is_rtl() {
+            assert!(icon_x > tab_x, "{dir:?}: the icon column is not between the panels and the canvas");
+            assert!(tab_x < middle, "{dir:?}: the dock is not at the left");
+        } else {
+            assert!(icon_x < tab_x, "{dir:?}: the icon column is not between the panels and the canvas");
+            assert!(tab_x > middle, "{dir:?}: the dock is not at the right");
+        }
+    }
+}
+
+#[test]
+fn every_dock_panel_names_an_embedded_icon() {
+    for (id, label, _) in PANELS {
+        let name = panel_icon(id).unwrap_or_else(|| panic!("{label} has no dock icon"));
+        assert!(crate::icons::exists(name), "{label}: {name} is not an embedded icon");
+    }
+    assert_eq!(panel_icon(CANVAS), None, "the canvas never collapses to an icon column");
+}
+
+/// The dock's iconic column asks the content for an image and falls back to the label's initial
+/// without one, so a missing hook brings back the letter placeholders (plan B6, #icons).
+#[test]
+fn the_dock_icon_hook_answers_for_every_panel_and_not_for_the_canvas() {
+    let mut state = app();
+    let collapsed = std::collections::HashSet::new();
+    let fillers = std::collections::HashSet::new();
+    let card = std::collections::HashSet::new();
+    let mut commands = Vec::new();
+    let content = PanelContent { app: &mut state, collapsed: &collapsed, fillers: &fillers, card: &card, strip: 28.0, commands: &mut commands };
+    for (id, label, _) in PANELS {
+        assert!(craft_ui::docking::DockContent::icon(&content, &id.to_string()).is_some(), "{label} falls back to a letter");
+    }
+    assert!(craft_ui::docking::DockContent::icon(&content, &CANVAS.to_string()).is_none());
 }

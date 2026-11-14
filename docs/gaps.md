@@ -342,6 +342,15 @@ what an agent can't finish alone.
 - **Estimate:** 60–110 h.
 
 ### G9. Panels, preferences and workspace
+- **Progress (2026-11-10):** the dock has Photoshop's icon column and «/» bars. The default layout
+  is the panel column plus, between it and the canvas, an icon column of Navigator, Histogram,
+  Info, History, Actions, Layer Comps and Brushes (`ui-egui/src/panels/panel_docking/default_layout.rs`);
+  «/» on either column bar collapses that column to icons and expands it again at the width its
+  bodies need, the choice is saved, panels and whole groups drag between the columns, Window
+  menu items open a panel behind the icons as its column's flyout, and the hand-drawn icon rail is
+  gone (one implementation, the workspace). Saved workspaces and prefs from before it still load.
+  Rows in [ui-parity](ui-parity.md#panels-and-workspace), tests in
+  `ui-egui/src/panels/panel_docking/tests.rs`. Floating and OS-window panel groups remain open.
 - **Progress (2026-10-21):** adjustment clipping is reachable above the Properties editor in a compact dock (#5231), with all-theme layout coverage and 8/16/32-bit scope and undo/redo tests. The normal adjustment-layer scope and remaining estimate stay unchanged.
 - **Progress (2026-10-16, #3222):** UI scale presets are complete: 75–125% in 5% steps,
   then 150–300%, remembered through preferences (UI-217-9).

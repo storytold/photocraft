@@ -132,10 +132,11 @@ Horizontal and vertical ruler ticks, labels and pointer markers are clipped to t
 strips. Their intersection is a clear origin square, including when the view is panned, flipped
 or rotated; the origin square retains its ruler-unit context menu.
 
-An embedding application's `panels.menu_bar` and `panels.rail` flags belong to its current
-session. Restoring a saved workspace or remembered panel layout preserves both flags, including
-when the serialized layout contains their values. Panel visibility, dock layout, tabs and Timeline
-visibility follow the saved layout.
+An embedding application's `panels.menu_bar` flag belongs to its current
+session. Restoring a saved workspace or remembered panel layout preserves it, including
+when the serialized layout contains its value. The dock itself comes from the saved workspace:
+its columns, the icon column and each column's «/» state. Panel visibility, dock layout, tabs and
+Timeline visibility follow the saved layout.
 
 The Pro status bar's Document Dimensions readout follows Preferences › Units & Rulers › Rulers,
 including changes made from a ruler's context menu. It uses the document resolution for physical

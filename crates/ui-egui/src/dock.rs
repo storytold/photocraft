@@ -5,7 +5,7 @@
 //! customized, the default layout is built each frame from this state: one dock column of the
 //! shown groups, top to bottom, where a group the user never resized gets its default height and
 //! the last expanded group (Layers by default) fills what the others leave. The Window menu's
-//! panel toggles, the icon rail, collapse and `ui.set` change this state.
+//! panel toggles, collapse and `ui.set` change this state.
 //!
 //! The layout is [`DockLayout`] in `UiState::dock` (serialisable, drivable with `ui.set`), saved
 //! with Window › Workspace › New Workspace…, reset by Reset Workspace, and remembered across
@@ -240,7 +240,7 @@ impl DockLayout {
         }
     }
 
-    /// Restore the tab requested by the Window menu or icon rail.
+    /// Restore the tab requested by the Window menu.
     pub fn show_tab(&mut self, group: Group, tab: usize, pro: bool) {
         let Some(&name) = group.tabs(pro).get(tab) else { return };
         if let Some(hidden) = self.hidden_tabs.get_mut(&group) {
@@ -294,7 +294,7 @@ impl DockLayout {
     }
 }
 
-/// Show `g` and expand it (Window › <panel>, the icon rail): a panel asked for is always
+/// Show `g` and expand it (Window › <panel>): a panel asked for is always
 /// brought back, whatever state it was left in (#129).
 pub fn reveal(app: &mut PhotocraftApp, g: Group) {
     *g.shown_mut(&mut app.ui.panels) = true;
@@ -302,21 +302,6 @@ pub fn reveal(app: &mut PhotocraftApp, g: Group) {
     let pro = app.ui.theme.is_pro();
     app.ui.dock.show_tab(g, selected, pro);
     app.ui.dock.set_collapsed(g, false);
-}
-
-/// Icon rail click: a hidden group is shown, a collapsed one expanded and an expanded one
-/// collapsed to its tab strip. A docked group is never hidden from the rail (it used to
-/// toggle visibility, so one stray click made a panel vanish: #129); `docked` is false for
-/// Studio's floating Properties card, which the rail shows and hides.
-pub fn rail_click(app: &mut PhotocraftApp, g: Group, docked: bool) {
-    if !g.shown(&app.ui.panels) {
-        reveal(app, g);
-    } else if !docked {
-        *g.shown_mut(&mut app.ui.panels) = false;
-    } else {
-        let collapse = !app.ui.dock.is_collapsed(g);
-        app.ui.dock.set_collapsed(g, collapse);
-    }
 }
 
 /// A tab strip's Close: hide `tab` of `g`, and the group with its last tab. When the selected
@@ -503,6 +488,9 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
     (app.ui.docking, app.ui.docking_returns) = crate::panel_docking::load(v).map_or((None, Default::default()), |(w, r)| (Some(w), r));
+    // A saved or restored layout is its own workspace, not the untouched conversion: the
+    // per-frame re-derivation must not overwrite it.
+    app.ui.docking_pristine_theme = None;
     app.ui.docking_kept = (app.ui.docking.is_none() && crate::panel_docking::newer(v))
         .then(|| ["docking", "dockingReturns", "dockingCollapsed"].into_iter().filter_map(|key| Some((key.to_owned(), v.get(key)?.clone()))).collect());
     // Collapsed custom groups belong to the workspace; the native dock keeps its own flags.
@@ -515,7 +503,6 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     {
         // The embedding host owns these flags, including for layouts that serialize them.
         p.menu_bar = app.ui.panels.menu_bar;
-        p.rail = app.ui.panels.rail;
         // A layout saved before the toolbar could move (or with an unreadable side) keeps the
         // current side; a valid saved side still belongs to the workspace.
         p.toolbar_side = saved.get("toolbar_side").and_then(|side| serde_json::from_value(side.clone()).ok()).unwrap_or(app.ui.panels.toolbar_side);

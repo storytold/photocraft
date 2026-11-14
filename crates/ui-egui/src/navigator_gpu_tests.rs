@@ -55,6 +55,9 @@ fn navigator_draws_the_gpu_canvas_texture_and_follows_edits() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness() else { return };
     h.run_steps(8);
+    // The icon column draws icons only; expand it so the Navigator has a body to draw into.
+    h.state_mut().run("window.panel.layout", json!({"action": {"SetIconic": {"panel": "navigator", "iconic": false}}})).unwrap();
+    h.run_steps(2);
     if !h.state().perf.gpu {
         eprintln!("skipping: the canvas fell back to the CPU here");
         return;

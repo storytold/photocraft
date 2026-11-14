@@ -186,7 +186,7 @@ parity for the area and are already contained in the dimension rows above.
 | File I/O | 60% | 300–500 | See [file-format-parity.md](file-format-parity.md) |
 | Print, export, Save for Web | 50% | 60–100 | Paper sizes include the Japanese ones (はがき 100×148 mm, 往復はがき 148×200, JIS B5/B4, A6, L判 89×127, 2L判 127×178, KG判 102×152, 六切 203×254, 四切 254×305) by their customary names; JPEG Options without Matte, or progressive Scans (FILE-215-19), no Photoshop PDF, no separations, Save for Web settings not remembered |
 | Video / timeline, data-driven graphics | 30% | 100–200 | Menu items live; frame model persists in `.pcraft`; no PSD video-layer mapping |
-| Workspace, panels, preferences | 40% | 150–250 | 11 of 183 prefs do nothing (scorecard, 2026-11-01); no floating/OS-window panel groups; Libraries, Comments, Contextual Task Bar missing |
+| Workspace, panels, preferences | 40% | 150–250 | 11 of 183 prefs do nothing (scorecard, 2026-11-01); no floating/OS-window panel groups; Libraries, Comments, Contextual Task Bar missing; the dock's icon column and «/» bars landed 2026-11-10 ([ui-parity.md](ui-parity.md#panels-and-workspace)) |
 | AI / generative | 10% | 300–600 | See the dimension row |
 
 Batch supports [output naming templates, recursive folders, open documents, Esc Continue/Stop,
@@ -600,7 +600,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-10 | minor | Image Processor: current-document and all-open-document sources process in-memory copies, preserving originals and history; folder input remains available; percentages and estimates unchanged |
+| 2026-11-10 | minor | Workspace, panels, preferences: the dock has Photoshop's icon column between the panels and the canvas, «/» on both column bars collapses and expands a column with the width its bodies need, panels and groups drag between the columns, and Window menus open a panel behind the icons as its column's flyout; the hand-drawn icon rail is gone and old workspaces still load. Percentages and estimates unchanged (no floating or OS-window groups yet) |
 | 2026-11-02 | minor | Automation Batch: Esc Continue/Stop preserves one file plan and error log; a read-only input preview replaces the progress bar; full live tabs remain open, AUTO-219-5 partial (#4579); percentages and estimates unchanged |
 | 2026-11-02 | minor | AUTO-219-1: action recording folds Move-tool nudges, records relative document switches and scales point text placement to the playback canvas; duplicate names and paragraph box placement remain open; Automation parity estimate unchanged |
 | 2026-11-01 | minor | AUTO-219-1: action recording uses implicit or uniquely named layers and folds Type keystrokes into whole-text steps; duplicate names remain ambiguous; Automation parity estimate unchanged |
