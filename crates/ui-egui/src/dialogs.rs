@@ -346,6 +346,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
     match d.kind {
         _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
         _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
+        _ if crate::perspective_crop_ui::owns_invalid(fields) => crate::perspective_crop_ui::invalid_body(ui, fields),
         _ if crate::perspective_crop_ui::owns_switch(fields) => crate::perspective_crop_ui::switch_body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
         _ if crate::color_picker_ui::owns(fields) => {
@@ -543,6 +544,17 @@ fn button_row(
                 fields.insert("choice".into(), json!("dontCrop"));
             } else if hit == Some(ButtonRole::Default) {
                 fields.insert("choice".into(), json!("crop"));
+            }
+            hit
+        } else if crate::perspective_crop_ui::owns_invalid(fields) {
+            // Cancel (the default: Enter, and Esc) / Don't Crop (#11970).
+            let keep = DialogButton::new(ButtonRole::Default, tl!("Cancel"), 84.0);
+            let dont = DialogButton::new(ButtonRole::Alternate, tl!("Don't Crop"), 96.0);
+            let hit = dialog_buttons(ui, &[keep, dont]);
+            if hit == Some(ButtonRole::Alternate) {
+                fields.insert("choice".into(), json!("dontCrop"));
+            } else if hit == Some(ButtonRole::Default) {
+                fields.insert("choice".into(), json!("cancel"));
             }
             hit
         } else if crate::preset_group_prompt::owns(fields) {
@@ -941,6 +953,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::mask_trash_prompt::owns,
     crate::rasterize_prompt::owns,
     crate::perspective_crop_ui::owns_switch,
+    crate::perspective_crop_ui::owns_invalid,
     crate::duplicate_layer_ui::owns,
     crate::stack_dialog::owns,
     crate::tool_reset::owns,
@@ -1175,6 +1188,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
+        _ if crate::perspective_crop_ui::owns_invalid(&d.fields) => crate::perspective_crop_ui::confirm_invalid(app, &d.fields),
         _ if crate::perspective_crop_ui::owns_switch(&d.fields) => crate::perspective_crop_ui::confirm_switch(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
