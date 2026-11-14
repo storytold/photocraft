@@ -20,9 +20,9 @@ pub(crate) fn choices() -> Value {
 }
 
 /// What a field the form lacks, or holds with another type (`ui.dialog.set` with `null`), becomes:
-/// the dialog's defaults, with empty folders.
+/// the dialog's defaults, with an empty destination. `input` is the Source Files list's own.
 fn fallback() -> Value {
-    json!({"input": "", "output": "", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
+    json!({"output": "", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
 }
 
 /// Whether `f` is the batch Lens Correction form.
@@ -32,32 +32,21 @@ pub(crate) fn owns(f: &Map<String, Value>) -> bool {
 
 /// The dialog body: one block per group. A missing or mistyped field is set to its [`fallback`]
 /// first, so the dialog shows what OK sends.
-pub(crate) fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+pub(crate) fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     if let Value::Object(fallback) = fallback() {
         for (key, value) in fallback {
-            // `input` may also be a list of files (`batch_inputs`), not only a folder.
-            let keeps = match f.get(&key) {
-                Some(Value::Array(_)) => key == "input",
-                Some(v) => std::mem::discriminant(v) == std::mem::discriminant(&value),
-                None => false,
-            };
-            if !keeps {
+            if f.get(&key).is_none_or(|v| std::mem::discriminant(v) != std::mem::discriminant(&value)) {
                 f.insert(key, value);
             }
         }
     }
-    let labels: Vec<&str> = ["Input:", "File Type:", "Profile:"].iter().map(|l| tl!(l)).collect();
+    let labels: Vec<&str> = ["Use:", "File Type:", "Profile:"].iter().map(|l| tl!(l)).collect();
     let w = crate::widgets::label_column_width(ui, &labels, 80.0, 160.0);
-    source_files(ui, f, w);
+    heading(ui, tl!("Source Files"));
+    super::lens_batch_sources::group(app, ui, f, id, w);
     destination_folder(ui, f, w);
     profile(ui, f, w);
     correction_options(ui, f);
-}
-
-/// Source Files: the folder the images are read from.
-fn source_files(ui: &mut egui::Ui, f: &mut Map<String, Value>, w: f32) {
-    heading(ui, tl!("Source Files"));
-    row(ui, w, tl!("Input:"), |ui| folder(ui, f, "input", tl!("Input"), tl!("Browse…")));
 }
 
 /// Destination Folder: the file type and the folder the results are written to.

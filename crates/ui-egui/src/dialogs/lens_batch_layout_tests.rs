@@ -29,17 +29,21 @@ pub(super) fn fields(h: &H) -> &Map<String, Value> {
     &h.state().ui.dialogs.last().expect("the dialog is open").fields
 }
 
-/// The text the text field `name` shows.
-pub(super) fn shown(h: &H, name: &str) -> String {
-    h.get_by_role_and_label(Role::TextInput, name).accesskit_node().value().unwrap_or_default().to_string()
-}
-
 /// Replaces the text of the text field `name` with `text`.
 pub(super) fn type_into(h: &mut H, name: &str, text: &str) {
     h.get_by_role_and_label(Role::TextInput, name).click();
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text(text.into()));
+    h.run_steps(2);
+}
+
+/// Sets the field `field` of the open dialog to `value` through `ui.dialog.set`, as scripts do.
+pub(super) fn set(h: &mut H, field: &str, value: Value) {
+    let dialog = h.state().ui.dialogs.last().expect("the dialog is open").id;
+    let (req, _rx) = crate::ControlRequest::new("ui.dialog.set", json!({"dialog": dialog, "field": field, "value": value}));
+    let ctx = h.ctx.clone();
+    assert!(matches!(crate::control::handle(h.state_mut(), &ctx, &req), crate::control::Outcome::Done(_)));
     h.run_steps(2);
 }
 
@@ -84,7 +88,7 @@ fn the_four_groups_follow_the_reference_order() {
         }
         // Each group's controls sit below its title and above the next group's.
         let groups: [&[(Role, &str)]; 4] = [
-            &[(Role::TextInput, "Input")],
+            &[(Role::ComboBox, "Use"), (Role::Button, "Browse…")],
             &[(Role::ComboBox, "File Type"), (Role::TextInput, "Output"), (Role::Button, "Choose…")],
             &[(Role::ComboBox, "Profile")],
             &[(Role::CheckBox, "Geometric Distortion"), (Role::CheckBox, "Auto Scale Image"), (Role::ComboBox, "Edge")],
@@ -167,8 +171,8 @@ fn alt_leaves_cancel_as_cancel_and_escape_cancels() {
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
         let mut h = harness();
         let dir = fixture("escape");
-        let (input, output) = (dir.to_string_lossy().into_owned(), dir.join("out"));
-        type_into(&mut h, "Input", &input);
+        let output = dir.join("out");
+        set(&mut h, "input", json!([dir.join("a.png")]));
         type_into(&mut h, "Output", &output.to_string_lossy());
         h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
         h.run_steps(2);
@@ -192,13 +196,12 @@ fn ok_runs_the_command_with_the_same_params() {
         let mut h = harness();
         assert_eq!(
             crate::filter_dialog::params_of(fields(&h)),
-            json!({"input": ".", "output": "./corrected", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
+            json!({"input": [], "output": "./corrected", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
         );
-        assert_eq!(shown(&h, "Input"), ".");
 
         let dir = fixture("ok");
-        let (input, output) = (dir.to_string_lossy().into_owned(), dir.join("out").to_string_lossy().into_owned());
-        type_into(&mut h, "Input", &input);
+        let (input, output) = (json!([dir.join("a.png")]), dir.join("out").to_string_lossy().into_owned());
+        set(&mut h, "input", input.clone());
         type_into(&mut h, "Output", &output);
         pick(&mut h, "File Type", "PNG");
         pick(&mut h, "Profile", "None");
@@ -220,12 +223,12 @@ fn ok_runs_the_command_with_the_same_params() {
     });
 }
 
-/// Browse… picks the source folder and Choose… the destination, each through the folder picker.
+/// Browse… picks the source files and Choose… the destination folder.
 #[test]
 fn browse_picks_the_source_and_choose_the_destination() {
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
         use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
-        let answers = vec![Some(FileDialogAnswer::FolderTo("/tmp/sources".into())), Some(FileDialogAnswer::FolderTo("/tmp/results".into()))];
+        let answers = vec![Some(FileDialogAnswer::Paths(vec!["/tmp/sources/a.png".into()])), Some(FileDialogAnswer::FolderTo("/tmp/results".into()))];
         let (show, asked) = crate::file_dialog::fake(answers);
         let mut h = harness_with(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() }));
         let click = |h: &mut H, button: &str| {
@@ -236,10 +239,10 @@ fn browse_picks_the_source_and_choose_the_destination() {
             h.run_steps(2);
         };
         click(&mut h, "Browse…");
-        assert_eq!((&fields(&h)["input"], &fields(&h)["output"]), (&json!("/tmp/sources"), &json!("./corrected")));
+        assert_eq!((&fields(&h)["input"], &fields(&h)["output"]), (&json!(["/tmp/sources/a.png"]), &json!("./corrected")));
         click(&mut h, "Choose…");
-        assert_eq!((&fields(&h)["input"], &fields(&h)["output"]), (&json!("/tmp/sources"), &json!("/tmp/results")));
-        assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }, FileDialogRequest::Folder { .. }]));
+        assert_eq!((&fields(&h)["input"], &fields(&h)["output"]), (&json!(["/tmp/sources/a.png"]), &json!("/tmp/results")));
+        assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Open { multiple: true, .. }, FileDialogRequest::Folder { .. }]));
     });
 }
 
@@ -249,13 +252,9 @@ fn browse_picks_the_source_and_choose_the_destination() {
 fn a_field_set_to_null_shows_and_sends_its_default() {
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
         let mut h = harness();
-        let dialog = h.state().ui.dialogs.last().expect("the dialog is open").id;
         for field in ["autoScale", "edge"] {
-            let (req, _rx) = crate::ControlRequest::new("ui.dialog.set", json!({"dialog": dialog, "field": field, "value": null}));
-            let ctx = h.ctx.clone();
-            assert!(matches!(crate::control::handle(h.state_mut(), &ctx, &req), crate::control::Outcome::Done(_)));
+            set(&mut h, field, Value::Null);
         }
-        h.run_steps(2);
         let ticked = h.get_by_role_and_label(Role::CheckBox, "Auto Scale Image").accesskit_node().toggled();
         assert_eq!(ticked, Some(egui::accesskit::Toggled::True), "Auto Scale Image shows its default");
         assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Edge").accesskit_node().value().as_deref(), Some("Transparency"));

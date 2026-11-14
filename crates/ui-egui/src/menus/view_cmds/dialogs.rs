@@ -569,7 +569,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.automate.lensCorrection" => dialog(
             app,
             // Opens as the reference dialog does (#13980); the command's own defaults stay for scripts.
-            json!({"input": dir, "output": format!("{dir}/corrected"), "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency", "__altReset": false}),
+            json!({"input": [], "output": format!("{dir}/corrected"), "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency", "__altReset": false}),
             crate::dialogs::lens_batch_ui::choices(),
         ),
         "file.scripts.imageProcessor" => dialog(
