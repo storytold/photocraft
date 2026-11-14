@@ -148,6 +148,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             orientation: t.orientation,
             antialias: t.antialias,
             warp: t.warp.clone(),
+            fit: t.fit.clone().map(|f| f.sanitized(&t.text)),
         },
         LayerContent::Shape(s) => ContentM::Shape {
             fill: s.fill.clone(),
@@ -481,7 +482,7 @@ impl Loader<'_> {
             }
             ContentM::Adjustment { adjustment } => LayerContent::Adjustment(adjustment.clone()),
             ContentM::Fill { fill } => LayerContent::Fill(fill.clone()),
-            ContentM::Text { text, font_family, size_pt, color, transform, cache, psd_raw, runs, paragraphs, shape, orientation, antialias, warp } => {
+            ContentM::Text { text, font_family, size_pt, color, transform, cache, psd_raw, runs, paragraphs, shape, orientation, antialias, warp, fit } => {
                 LayerContent::Text(TextLayer {
                     text: text.clone(),
                     font_family: font_family.clone(),
@@ -496,6 +497,7 @@ impl Loader<'_> {
                     orientation: *orientation,
                     antialias: *antialias,
                     warp: warp.clone(),
+                    fit: fit.clone().map(|f| f.sanitized(text)),
                 })
             }
             ContentM::Shape { fill, cache, psd_raw, path, stroke, live, arrow_live, triangle_live, density, feather } => LayerContent::Shape(ShapeLayer {

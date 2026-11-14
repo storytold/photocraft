@@ -615,6 +615,48 @@ fn minimal_txt2_style_run() -> E {
     E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), data)])), ("1".into(), E::Int(1))])
 }
 
+/// The `Txt2` keys of a paragraph's indents and spacing, in its paragraph run's style
+/// (`/0 /0 /5`): first-line, start and end indent, space before and after — EngineData's order
+/// (`FirstLineIndent` … `SpaceAfter`), as Photoshop's own files show.
+const TXT2_PARAGRAPH_SPACING: [&str; 5] = ["1", "2", "3", "4", "5"];
+
+/// The same keys in the older Photoshop's objects (`RunData /ParagraphSheet /Features`).
+const TD_PARAGRAPH_SPACING: [&str; 5] = ["FirstLineIndent", "StartIndent", "EndIndent", "SpaceBefore", "SpaceAfter"];
+
+/// The style of each paragraph of `layer`'s engine text (`\r`-terminated: one more than the
+/// text's breaks), in order: the paragraph run holding its first byte, as `TySh` writes it; the
+/// empty paragraph after a trailing break takes the empty run kept for it, when there is one.
+fn paragraph_styles(layer: &TextLayer) -> impl Iterator<Item = ParagraphStyle> + '_ {
+    let runs = layer.paragraph_runs();
+    let (mut start, mut ri, mut end) = (Some(0usize), 0usize, runs.first().map_or(0, |r| r.len));
+    std::iter::from_fn(move || {
+        let at = start?;
+        while ri + 1 < runs.len() && end <= at {
+            ri += 1;
+            end = end.saturating_add(runs.get(ri).map_or(0, |r| r.len));
+        }
+        start = layer.text.get(at..).and_then(|rest| rest.find(['\r', '\n'])).map(|i| at + i + 1);
+        runs.get(ri).map(|r| r.style.clone())
+    })
+}
+
+/// Sets the indents and spacing (`keys`, see [`TXT2_PARAGRAPH_SPACING`]) of each paragraph run of
+/// `runs`, in the style dictionary at `path`, from `layer`'s paragraph at that place, in document
+/// points (`k` per point, as the style runs' sizes). Every other key is kept. Baking Dynamic Text
+/// changes them (a paragraph split into lines keeps its first-line indent and space before only on
+/// its first line, and an area's scale scales them), and Photoshop reads them from here.
+fn set_paragraph_spacing(runs: &mut [E], layer: &TextLayer, k: f32, path: &[&str], keys: [&str; 5]) {
+    for (run, p) in runs.iter_mut().zip(paragraph_styles(layer)) {
+        let Some(style @ E::Dict(_)) = path.iter().try_fold(run, |v, key| v.get_mut(key)) else { continue };
+        let values = [p.first_line_indent_pt, p.start_indent_pt, p.end_indent_pt, p.space_before_pt, p.space_after_pt];
+        for (key, v) in keys.into_iter().zip(values) {
+            if v.is_finite() {
+                style.set(key, real(v * k));
+            }
+        }
+    }
+}
+
 /// A point-text object with a view naming frame `frame` and empty style runs, for a layer the
 /// file's block has no object for and no template to copy (#10308, #7698). Style runs are filled
 /// by [`txt2_style_runs`] next.
@@ -661,6 +703,8 @@ pub fn build_txt2(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>) -> Vec
 /// [`build_txt2`] for a document of `dpi` (the style runs of new and edited objects carry sizes
 /// in the document's points, as EngineData does).
 pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi: f32) -> Vec<u8> {
+    // Document points per point, as the style runs' sizes take them.
+    let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
     let prev = previous.and_then(parse_txt2);
     let prev_objects: &[E] = prev.as_ref().and_then(|p| p.path(&["1", "1"]).and_then(E::as_array)).unwrap_or(&[]);
     let mut slots: Vec<E> = prev_objects.to_vec();
@@ -717,9 +761,12 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
                 Some(entry) if entry.path(&["Model", "Text"]).and_then(E::as_str) != Some(text.as_str()) => td_edited_object(entry, &text),
                 _ => None,
             };
-            if let Some(fixed) = fixed
+            if let Some(mut fixed) = fixed
                 && let Some(slot) = entries.get_mut(at)
             {
+                if let Some(E::Array(runs)) = fixed.get_mut("Model").and_then(|m| m.get_mut("ParagraphRun")).and_then(|r| r.get_mut("RunArray")) {
+                    set_paragraph_spacing(runs, layer, k, &["RunData", "ParagraphSheet", "Features"], TD_PARAGRAPH_SPACING);
+                }
                 *slot = fixed;
                 td_changed = true;
             }
@@ -810,6 +857,11 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
                 })
                 .collect()
         });
+        // A new or edited object's paragraph runs are refitted from the file's (or the template's):
+        // their indents and spacing are set from the layer, as its `TySh` has them.
+        if !unchanged && let Some(E::Array(runs)) = model.get_mut("5").and_then(|r| r.get_mut("0")) {
+            set_paragraph_spacing(runs, layer, k, &["0", "0", "5"], TXT2_PARAGRAPH_SPACING);
+        }
         model.set("0", E::String(text));
         match model.get_mut("6") {
             Some(style_run @ E::Dict(_)) => style_run.set("0", E::Array(runs)),

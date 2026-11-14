@@ -73,6 +73,10 @@ fn export_supported_document(
     size_limit: u64,
     patterns: Option<&[photocraft_doc::PsdGlobalBlock]>,
 ) -> (PsdFile, Vec<String>) {
+    // Dynamic Text solved for the file is saved with the pixels of its solved look too: its
+    // layer's channels and the merged image, like its `TySh` and `Txt2`.
+    let solved = with_solved_dynamic_text(doc, fmt);
+    let doc = solved.as_ref().unwrap_or(doc);
     // A Duotone is written over its grey plate with its inks: the block it was imported with,
     // verbatim, while the inks are unedited, else one made from them (`duotone_map`). Photoshop
     // has only 8-bit Duotone: it refuses to open a 16-bit one.
@@ -93,6 +97,7 @@ fn export_supported_document(
         read_linked_files: opts.read_linked_files,
         text_styles: doc.text_styles.clone(),
         text_index: Default::default(),
+        baked_text: Default::default(),
         mask_fmt: PixelFormat::new(ColorMode::Grayscale, sample, false),
         cc,
         cmyk: fmt.mode == ColorMode::Cmyk,
@@ -184,11 +189,13 @@ fn export_supported_document(
     // `TySh` names (unused slots stay empty; see `photocraft_text::psd::build_txt2`). The block
     // it replaces is handed over so a kept object keeps everything the file held beyond its text
     // and style runs (Photoshop's `/21 /1` glyph pen positions, …).
+    // Baked Dynamic Text is written as the baked layer, in `Txt2` as in its `TySh`.
+    let baked = std::mem::take(&mut ex.baked_text);
     let text_layers: Vec<(i32, &photocraft_doc::TextLayer)> = doc
         .walk()
         .into_iter()
         .filter_map(|(_, _, l)| match &l.content {
-            LayerContent::Text(t) => Some((ex.text_index.get(&l.id).copied().unwrap_or(0), t)),
+            LayerContent::Text(t) => Some((ex.text_index.get(&l.id).copied().unwrap_or(0), baked.get(&l.id).unwrap_or(t))),
             _ => None,
         })
         .collect();
@@ -313,6 +320,31 @@ fn export_supported_document(
     }
     sign_global_blocks(&mut file);
     (file, ex.warnings)
+}
+
+/// `doc` with every Dynamic Text layer whose lines need solving (see `needs_solving`) solved and
+/// drawn again, or `None` when no layer was solved. The saved text is the solved layer baked, so
+/// its layer pixels and the merged image must show that look, not the base sizes the layer's
+/// cache was drawn at. The document itself is left alone.
+fn with_solved_dynamic_text(doc: &Document, fmt: PixelFormat) -> Option<Document> {
+    let ids: Vec<photocraft_doc::LayerId> =
+        doc.walk().into_iter().filter_map(|(_, _, l)| matches!(&l.content, LayerContent::Text(t) if super::needs_solving(t)).then_some(l.id)).collect();
+    if ids.is_empty() {
+        return None;
+    }
+    let mut copy = doc.clone();
+    let mut eng = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut solved_any = false;
+    for id in ids {
+        if let Some(LayerContent::Text(t)) = copy.layer_mut(id).map(|l| &mut l.content)
+            && let Some(mut solved) = super::solved_copy(&mut eng, t, doc.resolution_dpi)
+        {
+            eng.render_layer(&mut solved, doc.resolution_dpi, fmt);
+            *t = solved;
+            solved_any = true;
+        }
+    }
+    solved_any.then_some(copy)
 }
 
 fn add_format_warnings(doc: &Document, opts: &PsdExportOptions, fmt: PixelFormat, big: bool, has_duotone: bool, warnings: &mut Vec<String>) {
