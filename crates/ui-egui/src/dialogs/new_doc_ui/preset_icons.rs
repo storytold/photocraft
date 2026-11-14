@@ -30,7 +30,8 @@ pub(super) fn builtin_icon(category: &str, preset: &str) -> &'static str {
     }
 }
 
-/// Icon and text share one accessible button and hit target. Wrapping belongs to the parent row.
+/// Icon and text share one selectable button and hit target. The standard button exposes its
+/// pressed state to assistive technology. Wrapping belongs to the parent row.
 pub(super) fn category_tab(ui: &mut egui::Ui, category: &str, selected: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let tint = if selected { t.text } else { t.text_dim };
@@ -40,14 +41,20 @@ pub(super) fn category_tab(ui: &mut egui::Ui, category: &str, selected: bool) ->
             egui::Button::new((icons::image(category_icon(category), 16.0, tint), egui::RichText::new(label).size(13.0).color(tint)))
                 .gap(4.0)
                 .wrap_mode(egui::TextWrapMode::Extend)
+                .selected(selected)
                 .frame(false),
         )
         .on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, ui.is_enabled(), selected, label));
     if selected {
         ui.painter().line_segment([response.rect.left_bottom(), response.rect.right_bottom()], egui::Stroke::new(2.0, t.text));
     }
     response
+}
+
+/// The two light Pro palettes use blue selection text over the inherited blue button fill.
+/// Use their dark text ink for the glyph so it stays visible in a selected saved preset.
+pub(super) fn saved_icon_tint(t: &Tokens, selected: bool) -> egui::Color32 {
+    if selected && (!t.pro || t.dark()) { t.accent_text } else { t.text }
 }
 
 #[cfg(test)]
@@ -56,6 +63,50 @@ mod tests {
     use crate::new_doc_ui::{CATEGORIES, CLIPBOARD, Card, at_pref_resolutions, oriented};
     use photocraft_engine::prefs::UnitsAndRulers;
     use serde_json::{Map, json};
+
+    /// A named category button exposes its actual pressed state in the generated AccessKit tree.
+    #[test]
+    fn category_buttons_expose_the_active_category() {
+        use egui::accesskit::{Role, Toggled};
+
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            category_tab(ui, "Recent", false);
+            category_tab(ui, "Mobile", true);
+        });
+        // This headless test only inspects the accessibility tree.
+        output.textures_delta.clear();
+        let nodes = output.platform_output.accesskit_update.unwrap().nodes;
+        for (label, pressed) in [("Recent", Toggled::False), ("Mobile", Toggled::True)] {
+            let node = nodes.iter().find_map(|(_, node)| (node.label() == Some(label)).then_some(node)).unwrap();
+            assert_eq!(node.role(), Role::Button);
+            assert_eq!(node.toggled(), Some(pressed));
+        }
+    }
+
+    /// Selected Saved icons need at least 3:1 contrast against the actual button fill in light
+    /// Pro themes. The prior blue tint failed in both. Classic keeps its white selection ink.
+    #[test]
+    fn saved_icon_ink_stays_visible_in_light_pro_and_classic() {
+        use crate::theme::ThemeKind;
+
+        let ctx = egui::Context::default();
+        let luminance = |color: egui::Color32| {
+            let [r, g, b, _] = egui::Rgba::from(color).to_array();
+            0.2126 * r + 0.7152 * g + 0.0722 * b
+        };
+        for theme in [ThemeKind::ProLight, ThemeKind::ProLightGray, ThemeKind::Classic] {
+            crate::theme::apply(&ctx, theme);
+            let tokens = Tokens::get(&ctx);
+            let fill = ctx.global_style().visuals.selection.bg_fill;
+            let ink = saved_icon_tint(&tokens, true);
+            let (fill, ink) = (luminance(fill), luminance(ink));
+            let ratio = (fill.max(ink) + 0.05) / (fill.min(ink) + 0.05);
+            assert!(ratio >= 3.0, "{theme:?}: {ratio:.2}:1");
+            assert_eq!(saved_icon_tint(&tokens, false), tokens.text);
+        }
+    }
 
     /// Require distinct embedded category symbols and exact canonical overrides for named devices.
     #[test]
