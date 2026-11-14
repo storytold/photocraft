@@ -59,6 +59,34 @@ pub struct SpellDialog {
     /// continues it ([`crate::actions::resume`]).
     #[serde(skip)]
     pub resume: Option<u64>,
+    /// The hidden and Lock All type layers the check passes, each asked about when the check
+    /// reaches it (#14175).
+    pub skipped: Vec<SkippedLayer>,
+    /// Layers answered with Skip, and the reasons answered with Skip All.
+    #[serde(skip)]
+    pub passed: Vec<photocraft_doc::LayerId>,
+    #[serde(skip)]
+    pub skip_all: Vec<String>,
+    /// The prompt's "Don't show again"; what it does is not measured, so nothing yet.
+    #[serde(skip)]
+    pub dont_show: bool,
+    /// The dialog has been on screen: before that a prompt shows alone.
+    #[serde(skip)]
+    pub shown: bool,
+    /// The layer whose prompt was on screen in the last frame: only then Enter answers it, so the
+    /// Enter that brought it up does not skip at once.
+    #[serde(skip)]
+    pub prompt_seen: Option<photocraft_doc::LayerId>,
+}
+
+/// A type layer `edit.checkSpelling` did not check, `reason` "hidden" or "locked", reached when
+/// the dialog's `index` gets to `at`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkippedLayer {
+    pub layer: photocraft_doc::LayerId,
+    pub name: String,
+    pub reason: String,
+    pub at: usize,
 }
 
 /// The `dialog` that Check Spelling's results and a playback paused at its step name.
@@ -788,18 +816,110 @@ fn refresh_spelling(app: &mut PhotocraftApp) {
         p["layers"] = json!(d.layers.iter().filter(|l| doc.is_some_and(|doc| doc.layer(**l).is_some())).map(|l| l.0).collect::<Vec<_>>());
         p["from"] = json!(layer.0);
     }
-    let items = if !d.all_layers && d.layer.is_none() {
-        Vec::new()
-    } else {
-        run(app, "edit.checkSpelling", p).and_then(|r| r["misspellings"].as_array().cloned()).unwrap_or_default()
-    };
+    let list = if !d.all_layers && d.layer.is_none() { None } else { run(app, "edit.checkSpelling", p) };
+    let items = list.as_ref().and_then(|r| r["misspellings"].as_array().cloned()).unwrap_or_default();
     let ignored = |i: &Value| {
         let key = ignore_key(i["word"].as_str().unwrap_or(""));
         d.ignore.iter().any(|(layer, k)| i["layer"] == layer.0 && *k == key)
     };
+    let doc = app.session.active().map(|st| &st.doc);
+    // `at` counts the listed words, so the Ignore All words dropped below are taken off it.
+    let skipped: Vec<SkippedLayer> = list
+        .as_ref()
+        .and_then(|r| r["skipped"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| {
+            let layer = photocraft_doc::LayerId(v["layer"].as_u64()?);
+            let at = v["at"].as_u64()? as usize;
+            Some(SkippedLayer {
+                layer,
+                name: doc.and_then(|doc| doc.layer(layer)).map(|l| l.name.clone()).unwrap_or_default(),
+                reason: v["reason"].as_str()?.to_string(),
+                at: at - items[..at.min(items.len())].iter().filter(|i| ignored(i)).count(),
+            })
+        })
+        .collect();
     if let Some(s) = app.ui.type_panels.spell.as_mut() {
         s.items = items.into_iter().filter(|i| !ignored(i)).collect();
+        s.skipped = skipped;
         s.change_to = s.items.get(s.index).and_then(|i| i["suggestions"][0].as_str()).unwrap_or("").to_string();
+    }
+}
+
+/// The hidden or locked layer the check has reached and that is not answered yet.
+fn pending_skip(d: &SpellDialog) -> Option<&SkippedLayer> {
+    d.skipped.iter().find(|s| s.at <= d.index && !d.passed.contains(&s.layer) && !d.skip_all.contains(&s.reason))
+}
+
+/// Whether a hidden or locked layer prompt is open, which keeps the shortcuts from the window.
+pub fn skip_prompt_open(app: &PhotocraftApp) -> bool {
+    app.ui.type_panels.spell.as_ref().is_some_and(|d| pending_skip(d).is_some())
+}
+
+/// The reference's warning when the check reaches a hidden or Lock All type layer: Skip (the
+/// default, also Enter) passes it, Skip All every later one of its kind, and Cancel (also Esc) ends
+/// the check, keeping the changes made, and stops an action paused at it, as a step dialog's Cancel
+/// does.
+fn skip_prompt(app: &mut PhotocraftApp, ctx: &egui::Context, layer: &SkippedLayer) {
+    let t = Tokens::get(ctx);
+    let message = if layer.reason == "hidden" {
+        tl!("The text layer “{name}” is hidden and cannot be spell checked.  Skip hidden layer and continue spell checking?")
+    } else {
+        tl!("The text layer “{name}” is locked and cannot be spell checked.  Skip locked layer and continue spell checking?")
+    };
+    let message = crate::i18n::fmt(message, &[("name", &layer.name)]);
+    let mut dont_show = app.ui.type_panels.spell.as_ref().is_some_and(|d| d.dont_show);
+    let seen = app.ui.type_panels.spell.as_ref().is_some_and(|d| d.prompt_seen == Some(layer.layer));
+    let mut answer = None;
+    let modal = egui::Modal::new(egui::Id::unique("check-spelling-skip"))
+        .backdrop_color(egui::Color32::TRANSPARENT)
+        .frame(float_frame(&t).inner_margin(egui::Margin::same(14)))
+        .show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                let (r, _) = ui.allocate_exact_size(vec2(32.0, 32.0), egui::Sense::hover());
+                crate::icons::paint(ui, r, "triangle-alert", 30.0, t.warning);
+                ui.add(egui::Label::new(RichText::new(message).color(t.text).size(13.0)).wrap());
+            });
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                crate::widgets::checkbox(ui, &mut dont_show, tl!("Don't show again"));
+                // Right to left, so the row reads Skip, Cancel, Skip All.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::widgets::secondary_button(ui, tl!("Skip All"), 84.0).clicked() {
+                        answer = Some("skipAll");
+                    }
+                    if crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked() {
+                        answer = Some("cancel");
+                    }
+                    if crate::widgets::primary_button(ui, tl!("Skip"), 84.0).clicked() {
+                        answer = Some("skip");
+                    }
+                });
+            });
+        });
+    if modal.should_close() {
+        answer = Some("cancel");
+    }
+    if answer.is_none() && seen && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+        answer = Some("skip");
+    }
+    if answer == Some("cancel") {
+        if let Some(token) = app.ui.type_panels.spell.take().and_then(|d| d.resume) {
+            crate::actions::stopped(app, &serde_json::Map::from_iter([(crate::actions::RESUME.to_string(), json!(token))]));
+        }
+        return;
+    }
+    if let Some(s) = app.ui.type_panels.spell.as_mut() {
+        s.dont_show = dont_show;
+        s.prompt_seen = Some(layer.layer);
+        match answer {
+            Some("skip") => s.passed.push(layer.layer),
+            Some("skipAll") => s.skip_all.push(layer.reason.clone()),
+            _ => {}
+        }
     }
 }
 
@@ -832,8 +952,9 @@ pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value,
     app.session.execute("edit.checkSpelling", params).map_err(|e| e.to_string())?;
     app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, layers, resume, ..Default::default() });
     refresh_spelling(app);
-    let d = app.ui.type_panels.spell.as_ref().map(|d| d.items.clone()).unwrap_or_default();
-    Ok(json!({ "dialog": SPELLING, "misspellings": d }))
+    let (items, skipped) = app.ui.type_panels.spell.as_ref().map(|d| (d.items.clone(), d.skipped.clone())).unwrap_or_default();
+    // `skipped` tells a caller that a prompt (`ui.key` Enter or Escape answers it) may come first.
+    Ok(json!({ "dialog": SPELLING, "misspellings": items, "skipped": skipped }))
 }
 
 /// Done: an action being recorded gets one Check Spelling step with Check All Layers as the dialog
@@ -864,7 +985,15 @@ fn spelling_change_all_params(item: &Value, word: &str, replace: &str) -> Value 
 fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let Some(d) = app.ui.type_panels.spell.clone() else { return };
-    let item = d.items.get(d.index).cloned();
+    // A hidden or locked first layer is asked about before the dialog opens.
+    if let Some(layer) = pending_skip(&d).cloned()
+        && !d.shown
+    {
+        return skip_prompt(app, ctx, &layer);
+    }
+    // Under a prompt the dialog shows neither the next word nor the end of the check.
+    let pending = pending_skip(&d).is_some();
+    let item = d.items.get(d.index).cloned().filter(|_| !pending);
     let mut act: Option<&str> = None;
     let mut change_to = d.change_to.clone();
     let mut all_layers = d.all_layers;
@@ -889,67 +1018,69 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             });
             ui.add_space(6.0);
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(250.0);
-                    ui.label(RichText::new(tl!("Not in Dictionary:")).color(t.text_dim).size(11.5));
-                    let word = item.as_ref().and_then(|i| i["word"].as_str()).unwrap_or("");
-                    let shown = if item.is_some() {
-                        word.to_string()
-                    } else if d.items.is_empty() || d.index >= d.items.len() {
-                        "".into()
-                    } else {
-                        String::new()
-                    };
-                    ui.add_enabled(false, egui::TextEdit::singleline(&mut shown.clone()).desired_width(240.0)).accessible_name(tl!("Not in Dictionary:"));
-                    ui.add_space(4.0);
-                    let change_label = ui.label(RichText::new(tl!("Change To:")).color(t.text_dim).size(11.5));
-                    ui.add_enabled(item.is_some(), egui::TextEdit::singleline(&mut change_to).desired_width(240.0)).labelled_by(change_label.id);
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(tl!("Suggestions:")).color(t.text_dim).size(11.5));
-                    egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(3)).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
-                        ui.set_min_size(vec2(240.0, 110.0));
-                        egui::ScrollArea::vertical().id_salt("spell-sugg").max_height(110.0).show(ui, |ui| {
-                            for s in item.as_ref().and_then(|i| i["suggestions"].as_array()).into_iter().flatten() {
-                                let s = s.as_str().unwrap_or("");
-                                let r = ui.selectable_label(s == change_to, s);
-                                if r.clicked() {
-                                    change_to = s.to_string();
+            ui.add_enabled_ui(!pending, |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(250.0);
+                        ui.label(RichText::new(tl!("Not in Dictionary:")).color(t.text_dim).size(11.5));
+                        let word = item.as_ref().and_then(|i| i["word"].as_str()).unwrap_or("");
+                        let shown = if item.is_some() {
+                            word.to_string()
+                        } else if d.items.is_empty() || d.index >= d.items.len() {
+                            "".into()
+                        } else {
+                            String::new()
+                        };
+                        ui.add_enabled(false, egui::TextEdit::singleline(&mut shown.clone()).desired_width(240.0)).accessible_name(tl!("Not in Dictionary:"));
+                        ui.add_space(4.0);
+                        let change_label = ui.label(RichText::new(tl!("Change To:")).color(t.text_dim).size(11.5));
+                        ui.add_enabled(item.is_some(), egui::TextEdit::singleline(&mut change_to).desired_width(240.0)).labelled_by(change_label.id);
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(tl!("Suggestions:")).color(t.text_dim).size(11.5));
+                        egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(3)).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
+                            ui.set_min_size(vec2(240.0, 110.0));
+                            egui::ScrollArea::vertical().id_salt("spell-sugg").max_height(110.0).show(ui, |ui| {
+                                for s in item.as_ref().and_then(|i| i["suggestions"].as_array()).into_iter().flatten() {
+                                    let s = s.as_str().unwrap_or("");
+                                    let r = ui.selectable_label(s == change_to, s);
+                                    if r.clicked() {
+                                        change_to = s.to_string();
+                                    }
+                                    if r.double_clicked() {
+                                        change_to = s.to_string();
+                                        act = Some("change");
+                                    }
                                 }
-                                if r.double_clicked() {
-                                    change_to = s.to_string();
-                                    act = Some("change");
+                            });
+                        });
+                        ui.add_space(4.0);
+                        if crate::widgets::checkbox(ui, &mut all_layers, tl!("Check All Layers")).changed() {
+                            act = Some("relist");
+                        }
+                        let msg = if item.is_none() && !pending { tl!("Spell check complete.") } else { "" };
+                        if !msg.is_empty() {
+                            ui.label(RichText::new(msg).color(t.text).size(11.5));
+                        }
+                    });
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        if crate::widgets::primary_button(ui, tl!("Done"), 100.0).clicked() {
+                            act = Some("done");
+                        }
+                        ui.add_space(6.0);
+                        ui.add_enabled_ui(item.is_some(), |ui| {
+                            for (label, a) in [
+                                (tl!("Ignore"), "ignore"),
+                                (tl!("Ignore All"), "ignoreAll"),
+                                (tl!("Change"), "change"),
+                                (tl!("Change All"), "changeAll"),
+                                (tl!("Add"), "add"),
+                            ] {
+                                if crate::widgets::secondary_button(ui, label, 100.0).clicked() {
+                                    act = Some(a);
                                 }
                             }
                         });
-                    });
-                    ui.add_space(4.0);
-                    if crate::widgets::checkbox(ui, &mut all_layers, tl!("Check All Layers")).changed() {
-                        act = Some("relist");
-                    }
-                    let msg = if item.is_none() { tl!("Spell check complete.") } else { "" };
-                    if !msg.is_empty() {
-                        ui.label(RichText::new(msg).color(t.text).size(11.5));
-                    }
-                });
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    if crate::widgets::primary_button(ui, tl!("Done"), 100.0).clicked() {
-                        act = Some("done");
-                    }
-                    ui.add_space(6.0);
-                    ui.add_enabled_ui(item.is_some(), |ui| {
-                        for (label, a) in [
-                            (tl!("Ignore"), "ignore"),
-                            (tl!("Ignore All"), "ignoreAll"),
-                            (tl!("Change"), "change"),
-                            (tl!("Change All"), "changeAll"),
-                            (tl!("Add"), "add"),
-                        ] {
-                            if crate::widgets::secondary_button(ui, label, 100.0).clicked() {
-                                act = Some(a);
-                            }
-                        }
                     });
                 });
             });
@@ -957,6 +1088,10 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if let Some(s) = app.ui.type_panels.spell.as_mut() {
         s.change_to = change_to.clone();
         s.all_layers = all_layers;
+        s.shown = true;
+    }
+    if let Some(layer) = pending_skip(&d).cloned() {
+        return skip_prompt(app, ctx, &layer);
     }
     let Some(a) = act else { return };
     let word = item.as_ref().and_then(|i| i["word"].as_str()).unwrap_or("").to_string();
