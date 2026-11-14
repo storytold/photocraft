@@ -219,7 +219,7 @@ fn alt_reset_restores_the_custom_quality() {
     alt_reset(&mut h);
     assert!(h.state().ui.dialogs.iter().any(|d| d.id == dialog), "Reset keeps the dialog open");
     let p = params(&mut h, dialog);
-    assert_eq!((&p["format"], &p["quality"]), (&json!("png"), &Value::Null), "the opening format, no quality");
+    assert_eq!((&p["format"], &p["quality"]), (&json!("psd"), &Value::Null), "the opening format, no quality");
     assert!(!custom_ticked(&h) && !quality_enabled(&h), "Custom is off again");
     assert_eq!(shown_quality(&h), Some(10.0), "the field shows the opening quality");
     // Choosing JPEG again still sends no quality until Custom is ticked.

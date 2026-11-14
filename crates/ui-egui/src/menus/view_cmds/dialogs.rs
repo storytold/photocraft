@@ -500,16 +500,22 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}),
             )
         }
-        "file.export.layerCompsToFiles" | "file.export.artboardsToFiles" => {
+        "file.export.layerCompsToFiles" => {
             let (_, _, name) = doc?;
             let prefix = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
-            let fields = if id == "file.export.layerCompsToFiles" {
-                json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "selectedOnly": false,
-                    "__order": ["dir", "prefix", "selectedOnly", "format", "quality"]})
-            } else {
-                json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "__order": ["dir", "prefix", "format", "quality"]})
-            };
+            let fields = json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "selectedOnly": false,
+                "__order": ["dir", "prefix", "selectedOnly", "format", "quality"]});
             dialog(app, fields, json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}))
+        }
+        // The reference application's File Type list, in its order, PSD first chosen (#13635).
+        "file.export.artboardsToFiles" => {
+            let (_, _, name) = doc?;
+            let prefix = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
+            let fields = json!({"dir": dir, "prefix": prefix, "format": "psd", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10,
+                "__order": ["dir", "prefix", "format", "quality"],
+                "__labels": {"format": tl!("File Type:"), "bmp": "BMP", "jpg": "JPEG", "pdf": "PDF", "psd": "PSD", "tga": "Targa", "tiff": "TIFF",
+                    "png8": "PNG-8", "png24": "PNG-24"}});
+            dialog(app, fields, json!({"format": ["bmp", "jpg", "pdf", "psd", "tga", "tiff", "png8", "png24"]}))
         }
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
