@@ -5,9 +5,11 @@
 //! document, are discarded when it closes, and are not saved to `.pcraft` or PSD. Placing, moving
 //! and removing them changes no pixels and adds no History step, so they are not journaled. Each
 //! point reads one composite pixel (no averaging); its values match the Info panel's pointer
-//! readout (RGB 0–255 and colour-managed CMYK percentages, as in the Color Picker).
+//! readout: every colour readout mode ([`Readouts`]) plus the extra channels' ink
+//! ([`channel_readouts`]).
 
 use photocraft_doc::Document;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -30,40 +32,256 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
-/// Colour-managed CMYK, in percent, as the Info panel shows it: the same conversion the Color
-/// Picker uses (`photocraft_color::convert::rgb_to_cmyk`: the CMYK profile active on this thread,
-/// else the built-in coated CMYK), so both panels agree (#8101). 32-bit samples can lie outside
-/// 0..1, so each channel is clamped first (NaN reads as 0), like the RGB readout.
+/// Convert sRGB to CMYK percentages using the same conversion as the Color Picker (#8101).
+/// The destination is the active thread's CMYK profile or the built-in coated CMYK. Values
+/// outside 0..1 are clamped and NaN reads as 0, so 32-bit samples remain in range.
 pub fn device_cmyk(r: f32, g: f32, b: f32) -> [i32; 4] {
     let unit = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
     photocraft_color::convert::rgb_to_cmyk([unit(r), unit(g), unit(b)]).map(|v| (unit(v) * 100.0).round() as i32)
+}
+
+/// Every colour readout of one composite sample, as the Info panel's readout modes show it
+/// (Photoshop's Panel Options › Color Readout): RGB 0–255, colour-managed CMYK percentages,
+/// Grayscale, HSB, HSL, Lab, Web Color, Total Ink and Opacity.
+///
+/// Verified against Photoshop 2027's Info panel (2026-10-28, flat swatches): Grayscale is
+/// `100 − Rec.601 luma` of the encoded RGB (pure red reads K 70 %, gray 128 reads 50 %), whatever
+/// the document's profile (sRGB and Adobe RGB read alike) or the gray working space; Opacity is
+/// the composite alpha under the pointer (a 50 % layer over an opaque layer reads 100 %).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Readouts {
+    pub rgb: [i32; 3],
+    pub cmyk: [i32; 4],
+    /// Grayscale: K %.
+    pub gray: i32,
+    /// Hue 0–359°, saturation %, brightness %.
+    pub hsb: [i32; 3],
+    /// Hue 0–359°, saturation %, lightness %.
+    pub hsl: [i32; 3],
+    /// L 0–100, a and b about −128..127.
+    pub lab: [i32; 3],
+    /// Six lowercase hex digits, `rrggbb`.
+    pub web: String,
+    /// The CMYK percentages added up.
+    pub total_ink: i32,
+    /// Composite alpha %.
+    pub opacity: i32,
+}
+
+/// The readouts of straight-alpha `rgba` (0..1; 32-bit samples outside that are clamped, NaN
+/// reads as 0) in `doc`. CMYK and Total Ink honor the source profile of RGB documents and
+/// the destination profile of CMYK documents. Lab uses the RGB composite, so native Lab
+/// values clipped during RGB compositing cannot be recovered here.
+pub fn readouts(doc: &Document, rgba: [f32; 4]) -> Readouts {
+    let unit = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+    let rgb = [unit(rgba[0]), unit(rgba[1]), unit(rgba[2])];
+    let q = |v: f32| (v * 255.0).round() as i32;
+    let pct = |v: f32| (v * 100.0).round() as i32;
+    let src = crate::color_cmds::composite_profile(doc);
+    let cmyk = if crate::color_cmds::mode_space(doc.mode) == photocraft_cms::ColorSpace::Rgb
+        && !src.same_bytes(photocraft_cms::Builtin::Srgb.profile())
+        && let Ok(transform) = photocraft_cms::cached(&src, photocraft_cms::Builtin::CoatedCmyk.profile(), photocraft_cms::TransformOptions::default())
+    {
+        let mut plates = [0.0; 4];
+        transform.eval_fast(&rgb, &mut plates);
+        plates.map(|v| pct(unit(v)))
+    } else {
+        // Native CMYK documents composite to sRGB. Keep their own destination profile and the
+        // existing sRGB conversion, also the fallback if a custom source profile will not link.
+        photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgb[0], rgb[1], rgb[2]))
+    };
+    let [h, s, b] = photocraft_color::convert::rgb_to_hsb_sextant(rgb);
+    let hue = ((h * 60.0).round() as i32).rem_euclid(360);
+    let (mx, mn) = (rgb[0].max(rgb[1]).max(rgb[2]), rgb[0].min(rgb[1]).min(rgb[2]));
+    let (l, d) = ((mx + mn) / 2.0, mx - mn);
+    let sl = if d <= 0.0 { 0.0 } else { d / (1.0 - (2.0 * l - 1.0).abs()).max(f32::EPSILON) };
+    Readouts {
+        rgb: rgb.map(q),
+        cmyk,
+        gray: pct(1.0 - photocraft_color::convert::rgb_to_gray(rgb)),
+        hsb: [hue, pct(s), pct(b)],
+        hsl: [hue, pct(sl), pct(l)],
+        lab: lab(&src, rgb).map(|v| v.round() as i32),
+        web: format!("{:02x}{:02x}{:02x}", q(rgb[0]), q(rgb[1]), q(rgb[2])),
+        total_ink: cmyk.iter().sum(),
+        opacity: pct(unit(rgba[3])),
+    }
+}
+
+/// CIE Lab (D50) through the compositor's output profile, using the same transform as Color
+/// Range. Fall back to sRGB maths if a transform cannot be built.
+fn lab(src: &photocraft_cms::Profile, rgb: [f32; 3]) -> [f32; 3] {
+    match photocraft_cms::cached(src, photocraft_cms::Builtin::LabD50.profile(), photocraft_cms::TransformOptions::default()) {
+        Ok(t) => {
+            let mut out = [0.0f32; 3];
+            t.eval(&rgb, &mut out);
+            // The Lab profile's normalised encoding (ICC v4) → L 0–100, a and b −128–127.
+            [out[0] * 100.0, out[1] * 255.0 - 128.0, out[2] * 255.0 - 128.0]
+        }
+        Err(_) => photocraft_color::convert::srgb_to_lab(rgb),
+    }
+}
+
+/// One extra channel's reading at a pixel, as Photoshop shows a channel targeted on its own:
+/// ink % for a spot channel (its stored value, 1 = solid ink), masked % for an alpha channel
+/// (`1 − value`: white, selected, reads 0 %).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChannelReadout {
+    pub name: String,
+    pub spot: bool,
+    pub percent: i32,
+}
+
+/// The reading of every extra (alpha and spot) channel of `doc` at pixel `(x, y)`, in
+/// Channels-panel order: one pixel, no averaging. Empty off the canvas.
+pub fn channel_readouts(doc: &Document, x: i32, y: i32) -> Vec<ChannelReadout> {
+    if !doc.bounds().contains(x, y) {
+        return Vec::new();
+    }
+    doc.channels
+        .iter()
+        .map(|ch| {
+            let v = ch.surface.pixel(x, y).first().copied().unwrap_or(0.0);
+            let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+            let ink = if ch.spot.is_some() { v } else { 1.0 - v };
+            ChannelReadout { name: ch.name.clone(), spot: ch.spot.is_some(), percent: (ink * 100.0).round() as i32 }
+        })
+        .collect()
+}
+
+/// The colour space a Proof Color readout is shown in: the proof profile's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProofSpace {
+    Rgb,
+    Cmyk,
+    Gray,
+    Lab,
+}
+
+/// The Proof Color readout: the sample converted to View › Proof Setup's profile with its intent
+/// and black point compensation, in that profile's channels (RGB 0–255, CMYK %, K %, or Lab).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProofReadout {
+    pub space: ProofSpace,
+    pub values: Vec<i32>,
+}
+
+/// The space of `profile` as a Proof Color readout shows it; `None` for other spaces.
+fn space_of(profile: &photocraft_cms::Profile) -> Option<ProofSpace> {
+    match profile.color_space {
+        photocraft_cms::ColorSpace::Rgb => Some(ProofSpace::Rgb),
+        photocraft_cms::ColorSpace::Cmyk => Some(ProofSpace::Cmyk),
+        photocraft_cms::ColorSpace::Gray => Some(ProofSpace::Gray),
+        photocraft_cms::ColorSpace::Lab => Some(ProofSpace::Lab),
+        _ => None,
+    }
+}
+
+/// `doc`'s View › Proof Setup as the readout uses it: profile, intent and black point
+/// compensation. Without a setup of its own a document proofs to [`ProofSetup::default`]'s
+/// built-in coated CMYK, relative colorimetric with BPC, borrowed rather than cloned per frame.
+///
+/// [`ProofSetup::default`]: crate::color_cmds::ProofSetup
+fn proof_setup<'a>(color: &'a crate::color_cmds::ColorState, doc: &Document) -> (&'a photocraft_cms::Profile, photocraft_cms::Intent, bool) {
+    match color.proof_ref(doc.id) {
+        Some(pv) => (&pv.setup.profile, pv.setup.intent, pv.setup.bpc),
+        None => (photocraft_cms::Builtin::CoatedCmyk.profile(), photocraft_cms::Intent::RelativeColorimetric, true),
+    }
+}
+
+/// The space `doc`'s Proof Color readout is in (its View › Proof Setup profile's), so the panel
+/// can label the rows without a sample.
+pub fn proof_space(color: &crate::color_cmds::ColorState, doc: &Document) -> Option<ProofSpace> {
+    space_of(proof_setup(color, doc).0)
+}
+
+/// What identifies `doc`'s Proof Setup for a cached readout: its profile, intent and black point
+/// compensation.
+pub fn proof_key(color: &crate::color_cmds::ColorState, doc: &Document) -> (u64, photocraft_cms::Intent, bool) {
+    let (profile, intent, bpc) = proof_setup(color, doc);
+    (profile.content_hash(), intent, bpc)
+}
+
+/// [`ProofReadout`] of composite `rgb` (0..1) in `doc` through its Proof Setup; `None` when the
+/// proof profile has another colour space or no transform can be built.
+pub fn proof_readout(color: &crate::color_cmds::ColorState, doc: &Document, rgb: [f32; 3]) -> Option<ProofReadout> {
+    let (profile, intent, bpc) = proof_setup(color, doc);
+    let space = space_of(profile)?;
+    let unit = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+    let src = crate::color_cmds::composite_profile(doc);
+    let opts = photocraft_cms::TransformOptions { intent, bpc, ..Default::default() };
+    let t = photocraft_cms::cached(&src, profile, opts).ok()?;
+    let mut out = [0.0f32; 4];
+    t.eval(&rgb.map(unit), out.get_mut(..profile.channels())?);
+    let values = match space {
+        ProofSpace::Rgb => out.iter().take(3).map(|v| (unit(*v) * 255.0).round() as i32).collect(),
+        ProofSpace::Cmyk => out.iter().map(|v| (unit(*v) * 100.0).round() as i32).collect(),
+        ProofSpace::Gray => vec![((1.0 - unit(out[0])) * 100.0).round() as i32],
+        // The Lab profile's normalised encoding (ICC v4) → L 0–100, a and b −128–127.
+        ProofSpace::Lab => {
+            vec![(unit(out[0]) * 100.0).round() as i32, (unit(out[1]) * 255.0 - 128.0).round() as i32, (unit(out[2]) * 255.0 - 128.0).round() as i32]
+        }
+    };
+    Some(ProofReadout { space, values })
 }
 
 /// The Info-panel values for a sample point at document pixel `pos`: composite RGB 0–255 and
 /// colour-managed CMYK percentages (the document's CMYK profile when it has one), averaged over
 /// the `size` × `size` box of document pixels centred on it (#11732: the Sample Size the Color
 /// Sampler shares with the Eyedropper; 1 is Point Sample). The box is in document pixels, so the
-/// zoom never changes it. Bitmap and Multichannel documents were not measured, so they keep the
-/// Point Sample reading at every size.
+/// zoom never changes it.
 pub fn readout(doc: &Document, pos: [f64; 2], size: u32) -> ([i32; 3], [i32; 4]) {
+    let r = readouts(doc, sample_box(doc, pos, size));
+    (r.rgb, r.cmyk)
+}
+
+/// The composite straight RGBA (0..1) a sample point at `pos` reads with Sample Size `size`.
+/// Bitmap and Multichannel documents were not measured, so they keep the Point Sample reading at
+/// every size.
+fn sample_box(doc: &Document, pos: [f64; 2], size: u32) -> [f32; 4] {
     let size = if matches!(doc.mode, photocraft_color::ColorMode::Bitmap | photocraft_color::ColorMode::Multichannel) { 1 } else { size };
-    let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], size, crate::sample_cmds::SampleLayers::All);
-    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-    let cmyk = photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgba[0], rgba[1], rgba[2]));
-    ([q(rgba[0]), q(rgba[1]), q(rgba[2])], cmyk)
+    crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], size, crate::sample_cmds::SampleLayers::All)
 }
 
-/// One point as the list command reports it, read with Sample Size `size`.
-pub fn point_json(doc: &Document, index: usize, pos: [f64; 2], size: u32) -> Value {
-    let (rgb, cmyk) = readout(doc, pos, size);
-    json!({"index": index, "number": index + 1, "position": [pos[0], pos[1]], "rgb": rgb, "cmyk": cmyk})
+/// One point as the list command reports it, read with Sample Size `size`: its number and
+/// position, every [`Readouts`] field, `proof` ([`proof_readout`], `null` when the proof profile
+/// can't be read) and `channels` ([`channel_readouts`], one pixel as a channel is read).
+pub fn point_json(color: &crate::color_cmds::ColorState, doc: &Document, index: usize, pos: [f64; 2], size: u32) -> Value {
+    let rgba = sample_box(doc, pos, size);
+    let mut v = json!({"index": index, "number": index + 1, "position": [pos[0], pos[1]]});
+    if let (Some(o), Ok(Value::Object(r))) = (v.as_object_mut(), serde_json::to_value(readouts(doc, rgba))) {
+        o.extend(r);
+        // Points sit on whole pixels inside the canvas (`pixel`), so the casts are exact.
+        let channels = channel_readouts(doc, pos[0] as i32, pos[1] as i32);
+        o.insert("proof".into(), json!(proof_readout(color, doc, [rgba[0], rgba[1], rgba[2]])));
+        o.insert("channels".into(), json!(channels));
+    }
+    v
 }
 
-fn list_json(doc: &Document, points: &[[f64; 2]], size: u32) -> Value {
+/// Validate finite document-pixel coordinates before reading every extra channel; no document is an error.
+fn sample_channels(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "document.sampleChannels";
+    let c = |k: &str| -> Result<i32> {
+        p.get(k)
+            .and_then(Value::as_f64)
+            .map(f64::floor)
+            .filter(|v| v.is_finite() && *v >= f64::from(i32::MIN) && *v <= f64::from(i32::MAX))
+            .map(|v| v as i32)
+            .ok_or_else(|| bad(CMD, format!("`{k}` must be a finite number (document pixels)")))
+    };
+    let (x, y) = (c("x")?, c("y")?);
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    Ok(json!(channel_readouts(&st.doc, x, y)))
+}
+
+fn list_json(color: &crate::color_cmds::ColorState, doc: &Document, points: &[[f64; 2]], size: u32) -> Value {
     json!({
         "max": MAX_SAMPLERS,
         "size": size,
-        "samplers": points.iter().enumerate().map(|(i, p)| point_json(doc, i, *p, size)).collect::<Vec<_>>(),
+        "samplers": points.iter().enumerate().map(|(i, p)| point_json(color, doc, i, *p, size)).collect::<Vec<_>>(),
     })
 }
 
@@ -106,15 +324,16 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let x = coord(CMD, p, "x")?;
     let y = coord(CMD, p, "y")?;
     let size = crate::sample_cmds::size_param(CMD, p)?;
-    change(s, |st| {
+    let (i, pos) = change(s, |st| {
         let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
         if st.color_samplers.len() >= MAX_SAMPLERS {
             return Err(EngineError::Other(limit_message()));
         }
         st.color_samplers.push(pos);
-        let i = st.color_samplers.len() - 1;
-        Ok(json!({"index": i, "count": st.color_samplers.len(), "point": point_json(&st.doc, i, pos, size)}))
-    })
+        Ok((st.color_samplers.len() - 1, pos))
+    })?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    Ok(json!({"index": i, "count": st.color_samplers.len(), "point": point_json(&s.color, &st.doc, i, pos, size)}))
 }
 
 fn move_point(s: &mut Session, p: &Value) -> Result<Value> {
@@ -123,15 +342,17 @@ fn move_point(s: &mut Session, p: &Value) -> Result<Value> {
     let x = coord(CMD, p, "x")?;
     let y = coord(CMD, p, "y")?;
     let size = crate::sample_cmds::size_param(CMD, p)?;
-    change(s, |st| {
+    let pos = change(s, |st| {
         let n = st.color_samplers.len();
         if i >= n {
             return Err(bad(CMD, format!("no sample point {i} (the document has {n})")));
         }
         let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
         st.color_samplers[i] = pos;
-        Ok(json!({"index": i, "point": point_json(&st.doc, i, pos, size)}))
-    })
+        Ok(pos)
+    })?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    Ok(json!({"index": i, "point": point_json(&s.color, &st.doc, i, pos, size)}))
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
@@ -158,9 +379,10 @@ fn clear(s: &mut Session, _p: &Value) -> Result<Value> {
 fn list(s: &mut Session, p: &Value) -> Result<Value> {
     let size = crate::sample_cmds::size_param("view.colorSamplers.list", p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(list_json(&st.doc, &st.color_samplers, size))
+    Ok(list_json(&s.color, &st.doc, &st.color_samplers, size))
 }
 
+/// Register non-destructive sampler-point operations and document channel sampling with their parameter contracts.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -168,7 +390,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Add Color Sampler",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":f64,"y":f64,"size":1|3|5|11|31|51|101|"point"=1 (the Sample Size the readout averages over, in document pixels)} → the new point {index, number, position, rgb, cmyk}; errors at the 10-point limit or off the canvas"##,
+            params: r##"{"x":f64,"y":f64,"size":1|3|5|11|31|51|101|"point"=1 (the Sample Size the readout averages over, in document pixels)} → the new point {index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, proof:{space, values}|null, channels:[{name, spot, percent}]}; errors at the 10-point limit or off the canvas"##,
             enabled: has_doc,
             run: add,
             journal: false,
@@ -208,9 +430,19 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Color Samplers",
             menu: &[],
             shortcut: None,
-            params: r##"{"size":1|3|5|11|31|51|101|"point"=1 (Sample Size: each readout is the size × size average of document pixels around the point)} → {max, size, samplers:[{index, number, position, rgb, cmyk}]}"##,
+            params: r##"{"size":1|3|5|11|31|51|101|"point"=1 (Sample Size: each readout is the size × size average of document pixels around the point)} → {max, size, samplers:[{index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, proof:{space, values}|null, channels:[{name, spot, percent}]}]} (every Info panel readout of each point: RGB 0–255, CMYK %, Grayscale K %, HSB, HSL, Lab, web hex, Total Ink % (the CMYK plates), composite Opacity %, Proof Color (`proof`: the point in View › Proof Setup's profile, `space` rgb, cmyk, gray or lab) and each alpha/spot channel's % as a channel targeted alone reads it)"##,
             enabled: has_doc,
             run: list,
+            journal: false,
+        },
+        CommandSpec {
+            id: "document.sampleChannels",
+            label: "Sample Channels",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"x":i32,"y":i32} → [{name, spot, percent}] (every alpha and spot channel's reading at that pixel, in Channels-panel order: ink % for a spot channel, masked % for an alpha channel with white = 0 %; one pixel, no averaging; empty off the canvas)"##,
+            enabled: has_doc,
+            run: sample_channels,
             journal: false,
         },
     ]
