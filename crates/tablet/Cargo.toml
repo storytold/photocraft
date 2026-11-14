@@ -34,10 +34,14 @@ x11rb = { version = "=0.13.2", default-features = false, features = ["xinput"] }
 # WinTab 1.4: a system context on PhotoCraft's real window supplies pressure, tilt, rotation and
 # the eraser end while Windows Ink is disabled. `wintab` safely wraps the vendor's wintab32.dll,
 # loaded at run time; only the Windows target builds it. `windows` is pinned to the version
-# `wintab` uses.
+# `wintab` uses. `wintab-sys` is the FFI layer `wintab` pulls in; pin it too so a lockfile
+# refresh cannot move it on its own. Both crates come from a new single-owner crates.io account
+# and the published source matches ciart/wintab at the recorded commits: re-check provenance
+# before any bump.
 [target.'cfg(target_os = "windows")'.dependencies]
 log = { workspace = true }
 wintab = "=0.1.1"
+wintab-sys = "=0.1.0"
 windows = { version = "=0.62.2", features = ["Win32_Foundation"] }
 
 # Tests build real tablet NSEvents (from CGEvents) and read them through the monitor's path.
