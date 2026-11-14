@@ -666,3 +666,42 @@ fn pixel_paste_reads_the_bitmap_when_the_svg_read_fails() {
     app.run("file.new", json!({"width":24,"height":20})).unwrap();
     assert!(app.run("edit.paste", json!({"as":"pixels"})).is_err());
 }
+
+/// An app whose OS clipboard setter stores the image in `os`.
+fn app_mirroring_to(os: &OsClip) -> PhotocraftApp {
+    let a = os.clone();
+    let services = Services {
+        clipboard_set_image: Some(Box::new(move |w: u32, h: u32, px: &[u8]| {
+            *a.lock().unwrap() = Some((w, h, px.to_vec()));
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    PhotocraftApp::new(Session::new(), services)
+}
+
+#[test]
+fn a_background_export_reaches_the_os_clipboard_and_one_runs_at_a_time() {
+    let os: OsClip = Arc::default();
+    let mut app = app_mirroring_to(&os);
+    app.session.execute("file.new", serde_json::json!({"width": 32, "height": 32})).unwrap();
+    app.sync_views();
+    app.run("select.rect", serde_json::json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
+    app.run("edit.copy", serde_json::json!({})).unwrap();
+    *os.lock().unwrap() = None;
+    app.background_jobs = true;
+    app.export_os_clipboard();
+    assert!(app.os_clip_export.is_some(), "the conversion runs on a worker");
+    // A second request while it runs waits for it instead of starting another worker.
+    app.export_os_clipboard();
+    assert!(app.os_clip_export_again);
+    let ctx = egui::Context::default();
+    let start = std::time::Instant::now();
+    while (app.os_clip_export.is_some() || os.lock().unwrap().is_none()) && start.elapsed() < std::time::Duration::from_secs(10) {
+        app.poll_os_clipboard_export(&ctx);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.os_clip_export.is_none() && !app.os_clip_export_again, "nothing left pending");
+    let (w, h, px) = os.lock().unwrap().clone().expect("the export reached the OS clipboard");
+    assert_eq!((w, h, px.len()), (8, 4, 8 * 4 * 4));
+}

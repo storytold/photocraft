@@ -206,6 +206,12 @@ fn active_id(s: &Session) -> Result<LayerId> {
 /// Copy or Select All, Copy costs a pointer per tile; only the other tiles are read and written,
 /// one at a time, instead of the whole area as one `f32` buffer.
 fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
+    lift_checked(src, sel, canvas, &|| Ok(()))
+}
+
+/// [`lift`], calling `check` before each batch of tiles: a cancelled Copy job stops there
+/// instead of converting the rest of a large canvas.
+fn lift_checked(src: &Surface, sel: Option<&Surface>, canvas: Rect, check: &dyn Fn() -> Result<()>) -> Result<Clip> {
     let fmt = src.format();
     let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
     let area = match sel {
@@ -219,6 +225,10 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     // Only the selected area is read: converting the whole layer (a 24 MP Background gaining
     // alpha) cost about a second per Layer via Copy (#668).
     let mut shared = Vec::new();
+    let mut convert = Vec::new();
+    // Compared as stored bytes, not values: a float default of -0.0 equals 0.0 but is stored
+    // differently from the clip's own default, so its missing tiles must still be converted.
+    let blank_default = fmt.alpha && src.default_bytes().iter().all(|b| *b == 0);
     for tc in area.tiles() {
         let tr = tc.rect().intersect(&area);
         if fmt.alpha
@@ -230,8 +240,34 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
             shared.push((tc, tile.clone()));
             continue;
         }
-        let px = lift_region(src, sel, tr, with_alpha.channels())?;
-        out.try_write_region(tr, &px).map_err(|e| EngineError::Other(format!("not enough memory while copying pixels ({e}); the document was not changed")))?;
+        // Nothing to copy where the layer has no tiles and its default pixel is all zero: the
+        // clip's own default, so converting would write tiles that `prune` drops again.
+        if blank_default && !src.has_tiles_in(tr) {
+            continue;
+        }
+        convert.push(tr);
+    }
+    // The rest is converted tile by tile in parallel (a layer without alpha, a partial
+    // selection: every tile on a gigapixel canvas), a bounded batch at a time so at most a
+    // few tiles per thread are held as `f32` at once. Same pixels as converting them in order.
+    let n = with_alpha.channels();
+    #[cfg(not(target_arch = "wasm32"))]
+    let batch = rayon::current_num_threads().max(1) * 4;
+    #[cfg(target_arch = "wasm32")]
+    let batch = 1;
+    for rects in convert.chunks(batch) {
+        check()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let lifted: Vec<Result<Vec<f32>>> = {
+            use rayon::prelude::*;
+            rects.par_iter().map(|tr| lift_region(src, sel, *tr, n)).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let lifted: Vec<Result<Vec<f32>>> = rects.iter().map(|tr| lift_region(src, sel, *tr, n)).collect();
+        for (tr, px) in rects.iter().zip(lifted) {
+            out.try_write_region(*tr, &px?)
+                .map_err(|e| EngineError::Other(format!("not enough memory while copying pixels ({e}); the document was not changed")))?;
+        }
     }
     out.put_tiles(shared);
     out.prune();
@@ -284,11 +320,67 @@ fn merged_surface(doc: &Document) -> Surface {
     photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None)
 }
 
+/// What [`copy`] reads its pixels from, captured on the UI thread so the reading can run as a
+/// job. Surfaces and documents are copy-on-write: capturing them clones pointers, not pixels.
+enum CopySource {
+    /// The visible document, flattened (Copy Merged).
+    Merged(std::sync::Arc<Document>),
+    /// A layer's own pixels.
+    Layer(Surface),
+    /// What a group, fill or adjustment layer (or several layers) shows, in a scratch document.
+    Shown(Box<Document>),
+}
+
+/// The artboard a copy lands on, settled once its bounds are known (see [`source_board`]).
+enum BoardPick {
+    Known(Option<(LayerId, Rect)>),
+    /// Copy Merged: the board under the middle of the copied area, from these (id, rect) pairs.
+    Under(Vec<(LayerId, Rect)>),
+}
+
+/// Copy / Copy Merged: [`plan_copy`] on the UI thread, the pixel reading as a background job.
+///
+/// Reading the pixels converts every tile that can't be shared, and Copy Merged flattens the
+/// whole document: tens of seconds on a large canvas. On the UI thread that froze the window
+/// until the Wayland compositor dropped it ("Broken pipe"), closing PhotoCraft. As a job the
+/// window keeps drawing; the document is locked meanwhile, so Paste can't take a stale clip.
 fn copy(s: &mut Session, merged: bool) -> Result<Value> {
+    let work = plan_copy(s, merged)?;
+    crate::jobs::run(
+        s,
+        if merged { "Copy Merged" } else { "Copy" },
+        true,
+        move |ctx| {
+            ctx.progress(0.0, "Copying pixels");
+            work(&|| ctx.check())
+        },
+        |s, clip| Ok(install_clip(s, clip)),
+    )
+}
+
+/// [`copy`] on the calling thread, for Cut, which clears the pixels right after.
+fn copy_now(s: &mut Session) -> Result<Value> {
+    let clip = plan_copy(s, false)?(&|| Ok(()))?;
+    Ok(install_clip(s, clip))
+}
+
+fn install_clip(s: &mut Session, clip: Clip) -> Value {
+    let b = clip.bounds;
+    s.clipboard = Some(clip);
+    json!({"bounds": [b.x0, b.y0, b.width(), b.height()]})
+}
+
+/// Everything [`copy`] needs from the session, checked now; the returned work reads the pixels
+/// and builds the clip, on any thread.
+/// `check` is called between steps and tile batches; an error (a cancelled job) stops the work.
+fn plan_copy(s: &Session, merged: bool) -> Result<impl FnOnce(&dyn Fn() -> Result<()>) -> Result<Clip> + Send + 'static> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
-    let clip = if merged {
-        lift(&merged_surface(&d.doc), d.doc.selection.as_ref(), canvas)?
+    let selection = d.doc.selection.clone();
+    let (resolution, doc_id) = (d.doc.resolution_dpi, d.doc.id);
+    let (source, layers, pick) = if merged {
+        let boards = d.doc.artboards().into_iter().map(|(id, _, b)| (id, b.rect)).collect();
+        (CopySource::Merged(d.doc.clone()), None, BoardPick::Under(boards))
     } else {
         let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
         let several = multi_copy_ids(d);
@@ -296,32 +388,52 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
         if let Some(copies) = &mut layers {
             copy_linked_sources(&d.doc, copies)?;
         }
-        match (d.doc.layer(id).and_then(Layer::surface).filter(|_| several.is_empty()), &layers) {
-            (Some(surf), _) => Clip { components: None, layers, ..lift(surf, d.doc.selection.as_ref(), canvas)? },
+        let source = match (d.doc.layer(id).and_then(Layer::surface).filter(|_| several.is_empty()), &layers) {
+            (Some(surf), _) => CopySource::Layer(surf.clone()),
             // A group or fill layer has no pixels of its own: the clipboard pixels are what it
             // shows. Adjustment layers show nothing by themselves, so their clip spans the canvas
             // they apply to: Paste places them as a full-canvas layer, and the UI still mirrors
             // the clip to the OS clipboard (an empty clip would let a stale OS image replace it).
             (None, Some(copies)) => {
-                let mut shown = (**copies).clone();
+                let mut shown = copies.clone();
                 for l in &mut shown.layers {
                     l.visible = true;
                 }
-                let clip = lift(&merged_surface(&shown), None, canvas)?;
+                CopySource::Shown(shown)
+            }
+            (None, None) => return Err(EngineError::Other("the active layer has no pixels".into())),
+        };
+        (source, layers, BoardPick::Known(source_board(d, false, Rect::EMPTY)))
+    };
+    Ok(move |check: &dyn Fn() -> Result<()>| {
+        let clip = match source {
+            CopySource::Merged(doc) => {
+                let flat = merged_surface(&doc);
+                check()?;
+                lift_checked(&flat, selection.as_ref(), canvas, check)?
+            }
+            CopySource::Layer(surf) => Clip { components: None, layers, ..lift_checked(&surf, selection.as_ref(), canvas, check)? },
+            CopySource::Shown(shown) => {
+                let flat = merged_surface(&shown);
+                check()?;
+                let clip = lift_checked(&flat, None, canvas, check)?;
                 let bounds = if clip.bounds.is_empty() { canvas } else { clip.bounds };
                 Clip { components: None, layers, bounds, ..clip }
             }
-            (None, None) => return Err(EngineError::Other("the active layer has no pixels".into())),
+        };
+        if clip.bounds.is_empty() {
+            return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
         }
-    };
-    if clip.bounds.is_empty() {
-        return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
-    }
-    let b = clip.bounds;
-    let board = source_board(d, merged, b);
-    let clip = Clip { resolution: Some(d.doc.resolution_dpi), source: Some(d.doc.id), board, ..clip };
-    s.clipboard = Some(clip);
-    Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
+        let board = match pick {
+            BoardPick::Known(board) => board,
+            BoardPick::Under(boards) => {
+                // The same middle a pasted layer is placed by, so a clip leaves and joins boards alike.
+                let (cx, cy) = crate::layer_place::centre(clip.bounds);
+                boards.into_iter().rev().find(|(_, r)| r.contains(cx, cy))
+            }
+        };
+        Ok(Clip { resolution: Some(resolution), source: Some(doc_id), board, ..clip })
+    })
 }
 
 /// The artboard a Copy took its pixels from (#8788): the board the copied layers sit in (the
@@ -1212,7 +1324,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(k) = crate::channel_clip::paste_color_target(s, p) {
                     return crate::channel_clip::cut(s, id, k);
                 }
-                let r = copy(s, false)?;
+                let r = copy_now(s)?;
                 let bg = s.tools.background;
                 s.edit("Cut Pixels", |doc, _| clear_selected(doc, id, bg))?;
                 Ok(r)
