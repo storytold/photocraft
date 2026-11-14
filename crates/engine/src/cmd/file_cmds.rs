@@ -359,7 +359,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Mode Change…",
             &["File", "Automate"],
             None,
-            r##"{"from":["rgb","grayscale","cmyk","lab","indexed","bitmap",…]|"any"="any","to":"rgb|grayscale|cmyk|lab"}"##,
+            r##"{"from":["rgb","grayscale","cmyk","lab","indexed","bitmap",…]|"any"="any","to":"rgb|grayscale|cmyk|lab|bitmap|duotone|indexed|multichannel"} (bitmap, duotone, indexed, multichannel: the other params are the target's image.mode.* options, and the source must be RGB or Grayscale; Bitmap and Duotone from 8-bit RGB go through Grayscale and Grayscale converts directly; Indexed from 16-bit, or one-layer 32-bit, RGB or Grayscale goes through 8 Bits/Channel; Bitmap, Duotone and Multichannel need an 8-bit source; Bitmap to RGB goes through Grayscale; each step is its own history state)"##,
             has_doc,
             conditional_mode_change
         ),

@@ -2346,7 +2346,7 @@ fn fit_image_and_conditional_mode_change() {
     assert_eq!(doc(&s).mode, ColorMode::Grayscale);
     s.execute("file.automate.conditionalModeChange", json!({"to": "rgb"})).unwrap();
     assert_eq!(doc(&s).mode, ColorMode::Rgb);
-    assert!(s.execute("file.automate.conditionalModeChange", json!({"to": "duotone"})).is_err());
+    assert!(s.execute("file.automate.conditionalModeChange", json!({"to": "hsb"})).is_err());
 }
 
 #[test]
