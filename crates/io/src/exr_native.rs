@@ -32,10 +32,12 @@ fn require_scratch(expected: bool) -> Result<(), IoError> {
 /// falls back to the whole-file decoder. Once pixels are being decoded any failure fails the
 /// open, so no partial document is published.
 pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<Option<ImportResult>, IoError> {
-    let _metadata = photocraft_raster::memory::try_reserve(32 << 20).map_err(IoError::OutOfMemory)?;
     let mut decoder = match photocraft_codecs::exr_stream::Decoder::new(source, &|| ctl.cancelled()) {
         Ok(decoder) => decoder,
         Err(_) if ctl.cancelled() => return Err(IoError::Cancelled),
+        Err(photocraft_codecs::CodecError::LimitExceeded(reason)) if reason.contains("EXR pixel count") => {
+            return Err(IoError::OutOfMemory("decoded image tiles exceed the available RAM budget; enable a scratch disk or close other documents".into()));
+        }
         Err(_) => return Ok(None),
     };
     let info = decoder.info();
@@ -52,6 +54,9 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
             tiles.saturating_mul(side * side).saturating_mul(fmt.bytes_per_pixel() as u64),
         )?;
     }
+    // Report the dominant decoded-tile requirement first. Reserving metadata before checking
+    // the image extent can mask this actionable limit with a generic allocation failure.
+    let _metadata = photocraft_raster::memory::try_reserve(32 << 20).map_err(IoError::OutOfMemory)?;
     let _working = photocraft_raster::memory::try_reserve(info.working_bytes).map_err(IoError::OutOfMemory)?;
     let mut surface = Surface::new(fmt);
     let mut done = 0;

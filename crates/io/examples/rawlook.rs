@@ -161,7 +161,7 @@ fn synthetic() {
     times.sort_by(f64::total_cmp);
     let p = photocraft_raw::embedded_preview(&bytes).expect("preview");
     let t = Instant::now();
-    let img = codecs::decode_as(Format::Jpeg, p.jpeg).expect("jpeg");
+    let img = codecs::decode_as(Format::Jpeg, &p).expect("jpeg");
     let dec = t.elapsed().as_secs_f64() * 1e3;
     let r = photocraft_raw::Reference { width: img.width(), height: img.height(), rgb: img.data() };
     let t = Instant::now();
@@ -205,7 +205,7 @@ fn main() {
         let dev_ms = t.elapsed().as_secs_f64() * 1e3;
         // Independent check against the largest preview.
         let p = photocraft_raw::embedded_preview(&bytes).expect("preview");
-        let raw_jpeg = codecs::decode_as_with(Format::Jpeg, p.jpeg, &codecs::DecodeOptions { keep_orientation: true, ..Default::default() }).expect("jpeg");
+        let raw_jpeg = codecs::decode_as_with(Format::Jpeg, &p, &codecs::DecodeOptions { keep_orientation: true, ..Default::default() }).expect("jpeg");
         let own = raw_jpeg.meta.exif.as_deref().map_or(1, codecs::exif_orientation);
         let o = if own != 1 { own } else { codecs::exif_orientation(&bytes) };
         let jpeg = raw_jpeg.oriented(o).expect("orient").converted(ChannelLayout::Rgb, photocraft_codecs::SampleType::U8).into_owned();

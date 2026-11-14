@@ -145,7 +145,7 @@ fn batch_folder_input_controls(s: &mut Session, dir: &str, input: &str, first: &
     png(&output, "ignored.png", 3, 2, "#ffffff");
     let sub = join(input, "sub");
     std::fs::create_dir_all(&sub).unwrap();
-    let raw = join(&sub, "d.cr3");
+    let raw = join(&sub, "d.orf");
     std::fs::copy(first, &raw).unwrap();
     let result = s
         .execute(
@@ -3810,23 +3810,23 @@ fn folder_listing_recognises_gzipped_xcf_by_its_double_extension() {
 }
 
 /// A folder batch picks up every extension that the codecs open: Cineon, DICOM, Amiga IFF, PCX,
-/// XPM, DDS, the Netpbm family, and Photoshop templates. Not the raws whose usual files open only
-/// as the embedded JPEG preview (CR3, compressed ORF and RAF, RW2 other than raw formats 3, 4 and
-/// 5): a batch would process the thumbnail without a word.
+/// XPM, DDS, the Netpbm family, and Photoshop templates. Not raws that this build cannot decode
+/// natively (ORF, RAF, SRF, SR2, and RW2 variants other than raw formats 3, 4 and 5): a batch
+/// should not process an embedded JPEG preview without a word.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn folder_listing_takes_every_format_photocraft_opens() {
     let codecs = ["a.cin", "a.dcm", "a.dicom", "a.dc3", "a.iff", "a.lbm", "a.ilbm", "a.pcx", "a.xpm", "a.dds", "a.pbm", "a.pam", "a.pfm", "a.psdt", "A.PCX"];
-    let raws = ["a.dng", "IMG_0001.CR2", "a.nef", "a.nrw", "a.arw", "a.pef"];
+    let raws = ["a.dng", "IMG_0001.CR2", "a.nef", "a.nrw", "a.arw", "a.pef", "a.cr3"];
     for name in codecs.into_iter().chain(raws) {
         assert!(super::openable_name(name), "{name}");
     }
-    for f in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read) {
+    for f in photocraft_formats::Format::ALL.into_iter().filter(|f| f.capabilities().read == photocraft_formats::Availability::Available) {
         for ext in f.extensions() {
             assert!(super::openable_name(&format!("a.{ext}")), "{f:?} .{ext}");
         }
     }
-    for name in ["a.cr3", "IMG_0001.CR3", "a.orf", "a.raf", "a.rw2", "a.srf", "a.sr2"] {
+    for name in ["a.orf", "a.raf", "a.rw2", "a.srf", "a.sr2"] {
         assert!(!super::openable_name(name), "{name}");
     }
     // PhotoCraft does not read AVIF.
