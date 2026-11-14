@@ -35,6 +35,12 @@ fn names(app: &PhotocraftApp) -> Vec<String> {
     app.session.active().map(|st| st.doc.variables.data_sets.iter().map(|s| s.name.clone()).collect()).unwrap_or_default()
 }
 
+/// The selected row's fill. Themes without a row colour (transparent `row_selected`) use their
+/// soft accent, so the set Apply will use is always marked.
+pub fn selected_fill(t: &Tokens) -> egui::Color32 {
+    if t.row_selected.a() == 0 { t.accent_soft } else { t.row_selected }
+}
+
 /// The list on the left, Apply and Cancel on the right. Returns `Some(true)` when a set is to be
 /// applied (Apply, Enter, a double-click on a row) and `Some(false)` for Cancel.
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, interactive: bool) -> Option<bool> {
@@ -56,7 +62,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                     let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW), egui::Sense::click());
                     r.widget_info(|| egui::WidgetInfo::selected(egui::Role::ListBoxOption, true, on, name));
                     if on {
-                        ui.painter().rect_filled(rect, 0.0, t.row_selected);
+                        ui.painter().rect_filled(rect, 0.0, selected_fill(&t));
                     } else if r.hovered() {
                         ui.painter().rect_filled(rect, 0.0, t.hover);
                     }
@@ -94,6 +100,14 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
 /// Apply, Enter or a double-click: apply the selected set once. The variables and data sets
 /// themselves are never written here.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let index = f.get("index").and_then(Value::as_u64).ok_or_else(|| tl!("Select a data set to apply.").to_string())?;
+    // Checked against the document's sets here: an index past `usize` (wasm32) must not wrap
+    // around to a valid row on its way to the engine.
+    let count = names(app).len();
+    let index = f
+        .get("index")
+        .and_then(Value::as_u64)
+        .and_then(|i| usize::try_from(i).ok())
+        .filter(|i| *i < count)
+        .ok_or_else(|| tl!("Select a data set to apply.").to_string())?;
     app.run("image.applyDataSet", json!({"index": index}))
 }
