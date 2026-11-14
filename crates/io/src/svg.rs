@@ -401,6 +401,9 @@ struct Parsed {
     /// text while parsing, before any node reaches the conversion, so this is the only place
     /// that knows why the text is missing.
     fontless_text: bool,
+    /// Resolution may safely omit hostile/unreadable data URLs; disclose those omissions
+    /// after conversion, including when editable nodes collapse to one raster layer.
+    image_usage: craft_svg::tree::ImageUsage,
 }
 
 /// Parses a drawing, `.svgz` included. The XML is inflated and checked here, before the parser
@@ -451,7 +454,7 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
         // The resolver already rejects each over-budget optional image before decode.
         // Ordinary Open keeps the usable outer drawing, as before the shared-parser
         // migration; strict stored previews enforce completeness in their separate path.
-        Ok(Parsed { tree, fontless_text })
+        Ok(Parsed { tree, fontless_text, image_usage: image_resolver.usage() })
     })
     .map_err(IoError::from)
 }
@@ -688,7 +691,7 @@ fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: f
     let counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let decoded = max_pixels.min(MAX_RASTER_PIXELS).saturating_sub(counter.pixels);
     Ok(ParsedWork {
-        parsed: Parsed { tree, fontless_text: counter.fontless_text },
+        parsed: Parsed { tree, fontless_text: counter.fontless_text, image_usage: counter.resolver.usage() },
         svg_images: counter.svg_images,
         svg_chain: counter.svg_chain,
         decoded,
@@ -982,8 +985,11 @@ fn import_parsed_with_limits(
     reject_cache_overflow: bool,
     pixel_budget: u64,
 ) -> Result<ImportResult, IoError> {
-    let Parsed { tree, fontless_text } = parsed;
+    let Parsed { tree, fontless_text, image_usage } = parsed;
     let mut warnings = Vec::new();
+    if let Some(warning) = omitted_image_warning(image_usage) {
+        warnings.push(warning);
+    }
     if fontless_text {
         warnings.push("SVG: the text needs a font and none is installed, so it was dropped".to_string());
     }
@@ -1036,6 +1042,17 @@ fn import_parsed_with_limits(
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
     }
     Ok(ImportResult { initial_view: None, document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
+}
+
+/// One count-only warning bounds disclosure independently of the number or length of data URLs.
+fn omitted_image_warning(usage: craft_svg::tree::ImageUsage) -> Option<String> {
+    // svg_resource_limit_images is a subset of svg_limit_images, not another omitted image.
+    let count =
+        usage.raster_limit_images.saturating_add(usage.svg_limit_images).saturating_add(usage.invalid_raster_images).saturating_add(usage.invalid_svg_images);
+    (count != 0).then(|| {
+        let noun = if count == 1 { "image was" } else { "images were" };
+        format!("SVG: {count} embedded {noun} omitted because the data was unreadable or exceeded image limits; the remaining drawing was preserved")
+    })
 }
 
 /// The whole drawing rendered at `scale` (1 = its own size), as a straight-alpha RGBA buffer at

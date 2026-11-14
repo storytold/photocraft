@@ -57,7 +57,7 @@ flate2 = { workspace = true }
 crabz2 = { workspace = true }
 lzma-rust2 = { workspace = true }
 # XCF text and metadata packet parsing.
-roxmltree = "0.21"
+roxmltree = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The SVG fallback font search keeps each font file's character map (already in the tree through usvg).
 ttf-parser = { version = "0.25", default-features = false }
@@ -70,7 +70,7 @@ kurbo = { version = "0.13", optional = true }
 [dev-dependencies]
 lopdf = { version = "0.38", default-features = false }
 # PDF XMP serialization assertions parse output XML in tests.
-roxmltree = "0.21"
+roxmltree = { workspace = true }
 miniz_oxide = "0.9"
 crc32fast = "1.5"
 craft-affinity = { workspace = true, features = ["synth"] }

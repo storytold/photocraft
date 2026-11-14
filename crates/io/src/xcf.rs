@@ -46,6 +46,8 @@ mod metadata_packets;
 #[cfg(test)]
 mod metadata_tests;
 #[cfg(test)]
+mod optional_effect_review_tests;
+#[cfg(test)]
 mod optional_mask_budget_tests;
 #[cfg(test)]
 mod optional_mask_header_refund_tests;
@@ -82,9 +84,9 @@ use crate::{ImportResult, IoError};
 #[cfg(test)]
 use samples::integer_samples;
 use samples::{Precision, row_samples};
+use wire::{Compression, Cursor, Prop, be_f32, be_i32, be_u32, decode_tile, props};
 #[cfg(test)]
-use wire::rle_decode;
-use wire::{Compression, Cursor, Prop, be_f32, be_i32, be_u32, decode_tile, parasites, props, props_version};
+use wire::{parasites, props_version, rle_decode};
 
 type Result<T> = std::result::Result<T, IoError>;
 
@@ -224,19 +226,49 @@ impl<'a> Image<'a> {
     /// Effect pointers are optional and last in the owner header. A bounded pre-scan
     /// admits the whole list before allocation; omitted lists need not be followed.
     fn optional_effect_pointers(&mut self, cursor: &mut Cursor<'a>, ctl: &Interrupt<'_>) -> Result<(Vec<usize>, bool)> {
-        let mut scan = cursor.at(cursor.pos);
-        let charge = 4 * std::mem::size_of::<usize>().max(std::mem::size_of::<u64>());
-        for count in 0usize..=1024 {
-            ctl.check().map_err(|_| IoError::Cancelled)?;
-            let pointer = if scan.wide { (u64::from(scan.u32()?) << 32) | u64::from(scan.u32()?) } else { u64::from(scan.u32()?) };
-            if pointer == 0 {
-                return effects::read_pointers(cursor, &mut self.meta_budget, ctl).map(|pointers| (pointers, false));
+        let offset = cursor.pos;
+        let before = self.meta_budget;
+        let result = (|| -> Result<Option<Vec<usize>>> {
+            let mut scan = cursor.at(cursor.pos);
+            let charge = 4 * std::mem::size_of::<usize>().max(std::mem::size_of::<u64>());
+            for count in 0usize..=1024 {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
+                let pointer = if scan.wide { (u64::from(scan.u32()?) << 32) | u64::from(scan.u32()?) } else { u64::from(scan.u32()?) };
+                if pointer == 0 {
+                    return effects::read_pointers(cursor, &mut self.meta_budget, ctl).map(Some);
+                }
+                if count == 1024 || count.saturating_add(1).saturating_mul(charge) > self.meta_budget {
+                    return Ok(None);
+                }
             }
-            if count == 1024 || count.saturating_add(1).saturating_mul(charge) > self.meta_budget {
-                return Ok((Vec::new(), true));
+            Ok(None)
+        })();
+        match result {
+            Ok(Some(pointers)) => Ok((pointers, false)),
+            Ok(None) => Ok((Vec::new(), true)),
+            Err(IoError::Cancelled) => Err(IoError::Cancelled),
+            Err(IoError::XcfMetadataLimit) => {
+                self.meta_budget = before;
+                Ok((Vec::new(), true))
+            }
+            Err(error) => {
+                // No pointer list survived the rejected optional parse. Refund only
+                // its provisional storage, and keep independently framed pixels usable.
+                self.meta_budget = before;
+                self.warnings.note("Optional stored effect pointers could not be translated; usable pixels were preserved. See the conversion report");
+                self.outcomes.push(ConversionEntry {
+                    feature_code: "xcf.effect_list".into(),
+                    source: conversion::source("effect_list", 0, offset, "", &[], None),
+                    targets: Vec::new(),
+                    disposition: ConversionDisposition::RetainedUnapplied,
+                    reason: ConversionReason::InvalidOptionalData,
+                    source_description: format!("Optional effect pointer list could not be decoded: {error}"),
+                    native_description: "No effects from this malformed list were followed; independently framed native pixels preserved".into(),
+                    attachments: Vec::new(),
+                })?;
+                Ok((Vec::new(), false))
             }
         }
-        Ok((Vec::new(), true))
     }
 
     /// Reads a hierarchy (`hptr`): the first level's tiles into `channels` floats per pixel,
@@ -796,12 +828,12 @@ struct ImageMetadata<'a> {
 }
 
 /// Decode only drawable prerequisites here; native metadata conversion consumes the retained properties later.
-fn read_image_metadata<'a>(c: &mut Cursor<'a>, version: u32) -> Result<ImageMetadata<'a>> {
+fn read_image_metadata<'a>(c: &mut Cursor<'a>, version: u32, ctl: &Interrupt<'_>) -> Result<ImageMetadata<'a>> {
     // Image properties.
-    let image_props = props_version(c, Some(version))?;
+    let image_props = wire::props_version_with_interrupt(c, Some(version), ctl)?;
     let mut compression = Compression::None;
     let mut colormap = Vec::new();
-    let mut icc = None;
+    let mut selected_icc = None;
     for p in &image_props {
         match p.kind {
             1 => {
@@ -822,16 +854,24 @@ fn read_image_metadata<'a>(c: &mut Cursor<'a>, version: u32) -> Result<ImageMeta
                 }
             }
             21 => {
-                for (name, data) in parasites(p.data) {
-                    match name.as_str() {
-                        "icc-profile" if !data.is_empty() => icc = Some(data),
-                        _ => {}
+                let mut last = None;
+                wire::scan_parasites(p.data, ctl, |name, data| {
+                    if name == b"icc-profile" {
+                        last = Some(data);
                     }
+                })?;
+                if let Some(data) = last.filter(|data| !data.is_empty()) {
+                    selected_icc = Some(data);
                 }
             }
             _ => {}
         }
     }
+    // The property allowance is also the fixed prerequisite-profile copy bound. Scan every
+    // record first so only the final assignment is copied, never unused parasites/profiles.
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let icc = selected_icc.filter(|data| data.len() <= MAX_PAYLOAD).map(<[u8]>::to_vec);
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     Ok(ImageMetadata { properties: image_props, compression, colormap, icc })
 }
 
@@ -882,7 +922,7 @@ pub(crate) fn import_with_sample_order(
         warnings.note("64-bit floating-point samples open as native F32 with reduced precision");
     }
 
-    let ImageMetadata { properties: image_props, compression, colormap, icc } = read_image_metadata(&mut c, version)?;
+    let ImageMetadata { properties: image_props, compression, colormap, icc } = read_image_metadata(&mut c, version, ctl)?;
     let assigned_profile = icc.is_some();
     let color::ProfileSelection { bytes: native_profile, fallback_reason, tag_document } = color::select_profile(mode, precision, icc)?;
     if let Some(reason) = &fallback_reason {
@@ -1028,6 +1068,7 @@ pub(crate) fn import_with_sample_order(
         image_outcome,
         &mut image.meta_budget,
         &mut image.warnings,
+        ctl,
     )?;
     document.icc_profile = tag_document.then(|| native_profile.clone());
     image.outcomes.push(color_encoding_outcome(assigned_profile, precision, fallback_reason, tag_document))?;

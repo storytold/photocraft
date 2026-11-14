@@ -52,6 +52,8 @@ fn check(app: &PhotocraftApp, target: Target) -> Result<(), String> {
     let Some(LayerContent::Smart(smart)) = state.doc.layer(target.layer).map(|layer| &layer.content) else {
         return Err("the replacement target is no longer a smart object".into());
     };
+    // FIFO processing does not renew permission to overwrite a changed target. An
+    // earlier accepted replacement makes later picks stale; cancelling it does not.
     if state.revision != target.revision || smart.contents_id != target.contents {
         return Err("the replacement target changed; pick its contents again".into());
     }
@@ -91,7 +93,9 @@ pub(crate) fn pick(app: &mut PhotocraftApp, target: Target, name: String, bytes:
     // Even a fixed-output probe can scan an arbitrarily long compressed header.
     // Only plain fixed headers are inspected in the picker callback.
     let question = if wrapped { None } else { photocraft_io::historical_xcf_sample_order_request(&name, &bytes).map_err(|error| error.to_string())? };
-    if !wrapped && question.is_none() {
+    // Plain modern sources reserve their turn just like probed wrappers. Applying
+    // one now would change the revision underneath an earlier unanswered choice.
+    if !wrapped && question.is_none() && app.prompt_order.is_empty() && !crate::open_prompt::waiting(app) {
         return replace(app, target, &name, bytes, None);
     }
     let pending = &mut app.historical_replacements;

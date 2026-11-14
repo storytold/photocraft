@@ -459,8 +459,8 @@ pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<Decode
         return Err(invalid("native text tracking exceeds finite bounds"));
     }
     style.language = scalar(&fields, "language")?.filter(|s| !s.is_empty()).map(|s| s.replace('_', "-"));
-    // GIMP's added line spacing is in device pixels, independently of the font-size unit.
-    let extra_leading = f64::from(device_points(number(&fields, "line-spacing", 0.0, -8192.0, 8192.0)?, dpi)?);
+    // Added line spacing uses the source font-size unit; letter spacing above remains pixels.
+    let extra_leading = number(&fields, "line-spacing", 0.0, -8192.0, 8192.0)? * scale;
     if let Some(color) = field(&fields, "color")? {
         match color {
             [Value::List(v)] if v.first().and_then(|v| v.text().ok()) == Some("color-rgba") && v.len() == 5 => {

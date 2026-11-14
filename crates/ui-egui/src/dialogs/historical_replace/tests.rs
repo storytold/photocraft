@@ -50,6 +50,236 @@ fn object(app: &PhotocraftApp) -> &SmartObject {
     smart
 }
 
+fn modern_pick(wrapped: bool) -> FileDialogAnswer {
+    fn word(bytes: &mut Vec<u8>, value: u32) {
+        bytes.extend(value.to_be_bytes());
+    }
+    fn slot(bytes: &mut Vec<u8>) -> usize {
+        let at = bytes.len();
+        bytes.extend([0; 8]);
+        at
+    }
+    fn point(bytes: &mut [u8], slot: usize, offset: usize) {
+        bytes[slot..slot + 8].copy_from_slice(&(offset as u64).to_be_bytes());
+    }
+    let mut bytes = b"gimp xcf v026\0".to_vec();
+    for value in [1, 1, 0, 150, 17, 1] {
+        word(&mut bytes, value);
+    }
+    bytes.push(0);
+    word(&mut bytes, 0);
+    word(&mut bytes, 0);
+    let layer = slot(&mut bytes);
+    for _ in 0..3 {
+        slot(&mut bytes); // End layers, channels, and paths.
+    }
+    let offset = bytes.len();
+    point(&mut bytes, layer, offset);
+    for value in [1, 1, 1, 2] {
+        word(&mut bytes, value);
+    }
+    bytes.extend(b"m\0");
+    word(&mut bytes, 0);
+    word(&mut bytes, 0);
+    let hierarchy = slot(&mut bytes);
+    slot(&mut bytes); // No mask.
+    slot(&mut bytes); // No effects.
+    let offset = bytes.len();
+    point(&mut bytes, hierarchy, offset);
+    for value in [1, 1, 4] {
+        word(&mut bytes, value);
+    }
+    let level = slot(&mut bytes);
+    slot(&mut bytes);
+    let offset = bytes.len();
+    point(&mut bytes, level, offset);
+    word(&mut bytes, 1);
+    word(&mut bytes, 1);
+    let tile = slot(&mut bytes);
+    slot(&mut bytes);
+    let offset = bytes.len();
+    point(&mut bytes, tile, offset);
+    bytes.extend([17, 31, 57, 255]);
+    if wrapped {
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&bytes).unwrap();
+        FileDialogAnswer::Contents("modern.xcf.gz".into(), encoder.finish().unwrap())
+    } else {
+        FileDialogAnswer::Contents("modern.xcf".into(), bytes)
+    }
+}
+
+fn tick_probe(app: &mut PhotocraftApp) {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |ui| crate::jobs_ui::tick(app, ui.ctx()));
+    output.textures_delta.clear();
+}
+
+fn cancel_choice(app: &mut PhotocraftApp) {
+    let id = app.ui.dialogs.iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
+    crate::dialogs::cancel(app, id).unwrap();
+}
+
+#[test]
+fn plain_and_wrapped_modern_picks_wait_then_reject_a_changed_same_target() {
+    for wrapped in [false, true] {
+        let first = fixture::historical_pixel(true);
+        let mut app =
+            app(vec![Some(FileDialogAnswer::Contents("first.xcf".into(), first.clone())), Some(modern_pick(wrapped))], HistoricalXcfSampleOrder::BigEndian);
+        app.session.set_cooperative_jobs(true);
+        app.session.active_mut().unwrap().source_read_only = true;
+        let before = app.session.active().unwrap().clone();
+        pick_from_menu(&mut app);
+        let dialog = app.ui.dialogs[0].id;
+        pick_from_menu(&mut app);
+        assert!(Arc::ptr_eq(&before.doc, &app.session.active().unwrap().doc), "a later plain or wrapped pick cannot bypass the earlier reservation");
+        assert_eq!(app.session.active().unwrap().revision, before.revision);
+        assert_eq!(app.session.active().unwrap().history.past_len(), before.history.past_len());
+        tick_probe(&mut app);
+        assert_eq!(app.historical_replacements.len(), 2);
+        assert_eq!(app.ui.dialogs.len(), 1);
+        assert_eq!(app.ui.dialogs[0].id, dialog);
+        choose(&mut app, "little-endian");
+        let state = app.session.active().unwrap();
+        assert_eq!(state.revision, before.revision + 1);
+        assert_eq!(state.saved_revision, before.saved_revision);
+        assert_eq!(state.history.past_len(), before.history.past_len() + 1);
+        assert_eq!(state.path, before.path);
+        assert_eq!(state.source_read_only, before.source_read_only);
+        let SmartSource::Embedded { bytes, .. } = &object(&app).source else { panic!("first replacement") };
+        assert_eq!(bytes.as_slice(), first);
+        assert_eq!(object(&app).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian));
+        assert!(app.ui.status_error);
+        assert!(app.ui.status.contains("changed"), "{}", app.ui.status);
+        assert!(app.prompt_order.is_empty());
+        assert!(app.historical_replacements.is_empty());
+        assert!(app.ui.dialogs.is_empty());
+    }
+}
+
+#[test]
+fn cancelling_earlier_choice_allows_unchanged_plain_and_wrapped_modern_targets() {
+    for wrapped in [false, true] {
+        let modern = modern_pick(wrapped);
+        let FileDialogAnswer::Contents(_, expected) = &modern else { panic!("modern fixture") };
+        let expected = expected.clone();
+        let mut app = app(
+            vec![Some(FileDialogAnswer::Contents("earlier.xcf".into(), fixture::historical_pixel(true))), Some(modern)],
+            HistoricalXcfSampleOrder::BigEndian,
+        );
+        app.session.set_cooperative_jobs(true);
+        let before = app.session.active().unwrap().clone();
+        pick_from_menu(&mut app);
+        pick_from_menu(&mut app);
+        tick_probe(&mut app);
+        assert!(Arc::ptr_eq(&before.doc, &app.session.active().unwrap().doc));
+        assert_eq!(app.historical_replacements.len(), 2);
+        cancel_choice(&mut app);
+        let state = app.session.active().unwrap();
+        assert_eq!(state.revision, before.revision + 1);
+        assert_eq!(state.saved_revision, before.saved_revision);
+        assert_eq!(state.history.past_len(), before.history.past_len() + 1);
+        assert_eq!(state.path, before.path);
+        assert_eq!(state.source_read_only, before.source_read_only);
+        let modern = object(&app);
+        assert_eq!(modern.historical_xcf_sample_order, None);
+        let SmartSource::Embedded { bytes, .. } = &modern.source else { panic!("modern source") };
+        assert_eq!(bytes.as_slice(), expected);
+        let mut pixel = [0.; 4];
+        modern.cache.as_ref().unwrap().read_pixel(0, 0, &mut pixel);
+        for (actual, expected) in pixel.into_iter().zip([17. / 255., 31. / 255., 57. / 255., 1.]) {
+            assert!((actual - expected).abs() <= 1. / 65535.);
+        }
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert!(app.prompt_order.is_empty());
+        assert!(app.historical_replacements.is_empty());
+    }
+}
+
+#[test]
+fn queued_modern_replacement_of_another_document_applies_in_order_without_stealing_the_tab() {
+    for wrapped in [false, true] {
+        let first = fixture::historical_pixel(true);
+        let modern = modern_pick(wrapped);
+        let FileDialogAnswer::Contents(_, expected) = &modern else { panic!("modern fixture") };
+        let expected = expected.clone();
+        let mut app = app(vec![Some(FileDialogAnswer::Contents("first.xcf".into(), first.clone())), Some(modern)], HistoricalXcfSampleOrder::BigEndian);
+        app.session.set_cooperative_jobs(true);
+        pick_from_menu(&mut app);
+        let parent = app.session.active().unwrap().clone();
+        let mut other = Document::new("Other target", Size::new(1, 1), ColorMode::Rgb, SampleType::U16);
+        other.layers.push(Layer::new("Other smart", LayerContent::Smart(object(&app).clone())));
+        app.session.add_document(other, None);
+        app.session.active_mut().unwrap().source_read_only = true;
+        app.sync_views();
+        let other = app.session.active().unwrap().clone();
+        pick_from_menu(&mut app);
+        tick_probe(&mut app);
+        assert!(Arc::ptr_eq(&app.session.documents()[0].doc, &parent.doc));
+        assert!(Arc::ptr_eq(&app.session.documents()[1].doc, &other.doc));
+        assert_eq!(app.historical_replacements.len(), 2);
+        choose(&mut app, "little-endian");
+        assert_eq!(app.session.active().unwrap().doc.id, other.doc.id);
+        let changed = app.session.active().unwrap();
+        assert_eq!(changed.revision, other.revision + 1);
+        assert_eq!(changed.history.past_len(), other.history.past_len() + 1);
+        assert_eq!(changed.path, other.path);
+        assert_eq!(changed.source_read_only, other.source_read_only);
+        let LayerContent::Smart(smart) = &changed.doc.layers[0].content else { panic!("other smart") };
+        assert_eq!(smart.historical_xcf_sample_order, None);
+        let SmartSource::Embedded { bytes, .. } = &smart.source else { panic!("modern source") };
+        assert_eq!(bytes.as_slice(), expected);
+        let changed_parent = &app.session.documents()[0];
+        assert_eq!(changed_parent.revision, parent.revision + 1);
+        assert_eq!(changed_parent.history.past_len(), parent.history.past_len() + 1);
+        let SmartSource::Embedded { bytes, .. } = &object(&app).source else { panic!("first source") };
+        assert_eq!(bytes.as_slice(), first);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert!(app.prompt_order.is_empty());
+        assert!(app.historical_replacements.is_empty());
+    }
+}
+
+#[test]
+fn queued_modern_failures_preserve_earlier_choice_and_unchanged_target() {
+    for wrapped in [false, true] {
+        let invalid = if wrapped {
+            FileDialogAnswer::Contents("broken.xcf.gz".into(), vec![0x1f, 0x8b, 0])
+        } else {
+            FileDialogAnswer::Contents("broken.pcraft".into(), b"not a native document".to_vec())
+        };
+        let mut app = app(
+            vec![Some(FileDialogAnswer::Contents("first.xcf".into(), fixture::historical_pixel(true))), Some(invalid)],
+            HistoricalXcfSampleOrder::BigEndian,
+        );
+        app.session.set_cooperative_jobs(true);
+        let before = app.session.active().unwrap().clone();
+        pick_from_menu(&mut app);
+        let earlier = app.ui.dialogs[0].id;
+        pick_from_menu(&mut app);
+        assert_eq!(app.historical_replacements.len(), 2);
+        assert!(Arc::ptr_eq(&before.doc, &app.session.active().unwrap().doc));
+        assert_eq!(app.ui.dialogs[0].id, earlier);
+        if wrapped {
+            tick_probe(&mut app);
+            assert!(app.ui.status_error, "the failed header job reports only its own source");
+            assert_eq!(app.historical_replacements.len(), 1);
+            assert_eq!(app.ui.dialogs[0].id, earlier);
+        }
+        cancel_choice(&mut app);
+        let after = app.session.active().unwrap();
+        assert!(Arc::ptr_eq(&before.doc, &after.doc));
+        assert_eq!((after.revision, after.saved_revision, after.history.past_len()), (before.revision, before.saved_revision, before.history.past_len()));
+        assert_eq!(after.path, before.path);
+        assert_eq!(after.source_read_only, before.source_read_only);
+        assert_eq!(object(&app).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
+        assert!(app.prompt_order.is_empty());
+        assert!(app.historical_replacements.is_empty());
+        assert!(app.ui.dialogs.is_empty());
+    }
+}
+
 #[test]
 fn desktop_replacement_picker_asks_fresh_and_uses_exact_picked_bytes_for_both_orders() {
     for (little, order, previous) in

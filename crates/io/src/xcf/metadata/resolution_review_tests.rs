@@ -51,7 +51,7 @@ fn unequal_resolution_warning_is_independent_of_conversion_report_retention() {
     let mut doc = Document::new("Usable pixels", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
     let mut warnings = crate::ora::Warnings::default();
     let mut budget = 0; // Neither metadata retention nor report capacity may suppress the warning.
-    image(&mut doc, &properties, 26, &mut Default::default(), &mut outcomes, owner, &mut budget, &mut warnings).unwrap();
+    image(&mut doc, &properties, 26, &mut Default::default(), &mut outcomes, owner, &mut budget, &mut warnings, &photocraft_raster::Interrupt::NONE).unwrap();
     assert_eq!(doc.resolution_dpi, 300.);
     assert_eq!(warnings.finish(), vec![crate::unequal_resolution_warning(300., 150.).unwrap()]);
     let ImportConversion::Report(report) = outcomes.finish().unwrap() else { panic!("bounded report") };

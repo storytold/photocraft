@@ -111,10 +111,14 @@ pub(in crate::xcf) fn decode<'a>(base: &Cursor<'a>, offset: usize, version: u32,
                 charge(budget, argument_name.len())?;
                 let value_kind = argument_cursor.u32()?;
                 let value_bytes = bytes.get(argument_cursor.pos..).ok_or_else(|| invalid("effect argument framing"))?;
+                let before_value = *budget;
                 let value = match argument(&mut argument_cursor, value_kind, budget) {
                     Ok(value) => value,
                     Err(error @ (crate::IoError::XcfMetadataLimit | crate::IoError::Cancelled)) => return Err(error),
                     Err(error) => {
+                        // Parsed configuration discarded for malformed syntax or trailing
+                        // payload bytes retains only its diagnostic, not its temporary tree.
+                        *budget = before_value;
                         let message = error.to_string();
                         charge(budget, message.capacity())?;
                         ArgumentValue::Invalid { kind: value_kind, bytes: value_bytes, message }

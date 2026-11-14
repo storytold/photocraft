@@ -4,7 +4,7 @@
 use photocraft_color::Color;
 use photocraft_doc::{AlphaChannel, ColorIndicates, Document};
 
-use super::{Prop, Result, be_f32, be_i32, be_u32, conversion, parasites};
+use super::{Prop, Result, be_f32, be_i32, be_u32, conversion};
 use crate::initial_view::{MAX_INITIAL_SAMPLERS, NativeInitialView};
 
 #[cfg(test)]
@@ -88,6 +88,79 @@ pub(super) fn flag(props: &[Prop<'_>], kind: u32) -> bool {
     word(props, kind).is_some_and(|v| v != 0)
 }
 
+struct MetadataParasite<'a> {
+    name: &'static str,
+    ordinal: usize,
+    data: Option<&'a [u8]>,
+}
+
+/// Resolve only supported names without an owned name index. Keep first-seen processing
+/// order and final duplicate values, even after arbitrarily many unused bounded records.
+fn metadata_parasites<'a>(data: &'a [u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<([MetadataParasite<'a>; 4], bool)> {
+    let mut selected =
+        ["gimp-comment", "exif-data", "gimp-image-metadata", "gimp-metadata"].map(|name| MetadataParasite { name, ordinal: usize::MAX, data: None });
+    let mut ordinal = 0usize;
+    let malformed = super::wire::scan_parasites(data, ctl, |name, data| {
+        for slot in &mut selected {
+            if name == slot.name.as_bytes() {
+                if slot.data.is_none() {
+                    slot.ordinal = ordinal;
+                }
+                slot.data = Some(data);
+            }
+        }
+        ordinal = ordinal.saturating_add(1);
+    })?;
+    selected.sort_by_key(|slot| slot.ordinal);
+    Ok((selected, malformed))
+}
+
+fn image_guides(
+    doc: &mut Document,
+    property: &Prop<'_>,
+    version: u32,
+    outcomes: &mut conversion::Outcomes<'_>,
+    owner: usize,
+    budget: &mut usize,
+) -> Result<()> {
+    use photocraft_doc::import_conversion::ConversionReason as Reason;
+    let (guides, tail) = property.data.as_chunks::<5>();
+    let mut skipped = !tail.is_empty();
+    let mut limited = false;
+    for &[a, b, c, d, orientation] in guides {
+        let position = i32::from_be_bytes([a, b, c, d]);
+        let limit = match orientation {
+            1 => doc.size.height,
+            2 => doc.size.width,
+            _ => {
+                skipped = true;
+                continue;
+            }
+        };
+        if version < 15 && (position < 0 || i64::from(position) > i64::from(limit)) {
+            skipped = true;
+            continue;
+        }
+        if !charge(budget, 8) {
+            skipped = true;
+            limited = true;
+            break;
+        }
+        let target = if orientation == 1 { &mut doc.guides.horizontal } else { &mut doc.guides.vertical };
+        target.push(f64::from(position));
+    }
+    if skipped {
+        outcomes.detail(
+            owner,
+            "xcf.guides",
+            if limited { Reason::RetentionLimit } else { Reason::InvalidOptionalData },
+            "Unknown/truncated guides, legacy off-canvas positions or metadata allowance exceeded".into(),
+            "Documented valid native guide positions imported within allowance; raw source property retained within report limits".into(),
+        )?;
+    }
+    Ok(())
+}
+
 /// Map native document metadata without changing native DPI, unit, guide or sampler semantics.
 #[allow(clippy::too_many_arguments)] // One reader-owned set of bounded outputs, without a new persistent model.
 pub(super) fn image<'a>(
@@ -99,6 +172,7 @@ pub(super) fn image<'a>(
     owner: usize,
     budget: &mut usize,
     warnings: &mut crate::ora::Warnings,
+    ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<()> {
     use photocraft_doc::import_conversion::ConversionReason as Reason;
     doc.resolution_dpi = image_resolution(props, doc.resolution_dpi);
@@ -110,44 +184,10 @@ pub(super) fn image<'a>(
         warnings.note(&warning);
     }
     let mut metadata_incomplete = false;
+    let mut retention_limited = false;
     for p in props {
         match p.kind {
-            18 => {
-                let (guides, tail) = p.data.as_chunks::<5>();
-                let mut skipped = !tail.is_empty();
-                let mut limited = false;
-                for &[a, b, c, d, orientation] in guides {
-                    let position = i32::from_be_bytes([a, b, c, d]);
-                    let limit = match orientation {
-                        1 => doc.size.height,
-                        2 => doc.size.width,
-                        _ => {
-                            skipped = true;
-                            continue;
-                        }
-                    };
-                    if version < 15 && (position < 0 || i64::from(position) > i64::from(limit)) {
-                        skipped = true;
-                        continue;
-                    }
-                    if !charge(budget, 8) {
-                        skipped = true;
-                        limited = true;
-                        break;
-                    }
-                    let target = if orientation == 1 { &mut doc.guides.horizontal } else { &mut doc.guides.vertical };
-                    target.push(f64::from(position));
-                }
-                if skipped {
-                    outcomes.detail(
-                        owner,
-                        "xcf.guides",
-                        if limited { Reason::RetentionLimit } else { Reason::InvalidOptionalData },
-                        "Unknown/truncated guides, legacy off-canvas positions or metadata allowance exceeded".into(),
-                        "Documented valid native guide positions imported within allowance; raw source property retained within report limits".into(),
-                    )?;
-                }
-            }
+            18 => image_guides(doc, p, version, outcomes, owner, budget)?,
             19 => {
                 if let Some((x, y)) = resolution_pair(p.data) {
                     if x != y {
@@ -180,28 +220,53 @@ pub(super) fn image<'a>(
                 )?;
             }
             21 => {
-                for (name, data) in parasites(p.data) {
-                    match name.as_str() {
+                let (selected, malformed) = metadata_parasites(p.data, ctl)?;
+                if malformed {
+                    outcomes.notice(
+                        owner,
+                        "xcf.parasite_framing",
+                        Reason::InvalidOptionalData,
+                        (
+                            "Truncated or malformed optional parasite record".into(),
+                            "Valid preceding metadata imported; remaining source configuration retained inert within report limits".into(),
+                        ),
+                        Some("has malformed optional metadata; valid preceding records were preserved"),
+                        warnings,
+                    )?;
+                }
+                for MetadataParasite { name, data, .. } in selected {
+                    let Some(data) = data else { continue };
+                    ctl.check().map_err(|_| super::IoError::Cancelled)?;
+                    match name {
                         "gimp-comment" => {
-                            if let Ok(text) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(&data))
+                            if let Ok(text) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(data))
                                 && !text.is_empty()
                             {
-                                metadata_incomplete |= !push_text(doc, "Comment", text, budget);
+                                let omitted = !push_text(doc, "Comment", text, budget);
+                                metadata_incomplete |= omitted;
+                                retention_limited |= omitted;
                             }
                         }
                         "exif-data" => {
-                            let raw = data.strip_prefix(b"Exif\0\0").unwrap_or(&data);
+                            let raw = data.strip_prefix(b"Exif\0\0").unwrap_or(data);
                             // Native EXIF is a TIFF payload. Other legacy container layouts stay inert.
                             if raw.starts_with(b"II\x2a\0") || raw.starts_with(b"MM\0\x2a") {
                                 if charge(budget, raw.len()) {
                                     doc.metadata.exif = Some(std::sync::Arc::new(raw.to_vec()));
                                 } else {
                                     metadata_incomplete = true;
+                                    retention_limited = true;
                                 }
                             }
                         }
                         "gimp-image-metadata" | "gimp-metadata" => {
-                            if let Ok(xml) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(&data))
+                            // Refuse oversized optional XML before its parser allocates a node table.
+                            if data.len() > *budget {
+                                metadata_incomplete = true;
+                                retention_limited = true;
+                                continue;
+                            }
+                            if let Ok(xml) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(data))
                                 && let Ok(tree) = parse_xml(xml)
                                 && tree.root_element().has_tag_name("metadata")
                             {
@@ -213,7 +278,9 @@ pub(super) fn image<'a>(
                                     if let (Some(key), Some(value)) = (node.attribute("name"), node.text())
                                         && matches!(key.split('.').next(), Some("Exif" | "Xmp" | "Iptc"))
                                     {
-                                        metadata_incomplete |= !push_text(doc, key, value, budget);
+                                        let omitted = !push_text(doc, key, value, budget);
+                                        metadata_incomplete |= omitted;
+                                        retention_limited |= omitted;
                                     }
                                 }
                                 let packets = super::metadata_packets::translate(doc, &tree, budget);
@@ -230,12 +297,16 @@ pub(super) fn image<'a>(
         }
     }
     if metadata_incomplete {
-        outcomes.detail(
+        outcomes.notice(
             owner,
             "xcf.metadata_partial",
-            Reason::MissingMapping,
-            "Source binary/oversized metadata tags or shared native metadata allowance exceeded".into(),
-            "Representable plain tags imported within native allowance; remaining source metadata retained inert subject to report limits".into(),
+            if retention_limited { Reason::RetentionLimit } else { Reason::MissingMapping },
+            (
+                "Source binary/oversized metadata tags or shared native metadata allowance exceeded".into(),
+                "Representable plain tags imported within native allowance; remaining source metadata retained inert subject to report limits".into(),
+            ),
+            Some("has optional metadata that could not be retained within native metadata limits; usable image content was preserved"),
+            warnings,
         )?;
     }
     // New records take precedence over compatibility old records regardless of property order.

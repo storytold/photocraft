@@ -3,8 +3,46 @@
 use super::{
     AlphaChannel, BlendMode, Channel, ConversionDisposition, ConversionEntry, ConversionReason, Image, Interrupt, IoError, LabelColor, Layer, LayerContent,
     LayerMask, MAX_DEPTH, NativeTargetRef, Node, PendingLayerEffects, PixelFormat, Pixels, Prop, Rect, Result, Surface, be_f32, be_i32, be_u32, blend_mode,
-    conversion, finish, invalid, label, metadata, parasites, paths, place, props, resources, text, write_pixels,
+    conversion, finish, invalid, label, metadata, paths, place, props, resources, text, write_pixels,
 };
+
+/// Both float buffers are live during expansion. Admit the complete destination before
+/// allocating it, then release the source's existing hierarchy charge after replacement.
+fn opaque_alpha(pixels: Pixels, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Pixels> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    if !matches!(pixels.channels, 1 | 3) || pixels.width == 0 || pixels.height == 0 {
+        return Err(invalid("opaque pixels have invalid dimensions or channels"));
+    }
+    let samples = usize::try_from(pixels.width)
+        .ok()
+        .and_then(|width| usize::try_from(pixels.height).ok().and_then(|height| width.checked_mul(height)))
+        .ok_or_else(|| invalid("opaque pixel count overflow"))?;
+    let original = samples.checked_mul(pixels.channels).ok_or_else(|| invalid("opaque pixel count overflow"))?;
+    if pixels.data.len() != original {
+        return Err(invalid("opaque pixel buffer does not match its dimensions and channels"));
+    }
+    let channels = pixels.channels + 1;
+    let count = samples.checked_mul(channels).ok_or_else(|| invalid("opaque alpha expansion overflow"))?;
+    let bytes = count.checked_mul(std::mem::size_of::<f32>()).ok_or_else(|| invalid("opaque alpha expansion overflow"))?;
+    let remaining = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the 1 GiB pixel limit"))?;
+    let original_bytes = original.checked_mul(std::mem::size_of::<f32>()).ok_or_else(|| invalid("opaque pixel byte count overflow"))?;
+    let released = remaining.checked_add(original_bytes).ok_or_else(|| invalid("opaque pixel budget overflow"))?;
+    let mut data = Vec::new();
+    data.try_reserve_exact(count).map_err(|_| invalid("opaque alpha expansion allocation is unavailable"))?;
+    for (index, pixel) in pixels.data.chunks_exact(pixels.channels).enumerate() {
+        if index.is_multiple_of(2048) {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+        }
+        data.extend_from_slice(pixel);
+        data.push(1.);
+    }
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    *budget = released;
+    Ok(Pixels { channels, data, ..pixels })
+}
+
+#[cfg(test)]
+mod alpha_budget_tests;
 
 impl<'a> Image<'a> {
     /// Disclose omitted optional metadata after its native owner exists.
@@ -316,15 +354,38 @@ impl<'a> Image<'a> {
     }
 
     /// Translate unmodified stored text into editable native text, retaining saved pixels on optional-data failures.
-    pub(super) fn layer_text(&mut self, layer: &mut Layer, properties: &[Prop<'a>], position: (i32, i32), outcome: usize) -> Result<()> {
+    pub(super) fn layer_text(&mut self, layer: &mut Layer, properties: &[Prop<'a>], position: (i32, i32), outcome: usize, ctl: &Interrupt<'_>) -> Result<()> {
         let (x, y) = position;
         let modified = properties.iter().find(|p| p.kind == 26).and_then(|p| be_u32(p.data)).is_some_and(|flags| flags & 2 != 0);
-        let config = properties
-            .iter()
-            .filter(|p| p.kind == 21)
-            .flat_map(|p| parasites(p.data))
-            .filter(|(name, _)| matches!(name.as_str(), "gimp-text-layer" | "plug_in_gdyntext/data"))
-            .min_by_key(|(name, _)| name != "gimp-text-layer");
+        let mut config: Option<(&str, &[u8])> = None;
+        for property in properties.iter().filter(|p| p.kind == 21) {
+            let mut native = None;
+            let mut dynamic = None;
+            let malformed = super::wire::scan_parasites(property.data, ctl, |name, data| match name {
+                b"gimp-text-layer" => native = Some(data),
+                b"plug_in_gdyntext/data" => dynamic = Some(data),
+                _ => {}
+            })?;
+            if malformed {
+                self.outcomes.notice(
+                    outcome,
+                    "xcf.parasite_framing",
+                    ConversionReason::InvalidOptionalData,
+                    (
+                        "Malformed optional layer parasite record".into(),
+                        "Valid preceding text configuration remains usable; original source retained inert within report limits".into(),
+                    ),
+                    Some("has malformed optional layer metadata; valid preceding records were preserved"),
+                    &mut self.warnings,
+                )?;
+            }
+            let candidate = native.map(|data| ("gimp-text-layer", data)).or_else(|| dynamic.map(|data| ("plug_in_gdyntext/data", data)));
+            if let Some(candidate) = candidate
+                && config.is_none_or(|(name, _)| name != "gimp-text-layer" && candidate.0 == "gimp-text-layer")
+            {
+                config = Some(candidate);
+            }
+        }
         if modified {
             self.outcomes.notice(
                 outcome,
@@ -346,9 +407,9 @@ impl<'a> Image<'a> {
             let decoded = if let Some(error) = &self.native_color_error {
                 Err(IoError::Unsupported(format!("native text colors cannot be converted: {error}")))
             } else if config_name == "plug_in_gdyntext/data" {
-                text::decode_gdyntext(&config, self.resolution_dpi, (x, y))
+                text::decode_gdyntext(config, self.resolution_dpi, (x, y))
             } else {
-                text::decode(&config, self.resolution_dpi, (x, y))
+                text::decode(config, self.resolution_dpi, (x, y))
             };
             match decoded {
                 Ok(decoded) => {
@@ -599,13 +660,11 @@ impl<'a> Image<'a> {
                 47 => vector = true,
                 48 => link = true,
                 21 => {
-                    for (pname, _) in parasites(p.data) {
-                        match pname.as_str() {
-                            "gimphoto-clipped" => clipped = true,
-                            "gimp-text-layer" | "plug_in_gdyntext/data" => text = true,
-                            _ => {}
-                        }
-                    }
+                    super::wire::scan_parasites(p.data, ctl, |name, _| match name {
+                        b"gimphoto-clipped" => clipped = true,
+                        b"gimp-text-layer" | b"plug_in_gdyntext/data" => text = true,
+                        _ => {}
+                    })?;
                 }
                 _ => {}
             }
@@ -667,21 +726,7 @@ impl<'a> Image<'a> {
             }
             if !alpha {
                 // An opaque layer: add the alpha channel the document's pixel format carries.
-                let n = px.channels;
-                let mut data = Vec::with_capacity(px.data.len() / n * (n + 1));
-                for p in px.data.chunks_exact(n) {
-                    data.extend_from_slice(p);
-                    data.push(1.0);
-                }
-                px = Pixels {
-                    width: px.width,
-                    height: px.height,
-                    channels: n + 1,
-                    data,
-                    underflow: px.underflow,
-                    coverage_clamped: px.coverage_clamped,
-                    palette_fallback: px.palette_fallback,
-                };
+                px = opaque_alpha(px, &mut self.budget, ctl)?;
             }
             if gray_floating {
                 px = resources::gray_to_rgb(px, &mut self.budget, ctl)?;
@@ -730,7 +775,7 @@ impl<'a> Image<'a> {
             }
         }
         if text && !group {
-            self.layer_text(&mut layer, &lprops, (x, y), outcome)?;
+            self.layer_text(&mut layer, &lprops, (x, y), outcome, ctl)?;
         }
         self.retain_layer_properties(outcome, &lprops)?;
         if mptr != 0 {

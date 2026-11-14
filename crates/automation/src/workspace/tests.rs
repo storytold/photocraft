@@ -1560,9 +1560,64 @@ fn csh_import_with_inline_data_ignores_an_unreadable_path() {
     assert_eq!(result["group"], "Inline Set", "{result}");
 }
 
+/// Own only a directory created by this fixture, never a preexisting temporary path.
+struct ReplacementScratch(PathBuf);
+
+impl ReplacementScratch {
+    fn new() -> std::io::Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let parent = std::fs::canonicalize(std::env::temp_dir())?;
+        for _ in 0..128 {
+            let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = parent.join(format!("photocraft-non-image-replacement-{}-{serial}", std::process::id()));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self(path)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(std::io::Error::other("could not create a unique replacement-test directory"))
+    }
+}
+
+impl Drop for ReplacementScratch {
+    fn drop(&mut self) {
+        // A replaced/symlinked root is no longer this fixture's directory. Cleanup
+        // may recurse only into the exact absolute directory we created.
+        if std::fs::canonicalize(&self.0).is_ok_and(|resolved| resolved == self.0) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
+#[test]
+fn replacement_fixture_cleans_its_owned_root_after_workspace_drop_even_on_unwind() {
+    for unwind in [false, true] {
+        let mut owned = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let scratch = ReplacementScratch::new().unwrap();
+            owned = Some(scratch.0.clone());
+            let inside = scratch.0.join("inside");
+            std::fs::create_dir(&inside).unwrap();
+            // Declared after the guard: directory capabilities close first on Windows.
+            let workspace = AuthorizedWorkspace::new(Some(&inside), Some(&inside)).unwrap();
+            workspace.write("witness.txt", b"fixture-owned").unwrap();
+            if unwind {
+                panic!("fixture cleanup witness");
+            }
+        }));
+        assert_eq!(result.is_err(), unwind);
+        assert!(!owned.unwrap().exists(), "the owned root must disappear after normal return and unwinding");
+    }
+}
+
 #[test]
 fn suite_format_recognition_cannot_grant_replacement_of_existing_non_image_files() {
-    let (inside, _, workspace) = roots("non-image-replacement");
+    let scratch = ReplacementScratch::new().unwrap();
+    let inside = scratch.0.join("inside");
+    std::fs::create_dir(&inside).unwrap();
+    // Keep the guard before the capability so Windows closes its directory handle first.
+    let workspace = AuthorizedWorkspace::new(Some(&inside), Some(&inside)).unwrap();
     for (name, contents) in [
         ("notes.txt", b"keep".as_slice()),
         ("README.md", b"keep markdown".as_slice()),

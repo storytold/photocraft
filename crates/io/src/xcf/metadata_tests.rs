@@ -375,7 +375,18 @@ fn legacy_exif_with_budget(record: &[u8], mut budget: usize) -> (photocraft_doc:
         .unwrap();
     let props = [Prop { offset: 28, kind: 21, data: record }];
     outcomes.parasites(owner, props[0].offset, record, &["icc-profile"]).unwrap();
-    metadata::image(&mut doc, &props, 11, &mut Default::default(), &mut outcomes, owner, &mut budget, &mut Default::default()).unwrap();
+    metadata::image(
+        &mut doc,
+        &props,
+        11,
+        &mut Default::default(),
+        &mut outcomes,
+        owner,
+        &mut budget,
+        &mut Default::default(),
+        &photocraft_raster::Interrupt::NONE,
+    )
+    .unwrap();
     doc.metadata.import_conversion = Some(Arc::new(outcomes.finish().unwrap()));
     (doc, budget)
 }
@@ -398,7 +409,7 @@ fn legacy_exif_tiff_budget_boundary_reports_omission_and_preserves_source_eviden
                 .iter()
                 .find(|entry| entry.feature_code == "xcf.metadata_partial")
                 .expect("omitted valid TIFF needs the existing partial-metadata disclosure");
-            assert_eq!(incomplete.reason, ConversionReason::MissingMapping);
+            assert_eq!(incomplete.reason, ConversionReason::RetentionLimit);
             assert!(incomplete.source_description.contains("allowance exceeded"));
             assert_eq!(report.attachments.len(), 1);
             assert_eq!(report.attachments[0].bytes.as_slice(), record.as_slice(), "source evidence uses its separate bounded inert-retention allowance");

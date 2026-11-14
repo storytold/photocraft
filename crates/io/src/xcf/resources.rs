@@ -71,10 +71,14 @@ pub(super) fn gray_to_rgb(pixels: Pixels, budget: &mut usize, ctl: &photocraft_r
     if pixels.width == 0 || pixels.height == 0 || pixels.data.len() != expected {
         return Err(invalid("floating gray buffer does not match its complete dimensions and channels"));
     }
-    let extra = samples.checked_mul(2).and_then(|n| n.checked_mul(4)).ok_or_else(|| invalid("floating pixel count overflow"))?;
-    let remaining = budget.checked_sub(extra).ok_or_else(|| invalid("the layers exceed the 1 GiB pixel limit"))?;
     let channels = pixels.channels + 2;
     let count = samples.checked_mul(channels).ok_or_else(|| invalid("floating pixel count overflow"))?;
+    // Source and destination coexist until the replacement is complete. Admit the full
+    // output now, then release only the original hierarchy's already-charged sample bytes.
+    let bytes = count.checked_mul(std::mem::size_of::<f32>()).ok_or_else(|| invalid("floating pixel count overflow"))?;
+    let remaining = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the 1 GiB pixel limit"))?;
+    let original = expected.checked_mul(std::mem::size_of::<f32>()).ok_or_else(|| invalid("floating pixel count overflow"))?;
+    let released = remaining.checked_add(original).ok_or_else(|| invalid("floating pixel budget overflow"))?;
     let mut data = Vec::new();
     data.try_reserve_exact(count).map_err(|_| invalid("floating gray expansion allocation is unavailable"))?;
     for (index, pixel) in pixels.data.chunks_exact(pixels.channels).enumerate() {
@@ -88,7 +92,7 @@ pub(super) fn gray_to_rgb(pixels: Pixels, budget: &mut usize, ctl: &photocraft_r
         }
     }
     ctl.check().map_err(|_| crate::IoError::Cancelled)?;
-    *budget = remaining;
+    *budget = released;
     Ok(Pixels { channels, data, ..pixels })
 }
 
@@ -325,7 +329,9 @@ mod tests {
     #[test]
     fn gray_expansion_preserves_native_hdr_alpha_dimensions_and_underflow() {
         for alpha in [false, true] {
-            let mut budget = 24;
+            // Remaining allowance must fit the entire new buffer while the old one is live.
+            let available = if alpha { 32 } else { 24 };
+            let mut budget = available;
             let data = if alpha { vec![-0.25, 0.375, 3.5, 0.75] } else { vec![-0.25, 3.5] };
             let expanded = gray_to_rgb(
                 Pixels { width: 2, height: 1, channels: if alpha { 2 } else { 1 }, data, underflow: true, coverage_clamped: false, palette_fallback: false },
@@ -335,7 +341,7 @@ mod tests {
             .unwrap();
             assert_eq!((expanded.width, expanded.height, expanded.channels, expanded.underflow), (2, 1, if alpha { 4 } else { 3 }, true));
             assert_eq!(expanded.data, if alpha { vec![-0.25, -0.25, -0.25, 0.375, 3.5, 3.5, 3.5, 0.75] } else { vec![-0.25, -0.25, -0.25, 3.5, 3.5, 3.5] });
-            assert_eq!(budget, 8);
+            assert_eq!(budget, available - 16);
         }
         let mut budget = 15;
         assert!(

@@ -265,7 +265,10 @@ pub fn fresh_import_options(mut options: photocraft_io::ImportOptions) -> photoc
 /// (`photocraft_io::raw::EXTENSIONS`) and the Affinity ones (`photocraft_io::affinity::EXTENSIONS`):
 /// the document and vector formats `photocraft_io::import` handles, and `raw`, the Open As type
 /// for any camera raw.
-const OPEN_AS_EXTRA: &[&str] = &["raw", "pdn", "ora", "xcf", "xcf.gz", "xcfgz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "pdf", "ai"];
+const OPEN_AS_EXTRA: &[&str] = &[
+    "raw", "pdn", "ora", "xcf", "xcf.gz", "xcfgz", "xcf.bz2", "xcfbz2", "xcf.xz", "xcfxz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "pdf",
+    "ai",
+];
 
 /// Whether `ext` (the `as` value of Open As) names a format PhotoCraft reads.
 fn is_open_as_format(ext: &str) -> bool {
@@ -541,6 +544,9 @@ pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
     let input = PlaceInput::with_file(s, &path, PlaceFile::Path(path.clone()), link, p)?;
     place_input(s, input)
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod open_as_alias_tests;
 
 #[cfg(test)]
 mod import_options_parser_tests {

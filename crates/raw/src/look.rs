@@ -849,7 +849,15 @@ mod tests {
         let cam: Vec<[f32; 3]> = patches(w, h).iter().map(|p| [0, 1, 2].map(|k| p[k] / WB[k] as f32)).collect();
         let data = crate::testgen::mosaic(&cam, w, [0, 1, 1, 2], 0, 4095);
         let b = crate::testgen::tiff_ep("NIKON CORPORATION", w, h, &data, [0, 1, 1, 2], 12, vec![]);
-        let s = crate::decode(&b, &crate::Limits::default()).unwrap();
+        let mut s = crate::decode(&b, &crate::Limits::default()).unwrap();
+        assert!(data.iter().all(|sample| *sample <= 4095), "independently generated 12-bit sensor samples");
+        assert_eq!(s.data, data, "decoding must preserve the synthetic sensor codes");
+        assert!(s.black.values.iter().chain(&s.black.delta_h).chain(&s.black.delta_v).all(|value| *value == 0.0));
+        assert_eq!(s.baseline_exposure, 0.0);
+        // The JPEG oracle below uses the generator's known 12-bit white. Vendor
+        // plateau inference may treat a repeated patch edge as saturation; keep
+        // this rendering-fit test independent of that separate estimation policy.
+        s.white = [4095.0; 3];
         let to_srgb = color::invert(&color::srgb_to_xyz_d50()).unwrap();
         let pro_to_srgb = color::mul(&to_srgb, &color::rgb_to_xyz(color::ROMM, color::D50_XY));
         let f = |x: f64| 1.6 * x / (1.0 + 0.6 * x);

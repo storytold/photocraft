@@ -87,7 +87,7 @@ pub struct Developed {
     pub warnings: Vec<String>,
 }
 
-/// Linearization + black/white scaling for one sample (pre white balance), 0..1.
+/// Linearization + black/white scaling for one sample (pre white balance), without clipping.
 pub(crate) struct Scale<'a> {
     s: &'a Sensor,
     lin: Option<&'a [u16]>,
@@ -115,7 +115,9 @@ impl<'a> Scale<'a> {
         let black = s.black.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), sample, s.samples);
         let white = s.white[sample.min(2)];
         let range = white - black;
-        if range.is_nan() || range < 1.0 {
+        // Floating-point sensor levels use source units: a valid white-minus-black
+        // range may be smaller than one. Only invalid or nonpositive ranges fail.
+        if !range.is_finite() || range <= 0.0 {
             return 0.0;
         }
         let n = (v - black) / range;
@@ -1175,5 +1177,118 @@ mod tests {
         assert_eq!(px(&orient(src.clone(), 3, 2, 8).0), vec![2, 5, 1, 4, 0, 3]);
         assert_eq!(px(&orient(src.clone(), 3, 2, 5).0), vec![0, 3, 1, 4, 2, 5]);
         assert_eq!(px(&orient(src, 3, 2, 7).0), vec![5, 2, 4, 1, 3, 0]);
+    }
+
+    mod scale_review_tests {
+        use super::*;
+
+        fn float_sensor(values: &[f32], black: f32, white: f32) -> Sensor {
+            let mut sensor = test_sensor(values.len(), 1, None, 1);
+            sensor.data.clear();
+            sensor.float_data = Some(values.to_vec());
+            sensor.black = crate::BlackLevels::uniform(black);
+            sensor.white = [white; 3];
+            sensor.tone_curve.clear();
+            sensor
+        }
+
+        #[test]
+        fn fractional_float_levels_normalize_exactly_without_early_clipping() {
+            for (black, white, values, expected) in [
+                (0., 0.5, vec![-0.25, 0., 0.125, 0.25, 0.5, 0.75], vec![-0.5, 0., 0.25, 0.5, 1., 1.5]),
+                (0.25, 0.75, vec![0., 0.25, 0.5, 0.75, 1.], vec![-0.5, 0., 0.5, 1., 1.5]),
+            ] {
+                let sensor = float_sensor(&values, black, white);
+                let scale = Scale::new(&sensor);
+                let actual: Vec<_> = (0..values.len()).map(|x| scale.value(x, 0, 0)).collect();
+                assert_eq!(actual, expected);
+                let mut row = vec![0.; values.len() * 3];
+                fill_linear_row(&scale, &[1.; 3], 0, 0, &mut row);
+                let clipped: Vec<_> = expected.iter().flat_map(|value| [value.clamp(0., 1.); 3]).collect();
+                assert_eq!(row, clipped, "clipping remains at the existing develop boundary");
+            }
+        }
+
+        #[test]
+        fn invalid_ranges_and_nonfinite_samples_keep_the_existing_zero_fallback() {
+            for (black, white) in
+                [(0., 0.), (0.5, 0.25), (0., f32::NAN), (0., f32::INFINITY), (0., f32::NEG_INFINITY), (f32::NAN, 0.5), (f32::INFINITY, f32::INFINITY)]
+            {
+                let sensor = float_sensor(&[0.25], black, white);
+                assert_eq!(Scale::new(&sensor).value(0, 0, 0), 0.);
+            }
+            let sensor = float_sensor(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY], 0., 0.5);
+            for x in 0..3 {
+                assert_eq!(Scale::new(&sensor).value(x, 0, 0), 0.);
+            }
+        }
+
+        #[test]
+        fn integer_unit_ranges_black_subtraction_and_linearization_remain_unchanged() {
+            let mut sensor = test_sensor(3, 1, None, 1);
+            sensor.data = vec![0, 1, 2];
+            sensor.black = crate::BlackLevels::uniform(0.);
+            sensor.white = [1.; 3];
+            assert_eq!((0..3).map(|x| Scale::new(&sensor).value(x, 0, 0)).collect::<Vec<_>>(), [0., 1., 2.]);
+            sensor.data = vec![64, 1024, 4000];
+            sensor.black = crate::BlackLevels::uniform(64.);
+            sensor.white = [4000.; 3];
+            assert_eq!((0..3).map(|x| Scale::new(&sensor).value(x, 0, 0)).collect::<Vec<_>>(), [0., 960. / 3936., 1.]);
+            sensor.data = vec![0, 1, 2];
+            sensor.linearization = Some(vec![0, 64, 128]);
+            sensor.black = crate::BlackLevels::uniform(0.);
+            sensor.white = [128.; 3];
+            assert_eq!((0..3).map(|x| Scale::new(&sensor).value(x, 0, 0)).collect::<Vec<_>>(), [0., 0.5, 1.]);
+        }
+
+        /// Independent TIFF/DNG strip layout: three little-endian IEEE754 binary32
+        /// monochrome samples, with explicit fractional WhiteLevel and no calibration.
+        fn fractional_white_dng() -> Vec<u8> {
+            use crate::testgen::{TiffBuilder, Val};
+            let mut file = TiffBuilder::default();
+            let pixels = file.blob([0f32, 0.25, 0.5].iter().flat_map(|value| value.to_le_bytes()).collect());
+            let image = file.ifd(vec![
+                (256, Val::Long(vec![3])),
+                (257, Val::Long(vec![1])),
+                (258, Val::Short(vec![32])),
+                (259, Val::Short(vec![1])),
+                (262, Val::Short(vec![34892])),
+                (273, Val::Blobs(vec![pixels])),
+                (277, Val::Short(vec![1])),
+                (278, Val::Long(vec![1])),
+                (279, Val::Long(vec![12])),
+                (339, Val::Short(vec![3])),
+                (50706, Val::Byte(vec![1, 4, 0, 0])),
+                (50714, Val::Double(vec![0.])),
+                (50717, Val::Double(vec![0.5])),
+            ]);
+            file.chain = vec![image];
+            file.build()
+        }
+
+        #[test]
+        fn fractional_white_float_dng_develops_black_half_gray_and_white_instead_of_all_black() {
+            let bytes = fractional_white_dng();
+            let sensor = crate::decode(&bytes, &crate::Limits::default()).unwrap();
+            assert_eq!(sensor.float_data.as_deref(), Some([0., 0.25, 0.5].as_slice()));
+            assert_eq!(sensor.white, [0.5; 3]);
+            assert!(sensor.is_monochrome());
+            let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), ..Default::default() };
+            let developed = crate::develop(&bytes, &options).unwrap();
+            assert_eq!((developed.width, developed.height), (3, 1));
+            assert_eq!(developed.rgb.len(), 9);
+            for (pixel, expected) in developed.rgb.as_chunks::<3>().0.iter().zip([0u16, 44590, 65535]) {
+                // Half linear gray is 0.5^(1/1.8), with at most one output code
+                // of rounding/interpolation in the existing gamma-1.8 LUT.
+                if expected == 0 || expected == u16::MAX {
+                    assert!(pixel.iter().all(|actual| *actual == expected), "{pixel:?} vs {expected}");
+                } else {
+                    assert!(pixel.iter().all(|actual| actual.abs_diff(expected) <= 1), "{pixel:?} vs {expected}");
+                }
+            }
+            let mut broken = sensor;
+            broken.float_data.as_mut().unwrap().pop();
+            assert!(matches!(develop_sensor(&broken, &options), Err(RawError::Malformed(_))), "a truncated buffer remains a data error, never silently black");
+        }
     }
 }

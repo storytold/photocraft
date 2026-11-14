@@ -1,6 +1,11 @@
 //! Bounds-checked XCF framing, properties and tile compression.
 
-use super::{HashMap, MAX_PAYLOAD, MAX_STRING, Read, Result, invalid};
+#[cfg(test)]
+use super::HashMap;
+use super::{MAX_PAYLOAD, MAX_STRING, Read, Result, invalid};
+
+#[cfg(test)]
+mod parasite_review_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Compression {
@@ -155,28 +160,83 @@ pub(super) fn be_f32(b: &[u8]) -> Option<f32> {
     be_u32(b).map(f32::from_bits)
 }
 
-/// The parasites of a PROP_PARASITES payload as (name, data); a later duplicate wins.
-pub(super) fn parasites(data: &[u8]) -> Vec<(String, Vec<u8>)> {
+/// Parse optional records without copying names or unused payloads. A malformed tail leaves
+/// its valid prefix available; cancellation is always an import failure, never optional data.
+pub(super) fn scan_parasites<'a>(data: &'a [u8], ctl: &photocraft_raster::Interrupt<'_>, mut visit: impl FnMut(&'a [u8], &'a [u8])) -> Result<bool> {
     let mut c = Cursor { b: data, pos: 0, wide: false };
-    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
-    // Map each name to its output slot so duplicate replacement is O(1). The parasite
-    // records are file-controlled, so scanning `out` with iter_mut().find() per record is
-    // O(n^2) and lets a crafted payload with many distinct names stall import. The map
-    // preserves insertion order and last-value-wins behavior.
-    let mut index: HashMap<String, usize> = HashMap::new();
     while c.pos < data.len() {
-        let Ok(name) = c.string() else { break };
-        let (Ok(_flags), Ok(len)) = (c.u32(), c.u32()) else { break };
-        let Ok(payload) = c.take(len as usize) else { break };
-        match index.get(&name) {
-            Some(&i) => out[i].1 = payload.to_vec(),
-            None => {
-                index.insert(name.clone(), out.len());
-                out.push((name, payload.to_vec()));
-            }
+        ctl.check().map_err(|_| super::IoError::Cancelled)?;
+        let record = (|| {
+            let name = c.string_bytes()?;
+            c.u32()?; // Inert flags never grant authority.
+            let length = c.u32()? as usize;
+            Ok::<_, super::IoError>((name, c.take(length)?))
+        })();
+        match record {
+            Ok((name, payload)) => visit(name, payload),
+            Err(_) => return Ok(true),
         }
     }
-    out
+    Ok(false)
+}
+
+#[cfg(test)]
+pub(super) const MAX_PARASITES: usize = 4096;
+#[cfg(test)]
+const PARASITE_SCRATCH_BYTES: usize = 8 << 20;
+
+#[cfg(test)]
+pub(super) struct Parasites {
+    pub(super) values: Vec<(String, Vec<u8>)>,
+    pub(super) limited: bool,
+    pub(super) malformed: bool,
+}
+
+/// Bound the distinct-name index before reserving it, then copy only final winning values.
+/// Scanning continues after the cap so later duplicates of retained slots still win. Borrowed
+/// names/payloads avoid owning one copy per record, even for a flood of replacements.
+#[cfg(test)]
+pub(super) fn collect_parasites(data: &[u8], allowance: usize, max_records: usize, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Parasites> {
+    let mut remaining = allowance;
+    let mut records: Vec<(&[u8], &[u8])> = Vec::new();
+    let mut index: HashMap<&[u8], usize> = HashMap::new();
+    let mut limited = false;
+    // Cover Vec slots, hash buckets/control bytes and allocator slack before either reserve.
+    const SLOT_BYTES: usize = 192;
+    let malformed = scan_parasites(data, ctl, |name, payload| {
+        if let Some(&slot) = index.get(name) {
+            if let Some(record) = records.get_mut(slot) {
+                *record = (name, payload);
+            }
+            return;
+        }
+        if records.len() >= max_records.min(MAX_PARASITES) || remaining < SLOT_BYTES || records.try_reserve_exact(1).is_err() || index.try_reserve(1).is_err() {
+            limited = true;
+            return;
+        }
+        remaining -= SLOT_BYTES;
+        index.insert(name, records.len());
+        records.push((name, payload));
+    })?;
+    let mut values = Vec::new();
+    for (name, payload) in records {
+        ctl.check().map_err(|_| super::IoError::Cancelled)?;
+        // Lossy decoding can expand each source byte to a three-byte replacement character.
+        let bytes = name.len().saturating_mul(3).saturating_add(payload.len());
+        if bytes > remaining || values.try_reserve_exact(1).is_err() {
+            limited = true;
+            continue;
+        }
+        remaining -= bytes;
+        values.push((String::from_utf8_lossy(name).into_owned(), payload.to_vec()));
+    }
+    Ok(Parasites { values, limited, malformed })
+}
+
+/// Test compatibility for bounded final-value collection; production selectors borrow records.
+#[cfg(test)]
+pub(super) fn parasites(data: &[u8]) -> Vec<(String, Vec<u8>)> {
+    collect_parasites(data, PARASITE_SCRATCH_BYTES, MAX_PARASITES, &photocraft_raster::Interrupt::NONE).map(|records| records.values).unwrap_or_default()
 }
 
 /// What one tile's bytes decode to, for a drawable of `bpp` bytes per pixel.
