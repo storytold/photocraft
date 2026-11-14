@@ -72,23 +72,57 @@ impl Model {
         if interrupt(0.95) {
             return Err(DepthError::Cancelled);
         }
+        // The head's output grid need not equal the input (candle's DPT head gives 520 x 520 for a
+        // 518 x 518 input): read its size from the tensor and map it back onto the square input.
+        let dims = out.dims();
+        let (oh, ow) = match dims {
+            [.., oh, ow] => (*oh, *ow),
+            _ => return Err(DepthError::Backend(format!("unexpected output shape {dims:?}"))),
+        };
         let flat = out.flatten_all().map_err(be)?.to_vec1::<f32>().map_err(be)?;
-        if flat.len() != side * side {
-            return Err(DepthError::Backend(format!("unexpected output size {}", flat.len())));
+        if ow == 0 || oh == 0 || flat.len() != ow * oh {
+            return Err(DepthError::Backend(format!("unexpected output shape {dims:?}")));
         }
-        let mut cropped = Vec::with_capacity(pw * ph);
-        for y in 0..ph {
-            if let Some(row) = flat.get(y * side..y * side + pw) {
-                cropped.extend_from_slice(row);
-            }
-        }
+        let cropped = crop_resample(&flat, ow, oh, side, pw, ph);
         postprocess(&cropped, prep.width, prep.height)
     }
+}
+
+/// The `pw x ph` top-left part of a `side x side` input, sampled bilinearly (pixel centres) from an
+/// `ow x oh` output that covers the whole square input.
+fn crop_resample(out: &[f32], ow: usize, oh: usize, side: usize, pw: usize, ph: usize) -> Vec<f32> {
+    let (sx, sy) = (ow as f32 / side as f32, oh as f32 / side as f32);
+    let at = |x: usize, y: usize| out.get(y.min(oh - 1) * ow + x.min(ow - 1)).copied().unwrap_or(0.0);
+    let mut res = Vec::with_capacity(pw * ph);
+    for y in 0..ph {
+        let fy = ((y as f32 + 0.5) * sy - 0.5).max(0.0);
+        let (y0, ty) = (fy.floor() as usize, fy.fract());
+        for x in 0..pw {
+            let fx = ((x as f32 + 0.5) * sx - 0.5).max(0.0);
+            let (x0, tx) = (fx.floor() as usize, fx.fract());
+            let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+            let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+            res.push(top * (1.0 - ty) + bottom * ty);
+        }
+    }
+    res
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crop_resample_maps_a_larger_output_onto_the_input() {
+        // A 4x4 output over a 2x2 input: the top-left input pixel reads the top-left 2x2 block.
+        let out: Vec<f32> = (0..16).map(|v| v as f32).collect();
+        let r = crop_resample(&out, 4, 4, 2, 1, 1);
+        assert_eq!(r.len(), 1);
+        assert!((r[0] - (0.0 + 1.0 + 4.0 + 5.0) / 4.0).abs() < 1e-5, "{r:?}");
+        // Same size is the identity.
+        let same = crop_resample(&out, 4, 4, 4, 4, 4);
+        assert_eq!(same, out);
+    }
 
     #[test]
     fn rejects_empty_weights() {
