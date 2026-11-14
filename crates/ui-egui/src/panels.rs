@@ -216,6 +216,11 @@ mod title_tests {
         let hidden = texts(&mut app);
         assert!(!hidden.iter().any(|t| t.contains("foo.psd")), "file name hidden: {hidden:?}");
         assert!(hidden.iter().any(|t| t.contains("PhotoCraft")), "app name kept: {hidden:?}");
+        // A Copyrighted document: "© name", as its tab shows it (#13993).
+        app.session.prefs.edit(|p| p.interface.show_file_name_in_title = true);
+        app.run("file.fileInfo", serde_json::json!({"copyrightStatus": "copyrighted"})).unwrap();
+        let marked = texts(&mut app);
+        assert!(marked.iter().any(|t| t.contains("\u{a9} foo.psd")), "copyright sign before the name: {marked:?}");
     }
 
     #[test]
