@@ -1113,7 +1113,8 @@ fn a_chain_at_the_nesting_cap_beside_an_image_too_deep_in_xml_still_parses() {
 }
 
 /// An embedded SVGZ whose gzip stream is cut short is left out like any unreadable image, though
-/// craft-svg charges it the rest of the byte budget; an image refused for bytes after it is too.
+/// craft-svg charges it the rest of the byte budget. A small image refused for bytes after it is
+/// left out too; one past the whole budget on its own still fails the drawing.
 #[test]
 fn a_damaged_embedded_svgz_is_left_out() {
     let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\"/></svg>";
@@ -1122,6 +1123,12 @@ fn a_damaged_embedded_svgz_is_left_out() {
     let after = embedded_image("image/svg+xml", svg.as_bytes());
     let parsed = parse_bounded(image_svg(&format!("{damaged}{after}")).as_bytes(), MAX_RASTER_PIXELS).unwrap();
     assert!(!parsed.tree.root().has_children(), "both images are left out");
+    let mut huge = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\">".to_vec();
+    huge.resize(usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap() + 1024, b' ');
+    huge.extend_from_slice(b"</svg>");
+    let huge = embedded_image("image/svg+xml", &gzip(&huge));
+    let error = parse_bounded(image_svg(&format!("{damaged}{huge}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+    assert!(error.to_string().contains("byte or nesting budget"), "{error}");
     // A stored preview must draw completely, so it is still refused there.
     assert!(parse_bounded_work_with(image_svg(&damaged).as_bytes(), MAX_RASTER_PIXELS, true, fonts).is_err());
 }

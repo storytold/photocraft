@@ -597,15 +597,16 @@ struct SvgRefusals {
     depth: AtomicUsize,
     /// An image was refused for the chain depth or the byte budget.
     over_budget: AtomicBool,
-    /// craft-svg charged an image that couldn't be unpacked everything the byte budget had left:
-    /// later images refused for bytes are left out with it, not counted as the drawing's excess.
-    spent_by_unreadable: AtomicBool,
+    /// Bytes craft-svg charged images that couldn't be unpacked: it charges such an image
+    /// everything the byte budget had left, and so does a readable image that fits the budget
+    /// only without those charges. Neither is the drawing's content.
+    unread_charges: AtomicUsize,
 }
 
 /// `resolve`, also noting in `refusals` why craft-svg is about to refuse each embedded SVG. It
 /// repeats craft-svg's first two checks in their order: the chain depth, then unpacking within
-/// what the byte budget has left (`text/plain` data is an SVG unless it is a raster craft-svg
-/// draws).
+/// the byte budget, less only what the drawing's own images used (`text/plain` data is an SVG
+/// unless it is a raster craft-svg draws).
 fn noting_refusals(
     resolve: usvg::ImageHrefResolver<'static>,
     resolver: Arc<craft_svg::tree::ImageResolver>,
@@ -624,15 +625,16 @@ fn noting_refusals(
             if refusals.depth.load(Ordering::Relaxed) >= MAX_EMBEDDED_SVG_DEPTH {
                 refusals.over_budget.store(true, Ordering::Relaxed);
             } else {
-                let left = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX).saturating_sub(resolver.usage().embedded_svg_bytes);
-                match craft_svg::svgz::text(&data, left) {
-                    Ok(_) => {}
-                    Err(craft_svg::svgz::Error::TooLarge(_)) => {
-                        if !refusals.spent_by_unreadable.load(Ordering::Relaxed) {
-                            refusals.over_budget.store(true, Ordering::Relaxed);
-                        }
+                let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX);
+                let used = resolver.usage().embedded_svg_bytes;
+                let left = budget.saturating_sub(used);
+                let content_left = budget.saturating_sub(used.saturating_sub(refusals.unread_charges.load(Ordering::Relaxed)));
+                match craft_svg::svgz::text(&data, content_left) {
+                    Ok(text) if text.len() <= left => {}
+                    Err(craft_svg::svgz::Error::TooLarge(_)) => refusals.over_budget.store(true, Ordering::Relaxed),
+                    _ => {
+                        refusals.unread_charges.fetch_add(left, Ordering::Relaxed);
                     }
-                    Err(_) => refusals.spent_by_unreadable.store(true, Ordering::Relaxed),
                 }
             }
             refusals.depth.fetch_add(1, Ordering::Relaxed);
