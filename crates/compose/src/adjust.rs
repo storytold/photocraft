@@ -397,6 +397,8 @@ mod lookup_tests {
 }
 
 #[cfg(test)]
+mod curves_channel_composite_tests;
+#[cfg(test)]
 mod tone_tests;
 
 /// Legacy Brightness/Contrast scales contrast around 128 of 255 (contrast 80 keeps 128 at 128,
