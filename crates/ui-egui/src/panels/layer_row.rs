@@ -1,4 +1,4 @@
-use super::layer_drag::{MaskDrag, fx_drop, layer_drag_and_drop, mask_drag_key, mask_drop, start_fx_drag, starts_mask_drag};
+use super::layer_drag::{MaskDrag, dragged_layer, fx_drop, layer_drag_and_drop, mask_drag_key, mask_drop, start_fx_drag, starts_mask_drag};
 use super::layers::simple_lock_toggle;
 use super::{
     Color32, CornerRadius, Layer, LayerContent, PhotocraftApp, Pos2, Rect, Sense, Stroke, StrokeKind, Tokens, Value, icons, json, pos2, theme, vec2, widgets,
@@ -317,6 +317,16 @@ pub(super) fn layer_row(
         if load_at(m, p).is_some() {
             thumb_load_cursor(ctx, p, m);
         }
+    }
+    // A row takes a click (it selects the layer) and a drag, so the pointer anywhere over it is the
+    // hand, as in Photoshop (#12666). The eye column, the fx badge, the padlock and the mask
+    // thumbnails are widgets of their own and take the hover from the row, so this asks the rect
+    // rather than the response. The scrollbar's pad is not the row. A row being dragged down the
+    // panel keeps the drag's cursor, and a name being edited in place is a text field, so neither
+    // takes the hand.
+    let over_row = ui.rect_contains_pointer(rect.with_max_x(rect.right() - crate::layer_row_ui::RIGHT_PAD));
+    if over_row && !resp.dragged() && !eye_resp.dragged() && crate::layer_row_ui::renaming(ctx) != Some(l.id.0) && dragged_layer(ctx).is_none() {
+        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     // ⇧-click a mask thumbnail: disable / enable that mask; ⌥-click a layer mask: view it.
     let mask_toggle = resp.clicked().then(|| (ui.input(|i| i.modifiers), resp.interact_pointer_pos())).and_then(|(m, pos)| {

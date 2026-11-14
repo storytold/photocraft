@@ -80,6 +80,11 @@ pub(super) fn background_drop_refused(doc: &photocraft_doc::Document, payload: &
     moves_bg || (target == bg && position == "below")
 }
 
+/// The layer whose row is being dragged down the panel, if any.
+pub(super) fn dragged_layer(ctx: &egui::Context) -> Option<u64> {
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::unique("layer-drag")))
+}
+
 /// Drag a layer row to reorder: drop above, below, or inside an existing group. With ⌥ held on
 /// release the layers stay put and copies land there instead (Photoshop).
 /// Multi-layer moves are atomic (one undo step), using the engine's stable document order.
