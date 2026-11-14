@@ -124,3 +124,16 @@ fn shift_pressed_mid_drag_keeps_sampling_and_a_shift_press_never_samples() {
     assert_eq!(samplers(&app).len(), 1, "one sampler");
     assert_eq!(foreground(&app), fg, "the drag after a ⇧ press samples nothing");
 }
+
+/// CodeRabbit on #14693: a release that another tool receives still ends a ⇧ press, so the next
+/// Eyedropper press-less move samples as before.
+#[test]
+fn a_release_taken_by_another_tool_ends_the_shift_press() {
+    let mut app = app();
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 650.0, y: 400.0, pressure: 1.0 }, SHIFT);
+    app.ui.tool = Tool::Hand;
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 650.0, y: 400.0 }, Modifiers::NONE);
+    app.ui.tool = Tool::Eyedropper;
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 200.0, y: 100.0, pressure: 1.0 }, Modifiers::NONE);
+    assert_eq!(foreground(&app), [255, 255, 255], "the move samples: the ⇧ press is over");
+}
