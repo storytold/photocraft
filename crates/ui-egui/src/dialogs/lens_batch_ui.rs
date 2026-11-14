@@ -193,3 +193,7 @@ mod lens_batch_destination_tests;
 #[cfg(test)]
 #[path = "lens_batch_ok_state_tests.rs"]
 mod lens_batch_ok_state_tests;
+
+#[cfg(test)]
+#[path = "lens_batch_sticky_tests.rs"]
+mod lens_batch_sticky_tests;

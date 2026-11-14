@@ -10,12 +10,12 @@ use serde_json::json;
 use super::lens_batch_layout_tests::{H, entry, fields, fixture, harness, set, type_into};
 
 /// Whether the checkbox `label` is ticked.
-fn ticked(h: &H, label: &str) -> bool {
+pub(super) fn ticked(h: &H, label: &str) -> bool {
     h.get_by_role_and_label(Role::CheckBox, label).accesskit_node().toggled() == Some(Toggled::True)
 }
 
 /// The entry the dropdown `name` shows.
-fn combo(h: &H, name: &str) -> Option<String> {
+pub(super) fn combo(h: &H, name: &str) -> Option<String> {
     h.get_by_role_and_label(Role::ComboBox, name).accesskit_node().value().map(|v| v.to_string())
 }
 
