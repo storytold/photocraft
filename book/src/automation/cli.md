@@ -21,6 +21,23 @@ photocraft-cli run input.psd \
   --out output.png
 ```
 
+### Images piped on standard input
+
+`-` as the input of `convert`, `info` or `run` reads the image piped on standard input, to its
+end; the format comes from the bytes, not a name. A file called `-` is written `./-`.
+
+```sh
+wl-paste | photocraft-cli convert - pasted.png
+photocraft-cli info - < photo.jpg
+curl -s https://example.com/image.webp | photocraft-cli run - --cmd image.adjustments.invert --out inverted.png
+```
+
+The document is named `Untitled-1`, as a new one is (`info` reports `"file": "-"`). An empty
+pipe, a terminal (nothing piped in), more than 4 GB, and bytes that are not an image PhotoCraft
+reads all fail with exit status 1 and an `error: standard input: …` line. The desktop app takes
+`-` the same way: `photocraft - < image.png` opens the image as a new untitled document, which
+File › Save asks a path for. Neither reads standard input unless `-` is given.
+
 ### Missing font warnings
 
 If a type layer uses a font family that is not installed, `convert` and `run`
