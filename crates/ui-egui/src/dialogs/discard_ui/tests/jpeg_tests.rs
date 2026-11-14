@@ -3,7 +3,7 @@
 //! waiting behind it.
 use super::*;
 use crate::{FileDialogAnswer, jpeg_options_ui};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_codecs::JpegFormat;
 use std::{cell::RefCell, rc::Rc};
 
@@ -61,6 +61,54 @@ fn save_as_to_a_jpeg_asks_for_jpeg_options() {
     assert_eq!(writes.borrow().as_slice(), &[("p.jpg".to_string(), asked(pct(10), JpegFormat::Baseline))]);
     assert!(h.state().jpeg_options.is_none());
     assert_eq!(h.state().session.active().unwrap().path.as_deref(), Some("p.jpg"));
+}
+
+/// The first keystrokes change Quality without a click, and Enter writes that choice.
+#[test]
+fn jpeg_quality_arrows_and_enter_save() {
+    for (start, key, expected) in [(10, Key::ArrowUp, [11, 12]), (12, Key::ArrowUp, [12, 12]), (2, Key::ArrowDown, [1, 0]), (0, Key::ArrowDown, [0, 0])] {
+        let (mut h, writes) = jpeg_app("unused.jpg");
+        h.state_mut().session.prefs.edit(|p| {
+            p.dialogs.insert("file.jpegOptions".into(), json!({"quality": start}));
+        });
+        h.state_mut().save_as(Some("p.jpg".into())).unwrap();
+        h.run_steps(2);
+        assert!(h.query_by_label("JPEG Options").is_some());
+        assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(start));
+        for quality in expected {
+            h.key_press(key);
+            h.run_steps(2);
+            assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(quality));
+        }
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert_eq!(writes.borrow().as_slice(), &[("p.jpg".to_string(), asked(pct(expected[1]), JpegFormat::Baseline))]);
+        assert!(h.state().jpeg_options.is_none());
+    }
+}
+
+/// Focus belongs to the dialog controls the user tabs to, and resets on the next opening.
+#[test]
+fn jpeg_quality_focus_returns_only_when_reopened() {
+    let (mut h, _) = jpeg_app("unused.jpg");
+    h.state_mut().session.prefs.edit(|p| {
+        p.dialogs.insert("file.jpegOptions".into(), json!({"quality": 10}));
+    });
+    h.state_mut().save_as(Some("p.jpg".into())).unwrap();
+    h.run_steps(2);
+    let quality_focus = h.ctx.memory(|m| m.focused()).expect("Quality starts focused");
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    assert_ne!(h.ctx.memory(|m| m.focused()), Some(quality_focus));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().jpeg_options.is_none());
+
+    h.state_mut().save_as(Some("q.jpg".into())).unwrap();
+    h.run_steps(2);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(9));
 }
 
 /// Re-saving an opened JPEG starts at the file's own quality (`file_encoding`, as File › Save
@@ -344,4 +392,74 @@ fn a_bad_remembered_answer_is_ignored() {
         h.run_steps(2);
         assert_eq!(h.state().jpeg_options.as_ref().map(|p| (p.quality, p.format)), Some(expected), "{saved}");
     }
+}
+
+/// Opens JPEG Options at quality 6 and runs it to a steady state.
+fn open_at_six() -> Prompted {
+    let (mut h, _) = jpeg_app("unused.jpg");
+    h.state_mut().session.prefs.edit(|p| {
+        p.dialogs.insert("file.jpegOptions".into(), json!({"quality": 6}));
+    });
+    h.state_mut().save_as(Some("p.jpg".into())).unwrap();
+    h.run_steps(3);
+    h
+}
+
+/// The Quality field's own widget holds the focus it is given on open, so it shows its focus
+/// ring and keeps the arrows.
+#[test]
+fn jpeg_quality_field_has_the_focused_id() {
+    let h = open_at_six();
+    let focused = h.ctx.memory(|m| m.focused()).expect("Quality starts focused");
+    // Both the field and the slider are labelled "Quality"; the field is the one that is not the slider.
+    let field = h
+        .get_all_by_label("Quality")
+        .find(|n| n.accesskit_node().role() != egui::accesskit::Role::Slider && (u128::from(n.accesskit_node().id()) >> 64) as u64 == focused.accesskit_id().0);
+    assert!(field.is_some(), "the focused id is not the Quality field's widget");
+}
+
+/// Tabbing away and back (or clicking the field) leaves the arrows stepping by one level.
+#[test]
+fn jpeg_quality_arrows_step_after_tab_back() {
+    let mut h = open_at_six();
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, Key::Tab);
+    h.run_steps(3);
+    h.key_press(Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(7));
+    h.key_press(Key::ArrowDown);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(6));
+}
+
+/// Left and Right move the caret in the focused Quality field, so they leave the quality alone.
+#[test]
+fn jpeg_quality_left_and_right_do_not_change_quality() {
+    let mut h = open_at_six();
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    h.key_press(Key::ArrowLeft);
+    h.key_press(Key::ArrowLeft);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(6));
+    // The focus stayed on the field: only the focused field steps.
+    h.key_press(Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(7));
+}
+
+/// With the focus elsewhere, the arrows leave Quality alone.
+#[test]
+fn jpeg_quality_arrows_do_nothing_when_unfocused() {
+    let mut h = open_at_six();
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    h.key_press(Key::ArrowUp);
+    h.run_steps(3);
+    h.key_press(Key::ArrowDown);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(3);
+    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(6));
 }
