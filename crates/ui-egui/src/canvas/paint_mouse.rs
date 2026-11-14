@@ -14,8 +14,8 @@ use crate::state::Tool;
 /// The brush is a tool option, kept per tool like Photoshop's options bar: switching from the
 /// Brush to the Eraser saves the session brush for the old tool and loads the new tool's, so each
 /// keeps its own size, hardness, mode, opacity, dynamics and smoothing. A tool seen for the
-/// first time takes what the brush already has, at Photoshop's 10 % smoothing. Other tools leave
-/// the brush alone.
+/// first time takes what the brush already has, at Photoshop's 10 % smoothing, unless it has its
+/// own starting tip in [`fresh_brush`]. Other tools leave the brush alone.
 ///
 /// The foreground and background colours, the erase flag and the stroke seed belong to the
 /// session rather than to the tool, so a swap never carries them between tools: picking a colour
@@ -42,6 +42,16 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Art History Brush also starts at full opacity (#10263), and the Pattern Stamp at full
         // opacity and flow (#12616): those fields are their own.
+        // History Brush starts with its own tip while retaining the current stroke settings (#12847).
+        None if tool == Tool::HistoryBrush => BrushSettings {
+            opacity: current.opacity,
+            flow: current.flow,
+            pressure_size: current.pressure_size,
+            pressure_opacity: current.pressure_opacity,
+            build_up: current.build_up,
+            build_up_rate: current.build_up_rate,
+            ..fresh_brush(tool, &current)
+        },
         // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
         // Stamp and the Smudge tool start with their own measured tips instead, as the whole brush
         // Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601, #12964).
@@ -97,8 +107,8 @@ const PENCIL_TOOL_TIP: (f32, f32, f32) = (1.0, 1.0, 0.25);
 /// The Burn, Dodge and Sponge tools' tip after Reset Tool (#12671, #12684, #13029): a 65 px soft
 /// round at 25 % spacing.
 const TONING_TOOL_TIP: (f32, f32, f32) = (65.0, 0.0, 0.25);
-/// The Clone Stamp's tip after Reset Tool (#12601): a 21 px soft round at 25 % spacing.
-const CLONE_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
+/// Clone Stamp and History Brush reset to a 21 px soft round at 25 % spacing (#12601, #12847).
+const CLONE_STAMP_AND_HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 /// The Remove tool's size after Reset Tool (#12548): 19 px. Its hardness and spacing are not
 /// measured, so they stay the default brush's.
 const REMOVE_TOOL_SIZE: f32 = 19.0;
@@ -108,10 +118,10 @@ const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
-/// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
-/// [`CLONE_STAMP_TIP`] with no smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
-/// tool's [`SMUDGE_TOOL_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools keep the
-/// default tip.
+/// [`HEALING_BRUSH_TIP`], and the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`]. Clone Stamp
+/// and History Brush use [`CLONE_STAMP_AND_HISTORY_BRUSH_TIP`] with no smoothing. The Remove tool
+/// uses [`REMOVE_TOOL_SIZE`] with the default hardness and spacing. Smudge uses [`SMUDGE_TOOL_TIP`],
+/// and Pencil uses [`PENCIL_TOOL_TIP`].
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
@@ -121,8 +131,8 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
         Tool::Pencil => (brush.size, brush.hardness, brush.spacing) = PENCIL_TOOL_TIP,
         Tool::Burn | Tool::Dodge | Tool::Sponge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
         Tool::Smudge => (brush.size, brush.hardness, brush.spacing) = SMUDGE_TOOL_TIP,
-        Tool::CloneStamp => {
-            (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_TIP;
+        Tool::CloneStamp | Tool::HistoryBrush => {
+            (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_AND_HISTORY_BRUSH_TIP;
             brush.smoothing.amount = 0.0;
         }
         Tool::Remove => brush.size = REMOVE_TOOL_SIZE,
@@ -135,6 +145,10 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
 fn first_smoothing() -> photocraft_engine::paint::brush::Smoothing {
     photocraft_engine::paint::brush::Smoothing { amount: 0.1, ..Default::default() }
 }
+
+#[cfg(test)]
+#[path = "../history_brush_reset_tip_tests.rs"]
+mod history_brush_reset_tip_tests;
 
 /// Does a stroke with `tool` starting now paint in Photoshop's Clear mode, erasing with its own
 /// brush (#3439)? Clear chosen in its Mode dropdown, or `~` held (`hold_keys::erase_held`).
