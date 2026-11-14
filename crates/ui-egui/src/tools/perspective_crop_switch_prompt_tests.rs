@@ -47,6 +47,11 @@ fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, time: f64, events: Vec<eg
 
 /// A plain click on the toolbar slot holding `tool`, through the pointer.
 fn click_slot(app: &mut PhotocraftApp, tool: Tool) {
+    click_slot_n(app, tool, 1);
+}
+
+/// `clicks` plain clicks in a row on the toolbar slot holding `tool`.
+fn click_slot_n(app: &mut PhotocraftApp, tool: Tool, clicks: u32) {
     let ctx = egui::Context::default();
     PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
     frame(app, &ctx, 0.0, vec![]);
@@ -65,9 +70,12 @@ fn click_slot(app: &mut PhotocraftApp, tool: Tool) {
     let index = TOOL_SECTIONS.iter().flat_map(|s| s.iter()).position(|slot| slot.contains(&tool)).unwrap();
     let at = buttons[index].center();
     let pointer = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
-    frame(app, &ctx, 1.0, vec![egui::Event::PointerMoved(at), pointer(true)]);
-    frame(app, &ctx, 1.05, vec![pointer(false)]);
-    frame(app, &ctx, 1.1, vec![]);
+    for k in 0..clicks {
+        let t = 1.0 + f64::from(k) * 0.1;
+        frame(app, &ctx, t, vec![egui::Event::PointerMoved(at), pointer(true)]);
+        frame(app, &ctx, t + 0.05, vec![pointer(false)]);
+    }
+    frame(app, &ctx, 1.0 + f64::from(clicks) * 0.1, vec![]);
 }
 
 #[test]
@@ -188,4 +196,32 @@ fn the_buttons_read_crop_cancel_dont_crop_and_enter_crops() {
     h.run_steps(2);
     assert_eq!(h.state().ui.tool, Tool::Brush, "Enter is Crop");
     assert!(h.state().ui.perspective_crop.is_none());
+}
+
+/// CodeRabbit on #14785: a double-click on the Hand or Zoom slot with a quad pending only asks. It
+/// doesn't also fit the view or set 100 %, or switch the tool, behind the prompt.
+#[test]
+fn a_double_click_on_hand_or_zoom_only_asks() {
+    for tool in [Tool::Hand, Tool::Zoom] {
+        let mut app = setup(true);
+        let zoom = app.ui.views.first().map(|v| v.zoom);
+        click_slot_n(&mut app, tool, 2);
+        assert_eq!(prompts(&app).len(), 1, "{tool:?}: one prompt");
+        assert_eq!(app.ui.tool, Tool::PerspectiveCrop, "{tool:?}: the tool waits for the answer");
+        assert_eq!(app.ui.views.first().map(|v| v.zoom), zoom, "{tool:?}: the view is as it was");
+    }
+}
+
+/// CodeRabbit on #14785: the prompt asks about one document's quad. When another document becomes
+/// active the quad and the prompt both go, so a later quad on the new document is not answered by
+/// the old prompt.
+#[test]
+fn the_prompt_goes_with_its_quad_when_another_document_is_active() {
+    let mut app = setup(true);
+    click_slot(&mut app, Tool::Brush);
+    assert_eq!(prompts(&app).len(), 1);
+    app.run("file.new", json!({"width": 90, "height": 70})).unwrap();
+    cancel_stale(&mut app);
+    assert!(app.ui.perspective_crop.is_none(), "the old quad is dropped");
+    assert!(prompts(&app).is_empty(), "and its prompt with it");
 }
