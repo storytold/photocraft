@@ -127,21 +127,18 @@ fn save_as_follows_the_file_type_picked_in_the_portal_dialog() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// The dialog opens on the bare name (`test`, see `services::dialog_file_name`), so GTK doesn't
+/// The dialog opens on the bare name (`test`, see `services::portal_dialog_name`), so GTK doesn't
 /// ask to replace test.psd when PNG is picked: the type picked gives the extension, and a name
-/// that then exists is asked about under that name.
+/// that then exists is reported for the app to ask about, without opening the dialog again.
 #[test]
-fn a_bare_name_takes_the_picked_type_and_an_existing_target_is_asked_about() {
+fn a_bare_name_takes_the_picked_type_and_an_existing_target_is_reported() {
     let dir = std::env::temp_dir().join(format!("photocraft-portal-bare-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("test.psd"), b"open document").unwrap();
     let uri = |name: &str| -> &'static str { Box::leak(format!("file://{}/{name}", dir.display()).into_boxed_str()) };
-    let Some((conn, seen, mut daemon)) = mock_portal(vec![
-        (0, Some((uri("test"), "PNG"))),
-        (0, Some((uri("test.psd"), "PNG"))),
-        (0, Some((uri("test"), "PSD Document"))),
-        (0, Some((uri("test.psd"), "PSD Document"))),
-    ]) else {
+    let Some((conn, seen, mut daemon)) =
+        mock_portal(vec![(0, Some((uri("test"), "PNG"))), (0, Some((uri("test.psd"), "PNG"))), (0, Some((uri("test"), "PSD Document")))])
+    else {
         eprintln!("no dbus-daemon: skipped");
         return;
     };
@@ -152,13 +149,15 @@ fn a_bare_name_takes_the_picked_type_and_an_existing_target_is_asked_about() {
     // The suggested extension back in the name (typed again, or GTK's completion) with PNG
     // picked: test.png too, not a PSD written over test.psd.
     assert_eq!(save_as(&conn, opened()).unwrap(), Some(dir.join("test.png")));
-    // The type untouched: test.psd, which exists, so the dialog asks again as test.psd (the
-    // portal's replace prompt is then about the file that is written).
-    assert_eq!(save_as(&conn, opened()).unwrap(), Some(dir.join("test.psd")));
+    // The type untouched: test.psd, which exists. The save reports it for the app to ask about,
+    // and the dialog is not opened again.
+    let saved = save_as_answered(&conn, opened()).unwrap().expect("saved");
+    assert_eq!(saved.path, dir.join("test.psd"));
+    assert!(saved.replace, "test.psd exists and the dialog asked about test");
     let seen = seen.lock().unwrap().clone();
     let names: Vec<_> = seen.iter().map(|(name, _)| name.as_deref()).collect();
-    assert_eq!(names, [Some("test"), Some("test"), Some("test"), Some("test.psd")], "{seen:?}");
-    assert_eq!(seen[3].1.as_deref(), Some("PSD Document"));
+    assert_eq!(names, [Some("test"), Some("test"), Some("test")], "{seen:?}");
+    assert_eq!(seen[2].1.as_deref(), Some("PSD Document"));
     daemon.kill().ok();
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -171,7 +170,7 @@ fn a_dialog_closed_some_other_way_is_a_cancel() {
         eprintln!("no dbus-daemon: skipped");
         return;
     };
-    assert_eq!(save_as(&conn, request("test")), Ok(None));
+    assert!(save_as(&conn, request("test")).unwrap().is_none());
     daemon.kill().ok();
 }
 
@@ -201,24 +200,63 @@ fn the_answer_is_awaited_on_the_handle_the_portal_returns() {
     daemon.kill().ok();
 }
 
-/// When the extension the type gives names a file that exists, the dialog opens again under that
-/// name (so the portal asks before replacing it) instead of overwriting it unasked.
+/// When the extension the type gives names a file that exists, the dialog is not opened again:
+/// the save reports that the file was not asked about (`replace`), so the app asks before
+/// replacing it.
 #[test]
-fn a_renamed_file_that_exists_is_confirmed_in_the_dialog() {
+fn a_renamed_file_that_exists_is_reported_for_the_app_to_ask_about() {
     let dir = std::env::temp_dir().join(format!("photocraft-portal-exists-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("art.png"), b"old").unwrap();
     let typed: &'static str = Box::leak(format!("file://{}/art.psd", dir.display()).into_boxed_str());
-    let confirmed: &'static str = Box::leak(format!("file://{}/art.png", dir.display()).into_boxed_str());
-    let Some((conn, seen, mut daemon)) = mock_portal(vec![(0, Some((typed, "PNG"))), (0, Some((confirmed, "PNG")))]) else {
+    let Some((conn, seen, mut daemon)) = mock_portal(vec![(0, Some((typed, "PNG")))]) else {
         eprintln!("no dbus-daemon: skipped");
         return;
     };
-    assert_eq!(save_as(&conn, request("art.psd")).unwrap(), Some(dir.join("art.png")));
-    let seen = seen.lock().unwrap().clone();
-    assert_eq!(seen.len(), 2, "asked again: {seen:?}");
-    assert_eq!(seen[1], (Some("art.png".into()), Some("PNG".into())), "under the new name, on the picked type");
+    let saved = save_as_answered(&conn, request("art.psd")).unwrap().expect("saved");
+    assert_eq!(saved.path, dir.join("art.png"));
+    assert_eq!(saved.answered, dir.join("art.psd"), "the name the dialog asked about");
+    assert!(saved.replace, "a file the dialog did not ask about exists");
+    assert_eq!(seen.lock().unwrap().len(), 1, "the dialog is not opened again");
     assert_eq!(std::fs::read(dir.join("art.png")).unwrap(), b"old", "nothing written by the dialog");
+    daemon.kill().ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A target that does not exist is written at once, without a replace question.
+#[test]
+fn a_new_target_is_not_a_replace() {
+    let dir = std::env::temp_dir().join(format!("photocraft-portal-new-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let typed: &'static str = Box::leak(format!("file://{}/art.psd", dir.display()).into_boxed_str());
+    let Some((conn, _seen, mut daemon)) = mock_portal(vec![(0, Some((typed, "PNG")))]) else {
+        eprintln!("no dbus-daemon: skipped");
+        return;
+    };
+    let saved = save_as_answered(&conn, request("art.psd")).unwrap().expect("saved");
+    assert_eq!(saved.path, dir.join("art.png"));
+    assert!(!saved.replace);
+    daemon.kill().ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The dialog opens on the stem plus a trailing space (see `services::portal_dialog_name`) so GTK
+/// does not complete it with an existing file's extension. GTK strips the space from the name it
+/// saves; a backend that hands it back, or appends the type's extension after it, still writes the
+/// type picked, without the space.
+#[test]
+fn a_trailing_space_in_the_returned_name_is_trimmed_before_the_type_is_chosen() {
+    let dir = std::env::temp_dir().join(format!("photocraft-portal-space-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let with_space: &'static str = Box::leak(format!("file://{}/art%20", dir.display()).into_boxed_str());
+    let space_before_type: &'static str = Box::leak(format!("file://{}/art%20.png", dir.display()).into_boxed_str());
+    let Some((conn, _seen, mut daemon)) = mock_portal(vec![(0, Some((with_space, "JPEG"))), (0, Some((space_before_type, "JPEG")))]) else {
+        eprintln!("no dbus-daemon: skipped");
+        return;
+    };
+    let req = || SaveRequest { name: Some("art ".into()), ..request("art.png") };
+    assert_eq!(save_as(&conn, req()).unwrap(), Some(dir.join("art.jpg")));
+    assert_eq!(save_as(&conn, req()).unwrap(), Some(dir.join("art.jpg")));
     daemon.kill().ok();
     std::fs::remove_dir_all(&dir).ok();
 }

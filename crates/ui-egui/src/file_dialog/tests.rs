@@ -731,6 +731,27 @@ fn a_save_writes_at_once_when_the_dialog_asked_about_the_file() {
     assert_eq!(*written.borrow(), ["/pics/cat.psd", "/pics/dog.png"]);
 }
 
+/// The Linux portal reports the picked type after the dialog closes, so the extension it gives
+/// names a file the dialog did not ask about (`cat` was in the name field, `cat.jpg` is written).
+/// The app asks before replacing that file, and the save dialog does not open again.
+#[test]
+fn a_save_the_dialog_did_not_ask_about_asks_before_replacing() {
+    let ctx = egui::Context::default();
+    let (mut app, open, written) = app();
+    let disk = on_disk(&mut app);
+    changed_by_another_app(&disk, "/pics/cat.jpg");
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveToUnasked { path: "/pics/cat.jpg".into(), answered: "/pics/cat".into() }));
+    app.poll_file_dialog(&ctx, None);
+    let id = replace_prompt(&app).expect("the save asks first");
+    assert_eq!(open.borrow().len(), 1, "the save dialog does not open again");
+    assert!(written.borrow().is_empty(), "nothing is written before the answer");
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(*written.borrow(), ["/pics/cat.jpg"]);
+    assert!(!app.file_dialog_open() && replace_prompt(&app).is_none());
+}
+
 #[test]
 fn save_and_export_dialogs_start_beside_the_document() {
     let (mut app, open, _) = app();

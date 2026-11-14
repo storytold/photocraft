@@ -44,6 +44,12 @@ pub enum FileDialogAnswer {
     ContentsMany(Vec<(String, Vec<u8>)>),
     /// The path to save to (desktop), or the download's name (web).
     SaveTo(String),
+    /// The path to save to, where the save dialog asked about a different name: the Linux portal
+    /// reports the picked file type after the dialog closes, so the name it asked about was the
+    /// stem (`art`), and the extension the picked type gives (`art.jpg`) may name a file the dialog
+    /// never asked about. The app asks before replacing that file; `answered` is the name the
+    /// dialog did ask about, for the question.
+    SaveToUnasked { path: String, answered: String },
     /// The selected folder's path (desktop).
     FolderTo(String),
     /// No dialog could be shown (on Linux: no desktop portal and no zenity, #3354; the message
@@ -186,7 +192,7 @@ impl PhotocraftApp {
         let suggested_ext = suggested.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
         let ext = suggested_ext.clone();
         let asked = self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
-            FileDialogAnswer::SaveTo(path) => {
+            FileDialogAnswer::SaveTo(path) | FileDialogAnswer::SaveToUnasked { path, .. } => {
                 let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
                 let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
@@ -289,7 +295,7 @@ impl PhotocraftApp {
                 FileDialogAnswer::Contents(name, bytes) => app.open_contents(vec![(name, bytes)]),
                 FileDialogAnswer::ContentsMany(files) => app.open_contents(files),
                 FileDialogAnswer::FolderTo(_) => return Err(UNEXPECTED.into()),
-                FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Unavailable(_) => return Err(UNEXPECTED.into()),
+                FileDialogAnswer::SaveTo(_) | FileDialogAnswer::SaveToUnasked { .. } | FileDialogAnswer::Unavailable(_) => return Err(UNEXPECTED.into()),
             }
             Ok(Value::Null)
         })
@@ -392,6 +398,16 @@ impl PhotocraftApp {
             // The reply was dropped unanswered: the dialog couldn't be shown.
             Some(Err(TryRecvError::Disconnected)) | None => None,
         };
+        if let Some(FileDialogAnswer::SaveToUnasked { path, answered }) = &answer
+            && self.services.file_stamp.as_ref().is_some_and(|stamp| stamp(path).is_some())
+        {
+            crate::replace_prompt::open(self, answered, path);
+            if let Some(p) = self.file_dialog.as_mut() {
+                p.answer = None;
+                p.held = answer;
+            }
+            return;
+        }
         if let Some(FileDialogAnswer::SaveTo(answered)) = &answer
             && let Some(path) = self.file_dialog.as_ref().and_then(|p| p.saved_path.as_ref()).map(|written| written(self, answered))
             && self.replaces_unasked(answered, &path)
@@ -471,7 +487,7 @@ fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
             Ok((path, bytes))
         }
         FileDialogAnswer::FolderTo(_) => Err(UNEXPECTED.into()),
-        FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Unavailable(_) => Err(UNEXPECTED.into()),
+        FileDialogAnswer::SaveTo(_) | FileDialogAnswer::SaveToUnasked { .. } | FileDialogAnswer::Unavailable(_) => Err(UNEXPECTED.into()),
     }
 }
 
