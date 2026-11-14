@@ -1,4 +1,5 @@
-//! Layers to Files writes a file for an adjustment layer, like an empty layer (#13966).
+//! Layers to Files writes a file for an adjustment layer, like an empty layer, for PNG and JPEG
+//! (#13966); the formats that were not measured still skip it.
 
 use super::*;
 
@@ -66,4 +67,17 @@ fn a_hidden_adjustment_is_skipped_by_visible_only() {
     let all = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "all", "visibleOnly": false})).unwrap();
     assert_eq!(all["skipped"], json!([]));
     assert_eq!(all["files"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn other_formats_still_skip_the_adjustment_and_keep_its_number() {
+    // Only PNG and JPEG were measured; PSD (like TIFF, BMP, Targa and PDF) keeps today's skip.
+    let dir = tmp("psd");
+    let mut s = session();
+    let adjustment = s.active().unwrap().doc.layers.last().unwrap().id.0;
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "doc", "format": "psd"})).unwrap();
+    assert_eq!(r["skipped"], json!([{"layer": adjustment, "name": "Levels 1", "reason": "adjustment layer has no pixels of its own"}]));
+    let files: Vec<&str> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    let names: Vec<&str> = files.iter().map(|f| f.rsplit(['/', '\\']).next().unwrap()).collect();
+    assert_eq!(names, ["doc_0001_Empty.psd", "doc_0002_Background.psd"]);
 }

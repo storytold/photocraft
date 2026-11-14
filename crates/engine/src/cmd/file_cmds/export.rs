@@ -58,8 +58,9 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
     let mut report = LayerExportReport::default();
-    // Hidden layers never consumed a filename index; every other layer does, an adjustment layer
-    // included: it has no pixels of its own, so it exports like an empty layer (#13966).
+    // Hidden layers never consumed a filename index; every other layer does. An adjustment layer
+    // has no pixels of its own: for PNG and JPEG it exports like an empty layer, as measured
+    // (#13966); the other formats were not measured and still skip it, keeping its number.
     let mut i = 0usize;
     for l in doc.layers.iter().rev() {
         if !l.visible && visible_only {
@@ -68,6 +69,10 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
         }
         let index = i;
         i += 1;
+        if matches!(l.content, LayerContent::Adjustment(_)) && !matches!(format.as_str(), "png" | "jpg" | "jpeg") {
+            report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "adjustment layer has no pixels of its own" });
+            continue;
+        }
         let mut one = (*doc).clone();
         let mut only = l.clone();
         only.visible = true;
