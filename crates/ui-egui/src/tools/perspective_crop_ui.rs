@@ -278,6 +278,62 @@ fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     }
 }
 
+/// Marks the "Crop the image?" prompt a toolbar click on another tool opens with a quad pending
+/// (#11969); holds the clicked tool.
+const SWITCH: &str = "__perspectiveCropSwitch";
+
+/// A toolbar click on `tool` while the Perspective Crop has a quad pending asks "Crop the image?"
+/// first, as the reference application does: Crop (the default) commits and switches, Don't Crop
+/// drops the quad and switches, Cancel keeps the tool and the quad. Returns whether it asked; the
+/// caller switches at once otherwise. Clicked corners without a quad don't ask (not measured).
+pub(crate) fn ask_before_switch(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    cancel_stale(app);
+    if app.ui.tool != Tool::PerspectiveCrop || tool == Tool::PerspectiveCrop || app.ui.perspective_crop.is_none() {
+        return false;
+    }
+    let Ok(target) = serde_json::to_value(tool) else { return false };
+    // One prompt at a time: another click while it is open leaves it as it is.
+    if !app.ui.dialogs.iter().any(|d| owns_switch(&d.fields)) {
+        let mut f = serde_json::Map::new();
+        f.insert(SWITCH.into(), target);
+        f.insert("__label".into(), json!("PhotoCraft"));
+        f.insert("message".into(), json!("Crop the image?"));
+        f.insert("choice".into(), json!("crop"));
+        app.ui.open_dialog(crate::state::DialogKind::Command, f);
+    }
+    true
+}
+
+/// Is this dialog the "Crop the image?" prompt?
+pub fn owns_switch(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key(SWITCH)
+}
+
+/// The prompt's body: its question.
+pub fn switch_body(ui: &mut egui::Ui, f: &serde_json::Map<String, Value>) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let text = f.get("message").and_then(Value::as_str).unwrap_or("Crop the image?");
+    ui.add(egui::Label::new(egui::RichText::new(tl!(text)).color(t.text).size(13.0)).wrap());
+}
+
+/// The prompt's answer, `choice` "crop" (the default) or "dontCrop": commit or drop the quad, then
+/// switch to the clicked tool. A quad the commit refuses (crossing sides) stays, with the
+/// Perspective Crop, and the reason is the answer's error. Cancel closes it with nothing else.
+pub fn confirm_switch(app: &mut PhotocraftApp, f: &serde_json::Map<String, Value>) -> Result<Value, String> {
+    let tool: Tool = f.get(SWITCH).cloned().and_then(|v| serde_json::from_value(v).ok()).ok_or("the prompt has no tool")?;
+    let crop = f.get("choice").and_then(Value::as_str) != Some("dontCrop");
+    if crop {
+        cancel_stale(app);
+        let Some(q) = app.ui.perspective_crop else { return Err("there is no quad to crop".into()) };
+        let mut p = json!({"corners": q});
+        size_params(app, &mut p);
+        app.run("image.perspectiveCrop", p)?;
+    }
+    cancel(app);
+    crate::tool_memory::select(app, tool);
+    Ok(json!({"cropped": crop, "tool": f.get(SWITCH)}))
+}
+
 /// `image.perspectiveCrop`'s size params from W, H and the resolution (the Crop tool's fields):
 /// lengths in physical units convert at the typed resolution, else the document's.
 pub(crate) fn size_params(app: &PhotocraftApp, p: &mut Value) {
@@ -550,6 +606,10 @@ mod perspective_crop_modifiers_tests;
 #[cfg(test)]
 #[path = "perspective_crop_shield_tests.rs"]
 mod perspective_crop_shield_tests;
+
+#[cfg(test)]
+#[path = "perspective_crop_switch_prompt_tests.rs"]
+mod perspective_crop_switch_prompt_tests;
 
 #[cfg(test)]
 #[path = "perspective_crop_deselect_tests.rs"]
