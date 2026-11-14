@@ -366,6 +366,13 @@ fn rememberable(kind: &Kind, value: &Value) -> bool {
 }
 
 fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &mut Map<String, Value>) {
+    // Color Lookup opens at its defaults every time, as the reference application's does: an OK
+    // with a built-in look or a LUT file leaves the next opening at "no LUT" and Dither at its
+    // default (#14422). A recorded or scripted step still prefills, because the Actions panel
+    // seeds its own values after the dialog opens.
+    if command == COLOR_LOOKUP {
+        return;
+    }
     let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(command) else { return };
     // Select and Mask starts from its defaults unless Remember Settings was on, as in Photoshop
     // (#9423).
@@ -385,6 +392,11 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
 
 /// Remember successful built-in schema dialogs; failed or cancelled dialogs do not persist.
 pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<String, Value>) {
+    // Color Lookup restores nothing (#14422), so saving its choices would only leave values in the
+    // preferences that nothing reads.
+    if command == COLOR_LOOKUP {
+        return;
+    }
     if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") {
         return;
     }
