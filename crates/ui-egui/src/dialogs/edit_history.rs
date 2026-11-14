@@ -62,12 +62,25 @@ pub enum Step {
     Redo,
 }
 
-/// ⌘Z or ⇧⌘Z pressed this frame, consumed.
+/// ⌘Z or ⇧⌘Z pressed this frame, consumed. Only a fresh press counts: `consume_key` would take
+/// a repeat too, so a held (or stuck) Z would keep stepping the dialog's settings (#3726), and
+/// repeat events are left in the stream for handlers that do want them.
 fn take_step(ctx: &egui::Context) -> Option<Step> {
+    let take = |mods: egui::Modifiers| {
+        ctx.input_mut(|i| {
+            i.events
+                .iter()
+                .position(|e| matches!(e, egui::Event::Key { key: egui::Key::Z, modifiers: m, pressed: true, repeat: false, .. } if m.matches_logically(mods)))
+                .is_some_and(|at| {
+                    i.events.remove(at);
+                    true
+                })
+        })
+    };
     let cmd_shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
-    if ctx.input_mut(|i| i.consume_key(cmd_shift, egui::Key::Z)) {
+    if take(cmd_shift) {
         Some(Step::Redo)
-    } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
+    } else if take(egui::Modifiers::COMMAND) {
         Some(Step::Undo)
     } else {
         None
@@ -149,10 +162,13 @@ pub(crate) mod tests {
 
     use super::*;
 
-    /// One frame of the shell's key handling with ⌘Z (plus `modifiers`) pressed.
+    /// One frame of the shell's key handling with ⌘Z (plus `modifiers`) pressed and released.
     pub(crate) fn press_z(app: &mut PhotocraftApp, ctx: &egui::Context, modifiers: egui::Modifiers) {
         let raw = egui::RawInput {
-            events: vec![egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers }],
+            events: vec![
+                egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers },
+                egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: false, repeat: false, modifiers },
+            ],
             ..Default::default()
         };
         let mut out = ctx.run_ui(raw, |ui| crate::shortcuts::handle(app, ui.ctx()));
@@ -235,6 +251,26 @@ pub(crate) mod tests {
         assert_eq!(d.effects, before);
         assert!(d.selected < d.effects.len());
         assert_eq!(past(&app), steps);
+    }
+
+    /// With Undo rebound away from ⌘Z a held Z's repeats survive `drop_history_repeats` — the
+    /// dialog's own fixed key must still not step on them (#3726 review).
+    #[test]
+    fn a_remapped_undo_leaves_held_z_repeats_alone_in_a_dialog() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        crate::distort_ui::menu(&mut app, &ctx, "filter.filterGallery", &json!({})).unwrap().unwrap();
+        crate::distort_ui::menu(&mut app, &ctx, "filter.filterGallery", &json!({"ui": {"add": true}})).unwrap().unwrap();
+        crate::distort_ui::menu(&mut app, &ctx, "filter.filterGallery", &json!({"ui": {"add": true}})).unwrap().unwrap();
+        let effects = app.distort.gallery.as_ref().unwrap().effects.len();
+        app.run("prefs.set", json!({"path": "shortcuts.edit.undo", "value": "Cmd+Shift+F12"})).unwrap();
+        let z = |repeat| egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat, modifiers: egui::Modifiers::COMMAND };
+        let frame = |app: &mut PhotocraftApp, events| ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| crate::shortcuts::handle(app, ui.ctx()));
+        frame(&mut app, vec![z(false)]).textures_delta.clear();
+        assert_eq!(app.distort.gallery.as_ref().unwrap().effects.len(), effects - 1, "the fresh press steps once");
+        frame(&mut app, vec![z(true)]).textures_delta.clear();
+        frame(&mut app, vec![z(true)]).textures_delta.clear();
+        assert_eq!(app.distort.gallery.as_ref().unwrap().effects.len(), effects - 1, "held-key repeats don't keep stepping");
     }
 
     #[test]
