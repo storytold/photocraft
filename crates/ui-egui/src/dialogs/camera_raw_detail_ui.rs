@@ -383,10 +383,9 @@ fn develop_framed(
         _ => (None, params.clone()),
     };
     let base = retoned.as_ref().unwrap_or(source);
-    let frame = match canvas {
-        Some(c) if !params.geometry_neutral() => c,
-        _ => area,
-    };
+    // The canvas: Geometry develops only it, and the masks' coordinates are its own (without
+    // Geometry the content past it is developed too).
+    let frame = canvas.unwrap_or(area);
     let mut result = photocraft_engine::lens_cmds::camera_raw_surface_on(base, frame, &params, opaque);
     if matches!(coverage, Coverage::None) {
         return result;

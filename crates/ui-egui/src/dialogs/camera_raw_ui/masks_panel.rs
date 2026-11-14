@@ -753,9 +753,8 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, resp
         && let Some(i) = s.selected.filter(|i| *i < d.params.masks.len())
     {
         overlay(&ctx, &mut s, d, i, r, &painter);
-        // Masks apply where the develop runs: the canvas, when Geometry moves pixels and the
-        // layer reaches past it.
-        let mr = masks_frame(&shown, d.canvas_frame, d.pw, d.ph, r);
+        // Masks are drawn on the canvas, also when the layer reaches past it.
+        let mr = masks_frame(d.canvas_frame, d.pw, d.ph, r);
         pins(&painter, &d.params.masks[i], s.component, mr, t.accent);
         // The guide tool's drag belongs to `guide_drag` above.
         if s.tool != DrawTool::Guide && edits && !d.show_before {
@@ -769,11 +768,11 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, resp
     store(&ctx, s);
 }
 
-/// The part of the preview image `r` the masks apply to with the settings `shown`: the canvas
-/// when Geometry moves pixels and the layer reaches past it (the develop then runs on the
-/// canvas only, see `ProxyJob::run`), else the whole image.
-fn masks_frame(shown: &CameraRaw, canvas_frame: Option<[usize; 4]>, pw: usize, ph: usize, r: ERect) -> ERect {
-    if shown.geometry_neutral() { r } else { guide_frame(canvas_frame, pw, ph, r).0 }
+/// The part of the preview image `r` the masks are drawn on: the canvas, also when the layer
+/// reaches past it (the masks keep their place on the canvas whether or not Geometry, which
+/// develops only the canvas, is on; see `ProxyJob::run`).
+fn masks_frame(canvas_frame: Option<[usize; 4]>, pw: usize, ph: usize, r: ERect) -> ERect {
+    guide_frame(canvas_frame, pw, ph, r).0
 }
 
 /// Mask `m`'s coverage as [`masks::apply`] computed it in the last develop (`index` in its
@@ -787,7 +786,9 @@ fn apply_time_coverage(u: &super::proxy::Unmasked, m: &Mask, index: usize, float
         masks::apply(&mut px, u.w, u.h, &p, float);
         px
     });
-    (masks::coverage_for(m, applied.as_deref().unwrap_or(&u.px), u.w, u.h, &u.params), u.w, u.h)
+    // `m` is drawn on the canvas; the develop's own masks were reframed to where it sits.
+    let framed = u.masks_frame.and_then(|f| masks::reframed(std::slice::from_ref(m), f, u.w, u.h).pop());
+    (masks::coverage_for(framed.as_ref().unwrap_or(m), applied.as_deref().unwrap_or(&u.px), u.w, u.h, &u.params), u.w, u.h)
 }
 
 fn overlay(ctx: &egui::Context, s: &mut MaskUi, d: &CameraRawDialog, i: usize, r: ERect, painter: &egui::Painter) {
@@ -913,7 +914,7 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
         s.budget = masks::MAX_BRUSH_WORK - masks::brush_work(&d.params.masks);
     }
     // The canvas part of the proxy `r` shows when it is not the whole (`masks_frame`).
-    let pick_frame = d.canvas_frame.filter(|_| s.tool == DrawTool::ColorPick && !d.effective_params().geometry_neutral());
+    let pick_frame = d.canvas_frame.filter(|_| s.tool == DrawTool::ColorPick);
     let Some(m) = d.params.masks.get_mut(i) else { return };
     let alt = ctx.input(|x| x.modifiers.alt);
     if response.drag_started_by(egui::PointerButton::Primary) {
@@ -1517,19 +1518,15 @@ mod tests {
         assert!(is_open(&ctx), "the shortcut");
     }
 
-    /// With Geometry moving pixels and the layer past the canvas, masks apply on the canvas, so
-    /// their pins, drags and colour samples are relative to it; without Geometry, to the whole
-    /// preview.
+    /// With the layer past the canvas, masks are drawn on the canvas, with or without Geometry,
+    /// so their pins, drags and colour samples are relative to it and stay put when Geometry is
+    /// turned on.
     #[test]
-    fn masks_are_relative_to_the_canvas_under_geometry() {
+    fn masks_are_relative_to_the_canvas() {
         let r = ERect::from_min_size(pos2(10.0, 20.0), egui::vec2(280.0, 160.0));
         let frame = Some([7, 0, 28, 16]);
-        let flat = CameraRaw::default();
-        assert_eq!(masks_frame(&flat, frame, 28, 16, r), r);
-        let turned = CameraRaw { perspective_rotate: 3.0, ..CameraRaw::default() };
-        assert!(!turned.geometry_neutral());
-        assert_eq!(masks_frame(&turned, frame, 28, 16, r), ERect::from_min_max(pos2(80.0, 20.0), pos2(290.0, 180.0)));
-        assert_eq!(masks_frame(&turned, None, 28, 16, r), r);
+        assert_eq!(masks_frame(frame, 28, 16, r), ERect::from_min_max(pos2(80.0, 20.0), pos2(290.0, 180.0)));
+        assert_eq!(masks_frame(None, 28, 16, r), r);
         assert_eq!(in_proxy(frame, 28, 16, [0.0, 0.5]), [0.25, 0.5]);
         assert_eq!(in_proxy(frame, 28, 16, [1.0, 1.0]), [1.0, 1.0]);
         assert_eq!(in_proxy(None, 28, 16, [0.3, 0.4]), [0.3, 0.4]);
@@ -1550,7 +1547,7 @@ mod tests {
         let p = CameraRaw { masks: vec![lum(2.0)], ..CameraRaw::default() };
         let mut out = grey.clone();
         let unmasked = photocraft_algo::camera_raw::develop_keeping_unmasked(&mut out, w, h, &p, false).expect("kept");
-        let u = super::super::proxy::Unmasked { px: unmasked, w, h, frame: None, params: p.clone() };
+        let u = super::super::proxy::Unmasked { px: unmasked, w, h, frame: None, params: p.clone(), masks_frame: None };
         let (cov, ..) = apply_time_coverage(&u, &p.masks[0], 0, false);
         assert!(cov.iter().all(|c| *c > 0.9), "selected as applied: {cov:?}");
         assert!(masks::coverage(&p.masks[0], &out, w, h).iter().all(|c| *c < 0.1), "the result is past the range");
@@ -1560,7 +1557,7 @@ mod tests {
         let p = CameraRaw { masks: vec![all, lum(0.0)], ..CameraRaw::default() };
         let mut out = grey.clone();
         let unmasked = photocraft_algo::camera_raw::develop_keeping_unmasked(&mut out, w, h, &p, false).expect("kept");
-        let u = super::super::proxy::Unmasked { px: unmasked, w, h, frame: None, params: p.clone() };
+        let u = super::super::proxy::Unmasked { px: unmasked, w, h, frame: None, params: p.clone(), masks_frame: None };
         let (first, ..) = apply_time_coverage(&u, &p.masks[0], 0, false);
         assert!(first.iter().all(|c| *c > 0.9), "the linear gradient covers all: {first:?}");
         let (second, ..) = apply_time_coverage(&u, &p.masks[1], 1, false);

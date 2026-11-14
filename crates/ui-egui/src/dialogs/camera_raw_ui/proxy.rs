@@ -60,6 +60,10 @@ pub(crate) struct Unmasked {
     pub(crate) frame: Option<[usize; 4]>,
     /// The settings of that develop.
     pub(crate) params: CameraRaw,
+    /// Where the canvas sits in these pixels when they reach past it (`[x0, y0, x1, y1]`): the
+    /// masks, drawn on the canvas, were [`reframed`](photocraft_algo::camera_raw::masks::reframed)
+    /// to it.
+    pub(crate) masks_frame: Option<[f32; 4]>,
 }
 
 /// A developed proxy, ready to show.
@@ -113,6 +117,12 @@ impl ProxyJob {
         // masks see, unless Vignette or Grain (after the masks) changed it.
         let gpu = self.gpu.as_ref().filter(|_| p.masks.is_empty() || (p.vignette_amount == 0.0 && p.grain_amount <= 0.0));
         let keep = !p.masks.is_empty();
+        // The masks are drawn on the canvas; developed with the layer past it, they keep their
+        // place on the canvas.
+        let masks_frame = self.canvas_frame.filter(|_| frame.is_none() && !p.masks.is_empty()).map(|c| c.map(|v| v as f32));
+        if let Some(f) = masks_frame {
+            p.masks = photocraft_algo::camera_raw::masks::reframed(&p.masks, f, pw, ph);
+        }
         let (mut px, backend, unmasked) = if let Some([x0, y0, x1, y1]) = frame {
             let (fw, fh) = (x1 - x0, y1 - y0);
             let mut sub: Vec<[f32; 4]> = (y0..y1).flat_map(|y| input.get(y * pw + x0..y * pw + x1).unwrap_or(&[]).iter().copied()).collect();
@@ -143,7 +153,7 @@ impl ProxyJob {
                 }
             }
         };
-        let unmasked = unmasked.map(|(px, w, h, frame)| Unmasked { px, w, h, frame, params: p.clone() });
+        let unmasked = unmasked.map(|(px, w, h, frame)| Unmasked { px, w, h, frame, params: p.clone(), masks_frame });
         let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
         if self.opaque && !p.geometry_neutral() {
             over_white(&mut px);
