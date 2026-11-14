@@ -16,6 +16,18 @@ pub(super) fn contents_uuid(contents_id: SmartContentsId, bytes: &[u8]) -> Strin
     crate::smart_map::uuid_from(identity.finalize().as_bytes())
 }
 
+type OwnedSourceHash = (std::sync::Arc<Vec<u8>>, [u8; 32]);
+
+#[cfg(test)]
+thread_local! { pub(crate) static EMBED_HASHED_SOURCE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+/// The actual payload digest used by the source-conversion cache, separate from preview checks.
+pub(super) fn embed_source_hash(bytes: &[u8]) -> [u8; 32] {
+    #[cfg(test)]
+    EMBED_HASHED_SOURCE_BYTES.with(|count| count.set(count.get().saturating_add(bytes.len())));
+    *blake3::hash(bytes).as_bytes()
+}
+
 /// Smart-object state collected while emitting layers, written into the global blocks at the end.
 #[derive(Default)]
 pub(super) struct SmartOut {
@@ -34,6 +46,8 @@ pub(super) struct SmartOut {
     /// Sources converted so far, by contents identity, bytes and whether they were read from a
     /// link (`Err` = can't be embedded).
     pub(super) converted: std::collections::HashMap<(SmartContentsId, [u8; 32], bool), Result<Source, String>>,
+    /// Only immutable embedded owners are memoized for this export; pinning prevents address reuse.
+    pub(super) embedded_hashes: std::collections::HashMap<usize, OwnedSourceHash>,
     /// Each placed layer has its own id, even when it duplicates an imported layer.
     pub(super) placed_used: std::collections::HashSet<String>,
     /// Original instances reserve their imported placement regardless of layer order.
@@ -49,14 +63,16 @@ pub(super) struct SmartOut {
     /// Source composites (document pixel format, source space) by uuid; `None` = unreadable.
     pub(super) composites: std::collections::HashMap<String, Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)>>,
     /// Preserved `FEid` items (by placed id).
-    pub(super) old_fx: Vec<photocraft_psd::filter_effects::FilterEffectsItem>,
+    pub(super) old_fx: Vec<craft_psd::filter_effects::FilterEffectsItem>,
     /// Placed ids whose preserved `FEid` item stays.
     pub(super) keep_fx: std::collections::HashSet<String>,
     /// Regenerated `FEid` items.
-    pub(super) new_fx: Vec<photocraft_psd::filter_effects::FilterEffectsItem>,
+    pub(super) new_fx: Vec<craft_psd::filter_effects::FilterEffectsItem>,
     /// The unfiltered pixels of each smart object whose filter mask shows: its layer record holds
     /// the filtered pixels without the mask, as Photoshop's do (`compose::filter_mask`).
     pub(super) unfiltered: std::collections::HashMap<photocraft_doc::LayerId, Surface>,
+    /// Source-bound previews shared by private blocks and smart-filter source documents.
+    pub(super) vector_previews: crate::vector_preview::ExportCache,
 }
 
 /// Whether a smart object's filter mask shows: enabled over at least one visible, enabled filter.
@@ -66,7 +82,7 @@ pub(super) fn masked(sm: &photocraft_doc::SmartObject) -> bool {
 
 /// `FEid` data padded to 4 bytes inside the block length: Photoshop counts the padding in the
 /// length and can't open a file whose `FEid` is padded outside it.
-fn padded_fx(fx: &photocraft_psd::filter_effects::FilterEffects) -> Vec<u8> {
+fn padded_fx(fx: &craft_psd::filter_effects::FilterEffects) -> Vec<u8> {
     let mut d = fx.to_bytes();
     d.resize(d.len().next_multiple_of(4), 0);
     d
@@ -83,7 +99,7 @@ impl SmartOut {
         let old_fx = globals
             .iter()
             .filter(|(_, k, _)| FX_KEYS.contains(&k))
-            .filter_map(|(_, _, d)| photocraft_psd::filter_effects::FilterEffects::parse(d).ok())
+            .filter_map(|(_, _, d)| craft_psd::filter_effects::FilterEffects::parse(d).ok())
             .flat_map(|fx| fx.items)
             .collect();
         let mut linked_contents = std::collections::HashMap::new();
@@ -109,6 +125,20 @@ impl SmartOut {
         SmartOut { depth, globals, known, prune_ok: true, old_fx, linked_contents, placed_owners, unplaced_owners, ..Default::default() }
     }
 
+    /// The validated native preview of `sm`, checked against its embedded bytes or the preserved
+    /// embedded file it links to (never a disk path).
+    pub(super) fn vector_preview(&mut self, sm: &photocraft_doc::SmartObject) -> Option<std::sync::Arc<crate::vector_preview::Exported>> {
+        let preview = sm.vector_preview.as_ref()?;
+        let (owner, source) = match &sm.source {
+            photocraft_doc::SmartSource::Embedded { bytes, .. } => (bytes, bytes.as_slice()),
+            photocraft_doc::SmartSource::Linked { path } => self
+                .globals
+                .iter()
+                .find_map(|(_, key, data)| crate::linked::embedded_payload_in_blocks([(key, data.as_slice())], path).map(|(_, bytes)| (data, bytes)))?,
+        };
+        self.vector_previews.get(preview, owner, source)
+    }
+
     /// The document's global blocks with the linked-layer files and filter caches brought up to
     /// date: unreferenced files dropped (when every reference is known), new files appended,
     /// filter caches kept or regenerated per smart object. Unchanged blocks stay byte-identical.
@@ -128,7 +158,7 @@ impl SmartOut {
                     Some(d) => out.push((sig, key, Arc::new(d))),
                 }
             } else if FX_KEYS.contains(&&key) {
-                let Ok(mut fx) = photocraft_psd::filter_effects::FilterEffects::parse(&data) else {
+                let Ok(mut fx) = craft_psd::filter_effects::FilterEffects::parse(&data) else {
                     out.push((sig, key, data));
                     continue;
                 };
@@ -160,7 +190,7 @@ impl SmartOut {
             }
         }
         if !fx_placed && !self.new_fx.is_empty() {
-            let fx = photocraft_psd::filter_effects::FilterEffects { version: 3, items: self.new_fx.clone() };
+            let fx = craft_psd::filter_effects::FilterEffects { version: 3, items: self.new_fx.clone() };
             out.push((*b"8BIM", *b"FEid", Arc::new(padded_fx(&fx))));
             if !out.iter().any(|(_, k, _)| k == b"FMsk") {
                 // Filter mask overlay: RGB red at 50 %, Photoshop's default.
@@ -206,7 +236,18 @@ pub(super) fn link_group_resource(layers: &[Layer]) -> Option<Vec<u8>> {
         for l in layers {
             if let LayerContent::Group(g) = &l.content {
                 out.push(None);
-                walk(&g.children, out);
+                // `emit` writes a frame as its group around a "Frame Image" group (divider,
+                // children, record) and an optional "Frame Stroke" shape; none of those is linked.
+                if let Some(frame) = &l.frame {
+                    out.push(None);
+                    walk(&g.children, out);
+                    out.push(None);
+                    if frame.stroke.is_some() {
+                        out.push(None);
+                    }
+                } else {
+                    walk(&g.children, out);
+                }
             }
             out.push(l.link_group);
         }
