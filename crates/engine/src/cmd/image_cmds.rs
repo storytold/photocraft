@@ -715,8 +715,9 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let (nw, nh) = if relative { (ow + w, oh + h) } else { (w, h) };
     let (nw, nh) = (nw.round().clamp(1.0, 300_000.0) as u32, nh.round().clamp(1.0, 300_000.0) as u32);
     let (ax, ay) = anchor_factors("image.canvasSize", p.get("anchor").and_then(Value::as_str).unwrap_or("center"))?;
-    let dx = ((nw as f64 - ow) * ax).round() as i32;
-    let dy = ((nh as f64 - oh) * ay).round() as i32;
+    // An odd change on a centred axis drops the half pixel toward zero, as the reference does (#14536).
+    let dx = ((nw as f64 - ow) * ax).trunc() as i32;
+    let dy = ((nh as f64 - oh) * ay).trunc() as i32;
     let ext = extension_color(s, p);
     s.set_sampler_map(photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
     s.edit("Canvas Size", |doc, _| {
