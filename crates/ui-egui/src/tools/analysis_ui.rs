@@ -300,6 +300,22 @@ pub(crate) fn create_note(app: &mut PhotocraftApp, x: f64, y: f64) -> Result<Val
     Ok(result)
 }
 
+/// Does the temporary Move tool take this Color Sampler event (#11731)? ⌘ with the Color Sampler: a
+/// drag that starts on a point moves the point; one that starts off a point is the temporary Move
+/// tool's (`hold_keys::cmd_move_held` makes it that in the app; over `ui.pointer` the event falls
+/// through to `event_tool`). ⌘⌥ and ⌘⇧ were not measured and keep the sampler's handler. The Move
+/// and Up of a Move drag that a ⌘ Down began still belong to that drag when they arrive without ⌘
+/// (`ui.pointer` takes the modifiers per call).
+fn move_takes_it(app: &PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
+    if !matches!(ev, ToolEvent::Down { .. }) && app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move) {
+        return true;
+    }
+    if !mods.command || mods.alt || mods.shift || matches!(app.ui.analysis.drag, Some(Drag::Sampler(..) | Drag::SamplerNew(_))) {
+        return false;
+    }
+    !matches!(ev, ToolEvent::Down { x, y, .. } if sampler_at(app, [x, y]).is_some())
+}
+
 /// Pointer input for the Ruler, Count, Note and Color Sampler tools. Returns true when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     let tool = app.active_tool();
@@ -315,20 +331,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         return true;
     };
     let tol = tolerance(app);
-    // ⌘ with the Color Sampler (#11731): a drag that starts on a point moves the point; one that
-    // starts off a point is the temporary Move tool's (`hold_keys::cmd_move_held` makes it that in
-    // the app; over `ui.pointer` the event falls through to `event_tool`). ⌘⌥ and ⌘⇧ were not
-    // measured and keep the handler below.
-    if tool == Tool::ColorSampler && mods.command && !mods.alt && !mods.shift && !matches!(app.ui.analysis.drag, Some(Drag::Sampler(..) | Drag::SamplerNew(_)))
-    {
-        let on_point = matches!(ev, ToolEvent::Down { x, y, .. } if sampler_at(app, [x, y]).is_some());
-        if !on_point {
-            return false;
-        }
-    }
-    // The Move and Up of a Move drag that a ⌘ Down began (above) still belong to that drag when
-    // they arrive without ⌘ (`ui.pointer` takes the modifiers per call).
-    if tool == Tool::ColorSampler && !matches!(ev, ToolEvent::Down { .. }) && app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move) {
+    if tool == Tool::ColorSampler && move_takes_it(app, ev, mods) {
         return false;
     }
     match (tool, ev) {
