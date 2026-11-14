@@ -16,7 +16,7 @@ fn ok_greyed(h: &H) -> bool {
 }
 
 /// `ui.dialog.confirm` on the open dialog, as scripts do: its reply.
-fn confirm(h: &mut H) -> Value {
+pub(super) fn confirm(h: &mut H) -> Value {
     let dialog = h.state().ui.dialogs.last().expect("the dialog is open").id;
     let (req, _rx) = crate::ControlRequest::new("ui.dialog.confirm", json!({"dialog": dialog}));
     let ctx = h.ctx.clone();
