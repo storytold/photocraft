@@ -1761,8 +1761,8 @@ fn flatten_before_srgb_is_only_the_measured_case() {
 
 /// The measured case looks at what renders: a hidden layer (or a hidden group's contents) does not
 /// decide the path, while effects, Blend If, excluded channels, Advanced Blending and any content
-/// other than pixels or a group (adjustment, fill, smart object, frame, video) were not measured
-/// and keep the per-layer conversion.
+/// other than pixels or a plain group (adjustment, fill, smart object, frame, artboard, video) were
+/// not measured and keep the per-layer conversion.
 #[test]
 fn flatten_before_srgb_ignores_hidden_layers_and_refuses_unmeasured_features() {
     let doc = |s: &Session| (*s.active().unwrap().doc).clone();
@@ -1814,10 +1814,36 @@ fn flatten_before_srgb_ignores_hidden_layers_and_refuses_unmeasured_features() {
     let mut fill = wide_gamut_session();
     fill.execute("layer.newFillLayer.solidColor", json!({"color": "#c82828"})).unwrap();
     assert!(!optimizer::flattens_before_srgb(&doc(&fill)), "a fill layer");
-    let frame = changed(&|l| {
-        l.frame = Some(Box::new(photocraft_doc::Frame { path: photocraft_doc::Path::default(), transform: photocraft_geom::Affine::IDENTITY, stroke: None }));
+    // Groups that draw something of their own: an (empty) Frame Tool frame, an imported frame with
+    // a frame stroke, and an artboard with its background.
+    let group = |f: &dyn Fn(&mut photocraft_doc::Layer)| {
+        let mut s = wide_gamut_session();
+        s.edit("group", |d, _| {
+            let mut g = Layer::group("G", Vec::new());
+            f(&mut g);
+            d.layers.push(g);
+            Ok(())
+        })
+        .unwrap();
+        s
+    };
+    assert!(optimizer::flattens_before_srgb(&doc(&group(&|_| {}))), "a plain empty group");
+    let frame = group(&|g| {
+        g.frame = Some(Box::new(photocraft_doc::Frame { path: photocraft_doc::Path::default(), transform: photocraft_geom::Affine::IDENTITY, stroke: None }));
     });
     assert!(!optimizer::flattens_before_srgb(&doc(&frame)), "a Frame Tool frame");
+    let frame_stroke = group(&|g| {
+        if let photocraft_doc::LayerContent::Group(grp) = &mut g.content {
+            grp.frame_stroke = Some(photocraft_doc::ShapeStroke::default());
+        }
+    });
+    assert!(!optimizer::flattens_before_srgb(&doc(&frame_stroke)), "an imported frame's stroke");
+    let artboard = group(&|g| {
+        if let photocraft_doc::LayerContent::Group(grp) = &mut g.content {
+            grp.artboard = Some(photocraft_doc::Artboard::new(photocraft_geom::Rect::from_xywh(0, 0, 8, 8)));
+        }
+    });
+    assert!(!optimizer::flattens_before_srgb(&doc(&artboard)), "an artboard");
     let video = changed(&|l| l.video = Some(photocraft_doc::VideoData::new(Vec::new(), 30.0)));
     assert!(!optimizer::flattens_before_srgb(&doc(&video)), "a video layer");
 

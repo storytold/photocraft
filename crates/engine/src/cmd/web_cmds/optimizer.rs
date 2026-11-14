@@ -79,8 +79,9 @@ pub(super) fn flattens_before_srgb(doc: &Document) -> bool {
 /// Whether every visible layer (hidden ones and the contents of hidden groups do not render) is
 /// a pixel layer or a group that blends Normal (a group may pass through) with no active effects,
 /// no active Blend If, no excluded channels and default Advanced Blending. Adjustment, fill,
-/// text, shape and smart object layers (with their smart filters), Frame Tool frames and video
-/// layers were not measured, so they keep the per-layer conversion.
+/// text, shape and smart object layers (with their smart filters), artboards, frames (Frame Tool
+/// frames and imported frames with a frame stroke) and video layers were not measured, so they
+/// keep the per-layer conversion.
 fn plain_layers(layers: &[photocraft_doc::Layer], depth: usize) -> bool {
     use photocraft_doc::{BlendMode, LayerContent};
     if depth > photocraft_doc::MAX_GROUP_DEPTH {
@@ -92,7 +93,12 @@ fn plain_layers(layers: &[photocraft_doc::Layer], depth: usize) -> bool {
             None => l.blend == BlendMode::Normal,
         };
         blend_ok
-            && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_))
+            && match &l.content {
+                LayerContent::Raster(_) => true,
+                // An artboard paints its own background and clips; an imported frame draws its stroke.
+                LayerContent::Group(g) => g.artboard.is_none() && g.frame_stroke.is_none(),
+                _ => false,
+            }
             && l.frame.is_none()
             && l.video.is_none()
             && !photocraft_compose::effects::has_effects(l)
