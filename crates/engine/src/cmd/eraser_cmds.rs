@@ -203,7 +203,12 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
     if d.doc.mode == ColorMode::Rgb && colors.is_some_and(|c| c.len() == 1) {
         return Err(EngineError::Other(CHANNEL_TARGET_REFUSED.into()));
     }
-    Ok((Stroke { brush, points: pts }, bs, id, colors))
+    let stroke = Stroke { brush, points: pts };
+    // The working copy is dense over the stroke's bounds (#8666).
+    crate::retouch_cmds::reject_huge_stroke(CMD, &stroke)?;
+    // `apply_dab_stroke` reads the full rendered dab rectangle, which the point estimate undercounts.
+    crate::retouch_cmds::reject_huge_extent(CMD, &stroke, 0, crate::retouch_cmds::MAX_STROKE_PIXELS)?;
+    Ok((stroke, bs, id, colors))
 }
 
 /// `paint.backgroundEraser`: a stroke erasing colours similar to the sampled one.

@@ -1545,3 +1545,23 @@ fn mixer_load_fills_the_reservoir_from_the_canvas_and_keeps_the_foreground() {
     assert_eq!(s.tools.foreground, foreground);
     assert_eq!(s.active().unwrap().revision, revision);
 }
+
+/// The review on #9644: a soft 2048 px stroke along the diagonal whose input points pass the point
+/// estimate (6956 x 6956 px) but whose dab rectangles render over 8192 x 8192 px (a soft tip reaches
+/// further than half its size), which `apply_dab_stroke` would read and clone whole. That is still
+/// inside the paint crate's own 4 GiB working-copy budget, so only the pixel budget refuses it. Color
+/// Replacement and the Background Eraser refuse it up front, document untouched; a stroke that fits
+/// still paints.
+#[test]
+fn color_replacement_and_background_eraser_refuse_a_stroke_whose_dabs_render_too_large() {
+    let mut s = session(64, 64);
+    let points: Vec<[u32; 2]> = (0..=4900).step_by(500).chain([4900]).map(|v| [v, v]).collect();
+    for cmd in ["paint.colorReplacement", "paint.backgroundEraser"] {
+        let steps = s.active().unwrap().history.past_len();
+        let params = json!({"points": points, "size": 2048, "hardness": 0});
+        let err = s.execute(cmd, params).unwrap_err().to_string();
+        assert!(err.contains("stroke too large"), "{cmd}: {err}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "{cmd} leaves History alone");
+        s.execute(cmd, json!({"points": [[8, 8], [40, 40]], "size": 8, "hardness": 50})).unwrap_or_else(|e| panic!("{cmd}: a normal stroke must paint: {e}"));
+    }
+}
