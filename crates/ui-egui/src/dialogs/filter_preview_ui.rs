@@ -40,16 +40,21 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     let Some(st) = app.session.documents().get(idx) else { return };
     let (doc_id, revision) = (st.doc.id, st.revision);
 
-    // The filtered proxy the canvas already computed for this dialog, when there is one. Matching
-    // the dialog keeps a stacked dialog from showing another's preview; the Preview checkbox still
-    // decides whether the filtered result (rather than the original) is shown.
-    let preview_on = f.get("__preview").and_then(Value::as_bool) == Some(true);
+    // Share the computed result, not the canvas checkbox. A drag may keep old parameters and
+    // factor, but never a retired/committing frame or one for another source or target.
     let filtered: Option<(FilterPreviewKey, std::sync::Arc<Document>)> = app.filter_preview.as_ref().and_then(|p| {
         // An edited smart filter previews as `layer.smartFilter.setParams` (#6324).
         let previewed = crate::smart_ui::preview_command(f, &cmd);
-        (preview_on && p.key.dialog == dialog && p.key.doc == doc_id && p.key.command == previewed)
-            .then(|| p.result.clone().map(|r| (p.key.clone(), r)))
-            .flatten()
+        (!p.committing
+            && p.key.dialog == dialog
+            && p.key.doc == doc_id
+            && p.key.revision == revision
+            && p.key.active == st.active_layer
+            && p.key.target == st.channel_view.target
+            && p.key.command == previewed
+            && f.get("__smartFilter").is_none_or(|target| crate::smart_filter_dialog::validate_target(app, target).is_ok()))
+        .then(|| p.result.clone().map(|r| (p.key.clone(), r)))
+        .flatten()
     });
     // The proxy factor the preview runs at (the filtered key's when it exists, else the request's).
     // The fallback must be the factor the canvas will ask for, not the document's own: since #6326
@@ -191,6 +196,12 @@ pub(crate) fn reserved_height(f: &Map<String, Value>) -> f32 {
     if shows(f) { PREVIEW_H + 32.0 } else { 0.0 }
 }
 
+/// Whether this dialog needs the shared preview result, independently of canvas presentation.
+/// Keep the producer and logic-phase worker cleanup on the same demand policy.
+pub(crate) fn demanded(f: &Map<String, Value>) -> bool {
+    f.get("__preview").and_then(Value::as_bool) == Some(true) || shows(f)
+}
+
 /// Whether the dialog with fields `f` gets the preview window: Filter menu dialogs with a Preview
 /// checkbox, as in Photoshop. Image › Rotation › Arbitrary and the adjustment dialogs keep only
 /// the on-canvas preview, and Select and Mask has its own view.
@@ -303,6 +314,231 @@ struct Cache {
     filtered: Option<CachedTex>,
     original: Option<CachedTex>,
     view: Option<(photocraft_engine::channel_cmds::ChannelView, bool, Option<photocraft_doc::LayerId>)>,
+}
+
+#[cfg(test)]
+mod issue_11560 {
+    use super::*;
+
+    fn fixture(command: &str) -> (PhotocraftApp, u64, egui::Context) {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.session
+            .edit("Midtone edge", |doc, active| {
+                let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                for x in 0..64 {
+                    let v = 0.25 + x as f32 / 256.0 + if x >= 32 { 0.15 } else { 0.0 } + if x % 3 == 0 { 0.04 } else { 0.0 };
+                    s.fill_rect(photocraft_geom::Rect::new(x, 0, x + 1, 48), &[v, v, v, 1.0]);
+                }
+                Ok(())
+            })
+            .unwrap();
+        let id = crate::filter_dialog::open(&mut app, command).unwrap();
+        let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+        f.insert("amount".into(), json!(180));
+        f.insert("radius".into(), json!(2));
+        let detail = match command {
+            "filter.sharpen.unsharpMask" => "threshold",
+            "filter.sharpen.smartSharpen" => "reduceNoise",
+            _ => panic!("unexpected sharpening fixture command"),
+        };
+        f.insert(detail.into(), json!(0));
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        assert!(crate::canvas::ensure_filter_preview(&mut app, 0, &ctx).is_some());
+        let st = app.session.active().unwrap();
+        assert_ne!(
+            photocraft_compose::flatten(&st.doc).px,
+            photocraft_compose::flatten(app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()).px,
+            "fixture must actually sharpen, not merely allocate a texture"
+        );
+        (app, id, ctx)
+    }
+
+    fn meshes(shape: &egui::Shape, out: &mut Vec<(egui::TextureId, Rect)>) {
+        match shape {
+            egui::Shape::Mesh(m) => {
+                let bounds = m.vertices.iter().fold(Rect::NOTHING, |r, v| r.union(Rect::from_min_max(v.pos, v.pos)));
+                out.push((m.texture_id, bounds));
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| meshes(s, out)),
+            _ => {}
+        }
+    }
+
+    fn frame(app: &PhotocraftApp, id: u64, ctx: &egui::Context, f: &mut Map<String, Value>, events: Vec<egui::Event>) -> Vec<(egui::TextureId, Rect)> {
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(520.0, 480.0))), events, ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| window(app, id, ui, f));
+        // Raw egui has no renderer; retire texture deltas before any assertion can unwind.
+        output.textures_delta.clear();
+        let mut painted = Vec::new();
+        for s in &output.shapes {
+            meshes(&s.shape, &mut painted);
+        }
+        painted
+    }
+
+    fn cache(ctx: &egui::Context, id: u64) -> Cache {
+        ctx.data(|d| d.get_temp(egui::Id::unique(("filter-preview-ui", id))).unwrap())
+    }
+
+    fn hold_release(on: bool) {
+        for command in ["filter.sharpen.unsharpMask", "filter.sharpen.smartSharpen"] {
+            let (app, id, ctx) = fixture(command);
+            let mut f = app.ui.dialogs.last().unwrap().fields.clone();
+            // Warm with the checked state, then paint off without asking for fresh computation:
+            // this isolates the independent mini selection gate from the compute-demand gate.
+            frame(&app, id, &ctx, &mut f, vec![]);
+            let original = cache(&ctx, id).original.unwrap().tex.id();
+            let filtered = cache(&ctx, id).filtered.unwrap().tex.id();
+            f.insert("__preview".into(), json!(on));
+            let painted = frame(&app, id, &ctx, &mut f, vec![]);
+            let rect = painted.iter().find(|(tex, _)| *tex == filtered).expect("mini paints the filtered texture independently of canvas Preview").1;
+            assert!(!painted.iter().any(|(tex, _)| *tex == original));
+            let at = rect.center();
+            frame(&app, id, &ctx, &mut f, vec![egui::Event::PointerMoved(at)]);
+            let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            let pressed = frame(&app, id, &ctx, &mut f, vec![button(true)]);
+            assert!(pressed.iter().any(|(tex, _)| *tex == original), "real pointer press compares original");
+            assert!(!pressed.iter().any(|(tex, _)| *tex == filtered));
+            let held = frame(&app, id, &ctx, &mut f, vec![]);
+            assert!(held.iter().any(|(tex, _)| *tex == original), "unchanged held frame still compares original");
+            let released = frame(&app, id, &ctx, &mut f, vec![button(false)]);
+            assert!(released.iter().any(|(tex, _)| *tex == filtered), "release restores filtered pixels");
+            assert_eq!(f["__preview"], json!(on), "comparison must not toggle the canvas checkbox");
+        }
+    }
+
+    #[test]
+    fn checked_mini_real_press_hold_release_preserves_checkbox() {
+        hold_release(true);
+    }
+
+    #[test]
+    fn unchecked_mini_paints_filtered_and_real_press_hold_release_preserves_checkbox() {
+        hold_release(false);
+    }
+
+    #[test]
+    fn unchecked_mini_eligibility_keeps_the_existing_exclusions() {
+        for command in ["filter.sharpen.unsharpMask", "filter.sharpen.smartSharpen", "filter.blur.gaussianBlur"] {
+            let f = json!({"__command":command,"__preview":false}).as_object().unwrap().clone();
+            assert!(shows(&f));
+            assert!(reserved_height(&f) > 0.0);
+        }
+        for command in ["image.rotation.arbitrary", "adjust.levels", "layer.smartFilter.blendingOptions"] {
+            let f = json!({"__command":command,"__preview":false}).as_object().unwrap().clone();
+            assert!(!shows(&f));
+            assert_eq!(reserved_height(&f), 0.0);
+        }
+        assert!(!shows(json!({"__command":"filter.sharpen.unsharpMask"}).as_object().unwrap()));
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":64,"height":48})).unwrap();
+        let id = crate::filter_dialog::open(&mut app, crate::select_mask_view::COMMAND).unwrap();
+        let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+        f.insert("__preview".into(), json!(false));
+        assert!(crate::select_mask_view::owns(f));
+        assert!(!shows(f), "Select and Mask owns a different preview");
+    }
+
+    // Each identity cell has its own test so an expected revision red cannot conceal the
+    // active-layer, channel, dialog, document or committing controls in a hosted run.
+    fn target_policy(changed: &str) {
+        let (mut app, id, ctx) = fixture("filter.sharpen.unsharpMask");
+        let mut f = app.ui.dialogs.last().unwrap().fields.clone();
+        frame(&app, id, &ctx, &mut f, vec![]);
+        let filtered = cache(&ctx, id).filtered.unwrap().tex.id();
+        let p = app.filter_preview.as_mut().unwrap();
+        match changed {
+            "params" => {
+                f.insert("amount".into(), json!(60));
+            }
+            "revision" => p.key.revision += 1,
+            "active" => p.key.active = Some(photocraft_doc::LayerId(u64::MAX)),
+            "target" => p.key.target = photocraft_engine::channel_cmds::ChannelTarget::Alpha(0),
+            "dialog" => p.key.dialog += 1,
+            "doc" => p.key.doc = photocraft_doc::DocId(u64::MAX),
+            "committing" => p.committing = true,
+            _ => panic!("unknown identity control"),
+        }
+        let painted = frame(&app, id, &ctx, &mut f, vec![]);
+        if changed == "params" {
+            assert!(painted.iter().any(|(tex, _)| *tex == filtered), "same-target drag keeps its completed frame");
+        } else {
+            let c = cache(&ctx, id);
+            assert!(c.filtered.is_none(), "must reject {changed}, not upload it under a new texture ID");
+            let original = c.original.unwrap().tex.id();
+            assert!(painted.iter().any(|(tex, _)| *tex == original), "foreign {changed} falls back to original");
+        }
+    }
+
+    #[test]
+    fn mini_keeps_old_parameters_during_a_drag() {
+        target_policy("params");
+    }
+    #[test]
+    fn mini_rejects_foreign_revision() {
+        target_policy("revision");
+    }
+    #[test]
+    fn mini_rejects_foreign_active_layer() {
+        target_policy("active");
+    }
+    #[test]
+    fn mini_rejects_foreign_channel_target() {
+        target_policy("target");
+    }
+    #[test]
+    fn mini_rejects_foreign_dialog() {
+        target_policy("dialog");
+    }
+    #[test]
+    fn mini_rejects_foreign_document() {
+        target_policy("doc");
+    }
+    #[test]
+    fn mini_rejects_committing_frame_in_an_open_dialog() {
+        target_policy("committing");
+    }
+
+    #[test]
+    fn recorded_smart_filter_off_state_uses_the_whole_mapped_stack_without_editing_source() {
+        let (mut app, layer) = crate::smart_filter_dialog::tests::app(8, "rgb");
+        let sm = crate::smart_filter_dialog::tests::smart(&app, layer).clone();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        crate::smart_ui::open_editor(&mut app, &ctx, layer.0, &sm, 1);
+        let id = app.ui.dialogs.last().unwrap().id;
+        let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+        f.insert("__preview".into(), json!(false));
+        f.insert("amount".into(), json!(240));
+        let mut f = f.clone();
+        let before = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.past_len();
+        let revision = app.session.active().unwrap().revision;
+        let (command, params) = crate::smart_filter_dialog::edit_command(&app, &f).unwrap();
+        assert_eq!(command, "layer.smartFilter.setParams");
+        let mut engine = photocraft_engine::Session::new();
+        engine.color.settings = app.session.color.settings.clone();
+        engine.add_document(before.as_ref().clone(), None);
+        engine.select_layer(layer).unwrap();
+        engine.execute(&command, params).unwrap();
+        let expected = engine.active().unwrap().doc.clone();
+        assert_ne!(photocraft_compose::flatten(&expected).px, photocraft_compose::flatten(&before).px);
+        assert!(crate::canvas::ensure_filter_preview(&mut app, 0, &ctx).is_none());
+        let p = app.filter_preview.as_ref().expect("off-state smart mini still computes");
+        assert_eq!(p.key.command, command);
+        assert_eq!(photocraft_compose::flatten(p.result.as_ref().unwrap()).px, photocraft_compose::flatten(&expected).px);
+        let painted = frame(&app, id, &ctx, &mut f, vec![]);
+        let filtered = cache(&ctx, id).filtered.unwrap().tex.id();
+        assert!(painted.iter().any(|(tex, _)| *tex == filtered));
+        assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        crate::dialogs::cancel(&mut app, id).unwrap();
+        assert!(app.filter_preview.is_none());
+    }
 }
 
 #[cfg(test)]
