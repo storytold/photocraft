@@ -795,6 +795,38 @@ fn cam_amount_slider(ui: &mut egui::Ui, name: &str, value: &mut f32, lo: f32, hi
     });
 }
 
+/// The Art History Brush's Style, Area and Tolerance.
+fn art_history_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let o = &mut app.ui.tool_options;
+    opt(ui, tl!("Style"));
+    let styles = [
+        ("tightShort".to_string(), tl!("Tight Short")),
+        ("tightMedium".to_string(), tl!("Tight Medium")),
+        ("tightLong".to_string(), tl!("Tight Long")),
+        ("looseMedium".to_string(), tl!("Loose Medium")),
+        ("looseLong".to_string(), tl!("Loose Long")),
+        ("dab".to_string(), tl!("Dab")),
+        ("tightCurl".to_string(), tl!("Tight Curl")),
+        ("looseCurl".to_string(), tl!("Loose Curl")),
+    ];
+    crate::widgets::dropdown(ui, "art-history-style", tl!("Style"), &mut o.art_history_style, &styles, 130.0);
+    // Area: whole pixels 0..500, no slider; Tolerance: whole percents 0..100 with a slider
+    // arrow. Both alert on a typed value past their range, as the reference does (#12630).
+    opt(ui, tl!("Area"));
+    let (area, area_out) = crate::widgets::value_field_whole_alerting(ui, tl!("Area"), &mut o.art_history_area, 0.0..=500.0, "px", 66.0);
+    area.on_hover_text(tl!("Painting area diameter"));
+    opt(ui, tl!("Tolerance"));
+    let (tolerance, tolerance_out) = crate::widgets::value_field_whole_alerting(ui, tl!("Tolerance"), &mut o.art_history_tolerance, 0.0..=100.0, "%", 58.0);
+    tolerance.on_hover_text(tl!("Painting tolerance"));
+    cam_amount_slider(ui, tl!("Tolerance slider"), &mut o.art_history_tolerance, 0.0, 100.0, "Painting tolerance");
+    if area_out {
+        open_alert_once(app, ART_HISTORY_AREA_ALERT);
+    }
+    if tolerance_out {
+        open_alert_once(app, crate::panels::options_bar::ZERO_TO_100);
+    }
+}
+
 /// The reference's alert for an Art History Brush Area typed past 0..500 px (#12630).
 pub(crate) const ART_HISTORY_AREA_ALERT: &str = "An integer between 0 pixel and 500 Pixels is required. Closest value inserted.";
 
@@ -1130,36 +1162,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 None => opt(ui, tl!("The History Brush source was deleted: set a new source in the History panel")),
             }
         }
-        Tool::ArtHistoryBrush => {
-            opt(ui, tl!("Style"));
-            let styles = [
-                ("tightShort".to_string(), tl!("Tight Short")),
-                ("tightMedium".to_string(), tl!("Tight Medium")),
-                ("tightLong".to_string(), tl!("Tight Long")),
-                ("looseMedium".to_string(), tl!("Loose Medium")),
-                ("looseLong".to_string(), tl!("Loose Long")),
-                ("dab".to_string(), tl!("Dab")),
-                ("tightCurl".to_string(), tl!("Tight Curl")),
-                ("looseCurl".to_string(), tl!("Loose Curl")),
-            ];
-            crate::widgets::dropdown(ui, "art-history-style", tl!("Style"), &mut o.art_history_style, &styles, 130.0);
-            // Area: whole pixels 0..500, no slider; Tolerance: whole percents 0..100 with a slider
-            // arrow. Both alert on a typed value past their range, as the reference does (#12630).
-            opt(ui, tl!("Area"));
-            let (area, area_out) = crate::widgets::value_field_whole_alerting(ui, tl!("Area"), &mut o.art_history_area, 0.0..=500.0, "px", 66.0);
-            area.on_hover_text(tl!("Painting area diameter"));
-            opt(ui, tl!("Tolerance"));
-            let (tolerance, tolerance_out) =
-                crate::widgets::value_field_whole_alerting(ui, tl!("Tolerance"), &mut o.art_history_tolerance, 0.0..=100.0, "%", 58.0);
-            tolerance.on_hover_text(tl!("Painting tolerance"));
-            cam_amount_slider(ui, tl!("Tolerance slider"), &mut o.art_history_tolerance, 0.0, 100.0, "Painting tolerance");
-            if area_out {
-                open_alert_once(app, ART_HISTORY_AREA_ALERT);
-            }
-            if tolerance_out {
-                open_alert_once(app, crate::panels::options_bar::ZERO_TO_100);
-            }
-        }
+        Tool::ArtHistoryBrush => art_history_options(app, ui),
         Tool::QuickSelection => {
             crate::widgets::checkbox(ui, &mut o.sample_all.quick_selection, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.enhance_edge, tl!("Enhance Edge"));
