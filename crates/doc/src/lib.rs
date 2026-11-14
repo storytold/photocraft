@@ -18,6 +18,7 @@ pub mod frame;
 pub mod import_conversion;
 pub mod mode;
 pub mod pattern;
+pub mod responsive;
 pub mod slices;
 pub mod text;
 pub mod text_styles;
@@ -954,6 +955,8 @@ pub struct Document {
     /// How the document's lossy file was encoded (its JPEG quality, WebP lossy or lossless,
     /// PNG stereo pairing), so a save writes it back the same way rather than at fixed defaults.
     pub file_encoding: FileEncoding,
+    /// Responsive layout rules and variant relationships (native `.pcraft` data).
+    pub responsive: responsive::ResponsiveLayout,
 }
 
 /// The encoder settings a document's file was opened or saved with: what File › Save and the
@@ -1029,6 +1032,7 @@ impl Document {
             variables: Variables::default(),
             timeline: None,
             file_encoding: FileEncoding::default(),
+            responsive: responsive::ResponsiveLayout::default(),
         }
     }
 
@@ -1304,6 +1308,13 @@ impl Document {
     pub fn remove(&mut self, id: LayerId) -> Option<Layer> {
         let path = self.path_of(id)?;
         let (sib, idx) = self.siblings_mut(&path)?;
+        // Deliberately no responsive pruning here: `remove` is also the detach step of
+        // operations that put the layer straight back (Reorder Layers, drag into a group,
+        // Group Layers, New Frame, Background from Layer), and pruning would drop its rules
+        // and variant memberships on a mere rearrangement. No production deletion path calls
+        // `responsive.remove_layers` (tests do, to exercise it); instead the save path
+        // (`prune_absent`) drops whatever still dangles before validation
+        // (#7970's review: dragging a layer must not lose the responsive setup).
         Some(sib.remove(idx))
     }
 
