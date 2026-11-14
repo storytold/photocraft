@@ -378,6 +378,12 @@ fn legacy_point_origin(t: &TySh) -> Option<[f64; 2]> {
     if !(bounds[0].abs().max(bounds[1].abs()) > 1024.0 && origin_distance > 4096.0 && shifted_distance < origin_distance) {
         return None;
     }
+    // The writer also stores a tight ink box in `boundingBox`, which differs from the layout box
+    // in `bounds`. Identical boxes mean there is no ink box to realign to, so the transform is
+    // already correct, just large (a big canvas and font) (#11615).
+    if descriptor_rect(&t.text, "bounds").is_some_and(|layout_box| layout_box.iter().zip(bounds).all(|(l, b)| (l - b).abs() < 0.01)) {
+        return None;
+    }
 
     Some([bounds[0], bounds[1]])
 }

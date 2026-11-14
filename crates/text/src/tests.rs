@@ -1974,6 +1974,41 @@ fn legacy_origin_lines_up_ink_with_the_ink_bounding_box() {
     }
 }
 
+/// #11615: a correct point-text transform (centre x, first baseline) on a large canvas with a
+/// large font, whose `bounds` and `boundingBox` are the same layout box, carries no legacy-origin
+/// signature (a real writer's ink box differs from the layout box). It stays as stored.
+#[test]
+fn point_text_with_equal_boxes_keeps_its_stored_transform() {
+    use photocraft_psd::descriptor::{Descriptor, Id, Value as D};
+
+    let source = with_para(
+        styled("ELI", CharStyle { font_family: "Inter".into(), size_pt: 552.0, ..Default::default() }),
+        ParagraphStyle { align: TextAlign::Center, ..Default::default() },
+    );
+    let stored = Affine { m: [1.0, 0.0, 0.0, 1.0, 4430.0, 3360.0] };
+    let rect = |class| {
+        D::Descriptor(
+            Descriptor::new(class)
+                .with("Left", D::UnitFloat { unit: *b"#Pnt", value: -1022.53 })
+                .with("Top ", D::UnitFloat { unit: *b"#Pnt", value: -1265.67 })
+                .with("Rght", D::UnitFloat { unit: *b"#Pnt", value: 1022.53 })
+                .with("Btom", D::UnitFloat { unit: *b"#Pnt", value: 356.01 }),
+        )
+    };
+    let mut tysh = crate::psd::parse_tysh(&crate::psd::build_tysh(&source, 72.0, None)).unwrap();
+    tysh.transform = stored;
+    tysh.text.items.retain(|(key, _)| !key.is("bounds") && !key.is("boundingBox"));
+    tysh.text.items.push((Id::new("bounds"), rect("bounds")));
+    tysh.text.items.push((Id::new("boundingBox"), rect("boundingBox")));
+    let data = crate::psd::write_tysh(&tysh);
+
+    let mut engine = TextEngine::new();
+    let mut imported = crate::psd::text_layer_from_tysh(&data, 72.0).unwrap();
+    imported.psd_raw = Some(std::sync::Arc::new(data));
+    crate::psd::refine_legacy_point_origin(&mut imported, 72.0, &mut engine, None);
+    assert_transform_near(imported.transform, stored, 1e-6, "stored transform");
+}
+
 #[test]
 fn legacy_origin_uses_the_rendering_engines_registered_face() {
     let mut engine = TextEngine::new();
