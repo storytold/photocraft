@@ -448,11 +448,100 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
         .iter()
         .map(|p| f(p, noto))
         .collect();
+        // Standalone per-script Noto Sans CJK fonts for distributions that split or package
+        // single-script OTF/TTF files instead of the unified TTC:
+        // - `/usr/share/fonts/noto-cjk/NotoSans{JP,SC,TC,KR}-Regular.otf` and `NotoSansCJK{jp,sc,tc,kr}-Regular.otf`:
+        //   Arch Linux (`noto-fonts-cjk`), Gentoo (`media-fonts/noto-cjk`), Alpine (`font-noto-cjk`)
+        // - `/usr/share/fonts/noto/NotoSans*-Regular.otf`: Void Linux (`noto-fonts-cjk`), Slackware (`noto-cjk-fonts`)
+        // - `/usr/share/fonts/opentype/noto/NotoSans*-Regular.otf` and `/usr/share/fonts/truetype/noto/NotoSans*-Regular.ttf`:
+        //   Debian / Ubuntu (`fonts-noto-cjk`, `fonts-noto-cjk-extra`)
+        // - `/usr/share/fonts/opentype/NotoSansCJK*-Regular.otf` and `/usr/share/fonts/truetype/NotoSansCJK*-Regular.otf`:
+        //   openSUSE (`noto-sans-cjk-fonts`, `google-noto-sans-cjk-fonts`)
+        // - `/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSans*-Regular.otf` and
+        //   `/usr/share/fonts/google-noto-sans-cjk-{jp,sc,tc,kr}-fonts/NotoSans*-Regular.otf`:
+        //   Fedora / RHEL (`google-noto-sans-cjk-jp-fonts`, `google-noto-sans-cjk-sc-fonts`,
+        //   `google-noto-sans-cjk-tc-fonts`, `google-noto-sans-cjk-kr-fonts`)
+        match script {
+            Japanese => v.extend([
+                f("/usr/share/fonts/noto-cjk/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/noto-cjk/NotoSansCJKjp-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansCJKjp-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/noto/NotoSansJP-Regular.ttf", ""),
+                f("/usr/share/fonts/opentype/NotoSansCJKjp-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/NotoSansCJKjp-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKjp-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-jp-fonts/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-jp-fonts/NotoSansCJKjp-Regular.otf", ""),
+            ]),
+            SimplifiedChinese => v.extend([
+                f("/usr/share/fonts/noto-cjk/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansCJKsc-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/noto/NotoSansSC-Regular.ttf", ""),
+                f("/usr/share/fonts/opentype/NotoSansCJKsc-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/NotoSansCJKsc-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKsc-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-sc-fonts/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-sc-fonts/NotoSansCJKsc-Regular.otf", ""),
+            ]),
+            TraditionalChinese => v.extend([
+                f("/usr/share/fonts/noto-cjk/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/noto-cjk/NotoSansCJKtc-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansCJKtc-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf", ""),
+                f("/usr/share/fonts/opentype/NotoSansCJKtc-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/NotoSansCJKtc-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKtc-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-tc-fonts/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-tc-fonts/NotoSansCJKtc-Regular.otf", ""),
+            ]),
+            Korean => v.extend([
+                f("/usr/share/fonts/noto-cjk/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/noto-cjk/NotoSansCJKkr-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansCJKkr-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansCJKkr-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/noto/NotoSansKR-Regular.ttf", ""),
+                f("/usr/share/fonts/opentype/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/NotoSansCJKkr-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/NotoSansCJKkr-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKkr-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-kr-fonts/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-kr-fonts/NotoSansCJKkr-Regular.otf", ""),
+            ]),
+        }
         v.extend(match script {
             Japanese => vec![
                 f("/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf", ""),
                 f("/usr/share/fonts/truetype/fonts-japanese-gothic.ttf", ""),
                 f("/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf", ""),
+                // VL Gothic:
+                // - `/usr/share/fonts/TTF/VL-*Gothic-Regular.ttf`: Arch Linux (`ttf-vlgothic`)
+                // - `/usr/share/fonts/vlgothic/VL-*Gothic-Regular.ttf`: Fedora (`vlgothic-fonts`, `vlgothic-p-fonts`)
+                // - `/usr/share/fonts/VL-Gothic/VL-*Gothic-Regular.ttf`: openSUSE (`vlgothic-fonts`)
+                // - `/usr/share/fonts/truetype/vlgothic/VL-*Gothic-Regular.ttf`: Debian / Ubuntu (`fonts-vlgothic`)
+                f("/usr/share/fonts/TTF/VL-PGothic-Regular.ttf", ""),
+                f("/usr/share/fonts/TTF/VL-Gothic-Regular.ttf", ""),
+                f("/usr/share/fonts/vlgothic/VL-PGothic-Regular.ttf", ""),
+                f("/usr/share/fonts/vlgothic/VL-Gothic-Regular.ttf", ""),
+                f("/usr/share/fonts/VL-Gothic/VL-PGothic-Regular.ttf", ""),
+                f("/usr/share/fonts/VL-Gothic/VL-Gothic-Regular.ttf", ""),
+                f("/usr/share/fonts/truetype/vlgothic/VL-PGothic-Regular.ttf", ""),
+                f("/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf", ""),
             ],
             SimplifiedChinese | TraditionalChinese => vec![
                 f("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", ""),
@@ -461,10 +550,24 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
                 f("/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc", ""),
             ],
             Korean => vec![
+                // Nanum Gothic: Arch Linux (`ttf-nanum` -> `/usr/share/fonts/TTF/NanumGothic.ttf`),
+                // Debian/Ubuntu (`fonts-nanum` -> `/usr/share/fonts/truetype/nanum/NanumGothic.ttf`),
+                // Fedora (`nhn-nanum-gothic-fonts` -> `/usr/share/fonts/nanum/NanumGothic.ttf`).
+                f("/usr/share/fonts/TTF/NanumGothic.ttf", ""),
                 f("/usr/share/fonts/truetype/nanum/NanumGothic.ttf", ""),
                 f("/usr/share/fonts/nanum/NanumGothic.ttf", ""),
+                // UnDotum: Arch Linux (`ttf-unfonts-core` -> `/usr/share/fonts/TTF/UnDotum.ttf`),
+                // Debian/Ubuntu (`fonts-unfonts-core` -> `/usr/share/fonts/truetype/unfonts-core/UnDotum.ttf`),
+                // Fedora (`un-core-dotum-fonts` -> `/usr/share/fonts/un-core/UnDotum.ttf`).
+                f("/usr/share/fonts/TTF/UnDotum.ttf", ""),
                 f("/usr/share/fonts/truetype/unfonts-core/UnDotum.ttf", ""),
                 f("/usr/share/fonts/un-core/UnDotum.ttf", ""),
+                // Baekmuk Gulim: Arch Linux (`ttf-baekmuk` -> `/usr/share/fonts/TTF/gulim.ttf`),
+                // Debian/Ubuntu (`fonts-baekmuk` -> `/usr/share/fonts/truetype/baekmuk/gulim.ttf`),
+                // Fedora (`baekmuk-ttf-gulim-fonts` -> `/usr/share/fonts/baekmuk-ttf/gulim.ttf`).
+                f("/usr/share/fonts/TTF/gulim.ttf", ""),
+                f("/usr/share/fonts/truetype/baekmuk/gulim.ttf", ""),
+                f("/usr/share/fonts/baekmuk-ttf/gulim.ttf", ""),
             ],
         });
         let mut files = with_flatpak_host_fonts(v);
@@ -981,6 +1084,8 @@ mod tests {
 mod flatpak_tests {
     use super::*;
 
+    /// Verifies that Flatpak host font mirrors preserve collection face names and include
+    /// split distro CJK font paths for each script.
     #[test]
     fn cjk_discovery_includes_host_fonts_with_the_matching_collection_face() {
         for script in [CjkScript::Japanese, CjkScript::SimplifiedChinese, CjkScript::TraditionalChinese, CjkScript::Korean] {
@@ -996,6 +1101,35 @@ mod flatpak_tests {
                     assert_eq!(pair[1].family, pair[0].family);
                 }
             }
+        }
+        let ja = font_files(CjkScript::Japanese);
+        for expected in [
+            "/usr/share/fonts/noto-cjk/NotoSansCJKjp-Regular.otf",
+            "/run/host/fonts/noto-cjk/NotoSansCJKjp-Regular.otf",
+            "/usr/share/fonts/google-noto-sans-cjk-jp-fonts/NotoSansJP-Regular.otf",
+            "/run/host/fonts/google-noto-sans-cjk-jp-fonts/NotoSansJP-Regular.otf",
+            "/usr/share/fonts/TTF/VL-PGothic-Regular.ttf",
+            "/run/host/fonts/TTF/VL-PGothic-Regular.ttf",
+            "/usr/share/fonts/TTF/VL-Gothic-Regular.ttf",
+            "/run/host/fonts/TTF/VL-Gothic-Regular.ttf",
+        ] {
+            assert!(ja.iter().any(|file| file.path == std::path::Path::new(expected) && file.family.is_empty()), "missing {expected}");
+        }
+        let sc = font_files(CjkScript::SimplifiedChinese);
+        for expected in [
+            "/usr/share/fonts/google-noto-sans-cjk-sc-fonts/NotoSansSC-Regular.otf",
+            "/run/host/fonts/google-noto-sans-cjk-sc-fonts/NotoSansSC-Regular.otf",
+        ] {
+            assert!(sc.iter().any(|file| file.path == std::path::Path::new(expected) && file.family.is_empty()), "missing {expected}");
+        }
+        let ko = font_files(CjkScript::Korean);
+        for expected in [
+            "/usr/share/fonts/google-noto-sans-cjk-kr-fonts/NotoSansKR-Regular.otf",
+            "/run/host/fonts/google-noto-sans-cjk-kr-fonts/NotoSansKR-Regular.otf",
+            "/usr/share/fonts/TTF/gulim.ttf",
+            "/run/host/fonts/TTF/gulim.ttf",
+        ] {
+            assert!(ko.iter().any(|file| file.path == std::path::Path::new(expected) && file.family.is_empty()), "missing {expected}");
         }
     }
 
