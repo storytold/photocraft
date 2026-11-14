@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, layer_param};
 use crate::type_cmds::{check_text_unlocked, norm_text, refresh_at, replace_text};
-use crate::{EngineError, Result, Session};
+use crate::{DocState, EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -54,14 +54,32 @@ fn char_offsets(text: &str, offsets: &[usize]) -> Vec<usize> {
     result
 }
 
-/// Type layers top to bottom (Layers panel order), skipping fully locked ones.
-fn type_layers(doc: &Document) -> Vec<LayerId> {
-    doc.walk().into_iter().rev().filter(|(p, _, l)| matches!(l.content, LayerContent::Text(_)) && !doc.locks_at(p).all).map(|(_, _, l)| l.id).collect()
-}
-
-fn has_type(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document open")?;
-    if type_layers(&d.doc).is_empty() { Err("the document has no type layers".into()) } else { Ok(()) }
+/// Type layers in checking order, each with why it is not checked: from the type layer `start` up
+/// the stack, then from the bottom up to just below it, as the reference does (#14174). Without a
+/// type layer to start at, top to bottom (Layers panel order). A hidden or Lock All type layer is
+/// passed with its reason, "hidden" or "locked", which the dialog asks about (#14175); a layer in a
+/// hidden group and a partly locked layer are checked, as before.
+fn type_layers(doc: &Document, start: Option<LayerId>) -> Vec<(LayerId, Option<&'static str>)> {
+    let mut layers: Vec<(LayerId, Option<&'static str>)> = doc
+        .walk()
+        .into_iter()
+        .filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_)))
+        .map(|(p, _, l)| {
+            let skip = if !l.visible {
+                Some("hidden")
+            } else if doc.locks_at(&p).all {
+                Some("locked")
+            } else {
+                None
+            };
+            (l.id, skip)
+        })
+        .collect();
+    match start.and_then(|id| layers.iter().position(|(l, _)| *l == id)) {
+        Some(i) => layers.rotate_left(i),
+        None => layers.reverse(),
+    }
+    layers
 }
 
 fn text(doc: &Document, id: LayerId) -> Option<&str> {
@@ -80,15 +98,43 @@ fn accepted(s: &Session, p: &Value) -> HashSet<String> {
     set
 }
 
-fn layers_param(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
+fn layers_param(s: &Session, p: &Value) -> Result<Vec<(LayerId, Option<&'static str>)>> {
+    let cmd = "edit.checkSpelling";
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let all = type_layers(&st.doc);
-    if p.get("allLayers").and_then(Value::as_bool) == Some(false) || p.get("layer").is_some() {
-        let active = layer_param(s, p)?;
-        Ok(all.into_iter().filter(|id| *id == active).collect())
-    } else {
-        Ok(all)
+    if p.get("layer").is_none()
+        && let Some(v) = p.get("layers")
+    {
+        // The selected layers (#14184), in the same order as all layers; non-type layers are passed.
+        let ids = v.as_array().ok_or_else(|| bad(cmd, "`layers` must be a list of layer ids"))?;
+        let mut picked = HashSet::with_capacity(ids.len());
+        for id in ids {
+            let id = id.as_u64().map(LayerId).ok_or_else(|| bad(cmd, format!("`layers` takes layer ids, not {id}")))?;
+            st.doc.layer(id).ok_or_else(|| bad(cmd, format!("no layer {} in `layers`", id.0)))?;
+            picked.insert(id);
+        }
+        return Ok(type_layers(&st.doc, start_param(st, p)?).into_iter().filter(|(id, _)| picked.contains(id)).collect());
     }
+    if one_layer(p) {
+        let active = layer_param(s, p)?;
+        return Ok(type_layers(&st.doc, None).into_iter().filter(|(id, _)| *id == active).collect());
+    }
+    Ok(type_layers(&st.doc, start_param(st, p)?))
+}
+
+/// The dialog passes the layer it was opened on (null without one) as `from`, which stays the start
+/// when the active layer changes.
+fn start_param(st: &DocState, p: &Value) -> Result<Option<LayerId>> {
+    match p.get("from") {
+        None => Ok(st.active_layer),
+        Some(Value::Null) => Ok(None),
+        Some(v) => v.as_u64().map(|id| Some(LayerId(id))).ok_or_else(|| bad("edit.checkSpelling", "`from` must be a layer id")),
+    }
+}
+
+/// Check All Layers off: `allLayers: false`, one `layer` or a list of `layers`. Shared by
+/// `layers_param` and `recorded_step`, so what is checked and what is recorded agree.
+fn one_layer(p: &Value) -> bool {
+    p.get("allLayers").and_then(Value::as_bool) == Some(false) || p.get("layer").is_some() || p.get("layers").is_some()
 }
 
 fn list(s: &Session, p: &Value) -> Result<Value> {
@@ -97,7 +143,13 @@ fn list(s: &Session, p: &Value) -> Result<Value> {
     let ok = accepted(s, p);
     let max = p.get("suggestions").and_then(Value::as_u64).unwrap_or(5) as usize;
     let mut out = Vec::new();
-    for id in layers_param(s, p)? {
+    // A passed layer's `at` is the index of the first misspelling after it, where the dialog asks.
+    let mut skipped = Vec::new();
+    for (id, skip) in layers_param(s, p)? {
+        if let Some(reason) = skip {
+            skipped.push(json!({ "layer": id.0, "reason": reason, "at": out.len() }));
+            continue;
+        }
         let Some(t) = text(&st.doc, id) else { continue };
         let found = dict.misspellings(t, &ok);
         // Convert every start/end byte offset to a character offset in one pass over the
@@ -112,7 +164,7 @@ fn list(s: &Session, p: &Value) -> Result<Value> {
             out.push(json!({ "layer": id.0, "start": chars[i * 2], "end": chars[i * 2 + 1], "word": m.word, "suggestions": dict.suggest(&m.word, max) }));
         }
     }
-    Ok(json!({ "misspellings": out, "count": out.len() }))
+    Ok(json!({ "misspellings": out, "count": out.len(), "skipped": skipped }))
 }
 
 /// Replaces one occurrence (verified to still be `word` when given).
@@ -150,7 +202,8 @@ fn change_all(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let plan: Vec<(LayerId, Vec<(usize, usize)>)> = layers_param(s, p)?
         .into_iter()
-        .filter_map(|id| {
+        .filter(|(_, skip)| skip.is_none())
+        .filter_map(|(id, _)| {
             let t = text(&doc, id)?;
             let hits: Vec<(usize, usize)> = photocraft_text::spell::words(t).into_iter().filter(|(a, b)| t[*a..*b] == word).collect();
             (!hits.is_empty()).then_some((id, hits))
@@ -212,8 +265,7 @@ pub(crate) fn records(p: &Value) -> bool {
 
 /// The step a recorded Check Spelling becomes: `{"allLayers"}`, `false` when it checked one layer.
 pub(crate) fn recorded_step(p: &Value) -> Value {
-    let one_layer = p.get("allLayers").and_then(Value::as_bool) == Some(false) || p.get("layer").is_some();
-    json!({ "allLayers": !one_layer })
+    json!({ "allLayers": !one_layer(p) })
 }
 
 fn check_spelling(s: &mut Session, p: &Value) -> Result<Value> {
@@ -283,8 +335,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Check Spelling…",
             menu: &["Edit"],
             shortcut: None,
-            params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id|name? (check one layer),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer"? (default: the active layer),"start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"} → list: {"misspellings":[{"layer","start","end","word","suggestions"}],"count"} (an action records only a call without "action", as {"allLayers"} with its dialog on)"#,
-            enabled: has_type,
+            params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id|name? (check one layer),"layers":[id]? (check these layers, as Check All Layers off does with several layers selected; implies Check All Layers off; in the `from` order; non-type layers are passed; an empty `layers` checks nothing; not with `layer`),"from":id|null? (all layers or `layers`: start at this type layer, go up and wrap; default: the active layer; null, or a `from` that is not a type layer: top to bottom),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer"? (default: the active layer),"start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"} → list: {"misspellings":[{"layer","start","end","word","suggestions"}],"count","skipped":[{"layer","reason":"hidden|locked","at" (index of the next misspelling)}] (hidden and Lock All type layers, not checked; changeAll passes them too)} (an action records only a call without "action", as {"allLayers"} with its dialog on)"#,
+            // Any open document, also one without type layers, where it lists nothing.
+            enabled: crate::commands::has_doc,
             journal: true,
             run: check_spelling,
         },
@@ -467,11 +520,11 @@ mod tests {
     }
 
     #[test]
-    fn disabled_without_type() {
+    fn enabled_only_with_a_document() {
         let mut s = Session::new();
         assert!(!s.is_enabled("edit.checkSpelling"));
         s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
-        assert!(!s.is_enabled("edit.checkSpelling"));
+        assert!(s.is_enabled("edit.checkSpelling"));
         assert!(!s.is_enabled("type.insertText"));
     }
 
@@ -497,3 +550,15 @@ mod tests {
         assert_eq!(s.execute("type.caret", json!({"layer": id, "index": inserted["caret"]})).unwrap()["index"], inserted["caret"]);
     }
 }
+
+#[cfg(test)]
+#[path = "type_spell_enabled_tests.rs"]
+mod enabled_tests;
+
+#[cfg(test)]
+#[path = "type_spell_order_tests.rs"]
+mod order_tests;
+
+#[cfg(test)]
+#[path = "type_spell_selected_tests.rs"]
+mod selected_tests;
