@@ -32,7 +32,7 @@ pub(super) fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: u
             .iter()
             .filter_map(|it| {
                 if it.path.len() == depth {
-                    (it.label != "---").then(|| (translated_menu_label(lang, it), it.label.as_str()))
+                    (!it.is_separator()).then(|| (translated_menu_label(lang, it), it.label.as_str()))
                 } else {
                     let name = it.path.get(depth).map(String::as_str)?;
                     (!subs.contains(&name)).then(|| {
@@ -49,7 +49,7 @@ pub(super) fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: u
     let mut last_was_sep = true;
     for (i, it) in items.iter().enumerate() {
         if it.path.len() == depth {
-            if it.label == "---" {
+            if it.is_separator() {
                 if !last_was_sep && i + 1 < items.len() {
                     ui.add(egui::Separator::default().spacing(MENU_SEPARATOR));
                     last_was_sep = true;
@@ -139,7 +139,7 @@ fn submenu_row<R>(ui: &mut egui::Ui, title: egui::WidgetText, content: impl FnOn
 /// A submenu header is enabled only while some item under it (at any depth) can run, so a
 /// submenu of greyed items is greyed too instead of opening onto them (#1976).
 pub(super) fn submenu_enabled(children: &[&MenuItem]) -> bool {
-    children.iter().any(|c| c.enabled && c.label != "---")
+    children.iter().any(|c| c.enabled && !c.is_separator())
 }
 
 /// The command a menu click runs: ⌥ + Merge Down / Merge Layers / Merge Visible keep the

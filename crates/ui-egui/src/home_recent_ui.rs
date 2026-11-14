@@ -528,17 +528,17 @@ pub const GRID_PREVIEW_HEIGHT: f32 = 168.0;
 pub const LIST_ROW_HEIGHT: f32 = 34.0;
 
 /// Render the header for Recent files with title and Grid/List toggle buttons.
-pub(crate) fn recent_header(ui: &mut Ui, is_grid: &mut bool, total_width: f32) {
+pub(crate) fn recent_header(ui: &mut Ui, is_grid: &mut bool, total_width: f32, title: &str) {
     let t = Tokens::get(ui.ctx());
     let (header_rect, _) = ui.allocate_exact_size(vec2(total_width, 28.0), Sense::hover());
 
-    // Left label: "Recent"
-    let label_galley = ui.painter().layout_no_wrap(tl!("Recent").to_string(), crate::theme::semibold(17.0), t.text);
+    // Provider resources have their own section; this heading always describes local files.
+    let label_galley = ui.painter().layout_no_wrap(title.to_string(), crate::theme::semibold(17.0), t.text);
     let label_pos = pos2(header_rect.left(), header_rect.center().y - label_galley.size().y / 2.0);
     ui.painter().galley(label_pos, label_galley, t.text);
     let label_rect = Rect::from_min_size(label_pos, vec2(100.0, 24.0));
     let label_resp = ui.interact(label_rect, ui.scope_id().with("recent_title"), Sense::hover());
-    label_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Recent")));
+    label_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, title));
 
     // Container box for the toggles, aligned flush to the right edge of header_rect
     let box_size = vec2(60.0, 28.0);
@@ -790,7 +790,8 @@ pub(crate) fn show_home_recent(app: &mut PhotocraftApp, ui: &mut Ui, recent: &[S
     let content_width = avail_width;
 
     let mut toggle_grid = is_grid;
-    recent_header(ui, &mut toggle_grid, content_width);
+    let title = if app.services.file_provider.as_ref().is_some_and(|provider| provider.connected()) { tl!("Local Recent Files") } else { tl!("Recent") };
+    recent_header(ui, &mut toggle_grid, content_width, title);
     if toggle_grid != is_grid {
         app.ui.chrome.home_recent_grid = toggle_grid;
     }

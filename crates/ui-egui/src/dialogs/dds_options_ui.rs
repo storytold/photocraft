@@ -98,25 +98,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let settings = ExportSettings { dds: p.options, ..app.save_settings() };
         let mut step = if p.record == "file.save" { serde_json::json!({}) } else { serde_json::json!({"path": p.path}) };
         record(p.options, &mut step);
-        let written = app.with_document(p.doc, |app| {
-            // A Save As that keeps the document's own name records only its folder (#5305).
-            app.record_answered_save_as(p.record, &mut step);
-            app.write_document(p.path, &settings, p.copy)
-        });
-        if written.is_ok() {
-            // An action being recorded keeps the Save As or Save a Copy with this answer.
-            photocraft_engine::actions_cmds::note_automation_step(&mut app.session, p.record, &step);
-            app.session.journal.push((p.record.into(), step));
-        }
-        match written {
-            Err(e) => {
-                app.ui.status = crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &e)]);
-                app.ui.status_error = true;
-            }
-            Ok(Some(_)) if !p.copy => crate::discard_ui::saved_document(app, ctx, p.doc),
-            // A background save releases the close prompt when it finishes (`jobs_ui`).
-            Ok(_) => {}
-        }
+        app.write_answered_save(ctx, p.doc, p.path, &settings, p.copy, (p.record, step));
     } else if cancel {
         app.dds_options = None;
         app.ui.status = tl!("Save canceled").into();

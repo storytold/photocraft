@@ -76,6 +76,73 @@ fn submenu_header_is_disabled_when_every_item_is() {
     assert!(submenu_enabled(&[&off, &on]));
 }
 
+/// Inspect the real native tree without depending on a platform menu backend.
+fn native_submenu<'a>(nodes: &'a [native_menu::Node], title: &str) -> Option<&'a [native_menu::Node]> {
+    nodes.iter().find_map(|node| match node {
+        native_menu::Node::Submenu { label, children, .. } if label == title => Some(children.as_slice()),
+        _ => None,
+    })
+}
+
+/// Provider display text is data, including the label used to draw real separator rows.
+#[test]
+fn provider_resource_named_dashes_remains_a_command_in_window_native_and_search_menus() {
+    let provider = crate::file_providers::Host::default();
+    provider.set_session("menu-separator-fixture-0001".into()).unwrap();
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider.clone()), ..Default::default() });
+    let command = "file.openProviderRecent.dashes";
+    assert!(!menu_items(&app).iter().any(|item| item.id == command));
+    provider.connect("menu-fixture".into(), "Separator fixtures".into(), "account".into()).unwrap();
+    let connection = provider.snapshot()["connectionId"].as_str().unwrap().to_string();
+    provider.set_resources(&connection, vec![crate::file_providers::Resource { id: "dashes".into(), name: "---".into(), updated_at: String::new() }]).unwrap();
+
+    let items = menu_items(&app);
+    let resource = items.iter().find(|item| item.id == command).unwrap();
+    assert_eq!(resource.label, "---");
+    assert!(resource.enabled && !resource.is_separator());
+    assert!(submenu_enabled(&[resource]), "the only provider resource must keep its submenu enabled");
+    let mut separator = items.iter().find(|item| item.id == "---").unwrap().clone();
+    separator.label = "A separator with a different display label".into();
+    assert!(separator.is_separator(), "only the reserved ID defines a separator");
+    assert_eq!(search_items(&items, "---", crate::i18n::Lang::EN).iter().filter(|item| item.id == command).count(), 1);
+
+    let native = native_menu::from_items(&["File"], &items);
+    let recent = native_submenu(&native.menus[0].children, "Open Recent").unwrap();
+    let resources = native_submenu(recent, "Separator fixtures").unwrap();
+    assert!(matches!(resources, [native_menu::Node::Item(item)] if item.id == command && item.label == "---" && item.enabled));
+    provider.set_enabled(false).unwrap();
+    assert!(!menu_items(&app).iter().any(|item| item.id == command));
+}
+
+#[test]
+fn provider_resource_names_remain_literal_in_localized_menus_and_search() {
+    let french = crate::i18n::Lang::from_code("fr").unwrap();
+    assert_eq!(crate::i18n::tr(french, "File"), "Fichier");
+    let provider = crate::file_providers::Host::default();
+    provider.set_session("localized-menu-fixture-0001".into()).unwrap();
+    provider.connect("menu-fixture".into(), "Provider resources".into(), "account".into()).unwrap();
+    let connection = provider.snapshot()["connectionId"].as_str().unwrap().to_string();
+    let names = [("catalog", "File"), ("ellipsis", "File…")];
+    let resources =
+        names.into_iter().map(|(id, name)| crate::file_providers::Resource { id: id.into(), name: name.into(), updated_at: String::new() }).collect();
+    provider.set_resources(&connection, resources).unwrap();
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider), ..Default::default() });
+    let mut items = menu_items(&app);
+    let mut ordinary = items.iter().find(|item| item.id == "file.openProviderRecent.catalog").unwrap().clone();
+    ordinary.id = "fixture.catalog-control".into();
+    items.push(ordinary.clone());
+    let layout = native_menu::photocraft_layout(&items, french, "fr");
+    for (id, name) in names {
+        let command = format!("file.openProviderRecent.{id}");
+        let item = items.iter().find(|item| item.id == command).unwrap();
+        assert_eq!(translated_menu_label(french, item), name);
+        assert!(search_items(&items, name, french).iter().any(|hit| hit.id == command));
+        assert_eq!(layout.bar.find(&command).map(|item| item.label.as_str()), Some(name));
+    }
+    assert_eq!(translated_menu_label(french, &ordinary), "Fichier");
+    assert_eq!(layout.bar.find("fixture.catalog-control").map(|item| item.label.as_str()), Some("Fichier"));
+}
+
 #[test]
 fn live_lookup_finds_engine_and_shell_commands() {
     for command in photocraft_engine::commands::command_specs() {

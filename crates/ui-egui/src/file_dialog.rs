@@ -166,10 +166,27 @@ impl PhotocraftApp {
     ) -> Result<Value, String> {
         let mut suggested = std::path::PathBuf::from(suggested);
         let doc = self.session.active().map(|d| d.doc.id);
+        if self.save_options_open() && self.services.file_provider.as_ref().is_some_and(|provider| doc.is_some_and(|doc| provider.prepared_for(doc))) {
+            // A shortcut such as Save a Copy must not inherit another save's prepared
+            // provider destination while that save is still asking for format options.
+            return Err(crate::SAVE_OPTIONS_OPEN.into());
+        }
+        // A queued chooser still owns its document before the dialog service runs.
+        if self.file_dialog.is_some() {
+            return Err("a file dialog is already open".into());
+        }
+        if let Some(provider) = self.services.file_provider.as_ref() {
+            provider.prepare_dialog(doc);
+        }
+        let provider_dialog = self.services.file_provider.as_ref().is_some_and(|provider| provider.wants_dialog());
+        if provider_dialog {
+            // A provider receives a display filename, never a remembered local directory.
+            suggested = std::path::PathBuf::from(display_name(&suggested.to_string_lossy()));
+        }
         // Closed documents' folders are no longer needed.
         let open: Vec<_> = self.session.documents().iter().map(|d| d.doc.id).collect();
         self.save_dirs.retain(|id, _| open.contains(id));
-        if suggested.parent().is_some_and(|p| p.as_os_str().is_empty()) {
+        if !provider_dialog && suggested.parent().is_some_and(|p| p.as_os_str().is_empty()) {
             let document_dir = doc
                 .and_then(|d| self.save_dirs.get(&d).cloned())
                 // An export doesn't start in a folder that is gone.
@@ -189,7 +206,7 @@ impl PhotocraftApp {
             FileDialogAnswer::SaveTo(path) => {
                 let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
-                let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
+                let dir = doc.filter(|_| !provider_dialog).zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
                 // An export's folder only once it has exported: a failed one doesn't move where
                 // the next export starts.
                 if !export && let Some((doc, dir)) = dir.clone() {
@@ -206,7 +223,7 @@ impl PhotocraftApp {
             }
             _ => Err(UNEXPECTED.into()),
         })?;
-        if let Some(p) = self.file_dialog.as_mut() {
+        if !provider_dialog && let Some(p) = self.file_dialog.as_mut() {
             p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, ext.as_deref())));
         }
         Ok(asked)

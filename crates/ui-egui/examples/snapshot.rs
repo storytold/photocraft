@@ -12,6 +12,7 @@
 //! `--hardware-filtering` respects texture samplers; the default predictable renderer forces bilinear filtering.
 //! `--wayland-notice` previews the native file drag-and-drop guidance shown in Wayland sessions.
 //! `--update-notice` previews a newer release without contacting the network.
+//! `--file-provider-preview` previews external Recents with synthetic resources and no backend.
 //! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
 //!
 //! `--monitor 1366x768 --window-top 31` simulates the display the window is on (in points) and
@@ -33,6 +34,20 @@ fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
 }
 
+fn file_provider_preview() -> Result<photocraft_ui_egui::file_providers::Host, String> {
+    use photocraft_ui_egui::file_providers::{Host, Resource};
+    let host = Host::default();
+    host.set_session("snapshot-provider-preview".into())?;
+    let connection = host.connect("snapshot-storage".into(), "Example Storage".into(), "preview-account".into())?;
+    let resources = ["Drawing.psd", "Poster.pcraft", "Photo.png"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| Resource { id: format!("preview-{index}"), name: name.into(), updated_at: String::new() })
+        .collect();
+    host.set_resources(&connection, resources)?;
+    Ok(host)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let out = arg(&args, "--out").unwrap_or_else(|| "snapshot.png".into());
@@ -45,7 +60,20 @@ fn main() {
     let script: Vec<(String, Value)> =
         arg(&args, "--script").map(|s| serde_json::from_str::<Vec<(String, Value)>>(&s).expect("--script must be [[method, params], …]")).unwrap_or_default();
 
+    let file_provider = if args.iter().any(|arg| arg == "--file-provider-preview") {
+        match file_provider_preview() {
+            Ok(host) => Some(host),
+            Err(error) => {
+                eprintln!("file-provider preview: {error}");
+                std::process::exit(2);
+            }
+        }
+    } else {
+        None
+    };
+
     let services = Services {
+        file_provider,
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
         })),

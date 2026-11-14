@@ -33,10 +33,10 @@ use render::submenu_enabled;
 #[cfg(test)]
 use search::HELP_SEARCH_MAX;
 pub use search::{search_items, search_rank};
-pub use state::is_enabled;
-pub(crate) use state::reveal_label;
 #[cfg(test)]
-use state::{checked, translated_menu_label};
+use state::checked;
+pub use state::is_enabled;
+pub(crate) use state::{reveal_label, translated_menu_label};
 
 /// Shared gate for native menu clicks and control-channel `ui.menu.invoke`.
 /// Dialogs and unsaved-changes prompts block edits, but allow the four view-navigation

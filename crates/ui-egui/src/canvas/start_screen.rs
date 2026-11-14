@@ -221,7 +221,20 @@ fn render_start_content(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[St
 
     ui.add_space(24.0);
 
+    let show_recent = app.session.prefs().interface.show_home_recent_files;
+    if show_recent {
+        crate::file_providers::home_recent(app, ui);
+    }
     if recent.is_empty() {
+        if show_recent && app.services.file_provider.as_ref().is_some_and(|provider| provider.connected()) {
+            ui.add_space(16.0);
+            ui.label(egui::RichText::new(tl!("Local Recent Files")).strong());
+            ui.label(if cfg!(target_arch = "wasm32") {
+                tl!("Use the browser file picker to reopen a file from this device.")
+            } else {
+                tl!("There are no recent local files.")
+            });
+        }
         render_first_run_content(app, ui, content_w);
     } else {
         crate::home_recent_ui::show_home_recent(app, ui, recent, content_w);
@@ -281,3 +294,38 @@ pub(crate) fn start_screen_drop_hint(_app: &PhotocraftApp) -> std::borrow::Cow<'
 
 /// Recent files listed on the Home screen.
 const HOME_RECENT: usize = 11;
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    #[test]
+    fn provider_sections_preserve_the_current_home_grid_and_local_files() {
+        for width in [480.0, 1100.0] {
+            let provider = crate::file_providers::Host::default();
+            provider.set_session("home-provider-instance".into()).unwrap();
+            let connection = provider.connect("storage".into(), "Example Storage".into(), "account".into()).unwrap();
+            provider
+                .set_resources(&connection, vec![crate::file_providers::Resource { id: "remote".into(), name: "Remote.psd".into(), updated_at: String::new() }])
+                .unwrap();
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider), ..Default::default() });
+            app.ui.recent_files = vec!["Local.psd".into()];
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(width, 760.0))
+                .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, Default::default()))
+                .build_ui_state(|ui, app| start_screen(app, ui), app);
+            h.run_steps(2);
+            assert!(h.query_by_label("Remote.psd").is_some());
+            assert!(h.query_by_label("Local Recent Files").is_some());
+            assert!(h.query_by_label("Local.psd").is_some());
+            h.get_by_label("List view").click();
+            h.run_steps(2);
+            assert!(!h.state().ui.chrome.home_recent_grid);
+            assert!(h.query_by_label("Remote.psd").is_some());
+            assert!(h.query_by_label("Local.psd").is_some());
+            assert_eq!(h.state().ui.recent_files, ["Local.psd"]);
+        }
+    }
+}

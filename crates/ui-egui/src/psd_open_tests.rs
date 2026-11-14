@@ -2,8 +2,9 @@
 //! The exact same generated files exercise IO, the synchronous web-style path,
 //! background opening and the agent-visible dialog commands.
 
+// Provider regressions share this owner so the fixture is loaded once per UI test crate.
 #[path = "../../io/tests/support/recovery_psd.rs"]
-mod recovery_psd;
+pub(super) mod recovery_psd;
 
 use crate::{PhotocraftApp, Services, control};
 use photocraft_engine::Session;

@@ -32,6 +32,7 @@ pub mod dock;
 pub(crate) mod edit_session;
 pub mod file_dialog;
 pub mod file_open;
+pub mod file_providers;
 pub mod frame_stages;
 pub mod gpu_memo;
 pub mod gpu_status;
@@ -1085,6 +1086,8 @@ mod brush_hud_rate_tests;
 mod brush_opacity_minimum_tests;
 #[cfg(test)]
 mod burn_default_tip_tests;
+#[cfg(test)]
+mod file_provider_tests;
 
 #[cfg(test)]
 mod pencil_shift_digit_opacity_tests;
