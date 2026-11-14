@@ -526,6 +526,8 @@ mod cmds;
 mod customize;
 mod files;
 #[cfg(test)]
+mod legacy_channel_tests;
+#[cfg(test)]
 mod legacy_undo_tests;
 mod shortcuts;
 mod store;
@@ -535,8 +537,8 @@ pub use cmds::specs;
 #[cfg(test)]
 pub(crate) use files::write_files_atomically;
 pub use shortcuts::{
-    ALTERNATE_SHORTCUTS, BindKind, LEGACY_UNDO_SHORTCUTS, MAX_ALTERNATES, MIXER_BRUSH_COMMANDS, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts,
-    default_alternates, normalize_shortcut, reserved_shortcut, undo_key,
+    ALTERNATE_SHORTCUTS, BindKind, LEGACY_CHANNEL_SHORTCUTS, LEGACY_UNDO_SHORTCUTS, MAX_ALTERNATES, MIXER_BRUSH_COMMANDS, TEMPORARY_TOOLS, alternate_keys,
+    bindable_items, conflicts, default_alternates, normalize_shortcut, replaced_by_legacy_channel_keys, reserved_shortcut, undo_key,
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
@@ -1410,6 +1412,9 @@ pub struct Preferences {
     /// launch ([`PrefsStore::launch`]). Not saved, and no later edit changes it.
     #[serde(skip)]
     pub legacy_undo_keys: bool,
+    /// Edit › Keyboard Shortcuts › Use Legacy Channel Shortcuts (#14325): in an RGB document
+    /// ⌘1…⌘7 target the channels one key lower ([`LEGACY_CHANNEL_SHORTCUTS`]). Takes effect at once.
+    pub use_legacy_channel_shortcuts: bool,
     pub menus: MenuCustomization,
     pub toolbar: ToolbarCustomization,
     /// Edit › Check Spelling: words added to the dictionary ("Add").
