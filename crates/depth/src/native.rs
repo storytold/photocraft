@@ -86,6 +86,16 @@ impl Model {
         let cropped = crop_resample(&flat, ow, oh, side, pw, ph);
         postprocess(&cropped, prep.width, prep.height)
     }
+
+    /// High-quality estimate: a global pass plus overlapping tiles at the network's full
+    /// resolution, each fitted to the global map and feather-blended.
+    /// `rgb` is interleaved 0..1 at the working resolution chosen by the caller and the result is
+    /// at that resolution (0..1, larger = nearer). At most `max_tiles` (up to
+    /// [`crate::MAX_TILES`]) tiles are used. `interrupt` gets increasing fractions before each
+    /// network pass and returns true to cancel.
+    pub fn estimate_tiled(&self, rgb: &[f32], w: u32, h: u32, max_tiles: u32, interrupt: &dyn Fn(f32) -> bool) -> Result<DepthMap, DepthError> {
+        crate::estimate_tiled_with(&|r, tw, th| self.estimate(r, tw, th, &|_| false), rgb, w, h, max_tiles, interrupt)
+    }
 }
 
 /// The `pw x ph` top-left part of a `side x side` input, sampled bilinearly (pixel centres) from an
@@ -165,6 +175,46 @@ mod tests {
         let map = model.estimate(&rgb, w, h, &|_| false).unwrap();
         assert!(map.data.iter().all(|v| v.is_finite()));
         let (lo, hi) = map.data.iter().fold((1.0f32, 0.0f32), |(a, b), &v| (a.min(v), b.max(v)));
+        assert!(hi - lo > 0.5);
+    }
+
+    #[test]
+    #[ignore = "needs the real weights in PHOTOCRAFT_DEPTH_WEIGHTS_DIR"]
+    fn real_weights_tiled_if_present() {
+        let Some(dir) = std::env::var_os("PHOTOCRAFT_DEPTH_WEIGHTS_DIR") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        let (Ok(a), Ok(b)) = (std::fs::read(dir.join(crate::WEIGHTS[0].name)), std::fs::read(dir.join(crate::WEIGHTS[1].name))) else {
+            return;
+        };
+        let model = Model::load(&a, &b).unwrap();
+        // A synthetic 1600 x 1200 scene: a gradient with a bright disc.
+        let (w, h) = (1600u32, 1200u32);
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - 800.0, y as f32 - 600.0);
+                let v = if dx * dx + dy * dy < 250.0 * 250.0 { 0.9 } else { 0.2 + 0.4 * x as f32 / w as f32 };
+                rgb.extend([v, v * 0.8, 1.0 - v]);
+            }
+        }
+        let t = std::time::Instant::now();
+        let fast = model.estimate(&rgb, w, h, &|_| false).unwrap();
+        let fast_t = t.elapsed();
+        assert!(fast.data.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+        let t = std::time::Instant::now();
+        let seen = std::cell::Cell::new(0.0f32);
+        let high = model
+            .estimate_tiled(&rgb, w, h, 16, &|f| {
+                assert!(f >= seen.get());
+                seen.set(f);
+                false
+            })
+            .unwrap();
+        let high_t = t.elapsed();
+        eprintln!("fast {fast_t:?}, high {high_t:?} ({} tiles)", crate::tile_count(w, h, 16));
+        assert_eq!((high.width, high.height), (w, h));
+        assert!(high.data.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+        let (lo, hi) = high.data.iter().fold((1.0f32, 0.0f32), |(a, b), &v| (a.min(v), b.max(v)));
         assert!(hi - lo > 0.5);
     }
 }

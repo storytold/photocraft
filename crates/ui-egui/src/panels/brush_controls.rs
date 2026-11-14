@@ -160,6 +160,8 @@ pub(super) fn surface_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mu
         if estimate.clicked() {
             estimate_depth = true;
         }
+        widgets::checkbox(ui, &mut s.depth_high_quality, tl!("High Quality"))
+            .on_hover_text(tl!("Estimate depth in overlapping tiles for finer folds and edges (slower)"));
         ui.separator();
         widgets::checkbox(ui, &mut s.perspective, tl!("Follow Perspective"))
             .on_hover_text(tl!("Dabs follow the perspective planes defined in Vanishing Point"));

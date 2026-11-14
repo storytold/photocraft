@@ -479,7 +479,7 @@ impl PlaneSurface {
 }
 
 /// Target block (pixels per grid cell side) of a [`DepthGeometry`] grid.
-const DEPTH_BLOCK: usize = 4;
+const DEPTH_BLOCK: usize = 2;
 /// Most cells a [`DepthGeometry`] grid may have; larger areas get a coarser block.
 const DEPTH_MAX_CELLS: usize = 1 << 22;
 /// Tilt gain on the normalised slope `s = |∇D| / p90`: `g = relief * TILT_GAIN * s` and
@@ -496,6 +496,10 @@ const STEP_RADIUS: f64 = 0.35;
 pub const FOOTPRINT_RAYS: usize = 32;
 /// Most march steps of one footprint ray.
 const FOOTPRINT_STEPS: usize = 64;
+/// A depth jump over one step is an occlusion edge when it exceeds `EDGE_K * p90 * step` ...
+const EDGE_K: f64 = 6.0;
+/// ... and at least this much depth (0..1), so noise on a nearly flat photo is no edge.
+const EDGE_MIN_JUMP: f64 = 0.02;
 /// Squashes below this are clamped (a dab on a steep slope stays visible).
 const DEPTH_MIN_SQUASH: f64 = 0.15;
 /// Smallest dab scale from `size_by_depth`, so the far plane does not shrink dabs to nothing.
@@ -504,7 +508,7 @@ const DEPTH_MIN_SCALE: f64 = 0.05;
 /// A depth plane (0..1 per pixel, larger = nearer) as a brush surface: the local slope of depth
 /// under a point tilts and shrinks the dab.
 ///
-/// The plane is reduced to a grid of area means (block about 4 px, coarser if the grid would pass
+/// The plane is reduced to a grid of area means (block about 2 px, coarser if the grid would pass
 /// 2^22 cells), lightly smoothed (a 3-tap box per axis, edge-clamped, which removes the stair
 /// steps of an 8-bit channel), so a lookup costs a few bilinear samples at any image size.
 ///
@@ -569,12 +573,7 @@ impl DepthGeometry {
         if !finite {
             return Err("depth plane has non-finite values".into());
         }
-        let mut block = DEPTH_BLOCK;
-        let cells = |b: usize| w.div_ceil(b).saturating_mul(h.div_ceil(b));
-        while cells(block) > DEPTH_MAX_CELLS {
-            block += 1;
-        }
-        let (gw, gh) = (w.div_ceil(block), h.div_ceil(block));
+        let (block, gw, gh) = Self::grid_dims(w, h);
         // Area means, one band of `block` rows per grid row (bands are independent).
         let mut mean = vec![0.0f32; gw * gh];
         let band = |(gy, out): (usize, &mut [f32])| {
@@ -600,6 +599,71 @@ impl DepthGeometry {
         }
         #[cfg(target_arch = "wasm32")]
         mean.chunks_mut(gw).enumerate().for_each(band);
+        Ok(Self::from_means(area, block, gw, gh, mean))
+    }
+
+    /// Grid block and size for a `w` x `h` pixel area (coarser than [`DEPTH_BLOCK`] past the cap).
+    fn grid_dims(w: usize, h: usize) -> (usize, usize, usize) {
+        let mut block = DEPTH_BLOCK;
+        let cells = |b: usize| w.div_ceil(b).saturating_mul(h.div_ceil(b));
+        while cells(block) > DEPTH_MAX_CELLS {
+            block += 1;
+        }
+        (block, w.div_ceil(block), h.div_ceil(block))
+    }
+
+    /// Build from a full-precision `plane` of `pw` x `ph` values (row-major, 0..1, larger =
+    /// nearer) that covers `area` at its own resolution, which may differ from the area's (a
+    /// depth estimate is often smaller than the photo). Each grid cell is the mean of four
+    /// bilinear samples of the plane over the cell, so a plane finer than the 8-bit channel keeps
+    /// its narrow folds. Errors for an empty area or plane, a length mismatch or a non-finite value.
+    pub fn from_plane(area: Rect, plane: &[f32], pw: usize, ph: usize) -> Result<Self, String> {
+        let (w, h) = (i64::from(area.x1) - i64::from(area.x0), i64::from(area.y1) - i64::from(area.y0));
+        if w <= 0 || h <= 0 || pw == 0 || ph == 0 {
+            return Err("empty depth area".into());
+        }
+        let (w, h) = (w as usize, h as usize);
+        if pw.checked_mul(ph) != Some(plane.len()) {
+            return Err("depth plane does not match its size".into());
+        }
+        if plane.iter().any(|v| !v.is_finite()) {
+            return Err("depth plane has non-finite values".into());
+        }
+        let (block, gw, gh) = Self::grid_dims(w, h);
+        let at = |x: usize, y: usize| plane.get(y * pw + x).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+        // Bilinear sample at document-relative pixel position (px, py), pixel centres at +0.5.
+        let bilinear = |px: f64, py: f64| -> f32 {
+            let u = (px * pw as f64 / w as f64 - 0.5).clamp(0.0, (pw - 1) as f64);
+            let v = (py * ph as f64 / h as f64 - 0.5).clamp(0.0, (ph - 1) as f64);
+            let (x0, y0) = (u.floor() as usize, v.floor() as usize);
+            let (x1, y1) = ((x0 + 1).min(pw - 1), (y0 + 1).min(ph - 1));
+            let (tx, ty) = ((u - x0 as f64) as f32, (v - y0 as f64) as f32);
+            let top = at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx;
+            let bot = at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx;
+            top * (1.0 - ty) + bot * ty
+        };
+        let mut mean = vec![0.0f32; gw * gh];
+        let row = |(gy, out): (usize, &mut [f32])| {
+            let (ya, yb) = (gy * block, ((gy + 1) * block).min(h));
+            let (qy0, qy1) = (ya as f64 + 0.25 * (yb - ya) as f64, ya as f64 + 0.75 * (yb - ya) as f64);
+            for (gx, o) in out.iter_mut().enumerate() {
+                let (xa, xb) = (gx * block, ((gx + 1) * block).min(w));
+                let (qx0, qx1) = (xa as f64 + 0.25 * (xb - xa) as f64, xa as f64 + 0.75 * (xb - xa) as f64);
+                *o = (bilinear(qx0, qy0) + bilinear(qx1, qy0) + bilinear(qx0, qy1) + bilinear(qx1, qy1)) / 4.0;
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            mean.par_chunks_mut(gw).enumerate().for_each(row);
+        }
+        #[cfg(target_arch = "wasm32")]
+        mean.chunks_mut(gw).enumerate().for_each(row);
+        Ok(Self::from_means(area, block, gw, gh, mean))
+    }
+
+    /// Smooth the grid of area means and derive the slope scale and median.
+    fn from_means(area: Rect, block: usize, gw: usize, gh: usize, mean: Vec<f32>) -> Self {
         let grid = smooth_grid(&mean, gw, gh);
         let median = quantile(&mut grid.clone(), 0.5).unwrap_or(0.5);
         // Central differences over one cell (clamped at the edges), in depth per pixel.
@@ -618,7 +682,7 @@ impl DepthGeometry {
             }
         }
         let slope_scale = quantile(&mut mags, 0.9).filter(|s| s.is_finite() && *s > 0.0);
-        Ok(Self { area, block, gw, gh, grid, slope_scale, median })
+        Self { area, block, gw, gh, grid, slope_scale, median }
     }
 
     /// The median depth of the grid: the photo's middle distance, where the brush size is meant
@@ -635,6 +699,32 @@ impl DepthGeometry {
 
     pub fn area(&self) -> Rect {
         self.area
+    }
+
+    /// The depth jump (0..1) over `dist` pixels that counts as an occlusion edge.
+    fn edge_jump(&self, dist: f64) -> f64 {
+        self.slope_scale.map_or(f64::INFINITY, |p90| (EDGE_K * f64::from(p90) * dist).max(EDGE_MIN_JUMP))
+    }
+
+    /// The depth gradient along one axis from the samples at the centre and `step` pixels either
+    /// side. Central differences, except next to an occlusion edge: when only one side jumps,
+    /// the gradient is taken on the centre's own side (the jump is another surface, and would
+    /// corrupt the direction); when both do, the gentler side.
+    fn axis_gradient(&self, centre: f64, plus: f64, minus: f64, step: f64) -> f64 {
+        let (fwd, bwd) = ((plus - centre) / step, (centre - minus) / step);
+        let limit = self.edge_jump(step);
+        match ((plus - centre).abs() > limit, (centre - minus).abs() > limit) {
+            (false, false) => (fwd + bwd) / 2.0,
+            (true, false) => bwd,
+            (false, true) => fwd,
+            (true, true) => {
+                if fwd.abs() < bwd.abs() {
+                    fwd
+                } else {
+                    bwd
+                }
+            }
+        }
     }
 
     /// Bilinear sample at pixel position `(x, y)` (document coordinates); cell centres sit at
@@ -674,8 +764,11 @@ impl DepthGeometry {
         }
         let relief = f64::from(relief.clamp(0.0, 1.0));
         let step = (f64::from(radius) * STEP_RADIUS).max(self.block as f64);
-        let gx = (self.sample(x + step, y) - self.sample(x - step, y)) / (2.0 * step);
-        let gy = (self.sample(x, y + step) - self.sample(x, y - step)) / (2.0 * step);
+        let centre = self.sample(x, y);
+        let (xp, xm) = (self.sample(x + step, y), self.sample(x - step, y));
+        let (yp, ym) = (self.sample(x, y + step), self.sample(x, y - step));
+        let gx = self.axis_gradient(centre, xp, xm, step);
+        let gy = self.axis_gradient(centre, yp, ym, step);
         let mag = gx.hypot(gy);
         let g = self.slope_scale.map_or(0.0, |p90| relief * TILT_GAIN * mag / f64::from(p90));
         let squash = (1.0 / (1.0 + g * g).sqrt()).max(DEPTH_MIN_SQUASH);
@@ -697,7 +790,9 @@ impl DepthGeometry {
     /// covers `sqrt(1 + t²) · ds` of surface, with `t = relief * 3.18 * (dD/ds) / p90`: the
     /// normalised tilt of [`local`](Self::local), so a ray on a uniform slope ends at
     /// `radius / sqrt(1 + g²)`, the squash. The ray stops when the surface length reaches the
-    /// radius, and is clamped to `[0.15 * radius, radius]`. A flat depth gives a circle.
+    /// radius, and is clamped to `[0.15 * radius, radius]`. A flat depth gives a circle. A ray also stops where one
+    /// step's depth jump exceeds `max(6 * p90 * step, 0.02)` (an occlusion edge, so the dab does not
+    /// spill onto the surface behind): it may then be shorter than `0.15 * radius`, down to 1 px.
     ///
     /// `None` for non-finite arguments, a non-positive radius and points outside the area.
     pub fn footprint(&self, x: f64, y: f64, radius_px: f32, relief: f32) -> Option<[f32; FOOTPRINT_RAYS]> {
@@ -714,14 +809,21 @@ impl DepthGeometry {
         let Some(p90) = self.slope_scale.map(f64::from).filter(|_| relief > 0.0) else { return Some(rays) };
         let ds = (r / 16.0).max(0.5);
         let gain = relief * TILT_GAIN / p90;
+        let edge = self.edge_jump(ds);
         for (k, ray) in rays.iter_mut().enumerate() {
             let (sn, cs) = (k as f64 * std::f64::consts::TAU / FOOTPRINT_RAYS as f64).sin_cos();
             // Image y points down.
             let (dx, dy) = (cs, -sn);
             let (mut t, mut surface) = (0.0f64, 0.0f64);
             let mut here = self.sample(x, y);
+            let mut cut = false;
             for _ in 0..FOOTPRINT_STEPS {
                 let next = self.sample(x + dx * (t + ds), y + dy * (t + ds));
+                if (next - here).abs() > edge {
+                    // An occlusion edge: the dab stops here instead of spilling onto the surface behind.
+                    cut = true;
+                    break;
+                }
                 let tilt = gain * (next - here) / ds;
                 let seg = (1.0 + tilt * tilt).sqrt() * ds;
                 if surface + seg >= r {
@@ -732,7 +834,7 @@ impl DepthGeometry {
                 t += ds;
                 here = next;
             }
-            *ray = t.clamp(0.15 * r, r) as f32;
+            *ray = if cut { t.clamp(1.0f64.min(r), r) } else { t.clamp(0.15 * r, r) } as f32;
         }
         rays.iter().all(|v| v.is_finite()).then_some(rays)
     }
@@ -1111,5 +1213,107 @@ mod tests {
         // Off the middle of the ridge the outline is not symmetric.
         assert!(east < west - 0.5, "{east} {west}");
         assert!(rays.iter().all(|r| (3.6 - 1e-4..=24.0 + 1e-4).contains(r)));
+    }
+
+    fn area(w: usize, h: usize) -> Rect {
+        Rect { x0: 0, y0: 0, x1: w as i32, y1: h as i32 }
+    }
+
+    /// A `pw` x `ph` plane of `f(u, v)` with `u`, `v` in 0..1 (pixel centres).
+    fn plane(pw: usize, ph: usize, f: impl Fn(f32, f32) -> f32) -> Vec<f32> {
+        (0..ph).flat_map(|y| (0..pw).map(move |x| (x, y))).map(|(x, y)| f((x as f32 + 0.5) / pw as f32, (y as f32 + 0.5) / ph as f32)).collect()
+    }
+
+    #[test]
+    fn from_plane_matches_new_at_any_plane_resolution() {
+        let f = |u: f32, _v: f32| u;
+        let reference = DepthGeometry::new(area(200, 100), &plane(200, 100, f)).unwrap();
+        let want = reference.local(100.0, 50.0, 10.0, 1.0, true).unwrap();
+        for (pw, ph) in [(200, 100), (100, 50), (400, 200), (37, 11)] {
+            let g = DepthGeometry::from_plane(area(200, 100), &plane(pw, ph, f), pw, ph).unwrap();
+            let got = g.local(100.0, 50.0, 10.0, 1.0, true).unwrap();
+            assert!((got.0 - want.0).abs() < 0.03 && (got.2 - want.2).abs() < 0.03, "{pw}x{ph}: {got:?} vs {want:?}");
+        }
+    }
+
+    #[test]
+    fn from_plane_rejects_bad_input() {
+        let r = area(8, 8);
+        assert!(DepthGeometry::from_plane(r, &[0.5; 15], 4, 4).is_err());
+        assert!(DepthGeometry::from_plane(r, &[], 0, 0).is_err());
+        assert!(DepthGeometry::from_plane(Rect::EMPTY, &[0.5; 16], 4, 4).is_err());
+        let mut d = vec![0.5; 16];
+        d[3] = f32::NAN;
+        assert!(DepthGeometry::from_plane(r, &d, 4, 4).is_err());
+        assert!(DepthGeometry::from_plane(r, &[0.5; 16], 4, 4).is_ok());
+    }
+
+    #[test]
+    fn a_full_precision_plane_resolves_a_fold_that_eight_bit_levels_flatten() {
+        // A faint, narrow fold (amplitude 0.012, period 24 px: 3 levels of an 8-bit channel) on a
+        // gentle ramp. Quantised to 8 bits the fold is a few stair steps; the f32 plane keeps it.
+        let (w, h) = (480usize, 40usize);
+        let f = |u: f32, _: f32| 0.3 + 0.2 * u + 0.012 * (std::f32::consts::TAU * u * w as f32 / 24.0).sin();
+        let exact = plane(w, h, f);
+        let quant: Vec<f32> = exact.iter().map(|v| (v * 255.0).round() / 255.0).collect();
+        let precise = DepthGeometry::from_plane(area(w, h), &exact, w, h).unwrap();
+        let coarse = DepthGeometry::new(area(w, h), &quant).unwrap();
+        // Flank (the sine's rising crossing) and crest; the contrast is how well the fold shows.
+        let contrast = |g: &DepthGeometry| {
+            let flank = g.local(240.0, 20.0, 8.0, 1.0, false).unwrap().2;
+            let crest = g.local(246.0, 20.0, 8.0, 1.0, false).unwrap().2;
+            crest - flank
+        };
+        let (p, c) = (contrast(&precise), contrast(&coarse));
+        assert!(p > 0.15, "the precise plane shows the fold: {p}");
+        assert!(p > c + 0.03, "precise {p} vs quantised {c}");
+    }
+
+    /// Near on the left (D 0.8), far on the right (D 0.2), the step at x = 100, with a gentle
+    /// ramp along y so the photo's slope scale is a normal slope, not the step's.
+    fn step_geometry() -> DepthGeometry {
+        ramp(200, 100, |x, y| (if x < 100 { 0.8 } else { 0.2 }) + 0.0008 * y as f32)
+    }
+
+    #[test]
+    fn an_occlusion_edge_stops_the_rays_that_cross_it() {
+        let g = step_geometry();
+        let rays = g.footprint(94.0, 50.0, 40.0, 1.0).unwrap();
+        // Ray 0 points east at the edge 6 px away: cut at it, far below the old 0.15 * r = 6 floor.
+        assert!(rays[0] < 5.9 && rays[0] >= 1.0, "east {}", rays[0]);
+        for k in [1, 2, 31, 30] {
+            assert!(rays[k] < 40.0 * 0.5, "ray {k} leans east and is cut or short: {}", rays[k]);
+        }
+        // The ray straight away from the edge is untouched (the others feel the gentle y tilt).
+        assert!((rays[16] - 40.0).abs() < 0.5, "west {}", rays[16]);
+        // A centre on the far side is cut towards the edge only (west), not eastwards.
+        let far = g.footprint(106.0, 50.0, 40.0, 1.0).unwrap();
+        assert!(far[16] < 5.9 && (far[0] - 40.0).abs() < 0.5, "{} {}", far[16], far[0]);
+        // A small brush at the edge: cut rays keep 1 px, the others the usual 0.15 r floor.
+        let small = g.footprint(99.5, 50.0, 4.0, 0.5).unwrap();
+        assert!(small.iter().all(|r| (0.6 - 1e-4..=4.0).contains(r)) && small[0] >= 1.0, "{small:?}");
+    }
+
+    #[test]
+    fn a_gentle_fold_is_not_an_edge() {
+        // The ridge of the other footprint tests is steep but continuous: its rays keep the old floor.
+        let ridge = |x: usize| if x < 100 { 0.5 * x as f32 / 100.0 } else { (0.5 - 0.5 * (x as f32 - 100.0) / 20.0).max(0.0) };
+        let g = ramp(240, 100, |x, _| ridge(x));
+        let rays = g.footprint(92.0, 50.0, 24.0, 1.0).unwrap();
+        assert!(rays.iter().all(|r| *r >= 3.6 - 1e-4), "{rays:?}");
+    }
+
+    #[test]
+    fn next_to_an_edge_the_gradient_is_taken_on_the_centres_side() {
+        // Near side tilts along +y (D rises downwards); the step to the far surface is 7 px east of
+        // the centre, within the gradient step of radius 20.
+        let g = ramp(200, 100, |x, y| (if x < 100 { 0.6 } else { 0.1 }) + 0.004 * y as f32);
+        let (_, angle, squash) = g.local(96.0, 50.0, 20.0, 1.0, false).unwrap();
+        // Compressed axis along the tilt: y-up angle -90 deg. The jump would have turned it to 0 deg.
+        assert!((angle + std::f32::consts::FRAC_PI_2).abs() < 0.15, "{angle}");
+        assert!(squash < 0.9, "{squash}");
+        // Far side of the step: the same, from its own side.
+        let (_, angle, _) = g.local(104.0, 50.0, 20.0, 1.0, false).unwrap();
+        assert!((angle + std::f32::consts::FRAC_PI_2).abs() < 0.15, "{angle}");
     }
 }

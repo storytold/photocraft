@@ -330,15 +330,28 @@ fn depth_geometry(s: &Session, cmd: &str, name: &str) -> Result<Arc<DepthGeometr
     let channel = st.doc.channels.iter().find(|c| c.name == name).ok_or_else(|| bad(cmd, format!("no {name} channel: run Image ▸ Estimate Depth")))?;
     let canvas = st.doc.bounds();
     check_size(canvas, cmd)?;
-    // The channel is grayscale at the document depth; its first channel is the depth.
-    let n = channel.surface.channels().max(1);
-    let data = crate::allocation::read_region(&channel.surface, canvas, "the depth channel")?;
-    let depth: Vec<f32> = if n == 1 { data } else { data.chunks_exact(n).map(|c| c.first().copied().unwrap_or(0.0)).collect() };
-    let geometry = Arc::new(DepthGeometry::new(canvas, &depth).map_err(|e| bad(cmd, e))?);
+    // The estimator's full-precision plane while the channel is unchanged since the estimate (it
+    // keeps narrow folds the quantised channel loses); else the channel itself.
+    let geometry = if let Some((plane, pw, ph)) = precise_plane(s, st.doc.id, name, &channel.surface) {
+        DepthGeometry::from_plane(canvas, &plane, pw as usize, ph as usize).map_err(|e| bad(cmd, e))?
+    } else {
+        // The channel is grayscale at the document depth; its first channel is the depth.
+        let n = channel.surface.channels().max(1);
+        let data = crate::allocation::read_region(&channel.surface, canvas, "the depth channel")?;
+        let depth: Vec<f32> = if n == 1 { data } else { data.chunks_exact(n).map(|c| c.first().copied().unwrap_or(0.0)).collect() };
+        DepthGeometry::new(canvas, &depth).map_err(|e| bad(cmd, e))?
+    };
+    let geometry = Arc::new(geometry);
     s.surface_cache.depth_builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     *lock(&s.surface_cache.depth) =
         Some(DepthEntry { doc: st.doc.id, name: name.to_string(), surface: channel.surface.clone(), area: canvas, geometry: geometry.clone() });
     Ok(geometry)
+}
+
+/// The full-precision depth plane of channel `name` (row-major `(w, h)` over the document bounds,
+/// possibly at reduced resolution), when the channel is unchanged since the estimate.
+fn precise_plane(s: &Session, doc: DocId, name: &str, surface: &photocraft_raster::Surface) -> Option<(Arc<Vec<f32>>, u32, u32)> {
+    crate::depth_cmds::precise_depth_plane(s, doc, name, surface)
 }
 
 /// The cached depth geometry for channel `name`, if the channel's pixels are the ones it was

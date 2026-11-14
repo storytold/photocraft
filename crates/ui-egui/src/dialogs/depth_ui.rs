@@ -70,8 +70,9 @@ fn status(app: &mut PhotocraftApp) -> Result<Value, String> {
 
 /// Run `image.estimateDepth` into the brush's depth channel, as a background job when jobs are on.
 pub fn estimate(app: &mut PhotocraftApp) {
-    let channel = app.session.tools.brush.surface.depth_channel.clone();
-    if let Err(e) = app.run("image.estimateDepth", json!({"channel": channel})) {
+    let surface = &app.session.tools.brush.surface;
+    let (channel, quality) = (surface.depth_channel.clone(), if surface.depth_high_quality { "high" } else { "fast" });
+    if let Err(e) = app.run("image.estimateDepth", json!({"channel": channel, "quality": quality})) {
         match app.ui.depth_dialog.as_mut() {
             Some(d) => d.error = Some(e),
             None => {

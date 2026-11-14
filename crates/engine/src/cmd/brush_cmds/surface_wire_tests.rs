@@ -677,3 +677,22 @@ fn all_layers_leaves_out_the_layer_being_painted() {
     };
     assert!(with(&before) != with(&after), "the stroke is in the composite");
 }
+
+#[test]
+fn a_depth_stroke_next_to_an_occlusion_edge_does_not_spill_onto_the_far_surface() {
+    // Near on the left, far on the right, the step at x = 100; a gentle ramp along y keeps the
+    // photo's slope scale a normal slope.
+    let mut s = depth_doc(200, 100, "Depth", |x, y| (if x < 100 { 0.8 } else { 0.2 }) + 0.0008 * y as f32);
+    let brush = json!({"size": 40, "hardness": 1, "surface": {"depth": true, "relief": 1.0, "sizeByDepth": false}});
+    s.execute("paint.stroke", json!({"points": [[92, 20], [92, 80]], "color": "#c02020", "target": "pixels", "brush": brush.clone()})).unwrap();
+    let surf = layer_surface(&s);
+    let painted = |x: i32, y: i32| surf.rgba(x, y)[3] > 0.0;
+    assert!((20..80).any(|y| painted(92, y)), "the near side is painted");
+    // Nothing past the edge (one pixel of antialiasing at most).
+    let spill = (0..100).flat_map(|y| (102..200).map(move |x| (x, y))).filter(|&(x, y)| painted(x, y)).count();
+    assert_eq!(spill, 0, "the dab must stop at the depth jump");
+    // The cursor outline agrees: the east ray is cut at the edge.
+    s.execute("tools.setBrush", brush).unwrap();
+    let c = brush_cursor_shape(&mut s, 92.0, 50.0, 20.0).unwrap();
+    assert!(c.outline.unwrap()[0] < 12.0);
+}

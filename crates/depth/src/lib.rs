@@ -9,6 +9,9 @@
 
 use std::fmt;
 
+mod tiled;
+pub use tiled::{MAX_TILES, TileRect, estimate_tiled_with, merge_tiles, plan_tiles, resample_plane, tile_count};
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
@@ -235,6 +238,10 @@ mod stub {
         }
 
         pub fn estimate(&self, _rgb: &[f32], _w: u32, _h: u32, _interrupt: &dyn Fn(f32) -> bool) -> Result<DepthMap, DepthError> {
+            Err(DepthError::Unsupported)
+        }
+
+        pub fn estimate_tiled(&self, _rgb: &[f32], _w: u32, _h: u32, _max_tiles: u32, _interrupt: &dyn Fn(f32) -> bool) -> Result<DepthMap, DepthError> {
             Err(DepthError::Unsupported)
         }
     }

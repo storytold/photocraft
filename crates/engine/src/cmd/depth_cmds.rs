@@ -7,13 +7,14 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use photocraft_depth::{DepthError, DepthMap, MAX_PIXELS, Model, WEIGHTS, WeightFile};
-use photocraft_doc::{AlphaChannel, Document};
+use photocraft_doc::{AlphaChannel, DocId, Document};
 use photocraft_geom::Rect;
+use photocraft_raster::Surface;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -47,12 +48,66 @@ fn boxed<F: Fn(&[f32], u32, u32, &dyn Fn(f32) -> bool) -> Result<DepthMap> + Sen
 
 /// Name of the file that remembers which downloads passed their sha256 check.
 const MARKER: &str = "verified.txt";
-/// Longest side handed to the network (it resizes to 518 anyway).
+/// Longest side handed to the network in `fast` quality (it resizes to 518 anyway).
 const MODEL_INPUT_SIDE: usize = 1024;
+/// Longest side of the working image in `high` quality: four network widths, tiled.
+const HIGH_INPUT_SIDE: usize = photocraft_depth::MODEL_SIZE as usize * 4;
+/// Most tiles `high` quality may use.
+const HIGH_MAX_TILES: u32 = photocraft_depth::MAX_TILES;
+/// Most floats of full-precision plane the session keeps (the refined plane is at most 4096 x 4096).
+const MAX_PRECISE_FLOATS: usize = 1 << 26;
 /// Longest side of the grid the depth is refined on, before it is stretched to the document.
 const REFINE_SIDE: usize = 4096;
 const MAX_NAME: usize = 255;
 const NOT_INSTALLED: &str = "depth model not installed: run depth.downloadModel";
+
+/// How carefully `image.estimateDepth` works.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Quality {
+    /// One network pass over the whole image (depth sample every ~13 px on a 7000 px photo).
+    Fast,
+    /// A global pass plus overlapping full-resolution tiles on a larger working image.
+    High,
+}
+
+impl Quality {
+    fn name(self) -> &'static str {
+        match self {
+            Quality::Fast => "fast",
+            Quality::High => "high",
+        }
+    }
+}
+
+/// The full-precision depth plane of the last estimate and what it belongs to.
+struct PreciseDepth {
+    doc: DocId,
+    channel: String,
+    /// The channel as written, to tell later whether it was edited since.
+    surface: Surface,
+    plane: Arc<Vec<f32>>,
+    width: u32,
+    height: u32,
+}
+
+/// The float depth plane written by the last `image.estimateDepth`, if the channel `channel_name`
+/// of document `doc` still is exactly what that command wrote.
+///
+/// Contract: `current_channel_surface` is the channel's surface as it is now; it is compared with
+/// the surface the estimate wrote (`Surface ==`, which is cheap while the tiles are shared). Any
+/// edit, a replaced channel, another document or another name gives `None`, so the plane is never
+/// returned for pixels it does not describe. On a hit the result is `(plane, width, height)`:
+/// row-major values in 0..1 (larger = nearer) before the channel's 8/16-bit quantisation. The
+/// plane is the *refined* grid of the estimate: the document's size when its longer side is at most
+/// 4096 px, otherwise the document scaled down to a 4096 px longer side (map document pixels onto
+/// it by their fraction of the width and height). It is never more than 2^24 floats.
+pub fn precise_depth_plane(s: &Session, doc: DocId, channel_name: &str, current_channel_surface: &Surface) -> Option<(Arc<Vec<f32>>, u32, u32)> {
+    let guard = s.depth.precise.lock().unwrap_or_else(PoisonError::into_inner);
+    let p = guard.as_ref()?;
+    let same = p.doc == doc && p.channel == channel_name && p.surface == *current_channel_surface;
+    let sized = p.plane.len() == (p.width as usize).saturating_mul(p.height as usize);
+    (same && sized).then(|| (p.plane.clone(), p.width, p.height))
+}
 
 #[derive(Default)]
 pub struct DepthState {
@@ -66,6 +121,8 @@ pub struct DepthState {
     pending: Option<Receiver<FetchEvent>>,
     stop: Option<Arc<AtomicBool>>,
     cancelled: bool,
+    /// Shared with the estimate job, which fills it from its worker thread.
+    precise: Arc<Mutex<Option<PreciseDepth>>>,
 }
 
 impl DepthState {
@@ -408,11 +465,20 @@ fn depth_error(e: DepthError) -> EngineError {
     }
 }
 
+fn quality_param(p: &Value) -> Result<Quality> {
+    match p.get("quality") {
+        None => Ok(Quality::High),
+        Some(Value::String(q)) if q == "fast" => Ok(Quality::Fast),
+        Some(Value::String(q)) if q == "high" => Ok(Quality::High),
+        Some(_) => Err(bad("`quality` must be \"fast\" or \"high\"")),
+    }
+}
+
 fn channel_name(p: &Value) -> Result<String> {
     let obj = match p {
         Value::Null => None,
         Value::Object(o) => Some(o),
-        _ => return Err(bad("expected {\"channel\": name}")),
+        _ => return Err(bad("expected {\"channel\": name, \"quality\": \"fast\"|\"high\"}")),
     };
     let name = match obj.and_then(|o| o.get("channel")) {
         None => "Depth".to_string(),
@@ -434,7 +500,7 @@ fn enabled_estimate(s: &Session) -> std::result::Result<(), String> {
 /// A reduced plane set: (pixels, (width, height)).
 type Reduced = (Vec<f32>, (usize, usize));
 
-fn read_image(doc: &Document, ctx: &crate::jobs::JobCtx) -> Result<(Reduced, Reduced)> {
+fn read_image(doc: &Document, ctx: &crate::jobs::JobCtx, rgb_side: usize) -> Result<(Reduced, Reduced)> {
     let rect = doc.bounds();
     let (w, h) = (rect.width() as usize, rect.height() as usize);
     if w == 0 || h == 0 {
@@ -447,7 +513,7 @@ fn read_image(doc: &Document, ctx: &crate::jobs::JobCtx) -> Result<(Reduced, Red
     let flat = ctx
         .stage(0.0, 0.15, "Reading image", |ctl| photocraft_compose::composite_to_surface_with_interrupt(doc, rect, fmt, Some([1.0; 3]), ctl))
         .map_err(|_| EngineError::Cancelled)?;
-    let mut rgb = Accum::new(w, h, 3, MODEL_INPUT_SIDE);
+    let mut rgb = Accum::new(w, h, 3, rgb_side);
     let mut luma = Accum::new(w, h, 1, REFINE_SIDE);
     let mut row_rgb = vec![0.0f32; w * 3];
     let mut row_luma = vec![0.0f32; w];
@@ -475,11 +541,24 @@ fn read_image(doc: &Document, ctx: &crate::jobs::JobCtx) -> Result<(Reduced, Red
     Ok(((rgb.finish(), rd), (luma.finish(), ld)))
 }
 
+/// What an estimate produced.
+struct Estimated {
+    /// The depth at document size (0..1).
+    plane: Vec<f32>,
+    /// The refined plane before it was stretched to the document, and its size.
+    refined: Vec<f32>,
+    refined_size: (usize, usize),
+    /// Tiles the estimate used (1 = a single pass).
+    tiles: u32,
+}
+
 /// Run the estimator and refine its map to the document size: edges follow the photo.
-fn estimate_plane(doc: &Document, ctx: &crate::jobs::JobCtx, estimator: &EstimateFn) -> Result<Vec<f32>> {
+fn estimate_plane(doc: &Document, ctx: &crate::jobs::JobCtx, estimator: &EstimateFn, quality: Quality) -> Result<Estimated> {
     let rect = doc.bounds();
     let (w, h) = (rect.width() as usize, rect.height() as usize);
-    let ((rgb, (rw, rh)), (luma, (lw, lh))) = read_image(doc, ctx)?;
+    let side = if quality == Quality::High { HIGH_INPUT_SIDE } else { MODEL_INPUT_SIDE };
+    let ((rgb, (rw, rh)), (luma, (lw, lh))) = read_image(doc, ctx, side)?;
+    let tiles = if quality == Quality::High { photocraft_depth::tile_count(rw as u32, rh as u32, HIGH_MAX_TILES) } else { 1 };
     ctx.progress(0.15, "Estimating depth");
     let map = estimator(&rgb, rw as u32, rh as u32, &|p| {
         ctx.progress(0.15 + 0.65 * p, "");
@@ -505,44 +584,63 @@ fn estimate_plane(doc: &Document, ctx: &crate::jobs::JobCtx, estimator: &Estimat
         return Err(EngineError::Cancelled);
     }
     ctx.progress(0.95, "");
-    Ok(resize_plane(&refined, lw, lh, w, h))
+    let plane = resize_plane(&refined, lw, lh, w, h);
+    Ok(Estimated { plane, refined, refined_size: (lw, lh), tiles })
 }
 
 fn estimate_depth(s: &mut Session, p: &Value) -> Result<Value> {
     let name = channel_name(p)?;
+    let quality = quality_param(p)?;
     s.active().ok_or(EngineError::NoDocument)?;
     s.depth.poll();
     let estimator = match s.depth.estimator.clone() {
-        Some(e) => boxed(move |rgb, w, h, _| e(rgb, w, h).map_err(EngineError::Other)),
+        Some(e) => boxed(move |rgb, w, h, interrupt| {
+            let one = |r: &[f32], w: u32, h: u32| e(r, w, h).map_err(DepthError::Backend);
+            match quality {
+                Quality::Fast => one(rgb, w, h).map_err(depth_error),
+                Quality::High => photocraft_depth::estimate_tiled_with(&one, rgb, w, h, HIGH_MAX_TILES, interrupt).map_err(depth_error),
+            }
+        }),
         None => {
             let dir = s.depth.models_dir.clone().filter(|d| installed(d)).ok_or_else(|| bad(NOT_INSTALLED))?;
             boxed(move |rgb, w, h, interrupt| {
                 let model = load_model(&dir)?;
-                model.estimate(rgb, w, h, interrupt).map_err(depth_error)
+                match quality {
+                    Quality::Fast => model.estimate(rgb, w, h, interrupt),
+                    Quality::High => model.estimate_tiled(rgb, w, h, HIGH_MAX_TILES, interrupt),
+                }
+                .map_err(depth_error)
             })
         }
     };
+    let precise = s.depth.precise.clone();
     let started = web_time::Instant::now();
     crate::jobs::edit_job(
         s,
         "Estimate Depth",
         move |doc, _, ctx| {
-            let plane = estimate_plane(doc, ctx, &*estimator)?;
+            let est = estimate_plane(doc, ctx, &*estimator, quality)?;
             let rect = doc.bounds();
-            let surface = plane_surface(&plane, rect, channel_format(doc));
+            let surface = plane_surface(&est.plane, rect, channel_format(doc));
+            let snapshot = surface.clone();
             let index = match doc.channels.iter().position(|c| c.name == name) {
                 Some(i) => {
                     doc.channels[i].surface = surface;
                     i
                 }
                 None => {
-                    doc.channels.push(AlphaChannel::new(name, surface));
+                    doc.channels.push(AlphaChannel::new(name.clone(), surface));
                     doc.channels.len() - 1
                 }
             };
-            Ok((index, rect.width(), rect.height()))
+            let (pw, ph) = est.refined_size;
+            let keep = pw.saturating_mul(ph) <= MAX_PRECISE_FLOATS && est.refined.len() == pw * ph;
+            let entry =
+                keep.then(|| PreciseDepth { doc: doc.id, channel: name, surface: snapshot, plane: Arc::new(est.refined), width: pw as u32, height: ph as u32 });
+            *precise.lock().unwrap_or_else(PoisonError::into_inner) = entry;
+            Ok((index, rect.width(), rect.height(), est.tiles))
         },
-        move |(index, w, h)| json!({"channel": index, "width": w, "height": h, "ms": started.elapsed().as_millis() as u64}),
+        move |(index, w, h, tiles)| json!({"channel": index, "width": w, "height": h, "quality": quality.name(), "tiles": tiles, "ms": started.elapsed().as_millis() as u64}),
     )
 }
 
@@ -593,7 +691,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Estimate Depth",
             menu: &[],
             shortcut: None,
-            params: r#"{"channel":name="Depth"} → {channel,width,height,ms}: estimates relative depth of the visible image into an alpha channel (white = near); replaces a channel of that name. Needs the depth model (depth.downloadModel)"#,
+            params: r#"{"channel":name="Depth","quality":"fast"|"high"="high"} → {channel,width,height,quality,tiles,ms}: estimates relative depth of the visible image into an alpha channel (white = near); replaces a channel of that name. "fast" is one network pass; "high" adds overlapping full-resolution tiles on a larger working image (slower, much finer folds and edges). Needs the depth model (depth.downloadModel)"#,
             enabled: enabled_estimate,
             run: estimate_depth,
             journal: true,
@@ -649,6 +747,64 @@ mod tests {
         s.execute("edit.undo", json!({})).unwrap();
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(channels(&s), 0);
+    }
+
+    #[test]
+    fn quality_is_validated_and_reported() {
+        let mut s = session(16, 16);
+        s.depth.estimator = Some(fake());
+        for p in [json!({"quality": "ultra"}), json!({"quality": 3}), json!({"quality": null}), json!({"quality": ["fast"]}), json!({"quality": "High"})] {
+            assert!(s.execute("image.estimateDepth", p.clone()).is_err(), "{p}");
+        }
+        assert_eq!(channels(&s), 0);
+        let r = s.execute("image.estimateDepth", json!({})).unwrap();
+        assert_eq!(r["quality"], "high");
+        let r = s.execute("image.estimateDepth", json!({"quality": "fast"})).unwrap();
+        assert_eq!((r["quality"].clone(), r["tiles"].clone()), (json!("fast"), json!(1)));
+    }
+
+    #[test]
+    fn high_tiles_a_large_document_and_fast_does_not() {
+        let mut s = session(1500, 1000);
+        s.depth.estimator = Some(fake());
+        let hi = s.execute("image.estimateDepth", json!({"quality": "high"})).unwrap();
+        assert!(hi["tiles"].as_u64().unwrap() > 1, "{hi}");
+        assert!(hi["tiles"].as_u64().unwrap() <= 16);
+        let doc = &s.active().unwrap().doc;
+        assert_eq!(doc.channels.len(), 1);
+        let v = doc.channels[0].surface.read_region(doc.bounds());
+        assert!(v.iter().all(|x| x.is_finite() && (0.0..=1.0).contains(x)));
+        let fast = s.execute("image.estimateDepth", json!({"quality": "fast"})).unwrap();
+        assert_eq!(fast["tiles"], 1);
+        // A small document is one pass even in high quality.
+        let mut small = session(200, 150);
+        small.depth.estimator = Some(fake());
+        assert_eq!(small.execute("image.estimateDepth", json!({})).unwrap()["tiles"], 1);
+    }
+
+    #[test]
+    fn the_precise_plane_is_kept_until_the_channel_is_edited() {
+        let mut s = session(64, 48);
+        s.depth.estimator = Some(fake());
+        let id = s.active().unwrap().doc.id;
+        s.execute("image.estimateDepth", json!({})).unwrap();
+        let surface = s.active().unwrap().doc.channels[0].surface.clone();
+        let (plane, w, h) = precise_depth_plane(&s, id, "Depth", &surface).expect("plane right after the estimate");
+        assert_eq!((w, h, plane.len()), (64, 48, 64 * 48));
+        assert!(plane.iter().all(|v| (0.0..=1.0).contains(v)));
+        // Other names and documents do not match.
+        assert!(precise_depth_plane(&s, id, "Other", &surface).is_none());
+        assert!(precise_depth_plane(&s, DocId(id.0 + 1), "Depth", &surface).is_none());
+        // Editing the channel invalidates it.
+        let mut edited = surface.clone();
+        let r = Rect::new(0, 0, 4, 4);
+        edited.write_region(r, &[0.123; 16]);
+        assert!(precise_depth_plane(&s, id, "Depth", &edited).is_none());
+        // A fresh estimate replaces the plane.
+        s.execute("image.estimateDepth", json!({"quality": "fast"})).unwrap();
+        let now = s.active().unwrap().doc.channels[0].surface.clone();
+        assert!(precise_depth_plane(&s, id, "Depth", &now).is_some());
+        assert!(precise_depth_plane(&s, id, "Depth", &edited).is_none());
     }
 
     #[test]

@@ -48,6 +48,9 @@ pub struct SurfaceOptions {
     pub size_by_depth: bool,
     /// Name of the alpha channel holding the depth (white = near).
     pub depth_channel: String,
+    /// Estimate Depth runs the tiled, high-resolution estimate (slower, finer folds and edges)
+    /// rather than one whole-image pass.
+    pub depth_high_quality: bool,
 }
 
 impl Default for SurfaceOptions {
@@ -62,6 +65,7 @@ impl Default for SurfaceOptions {
             relief: 0.5,
             size_by_depth: true,
             depth_channel: "Depth".to_string(),
+            depth_high_quality: true,
         }
     }
 }
