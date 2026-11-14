@@ -31,6 +31,6 @@ opens the small PNG preview Affinity stores in the file instead, as a single pix
 stacks, batch processing or other imports that can't show the warning. Export PSD or PNG from
 Affinity in that case.
 
-See [the crate's notes](https://github.com/storytold/photocraft/blob/main/crates/affinity/README.md)
+See [the crate's notes](https://github.com/storytold/craft-libs/blob/main/crates/affinity/README.md)
 for the full list of what is imported, how the reader was written and validated, and its safety
 limits.
