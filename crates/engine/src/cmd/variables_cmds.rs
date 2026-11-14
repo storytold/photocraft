@@ -333,7 +333,7 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
             let Some(cell) = cells.get(ci) else { continue };
             let Some(def) = vars.def(var) else { continue };
             let value = match def.kind {
-                VarKind::Visibility => VarValue::Visibility(matches!(cell.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "visible" | "on")),
+                VarKind::Visibility => VarValue::Visibility(cell.trim().eq_ignore_ascii_case("true")),
                 VarKind::PixelReplacement { .. } => VarValue::Pixels(cell.clone()),
                 VarKind::TextReplacement => VarValue::Text(cell.clone()),
             };
@@ -564,6 +564,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod import_visibility_tests;
 #[cfg(test)]
 mod tests;
 
