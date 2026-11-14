@@ -4505,6 +4505,7 @@ fn batch_raw_open_as_error_names_the_requested_format() {
     let (w, h) = (24, 16);
     let mut bad = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
     bad.truncate(400); // still sniffed as RAW, but the directory data is cut off
+    assert!(photocraft_io::raw::is_raw(&bad), "the truncated DNG must still reach the batch RAW path");
     let mut s = Session::new();
     s.batch_raw_open = Some(s.prefs().raw_defaults.clone());
     let err = open_bytes_as(&mut s, "notes.txt", &bad, Some("dng"), None).unwrap_err().to_string();

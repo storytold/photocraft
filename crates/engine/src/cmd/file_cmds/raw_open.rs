@@ -72,7 +72,7 @@ pub(super) fn prepare(
     // An error names the file as chosen and, for Open As, the format asked for, like the other Open As path.
     let fail = |error: photocraft_io::IoError| match as_ext {
         Some(ext) => crate::error::io_open_as_error(shown, ext, error),
-        None => EngineError::Other(format!("{shown}: {error}")),
+        None => crate::error::io_open_error(shown, error),
     };
     let Some(defaults) = &s.batch_raw_open else { return Ok(None) };
     if !photocraft_io::raw::is_raw(bytes) {
@@ -89,10 +89,7 @@ pub(super) fn prepare(
     let mut imported = photocraft_io::import_with_options(name, bytes, &opts).map_err(fail)?;
     if imported.preview_only || !imported.warnings.iter().any(|warning| warning.contains(photocraft_io::raw::DEVELOPED_NOTE)) {
         return Err(match as_ext {
-            Some(ext) => EngineError::Other(format!(
-                "\"{shown}\" could not be opened as {}: complete RAW development is required",
-                ext.trim_start_matches('.').to_ascii_uppercase()
-            )),
+            Some(ext) => crate::error::open_as_failure(shown, ext, "complete RAW development is required"),
             None => EngineError::Other(format!("{shown}: complete RAW development is required")),
         });
     }
