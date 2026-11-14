@@ -136,3 +136,34 @@ fn a_stroke_that_finds_nothing_changes_nothing() {
     assert!(at(&s, 60, 60) >= 0.999);
     assert_eq!(s.active().unwrap().history.past_len(), before);
 }
+
+/// CodeRabbit on #14672: only fully transparent pixels drop out. A faint patch (alpha 0.2) beside
+/// the red rectangles stays selected, and a similar-looking patch of fully transparent pixels next
+/// to it does not.
+#[test]
+fn partly_transparent_pixels_stay_selected() {
+    let mut s = issue_document();
+    // A faint patch on the Shapes layer: 20 % red over 350,100-450,200.
+    marquee(&mut s, [350, 100, 450, 200]);
+    s.execute("edit.fill", json!({"color": "#dc1e1e", "opacity": 20})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    marquee(&mut s, [50, 50, 480, 300]);
+    click(&mut s, [550.0, 150.0], "add", false);
+    assert_eq!(full_in(&s, [350, 100, 450, 200]), 100 * 100, "the faint patch stays selected");
+    assert_eq!(full_in(&s, [450, 100, 480, 200]), 0, "the transparent pixels beside it drop out");
+}
+
+/// CodeRabbit on #14672: the filter works on the selection's own tiles, so two pieces far apart
+/// (in different tiles, with nothing selected between them) each lose only their transparent
+/// pixels.
+#[test]
+fn two_selected_pieces_far_apart_each_drop_their_transparent_pixels() {
+    let mut s = issue_document();
+    marquee(&mut s, [10, 10, 130, 130]);
+    s.execute("select.rect", json!({"x": 560, "y": 440, "width": 120, "height": 120, "mode": "add"})).unwrap();
+    // A stroke that adds nothing new on transparency.
+    click(&mut s, [550.0, 150.0], "add", false);
+    assert_eq!(full_in(&s, [100, 100, 130, 130]), 30 * 30, "red 1's corner under the first piece");
+    assert_eq!(full_in(&s, [10, 10, 100, 100]), 0, "the first piece's transparent part drops out");
+    assert_eq!(full_in(&s, [560, 440, 680, 560]), 0, "the second piece lies on transparency and drops out");
+}

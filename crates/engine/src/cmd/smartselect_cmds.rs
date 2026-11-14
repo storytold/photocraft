@@ -170,18 +170,28 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
 /// `sel` without the pixels that are fully transparent on `layer`, for a pixel or type layer
 /// (Quick Selection with Sample All Layers off, #12919). Other layers (smart objects, shapes,
 /// fills, groups; not measured) leave it as it is.
+///
+/// It visits the selection's own tiles, one at a time, so a stroke costs the tiles the selection
+/// holds, not its bounding box: two small pieces far apart don't make a canvas-sized RGBA buffer.
 fn drop_transparent(layer: &Layer, sel: photocraft_raster::Surface) -> photocraft_raster::Surface {
     if !matches!(layer.content, LayerContent::Raster(_) | LayerContent::Text(_)) {
         return sel;
     }
     let Some(surf) = layer.surface() else { return sel };
-    let area = sel.content_bounds();
-    if area.is_empty() {
-        return sel;
+    let coords: Vec<photocraft_geom::TileCoord> = sel.tiles().map(|(tc, _)| *tc).collect();
+    let mut out = sel.clone();
+    for tc in coords {
+        let rect = tc.rect();
+        let mask: Vec<u8> = SurfaceSampler(surf).rgba(rect).iter().map(|p| if p[3] > 0.0 { 255 } else { 0 }).collect();
+        let opaque = matting::region_surface(&Region { bbox: rect, mask });
+        let kept = photocraft_algo::selection::combine_surfaces(&sel, &opaque, rect, f32::min);
+        match kept.tile(tc) {
+            Some(tile) => out.put_tiles([(tc, std::sync::Arc::clone(tile))]),
+            // `take_tiles` only allocates for a tile that is missing; this one is there.
+            None => drop(out.take_tiles(rect)),
+        }
     }
-    let mask: Vec<u8> = SurfaceSampler(surf).rgba(area).iter().map(|p| if p[3] > 0.0 { 255 } else { 0 }).collect();
-    let opaque = matting::region_surface(&Region { bbox: area, mask });
-    photocraft_algo::selection::combine_surfaces(&sel, &opaque, area, f32::min)
+    out
 }
 
 fn rect_param(p: &Value) -> Option<Rect> {
