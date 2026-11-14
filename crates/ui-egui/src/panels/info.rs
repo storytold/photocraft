@@ -113,6 +113,11 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 .map_or((0.0, 0.0), |a| (a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)));
             let num = |v: &Value, i: usize| v.get(i).and_then(Value::as_i64).map_or_else(|| "—".to_string(), |n| n.to_string());
             let (rgb, cmyk) = (&s["rgb"], &s["cmyk"]);
+            // While an adjustment layer is selected: "before/ after" per channel (#11736).
+            let rgb_cell = |i: usize| match s.get("before") {
+                Some(b) => format!("{}/ {}", num(&b["rgb"], i), num(rgb, i)),
+                None => num(rgb, i),
+            };
             ui.horizontal(|ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new(format!("#{n}")).color(t.text_dim).size(11.5)));
                 // The point sits on its pixel's centre (#11725); the row names the pixel, as the pointer row does.
@@ -120,7 +125,7 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             });
             ui.horizontal(|ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
-                cell(ui, format!("R:{} G:{} B:{}", num(rgb, 0), num(rgb, 1), num(rgb, 2)));
+                cell(ui, format!("R:{} G:{} B:{}", rgb_cell(0), rgb_cell(1), rgb_cell(2)));
             });
             ui.horizontal(|ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
@@ -132,16 +137,17 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The Info panel's Color Sampler readouts and the (document, revision, Sample Size) they were
 /// composited for.
-pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64, u32), std::sync::Arc<Vec<Value>>);
+pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64, u32, Option<photocraft_doc::LayerId>), std::sync::Arc<Vec<Value>>);
 
 /// The Color Sampler readouts of the active document, composited once per revision (#4528):
 /// adding, moving or deleting a sampler and every pixel edit bump the revision, so between them
 /// the Info panel reuses them instead of compositing each point through the stack every frame.
 /// They average over the Sample Size shared with the Eyedropper (#11732), which is part of the
-/// key, so changing it re-reads every sampler at once.
+/// key, so changing it re-reads every sampler at once. The selected layer is part of it too:
+/// while an adjustment layer is selected each reading carries its "before" value (#11736).
 pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Value>> {
     let size = app.ui.tool_options.eyedropper_size;
-    let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision, size)) else { return std::sync::Arc::default() };
+    let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision, size, s.active_layer)) else { return std::sync::Arc::default() };
     if let Some((k, v)) = &app.info_samplers
         && *k == key
     {
