@@ -158,8 +158,11 @@ fn knock_out_exterior(map: &mut Map, shape: &Map, fill_opacity: f32) {
 /// attenuated twice). In any other mode the layer blends with what's beneath it, shadow and all:
 /// an Exclusion or Difference layer would invert it, Multiply darken by it, Screen show it as
 /// grey. Photoshop keeps it out from under the shape, so here it's knocked out wholly.
+/// Below 100 % fill a normal-mode layer knocks it out wholly too, not in proportion to the
+/// see-through share: in Photoshop 2026 a 50 % fill layer with a knocked-out shadow is exactly
+/// as bright inside as with no shadow; knocking out half left a quarter of the shadow under it.
 pub fn shadow_see_through(layer: &Layer) -> f32 {
-    if matches!(layer.blend, BlendMode::Normal | BlendMode::Dissolve | BlendMode::PassThrough) { 1.0 - layer.fill_opacity.clamp(0.0, 1.0) } else { 1.0 }
+    if matches!(layer.blend, BlendMode::Normal | BlendMode::Dissolve | BlendMode::PassThrough) && layer.fill_opacity >= 1.0 { 0.0 } else { 1.0 }
 }
 
 /// Blend Interior Effects as Group off (Photoshop's default): the layer's mode applies to its

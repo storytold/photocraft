@@ -1783,6 +1783,22 @@ fn drop_shadow_uses_global_light_and_knockout() {
     assert!(close4(px(&d, 20, 28), [0.0, 0.0, 0.0, 1.0]));
 }
 
+/// Layer Knocks Out Drop Shadow below 100 % fill: Photoshop keeps the shadow out from under the
+/// whole shape, not in proportion to the see-through fill, so the inside of a 50 % fill layer is
+/// exactly as bright as with no shadow. At 100 % fill the layer covers it anyway.
+#[test]
+fn partial_fill_knocks_the_drop_shadow_out_wholly() {
+    let mut d = fx_doc(vec![Effect::DropShadow(shadow(5.0, 90.0))]);
+    d.layers[1].fill_opacity = 0.5;
+    let mut bare = d.clone();
+    bare.layers[1].effects.items.clear();
+    assert!(close4(px(&bare, 20, 28), [1.0, 0.5, 0.5, 1.0]), "{:?}", px(&bare, 20, 28));
+    assert!(close4(px(&d, 20, 28), px(&bare, 20, 28)), "no shadow under the layer: {:?}", px(&d, 20, 28));
+    assert!(close4(px(&d, 20, 32), [0.0, 0.0, 0.0, 1.0]), "the shadow outside the shape: {:?}", px(&d, 20, 32));
+    d.layers[1].fill_opacity = 1.0;
+    assert!(close4(px(&d, 20, 28), [1.0, 0.0, 0.0, 1.0]), "{:?}", px(&d, 20, 28));
+}
+
 #[test]
 fn soft_shadow_is_blurred_and_bounded() {
     let d = fx_doc(vec![Effect::DropShadow(Shadow { spread: 0.0, size: 6.0, ..shadow(0.0, 90.0) })]);
