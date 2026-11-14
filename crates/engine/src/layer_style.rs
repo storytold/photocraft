@@ -981,8 +981,8 @@ fn same_kind(a: &Effect, b: &Effect) -> bool {
 /// automation mistake can't ask for an unbounded document change.
 const MAX_EFFECTS: usize = 256;
 
-/// Replaces a layer's whole effect list in one history step: the Layer Style dialog's
-/// apply. Each entry builds an effect from `params`, or edits the snapshot it carried
+/// Applies blending options, effects, and shared light changes in one history step.
+/// Each entry builds an effect from `params`, or edits the snapshot it carried
 /// (`fx`: the effect JSON as the dialog loaded it, kept verbatim for everything the
 /// dialog doesn't model) with the params present. Unknown kinds, kind/snapshot
 /// mismatches and malformed snapshots are errors, never panics.
@@ -1037,9 +1037,33 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
         }
         list.push(fx);
     }
+    let options = |key: &str| match p.get(key) {
+        None => Ok(None),
+        Some(value) if value.is_object() => Ok(Some(value)),
+        Some(_) => Err(bad(CMD, format!("`{key}` must be an object"))),
+    };
+    let blending = options("blendingOptions")?;
+    let light = options("globalLight")?
+        .map(|params| {
+            let current = s.active().ok_or(EngineError::NoDocument)?.doc.global_light;
+            crate::layer_menu_cmds::global_light_params(current, params)
+        })
+        .transpose()?;
     let count = list.len();
-    let label = if list.is_empty() { "Clear Layer Style" } else { "Edit Layer Style" };
+    let label = if blending.is_some() || light.is_some() {
+        "Layer Style"
+    } else if list.is_empty() {
+        "Clear Layer Style"
+    } else {
+        "Edit Layer Style"
+    };
     s.edit(label, |doc, _| {
+        if let Some(params) = blending {
+            crate::layer_menu_cmds::apply_blending_options(doc, id, params)?;
+        }
+        if let Some(light) = light {
+            doc.global_light = light;
+        }
         for pat in &pats {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
         }
@@ -1190,7 +1214,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Layer Style",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id,"effects":[{"kind":"dropShadow|innerShadow|outerGlow|innerGlow|stroke|colorOverlay|gradientOverlay|patternOverlay|satin|bevelEmboss","params":{…layer.layerStyle.<kind> params…},"fx":<effect snapshot carried through the Layer Style dialog, optional>}]} (replaces the layer's whole effect list; an entry with `fx` edits that effect with the params present, one without builds from params)"##,
+            params: r##"{"layer":id,"blendingOptions":{…layer.layerStyle.blendingOptions params…}?,"globalLight":{"angle":deg?,"altitude":deg?}?,"effects":[{"kind":"dropShadow|innerShadow|outerGlow|innerGlow|stroke|colorOverlay|gradientOverlay|patternOverlay|satin|bevelEmboss","params":{…layer.layerStyle.<kind> params…},"fx":<effect snapshot carried through the Layer Style dialog, optional>}]} (replaces the layer's whole effect list and applies optional blending and light settings in one history state; an entry with `fx` edits that effect with the params present, one without builds from params)"##,
             enabled: has_layer,
             run: replace_effects,
             journal: true,
