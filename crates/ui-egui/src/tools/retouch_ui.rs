@@ -795,6 +795,9 @@ fn cam_amount_slider(ui: &mut egui::Ui, name: &str, value: &mut f32, lo: f32, hi
     });
 }
 
+/// The reference's alert for an Art History Brush Area typed past 0..500 px (#12630).
+pub(crate) const ART_HISTORY_AREA_ALERT: &str = "An integer between 0 pixel and 500 Pixels is required. Closest value inserted.";
+
 /// Opens the alert with `message` (English, translated here) unless it is already up.
 fn open_alert_once(app: &mut PhotocraftApp, message: &str) {
     let message = tl!(message).to_owned();
@@ -1140,12 +1143,22 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("looseCurl".to_string(), tl!("Loose Curl")),
             ];
             crate::widgets::dropdown(ui, "art-history-style", tl!("Style"), &mut o.art_history_style, &styles, 130.0);
+            // Area: whole pixels 0..500, no slider; Tolerance: whole percents 0..100 with a slider
+            // arrow. Both alert on a typed value past their range, as the reference does (#12630).
             opt(ui, tl!("Area"));
-            crate::widgets::value_field(ui, &mut o.art_history_area, 0.0..=100.0, "", 50.0);
+            let (area, area_out) = crate::widgets::value_field_whole_alerting(ui, tl!("Area"), &mut o.art_history_area, 0.0..=500.0, "px", 66.0);
+            area.on_hover_text(tl!("Painting area diameter"));
             opt(ui, tl!("Tolerance"));
-            crate::widgets::value_field(ui, &mut o.art_history_tolerance, 0.0..=100.0, "", 50.0);
-            crate::widgets::vline(ui, 22.0);
-            opt(ui, tl!("Stylized dabs from a history state"));
+            let (tolerance, tolerance_out) =
+                crate::widgets::value_field_whole_alerting(ui, tl!("Tolerance"), &mut o.art_history_tolerance, 0.0..=100.0, "%", 58.0);
+            tolerance.on_hover_text(tl!("Painting tolerance"));
+            cam_amount_slider(ui, tl!("Tolerance slider"), &mut o.art_history_tolerance, 0.0, 100.0, "Painting tolerance");
+            if area_out {
+                open_alert_once(app, ART_HISTORY_AREA_ALERT);
+            }
+            if tolerance_out {
+                open_alert_once(app, crate::panels::options_bar::ZERO_TO_100);
+            }
         }
         Tool::QuickSelection => {
             crate::widgets::checkbox(ui, &mut o.sample_all.quick_selection, tl!("Sample All Layers"));
