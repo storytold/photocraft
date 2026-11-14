@@ -343,7 +343,7 @@ pub(crate) fn edge_at(q: &[[f64; 2]; 4], p: [f64; 2], tol: f64) -> Option<usize>
 /// projection on the midpoint's own path). That keeps each corner on the line through its side;
 /// on a quad whose sides differ in length the two corners move by different amounts (measured: a
 /// 50 px drag moved them 53 and 46 px). Sides that cancel out (a zero-length or degenerate quad)
-/// move the edge straight by `d`.
+/// move the edge straight by `d`; so does a quad with a side of no length.
 pub(crate) fn edge_moved(q: [[f64; 2]; 4], i: usize, d: [f64; 2]) -> [[f64; 2]; 4] {
     let (a, b) = (i % 4, (i + 1) % 4);
     let (to_a, to_b) = ((a + 3) % 4, (b + 1) % 4);
@@ -351,8 +351,10 @@ pub(crate) fn edge_moved(q: [[f64; 2]; 4], i: usize, d: [f64; 2]) -> [[f64; 2]; 
     let sb = [q[to_b][0] - q[b][0], q[to_b][1] - q[b][1]];
     let m = [(sa[0] + sb[0]) / 2.0, (sa[1] + sb[1]) / 2.0];
     let mm = m[0] * m[0] + m[1] * m[1];
+    // A side of no length can't carry its corner along it: both corners then move straight.
+    let both = |s: [f64; 2]| s[0] * s[0] + s[1] * s[1] > 1e-9;
     let mut out = q;
-    if mm.is_finite() && mm > 1e-9 {
+    if mm.is_finite() && mm > 1e-9 && both(sa) && both(sb) {
         let t = (d[0] * m[0] + d[1] * m[1]) / mm;
         out[a] = [q[a][0] + t * sa[0], q[a][1] + t * sa[1]];
         out[b] = [q[b][0] + t * sb[0], q[b][1] + t * sb[1]];
