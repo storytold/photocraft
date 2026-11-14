@@ -140,3 +140,26 @@ fn a_move_drag_begun_with_command_finishes_when_the_later_events_come_without_it
     assert_eq!(samplers(&app), vec![[300.5, 200.5]], "no point added");
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Move"));
 }
+
+/// CodeRabbit on #14684: the decision uses where the pointer is this frame. A pointer that moves
+/// onto a point and presses in one frame (`hover_doc` is still last frame's, off the point) keeps
+/// the Color Sampler.
+#[test]
+fn the_pointer_of_this_frame_decides_whether_command_is_the_move_tool() {
+    let mut app = app();
+    app.sync_views();
+    let xf = crate::canvas::ViewXform::active(&app).expect("the view's mapping");
+    let on_point = xf.to_screen(300.5, 200.5);
+    let off_point = xf.to_screen(50.0, 50.0);
+    let held = |app: &mut PhotocraftApp, at: egui::Pos2| {
+        app.hover_doc = Some([50.0, 50.0]);
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput { events: vec![egui::Event::PointerMoved(at), egui::Event::ModifiersChanged(CMD)], ..Default::default() };
+        ctx.begin_pass(raw);
+        let t = crate::hold_keys::held_tool(app, &ctx);
+        ctx.end_pass().textures_delta.clear();
+        t
+    };
+    assert_eq!(held(&mut app, on_point), None, "this frame's pointer is on the point: the Color Sampler");
+    assert_eq!(held(&mut app, off_point), Some(crate::hold_keys::Temporary::Move), "this frame's pointer is off it: Move");
+}

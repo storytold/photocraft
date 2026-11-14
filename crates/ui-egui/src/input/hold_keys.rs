@@ -128,7 +128,17 @@ fn sampler_keeps_command(app: &PhotocraftApp, i: &InputState) -> bool {
         && !i.modifiers.alt
         && !i.modifiers.shift
         && (matches!(app.ui.analysis.drag, Some(crate::analysis_ui::Drag::Sampler(..)))
-            || app.hover_doc.is_some_and(|p| crate::analysis_ui::sampler_at(app, p).is_some()))
+            || pointer_doc(app, i).is_some_and(|p| crate::analysis_ui::sampler_at(app, p).is_some()))
+}
+
+/// The document point under the pointer in this frame's input, else the last frame's hover:
+/// `hover_doc` is written after the temporary tool is chosen, so a pointer that moves onto
+/// something and presses in one frame would be judged where it was.
+fn pointer_doc(app: &PhotocraftApp, i: &InputState) -> Option<[f64; 2]> {
+    match (i.pointer.latest_pos(), crate::canvas::ViewXform::active(app)) {
+        (Some(at), Some(xf)) => Some(xf.to_doc(at)),
+        _ => app.hover_doc,
+    }
 }
 
 /// The Hand tool's own modifiers (#6434): ⌘ (Ctrl off the Mac) held is Zoom In, ⌥ (with or
