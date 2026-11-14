@@ -44,8 +44,12 @@ AuthorizedWorkspace
 ```
 
 The handle is created from an explicit launch-time grant, preserves separate read/write
-permissions, checks absolute paths against the granted root and rejects escaping paths. Operations
-use the held directory capability; the requested path is never resolved with ambient authority.
+permissions, checks absolute paths against the granted root and rejects escaping paths. File
+contents are read and written through the held directory capability. On Windows UNC write roots,
+directory creation and atomic-save renames use guarded ambient paths beneath the canonical root,
+with each ancestor verified through its parent handle and held open. See
+[Windows UNC write roots](../automation/security-model.md#windows-unc-write-roots) for the
+provider and WSL limitations.
 Ordinary single-file writes require an existing in-root parent. Capability-scoped multi-file
 exports create their required export directory and missing ancestors beneath the write root
 before writing files.
