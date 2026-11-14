@@ -353,6 +353,61 @@ fn sample_shape_fill(app: &mut PhotocraftApp, x: f64, y: f64) {
 
 /// Is document point (x, y) on a colour sampler, within the Color Sampler tool's reach of one (7
 /// screen pixels)?
+/// The Eyedropper's cursor: the comparison ring while it samples (#213); with ⇧ held, the
+/// eyedropper with the sampler target, as a ⇧-click places a colour sampler (#11748); otherwise
+/// its pipette, or the crosshair for precise Other Cursors.
+pub(super) fn eyedropper_cursor(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, p: Pos2, down: bool, shift: bool) -> egui::CursorIcon {
+    if let Some(icon) = eyedropper_ring(app, painter, xf, p, down) {
+        icon
+    } else if precise_other_cursor(app) {
+        egui::CursorIcon::Crosshair
+    } else if shift {
+        color_sampler_cursor(painter.ctx(), p)
+    } else {
+        pipette_cursor(painter.ctx(), p)
+    }
+}
+
+/// The alert a ⇧-click with the Eyedropper shows at the 10-sampler limit (#11748).
+pub(crate) const SAMPLER_LIMIT_ALERT: &str = "Could not create a new sampler because the maximum number of samplers is 10.";
+
+/// An Eyedropper ⇧-click at document point (`x`, `y`) (#11748): adds a colour sampler on the
+/// clicked pixel, as the Color Sampler tool places one, without changing the foreground. With ⌥
+/// on an existing sampler it deletes that one instead. At the 10-sampler limit the reference's
+/// alert opens and nothing is added; off the canvas nothing happens.
+pub(crate) fn eyedropper_shift_click(app: &mut PhotocraftApp, x: f64, y: f64, alt: bool) {
+    if alt && let Some(i) = crate::analysis_ui::sampler_at(app, [x, y]) {
+        if let Err(e) = app.run("view.colorSamplers.delete", json!({"index": i})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return;
+    }
+    let size = app.session.active().map(|d| d.doc.size);
+    let inside = size.is_some_and(|s| (0.0..f64::from(s.width)).contains(&x) && (0.0..f64::from(s.height)).contains(&y));
+    if !inside {
+        return;
+    }
+    match app.run("view.colorSamplers.add", json!({"x": x, "y": y})) {
+        Ok(_) => {}
+        Err(e) if e == photocraft_engine::sampler_cmds::limit_message() => {
+            let shown = app
+                .ui
+                .dialogs
+                .iter()
+                .any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(tl!(SAMPLER_LIMIT_ALERT)));
+            if !shown {
+                let params = json!({ "message": tl!(SAMPLER_LIMIT_ALERT) }).as_object().cloned().unwrap_or_default();
+                app.ui.open_dialog(crate::state::DialogKind::Error, params);
+            }
+        }
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+}
+
 fn on_sampler(app: &PhotocraftApp, x: f64, y: f64) -> bool {
     let tol = 7.0 / f64::from(app.point_zoom().max(0.01));
     app.session.active().is_some_and(|d| d.color_samplers.iter().any(|q| (q[0] - x).hypot(q[1] - y) <= tol))

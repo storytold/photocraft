@@ -1,5 +1,5 @@
 use super::cancel_stale_vector_drag;
-use super::cursors::{alt_eyedropper, sample_eyedropper};
+use super::cursors::{alt_eyedropper, eyedropper_shift_click, sample_eyedropper};
 use super::drag::Drag;
 use super::gesture::{finish_release, polygon_click, selection_mode};
 use super::selection::finish_selection_drag;
@@ -409,6 +409,10 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
         return false;
     }
     match ev {
+        // ⇧-click places a colour sampler instead of sampling (#11748); ⇧⌥ on a sampler deletes it.
+        ToolEvent::Down { x, y, .. } if mods.shift => eyedropper_shift_click(app, x, y, mods.alt),
+        // While ⇧ stays held after that press, moves sample nothing.
+        ToolEvent::Move { .. } if mods.shift => {}
         ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => sample_eyedropper(app, x, y, mods),
         ToolEvent::Up { .. } => {}
     }
