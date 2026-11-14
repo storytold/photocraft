@@ -148,6 +148,8 @@ pub mod rasterize_style_cmds;
 pub mod redeye_cmds;
 pub mod render_cmds;
 pub mod retouch_cmds;
+#[cfg(test)]
+mod rotate_canvas_bitmap_tests;
 pub mod sample_cmds;
 #[cfg(test)]
 mod sample_zoom_box_tests;
