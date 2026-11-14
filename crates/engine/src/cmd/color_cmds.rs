@@ -1005,6 +1005,16 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
+/// Edit > Convert to Profile: a document open, and not in Bitmap mode, where the reference
+/// application greys it (#14263).
+fn convert_profile_enabled(s: &Session) -> std::result::Result<(), String> {
+    let doc = &s.active().ok_or("no document open")?.doc;
+    if doc.mode == ColorMode::Bitmap {
+        return Err("Convert to Profile is not available for Bitmap documents".into());
+    }
+    Ok(())
+}
+
 fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
@@ -1111,6 +1121,10 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
         .and_then(Value::as_str)
         .ok_or_else(|| EngineError::BadParams { cmd: "edit.convertToProfile".into(), msg: "missing `profile`".into() })?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    // Also for a caller that runs it without the enabled check (#14263).
+    if doc.mode == ColorMode::Bitmap {
+        return Err(EngineError::Other("Convert to Profile is not available for Bitmap documents".into()));
+    }
     let dst = s.color.resolve(spec, Some(doc), None)?;
     let intent = intent_or(p, s.color.settings.intent())?;
     let bpc = bool_param(p, "bpc", s.color.settings.bpc);
@@ -1344,7 +1358,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Convert to Profile…",
             ["Edit"],
             r##"{"profile":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020|gray-gamma-2.2|sgray|lab-d50|coated-cmyk|working" (or a path to an .icc file),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"dither":bool=false (deterministic color quantization for 8-bit profile changes),"flatten":bool=false (flatten in the source profile before conversion),"rasterizePlaced":bool=false (freeze displayed Smart Object pixels; flatten takes precedence)}"##,
-            has_doc,
+            convert_profile_enabled,
             convert_to_profile,
             true
         ),
@@ -1927,3 +1941,6 @@ mod settings_tests {
         assert!(s.execute("color.profileMismatch", json!({"action": "explode"})).is_err());
     }
 }
+
+#[cfg(test)]
+mod convert_profile_bitmap_tests;
