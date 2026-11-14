@@ -1,5 +1,6 @@
 use super::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 
 struct TempDir(PathBuf);
 impl TempDir {
@@ -45,10 +46,32 @@ struct Faulty {
     /// with this raw OS error, or with this kind.
     fail_sync_dir: Option<Result<i32, io::ErrorKind>>,
     synced: Cell<u32>,
+    /// Keep the files in a map instead of on disk, for paths that must not exist on
+    /// disk at all (the document-portal test's synthetic `/run/user/1000/doc`).
+    in_memory: bool,
+    files: RefCell<BTreeMap<PathBuf, Vec<u8>>>,
 }
 
 impl AtomicFs for Faulty {
+    fn create_dir(&self, dir: &Path) -> io::Result<()> {
+        if self.in_memory {
+            return Ok(());
+        }
+        std::fs::create_dir_all(dir)
+    }
     fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+        if self.in_memory {
+            let mut files = self.files.borrow_mut();
+            if files.contains_key(tmp) {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "injected: the temporary file exists"));
+            }
+            if let Some(n) = self.fail_write_after {
+                files.insert(tmp.to_path_buf(), bytes[..n.min(bytes.len())].to_vec());
+                return Err(io::Error::new(io::ErrorKind::StorageFull, "injected: no space left on device"));
+            }
+            files.insert(tmp.to_path_buf(), bytes.to_vec());
+            return Ok(());
+        }
         if let Some(n) = self.fail_write_after {
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(tmp)?;
             f.write_all(&bytes[..n.min(bytes.len())])?;
@@ -65,9 +88,19 @@ impl AtomicFs for Faulty {
             self.locked_renames.set(self.locked_renames.get() - 1);
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected: sharing violation"));
         }
+        if self.in_memory {
+            let mut files = self.files.borrow_mut();
+            let bytes = files.remove(from).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "injected: no such file"))?;
+            files.insert(to.to_path_buf(), bytes);
+            return Ok(());
+        }
         RealFs.rename(from, to)
     }
     fn remove(&self, path: &Path) -> io::Result<()> {
+        if self.in_memory {
+            self.files.borrow_mut().remove(path);
+            return Ok(());
+        }
         RealFs.remove(path)
     }
     /// Count publication barriers and optionally fail before the real directory flush.
@@ -76,10 +109,14 @@ impl AtomicFs for Faulty {
         match self.fail_sync_dir {
             Some(Ok(code)) => Err(io::Error::from_raw_os_error(code)),
             Some(Err(kind)) => Err(io::Error::new(kind, "injected directory flush failure")),
+            None if self.in_memory => Ok(()),
             None => RealFs.sync_dir(dir),
         }
     }
     fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if self.in_memory {
+            return Ok(());
+        }
         RealFs.copy_metadata(from, to)
     }
 }
@@ -436,6 +473,57 @@ fn read_only_file_on_disk_is_never_replaced() {
     atomic_write(&p, b"new").unwrap();
     assert_eq!(std::fs::read(&p).unwrap(), b"new");
     atomic_write(&d.0.join("fresh.psd"), b"x").unwrap();
+}
+
+/// #11185: the document portal's mount is `/run/user/<uid>/doc/…`, nowhere else.
+#[test]
+fn recognizes_document_portal_paths() {
+    assert!(is_document_portal_path(Path::new("/run/user/1000/doc/9f3abc/file.psd")));
+    assert!(!is_document_portal_path(Path::new("/home/user/Documents/file.psd")));
+    assert!(!is_document_portal_path(Path::new("/run/user/1000/other/file.psd")));
+    assert!(!is_document_portal_path(Path::new("/home/user/run/user/1000/doc/file.psd")));
+    assert!(!is_document_portal_path(Path::new("doc/file.psd")));
+}
+
+/// #11185: a failed save to a document-portal folder names the portal and the remedy in
+/// its error, at whichever step failed; a failure anywhere else does not.
+#[test]
+fn portal_failures_carry_the_portal_clause() {
+    let portal = Path::new("/run/user/1000/doc/9f3abc/file.psd");
+    let local = Path::new("/home/user/Documents/file.psd");
+    let e = rename_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), portal);
+    assert!(e.to_string().contains("document portal") && e.to_string().contains("Flatseal"), "{e}");
+    let e = rename_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), local);
+    assert!(!e.to_string().contains("document portal"), "{e}");
+    let e = write_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), portal, portal.parent().unwrap());
+    assert!(e.to_string().contains("document portal"), "{e}");
+    let e = write_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), local, local.parent().unwrap());
+    assert!(!e.to_string().contains("document portal"), "{e}");
+}
+
+/// #11185, driven through the in-memory `Faulty` file system at a synthetic portal
+/// path, `/run/user/1000/doc`: a portal save the file system allows is NOT refused —
+/// the bytes land and no temporary file remains — and one whose rename fails carries
+/// the portal clause, keeps the original, and still cleans its temporary file up.
+/// The path is synthetic, so the test never touches a real `$XDG_RUNTIME_DIR` (a live
+/// FUSE mount on a real desktop) and runs the same everywhere. (The clause itself is
+/// also covered by `portal_failures_carry_the_portal_clause`.)
+#[cfg(unix)]
+#[test]
+fn document_portal_saves_run_and_failed_ones_name_the_portal() {
+    let dir = PathBuf::from("/run/user/1000/doc").join(format!("pc-atomic-portal-{}", std::process::id()));
+    let p = dir.join("file.psd");
+    let fs = Faulty { in_memory: true, ..Default::default() };
+    atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap();
+    assert_eq!(fs.files.borrow().get(&p).map(Vec::as_slice), Some(b"new".as_slice()));
+    assert!(fs.files.borrow().len() == 1, "no temporary file remains: {:?}", fs.files.borrow().keys().collect::<Vec<_>>());
+
+    let fs = Faulty { in_memory: true, fail_rename: Some(io::ErrorKind::PermissionDenied), ..Default::default() };
+    fs.files.borrow_mut().insert(p.clone(), b"new".to_vec());
+    let e = atomic_write_with(&fs, NO_RETRY, &p, b"newer").unwrap_err();
+    assert!(e.to_string().contains("document portal"), "{e}");
+    assert_eq!(fs.files.borrow().get(&p).map(Vec::as_slice), Some(b"new".as_slice()));
+    assert!(fs.files.borrow().len() == 1, "the temporary file was cleaned up: {:?}", fs.files.borrow().keys().collect::<Vec<_>>());
 }
 
 #[cfg(unix)]
