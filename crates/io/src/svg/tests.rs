@@ -1573,6 +1573,8 @@ fn damaged_images_do_not_hide_decoded_text_byte_overruns() {
     let compressed = gzip(svg);
     let damaged = embedded_image("image/svg+xml", &compressed[..compressed.len() / 2]);
     let small = embedded_image("image/svg+xml", svg);
+    let omitted = parse_bounded(image_svg(&format!("{damaged}{damaged}{small}")).as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert!(!omitted.tree.root().has_children(), "both damaged images and the later small image stay omitted");
     let latin1_image = |raw_bytes| {
         let mut latin1 = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><!--".to_vec();
         latin1.resize(raw_bytes, 0xe9);
@@ -1598,7 +1600,7 @@ fn imports_warn_when_embedded_images_are_omitted() {
     let imported = import_svg("ordinary", svg.as_bytes()).unwrap();
     let omission_warnings = |imported: &ImportResult| imported.warnings.iter().filter(|warning| warning.contains("embedded images were omitted")).count();
     assert_eq!(omission_warnings(&imported), 1, "{:?}", imported.warnings);
-    assert!(!imported.document.layers.is_empty(), "the readable drawing still opens");
+    assert_eq!(photocraft_compose::flatten(&imported.document).to_rgba8().pixels, vec![255, 0, 0, 255], "the readable red rectangle is retained");
     let clean = import_svg("clean", image_svg(rect).as_bytes()).unwrap();
     assert_eq!(omission_warnings(&clean), 0, "{:?}", clean.warnings);
     let compressed = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
@@ -1606,6 +1608,6 @@ fn imports_warn_when_embedded_images_are_omitted() {
     let svg = image_svg(&format!("{damaged}{rect}"));
     let bounded = import_svg_bounded("bounded", svg.as_bytes(), MAX_RASTER_PIXELS).unwrap();
     assert_eq!(omission_warnings(&bounded), 1, "{:?}", bounded.warnings);
-    assert!(!bounded.document.layers.is_empty());
+    assert_eq!(photocraft_compose::flatten(&bounded.document).to_rgba8().pixels, vec![255, 0, 0, 255], "the bounded import retains the red rectangle");
     assert!(parse_bounded_work_with(svg.as_bytes(), MAX_RASTER_PIXELS, true, fonts).is_err(), "stored previews must still be complete");
 }
