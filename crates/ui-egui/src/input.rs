@@ -13,4 +13,5 @@ pub(super) mod single_line_drag;
 pub mod spring_tools;
 pub mod stylus;
 pub(super) mod tool_shortcuts;
+pub mod touch_nav;
 pub mod touch_twins;

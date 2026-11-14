@@ -95,6 +95,11 @@ pub fn free_pointer_over(ctx: &egui::Context, canvas: egui::Rect) -> Option<egui
     free_pointer_at(ctx, canvas, ctx.pointer_hover_pos()?)
 }
 
+/// Hit-test each touch origin, rather than the compatibility pointer or gesture centroid.
+pub(crate) fn free_position(ctx: &egui::Context, canvas: egui::Rect, p: egui::Pos2) -> bool {
+    !egui::Popup::is_any_open(ctx) && canvas.contains(p) && !rects(ctx).iter().any(|r| r.contains(p))
+}
+
 /// Pan drag under an open dialog: Space-drag, middle-drag, or a drag with the Hand tool, started on
 /// the free canvas. Returns this frame's pointer movement.
 pub fn pan_delta(ctx: &egui::Context, canvas: egui::Rect, hand: bool) -> Option<egui::Vec2> {

@@ -206,6 +206,7 @@ use input::single_line_drag;
 pub use input::spring_tools;
 pub use input::stylus;
 use input::tool_shortcuts;
+pub use input::touch_nav;
 pub use input::touch_twins;
 pub use menus::enable_rules;
 pub use menus::menu_keys;
@@ -375,6 +376,8 @@ pub struct PhotocraftApp {
     monitors: monitor_status::State,
     pub(crate) thumbnail_cache: std::sync::Arc<std::sync::Mutex<crate::home_recent_ui::ThumbnailCache>>,
     checker: Option<egui::TextureHandle>,
+    /// Two-or-more-finger canvas pan/zoom is in progress (`touch_nav`).
+    touch_nav: bool,
     drag: Option<canvas::Drag>,
     /// An owned vector drag was cancelled (`canvas::cancel_stale_vector_drag`): the rest of its
     /// pointer events go nowhere.

@@ -14,6 +14,24 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     finish(app, d, None);
 }
 
+/// Finish a live painting gesture when a second touch promotes it to navigation.
+///
+/// The touch state machine owns the transition, so there is no PointerButton release to drive the
+/// normal canvas path. Commit the points already received, then let touch navigation clear the
+/// gesture and consume all subsequent contacts.
+pub(crate) fn finish_touch_stroke(app: &mut PhotocraftApp) -> bool {
+    let Some(tool) = app.drag.as_ref().map(|d| d.tool) else { return false };
+    if !super::strokes::strokes_live(tool) {
+        return false;
+    }
+    let Some(mut d) = app.drag.take() else { return false };
+    d.track(d.live);
+    finish_gesture(app, d);
+    crate::move_mods::finish(app);
+    app.press_stroke = false;
+    true
+}
+
 /// [`finish_gesture`] for a pointer release. `click`: the release, before snapping, came back
 /// within half a pixel of the press (`tool_input`). A selection drag that snapping pulled back onto
 /// its press point is not one (#11392).

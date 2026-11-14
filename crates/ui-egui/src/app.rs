@@ -54,6 +54,7 @@ impl PhotocraftApp {
             monitors: Default::default(),
             thumbnail_cache: std::sync::Arc::new(std::sync::Mutex::new(crate::home_recent_ui::ThumbnailCache::default())),
             checker: None,
+            touch_nav: false,
             drag: None,
             cancelled_vector_drag: false,
             move_blocked: false,
@@ -295,6 +296,10 @@ impl eframe::App for PhotocraftApp {
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
         let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
         stylus::pen_hold_is_no_right_click(ctx, pen_down);
+        #[cfg(target_arch = "wasm32")]
+        if crate::touch_nav::normalize_pointer(ctx, raw_input) {
+            crate::touch_nav::abort_tools(self, ctx);
+        }
         if self.custom_titlebar {
             titlebar::release_after_os_resize(ctx, raw_input);
         }
