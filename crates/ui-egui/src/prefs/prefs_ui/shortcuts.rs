@@ -190,6 +190,16 @@ pub(crate) fn capture_key_press(capture_mods: egui::Modifiers, i: &egui::InputSt
     (mods, pressed)
 }
 
+/// Does a row stay under the search `needle`? Case-blind, it matches the shown menu path and name
+/// or the English one with the keys and id. With Match Case it needs the exact case in a command
+/// name (`names`: shown and English), as the reference matches names only (#14317).
+pub(super) fn search_hit(local: &str, english: &str, names: [&str; 2], needle: &str, match_case: bool) -> bool {
+    if match_case {
+        return names.iter().any(|name| name.contains(needle));
+    }
+    crate::i18n::current().contains_ignore_case(local, needle) || crate::i18n::Lang::EN.contains_ignore_case(english, needle)
+}
+
 /// Keyboard Shortcuts and Menus: a searchable list of commands by menu with editable shortcuts
 /// (click a shortcut, press keys; ⌫ removes it), menu visibility and colours, toolbar tools.
 pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -235,11 +245,19 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
         ui.add_space(4.0);
     }
     let mut filter = f.get("filter").and_then(Value::as_str).unwrap_or("").to_string();
+    // Match Case beside the shortcut search, off by default (#14317). The Menus tab keeps its
+    // case-blind search.
+    let mut match_case = f.get("matchCase").and_then(Value::as_bool).unwrap_or(false);
     ui.horizontal(|ui| {
         ui.label(RichText::new(tl!("Search")).color(t.text_dim));
         ui.add(egui::TextEdit::singleline(&mut filter).desired_width(260.0).hint_text(tl!("command or shortcut")));
+        if tab == 0 {
+            ui.checkbox(&mut match_case, tl!("Match Case"));
+        }
     });
     f.insert("filter".into(), json!(filter));
+    f.insert("matchCase".into(), json!(match_case));
+    let match_case = match_case && tab == 0;
     // Menu path and command label as shown in the menus, in the UI language.
     let shown = |id: &str, label: &str, path: &[String]| -> (Vec<String>, String) {
         let lang = crate::i18n::current();
@@ -355,10 +373,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                 // Match what is shown and the English name (commands are documented in English).
                 let local = format!("{} {}", shown_path.join(" "), shown_label);
                 let english = format!("{} {} {} {} {id}", path.join(" "), label, cur.clone().unwrap_or_default(), alts.join(" "));
-                if !needle.is_empty()
-                    && !crate::i18n::current().contains_ignore_case(&local, needle)
-                    && !crate::i18n::Lang::EN.contains_ignore_case(&english, needle)
-                {
+                if !needle.is_empty() && !search_hit(&local, &english, [shown_label.as_str(), label.as_str()], needle, match_case) {
                     continue;
                 }
                 if tab == 0 && path.is_empty() && def.is_none() && cur.is_none() && alts.is_empty() {
