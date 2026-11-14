@@ -895,7 +895,7 @@ pub fn title(d: &Dialog) -> String {
         DialogKind::About => "About PhotoCraft".into(),
         DialogKind::LayerStyle => "Layer Style".into(),
         DialogKind::Command => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command").trim_end_matches('…').to_string(),
-        DialogKind::Error => "Error".into(),
+        DialogKind::Error => d.fields.get("__title").and_then(Value::as_str).unwrap_or("Error").to_string(),
     }
 }
 
@@ -1183,6 +1183,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
     image_processor_ui::preflight(&mut app.ui, id)?;
     fit_image_range::preflight(&mut app.ui, id)?;
+    define_name::preflight(&mut app.ui, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
@@ -1313,6 +1314,9 @@ pub mod color_range_ui;
 pub mod color_table_ui;
 pub mod credits;
 pub mod dds_options_ui;
+mod define_name;
+#[cfg(test)]
+mod define_pattern_empty_name_tests;
 pub mod delete_layer_prompt;
 pub mod dialog_alt_reset;
 pub mod dialog_blend_ui;

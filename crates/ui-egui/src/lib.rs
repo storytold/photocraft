@@ -1090,6 +1090,8 @@ mod burn_default_tip_tests;
 mod pencil_shift_digit_opacity_tests;
 
 #[cfg(test)]
+mod define_brush_empty_name_tests;
+#[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]
 mod dodge_default_tip_tests;
