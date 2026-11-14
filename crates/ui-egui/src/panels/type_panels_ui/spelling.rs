@@ -28,6 +28,9 @@ pub struct SpellDialog {
     /// continues it ([`crate::actions::resume`]).
     #[serde(skip)]
     pub resume: Option<u64>,
+    /// The `coalesce` key of this run: its corrections are one "Spell Check" history state.
+    #[serde(skip)]
+    pub history_key: Option<String>,
 }
 
 /// The engine's misspellings, as the raw JSON items of `edit.checkSpelling`. A single-layer check without a layer
@@ -102,7 +105,10 @@ pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value,
     }
     app.session.execute("edit.checkSpelling", params).map_err(|e| e.to_string())?;
     let raw = list(app, all_layers, layer, &[]);
-    app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, resume });
+    // The revision only grows and every correction bumps it, so a later run's key never matches
+    // the one an earlier run left in the history.
+    let history_key = app.session.active().map(|st| format!("spellCheck:{}:{}", st.doc.id.0, st.revision));
+    app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, resume, history_key });
     let items = to_items(app, &raw);
     // Opening over an open dialog replaces it and leaves the replaced one's Cancel as a result; that Cancel is not
     // the new dialog's, so it is dropped.
@@ -145,10 +151,19 @@ fn report(app: &mut PhotocraftApp, result: Result<Value, String>) {
     }
 }
 
+/// One history state per run of the dialog (#14177): its corrections share the run's `coalesce` key. A paused
+/// action's corrections keep its own grouping (#10965).
+fn coalesce(app: &PhotocraftApp, p: &mut Value) {
+    if let Some(key) = app.ui.type_panels.spell.as_ref().filter(|d| d.resume.is_none()).and_then(|d| d.history_key.as_ref()) {
+        p["coalesce"] = json!(key);
+    }
+}
+
 /// Replaces the one listed occurrence.
 fn change(app: &mut PhotocraftApp, item: &SpellingItem, to: &str) {
     let chars = char_range(&text_of(app, item.object), item.range.clone());
-    let p = json!({ "action": "change", "layer": item.object, "start": chars.start, "end": chars.end, "word": item.word, "replace": to });
+    let mut p = json!({ "action": "change", "layer": item.object, "start": chars.start, "end": chars.end, "word": item.word, "replace": to });
+    coalesce(app, &mut p);
     let result = crate::actions::spelling_change(app, p);
     report(app, result);
 }
@@ -159,6 +174,7 @@ fn change_all(app: &mut PhotocraftApp, item: &SpellingItem, to: &str, all_layers
     if !all_layers {
         p["layer"] = json!(item.object);
     }
+    coalesce(app, &mut p);
     let result = crate::actions::spelling_change(app, p);
     report(app, result);
 }
