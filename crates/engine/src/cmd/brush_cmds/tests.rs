@@ -886,7 +886,7 @@ fn pencil_latency_24mp() {
 
 #[test]
 fn live_stroke_equals_the_commit_at_every_zoom_with_smoothing() {
-    // #189: the preview while dragging must be the committed stroke (within 1/255), with a soft
+    // #189: the preview at release must be the committed stroke (within 1/255), with a soft
     // brush on an opaque Background with content, at any zoom (the smoothing string scales with
     // it), with smoothing on, pressure, 8 and 16 bits, and points fed one pointer move at a time.
     let pts: Vec<[f64; 3]> = (0..40)
@@ -909,6 +909,7 @@ fn live_stroke_equals_the_commit_at_every_zoom_with_smoothing() {
                 for q in &pts[1..] {
                     live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();
                 }
+                live.finish().unwrap();
                 let mut commit = p.clone();
                 commit["points"] = json!(pts);
                 commit["seed"] = json!(live.seed);
@@ -1278,6 +1279,131 @@ fn live_and_commit(s: &Session, cmd: &str, base: Value, pts: &[[f64; 3]]) -> (Li
     p["points"] = json!(pts);
     p["seed"] = json!(live.seed);
     (live, p)
+}
+
+#[test]
+fn smoothed_commits_are_the_same_pixels_with_and_without_the_live_view() {
+    // Smoothing holds the catch-up back until `finish` (pen up). A commit takes the live stroke's
+    // pixels (`into_commit` finishes it if the canvas hasn't); they must be bit-identical to
+    // rendering the stroke from scratch, which is what a commit without a live view does, and
+    // what every commit did before. With and without distinct mirrors (the union path). Catch-up
+    // on Stroke End is on (it starts off), and Pressure for Size (also off by default) keeps the
+    // lagging dabs small enough to leave the stroke's end unpainted until the catch-up.
+    let pts: Vec<[f64; 3]> = (0..30)
+        .map(|i| {
+            let t = f64::from(i) / 29.0;
+            [20.0 + 160.0 * t, 50.0 + 25.0 * (t * 6.0).sin(), 0.4 + 0.6 * t]
+        })
+        .collect();
+    let end = pts[pts.len() - 1];
+    for depth in [8, 16] {
+        for amount in [0.3, 0.8] {
+            for symmetry in [false, true] {
+                for finished_first in [false, true] {
+                    let what = format!("depth {depth}, smoothing {amount}, symmetry {symmetry}, finished first {finished_first}");
+                    let new = || {
+                        let mut s = Session::new();
+                        s.execute("file.new", json!({"width": 200, "height": 100, "depth": depth, "background": "transparent"})).unwrap();
+                        if symmetry {
+                            s.execute("paint.setSymmetry", json!({"mode": "vertical"})).unwrap();
+                        }
+                        s
+                    };
+                    let mut s = new();
+                    let mut p = json!({"points": [pts[0]], "brush": {"size": 24, "hardness": 0.2, "pressureSize": true, "smoothing": {"amount": amount, "catchUpOnEnd": true}}, "target": "pixels"});
+                    let mut live = LiveStroke::begin(&s, &p).unwrap();
+                    for q in &pts[1..] {
+                        live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();
+                    }
+                    if symmetry {
+                        assert!(live.mirror_distinct.iter().any(|d| *d), "{what}: a distinct mirror");
+                    }
+                    let layer = s.active().unwrap().active_layer.unwrap();
+                    let lagging = live.doc.layer(layer).unwrap().surface().unwrap().rgba(end[0] as i32 - 2, end[1] as i32)[3];
+                    if finished_first {
+                        live.finish().unwrap();
+                    }
+                    p["points"] = json!(pts);
+                    p["seed"] = json!(live.seed);
+                    s.offer_live_stroke(live).unwrap();
+                    let r = s.execute("paint.stroke", p.clone()).unwrap();
+                    s.clear_live_stroke();
+                    assert_eq!(r["fromLive"], true, "{what}: the commit took the live pixels");
+                    let mut fresh = new();
+                    assert!(fresh.execute("paint.stroke", p).unwrap().get("fromLive").is_none(), "{what}");
+                    assert!(same_pixels(&surface(&s), &surface(&fresh), Rect::new(0, 0, 200, 100)), "{what}");
+                    // The live view lagged behind the pen; the commit has the catch-up.
+                    let done = surface(&s).rgba(end[0] as i32 - 2, end[1] as i32)[3];
+                    assert!(lagging < done && done > 0.5, "{what}: lagging {lagging}, committed {done}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_press_too_short_to_paint_shows_its_first_dab_and_commits_exactly_that() {
+    // The brush holds a stroke's first dab back until the next point gives it a direction, so a
+    // tap shows that dab on its own (`first_dab`), as finishing would draw it. The commit must be
+    // exactly what was shown (no second dab, nothing left of the preview), with smoothing or not.
+    for amount in [0.0, 0.6] {
+        let what = format!("smoothing {amount}");
+        let mut s = session(120, 100);
+        let p = json!({"points": [[60.0, 50.0, 1.0]], "brush": {"size": 30, "hardness": 0.5, "smoothing": {"amount": amount}}, "target": "pixels"});
+        let mut live = LiveStroke::begin(&s, &p).unwrap();
+        assert!(live.renderer.bounds().is_empty() && !live.first_dab.is_empty(), "{what}: only the first dab is shown");
+        // The canvas refreshes what `bounds` covers when the stroke starts, so it covers the dab.
+        assert_eq!(live.bounds().union(&live.first_dab), live.bounds(), "{what}: the dab is in the stroke's bounds");
+        let layer = s.active().unwrap().active_layer.unwrap();
+        let shown = live.doc.layer(layer).unwrap().surface().unwrap().clone();
+        assert!(shown.rgba(60, 50)[3] > 0.5, "{what}: the press paints at once");
+        live.finish().unwrap();
+        let mut commit = p.clone();
+        commit["seed"] = json!(live.seed);
+        s.offer_live_stroke(live).unwrap();
+        let r = s.execute("paint.stroke", commit.clone()).unwrap();
+        s.clear_live_stroke();
+        assert_eq!(r["fromLive"], true, "{what}");
+        let bounds = Rect::new(0, 0, 120, 100);
+        assert!(same_pixels(&surface(&s), &shown, bounds), "{what}: the commit is the dab that was shown");
+        let mut fresh = session(120, 100);
+        fresh.execute("paint.stroke", commit).unwrap();
+        assert!(same_pixels(&surface(&s), &surface(&fresh), bounds), "{what}: and a fresh render of the tap");
+    }
+}
+
+#[test]
+fn a_stroke_pressed_on_the_symmetry_axis_takes_back_its_first_dab_preview() {
+    // Pressed on the axis, the mirror is the stroke itself, so the press shows its first dab on its
+    // own. The next point makes the mirror distinct and turns a direction-following tip, so that
+    // dab is redrawn in a new shape by the union path; nothing of the preview may be left.
+    let new = || {
+        let mut s = session(168, 100);
+        s.execute("paint.setSymmetry", json!({"mode": "vertical"})).unwrap();
+        s
+    };
+    let mut s = new();
+    let brush = json!({"size": 40, "hardness": 1, "roundness": 0.15, "spacing": 0.25, "shapeDynamics": {"enabled": true, "angle": {"control": "direction"}}});
+    let mut p = json!({"points": [[84.0, 50.0, 1.0]], "brush": brush, "target": "pixels", "smoothing": 0});
+    let mut live = LiveStroke::begin(&s, &p).unwrap();
+    assert!(!live.first_dab.is_empty() && !live.mirror_distinct.iter().any(|d| *d), "the press shows its first dab alone");
+    let pts = [[84.0, 50.0, 1.0], [92.0, 80.0, 1.0], [96.0, 95.0, 1.0]];
+    for q in &pts[1..] {
+        live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();
+    }
+    assert!(live.mirror_distinct.iter().any(|d| *d), "a distinct mirror");
+    live.finish().unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let shown = live.doc.layer(layer).unwrap().surface().unwrap().clone();
+    p["points"] = json!(pts);
+    p["seed"] = json!(live.seed);
+    let mut fresh = new();
+    fresh.execute("paint.stroke", p.clone()).unwrap();
+    let bounds = Rect::new(0, 0, 168, 100);
+    assert!(same_pixels(&shown, &surface(&fresh), bounds), "the live view is a fresh render of the stroke");
+    s.offer_live_stroke(live).unwrap();
+    assert_eq!(s.execute("paint.stroke", p).unwrap()["fromLive"], true);
+    assert!(same_pixels(&surface(&s), &surface(&fresh), bounds), "and so is the commit");
 }
 
 #[test]

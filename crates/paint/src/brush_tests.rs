@@ -1372,35 +1372,11 @@ fn sampled_dabs_are_the_same_in_their_tight_box_with_rows_cut_to_the_tip() {
 }
 
 #[test]
-fn composite_live_shows_the_finished_stroke_after_every_chunk() {
-    // A big smoothed Dual Brush stroke: its tail spans many coverage tiles and moves every step,
-    // so the tiles it redraws, the ones it leaves and the ones the stroke covers all occur. The
-    // zigzag's corners are cut by the smoothing, so earlier tails reach where the stroke never
-    // paints and must be taken back.
-    let dual = DualBrush { enabled: true, size: 90.0, spacing: 0.3, mode: MaskMode::Overlay, roundness: 0.7, ..Default::default() };
-    let b = BrushSettings { size: 70.0, hardness: 0.3, spacing: 0.05, dual_brush: dual, smoothing: Smoothing { amount: 0.9, ..Default::default() }, ..brush() };
-    let pts: Vec<StrokePoint> = (0..40).map(|i| StrokePoint::new(60.0 + i as f64 * 8.0, if i % 8 < 4 { 60.0 } else { 160.0 }, 1.0)).collect();
-    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
-        let pre = Surface::with_default(fmt, &[0.2, 0.5, 0.9, 1.0]);
-        let mut live = pre.clone();
-        let mut r = StrokeRenderer::new(&b, Some(fmt), 1.0);
-        let mut tail = Rect::EMPTY;
-        for (n, chunk) in pts.chunks(3).enumerate() {
-            r.push(chunk);
-            tail = r.composite_live(tail, &pre, &mut live, None, false).1;
-            let mut done = pre.clone();
-            render_stroke(&mut done, &b, &pts[..(n * 3 + chunk.len())], None, false, 1.0);
-            let same = (0..220).all(|y| (0..480).all(|x| live.rgba(x, y) == done.rgba(x, y)));
-            assert!(same, "{fmt:?}: after chunk {n} the live preview differs from the finished stroke");
-        }
-    }
-}
-
-#[test]
-fn live_union_of_passes_matches_merging_the_finished_passes_after_every_chunk() {
+fn live_union_of_passes_matches_merging_the_passes_after_every_chunk_and_at_the_end() {
     // Symmetric painting previews the stroke and its mirrors with `composite_union_live`, which
-    // redraws only changed tiles; after every chunk the target must be exactly what finishing
-    // every pass and merging them with `composite_union_many` gives (the commit takes these pixels).
+    // redraws only changed tiles; after every chunk, and once the passes finish, the target must
+    // be exactly what merging the passes with `composite_union_many` gives (at the end the commit
+    // takes these pixels).
     let base = BrushSettings { size: 14.0, hardness: 0.6, opacity: 0.6, ..brush() };
     let mut brushes = vec![base.clone()];
     brushes.push(BrushSettings { smoothing: Smoothing { amount: 0.7, catch_up_on_end: true, ..Default::default() }, ..base.clone() });
@@ -1447,34 +1423,29 @@ fn live_union_of_passes_matches_merging_the_finished_passes_after_every_chunk() 
                 let mut live = crate::render::UnionLive::default();
                 let mut target = pre.clone();
                 let (mut at, mut chunk, mut merged) = (0, 1, 0);
-                while at < stroke.len() {
+                while at <= stroke.len() {
                     let end = (at + chunk).min(stroke.len());
                     for (r, path) in renderers.iter_mut().zip(&paths) {
-                        r.push(&path[at..end]);
+                        if at == stroke.len() {
+                            r.finish();
+                        } else {
+                            r.push(&path[at..end]);
+                        }
                     }
                     let count = if four && at >= 12 { 4 } else { 2 };
                     let full = merged != count;
                     merged = count;
                     let mut passes: Vec<&mut StrokeRenderer> = renderers.iter_mut().take(count).collect();
                     StrokeRenderer::composite_union_live(&mut passes, &mut live, full, &pre, &mut target, selection, false);
-                    let finished: Vec<StrokeRenderer> = renderers
-                        .iter()
-                        .take(count)
-                        .map(|r| {
-                            let mut r = r.clone();
-                            r.finish();
-                            r
-                        })
-                        .collect();
                     let mut expected = pre.clone();
-                    finished[0].composite_union_many(&finished[1..], &pre, &mut expected, selection, false);
+                    renderers[0].composite_union_many(&renderers[1..count], &pre, &mut expected, selection, false);
                     assert!(
                         target.read_region(area) == expected.read_region(area),
                         "{sample:?}, brush {bi}, four {four}, selection {}, points ..{end}",
                         selection.is_some()
                     );
-                    assert_eq!(live.bounds(), finished.iter().fold(Rect::EMPTY, |r, f| r.union(&f.bounds())));
-                    at = end;
+                    assert_eq!(live.bounds(), renderers[..count].iter().fold(Rect::EMPTY, |r, f| r.union(&f.bounds())));
+                    at = if at == stroke.len() { at + 1 } else { end };
                     chunk = chunk % 3 + 1;
                 }
             }

@@ -619,11 +619,14 @@ impl CoverageMap {
         v
     }
 
-    /// The finished coverage over the tiles `keys`: `tail`'s copy of a tile where finishing the
-    /// stroke changes it (see [`StrokeRenderer::tail_preview`]), else this map's own.
-    fn finished_subset(&self, tail: Option<&Self>, keys: &HashSet<(i32, i32)>) -> Self {
-        let tile = |k: &(i32, i32)| tail.and_then(|t| t.tiles.get(&tile_key(*k))).or_else(|| self.tiles.get(&tile_key(*k))).map(|t| (tile_key(*k), t.clone()));
-        Self { tiles: keys.iter().filter_map(tile).collect(), nc: self.nc, bounds: tail.map_or(self.bounds, |t| t.bounds), dirty: HashSet::new() }
+    /// A copy of the tiles `keys`.
+    fn subset(&self, keys: &HashSet<(i32, i32)>) -> Self {
+        Self {
+            tiles: keys.iter().filter_map(|k| self.tiles.get(&tile_key(*k)).map(|t| (tile_key(*k), t.clone()))).collect(),
+            nc: self.nc,
+            bounds: self.bounds,
+            dirty: HashSet::new(),
+        }
     }
 
     /// Union two passes of the same brush stroke without applying opacity twice where they
@@ -662,16 +665,14 @@ impl CoverageMap {
 // Stroke renderer
 // ---------------------------------------------------------------------------
 
-/// What [`StrokeRenderer::composite_union_live`] drew last: the coverage tiles of the passes'
-/// smoothing tails (redrawn without them next time) and the merged bounds.
+/// What [`StrokeRenderer::composite_union_live`] drew last: the merged bounds.
 #[derive(Clone, Debug, Default)]
 pub struct UnionLive {
-    tail_keys: HashSet<(i32, i32)>,
     bounds: Rect,
 }
 
 impl UnionLive {
-    /// The merged bounds of the finished passes, as last drawn.
+    /// The merged bounds of the passes, as last drawn.
     pub fn bounds(&self) -> Rect {
         self.bounds
     }
@@ -851,10 +852,10 @@ impl StrokeRenderer {
     }
 
     /// Live preview of a stroke painted as several passes (the stroke, then its symmetry
-    /// mirrors): leaves `target` as finishing every pass now and compositing them with
-    /// [`composite_union_many`](Self::composite_union_many) over `pre` would, but redraws only the
-    /// coverage tiles that changed since the previous call (new dabs, and the smoothing tail now
-    /// and before). `full` redraws every tile: on the first call, or when a pass joins. Returns
+    /// mirrors): leaves `target` as compositing the passes as they are now with
+    /// [`composite_union_many`](Self::composite_union_many) over `pre` would (finish them first
+    /// for the finished stroke), but redraws only the coverage tiles that changed since the
+    /// previous call. `full` redraws every tile: on the first call, or when a pass joins. Returns
     /// the damaged rectangle.
     pub fn composite_union_live(
         passes: &mut [&mut Self],
@@ -865,23 +866,17 @@ impl StrokeRenderer {
         selection: Option<&Surface>,
         lock_transparency: bool,
     ) -> Rect {
-        let mut keys = std::mem::take(&mut live.tail_keys);
+        let mut keys = HashSet::new();
         for p in passes.iter_mut() {
             p.drain_dirty_into(&mut keys);
             if full {
                 p.keys_into(&mut keys);
             }
         }
-        let tails: Vec<_> = passes.iter().map(|p| p.tail_preview()).collect();
-        let mut tail_keys = HashSet::new();
-        for t in tails.iter().flatten() {
-            t.keys_into(&mut tail_keys);
-        }
-        keys.extend(&tail_keys);
         let mut merged: Option<Self> = None;
-        for (p, t) in passes.iter().zip(&tails) {
-            let cov = p.cov.finished_subset(t.as_ref().map(|t| &t.cov), &keys);
-            let dual = p.dual.as_ref().map(|d| d.finished_subset(t.as_ref().and_then(|t| t.dual.as_ref()), &keys));
+        for p in passes.iter() {
+            let cov = p.cov.subset(&keys);
+            let dual = p.dual.as_ref().map(|d| d.subset(&keys));
             match merged.as_mut() {
                 None => {
                     merged = Some(Self {
@@ -932,7 +927,6 @@ impl StrokeRenderer {
             }
         }
         merged.composite(pre, target, selection, lock_transparency, true);
-        live.tail_keys = tail_keys;
         live.bounds = after;
         dmg
     }
@@ -1125,49 +1119,6 @@ impl StrokeRenderer {
         // Tiles whose coverage the tail doesn't change still composite the same: redraw them all.
         t.cov.dirty.extend(t.cov.tiles.keys().copied().map(tile_coords));
         Some(t)
-    }
-
-    /// One step of a live preview that shows the stroke as finishing it now would (see
-    /// [`tail_preview`](Self::tail_preview)): takes back the previous step's tail `old`, composites
-    /// the tiles that changed, then the new tail. Returns the damage and the new tail's rectangle
-    /// (the next step's `old`).
-    ///
-    /// A tile the tail redraws is composited once, by the tail: it starts from `pre` and covers
-    /// at least what the stroke's own composite would write there. And `old` is copied back from
-    /// `pre` only where no tile composite rewrites it anyway. Big brushes' tails span hundreds
-    /// of tiles, so doing both twice cost as much as the rest of the frame.
-    pub fn composite_live(&mut self, old: Rect, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool) -> (Rect, Rect) {
-        let mut tail = self.tail_preview();
-        let redrawn_by_tail: HashSet<u64> = tail.as_ref().map(|t| t.cov.tiles.keys().copied().collect()).unwrap_or_default();
-        if !old.is_empty() {
-            self.mark_dirty(old);
-            let bounds = self.bounds();
-            let tail_bounds = tail.as_ref().map_or(Rect::EMPTY, |t| t.bounds());
-            let mut region = Vec::new();
-            for ty in old.y0.div_euclid(COV_TILE)..=(old.y1 - 1).div_euclid(COV_TILE) {
-                for tx in old.x0.div_euclid(COV_TILE)..=(old.x1 - 1).div_euclid(COV_TILE) {
-                    let tile = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE);
-                    let part = tile.intersect(&old);
-                    let written = if redrawn_by_tail.contains(&tile_key((tx, ty))) {
-                        tile.intersect(&tail_bounds)
-                    } else if self.cov.tiles.contains_key(&tile_key((tx, ty))) {
-                        tile.intersect(&bounds)
-                    } else {
-                        Rect::EMPTY
-                    };
-                    if part.is_empty() || written.contains_rect(&part) {
-                        continue;
-                    }
-                    pre.read_region_into(part, &mut region);
-                    target.write_region(part, &region);
-                }
-            }
-        }
-        self.cov.dirty.retain(|k| !redrawn_by_tail.contains(&tile_key(*k)));
-        let mut dmg = old.union(&self.composite(pre, target, selection, lock_transparency, false));
-        let tail_rect = tail.as_mut().map_or(Rect::EMPTY, |t| t.composite(pre, target, selection, lock_transparency, false));
-        dmg = dmg.union(&tail_rect);
-        (dmg, tail_rect)
     }
 
     /// Mark the coverage tiles over `r` for the next `composite` (e.g. to redraw over a preview).
