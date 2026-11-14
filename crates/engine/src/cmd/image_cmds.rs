@@ -1055,7 +1055,7 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
                 Ok(())
             })?;
         }
-        crate::mode_cmds::rotate_arbitrary_with(s, &json!({"angle": angle, "direction": "ccw"}), false)?;
+        crate::mode_cmds::rotate_arbitrary_with(s, &json!({"angle": angle, "direction": "ccw"}), false, false)?;
         // Color Sampler points follow the crop's origin shift too (the rotation moved them above).
         s.set_sampler_map(crop_target.sampler_map(target));
         let extension = s.tools.background;

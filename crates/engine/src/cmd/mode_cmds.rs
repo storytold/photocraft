@@ -63,12 +63,15 @@ pub fn rotated_size(size: Size, deg: f64) -> Size {
 }
 
 pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
-    rotate_arbitrary_with(s, p, true)
+    rotate_arbitrary_with(s, p, true, true)
 }
 
 /// [`rotate_arbitrary`]; `keep_counts` leaves the count points where they were (Image Rotation,
-/// #11762). The Crop tool's straighten turn moves them with the image, as before.
-pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: bool) -> Result<Value> {
+/// unlike the turned Crop and Straighten, keeps the Color Sampler points — #11762). The Crop
+/// tool's straighten turn moves them with the image, as before. `keep_guides` turns the guides
+/// with the canvas (#14508, measured for Image Rotation > Arbitrary) instead of dropping them,
+/// as the turned Crop and the Straighten still do (not measured there).
+pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: bool, keep_guides: bool) -> Result<Value> {
     const CMD: &str = "image.rotation.arbitrary";
     // At full precision: an f32 angle can grow the canvas 1 px past what `rotated_size` gives callers.
     let angle = p.get("angle").and_then(Value::as_f64).unwrap_or(0.0);
@@ -138,6 +141,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: boo
             // What Free Transform leaves alone: unlinked vector masks, gradient angles, artboards…
             crate::canvas_geom::transform_layer_geometry(l, &a, false, dpi);
         }
+        let guides_before = doc.guides.clone();
         if keep_counts {
             crate::canvas_geom::keeping_count_points(doc, |doc| crate::canvas_geom::transform_doc_marks(doc, &a));
         } else {
@@ -152,7 +156,31 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: boo
         // Type, shapes and smart objects re-render from their new geometry; type in a missing
         // font keeps its turned pixels.
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
-        doc.guides = Default::default();
+        // #14508: the turn keeps its guides. A right angle goes through transform_doc_marks
+        // above, which swaps orientation and position exactly as the reference measures
+        // (90° clockwise: a vertical guide at x=100 becomes a horizontal one at y=100). Any
+        // other angle follows the measured rule: each guide's edge point (the vertical guide's
+        // point on the top edge, the horizontal one's on the left) turns about the old centre
+        // while the UNROUNDED turned bounding box sits flush at the new canvas's origin - on a
+        // 400x300 canvas turned 30° that lands x=100 at 236.60 and y=50 at 43.30, both within
+        // 0.15 px of the reference's 236.49 and 43.19 (the exact rule is not settled, so no
+        // further refinement is guessed). The content itself is centred in the ROUNDED canvas,
+        // so on a non-right angle the guides hug the unrounded geometry, up to a pixel off the
+        // painted edge - as measured. Guide COLOURS for a turned canvas were not measured and
+        // stay cleared as today; guides that end up off the new canvas follow the same rule
+        // continued, they are kept. The turned Crop and Straighten pass keep_guides=false: not
+        // measured there, so they drop guides exactly as they do today.
+        if !keep_guides {
+            doc.guides = Default::default();
+        } else if sn.abs() > 1e-9 && cs.abs() > 1e-9 {
+            let (ow, oh) = (f64::from(old.width), f64::from(old.height));
+            let gw = ow * cs.abs() + oh * sn.abs();
+            let gh = ow * sn.abs() + oh * cs.abs();
+            let txf = gw / 2.0 - (cs * cx - sn * cy);
+            let tyf = gh / 2.0 - (sn * cx + cs * cy);
+            doc.guides.vertical = guides_before.vertical.iter().map(|x| cs * *x + txf).collect();
+            doc.guides.horizontal = guides_before.horizontal.iter().map(|y| cs * *y + tyf).collect();
+        }
         Ok(new)
     })?;
     Ok(json!({"width": size.width, "height": size.height}))
