@@ -62,6 +62,20 @@ fn collapsing_advanced_options_hides_color_profile_and_keeps_the_choice() {
 }
 
 #[test]
+fn an_unavailable_profile_is_dropped_while_advanced_options_is_collapsed() {
+    // A saved preset can bring back a profile that is no longer installed: Create must not send
+    // it, also when the disclosure holding Color Profile is collapsed (egui skips its body then).
+    let mut h = harness();
+    let nd = h.state().ui.dialogs[0].id;
+    h.get_by_label("Advanced Options").click();
+    h.run_steps(3);
+    assert_eq!(count(&h, "Color Profile"), 0, "collapsed");
+    h.state_mut().ui.dialog_mut(nd).unwrap().fields.insert("profile".into(), json!("no-such-installed-profile"));
+    h.run_steps(3);
+    assert_eq!(h.state().ui.dialogs[0].fields.get("profile"), None, "the unavailable profile is dropped");
+}
+
+#[test]
 fn depth_labels_have_no_float_suffix() {
     let labels: Vec<&str> = crate::dialogs::new_doc_ui::DEPTH_OPTIONS.iter().map(|o| o.1).collect();
     assert_eq!(labels, ["8 bit", "16 bit", "32 bit"]);

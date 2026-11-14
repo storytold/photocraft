@@ -814,29 +814,28 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             // Photoshop's Advanced Options disclosure (open by default) holds Color Profile (#321): the
             // working space by default, or another profile of the mode's colour space, built in or
             // installed in the system. Collapsing it only hides the field; the choice stays in `f`.
+            // The choice is checked on every frame, collapsed or not (egui skips a collapsed body).
+            let mode = get_s(f, "mode", "rgb");
+            let space = color_mode_of(&mode).map(photocraft_engine::color_cmds::mode_space);
+            let working = color_mode_of(&mode).map(|m| app.session.color.working(m).description.clone()).unwrap_or_default();
+            let installed = photocraft_engine::installed_profiles::installed();
+            let opts = profile_options(space, &working, &installed);
+            let mut profile = get_s(f, "profile", "working");
+            if !opts.iter().any(|(v, _)| *v == profile) {
+                // Not a profile of this mode (or no longer installed): Create must not send it.
+                profile = "working".into();
+                f.remove("profile");
+            }
             egui::CollapsingHeader::new(egui::RichText::new(tl!("Advanced Options")).strong()).id_salt("nd-advanced").default_open(true).show(ui, |ui| {
                 small_label(ui, tl!("Color Profile"));
-                {
-                    let mode = get_s(f, "mode", "rgb");
-                    let space = color_mode_of(&mode).map(photocraft_engine::color_cmds::mode_space);
-                    let working = color_mode_of(&mode).map(|m| app.session.color.working(m).description.clone()).unwrap_or_default();
-                    let installed = photocraft_engine::installed_profiles::installed();
-                    let opts = profile_options(space, &working, &installed);
-                    let mut profile = get_s(f, "profile", "working");
-                    if !opts.iter().any(|(v, _)| *v == profile) {
-                        // Not a profile of this mode (or no longer installed): Create must not send it.
-                        profile = "working".into();
+                let shown: Vec<(String, &str)> = opts.iter().map(|(v, l)| (v.clone(), l.as_str())).collect();
+                if widgets::dropdown(ui, "nd-profile", tl!("Color Profile"), &mut profile, &shown, 240.0) {
+                    if profile == "working" {
                         f.remove("profile");
+                    } else {
+                        f.insert("profile".into(), json!(profile));
                     }
-                    let shown: Vec<(String, &str)> = opts.iter().map(|(v, l)| (v.clone(), l.as_str())).collect();
-                    if widgets::dropdown(ui, "nd-profile", tl!("Color Profile"), &mut profile, &shown, 240.0) {
-                        if profile == "working" {
-                            f.remove("profile");
-                        } else {
-                            f.insert("profile".into(), json!(profile));
-                        }
-                        f.remove("__savedPreset");
-                    }
+                    f.remove("__savedPreset");
                 }
             });
             save_preset(app, ui, f);
