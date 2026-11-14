@@ -347,9 +347,12 @@ pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
     if let Some(r) = get_bool(d, "Rltv") {
         p.insert("relative".into(), r.into());
     }
-    let (v, h) = (get_enum(d, "Vrtc"), get_enum(d, "Hrzn"));
-    // A step with neither anchor key anchors at the top left; with one, the other axis centres.
-    let anchor = match (v.as_deref().unwrap_or(if h.is_some() { "Cntr" } else { "Top" }), h.as_deref().unwrap_or(if v.is_some() { "Cntr" } else { "Left" })) {
+    let (v, h) = match (get_enum(d, "Vrtc"), get_enum(d, "Hrzn")) {
+        // A step with neither anchor key anchors at the top left; with one, the other axis centres.
+        (None, None) => ("Top".into(), "Left".into()),
+        (v, h) => (v.unwrap_or_else(|| "Cntr".into()), h.unwrap_or_else(|| "Cntr".into())),
+    };
+    let anchor = match (v.as_str(), h.as_str()) {
         ("Top", "Left") => "topLeft",
         ("Top", "Cntr") => "top",
         ("Top", "Rght") => "topRight",
