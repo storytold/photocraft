@@ -134,9 +134,21 @@ pub(crate) fn reidentify_copied_layers(doc: &mut Document) {
     }
 }
 
-/// Scale every size and distance of a style by `k` (Image Size's Scale Styles, Layer Style ›
-/// Scale Effects, and previews that draw a style at a reduced resolution).
+/// Scale every size and distance of a style by `k` (Image Size's Scale Styles and Layer Style ›
+/// Scale Effects), with pattern scales kept within the dialog's 1..1000 %.
 pub fn scale_effects(fx: &mut Effects, k: f32) {
+    scale_effects_with(fx, k, true);
+}
+
+/// [`scale_effects`] for a preview that draws a style at a reduced resolution: pattern scales
+/// follow `k` exactly, so the preview matches the style it stands for (a 2 % pattern drawn at a
+/// quarter of the size is 0.5 %, not the dialog's 1 % minimum).
+pub fn scale_effects_preview(fx: &mut Effects, k: f32) {
+    scale_effects_with(fx, k, false);
+}
+
+fn scale_effects_with(fx: &mut Effects, k: f32, clamp: bool) {
+    let pattern = |scale: &mut f32| scale_pattern(scale, k, clamp);
     for e in &mut fx.items {
         match e {
             Effect::DropShadow(s) | Effect::InnerShadow(s) => {
@@ -152,19 +164,32 @@ pub fn scale_effects(fx: &mut Effects, k: f32) {
             Effect::BevelEmboss(b) => {
                 b.size *= k;
                 b.soften *= k;
+                if let Some(t) = &mut b.texture {
+                    pattern(&mut t.scale);
+                }
             }
-            Effect::PatternOverlay { scale, .. } => *scale *= k,
+            Effect::PatternOverlay { scale, .. } => pattern(scale),
             Effect::GradientOverlay { .. } | Effect::ColorOverlay { .. } => {}
         }
         if let Effect::Stroke(s) = e
             && let FxPaint::Pattern { scale, .. } = &mut s.paint
         {
-            *scale *= k;
+            pattern(scale);
         }
     }
     // Effects changed: the preserved PSD block no longer applies.
     if k != 1.0 {
         fx.psd_raw = None;
+    }
+}
+
+/// Scale a style's pattern scale; with `clamp`, kept within the 1..1000 % the Layer Style dialog
+/// and the reference application allow (a 10 % pattern reduced to 5 % stays at 1 %).
+fn scale_pattern(scale: &mut f32, k: f32, clamp: bool) {
+    let (min, max) = photocraft_doc::effects::PATTERN_SCALE_RANGE;
+    let v = *scale * k;
+    if !v.is_nan() {
+        *scale = if clamp { v.clamp(min, max) } else { v };
     }
 }
 
@@ -293,7 +318,13 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
             Method::Automatic if nw > ow || nh > oh => Resample::PreserveDetails,
             Method::Automatic => Resample::BicubicSharper,
         };
-        resample_doc_with_styles(doc, "image.imageSize", nw, nh, filter, scale_styles)
+        // Resampling to a new pixel size drops the selection rather than scaling it, as Photoshop
+        // does (#13856); undo brings it back with the old size. Taken before the resample so it
+        // isn't scaled for nothing. A resolution-only change (returned above) keeps it.
+        if (nw, nh) != (ow, oh) {
+            doc.selection = None;
+        }
+        crate::canvas_geom::keeping_count_points(doc, |doc| resample_doc_with_styles(doc, "image.imageSize", nw, nh, filter, scale_styles))
     })?;
     // The size the document has now: without resampling `width`/`height` are ignored (#1815).
     let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
@@ -689,7 +720,7 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let ext = extension_color(s, p);
     s.set_sampler_map(photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
     s.edit("Canvas Size", |doc, _| {
-        translate_doc(doc, "image.canvasSize", dx, dy)?;
+        crate::canvas_geom::keeping_count_points(doc, |doc| translate_doc(doc, "image.canvasSize", dx, dy))?;
         doc.size = Size::new(nw, nh);
         if nw > ow as u32 || nh > oh as u32 {
             drop_fill_caches(&mut doc.layers);
@@ -755,6 +786,7 @@ fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value>
     let unlock = !delete && !content_aware && !keep_background;
     // Values beyond i32 would wrap through the narrowing casts into a rectangle unrelated to
     // the numbers passed; reject them (see `commands::int_i32`).
+    let given = ["x", "y", "width", "height"].into_iter().any(|k| p.get(k).is_some_and(|v| !v.is_null()));
     let explicit = match (
         crate::commands::int_i32("image.crop", p, "x")?,
         crate::commands::int_i32("image.crop", p, "y")?,
@@ -774,6 +806,14 @@ fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value>
                     .ok_or_else(|| bad("image.crop", format!("`{ko}` + `{kl}` = {} is outside the 32-bit coordinate range", i64::from(o) + i64::from(len))))
             };
             Some(Rect::new(x, y, end(x, w, "x", "width")?, end(y, h, "y", "height")?))
+        }
+        // A rectangle that is passed but incomplete or empty is refused: falling back to the
+        // selection would crop somewhere the caller didn't ask for (#9279).
+        _ if given => {
+            return Err(bad(
+                "image.crop",
+                "`x`, `y`, `width` and `height` go together: pass all four as numbers of pixels, with `width` and `height` rounding to at least 1",
+            ));
         }
         _ => None,
     };
@@ -1015,7 +1055,7 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
                 Ok(())
             })?;
         }
-        crate::mode_cmds::rotate_arbitrary(s, &json!({"angle": angle, "direction": "ccw"}))?;
+        crate::mode_cmds::rotate_arbitrary_with(s, &json!({"angle": angle, "direction": "ccw"}), false)?;
         // Color Sampler points follow the crop's origin shift too (the rotation moved them above).
         s.set_sampler_map(crop_target.sampler_map(target));
         let extension = s.tools.background;
@@ -1206,7 +1246,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.crop",
             "Crop",
             ["Image"],
-            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; deleteCroppedPixels false: the pixels past the frame are kept and, unless contentAware, the Background becomes a normal layer, "Layer 0", so an extension is transparent on every layer (with contentAware the Background stays); contentAware: the Crop tool's Fill › Content-Aware Fill uses surrounding pixels to fill areas uncovered by a rotated or extending crop. The fill targets the Background, or the active pixel layer if there is no Background. With Delete Cropped Pixels on, it also targets a separate active pixel layer if it is visible and unlocked.)"##,
+            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (x/y/width/height, all four or none: without them the selection's bounds are cropped to; targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; deleteCroppedPixels false: the pixels past the frame are kept and, unless contentAware, the Background becomes a normal layer, "Layer 0", so an extension is transparent on every layer (with contentAware the Background stays); contentAware: the Crop tool's Fill › Content-Aware Fill uses surrounding pixels to fill areas uncovered by a rotated or extending crop. The fill targets the Background, or the active pixel layer if there is no Background. With Delete Cropped Pixels on, it also targets a separate active pixel layer if it is visible and unlocked.)"##,
             has_doc,
             crop
         ),
@@ -1222,7 +1262,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.rgb",
             "RGB Color",
             ["Image", "Mode"],
-            r##"{"profile":"<builtin id>|working|/path/to/profile.icc"=working,"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true}"##,
+            r##"{"profile":"<builtin id>|working|/path/to/profile.icc"=working (Indexed→RGB preserves the document profile unless explicit),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true}"##,
             has_doc,
             |s, p| convert_mode(s, ColorMode::Rgb, p)
         ),
@@ -1259,3 +1299,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "image_size_drops_selection_tests.rs"]
+mod image_size_drops_selection_tests;

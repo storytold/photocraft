@@ -540,16 +540,30 @@ fn type_shape_descriptor() -> Descriptor {
     desc("null").with("null", class_ref("contentLayer")).with("Usng", target_ref("textLayer"))
 }
 
+/// Make events another module maps: a type path, an artboard, a layer style or a frame,
+/// tried in that order.
+fn delegated_make_from(d: &Descriptor) -> Option<Mapped> {
+    let class = get_ref(d, "null").and_then(ref_class);
+    match class.as_deref() {
+        Some("Path") => return Some(super::steps_type_path::from(d)),
+        // Layer › New › Artboard and Artboard from Layers (#10723).
+        Some("artboardSection") => return Some(super::steps_artboard_section::from(d)),
+        _ => {}
+    }
+    if let Some(mapped) = super::steps_layer_style::create_from_descriptor(d) {
+        return Some(mapped);
+    }
+    // Layer › New › Frame from Layers (#10723).
+    (class.as_deref() == Some("framedGroupSection")).then(|| super::steps_frame_section::from(d))
+}
+
 /// Import Make events only when their geometry and options can be represented faithfully,
 /// including the exact target-text-to-content-layer references.
 pub(super) fn make_from(d: &Descriptor) -> Mapped {
     if let Some(mapped) = super::steps_calculations::from_descriptor(d) {
         return mapped;
     }
-    if get_ref(d, "null").and_then(ref_class).as_deref() == Some("Path") {
-        return super::steps_type_path::from(d);
-    }
-    if let Some(mapped) = super::steps_layer_style::create_from_descriptor(d) {
+    if let Some(mapped) = delegated_make_from(d) {
         return mapped;
     }
     if d.items == type_shape_descriptor().items {
@@ -717,8 +731,14 @@ pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
     if id == super::steps_type_path::COMMAND {
         return super::steps_type_path::to(p);
     }
+    if matches!(id, super::steps_artboard_section::NEW | super::steps_artboard_section::FROM_LAYERS) {
+        return super::steps_artboard_section::to(id, p);
+    }
     if id == super::steps_layer_style::CREATE {
         return super::steps_layer_style::style_to(id, p);
+    }
+    if id == super::steps_frame_section::COMMAND {
+        return super::steps_frame_section::to(p);
     }
     if id == "type.convertToShape" {
         return p.as_object().filter(|p| p.is_empty()).map(|_| type_shape_descriptor());
@@ -1164,9 +1184,12 @@ pub(super) fn set_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     let unsupported = Mapped::Unsupported { harmless: false };
     match (ref_class(r).as_deref(), target(r)) {
+        (Some("Path"), Target::Property(p)) if p == "WrPt" => super::steps_path::from(d),
         (Some("Chnl"), Target::Property(p)) if p == "fsel" => selection_from(d),
         // Quick Mask mode on (`set` of the document's quick-mask property); `clearEvent` turns it off.
         (Some("Prpr"), Target::Property(p)) if p == "QucM" => step("select.editInQuickMaskMode", json!({"on": true})),
+        // Image › Analysis › Set Measurement Scale › Custom (#10723).
+        (Some("Prpr"), Target::Property(p)) if p == "measurementScale" => super::steps_measurement::from(d),
         // Layer › New › Layer From Background (Photoshop records the New Layer dialog's values
         // as a `set` of the Background); values other than the defaults then apply to the layer.
         (Some("Lyr"), Target::Property(p)) if p == "Bckg" => background_from(d),
@@ -1270,6 +1293,8 @@ pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
     let fsel = D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]);
     let sel = |t: D| desc("null").with("null", fsel.clone()).with("T   ", t);
     Some(match id {
+        "path.set" => return super::steps_path::to(p),
+        super::steps_measurement::SET_SCALE => return super::steps_measurement::to(p),
         "select.all" => sel(enm("Ordn", "Al  ")),
         "select.deselect" => sel(enm("Ordn", "None")),
         "select.reselect" => sel(enm("Ordn", "Prvs")),

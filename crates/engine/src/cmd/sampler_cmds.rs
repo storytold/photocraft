@@ -17,6 +17,12 @@ use crate::{DocState, EngineError, Result, Session};
 /// Photoshop's Color Sampler limit: at most 10 points per document.
 pub const MAX_SAMPLERS: usize = 10;
 
+/// The refusal `view.colorSamplers.add` gives at [`MAX_SAMPLERS`], so a caller can tell it from
+/// other failures.
+pub fn limit_message() -> String {
+    format!("Color Sampler limit reached: at most {MAX_SAMPLERS} points per document")
+}
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
@@ -42,6 +48,11 @@ pub fn device_cmyk(r: f32, g: f32, b: f32) -> [i32; 4] {
 /// pure ink reads 100 % of that ink and 0 % of the rest, as Photoshop's Device CMYK readout and
 /// other editors show a CMYK file's pixel.
 ///
+/// `size` and `zoom` choose the box exactly as the RGB readout does
+/// ([`crate::sample_cmds::sample_rect_at`]): the Eyedropper's view zoom for a pointer sample
+/// (#11751), `None` for the centred square the Color Sampler always uses (#11732), so the CMYK row
+/// and the RGB row of one sample describe the same pixels.
+///
 /// The reading must not come back from the RGB composite: the profile's CMYK → sRGB → CMYK round
 /// trip is lossy, and reports a pure cyan ink (100/0/0/0) as 73/15/0/0, a pure black as
 /// 18/11/12/91 (#11640).
@@ -53,14 +64,14 @@ pub fn device_cmyk(r: f32, g: f32, b: f32) -> [i32; 4] {
 /// shadow, one pointer sample cost 446 ms that way, against 1 ms on the native path and 14 ms for
 /// the RGB composite the readout already pays, so a per-pixel readout must not ask for it
 /// (#11681 review). Such a document keeps the colour-managed conversion of its RGB composite.
-pub fn ink_cmyk(doc: &Document, pos: [f64; 2], size: u32) -> Option<[i32; 4]> {
-    let rect = crate::sample_cmds::sample_rect(pos[0], pos[1], size, doc.bounds())?;
+pub fn ink_cmyk(doc: &Document, pos: [f64; 2], size: u32, zoom: Option<f64>) -> Option<[i32; 4]> {
+    let rect = crate::sample_cmds::sample_rect_at(pos[0], pos[1], size, zoom, doc.bounds())?;
     // Asked before rendering, since `render_cmyk` takes the split route rather than return `None`.
     if !photocraft_compose::cmyk::supports(doc) {
         return None;
     }
     let inks = photocraft_compose::cmyk::render_cmyk(doc, rect)?;
-    // The same alpha-weighted mean over the square as the RGB readout, on ink values.
+    // The same alpha-weighted mean over the sampled box as the RGB readout, on ink values.
     let mut sum = [0.0f64; 4];
     let mut cover = 0.0f64;
     for pixel in &inks.px {
@@ -78,31 +89,37 @@ pub fn ink_cmyk(doc: &Document, pos: [f64; 2], size: u32) -> Option<[i32; 4]> {
 
 /// The CMYK percentages to show for a sampled pixel: the document's own inks when it is a CMYK
 /// document (#11640), else the colour-managed conversion of its RGB composite ([`device_cmyk`],
-/// the conversion the Color Picker and the CMYK readouts of other documents use).
-pub fn cmyk_readout(doc: &Document, pos: [f64; 2], size: u32, rgba: [f32; 4]) -> [i32; 4] {
-    ink_cmyk(doc, pos, size)
+/// the conversion the Color Picker and the CMYK readouts of other documents use). `size` and
+/// `zoom` are the sample the `rgba` composite was read with, so both rows average the same pixels.
+pub fn cmyk_readout(doc: &Document, pos: [f64; 2], size: u32, zoom: Option<f64>, rgba: [f32; 4]) -> [i32; 4] {
+    ink_cmyk(doc, pos, size, zoom)
         .unwrap_or_else(|| photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgba[0], rgba[1], rgba[2])))
 }
 
 /// The Info-panel values for a sample point at document pixel `pos`: composite RGB 0–255 and
 /// CMYK percentages (the document's own inks for a CMYK document, its colour-managed CMYK
-/// otherwise). One composite pixel, no averaging.
-pub fn readout(doc: &Document, pos: [f64; 2]) -> ([i32; 3], [i32; 4]) {
-    let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], 1, crate::sample_cmds::SampleLayers::All);
+/// otherwise), averaged over the `size` × `size` box of document pixels centred on it (#11732: the
+/// Sample Size the Color Sampler shares with the Eyedropper; 1 is Point Sample). The box is in
+/// document pixels, so the zoom never changes it. Bitmap and Multichannel documents were not
+/// measured, so they keep the Point Sample reading at every size.
+pub fn readout(doc: &Document, pos: [f64; 2], size: u32) -> ([i32; 3], [i32; 4]) {
+    let size = if matches!(doc.mode, photocraft_color::ColorMode::Bitmap | photocraft_color::ColorMode::Multichannel) { 1 } else { size };
+    let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], size, crate::sample_cmds::SampleLayers::All);
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-    ([q(rgba[0]), q(rgba[1]), q(rgba[2])], cmyk_readout(doc, pos, 1, rgba))
+    ([q(rgba[0]), q(rgba[1]), q(rgba[2])], cmyk_readout(doc, pos, size, None, rgba))
 }
 
-/// One point as the list command reports it.
-pub fn point_json(doc: &Document, index: usize, pos: [f64; 2]) -> Value {
-    let (rgb, cmyk) = readout(doc, pos);
+/// One point as the list command reports it, read with Sample Size `size`.
+pub fn point_json(doc: &Document, index: usize, pos: [f64; 2], size: u32) -> Value {
+    let (rgb, cmyk) = readout(doc, pos, size);
     json!({"index": index, "number": index + 1, "position": [pos[0], pos[1]], "rgb": rgb, "cmyk": cmyk})
 }
 
-fn list_json(doc: &Document, points: &[[f64; 2]]) -> Value {
+fn list_json(doc: &Document, points: &[[f64; 2]], size: u32) -> Value {
     json!({
         "max": MAX_SAMPLERS,
-        "samplers": points.iter().enumerate().map(|(i, p)| point_json(doc, i, *p)).collect::<Vec<_>>(),
+        "size": size,
+        "samplers": points.iter().enumerate().map(|(i, p)| point_json(doc, i, *p, size)).collect::<Vec<_>>(),
     })
 }
 
@@ -110,14 +127,16 @@ fn coord(cmd: &str, p: &Value, key: &str) -> Result<f64> {
     p.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, format!("`{key}` must be a finite number (document pixels)")))
 }
 
-/// The pixel a point at document coordinate `(x, y)` sits on, if it is inside the canvas. Whole
-/// pixels only: the click's fractional position floors to the pixel it lands on.
+/// The centre of the pixel a point at document coordinate `(x, y)` sits on, if it is inside the
+/// canvas: the click's fractional position snaps to the middle of the pixel it lands on, so a
+/// click anywhere in pixel 199,149 stores 199.5,149.5, as in Photoshop (#11725). The readout
+/// floors it back to that pixel.
 fn pixel(doc: &Document, x: f64, y: f64) -> Option<[f64; 2]> {
     let (px, py) = (x.floor(), y.floor());
     if px < f64::from(i32::MIN) || px > f64::from(i32::MAX) || py < f64::from(i32::MIN) || py > f64::from(i32::MAX) {
         return None;
     }
-    doc.bounds().contains(px as i32, py as i32).then_some([px, py])
+    doc.bounds().contains(px as i32, py as i32).then_some([px + 0.5, py + 0.5])
 }
 
 fn index_param(cmd: &str, p: &Value) -> Result<usize> {
@@ -142,14 +161,15 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "view.colorSamplers.add";
     let x = coord(CMD, p, "x")?;
     let y = coord(CMD, p, "y")?;
+    let size = crate::sample_cmds::size_param(CMD, p)?;
     change(s, |st| {
         let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
         if st.color_samplers.len() >= MAX_SAMPLERS {
-            return Err(EngineError::Other(format!("Color Sampler limit reached: at most {MAX_SAMPLERS} points per document")));
+            return Err(EngineError::Other(limit_message()));
         }
         st.color_samplers.push(pos);
         let i = st.color_samplers.len() - 1;
-        Ok(json!({"index": i, "count": st.color_samplers.len(), "point": point_json(&st.doc, i, pos)}))
+        Ok(json!({"index": i, "count": st.color_samplers.len(), "point": point_json(&st.doc, i, pos, size)}))
     })
 }
 
@@ -158,6 +178,7 @@ fn move_point(s: &mut Session, p: &Value) -> Result<Value> {
     let i = index_param(CMD, p)?;
     let x = coord(CMD, p, "x")?;
     let y = coord(CMD, p, "y")?;
+    let size = crate::sample_cmds::size_param(CMD, p)?;
     change(s, |st| {
         let n = st.color_samplers.len();
         if i >= n {
@@ -165,7 +186,7 @@ fn move_point(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
         st.color_samplers[i] = pos;
-        Ok(json!({"index": i, "point": point_json(&st.doc, i, pos)}))
+        Ok(json!({"index": i, "point": point_json(&st.doc, i, pos, size)}))
     })
 }
 
@@ -190,9 +211,10 @@ fn clear(s: &mut Session, _p: &Value) -> Result<Value> {
     })
 }
 
-fn list(s: &mut Session, _p: &Value) -> Result<Value> {
+fn list(s: &mut Session, p: &Value) -> Result<Value> {
+    let size = crate::sample_cmds::size_param("view.colorSamplers.list", p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(list_json(&st.doc, &st.color_samplers))
+    Ok(list_json(&st.doc, &st.color_samplers, size))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -202,7 +224,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Add Color Sampler",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":f64,"y":f64} → the new point {index, number, position, rgb, cmyk}; errors at the 10-point limit or off the canvas"##,
+            params: r##"{"x":f64,"y":f64,"size":1|3|5|11|31|51|101|"point"=1 (the Sample Size the readout averages over, in document pixels)} → the new point {index, number, position, rgb, cmyk}; errors at the 10-point limit or off the canvas"##,
             enabled: has_doc,
             run: add,
             journal: false,
@@ -212,7 +234,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Move Color Sampler",
             menu: &[],
             shortcut: None,
-            params: r##"{"index":n,"x":f64,"y":f64}"##,
+            params: r##"{"index":n,"x":f64,"y":f64,"size":1|3|5|11|31|51|101|"point"=1}"##,
             enabled: has_doc,
             run: move_point,
             journal: false,
@@ -242,7 +264,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Color Samplers",
             menu: &[],
             shortcut: None,
-            params: r##"{} → {max, samplers:[{index, number, position, rgb, cmyk}]}"##,
+            params: r##"{"size":1|3|5|11|31|51|101|"point"=1 (Sample Size: each readout is the size × size average of document pixels around the point)} → {max, size, samplers:[{index, number, position, rgb, cmyk}]}"##,
             enabled: has_doc,
             run: list,
             journal: false,
@@ -252,3 +274,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod pixel_centre_tests;
+
+#[cfg(test)]
+mod sample_size_tests;

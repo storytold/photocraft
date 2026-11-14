@@ -7,28 +7,32 @@ pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
 }
 
 /// The colours the Info panel reads at document pixel `(x, y)`: the composite RGB (straight RGBA
-/// 0..1, averaged over the Eyedropper's Sample Size, as in Photoshop (#1649)) and its CMYK
-/// percentages. Both are cached per document, pixel, revision and Sample Size, so neither the
-/// composite nor the ink composite runs again on a frame that shows the same pixel of the same
-/// document (#4528) — and a switch to another document re-reads (#11681 review).
+/// 0..1), averaged over the Eyedropper's Sample Size over the box it reads at the view zoom, as in
+/// Photoshop (#1649, #11732, #11751), and its CMYK percentages (the document's own inks for a CMYK
+/// document, #11640). Both are cached per document, pixel, revision, Sample Size and zoom, so
+/// neither the composite nor the ink composite runs again on a frame that shows the same pixel of
+/// the same document (#4528) — and a switch to another document re-reads (#11681 review).
 pub(crate) fn pointer_readout(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<crate::InfoSample> {
     let st = app.session.active()?;
     let (doc, rev) = (st.doc.id, st.revision);
     let sample_size = app.ui.tool_options.eyedropper_size;
-    if let Some(((cd, cx, cy, cr, cs), v)) = app.info_sample
-        && (cd, cx, cy, cr, cs) == (doc, x, y, rev, sample_size)
+    let zoom = app.current_zoom();
+    let key = (doc, x, y, rev, sample_size, zoom.to_bits());
+    if let Some((k, v)) = app.info_sample
+        && k == key
     {
         return Some(v);
     }
     let at = [f64::from(x) + 0.5, f64::from(y) + 0.5];
-    let params = json!({"x": at[0], "y": at[1], "size": sample_size});
+    let params = json!({"x": at[0], "y": at[1], "size": sample_size, "zoom": f64::from(zoom)});
     let v: Vec<f32> = serde_json::from_value(app.session.execute("document.sampleColor", params).ok()?).ok()?;
     let rgba = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
     // The CMYK row through the engine, as the Color Sampler points do: the document's own inks for
-    // a CMYK document, so a pure ink reads 100 % (#11640), else the colour-managed conversion of
-    // its RGB composite, the same one the Color Picker uses (#8101).
-    let cmyk = app.session.active().map(|st| photocraft_engine::sampler_cmds::cmyk_readout(&st.doc, at, sample_size, rgba))?;
-    app.info_sample = Some(((doc, x, y, rev, sample_size), (rgba, cmyk)));
+    // a CMYK document, so a pure ink reads 100 % (#11640), over the same box the RGB row just
+    // averaged (#11751); else the colour-managed conversion of its RGB composite, the same one the
+    // Color Picker uses (#8101).
+    let cmyk = app.session.active().map(|st| photocraft_engine::sampler_cmds::cmyk_readout(&st.doc, at, sample_size, Some(f64::from(zoom)), rgba))?;
+    app.info_sample = Some((key, (rgba, cmyk)));
     Some((rgba, cmyk))
 }
 
@@ -119,7 +123,8 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let (rgb, cmyk) = (&s["rgb"], &s["cmyk"]);
             ui.horizontal(|ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new(format!("#{n}")).color(t.text_dim).size(11.5)));
-                cell(ui, format!("X: {}  Y: {}", fx(at.0), fy(at.1)));
+                // The point sits on its pixel's centre (#11725); the row names the pixel, as the pointer row does.
+                cell(ui, format!("X: {}  Y: {}", fx(at.0.floor()), fy(at.1.floor())));
             });
             ui.horizontal(|ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
@@ -133,20 +138,24 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The Info panel's Color Sampler readouts and the (document, revision) they were composited for.
-pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64), std::sync::Arc<Vec<Value>>);
+/// The Info panel's Color Sampler readouts and the (document, revision, Sample Size) they were
+/// composited for.
+pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64, u32), std::sync::Arc<Vec<Value>>);
 
 /// The Color Sampler readouts of the active document, composited once per revision (#4528):
 /// adding, moving or deleting a sampler and every pixel edit bump the revision, so between them
 /// the Info panel reuses them instead of compositing each point through the stack every frame.
+/// They average over the Sample Size shared with the Eyedropper (#11732), which is part of the
+/// key, so changing it re-reads every sampler at once.
 pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Value>> {
-    let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision)) else { return std::sync::Arc::default() };
+    let size = app.ui.tool_options.eyedropper_size;
+    let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision, size)) else { return std::sync::Arc::default() };
     if let Some((k, v)) = &app.info_samplers
         && *k == key
     {
         return v.clone();
     }
-    let list = app.session.execute("view.colorSamplers.list", json!({})).ok();
+    let list = app.session.execute("view.colorSamplers.list", json!({"size": size})).ok();
     let v = std::sync::Arc::new(list.as_ref().and_then(|v| v["samplers"].as_array()).cloned().unwrap_or_default());
     app.info_samplers = Some((key, v.clone()));
     v
