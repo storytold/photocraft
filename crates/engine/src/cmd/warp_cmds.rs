@@ -469,7 +469,8 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     // a large layer runs on a worker with progress, and can be cancelled.
     crate::jobs::edit_job(
         s,
-        "Warp",
+        // A smart object's warp is a Free Transform step in the reference; the rest stay Warp (#12492).
+        if is_smart { "Free Transform" } else { "Warp" },
         move |doc, _, ctx| ctx.stage(0.0, 1.0, "Warping", |ctl| warp_doc(doc, id, &w, rect, interp, content_knots, ctl)),
         move |()| json!({"layer": id.0, "changed": true, "rect": [rect.x0, rect.y0, rect.x1, rect.y1]}),
     )
@@ -790,6 +791,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "warp_smart_history_name_tests.rs"]
+mod warp_smart_history_name_tests;
 
 #[cfg(test)]
 #[path = "warp_split_default_grid_tests.rs"]
