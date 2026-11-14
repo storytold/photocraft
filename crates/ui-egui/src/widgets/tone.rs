@@ -291,11 +291,11 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, scope: H
         HistSource::Channel { .. } | HistSource::Colors { .. } => {}
     }
     // An adjustment layer's masks limit what the adjustment touches, so only the pixels they reveal
-    // are counted: any effective value above zero, since the compositor blends the adjustment in
-    // wherever the mask is not fully black. They are read the way the compositor reads them: a
-    // feather blurs across the canvas, so a feathered layer reads the compositor's (cached)
-    // canvas-wide combined mask; otherwise each band takes the pixel mask (with density) times the
-    // vector mask rendered for that band.
+    // are counted: any effective value that visibly blends the adjustment in ([`reveals`]), since
+    // the compositor applies it wherever the mask is not (practically) black. They are read the
+    // way the compositor reads them: a feather blurs across the canvas, so a feathered layer reads
+    // the compositor's (cached) canvas-wide combined mask; otherwise each band takes the pixel
+    // mask (with density) times the vector mask rendered for that band.
     let below = match source {
         HistSource::BelowLayer(id) => doc.layer(id),
         _ => None,
@@ -374,10 +374,10 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, scope: H
         if masked {
             if let Some(pass) = &mut sel_pass {
                 for (keep, value) in pass.iter_mut().zip(&revealed) {
-                    *keep &= *value > 0.0;
+                    *keep &= reveals(*value);
                 }
             } else {
-                sel_pass = Some(revealed.iter().map(|&value| value > 0.0).collect());
+                sel_pass = Some(revealed.iter().map(|&value| reveals(value)).collect());
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -437,11 +437,21 @@ fn sampled_vector_values(mask: &photocraft_vector::CompiledVectorMask, rect: pho
     out
 }
 
-/// Whether a pixel mask reveals every pixel: no painted tiles and a default above zero after
+/// Whether a mask value blends the adjustment in visibly: at or above half an 8-bit level. The
+/// compositor blends in proportion to the value, so below that no 8-bit output changes; it also
+/// keeps the f32 residue a feather blur leaves past its edge (about 1e-8) from counting.
+fn reveals(value: f32) -> bool {
+    value >= REVEAL_MIN
+}
+
+/// Half an 8-bit level, the weakest mask value [`reveals`] counts.
+const REVEAL_MIN: f32 = 0.5 / 255.0;
+
+/// Whether a pixel mask reveals every pixel: no painted tiles and a default that [`reveals`] after
 /// density (counting it then changes nothing, so the per-band pass is skipped).
 fn reveals_all(m: &photocraft_doc::LayerMask) -> bool {
     let d = m.surface.default_pixel().first().copied().unwrap_or(1.0);
-    m.surface.tile_count() == 0 && 1.0 - m.density * (1.0 - d) > 0.0
+    m.surface.tile_count() == 0 && reveals(1.0 - m.density * (1.0 - d))
 }
 
 /// Bin- and pixel-wise sum of two partial counts (saturating: a hostile canvas can exceed
@@ -1400,6 +1410,39 @@ mod tests {
         .unwrap();
         let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb, HistScope::WholeInput);
         assert_eq!((hist[0][0], hist[0][255]), (0, 32 * 64), "the 25% white half counts, the black half stays hidden");
+    }
+
+    /// A feather blur leaves f32 residue past its edge; downstream of a revealed stripe on the
+    /// black half, the white half the mask hides stays uncounted.
+    #[test]
+    fn hidden_pixels_past_a_feathered_edge_stay_uncounted() {
+        let (mut s, id) = masked_adjustment(64, 64, 32, true);
+        s.edit("left-stripe", |doc, active| {
+            let m = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
+            m.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[0.0]);
+            m.surface.fill_rect(photocraft_geom::Rect::new(8, 0, 10, 64), &[1.0]);
+            m.feather = 2.0;
+            Ok(())
+        })
+        .unwrap();
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb, HistScope::WholeInput);
+        assert!(hist[0][0] > 0, "the feathered stripe counts");
+        assert_eq!(hist[0][255], 0, "22 pixels past the edge the white half stays hidden");
+    }
+
+    /// A black mask at 99.9% density blends in 0.1%, which no 8-bit output shows: nothing counts.
+    #[test]
+    fn a_practically_black_mask_counts_nothing() {
+        let (mut s, id) = masked_adjustment(64, 64, 32, true);
+        s.edit("near-black", |doc, active| {
+            let m = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
+            m.surface = photocraft_doc::Surface::with_default(photocraft_doc::PixelFormat::GRAY8, &[0.0]);
+            m.density = 0.999;
+            Ok(())
+        })
+        .unwrap();
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb, HistScope::WholeInput);
+        assert_eq!(hist.pixel_count, 0);
     }
 
     #[test]
