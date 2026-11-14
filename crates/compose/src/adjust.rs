@@ -279,7 +279,9 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                     continue;
                 }
                 let mut o = lut3d_sample(table, n, [p[0], p[1], p[2]], *tetrahedral);
-                if *dither {
+                // An 8-bit step of noise is coarse in deeper documents, which Photoshop 27.11
+                // leaves flat (#9115).
+                if *dither && matches!(depth, None | Some(SampleType::U8)) {
                     let d = bayer4(x0 + (i % w) as i32, y0 + (i / w) as i32) / 255.0;
                     o = o.map(|v| (v + d).clamp(0.0, 1.0));
                 }
