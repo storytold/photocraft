@@ -15,9 +15,12 @@ use super::{Result, invalid};
 
 const MAX_NODES: usize = 65_536;
 const MAX_DEPTH: usize = 32;
+const MAX_FEATURE_SETTINGS: usize = 64;
 
 #[cfg(test)]
 mod diagnostic_review_tests;
+#[cfg(test)]
+mod feature_settings_review_tests;
 #[cfg(test)]
 mod literal_profile_review_tests;
 #[cfg(test)]
@@ -842,12 +845,18 @@ fn device_points(pixels: f64, dpi: f64) -> Result<f32> {
     Ok(points as f32)
 }
 
-/// Parse bounded OpenType feature settings, validate four-character tags and resolve repeated tags to their final values.
+/// Bound source settings before deduplication, validate tags and keep each tag's final value.
 fn features(text: &str) -> Result<Vec<FontFeature>> {
     let mut result = Vec::new();
-    for entry in text.split(',').map(str::trim).filter(|entry| !entry.is_empty()) {
-        if result.len() >= 64 {
+    for (index, entry) in text.split(',').enumerate() {
+        // Inherited lists are parsed for each descendant. Duplicate tags and
+        // empty comma slots must not evade the bound on that repeated work.
+        if index >= MAX_FEATURE_SETTINGS {
             return Err(invalid("too many native font features"));
+        }
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
         }
         let (entry, default) = if let Some(rest) = entry.strip_prefix('-') { (rest, 0) } else { (entry.strip_prefix('+').unwrap_or(entry), 1) };
         let mut parts = entry.split(|c: char| c == '=' || c.is_ascii_whitespace()).filter(|s| !s.is_empty());

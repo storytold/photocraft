@@ -8,6 +8,8 @@ use super::{Prop, Result, be_f32, be_i32, be_u32, conversion};
 use crate::initial_view::{MAX_INITIAL_SAMPLERS, NativeInitialView};
 
 #[cfg(test)]
+mod guide_storage_review_tests;
+#[cfg(test)]
 mod resolution_review_tests;
 #[cfg(test)]
 mod text_storage_review_tests;
@@ -124,6 +126,7 @@ fn image_guides(
     outcomes: &mut conversion::Outcomes<'_>,
     owner: usize,
     budget: &mut usize,
+    storage: &mut GuideStorage,
 ) -> Result<()> {
     use photocraft_doc::import_conversion::ConversionReason as Reason;
     let (guides, tail) = property.data.as_chunks::<5>();
@@ -143,13 +146,13 @@ fn image_guides(
             skipped = true;
             continue;
         }
-        if !charge(budget, 8) {
+        let (target, charged) =
+            if orientation == 1 { (&mut doc.guides.horizontal, &mut storage.horizontal) } else { (&mut doc.guides.vertical, &mut storage.vertical) };
+        if !push_guide(target, f64::from(position), charged, budget) {
             skipped = true;
             limited = true;
             break;
         }
-        let target = if orientation == 1 { &mut doc.guides.horizontal } else { &mut doc.guides.vertical };
-        target.push(f64::from(position));
     }
     if skipped {
         outcomes.detail(
@@ -161,6 +164,54 @@ fn image_guides(
         )?;
     }
     Ok(())
+}
+
+/// Capacity admitted once per orientation across all guide properties in this image.
+#[derive(Default)]
+struct GuideStorage {
+    horizontal: usize,
+    vertical: usize,
+}
+
+/// Stage growth fallibly and admit actual retained slots before changing native guides.
+fn push_guide(target: &mut Vec<f64>, value: f64, charged: &mut usize, budget: &mut usize) -> bool {
+    let Some(length) = target.len().checked_add(1) else { return false };
+    // Geometric growth bounds total copying work for long optional guide lists.
+    let capacity = if length > target.capacity() {
+        let Some(grown) = target.capacity().max(1).checked_mul(2) else { return false };
+        if target.capacity() == 0 { 1 } else { grown.max(length) }
+    } else {
+        target.capacity()
+    };
+    let slot_bytes = std::mem::size_of::<f64>();
+    let Some(minimum) = capacity.saturating_sub(*charged).checked_mul(slot_bytes) else { return false };
+    if minimum > *budget {
+        return false;
+    }
+    let mut replacement = if length > target.capacity() {
+        let mut next = Vec::new();
+        if next.try_reserve_exact(capacity).is_err() {
+            return false;
+        }
+        Some(next)
+    } else {
+        None
+    };
+    let capacity = replacement.as_ref().map_or(target.capacity(), Vec::capacity);
+    let Some(cost) = capacity.saturating_sub(*charged).checked_mul(slot_bytes) else { return false };
+    let Some(remaining) = budget.checked_sub(cost) else { return false };
+    if let Some(next) = &mut replacement {
+        next.append(target);
+        next.push(value);
+    } else {
+        target.push(value);
+    }
+    if let Some(next) = replacement {
+        *target = next;
+    }
+    *charged = capacity;
+    *budget = remaining;
+    true
 }
 
 /// Map native document metadata without changing native DPI, unit, guide or sampler semantics.
@@ -186,11 +237,12 @@ pub(super) fn image<'a>(
         warnings.note(&warning);
     }
     let mut text_storage = TextStorage::default();
+    let mut guide_storage = GuideStorage::default();
     let mut metadata_incomplete = false;
     let mut retention_limited = false;
     for p in props {
         match p.kind {
-            18 => image_guides(doc, p, version, outcomes, owner, budget)?,
+            18 => image_guides(doc, p, version, outcomes, owner, budget, &mut guide_storage)?,
             19 => {
                 if let Some((x, y)) = resolution_pair(p.data) {
                     if x != y {
