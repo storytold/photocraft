@@ -43,7 +43,7 @@ fn properties_legacy_toggle_preserves_values_and_clamps_modern_contrast() {
     let mut h = Harness::builder().with_size(egui::vec2(450.0, 250.0)).build_ui_state(
         |ui, values| {
             let cx = EditorCx {
-                mem: ui.id(),
+                mem: ui.scope_id(),
                 hist: None,
                 gray: false,
                 swatches: [[0.0; 3]; 2],
