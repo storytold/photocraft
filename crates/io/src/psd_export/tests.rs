@@ -914,3 +914,28 @@ fn a_redrawn_filter_cache_is_charged_to_the_save_budget() {
         assert_eq!(a.cache.as_ref().unwrap().pixel(1, 1), b.cache.as_ref().unwrap().pixel(1, 1), "layer {i}");
     }
 }
+
+/// Each smart object's filter cache is redrawn on save, and what it keeps until its record is
+/// unmixed is given back once the record is written: the save's smart-filter cache budget
+/// bounds what is held at once, not the sum. Smart objects whose caches together exceed it,
+/// each fitting, all keep their caches, edited (redrawn) or as read.
+#[test]
+fn many_masked_smart_objects_keep_their_caches_on_save() {
+    let one = filtered_embedded_smart_object();
+    let mut doc = one.clone();
+    doc.layers = (0..4)
+        .map(|i| {
+            let mut l = one.layers[0].duplicate();
+            l.name = format!("object {i}");
+            l
+        })
+        .collect();
+    // Redrawn: room for one object's unfiltered pixels (as estimated, with their margin).
+    let redrawn = crate::smart_map::with_test_cache_cap(5 << 18, || crate::export(&doc, "x.psb", &crate::ExportOptions::default())).unwrap();
+    assert_eq!(fx_ids(&redrawn.bytes).len(), 4, "{:?}", redrawn.warnings);
+    // As read: room for the four masks and one object's unfiltered pixels.
+    let back = crate::import("x.psb", &redrawn.bytes).unwrap().document;
+    let kept = crate::smart_map::with_test_cache_cap(2 << 18, || crate::export(&back, "x.psb", &crate::ExportOptions::default())).unwrap();
+    assert_eq!(fx_ids(&kept.bytes).len(), 4, "{:?}", kept.warnings);
+    assert!(!kept.warnings.iter().any(|w| w.contains("left out")), "{:?}", kept.warnings);
+}

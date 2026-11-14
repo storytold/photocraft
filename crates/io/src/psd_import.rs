@@ -70,9 +70,13 @@ pub(crate) struct Ctx<'a> {
     /// The same for the unfiltered pixels the mask mixes back in.
     /// `Err` when the source was refused for the smart-filter cache budget.
     pub unfiltered: std::collections::HashMap<String, Result<Option<Surface>, crate::smart_map::FilterCacheError>>,
-    /// The pixels kept in [`Self::filter_masks`] and [`Self::unfiltered`], and the smart objects
-    /// mixed through them, charged as they are made (the import budget doesn't cover them).
+    /// The pixels kept in [`Self::filter_masks`] and [`Self::unfiltered`], and the tiles mixing
+    /// adds to smart objects, charged as they are made (the import budget doesn't cover them). A
+    /// source gives its charge back once the last layer naming it is built ([`Self::placed_uses`]).
     pub smart_filter_budget: crate::smart_map::FilterCacheBudget,
+    /// How many layer records name each placed id, counted down as they are built: an
+    /// unfiltered source is dropped after its last use.
+    pub placed_uses: std::collections::HashMap<String, usize>,
     /// Placed layers naming the same source share editable contents, not their placement.
     pub smart_contents: std::collections::HashMap<String, SmartContentsId>,
     /// Source sizes of `PlLd`-only placed layers, by source id (read once per embedded file).
@@ -116,6 +120,26 @@ fn row_bands(top: i32, h: usize, rows: usize) -> Vec<(usize, usize)> {
         r1 = end + rows;
     }
     out
+}
+
+/// Bytes of the tiles mixing `source` into `stored` adds ([`photocraft_compose::filter_mask::mix`]
+/// keeps the stored tiles and writes the source's): one per tile the source has and they don't.
+fn added_tiles_bytes(source: &Surface, stored: &Surface, fmt: &PixelFormat) -> u64 {
+    let added = source.tiles().filter(|(c, _)| stored.tile(**c).is_none()).count();
+    photocraft_raster::stored_tiles_bytes(added as u64, fmt)
+}
+
+/// How many layer records name each placed id in their `SoLd`/`SoLE`.
+fn count_placed_uses(file: &PsdFile) -> std::collections::HashMap<String, usize> {
+    let mut uses = std::collections::HashMap::new();
+    for rec in file.layers() {
+        if let Some(p) = rec.block(b"SoLd").or_else(|| rec.block(b"SoLE")).and_then(|b| crate::smart_map::parse_sold(&b.data))
+            && !p.placed.is_empty()
+        {
+            *uses.entry(p.placed).or_insert(0) += 1;
+        }
+    }
+    uses
 }
 
 fn import_format(file: &PsdFile) -> (ColorMode, bool, bool, SampleType) {
@@ -794,10 +818,10 @@ impl Ctx<'_> {
                     }
                 };
                 match unfiltered {
-                    // Every layer of a source mixes its own copy, up to as many new tiles as the
-                    // source has beyond its stored ones: charged per layer, as many layers can
-                    // share one source.
-                    Ok(Some(u)) if self.smart_filter_budget.try_charge(photocraft_raster::stored_tiles_bytes(u.tile_count() as u64, &self.fmt)) => {
+                    // The mixed layer keeps the stored tiles (which the import budget charged)
+                    // and gains a tile wherever the source has one they don't: charged per layer
+                    // (it stays with the document), as many layers can share one source.
+                    Ok(Some(u)) if self.smart_filter_budget.try_charge(added_tiles_bytes(&u, &stored, &self.fmt)) => {
                         photocraft_compose::filter_mask::mix(&u, &stored, m)
                     }
                     Ok(Some(_)) => {
@@ -818,6 +842,9 @@ impl Ctx<'_> {
             _ => stored,
         };
         let filter_mask = if ignore_mask { None } else { filter_mask };
+        if let Some(p) = &placed {
+            self.used_placed(&p.placed);
+        }
         // The global blocks' data lives in `self.global` (an owned open moves it out of the file).
         let vector_preview = rec.block(&crate::vector_preview::PSD_KEY).and_then(|block| {
             let global = &self.global;
@@ -841,6 +868,22 @@ impl Ctx<'_> {
         };
         crate::smart_map::pin_puppet_meshes(&mut sm);
         LayerContent::Smart(sm)
+    }
+
+    /// Counts a layer naming `placed` as built; after the last one its unfiltered source is
+    /// dropped and gives its charge back.
+    fn used_placed(&mut self, placed: &str) {
+        let Some(left) = self.placed_uses.get_mut(placed) else { return };
+        *left = left.saturating_sub(1);
+        if *left > 0 {
+            return;
+        }
+        self.placed_uses.remove(placed);
+        if let Some(Ok(Some(_))) = self.unfiltered.remove(placed)
+            && let Some(item) = self.filter_effects.iter().find(|i| i.id == placed)
+        {
+            self.smart_filter_budget.release(crate::smart_map::unfiltered_charge(item, self.fmt));
+        }
     }
 
     /// Typed vector mask from `vsms`/`vmsk` (non-shape layers). A user mask that Photoshop
@@ -1456,6 +1499,7 @@ fn psd_to_document_global(
         filter_masks: Default::default(),
         unfiltered: Default::default(),
         smart_filter_budget: Default::default(),
+        placed_uses: Default::default(),
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
         vector_previews: Default::default(),
@@ -1476,6 +1520,9 @@ fn psd_to_document_global(
             Ok(fx) => cx.filter_effects.extend(fx.items),
             Err(e) => cx.warn(format!("smart filter masks ({}) could not be read: {e}", String::from_utf8_lossy(key))),
         }
+    }
+    if !cx.filter_effects.is_empty() {
+        cx.placed_uses = count_placed_uses(file);
     }
     if ctl.cancelled() {
         return None;

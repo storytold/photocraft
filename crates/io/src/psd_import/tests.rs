@@ -584,6 +584,7 @@ fn only_allocation_failures_are_fatal_to_a_layer_channel() {
         filter_masks: Default::default(),
         unfiltered: Default::default(),
         smart_filter_budget: Default::default(),
+        placed_uses: Default::default(),
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
         vector_previews: Default::default(),
@@ -645,6 +646,7 @@ fn test_ctx(file: &PsdFile) -> Ctx<'_> {
         filter_masks: Default::default(),
         unfiltered: Default::default(),
         smart_filter_budget: Default::default(),
+        placed_uses: Default::default(),
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
         vector_previews: Default::default(),
@@ -757,8 +759,9 @@ fn filter_mask_mixes_are_charged_per_layer() {
     let file = testgen::small(Version::Psd, Compression::Raw);
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     let mask_fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
-    // The filter shows on the right half only: the left is the unfiltered green once mixed.
-    let (rec, item) = filtered_smart_object(&file, Rect::new(0, 0, 4, 3), Rect::new(0, 0, 2, 3));
+    // The unfiltered source sits a tile right of the stored pixels, its left half where the
+    // mask hides the filter (green once mixed): every mixed copy adds a tile.
+    let (rec, item) = filtered_smart_object(&file, Rect::new(256, 0, 260, 3), Rect::new(256, 0, 258, 3));
     let tile = photocraft_raster::stored_tiles_bytes(1, &fmt);
     let mask_tile = photocraft_raster::stored_tiles_bytes(1, &mask_fmt);
 
@@ -769,7 +772,7 @@ fn filter_mask_mixes_are_charged_per_layer() {
         let mixed = (0..layers)
             .filter(|_| match cx.layer_from_record(&rec).content {
                 LayerContent::Smart(sm) => {
-                    let mixed = sm.cache.is_some_and(|c| c.pixel(0, 0) == vec![0.0, 1.0, 0.0, 1.0]);
+                    let mixed = sm.cache.is_some_and(|c| c.pixel(256, 0) == vec![0.0, 1.0, 0.0, 1.0]);
                     // A mask is kept only over pixels it was mixed into (saving unmixes them).
                     assert_eq!(sm.filter_mask.is_some(), mixed);
                     mixed
@@ -824,10 +827,15 @@ fn a_far_filter_source_mixes_without_walking_the_tiles_between() {
 /// A PSB of testgen's first layer as smart objects, one per `(placed id, mask level)`, each with
 /// its own `FEid` item (green unfiltered pixels, a mask of that level over the layer).
 fn masked_smart_psb(objects: &[(&str, f32)]) -> (Vec<u8>, Vec<Vec<u8>>) {
+    masked_smart_psb_over(&objects.iter().map(|(p, l)| (*p, *l, Rect::new(0, 0, 4, 3))).collect::<Vec<_>>())
+}
+
+/// [`masked_smart_psb`] with each object's unfiltered source (and mask) over its own rect.
+fn masked_smart_psb_over(objects: &[(&str, f32, Rect)]) -> (Vec<u8>, Vec<Vec<u8>>) {
     let mut file = testgen::small(Version::Psb, Compression::Raw);
     let (mut records, mut items) = (Vec::new(), Vec::new());
-    for (placed, level) in objects {
-        let (rec, item) = masked_smart_object(&file, placed, Rect::new(0, 0, 4, 3), Rect::new(0, 0, 4, 3), *level);
+    for (placed, level, source) in objects {
+        let (rec, item) = masked_smart_object(&file, placed, *source, *source, *level);
         records.push(rec);
         items.push(item);
     }
@@ -889,14 +897,17 @@ fn close(a: &[f32], b: &[f32]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 1.5 / 255.0)
 }
 
-/// A save whose smart-filter caches run out before an unchanged smart object keeps that
-/// object's placement as it was and leaves its cache out, with a warning: it doesn't treat it as
-/// changed and redraw its cache (over the source's bounds and the canvas) past the budget.
+/// A save keeps an unchanged smart object's placement as it was read, and when that object's own
+/// caches don't fit the save's smart-filter cache budget, it leaves its cache out with a
+/// warning: it doesn't treat it as changed and redraw the cache (over the source's bounds and
+/// the canvas). The caches of the objects before it were given back once their records were
+/// written, so they don't count.
 #[test]
-fn a_save_out_of_cache_budget_keeps_unchanged_placements_without_redrawing() {
-    let (bytes, solds) = masked_smart_psb(&[("placed-1", 0.5), ("placed-2", 0.5)]);
+fn a_save_keeps_unchanged_placements_and_leaves_out_a_cache_too_large_for_its_budget() {
+    // The second object's unfiltered pixels take two tiles.
+    let (bytes, solds) = masked_smart_psb_over(&[("placed-1", 0.5, Rect::new(0, 0, 4, 3)), ("placed-2", 0.5, Rect::new(0, 0, 300, 3))]);
     let doc = crate::import("two.psb", &bytes).unwrap().document;
-    // The first object's mask and unfiltered pixels fit; the second's mask doesn't.
+    // Room for a mask and one tile of unfiltered pixels.
     let fits_one = photocraft_raster::stored_tiles_bytes(1, &PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false))
         + photocraft_raster::stored_tiles_bytes(1, &PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
     let out = crate::smart_map::with_test_cache_cap(fits_one, || crate::export(&doc, "two.psb", &crate::ExportOptions::default())).unwrap();
@@ -909,5 +920,28 @@ fn a_save_out_of_cache_budget_keeps_unchanged_placements_without_redrawing() {
     let back = crate::import("two.psb", &out.bytes).unwrap().document;
     for i in 0..2 {
         assert!(close(&smart(&back, i).cache.as_ref().unwrap().pixel(1, 1), &smart(&doc, i).cache.as_ref().unwrap().pixel(1, 1)), "object {i}");
+    }
+}
+
+/// Opening holds a smart object's unfiltered source only while layers naming it are built, and
+/// charges mixing only for the tiles it adds: many masked smart objects whose sources together
+/// exceed the smart-filter cache budget, each fitting it, all open with their masks applied.
+#[test]
+fn masked_smart_objects_open_with_their_masks_however_many_their_sources_add_up_to() {
+    let objects = [("p1", 0.5), ("p2", 0.5), ("p3", 0.5), ("p4", 0.5)];
+    let (bytes, _) = masked_smart_psb(&objects);
+    // Room for the four masks (kept with the document) and one source (one tile) at a time.
+    let mask_tile = photocraft_raster::stored_tiles_bytes(1, &PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+    let cap = 4 * mask_tile + photocraft_raster::stored_tiles_bytes(1, &PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+    let imported = crate::smart_map::with_test_cache_cap(cap, || crate::import("four.psb", &bytes)).unwrap();
+    assert!(!imported.warnings.iter().any(|w| w.contains("filter mask was ignored")), "{:?}", imported.warnings);
+    let unlimited = crate::import("four.psb", &bytes).unwrap().document;
+    for i in 0..objects.len() {
+        assert!(smart(&imported.document, i).filter_mask.is_some(), "object {i} keeps its mask");
+        assert_eq!(
+            smart(&imported.document, i).cache.as_ref().unwrap().pixel(1, 1),
+            smart(&unlimited, i).cache.as_ref().unwrap().pixel(1, 1),
+            "object {i} mixed"
+        );
     }
 }

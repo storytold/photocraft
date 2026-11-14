@@ -774,9 +774,10 @@ impl Ex<'_> {
                                 let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
                                 if item.is_some() && masked(sm) {
                                     let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
-                                    // Kept until the record is unmixed with it: what was admitted.
-                                    self.smart.fx_budget.try_charge(photocraft_raster::stored_tiles_bytes(u.tile_count() as u64, &self.fmt));
-                                    self.smart.unfiltered.insert(l.id, u);
+                                    // Held until the record is unmixed with it, then given back.
+                                    let held = photocraft_raster::stored_tiles_bytes(u.tile_count() as u64, &self.fmt);
+                                    let held = if self.smart.fx_budget.try_charge(held) { held } else { 0 };
+                                    self.smart.unfiltered.insert(l.id, (u, held));
                                 }
                                 item
                             }
@@ -843,7 +844,7 @@ impl Ex<'_> {
     /// and its working set (the placed source, and the cache's planes over it and `bounds`, read
     /// as floats) the process's working memory. The reservation is held while it draws.
     fn redraw_admission(
-        &self,
+        &mut self,
         sm: &photocraft_doc::SmartObject,
         src: photocraft_geom::Rect,
         bounds: photocraft_geom::Rect,
@@ -852,7 +853,7 @@ impl Ex<'_> {
         let placed = placed_area(src, sm).ok_or_else(too_large)?;
         let fmt = self.fmt;
         let kept = if masked(sm) { photocraft_raster::tile_storage_bytes(placed, &fmt) } else { 0 };
-        if !self.smart.fx_budget.fits(kept) {
+        if !self.smart.fx_budget.fits(kept) && !(self.smart.forget_masks() && self.smart.fx_budget.fits(kept)) {
             return Err(too_large());
         }
         let area = placed.union(&bounds);
@@ -898,31 +899,48 @@ impl Ex<'_> {
         stack: &crate::smart_map::FilterStack,
     ) -> Result<Option<photocraft_doc::LayerMask>, crate::smart_map::FilterCacheError> {
         let sample = self.mask_fmt.sample;
-        let smart = &mut self.smart;
-        let decoded = match smart.old_masks.get(placed) {
+        let decoded = match self.smart.old_masks.get(placed) {
             Some(done) => done.clone(),
             None => {
-                let item = smart.old_fx.iter().find(|i| i.id == placed);
-                let made = item.map_or(Ok(None), |i| crate::smart_map::mask_from_item(i, sample, stack, &mut smart.fx_budget));
-                smart.old_masks.insert(placed.to_string(), made.clone());
+                let mut made = self.decode_preserved_mask(placed, sample, stack);
+                if matches!(made, Err(crate::smart_map::FilterCacheError::TooLarge)) && self.smart.forget_masks() {
+                    made = self.decode_preserved_mask(placed, sample, stack);
+                }
+                self.smart.old_masks.insert(placed.to_string(), made.clone());
                 made
             }
         };
         decoded.map(|m| m.map(|m| photocraft_doc::LayerMask { enabled: stack.mask_enabled, linked: stack.mask_linked, ..m }))
     }
 
-    /// The unfiltered pixels in the preserved `FEid` item of `placed`: decoded once per export
-    /// (layers of one source share their tiles) and charged to its smart-filter cache budget.
-    /// `Ok(None)` when the item holds none that can be read.
-    fn preserved_unfiltered(&mut self, placed: &str) -> Result<Option<Surface>, crate::smart_map::FilterCacheError> {
-        if let Some(done) = self.smart.old_unfiltered.get(placed) {
-            return done.clone();
-        }
-        let fmt = self.fmt;
+    /// The filter mask of the preserved `FEid` item of `placed`, charged to the save's
+    /// smart-filter cache budget while it is remembered ([`SmartOut::forget_masks`]).
+    fn decode_preserved_mask(
+        &mut self,
+        placed: &str,
+        sample: SampleType,
+        stack: &crate::smart_map::FilterStack,
+    ) -> Result<Option<photocraft_doc::LayerMask>, crate::smart_map::FilterCacheError> {
         let smart = &mut self.smart;
         let item = smart.old_fx.iter().find(|i| i.id == placed);
-        let made = item.map_or(Ok(None), |i| crate::smart_map::unfiltered_from_item(i, fmt, &mut smart.fx_budget));
-        smart.old_unfiltered.insert(placed.to_string(), made.clone());
+        item.map_or(Ok(None), |i| crate::smart_map::mask_from_item(i, sample, stack, &mut smart.fx_budget))
+    }
+
+    /// The unfiltered pixels in the preserved `FEid` item of `placed` (only its owner reads
+    /// them), with what they were charged to the save's smart-filter cache budget: held until
+    /// the layer's record is unmixed with them, then given back. Remembered masks give theirs
+    /// back first when these don't fit. `Ok(None)` when the item holds none that can be read.
+    fn preserved_unfiltered(&mut self, placed: &str) -> Result<Option<(Surface, u64)>, crate::smart_map::FilterCacheError> {
+        let fmt = self.fmt;
+        let decode = |smart: &mut SmartOut| {
+            let item = smart.old_fx.iter().find(|i| i.id == placed);
+            let made = item.map_or(Ok(None), |i| crate::smart_map::unfiltered_from_item(i, fmt, &mut smart.fx_budget));
+            made.map(|u| u.zip(item.map(|i| crate::smart_map::unfiltered_charge(i, fmt))))
+        };
+        let made = decode(&mut self.smart);
+        if matches!(made, Err(crate::smart_map::FilterCacheError::TooLarge)) && self.smart.forget_masks() {
+            return decode(&mut self.smart);
+        }
         made
     }
 
@@ -1202,12 +1220,18 @@ impl Ex<'_> {
                 }
                 LayerContent::Smart(sm) => {
                     // Photoshop's record holds the filtered pixels without the filter mask.
-                    let unmixed = match (self.smart.unfiltered.get(&l.id), sm.cache.as_ref(), sm.filter_mask.as_ref()) {
-                        (Some(u), Some(c), Some(m)) if masked(sm) => Some(photocraft_compose::filter_mask::unmix(u, c, m)),
+                    let unfiltered = self.smart.unfiltered.remove(&l.id);
+                    let unmixed = match (&unfiltered, sm.cache.as_ref(), sm.filter_mask.as_ref()) {
+                        (Some((u, _)), Some(c), Some(m)) if masked(sm) => Some(photocraft_compose::filter_mask::unmix(u, c, m)),
                         _ => None,
                     };
                     let r = self.record(l, extra, unmixed.as_ref().or(sm.cache.as_ref()));
                     self.records.push(r);
+                    // Written: the unfiltered pixels are freed and give their charge back.
+                    if let Some((u, held)) = unfiltered {
+                        drop(u);
+                        self.smart.fx_budget.release(held);
+                    }
                 }
             }
             if !tick() {

@@ -261,6 +261,22 @@ impl FilterCacheBudget {
         }
         fits
     }
+
+    /// Gives back `bytes` charged earlier, once what they paid for is freed: the budget bounds
+    /// what is held at once, not what passes through.
+    pub fn release(&mut self, bytes: u64) {
+        self.used = self.used.saturating_sub(bytes);
+    }
+}
+
+/// What [`mask_from_item`] charged for the `mask` it made.
+pub fn mask_charge(mask: &LayerMask) -> u64 {
+    photocraft_raster::stored_tiles_bytes(mask.surface.tile_count() as u64, &mask.surface.format())
+}
+
+/// What [`unfiltered_from_item`] charged for the pixels it made of `item` in `fmt`.
+pub fn unfiltered_charge(item: &FilterEffectsItem, fmt: PixelFormat) -> u64 {
+    photocraft_raster::tile_storage_bytes(psd_rect(&item.rect), &fmt)
 }
 
 /// Why a smart-filter cache was not read.
