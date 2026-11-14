@@ -307,3 +307,7 @@ mod tests {
 #[cfg(test)]
 #[path = "../type_spell_order_ui_tests.rs"]
 mod spell_order_ui_tests;
+
+#[cfg(test)]
+#[path = "../type_spell_sticky_tests.rs"]
+mod spell_sticky_tests;
