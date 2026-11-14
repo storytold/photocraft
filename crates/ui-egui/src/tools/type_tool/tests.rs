@@ -389,6 +389,25 @@ fn a_name_from_text_after_blank_lines_keeps_following_the_text() {
     assert_eq!(name(&app), "Subtitle");
 }
 
+/// #12047: a new type layer keeps the document's generic "Layer N" name while its text is still
+/// being edited, and takes a name from the text — of every line of it — only at the first commit.
+#[test]
+fn a_new_type_layer_is_named_layer_n_until_the_first_commit() {
+    let mut app = app();
+    let generic = app.session.active().unwrap().doc.next_layer_name("Layer");
+    assert_eq!(generic, "Layer 1", "the first new layer of a fresh document");
+    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    let name = |app: &PhotocraftApp| app.session.active().unwrap().doc.layer(id).unwrap().name.clone();
+    insert(&mut app, "Hello\nB CA");
+    assert_eq!(name(&app), generic, "the text is still being edited, so the panel still reads {generic}");
+    commit(&mut app);
+    assert_eq!(name(&app), "HelloB CA", "the first commit names it after every line of its text");
+    // From then on the name follows the text, as any automatic one does.
+    app.run("type.edit", json!({"layer": id.0, "text": "Goodbye"})).unwrap();
+    assert_eq!(name(&app), "Goodbye");
+}
+
 #[test]
 fn dragging_a_box_handle_resizes_the_paragraph_box() {
     let mut app = app();

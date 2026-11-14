@@ -815,7 +815,10 @@ fn shown_style_params<'a>(t: &TextLayer, p: &'a Value) -> Result<std::borrow::Co
 /// Whether a type layer still has the name it got from its text, so the name follows edits to
 /// the text. A layer renamed to anything else keeps its name (#483). A duplicate's name ("Title
 /// copy", "Title copy 2") still comes from its text, so the copy is renamed after its new text
-/// as Photoshop does, unless the user typed that name (`typed`, #9023).
+/// as Photoshop does, unless the user typed that name (`typed`, #9023). The Type tool's new layer
+/// starts under the document's generic "Layer N" name instead, which is *not* an automatic name:
+/// it keeps it while its text is still being edited, and takes the name of the text only when the
+/// commit sends `type.edit` with `name` (#12047).
 pub(crate) fn is_auto_named(l: &Layer, typed: Option<&str>) -> bool {
     let LayerContent::Text(t) = &l.content else { return false };
     let auto = layer_name(&t.text);
@@ -842,11 +845,19 @@ fn copy_root(name: &str) -> Option<&str> {
     (rest.is_empty() || rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))).then_some(root)
 }
 
-/// The name a type layer gets from its text: its first non-empty line, at most 40 characters.
-/// The Type tool names new layers with this too, so `is_auto_named` recognises them.
+/// How long a name taken from the text may be: the reference application cuts it at 63
+/// *characters*, not bytes (#12047).
+const LAYER_NAME_MAX_CHARS: usize = 63;
+
+/// The name a type layer gets from its text: every line run together without a separator, so
+/// "Hello\nB CA" is "HelloB CA" (#12047), cut at [`LAYER_NAME_MAX_CHARS`] characters. A line's
+/// leading and trailing spaces are trimmed and a blank line adds nothing, as they always did;
+/// text with no letter in it falls back to "Type Layer". The Type tool gives a new layer the
+/// document's next "Layer N" name instead until its first commit (#12047), and names a layer
+/// whose text was already set (a script's `type.create`) with this.
 pub fn layer_name(text: &str) -> String {
-    let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    let name: String = first.chars().take(40).collect();
+    let joined: String = text.lines().map(str::trim).collect();
+    let name: String = joined.chars().take(LAYER_NAME_MAX_CHARS).collect();
     if name.is_empty() { "Type Layer".into() } else { name }
 }
 
