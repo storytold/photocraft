@@ -197,7 +197,7 @@ pub fn move_target(from: usize, slot: usize) -> usize {
 
 /// Id of the frame being dragged, kept in egui memory between frames.
 fn drag_id() -> egui::Id {
-    egui::Id::new("frame-strip-drag")
+    egui::Id::unique("frame-strip-drag")
 }
 
 /// How far the pointer may stray above or below the strip before a drop cancels the drag.
@@ -346,7 +346,7 @@ fn drag_frame(ui: &mut egui::Ui, ctx: &egui::Context, cells: &[Rect], from: usiz
     // A ghost of the carried frame follows the pointer.
     if let Some(src) = cells.get(from) {
         let ghost = Rect::from_center_size(pos, src.size());
-        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("frame-strip-ghost"));
+        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("frame-strip-ghost"));
         let p = ui.ctx().layer_painter(layer);
         p.rect_filled(ghost, t.radius_sm, t.accent_soft.gamma_multiply(0.8));
         p.text(ghost.center(), Align2::CENTER_CENTER, (from + 1).to_string(), FontId::monospace(14.0), t.text);
