@@ -770,11 +770,15 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 // ------------------------------------------------------------------ spelling
 
-/// Refresh the opening layer when checking one layer; an absent opening receiver must not adopt the newly active layer.
+/// Refresh the opening layer when checking one layer, and start Check All Layers at it; an absent
+/// opening receiver must not adopt the newly active layer.
 fn refresh_spelling(app: &mut PhotocraftApp) {
     let Some(d) = app.ui.type_panels.spell.clone() else { return };
     let mut p = json!({ "action": "list", "allLayers": d.all_layers, "ignore": d.ignore, "suggestions": 8 });
-    if let Some(layer) = d.layer.filter(|_| !d.all_layers) {
+    // Check All Layers starts at the opening layer, or top to bottom (null) without one (#14174).
+    if d.all_layers {
+        p["from"] = json!(d.layer.map(|l| l.0));
+    } else if let Some(layer) = d.layer {
         p["layer"] = json!(layer.0);
     }
     let items = if !d.all_layers && d.layer.is_none() {
