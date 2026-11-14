@@ -96,6 +96,38 @@ fn free_transform_runs_as_a_job_with_the_inline_result() {
 }
 
 #[test]
+fn load_selection_runs_as_a_job_with_the_inline_result() {
+    // On the UI thread a large canvas froze the window long enough for Wayland to drop it.
+    // Clear and half-transparent areas, so a fully selected canvas can't pass.
+    let punch = |s: &mut Session| {
+        s.edit("alpha", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surf.fill_rect(photocraft_geom::Rect::new(0, 0, 100, 200), &[0.0, 0.0, 0.0, 0.0]);
+            surf.fill_rect(photocraft_geom::Rect::new(100, 0, 200, 200), &[0.2, 0.4, 0.6, 0.5]);
+            Ok(())
+        })
+        .unwrap();
+    };
+    let load = json!({"channel": "transparency"});
+    let mut inline = session(300, 200);
+    punch(&mut inline);
+    inline.execute("select.loadSelection", load.clone()).unwrap();
+
+    let mut s = session(300, 200);
+    punch(&mut s);
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("select.loadSelection", load).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    assert_eq!(s.active().unwrap().doc.selection, inline.active().unwrap().doc.selection, "the inline selection");
+    let at = |x, y| s.active().unwrap().doc.selection.as_ref().map_or(0.0, |m| m.sample_channel(x, y, 0));
+    assert_eq!(at(50, 50), 0.0, "clear pixels are not selected");
+    assert!((at(150, 50) - 0.5).abs() < 0.01, "half-transparent pixels are half selected: {}", at(150, 50));
+    assert_eq!(at(250, 50), 1.0, "opaque pixels are selected");
+}
+
+#[test]
 fn warp_runs_as_a_job_with_the_inline_result() {
     let arc = json!({"style": "arc", "bend": 30});
     let mut inline = session(300, 200);
