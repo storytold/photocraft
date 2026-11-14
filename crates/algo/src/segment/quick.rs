@@ -32,6 +32,37 @@ use photocraft_geom::Rect;
 
 use super::{FREE, HARD_FG, Region, RgbImage, Sampler};
 
+/// What a transparent pixel reads as for the cut: a colour far outside `0..=1`, so the edge from
+/// any opaque colour into transparency is as cheap to cut as an edge can be.
+const TRANSPARENT: f32 = -2.0;
+
+/// The pixels Quick Selection cuts (#12921). Transparency is an edge: a transparent pixel reads as
+/// a colour far from every opaque one (partly transparent pixels in proportion), not as the
+/// mid-grey [`RgbImage::from_rgba`] puts behind it for the other tools. On a layer whose shapes sit
+/// on transparency, that grey matched mid-tone content (a grey ramp from 100 to 145 brackets it),
+/// so the shapes' outline was no edge and the cut fell on the ramp's 5-level steps instead. The
+/// reference application stops at the outline. Opaque pixels, and so the composite, read as before.
+pub struct CutSampler<'a>(pub &'a dyn Sampler);
+
+impl Sampler for CutSampler<'_> {
+    fn rgba(&self, r: Rect) -> Vec<[f32; 4]> {
+        self.0.rgba(r)
+    }
+
+    fn rgb(&self, r: Rect) -> RgbImage {
+        let px = self
+            .0
+            .rgba(r)
+            .iter()
+            .map(|p| {
+                let a = if p[3].is_finite() { p[3].clamp(0.0, 1.0) } else { 0.0 };
+                [0, 1, 2].map(|c| p[c].clamp(0.0, 1.0) * a + TRANSPARENT * (1.0 - a))
+            })
+            .collect();
+        RgbImage { w: r.width() as usize, h: r.height() as usize, px }
+    }
+}
+
 /// The model's constants (see the module docs); [`Tuning::default`] is the fit to Photoshop.
 #[derive(Clone, Copy, Debug)]
 pub struct Tuning {
@@ -364,3 +395,7 @@ pub fn upsample(low: &[bool], lw: usize, lh: usize, step: usize, w: usize, h: us
     }
     out
 }
+
+#[cfg(test)]
+#[path = "quick_ramp_tests.rs"]
+mod quick_ramp_tests;
