@@ -461,6 +461,9 @@ pub enum FilterParams {
     },
     /// Photographic relight: angle −180…180°, elevation 0…90°, intensity/ambient 0…100,
     /// warmth −100…100, softness 1…100. Intensity 0 is an identity copy.
+    /// A non-empty `lights` (at most [`RELIGHT_MAX_LIGHTS`]) replaces the single lamp: `angle`,
+    /// `elevation`, `intensity` and `warmth` are then ignored; it is an identity copy when every
+    /// light has intensity 0.
     Relight {
         angle: f32,
         elevation: f32,
@@ -468,6 +471,8 @@ pub enum FilterParams {
         ambient: f32,
         warmth: f32,
         softness: f32,
+        #[serde(default)]
+        lights: Vec<RelightLight>,
     },
 
     // ---- Noise ----
@@ -658,7 +663,9 @@ impl FilterParams {
     /// depends on size (Relight's shading blur) request the neighbourhood they actually read.
     pub fn halo_for(&self, bounds: Rect) -> Halo {
         match self {
-            FilterParams::Relight { intensity, softness, .. } if *intensity != 0.0 => Halo::Radius(relight::halo_radius(*softness, bounds)),
+            FilterParams::Relight { intensity, softness, lights, .. } if !relight::is_identity(*intensity, lights) => {
+                Halo::Radius(relight::halo_radius(*softness, bounds))
+            }
             _ => self.halo(),
         }
     }
@@ -826,7 +833,7 @@ fn halo_ext(p: &FilterParams) -> Halo {
         // Generators and per-pixel renders only need the bounds geometry (always in the context).
         FilterParams::Fibers { .. } | FilterParams::LensFlare { .. } | FilterParams::Clouds { .. } => Halo::Radius(0),
         FilterParams::LightingEffects { .. } => r(1.0),
-        FilterParams::Relight { intensity, .. } if *intensity == 0.0 => Halo::Radius(0),
+        FilterParams::Relight { intensity, lights, .. } if relight::is_identity(*intensity, lights) => Halo::Radius(0),
         FilterParams::Relight { .. } => Halo::Radius(relight::halo_radius_max()),
         FilterParams::ReduceNoise { .. } => r(denoise::reach()),
         // The kernels clamp the radius to 100 px: size the source window by what they use.
@@ -977,11 +984,19 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
                 white_is_high: *white_is_high,
             },
         ),
-        FilterParams::Relight { angle, elevation, intensity, ambient, warmth, softness } => relight::relight(
+        FilterParams::Relight { angle, elevation, intensity, ambient, warmth, softness, lights } => relight::relight(
             src,
             out,
             ctx,
-            relight::Params { angle: *angle, elevation: *elevation, intensity: *intensity, ambient: *ambient, warmth: *warmth, softness: *softness },
+            relight::Params {
+                angle: *angle,
+                elevation: *elevation,
+                intensity: *intensity,
+                ambient: *ambient,
+                warmth: *warmth,
+                softness: *softness,
+                lights: lights.clone(),
+            },
         ),
         FilterParams::ReduceNoise { strength, preserve_details, reduce_color_noise, sharpen_details, remove_jpeg_artifact } => denoise::reduce_noise(
             src,

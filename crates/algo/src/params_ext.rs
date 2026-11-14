@@ -83,6 +83,59 @@ pub enum LensType {
     MoviePrime,
 }
 
+/// Most lights Relight honours; extras are ignored.
+pub const RELIGHT_MAX_LIGHTS: usize = 3;
+
+/// Relight light type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum RelightLightKind {
+    /// A lamp at `x`, `y`, `height`: shading and falloff vary across the image.
+    #[default]
+    Point,
+    /// An infinite lamp from `angle` / `elevation`.
+    Directional,
+}
+
+/// One Relight light. Point positions are fractions of the filter bounds (a light may sit
+/// slightly off-image); `height` is a fraction of the bounds' shorter side.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RelightLight {
+    pub kind: RelightLightKind,
+    /// Point: position, −0.5…1.5.
+    pub x: f32,
+    pub y: f32,
+    /// Point: height above the image, 0.01…2.
+    pub height: f32,
+    /// Directional: degrees, 0 = from the right, 90 = from above.
+    pub angle: f32,
+    /// Directional: elevation 0…90°.
+    pub elevation: f32,
+    /// Linear RGB 0–1.
+    pub color: [f32; 3],
+    /// 0…100.
+    pub intensity: f32,
+    /// 0…100: how soft and wrapping the light is.
+    pub diffusion: f32,
+}
+
+impl Default for RelightLight {
+    fn default() -> Self {
+        RelightLight {
+            kind: RelightLightKind::Point,
+            x: 0.3,
+            y: 0.25,
+            height: 0.5,
+            angle: 45.0,
+            elevation: 40.0,
+            color: [1.0, 1.0, 1.0],
+            intensity: 40.0,
+            diffusion: 0.0,
+        }
+    }
+}
+
 /// Lighting Effects light type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
