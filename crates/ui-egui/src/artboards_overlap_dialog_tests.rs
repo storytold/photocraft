@@ -71,3 +71,23 @@ fn layer_comps_to_files_has_no_overlap_choice() {
     assert_eq!(h.query_all_by_role(Role::RadioButton).count(), 0);
     assert!(h.state_mut().ui.dialog_mut(dialog).unwrap().fields.get("content").is_none());
 }
+
+/// #13646: Artboards to PDF has the same radio pair right below the file name, overlapping first
+/// and selected, and OK passes the choice to `file.export.artboardsToPdf` as `content`.
+#[test]
+fn artboards_to_pdf_offers_the_two_radios_below_the_path() {
+    let mut h = harness();
+    let dialog = open(&mut h, "file.export.artboardsToPdf");
+    let radios: Vec<String> = h.query_all_by_role(Role::RadioButton).filter_map(|n| n.accesskit_node().label()).collect();
+    assert_eq!(radios, [OVERLAPPING, CONTENT_ONLY]);
+    assert!(selected(&h, OVERLAPPING) && !selected(&h, CONTENT_ONLY));
+    let fields = &h.state_mut().ui.dialog_mut(dialog).unwrap().fields;
+    let keys = crate::view_cmds::form_keys(fields);
+    assert_eq!(keys.iter().position(|k| k == "content"), keys.iter().position(|k| k == "path").map(|i| i + 1), "{keys:?}");
+    assert_eq!(crate::filter_dialog::params_of(fields)["content"], "overlapping");
+    h.get_by_role_and_label(Role::RadioButton, CONTENT_ONLY).click();
+    h.run_steps(4);
+    assert!(selected(&h, CONTENT_ONLY) && !selected(&h, OVERLAPPING));
+    let fields = &h.state_mut().ui.dialog_mut(dialog).unwrap().fields;
+    assert_eq!(crate::filter_dialog::params_of(fields)["content"], "artboard");
+}

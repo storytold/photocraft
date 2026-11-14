@@ -532,7 +532,13 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
-            dialog(app, json!({"path": format!("{dir}/{stem}.pdf"), "quality": 10}), json!({}))
+            // Include Overlapping Areas / Artboard Content Only, right below the file name.
+            dialog(
+                app,
+                json!({"path": format!("{dir}/{stem}.pdf"), "content": "overlapping", "quality": 10, "__radios": ["content"],
+                    "__labels": {"overlapping": tl!("Include Overlapping Areas"), "artboard": tl!("Artboard Content Only")}, "__order": ["path", "content", "quality"]}),
+                json!({"content": ["overlapping", "artboard"]}),
+            )
         }
         "file.export.dataSetsAsFiles" => {
             #[cfg(target_arch = "wasm32")]

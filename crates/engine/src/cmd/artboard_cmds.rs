@@ -745,6 +745,19 @@ fn chosen_documents(doc: &Document, p: &Value, overlapping: bool) -> Result<Vec<
     Ok(out)
 }
 
+/// `"content"`: `"overlapping"` (Include Overlapping Areas, the default) or `"artboard"` (Artboard
+/// Content Only).
+fn overlapping_param(p: &Value, cmd: &str) -> Result<bool> {
+    match p.get("content") {
+        None | Some(Value::Null) => Ok(true),
+        Some(v) => match v.as_str() {
+            Some("overlapping") => Ok(true),
+            Some("artboard") => Ok(false),
+            _ => Err(bad(cmd, format!("`content` must be \"overlapping\" or \"artboard\", not {v}"))),
+        },
+    }
+}
+
 /// The artboards an export covers: `"artboards": [ids]`, else all, top of the Layers panel first.
 fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
     let all: Vec<LayerId> = doc.artboards().into_iter().rev().map(|b| b.0).collect();
@@ -765,14 +778,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
-    let overlapping = match p.get("content") {
-        None | Some(Value::Null) => true,
-        Some(v) => match v.as_str() {
-            Some("overlapping") => true,
-            Some("artboard") => false,
-            _ => return Err(bad(cmd, format!("`content` must be \"overlapping\" or \"artboard\", not {v}"))),
-        },
-    };
+    let overlapping = overlapping_param(p, cmd)?;
     let doc = d.doc.clone();
     let mut files = Vec::new();
     for (i, one) in chosen_documents(&doc, p, overlapping)?.into_iter().enumerate() {
@@ -841,8 +847,9 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
+    let overlapping = overlapping_param(p, cmd)?;
     let mut pages = Vec::new();
-    for one in chosen_documents(&doc, p, false)? {
+    for one in chosen_documents(&doc, p, overlapping)? {
         let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
         let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
         let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
@@ -927,7 +934,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board)"##,
+            r##"{"path":str (.pdf),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -940,6 +947,9 @@ mod first_board_background_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/overlapping_areas_tests.rs"]
 mod overlapping_areas_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_overlapping_areas_tests.rs"]
+mod pdf_overlapping_areas_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
