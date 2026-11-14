@@ -445,6 +445,24 @@ fn lens_batch(s: &mut Session, p: &Value) -> Result<Value> {
         scratch.execute(LENS, params.clone())?;
         Ok(())
     });
+    // Photoshop closes a listed source that is open in the app, as file.close does (#13991).
+    // Unsaved changes, failed sources and Folder mode were not measured, so those documents stay
+    // open; so does one a background job is editing, which closing would cancel.
+    if p.get("input").or_else(|| p.get("files")).is_some_and(Value::is_array) {
+        let failed: Vec<&str> = r["errors"].as_array().into_iter().flatten().filter_map(|e| e["file"].as_str()).collect();
+        let corrected: Vec<&String> = inputs.iter().filter(|input| !failed.contains(&input.as_str())).collect();
+        let sources: Vec<usize> = s
+            .documents()
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| !d.is_dirty() && s.job_on(d.doc.id).is_none())
+            .filter(|(_, d)| d.path.as_deref().is_some_and(|path| corrected.iter().any(|input| crate::file_cmds::same_file(input, path))))
+            .map(|(i, _)| i)
+            .collect();
+        for i in sources.into_iter().rev() {
+            s.close(i);
+        }
+    }
     Ok(r)
 }
 
@@ -756,3 +774,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "lens_batch_close_tests.rs"]
+mod lens_batch_close_tests;
