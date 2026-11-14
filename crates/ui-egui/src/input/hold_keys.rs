@@ -117,7 +117,16 @@ pub fn cmd_nudges(app: &PhotocraftApp) -> bool {
 
 /// Is ⌘ alone (no other temporary key) making the Move tool now?
 fn cmd_move_held(app: &PhotocraftApp, i: &InputState) -> bool {
-    i.modifiers.command && cmd_moves(app.ui.tool) && app.ui.transform.is_none() && app.ui.text_edit.is_none()
+    i.modifiers.command && cmd_moves(app.ui.tool) && app.ui.transform.is_none() && app.ui.text_edit.is_none() && !sampler_keeps_command(app)
+}
+
+/// With the Color Sampler, ⌘ over one of its points (or while one is dragged) stays the Color
+/// Sampler, so a ⌘-drag there moves the point and the cursor is the sampler's; off a point ⌘ is
+/// the Move tool (#11731).
+fn sampler_keeps_command(app: &PhotocraftApp) -> bool {
+    app.ui.tool == Tool::ColorSampler
+        && (matches!(app.ui.analysis.drag, Some(crate::analysis_ui::Drag::Sampler(..)))
+            || app.hover_doc.is_some_and(|p| crate::analysis_ui::sampler_at(app, p).is_some()))
 }
 
 /// The Hand tool's own modifiers (#6434): ⌘ (Ctrl off the Mac) held is Zoom In, ⌥ (with or
