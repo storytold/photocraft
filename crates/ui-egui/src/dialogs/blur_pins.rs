@@ -170,11 +170,26 @@ impl Tilt {
 /// filter's bounds with the remembered settings, selected.
 pub fn init(app: &mut PhotocraftApp, fields: &mut Map<String, Value>) {
     reset(fields);
+    // A Smart Object's filters work within the object, so the pins are fractions of it.
+    let active = app.session.active().and_then(|st| st.active_layer);
+    if let Some(layer) = active
+        && set_object_bounds(app, fields, layer)
+    {
+        return;
+    }
     let bounds = app.session.active().map(|st| (st.doc.id, st.doc.bounds(), st.doc.selection.clone()));
     if let Some((doc, canvas, selection)) = bounds {
         let b = selection.map(|s| app.cached_bounds(u64::MAX - doc.0, &s)).filter(|b| !b.is_empty()).unwrap_or(canvas);
         fields.insert("__bounds".into(), json!([b.x0, b.y0, b.x1, b.y1]));
     }
+}
+
+/// Point the workspace's bounds at Smart Object `layer`'s placed content, which the engine
+/// resolves a smart Blur Gallery filter's pins against. False when `layer` is not a Smart Object.
+pub fn set_object_bounds(app: &PhotocraftApp, fields: &mut Map<String, Value>, layer: photocraft_doc::LayerId) -> bool {
+    let Some(b) = app.session.active().and_then(|st| photocraft_engine::smart_cmds::object_bounds(&st.doc, layer)) else { return false };
+    fields.insert("__bounds".into(), json!([b.x0, b.y0, b.x1, b.y1]));
+    true
 }
 
 /// One pin in the middle with the dialog's settings, selected. Alt+Cancel (Reset) runs this

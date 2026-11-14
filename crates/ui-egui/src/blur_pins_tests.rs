@@ -16,11 +16,17 @@ fn harness(selection: bool) -> Harness<'static, PhotocraftApp> {
 
 /// [`harness`] with the Blur Gallery `command` open.
 fn harness_for(command: &str, selection: bool) -> Harness<'static, PhotocraftApp> {
+    harness_prep(command, selection, |_| {})
+}
+
+/// [`harness_for`] with `prep` run on the app before the dialog opens.
+fn harness_prep(command: &str, selection: bool, prep: impl FnOnce(&mut PhotocraftApp)) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     if selection {
         app.run("select.rect", json!({"x": 100, "y": 50, "width": 200, "height": 100})).unwrap();
     }
+    prep(&mut app);
     app.sync_views();
     app.ui.extras.rulers = false;
     let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
@@ -424,4 +430,40 @@ fn alt_reset_starts_again_from_one_pin() {
     crate::dialog_alt_reset::apply(&mut app, &egui::Context::default(), &mut fields);
     let p = pins(&fields)[0];
     assert_eq!((p.x, p.y, p.tilt.map(|t| t.angle)), (0.5, 0.5, Some(0.0)));
+}
+
+/// A smart object over the (100,50)-(300,150) block of a 400x300 document.
+fn make_object(app: &mut PhotocraftApp) -> u64 {
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 100, "y": 50, "width": 200, "height": 100})).unwrap();
+    app.run("edit.fill", json!({"contents": "black"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap()
+}
+
+/// #13558: a Blur Gallery filter on a Smart Object places its pins on the object, so the dialog's
+/// bounds are the object's, not the canvas's.
+#[test]
+fn a_smart_object_dialog_takes_the_object_bounds() {
+    let h = harness_prep(TILT, false, |app| {
+        make_object(app);
+    });
+    assert_eq!(fields(&h)["__bounds"], json!([100, 50, 300, 150]));
+}
+
+/// Reopening an existing Blur Gallery smart filter shows its pins on the object as well.
+#[test]
+fn reopening_a_smart_filter_takes_the_object_bounds() {
+    let mut layer = 0;
+    let mut h = harness_prep(TILT, false, |app| {
+        layer = make_object(app);
+        app.run(TILT, json!({"centerY": 0.3})).unwrap();
+    });
+    h.state_mut().ui.dialogs.clear();
+    let ctx = h.ctx.clone();
+    let st = h.state().session.active().unwrap();
+    let photocraft_doc::LayerContent::Smart(sm) = st.doc.layer(photocraft_doc::LayerId(layer)).unwrap().content.clone() else { panic!("smart") };
+    crate::panels::smart_ui::open_editor(h.state_mut(), &ctx, layer, &sm, 0);
+    h.run_steps(4);
+    assert_eq!(fields(&h)["__bounds"], json!([100, 50, 300, 150]));
 }

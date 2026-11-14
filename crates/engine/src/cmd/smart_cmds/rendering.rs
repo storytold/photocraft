@@ -140,16 +140,28 @@ pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> 
 /// The reference bounds of smart filter `f`. Render filters work within the smart object, as
 /// Photoshop's do: Lens Flare's centre is a fraction of the object, and Clouds and Fibers fill it
 /// and size their pattern by it. The object is its placed content's bounds (which leaves out
-/// fully transparent edges of the source); the other filters use the canvas, as on a layer.
+/// fully transparent edges of the source). The Blur Gallery pins and widths are fractions of the
+/// object, so they move, scale and rotate with it. The other filters use the canvas, as on a layer.
 fn filter_bounds(f: &SmartFilter, placed: &Surface, canvas: Rect) -> Rect {
     match placed.content_bounds() {
-        b if renders_in_object(f) && !b.is_empty() => b,
+        b if works_in_object(f) && !b.is_empty() => b,
         _ => canvas,
     }
 }
 
-fn renders_in_object(f: &SmartFilter) -> bool {
-    matches!(f.command.as_str(), "filter.render.clouds" | "filter.render.differenceClouds" | "filter.render.fibers" | "filter.render.lensFlare")
+fn works_in_object(f: &SmartFilter) -> bool {
+    matches!(
+        f.command.as_str(),
+        "filter.render.clouds"
+            | "filter.render.differenceClouds"
+            | "filter.render.fibers"
+            | "filter.render.lensFlare"
+            | "filter.blurGallery.tiltShift"
+            | "filter.blurGallery.irisBlur"
+            | "filter.blurGallery.fieldBlur"
+            | "filter.blurGallery.spinBlur"
+            | "filter.blurGallery.pathBlur"
+    )
 }
 
 /// One visible smart filter over `cur`, blended with its blend mode and opacity. `Err` when the
@@ -372,7 +384,7 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
         ctx.check()?;
         ctx.progress(i as f32 / n, "");
         let bounds = match object_bounds {
-            _ if !renders_in_object(f) => canvas,
+            _ if !works_in_object(f) => canvas,
             Some(b) => b,
             None => *object_bounds.insert(filter_bounds(f, &placed()?.surface, canvas)),
         };
@@ -404,6 +416,15 @@ pub fn render_below_filter(doc: &Document, sm: &SmartObject, index: usize) -> Re
     below.smart_filters.truncate(index);
     below.filter_mask = None;
     render(doc, &below)
+}
+
+/// The bounds smart filters that work within the object (Blur Gallery, Lens Flare, Clouds, ...)
+/// resolve their fractions against: the placed, unfiltered content of smart layer `layer`. `None`
+/// for a layer that is not a Smart Object, whose source is unavailable, or whose content is empty.
+pub fn object_bounds(doc: &Document, layer: photocraft_doc::LayerId) -> Option<Rect> {
+    let LayerContent::Smart(sm) = &doc.layer(layer)?.content else { return None };
+    let placed = render_below_filter(doc, sm, 0).ok()??;
+    Some(placed.content_bounds()).filter(|b| !b.is_empty())
 }
 
 /// Re-renders smart layer `l` (which lives in `doc`) in place. Returns false if its source is

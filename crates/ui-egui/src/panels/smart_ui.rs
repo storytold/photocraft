@@ -513,6 +513,10 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
         if let Value::Object(p) = &f.params {
             fields.extend(p.iter().filter(|(key, _)| !key.starts_with("__")).map(|(key, value)| (key.clone(), value.clone())));
         }
+        if crate::blur_pins::handles(&f.command) {
+            // The pins are fractions of the object the filter sits on, not of the canvas.
+            crate::blur_pins::set_object_bounds(app, &mut fields, photocraft_doc::LayerId(layer));
+        }
         app.ui.dialog_mut(id)?.fields = fields;
         Some(id)
     }) else {
