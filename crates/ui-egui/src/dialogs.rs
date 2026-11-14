@@ -1363,6 +1363,9 @@ pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 pub mod replace_prompt;
 pub(super) mod rgb_histogram;
+#[cfg(test)]
+mod rotate_canvas_layout_tests;
+pub(crate) mod rotate_canvas_ui;
 pub mod screen_picker;
 pub mod select_mask_ui;
 pub mod shape_dialog;

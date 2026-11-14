@@ -316,7 +316,6 @@ pub const PREVIEWED: &[&str] = &[
     "image.adjustments.replaceColor",
     MATCH_COLOR,
     "image.adjustments.hdrToning",
-    "image.rotation.arbitrary",
     "image.mode.indexedColor",
     "image.mode.bitmap",
     "image.mode.duotone",
@@ -342,6 +341,8 @@ pub fn has_dialog(command: &str) -> bool {
         || matches!(
             command,
             "image.trim"
+                // Rotate Canvas has no preview, as in the reference application (#14462).
+                | "image.rotation.arbitrary"
                 | "select.refineEdge"
                 | "view.proofSetup"
                 | "layer.layerStyle.globalLight"
@@ -439,7 +440,8 @@ fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<S
     if command == "image.mode.indexedColor" {
         indexed_matte_defaults(app, fields);
     }
-    if command == "image.rotation.arbitrary" {
+    if command == super::rotate_canvas_ui::COMMAND {
+        super::rotate_canvas_ui::open_fields(fields);
         straighten_defaults(app, fields);
     }
     if command == "type.warpText" {
@@ -1150,6 +1152,11 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     };
     if crate::select_mask_view::owns(f) {
         crate::select_mask_view::controls(ui, f);
+    }
+    // Rotate Canvas lays out its one row itself (#14462).
+    if super::rotate_canvas_ui::owns(f) {
+        super::rotate_canvas_ui::body(ui, f);
+        return;
     }
     for p in parse_spec(&spec) {
         if cmd == "image.mode.indexedColor" && p.key == "matte" {

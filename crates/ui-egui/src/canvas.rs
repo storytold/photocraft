@@ -3070,6 +3070,8 @@ mod rotation_preview_isolation_tests {
         let dialog = app.ui.dialogs.last_mut().unwrap();
         dialog.fields.insert("angle".into(), json!(90.0));
         dialog.fields.insert("direction".into(), json!("cw"));
+        // Rotate Canvas opens without a Preview (#14462); the size-changing preview path still works.
+        dialog.fields.insert("__preview".into(), json!(true));
 
         let (factor, _, size) = ensure_filter_preview(&mut app, 0, &egui::Context::default()).expect("CPU preview computed");
         assert_eq!(factor, 1);
@@ -3091,6 +3093,7 @@ mod rotation_preview_isolation_tests {
         let mut app = PhotocraftApp::new(session, crate::Services::default());
         crate::filter_dialog::open(&mut app, "image.rotation.arbitrary").unwrap();
         app.ui.dialogs.last_mut().unwrap().fields.insert("angle".into(), json!(90.0));
+        app.ui.dialogs.last_mut().unwrap().fields.insert("__preview".into(), json!(true));
         assert!(ensure_filter_preview(&mut app, 0, &egui::Context::default()).is_some());
 
         app.session.execute("file.new", json!({"width": 40, "height": 20})).unwrap();

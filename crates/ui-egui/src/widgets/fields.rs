@@ -96,6 +96,22 @@ fn value_field_alerting_in(
     (r, alert)
 }
 
+/// A [`value_field`] showing `decimals` places, whose arrow keys step by the last of them, and
+/// whose scrubby caption ([`super::scrub_label`]) moves it by `scrub_step` a point instead
+/// (Shift ×10, Alt a tenth, as on every caption): the Rotate Canvas angle (#14462).
+pub fn value_field_scrub_step(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    decimals: u32,
+    scrub_step: f32,
+) -> Response {
+    let opts = FieldOpts { decimals: Some(decimals), step_from_decimals: true, scrub_step: Some(scrub_step), ..Default::default() };
+    value_field_in(ui, value, range, suffix, width, 0.0, opts, None).0
+}
+
 /// A [`value_field`] whose visible caption was drawn apart from it (an options-bar caption in a
 /// nested layout): `name` names the number when the caption's scrub link did not reach it.
 pub fn value_field_named(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
@@ -160,6 +176,9 @@ pub(super) struct FieldOpts {
     pub(super) blank_when_zero: bool,
     /// Keep the trailing zeros of `decimals` (`50.0`), where every other field drops them.
     pub(super) keep_zeros: bool,
+    /// What one point of a drag on the field's scrubby caption moves the value by, where it is
+    /// not the arrow-key step (the Rotate Canvas angle: 0.01 a key press, 1° a point, #14462).
+    pub(super) scrub_step: Option<f32>,
 }
 
 /// Arrow-key and drag step for a value field: [`FieldOpts::step_from_decimals`] uses `decimals`;
@@ -312,7 +331,11 @@ fn value_field_box(
         }
         if s.steps != 0.0 {
             // Onto the step grid first, so a whole-number field drops its decimals (55.4 + 1 = 56).
-            let v = ((*value / unit).round() + s.steps) * unit;
+            // A caption with a step of its own moves the value by it and keeps its decimals.
+            let v = match opts.scrub_step {
+                Some(step) => *value + s.steps * step,
+                None => ((*value / unit).round() + s.steps) * unit,
+            };
             let v = (v * 1e4).round() / 1e4;
             // `f32::clamp` panics on a reversed or NaN range, which `DragValue::range` accepts.
             let v = if lo <= hi { v.clamp(lo, hi) } else { v };
