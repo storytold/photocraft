@@ -404,4 +404,6 @@ impl CafWorkspace {
 }
 
 #[cfg(test)]
+mod fill_settings_reset_tests;
+#[cfg(test)]
 mod tests;
