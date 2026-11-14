@@ -152,12 +152,20 @@ fn write_stream_seeks_back_and_keeps_the_original_on_failure() {
     assert_eq!(std::fs::read(inside.join("notes.txt")).unwrap(), b"keep");
 }
 
-/// #14355: text and office files PhotoCraft can read but never writes as an image (notes, data,
-/// rich text) are not "a kind PhotoCraft writes", by name or by their bytes (#9439).
+/// #14355: files PhotoCraft can read but never writes (notes, data, rich text, read-only image
+/// formats such as XPM or DICOM) are not "a kind PhotoCraft writes", by name or by their bytes (#9439).
 #[test]
-fn write_refuses_to_replace_text_files_photocraft_reads_but_does_not_write() {
-    let (inside, _, workspace) = roots("text-kinds");
-    let files: [(&str, &[u8]); 4] = [("notes.md", b"# keep"), ("data.csv", b"a,b\n1,2\n"), ("letter.rtf", b"{\\rtf1 keep}"), ("README", b"{\\rtf1 keep}")];
+fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
+    let (inside, _, workspace) = roots("read-only-kinds");
+    let files: [(&str, &[u8]); 7] = [
+        ("notes.md", b"# keep"),
+        ("data.csv", b"a,b\n1,2\n"),
+        ("letter.rtf", b"{\\rtf1 keep}"),
+        ("README", b"{\\rtf1 keep}"),
+        ("icon.xpm", b"/* XPM */ keep"),
+        ("scan.dcm", b"keep"),
+        ("TODO", b"/* XPM */ keep"),
+    ];
     let replaced: Vec<&str> = files
         .into_iter()
         .filter(|(name, bytes)| {
