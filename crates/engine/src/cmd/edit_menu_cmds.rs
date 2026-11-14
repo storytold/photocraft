@@ -59,8 +59,10 @@ pub struct EditState {
     pub fade: Option<FadeSource>,
     /// Custom shape library (the vector tools read it).
     pub custom_shapes: Vec<CustomShape>,
-    /// Find and Replace Text position: (layer, byte offset after the current match).
+    /// Find and Replace Text position: (layer, start byte, end byte of the current match).
     pub find_cursor: Option<(LayerId, usize, usize)>,
+    /// First layer visited in the current Find Next round (so wrapping stops before it).
+    pub find_start: Option<LayerId>,
 }
 
 /// Commands whose result Edit › Fade can blend back against the previous state.
@@ -453,3 +455,7 @@ mod tests;
 #[cfg(test)]
 #[path = "edit_menu_cmds/fade_visibility_tests.rs"]
 mod fade_visibility_tests;
+
+#[cfg(test)]
+#[path = "edit_menu_cmds/find_replace_order_tests.rs"]
+mod find_replace_order_tests;
