@@ -213,6 +213,11 @@ fn layer_source_for(job: Option<&photocraft_engine::jobs::JobCtx>, doc: &Arc<Doc
     Ok(out)
 }
 
+/// Keep `out`, layer `id` of `doc` composited for export, replacing whatever was kept.
+fn keep_layer_source(doc: Arc<Document>, id: photocraft_doc::LayerId, out: Arc<Document>) {
+    *LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((doc, id, out));
+}
+
 /// Let go of the kept layer unless it was composited from `active`, the document as it is now: a
 /// prepare whose document changed keeps nothing, and the active document's own composite stays.
 /// The generation doesn't move, so a composite of the active document still being made is kept.
@@ -247,16 +252,26 @@ pub fn open_selected_layers(app: &mut PhotocraftApp, layers: Vec<photocraft_doc:
     let name = doc.layer(first).map(|l| l.name.clone()).unwrap_or_default();
     let label = crate::i18n::fmt(tl!("Preparing Export As: {name}"), &[("name", &name)]);
     let ids: Vec<u64> = layers.iter().map(|l| l.0).collect();
-    let result = json!({"layers": ids});
+    let params = json!({"layers": ids});
+    let source = doc.clone();
     let started = app
         .session
         .start_job(
             PREPARE_JOB,
-            json!({"layers": ids}),
+            params,
             &label,
             false,
-            move |ctx| layer_source_for(Some(ctx), &doc, first).map(drop).map_err(photocraft_engine::EngineError::Other),
-            move |_, ()| Ok(result),
+            move |_| photocraft_engine::layer_menu_cmds::layer_document(&source, first).map(Arc::new),
+            // Kept here, on the UI thread, and only for the document as it still is: the
+            // dialog then opens from it, whatever other exports did with the cache meanwhile.
+            // A cancelled or failed prepare never gets here, so it keeps nothing.
+            move |session, out| {
+                let ready = session.active().is_some_and(|st| Arc::ptr_eq(&st.doc, &doc));
+                if ready {
+                    keep_layer_source(doc, first, out);
+                }
+                Ok(json!({"layers": ids, "ready": ready}))
+            },
         )
         .map_err(|e| e.to_string())?;
     match started {
@@ -283,7 +298,7 @@ pub(crate) fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs:
                 .unwrap_or_default();
             // Opened only for the document the layer was composited from: anything else would
             // composite it again here, on the UI thread.
-            let ready = app.session.active().zip(layers.first()).is_some_and(|(st, first)| cached_layer_source(&st.doc, *first).is_some());
+            let ready = v.get("ready").and_then(Value::as_bool).unwrap_or(false);
             if !ready {
                 release_layer_source_unless(app.session.active().map(|st| &st.doc));
                 app.ui.status = tl!("Export As: the document changed while the layer was prepared; choose Export As again").to_string();
