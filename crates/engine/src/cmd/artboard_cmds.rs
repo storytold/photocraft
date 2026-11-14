@@ -657,10 +657,127 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
     Ok(Some(one))
 }
 
+/// Include Overlapping Areas: each visible artboard stacked above board `id` that overlaps it, as
+/// the reference application writes it into the board's file: a plain group (no longer an
+/// artboard) holding its layers over a new pixel layer "Background for <board>" filled with the
+/// board's background where the two boards overlap, in source coordinates and bottom to top. A
+/// group whose layers reach past its own board (effects, pixels outside the board, adjustments)
+/// gets a mask to its board, which the artboard clipped them to.
+fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
+    let above = doc.layers.iter().skip_while(|l| l.id != id).skip(1);
+    let mut out = Vec::new();
+    for l in above.filter(|l| l.visible) {
+        let Some(ab) = l.artboard().cloned() else { continue };
+        let overlap = ab.rect.intersect(&rect);
+        if overlap.is_empty() {
+            continue;
+        }
+        let mut group = l.clone();
+        // The board's own shadow or glow is built from all its layers, so they stay whole.
+        let fx = photocraft_compose::effects::has_effects(&group);
+        if let LayerContent::Group(g) = &mut group.content {
+            g.artboard = None;
+            if !fx {
+                cut_pixels(&mut g.children, overlap, 0);
+            }
+        }
+        let reach = photocraft_compose::change_bounds(&group, doc.bounds());
+        if reach.is_none_or(|r| !ab.rect.contains_rect(&r)) {
+            group.mask = Some(board_mask(group.mask.take(), ab.rect));
+            // The artboard clipped its own effects too; a plain mask would only shape them.
+            group.advanced.layer_mask_hides_effects |= fx;
+        }
+        if let (Some(bg), Some(children)) = (ab.background.rgba(), group.children_mut()) {
+            let fmt = doc.pixel_format();
+            let mut surf = Surface::new(fmt);
+            surf.fill_rect(overlap, &photocraft_raster::from_rgba(&fmt, bg));
+            children.insert(0, Layer::new(format!("Background for {}", l.name), LayerContent::Raster(surf)));
+        }
+        out.push(group);
+    }
+    out
+}
+
+/// A mask that hides everything outside `board` and, inside it, what the board's own `mask` hid
+/// (its density baked in), so a board clipped to its rect keeps the mask the user painted.
+fn board_mask(mask: Option<photocraft_doc::LayerMask>, board: Rect) -> photocraft_doc::LayerMask {
+    let own = mask.filter(|m| m.enabled);
+    let mut out = own.clone().unwrap_or_else(photocraft_doc::LayerMask::reveal_all);
+    out.surface = Surface::with_default(out.surface.format(), &[0.0]);
+    out.density = 1.0;
+    let kept = own.and_then(|m| {
+        let mut px = m.surface.try_read_region(board).ok()?;
+        px.iter_mut().for_each(|v| *v = 1.0 - m.density * (1.0 - *v));
+        out.surface.try_write_region(board, &px).ok()
+    });
+    if kept.is_none() {
+        out.surface = Surface::with_default(out.surface.format(), &[0.0]);
+        out.surface.fill_rect(board, &[1.0]);
+    }
+    out
+}
+
+/// Cuts the pixel layers in `layers` (and in groups inside them, `depth` levels down so far) to
+/// `keep`, as the reference application cuts an overlapping board's layers to the file. Layers
+/// whose pixels can't be cut stay whole; the group's mask still hides what lies past its board.
+/// A layer with effects, or inside a group with effects, stays whole too: pixels outside `keep`
+/// can cast a shadow or glow into it.
+fn cut_pixels(layers: &mut [Layer], keep: Rect, depth: usize) {
+    const MAX_DEPTH: usize = 64;
+    for l in layers {
+        if photocraft_compose::effects::has_effects(l) {
+            continue;
+        }
+        match &mut l.content {
+            LayerContent::Group(g) if depth < MAX_DEPTH => cut_pixels(&mut g.children, keep, depth + 1),
+            LayerContent::Raster(surf) => {
+                let r = surf.content_bounds().intersect(&keep);
+                let mut cut = Surface::with_default(surf.format(), &surf.default_pixel());
+                if !r.is_empty() {
+                    let Ok(px) = surf.try_read_region(r) else { continue };
+                    if cut.try_write_region(r, &px).is_err() {
+                        continue;
+                    }
+                }
+                *surf = cut;
+            }
+            _ => {}
+        }
+    }
+}
+
 /// [`artboard_document`] for each chosen board, all built before any file is written so a
-/// board that can't be exported fails the export without leaving a partial set behind.
-fn chosen_documents(doc: &Document, p: &Value) -> Result<Vec<Document>> {
-    chosen_artboards(doc, p).into_iter().filter_map(|id| artboard_document(doc, id).transpose()).collect()
+/// board that can't be exported fails the export without leaving a partial set behind. With
+/// `overlapping`, each file also holds the boards above that overlap it ([`overlapping_boards`]).
+fn chosen_documents(doc: &Document, p: &Value, overlapping: bool) -> Result<Vec<Document>> {
+    let mut out = Vec::new();
+    for id in chosen_artboards(doc, p) {
+        let Some(mut one) = artboard_document(doc, id)? else { continue };
+        if overlapping && let Some(r) = doc.layer(id).and_then(|l| l.artboard()).map(|a| a.rect) {
+            // `artboard_document` has checked that the board's origin negates.
+            let (dx, dy) = (r.x0.saturating_neg(), r.y0.saturating_neg());
+            for mut group in overlapping_boards(doc, id, r) {
+                crate::commands::translate_layer(doc, &mut group, dx, dy);
+                crate::vector_cmds::translate_vectors(doc, &mut group, f64::from(dx), f64::from(dy));
+                one.layers.push(group);
+            }
+        }
+        out.push(one);
+    }
+    Ok(out)
+}
+
+/// `"content"`: `"overlapping"` (Include Overlapping Areas, the default) or `"artboard"` (Artboard
+/// Content Only).
+fn overlapping_param(p: &Value, cmd: &str) -> Result<bool> {
+    match p.get("content") {
+        None | Some(Value::Null) => Ok(true),
+        Some(v) => match v.as_str() {
+            Some("overlapping") => Ok(true),
+            Some("artboard") => Ok(false),
+            _ => Err(bad(cmd, format!("`content` must be \"overlapping\" or \"artboard\", not {v}"))),
+        },
+    }
 }
 
 /// The artboards an export covers: `"artboards": [ids]`, else all, top of the Layers panel first.
@@ -683,9 +800,10 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
+    let overlapping = overlapping_param(p, cmd)?;
     let doc = d.doc.clone();
     let mut files = Vec::new();
-    for (i, one) in chosen_documents(&doc, p)?.into_iter().enumerate() {
+    for (i, one) in chosen_documents(&doc, p, overlapping)?.into_iter().enumerate() {
         // Names may be identical, or collide after sanitizing or filesystem case folding.
         let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
         let path = join(&dir, &format!("{name}.{format}"));
@@ -751,8 +869,9 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
+    let overlapping = overlapping_param(p, cmd)?;
     let mut pages = Vec::new();
-    for one in chosen_documents(&doc, p)? {
+    for one in chosen_documents(&doc, p, overlapping)? {
         let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
         let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
         let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
@@ -829,7 +948,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's file also shows the visible boards above it where they overlap it, each as a plain group with a \"Background for <board>\" layer; artboard: Artboard Content Only),"artboards":[id]? (default all),"quality":0..12?} → {files}"##,
             export_artboards,
             artboards_to_files
         ),
@@ -837,7 +956,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board)"##,
+            r##"{"path":str (.pdf),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -847,6 +966,12 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/overlapping_areas_tests.rs"]
+mod overlapping_areas_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_overlapping_areas_tests.rs"]
+mod pdf_overlapping_areas_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;

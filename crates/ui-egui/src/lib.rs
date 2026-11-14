@@ -1057,6 +1057,8 @@ mod polygon_lasso_tests;
 mod window_frame_tests;
 
 #[cfg(test)]
+mod artboards_overlap_dialog_tests;
+#[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
 mod export_quality_tests;
