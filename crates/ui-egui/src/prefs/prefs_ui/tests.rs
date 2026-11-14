@@ -2476,6 +2476,25 @@ fn tool_colors_restore_cmyk_inks_for_picker_and_fill_after_swapping_and_exiting_
 }
 
 #[test]
+fn tool_cmyk_roles_keep_remote_rgb_and_inks_when_local_only_inks_changed() {
+    let store = Arc::new(Mutex::new(None));
+    let mut initial = app_on(&store, Arc::default());
+    let old_rgb = [0.2, 0.4, 0.6];
+    initial.run("tools.setColors", json!({"foreground": old_rgb, "foregroundCmyk": [1., 0., 0., 0.]})).unwrap();
+    crate::tool_memory::save_on_exit(&mut initial).unwrap();
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+    let new_rgb = [0.6, 0.4, 0.2];
+    let new_inks = [0., 1., 0., 0.];
+    a.run("tools.setColors", json!({"foreground": new_rgb, "foregroundCmyk": new_inks})).unwrap();
+    b.run("tools.setColors", json!({"foreground": old_rgb, "foregroundCmyk": [0., 0., 1., 0.]})).unwrap();
+    crate::tool_memory::save_on_exit(&mut a).unwrap();
+    crate::tool_memory::save_on_exit(&mut b).unwrap();
+    let restored = app_on(&store, Arc::default());
+    assert_eq!(&restored.session.tools.foreground[..3], &new_rgb);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(new_inks));
+}
+
+#[test]
 fn tool_colors_save_changed_cmyk_inks_even_when_rgba_is_unchanged() {
     let (mut app, store) = app_with_store();
     let ctx = egui::Context::default();

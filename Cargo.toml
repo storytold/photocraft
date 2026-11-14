@@ -55,14 +55,14 @@ craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3"
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
-craft-pcraft-bundle = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
+craft-pcraft-bundle = { git = "https://github.com/storytold/craft-libs", rev = "eec8408c53620135e66344e342c2a0849aeb917a" }
 craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-ora = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-kra = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-pdn = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3", features = ["tree-render", "tree-render-system-fonts"] }
-craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
+craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "eec8408c53620135e66344e342c2a0849aeb917a" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-crs = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 # Interface translations: lookup, fallback, CLDR plurals and language names over the craft-i18n
@@ -82,9 +82,8 @@ bytemuck = { version = "1", features = ["derive"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 encoding_rs = { version = "0.8", default-features = false, features = ["alloc"] }
 image = { version = "0.25", default-features = false }
-# Baseline-JPEG decode of lossy DNG tiles (compression 34892), shared with zune-jpeg.
+# Baseline-JPEG decode of lossy DNG tiles (compression 34892).
 zune-core = "0.5"
-zune-jpeg = "0.5"
 proptest = "1"
 eframe = { version = "0.37", default-features = false }
 # Without `default_fonts`, which embeds egui's fonts uncompressed: ui-egui ships them deflated

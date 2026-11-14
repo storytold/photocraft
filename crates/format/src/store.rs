@@ -155,7 +155,16 @@ impl ByteSource for ZipSource<'_> {
 fn bundle_error(error: craft_pcraft_bundle::Error) -> FormatError {
     match error {
         craft_pcraft_bundle::Error::LimitExceeded { entry, limit } => FormatError::LimitExceeded(format!("`{entry}` exceeds {limit} bytes")),
+        craft_pcraft_bundle::Error::Zip(error) if error.is_limit() => FormatError::LimitExceeded(error.to_string()),
         other => FormatError::corrupt(other.to_string()),
+    }
+}
+
+/// Saving decodes no objects: an I/O failure here concerns publication, not corrupt input.
+fn save_error(error: craft_pcraft_bundle::Error) -> FormatError {
+    match error {
+        craft_pcraft_bundle::Error::Io(message) => FormatError::Io(std::io::Error::other(message)),
+        other => bundle_error(other),
     }
 }
 
@@ -1200,7 +1209,7 @@ impl PcraftWriter {
             }
         }
         scratch_ok(doc, generation)?;
-        let directory_stats = self.directory.save_directory(dir, writer).map_err(bundle_error)?;
+        let directory_stats = self.directory.save_directory(dir, writer).map_err(save_error)?;
         let mut stats = prepared.stats;
         stats.objects_removed = directory_stats.removed;
         for path in &directory_stats.written_objects {
