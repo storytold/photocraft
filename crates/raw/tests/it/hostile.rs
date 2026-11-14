@@ -129,6 +129,8 @@ fn exercise(b: &[u8]) {
     let _ = embedded_preview(b);
     let _ = embedded_previews(b);
     let _ = embedded_preview_color_space(b);
+    let _ = exif_source(b);
+    let _ = orientation(b);
     let opts = DevelopOptions { limits: Limits { max_alloc: 64 << 20, ..Limits::default() }, ..Default::default() };
     if let Ok(s) = decode(b, &opts.limits) {
         for m in [Demosaic::Bilinear, Demosaic::Ahd] {
@@ -163,6 +165,24 @@ fn every_truncation_fails_cleanly() {
         for n in (0..b.len()).step_by(3) {
             exercise(&b[..n]);
         }
+    }
+}
+
+/// A CR3 with a camera JPEG and its EXIF in CMT1, CMT2 and CMT4 (no sensor data, so it is not
+/// among the samples, which develop).
+fn cr3_with_exif() -> Vec<u8> {
+    let jpeg = [0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 8, 0x00, 24, 0x00, 32, 1, 1, 0x11, 0, 0xFF, 0xD9];
+    let ifd0 = [(271, Val::Ascii("Canon".into())), (272, Val::Ascii("Canon EOS Synthetic".into()))];
+    let exif = [(33434, Val::Rational(vec![(1, 200)])), (42036, Val::Ascii("RF24-105mm F4 L IS USM".into()))];
+    testgen::cr3_preview_with_exif(&jpeg, 6, &ifd0, &exif, &[(0, Val::Byte(vec![2, 3, 0, 0]))])
+}
+
+#[test]
+fn a_cr3s_exif_is_found_and_every_truncation_fails_cleanly() {
+    let b = cr3_with_exif();
+    assert!(matches!(exif_source(&b), Some(ExifSource::Directories { ifd0: Some(_), exif: Some(_), gps: Some(_) })));
+    for n in 0..b.len() {
+        exercise(&b[..n]);
     }
 }
 
