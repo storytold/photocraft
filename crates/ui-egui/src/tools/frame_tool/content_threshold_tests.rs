@@ -31,11 +31,8 @@ fn threshold_compares_each_dimension_instead_of_area_or_overlap() {
 
 #[test]
 fn small_canvas_drags_make_empty_frames_and_large_enough_drags_take_content_in_one_step() {
-    for (bounds, side, taken) in [
-        (Rect::new(50, 50, 150, 130), 20., false),
-        (Rect::new(50, 50, 150, 130), 40., true),
-        (Rect::new(0, 0, 600, 400), 100., false),
-    ] {
+    for (bounds, side, taken) in [(Rect::new(50, 50, 150, 130), 20., false), (Rect::new(50, 50, 150, 130), 40., true), (Rect::new(0, 0, 600, 400), 100., false)]
+    {
         let (mut app, layer) = candidate(bounds);
         let before = app.session.active().unwrap().history.entries().len();
         let m = egui::Modifiers::NONE;
