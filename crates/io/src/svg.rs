@@ -10,6 +10,7 @@
 //! stops and direction in the layer's own gradient fill, with a warning that the exact geometry
 //! is not kept.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use craft_svg::tree::draw::{self, tiny_skia};
@@ -544,7 +545,9 @@ fn parse_image_bounded_with(
             budget.lock().unwrap_or_else(PoisonError::into_inner).fontless_text = true;
         }
         let resolver = Arc::clone(&budget.lock().unwrap_or_else(PoisonError::into_inner).resolver);
-        let opt = options_with_isolation(fontdb, xml_left, isolated, resolver);
+        let nested_gzip = Arc::new(AtomicBool::new(false));
+        let mut opt = options_with_isolation(fontdb, xml_left, isolated, Arc::clone(&resolver));
+        opt.image_href_resolver = noting_nested_gzip(opt.image_href_resolver, resolver, Arc::clone(&nested_gzip));
         let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
         let limits = tree_limits(xml_left, MAX_RASTER_PIXELS);
         let tree = guarded_parse(|| craft_svg::tree::parse_text(text, &limits, &opt))?;
@@ -557,7 +560,7 @@ fn parse_image_bounded_with(
         counter.svg_chain = usage.embedded_svg_depth as u64;
         if usage.raster_limit_images > 0 {
             counter.error.get_or_insert_with(|| "embedded SVG raster images exceed the decoded pixel budget".into());
-        } else if counter.strict && usage.svg_limit_images > 0 {
+        } else if usage.svg_limit_images > 0 && (counter.strict || embedded_svg_over_budget(&usage, nested_gzip.load(Ordering::Relaxed))) {
             counter.error.get_or_insert_with(|| "embedded SVG images exceed the byte or nesting budget".into());
         } else if counter.strict && (usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0) {
             counter.error.get_or_insert_with(|| "can't parse an embedded SVG image".into());
@@ -581,6 +584,42 @@ fn parse_image_bounded_with(
         }
         ParseFailure::Decode(error) => error,
     })
+}
+
+/// `resolve`, also noting in `seen` an embedded SVG whose gzip holds gzip again, unpacked within
+/// what the byte budget has left as craft-svg unpacks it. craft-svg refuses that image as over
+/// the byte budget and charges it everything the budget had left, so afterwards a spent budget
+/// no longer means the drawing's images were too large.
+fn noting_nested_gzip(
+    resolve: usvg::ImageHrefResolver<'static>,
+    resolver: Arc<craft_svg::tree::ImageResolver>,
+    seen: Arc<AtomicBool>,
+) -> usvg::ImageHrefResolver<'static> {
+    let usvg::ImageHrefResolver { resolve_data, resolve_string } = resolve;
+    usvg::ImageHrefResolver {
+        resolve_data: Box::new(move |mime, data, options| {
+            if matches!(mime, "image/svg+xml" | "text/plain") {
+                let left = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX).saturating_sub(resolver.usage().embedded_svg_bytes);
+                if matches!(craft_svg::svgz::inflate(&data, left), Err(craft_svg::svgz::Error::Nested(_))) {
+                    seen.store(true, Ordering::Relaxed);
+                }
+            }
+            resolve_data(mime, data, options)
+        }),
+        resolve_string,
+    }
+}
+
+/// Whether craft-svg left an embedded SVG out because the drawing's SVG images were too large
+/// together or nested more than [`MAX_EMBEDDED_SVG_DEPTH`] deep, which fails even a non-strict
+/// parse, as the bounded path did before craft-svg. Its count of refused SVG images also covers
+/// an image nested too deeply in XML and a gzip inside gzip, which only leave that image out.
+/// A refused image is charged whatever the byte budget had left, so a spent budget means too
+/// large unless a nested gzip spent it. A chain at the cap, or a spent budget, alongside an
+/// image only too deep in XML is refused too: the counts can't tell them apart.
+fn embedded_svg_over_budget(usage: &craft_svg::tree::ImageUsage, nested_gzip: bool) -> bool {
+    let spent = usage.embedded_svg_bytes >= usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX);
+    (spent && !nested_gzip) || usage.embedded_svg_depth >= MAX_EMBEDDED_SVG_DEPTH
 }
 
 /// Used paint/effect resources can decode an image once per use. Ordinary paths, gradients,

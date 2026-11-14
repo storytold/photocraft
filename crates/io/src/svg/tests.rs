@@ -60,6 +60,18 @@ fn image_svg(images: &str) -> String {
     format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\">{images}</svg>")
 }
 
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(if i <= chunk.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
+
 fn png_dimensions(width: u32, height: u32) -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
     bytes.extend_from_slice(&width.to_be_bytes());
@@ -1017,17 +1029,6 @@ fn bounded_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
 /// main-thread size); deeper ones are refused.
 #[test]
 fn the_deepest_chain_of_embedded_svg_images_fits_a_small_stack() {
-    fn base64(bytes: &[u8]) -> String {
-        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        for chunk in bytes.chunks(3) {
-            let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
-            for i in 0..4 {
-                out.push(if i <= chunk.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
-            }
-        }
-        out
-    }
     let chain = |levels: usize| {
         let mut svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><rect width=\"8\" height=\"8\"/></svg>".to_string();
         for _ in 0..levels {
@@ -1056,6 +1057,35 @@ fn the_deepest_chain_of_embedded_svg_images_fits_a_small_stack() {
         .unwrap()
         .join()
         .unwrap();
+}
+
+/// gzipped at every level, a chain of SVG images stays small, so the byte budget never ends it:
+/// one image past [`MAX_EMBEDDED_SVG_DEPTH`] is refused, not parsed with the innermost left out.
+/// (Drawing such a chain is refused past craft-svg's own, lower limit of 24.)
+#[test]
+fn a_chain_of_svg_images_past_the_nesting_cap_is_refused() {
+    use std::io::Write;
+    let gz = |bytes: &[u8]| {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    };
+    let chain = |levels: usize| {
+        let mut svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><rect width=\"8\" height=\"8\"/></svg>".to_string();
+        for _ in 0..levels {
+            svg = format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><image width=\"8\" height=\"8\" href=\"data:image/svg+xml;base64,{}\"/></svg>",
+                base64(&gz(svg.as_bytes()))
+            );
+        }
+        svg
+    };
+    let deepest = chain(MAX_EMBEDDED_SVG_DEPTH);
+    assert!(deepest.len() < 1 << 20, "far below the byte budget: {} bytes", deepest.len());
+    let (_, chain_length) = parse_bounded_inner(deepest.as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert_eq!(chain_length, MAX_EMBEDDED_SVG_DEPTH as u64, "every level parses");
+    let error = parse_bounded(chain(MAX_EMBEDDED_SVG_DEPTH + 1).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+    assert!(error.to_string().contains("byte or nesting budget"), "{error}");
 }
 
 /// Only a stored display preview is strict about an embedded image it can't read; an edited SVG
