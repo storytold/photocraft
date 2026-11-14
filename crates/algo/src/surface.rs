@@ -42,7 +42,8 @@ fn luma_weight(ctx: &Ctx, px: &[f32]) -> Option<(f32, f32)> {
     if px.iter().any(|v| !v.is_finite()) {
         return None;
     }
-    let c = rgba(ctx, px);
+    // RGB needs no conversion (the same values `to_rgba` gives).
+    let c = if ctx.mode == ColorMode::Rgb { [px[0], px[1], px[2], if ctx.alpha { px[3] } else { 1.0 }] } else { rgba(ctx, px) };
     let a = if ctx.alpha { c[3] } else { 1.0 };
     let y = rec709(c);
     (a > 0.0 && y.is_finite()).then_some((y, a.min(1.0)))
@@ -134,8 +135,7 @@ impl ShadingBuilder {
         self.area
     }
 
-    /// Rows per band: a multiple of the grid's block size, so no block is split between bands
-    /// (the field is the same for any band height).
+    /// Rows per band: a multiple of the grid's block size (any band height gives the same field).
     pub fn band_rows(&self) -> usize {
         self.band_rows
     }
@@ -146,37 +146,89 @@ impl ShadingBuilder {
         self.band_rows = rows.max(1).div_ceil(self.k) * self.k;
     }
 
-    /// Add the rows `band` of the area: full width, starting a whole number of blocks below the
-    /// area's top. `img` must cover `band` and hold the colour model's channels.
+    /// Add the rows `band` of the area: full width, anywhere in the area (bands come in order, so
+    /// each grid cell sums its pixels in the same order whatever the band heights). `img` must
+    /// cover `band` and hold the colour model's channels.
     pub fn add_band(&mut self, img: &Image, band: Rect) -> Result<(), String> {
-        let a = self.area;
-        let aligned = band.x0 == a.x0 && band.x1 == a.x1 && band.y0 >= a.y0 && band.y1 <= a.y1 && ((band.y0 - a.y0) as usize).is_multiple_of(self.k);
-        if !aligned {
-            return Err("a shading band must span the area's width and start on a block row".to_string());
-        }
         let need = crate::fxutil::fmt(&self.ctx).channels();
         let (iw, ih) = (u64::from(img.rect.width()), u64::from(img.rect.height()));
         if !img.rect.contains_rect(&band) || img.ch < need || (iw * ih).checked_mul(img.ch as u64) != Some(img.data.len() as u64) {
             return Err("the shading sample does not match its colour model".to_string());
         }
-        let w = a.width() as usize;
-        for y in band.y0..band.y1 {
-            let gy = (y - a.y0) as usize / self.k;
-            let row = (y - a.y0) as usize * w;
-            for x in band.x0..band.x1 {
-                let Some((yl, wt)) = luma_weight(&self.ctx, img.px(x, y)) else { continue };
-                let code = encode_luma(yl);
-                let gx = (x - a.x0) as usize / self.k;
-                if let Some(slot) = self.luma.get_mut(row + (x - a.x0) as usize) {
-                    *slot = code;
-                }
-                let yq = decode_luma(code);
-                if let Some(cell) = self.packed.get_mut((gy * self.gw + gx) * 2..(gy * self.gw + gx) * 2 + 2) {
-                    cell[0] += yq * wt;
-                    cell[1] += wt;
+        self.accumulate(band, &img.data, img.ch, img.rect)
+    }
+
+    /// [`add_band`](Self::add_band) for straight RGBA pixels covering exactly `band` (a composite
+    /// band), without copying them into an [`Image`]. The builder's colour model must be RGB with
+    /// alpha.
+    pub fn add_band_rgba(&mut self, band: Rect, px: &[[f32; 4]]) -> Result<(), String> {
+        if self.ctx.mode != ColorMode::Rgb || !self.ctx.alpha || (u64::from(band.width()) * u64::from(band.height())) != px.len() as u64 {
+            return Err("the shading sample does not match its colour model".to_string());
+        }
+        self.accumulate(band, px.as_flattened(), 4, band)
+    }
+
+    /// Accumulates `band` from `data` (interleaved, `ch` channels, covering `data_rect`), one grid
+    /// row of blocks per task: tasks own disjoint rows of the luma codes and of the grid.
+    fn accumulate(&mut self, band: Rect, data: &[f32], ch: usize, data_rect: Rect) -> Result<(), String> {
+        let a = self.area;
+        if band.x0 != a.x0 || band.x1 != a.x1 || band.y0 < a.y0 || band.y1 > a.y1 {
+            return Err("a shading band must span the area's width and lie inside it".to_string());
+        }
+        if band.is_empty() {
+            return Ok(());
+        }
+        let (w, k, gw) = (a.width() as usize, self.k, self.gw);
+        let first_gy = (band.y0 - a.y0) as usize / k;
+        let last_gy = (band.y1 - 1 - a.y0) as usize / k;
+        let too_short = || "the shading area does not match its buffers".to_string();
+        let luma_band = self.luma.get_mut((band.y0 - a.y0) as usize * w..(band.y1 - a.y0) as usize * w).ok_or_else(too_short)?;
+        let packed_rows = self.packed.get_mut(first_gy * gw * 2..(last_gy + 1) * gw * 2).ok_or_else(too_short)?;
+        // One task per grid row: its pixel rows (a block row, or part of one at a band's edge).
+        let mut tasks: Vec<(i32, i32, &mut [u16], &mut [f32])> = Vec::with_capacity(last_gy - first_gy + 1);
+        let (mut rest, mut y) = (luma_band, band.y0);
+        for (gy, grid_row) in (first_gy..=last_gy).zip(packed_rows.chunks_mut(gw * 2)) {
+            let y_end = band.y1.min(a.y0.saturating_add(((gy + 1) * k) as i32));
+            let (head, tail) = rest.split_at_mut(((y_end - y) as usize * w).min(rest.len()));
+            rest = tail;
+            tasks.push((y, y_end, head, grid_row));
+            y = y_end;
+        }
+        let dw = data_rect.width() as usize;
+        let ctx = self.ctx;
+        let work = |(y0, y1, luma, grid): &mut (i32, i32, &mut [u16], &mut [f32])| {
+            for y in *y0..*y1 {
+                let luma_row = luma.get_mut((y - *y0) as usize * w..(y - *y0 + 1) as usize * w);
+                let src_row = (y - data_rect.y0) as usize * dw;
+                let Some(luma_row) = luma_row else { continue };
+                // The grid column advances every `k` pixels: counted, not divided.
+                let (mut gx, mut in_block) = (0usize, 0usize);
+                for (xi, slot) in luma_row.iter_mut().enumerate() {
+                    let x = a.x0 + xi as i32;
+                    let o = (src_row + (x - data_rect.x0) as usize) * ch;
+                    if let Some((yl, wt)) = data.get(o..o + ch).and_then(|px| luma_weight(&ctx, px)) {
+                        let code = encode_luma(yl);
+                        *slot = code;
+                        if let Some(cell) = grid.get_mut(gx * 2..gx * 2 + 2) {
+                            cell[0] += decode_luma(code) * wt;
+                            cell[1] += wt;
+                        }
+                    }
+                    in_block += 1;
+                    if in_block == k {
+                        in_block = 0;
+                        gx += 1;
+                    }
                 }
             }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            tasks.par_iter_mut().for_each(work);
         }
+        #[cfg(target_arch = "wasm32")]
+        tasks.iter_mut().for_each(work);
         Ok(())
     }
 
@@ -187,7 +239,7 @@ impl ShadingBuilder {
             gauss_blur_n(&mut self.packed, self.gw, self.gh, 2, self.sigma / self.k as f32);
         }
         let y_ref = self.packed.as_chunks::<2>().0.iter().map(|c| if c[1] > 1e-6 && c[0].is_finite() { c[0] / c[1] } else { f32::NAN }).collect();
-        ShadingField { area: self.area, k: self.k, gw: self.gw, gh: self.gh, y_ref, luma: self.luma }
+        ShadingField { area: self.area, k: self.k, inv: 1.0 / self.k as f32, gw: self.gw, gh: self.gh, y_ref, luma: self.luma }
     }
 }
 
@@ -197,8 +249,9 @@ impl ShadingBuilder {
 pub struct ShadingField {
     /// The pixels the field covers (the sample's rect within the requested bounds).
     area: Rect,
-    /// Block size of the reduced grid.
+    /// Block size of the reduced grid, and its reciprocal.
     k: usize,
+    inv: f32,
     gw: usize,
     gh: usize,
     /// Blurred luma per grid cell, NaN where no pixel contributed.
@@ -242,22 +295,39 @@ impl ShadingField {
         self.k
     }
 
-    /// The blurred luma at a pixel (bilinear between block centres), `None` where no pixel
-    /// contributed.
-    fn reference(&self, x: i32, y: i32) -> Option<f32> {
+    /// The two grid rows of blurred luma around pixel row `y`, and the weight between them.
+    fn ref_row(&self, y: i32) -> Option<RefRow<'_>> {
         if self.gw == 0 || self.gh == 0 {
             return None;
         }
-        let inv = 1.0 / self.k as f32;
-        let fx = (((x - self.area.x0) as f32 + 0.5) * inv - 0.5).clamp(0.0, (self.gw - 1) as f32);
-        let fy = (((y - self.area.y0) as f32 + 0.5) * inv - 0.5).clamp(0.0, (self.gh - 1) as f32);
-        let (x0, y0) = (fx as usize, fy as usize);
-        let (x1, y1) = ((x0 + 1).min(self.gw - 1), (y0 + 1).min(self.gh - 1));
-        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
-        let at = |gx: usize, gy: usize| self.y_ref.get(gy * self.gw + gx).copied();
-        let (a, b, c, d) = (at(x0, y0)?, at(x1, y0)?, at(x0, y1)?, at(x1, y1)?);
-        let v = (a + (b - a) * tx) * (1.0 - ty) + (c + (d - c) * tx) * ty;
+        let fy = (((y - self.area.y0) as f32 + 0.5) * self.inv - 0.5).clamp(0.0, (self.gh - 1) as f32);
+        let y0 = fy as usize;
+        let y1 = (y0 + 1).min(self.gh - 1);
+        let (r0, r1) = (self.y_ref.get(y0 * self.gw..(y0 + 1) * self.gw)?, self.y_ref.get(y1 * self.gw..(y1 + 1) * self.gw)?);
+        Some(RefRow { r0, r1, ty: fy - y0 as f32 })
+    }
+
+    /// The blurred luma at pixel column `x` of a row from [`ref_row`](Self::ref_row) (bilinear
+    /// between block centres), `None` where no pixel contributed.
+    #[inline]
+    fn ref_at(&self, row: &RefRow<'_>, x: i32) -> Option<f32> {
+        let fx = (((x - self.area.x0) as f32 + 0.5) * self.inv - 0.5).clamp(0.0, (self.gw - 1) as f32);
+        let x0 = fx as usize;
+        let x1 = (x0 + 1).min(self.gw - 1);
+        let tx = fx - x0 as f32;
+        let (a, b, c, d) = (*row.r0.get(x0)?, *row.r0.get(x1)?, *row.r1.get(x0)?, *row.r1.get(x1)?);
+        let v = (a + (b - a) * tx) * (1.0 - row.ty) + (c + (d - c) * tx) * row.ty;
         v.is_finite().then_some(v)
+    }
+
+    #[inline]
+    fn shade_code(&self, code: u16, reference: Option<f32>) -> f32 {
+        if code == NO_LUMA {
+            return 1.0;
+        }
+        let Some(r) = reference else { return 1.0 };
+        let s = decode_luma(code) / r.max(MIN_REF);
+        if s.is_finite() { s.clamp(0.0, MAX_SHADE) } else { 1.0 }
     }
 
     /// The shading factor at one pixel, `0..=4`; 1 outside the area or where nothing is known.
@@ -267,27 +337,45 @@ impl ShadingField {
         }
         let idx = (y - self.area.y0) as usize * self.area.width() as usize + (x - self.area.x0) as usize;
         let Some(&code) = self.luma.get(idx) else { return 1.0 };
-        if code == NO_LUMA {
-            return 1.0;
-        }
-        let Some(r) = self.reference(x, y) else { return 1.0 };
-        let s = decode_luma(code) / r.max(MIN_REF);
-        if s.is_finite() { s.clamp(0.0, MAX_SHADE) } else { 1.0 }
+        let reference = self.ref_row(y).and_then(|row| self.ref_at(&row, x));
+        self.shade_code(code, reference)
     }
 
     /// Fill `out` (row-major over `rect`) with the shading factor of each pixel. A request is
-    /// independent of how it is split: tiles give the same values as one call. `out` shorter than
-    /// the rect is filled as far as it goes.
+    /// independent of how it is split: tiles give the same values as one call (and the same values
+    /// as [`shade_at`](Self::shade_at)). `out` shorter than the rect is filled as far as it goes.
+    /// Row by row: the row's grid lines are found once, and the pixel loop has no `%` or `/`.
     pub fn shade_into(&self, rect: Rect, out: &mut [f32]) {
         let w = rect.width() as usize;
         if w == 0 {
             return;
         }
-        for (i, o) in out.iter_mut().enumerate() {
-            let (x, y) = (rect.x0.saturating_add((i % w) as i32), rect.y0.saturating_add((i / w) as i32));
-            *o = self.shade_at(x, y);
+        let aw = self.area.width() as usize;
+        for (r, out_row) in out.chunks_mut(w).enumerate() {
+            let y = rect.y0.saturating_add(r as i32);
+            let inside_rows = y >= self.area.y0 && y < self.area.y1;
+            let ref_row = if inside_rows { self.ref_row(y) } else { None };
+            let luma_row = if inside_rows { self.luma.get((y - self.area.y0) as usize * aw..((y - self.area.y0) as usize + 1) * aw) } else { None };
+            for (c, o) in out_row.iter_mut().enumerate() {
+                let x = rect.x0.saturating_add(c as i32);
+                *o = match luma_row {
+                    Some(luma) if x >= self.area.x0 && x < self.area.x1 => {
+                        let code = luma.get((x - self.area.x0) as usize).copied().unwrap_or(NO_LUMA);
+                        let reference = ref_row.as_ref().and_then(|row| self.ref_at(row, x));
+                        self.shade_code(code, reference)
+                    }
+                    _ => 1.0,
+                };
+            }
         }
     }
+}
+
+/// Two grid rows of blurred luma and the weight between them (see `ShadingField::ref_row`).
+struct RefRow<'a> {
+    r0: &'a [f32],
+    r1: &'a [f32],
+    ty: f32,
 }
 
 /// The perspective planes of a Vanishing Point scene as a brush surface.
@@ -369,6 +457,121 @@ impl PlaneSurface {
         }
         let out = (s1 as f32, angle as f32, squash.min(1.0) as f32);
         (out.0.is_finite() && out.0 > 0.0 && out.1.is_finite() && out.2.is_finite()).then_some(out)
+    }
+}
+
+/// Target block (pixels per grid cell side) of a [`DepthGeometry`] grid.
+const DEPTH_BLOCK: usize = 4;
+/// Most cells a [`DepthGeometry`] grid may have; larger areas get a coarser block.
+const DEPTH_MAX_CELLS: usize = 1 << 22;
+/// Foreshortening gain: a depth change of 0.1 across the brush diameter at relief 1 gives
+/// `g = 0.1 * K = sqrt(3)`, so `squash = 1 / sqrt(1 + g^2) = 0.5`.
+const DEPTH_K: f64 = 17.320508;
+/// Squashes below this are clamped (a dab on a steep slope stays visible).
+const DEPTH_MIN_SQUASH: f64 = 0.15;
+/// Smallest dab scale from `size_by_depth`, so the far plane does not shrink dabs to nothing.
+const DEPTH_MIN_SCALE: f64 = 0.05;
+
+/// A depth plane (0..1 per pixel, larger = nearer) as a brush surface: the local slope of depth
+/// under a point tilts and shrinks the dab.
+///
+/// The plane is reduced to a grid of area means (block about 4 px, coarser if the grid would pass
+/// 2^22 cells), so a lookup costs a few bilinear samples at any image size.
+#[derive(Clone, Debug)]
+pub struct DepthGeometry {
+    area: Rect,
+    block: usize,
+    gw: usize,
+    gh: usize,
+    grid: Vec<f32>,
+}
+
+impl DepthGeometry {
+    /// Build from `depth`, row-major over `area` (`width * height` values, clamped to 0..1).
+    /// Errors for an empty area, a length mismatch or a non-finite value.
+    pub fn new(area: Rect, depth: &[f32]) -> Result<Self, String> {
+        let (w, h) = (i64::from(area.x1) - i64::from(area.x0), i64::from(area.y1) - i64::from(area.y0));
+        if w <= 0 || h <= 0 {
+            return Err("empty depth area".into());
+        }
+        let (w, h) = (w as usize, h as usize);
+        if w.checked_mul(h) != Some(depth.len()) {
+            return Err("depth plane does not match its area".into());
+        }
+        if depth.iter().any(|v| !v.is_finite()) {
+            return Err("depth plane has non-finite values".into());
+        }
+        let mut block = DEPTH_BLOCK;
+        let cells = |b: usize| w.div_ceil(b).saturating_mul(h.div_ceil(b));
+        while cells(block) > DEPTH_MAX_CELLS {
+            block += 1;
+        }
+        let (gw, gh) = (w.div_ceil(block), h.div_ceil(block));
+        let mut sum = vec![0.0f32; gw * gh];
+        let mut count = vec![0u32; gw * gh];
+        for (y, row) in depth.chunks_exact(w).enumerate() {
+            let gy = y / block;
+            for (x, v) in row.iter().enumerate() {
+                let i = gy * gw + x / block;
+                if let (Some(s), Some(c)) = (sum.get_mut(i), count.get_mut(i)) {
+                    *s += v.clamp(0.0, 1.0);
+                    *c += 1;
+                }
+            }
+        }
+        let grid = sum.iter().zip(&count).map(|(s, &c)| if c > 0 { s / c as f32 } else { 0.0 }).collect();
+        Ok(Self { area, block, gw, gh, grid })
+    }
+
+    pub fn area(&self) -> Rect {
+        self.area
+    }
+
+    /// Bilinear sample at pixel position `(x, y)` (document coordinates); cell centres sit at
+    /// half a block, and positions past the outermost centres clamp to the edge.
+    fn sample(&self, x: f64, y: f64) -> f64 {
+        let b = self.block as f64;
+        let fx = ((x - f64::from(self.area.x0)) / b - 0.5).clamp(0.0, (self.gw - 1) as f64);
+        let fy = ((y - f64::from(self.area.y0)) / b - 0.5).clamp(0.0, (self.gh - 1) as f64);
+        let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(self.gw - 1), (y0 + 1).min(self.gh - 1));
+        let (tx, ty) = (fx - x0 as f64, fy - y0 as f64);
+        let at = |gx: usize, gy: usize| f64::from(self.grid.get(gy * self.gw + gx).copied().unwrap_or(0.0));
+        let top = at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx;
+        let bot = at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx;
+        top * (1.0 - ty) + bot * ty
+    }
+
+    /// The dab projection at `(x, y)` for a brush of `radius` pixels: `(scale, squash_angle,
+    /// squash)`, in the same convention as [`PlaneSurface::local`] (`squash_angle` is the y-up,
+    /// counter-clockwise direction of the compressed axis).
+    ///
+    /// The depth gradient comes from central differences of the grid at a step of about the
+    /// radius (at least one cell). With `ΔD = |∇D| * 2 * radius` the depth change across the brush
+    /// diameter, `g = relief * K * ΔD` and `squash = 1 / sqrt(1 + g²)` (not below 0.15), along
+    /// the gradient. `scale` is `max(D, 0.05)` when `size_by_depth` is set, else 1.
+    ///
+    /// `None` for non-finite arguments, a non-positive radius and points outside the area.
+    pub fn local(&self, x: f64, y: f64, radius: f32, relief: f32, size_by_depth: bool) -> Option<(f32, f32, f32)> {
+        if !(x.is_finite() && y.is_finite() && radius.is_finite() && radius > 0.0 && relief.is_finite()) {
+            return None;
+        }
+        let a = self.area;
+        if x < f64::from(a.x0) || y < f64::from(a.y0) || x >= f64::from(a.x1) || y >= f64::from(a.y1) {
+            return None;
+        }
+        let relief = f64::from(relief.clamp(0.0, 1.0));
+        let step = (f64::from(radius) / self.block as f64).max(1.0) * self.block as f64;
+        let gx = (self.sample(x + step, y) - self.sample(x - step, y)) / (2.0 * step);
+        let gy = (self.sample(x, y + step) - self.sample(x, y - step)) / (2.0 * step);
+        let mag = gx.hypot(gy);
+        let g = relief * DEPTH_K * mag * 2.0 * f64::from(radius);
+        let squash = (1.0 / (1.0 + g * g).sqrt()).max(DEPTH_MIN_SQUASH);
+        // Image y points down; the dab convention is y-up.
+        let angle = if mag > 1e-9 { (-gy).atan2(gx) } else { 0.0 };
+        let scale = if size_by_depth { self.sample(x, y).max(DEPTH_MIN_SCALE) } else { 1.0 };
+        let out = (scale as f32, angle as f32, squash as f32);
+        (out.0.is_finite() && out.1.is_finite() && out.2.is_finite()).then_some(out)
     }
 }
 
@@ -459,8 +662,9 @@ mod tests {
             let whole = ShadingField::build(Image::read(&surf, rect), ColorMode::Rgb, true, rect, sigma).unwrap();
             let mut b = ShadingBuilder::new(ColorMode::Rgb, true, rect, sigma).unwrap();
             b.set_band_rows(3);
-            let rows = b.band_rows() as i32;
-            assert!(rows >= 3 && (rows as usize).is_multiple_of(whole.block()));
+            // Bands of any height (not only whole blocks) give the same field.
+            let rows = if sigma > 10.0 { 7 } else { b.band_rows() as i32 };
+            assert!(rows >= 3);
             let mut y = 0;
             while y < 41 {
                 let band = Rect::new(0, y, 50, (y + rows).min(41));
@@ -473,10 +677,10 @@ mod tests {
             banded.shade_into(rect, &mut c);
             assert!(a.iter().zip(&c).all(|(x, y)| x.to_bits() == y.to_bits()), "sigma {sigma}");
         }
-        // A band that does not start on a block row, or misses the width, is refused.
+        // A band that misses the width, or lies outside the area, is refused.
         let mut b = ShadingBuilder::new(ColorMode::Rgb, true, rect, 20.0).unwrap();
-        let bad = Rect::new(0, 2, 50, 10);
-        assert!(b.add_band(&Image::read(&surf, bad), bad).is_err());
+        let outside = Rect::new(0, 30, 50, 60);
+        assert!(b.add_band(&Image::read(&surf, outside), outside).is_err());
         let narrow = Rect::new(0, 0, 10, 5);
         assert!(b.add_band(&Image::read(&surf, narrow), narrow).is_err());
     }
@@ -572,5 +776,74 @@ mod tests {
         assert!(square_on().local([f64::NAN, 150.0]).is_none());
         let none = PlaneSurface::new(Scene { planes: Vec::new(), focal: 1000.0, center: [0.0, 0.0] });
         assert!(none.local([1.0, 1.0]).is_none());
+    }
+
+    fn ramp(w: usize, h: usize, f: impl Fn(usize, usize) -> f32) -> DepthGeometry {
+        let mut d = Vec::with_capacity(w * h);
+        for y in 0..h {
+            for x in 0..w {
+                d.push(f(x, y));
+            }
+        }
+        DepthGeometry::new(Rect { x0: 0, y0: 0, x1: w as i32, y1: h as i32 }, &d).unwrap()
+    }
+
+    #[test]
+    fn depth_ramp_squashes_along_the_ramp() {
+        // D rises 0..1 over 200 px along +x: 0.1 over a 20 px diameter (radius 10).
+        let g = ramp(200, 100, |x, _| x as f32 / 200.0);
+        let (_, angle, squash) = g.local(100.0, 50.0, 10.0, 1.0, false).unwrap();
+        assert!((squash - 0.5).abs() < 0.05, "{squash}");
+        assert!(angle.abs() < 1e-3, "{angle}");
+        // Relief 0 never squashes; a ramp along image +y is y-down, so the y-up angle is -90 deg.
+        assert!((g.local(100.0, 50.0, 10.0, 0.0, false).unwrap().2 - 1.0).abs() < 1e-6);
+        let v = ramp(100, 200, |_, y| y as f32 / 200.0);
+        let (_, angle, squash) = v.local(50.0, 100.0, 10.0, 1.0, false).unwrap();
+        assert!(squash < 0.6);
+        assert!((angle + std::f32::consts::FRAC_PI_2).abs() < 1e-3, "{angle}");
+    }
+
+    #[test]
+    fn depth_flat_does_not_squash_and_scale_follows_depth() {
+        let g = ramp(64, 64, |_, _| 0.6);
+        let (scale, _, squash) = g.local(32.0, 32.0, 8.0, 1.0, true).unwrap();
+        assert_eq!(squash, 1.0);
+        assert!((scale - 0.6).abs() < 1e-5);
+        assert_eq!(g.local(32.0, 32.0, 8.0, 1.0, false).unwrap().0, 1.0);
+        // Far plane keeps a minimum scale.
+        let far = ramp(16, 16, |_, _| 0.0);
+        assert!((far.local(8.0, 8.0, 4.0, 1.0, true).unwrap().0 - 0.05).abs() < 1e-6);
+        // Scale tracks D across a ramp.
+        let r = ramp(200, 20, |x, _| x as f32 / 200.0);
+        let (a, b) = (r.local(40.0, 10.0, 2.0, 0.0, true).unwrap().0, r.local(160.0, 10.0, 2.0, 0.0, true).unwrap().0);
+        assert!(b > a * 3.0);
+    }
+
+    #[test]
+    fn depth_squash_is_clamped_and_bounds_checked() {
+        let cliff = ramp(100, 20, |x, _| if x < 50 { 0.0 } else { 1.0 });
+        assert!((cliff.local(50.0, 10.0, 10.0, 1.0, false).unwrap().2 - 0.15).abs() < 1e-6);
+        let g = ramp(32, 32, |_, _| 0.5);
+        assert!(g.local(-1.0, 5.0, 4.0, 1.0, true).is_none());
+        assert!(g.local(5.0, 32.0, 4.0, 1.0, true).is_none());
+        assert!(g.local(f64::NAN, 5.0, 4.0, 1.0, true).is_none());
+        assert!(g.local(5.0, 5.0, f32::NAN, 1.0, true).is_none());
+        assert!(g.local(5.0, 5.0, 0.0, 1.0, true).is_none());
+        assert!(g.local(5.0, 5.0, 4.0, f32::INFINITY, true).is_none());
+    }
+
+    #[test]
+    fn depth_geometry_rejects_bad_input() {
+        let r = Rect { x0: 0, y0: 0, x1: 4, y1: 4 };
+        assert!(DepthGeometry::new(r, &[0.0; 15]).is_err());
+        assert!(DepthGeometry::new(Rect::EMPTY, &[]).is_err());
+        let mut d = vec![0.5f32; 16];
+        d[3] = f32::NAN;
+        assert!(DepthGeometry::new(r, &d).is_err());
+        // An offset area is addressed in document coordinates.
+        let o = Rect { x0: 100, y0: 50, x1: 104, y1: 54 };
+        let g = DepthGeometry::new(o, &[0.5; 16]).unwrap();
+        assert!(g.local(101.0, 51.0, 2.0, 1.0, true).is_some());
+        assert!(g.local(1.0, 1.0, 2.0, 1.0, true).is_none());
     }
 }

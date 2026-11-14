@@ -93,11 +93,11 @@ pub(crate) fn pen_axes(xf: &crate::canvas::ViewXform, brush: &BrushSettings, pen
 
 /// The dab the surface-aware brush will lay down at `doc`: radius, foreshortening and the offset
 /// of its centre from the pointer, from the engine. `None` when neither Follow Perspective nor
-/// Follow Folds applies, the tool is not the Brush or Pencil, or nothing shapes the dab here (the
+/// Follow Depth applies, the tool is not the Brush or Pencil, or nothing shapes the dab here (the
 /// cursor then stays as it is).
 pub(crate) fn surface_shape(app: &mut crate::PhotocraftApp, tool: crate::Tool, doc: [f64; 2]) -> Option<photocraft_engine::brush_cmds::CursorShape> {
     let o = &app.session.tools.brush.surface;
-    if !matches!(tool, crate::Tool::Brush | crate::Tool::Pencil) || !(o.perspective || o.folds) {
+    if !matches!(tool, crate::Tool::Brush | crate::Tool::Pencil) || !(o.perspective || o.depth) {
         return None;
     }
     let base = app.session.tools.brush.size / 2.0;
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn surface_shape_is_none_when_follow_perspective_is_off() {
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        assert!(!app.session.tools.brush.surface.perspective && !app.session.tools.brush.surface.folds);
+        assert!(!app.session.tools.brush.surface.perspective && !app.session.tools.brush.surface.depth);
         assert!(surface_shape(&mut app, crate::Tool::Brush, [10.0, 10.0]).is_none());
     }
 }

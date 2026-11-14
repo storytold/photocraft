@@ -81,6 +81,7 @@ mod count_record_label_tests;
 #[cfg(test)]
 mod count_resize_tests;
 pub mod cutout_cmds;
+pub mod depth_cmds;
 pub mod distort_cmds;
 pub mod document_preset_cmds;
 pub mod edit_cmds;
@@ -1402,6 +1403,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::layer_copy_cmds::specs());
     v.extend(crate::prefs::specs());
     v.extend(crate::updates_cmds::specs());
+    v.extend(crate::depth_cmds::specs());
     v.extend(crate::edit_menu_cmds::specs());
     v.extend(crate::fill_key_cmds::specs());
     v.extend(crate::sample_cmds::specs());

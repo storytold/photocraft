@@ -380,6 +380,7 @@ impl PhotocraftApp {
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);
         updates_ui::show(self, &ctx);
+        crate::dialogs::depth_ui::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
         kys_import::show_offer(self, &ctx);
         if self.titlebar_modal_drag(chrome) {

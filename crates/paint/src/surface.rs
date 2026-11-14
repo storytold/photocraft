@@ -39,18 +39,30 @@ pub struct SurfaceOptions {
     pub sample: SampleMode,
     /// Follow Perspective: dabs are sized and foreshortened by the perspective plane under them.
     pub perspective: bool,
-    /// Follow Folds: dabs are foreshortened and shifted by the slope and height of the photo's
-    /// shading (a rough height map), so a stroke bends over folds. `detail` sets its scale too.
-    pub folds: bool,
-    /// 0..1: how strongly a slope foreshortens the dab.
-    pub fold_depth: f32,
-    /// 0..1: how far a fold's height shifts the dab.
-    pub fold_bend: f32,
+    /// Follow Depth: dabs are foreshortened by the slope of the document's depth channel, and
+    /// (with `size_by_depth`) sized by it.
+    pub depth: bool,
+    /// 0..1: how strongly a depth slope foreshortens the dab.
+    pub relief: f32,
+    /// Far surfaces get smaller dabs (the first dab keeps the brush size).
+    pub size_by_depth: bool,
+    /// Name of the alpha channel holding the depth (white = near).
+    pub depth_channel: String,
 }
 
 impl Default for SurfaceOptions {
     fn default() -> Self {
-        Self { color: false, strength: 1.0, detail: 24.0, sample: SampleMode::AllLayers, perspective: false, folds: false, fold_depth: 0.5, fold_bend: 0.3 }
+        Self {
+            color: false,
+            strength: 1.0,
+            detail: 24.0,
+            sample: SampleMode::AllLayers,
+            perspective: false,
+            depth: false,
+            relief: 0.5,
+            size_by_depth: true,
+            depth_channel: "Depth".to_string(),
+        }
     }
 }
 
@@ -63,10 +75,11 @@ impl SurfaceOptions {
         if !self.detail.is_finite() || !DETAIL_RANGE.contains(&self.detail) {
             return Err(format!("surface detail must be between {} and {}, got {}", DETAIL_RANGE.start(), DETAIL_RANGE.end(), self.detail));
         }
-        for (name, v) in [("fold depth", self.fold_depth), ("fold bend", self.fold_bend)] {
-            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
-                return Err(format!("surface {name} must be between 0 and 1, got {v}"));
-            }
+        if !self.relief.is_finite() || !(0.0..=1.0).contains(&self.relief) {
+            return Err(format!("surface relief must be between 0 and 1, got {}", self.relief));
+        }
+        if self.depth_channel.is_empty() || self.depth_channel.chars().count() > 255 {
+            return Err("surface depth channel must be a channel name of 1 to 255 characters".to_string());
         }
         Ok(())
     }
@@ -178,9 +191,10 @@ mod tests {
         assert!(SurfaceOptions { detail: 600.0, ..Default::default() }.validate().is_err());
         assert!(SurfaceOptions { detail: f32::INFINITY, ..Default::default() }.validate().is_err());
         for bad in [f32::NAN, -0.1, 1.5, f32::INFINITY] {
-            assert!(SurfaceOptions { fold_depth: bad, ..Default::default() }.validate().is_err());
-            assert!(SurfaceOptions { fold_bend: bad, ..Default::default() }.validate().is_err());
+            assert!(SurfaceOptions { relief: bad, ..Default::default() }.validate().is_err());
         }
+        assert!(SurfaceOptions { depth_channel: String::new(), ..Default::default() }.validate().is_err());
+        assert!(SurfaceOptions { depth_channel: "x".repeat(256), ..Default::default() }.validate().is_err());
     }
 
     #[test]

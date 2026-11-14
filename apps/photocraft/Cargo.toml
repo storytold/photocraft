@@ -22,6 +22,7 @@ photocraft-raster = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-compose = { workspace = true }
 photocraft-engine = { workspace = true }
+photocraft-depth = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-format = { workspace = true }

@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use photocraft_algo::Image;
-use photocraft_algo::surface::{PlaneSurface, ShadingBuilder, ShadingField};
+use photocraft_algo::surface::{DepthGeometry, PlaneSurface, ShadingBuilder, ShadingField};
 use photocraft_color::ColorMode;
 use photocraft_doc::{DocId, LayerId};
 use photocraft_geom::{Point, Rect};
@@ -58,53 +58,29 @@ impl SurfaceMap for PlaneMap {
     }
 }
 
-/// Follow Folds: the photo's shading as a rough height map `H = S - 1`. A dab over a slope is
-/// foreshortened along the slope (a tilted surface seen from the front) and a dab over a high
-/// point moves up (seen from slightly above).
-///
-/// With `h = max(base_radius / 2, 1.5)` px, the slope is the gradient of S by central
-/// differences over `±h`, each side averaged over three samples across (12 reads a dab). The
-/// tilt is `g = depth · 4h · ∇H` (K = 4h: a shading change of 1 over 2h px at full depth is
-/// |g| = 2), the squash `1/√(1+|g|²)` (never below 0.2) along the gradient's direction, and the
-/// bend shifts the dab up by `bend · 2 · base_radius · H`, at most `2 · base_radius`.
-pub(crate) struct FoldMap {
-    field: Arc<ShadingField>,
-    base_radius: f32,
-    depth: f32,
-    bend: f32,
+/// Follow Depth: the document's depth channel (white = near) as a surface map. Over a slope the
+/// dab is foreshortened along it, and with `size_by_depth` its size follows the depth (see
+/// `photocraft_algo::surface::DepthGeometry::local`, which this adapts). The brush's radius
+/// (size / 2) sets the scale the slope is measured at.
+pub(crate) struct DepthMap {
+    geometry: Arc<DepthGeometry>,
+    radius: f32,
+    relief: f32,
+    size_by_depth: bool,
 }
 
-impl FoldMap {
-    pub(crate) fn new(field: Arc<ShadingField>, base_radius: f32, depth: f32, bend: f32) -> Self {
-        Self { field, base_radius: if base_radius.is_finite() { base_radius.max(0.5) } else { 0.5 }, depth, bend }
+impl DepthMap {
+    pub(crate) fn new(geometry: Arc<DepthGeometry>, radius: f32, relief: f32, size_by_depth: bool) -> Self {
+        Self { geometry, radius: if radius.is_finite() { radius.max(0.5) } else { 0.5 }, relief, size_by_depth }
     }
 
-    /// The fold's projection at `p`, `None` where it is flat (or off the canvas).
+    /// The depth projection at `p`; `None` off the canvas, and where it is flat and unscaled.
     fn local(&self, p: Point) -> Option<Local> {
-        if !(p.x.is_finite() && p.y.is_finite()) {
+        let (scale, squash_angle, squash) = self.geometry.local(p.x, p.y, self.radius, self.relief, self.size_by_depth)?;
+        if scale == 1.0 && squash >= 0.9999 {
             return None;
         }
-        let r = f64::from(self.base_radius);
-        let h = (r * 0.5).max(1.5);
-        let s = |dx: f64, dy: f64| f64::from(self.field.shade_at((p.x + dx).floor() as i32, (p.y + dy).floor() as i32));
-        let (mut gx, mut gy) = (0.0, 0.0);
-        for j in [-0.5, 0.0, 0.5] {
-            gx += s(h, j * h) - s(-h, j * h);
-            gy += s(j * h, h) - s(j * h, -h);
-        }
-        // Shading change per pixel, then in tilt units.
-        let k = f64::from(self.depth) * 4.0 * h / (3.0 * 2.0 * h);
-        let (ux, uy) = (gx * k, gy * k);
-        let mag = ux.hypot(uy);
-        let squash = (1.0 / (1.0 + mag * mag).sqrt()).max(0.2);
-        // The gradient's direction in the y-up convention (image y points down).
-        let angle = if mag > 1e-9 { (-uy).atan2(ux) } else { 0.0 };
-        let lim = 2.0 * r;
-        let off_y = (-f64::from(self.bend) * lim * (s(0.0, 0.0) - 1.0)).clamp(-lim, lim);
-        if squash >= 0.9999 && off_y == 0.0 {
-            return None;
-        }
-        let local = Local { scale: 1.0, squash_angle: angle as f32, squash: squash as f32, offset: [0.0, off_y as f32] };
+        let local = Local { scale, squash_angle, squash, offset: [0.0; 2] };
         local.is_valid().then_some(local)
     }
 }
@@ -117,8 +93,9 @@ fn local_matrix(l: &Local) -> [[f64; 2]; 2] {
     [[sc * (1.0 - k * cs * cs), -sc * k * cs * sn], [-sc * k * cs * sn, sc * (1.0 - k * sn * sn)]]
 }
 
-/// Perspective `a` followed by fold `b`: their matrices multiplied and decomposed again; the
-/// offsets add (the fold's is not scaled by the plane: the plane's scale has arbitrary units).
+/// Perspective `a` followed by depth `b`: their matrices multiplied and decomposed again, so the
+/// scale is the plane's times the depth's (the first dab anchors the product) and the squashes
+/// compose. The offsets add.
 fn combine(a: &Local, b: &Local) -> Option<Local> {
     let (m, n) = (local_matrix(a), local_matrix(b));
     let j = [
@@ -136,11 +113,13 @@ fn combine(a: &Local, b: &Local) -> Option<Local> {
     local.is_valid().then_some(local)
 }
 
-/// Follow Perspective and Follow Folds together. With a plane map, a dab off every plane is
-/// left alone (fold or not): the stroke's size is anchored on the plane's scale.
+/// Follow Perspective and Follow Depth together. With a plane map, a dab off every plane is left
+/// alone (depth or not): the stroke is anchored on the plane. On a plane both apply, as in
+/// [`combine`]. Without a plane map the depth scale itself is the anchored size (the first dab
+/// keeps the brush size; later ones scale with D relative to it).
 struct CombinedMap {
     persp: Option<Arc<PlaneMap>>,
-    fold: Option<FoldMap>,
+    depth: Option<DepthMap>,
 }
 
 impl SurfaceMap for CombinedMap {
@@ -149,30 +128,62 @@ impl SurfaceMap for CombinedMap {
             Some(m) => Some(m.local(p)?),
             None => None,
         };
-        let fold = self.fold.as_ref().and_then(|f| f.local(p));
-        match (plane, fold) {
+        let depth = self.depth.as_ref().and_then(|d| d.local(p));
+        match (plane, depth) {
             (Some(a), Some(b)) => combine(&a, &b).or(Some(a)),
             (a, b) => a.or(b),
         }
     }
 }
 
-/// The dab map for the planes and/or folds a stroke follows.
-pub(crate) fn make_map(persp: Option<Arc<PlaneMap>>, fold: Option<FoldMap>) -> Option<Arc<dyn SurfaceMap>> {
-    match (persp, fold) {
+/// The dab map for the planes and/or depth a stroke follows.
+pub(crate) fn make_map(persp: Option<Arc<PlaneMap>>, depth: Option<DepthMap>) -> Option<Arc<dyn SurfaceMap>> {
+    match (persp, depth) {
         (None, None) => None,
         (Some(p), None) => Some(p),
-        (persp, fold) => Some(Arc::new(CombinedMap { persp, fold })),
+        (persp, depth) => Some(Arc::new(CombinedMap { persp, depth })),
     }
 }
 
+/// What a cached shading field was built for. The document's content is compared apart from this
+/// ([`same_sources`]), not by revision: a stroke on the target layer must keep the cache.
 #[derive(Clone, PartialEq)]
 struct FieldKey {
     doc: DocId,
-    revision: u64,
     sample: SampleMode,
     detail: u32,
+    /// The layer being painted: hidden from an All Layers sample, the source of a Current Layer one.
     layer: Option<LayerId>,
+}
+
+/// A cached field, with the document it was built from (a copy-on-write handle: tiles are shared,
+/// and holding it keeps their identity from being reused).
+struct FieldEntry {
+    key: FieldKey,
+    doc: Arc<photocraft_doc::Document>,
+    field: Arc<ShadingField>,
+}
+
+/// Do `a` and `b` hold the same pixels for a sample of kind `sample` aimed at `layer`?
+///
+/// No pixel is scanned. Layers compare field by field, and a surface compares its tile table
+/// first by `Arc` pointer (`photocraft_raster::Tile` is `Eq` with a pointer shortcut), so a layer
+/// no edit has touched costs one pointer test per tile. All Layers ignores the target layer
+/// entirely (it is hidden from the sample), so painting on it, like changing the selection or the
+/// history, keeps the field; any edit of another layer, or of the canvas, invalidates it. A target
+/// inside a group is compared with its group, so there a stroke does invalidate (a rebuild per
+/// stroke, as before). Document-wide settings other than size and colour mode (patterns, the
+/// colour profile) are not compared.
+fn same_sources(a: &photocraft_doc::Document, b: &photocraft_doc::Document, sample: SampleMode, layer: Option<LayerId>) -> bool {
+    if a.size != b.size || a.mode != b.mode || a.depth != b.depth {
+        return false;
+    }
+    match sample {
+        SampleMode::CurrentLayer => layer.is_some_and(|id| matches!((a.layer(id), b.layer(id)), (Some(x), Some(y)) if x == y)),
+        SampleMode::AllLayers => {
+            a.layers.len() == b.layers.len() && a.layers.iter().zip(&b.layers).all(|(x, y)| x.id == y.id && (Some(x.id) == layer || x == y))
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -185,8 +196,33 @@ struct MapKey {
 /// What a session keeps between strokes (see the module doc). Never serialized.
 #[derive(Default)]
 pub struct SurfaceCache {
-    fields: Mutex<Vec<(FieldKey, Arc<ShadingField>)>>,
+    fields: Mutex<Vec<FieldEntry>>,
     map: Mutex<Option<(MapKey, Arc<PlaneMap>)>>,
+    builds: std::sync::atomic::AtomicUsize,
+    depth: Mutex<Option<DepthEntry>>,
+    depth_builds: std::sync::atomic::AtomicUsize,
+}
+
+/// The depth geometry of a channel, with a snapshot of the channel's surface it was built from
+/// (tile handles: an edit of the channel makes the snapshot differ; painting elsewhere does not).
+struct DepthEntry {
+    doc: DocId,
+    name: String,
+    surface: photocraft_raster::Surface,
+    area: Rect,
+    geometry: Arc<DepthGeometry>,
+}
+
+impl SurfaceCache {
+    /// How many shading fields this session has built (a cache hit builds none).
+    pub fn field_builds(&self) -> usize {
+        self.builds.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// How many depth geometries this session has built.
+    pub fn depth_builds(&self) -> usize {
+        self.depth_builds.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// Shading and perspective for one stroke, ready to attach to its renderers.
@@ -197,7 +233,7 @@ pub(crate) struct Wiring {
 }
 
 impl Wiring {
-    /// The dab map the stroke follows (planes and/or folds), if any.
+    /// The dab map the stroke follows (planes and/or depth), if any.
     #[cfg(test)]
     pub(crate) fn map(&self) -> Option<&Arc<dyn SurfaceMap>> {
         self.map.as_ref()
@@ -219,21 +255,21 @@ impl Wiring {
     /// no saved plane for this canvas, or a shading sample that cannot be built.
     pub(crate) fn build(s: &Session, cmd: &str, p: &Value, brush: &BrushSettings, layer: Option<LayerId>) -> Result<Self> {
         let opts = &brush.surface;
-        if brush.erase || !(opts.color || opts.perspective || opts.folds) {
+        if brush.erase || !(opts.color || opts.perspective || opts.depth) {
             return Ok(Self::default());
         }
         opts.validate().map_err(|e| bad(cmd, e))?;
         let mut w = Self::default();
         let persp = if opts.perspective { Some(plane_map(s).ok_or_else(|| bad(cmd, NO_PLANES))?) } else { None };
-        // Folds are geometry, so they follow a mask or channel target too; the shading then
-        // comes from the whole picture when there is no layer to read.
-        let fold = if opts.folds {
-            let field = fold_field(s, cmd, opts, layer)?;
-            Some(FoldMap::new(field, (brush.size / 2.0).max(0.5), opts.fold_depth, opts.fold_bend))
+        // Depth is geometry, so it follows a mask or channel target too. A missing channel is
+        // an error here (the stroke builds; the cursor only reads).
+        let depth = if opts.depth {
+            let geometry = depth_geometry(s, cmd, &opts.depth_channel)?;
+            Some(DepthMap::new(geometry, (brush.size / 2.0).max(0.5), opts.relief, opts.size_by_depth))
         } else {
             None
         };
-        w.map = make_map(persp, fold);
+        w.map = make_map(persp, depth);
         if opts.color && !is_gray_target(s, p)? {
             let field = shading_field(s, cmd, opts.sample, opts.detail, layer)?;
             w.shade = Some((Arc::new(FieldShade(field)), opts.strength));
@@ -242,10 +278,35 @@ impl Wiring {
     }
 }
 
-/// The shading field Follow Folds reads (the same cached field Surface Color uses).
-fn fold_field(s: &Session, cmd: &str, opts: &photocraft_paint::SurfaceOptions, layer: Option<LayerId>) -> Result<Arc<ShadingField>> {
-    let sample = if layer.is_none() { SampleMode::AllLayers } else { opts.sample };
-    shading_field(s, cmd, sample, opts.detail, layer)
+/// The depth geometry of the active document's alpha channel `name` (the first of that name):
+/// the cached one while the channel's pixels are unchanged, else built (and kept).
+fn depth_geometry(s: &Session, cmd: &str, name: &str) -> Result<Arc<DepthGeometry>> {
+    if let Some(g) = cached_depth(s, name) {
+        return Ok(g);
+    }
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let channel = st.doc.channels.iter().find(|c| c.name == name).ok_or_else(|| bad(cmd, format!("no {name} channel: run Image ▸ Estimate Depth")))?;
+    let canvas = st.doc.bounds();
+    check_size(canvas, cmd)?;
+    // The channel is grayscale at the document depth; its first channel is the depth.
+    let n = channel.surface.channels().max(1);
+    let data = crate::allocation::read_region(&channel.surface, canvas, "the depth channel")?;
+    let depth: Vec<f32> = if n == 1 { data } else { data.chunks_exact(n).map(|c| c.first().copied().unwrap_or(0.0)).collect() };
+    let geometry = Arc::new(DepthGeometry::new(canvas, &depth).map_err(|e| bad(cmd, e))?);
+    s.surface_cache.depth_builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    *lock(&s.surface_cache.depth) =
+        Some(DepthEntry { doc: st.doc.id, name: name.to_string(), surface: channel.surface.clone(), area: canvas, geometry: geometry.clone() });
+    Ok(geometry)
+}
+
+/// The cached depth geometry for channel `name`, if the channel's pixels are the ones it was
+/// built from. Never builds: what the brush cursor reads.
+pub(crate) fn cached_depth(s: &Session, name: &str) -> Option<Arc<DepthGeometry>> {
+    let st = s.active()?;
+    let channel = st.doc.channels.iter().find(|c| c.name == name)?;
+    let cache = lock(&s.surface_cache.depth);
+    let e = cache.as_ref()?;
+    (e.doc == st.doc.id && e.name == name && e.area == st.doc.bounds() && e.surface == channel.surface).then(|| e.geometry.clone())
 }
 
 /// A mask, an alpha channel, Quick Mask or a single colour channel: no colour to shade.
@@ -253,49 +314,70 @@ fn is_gray_target(s: &Session, p: &Value) -> Result<bool> {
     Ok(is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some())
 }
 
-/// The shading field of the active document as it is now, cached by revision.
+fn field_key(doc: &photocraft_doc::Document, sample: SampleMode, detail: f32, layer: Option<LayerId>) -> FieldKey {
+    FieldKey { doc: doc.id, sample, detail: detail.to_bits(), layer }
+}
+
+/// The cached shading field for the active document as it is now, if there is one. Never builds:
+/// what the brush cursor reads.
+pub(crate) fn cached_shading_field(s: &Session, sample: SampleMode, detail: f32, layer: Option<LayerId>) -> Option<Arc<ShadingField>> {
+    let st = s.active()?;
+    let key = field_key(&st.doc, sample, detail, layer);
+    lock(&s.surface_cache.fields).iter().find(|e| e.key == key && same_sources(&e.doc, &st.doc, sample, layer)).map(|e| e.field.clone())
+}
+
+/// The shading field of the active document as it is now: the cached one, else built (and kept).
 fn shading_field(s: &Session, cmd: &str, sample: SampleMode, detail: f32, layer: Option<LayerId>) -> Result<Arc<ShadingField>> {
-    let st = s.active().ok_or(EngineError::NoDocument)?;
-    let key = FieldKey {
-        doc: st.doc.id,
-        revision: st.revision,
-        sample,
-        detail: detail.to_bits(),
-        layer: if sample == SampleMode::CurrentLayer { layer } else { None },
-    };
-    if let Some((_, f)) = lock(&s.surface_cache.fields).iter().find(|(k, _)| *k == key) {
-        return Ok(f.clone());
+    if let Some(f) = cached_shading_field(s, sample, detail, layer) {
+        return Ok(f);
     }
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let key = field_key(&st.doc, sample, detail, layer);
     let field = Arc::new(build_field(&st.doc, cmd, sample, detail, layer)?);
+    s.surface_cache.builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut cache = lock(&s.surface_cache.fields);
-    cache.retain(|(k, _)| *k != key);
+    cache.retain(|e| e.key != key);
     if cache.len() >= KEEP_FIELDS {
         cache.remove(0);
     }
-    cache.push((key, field.clone()));
+    cache.push(FieldEntry { key, doc: st.doc.clone(), field: field.clone() });
     Ok(field)
 }
 
 /// A shading field of `doc` over its canvas: the visible composite, or the layer's own pixels.
-/// The sample is read a band of rows at a time, so only the 16-bit luma of the whole canvas is
+///
+/// All Layers hides `layer` (the one being painted) first, so the paint of earlier strokes never
+/// feeds into the shading of later ones. Hiding, not removing, keeps the other layers' order; a
+/// layer clipped to the hidden one disappears with it, which is what a hidden clipping base does
+/// in the composite. The sample is rendered by `photocraft_compose::render_bands` (tiles in
+/// parallel) and its luma accumulated per band, so only the 16-bit luma of the whole canvas is
 /// ever held, not its float pixels.
 pub(crate) fn build_field(doc: &photocraft_doc::Document, cmd: &str, sample: SampleMode, detail: f32, layer: Option<LayerId>) -> Result<ShadingField> {
     let canvas = doc.bounds();
     check_size(canvas, cmd)?;
     match sample {
         SampleMode::AllLayers => {
-            let b = ShadingBuilder::new(ColorMode::Rgb, true, canvas, detail).map_err(|e| bad(cmd, e))?;
-            for_bands(b, cmd, |band| {
-                let buf = photocraft_compose::render(doc, band);
-                if buf.px.len() as u64 != u64::from(band.width()) * u64::from(band.height()) {
+            // Cheap: the layers' surfaces are copy-on-write.
+            let mut hidden;
+            let doc = match layer.filter(|id| doc.layer(*id).is_some_and(|l| l.visible)) {
+                Some(id) => {
+                    hidden = doc.clone();
+                    if let Some(l) = hidden.layer_mut(id) {
+                        l.visible = false;
+                    }
+                    &hidden
+                }
+                None => doc,
+            };
+            let mut b = ShadingBuilder::new(ColorMode::Rgb, true, canvas, detail).map_err(|e| bad(cmd, e))?;
+            let rows = i32::try_from(b.band_rows()).unwrap_or(i32::MAX);
+            photocraft_compose::render_bands(doc, canvas, rows, |band| {
+                if band.px.len() as u64 != u64::from(band.rect.width()) * u64::from(band.rect.height()) {
                     return Err(bad(cmd, "the document could not be rendered for Surface Color"));
                 }
-                let mut data = crate::allocation::capacity::<f32>(buf.px.len().saturating_mul(4), "the Surface Color sample")?;
-                for px in &buf.px {
-                    data.extend_from_slice(px);
-                }
-                Ok(Image { rect: band, ch: 4, data })
-            })
+                b.add_band_rgba(band.rect, &band.px).map_err(|e| bad(cmd, e))
+            })?;
+            Ok(b.finish())
         }
         SampleMode::CurrentLayer => {
             let id = layer.ok_or_else(|| bad(cmd, "Surface Color needs a target layer"))?;
@@ -364,32 +446,27 @@ pub struct CursorShape {
     pub proj_angle: f32,
     /// 0.05..1; 1 is a round outline.
     pub proj_scale: f32,
-    /// Where the outline's centre sits from the pointer, in image pixels (y down): Follow Folds'
-    /// bend.
+    /// Where the outline's centre sits from the pointer, in image pixels (y down); always 0 for
+    /// planes and depth (kept for the cursor drawing).
     pub offset: [f32; 2],
 }
 
 /// What the brush cursor draws at document point `(x, y)` with a tip of radius `base_radius` while
-/// Follow Perspective and/or Follow Folds is on: the dab a stroke starting there lays down first
+/// Follow Perspective and/or Follow Depth is on: the dab a stroke starting there lays down first
 /// (it anchors the stroke's size, so it keeps `base_radius`; see [`surface_dab_shape`]), with the
-/// plane's foreshortening, the fold's slope and the fold's bend. `None` when neither applies: the
-/// options are off, the document has no planes for this canvas, the point is off every plane (with
-/// Follow Perspective on), or the surface is flat there. The cursor then stays a plain round
-/// outline. Follow Folds reads the shading field, which is built (and cached) on first use.
+/// plane's foreshortening and the depth slope's. `None` when neither applies: the options are off,
+/// the document has no planes for this canvas, the point is off every plane (with Follow
+/// Perspective on), or the depth is flat and unscaled there. The cursor then stays a plain round
+/// outline. Follow Depth reads only an already cached depth geometry (a stroke builds it): with
+/// none, the outline stays plain, so hovering never builds anything.
 pub fn brush_cursor_shape(s: &mut Session, x: f64, y: f64, base_radius: f32) -> Option<CursorShape> {
     let opts = s.tools.brush.surface.clone();
-    if !(opts.perspective || opts.folds) {
+    if !(opts.perspective || opts.depth) {
         return None;
     }
     let persp = if opts.perspective { Some(plane_map(s)?) } else { None };
-    let fold = if opts.folds {
-        let layer = s.active()?.active_layer;
-        let field = fold_field(s, CURSOR_SHAPE, &opts, layer).ok()?;
-        Some(FoldMap::new(field, base_radius, opts.fold_depth, opts.fold_bend))
-    } else {
-        None
-    };
-    let local = make_map(persp, fold)?.local(Point::new(x, y))?;
+    let depth = if opts.depth { Some(DepthMap::new(cached_depth(s, &opts.depth_channel)?, base_radius, opts.relief, opts.size_by_depth)) } else { None };
+    let local = make_map(persp, depth)?.local(Point::new(x, y))?;
     let (radius, proj_angle, proj_scale) = surface_dab_shape(base_radius, Some(local.scale), &local);
     Some(CursorShape { radius, proj_angle, proj_scale, offset: local.offset })
 }
@@ -413,7 +490,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Brush Cursor Shape",
         menu: &[],
         shortcut: None,
-        params: r##"{"x":px,"y":px} → {"onPlane":true,"radius":px,"projAngle":radians (counter-clockwise, y up),"projScale":0.05..1,"offset":[dx,dy] px (y down)} | {"onPlane":false}: the brush cursor's outline at that point while the brush's Surface › Follow Perspective or Follow Folds is on (the first dab of a stroke starting there)"##,
+        params: r##"{"x":px,"y":px} → {"onPlane":true,"radius":px,"projAngle":radians (counter-clockwise, y up),"projScale":0.05..1,"offset":[dx,dy] px (y down)} | {"onPlane":false}: the brush cursor's outline at that point while the brush's Surface › Follow Perspective or Follow Depth is on (the first dab of a stroke starting there)"##,
         enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
         run: cursor_shape,
         journal: false,

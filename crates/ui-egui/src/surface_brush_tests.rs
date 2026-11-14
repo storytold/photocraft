@@ -42,9 +42,14 @@ fn the_popover_toggles_reach_the_brush_settings() {
         checkbox(&h, "Follow Perspective").click();
         h.run_steps(3);
         assert!(h.state().session.tools.brush.surface.perspective, "{tool:?}: Follow Perspective");
-        checkbox(&h, "Follow Folds").click();
+        checkbox(&h, "Follow Depth").click();
         h.run_steps(3);
-        assert!(h.state().session.tools.brush.surface.folds, "{tool:?}: Follow Folds");
+        assert!(h.state().session.tools.brush.surface.depth, "{tool:?}: Follow Depth");
+        // Size by Depth starts on; Relief is a slider.
+        assert!(h.state().session.tools.brush.surface.size_by_depth);
+        checkbox(&h, "Size by Depth").click();
+        h.run_steps(3);
+        assert!(!h.state().session.tools.brush.surface.size_by_depth, "{tool:?}: Size by Depth");
     }
 }
 
@@ -75,7 +80,7 @@ fn ui_inspect_reports_the_cursor_shape() {
     use crate::control::{ControlRequest, Outcome, handle};
     let ctx = egui::Context::default();
     let mut app = app(Tool::Brush);
-    let mut inspect = |app: &mut PhotocraftApp| {
+    let inspect = |app: &mut PhotocraftApp| {
         let (req, _rx) = ControlRequest::new("ui.inspect", json!({}));
         let Outcome::Done(v) = handle(app, &ctx, &req) else { panic!("ui.inspect replies at once") };
         v
@@ -92,18 +97,29 @@ fn ui_inspect_reports_the_cursor_shape() {
 }
 
 #[test]
-fn folds_give_a_cursor_shape_over_a_fold_background() {
+fn relief_and_size_by_depth_are_greyed_until_follow_depth_is_on() {
+    let h = open_popover(app(Tool::Brush));
+    assert!(checkbox(&h, "Size by Depth").accesskit_node().is_disabled());
+    assert!(h.query_all_by_role(Role::Slider).all(|n| n.accesskit_node().is_disabled()));
+}
+
+#[test]
+fn the_depth_options_reach_tools_set_brush() {
     let mut app = app(Tool::Brush);
-    // A smooth ramp with a dark band: shading the engine reads as a fold.
-    for (i, c) in ["#808080", "#303030", "#c0c0c0"].iter().enumerate() {
-        app.run("select.rect", json!({"x": 40 * i as i32 + 40, "y": 0, "width": 40, "height": 160})).unwrap();
-        app.run("edit.fill", json!({"color": c})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"surface": {"depth": true, "relief": 0.8, "sizeByDepth": false}}})).unwrap();
+    let s = &app.session.tools.brush.surface;
+    assert!(s.depth && !s.size_by_depth && (s.relief - 0.8).abs() < 1e-6);
+}
+
+#[test]
+fn estimate_depth_asks_for_consent_when_the_model_is_missing() {
+    let mut app = app(Tool::Brush);
+    crate::dialogs::depth_ui::start(&mut app);
+    // Not installed in a fresh session: the consent dialog opens (or, where unsupported, a status).
+    match app.ui.depth_dialog.as_ref() {
+        Some(d) => assert_eq!(d.phase, crate::dialogs::depth_ui::DepthPhase::Consent),
+        None => assert!(app.ui.status_error, "{}", app.ui.status),
     }
-    app.run("select.deselect", json!({})).unwrap();
-    app.run("tools.setBrush", json!({"brush": {"size": 20.0, "surface": {"folds": true}}})).unwrap();
-    let shape = crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [80.0, 80.0]).expect("folds shape the dab");
-    assert!(shape.radius > 0.0 && shape.offset.iter().all(|v| v.is_finite()), "{shape:?}");
-    // Off: plain again.
-    app.run("tools.setBrush", json!({"brush": {"surface": {"folds": false}}})).unwrap();
-    assert!(crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [80.0, 80.0]).is_none());
+    crate::dialogs::depth_ui::cancel(&mut app);
+    assert!(app.ui.depth_dialog.is_none());
 }

@@ -294,10 +294,10 @@ fn vanishing_point_paste_rejects_hostile_shade_params() {
     assert_eq!(s.active().unwrap().history.past_len(), steps);
 }
 
-// ---- Follow Folds ----
+// ---- Follow Depth ----
 
-/// A document whose picture is a sinusoidal fold: columns of brightness `0.5 + 0.3 sin(2πx/16)`,
-/// with an empty layer on top.
+/// A document whose picture is a sinusoidal fold (columns of brightness `0.5 + 0.3 sin(2πx/16)`),
+/// with an empty layer on top: a photo for Surface Color.
 fn folds_doc(w: u32, h: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": w, "height": h, "background": "transparent", "depth": 32})).unwrap();
@@ -314,10 +314,33 @@ fn folds_doc(w: u32, h: u32) -> Session {
     s
 }
 
-fn fold_map(s: &Session, base_radius: f32, depth: f32, bend: f32) -> Arc<dyn SurfaceMap> {
-    let doc = &s.active().unwrap().doc;
-    let field = super::surface_wire::build_field(doc, "test", photocraft_paint::SampleMode::AllLayers, 24.0, None).unwrap();
-    super::surface_wire::make_map(None, Some(super::surface_wire::FoldMap::new(Arc::new(field), base_radius, depth, bend))).unwrap()
+/// A document with an empty layer and an alpha channel `name` holding `depth(x, y)`.
+fn depth_doc(w: u32, h: u32, name: &str, depth: impl Fn(i32, i32) -> f32) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": w, "height": h, "background": "transparent", "depth": 32})).unwrap();
+    s.edit("depth channel", |doc, _| {
+        let fmt = photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, doc.depth, false);
+        let mut surf = Surface::new(fmt);
+        let data: Vec<f32> = (0..h as i32).flat_map(|y| (0..w as i32).map(move |x| (x, y))).map(|(x, y)| depth(x, y)).collect();
+        surf.write_region(Rect::new(0, 0, w as i32, h as i32), &data);
+        doc.channels.push(photocraft_doc::AlphaChannel::new(name.to_string(), surf));
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+/// Depth rising from 0 at the left to 1 at the right edge of a 200 px wide image.
+fn ramp_doc() -> Session {
+    depth_doc(200, 100, "Depth", |x, _| x as f32 / 200.0)
+}
+
+fn depth_brush(extra: Value) -> Value {
+    let mut surface = json!({"depth": true, "relief": 1.0, "sizeByDepth": false});
+    for (k, v) in extra.as_object().unwrap() {
+        surface[k] = v.clone();
+    }
+    json!({"size": 12, "surface": surface})
 }
 
 fn dabs_with(brush: &BrushSettings, map: Arc<dyn SurfaceMap>, pts: &[StrokePoint]) -> Vec<photocraft_paint::Dab> {
@@ -328,71 +351,65 @@ fn dabs_with(brush: &BrushSettings, map: Arc<dyn SurfaceMap>, pts: &[StrokePoint
     dabs
 }
 
-#[test]
-fn dabs_on_a_steep_slope_are_squashed_along_it_and_flat_ones_are_not() {
-    let s = folds_doc(200, 100);
-    let map = fold_map(&s, 6.0, 0.5, 0.0);
-    // x = 40: the brightness is mid-way and falling fastest; x = 36: a crest.
-    let slope = map.local(photocraft_geom::Point::new(40.0, 50.0)).unwrap();
-    assert!(slope.squash < 0.9, "{slope:?}");
-    assert!(slope.squash_angle.cos().abs() > 0.99, "squashed along x: {slope:?}");
-    assert_eq!(slope.offset, [0.0, 0.0], "no bend asked");
-    let crest = map.local(photocraft_geom::Point::new(36.0, 50.0)).map_or(1.0, |l| l.squash);
-    assert!(crest > 0.97, "{crest}");
-    // Depth 0 never squashes.
-    let none = fold_map(&s, 6.0, 0.0, 0.0);
-    assert!(none.local(photocraft_geom::Point::new(40.0, 50.0)).is_none());
-}
-
-#[test]
-fn bend_moves_dab_centres_with_the_fold_height() {
-    let s = folds_doc(200, 100);
-    let brush = BrushSettings { size: 12.0, ..BrushSettings::default() };
-    let pts = [StrokePoint::new(10.0, 50.0, 1.0), StrokePoint::new(150.0, 50.0, 1.0)];
-    let bent = dabs_with(&brush, fold_map(&s, 6.0, 0.5, 0.3), &pts);
-    let ys: Vec<f64> = bent.iter().map(|d| d.center.y).collect();
-    let (lo, hi) = ys.iter().fold((f64::MAX, f64::MIN), |(l, h), y| (l.min(*y), h.max(*y)));
-    assert!(hi - lo > 2.0, "{lo} {hi}");
-    let near = |x: f64| bent.iter().min_by(|a, b| (a.center.x - x).abs().total_cmp(&(b.center.x - x).abs())).map(|d| d.center.y).unwrap();
-    // A bright crest (x = 36) rises, a dark trough (x = 44) sinks.
-    assert!(near(36.0) < 50.0 - 1.0 && near(44.0) > 50.0 + 1.0, "{} {}", near(36.0), near(44.0));
-    // No bend: the centres stay on the line.
-    let straight = dabs_with(&brush, fold_map(&s, 6.0, 0.5, 0.0), &pts);
-    assert!(straight.iter().all(|d| d.center.y == 50.0));
-}
-
-#[test]
-fn folds_off_or_flat_paint_exactly_as_today() {
-    let stroke = |surface: Value| {
-        let mut s = folds_doc(200, 100);
-        s.execute("paint.stroke", json!({"points": [[20, 50], [180, 50]], "target": "pixels", "brush": {"size": 12, "surface": surface}})).unwrap();
-        layer_surface(&s)
-    };
-    let area = Rect::new(0, 0, 200, 100);
-    let plain = stroke(json!({}));
-    assert!(same(&plain, &stroke(json!({"folds": false, "foldDepth": 1, "foldBend": 1})), area));
-    assert!(same(&plain, &stroke(json!({"folds": true, "foldDepth": 0, "foldBend": 0})), area));
-    assert!(!same(&plain, &stroke(json!({"folds": true})), area), "folds change the stroke");
+/// The stroke's own wiring map (built, and cached, from the session brush).
+fn wiring_map(s: &Session) -> Arc<dyn SurfaceMap> {
+    let layer = s.active().unwrap().active_layer;
+    let wiring = super::surface_wire::Wiring::build(s, "test", &json!({}), &s.tools.brush, layer).unwrap();
+    wiring.map().unwrap().clone()
 }
 
 /// The first dab of a stroke starting at `(x, y)` under the stroke's own wiring.
 fn first_dab(s: &Session, x: f64, y: f64) -> Option<photocraft_paint::Dab> {
-    let brush = s.tools.brush.clone();
     let layer = s.active().unwrap().active_layer;
-    let wiring = super::surface_wire::Wiring::build(s, "test", &json!({}), &brush, layer).unwrap();
+    let wiring = super::surface_wire::Wiring::build(s, "test", &json!({}), &s.tools.brush, layer).unwrap();
     let map = wiring.map()?.clone();
-    dabs_with(&brush, map, &[StrokePoint::new(x, y, 1.0)]).first().copied()
+    dabs_with(&s.tools.brush, map, &[StrokePoint::new(x, y, 1.0)]).first().copied()
+}
+
+#[test]
+fn dabs_on_a_depth_slope_are_squashed_along_it_and_flat_ones_are_not() {
+    let mut s = ramp_doc();
+    s.execute("tools.setBrush", depth_brush(json!({}))).unwrap();
+    let d = first_dab(&s, 100.0, 50.0).unwrap();
+    assert_eq!(d.radius, 6.0, "no size by depth: the brush size");
+    assert!(d.proj_scale < 0.8, "{}", d.proj_scale);
+    assert!(d.proj_angle.cos().abs() > 0.99, "squashed along the ramp (x): {}", d.proj_angle);
+    // Relief 0 never squashes (and with no depth scale there is nothing to follow).
+    s.execute("tools.setBrush", json!({"surface": {"relief": 0}})).unwrap();
+    assert!(first_dab(&s, 100.0, 50.0).is_none_or(|d| d.proj_scale == 1.0));
+    // A flat depth plane is not squashed.
+    let mut flat = depth_doc(200, 100, "Depth", |_, _| 0.6);
+    flat.execute("tools.setBrush", depth_brush(json!({}))).unwrap();
+    assert!(first_dab(&flat, 100.0, 50.0).is_none_or(|d| d.proj_scale == 1.0 && d.radius == 6.0));
+}
+
+#[test]
+fn size_by_depth_shrinks_dabs_towards_the_far_side_from_the_first_dab() {
+    let mut s = ramp_doc();
+    s.execute("tools.setBrush", depth_brush(json!({"sizeByDepth": true, "relief": 0}))).unwrap();
+    let brush = s.tools.brush.clone();
+    let map = wiring_map(&s);
+    let dabs = dabs_with(&brush, map, &[StrokePoint::new(100.0, 50.0, 1.0), StrokePoint::new(30.0, 50.0, 1.0)]);
+    assert_eq!(dabs.first().map(|d| d.radius), Some(6.0));
+    assert!(dabs.windows(2).all(|w| w[1].radius <= w[0].radius + 1e-6), "dabs only shrink towards low D");
+    // D falls from 0.5 to 0.15 over the stroke: about 0.3 of the size.
+    let last = dabs.last().unwrap().radius;
+    assert!(last < 3.0 && last > 1.0, "{last}");
+    // The other way, the dabs grow.
+    let grow = dabs_with(&brush, wiring_map(&s), &[StrokePoint::new(30.0, 50.0, 1.0), StrokePoint::new(100.0, 50.0, 1.0)]);
+    assert!(grow.last().unwrap().radius > 6.0 * 2.0);
 }
 
 fn assert_cursor_is_first_dab(s: &mut Session, x: f64, y: f64) {
     let radius = (s.tools.brush.size / 2.0).max(0.5);
-    let cursor = brush_cursor_shape(s, x, y, radius);
+    // The stroke's wiring builds (and caches) the geometry; the cursor only reads it.
     let dab = first_dab(s, x, y);
+    let cursor = brush_cursor_shape(s, x, y, radius);
     match (cursor, dab) {
         (Some(c), Some(d)) => {
             assert_eq!((c.radius, c.proj_angle, c.proj_scale), (d.radius, d.proj_angle, d.proj_scale), "({x}, {y})");
-            assert_eq!(d.center.x, x + f64::from(c.offset[0]));
-            assert_eq!(d.center.y, y + f64::from(c.offset[1]));
+            assert_eq!(c.offset, [0.0, 0.0]);
+            assert_eq!((d.center.x, d.center.y), (x, y));
         }
         (None, d) => assert!(d.is_none_or(|d| d.proj_scale == 1.0 && d.center.x == x && d.center.y == y), "({x}, {y}) {d:?}"),
         (c, None) => panic!("cursor {c:?} but no dab at ({x}, {y})"),
@@ -400,15 +417,15 @@ fn assert_cursor_is_first_dab(s: &mut Session, x: f64, y: f64) {
 }
 
 #[test]
-fn the_cursor_shape_and_offset_are_the_first_dab_with_folds_and_with_both() {
-    let mut s = folds_doc(400, 300);
-    s.execute("tools.setBrush", json!({"size": 12, "surface": {"folds": true, "foldDepth": 0.8, "foldBend": 0.5}})).unwrap();
-    let mut moved = 0;
-    for (x, y) in [(40.0, 50.0), (36.0, 50.0), (44.0, 120.0), (101.0, 200.0), (200.0, 270.0)] {
+fn the_cursor_is_the_first_dab_with_depth_and_with_both() {
+    let mut s = depth_doc(400, 300, "Depth", |x, y| (x as f32 / 400.0) * 0.7 + (y as f32 / 300.0) * 0.3);
+    s.execute("tools.setBrush", depth_brush(json!({"sizeByDepth": true}))).unwrap();
+    let mut shaped = 0;
+    for (x, y) in [(40.0, 50.0), (200.0, 150.0), (350.0, 280.0), (101.0, 200.0)] {
         assert_cursor_is_first_dab(&mut s, x, y);
-        moved += brush_cursor_shape(&mut s, x, y, 6.0).is_some_and(|c| c.offset[1] != 0.0 || c.proj_scale < 1.0) as u32;
+        shaped += brush_cursor_shape(&mut s, x, y, 6.0).is_some_and(|c| c.proj_scale < 1.0) as u32;
     }
-    assert!(moved >= 3, "the folds show");
+    assert!(shaped >= 3, "the slope shows");
     // With planes as well: on the plane both apply, off it nothing does.
     s.execute("perspective.setPlanes", json!({"planes": [FLOOR]})).unwrap();
     s.execute("tools.setBrush", json!({"surface": {"perspective": true}})).unwrap();
@@ -417,16 +434,88 @@ fn the_cursor_shape_and_offset_are_the_first_dab_with_folds_and_with_both() {
     }
     assert!(brush_cursor_shape(&mut s, 10.0, 10.0, 6.0).is_none(), "off the plane");
     let both = brush_cursor_shape(&mut s, 202.0, 250.0, 6.0).unwrap();
-    s.execute("tools.setBrush", json!({"surface": {"folds": false}})).unwrap();
+    s.execute("tools.setBrush", json!({"surface": {"depth": false}})).unwrap();
     let plane = brush_cursor_shape(&mut s, 202.0, 250.0, 6.0).unwrap();
-    assert!(both.proj_scale <= plane.proj_scale + 1e-6 || both.proj_angle != plane.proj_angle || both.offset != plane.offset, "{both:?} {plane:?}");
+    assert!(both.proj_scale != plane.proj_scale || both.proj_angle != plane.proj_angle, "{both:?} {plane:?}");
+}
+
+fn depth_stroke(s: &mut Session, y: i32) -> Result<Value> {
+    s.execute("paint.stroke", json!({"points": [[40, y], [160, y]], "color": "#c02020", "target": "pixels", "brush": depth_brush(json!({}))}))
 }
 
 #[test]
-fn a_live_stroke_with_folds_commits_the_pixels_it_shows() {
-    let p = json!({"points": [[20, 50]], "color": "#c04020", "seed": 3, "target": "pixels",
-        "brush": {"size": 12, "surface": {"folds": true, "foldDepth": 1, "foldBend": 0.6, "color": true}}});
-    let mut s = folds_doc(200, 100);
+fn the_depth_cursor_never_builds_and_a_stroke_builds_once() {
+    let mut s = ramp_doc();
+    s.execute("tools.setBrush", depth_brush(json!({}))).unwrap();
+    for x in [10.0, 100.0, 150.0] {
+        assert!(brush_cursor_shape(&mut s, x, 50.0, 6.0).is_none());
+    }
+    assert_eq!(s.surface_cache.depth_builds(), 0, "hovering builds nothing");
+    depth_stroke(&mut s, 50).unwrap();
+    assert_eq!(s.surface_cache.depth_builds(), 1);
+    assert!(brush_cursor_shape(&mut s, 100.0, 50.0, 6.0).is_some());
+    assert_eq!(s.surface_cache.depth_builds(), 1);
+    let r = s.execute("brush.cursorShape", json!({"x": 100, "y": 50})).unwrap();
+    assert_eq!(r["onPlane"], true);
+    assert_eq!(r["offset"], json!([0.0, 0.0]));
+}
+
+#[test]
+fn painting_keeps_the_depth_cache_and_editing_the_channel_rebuilds_it() {
+    let mut s = ramp_doc();
+    depth_stroke(&mut s, 30).unwrap();
+    depth_stroke(&mut s, 60).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    depth_stroke(&mut s, 80).unwrap();
+    assert_eq!(s.surface_cache.depth_builds(), 1, "painting and adding layers keep the geometry");
+    s.edit("edit the depth", |doc, _| {
+        let ch = doc.channels.iter_mut().find(|c| c.name == "Depth").unwrap();
+        ch.surface.fill_rect(Rect::new(0, 0, 50, 50), &[1.0]);
+        Ok(())
+    })
+    .unwrap();
+    depth_stroke(&mut s, 90).unwrap();
+    assert_eq!(s.surface_cache.depth_builds(), 2);
+}
+
+#[test]
+fn a_missing_depth_channel_is_an_error() {
+    let mut s = striped(200, 100);
+    let p = json!({"points": [[10, 10], [50, 50]], "target": "pixels", "brush": depth_brush(json!({}))});
+    let e = s.execute("paint.stroke", p.clone()).unwrap_err().to_string();
+    assert!(e.contains("no Depth channel: run Image"), "{e}");
+    assert!(LiveStroke::begin_with(&s, "paint.stroke", &p).is_err());
+    assert!(layer_surface(&s).content_bounds().is_empty());
+    // Another name is looked up by that name.
+    let mut s = ramp_doc();
+    let other = json!({"points": [[10, 10], [50, 50]], "target": "pixels", "brush": depth_brush(json!({"depthChannel": "Relief"}))});
+    assert!(s.execute("paint.stroke", other).unwrap_err().to_string().contains("no Relief channel"));
+}
+
+#[test]
+fn hostile_depth_params_are_errors() {
+    let mut s = ramp_doc();
+    for opts in [
+        json!({"relief": 2}),
+        json!({"relief": -1}),
+        json!({"depthChannel": ""}),
+        json!({"depthChannel": "x".repeat(300)}),
+        json!({"depth": "yes"}),
+        json!({"sizeByDepth": "no"}),
+    ] {
+        let p = json!({"points": [[10, 10], [50, 50]], "target": "pixels", "brush": depth_brush(opts.clone())});
+        assert!(s.execute("paint.stroke", p.clone()).is_err(), "{opts}");
+        assert!(s.execute("paint.pencil", p).is_err(), "{opts}");
+        assert!(s.execute("tools.setBrush", json!({"surface": opts})).is_err(), "{opts}");
+    }
+    assert!(layer_surface(&s).content_bounds().is_empty());
+}
+
+#[test]
+fn a_live_stroke_with_depth_commits_the_pixels_it_shows() {
+    let p = json!({"points": [[20, 50]], "color": "#c04020", "seed": 3, "target": "pixels", "brush": depth_brush(json!({"sizeByDepth": true}))});
+    let mut s = ramp_doc();
+    s.execute("layer.new.layer", json!({})).unwrap();
     let mut live = LiveStroke::begin_with(&s, "paint.stroke", &p).unwrap();
     live.push(&[StrokePoint::new(90.0, 40.0, 1.0), StrokePoint::new(170.0, 60.0, 1.0)]).unwrap();
     let mut commit = p.clone();
@@ -439,31 +528,87 @@ fn a_live_stroke_with_folds_commits_the_pixels_it_shows() {
     s.clear_live_stroke();
     let area = Rect::new(0, 0, 200, 100);
     assert!(same(&shown, &layer_surface(&s), area));
-    let mut fresh = folds_doc(200, 100);
+    let mut fresh = ramp_doc();
+    fresh.execute("layer.new.layer", json!({})).unwrap();
     fresh.execute("paint.stroke", commit).unwrap();
     assert!(same(&layer_surface(&fresh), &layer_surface(&s), area));
 }
 
+// ---- Speed: the cache, the cursor and the sample ----
+
+fn folds_stroke(s: &mut Session, y: i32) {
+    s.execute(
+        "paint.stroke",
+        json!({"points": [[20, y], [150, y]], "color": "#c02020", "target": "pixels",
+        "brush": {"size": 12, "surface": {"color": true, "detail": 24}}}),
+    )
+    .unwrap();
+}
+
 #[test]
-fn hostile_fold_params_are_errors_and_the_command_reports_the_offset() {
+fn the_shading_cursor_path_never_builds_either() {
+    // Surface Color builds on the stroke; hovering with Follow Perspective on reads no field.
     let mut s = folds_doc(200, 100);
-    for opts in [
-        json!({"folds": true, "foldDepth": 2}),
-        json!({"folds": true, "foldDepth": -1}),
-        json!({"foldBend": 1.5}),
-        json!({"foldBend": -0.1}),
-        json!({"foldDepth": "deep"}),
-    ] {
-        let p = json!({"points": [[10, 10], [50, 50]], "target": "pixels", "brush": {"size": 10, "surface": opts}});
-        assert!(s.execute("paint.stroke", p.clone()).is_err(), "{opts}");
-        assert!(s.execute("paint.pencil", p).is_err(), "{opts}");
-        assert!(s.execute("tools.setBrush", json!({"surface": opts})).is_err(), "{opts}");
+    s.execute("tools.setBrush", json!({"size": 12, "surface": {"color": true}})).unwrap();
+    for x in [10.0, 36.0, 150.0] {
+        assert!(brush_cursor_shape(&mut s, x, 50.0, 6.0).is_none());
     }
-    assert!(layer_surface(&s).content_bounds().is_empty());
-    s.execute("tools.setBrush", json!({"size": 12, "surface": {"folds": true, "foldBend": 0.6}})).unwrap();
-    let r = s.execute("brush.cursorShape", json!({"x": 36, "y": 50})).unwrap();
-    assert_eq!(r["onPlane"], true, "{r}");
-    let off = r["offset"].as_array().unwrap();
-    assert_eq!(off.len(), 2);
-    assert!(off[1].as_f64().unwrap() < -1.0, "a crest moves up: {r}");
+    assert_eq!(s.surface_cache.field_builds(), 0);
+    folds_stroke(&mut s, 50);
+    assert_eq!(s.surface_cache.field_builds(), 1);
+}
+
+#[test]
+fn a_second_stroke_reuses_the_field_and_an_edit_of_another_layer_invalidates_it() {
+    let mut s = folds_doc(200, 100);
+    let photo = s.active().unwrap().doc.layers[0].id;
+    folds_stroke(&mut s, 30);
+    assert_eq!(s.surface_cache.field_builds(), 1);
+    // The first stroke changed the paint layer (and the document revision): the field stays.
+    folds_stroke(&mut s, 60);
+    folds_stroke(&mut s, 80);
+    assert_eq!(s.surface_cache.field_builds(), 1, "painting on the target layer keeps the cache");
+    // Selection changes do not matter either.
+    s.execute("select.all", json!({})).unwrap();
+    folds_stroke(&mut s, 70);
+    assert_eq!(s.surface_cache.field_builds(), 1);
+    // Another layer's pixels do.
+    s.edit("touch the photo", |doc, _| {
+        doc.layer_mut(photo).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 20, 20), &[0.9, 0.9, 0.9, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    folds_stroke(&mut s, 40);
+    assert_eq!(s.surface_cache.field_builds(), 2, "editing another layer rebuilds");
+    // A different detail is a different field.
+    s.execute("paint.stroke", json!({"points": [[20, 90], [150, 90]], "target": "pixels", "brush": {"size": 12, "surface": {"color": true, "detail": 12}}}))
+        .unwrap();
+    assert_eq!(s.surface_cache.field_builds(), 3);
+}
+
+#[test]
+fn all_layers_leaves_out_the_layer_being_painted() {
+    let mut s = folds_doc(200, 100);
+    let target = s.active().unwrap().active_layer.unwrap();
+    let before = s.active().unwrap().doc.clone();
+    folds_stroke(&mut s, 50);
+    let after = s.active().unwrap().doc.clone();
+    assert!(!layer_surface(&s).content_bounds().is_empty());
+    let shade = |doc: &photocraft_doc::Document| {
+        let f = super::surface_wire::build_field(doc, "test", photocraft_paint::SampleMode::AllLayers, 24.0, Some(target)).unwrap();
+        let mut out = vec![0.0f32; 200 * 100];
+        f.shade_into(Rect::new(0, 0, 200, 100), &mut out);
+        out
+    };
+    // The red stroke does not change the shading of what is under it.
+    let (a, b) = (shade(&before), shade(&after));
+    assert!(a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()));
+    // Without leaving the layer out, it would.
+    let with = |doc: &photocraft_doc::Document| {
+        let f = super::surface_wire::build_field(doc, "test", photocraft_paint::SampleMode::AllLayers, 24.0, None).unwrap();
+        let mut out = vec![0.0f32; 200 * 100];
+        f.shade_into(Rect::new(0, 0, 200, 100), &mut out);
+        out
+    };
+    assert!(with(&before) != with(&after), "the stroke is in the composite");
 }

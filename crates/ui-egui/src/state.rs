@@ -591,6 +591,9 @@ pub struct UiState {
     /// The status message is an error (shown in the warning colour).
     #[serde(default)]
     pub status_error: bool,
+    /// Estimate Depth's consent, download and file-picking dialog (`dialogs::depth_ui`), while open.
+    #[serde(default)]
+    pub depth_dialog: Option<crate::dialogs::depth_ui::DepthDialog>,
     /// Non-blocking notices (import/export warnings, files that couldn't open), newest last.
     #[serde(default)]
     pub notices: Vec<crate::notices::Notice>,
@@ -724,6 +727,7 @@ impl Default for UiState {
             next_id: 1,
             status: String::new(),
             status_error: false,
+            depth_dialog: None,
             notices: Vec::new(),
             updates_open: false,
             gpu_fallback_notice: None,

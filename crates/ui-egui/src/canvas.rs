@@ -2053,7 +2053,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                             surface.map_or((brush.size / 2.0, 0.0, 1.0, [0.0; 2]), |c| (c.radius, c.proj_angle, c.proj_scale, c.offset));
                         let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
                         let axes = crate::brush_cursor::surface_axes(xf, r, angle, scale);
-                        // The dab may land off the pointer (Follow Folds): outline there, joined to the crosshair.
+                        // The dab may land off the pointer (offset, if the engine gives one): outline there, joined to the crosshair.
                         let at = xf.to_screen(doc[0] as f32 + offset[0], doc[1] as f32 + offset[1]);
                         if (at - p).length() > 1.0 {
                             crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);

@@ -83,6 +83,7 @@ pub use cmd::color_to_alpha_cmds;
 pub use cmd::comps_cmds;
 pub use cmd::contour_lib_cmds;
 pub use cmd::cutout_cmds;
+pub use cmd::depth_cmds;
 pub use cmd::distort_cmds;
 pub use cmd::document_preset_cmds;
 pub use cmd::edit_cmds;
@@ -264,6 +265,8 @@ pub struct Session {
     pub prefs: prefs::PrefsStore,
     /// Release checks use an injected platform transport; no network I/O in the engine.
     pub updates: updates_cmds::Updates,
+    /// Depth model store and estimator (the frontend injects the folder and download).
+    pub depth: depth_cmds::DepthState,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).
     pub edit_state: edit_menu_cmds::EditState,
     /// The pattern library (Window › Patterns; see `pattern.*`).
