@@ -945,13 +945,13 @@ fn picker_param(p: &Value) -> std::result::Result<Option<Option<[f32; 2]>>, Stri
     Ok(Some(at))
 }
 
-/// brushSize rides the journaled `tools.setBrush` command (#744). Numeric values
-/// are validated here so the command cannot fail after other fields were
-/// applied; non-numeric values keep the API's historical silent no-op.
+/// Validate `brushSize` before applying a mixed update. The journaled
+/// `tools.setBrush` command stores the size as f32, so a finite f64 that rounds
+/// to infinity must be rejected here. Nonnumeric values remain a no-op (#744).
 fn brush_size_param(p: &Value) -> std::result::Result<Option<f64>, String> {
     let Some(size) = p.get("brushSize").and_then(Value::as_f64) else { return Ok(None) };
-    if !size.is_finite() || size > f64::from(photocraft_paint::MAX_BRUSH_SIZE) {
-        return Err(format!("brushSize must be finite and at most {} px", photocraft_paint::MAX_BRUSH_SIZE));
+    if !(size as f32).is_finite() || size > f64::from(photocraft_paint::MAX_BRUSH_SIZE) {
+        return Err(format!("brushSize must be finite as f32 and at most {} px", photocraft_paint::MAX_BRUSH_SIZE));
     }
     Ok(Some(size))
 }

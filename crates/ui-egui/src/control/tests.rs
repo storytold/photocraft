@@ -1415,6 +1415,32 @@ fn ui_set_brush_size_dispatches_a_journaled_brush_command() {
     assert_eq!(app.session.journal.len(), journal_len);
 }
 
+/// A finite f64 that overflows the brush's f32 size must reject the entire mixed update.
+#[test]
+fn ui_set_rejects_brush_size_overflow_before_applying_other_fields() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let r = call(&mut app, &ctx, "ui.set", json!({"tool": "move", "strokeTrace": false}));
+    assert_eq!(r["ok"], true, "{r}");
+    let brush_size = app.session.tools.brush.size;
+    let journal_len = app.session.journal.len();
+
+    let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "strokeTrace": true, "brushSize": -1e39}));
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(app.ui.tool, crate::state::Tool::Move);
+    assert!(!app.stroke_trace.enabled());
+    assert_eq!(app.session.tools.brush.size, brush_size);
+    assert_eq!(app.session.journal.len(), journal_len);
+    assert!(r["error"].as_str().is_some_and(|message| message.contains("brushSize")), "{r}");
+
+    let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "strokeTrace": true, "brushSize": -1.0}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(app.ui.tool, crate::state::Tool::Brush);
+    assert!(app.stroke_trace.enabled());
+    assert_eq!(app.session.tools.brush.size, -1.0);
+    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("tools.setBrush"));
+}
+
 #[test]
 fn preferences_apply_is_available_over_control_without_closing() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
