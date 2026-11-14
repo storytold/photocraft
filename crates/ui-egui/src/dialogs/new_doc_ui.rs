@@ -21,12 +21,15 @@ pub const CATEGORIES: &[(&str, &[Preset])] = &[
     (
         "Photo",
         &[
+            ("Default PhotoCraft Size", 2100, 1500, 300.0),
+            ("Landscape, 3 x 2", 900, 600, 300.0),
             ("Landscape, 6 x 4", 1800, 1200, 300.0),
             ("Landscape, 7 x 5", 2100, 1500, 300.0),
             ("Landscape, 10 x 8", 3000, 2400, 300.0),
+            ("Portrait, 2 x 3", 600, 900, 300.0),
             ("Portrait, 4 x 6", 1200, 1800, 300.0),
             ("Portrait, 5 x 7", 1500, 2100, 300.0),
-            ("Square, 5 x 5", 1500, 1500, 300.0),
+            ("Portrait, 8 x 10", 2400, 3000, 300.0),
         ],
     ),
     (
@@ -36,15 +39,28 @@ pub const CATEGORIES: &[(&str, &[Preset])] = &[
             ("Legal", 2550, 4200, 300.0),
             ("Tabloid", 3300, 5100, 300.0),
             ("A4", 2480, 3508, 300.0),
-            ("A3", 3508, 4961, 300.0),
+            ("A6", 1240, 1748, 300.0),
             ("A5", 1748, 2480, 300.0),
-            ("B3", 4169, 5906, 300.0),
+            ("A3", 3508, 4961, 300.0),
+            ("B5", 2079, 2953, 300.0),
             ("B4", 2953, 4169, 300.0),
+            ("B3", 4169, 5906, 300.0),
+            ("C4", 2705, 3827, 300.0),
+            ("C5", 1913, 2705, 300.0),
+            ("C6", 1346, 1913, 300.0),
+            ("DL", 1299, 2598, 300.0),
         ],
     ),
     (
         "Art & Illustration",
-        &[("Poster", 5400, 7200, 300.0), ("Postcard", 1800, 1200, 300.0), ("Comic Book", 1988, 3075, 300.0), ("Square, 12 x 12", 3600, 3600, 300.0)],
+        &[
+            ("1000 pixel grid", 1000, 1000, 300.0),
+            ("2000 pixel grid", 2000, 2000, 300.0),
+            ("Poster", 5400, 7200, 300.0),
+            ("Postcard", 1200, 1800, 300.0),
+            ("1080p", 1920, 1080, 72.0),
+            ("720p", 1280, 720, 72.0),
+        ],
     ),
     (
         "Web",
@@ -168,9 +184,18 @@ pub fn swap_size(f: &mut Map<String, Value>) {
     }
 }
 
-/// Print and photo presets (listed at 300 ppi) are specified in inches, screen presets in pixels.
+/// Print and photo presets (listed at 300 ppi) take the Print Resolution, screen presets the
+/// Screen Resolution.
 fn is_print(p: &Preset) -> bool {
     p.3 >= 300.0
+}
+
+/// Presets listed at 300 ppi but sized in pixels: Art & Illustration's pixel grids (#14040).
+const PIXEL_SIZED: &[&str] = &["1000 pixel grid", "2000 pixel grid"];
+
+/// Print and photo presets are specified in inches; screen presets and the pixel grids in pixels.
+fn in_inches(p: &Preset) -> bool {
+    is_print(p) && !PIXEL_SIZED.contains(&p.0)
 }
 
 /// A built-in preset turned to the orientation picked with the Orientation buttons (#4668), so the
@@ -188,10 +213,10 @@ fn oriented(p: &Preset, f: &Map<String, Value>) -> Preset {
 }
 
 /// The unit a built-in preset shows and applies: a print preset in the physical unit picked for
-/// Width/Height (#4668), else in inches; a screen preset in pixels.
+/// Width/Height (#4668), else in inches; a screen preset or a pixel grid in pixels.
 fn preset_unit(p: &Preset, f: &Map<String, Value>) -> String {
     let unit = get_s(f, "__unit", "px");
-    if !is_print(p) {
+    if !in_inches(p) {
         "px".into()
     } else if unit != "px" && UNITS.iter().any(|u| u.0 == unit) {
         unit
@@ -202,15 +227,15 @@ fn preset_unit(p: &Preset, f: &Map<String, Value>) -> String {
 
 /// A built-in preset at Preferences › Units & Rulers › New Document Preset Resolutions, as in
 /// Photoshop: a print preset keeps its size in inches at the Print Resolution (Letter at 200 ppi is
-/// 1700 x 2200 px), a screen preset keeps its pixels at the Screen Resolution. The Clipboard preset
-/// is the copied pixels and keeps its own resolution. A resolution that isn't a positive finite
-/// number leaves the preset as listed.
+/// 1700 x 2200 px), a screen preset keeps its pixels at the Screen Resolution, and a pixel grid
+/// keeps its pixels at the Print Resolution. The Clipboard preset is the copied pixels and keeps
+/// its own resolution. A resolution that isn't a positive finite number leaves the preset as listed.
 pub fn at_pref_resolutions(p: &Preset, units: &UnitsAndRulers) -> Preset {
     let ppi = (if is_print(p) { units.print_resolution } else { units.screen_resolution }) as f32;
     if p.0 == CLIPBOARD || !(ppi.is_finite() && ppi > 0.0) {
         return *p;
     }
-    if !is_print(p) {
+    if !in_inches(p) {
         return (p.0, p.1, p.2, ppi);
     }
     let scale = ppi / p.3;
