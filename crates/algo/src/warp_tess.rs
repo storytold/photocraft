@@ -524,6 +524,7 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             square_twist: None,
             column_chords: None,
             flat_columns: None,
+            surface_sides: [false; 2],
         }
     } else {
         Rules {
@@ -538,8 +539,18 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             square_twist: tall.then_some(TALL_SQUARE_TWIST_TOL),
             column_chords: tall.then_some(TALL_COLUMN_LEVEL),
             flat_columns: (!tall).then_some(FLAT_COLUMN_TOL),
+            surface_sides: [false; 2],
         }
     }
+}
+
+/// Which sides of a quilt's patch it shares with another patch.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Seams {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+    pub bottom: bool,
 }
 
 /// Tessellates one patch of a warp split into several (a quilt), whose map from the patch's own
@@ -548,7 +559,7 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
 /// stays whole), without the first level's forced split down, and with a split down for a cell's
 /// twist carried to the other cells cut from the same parent. `None` when the map isn't finite at
 /// the corners.
-pub(crate) fn quilt_patch_mesh(at: &dyn Fn(f64, f64) -> P) -> Option<EnvelopeMesh> {
+pub(crate) fn quilt_patch_mesh(at: &dyn Fn(f64, f64) -> P, seams: Seams) -> Option<EnvelopeMesh> {
     let corners = [at(0.0, 0.0), at(1.0, 0.0), at(0.0, 1.0), at(1.0, 1.0)];
     if corners.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
         return None;
@@ -566,6 +577,7 @@ pub(crate) fn quilt_patch_mesh(at: &dyn Fn(f64, f64) -> P) -> Option<EnvelopeMes
         square_twist: None,
         column_chords: None,
         flat_columns: None,
+        surface_sides: if seams.top || seams.bottom { [false; 2] } else { [seams.left, seams.right] },
     };
     let (leaves, log) = cells(&net, true, &rules);
     Some(triangulate(&net, at, &leaves, &log, &rules))
@@ -609,6 +621,9 @@ struct Rules {
     /// column asks for less than this much of a split sits on that stretch's chord (envelopes
     /// that aren't tall).
     flat_columns: Option<f64>,
+    /// The left and right sides whose points stay where the surface puts them rather than on the
+    /// side's chord: a quilt patch's inner seams when the quilt has a single row of patches.
+    surface_sides: [bool; 2],
 }
 
 /// The parent cell of `c` (one halving up both ways), as a comparable key.
@@ -892,7 +907,7 @@ fn own_points(
         let lv = level(v);
         let w = 1.0 / f64::from(1u32 << lv);
         let (a, b) = (v - w, v + w);
-        let on_side = u.abs() < 1e-12 || (u - 1.0).abs() < 1e-12;
+        let on_side = (u.abs() < 1e-12 && !rules.surface_sides[0]) || ((u - 1.0).abs() < 1e-12 && !rules.surface_sides[1]);
         let across = |s: &Split| s.cell[2] <= a + 1e-9 && s.cell[3] >= b - 1e-9 && s.cell[0] < u - 1e-9 && s.cell[1] > u + 1e-9;
         if let (None, Some(tol), false) = (rules.column_chords, rules.flat_columns, on_side) {
             if lv > fixed_level && !log.iter().any(across) && need(&segment(&net.col(u), a, b)) < tol {
@@ -1157,6 +1172,7 @@ mod tests {
                 square_twist: None,
                 column_chords: None,
                 flat_columns: None,
+                surface_sides: [false; 2],
             },
         );
         assert!(log.iter().any(|s| s.cell == [0.0, 0.25, 0.0, 0.25]), "the corner cell splits");
@@ -1308,10 +1324,10 @@ mod tests {
     #[test]
     fn a_flat_quilt_patch_stays_whole() {
         let at = |u: f64, v: f64| [10.0 + 100.0 * u, 20.0 + 50.0 * v];
-        let m = quilt_patch_mesh(&at).expect("finite");
+        let m = quilt_patch_mesh(&at, Seams::default()).expect("finite");
         assert_eq!(m.quads.len(), 1);
         assert_eq!(m.uv.len(), 4);
-        assert!(quilt_patch_mesh(&|_, _| [f64::NAN, 0.0]).is_none());
+        assert!(quilt_patch_mesh(&|_, _| [f64::NAN, 0.0], Seams::default()).is_none());
     }
 
     /// A quilt patch whose rows bend but whose columns are straight splits across only; a one-patch
@@ -1319,7 +1335,7 @@ mod tests {
     #[test]
     fn a_quilt_patch_splits_only_where_it_bends() {
         let at = |u: f64, v: f64| [128.0 * u, 128.0 * v + 20.0 * (std::f64::consts::PI * u).sin()];
-        let m = quilt_patch_mesh(&at).expect("finite");
+        let m = quilt_patch_mesh(&at, Seams::default()).expect("finite");
         assert!(m.quads.len() > 1);
         for q in &m.quads {
             let (top, bottom) = (m.uv[q[0]][1], m.uv[q[2]][1]);
@@ -1368,6 +1384,7 @@ mod tests {
             square_twist: None,
             column_chords: None,
             flat_columns: None,
+            surface_sides: [false; 2],
         };
         assert!(tallest(&quilt) <= 0.25 + 1e-9, "bottom cells {}", tallest(&quilt));
         let alone = Rules { twist_spreads: false, ..quilt };
@@ -1409,6 +1426,7 @@ mod tests {
             square_twist: None,
             column_chords: None,
             flat_columns: None,
+            surface_sides: [false; 2],
         }
     }
 
@@ -1476,6 +1494,38 @@ mod tests {
         assert!(split.is_some_and(|s| s.across && s.down), "the cell didn't split both ways: {:?}", split.map(|s| (s.across, s.down)));
     }
 
+    /// In a quilt with a single row of patches, a point on a patch's inner seam stays where the
+    /// surface puts it; elsewhere a nearly straight side's points sit on its chord.
+    #[test]
+    fn a_single_row_quilts_seam_points_stay_on_the_surface() {
+        let pi = std::f64::consts::PI;
+        let at = |u: f64, v: f64| [64.0 * u + 0.6 * (pi * v).sin(), 64.0 * v + 30.0 * u * v + 10.0 * (2.0 * pi * u).sin() * (pi * v).sin()];
+        let seam = Seams { left: true, ..Seams::default() };
+        let (plain, kept) = (quilt_patch_mesh(&at, Seams::default()).expect("finite"), quilt_patch_mesh(&at, seam).expect("finite"));
+        let side = |m: &EnvelopeMesh| {
+            m.uv.iter().zip(&m.pos).filter(|(q, _)| q[0].abs() < 1e-12 && q[1] > 1e-9 && q[1] < 1.0 - 1e-9).map(|(q, p)| (q[1], *p)).collect::<Vec<_>>()
+        };
+        let (a, b) = (side(&plain), side(&kept));
+        assert!(!a.is_empty() && a.len() == b.len(), "{} {}", a.len(), b.len());
+        assert!(
+            b.iter().all(|(v, p)| {
+                let s = at(0.0, *v);
+                (p[0] - s[0]).hypot(p[1] - s[1]) < 1e-9
+            }),
+            "a seam point left the surface"
+        );
+        assert!(
+            a.iter().any(|(v, p)| {
+                let s = at(0.0, *v);
+                (p[0] - s[0]).hypot(p[1] - s[1]) > 1e-3
+            }),
+            "no side point moved onto its chord: {a:?}"
+        );
+        let both = Seams { left: true, top: true, ..Seams::default() };
+        let c = side(&quilt_patch_mesh(&at, both).expect("finite"));
+        assert_eq!(a, c, "a seam with a patch above or below kept its points on the surface");
+    }
+
     /// A quilt patch cut both ways decides its first-level cells' down cuts by row strip, as the
     /// reference redrew split waves (control points moved by a wave): the top-left patch of a 2 x 2 wave splits its top strip (the
     /// warp's top edge twists) but not the one below; the bottom patch of a 1 x 2 wave of
@@ -1529,7 +1579,7 @@ mod tests {
             let wave = 8.0 * (2.0 * pi * u).sin() * (0.05 + 4.0 * (v - 0.5) * (v - 0.5));
             [64.0 * u, 64.0 * v + 16.0 * u * v + wave]
         };
-        let m = quilt_patch_mesh(&at).expect("finite");
+        let m = quilt_patch_mesh(&at, Seams::default()).expect("finite");
         let pos_of = |u: f64, v: f64| m.uv.iter().position(|p| (p[0] - u).abs() < 1e-12 && (p[1] - v).abs() < 1e-12).map(|k| m.pos[k]);
         let (Some(q), Some(h)) = (pos_of(0.25, 0.5), pos_of(0.5, 0.5)) else {
             panic!("the middle row wasn't cut at its quarters: {:?}", m.uv);
@@ -1852,6 +1902,7 @@ mod tests {
             square_twist: None,
             column_chords: None,
             flat_columns: None,
+            surface_sides: [false; 2],
         };
         let (leaves, _) = cells(&net, true, &full);
         let tall = |ls: &[Cell]| ls.iter().any(|c| c[0] >= 0.5 - 1e-9 && c[1] <= 0.75 + 1e-9 && c[2].abs() < 1e-9 && (c[3] - 0.25).abs() < 1e-9);
@@ -1883,6 +1934,7 @@ mod tests {
             square_twist: None,
             column_chords: None,
             flat_columns: None,
+            surface_sides: [false; 2],
         };
         let (leaves, _) = cells(&net, true, &full);
         assert_eq!(m.quads.len(), leaves.len(), "no leaf is cut across");

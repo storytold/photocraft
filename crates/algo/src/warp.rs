@@ -429,7 +429,8 @@ fn quilt_mesh(at: &dyn Fn(f64, f64) -> [f64; 2], cuts_u: &[f64], cuts_v: &[f64])
         for u in us.windows(2) {
             let (&[ua, ub], &[va, vb]) = (u, v) else { continue };
             let sub = |s: f64, t: f64| at(ua + (ub - ua) * s, va + (vb - va) * t);
-            let m = crate::warp_tess::quilt_patch_mesh(&sub)?;
+            let seams = crate::warp_tess::Seams { left: ua > 1e-9, right: ub < 1.0 - 1e-9, top: va > 1e-9, bottom: vb < 1.0 - 1e-9 };
+            let m = crate::warp_tess::quilt_patch_mesh(&sub, seams)?;
             let base = all.uv.len();
             all.uv.extend(m.uv.iter().map(|p| [ua + (ub - ua) * p[0], va + (vb - va) * p[1]]));
             all.pos.extend(m.pos);
