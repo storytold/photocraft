@@ -874,6 +874,8 @@ mod tool_shortcut_tests;
 #[cfg(test)]
 mod toolbar_custom_group_layout_tests;
 #[cfg(test)]
+mod toolbar_extras_slot_tools_tests;
+#[cfg(test)]
 mod toolbar_group_order_tests;
 #[cfg(test)]
 mod toolbar_more_slot_flyout_tests;
