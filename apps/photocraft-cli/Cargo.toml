@@ -46,7 +46,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde = { workspace = true }
 tempfile = "3"
 # Reading back a saved PSD's merged-image flag (#8064).
-photocraft-psd = { workspace = true }
+craft-psd = { workspace = true }
 # A real ICC profile for the --metadata test (#9466).
 photocraft-cms = { workspace = true }
 # Synthetic camera raws (#7789).

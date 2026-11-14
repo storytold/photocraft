@@ -231,75 +231,29 @@ fn bmp_is_rle(b: &[u8]) -> bool {
     u32_at(14).is_some_and(|n| n >= 40) && matches!(u32_at(30), Some(1 | 2))
 }
 
+/// The blocks of a GIF (craft-gif), every frame recorded. The frame list is bounded by the file:
+/// each image descriptor takes at least 11 of its bytes.
+fn gif_scan(b: &[u8]) -> Option<craft_gif::Info> {
+    craft_gif::scan(b, usize::MAX)
+}
+
 /// The width and height of a GIF's first image descriptor, if the blocks reach one.
 fn gif_first_frame(b: &[u8]) -> Option<(u32, u32)> {
-    let mut at = None;
-    gif_walk(b, |i| {
-        at = Some(i);
-        false
-    });
-    let u16_at = |at: usize| b.get(at..at + 2).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes);
-    // Descriptor: separator, left, top, width, height (little-endian u16s), packed fields.
-    let i = at?;
-    Some((u32::from(u16_at(i + 5)?), u32::from(u16_at(i + 7)?)))
+    craft_gif::scan(b, 1)?.frames.first().map(|f| (u32::from(f.width), u32::from(f.height)))
 }
 
 /// Counts a GIF's frames (image descriptors) by walking its blocks, without decompressing any.
 /// The total is unknown when the blocks end before the trailer or break off.
 pub(crate) fn gif_more_frames(b: &[u8]) -> Option<DecodeWarning> {
-    let (frames, total) = gif_walk(b, |_| true);
-    (frames > 1).then_some(DecodeWarning::MoreFrames { total })
+    let info = gif_scan(b)?;
+    let total = info.complete.then(|| u32::try_from(info.frames.len()).unwrap_or(u32::MAX));
+    (info.frames.len() > 1).then_some(DecodeWarning::MoreFrames { total })
 }
 
 /// Whether a GIF holds more than one frame, or None when the walk stops before the trailer
 /// after at most one frame (so frames past the break could not be counted).
 pub(crate) fn gif_has_more_frames(b: &[u8]) -> Option<bool> {
-    let (frames, total) = gif_walk(b, |_| true);
-    if frames > 1 { Some(true) } else { total.map(|_| false) }
-}
-
-/// Walks a GIF's blocks without decompressing any, handing `frame` the offset of each image
-/// descriptor until it returns false. Gives the descriptors seen, and the frame count if the
-/// blocks reached the trailer.
-fn gif_walk(b: &[u8], mut frame: impl FnMut(usize) -> bool) -> (u32, Option<u32>) {
-    // Size of the colour table a packed-fields byte announces.
-    let table = |flags: u8| if flags & 0x80 != 0 { 3usize << ((flags & 7) + 1) } else { 0 };
-    // Skips the data sub-blocks starting at `i` (each length-prefixed, ended by a zero length).
-    let skip = |mut i: usize| -> Option<usize> {
-        loop {
-            let n = usize::from(*b.get(i)?);
-            i = i.checked_add(1 + n)?;
-            if n == 0 {
-                return Some(i);
-            }
-        }
-    };
-    // Header (6 bytes), logical screen descriptor (7) and the global colour table.
-    let Some(&flags) = b.get(10) else {
-        return (0, None);
-    };
-    let mut i = 13 + table(flags);
-    let mut frames = 0u32;
-    let total = loop {
-        let next = match b.get(i) {
-            Some(0x3B) => break Some(frames),
-            Some(0x21) => skip(i + 2),
-            Some(0x2C) => {
-                frames = frames.saturating_add(1);
-                if !frame(i) {
-                    break None;
-                }
-                // Descriptor (10 bytes, packed fields last), local colour table, LZW code size.
-                b.get(i + 9).and_then(|&flags| skip(i + 11 + table(flags)))
-            }
-            _ => None,
-        };
-        match next {
-            Some(n) => i = n,
-            None => break None,
-        }
-    };
-    (frames, total)
+    gif_scan(b)?.has_more_frames()
 }
 
 pub(crate) fn from_dynamic(f: Format, d: DynamicImage) -> Result<Image, CodecError> {

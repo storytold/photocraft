@@ -10,9 +10,9 @@
 //! that cannot be read (noise gradients, profile lookups, CMYK channel mixers, unknown versions)
 //! stay [`Adjustment::Unsupported`] and are written back verbatim.
 
+use craft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
 use photocraft_doc::Adjustment;
 use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, LutFormat, LutSource, ToneSpace, curve_map};
-use photocraft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
 
 mod encode;
 

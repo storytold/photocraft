@@ -1,5 +1,5 @@
 use super::*;
-use photocraft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
+use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -598,10 +598,10 @@ fn a_store_without_previews_makes_them_once_and_then_loads_lazily() {
 
 /// A v6 `.abr` whose presets sit in Photoshop folders (`phry`).
 fn abr_with_folders(presets: &[(&str, &[&str])]) -> Vec<u8> {
-    use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value};
+    use craft_psd::descriptor::{Descriptor, UnicodeString, Value};
     let descs: Vec<Descriptor> = presets.iter().map(|(n, _)| Descriptor::new("brushPreset").with("Nm  ", Value::Text(UnicodeString::new_nul(n)))).collect();
     let folders: Vec<Vec<String>> = presets.iter().map(|(_, f)| f.iter().map(|x| x.to_string()).collect()).collect();
-    photocraft_psd::abr::write_v6_folders(2, &[], &[], &descs, &folders, true).unwrap()
+    craft_psd::abr::write_v6_folders(2, &[], &[], &descs, &folders, true).unwrap()
 }
 
 #[test]

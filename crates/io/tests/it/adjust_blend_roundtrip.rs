@@ -9,13 +9,13 @@ use crate::common;
 use std::sync::Arc;
 
 use common::*;
+use craft_psd::PsdFile;
 use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_doc::adjust::{CurvePoint, LevelsChannel};
 use photocraft_doc::adjust::{HueRange, ToneSpace};
 use photocraft_doc::*;
 use photocraft_geom::Rect;
 use photocraft_io::*;
-use photocraft_psd::PsdFile;
 
 const TOL: f32 = 1.0 / 255.0 + 1e-5;
 
@@ -280,7 +280,7 @@ fn every_blend_mode_round_trips() {
             let adj = Layer::new("inside", LayerContent::Adjustment(Adjustment::Invert));
             d.layers.push(Layer::group("pass-through adj", vec![raster("px", fmt, Rect::new(0, 0, 6, 6), 6, true), adj]));
             let (back, _, file) = export_import(&d);
-            assert!(file.layers().iter().any(|l| l.blend_mode == photocraft_psd::BlendMode::PassThrough), "pass key written");
+            assert!(file.layers().iter().any(|l| l.blend_mode == craft_psd::BlendMode::PassThrough), "pass key written");
             assert_docs_eq(&d, &back);
             assert_composite_eq(&d, &back, "pass-through");
             continue;

@@ -639,7 +639,8 @@ fn package_lists_a_missing_link_once() {
 #[test]
 fn paths_export_as_illustrator_postscript() {
     let mut s = session("rgb", 8);
-    assert!(!s.is_enabled("file.export.pathsToIllustrator"));
+    // Enabled without paths too: Document Bounds needs none (#13771).
+    assert!(s.is_enabled("file.export.pathsToIllustrator"));
     s.edit("paths", |d, _| {
         let tri = Subpath::polygon(&[(10.0, 10.0), (100.0, 10.0), (50.0, 90.0)]);
         let mut curve = Subpath::polyline(&[(0.0, 0.0), (300.0, 150.0)]);
@@ -652,8 +653,8 @@ fn paths_export_as_illustrator_postscript() {
     let ai = r["ai"].as_str().unwrap();
     assert!(ai.starts_with("%!PS-Adobe-2.0 EPSF-1.2"));
     assert!(ai.contains("%%BoundingBox: 0 0 300 150"));
-    assert!(ai.contains("*u\n10.0000 140.0000 m\n100.0000 140.0000 L\n"), "{ai}");
-    assert!(ai.contains("\nn\n") && ai.contains("\nN\n*U\n"));
+    assert!(ai.contains("1 XR\n10.0000 140.0000 m\n100.0000 140.0000 L\n"), "{ai}");
+    assert!(ai.contains("\nn\n*U\n") && ai.contains("\nN\n*U\n"));
     assert!(ai.contains(" C\n"), "curve segment");
     let dir = tmp("ai");
     let r = s.execute("file.export.pathsToIllustrator", json!({"path": format!("{dir}/p.ai"), "paths": "Shapes"})).unwrap();

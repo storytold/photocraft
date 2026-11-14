@@ -357,7 +357,7 @@ fn merged_composite_of_a_tagged_cmyk_file_reads_through_its_profile() {
     }
     doc.layers.push(Layer::new("Background", LayerContent::Raster(surface)));
     let psd = export(&doc, "psd", &ExportOptions::default()).unwrap();
-    let file = photocraft_psd::PsdFile::from_bytes(&psd.bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&psd.bytes).unwrap();
     let merged = photocraft_io::merged_composite(&file).unwrap();
     // The merged image's own inks (planar, 255 = no ink), shown through the file's profile.
     let raw = file.decode_merged().unwrap();

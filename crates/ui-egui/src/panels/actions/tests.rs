@@ -2,9 +2,9 @@ use super::*;
 
 /// A small valid Photoshop set, generated without external action files.
 fn action_set_bytes(set: &str, action: &str) -> Vec<u8> {
-    use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
-    use photocraft_psd::descriptor::UnicodeString;
-    photocraft_psd::atn::write(&AtnFile {
+    use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+    use craft_psd::descriptor::UnicodeString;
+    craft_psd::atn::write(&AtnFile {
         name: UnicodeString::new_nul(set),
         actions: vec![AtnAction {
             name: UnicodeString::new_nul(action),
@@ -247,9 +247,9 @@ fn bulk_load_keeps_selection_order_and_earlier_warnings_and_errors() {
     let first = dir.path().join("z-first.atn");
     let broken = dir.path().join("broken.atn");
     let last = dir.path().join("a-last.atn");
-    let mut unsupported = photocraft_psd::atn::parse(&action_set_bytes("Same set", "Old")).unwrap();
-    unsupported.actions[0].items[0].event = photocraft_psd::atn::AtnEvent::Code(*b"Xxxx");
-    std::fs::write(&first, photocraft_psd::atn::write(&unsupported).unwrap()).unwrap();
+    let mut unsupported = craft_psd::atn::parse(&action_set_bytes("Same set", "Old")).unwrap();
+    unsupported.actions[0].items[0].event = craft_psd::atn::AtnEvent::Code(*b"Xxxx");
+    std::fs::write(&first, craft_psd::atn::write(&unsupported).unwrap()).unwrap();
     std::fs::write(&broken, b"not an action file").unwrap();
     std::fs::write(&last, action_set_bytes("Same set", "Replacement")).unwrap();
     let paths = [first, broken, last].map(|p| p.to_string_lossy().into_owned()).to_vec();
@@ -282,9 +282,9 @@ fn bulk_load_status(app: &mut PhotocraftApp, files: Vec<(String, Vec<u8>)>) -> S
 /// what the panel holds afterwards and says which set was replaced.
 fn bulk_load_summary_counts_a_replaced_set_once() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    let mut a = photocraft_psd::atn::parse(&action_set_bytes("Set 1", "A")).unwrap();
-    a.actions[0].items[0].event = photocraft_psd::atn::AtnEvent::Code(*b"Xxxx");
-    let files = vec![("a.atn".into(), photocraft_psd::atn::write(&a).unwrap()), ("b.atn".into(), action_set_bytes("Set 1", "B"))];
+    let mut a = craft_psd::atn::parse(&action_set_bytes("Set 1", "A")).unwrap();
+    a.actions[0].items[0].event = craft_psd::atn::AtnEvent::Code(*b"Xxxx");
+    let files = vec![("a.atn".into(), craft_psd::atn::write(&a).unwrap()), ("b.atn".into(), action_set_bytes("Set 1", "B"))];
     let status = bulk_load_status(&mut app, files);
     assert_eq!(app.session.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["B"]);
     assert!(!app.ui.status_error, "{status}");
@@ -934,8 +934,8 @@ fn recorded_save_never_flattens_layers_over_a_flat_file() {
 /// Photoshop's "save in directory", `out` itself) and plays it on each PSD in `sources`.
 /// Returns the played results, whether any PSD changed on disk and the files in `out`.
 fn play_imported_save_as(dest: &str, in_folder: bool, sources: &[&str]) -> (Vec<Value>, bool, Vec<String>) {
-    use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
-    use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
+    use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+    use craft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
     let dir = std::env::temp_dir().join(format!("photocraft-atn-save-as-{dest}-{in_folder}-{}", std::process::id()));
     let out = dir.join("out");
     std::fs::create_dir_all(&out).unwrap();
@@ -977,7 +977,7 @@ fn play_imported_save_as(dest: &str, in_folder: bool, sources: &[&str]) -> (Vec<
         app.save_as(Some(src.clone())).unwrap();
         before.push(std::fs::read(src).unwrap());
     }
-    app.run("actions.load", json!({"data": photocraft_engine::paint::tile::b64_encode(&photocraft_psd::atn::write(&set).unwrap())})).unwrap();
+    app.run("actions.load", json!({"data": photocraft_engine::paint::tile::b64_encode(&craft_psd::atn::write(&set).unwrap())})).unwrap();
     let mut played = Vec::new();
     for src in &sources {
         app.open_path(src).unwrap();
@@ -2965,8 +2965,8 @@ fn button_mode_plays_the_clicked_action_and_hides_its_steps() {
 /// document (#7367).
 #[test]
 fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
-    use photocraft_psd::atn::{self, AtnEvent, AtnItem};
-    use photocraft_psd::descriptor::{Descriptor, Id, Value as D};
+    use craft_psd::atn::{self, AtnEvent, AtnItem};
+    use craft_psd::descriptor::{Descriptor, Id, Value as D};
     use std::{cell::RefCell, rc::Rc};
     // A one-step .atn: Close (`Cls `) with Save: Yes.
     let seed = Action::new("Seed", vec![("layer.new.layer".into(), json!({}))]);
@@ -3033,9 +3033,9 @@ fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
 /// one in a set a later file replaced (CodeRabbit on #10776).
 fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    let mut a = photocraft_psd::atn::parse(&action_set_bytes("Set A", "A")).unwrap();
-    a.actions[0].items[0].event = photocraft_psd::atn::AtnEvent::Code(*b"Xxxx");
-    let files = vec![("a.atn".into(), photocraft_psd::atn::write(&a).unwrap()), ("b.atn".into(), action_set_bytes("Set B", "B"))];
+    let mut a = craft_psd::atn::parse(&action_set_bytes("Set A", "A")).unwrap();
+    a.actions[0].items[0].event = craft_psd::atn::AtnEvent::Code(*b"Xxxx");
+    let files = vec![("a.atn".into(), craft_psd::atn::write(&a).unwrap()), ("b.atn".into(), action_set_bytes("Set B", "B"))];
     let status = bulk_load_status(&mut app, files);
     assert!(status.contains("1 step has no PhotoCraft equivalent yet"), "{status}");
     assert!(!app.ui.status_error, "{status}");

@@ -5,7 +5,7 @@
 //! The library is [`PresetState::contours`](crate::presets::PresetState); like the other preset
 //! sets it lives in the preferences document and changes the preferences, not a document's
 //! history. A user contour is applied to an effect as a `contour` curve object (see
-//! [`contour_param`]); `.shc` files go through `photocraft_psd::shc` (see [`contours_from_shc`]).
+//! [`contour_param`]); `.shc` files go through `craft_psd::shc` (see [`contours_from_shc`]).
 
 use photocraft_doc::Contour;
 use photocraft_doc::adjust::CurvePoint;

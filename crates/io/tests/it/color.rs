@@ -184,8 +184,8 @@ fn rgb_fill_colours_separate_through_the_document_cmyk_profile() {
 fn cmyk_merged_composite_reads_through_the_embedded_profile() {
     // The merged image of a CMYK file tagged with a non-default profile is turned into RGB through
     // that profile, as the layers are, or every comparison against it is off (#3778).
+    use craft_psd::{Compression, ImageResource, Version, testgen};
     use photocraft_cms::{Intent, Transform};
-    use photocraft_psd::{Compression, ImageResource, Version, testgen};
     let profile = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
         tvi: [0.26, 0.26, 0.26, 0.3],
         grid_a2b: 5,
@@ -199,7 +199,7 @@ fn cmyk_merged_composite_reads_through_the_embedded_profile() {
         [o[0].clamp(0.0, 1.0), o[1].clamp(0.0, 1.0), o[2].clamp(0.0, 1.0)]
     };
     for depth in [8u16, 16] {
-        let mut f = testgen::merged_only(Version::Psd, photocraft_psd::ColorMode::Cmyk, depth, Compression::Raw, 4, 1);
+        let mut f = testgen::merged_only(Version::Psd, craft_psd::ColorMode::Cmyk, depth, Compression::Raw, 4, 1);
         let inks: [[f32; 4]; 4] = [[0.1, 0.6, 0.7, 0.05], [0.8, 0.2, 0.1, 0.0], [0.3, 0.3, 0.3, 0.5], [0.0, 0.0, 0.0, 0.0]];
         let max = if depth == 8 { 255.0 } else { 65535.0 };
         let mut data = Vec::new();
@@ -210,7 +210,7 @@ fn cmyk_merged_composite_reads_through_the_embedded_profile() {
                 if depth == 8 { data.push(v as u8) } else { data.extend((v as u16).to_be_bytes()) }
             }
         }
-        f.image_data = photocraft_psd::ImageData { compression: Compression::Raw, data, stored: None };
+        f.image_data = craft_psd::ImageData { compression: Compression::Raw, data, stored: None };
         f.resources.push(ImageResource::new(1039, profile.to_bytes().to_vec()));
         let merged = merged_composite(&f).unwrap();
         let mut seen_far = false;
@@ -254,7 +254,7 @@ fn grdm_block(a: (u16, [u16; 4]), b: (u16, [u16; 4])) -> Vec<u8> {
 }
 
 fn saved_grdm(bytes: &[u8]) -> Vec<u8> {
-    let f = photocraft_psd::PsdFile::from_bytes(bytes).unwrap();
+    let f = craft_psd::PsdFile::from_bytes(bytes).unwrap();
     f.layers().iter().find_map(|l| l.block(b"grdm")).map(|b| b.data.clone()).expect("grdm block")
 }
 

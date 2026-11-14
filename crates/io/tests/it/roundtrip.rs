@@ -3,9 +3,9 @@
 use crate::common;
 
 use common::*;
+use craft_psd::PsdFile;
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_io::*;
-use photocraft_psd::PsdFile;
 
 fn roundtrip(doc: &photocraft_doc::Document) -> photocraft_doc::Document {
     let r = export(doc, "x.psd", &ExportOptions::default()).expect("export");
@@ -224,8 +224,8 @@ fn edited_adjustment_regenerates_block_unedited_keeps_raw() {
 
 #[test]
 fn text_layer_roundtrip_with_tysh() {
+    use craft_psd::descriptor::{Descriptor, UnicodeString, Value, VersionedDescriptor};
     use photocraft_doc::*;
-    use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value, VersionedDescriptor};
     // Minimal TySh: version, transform, text version, text descriptor, warp.
     let mut tysh = 1u16.to_be_bytes().to_vec();
     for v in [1.0f64, 0.0, 0.0, 1.0, 3.0, 4.0] {
@@ -268,7 +268,7 @@ fn text_layer_roundtrip_with_tysh() {
 fn effects_raw_roundtrip() {
     let mut d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);
     let mut lfx = vec![0, 0, 0, 0];
-    lfx.extend(photocraft_psd::testgen::sample_descriptor().to_bytes());
+    lfx.extend(craft_psd::testgen::sample_descriptor().to_bytes());
     // Typed items and the raw block must agree; the raw bytes are then kept.
     let (master, items) = photocraft_io::effects_map::parse_lfx2(&lfx).unwrap();
     d.layers[1].effects.enabled = master;
@@ -326,7 +326,7 @@ fn document_to_psd_direct_api() {
 fn big_document_goes_psb_with_warning() {
     let d = photocraft_doc::Document::new("big", photocraft_geom::Size::new(30_001, 1), ColorMode::Grayscale, SampleType::U8);
     let (f, w) = document_to_psd_with(&d, &PsdExportOptions::default());
-    assert_eq!(f.header.version, photocraft_psd::Version::Psb);
+    assert_eq!(f.header.version, craft_psd::Version::Psb);
     assert!(w.iter().any(|w| w.contains("PSB")));
 }
 
@@ -551,7 +551,7 @@ fn blend_if_round_trips_as_blending_ranges() {
     assert_eq!(rec.blending_ranges.data, want);
     // Layers without Blend If keep full ranges for gray + R, G, B.
     let rb = f.layers().iter().find(|r| r.name() == "b").unwrap();
-    assert_eq!(rb.blending_ranges, photocraft_psd::BlendingRanges::full(3));
+    assert_eq!(rb.blending_ranges, craft_psd::BlendingRanges::full(3));
     let back = roundtrip(&d);
     assert_eq!(back.layers[0].blend_if, bi);
     assert!(back.layers[1].blend_if.is_default());

@@ -40,4 +40,4 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlE
 [dev-dependencies]
 serde_json = { workspace = true }
 photocraft-paint = { workspace = true }
-photocraft-psd = { workspace = true }
+craft-psd = { workspace = true }

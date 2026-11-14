@@ -274,8 +274,8 @@ fn identity_look() -> Vec<u8> {
 
 /// A `clrL` block as Photoshop writes one for a loaded LUT file.
 fn clrl_block(format: &str, bytes: &[u8], name: &str) -> Vec<u8> {
-    let en = |t: &str, val: &str| Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new(t), value: photocraft_psd::descriptor::Id::new(val) };
-    let text = |t: &str| Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul(t));
+    let en = |t: &str, val: &str| Value::Enumerated { type_id: craft_psd::descriptor::Id::new(t), value: craft_psd::descriptor::Id::new(val) };
+    let text = |t: &str| Value::Text(craft_psd::descriptor::UnicodeString::new_nul(t));
     let desc = Descriptor::new("null")
         .with("lookupType", en("colorLookupType", "3DLUT"))
         .with("NM  ", text(name))
@@ -355,10 +355,10 @@ fn color_lookup_table_without_matching_file_is_saved_as_cube_named_to_match() {
 #[test]
 fn color_lookup_synthetic_block() {
     let cube = b"TITLE \"t\"\nLUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
-    let en = |t: &str, val: &str| Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new(t), value: photocraft_psd::descriptor::Id::new(val) };
+    let en = |t: &str, val: &str| Value::Enumerated { type_id: craft_psd::descriptor::Id::new(t), value: craft_psd::descriptor::Id::new(val) };
     let desc = Descriptor::new("null")
         .with("lookupType", en("colorLookupType", "3DLUT"))
-        .with("NM  ", Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul("Id")))
+        .with("NM  ", Value::Text(craft_psd::descriptor::UnicodeString::new_nul("Id")))
         .with("Dthr", Value::Boolean(true))
         .with("LUTFormat", en("LUTFormatType", "LUTFormatCUBE"))
         .with("LUT3DFileData", Value::RawData(cube.to_vec()));
@@ -389,10 +389,10 @@ fn color_lookup_synthetic_block() {
 }
 
 fn cube_lookup_block(cube: &[u8]) -> Vec<u8> {
-    let en = |t: &str, val: &str| Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new(t), value: photocraft_psd::descriptor::Id::new(val) };
+    let en = |t: &str, val: &str| Value::Enumerated { type_id: craft_psd::descriptor::Id::new(t), value: craft_psd::descriptor::Id::new(val) };
     let desc = Descriptor::new("null")
         .with("LUTFormat", en("LUTFormatType", "LUTFormatCUBE"))
-        .with("LUT3DFileName", Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul("domain.cube")))
+        .with("LUT3DFileName", Value::Text(craft_psd::descriptor::UnicodeString::new_nul("domain.cube")))
         .with("LUT3DFileData", Value::RawData(cube.to_vec()));
     let mut block = vec![0, 1];
     block.extend(VersionedDescriptor::new(desc).to_bytes());

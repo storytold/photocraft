@@ -137,7 +137,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         item.label = reveal_label().into();
     }
     // File › Open Recent: a dynamic submenu of recently opened files (inserted after "Open As…").
-    if let Some(after) = items.iter().position(|i| i.id == "file.openAs") {
+    if let Some(after) = items.iter().position(|i| i.id == "file.openAsSmartObject").or_else(|| items.iter().position(|i| i.id == "file.openAs")) {
         let rp: Vec<String> = vec!["File".into(), "Open Recent".into()];
         let mut recent: Vec<MenuItem> = app
             .ui

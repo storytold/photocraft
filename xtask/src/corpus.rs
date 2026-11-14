@@ -15,7 +15,7 @@ use crate::pinned::{PinnedCorpus, USER_AGENT};
 use crate::{cargo, root, run};
 
 /// Crates with corpus tests (behind their `corpus` feature).
-pub const CORPUS_CRATES: &[&str] = &["photocraft-psd", "photocraft-codecs", "photocraft-io", "photocraft-engine"];
+pub const CORPUS_CRATES: &[&str] = &["photocraft-codecs", "photocraft-io", "photocraft-engine"];
 /// Opt-in corpus crates: fetched and tested only with `test-corpus --pixls`.
 pub const PIXLS_CRATES: &[&str] = &["photocraft-raw"];
 
@@ -25,7 +25,6 @@ const HEIF_CRATES: &[&str] = &["photocraft-codecs", "photocraft-io"];
 /// Paths whose changes make `test-corpus --changed` run (the file-format and rendering crates,
 /// and the engine's `.atn` import and export).
 const CRITICAL: &[&str] = &[
-    "crates/psd/",
     "crates/io/",
     "crates/codecs/",
     "crates/heif/",

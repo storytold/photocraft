@@ -140,10 +140,10 @@ pub struct Metadata {
     /// Free-form key/value text (PNG tEXt/iTXt, TIFF ASCII tags).
     pub text: Vec<(String, String)>,
     /// Photoshop image resources (`8BIM` resource blocks): TIFF tag 34377. Kept opaque here;
-    /// `photocraft-io` reads and writes them through `photocraft-psd`.
+    /// `photocraft-io` reads and writes them through `craft-psd`.
     pub photoshop_resources: Option<Vec<u8>>,
     /// Photoshop layer data (TIFF tag 37724 `ImageSourceData`): a layered TIFF's layers. Kept
-    /// opaque here; `photocraft-io` reads and writes it through `photocraft-psd`.
+    /// opaque here; `photocraft-io` reads and writes it through `craft-psd`.
     pub photoshop_layers: Option<Vec<u8>>,
     /// Samples per pixel beyond the colour channels and the one alpha sample. TIFF extra
     /// samples (spot colours, extra alpha channels) the pixel layout does not hold. Each entry
@@ -373,69 +373,24 @@ impl ExrPartInfo {
     }
 }
 
-/// One selection policy for header ranking/probing and flat decoding: never synthesize
-/// RGB(A) or YA from separate layers. OpenEXR layers use the full prefix before the last
-/// dot, including nested layers; a leading or trailing dot alone does not name a layer.
+/// One selection policy for header ranking/probing and flat decoding (craft-exr's): never
+/// synthesize RGB(A) or YA from separate layers.
 pub(crate) fn exr_color_channels<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<(ChannelLayout, Vec<usize>)> {
-    #[derive(Default)]
-    struct Group {
-        r: Option<usize>,
-        g: Option<usize>,
-        b: Option<usize>,
-        a: Option<usize>,
-        y: Option<usize>,
-    }
-
-    // Sorted prefixes make rank ties deterministic independently of channel order, with
-    // the empty (unprefixed) group first. Unsupported channels cannot complete a group.
-    let mut groups = std::collections::BTreeMap::<&str, Group>::new();
-    let mut count = 0usize;
-    for (index, name) in names.into_iter().enumerate() {
-        count = count.saturating_add(1);
-        let (prefix, base) = name.rsplit_once('.').filter(|(prefix, base)| !prefix.is_empty() && !base.is_empty()).unwrap_or(("", name));
-        if !matches!(base, "R" | "G" | "B" | "A" | "Y") {
-            continue;
-        }
-        let group = groups.entry(prefix).or_default();
-        let component = match base {
-            "R" => &mut group.r,
-            "G" => &mut group.g,
-            "B" => &mut group.b,
-            "A" => &mut group.a,
-            "Y" => &mut group.y,
-            _ => continue,
+    use craft_exr::channels::ColorLayout;
+    craft_exr::channels::color_channels(names).map(|(layout, indices)| {
+        let layout = match layout {
+            ColorLayout::Y => ChannelLayout::Gray,
+            ColorLayout::YA => ChannelLayout::GrayA,
+            ColorLayout::Rgb => ChannelLayout::Rgb,
+            ColorLayout::Rgba => ChannelLayout::Rgba,
         };
-        component.get_or_insert(index);
-    }
-
-    let mut best = None;
-    let mut best_rank = 0;
-    for group in groups.values() {
-        let candidate = if let (Some(r), Some(g), Some(b)) = (group.r, group.g, group.b) {
-            match group.a {
-                Some(a) => (ChannelLayout::Rgba, vec![r, g, b, a]),
-                None => (ChannelLayout::Rgb, vec![r, g, b]),
-            }
-        } else if let Some(y) = group.y {
-            match group.a {
-                Some(a) => (ChannelLayout::GrayA, vec![y, a]),
-                None => (ChannelLayout::Gray, vec![y]),
-            }
-        } else {
-            continue;
-        };
-        let rank = candidate.0.channels();
-        if rank > best_rank {
-            best = Some(candidate);
-            best_rank = rank;
-        }
-    }
-    best.or_else(|| (count == 1).then(|| (ChannelLayout::Gray, vec![0])))
+        (layout, indices)
+    })
 }
 
 /// Strip an optional `layer.` prefix from a channel name (`diffuse.R` → `R`).
 pub(crate) fn base_channel_name(name: &str) -> &str {
-    name.rsplit('.').next().unwrap_or(name)
+    craft_exr::channels::base_channel_name(name)
 }
 
 /// One Cryptomatte layer of an EXR file (Cryptomatte specification 1.2): per-pixel object or

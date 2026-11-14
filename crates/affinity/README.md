@@ -71,7 +71,7 @@ are rejected. The I/O adapter decodes it with a 128 MiB allocation limit.
 
 Affinity has no published file-format specification, so this reader is built only from a public
 description of the format and from public files, never from Affinity itself. This is how
-PhotoCraft already treats formats that are only partly documented: `photocraft-psd` fills the gaps
+PhotoCraft already treats formats that are only partly documented: `craft-psd` fills the gaps
 in Adobe's specification from the MIT-licensed psd-tools and ag-psd, and `photocraft-raw` recovered
 Nikon's compression tables by black-box analysis of CC0 sample files (see their READMEs).
 
