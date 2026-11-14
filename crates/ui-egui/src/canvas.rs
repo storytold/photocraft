@@ -72,8 +72,9 @@ pub(crate) use cursors::{
 };
 use cursors::{brush_tip_centre, eyedropper_ring, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
+pub use display::display_image;
 use display::texture_key;
-pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
+pub(crate) use display::{cache_key, canvas_display, display_doc};
 use display::{checker, hdr_preview, sync_display_lut};
 pub use drag::{Drag, DragDocument, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
 pub(crate) use drag::{angle_readout, doc_box_corners, draw_readout, draw_value_readout};
