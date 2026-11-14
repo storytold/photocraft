@@ -24,8 +24,10 @@ socket I/O and handler waits use timeouts; MCP and headless batches are limited 
 JSON-lines replies and encoded MCP tool results are capped at 8 MiB, with aggregate batch reply
 budgets. Headless previews have source-pixel, requested-edge, and encoded-PNG ceilings. The
 bridge bounds incoming reply frames and screenshot decoding.
-Automation file methods require separately configured read and write roots. Request paths are
-relative, and absolute, traversal, alternate-separator, device-name, and link-escape paths are
+Automation file methods require separately configured read and write roots. Request paths may be
+relative or absolute beneath the canonical or configured spelling of the applicable granted root.
+Absolute paths are translated to relative paths and resolved through the held directory capability.
+Outside-root absolute paths, parent traversal, malformed relative components and link escapes are
 rejected before file effects.
 
 **Known limitations:** the token is a bearer credential and grants the complete non-filesystem
