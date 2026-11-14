@@ -20,6 +20,8 @@ struct KernSlot {
     run: usize,
     /// Byte offset in the paragraph text.
     start: usize,
+    /// Paragraph-text byte range represented by this visual cluster.
+    text_range: std::ops::Range<usize>,
     first: Option<u32>,
     last: Option<u32>,
     font: parley::FontData,
@@ -53,6 +55,8 @@ struct KernCursor {
     run: usize,
     /// Slot of the cluster each glyph of the run belongs to.
     glyph_slot: Vec<usize>,
+    /// Layer-text byte range represented by each glyph, parallel to `glyph_slot`.
+    glyph_range: Vec<std::ops::Range<usize>>,
     /// Glyphs emitted so far.
     emitted: usize,
     /// First slot whose kerning isn't applied yet.
@@ -136,6 +140,7 @@ fn collect_kern_slots(line: &Line<'_>, para: &Para<'_>) -> Vec<KernSlot> {
             slots.push(KernSlot {
                 run: run.index(),
                 start: c.text_range().start,
+                text_range: c.text_range(),
                 first,
                 last,
                 font: run.font().clone(),
@@ -193,18 +198,24 @@ fn kern_cursors(line: &Line<'_>, slots: &[KernSlot]) -> Vec<KernCursor> {
             continue;
         }
         let base = slots.iter().position(|s| s.run == run.index()).unwrap_or(0);
-        cursors.push(KernCursor { run: run.index(), glyph_slot: glyph_slots(run, base), emitted: 0, applied: base });
+        let (glyph_slot, glyph_range) = glyph_mapping(run, base, slots);
+        cursors.push(KernCursor { run: run.index(), glyph_slot, glyph_range, emitted: 0, applied: base });
     }
     cursors
 }
 
 /// For each glyph of `run`, the slot of its cluster (the run's clusters start at slot `base`).
-fn glyph_slots(run: &Run<'_, RunBrush>, base: usize) -> Vec<usize> {
+fn glyph_mapping(run: &Run<'_, RunBrush>, base: usize, slots: &[KernSlot]) -> (Vec<usize>, Vec<std::ops::Range<usize>>) {
     let mut g2s = Vec::new();
+    let mut ranges = Vec::new();
     for (ci, c) in run.visual_clusters().enumerate() {
-        g2s.extend(c.glyphs().map(|_| base + ci));
+        let range = slots.get(base + ci).map(|s| s.text_range.clone()).unwrap_or_else(|| c.text_range());
+        for _ in c.glyphs() {
+            g2s.push(base + ci);
+            ranges.push(range.clone());
+        }
     }
-    g2s
+    (g2s, ranges)
 }
 
 /// Distributes `slack` between the clusters of the line from `c0` (and their glyphs from `g0`);
@@ -230,6 +241,7 @@ fn justify_line(out: &mut TextLayout, c0: usize, g0: usize, slack: f32) -> f32 {
 fn rotate_to_text_space(glyphs: &mut [PlacedGlyph], vinfo: &[VGlyph], baseline: f32) {
     for (g, v) in glyphs.iter_mut().zip(vinfo) {
         let (u, cross) = (g.x, g.y);
+        g.line_center = Some(u + v.advance / 2.0);
         if v.upright {
             g.x = -baseline - v.advance * 0.5;
             g.y = u + v.origin;
@@ -303,8 +315,10 @@ impl Para<'_> {
         let mut pos = self.indent_start + if line_index == 0 { self.first_indent } else { 0.0 };
         let mut trailing_tabs = 0.0f32;
         let mut trailing_growth = 0.0f32;
+        // Whether every slot after `j` is blank, from one reverse scan rather than one per slot.
+        let last_inked = slots.iter().rposition(|n| !n.blank);
         for (j, s) in slots.iter().enumerate() {
-            let rest_blank = slots[j + 1..].iter().all(|n| n.blank);
+            let rest_blank = last_inked.is_none_or(|k| k <= j);
             if s.blank && rest_blank {
                 trailing_growth += s.growth;
             }
@@ -320,12 +334,14 @@ impl Para<'_> {
     }
 
     /// Where the line starts along its extent: box and area lines at their box or span edge,
-    /// point lines around the anchor.
+    /// point and legacy unbounded path lines around the anchor. Explicit path ranges
+    /// align center/right lines within their available span instead of around that anchor.
     fn line_start(&self, f: &LineFrame, offset: f32, adv: f32, line_kern: f32) -> f32 {
         if !self.env.wraps {
+            let span = self.env.path_range.unwrap_or(0.0);
             let target = match self.ps.align {
-                TextAlign::Center | TextAlign::JustifyCenter => -(adv + line_kern) / 2.0,
-                TextAlign::Right | TextAlign::JustifyRight => -(adv + line_kern),
+                TextAlign::Center | TextAlign::JustifyCenter => (span - adv - line_kern) / 2.0,
+                TextAlign::Right | TextAlign::JustifyRight => span - adv - line_kern,
                 _ => self.indent_start,
             };
             return target - offset;
@@ -400,7 +416,8 @@ impl Para<'_> {
         let mut kern_px = self.kerning(optical, &slots);
         let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index);
         let line_kern: f32 = kern_px.iter().sum::<f32>() - trailing_tabs;
-        let dx = self.line_start(f, m.offset, adv, line_kern);
+        let growth = if self.env.path_range.is_some() { slots.iter().map(|s| s.growth).sum::<f32>() - trailing_growth } else { 0.0 };
+        let dx = self.line_start(f, m.offset, adv, line_kern + growth);
         let lc = LineCtx { dx, baseline: f.baseline, slots: &slots, kern_px: &kern_px, line_index: out.lines.len() };
         let (g0, c0) = (out.glyphs.len(), out.clusters.len());
         let mut state = LineState { cursors: kern_cursors(line, &slots), seen_runs: Vec::new(), vinfo: Vec::new(), extra: 0.0 };
@@ -493,6 +510,7 @@ impl Para<'_> {
         let mut pen = gr.offset();
         let mut cursor = state.cursors.iter_mut().find(|c| c.run == run.index());
         for g in gr.glyphs() {
+            let source_range = cursor.as_deref().and_then(|c| c.glyph_range.get(c.emitted)).cloned().unwrap_or_default();
             if let Some(c) = cursor.as_deref_mut() {
                 c.before_glyph(lc.kern_px, &mut state.extra);
             }
@@ -503,7 +521,9 @@ impl Para<'_> {
                 y: lc.baseline + g.y,
                 style: gr.style().brush.0,
                 orient: GlyphOrient::Horizontal,
+                line_center: None,
             });
+            out.glyph_ranges.push(self.map_offset(source_range.start)..self.map_offset(source_range.end));
             if let Some(v) = &vm {
                 let upright = class == 1 || (class == 2 && !plain.contains(&g.id));
                 state.vinfo.push(VGlyph {
