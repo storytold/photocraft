@@ -653,36 +653,41 @@ fn curve_round_trip_keeps_anchor(points: &[CurvePoint], input: f32, output: f32)
 
 fn move_curve_endpoint(points: &mut [CurvePoint], sample: f32, black: bool) {
     let sample = sample.clamp(0.0, 1.0);
-    let mut candidate = points.to_vec();
-    if black {
-        for p in &mut candidate {
-            p.input = sample + p.input * (1.0 - sample);
-        }
-        if let Some(first) = candidate.first_mut() {
-            first.input = sample;
-            first.output = 0.0;
-        }
-    } else {
-        for p in &mut candidate {
-            p.input *= sample;
-        }
-        if let Some(last) = candidate.last_mut() {
-            last.input = sample;
-            last.output = 1.0;
-        }
-    }
-
-    // `curve_arr` stores hundredths of a 0..255 level, while `parse_curve` drops points
-    // separated by less than half a level. Scaling an endpoint toward the sample can collapse
-    // several edited points together even when the target endpoint itself survives. Check that
-    // the full curve survives the actual serializer and parser.
     let target = if black { 0.0 } else { 1.0 };
-    if curve_round_trip_keeps_anchor(&candidate, sample, target) {
-        points.clone_from_slice(&candidate);
-        return;
+    let (Some(first), Some(last)) = (points.first().map(|p| p.input), points.last().map(|p| p.input)) else { return };
+    let fixed = if black { (1.0, 0.0) } else { (0.0, 1.0) };
+    let actual = if black { (last, first) } else { (first, last) };
+
+    // Each pass maps the inputs from `other..old` onto `other..sample` and puts the picked end
+    // point on the sample. The first pass keeps the other end point where it is, so black then
+    // white (or white then black) sets both references (#14377); with both end points at 0 and
+    // 255 it equals the second pass, which scales every point toward the sample as before.
+    for (other, old) in [actual, fixed] {
+        let ratio = (sample - other) / (old - other);
+        // Only a positive ratio keeps the points in order: a pick at or past the other end
+        // point would fold the curve over it, and a zero span gives no ratio at all.
+        if !ratio.is_finite() || ratio <= 0.0 {
+            continue;
+        }
+        let mut candidate = points.to_vec();
+        for p in &mut candidate {
+            p.input = other + (p.input - other) * ratio;
+        }
+        if let Some(own) = if black { candidate.first_mut() } else { candidate.last_mut() } {
+            own.input = sample;
+            own.output = target;
+        }
+        // `curve_arr` stores hundredths of a 0..255 level, while `parse_curve` drops points
+        // separated by less than half a level. Moving an endpoint toward the sample can collapse
+        // several edited points together even when the target endpoint itself survives. Check
+        // that the full curve survives the actual serializer and parser.
+        if curve_round_trip_keeps_anchor(&candidate, sample, target) {
+            points.clone_from_slice(&candidate);
+            return;
+        }
     }
 
-    // If scaling collapses any points, keep the user's point positions and edits, and make the
+    // If neither pass survives the round trip, keep the user's point positions and edits, and make the
     // two points nearest the selected endpoint a target plateau. Near an endpoint sample, those
     // two points bracket the sample; the plateau is representable and leaves the rest of the
     // curve intact.
@@ -1247,3 +1252,6 @@ pub fn user_keys(p: &Value) -> Map<String, Value> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod curves_eyedropper_endpoints_tests;
