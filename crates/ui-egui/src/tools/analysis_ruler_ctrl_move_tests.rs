@@ -2,7 +2,8 @@
 //! `command: true` sends) is the temporary Move tool, as `docs/control-protocol.md` already
 //! promises for a non-selection tool and as it already is from the keyboard: the drag moves the
 //! layer as one "Move" history step, the ruler stays as it was, and the tool stays the Ruler.
-//! The Count and Note tools were not measured for a Ctrl-drag, so they keep today's behaviour.
+//! The Count and Note tools do what the keyboard does for them (the issue's last "Done when" item):
+//! a Ctrl-drag is the Move tool there too. The Color Sampler is left to #11731.
 
 use egui::Modifiers;
 use photocraft_geom::Rect;
@@ -124,28 +125,62 @@ fn a_drag_without_ctrl_still_draws_the_ruler() {
     assert_eq!(history(&app), steps, "a ruler is no history step");
 }
 
-/// Not measured, so kept as today: with the Count and Note tools a Ctrl+drag is still the tool's
-/// own gesture, not the Move tool's.
+/// A Move drag that started with Ctrl keeps the Move tool for the rest of the gesture: a release
+/// without the modifier (the key let go before the button) still ends the drag as a Move.
 #[test]
-fn ctrl_keeps_the_count_and_note_tools_as_they_are() {
+fn a_ctrl_drag_released_without_ctrl_still_finishes_as_the_move_tool() {
+    use crate::control::{ControlRequest, Outcome, handle};
     let mut app = ruler_app();
-    app.ui.tool = Tool::Count;
     let id = app.session.active().unwrap().active_layer.unwrap();
-    let steps = history(&app);
-    drag(&mut app, [120.0, 120.0], [170.0, 150.0], CTRL);
-    assert_eq!(app.session.active().unwrap().doc.measurement.count_total(), 1, "one marker where the press landed");
-    assert_eq!(bounds(&app, id), Rect::new(100, 100, 160, 160), "the layer stays");
-    assert_eq!(history(&app), steps + 1, "the marker's own step");
-    assert_ne!(label(&app).as_deref(), Some("Move"), "not the Move tool's");
-    assert!(app.ui.analysis.drag.is_none());
+    let (steps, before) = (history(&app), ruler(&app));
+    tool_event(&mut app, ToolEvent::Down { x: 120.0, y: 120.0, pressure: 1.0 }, CTRL);
+    tool_event(&mut app, ToolEvent::Move { x: 145.0, y: 135.0, pressure: 1.0 }, CTRL);
+    tool_event(&mut app, ToolEvent::Up { x: 170.0, y: 150.0 }, Modifiers::NONE);
+    assert!(app.drag.is_none(), "the Move drag ended on the release");
+    check_moves_the_layer(&mut app, id, steps, before);
 
+    // The same gesture over the control channel: Ctrl on the first events only.
     let mut app = ruler_app();
-    app.ui.tool = Tool::Note;
     let id = app.session.active().unwrap().active_layer.unwrap();
-    let steps = history(&app);
-    drag(&mut app, [120.0, 120.0], [170.0, 150.0], CTRL);
-    assert_eq!(app.session.active().unwrap().doc.notes.len(), 1, "a note where the press landed");
-    assert_eq!(bounds(&app, id), Rect::new(100, 100, 160, 160), "the layer stays");
-    assert_eq!(history(&app), steps + 1, "the note's own step");
-    assert_ne!(label(&app).as_deref(), Some("Move"), "not the Move tool's");
+    let (steps, before) = (history(&app), ruler(&app));
+    let ctx = egui::Context::default();
+    let down = json!({"command": true, "events": [{"kind": "down", "x": 120.0, "y": 120.0}, {"kind": "move", "x": 145.0, "y": 135.0}]});
+    let up = json!({"events": [{"kind": "up", "x": 170.0, "y": 150.0}]});
+    for params in [down, up] {
+        let (request, _rx) = ControlRequest::new("ui.pointer", params);
+        let Outcome::Done(_) = handle(&mut app, &ctx, &request) else { panic!("ui.pointer should reply immediately") };
+    }
+    assert!(app.drag.is_none(), "the Move drag ended on the release");
+    check_moves_the_layer(&mut app, id, steps, before);
+}
+
+/// Count and Note: with Ctrl on the event the control route does what the keyboard route does for
+/// them, which is the temporary Move tool: the layer moves as one "Move" step, and no marker or
+/// note is created.
+#[test]
+fn ctrl_with_the_count_and_note_tools_is_the_move_tool_as_from_the_keyboard() {
+    for tool in [Tool::Count, Tool::Note] {
+        // The keyboard route, which already worked.
+        let mut keyboard = ruler_app();
+        keyboard.ui.tool = tool;
+        let id = keyboard.session.active().unwrap().active_layer.unwrap();
+        keyboard.tool_override = Some(Tool::Move);
+        drag(&mut keyboard, [120.0, 120.0], [170.0, 150.0], Modifiers::NONE);
+        keyboard.tool_override = None;
+        assert_eq!(bounds(&keyboard, id), Rect::new(150, 130, 210, 190), "{tool:?}: the keyboard moves the layer");
+
+        // The control route, now the same.
+        let mut app = ruler_app();
+        app.ui.tool = tool;
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let (steps_before, before) = (history(&app), ruler(&app));
+        drag(&mut app, [120.0, 120.0], [170.0, 150.0], CTRL);
+        assert_eq!(bounds(&app, id), Rect::new(150, 130, 210, 190), "{tool:?}: the layer moved +50,+30");
+        assert_eq!(history(&app), steps_before + 1, "{tool:?}: one history step");
+        assert_eq!(label(&app).as_deref(), Some("Move"), "{tool:?}: the Move tool's step");
+        assert_eq!(ruler(&app), before, "{tool:?}: the ruler stays");
+        assert_eq!(app.ui.tool, tool, "{tool:?}: the tool stays");
+        assert_eq!(app.session.active().unwrap().doc.measurement.count_total(), 0, "{tool:?}: no marker");
+        assert!(app.session.active().unwrap().doc.notes.is_empty(), "{tool:?}: no note");
+    }
 }
