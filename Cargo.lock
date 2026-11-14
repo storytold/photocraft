@@ -5707,7 +5707,6 @@ dependencies = [
  "proptest",
  "serde_json",
  "thiserror 2.0.21",
- "tiff",
  "ttf-parser",
  "zune-core",
  "zune-jpegxl",
@@ -5774,11 +5773,11 @@ dependencies = [
 name = "photocraft-raw"
 version = "0.23.1"
 dependencies = [
+ "craft-image-codecs",
  "craft-raw",
  "flate2",
  "image",
  "photocraft-raw",
- "png 0.18.1",
  "rayon",
  "zune-core",
  "zune-jpegxl",

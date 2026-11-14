@@ -75,4 +75,3 @@ proptest = { workspace = true }
 # Lossless JPEG XL encoder for the JPEG XL DNG preview test (tests only), as in photocraft-raw.
 zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
 zune-core = { workspace = true }
-tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"] }
