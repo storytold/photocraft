@@ -1935,7 +1935,8 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
 
 /// The Pencil's cursor (and the Eraser's in Pencil or Block mode): the outline of the whole pixels
 /// its dab fills, on the pixel grid. A round tip is a disc, a square or Block one its square. The
-/// hotspot is drawn as well when `crosshair` asks for it or the outline is too small to see.
+/// hotspot is drawn as well when `crosshair` asks for it. An outline too small to see alone gets
+/// arms that stop short of it instead, so they show where it is without covering it (#13602).
 fn pencil_outline_cursor(painter: &egui::Painter, xf: &ViewXform, p: Pos2, size: f32, block: bool, crosshair: bool) -> egui::CursorIcon {
     let ppp = painter.ctx().pixels_per_point();
     let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
@@ -1949,8 +1950,13 @@ fn pencil_outline_cursor(painter: &egui::Painter, xf: &ViewXform, p: Pos2, size:
         painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
         painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
     }
-    // Too small to see where it is: the hotspot as well.
-    if crosshair || sq.width() < 6.0 {
+    // Too small to see where it is: arms around it, clear of the outline, as in Photoshop. The
+    // square sits on the pixel grid, off the pointer, so the arms clear its farthest edge.
+    if sq.width() / 2.0 < crate::tool_cursor::SMALL_TIP_RADIUS {
+        let reach = [sq.left() - p.x, sq.right() - p.x, sq.top() - p.y, sq.bottom() - p.y].into_iter().fold(0.0f32, |m, d| m.max(d.abs()));
+        let (gap, length) = crate::tool_cursor::small_tip_arms(reach);
+        crate::tool_cursor::crosshair(painter, p, length, gap);
+    } else if crosshair {
         crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
     }
     egui::CursorIcon::None
@@ -2037,7 +2043,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             } else {
                 let painting = app.drag.is_some();
                 let brush = &app.session.tools.brush;
-                let full = (brush.size / 2.0 * xf.zoom).max(1.0);
+                let full = (brush.size / 2.0 * xf.zoom).max(0.0);
                 match cur.painting {
                     PaintingCursor::Standard => egui::CursorIcon::Default,
                     PaintingCursor::Precise => crate::tool_cursor::crosshair(painter, p, 6.0, 0.0),

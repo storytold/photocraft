@@ -6,9 +6,6 @@ use std::sync::Arc;
 use egui::{CursorIcon, Painter, Pos2, Vec2};
 use photocraft_paint::brush::{BrushSettings, TipShape};
 
-/// Below this on-screen radius an outline is unreadable: show the crosshair instead.
-const MIN_RADIUS: f32 = 3.0;
-
 #[derive(Clone)]
 struct Cached {
     key: Key,
@@ -98,7 +95,10 @@ fn on_screen(rings: &[Vec<[f32; 2]>], axes: [Vec2; 2]) -> Vec<Vec<Vec2>> {
 
 /// The brush cursor at `at`. `radius` is the tip's screen radius (size / 2 at the current zoom),
 /// for the plain circle; `axes` comes from [`tip_axes`], for a traced outline. `normal` is
-/// Preferences › Cursors "Normal Brush Tip" (the 50 % contour, not the full tip).
+/// Preferences › Cursors "Normal Brush Tip" (the 50 % contour, not the full tip). A tip whose
+/// outline reaches less than [`SMALL_TIP_RADIUS`](crate::tool_cursor::SMALL_TIP_RADIUS) from its
+/// centre is too small to read alone: it shows at its real size inside a crosshair that leaves it
+/// uncovered, as in Photoshop (#13602); a shaped tip that small shows as the circle around it.
 pub(crate) fn cursor(painter: &Painter, at: Pos2, brush: &BrushSettings, radius: f32, axes: [Vec2; 2], normal: bool, centre: bool) -> CursorIcon {
     let anisotropic = (axes[0].length_sq() - axes[1].length_sq()).abs() > 0.001 || axes[0].dot(axes[1]).abs() > 0.001;
     let outline = rings(painter.ctx(), brush, !normal).or_else(|| {
@@ -108,12 +108,15 @@ pub(crate) fn cursor(painter: &Painter, at: Pos2, brush: &BrushSettings, radius:
     if let Some(rings) = outline {
         let pts = on_screen(&rings, axes);
         let extent = pts.iter().flatten().fold(0.0f32, |m, p| m.max(p.length()));
-        if extent < MIN_RADIUS {
-            return crate::tool_cursor::crosshair(painter, at, 4.0, 0.0);
+        if extent < crate::tool_cursor::SMALL_TIP_RADIUS {
+            return crate::tool_cursor::small_tip(painter, at, extent);
         }
         return crate::tool_cursor::outline(painter, at, pts, centre);
     }
-    let r = if normal { photocraft_paint::half_coverage_radius(radius, brush.hardness).max(1.0) } else { radius };
+    let r = if normal { photocraft_paint::half_coverage_radius(radius, brush.hardness) } else { radius };
+    if r.is_nan() || r < crate::tool_cursor::SMALL_TIP_RADIUS {
+        return crate::tool_cursor::small_tip(painter, at, r);
+    }
     crate::tool_cursor::circle(painter, at, r, centre)
 }
 

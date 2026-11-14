@@ -478,5 +478,9 @@ mod background_eraser_alt_click_tests;
 mod remove_cursor_tests;
 
 #[cfg(test)]
+#[path = "small_tip_cursor_tests.rs"]
+mod small_tip_cursor_tests;
+
+#[cfg(test)]
 #[path = "paint_bucket_cursor_tests.rs"]
 mod paint_bucket_cursor_tests;
