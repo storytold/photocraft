@@ -69,6 +69,9 @@ mod tests;
 mod open_recent_position_tests;
 
 #[cfg(test)]
+mod file_menu_package_block_tests;
+
+#[cfg(test)]
 mod open_recent_tests {
     use super::*;
     use serde_json::json;
