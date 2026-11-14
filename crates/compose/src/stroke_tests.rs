@@ -323,3 +323,206 @@ fn outside_stroke_on_partial_fill_raster_layer_keeps_interior_free_of_stroke() {
     let stroke_pixel = px(&d, 13, 20);
     assert!(close4(stroke_pixel, [0.0, 0.0, 1.0, 1.0]), "outside stroke must be blue: {stroke_pixel:?}");
 }
+
+/// #9048: an inverted shape fills on past the canvas, so its canvas border is no edge. With
+/// Fill 0 % and an Outside stroke inside a group with an Outer Bevel, Photoshop strokes and bevels
+/// only the hole; the canvas edges stay as the backdrop (black).
+#[test]
+fn inverted_shape_effects_have_no_edge_at_the_canvas_border() {
+    let mut d = Document::with_background("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8, Color::BLACK);
+    let mut l = shape(12.0, 28.0, Fill::Solid(Color::BLACK), None);
+    if let LayerContent::Shape(sh) = &mut l.content {
+        sh.path.inverted = true;
+        sh.cache = Some(photocraft_vector::render_shape(sh, PixelFormat::RGBA8, Rect::new(0, 0, 40, 40)));
+    }
+    l.fill_opacity = 0.0;
+    l.effects.items = vec![stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::BLACK))];
+    let mut g = Layer::group("g", vec![l]);
+    g.effects.items = vec![Effect::BevelEmboss(photocraft_doc::Bevel {
+        enabled: true,
+        style: photocraft_doc::BevelStyle::OuterBevel,
+        technique: photocraft_doc::BevelTechnique::Smooth,
+        depth: 1.5,
+        up: true,
+        size: 6.0,
+        soften: 0.0,
+        angle: 58.0,
+        altitude: 25.0,
+        use_global_light: false,
+        gloss_contour: photocraft_doc::Contour::Linear,
+        gloss_anti_alias: false,
+        highlight: FxCommon::new(BlendMode::Screen, 0.75),
+        highlight_color: Color::WHITE,
+        shadow: FxCommon::new(BlendMode::Multiply, 0.75),
+        shadow_color: Color::BLACK,
+        contour: None,
+        texture: None,
+    })];
+    d.layers.push(g);
+    for (x, y) in [(20, 1), (20, 38), (1, 20), (38, 20), (38, 38), (1, 1)] {
+        assert!(close4(px(&d, x, y), [0.0, 0.0, 0.0, 1.0]), "canvas edge ({x},{y}) lit: {:?}", px(&d, x, y));
+    }
+    // The hole's edge is still bevelled (the light comes from the upper right).
+    let lit = (12..28).map(|x| px(&d, x, 10)[0]).fold(0.0f32, f32::max);
+    assert!(lit > 0.2, "the hole's top edge is lit: {lit}");
+}
+
+/// An inverted shape's vector stroke under a partial layer mask: the effect shape is the mask ×
+/// (fill ∪ stroke), the mask applied once. In the hole the fill is 0 and the stroke (at 50 %
+/// opacity) 0.5, so at a 50 % mask the layer's alpha there is 0.25, not 0.3125.
+#[test]
+fn inverted_shapes_masked_vector_stroke_is_masked_once() {
+    let mut d = Document::new("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+    d.layers.clear();
+    let vs = ShapeStroke { width: 4.0, align: StrokeAlign::Outside, opacity: 0.5, paint: Fill::Solid(Color::rgb(0.0, 1.0, 0.0)), ..ShapeStroke::default() };
+    let mut l = shape(10.0, 30.0, Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), Some(vs));
+    if let LayerContent::Shape(sh) = &mut l.content {
+        sh.path.inverted = true;
+        sh.cache = Some(photocraft_vector::render_shape(sh, PixelFormat::RGBA8, Rect::new(0, 0, 40, 40)));
+    }
+    let mut m = LayerMask::reveal_all();
+    m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.5]);
+    l.mask = Some(m);
+    l.effects.items = vec![Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 1.0, 1.0) }];
+    d.layers.push(l);
+    let p = px(&d, 12, 20);
+    assert!(close4(p, [0.0, 1.0, 0.0, 0.25]), "the stroke in the hole at the mask's 50 %: {p:?}");
+}
+
+/// An inverted shape's hole that crosses the canvas border, at a Density below 100 %: past the
+/// canvas the fill's coverage is as soft as inside it, so the border isn't an edge of the hole.
+/// At 0 % the fill covers the hole too: no Inside stroke anywhere; at 25 % the border of the hole
+/// is stroked as the rest of it.
+#[test]
+fn soft_inverted_shapes_hole_has_no_edge_at_the_canvas_border() {
+    for density in [0.0f32, 0.25] {
+        let mut d = Document::with_background("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8, Color::BLACK);
+        let mut path = Path::new(vec![Subpath::polygon(&[(12.0, -20.0), (28.0, -20.0), (28.0, 20.0), (12.0, 20.0)])]);
+        path.inverted = true;
+        let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::BLACK)), density, ..ShapeLayer::default() };
+        sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, Rect::new(0, 0, 40, 40)));
+        let mut l = Layer::new("shape", LayerContent::Shape(sh));
+        l.fill_opacity = 0.0;
+        l.effects.items = vec![stroke(4.0, StrokePosition::Inside, FxPaint::Color(Color::WHITE))];
+        d.layers.push(l);
+        let deep = px(&d, 20, 10);
+        for y in [0, 1, 2] {
+            let p = px(&d, 20, y);
+            assert!(close4(p, deep), "density {density}: border pixel (20,{y}) {p:?} vs (20,10) {deep:?}");
+        }
+        if density == 0.0 {
+            assert!(close4(deep, [0.0, 0.0, 0.0, 1.0]), "density 0 covers the hole: {deep:?}");
+        }
+    }
+}
+
+const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
+fn assert_pixels(d: &Document, expected: &[((i32, i32), [f32; 4])]) {
+    for &((x, y), want) in expected {
+        let got = px(d, x, y);
+        assert!(close4(got, want), "({x},{y}): {got:?}, expected {want:?}");
+    }
+}
+
+/// #9048 changes only inverted shapes: a plain shape that runs off the canvas keeps its effects as
+/// before. Its fill reaches the canvas corner with no stroke there, and the Outside stroke follows
+/// only the edges inside the canvas.
+#[test]
+fn normal_shape_at_the_canvas_edge_keeps_its_effects() {
+    let mut d = doc(40, 40);
+    let mut l = shape(-10.0, 14.0, Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), None);
+    l.effects.items = vec![stroke(4.0, StrokePosition::Outside, blue())];
+    d.layers.push(l);
+    assert_pixels(
+        &d,
+        &[
+            ((0, 0), RED),
+            ((0, 7), RED),
+            ((7, 0), RED),
+            ((13, 13), RED),
+            ((15, 0), BLUE),
+            ((0, 15), BLUE),
+            ((17, 7), BLUE),
+            ((15, 15), BLUE),
+            ((19, 7), WHITE),
+            ((7, 19), WHITE),
+            ((30, 30), WHITE),
+        ],
+    );
+}
+
+/// #9048 for an effect inside the shape: an inverted shape's Inside stroke runs around the hole,
+/// within the fill, and not along the canvas border, where the fill goes on past the canvas.
+#[test]
+fn inverted_shapes_inside_stroke_has_no_edge_at_the_canvas_border() {
+    let mut d = doc(40, 40);
+    let mut l = shape(12.0, 28.0, Fill::Solid(Color::BLACK), None);
+    if let LayerContent::Shape(sh) = &mut l.content {
+        sh.path.inverted = true;
+        sh.cache = Some(photocraft_vector::render_shape(sh, PixelFormat::RGBA8, Rect::new(0, 0, 40, 40)));
+    }
+    l.effects.items = vec![stroke(3.0, StrokePosition::Inside, blue())];
+    d.layers.push(l);
+    assert_pixels(
+        &d,
+        &[
+            // The canvas border is fill, not stroke.
+            ((0, 0), BLACK),
+            ((20, 0), BLACK),
+            ((20, 1), BLACK),
+            ((0, 20), BLACK),
+            ((39, 20), BLACK),
+            ((20, 39), BLACK),
+            ((39, 39), BLACK),
+            // The stroke rings the hole, inside the fill; the hole shows the backdrop.
+            ((10, 20), BLUE),
+            ((29, 20), BLUE),
+            ((20, 10), BLUE),
+            ((20, 29), BLUE),
+            ((6, 20), BLACK),
+            ((20, 20), WHITE),
+        ],
+    );
+}
+
+/// An inverted shape whose layer mask stops short of the canvas border: the layer doesn't reach the
+/// border, so the Outside stroke runs around the mask's edge (and into the hole), and the canvas
+/// border stays the backdrop.
+#[test]
+fn inverted_shape_masked_short_of_the_border_strokes_the_mask_edge() {
+    let mut d = doc(40, 40);
+    let mut l = shape(14.0, 26.0, Fill::Solid(Color::BLACK), None);
+    if let LayerContent::Shape(sh) = &mut l.content {
+        sh.path.inverted = true;
+        sh.cache = Some(photocraft_vector::render_shape(sh, PixelFormat::RGBA8, Rect::new(0, 0, 40, 40)));
+    }
+    let mut m = LayerMask::hide_all();
+    for y in 6..34 {
+        for x in 6..34 {
+            m.surface.write_pixel(x, y, &[1.0]);
+        }
+    }
+    l.mask = Some(m);
+    l.effects.items = vec![stroke(3.0, StrokePosition::Outside, blue())];
+    d.layers.push(l);
+    assert_pixels(
+        &d,
+        &[
+            ((0, 0), WHITE),
+            ((20, 0), WHITE),
+            ((1, 20), WHITE),
+            ((39, 20), WHITE),
+            ((20, 39), WHITE),
+            ((4, 20), BLUE),
+            ((35, 20), BLUE),
+            ((20, 4), BLUE),
+            ((10, 20), BLACK),
+            ((15, 20), BLUE),
+            ((20, 20), WHITE),
+        ],
+    );
+}
