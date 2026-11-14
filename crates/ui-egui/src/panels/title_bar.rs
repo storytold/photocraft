@@ -89,6 +89,9 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     let ui = &mut group_ui;
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let mut ws = app.ui.workspace.clone();
+                    if let Some(skin) = app.ui.theme.skin_key() {
+                        ws = skin;
+                    }
                     let options = crate::workspace_ui::switcher_options(app);
                     let opts: Vec<(String, &str)> = options.iter().map(|(k, l)| (k.clone(), l.as_str())).collect();
                     // A narrow bar drops what is also in a menu, the theme toggle first
@@ -104,8 +107,14 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     };
                     let ws_width = (room - f32::from(icons_shown) * ICON_SLOT - 6.0).clamp(WORKSPACE_MIN, 130.0);
                     if room >= WORKSPACE_MIN && widgets::dropdown(ui, "workspace", tl!("Workspace"), &mut ws, &opts, ws_width) {
-                        app.ui.workspace = ws;
-                        crate::menus::apply_workspace(app);
+                        // A skin entry recolours the interface only; the layout on screen stays put.
+                        match crate::theme::ThemeKind::from_skin_key(&ws) {
+                            Some(kind) => app.set_theme(ui.ctx(), kind),
+                            None => {
+                                app.ui.workspace = ws;
+                                crate::menus::apply_workspace(app);
+                            }
+                        }
                     }
                     if icons_shown >= 1
                         && icons::button(ui, "search", 28.0, app.ui.palette_open, &crate::shortcuts::tip_label(app, "Search commands", "edit.search")).clicked()

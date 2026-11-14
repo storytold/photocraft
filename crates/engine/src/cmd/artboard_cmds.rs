@@ -14,7 +14,7 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, color_param, int, int_i32};
-use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, save_doc, stem, str_param, write_file};
+use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, save_doc, str_param, write_file};
 use crate::{EngineError, Result, Session};
 
 /// Artboard size presets (name, width, height) in pixels, Photoshop's common devices and pages.
@@ -675,19 +675,30 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
     }
 }
 
-/// File › Export › Artboards to Files: `<prefix>_<index:04>_<artboard name>.<format>` per board.
+/// File › Export › Artboards to Files: `<artboard name>.<format>` per board, or
+/// `<prefix>_<index:04>_<artboard name>.<format>` when a prefix is given.
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
+    let prefix = p.get("prefix").and_then(Value::as_str).map(sanitize).unwrap_or_default();
     let doc = d.doc.clone();
     let mut files = Vec::new();
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (i, one) in chosen_documents(&doc, p)?.into_iter().enumerate() {
+        // A prefix groups the set as `<prefix>_<index:04>_<artboard>`; without one each file is
+        // named after its artboard, the name the board carries on the canvas.
+        let base = sanitize(&one.name);
+        let named = if prefix.is_empty() { base } else { format!("{prefix}_{i:04}_{base}") };
         // Names may be identical, or collide after sanitizing or filesystem case folding.
-        let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
+        let mut name = named.clone();
+        let mut n = 2;
+        while !taken.insert(name.to_lowercase()) {
+            name = format!("{named}-{n}");
+            n += 1;
+        }
         let path = join(&dir, &format!("{name}.{format}"));
         save_doc(&one, &path, save)?;
         files.push(path);

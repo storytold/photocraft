@@ -18,6 +18,9 @@
 //!
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
+/// Title-bar skin entries in the workspace dropdown are keyed `skin:<theme id>`.
+pub const SKIN_PREFIX: &str = "skin:";
+
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
 use photocraft_engine::prefs::UiFontSize;
 use serde::{Deserialize, Serialize};
@@ -52,10 +55,16 @@ pub enum ThemeKind {
     SoftDark,
     /// A low-contrast light theme: pale violet-grey surfaces, softened dark text and a periwinkle accent.
     SoftLight,
+    /// Deep navy skin sampled from a dark dashboard design: near-black blue surfaces, an electric
+    /// blue accent, mint and amber status colours and softly rounded cards.
+    Nebula,
+    /// A frosty light skin in the Fluent "mica" manner: translucent pale-blue surfaces, soft
+    /// shadows, thin cool borders and the Fluent blue accent.
+    Mica,
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 14] = [
+    pub const ALL: [ThemeKind; 16] = [
         ThemeKind::Pro,
         ThemeKind::ProMedium,
         ThemeKind::ProLightGray,
@@ -70,6 +79,8 @@ impl ThemeKind {
         ThemeKind::BreezeDark,
         ThemeKind::SoftDark,
         ThemeKind::SoftLight,
+        ThemeKind::Nebula,
+        ThemeKind::Mica,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -87,6 +98,8 @@ impl ThemeKind {
             ThemeKind::BreezeDark => "Breeze Dark",
             ThemeKind::SoftDark => "Soft Dark",
             ThemeKind::SoftLight => "Soft Light",
+            ThemeKind::Nebula => "Nebula",
+            ThemeKind::Mica => "Mica",
         }
     }
     /// The canonical name: `ui.set {theme}` accepts it and the Window › Theme commands are
@@ -107,6 +120,8 @@ impl ThemeKind {
             ThemeKind::BreezeDark => "breezeDark",
             ThemeKind::SoftDark => "softDark",
             ThemeKind::SoftLight => "softLight",
+            ThemeKind::Nebula => "nebula",
+            ThemeKind::Mica => "mica",
         }
     }
     /// Photoshop-grammar layout (tab strips, flat panels): the four Pro brightness levels.
@@ -124,12 +139,26 @@ impl ThemeKind {
                 | ThemeKind::AdwaitaDark
                 | ThemeKind::BreezeDark
                 | ThemeKind::SoftDark
+                | ThemeKind::Nebula
         )
     }
     /// Whether this theme belongs to the light appearance family.
     pub fn is_light(self) -> bool {
         !self.is_dark()
     }
+    /// The theme a title-bar skin entry (`skin:<theme id>`) stands for: the entry switches the
+    /// colours without touching the workspace layout.
+    pub fn from_skin_key(key: &str) -> Option<Self> {
+        Self::from_name(key.strip_prefix(SKIN_PREFIX)?)
+    }
+
+    /// The workspace switcher's key for a skin (`skin:<id>`). A skin recolours the interface
+    /// without changing the workspace, so the switcher shows it as the current entry while one is
+    /// applied — otherwise nothing in the list reads as chosen.
+    pub fn skin_key(self) -> Option<String> {
+        matches!(self, Self::Nebula | Self::Mica).then(|| format!("{SKIN_PREFIX}{}", self.id()))
+    }
+
     pub fn next(self) -> Self {
         let i = Self::ALL.iter().position(|k| *k == self).unwrap_or(0);
         Self::ALL[(i + 1) % Self::ALL.len()]
@@ -150,6 +179,8 @@ impl ThemeKind {
             "breezedark" | "kdedark" | "plasmadark" => Some(ThemeKind::BreezeDark),
             "softdark" => Some(ThemeKind::SoftDark),
             "softlight" => Some(ThemeKind::SoftLight),
+            "nebula" | "deepblue" | "深空蓝" => Some(ThemeKind::Nebula),
+            "mica" | "glass" | "frosted" | "acrylic" | "fluent" | "毛玻璃" => Some(ThemeKind::Mica),
             _ => None,
         }
     }
@@ -331,6 +362,92 @@ impl Tokens {
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+            },
+            // A deep navy skin sampled from the reference dashboard: near-black blue surfaces,
+            // bright electric-blue accent, mint/green status colours and softly rounded cards.
+            ThemeKind::Nebula => Tokens {
+                kind,
+                chrome: Color32::from_rgb(5, 8, 15),
+                canvas: Color32::from_rgb(3, 6, 12),
+                canvas_dot: Color32::from_rgb(20, 26, 36),
+                dock: Color32::from_rgb(4, 7, 13),
+                card: Color32::from_rgb(14, 18, 26),
+                card_border: Color32::from_rgb(28, 34, 44),
+                field: Color32::from_rgb(16, 20, 28),
+                field_border: Color32::from_rgb(38, 45, 56),
+                hover: Color32::from_rgb(24, 30, 39),
+                pressed: Color32::from_rgb(32, 39, 50),
+                text: Color32::from_rgb(231, 236, 243),
+                text_dim: Color32::from_rgb(143, 153, 166),
+                text_faint: Color32::from_rgb(90, 100, 114),
+                icon: Color32::from_rgb(203, 210, 220),
+                accent: Color32::from_rgb(78, 107, 246),
+                accent_soft: Color32::from_rgba_unmultiplied(78, 107, 246, 46),
+                accent_border: Color32::from_rgba_unmultiplied(104, 134, 252, 120),
+                accent_text: Color32::from_rgb(220, 226, 255),
+                separator: Color32::from_rgb(22, 27, 36),
+                shadow: Color32::from_black_alpha(150),
+                primary_bg: Color32::from_rgb(78, 107, 246),
+                primary_text: Color32::WHITE,
+                danger: Color32::from_rgb(233, 81, 66),
+                warning: Color32::from_rgb(248, 182, 0),
+                radius_sm: 6.0,
+                radius: 8.0,
+                radius_lg: 10.0,
+                bevel: false,
+                // Photoshop-grammar layout, so the new skin only changes colours, not geometry.
+                pro: true,
+                round_chips: false,
+                tab_strip: Color32::from_rgb(8, 11, 18),
+                row_selected: Color32::from_rgb(48, 64, 105),
+                histogram_bg: Color32::from_rgb(5, 8, 15),
+                histogram_level: 235,
+                caption_close: Color32::from_rgb(196, 43, 28),
+                caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
+            },
+            // Mica: a frosty light skin in the Fluent manner — translucent pale-blue surfaces over a
+            // soft blue-grey ground, hairline cool borders, gentle shadows and the Fluent blue accent.
+            ThemeKind::Mica => Tokens {
+                kind,
+                chrome: Color32::from_rgb(234, 240, 248),
+                canvas: Color32::from_rgb(242, 245, 250),
+                canvas_dot: Color32::from_rgb(220, 228, 240),
+                dock: Color32::from_rgb(231, 238, 248),
+                card: Color32::from_rgba_unmultiplied(250, 252, 255, 248),
+                card_border: Color32::from_rgb(211, 221, 235),
+                field: Color32::WHITE,
+                field_border: Color32::from_rgb(195, 207, 224),
+                hover: Color32::from_rgb(226, 235, 247),
+                pressed: Color32::from_rgb(212, 224, 240),
+                text: Color32::from_rgb(22, 32, 46),
+                text_dim: Color32::from_rgb(70, 85, 105),
+                text_faint: Color32::from_rgb(113, 128, 143),
+                icon: Color32::from_rgb(38, 48, 61),
+                accent: Color32::from_rgb(15, 108, 189),
+                accent_soft: Color32::from_rgba_unmultiplied(15, 108, 189, 36),
+                accent_border: Color32::from_rgba_unmultiplied(15, 108, 189, 110),
+                accent_text: Color32::from_rgb(11, 78, 138),
+                separator: Color32::from_rgb(222, 230, 241),
+                shadow: Color32::from_black_alpha(36),
+                primary_bg: Color32::from_rgb(15, 108, 189),
+                primary_text: Color32::WHITE,
+                danger: Color32::from_rgb(196, 43, 28),
+                warning: Color32::from_rgb(138, 90, 0),
+                radius_sm: 8.0,
+                radius: 12.0,
+                radius_lg: 16.0,
+                bevel: false,
+                // Photoshop-grammar layout: the skin changes colours and corners, not the panels.
+                pro: true,
+                round_chips: false,
+                tab_strip: Color32::from_rgb(227, 234, 244),
+                row_selected: Color32::from_rgb(214, 226, 245),
+                histogram_bg: Color32::from_rgb(22, 32, 46),
+                histogram_level: 240,
+                caption_close: Color32::from_rgb(196, 43, 28),
+                caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(80),
             },
             ThemeKind::Studio => Tokens {
                 kind,

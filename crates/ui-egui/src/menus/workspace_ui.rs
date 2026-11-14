@@ -64,6 +64,9 @@ fn saved_name(app: &PhotocraftApp, id: &str) -> Option<String> {
     app.session.prefs().workspaces.keys().nth(i).cloned()
 }
 
+/// Skins offered at the end of the workspace switcher: colours only, no layout change.
+const SKINS: [crate::theme::ThemeKind; 2] = [crate::theme::ThemeKind::Nebula, crate::theme::ThemeKind::Mica];
+
 /// The top-bar workspace switcher's options as (key, label): the presets, then saved workspaces.
 pub fn switcher_options(app: &PhotocraftApp) -> Vec<(String, String)> {
     // Keys stay English (`apply_workspace` matches them); the dropdown shows the preset labels
@@ -77,6 +80,15 @@ pub fn switcher_options(app: &PhotocraftApp) -> Vec<(String, String)> {
         ("Motion", tl!("Motion")),
     ];
     let mut opts: Vec<(String, String)> = presets.iter().map(|(k, l)| ((*k).to_string(), (*l).to_string())).collect();
+    // Skin entries recolour the interface only (`ThemeKind::from_skin_key`); the layout stays put.
+    for kind in SKINS {
+        let name = match kind {
+            crate::theme::ThemeKind::Nebula => tl!("Nebula"),
+            crate::theme::ThemeKind::Mica => tl!("Mica"),
+            _ => kind.label(),
+        };
+        opts.push((format!("{}{}", crate::theme::SKIN_PREFIX, kind.id()), format!("{} · {}", name, tl!("Skin"))));
+    }
     opts.extend(saved_names(app).into_iter().map(|n| (n.clone(), n)));
     opts
 }
@@ -687,7 +699,9 @@ mod tests {
         }
         // The top-bar switcher lists them after the presets.
         let keys: Vec<String> = switcher_options(&app).into_iter().map(|(k, _)| k).collect();
-        assert_eq!(keys[6..], ["Comp", "Retouch"]);
+        // The office skins follow the six presets; saved workspaces come after them.
+        assert_eq!(keys[6..8], ["skin:nebula", "skin:mica"]);
+        assert_eq!(keys[8..], ["Comp", "Retouch"]);
         assert!(keys.contains(&app.ui.workspace));
     }
 

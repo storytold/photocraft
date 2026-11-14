@@ -194,7 +194,7 @@ pub fn quick_export_layer_png(app: &mut PhotocraftApp, layer: photocraft_doc::La
 }
 
 /// Export each selected layer separately, with one destination prompt for the batch.
-/// The chosen path names the first file; subsequent files have numbered sibling names.
+/// The chosen path decides the folder and the format; every file is named after its layer.
 pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value, String> {
     let st = app.session.active().ok_or("no document")?;
     let layers = st.selected_layers();
@@ -208,7 +208,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
     // is open cannot change which layers get exported.
     let docs: Vec<_> =
         layers.into_iter().map(|id| photocraft_engine::layer_menu_cmds::layer_document(&st.doc, id).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
-    let suggested = format!("{}.png", export_name(&st.doc.name));
+    let suggested = format!("{}.png", export_name(&docs[0].name));
     app.pick_export(&suggested, move |app, path| {
         if !path.to_ascii_lowercase().ends_with(".png") {
             return Err("Quick Export as PNG writes .png files".into());
@@ -236,36 +236,42 @@ fn export_name(name: &str) -> String {
     if name.is_empty() { "layer".into() } else { name.into() }
 }
 
-/// The files a multi-layer export writes: the chosen path, then numbered siblings named after
-/// each layer, in the chosen path's format.
+/// The files a multi-layer export writes: one file per layer, named after the layer — an
+/// artboard exports under the name its board carries — in the chosen folder and format.
+/// The chosen path supplies the folder and the extension only; a name two layers would share,
+/// or one an entry already occupies, is numbered from `-2` on.
 fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
-    let first = std::path::Path::new(path);
-    let parent = first.parent().unwrap_or_else(|| std::path::Path::new(""));
-    let stem = first.file_stem().and_then(|s| s.to_str()).unwrap_or("layers");
-    let ext = first.extension().and_then(|e| e.to_str()).unwrap_or("png");
+    let chosen = std::path::Path::new(path);
+    let parent = chosen.parent().unwrap_or_else(|| std::path::Path::new(""));
+    let ext = chosen.extension().and_then(|e| e.to_str()).unwrap_or("png");
+    let mut taken: Vec<String> = Vec::new();
     docs.iter()
-        .enumerate()
-        .map(|(i, doc)| {
-            if i == 0 {
-                return path.to_string();
-            }
-            let name = export_name(&doc.name);
-            let candidate = parent.join(format!("{stem}-{}-{name}.{ext}", i + 1));
-            // The first file's overwrite is handled by the Save dialog; never overwrite sibling
-            // files silently on desktop. Downloads on the web are named by the browser.
-            #[cfg(not(target_arch = "wasm32"))]
-            let candidate = {
-                let mut candidate = candidate;
-                let mut suffix = 1u64;
+        .map(|doc| {
+            let base = export_name(&doc.name);
+            let mut name = base.clone();
+            let mut suffix = 1u64;
+            loop {
+                let candidate = parent.join(format!("{name}.{ext}"));
                 // A name any entry occupies is taken, a symlink (even a dangling one) included: the writer
-                // follows links, so one planted here would redirect the export.
-                while candidate.symlink_metadata().is_ok() {
-                    candidate = parent.join(format!("{stem}-{}-{name}-{suffix}.{ext}", i + 1));
-                    suffix = suffix.saturating_add(1);
+                // follows links, so one planted here would redirect the export. Downloads on the web
+                // are named by the browser.
+                let free = !taken.iter().any(|t| t.eq_ignore_ascii_case(&name)) && {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        candidate.symlink_metadata().is_err()
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        true
+                    }
+                };
+                if free {
+                    taken.push(name);
+                    return candidate.to_string_lossy().into_owned();
                 }
-                candidate
-            };
-            candidate.to_string_lossy().into_owned()
+                suffix = suffix.saturating_add(1);
+                name = format!("{base}-{suffix}");
+            }
         })
         .collect()
 }
@@ -1103,8 +1109,9 @@ pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
 }
 
 /// [`confirm`] for several layers: one destination prompt, then each layer exported with the
-/// dialog's settings and named as Quick Export names a selection's files. The layers are captured
-/// when asked, so changing the selection or document meanwhile can't change what is exported.
+/// dialog's settings under its own name (an artboard's, say — `1.jpg`, `2.jpg`). The layers are
+/// captured when asked, so changing the selection or document meanwhile can't change what is
+/// exported.
 fn confirm_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[photocraft_doc::LayerId]) -> Result<Value, String> {
     let st = app.session.active().ok_or("no document")?;
     let source_profile = effective_source_profile(app, &st.doc);
@@ -1113,8 +1120,7 @@ fn confirm_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[photoc
     if docs.is_empty() {
         return Err("no selected layers".into());
     }
-    let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a);
-    let suggested = format!("{}.{}", export_name(stem), s_fmt(f));
+    let suggested = format!("{}.{}", export_name(&docs[0].name), s_fmt(f));
     let (f, settings) = (f.clone(), settings(f));
     app.pick_export(&suggested, move |app, path| {
         let mut exported = Vec::new();
@@ -1188,7 +1194,7 @@ mod batch_name_tests {
         let dir = std::env::temp_dir().join(format!("pc-batch-names-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // Dangling: `exists()` follows it and reports the name free; the writer would follow it too.
-        let planted = dir.join("x-2-a.png");
+        let planted = dir.join("a-2.png");
         let _ = std::fs::remove_file(&planted);
         std::os::unix::fs::symlink(dir.join("victim"), &planted).unwrap();
         let doc = Document::new("a", Size::new(2, 2), ColorMode::Rgb, SampleType::U8);

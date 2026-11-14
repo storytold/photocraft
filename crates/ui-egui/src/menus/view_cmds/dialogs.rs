@@ -488,7 +488,12 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         }
         "file.export.layerCompsToFiles" | "file.export.artboardsToFiles" => {
             let (_, _, name) = doc?;
-            let prefix = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
+            // Artboards are written under their own names, so the prefix starts empty for them.
+            let prefix = if id == "file.export.artboardsToFiles" {
+                String::new()
+            } else {
+                name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string()
+            };
             let fields = if id == "file.export.layerCompsToFiles" {
                 json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "selectedOnly": false,
                     "__order": ["dir", "prefix", "selectedOnly", "format", "quality"]})

@@ -84,6 +84,8 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.adwaitaDark", "Adwaita", &["Window", "Theme", "Dark Theme"], None),
     ("window.theme.breezeDark", "Breeze", &["Window", "Theme", "Dark Theme"], None),
     ("window.theme.softDark", "Soft", &["Window", "Theme", "Dark Theme"], None),
+    ("window.theme.nebula", "Nebula", &["Window", "Theme", "Dark Theme"], None),
+    ("window.theme.mica", "Mica", &["Window", "Theme", "Light Theme"], None),
     ("window.theme.proLightGray", "Pro Light Gray", &["Window", "Theme", "Light Theme"], None),
     ("window.theme.proLight", "Pro Light", &["Window", "Theme", "Light Theme"], None),
     ("window.theme.studioLight", "Studio", &["Window", "Theme", "Light Theme"], None),
