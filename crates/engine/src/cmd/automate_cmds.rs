@@ -546,9 +546,6 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     let cols = f("columns", 5.0).round().clamp(1.0, 100.0) as u32;
     let rows = f("rows", 6.0).round().clamp(1.0, 100.0) as u32;
     let auto = p.get("autoSpacing").and_then(Value::as_bool).unwrap_or(true);
-    let gap = (f64::from(pw.min(ph)) * 0.014).max(2.0);
-    let hs = if auto { gap } else { p.get("horizontal").and_then(Value::as_f64).map_or(gap, |v| units_px(v, unit, res)) };
-    let vs = if auto { gap } else { p.get("vertical").and_then(Value::as_f64).map_or(gap, |v| units_px(v, unit, res)) };
     let across = p.get("placeAcrossFirst").and_then(Value::as_bool).unwrap_or(true);
     let rotate = p.get("rotateForBestFit").and_then(Value::as_bool).unwrap_or(false);
     let caption = p.get("caption").and_then(Value::as_bool).unwrap_or(true);
@@ -557,10 +554,27 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     let flatten = p.get("flatten").and_then(Value::as_bool).unwrap_or(false);
     let mode = p.get("mode").and_then(Value::as_str).unwrap_or("rgb").to_string();
     let depth = crate::commands::int(p, "depth").unwrap_or(8);
-    let caption_px = if caption { font_pt * res / 72.0 * 1.5 } else { 0.0 };
-    let cell_w = ((f64::from(pw) - f64::from(cols + 1) * hs) / f64::from(cols)).max(1.0);
-    let cell_h = ((f64::from(ph) - f64::from(rows + 1) * vs) / f64::from(rows)).max(1.0);
-    let box_h = (cell_h - caption_px).max(1.0);
+    let caption_px = if caption { font_pt * res / 72.0 * 1.1 } else { 0.0 };
+    // Cells split the page with no outer margin, in whole points: the reference's 2400 px / 5 columns
+    // at 300 ppi (115.2 pt) is measured as a 479 px (115 pt) pitch (#13699). Exact cells are used
+    // when whole points would drift the last image box's centre out of its exact page / n cell; the
+    // box is centred in the cell above `below` (the caption strip).
+    let pt = res / 72.0;
+    let cell = |len: u32, n: u32, below: f64| {
+        let exact = f64::from(len) / f64::from(n);
+        let whole = (exact / pt + 1e-6).floor() * pt;
+        (if f64::from(n - 1) * (exact - whole) < (whole - below) / 2.0 { whole } else { exact }).max(1.0)
+    };
+    let (cell_w, cell_h) = (cell(pw, cols, 0.0), cell(ph, rows, caption_px));
+    // Each image box is inset by half the spacing on every side; auto-spacing uses 1 % of the shorter cell side.
+    let auto_inset = cell_w.min(cell_h) * 0.01;
+    let inset = |key: &str, cell: f64| {
+        let manual = if auto { None } else { p.get(key).and_then(Value::as_f64).map(|v| units_px(v, unit, res) / 2.0) };
+        manual.unwrap_or(auto_inset).clamp(0.0, (cell - 1.0) / 2.0)
+    };
+    let (ix, iy) = (inset("horizontal", cell_w), inset("vertical", cell_h));
+    let box_w = (cell_w - 2.0 * ix).max(1.0);
+    let box_h = (cell_h - 2.0 * iy - caption_px).max(1.0);
     let per_page = (cols * rows) as usize;
     let mut docs = Vec::new();
     let mut placed = 0usize;
@@ -577,25 +591,25 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
         for (k, path) in chunk.iter().enumerate() {
             let k = k as u32;
             let (c, r) = if across { (k % cols, k / cols) } else { (k / rows, k % rows) };
-            let x0 = hs + f64::from(c) * (cell_w + hs);
-            let y0 = vs + f64::from(r) * (cell_h + vs);
+            let x0 = f64::from(c) * cell_w + ix;
+            let y0 = f64::from(r) * cell_h + iy;
             let thumb = (|| -> Result<photocraft_doc::Surface> {
                 let bytes = read_file(path)?;
                 let src = import(&file_name(path), &bytes)?;
                 let mut t = Session::new();
                 t.add_document(src, None);
                 let (w, h) = t.active().map(|d| (f64::from(d.doc.size.width), f64::from(d.doc.size.height))).unwrap_or((1.0, 1.0));
-                let fit = |w: f64, h: f64| (cell_w / w).min(box_h / h);
+                let fit = |w: f64, h: f64| (box_w / w).min(box_h / h);
                 if rotate && fit(h, w) > fit(w, h) * 1.001 {
                     t.execute("image.imageRotation.90cw", json!({}))?;
                 }
                 let (w, h) = t.active().map(|d| (f64::from(d.doc.size.width), f64::from(d.doc.size.height))).unwrap_or((1.0, 1.0));
                 let k = fit(w, h);
-                let (tw, th) = ((w * k).round().max(1.0), (h * k).round().max(1.0));
+                let (tw, th) = ((w * k).round().min(box_w.floor()).max(1.0), (h * k).round().min(box_h.floor()).max(1.0));
                 t.execute("image.imageSize", json!({"width": tw, "height": th, "resample": "bicubic"}))?;
                 let d = &t.active().ok_or(EngineError::NoDocument)?.doc;
                 let buf = photocraft_compose::flatten(d);
-                let ox = (x0 + (cell_w - tw) / 2.0).round() as i32;
+                let ox = (x0 + (box_w - tw) / 2.0).round() as i32;
                 let oy = (y0 + (box_h - th) / 2.0).round() as i32;
                 let n = fmt.channels();
                 let mut data = vec![0.0f32; buf.px.len() * n];
@@ -614,17 +628,31 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             };
             let label = stem(path);
-            s.edit("Contact Sheet", |doc, active| {
+            let id = s.edit("Contact Sheet", |doc, active| {
                 let l = Layer::new(label.clone(), LayerContent::Raster(surf));
                 *active = Some(l.id);
+                let id = l.id;
                 doc.layers.push(l);
-                Ok(())
+                Ok(id)
             })?;
+            if !flatten {
+                // The reference masks each image to its cell with a lasso around it (#13701). The cell
+                // stops above the caption band; the inset thumbnail always lies inside it.
+                let (cx0, cy0) = ((f64::from(c) * cell_w).round(), (f64::from(r) * cell_h).round());
+                let (cx1, cy1) = ((f64::from(c + 1) * cell_w).round(), (y0 + box_h).round());
+                if cx0 >= f64::from(pw) || cy0 >= f64::from(ph) {
+                    // A cell past the page edge (many 1 px cells) would leave no selection to reveal.
+                    s.execute("layer.layerMask.hideAll", json!({"layer": id.0}))?;
+                } else {
+                    s.execute("select.lasso", json!({"points": [[cx0, cy0], [cx1, cy0], [cx1, cy1], [cx0, cy1]], "antiAlias": false}))?;
+                    s.execute("layer.layerMask.revealSelection", json!({"layer": id.0}))?;
+                }
+            }
             placed += 1;
             if caption {
                 let size_pt = font_pt;
-                let baseline = y0 + box_h + caption_px * 0.72;
-                s.execute("type.create", json!({"x": x0 + cell_w / 2.0, "y": baseline, "text": label, "font": font, "size": size_pt, "align": "center", "color": [0.0, 0.0, 0.0], "name": label}))?;
+                let baseline = y0 + box_h + caption_px * 0.75;
+                s.execute("type.create", json!({"x": x0 + box_w / 2.0, "y": baseline, "text": label, "font": font, "size": size_pt, "align": "center", "color": [0.0, 0.0, 0.0], "name": label}))?;
             }
         }
         if flatten {
@@ -701,3 +729,11 @@ mod tests;
 #[cfg(test)]
 #[path = "automate_cmds/contact_sheet_subfolders_tests.rs"]
 mod contact_sheet_subfolders_tests;
+
+#[cfg(test)]
+#[path = "automate_cmds/contact_sheet_geometry_tests.rs"]
+mod contact_sheet_geometry_tests;
+
+#[cfg(test)]
+#[path = "automate_cmds/contact_sheet_masks_tests.rs"]
+mod contact_sheet_masks_tests;
