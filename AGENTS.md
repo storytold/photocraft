@@ -159,6 +159,8 @@ cargo xtask perf --quick    # if you touched a hot path; `cargo xtask perf --upd
 cargo xtask test-corpus     # if you touched psd, io, codecs, compose, gpu, text or format (or: --changed decides)
 ```
 
+For new or changed heavy operations, record release timings on a 24–36 MP image (before/after where applicable) in the dev log (Rule 8), and include a short summary in the PR description.
+
 While iterating, run less and keep the full commands above as the final gate: `cargo test -p <crate> --lib --tests` skips the examples and doctests plain `cargo test` builds every time (ui-egui has 11 examples), and `cargo test -p <crate> --test <file>` runs one integration-test file. `cargo nextest run` runs tests in parallel across binaries; see `docs/development.md` › Faster test loops.
 
 **MCP in tests and agent sessions: `photocraft-cli mcp --headless`.** Plain `photocraft-cli mcp` works in the open PhotoCraft window while the ArtCraft Launcher's agents switch is on, and then may start PhotoCraft on the developer's machine when it is closed. Scripts, tests and agents that want a session without a window pass `--headless` (or use `photocraft-cli serve`); a test that runs the CLI also gives it its own settings, launcher and flags folders (`PHOTOCRAFT_CONFIG_DIR`, `CRAFT_MCP_DIR`, `CRAFT_FLAGS_FILE`, as `crate::command()` in `apps/photocraft-cli/tests/it/main.rs` does). To drive the running app on purpose, use `--control` (`docs/development.md`).
