@@ -19,6 +19,16 @@ pub struct ToolOptions {
     /// collect as a tint on the canvas and ↩ applies them together (Esc drops them).
     pub remove_after_each_stroke: bool,
     pub feather: f32,
+    /// Lasso freehand stabilising, 0..100 %. A PhotoCraft addition: Photoshop's Lasso has no
+    /// smoothing, so 0 (off) is the parity default.
+    pub lasso_smoothing: f32,
+    /// The Lasso's Pulled String Mode (the brush's Smoothing Options): the outline moves only
+    /// once the pointer pulls a string of `lasso_smoothing` % × 100 px taut. Off by default, as
+    /// for the brush.
+    pub lasso_pulled_string: bool,
+    /// The Lasso's Adjust for Zoom (the brush's Smoothing Options): the pulled string keeps its
+    /// size on screen by dividing it by the view zoom. On by default, as for the brush.
+    pub lasso_adjust_for_zoom: bool,
     /// linear | radial | angle | reflected | diamond
     pub gradient_style: String,
     pub gradient_reverse: bool,
@@ -481,6 +491,9 @@ impl Default for ToolOptions {
             remove_new_layer: false,
             remove_after_each_stroke: true,
             feather: 0.0,
+            lasso_smoothing: 0.0,
+            lasso_pulled_string: false,
+            lasso_adjust_for_zoom: true,
             gradient_style: "linear".into(),
             gradient_reverse: false,
             gradient_dither: true,

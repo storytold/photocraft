@@ -1299,6 +1299,7 @@ fn remembered_tool_options_are_clamped_to_their_fields() {
         "feather": 1e30, "tolerance": -5.0, "polygon_sides": 0, "eyedropper_size": 7,
         "crop_overlay_orientation": 9, "fill_opacity": 0.0, "magnetic_width": 1e9,
         "pattern_stamp_angle": -720.0, "marquee_width": 1e7, "shape_stroke": {"miter_limit": -1.0, "opacity": 5.0},
+        "lasso_smoothing": 1e9,
     }});
     let (mut app, _) = app_with_saved(Some(hostile.to_string()));
     tick(&mut app, &ctx);
@@ -1307,6 +1308,7 @@ fn remembered_tool_options_are_clamped_to_their_fields() {
     assert_eq!((o.feather, o.tolerance, o.polygon_sides, o.eyedropper_size), (1000.0, 0.0, 3, d.eyedropper_size));
     assert_eq!((o.crop_overlay_orientation, o.fill_opacity, o.magnetic_width), (d.crop_overlay_orientation, 1.0, 256.0));
     assert_eq!((o.pattern_stamp_angle, o.marquee_width), (-180.0, 999.0));
+    assert_eq!(o.lasso_smoothing, 100.0, "1e9 % is clamped to the field's 100 % maximum");
     assert_eq!(o.shape_stroke, d.shape_stroke, "an invalid stroke style takes the default");
     // A good value is left alone, and in-range defaults never change (nothing to save).
     let (mut app2, _) = app_with_saved(Some(json!({"toolOptions": {"feather": 12.5}}).to_string()));
