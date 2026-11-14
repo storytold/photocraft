@@ -14,9 +14,9 @@ craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3",
 # Feature flags shared with the launcher and the other Craft apps (craft-libs#1118, #1119).
 craft-flags = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 # The ArtCraft Launcher's agents switch and app list, shared with the launcher, the MCP gateway and
-# every Craft app (storytold/craft-ai-integrations#195). Pinned to the head of
-# storytold/craft-ai-integrations#197 until it merges.
-craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "35e0352666a117407d62230a6c6c2366f3e21a3b" }
+# every Craft app (storytold/craft-ai-integrations#195). Pinned to the merge commit of
+# storytold/craft-ai-integrations#197.
+craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "0d76ea02a06299a5a6eee1993863fbcafe9c2cc3" }
 # internal
 photocraft-geom = { path = "crates/geom" }
 photocraft-color = { path = "crates/color" }
