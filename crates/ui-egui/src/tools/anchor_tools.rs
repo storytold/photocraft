@@ -264,7 +264,13 @@ fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
             return;
         }
         if apply(app, r, hit, p) {
+            // A press that began a join drag (#12766) keeps its drag: only the selection is replaced.
+            let join = app.ui.direct_selection.drag.take().zip(app.ui.direct_selection.coalesce.take());
             select_follower(app, r, &path, [s, k]);
+            if let Some((drag, coalesce)) = join {
+                app.ui.direct_selection.drag = Some(drag);
+                app.ui.direct_selection.coalesce = Some(coalesce);
+            }
         }
         return;
     }
@@ -330,10 +336,22 @@ fn edit_pen(app: &mut PhotocraftApp, mut path: Path, hit: Hit, p: [f64; 2]) {
 /// Whether the engine ran the edit: not at a full History (it records a step and evicts the oldest, so
 /// the step count does not change), nor when a live-shape prompt or an error stopped it.
 fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) -> bool {
+    // Delete Anchor Point: a drag from the anchor bends the join (#12766), in the deletion's step.
+    let deleted = match hit {
+        Hit::Anchor(k) if app.ui.tool == Tool::DeleteAnchorPoint => {
+            let before = crate::direct_select::candidates(app).into_iter().find(|(c, _)| *c == r).map(|(_, path)| path);
+            before.and_then(|path| edit::join_knot(&path, k))
+        }
+        _ => None,
+    };
     let (id, mut params, coalesce) = match hit {
         Hit::Segment([s, k], t) => {
             let key = format!("add-anchor-{}", app.ui.alloc_id());
             ("path.addAnchor", serde_json::json!({"subpath": s, "knot": k, "t": t, "coalesce": key}), Some(key))
+        }
+        Hit::Anchor([s, k]) if deleted.is_some() => {
+            let key = format!("delete-anchor-{}", app.ui.alloc_id());
+            ("path.deleteAnchor", serde_json::json!({"subpath": s, "knot": k, "coalesce": key}), Some(key))
         }
         Hit::Anchor([s, k]) => ("path.deleteAnchor", serde_json::json!({"subpath": s, "knot": k}), None),
         Hit::Handle(..) => return false,
@@ -349,6 +367,7 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) -> bool {
     let ran = app.run(id, params);
     let ok = ran.is_ok();
     match ran {
+        Ok(_) if deleted.is_some() => grab_deleted_join(app, r, deleted, p, coalesce),
         Ok(v) if coalesce.is_some() => {
             let n = |f: &str| v["anchor"][f].as_u64().and_then(|v| usize::try_from(v).ok());
             let base = crate::direct_select::candidates(app).into_iter().find(|(c, _)| *c == r).map(|(_, path)| path);
@@ -366,6 +385,19 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) -> bool {
         }
     }
     ok
+}
+
+/// After a Delete Anchor Point press (`path.deleteAnchor` under `coalesce`): a drag from `p` bends the
+/// join of the deleted anchor's neighbours, `knot` the one it leaves. Only a straight join between plain
+/// corners bends; anything else, as a click does, is left as the press made it.
+fn grab_deleted_join(app: &mut PhotocraftApp, r: PathRef, knot: Option<[usize; 2]>, p: [f64; 2], coalesce: Option<String>) {
+    let base = crate::direct_select::candidates(app).into_iter().find(|(c, _)| *c == r).map(|(_, path)| path);
+    let at = Point::new(p[0], p[1]);
+    match (knot, base, coalesce) {
+        (Some(k), Some(base), Some(key)) if edit::bend_join(&mut base.clone(), k, at, at).is_ok() => crate::direct_select::grab_join(app, r, base, k, p, key),
+        _ if app.ui.direct_selection.target.as_ref() == Some(&r) => app.ui.direct_selection = DirectSelection { target: Some(r), ..Default::default() },
+        _ => {}
+    }
 }
 
 /// The hover feedback over the Direct Selection overlay: Add highlights the segment under the
@@ -412,6 +444,8 @@ mod add_anchor_lock_tests;
 mod add_anchor_targeted_path_tests;
 #[cfg(test)]
 mod delete_anchor_drag_segment_tests;
+#[cfg(test)]
+mod delete_anchor_drag_tests;
 #[cfg(test)]
 mod delete_anchor_live_shape_tests;
 #[cfg(test)]

@@ -20,7 +20,7 @@ use crate::vector_cmds::{bad, has_doc, layer_id, nums, path_json, path_mut, pt, 
 use crate::{Result, Session};
 
 /// Coordinates and offsets beyond this are mistakes (the same bound as `path.transform`).
-const MAX: f64 = 1_000_000.0;
+pub const MAX: f64 = 1_000_000.0;
 
 fn finite(v: [f64; 2]) -> bool {
     v.iter().all(|c| c.is_finite() && c.abs() <= MAX)
