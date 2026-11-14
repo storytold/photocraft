@@ -134,7 +134,8 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let enhance = b(p, "enhanceEdge", false);
     let region = with_quick_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| {
         let canvas = doc.bounds();
-        let Some(r) = quick::quick_select(smp, canvas, &pts, size) else { return Ok(None) };
+        // Transparency is an edge for the cut (#12921); Enhance Edge reads the pixels as before.
+        let Some(r) = quick::quick_select(&quick::CutSampler(smp), canvas, &pts, size) else { return Ok(None) };
         let surface = matting::region_surface(&r);
         if enhance { matting::refine_surface(smp, &surface, canvas, &ENHANCE, None).map_err(|e| EngineError::Other(e.to_string())) } else { Ok(Some(surface)) }
     })??;
