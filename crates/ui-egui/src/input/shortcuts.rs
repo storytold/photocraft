@@ -6,6 +6,10 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
+#[cfg(test)]
+#[path = "shortcut_modifier_order_tests.rs"]
+mod shortcut_modifier_order_tests;
+
 /// Parse `Cmd+Shift+N` style strings. `Cmd` maps to ⌘ on macOS and Ctrl elsewhere.
 pub fn parse(s: &str) -> Option<KeyboardShortcut> {
     // A trailing '+' names the Plus key (both "Cmd+" and "Cmd++" are accepted).
@@ -58,6 +62,15 @@ pub fn pretty(s: &str) -> String {
             parts.pop();
         }
         parts.push("+");
+    }
+    if !mac && parts.len() > 1 {
+        let modifier_count = parts.len() - 1;
+        parts[..modifier_count].sort_by_key(|part| match *part {
+            "Alt" => 0,
+            "Shift" => 1,
+            "Cmd" | "Ctrl" => 2,
+            _ => 3,
+        });
     }
     parts
         .into_iter()
