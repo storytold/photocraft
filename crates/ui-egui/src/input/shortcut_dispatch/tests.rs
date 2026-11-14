@@ -1301,3 +1301,34 @@ fn alt_choosing_an_adjustment_from_the_menu_reopens_the_last_settings() {
     choose(&mut h, Modifiers::ALT);
     assert_eq!(crate::palette::recent_ids(&h.ctx).first().map(String::as_str), Some("image.adjustments.levels"), "Edit › Search's most recent");
 }
+
+/// An RGB document with Use Legacy Channel Shortcuts on (#14325), and the bindings it leaves.
+fn legacy_channel_app(set: serde_json::Value) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("edit.keyboardShortcuts", json!({"set": set})).unwrap();
+    app.session.edit_prefs(|p| p.use_legacy_channel_shortcuts = true);
+    app
+}
+
+fn bound(app: &PhotocraftApp, id: &str, key: &str) -> bool {
+    bindings(app).iter().any(|(i, sc)| i == id && *sc == parse(key).unwrap())
+}
+
+/// CodeRabbit on #14859: the legacy keys replace only the default ⌘-digit keys. A key the user
+/// assigned to one of those commands stays that command's.
+#[test]
+fn legacy_channel_keys_keep_an_explicit_assignment_to_a_channel_command() {
+    let app = legacy_channel_app(json!({"channel.target.slot3": "Cmd+7"}));
+    assert!(bound(&app, "channel.target.slot3", "Cmd+7"), "the user's Cmd+7 stays with slot 3");
+    assert!(!bound(&app, "channel.target.slot9", "Cmd+7"), "and the legacy table doesn't take it");
+}
+
+/// CodeRabbit on #14859: a key the user removed from a channel command is not given back by the
+/// legacy table.
+#[test]
+fn legacy_channel_keys_do_not_restore_a_shortcut_the_user_removed() {
+    let app = legacy_channel_app(json!({"channel.target.slot3": ""}));
+    assert!(!bound(&app, "channel.target.slot3", "Cmd+1"), "slot 3 stays without a key");
+    assert!(bound(&app, "channel.target.slot4", "Cmd+2"), "the other legacy keys still apply");
+}

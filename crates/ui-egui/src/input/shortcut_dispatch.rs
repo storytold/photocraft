@@ -141,9 +141,19 @@ fn legacy_channel_keys(app: &PhotocraftApp, all: &mut Vec<(String, KeyboardShort
     if !app.session.prefs().use_legacy_channel_shortcuts || !rgb {
         return;
     }
+    let prefs = app.session.prefs();
+    // A key the user gave the command (main or further) is theirs, not a default the table replaces.
+    let explicit = |id: &str, sc: &KeyboardShortcut| {
+        prefs.shortcuts.get(id).and_then(|k| parse(k)).is_some_and(|k| k == *sc)
+            || prefs.alternate_shortcuts.get(id).is_some_and(|keys| keys.iter().any(|k| parse(k).is_some_and(|k| k == *sc)))
+    };
     let digits: Vec<KeyboardShortcut> = (1..=9).filter_map(|n| parse(&format!("Cmd+{n}"))).collect();
-    all.retain(|(id, sc)| !(replaced_by_legacy_channel_keys(id) && digits.contains(sc)));
+    all.retain(|(id, sc)| !(replaced_by_legacy_channel_keys(id) && digits.contains(sc) && !explicit(id, sc)));
     for (key, id) in LEGACY_CHANNEL_SHORTCUTS {
+        // A command the user left without a key stays without one.
+        if prefs.shortcuts.get(*id).is_some_and(String::is_empty) {
+            continue;
+        }
         if let Some(sc) = parse(key).filter(|sc| !all.iter().any(|(_, b)| b == sc)) {
             all.push((id.to_string(), sc));
         }
