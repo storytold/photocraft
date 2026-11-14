@@ -747,15 +747,15 @@ fn desktop_mode_changes_never_read_a_working_space_file() {
     // the document would come out tagged with this profile.
     let outside = std::env::temp_dir().join(format!("photocraft-desktop-mode-{}", std::process::id()));
     std::fs::create_dir_all(&outside).unwrap();
-    let icc = |name: &str, builtin: photocraft_cms::Builtin| {
+    let icc = |name: &str, builtin: craft_cms::Builtin| {
         let path = outside.join(name);
         std::fs::write(&path, builtin.profile().to_bytes().as_slice()).unwrap();
         path.to_string_lossy().into_owned()
     };
     let mut session = photocraft_engine::Session::new();
-    session.color.settings.working_rgb = icc("rgb.icc", photocraft_cms::Builtin::ProPhotoCompat);
-    session.color.settings.working_gray = icc("gray.icc", photocraft_cms::Builtin::GrayGamma22);
-    session.color.settings.working_cmyk = icc("cmyk.icc", photocraft_cms::Builtin::CoatedCmyk);
+    session.color.settings.working_rgb = icc("rgb.icc", craft_cms::Builtin::ProPhotoCompat);
+    session.color.settings.working_gray = icc("gray.icc", craft_cms::Builtin::GrayGamma22);
+    session.color.settings.working_cmyk = icc("cmyk.icc", craft_cms::Builtin::CoatedCmyk);
     session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "profile": "srgb"})).unwrap();
     session.authorize = Some(authorize_desktop_engine_step);
     let mode = |session: &photocraft_engine::Session| session.active().unwrap().doc.mode;
@@ -781,14 +781,14 @@ fn desktop_mode_changes_never_read_a_working_space_file() {
     session.execute("image.mode.bitmap", serde_json::json!({"method": "halftone", "frequency": 45, "angle": 22.5, "shape": "ellipse"})).unwrap();
     session.execute("image.mode.grayscale", serde_json::json!({"profile": "sgray"})).unwrap();
     let rgb = session.execute("image.mode.rgb", serde_json::json!({"profile": "adobe-rgb-compat"})).unwrap();
-    assert_eq!(rgb["profile"], photocraft_cms::Builtin::AdobeRgbCompat.description());
+    assert_eq!(rgb["profile"], craft_cms::Builtin::AdobeRgbCompat.description());
     assert_eq!(mode(&session), photocraft_engine::doc::ColorMode::Rgb);
     // Lab has no working space to read.
     session.execute("image.mode.lab", serde_json::json!({})).unwrap();
     // The trusted local UI (no gate) still uses the configured working space.
     session.authorize = None;
     let gray = session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
-    assert_eq!(gray["profile"], photocraft_cms::Builtin::GrayGamma22.description());
+    assert_eq!(gray["profile"], craft_cms::Builtin::GrayGamma22.description());
     let _ = std::fs::remove_dir_all(&outside);
 }
 
@@ -804,9 +804,9 @@ fn built_in_working_spaces_convert_without_a_profile_under_the_desktop_gate() {
     session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
     session.execute("image.mode.bitmap", serde_json::json!({"method": "halftone", "frequency": 45, "angle": 22.5, "shape": "ellipse"})).unwrap();
     let gray = session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
-    assert_eq!(gray["profile"], photocraft_cms::Builtin::DotGain20Compat.description());
+    assert_eq!(gray["profile"], craft_cms::Builtin::DotGain20Compat.description());
     let rgb = session.execute("image.mode.rgb", serde_json::json!({})).unwrap();
-    assert_eq!(rgb["profile"], photocraft_cms::Builtin::AdobeRgbCompat.description());
+    assert_eq!(rgb["profile"], craft_cms::Builtin::AdobeRgbCompat.description());
 }
 
 #[test]
@@ -928,6 +928,10 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         "fileHandling.lutFolder",
         "fileHandling",
         "scratchDisks.disks",
+        "integrations",
+        "integrations.readRoot",
+        "integrations.writeRoot",
+        ".integrations.writeRoot",
         ".",
         "..historyLog.filePath",
     ] {
@@ -938,6 +942,12 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
     );
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "interface.language", "value": "fr"})).is_ok());
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "fileHandling.autosave", "value": false})).is_ok());
+    assert!(
+        authorize_engine_command("prefs.set", &serde_json::json!({"values": {"integrations.controlPort": 7878, "integrations.writeRoot": "/outside"}}))
+            .is_err(),
+        "a batch may not grant automation roots either"
+    );
+    assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "integrations.controlPort", "value": 7878})).is_ok());
 }
 
 #[test]
@@ -1137,6 +1147,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.convertPoint"
             | "path.addAnchor"
             | "path.deleteAnchor"
+            | "path.deleteSegment"
             | "path.mergeShapeComponents"
             | "path.setOperation"
             | "path.clippingPath.set"
@@ -1634,7 +1645,7 @@ fn csh_import_requires_inline_data_in_automation() {
 
 /// A one-shape CSH set (version 2) named `name`, with a single open one-knot subpath.
 fn one_shape_csh(name: &str) -> Vec<u8> {
-    use photocraft_psd::path::{PathData, PsdKnot, PsdSubpath};
+    use craft_psd::path::{PathData, PsdKnot, PsdSubpath};
     let mut bytes = b"cush".to_vec();
     bytes.extend_from_slice(&2u32.to_be_bytes());
     bytes.extend_from_slice(&1u32.to_be_bytes());

@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use photocraft_cms::{ColorSpace, TransformOptions};
+use craft_cms::{ColorSpace, TransformOptions};
 use photocraft_color::ColorMode;
 use photocraft_doc::Document;
 use photocraft_engine::color_cmds::ColorSettings;
@@ -469,6 +469,9 @@ fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<S
     if command == "edit.assignProfile" {
         assign_profile_defaults(app, fields);
     }
+    if command == super::fade_modes::COMMAND {
+        super::fade_modes::defaults(app, fields);
+    }
     if command == crate::bitmap_dialog::COMMAND {
         crate::bitmap_dialog::defaults(app, fields);
     }
@@ -693,7 +696,10 @@ fn straighten_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     if !rot.is_finite() {
         return;
     }
-    fields.insert("angle".into(), json!(rot.abs()));
+    // Rounded here, in f64, to the field's two decimals: `ui.dialog.open` then `ui.dialog.confirm`
+    // can run with no frame drawn between them, and only a drawn frame rounds (#13067).
+    let scale = 10f64.powi(wide_field_decimals("image.rotation.arbitrary", "angle").unwrap_or(2).min(6) as i32);
+    fields.insert("angle".into(), json!((rot.abs() * scale).round() / scale));
     fields.insert("direction".into(), json!(if rot < 0.0 { "ccw" } else { "cw" }));
 }
 
@@ -850,7 +856,7 @@ const PROFILE_DIALOGS: &[&str] = &["edit.assignProfile", "edit.convertToProfile"
 /// working spaces those of that space, as Photoshop lists them (#6323). An RGB working space is a
 /// display or colour-space profile, not a scanner's or a printer's.
 fn installed_filter(cmd: &str, key: &str) -> Option<fn(&InstalledProfile) -> bool> {
-    use photocraft_cms::{ColorSpace, ProfileClass};
+    use craft_cms::{ColorSpace, ProfileClass};
     match (cmd, key) {
         (c, "profile") if PROFILE_DIALOGS.contains(&c) => Some(|_| true),
         ("edit.colorSettings", "workingRgb") => {
@@ -1042,9 +1048,9 @@ fn indexed_matte_document_color(app: &PhotocraftApp, doc: &Document, color: [f32
     };
     let source = app.session.color.working(ColorMode::Rgb);
     let options = TransformOptions { intent: app.session.color.settings.intent(), bpc: app.session.color.settings.bpc, ..Default::default() };
-    let transform = photocraft_cms::transform::cached(&source, &destination, options).map_err(|e| e.to_string())?;
+    let transform = craft_cms::transform::cached(&source, &destination, options).map_err(|e| e.to_string())?;
     let mut output = [0.0; 16];
-    transform.eval(&color[..3], &mut output);
+    transform.eval(&color[..3], &mut output).map_err(|e| e.to_string())?;
     let rgb = if destination.color_space == ColorSpace::Gray { [output[0]; 3] } else { [output[0], output[1], output[2]] };
     if rgb.iter().any(|v| !v.is_finite()) {
         return Err("cannot convert matte colour to finite document samples".into());
@@ -1150,6 +1156,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             indexed_matte_row(ui, f);
             continue;
         }
+        if cmd == super::fade_modes::COMMAND && p.key == "mode" {
+            super::fade_modes::row(ui, f, &label(&p.key));
+            continue;
+        }
         if zoom_center::owns(&cmd, f) && matches!(p.key.as_str(), "centerX" | "centerY") {
             if p.key == "centerX" {
                 zoom_center::row(ui, f);
@@ -1158,7 +1168,16 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         match p.kind {
             Kind::Range { min, max, default } => {
-                let src = f.get(&p.key).and_then(Value::as_f64);
+                // The field's shown precision: small ranges keep their two decimals, and so
+                // does the Arbitrary angle; the other wide fields round to one (#12035).
+                let scale = field_scale(&cmd, &p.key, min, max);
+                let wide_decimals = wide_field_decimals(&cmd, &p.key).is_some();
+                let round64 = |x: f64| (x * f64::from(scale)).round() / f64::from(scale);
+                // A wide field showing two decimals rounds while the value is still f64, before
+                // the widget narrows it: a 43x27 ruler is 32.1249984°, whose f32 cast lands
+                // exactly on 32.125, and the field drew that half-away as 32.13 on the first
+                // frame after opening or Alt+Reset, over the 32.12 it stored (#13067).
+                let src = f.get(&p.key).and_then(Value::as_f64).map(|x| if wide_decimals { round64(x) } else { x });
                 let mut v = src.unwrap_or(default as f64) as f32;
                 // A widget edit this frame makes the field's f32 value authoritative (#12035).
                 let mut edited = false;
@@ -1209,18 +1228,15 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                                 .changed();
                     }
                 });
-                // The field's shown precision: small ranges keep their two decimals, and so
-                // does the Arbitrary angle; the other wide fields round to one (#12035).
-                let scale = field_scale(&cmd, &p.key, min, max);
-                // A field showing two decimals rounds while the value is still f64: a 43x27
-                // ruler is 32.1249984°, whose f32 cast lands exactly on 32.125, and rounding
-                // that widened value half-away shows 32.13 where the pre-fill says 32.12.
-                // Values the user typed or dragged are f32 already, so they round as before.
-                let w = match (wide_field_decimals(&cmd, &p.key), src) {
-                    (Some(_), Some(raw)) if !edited => ((raw * f64::from(scale)).round() / f64::from(scale)) as f32,
-                    _ => (v * scale).round() / scale,
+                // Such a field also keeps its rounded value as f64: stored as f32, 32.12 widens to
+                // 32.1199989 and OK sends that to the command (#13067). A value the user typed or
+                // dragged this frame is the widget's f32, so it rounds from that.
+                let w = match (wide_decimals, src) {
+                    (true, Some(rounded)) if !edited => json!(rounded),
+                    (true, _) => json!(round64(f64::from(v))),
+                    (false, _) => json!((v * scale).round() / scale),
                 };
-                f.insert(p.key, json!(w));
+                f.insert(p.key, w);
             }
             Kind::Choice { options, default } => {
                 ui.horizontal(|ui| {
