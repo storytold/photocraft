@@ -65,6 +65,7 @@ pub(crate) mod toolbar;
 pub mod type_panels_ui;
 pub(super) mod variables_ui;
 
+pub(crate) use brush_controls::brush_preset_chip;
 #[cfg(test)]
 use color::color_field_height;
 pub(crate) use color::{color_field, color_field_fill_id, field_chips, field_hsva, offer_color_field_fill, srgb_hsva};

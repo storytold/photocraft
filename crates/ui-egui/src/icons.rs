@@ -188,6 +188,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Sharpen => "triangle",
         Tool::Smudge => "pointer",
         Tool::Dodge => "lollipop",
+        Tool::AdjustmentBrush => "adjustment-layer",
         Tool::Burn => "flame",
         Tool::Sponge => "cloud",
         Tool::QuickSelection => "quick-selection",

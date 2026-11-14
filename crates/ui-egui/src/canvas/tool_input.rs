@@ -540,12 +540,19 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
             // Painting a type, shape, Smart Object or fill layer asks to rasterize it first
             // (⌥-click with the Clone Stamp or Healing Brush only sets the source).
             let sets_source = matches!(tool, Tool::CloneStamp | Tool::Healing) && mods.alt;
+            // The Adjustment Brush paints a new layer's mask whatever the active layer is (hidden,
+            // locked, a group or type): only Indexed Color refuses it (#12519).
+            let own_layer = tool == Tool::AdjustmentBrush;
+            if own_layer && crate::adjustment_brush::press_refused(app) {
+                return;
+            }
             // Painting on or moving a hidden layer is refused at the press, as in Photoshop (#571).
-            if !sets_source && press_refused(app, tool) {
+            if !sets_source && !own_layer && press_refused(app, tool) {
                 return;
             }
             // The Clone Stamp's no-source alert opens at the press, after any rasterize prompt.
             if !sets_source
+                && !own_layer
                 && (crate::rasterize_prompt::intercept(app, tool, x, y, pressure)
                     || refuse_group(app, tool)
                     || crate::retouch_ui::clone_stamp_without_source(app, tool))

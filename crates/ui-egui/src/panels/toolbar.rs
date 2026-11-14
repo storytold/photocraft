@@ -36,6 +36,7 @@ pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Eraser, Tool::BackgroundEraser, Tool::MagicEraser],
         &[Tool::Gradient, Tool::PaintBucket],
         &[Tool::Blur, Tool::Sharpen, Tool::Smudge],
+        &[Tool::AdjustmentBrush],
         &[Tool::Dodge, Tool::Burn, Tool::Sponge],
     ],
     &[
@@ -261,6 +262,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 let tip = match crate::tool_shortcuts::shortcut(app, tool) {
                                     Some(sc) => format!("{}  ({})", tl!(tool.label()), crate::shortcuts::pretty(&sc)),
                                     None => tl!(tool.label()).to_string(),
+                                };
+                                let tip = match tool.description() {
+                                    Some(d) => format!("{tip}\n{}", tl!(d)),
+                                    None => tip,
                                 };
                                 let resp = icons::button_with_icon_size_tip(ui, icons::tool_icon(tool), bx, toolbar_icon_size(bx, t.pro), sel, &tip, tool_tips);
                                 if slot.len() > 1 {

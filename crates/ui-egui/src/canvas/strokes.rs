@@ -676,6 +676,7 @@ pub(crate) fn freehand_tool(tool: Tool) -> bool {
             | Tool::Blur
             | Tool::Sharpen
             | Tool::Smudge
+            | Tool::AdjustmentBrush
             | Tool::Dodge
             | Tool::Burn
             | Tool::Sponge

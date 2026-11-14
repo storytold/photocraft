@@ -19,8 +19,7 @@ pub const NEW_LAYER_LABEL: &str = "New Adjustment Layer";
 pub const STROKE_LABEL: &str = "Adjustment Brush";
 
 /// The alert a stroke on an Indexed Color document shows; nothing changes.
-pub const INDEXED_ALERT: &str =
-    "Could not complete your request because the tool does not work with Indexed Color images. Please convert the image to RGB or another supported mode before using.";
+pub const INDEXED_ALERT: &str = "Could not complete your request because the tool does not work with Indexed Color images. Please convert the image to RGB or another supported mode before using.";
 
 /// One entry of the options bar's Adjustment dropdown: the kind id (the `layer.newAdjustmentLayer`
 /// suffix for the kinds that exist), its label, and whether a separator follows it.
@@ -204,8 +203,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let zoom = q.get("zoom").and_then(Value::as_f64).filter(|z| z.is_finite() && *z > 0.0).unwrap_or(1.0) as f32;
 
     // An adjustment layer of this kind with a mask is active: paint into its mask.
-    let paints_active = active_kind(s) == Some(kind)
-        && s.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))).is_some_and(|l| l.mask.is_some());
+    let paints_active =
+        active_kind(s) == Some(kind) && s.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))).is_some_and(|l| l.mask.is_some());
     let result = if paints_active {
         let mut r = super::brush_cmds::stroke_into(s, CMD, &q, STROKE_LABEL, brush, pts)?;
         r["created"] = json!(false);

@@ -217,9 +217,7 @@ fn subtract_paints_black_and_swaps_the_colours() {
 fn entries_grey_out_per_mode_and_depth() {
     let off = |mode, depth| -> Vec<&str> { ENTRIES.iter().map(|e| e.kind).filter(|k| !enabled_in(k, mode, depth)).collect() };
     let missing = ["light", "colorVibrance", "clarityDehaze", "grain"];
-    let with = |more: &[&'static str]| -> Vec<&'static str> {
-        ENTRIES.iter().map(|e| e.kind).filter(|k| missing.contains(k) || more.contains(k)).collect()
-    };
+    let with = |more: &[&'static str]| -> Vec<&'static str> { ENTRIES.iter().map(|e| e.kind).filter(|k| missing.contains(k) || more.contains(k)).collect() };
     assert_eq!(off(ColorMode::Rgb, SampleType::U8), with(&[]));
     assert_eq!(off(ColorMode::Rgb, SampleType::U16), with(&[]));
     assert_eq!(off(ColorMode::Rgb, SampleType::F32), with(&["invert", "posterize", "threshold", "gradientMap"]));

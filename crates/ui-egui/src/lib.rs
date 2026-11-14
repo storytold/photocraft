@@ -276,6 +276,7 @@ pub use text::egui_fonts;
 use text::font_filters;
 use text::font_preview;
 pub use text::served_fonts;
+pub use tools::adjustment_brush;
 use tools::align_bar;
 pub use tools::analysis_ui;
 pub use tools::anchor_tools;

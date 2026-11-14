@@ -133,7 +133,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         // chip, so a tool change swaps the brush with it (Photoshop keeps one per tool).
                         crate::paint_mouse::sync_tool_brush(app);
                         // Brush edits here go through `tools.setBrush`, one journal entry per gesture (Rule 1).
-                        if (tool.is_brushlike() && !matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser))
+                        if (tool.is_brushlike() && !matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser | Tool::AdjustmentBrush))
                             || tool == Tool::QuickSelection
                         {
                             brush_preset_chip(ui, &app.session.tools.brush, &mut app.ui);
@@ -181,7 +181,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
                             widgets::vline(ui, 22.0);
                         }
-                        if crate::eraser_ui::options_bar(app, ui, tool)
+                        if crate::adjustment_brush::options_bar(app, ui, tool)
+                            || crate::eraser_ui::options_bar(app, ui, tool)
                             || crate::retouch_ui::options_bar(app, ui, tool)
                             || crate::vector_ui::options_bar(app, ui, tool)
                             || crate::analysis_ui::options_bar(app, ui, tool)
@@ -993,7 +994,7 @@ fn fixed_size_field(ui: &mut egui::Ui, px: &mut f32, units: widgets::FieldUnits,
     picked
 }
 
-fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> egui::Response {
+pub(crate) fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> egui::Response {
     opt_label(ui, label);
     let mut percent = *value * 100.0;
     let r = widgets::value_field_named(ui, label, &mut percent, range, "%", width);
@@ -1005,7 +1006,7 @@ fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::op
 
 /// A pressure toggle named `name` (for screen readers and tests); its tooltip is `name`, unless
 /// `own_tip` leaves the tooltip to the caller (the Brush's own texts, #11813).
-fn pressure_button(ui: &mut egui::Ui, on: bool, name: &str, own_tip: bool) -> egui::Response {
+pub(crate) fn pressure_button(ui: &mut egui::Ui, on: bool, name: &str, own_tip: bool) -> egui::Response {
     icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), on, name, !own_tip)
 }
 
@@ -1036,7 +1037,7 @@ pub(crate) fn range_alert(ui_state: &mut crate::state::UiState, text: &str) {
 
 /// [`percent_field`] that keeps whole percents (`33.7` becomes 34 %). A value set elsewhere (a
 /// `tools.setBrush` fraction, an older saved 0) shows as the whole percent in range.
-fn whole_percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> egui::Response {
+pub(crate) fn whole_percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> egui::Response {
     opt_label(ui, label);
     let mut percent = (*value * 100.0).round().max(*range.start()).min(*range.end());
     let r = widgets::value_field_named(ui, label, &mut percent, range.clone(), "%", width);
