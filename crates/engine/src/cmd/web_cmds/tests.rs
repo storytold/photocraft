@@ -1602,3 +1602,82 @@ fn a_whole_image_path_with_slice_numbers_is_refused() {
     s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": whole, "numbers": [1]})).unwrap();
     assert_eq!(decode(&whole).dimensions(), (64, 48));
 }
+
+/// The document of #13796: 200x150, a wide-gamut profile assigned, a red/white background, a blue
+/// square and a green strip at half opacity.
+fn wide_gamut_session() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 150, "depth": 8, "name": "wide.psd", "background": "transparent"})).unwrap();
+    s.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    s.edit("paint", |doc, active| {
+        let fmt = doc.pixel_format();
+        let rgb = |r: f32, g: f32, b: f32| photocraft_raster::from_rgba(&fmt, [r / 255.0, g / 255.0, b / 255.0, 1.0]);
+        let mut bg = Layer::raster("Background", fmt);
+        let surf = bg.surface_mut().unwrap();
+        surf.fill_rect(Rect::new(0, 0, 100, 150), &rgb(200.0, 30.0, 30.0));
+        surf.fill_rect(Rect::new(100, 0, 200, 150), &rgb(255.0, 255.0, 255.0));
+        doc.insert_above(None, bg);
+        let mut top = Layer::raster("Top", fmt);
+        top.surface_mut().unwrap().fill_rect(Rect::new(50, 25, 150, 125), &rgb(30.0, 30.0, 200.0));
+        doc.insert_above(None, top);
+        let mut semi = Layer::raster("Semi", fmt);
+        semi.surface_mut().unwrap().fill_rect(Rect::new(0, 100, 200, 150), &rgb(0.0, 160.0, 0.0));
+        semi.opacity = 0.5;
+        let id = doc.insert_above(None, semi);
+        *active = Some(id);
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+fn rgb_at(img: &photocraft_codecs::Image, x: u32, y: u32) -> [i32; 3] {
+    let px = img.to_rgba8();
+    let i = (y as usize * img.width() as usize + x as usize) * 4;
+    [px[i].into(), px[i + 1].into(), px[i + 2].into()]
+}
+
+fn near(got: [i32; 3], want: [i32; 3], tol: i32, what: &str) {
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= tol), "{what}: got {got:?}, want {want:?} (+-{tol})");
+}
+
+/// Convert to sRGB converts the flattened image: layers are blended in the document's space and the
+/// result is converted, not blended after each layer was converted (#13796).
+#[test]
+fn quick_export_converts_the_flattened_image_to_srgb() {
+    let dir = tmp("srgb_flat");
+    let mut s = wide_gamut_session();
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png", "convertToSrgb": true})).unwrap();
+    let path = format!("{dir}/q.png");
+    s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+    let img = decode(&path);
+    let blended = rgb_at(&img, 25, 125);
+    assert_ne!(blended, [117, 93, 12], "layers were converted and then blended");
+    near(blended, [102, 95, 0], 2, "blend of red and half green");
+    near(rgb_at(&img, 25, 75), [233, 24, 24], 2, "red");
+    near(rgb_at(&img, 100, 75), [24, 24, 205], 2, "blue");
+}
+
+#[test]
+fn quick_export_without_convert_to_srgb_keeps_raw_values() {
+    let dir = tmp("srgb_raw");
+    let mut s = wide_gamut_session();
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png", "convertToSrgb": false})).unwrap();
+    let path = format!("{dir}/q.png");
+    s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+    let img = decode(&path);
+    near(rgb_at(&img, 25, 75), [200, 30, 30], 1, "red");
+    near(rgb_at(&img, 100, 75), [30, 30, 200], 1, "blue");
+    near(rgb_at(&img, 25, 125), [100, 95, 15], 1, "blend");
+}
+
+#[test]
+fn save_for_web_converts_the_flattened_image_to_srgb() {
+    let dir = tmp("srgb_sfw");
+    let mut s = wide_gamut_session();
+    let path = format!("{dir}/w.png");
+    s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "convertToSrgb": true, "path": path})).unwrap();
+    let img = decode(&path);
+    near(rgb_at(&img, 25, 125), [102, 95, 0], 2, "blend of red and half green");
+    near(rgb_at(&img, 25, 75), [233, 24, 24], 2, "red");
+}
