@@ -766,8 +766,8 @@ fn data_sets_as_files_extension_changes_only_the_case() {
 fn data_sets_as_files_keeps_other_formats_for_scripts() {
     let (mut s, _, _) = psd_export_session();
     let dir = tmp("psd-png");
-    // `psd` (and no format) writes a layered PSD; an explicit other format keeps the flattening
-    // exporter the command always used, for agents and scripts (#13754 "Done when").
+    // `psd` (and no format) writes a layered PSD; an explicit other format stays available to
+    // agents and scripts, written as Save As writes it (#13754 "Done when").
     let ok = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "format": "psd", "dataSets": ["Data Set 1"]})).unwrap();
     assert_eq!(ok["files"], json!([format!("{dir}/Data_Set_1.psd")]));
     assert!(std::fs::read(format!("{dir}/Data_Set_1.psd")).unwrap().starts_with(b"8BPS"));
@@ -775,10 +775,17 @@ fn data_sets_as_files_keeps_other_formats_for_scripts() {
     let png = s.execute("file.export.dataSetsAsFiles", json!({"dir": other, "format": "png", "dataSets": ["Data Set 1"]})).unwrap();
     assert_eq!(png["files"], json!([format!("{other}/Data_Set_1.png")]));
     assert!(std::fs::read(format!("{other}/Data_Set_1.png")).unwrap().starts_with(b"\x89PNG"), "a real PNG, not a PSD");
-    // A leading dot is the same name: `Data_Set_1.png`, never `Data_Set_1..png`.
+    // The shared encoder's notes reach the caller, each under its data set's name: a PNG
+    // flattens the layers.
+    let warnings = png["warnings"].as_array().unwrap();
+    assert!(!warnings.is_empty() && warnings.iter().all(|w| w.as_str().unwrap().starts_with("Data Set 1: ")), "{warnings:?}");
+    // A leading dot or upper case is the same name, as in Export Layers to Files:
+    // `Data_Set_1.png`, never `Data_Set_1..png`.
     let dotted = tmp("psd-png-dotted");
-    let png = s.execute("file.export.dataSetsAsFiles", json!({"dir": dotted, "format": ".png", "dataSets": ["Data Set 1"]})).unwrap();
-    assert_eq!(png["files"], json!([format!("{dotted}/Data_Set_1.png")]));
+    for format in [".png", "PNG"] {
+        let png = s.execute("file.export.dataSetsAsFiles", json!({"dir": dotted, "format": format, "dataSets": ["Data Set 1"]})).unwrap();
+        assert_eq!(png["files"], json!([format!("{dotted}/Data_Set_1.png")]), "format {format}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&other);
     let _ = std::fs::remove_dir_all(&dotted);

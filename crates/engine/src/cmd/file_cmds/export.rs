@@ -38,16 +38,23 @@ pub struct LayerExportReport {
     pub skipped: Vec<SkippedExportLayer>,
 }
 
+/// A batch exporter's `format` as the extension of every file it writes: leading dots dropped,
+/// lower case, and only ASCII letters and digits, so it stays inside the one filename component
+/// handed to `write` (a separator or `..` would place files outside the chosen folder). `None`
+/// when it is not a bare name.
+pub(crate) fn bare_format(raw: &str) -> Option<String> {
+    let name = raw.trim_start_matches('.').to_ascii_lowercase();
+    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric())).then_some(name)
+}
+
 /// The same export as [`export_layers_with`], with an explanation for every omitted top-level
 /// layer. Groups export merged, so their children are not separate exports or skips. Encoding
 /// and write failures remain errors, never successful skips. Existing numbering is preserved.
 pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<LayerExportReport> {
     let cmd = "file.export.layersToFiles";
-    let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
-    // The format becomes the file extension inside one filename component handed to `write`.
-    if format.is_empty() || !format.chars().all(|c| c.is_ascii_alphanumeric()) {
+    let Some(format) = bare_format(p.get("format").and_then(Value::as_str).unwrap_or("png")) else {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: "`format` must be a file extension such as png".into() });
-    }
+    };
     let trim = p.get("trim").and_then(Value::as_bool).unwrap_or(false);
     let visible_only = p.get("visibleOnly").and_then(Value::as_bool).unwrap_or(true);
     // Callers outside `Session::execute` (headless workspace exports) carry the session's gate

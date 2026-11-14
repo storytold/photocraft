@@ -133,7 +133,7 @@ pub struct ExportDataSetsParams {
     /// Document index from `session_list` (default: the active document).
     #[serde(default)]
     pub index: Option<usize>,
-    /// Format name (default `psd`, a layered PSD); another bare name such as `png` or `jpg` writes each data set in that format with its defaults.
+    /// Format name (default `psd`, a layered PSD); another bare name such as `png`, `jpg` or `psb` writes each data set in that format, as Save As writes it.
     #[serde(default)]
     pub format: Option<String>,
     /// File extension of the written PSDs: `.psd` (default) or `.PSD`.
