@@ -235,11 +235,17 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
         ui.add_space(4.0);
     }
     let mut filter = f.get("filter").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut match_case = f.get("matchCase").and_then(Value::as_bool).unwrap_or(false);
+    let hint = if tab == 1 { tl!("Search in Application Menus") } else { tl!("command or shortcut") };
     ui.horizontal(|ui| {
         ui.label(RichText::new(tl!("Search")).color(t.text_dim));
-        ui.add(egui::TextEdit::singleline(&mut filter).desired_width(260.0).hint_text(tl!("command or shortcut")));
+        ui.add(egui::TextEdit::singleline(&mut filter).desired_width(260.0).hint_text(hint));
+        if tab == 1 {
+            ui.checkbox(&mut match_case, tl!("Match Case"));
+        }
     });
     f.insert("filter".into(), json!(filter));
+    f.insert("matchCase".into(), json!(match_case));
     // Menu path and command label as shown in the menus, in the UI language.
     let shown = |id: &str, label: &str, path: &[String]| -> (Vec<String>, String) {
         let lang = crate::i18n::current();
@@ -353,13 +359,24 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                 let alts = eff_alts(&alt_overrides, id, cur.as_deref());
                 let (shown_path, shown_label) = shown(id, label, path);
                 // Match what is shown and the English name (commands are documented in English).
-                let local = format!("{} {}", shown_path.join(" "), shown_label);
-                let english = format!("{} {} {} {} {id}", path.join(" "), label, cur.clone().unwrap_or_default(), alts.join(" "));
-                if !needle.is_empty()
-                    && !crate::i18n::current().contains_ignore_case(&local, needle)
-                    && !crate::i18n::Lang::EN.contains_ignore_case(&english, needle)
-                {
-                    continue;
+                if !needle.is_empty() {
+                    if tab == 1 {
+                        let full = |p: &[String], l: &str| if p.is_empty() { l.to_string() } else { format!("{} › {l}", p.join(" › ")) };
+                        let local = full(&shown_path, &shown_label);
+                        let english = full(path, label);
+                        let has_all = |haystack: &str, lang: crate::i18n::Lang| {
+                            needle.split_whitespace().all(|w| if match_case { haystack.contains(w) } else { lang.contains_ignore_case(haystack, w) })
+                        };
+                        if !has_all(&local, crate::i18n::current()) && !has_all(&english, crate::i18n::Lang::EN) {
+                            continue;
+                        }
+                    } else {
+                        let local = format!("{} {}", shown_path.join(" "), shown_label);
+                        let english = format!("{} {} {} {} {id}", path.join(" "), label, cur.clone().unwrap_or_default(), alts.join(" "));
+                        if !crate::i18n::current().contains_ignore_case(&local, needle) && !crate::i18n::Lang::EN.contains_ignore_case(&english, needle) {
+                            continue;
+                        }
+                    }
                 }
                 if tab == 0 && path.is_empty() && def.is_none() && cur.is_none() && alts.is_empty() {
                     continue;
