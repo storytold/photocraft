@@ -913,6 +913,34 @@ fn shadow(noise: f32, origin: (i32, i32)) -> Map {
     shadow_map(&square_shape(40), &s, &GlobalLight::default(), false, origin)
 }
 
+/// Photoshop 2026, a 100 px square with a multiply black Drop Shadow: a contour that lifts 0
+/// fades in at 8.33 × the blurred coverage (1 → 8, 12 → 102, 24 → 202 of 255 under a contour
+/// flat at 255; a descending contour reads 227 at 28, where it crosses the ramp) and then
+/// follows the contour. A Linear contour stays the identity; an Inner Shadow is not capped.
+#[test]
+fn drop_shadow_contour_fades_in_from_empty() {
+    let contour = |points: &[(f32, f32)]| Contour::Custom {
+        name: "test".into(),
+        points: points.iter().map(|&(i, o)| photocraft_doc::adjust::CurvePoint { input: i / 255.0, output: o / 255.0 }).collect(),
+        corners: vec![],
+    };
+    let flat = contour(&[(0.0, 255.0), (255.0, 255.0)]);
+    let desc = contour(&[(0.0, 255.0), (255.0, 0.0)]);
+    let l = shadow_lut(&flat, false).unwrap_or_default();
+    for (v, want) in [(0.0, 0.0), (1.0, 8.0), (12.0, 102.0), (24.0, 202.0), (32.0, 255.0), (128.0, 255.0)] {
+        let got = lut_at(&l, v / 255.0) * 255.0;
+        assert!((got - want).abs() < 3.0, "flat at {v}: {got} vs {want}");
+    }
+    let l = shadow_lut(&desc, false).unwrap_or_default();
+    for (v, want) in [(8.0, 67.0), (28.0, 227.0), (60.0, 195.0), (120.0, 135.0)] {
+        let got = lut_at(&l, v / 255.0) * 255.0;
+        assert!((got - want).abs() < 3.0, "descending at {v}: {got} vs {want}");
+    }
+    assert!(shadow_lut(&Contour::Linear, false).is_none());
+    let inner = shadow_lut(&flat, true).unwrap_or_default();
+    assert!(inner.iter().all(|v| (*v - 1.0).abs() < 1e-4), "inner shadow keeps its contour");
+}
+
 #[test]
 fn shadow_noise_speckles_soft_coverage_deterministically() {
     let plain = shadow(0.0, (0, 0));
