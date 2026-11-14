@@ -141,7 +141,6 @@ fn nonoverlap_drag_makes_one_empty_frame_even_with_a_raster_active() {
     assert_eq!(st.history.entries().last().map(String::as_str), Some("New Frame"));
 }
 
-
 #[test]
 fn a_large_selection_does_not_make_upper_raster_pixels_overlap_the_drag() {
     let (mut app, red, blue, _) = scene();
