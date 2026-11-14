@@ -9,7 +9,8 @@
 //! it does there.
 //!
 //! Plain adjustment layers that Photoshop evaluates on the inks (Invert, Posterize, Threshold,
-//! Brightness/Contrast, Hue/Saturation, Color Balance, and Levels and Curves on CMYK channels)
+//! Brightness/Contrast, Hue/Saturation, Color Balance, a CMYK Channel Mixer, and Levels and
+//! Curves on CMYK channels)
 //! join such a stack too: on the
 //! stored inks their rules are exact, where the RGB compositor can only apply them to a separation
 //! of its RGB composite, whose black differs from the file's. Such stacks are also rendered for
@@ -54,7 +55,7 @@ enum InkOp<'a> {
     /// Each ink's stored value (1 - ink) through its channel's table: C, M, Y, K
     /// (`adjust::ink_through`; Levels, Curves and Brightness/Contrast).
     Tables([Vec<f32>; INKS]),
-    /// Invert, Posterize or Threshold (`adjust::stored_channels`).
+    /// Invert, Posterize, Threshold or a CMYK Channel Mixer (`adjust::stored_channels`).
     Rules(&'a Adjustment),
     /// Hue/Saturation or Color Balance on C, M and Y as inverted RGB (`adjust::apply_cmy`).
     Cmy(&'a Adjustment),
@@ -86,7 +87,9 @@ fn ink_op(layer: &Layer, depth: SampleType) -> Option<InkOp<'_>> {
         return None;
     }
     match adj {
-        Adjustment::Invert | Adjustment::Posterize { .. } | Adjustment::Threshold { .. } => Some(InkOp::Rules(adj)),
+        Adjustment::Invert | Adjustment::Posterize { .. } | Adjustment::Threshold { .. } | Adjustment::ChannelMixer { cmyk: Some(_), .. } => {
+            Some(InkOp::Rules(adj))
+        }
         _ if adjust::cmy_adjustment(adj) => Some(InkOp::Cmy(adj)),
         Adjustment::BrightnessContrast { brightness, contrast, legacy } => {
             let t = adjust::ink_brightness_contrast_lut(*brightness, *contrast, *legacy);
