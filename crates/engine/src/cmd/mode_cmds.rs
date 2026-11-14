@@ -42,13 +42,23 @@ fn str_or<'a>(p: &'a Value, key: &str, default: &'a str) -> &'a str {
 
 type Enabled = std::result::Result<(), String>;
 
-fn has_doc(s: &Session) -> Enabled {
-    s.active().map(|_| ()).ok_or_else(|| "no document open".into())
-}
-
 fn mode_is(s: &Session, modes: &[ColorMode], what: &str) -> Enabled {
     let d = s.active().ok_or("no document open")?;
     if modes.contains(&d.doc.mode) { Ok(()) } else { Err(format!("{what} (the document is {:?})", d.doc.mode)) }
+}
+
+/// #14509, measured: in a Bitmap document only Arbitrary is greyed in the Image Rotation
+/// submenu - 180, the two 90 turns and both flips stay available - and a scripted call answers
+/// this sentence with the document unchanged. The Crop tool's straighten shares
+/// [`rotate_arbitrary_with`] but was not measured in Bitmap, so only this spec's gate names it.
+const BITMAP_ROTATE_REFUSAL: &str = "Could not complete the command because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
+
+fn rotate_arbitrary_enabled(s: &Session) -> Enabled {
+    let d = s.active().ok_or("no document open")?;
+    if d.doc.mode == ColorMode::Bitmap {
+        return Err(BITMAP_ROTATE_REFUSAL.into());
+    }
+    Ok(())
 }
 
 // ---------- Image Rotation › Arbitrary ----------
@@ -772,7 +782,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Arbitrary…",
             ["Image", "Image Rotation"],
             r##"{"angle":-359.99..359.99=0,"direction":"cw|ccw"="cw","interpolation":"bicubic|bilinear|nearest"="bicubic"}"##,
-            has_doc,
+            rotate_arbitrary_enabled,
             rotate_arbitrary
         ),
         spec!(
