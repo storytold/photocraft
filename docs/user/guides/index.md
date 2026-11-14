@@ -7,6 +7,7 @@ verified: 0.8.2
 
 - [Open and save files](open-and-save-files.md)
 - [Adjust colors without changing your pixels](adjust-colors-with-adjustment-layers.md)
+- [Customize the Layers panel](customize-layers-panel.md)
 - [Select part of an image and mask it](select-and-mask.md)
 - [Add and style text](add-and-style-text.md)
 - [Export an image](export-an-image.md)
