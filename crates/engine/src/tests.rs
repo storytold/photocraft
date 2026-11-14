@@ -691,6 +691,108 @@ fn arrange_and_group() {
     assert_eq!(doc["layers"][0]["children"][0]["name"], "A");
 }
 
+/// The Layers panel's rows, top first, children indented.
+fn panel_rows(s: &Session) -> Vec<String> {
+    fn rec(layers: &[photocraft_doc::Layer], depth: usize, out: &mut Vec<String>) {
+        for l in layers.iter().rev() {
+            out.push(format!("{}{}", "  ".repeat(depth), l.name));
+            rec(l.children().unwrap_or(&[]), depth + 1, out);
+        }
+    }
+    let mut out = Vec::new();
+    rec(&s.active().unwrap().doc.layers, 0, &mut out);
+    out
+}
+
+/// Background, then a group G of C1 and C2 (bottom to top), then X above the group; `expanded`
+/// says whether G is open in the panel. Returns (g, x).
+fn group_below_a_layer(s: &mut Session, expanded: bool) -> (u64, u64) {
+    let c1 = s.execute("layer.new.layer", json!({"name": "C1"})).unwrap()["layer"].as_u64().unwrap();
+    let c2 = s.execute("layer.new.layer", json!({"name": "C2"})).unwrap()["layer"].as_u64().unwrap();
+    let g = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.moveTo", json!({"layer": c1, "target": g, "position": "into"})).unwrap();
+    s.execute("layer.moveTo", json!({"layer": c2, "target": c1, "position": "above"})).unwrap();
+    let x = s.execute("layer.new.layer", json!({"name": "X"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.moveTo", json!({"layer": x, "target": g, "position": "above"})).unwrap();
+    s.execute("layer.setExpanded", json!({"layer": g, "expanded": expanded})).unwrap();
+    assert_eq!(panel_rows(s), ["X", "G", "  C2", "  C1", "Background"]);
+    (g, x)
+}
+
+/// #11263: Bring Forward and Send Backward move a layer one row of the Layers panel at a time, as
+/// Photoshop's do: down into the expanded group below, at its top, through its children and out
+/// below the group; and the same rows back up. Each step is one undo step.
+#[test]
+fn arrange_steps_through_an_expanded_group_a_row_at_a_time() {
+    let mut s = session_with_doc();
+    let (_, x) = group_below_a_layer(&mut s, true);
+    let start = ["X", "G", "  C2", "  C1", "Background"];
+    let down = [
+        ["G", "  X", "  C2", "  C1", "Background"],
+        ["G", "  C2", "  X", "  C1", "Background"],
+        ["G", "  C2", "  C1", "  X", "Background"],
+        ["G", "  C2", "  C1", "X", "Background"],
+    ];
+    for want in down {
+        s.execute("layer.arrange.sendBackward", json!({"layer": x})).unwrap();
+        assert_eq!(panel_rows(&s), want);
+    }
+    // Nothing goes below the Background.
+    let err = s.execute("layer.arrange.sendBackward", json!({"layer": x})).unwrap_err();
+    assert!(err.to_string().contains("can't move further"), "{err}");
+    assert_eq!(panel_rows(&s), down[3]);
+    let up = [down[2], down[1], down[0], start];
+    for want in up {
+        s.execute("layer.arrange.bringForward", json!({"layer": x})).unwrap();
+        assert_eq!(panel_rows(&s), want);
+    }
+    assert!(s.execute("layer.arrange.bringForward", json!({"layer": x})).is_err());
+    assert_eq!(panel_rows(&s), start);
+    for want in [up[2], up[1], up[0], down[3]] {
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(panel_rows(&s), want);
+    }
+}
+
+/// A collapsed group is one row of the panel, passed in one step; Bring to Front and Send to Back
+/// keep to the layer's own group; a stack of groups that would nest past the depth cap inside the
+/// group below passes it as well.
+#[test]
+fn arrange_passes_collapsed_and_too_deep_groups_and_keeps_front_and_back_in_the_group() {
+    let mut s = session_with_doc();
+    let (g, x) = group_below_a_layer(&mut s, false);
+    let start = ["X", "G", "  C2", "  C1", "Background"];
+    let below = ["G", "  C2", "  C1", "X", "Background"];
+    s.execute("layer.arrange.sendBackward", json!({"layer": x})).unwrap();
+    assert_eq!(panel_rows(&s), below);
+    s.execute("layer.arrange.bringForward", json!({"layer": x})).unwrap();
+    assert_eq!(panel_rows(&s), start);
+    // Inside the open group, Bring to Front and Send to Back stay inside.
+    s.execute("layer.setExpanded", json!({"layer": g, "expanded": true})).unwrap();
+    s.execute("layer.arrange.sendBackward", json!({"layer": x})).unwrap();
+    assert_eq!(panel_rows(&s), ["G", "  X", "  C2", "  C1", "Background"]);
+    assert_eq!(s.execute("layer.arrange.bringToFront", json!({"layer": x})).unwrap(), json!({"moved": false}));
+    s.execute("layer.arrange.sendToBack", json!({"layer": x})).unwrap();
+    assert_eq!(panel_rows(&s), ["G", "  C2", "  C1", "  X", "Background"]);
+    s.execute("layer.arrange.bringToFront", json!({"layer": x})).unwrap();
+    assert_eq!(panel_rows(&s), ["G", "  X", "  C2", "  C1", "Background"]);
+    // A layer wrapped in MAX_GROUP_DEPTH groups, above G: inside G its layer would sit one group
+    // too deep, so Send Backward passes G instead.
+    let leaf = s.execute("layer.new.layer", json!({"name": "Leaf"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.moveTo", json!({"layer": leaf, "target": g, "position": "above"})).unwrap();
+    let mut top = leaf;
+    for _ in 0..photocraft_doc::MAX_GROUP_DEPTH {
+        top = s.execute("layer.groupLayers", json!({"layer": top})).unwrap()["layer"].as_u64().unwrap();
+    }
+    let ids = |s: &Session| s.active().unwrap().doc.layers.iter().map(|l| l.id.0).collect::<Vec<_>>();
+    let bg = ids(&s)[0];
+    assert_eq!(ids(&s), [bg, g, top]);
+    assert_eq!(s.active().unwrap().doc.max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH);
+    s.execute("layer.arrange.sendBackward", json!({"layer": top})).unwrap();
+    assert_eq!(ids(&s), [bg, top, g]);
+    assert_eq!(s.active().unwrap().doc.max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH);
+}
+
 #[test]
 fn canvas_flips_and_rotation() {
     let mut s = Session::new();
