@@ -82,6 +82,13 @@ fn header_pixels(bytes: &[u8]) -> Option<u64> {
     if let Ok((w, h)) = photocraft_codecs::probe_size(bytes) {
         return Some(u64::from(w) * u64::from(h));
     }
+    // A VectorCraft file is a few kilobytes of JSON around a PDF whose page is drawn at one pixel
+    // per point: the artboard's size, not the file's, sets the allocation.
+    if photocraft_io::vectorcraft::is_vectorcraft(bytes)
+        && let Ok((w, h)) = photocraft_io::vectorcraft::drawn_size(bytes)
+    {
+        return Some(u64::from(w) * u64::from(h));
+    }
     let be32 = |at: usize| -> Option<u64> { Some(u64::from(u32::from_be_bytes(bytes.get(at..at.checked_add(4)?)?.try_into().ok()?))) };
     let be16 = |at: usize| -> Option<u64> { Some(u64::from(u16::from_be_bytes(bytes.get(at..at.checked_add(2)?)?.try_into().ok()?))) };
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {

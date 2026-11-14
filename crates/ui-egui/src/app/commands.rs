@@ -181,6 +181,7 @@ impl PhotocraftApp {
             id,
             "layer.vectorMask.add" | "layer.vectorMask.fromPath" | "layer.vectorMask.revealAll" | "layer.vectorMask.hideAll" | "layer.vectorMask.currentPath"
         ) && on_active_layer;
+        let notice_before = self.ui.notices.last().map(|notice| notice.id);
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
@@ -196,8 +197,9 @@ impl PhotocraftApp {
             self.perf.stage.command(id, self.perf.command_ms);
         }
         match &r {
-            Ok(_) => {
-                if self.ui.status_error {
+            Ok(result) => {
+                let action_reported_warning = id == "actions.play" && self.ui.notices.last().map(|notice| notice.id) != notice_before;
+                if self.ui.status_error && !action_reported_warning {
                     self.ui.status.clear();
                     self.ui.status_error = false;
                 }
@@ -208,6 +210,9 @@ impl PhotocraftApp {
                     // Sampler points that fell outside the new canvas (#1046).
                     self.ui.status = crate::i18n::trn(crate::i18n::current(), removed as u64, "{n} sample point removed", "{n} sample points removed");
                     self.ui.status_error = false;
+                }
+                if matches!(id, "file.placeEmbedded" | "file.placeLinked") {
+                    self.report_place_warnings(result, id == "file.placeLinked");
                 }
             }
             Err(e) => {

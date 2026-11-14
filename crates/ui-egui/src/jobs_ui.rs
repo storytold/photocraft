@@ -244,10 +244,11 @@ pub(crate) fn track_place(app: &mut PhotocraftApp, name: &str, started: &Value) 
 
 /// A background place ended: start Free Transform on the layer it made, or report why not, then
 /// go on with the files dropped meanwhile.
-fn finish_place(app: &mut PhotocraftApp, ctx: &egui::Context, place: PlaceJob, outcome: JobOutcome) {
+fn finish_place(app: &mut PhotocraftApp, ctx: &egui::Context, place: PlaceJob, outcome: JobOutcome, linked: bool) {
     app.sync_views();
     match outcome {
         JobOutcome::Done(result) => {
+            app.report_place_warnings(&result, linked);
             // The tab can change while the file is placed: the box opens only on the document it
             // was placed in, and never over another one. An image placed into a frame has none.
             if app.ui.transform.is_none()
@@ -619,7 +620,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     if app.jobs.place.as_ref().is_some_and(|p| p.job == e.id)
         && let Some(place) = app.jobs.place.take()
     {
-        finish_place(app, ctx, place, e.outcome);
+        finish_place(app, ctx, place, e.outcome, e.command == "file.placeLinked");
         return;
     }
     if e.command == SAVE_JOB

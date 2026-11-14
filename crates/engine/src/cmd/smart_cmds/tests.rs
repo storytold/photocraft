@@ -525,6 +525,25 @@ fn quad_centre(s: &Session, sm: &SmartObject) -> (f64, f64) {
     (x / 4.0, y / 4.0)
 }
 
+/// A VectorCraft source's box (Reset Transform, warp frames) comes from the carried PDF's page
+/// size: the artboard is not drawn for it.
+#[test]
+fn vectorcraft_source_box_does_not_draw_the_artboard() {
+    let pdf = "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 61 29] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let mut bytes = format!(
+        r#"{{"format":"vectorcraft","version":4,"generator":"VectorCraft 0.1.0","pdf":{{"mime":"application/pdf","blob":[0,{}]}},"document":{{"artboards":[],"layers":[]}}}}"#,
+        pdf.len()
+    )
+    .into_bytes();
+    bytes.extend_from_slice(b"\n\0VCBLOBS\0");
+    bytes.extend_from_slice(pdf.as_bytes());
+    let s = session(8);
+    let doc = s.active().unwrap().doc.clone();
+    let smart = SmartObject::new(SmartSource::Embedded { file_name: "Frame.vectorcraft".into(), bytes: Arc::new(bytes.clone()) }, Affine::IDENTITY, None);
+    assert_eq!(source_box(&doc, &smart), Some([0.0, 0.0, 61.0, 29.0]));
+    assert!(super::source::cache_get(&super::source::cache_key(&bytes, doc.pixel_format())).is_none(), "the artboard was drawn");
+}
+
 /// Layer ▸ Smart Objects ▸ Reset Transform (#11662): 100 % of the contents' own size, no rotation,
 /// skew, Distort or Perspective, and the object stays centred where it is.
 #[test]

@@ -596,6 +596,7 @@ fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         match result {
             // A called action that paused for a dialog continues here after it once confirmed.
             Ok(value) => {
+                report_replayed_place(app, id, &value);
                 // Step by Step and Pause For: the canvas shows this step before the next one runs.
                 let c = called(app, &action.name, i, id, &value, target);
                 if end_at(playback::paced(app, &action, i, id, ran, c), &mut ran, &mut failed, &mut paused, &mut stopped) {
@@ -1124,6 +1125,13 @@ pub fn stop_message_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<St
 
 /// The key a paused playback leaves in its dialog's fields: the token of its [`PausedPlayback`].
 pub const RESUME: &str = "__resumeAction";
+
+/// Show the import warnings of a replayed Place step, as File › Place does.
+fn report_replayed_place(app: &mut PhotocraftApp, id: &str, value: &Value) {
+    if matches!(id, "file.placeEmbedded" | "file.placeLinked") {
+        app.report_place_warnings(value, id == "file.placeLinked");
+    }
+}
 
 /// Resume the recording a paused call suspended and journal that call, once.
 fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {

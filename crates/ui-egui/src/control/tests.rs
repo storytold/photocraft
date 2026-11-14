@@ -8,6 +8,40 @@ fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Valu
     }
 }
 
+#[test]
+fn action_placement_over_control_replaces_a_stale_error_with_its_warning() {
+    let pdf = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 4 4] >>\nendobj\n4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 4 4] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let mut bytes = format!(
+        r#"{{"format":"vectorcraft","version":4,"pdf":{{"mime":"application/pdf","blob":[0,{}]}},"document":{{"artboards":[],"layers":[]}}}}"#,
+        pdf.len()
+    )
+    .into_bytes();
+    bytes.extend_from_slice(b"\n\0VCBLOBS\0");
+    bytes.extend_from_slice(pdf);
+    let folder = std::env::temp_dir().join(format!("photocraft-control-place-warnings-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("Pages.vectorcraft");
+    std::fs::write(&path, bytes).unwrap();
+    for command in ["file.placeEmbedded", "file.placeLinked"] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.session.actions.list.push(photocraft_engine::actions_cmds::Action {
+            name: "Place".into(),
+            steps: vec![(command.into(), json!({"path": path}))],
+            ..Default::default()
+        });
+        app.ui.status = "An earlier command failed".into();
+        app.ui.status_error = true;
+        let reply = call(&mut app, &egui::Context::default(), "engine.execute", json!({"command": "actions.play", "params": {"action": "Place"}}));
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert!(app.ui.status.contains("2 artboards"), "{}", app.ui.status);
+        assert!(!app.ui.status.contains("earlier command"));
+        assert!(app.ui.status_error);
+        assert!(app.ui.notices.iter().any(|n| n.lines.iter().any(|line| line.contains("2 artboards"))));
+    }
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
 /// #3674: a guessed name gets a pointer to the right one, in both directions; and every
 /// method listed for those hints is served.
 #[test]

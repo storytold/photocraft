@@ -203,6 +203,8 @@ pub(crate) use rendering::source_box;
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 #[cfg(test)]
+pub(crate) use source::VECTORCRAFT_DRAWS;
+#[cfg(test)]
 use source::svg_source_image_in;
 pub use source::{SourceImage, purge_source_cache, source_bytes, source_cache_bytes, source_decode_count, source_image, svg_source_image};
 use source::{authorize_source, authorized_source_bytes};

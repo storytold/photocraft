@@ -25,6 +25,9 @@
 //! * Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`) open natively
 //!   with no source save path, what isn't imported listed in the warnings; a file
 //!   whose native data can't be read opens as its embedded preview; see `affinity`.
+//! * VectorCraft documents (`.vectorcraft`, `.drawcraft`) open and place as their first artboard, drawn from
+//!   the PDF the file carries when saved with Create PDF-Compatible File (import only); see
+//!   `vectorcraft`.
 //! * Every other format goes through `photocraft-codecs` as a single layer
 //!   (depth and Gray/RGB/CMYK model preserved): a locked "Background" when the
 //!   image is opaque, a normal "Layer 0" when it has transparency.
@@ -88,6 +91,7 @@ pub mod text_styles_map;
 pub mod tiff_layers;
 pub mod vector_map;
 pub mod vector_preview;
+pub mod vectorcraft;
 mod xcf;
 
 use craft_psd::{PsdError, PsdFile};
@@ -124,6 +128,9 @@ pub enum IoError {
     /// A GIMP XCF file that could not be read.
     #[error("XCF: {0}")]
     Xcf(String),
+    /// A VectorCraft document that could not be read, or one saved without its PDF.
+    #[error("VectorCraft: {0}")]
+    VectorCraft(String),
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
@@ -935,6 +942,7 @@ pub(crate) enum Route {
     Pcraft,
     Psd,
     Affinity,
+    VectorCraft,
     Ora,
     Kra,
     Xcf,
@@ -962,6 +970,8 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
         Some(photocraft_formats::Format::Pdn) => Route::Pdn,
         Some(photocraft_formats::Format::Raw) => Route::Raw,
         Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz) => Route::Svg,
+        // As with SVG, a recognized raster signature still wins over a misleading .vectorcraft suffix.
+        detected if vectorcraft::is_vectorcraft(bytes) || (detected.is_none() && vectorcraft::has_extension(name)) => Route::VectorCraft,
         _ => Route::Flat,
     }
 }
@@ -1029,6 +1039,7 @@ fn import_stages(
         }
         Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
         Route::Affinity => affinity::import(name, bytes, ctl),
+        Route::VectorCraft => vectorcraft::import(name, bytes, ctl),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
         Route::Xcf => xcf::import(name, bytes, ctl),
