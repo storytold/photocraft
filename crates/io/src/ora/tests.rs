@@ -1,7 +1,5 @@
 use super::*;
-use craft_ora::{MAX_NODES, MIMETYPE};
 use photocraft_doc::{Adjustment, Color, Fill, LayerMask};
-use photocraft_format::zip::{ZipReader, ZipWriter};
 
 const CANVAS: Size = Size { width: 70, height: 50 };
 
@@ -172,15 +170,15 @@ fn archive_layout_follows_the_specification() {
     assert_eq!(out.bytes.get(30..38), Some(&b"mimetype"[..]));
     assert_eq!(out.bytes.get(38..54), Some(MIMETYPE));
     assert!(is_ora(&out.bytes));
-    let zip = ZipReader::new(&out.bytes).unwrap();
+    let mut archive = craft_ora::Archive::open(&out.bytes).unwrap();
     for entry in ["stack.xml", "mergedimage.png", "Thumbnails/thumbnail.png"] {
-        assert!(zip.find(entry).is_some(), "{entry}");
+        assert!(archive.entry(entry, 1 << 20).unwrap().is_some(), "{entry}");
     }
-    let thumb = codecs::decode(&zip.read_by_name("Thumbnails/thumbnail.png", 1 << 20).unwrap()).unwrap();
+    let thumb = codecs::decode(&archive.entry("Thumbnails/thumbnail.png", 1 << 20).unwrap().unwrap()).unwrap();
     assert!(thumb.dimensions().0 <= 256 && thumb.dimensions().1 <= 256);
-    let merged = codecs::decode(&zip.read_by_name("mergedimage.png", 1 << 20).unwrap()).unwrap();
+    let merged = codecs::decode(&archive.entry("mergedimage.png", 1 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(merged.dimensions(), (70, 50));
-    let xml = String::from_utf8(zip.read_by_name("stack.xml", 1 << 20).unwrap()).unwrap();
+    let xml = String::from_utf8(archive.entry("stack.xml", 1 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains("name=\"Pass &lt;&amp;&gt; &quot;through&quot;\""), "{xml}");
     assert!(xml.contains("isolation=\"auto\""), "{xml}");
     assert!(xml.contains("composite-op=\"krita:linear light\""), "{xml}");
@@ -204,7 +202,7 @@ fn deeply_nested_stack_xml_is_an_error_not_a_stack_overflow() {
     let stack = format!("<image w=\"4\" h=\"4\">{}{}</image>", "<stack>".repeat(20_000), "</stack>".repeat(20_000));
     let bytes = archive(&stack, &[]);
     let e = std::thread::Builder::new().stack_size(512 * 1024).spawn(move || crate::import("deep.ora", &bytes).err()).unwrap().join().unwrap();
-    assert!(matches!(&e, Some(IoError::Ora(m)) if m.contains("nest")), "{e:?}");
+    assert!(matches!(&e, Some(IoError::Ora(m)) if m.contains("nested")), "{e:?}");
 }
 
 fn solid_png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
@@ -372,7 +370,8 @@ fn soft_light_exports_as_svg_soft_light() {
     soft.blend = BlendMode::SoftLight;
     d.layers.push(soft);
     let out = export(&d).unwrap();
-    let xml = String::from_utf8(ZipReader::new(&out.bytes).unwrap().read_by_name("stack.xml", 1 << 20).unwrap()).unwrap();
+    let mut archive = craft_ora::Archive::open(&out.bytes).unwrap();
+    let xml = String::from_utf8(archive.entry("stack.xml", 1 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains("name=\"Soft\"") && xml.contains("composite-op=\"svg:soft-light\""), "{xml}");
     assert!(!xml.contains("soft_light"), "{xml}");
     let (back, exported, imported) = round_trip(&d);
@@ -466,6 +465,17 @@ fn truncated_and_corrupted_files_never_panic() {
         }
         let _ = crate::import("x.ora", &b);
     }
+}
+
+#[test]
+fn zip_mimetype_reads_only_a_leading_stored_entry() {
+    assert_eq!(craft_ora::zip_mimetype(&archive("<image/>", &[])), Some(MIMETYPE));
+    assert_eq!(craft_ora::zip_mimetype(b"PK\x03\x04"), None);
+    assert_eq!(craft_ora::zip_mimetype(&[]), None);
+    let mut z = ZipWriter::new();
+    z.add("stack.xml", b"x").unwrap();
+    z.add("mimetype", MIMETYPE).unwrap();
+    assert_eq!(craft_ora::zip_mimetype(&z.finish().unwrap()), None);
 }
 
 #[test]
