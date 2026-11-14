@@ -4,10 +4,14 @@
 //! Everything is incremental (feed points in any chunking, get the same dabs) and deterministic:
 //! jitter comes from [`crate::rng`] keyed by the stroke seed and the step/dab index.
 
+use std::cell::Cell;
+use std::sync::Arc;
+
 use photocraft_geom::Point;
 
 use crate::brush::{BrushSettings, Control, Dynamic, Smoothing};
 use crate::rng::{rand_signed, rand01, stream};
+use crate::surface::{MapHandle, SurfaceMap, surface_dab_shape};
 use crate::{Dab, StrokePoint};
 
 /// Maximum pulled-string length at 100 % smoothing, in screen pixels.
@@ -571,9 +575,24 @@ pub fn base_diameter(b: &BrushSettings, s: &StepInput) -> f32 {
 
 /// Distance to the next step at `p`: the diameter there times the spacing.
 fn step_len_for(brush: &BrushSettings, p: &StrokePoint) -> f64 {
+    step_len_scaled(brush, p, 1.0)
+}
+
+/// [`step_len_for`] with the diameter scaled by `factor` (a perspective plane's change of scale).
+fn step_len_scaled(brush: &BrushSettings, p: &StrokePoint, factor: f32) -> f64 {
     let s = StepInput { point: *p, direction: 0.0, initial_direction: 0.0, step: 0 };
-    let d = base_diameter(brush, &s).max(1.0);
+    let d = (base_diameter(brush, &s) * factor).max(1.0);
     f64::from(d * brush.spacing.max(0.01)).max(0.5)
+}
+
+/// How much a perspective plane scales the dab at `p` relative to the stroke's first on-plane dab
+/// (`anchor`, the plane's scale there): 1 before that dab or off the planes.
+fn surface_factor(map: &dyn SurfaceMap, anchor: Option<f32>, p: &StrokePoint) -> f32 {
+    let Some(anchor) = anchor.filter(|a| a.is_finite() && *a > 0.0) else { return 1.0 };
+    match map.local(Point::new(p.x, p.y)) {
+        Some(l) if l.is_valid() => (l.scale / anchor).clamp(0.01, 100.0),
+        _ => 1.0,
+    }
 }
 
 /// Builds the primary dabs of a step (Shape Dynamics, Scattering, Transfer, Color, Texture depth).
@@ -584,15 +603,28 @@ pub struct DabBuilder {
     /// Per-stroke colour (Color Dynamics with per-tip off), computed at the first step.
     stroke_color: Option<[f32; 4]>,
     next_index: u64,
+    /// Follow Perspective: the planes dabs are sized and foreshortened by.
+    surface: Option<MapHandle>,
+    /// The plane's scale at the stroke's first on-plane dab (the size the brush means).
+    anchor: Option<f32>,
 }
 
 impl DabBuilder {
     pub fn new(brush: &BrushSettings) -> Self {
-        Self { brush: brush.clone(), seed: brush.seed, stroke_color: None, next_index: 0 }
+        Self { brush: brush.clone(), seed: brush.seed, stroke_color: None, next_index: 0, surface: None, anchor: None }
+    }
+
+    /// Size and foreshorten dabs by `map` wherever it has a plane (see [`surface_dab_shape`]).
+    pub fn with_surface(mut self, map: Option<Arc<dyn SurfaceMap>>) -> Self {
+        self.surface = map.map(MapHandle);
+        self
     }
 
     pub fn step_len(&self, p: &StrokePoint) -> f64 {
-        step_len_for(&self.brush, p)
+        match &self.surface {
+            Some(m) => step_len_scaled(&self.brush, p, surface_factor(&*m.0, self.anchor, p)),
+            None => step_len_for(&self.brush, p),
+        }
     }
 
     pub fn build(&mut self, s: &StepInput, out: &mut Vec<Dab>) {
@@ -649,7 +681,7 @@ impl DabBuilder {
                     }
                 }
             }
-            let radius = (diameter / 2.0).max(0.5);
+            let mut radius = (diameter / 2.0).max(0.5);
             // Scatter.
             let mut c = Point::new(s.point.x, s.point.y);
             if sc.enabled && sc.scatter.jitter > 0.0 {
@@ -665,6 +697,11 @@ impl DabBuilder {
                     c.x += -dy * ox;
                     c.y += dx * ox;
                 }
+            }
+            // Follow Perspective: on a plane, the plane's projection replaces the pen-tilt one.
+            if let Some(local) = self.surface.as_ref().and_then(|m| m.0.local(c)).filter(|l| l.is_valid()) {
+                let anchor = *self.anchor.get_or_insert(local.scale);
+                (radius, proj_angle, proj_scale) = surface_dab_shape(radius, Some(anchor), &local);
             }
             // Transfer.
             let tr = &b.transfer;
@@ -786,6 +823,8 @@ pub fn apply_pose(b: &BrushSettings, mut p: StrokePoint) -> StrokePoint {
 /// Incremental dab generation for a whole brush (primary and optional dual dabs).
 #[derive(Clone, Debug)]
 pub struct DabGenerator {
+    /// The planes dabs follow (the builder holds the same map).
+    surface: Option<MapHandle>,
     smoother: Smoother,
     walker: PathWalker,
     dual_walker: Option<PathWalker>,
@@ -809,6 +848,16 @@ impl DabGenerator {
         self.smoother.string()
     }
 
+    /// Follow the perspective planes of `map`: on a plane, dabs are sized by its local scale
+    /// (anchored at the stroke's first on-plane dab) and foreshortened by its squash, and spacing
+    /// follows the dab size. Off every plane, and with `None`, dabs are as without. Call it before
+    /// feeding any point.
+    pub fn with_surface(mut self, map: Option<Arc<dyn SurfaceMap>>) -> Self {
+        self.surface = map.clone().map(MapHandle);
+        self.builder = self.builder.with_surface(map);
+        self
+    }
+
     pub fn new(brush: &BrushSettings, zoom: f32) -> Self {
         let brush = brush.bounded_for_render();
         let interval = brush.build_up.then(|| 1000.0 / f64::from(brush.build_up_rate.clamp(0.1, 1000.0)));
@@ -819,6 +868,7 @@ impl DabGenerator {
             walker = walker.pixel_grid(f64::from(crate::render::grid_center(0.0, 0.0, brush.size).0));
         }
         Self {
+            surface: None,
             smoother: Smoother::new(&brush.smoothing, zoom),
             walker,
             dual_walker: dual_on.then(|| PathWalker::new(None)),
@@ -835,8 +885,18 @@ impl DabGenerator {
             // Each step becomes its dabs as the walker emits it: a long segment never holds its
             // step list (the pixel-grid mode can emit 1e7 steps for one).
             let brush = &*self.step_brush;
+            let surface = self.surface.as_ref();
             let builder = &mut self.builder;
-            self.walker.push(p, &|q| step_len_for(brush, q), &mut |s| builder.build(&s, dabs));
+            // The spacing reads the anchor the builder sets with the first on-plane dab.
+            let anchor = Cell::new(builder.anchor);
+            let step_len = |q: &StrokePoint| match surface {
+                Some(m) => step_len_scaled(brush, q, surface_factor(&*m.0, anchor.get(), q)),
+                None => step_len_for(brush, q),
+            };
+            self.walker.push(p, &step_len, &mut |s| {
+                builder.build(&s, dabs);
+                anchor.set(builder.anchor);
+            });
             if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {
                 let step = db.step_len(&p);
                 w.push(p, &|_| step, &mut |s| db.build(&s, dual));

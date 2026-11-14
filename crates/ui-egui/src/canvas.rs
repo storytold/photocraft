@@ -1812,6 +1812,7 @@ fn eyedropper_owns_image(app: &PhotocraftApp) -> bool {
 /// pointer position over another window paints nothing, then a guide under the pointer, then the
 /// tool's own cursor.
 fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool) {
+    crate::brush_cursor::draw_planes(app, input.painter, input.xf, input.tool);
     let ctx = input.ctx;
     let xf = input.xf;
     let response = input.response;
@@ -2036,12 +2037,22 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 crate::tool_cursor::crosshair(painter, p, 6.0, 0.0)
             } else {
                 let painting = app.drag.is_some();
+                // Follow Perspective: the outline is the dab as it will land on the plane here.
+                let surface = crate::brush_cursor::surface_shape(app, tool, xf.to_doc(p));
+                crate::brush_cursor::remember_shape(ui.ctx(), surface);
                 let brush = &app.session.tools.brush;
                 let full = (brush.size / 2.0 * xf.zoom).max(1.0);
                 match cur.painting {
                     PaintingCursor::Standard => egui::CursorIcon::Default,
                     PaintingCursor::Precise => crate::tool_cursor::crosshair(painter, p, 6.0, 0.0),
                     _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(painter, p, 5.0, 0.0),
+                    // On a perspective plane (Follow Perspective) the dab's own size, squash and angle.
+                    PaintingCursor::NormalTip | PaintingCursor::FullSizeTip if surface.is_some() => {
+                        let (r, angle, scale) = surface.unwrap_or((brush.size / 2.0, 0.0, 1.0));
+                        let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
+                        let axes = crate::brush_cursor::surface_axes(xf, r, angle, scale);
+                        crate::brush_cursor::cursor(painter, p, brush, (r * xf.zoom).max(1.0), axes, cur.painting == PaintingCursor::NormalTip, centre)
+                    }
                     // The Pencil (and the Eraser in Pencil mode): the outline of the
                     // whole pixels its dab fills, on the pixel grid. A round tip is a
                     // disc, a tiny one the whole square (#2662). The Block-mode Eraser:

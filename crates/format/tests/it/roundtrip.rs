@@ -1389,3 +1389,21 @@ fn file_encoding_source_images_roundtrips_and_defaults_when_absent() {
         assert_eq!(old.file_encoding, photocraft_doc::FileEncoding { jpeg_quality: Some(80), ..Default::default() });
     }
 }
+
+/// Vanishing Point planes are saved in `.pcraft`; a manifest from before the key existed loads
+/// with none, and non-finite corners in a hand-edited file are dropped.
+#[test]
+fn perspective_planes_roundtrip_and_default_when_absent() {
+    let mut doc = Document::new("floor", photocraft_doc::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+    doc.perspective =
+        photocraft_doc::PerspectivePlanes { planes: vec![[[1.0, 1.0], [3.0, 1.0], [4.0, 4.0], [0.0, 4.0]]], focal: Some(120.5), size: Some([4, 4]) };
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(loaded.perspective, doc.perspective);
+    assert_eq!(loaded, doc);
+
+    let mut json = serde_json::to_value(read_manifest(&bytes).unwrap().document).unwrap();
+    assert!(json.as_object_mut().unwrap().remove("perspective").is_some());
+    let old: photocraft_format::manifest::DocM = serde_json::from_value(json).unwrap();
+    assert!(old.perspective.is_empty());
+}

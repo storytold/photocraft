@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::curve::ResponseCurve;
 use crate::mixer::MixerSettings;
+use crate::surface::SurfaceOptions;
 use crate::tile::{GrayTile, StoredTile};
 
 /// Largest brush diameter accepted by the rasterizer and brush controls.
@@ -617,6 +618,8 @@ pub struct BrushSettings {
     pub locks: SectionLocks,
     /// Mixer Brush options (Wet, Load, Mix, Flow, Sample All Layers) used by `paint.mixerBrush`.
     pub mixer: MixerSettings,
+    /// Surface-aware painting: shading from the photo and perspective-following dabs.
+    pub surface: SurfaceOptions,
     /// Random seed for jitters (commands derive it from the stroke when not given), so strokes replay.
     pub seed: u64,
 }
@@ -662,6 +665,7 @@ impl Default for BrushSettings {
             protect_texture: false,
             locks: SectionLocks::default(),
             mixer: MixerSettings::default(),
+            surface: SurfaceOptions::default(),
             seed: 0,
         }
     }

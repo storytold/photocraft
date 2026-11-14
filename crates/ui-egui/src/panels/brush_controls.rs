@@ -113,6 +113,48 @@ pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::Br
     });
 }
 
+/// The Brush's and Pencil's Surface button: a popover with Surface Color (the paint takes on the
+/// photo's shading: Strength, Detail, Sample) and Follow Perspective (dabs follow the stored
+/// Vanishing Point planes), plus Clear Planes. Edits are the caller's `b`, committed through
+/// `tools.setBrush`; Clear Planes runs `perspective.clearPlanes`.
+pub(super) fn surface_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) {
+    use photocraft_paint::surface::{DETAIL_RANGE, SampleMode};
+    let on = b.surface.color || b.surface.perspective;
+    let resp = icons::button(ui, "grid-3x3", 24.0, on, tl!("Surface options"));
+    let resp = crate::brush_picker::named(resp, "Surface options");
+    let clear_enabled = crate::menus::is_enabled(app, "perspective.clearPlanes");
+    let mut clear = false;
+    egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(200.0);
+        let s = &mut b.surface;
+        ui.label(egui::RichText::new(tl!("Surface")).strong());
+        widgets::checkbox(ui, &mut s.color, tl!("Surface Color")).on_hover_text(tl!("The paint takes on the shading of the photo"));
+        ui.add_enabled_ui(s.color, |ui| {
+            let mut percent = (s.strength * 100.0).clamp(0.0, 100.0);
+            if widgets::slider_row(ui, tl!("Strength"), &mut percent, 0.0..=100.0, "%", None).changed() {
+                s.strength = (percent.round() / 100.0).clamp(0.0, 1.0);
+            }
+            let mut detail = s.detail;
+            if widgets::slider_row(ui, tl!("Detail"), &mut detail, *DETAIL_RANGE.start()..=*DETAIL_RANGE.end(), "px", None).changed() {
+                s.detail = detail.round().clamp(*DETAIL_RANGE.start(), *DETAIL_RANGE.end());
+            }
+            let modes = [(SampleMode::AllLayers, tl!("All Layers")), (SampleMode::CurrentLayer, tl!("Current Layer"))];
+            widgets::dropdown(ui, "surface-sample", tl!("Sample"), &mut s.sample, &modes, 120.0);
+        });
+        ui.separator();
+        widgets::checkbox(ui, &mut s.perspective, tl!("Follow Perspective"))
+            .on_hover_text(tl!("Dabs follow the perspective planes defined in Vanishing Point"));
+        ui.add_enabled_ui(clear_enabled, |ui| {
+            if ui.button(tl!("Clear Planes")).clicked() {
+                clear = true;
+            }
+        });
+    });
+    if clear {
+        crate::brush_panel::run_or_status(app, "perspective.clearPlanes", json!({}));
+    }
+}
+
 /// A Useful mixer brush combinations entry: its label and the Wet, Load and Mix it sets.
 type MixerCombination = (&'static str, Option<(f32, f32, f32)>);
 
@@ -259,3 +301,7 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
 #[cfg(test)]
 #[path = "../smoothing_options_greyed_tests.rs"]
 mod smoothing_options_greyed_tests;
+
+#[cfg(test)]
+#[path = "../surface_brush_tests.rs"]
+mod surface_brush_tests;

@@ -282,6 +282,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
         variables: d.variables.clone(),
         timeline: d.timeline.clone(),
         file_encoding: d.file_encoding,
+        perspective: d.perspective.clone(),
         layer_comps: d.layer_comps.iter().map(|c| comp_m(c, sink)).collect(),
         last_applied_comp: d.last_applied_comp,
         last_document_state: d.last_document_state.as_ref().map(|c| comp_m(c, sink)),
@@ -716,6 +717,7 @@ impl Loader<'_> {
             variables,
             timeline: m.timeline.clone(),
             file_encoding: m.file_encoding,
+            perspective: sanitized_perspective(&m.perspective),
             layer_comps,
             last_applied_comp: m.last_applied_comp,
             last_document_state,
@@ -728,6 +730,16 @@ impl Loader<'_> {
 
     fn channel(&mut self, c: &ChannelM) -> Result<AlphaChannel> {
         Ok(AlphaChannel { name: c.name.clone(), surface: self.surface(&c.surface)?, spot: c.spot, color: c.color, opacity: c.opacity, indicates: c.indicates })
+    }
+}
+
+/// The saved planes with hostile values dropped: non-finite corners and anything past the cap.
+fn sanitized_perspective(p: &photocraft_doc::PerspectivePlanes) -> photocraft_doc::PerspectivePlanes {
+    const MAX_PLANES: usize = 64;
+    photocraft_doc::PerspectivePlanes {
+        planes: p.planes.iter().filter(|pl| pl.iter().flatten().all(|v| v.is_finite())).take(MAX_PLANES).copied().collect(),
+        focal: p.focal.filter(|f| f.is_finite() && *f > 0.0),
+        size: p.size.filter(|s| s[0] > 0 && s[1] > 0),
     }
 }
 
