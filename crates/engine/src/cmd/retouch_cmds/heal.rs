@@ -3,7 +3,7 @@ use super::periodic;
 use super::sampling::{SampleLayers, composite_region, sample_all_layers, sample_layers};
 use super::{
     BlendMode, CompleteParams, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, Session, Stroke, Surface, Value, apply_coverage, bad,
-    coverage, damage_json, flag, inpaint, json, parse_brush, poisson, reject_huge_stroke, run_stroke, string,
+    coverage, damage_json, flag, inpaint, json, parse_brush, poisson, reject_huge_stroke, restore_coverage, run_stroke, string,
 };
 
 /// Grow a stroke's coverage map by `m` pixels of zero coverage (a Dirichlet boundary for the solve).
@@ -172,7 +172,7 @@ pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
         let src = if src_surface.format() == fmt { src_surface } else { src_surface.convert(fmt) };
         let (bounds, cov) = coverage(CMD, &stroke)?;
         let paint = Region::read(&src, bounds);
-        Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
+        Ok(restore_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
     })?;
     let mut r = json!({ "damage": damage_json(dmg) });
     if from_live {
@@ -314,3 +314,7 @@ pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "heal_indexed_tests.rs"]
 mod heal_indexed_tests;
+
+#[cfg(test)]
+#[path = "history_brush_transparency_tests.rs"]
+mod history_brush_transparency_tests;

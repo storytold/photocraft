@@ -203,6 +203,39 @@ pub fn apply_coverage(
     paint: &Region,
     blend: BlendMode,
 ) -> Rect {
+    composite_coverage(target, rect, cov, opacity, selection, lock_transparency, paint, blend, false)
+}
+
+/// [`apply_coverage`] for the History Brush (#14701): in Normal mode the paint image *replaces*
+/// the pixels at the per-pixel weight (a premultiplied mix, alpha included), so a transparent
+/// source pixel clears what is there instead of leaving it under the restored pixels. Other
+/// modes, locked transparency and targets without alpha composite as [`apply_coverage`] does.
+#[allow(clippy::too_many_arguments)]
+pub fn restore_coverage(
+    target: &mut Surface,
+    rect: Rect,
+    cov: &[f32],
+    opacity: f32,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    paint: &Region,
+    blend: BlendMode,
+) -> Rect {
+    composite_coverage(target, rect, cov, opacity, selection, lock_transparency, paint, blend, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn composite_coverage(
+    target: &mut Surface,
+    rect: Rect,
+    cov: &[f32],
+    opacity: f32,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    paint: &Region,
+    blend: BlendMode,
+    replace: bool,
+) -> Rect {
     if rect.is_empty() {
         return Rect::EMPTY;
     }
@@ -237,7 +270,10 @@ pub fn apply_coverage(
         }
         let src = paint.px(x, y);
         if blend == BlendMode::Normal {
-            over_native(&fmt, px, src, k, lock_transparency);
+            match a {
+                Some(a) if replace && !lock_transparency => mix_premultiplied(px, src, a, k),
+                _ => over_native(&fmt, px, src, k, lock_transparency),
+            }
         } else {
             // A transparent source cannot paint. Skip it before an RGB round trip changes
             // untouched native CMYK/Lab values; Normal handles zero weight in over_native.
