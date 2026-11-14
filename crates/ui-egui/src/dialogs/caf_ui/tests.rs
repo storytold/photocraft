@@ -246,6 +246,9 @@ fn settings_are_remembered_and_the_menu_opens_the_workspace() {
     open(&mut app).unwrap();
     let mut want = CafOpts::default();
     want.apply(&set).unwrap();
+    // The Fill Settings are not remembered (#14193).
+    let d = CafOpts::default();
+    (want.color_adaptation, want.rotation, want.scale, want.mirror) = (d.color_adaptation, d.rotation, d.scale, d.mirror);
     assert_eq!(ws(&app).opts, want);
     // Bad values are errors; the engine command with params still runs directly.
     assert!(control(&mut app, &json!({"sampling": "everywhere"})).is_err());

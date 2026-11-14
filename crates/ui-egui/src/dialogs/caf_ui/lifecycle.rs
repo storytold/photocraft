@@ -15,7 +15,8 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
     let (pw, ph) = ((canvas.width() as usize).div_ceil(k), (canvas.height() as usize).div_ceil(k));
     let mut opts = CafOpts::default();
     if let Some(saved) = app.session.prefs().dialogs.get(REMEMBERED) {
-        let _ = opts.apply(saved);
+        // Fill Settings open at their defaults: an older entry's keys are ignored.
+        let _ = opts.apply(&without_fill_settings(saved.clone()));
     }
     let mut w = CafWorkspace {
         layer,
@@ -71,8 +72,18 @@ pub(super) fn bounds(b: &Base) -> Rect {
     })
 }
 
+/// The Fill Settings (Color Adaptation, Rotation Adaptation, Scale, Mirror) are never remembered.
+fn without_fill_settings(mut v: Value) -> Value {
+    if let Some(m) = v.as_object_mut() {
+        for k in ["colorAdaptation", "rotationAdaptation", "scale", "mirror"] {
+            m.remove(k);
+        }
+    }
+    v
+}
+
 fn remember(app: &mut PhotocraftApp, opts: &CafOpts) {
-    let v = opts.to_json();
+    let v = without_fill_settings(opts.to_json());
     app.session.prefs.edit(|p| p.dialogs.insert(REMEMBERED.into(), v));
 }
 
