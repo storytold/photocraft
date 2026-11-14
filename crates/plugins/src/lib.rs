@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod acceleration;
 mod apply;
 pub mod manifest;
 pub mod registry;
@@ -32,6 +33,8 @@ pub use runtime::{ABI_VERSION, Limits, Plugin};
 /// A plug-in error. Every way a module can misbehave ends here, never in a panic.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    #[error("plug-in cancelled")]
+    Cancelled,
     #[error("not a valid plug-in module: {0}")]
     Module(String),
     #[error("plug-in ABI: {0}")]

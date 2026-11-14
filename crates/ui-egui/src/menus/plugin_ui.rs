@@ -66,6 +66,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
     }
     let mut fixed = Map::new();
     fixed.insert("id".into(), json!(pid));
+    fixed.insert("__preview".into(), json!(m.preview_default));
     let d = crate::filter_dialog::open_with_spec(app, "plugin.run", &m.name, &m.params_notation(), fixed);
     Some(Ok(json!({"dialog": d})))
 }

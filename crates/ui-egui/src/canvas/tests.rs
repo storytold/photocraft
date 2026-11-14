@@ -186,6 +186,156 @@ fn inline_filter_preview_is_composited_and_recorded_once() {
     assert_eq!(app.perf.stage.composite_ms + app.perf.stage.upload_ms, app.perf.composite_ms + app.perf.upload_ms);
 }
 
+/// A focused duplicate with a different visible region must not replace the main view's preview or queue another job.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn plugin_preview_review_regression_keeps_canonical_region_across_views() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = true;
+    app.run("file.new", json!({"width": 1024, "height": 128, "background": "#204060"})).unwrap();
+    app.run("plugin.install", json!({"path": concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+    crate::filter_dialog::open_with_spec(
+        &mut app,
+        "plugin.run",
+        "Invert",
+        "{}",
+        json!({"id": "org.photocraft.example.invert", "__preview": true}).as_object().unwrap().clone(),
+    );
+    app.ui.extras.rulers = false;
+    let main = View { zoom: 1.0, center: [128.0, 64.0], doc_size: [1024, 128], fit_pending: false, ..Default::default() };
+    let duplicate = View { center: [896.0, 64.0], ..main.clone() };
+    let id = app.ui.alloc_id();
+    app.ui.windows.push(crate::state::DocWindow { id, document: 0, view: duplicate.clone(), open: true, floating: false, focused: true, position: None });
+    let viewport = egui::ViewportId::from_hash_of(("docwin", id));
+    let ctx = egui::Context::default();
+    let paint = |app: &mut PhotocraftApp, view: &View, viewport_id, primary| {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(256.0, 128.0));
+        let mut input = egui::RawInput { viewport_id, screen_rect: Some(rect), ..Default::default() };
+        input.viewports.entry(viewport_id).or_default();
+        let mut shown = false;
+        ctx.run_ui(input, |ui| {
+            // Carry the same explicit document-window identity as tabs::extra_windows.
+            let window = egui::Id::unique("canvas-doc-window");
+            if viewport_id != egui::ViewportId::ROOT {
+                ui.data_mut(|data| data.insert_temp(window, viewport_id));
+            }
+            canvas_view(app, ui, 0, rect, view.clone(), primary);
+            shown = ensure_filter_preview(app, 0, ui.ctx()).is_some();
+            ui.data_mut(|data| data.remove::<egui::ViewportId>(window));
+        })
+        .textures_delta
+        .clear();
+        shown
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !paint(&mut app, &main, egui::ViewportId::ROOT, true) {
+        assert!(std::time::Instant::now() < deadline, "the main view never received its preview");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let canonical = app.filter_preview.as_ref().unwrap().key.clone();
+    let original = app.session.active().unwrap().doc.clone();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let filtered = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap().layer(layer).unwrap().surface().unwrap().pixel(128, 64);
+    assert_ne!(filtered, original.layer(layer).unwrap().surface().unwrap().pixel(128, 64), "the main view has an actual filter result");
+
+    let shown = paint(&mut app, &duplicate, viewport, true);
+    assert_eq!(app.filter_preview.as_ref().unwrap().key, canonical, "the focused duplicate replaced the main view's preview");
+    assert!(!app.filter_preview_worker.busy(), "a different duplicate viewport queued redundant filtering");
+    assert!(shown, "the duplicate lost the shared canonical preview");
+    let duplicate_filtered = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap().layer(layer).unwrap().surface().unwrap().pixel(896, 64);
+    assert_eq!(duplicate_filtered, filtered, "a disjoint duplicate view must show the filter result, not the original pixels");
+    assert!(paint(&mut app, &main, egui::ViewportId::ROOT, true), "the main view lost its filter preview after drawing the duplicate");
+    let window = egui::Id::unique("canvas-doc-window");
+    ctx.data_mut(|data| data.insert_temp(window, viewport));
+    assert!(paint(&mut app, &duplicate, egui::ViewportId::ROOT, true), "an embedded duplicate reuses the canonical preview");
+    assert_eq!(app.filter_preview.as_ref().unwrap().key, canonical);
+    assert!(!app.filter_preview_worker.busy());
+
+    // Undocking transfers ownership even without focus; ROOT must then reuse the floating region.
+    app.ui.windows[0].floating = true;
+    app.ui.windows[0].focused = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !paint(&mut app, &duplicate, viewport, false) || app.filter_preview.as_ref().unwrap().key == canonical {
+        assert!(std::time::Instant::now() < deadline, "the unfocused floating owner never received its region");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let floating = app.filter_preview.as_ref().unwrap().key.clone();
+    assert!(paint(&mut app, &main, egui::ViewportId::ROOT, true));
+    assert_eq!(app.filter_preview.as_ref().unwrap().key, floating, "ROOT cannot take back a floating owner's region");
+    ctx.data_mut(|data| data.insert_temp(window, viewport));
+    assert!(paint(&mut app, &duplicate, egui::ViewportId::ROOT, false), "embedded floating windows retain ownership");
+    assert!(!app.filter_preview_worker.busy());
+
+    app.ui.windows[0].open = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !paint(&mut app, &main, egui::ViewportId::ROOT, true) || app.filter_preview.as_ref().unwrap().key == floating {
+        assert!(std::time::Instant::now() < deadline, "closing the floating window did not restore the main preview");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let restored = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap().layer(layer).unwrap().surface().unwrap().pixel(128, 64);
+    assert_eq!(restored, filtered, "closing the floating window restores filtered pixels in the main view");
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc), "previewing never edits the document");
+}
+
+/// Canvas-produced document regions must cover the visible proxy pixels before and after panning.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn panned_plugin_preview_matches_full_preview_at_factor_four() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = true;
+    app.run("file.new", json!({"width": 6000, "height": 4000, "background": "#204060"})).unwrap();
+    app.session
+        .edit("pattern", |doc, active| {
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surface.fill_rect(DRect::new(1600, 1000, 2000, 1400), &[0.2, 0.7, 0.3, 1.0]);
+            surface.fill_rect(DRect::new(4000, 2400, 4400, 3000), &[0.8, 0.2, 0.4, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.run("plugin.install", json!({"path": concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+    crate::filter_dialog::open_with_spec(
+        &mut app,
+        "plugin.run",
+        "Invert",
+        "{}",
+        json!({"id": "org.photocraft.example.invert", "__preview": true}).as_object().unwrap().clone(),
+    );
+    app.ui.extras.rulers = false;
+    let original = app.session.active().unwrap().doc.clone();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let full = crate::filter_dialog::preview_document(&original, Some(layer), "plugin.run", &json!({"id": "org.photocraft.example.invert"}), 4).unwrap();
+    let expected = full.layer(layer).unwrap().surface().unwrap();
+    let proxy = crate::proxy::proxy_document(&original, 4);
+    let ctx = egui::Context::default();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(256.0, 128.0));
+    for (center, region, visible) in
+        [([1800.0, 1200.0], [0, 0, 4096, 3072], DRect::new(322, 236, 578, 364)), ([4200.0, 2700.0], [2048, 1024, 6000, 4000], DRect::new(922, 611, 1178, 739))]
+    {
+        let view = View { zoom: 0.25, center, doc_size: [6000, 4000], fit_pending: false, ..Default::default() };
+        app.ui.views[0] = view.clone();
+        ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
+            canvas_view(&mut app, ui, 0, rect, view.clone(), true);
+        })
+        .textures_delta
+        .clear();
+        assert!(app.filter_preview_worker.busy(), "each uncovered pan returns while filtering runs on the worker");
+        drive_until(&mut app, &ctx, "the panned region", |app| {
+            app.filter_preview.as_ref().is_some_and(|p| p.key.params["__previewRegion"] == json!(region) && p.result.is_some())
+        });
+        let preview = app.filter_preview.as_ref().unwrap();
+        assert_eq!(preview.key.k, 4);
+        assert_eq!(preview.key.params["__previewRegion"], json!(region), "document coordinates at {center:?}");
+        let result = preview.result.as_ref().unwrap().layer(layer).unwrap().surface().unwrap();
+        assert_ne!(expected.pixel(visible.x0, visible.y0), proxy.layer(layer).unwrap().surface().unwrap().pixel(visible.x0, visible.y0));
+        for y in visible.y0..visible.y1 {
+            for x in visible.x0..visible.x1 {
+                assert_eq!(result.pixel(x, y), expected.pixel(x, y), "visible proxy pixel {x},{y} at {center:?}");
+            }
+        }
+    }
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc), "previewing never edits the document");
+}
+
 /// #6326: a filter's live preview is never coarser than the screen. On a document big enough
 /// for a reduced proxy, the view at 100 % previews at full resolution, and only a view zoomed
 /// out far enough uses the proxy. Through `ensure_filter_preview`, so the factor the canvas
@@ -3992,4 +4142,99 @@ fn an_armed_eyedropper_hides_no_cursor_on_a_secondary_canvas() {
     };
     assert_eq!(cursor(&mut app, true), egui::CursorIcon::None, "the primary canvas hides the icon under the pipette it draws");
     assert_ne!(cursor(&mut app, false), egui::CursorIcon::None, "a secondary canvas keeps a cursor");
+}
+
+#[test]
+fn inline_plugin_preview_never_refilters_on_pan() {
+    for cooperative in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.background_jobs = false;
+        app.session.set_cooperative_jobs(cooperative);
+        app.run("file.new", json!({"width":2048,"height":128,"background":"#204060"})).unwrap();
+        app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+        crate::filter_dialog::open_with_spec(
+            &mut app,
+            "plugin.run",
+            "Invert",
+            "{}",
+            json!({"id":"org.photocraft.example.invert","__preview":true}).as_object().unwrap().clone(),
+        );
+        let ctx = egui::Context::default();
+        let doc = app.session.active().unwrap().doc.clone();
+        let set_region = |r| ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("plugin-preview-region", doc.id)), r));
+        set_region(DRect::new(200, 0, 300, 128));
+        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+        let first = app.filter_preview.as_ref().unwrap().result.clone().unwrap();
+        assert!(app.filter_preview.as_ref().unwrap().key.params.get("__previewRegion").is_none());
+        for x in [230, 1024, 1800, 260, 200] {
+            set_region(DRect::new(x, 0, x + 100, 128));
+            ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+            assert!(
+                std::sync::Arc::ptr_eq(&first, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()),
+                "panning must not run a synchronous plug-in in cooperative/web sessions"
+            );
+        }
+        app.ui.dialogs[0].fields.insert("amount".into(), json!(0.5));
+        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&first, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()), "changed parameters invalidate reuse");
+        app.ui.view.pattern_preview = true;
+        set_region(DRect::new(3000, 0, 3100, 128));
+        ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+        let preview = app.filter_preview.as_ref().unwrap();
+        assert!(preview.key.params.get("__previewRegion").is_none());
+        assert_ne!(preview.result.as_ref().unwrap().layers[0].surface().unwrap().pixel(1, 1), doc.layers[0].surface().unwrap().pixel(1, 1));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_failed_plugin_preview_does_not_retain_its_large_region() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = true;
+    app.run("file.new", json!({"width":2048,"height":1024,"background":"#204060"})).unwrap();
+    app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"),"/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+    crate::filter_dialog::open_with_spec(
+        &mut app,
+        "plugin.run",
+        "Invert",
+        "{}",
+        json!({"id":"org.photocraft.example.invert","__preview":true}).as_object().unwrap().clone(),
+    );
+    let ctx = egui::Context::default();
+    let doc = app.session.active().unwrap().doc.id;
+    let region = egui::Id::unique(("plugin-preview-region", doc));
+    ctx.data_mut(|d| d.insert_temp(region, DRect::new(0, 0, 2048, 1024)));
+    drive_until(&mut app, &ctx, "the large preview", |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
+    app.filter_preview.as_mut().unwrap().result = None;
+    ctx.data_mut(|d| d.insert_temp(region, DRect::new(0, 0, 128, 128)));
+    app.ui.dialogs[0].fields.insert("amount".into(), json!(0.5));
+    drive_until(&mut app, &ctx, "the smaller preview", |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
+    assert_eq!(app.filter_preview.as_ref().unwrap().key.params["__previewRegion"], json!([0, 0, 512, 512]));
+}
+
+/// The shared window renderer must retain mask ownership even when egui embeds it in ROOT.
+#[test]
+fn embedded_document_window_keeps_skin_smooth_mask_ownership() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.background_jobs = false;
+    app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/skin-smooth.wasm")})).unwrap();
+    app.run("file.new", json!({"width":32,"height":24,"background":"#b17d62"})).unwrap();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "plugin.filter.local.skinsmooth.skin-smooth", json!({})).unwrap();
+    app.ui.dialogs[0].fields.insert("__skinMask".into(), json!(true));
+    let id = app.ui.alloc_id();
+    let mut window = crate::state::DocWindow { id, document: 0, view: app.ui.views[0].clone(), open: true, floating: false, focused: true, position: None };
+    app.ui.windows.push(window.clone());
+    let ctx = egui::Context::default();
+    for floating in [false, true] {
+        window.floating = floating;
+        app.ui.windows[0].floating = floating;
+        ctx.run_ui(Default::default(), |ui| {
+            super::tabs::document_window_canvas(&mut app, ui, &window, window.view.clone(), true);
+            assert!(ui.data(|d| d.get_temp::<egui::ViewportId>(egui::Id::unique("canvas-doc-window"))).is_none());
+        })
+        .textures_delta
+        .clear();
+        assert_eq!(app.skin_smooth_mask.is_some(), floating, "only the undocked document owns the mask in this window");
+        assert!(app.drawing_window.is_none());
+    }
 }

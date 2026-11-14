@@ -142,6 +142,7 @@ pub mod perspective_crop_cmds;
 pub mod photo_cmds;
 pub mod pick_cmds;
 pub mod plugin_cmds;
+mod plugin_preset_cmds;
 pub mod preset_import_cmds;
 pub mod print_cmds;
 pub mod rasterize_style_cmds;
@@ -270,6 +271,7 @@ fn registry() -> &'static Registry {
 
 // ---------- the table ----------
 
+/// Assembles built-in and module command specs for the shared engine, CLI and UI registry.
 #[allow(clippy::too_many_lines)]
 /// Register the core file, edit, layer and document commands.
 fn build() -> Vec<CommandSpec> {
@@ -1455,6 +1457,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::rasterize_style_cmds::specs());
     v.extend(crate::variables_cmds::specs());
     v.extend(crate::plugin_cmds::specs());
+    v.extend(plugin_preset_cmds::specs());
     v.extend(crate::group_view_cmds::specs());
     v.extend(crate::fx_view_cmds::specs());
     v.extend(crate::fx_visibility_cmds::specs());

@@ -551,6 +551,10 @@ pub fn reset_fields(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
         return;
     }
     let Some(command) = fields.get("__command").and_then(Value::as_str).map(str::to_owned) else { return };
+    if command == "plugin.run" && fields.contains_key("__presetValues") {
+        super::plugin_presets::reset(app, fields);
+        return;
+    }
     let spec =
         fields.get("__spec").and_then(Value::as_str).map(str::to_owned).or_else(|| photocraft_engine::commands::find(&command).map(|c| c.params.to_owned()));
     let Some(spec) = spec else { return };
@@ -749,7 +753,7 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
     fields.insert("__command".into(), json!(command));
     fields.insert("__label".into(), json!(label));
     fields.insert("__filter".into(), json!(true));
-    fields.insert("__preview".into(), json!(true));
+    fields.entry("__preview").or_insert(json!(true));
     fields.insert("__spec".into(), json!(spec));
     for p in parse_spec(spec) {
         let v = match &p.kind {
@@ -772,6 +776,12 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
             fields.insert("target".into(), json!("mask"));
         } else if let Some(colors) = photocraft_engine::color_channels::selected(&app.session).filter(|c| c.len() > 1) {
             fields.insert("target".into(), colors.params());
+        }
+    }
+    if command == "plugin.run" {
+        super::plugin_presets::restore_choices(app, &mut fields);
+        if super::skin_smooth_ui::owns(&fields) {
+            super::skin_smooth_ui::bind(app, &mut fields);
         }
     }
     app.ui.open_dialog(crate::state::DialogKind::Command, fields)
@@ -1152,6 +1162,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         crate::select_mask_view::controls(ui, f);
     }
     for p in parse_spec(&spec) {
+        if cmd == "plugin.run" && p.key == "preset" && f.contains_key("__presetValues") && super::plugin_presets::manages_preset(f) {
+            continue;
+        }
         if cmd == "image.mode.indexedColor" && p.key == "matte" {
             indexed_matte_row(ui, f);
             continue;
@@ -1432,7 +1445,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.add_space(4.0);
         ui.add(egui::Label::new(egui::RichText::new(note).color(t.text_dim)).wrap());
     }
-    if let Some(mut preview) = f.get("__preview").and_then(Value::as_bool) {
+    if cmd != "plugin.run"
+        && let Some(mut preview) = f.get("__preview").and_then(Value::as_bool)
+    {
         ui.add_space(4.0);
         crate::widgets::checkbox(ui, &mut preview, tl!("Preview"));
         f.insert("__preview".into(), json!(preview));
@@ -1549,7 +1564,34 @@ pub(crate) fn preview_document_for_target(
     // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).
     let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
     let mut proxy = crate::proxy::proxy_document(doc, run_k);
+    let selection = proxy.selection.clone();
     let mut p = params.clone();
+    if command == photocraft_engine::plugin_cmds::RUN
+        && let Some(rect) = params.get("__previewRegion")
+    {
+        let [x0, y0, x1, y1]: [i32; 4] = serde_json::from_value(rect.clone()).ok()?;
+        let k = i32::try_from(run_k.max(1)).ok()?;
+        let up = |x: i32| x.div_euclid(k).saturating_add(i32::from(x.rem_euclid(k) != 0));
+        let region = photocraft_geom::Rect::new(x0.div_euclid(k), y0.div_euclid(k), up(x1), up(y1)).intersect(&proxy.bounds());
+        let mut mask = photocraft_raster::Surface::new(photocraft_color::PixelFormat {
+            mode: photocraft_color::ColorMode::Grayscale,
+            sample: photocraft_color::SampleType::F32,
+            alpha: false,
+        });
+        // Preserve feathered selection coverage, with zero coverage outside the viewport.
+        for tile in region.tiles() {
+            if let Some(cancel) = cancel {
+                cancel.check().ok()?;
+            }
+            let row = tile.rect().intersect(&region);
+            let values = selection.as_ref().map_or_else(|| vec![1.0; row.width() as usize * row.height() as usize], |s| s.read_region(row));
+            mask.write_region(row, &values);
+        }
+        proxy.selection = Some(mask);
+        // A renderable smart object has its own shared filter mask. Carry the region to
+        // the new stage too, so that mask keeps its coverage, density and feather.
+        p["__previewRegion"] = json!([region.x0, region.y0, region.x1, region.y1]);
+    }
     if is_smart_edit(command) {
         let layer = match params.get("layer") {
             Some(id) => photocraft_doc::LayerId(id.as_u64()?),
@@ -1575,6 +1617,7 @@ pub(crate) fn preview_document_for_target(
         scale_preview_params(command, &mut p, run_k);
     }
     let mut s = photocraft_engine::Session::new();
+    s.plugin_accelerator = photocraft_plugins::acceleration::current();
     s.color.settings = color.clone();
     if let Some((foreground, background)) = tool_colors {
         s.tools.foreground = foreground;
@@ -1595,8 +1638,32 @@ pub(crate) fn preview_document_for_target(
         s.select_layer(id).ok()?;
     }
     s.active_mut()?.channel_view.target = target;
+    if command == photocraft_engine::plugin_cmds::RUN
+        && target == photocraft_engine::channel_cmds::ChannelTarget::Composite
+        && let Some(rect) = p.get("__previewRegion")
+    {
+        let [x0, y0, x1, y1]: [i32; 4] = serde_json::from_value(rect.clone()).ok()?;
+        if let Some((layer, surface)) = photocraft_engine::plugin_cmds::preview_smart_region(
+            &s,
+            &p,
+            photocraft_geom::Rect::new(x0, y0, x1, y1),
+            cancel.unwrap_or(&photocraft_engine::jobs::JobCtx::new()),
+        )
+        .ok()?
+        {
+            let mut result = (*s.active()?.doc).clone();
+            let photocraft_doc::LayerContent::Smart(sm) = &mut result.layer_mut(layer)?.content else { return None };
+            sm.cache = Some(surface);
+            result.selection = selection;
+            return Some(result);
+        }
+    }
     s.execute(command, p).ok()?;
-    s.active().map(|d| crate::proxy::proxy_document(&d.doc, reduce_k))
+    let mut result = crate::proxy::proxy_document(&s.active()?.doc, reduce_k);
+    if command == photocraft_engine::plugin_cmds::RUN && params.get("__previewRegion").is_some() {
+        result.selection = selection;
+    }
+    Some(result)
 }
 
 /// Whether `command` is a Smart Filter edit (its parameters or its blending) rather than a filter run on its own.
@@ -1747,8 +1814,8 @@ pub struct FilterPreviewKey {
 }
 
 impl FilterPreviewKey {
-    /// Same dialog, document and source revisions, layer, channel target, command, proxy factor
-    /// and tool colors. For Match Color, the selected source layer is also part of the target.
+    /// Same dialog, document and source revisions, layer, channel target, command, proxy factor,
+    /// tool colors and preview region. Match Color also includes the selected source layer.
     ///
     /// The canvas shows whatever this preview was computed for, so a result whose parameters are
     /// a few frames old still belongs on screen while a slider is moving; matching on everything
@@ -1771,6 +1838,7 @@ impl FilterPreviewKey {
             && self.active == other.active
             && self.target == other.target
             && self.command == other.command
+            && self.params.get("__previewRegion") == other.params.get("__previewRegion")
             && (self.command != MATCH_COLOR || self.params.get("sourceLayer") == other.params.get("sourceLayer"))
             && self.tool_colors == other.tool_colors
     }

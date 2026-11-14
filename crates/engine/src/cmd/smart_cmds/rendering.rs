@@ -327,6 +327,9 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
     // stages too: a trusted UI render may have populated this process-wide cache earlier.
     for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
         crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
+        if filter.command == crate::plugin_cmds::RUN {
+            crate::plugin_cmds::check_color(doc, &filter.params)?;
+        }
     }
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
     let bytes = display_source(sm, &bytes);

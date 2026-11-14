@@ -65,6 +65,38 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     let st = app.session.documents().get(idx)?;
     // Fade previews at full size: it blends one area, like OK does, and has no proxy (#8230).
     let k = if cmd == FADE { 1 } else { filter_preview_factor(app, &st.doc, &cmd, &params) };
+    let extra_views = app.ui.windows.iter().filter(|w| w.open && w.document == idx);
+    // Duplicates share one preview: each may show a different part of the document.
+    let multiple_views = extra_views.clone().any(|w| !w.floating) || extra_views.count() > 1;
+    // Only the preview copy gets this region. OK still dispatches the dialog's full parameters.
+    if cmd == photocraft_engine::plugin_cmds::RUN
+        && !multiple_views
+        // Only a background worker may refilter on pan. Inline/web sessions reuse a full proxy.
+        && app.background_jobs
+        && !cfg!(target_arch = "wasm32")
+        && !app.session.cooperative_jobs()
+        && !app.ui.view.pattern_preview
+        && let Some(visible) = ctx.data(|data| data.get_temp::<photocraft_geom::Rect>(egui::Id::unique(("plugin-preview-region", st.doc.id))))
+        && let Some(p) = params.as_object_mut()
+    {
+        let r = visible.intersect(&st.doc.bounds());
+        // Retain completed coverage while it contains the viewport. A tile of overscan
+        // avoids redundant worker requests when a native view pans around a tile boundary.
+        let q = (k as i32).saturating_mul(photocraft_geom::TILE_SIZE).max(1);
+        let up = |x: i32| x.div_euclid(q).saturating_add(i32::from(x.rem_euclid(q) != 0)).saturating_mul(q);
+        let previous = app
+            .filter_preview
+            .as_ref()
+            .filter(|p| p.result.is_some() && p.key.doc == st.doc.id && p.key.k == k)
+            .and_then(|p| p.key.params.get("__previewRegion"))
+            .and_then(|v| serde_json::from_value::<[i32; 4]>(v.clone()).ok())
+            .map(|[x0, y0, x1, y1]| photocraft_geom::Rect::new(x0, y0, x1, y1))
+            .filter(|previous| previous.intersect(&r) == r);
+        let r = previous.unwrap_or_else(|| {
+            photocraft_geom::Rect::new(r.x0.div_euclid(q) * q, r.y0.div_euclid(q) * q, up(r.x1), up(r.y1)).inflate(q).intersect(&st.doc.bounds())
+        });
+        p.insert("__previewRegion".into(), serde_json::json!([r.x0, r.y0, r.x1, r.y1]));
+    }
     let request = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
@@ -118,8 +150,10 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
             let color = app.session.color.settings.clone();
             let task = request.clone();
+            let accelerator = app.session.effective_plugin_accelerator();
             let fade = fade_job(app, &task);
             if let Err(error) = app.filter_preview_worker.start(request.clone(), ctx.clone(), move |cancel| {
+                let _acceleration = photocraft_plugins::acceleration::scope(accelerator);
                 let t0 = crate::gpu_canvas::now_ms();
                 let result = match fade {
                     Some(fade) => fade.and_then(|f| f.render().ok()),
@@ -166,6 +200,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         let doc = app.session.documents().get(idx)?.doc.clone();
         let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
         let t0 = crate::gpu_canvas::now_ms();
+        let _acceleration = photocraft_plugins::acceleration::scope(app.session.effective_plugin_accelerator());
         let computed = match fade_job(app, &request) {
             Some(fade) => fade.and_then(|f| f.render().ok()),
             None => crate::filter_dialog::preview_document_for_target(

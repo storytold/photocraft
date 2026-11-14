@@ -63,6 +63,8 @@ fn lenient_unit<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<U
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ParamSpec {
+    /// Up to 16 normalized RGB samples, used by colour-range controls. Empty by default.
+    Colors,
     /// A real number in `min..=max` (a slider in the dialog).
     Number {
         min: f64,
@@ -125,6 +127,20 @@ pub struct Manifest {
     pub overlap: u32,
     #[serde(default)]
     pub area: Area,
+    /// Initial Preview checkbox state. Older manifests retain live preview.
+    #[serde(default = "preview_enabled")]
+    pub preview_default: bool,
+    /// Values displayed when the `preset` choice changes. Editing a value selects `manual`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub preset_values: std::collections::BTreeMap<String, Map<String, Value>>,
+    /// Optional, versioned algorithm contract implemented by a trusted host accelerator.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accelerator: String,
+}
+
+/// Keeps live preview enabled for older manifests that omit previewDefault.
+fn preview_enabled() -> bool {
+    true
 }
 
 impl Manifest {
@@ -142,7 +158,12 @@ impl Manifest {
         Ok(man)
     }
 
+    /// Rejects invalid metadata, parameter schemas and preset definitions before installation.
+    /// Presets may reference declared filter parameters only, never host routing or preset selection.
     fn validate(&self) -> Result<()> {
+        if !self.accelerator.is_empty() && !valid_id(&self.accelerator) {
+            return Err(Error::Manifest("invalid accelerator algorithm".into()));
+        }
         if !valid_id(&self.id) {
             return Err(Error::Manifest(format!("invalid id {:?}: use 1-64 characters from A-Z a-z 0-9 . _ -", self.id)));
         }
@@ -175,6 +196,28 @@ impl Manifest {
                 _ => {}
             }
         }
+        if !self.preset_values.is_empty() {
+            let options = self
+                .params
+                .iter()
+                .find_map(|(k, spec)| match spec {
+                    ParamSpec::Choice { options, .. } if k == "preset" && options.iter().any(|o| o == "manual") => Some(options),
+                    _ => None,
+                })
+                .ok_or_else(|| Error::Manifest("`presetValues` needs a `preset` choice with `manual`".into()))?;
+            for (name, values) in &self.preset_values {
+                if name == "manual"
+                    || !options.contains(name)
+                    || values.contains_key("preset")
+                    || values.keys().any(|key| !self.params.iter().any(|(k, _)| k == key))
+                {
+                    return Err(Error::Manifest(format!("invalid preset {name:?}")));
+                }
+                let mut values = values.clone();
+                values.insert("preset".into(), json!("manual"));
+                self.resolve_params(&Value::Object(values)).map_err(|e| Error::Manifest(e.to_string()))?;
+            }
+        }
         Ok(())
     }
 
@@ -188,6 +231,7 @@ impl Manifest {
                 ParamSpec::Number { min, max, default, .. } => format!("\"{k}\":{min}..{max}={default}"),
                 ParamSpec::Int { default, .. } => format!("\"{k}\":int={default}"),
                 ParamSpec::Bool { default } => format!("\"{k}\":bool={default}"),
+                ParamSpec::Colors => format!("\"{k}\":json"),
                 ParamSpec::Choice { options, default } => {
                     // The dialog's default is the first option, so list the default first.
                     let mut opts = options.clone();
@@ -212,11 +256,31 @@ impl Manifest {
             Value::Object(m) => m,
             _ => return Err(Error::Params("plug-in parameters must be a JSON object".into())),
         };
+        // A saved named preset must contain the values that the built-in choice actually uses.
+        let preset = given.get("preset").filter(|v| !v.is_null()).and_then(Value::as_str).or_else(|| {
+            self.params.iter().find_map(|(key, spec)| match spec {
+                ParamSpec::Choice { options, default } if key == "preset" => default.as_deref().or_else(|| options.first().map(String::as_str)),
+                _ => None,
+            })
+        });
+        let preset_params = preset.and_then(|key| self.preset_values.get(key)).map(|values| {
+            let mut p = given.clone();
+            p.extend(values.clone());
+            p
+        });
+        let given = preset_params.as_ref().unwrap_or(given);
         let mut out = Map::new();
         for (k, spec) in &self.params {
             let v = given.get(k).filter(|v| !v.is_null());
             let wrong = |what: &str| Error::Params(format!("`{k}` must be {what}"));
             let resolved = match spec {
+                ParamSpec::Colors => {
+                    let colors = v
+                        .map_or(Some(Vec::new()), |v| serde_json::from_value::<Vec<[f64; 3]>>(v.clone()).ok())
+                        .filter(|c| c.len() <= 16 && c.iter().flatten().all(|v| v.is_finite() && (0.0..=1.0).contains(v)))
+                        .ok_or_else(|| wrong("at most 16 normalized RGB colours"))?;
+                    v.cloned().unwrap_or_else(|| json!(colors))
+                }
                 ParamSpec::Number { min, max, default, .. } => match v {
                     None => json!((*default).clamp(*min, *max)),
                     Some(v) => json!(v.as_f64().filter(|f| f.is_finite()).ok_or_else(|| wrong("a number"))?.clamp(*min, *max)),
@@ -279,6 +343,11 @@ impl Manifest {
     /// below that minimum. A clamped value would change the feature size (as for built-in filters,
     /// #2063), so such a preview runs less reduced instead. Always at least 1.
     pub fn preview_factor(&self, params: &Map<String, Value>, k: u32) -> u32 {
+        if self.pixel_params().next().is_none() {
+            return k.max(1);
+        }
+        let resolved = if self.preset_values.is_empty() { None } else { self.resolve_params(&Value::Object(params.clone())).ok() };
+        let params = resolved.as_ref().unwrap_or(params);
         self.pixel_params().fold(k.max(1), |k, (key, min, max, default, _)| match Self::pixel_value(params, key, min, max, default) {
             Some(v) if min > 0.0 => k.min((v / min).floor().max(1.0).min(f64::from(k)) as u32),
             Some(v) if max < 0.0 => k.min((v / max).floor().max(1.0).min(f64::from(k)) as u32),
@@ -292,8 +361,16 @@ impl Manifest {
     /// document pixels as OK applies (#7524). Unitless parameters, unknown keys and values of the
     /// wrong type (which [`Manifest::resolve_params`] rejects) are left as they are.
     pub fn scale_for_preview(&self, params: &mut Map<String, Value>, k: u32) {
-        if k <= 1 {
+        if k <= 1 || self.pixel_params().next().is_none() {
             return;
+        }
+        // Host-managed presets require a manual choice. Expand once, then keep the scaled
+        // editable values through subsequent command/runtime resolution.
+        if !self.preset_values.is_empty()
+            && let Ok(resolved) = self.resolve_params(&Value::Object(params.clone()))
+        {
+            params.extend(resolved);
+            params.insert("preset".into(), json!("manual"));
         }
         let k = f64::from(k);
         for (key, min, max, default, int) in self.pixel_params() {
@@ -500,6 +577,21 @@ fn valid_key(k: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Exercises malformed sample shapes, out-of-range values and group limits at the manifest boundary.
+    #[test]
+    fn colour_samples_are_bounded_normalized_rgb_and_hidden_json_controls() {
+        let m = Manifest::parse(br#"{"id":"test.colors","name":"Colours","kind":"filter","params":{"colors":{"type":"colors"}}}"#).unwrap();
+        assert_eq!(m.params_notation(), r#"{"colors":json}"#);
+        assert_eq!(m.resolve_params(&json!({})).unwrap()["colors"], json!([]));
+        let samples = json!([[0.7, 0.5, 0.4], [0.2, 0.4, 0.8]]);
+        assert_eq!(m.resolve_params(&json!({"colors":samples})).unwrap()["colors"], samples);
+        for invalid in
+            [json!("red"), json!([[0, 1]]), json!([[0, 1, 0, 1]]), json!([[0, -1, 0]]), json!([[0, 1.1, 0]]), json!([[1e100, 0, 0]]), json!(vec![[0.5; 3]; 17])]
+        {
+            assert!(m.resolve_params(&json!({"colors":invalid})).is_err());
+        }
+    }
 
     const FULL: &str = r#"{"id":"org.example.tone","name":"Tone","version":"1.2","kind":"filter",
         "params":{"amount":{"type":"number","min":0,"max":100,"default":50},
@@ -763,5 +855,56 @@ mod tests {
         // The documented limit counts characters, not bytes.
         assert!(with_name(&"é".repeat(64)).is_ok());
         assert!(with_name(&"é".repeat(65)).is_err());
+    }
+    /// Protects legacy preview defaults while preventing preset metadata from injecting host routing fields.
+    #[test]
+    fn preview_default_is_compatible_and_presets_cannot_change_host_fields() {
+        let mut value = json!({"id":"test.metadata","name":"Test","kind":"filter"});
+        assert!(Manifest::parse(value.to_string().as_bytes()).unwrap().preview_default);
+        value["previewDefault"] = json!(false);
+        value["params"] = json!({"preset":{"type":"choice","options":["manual","soft"]},"fine":{"type":"number","min":0,"max":100,"default":45}});
+        value["presetValues"] = json!({"soft":{"fine":70}});
+        assert!(!Manifest::parse(value.to_string().as_bytes()).unwrap().preview_default);
+        for values in [json!({"__command":"file.exit"}), json!({"id":"other.plugin"}), json!({"fine":"wrong"}), json!({"preset":"soft"})] {
+            value["presetValues"]["soft"] = values;
+            assert!(Manifest::parse(value.to_string().as_bytes()).is_err());
+        }
+    }
+    fn preset_manifest() -> Manifest {
+        Manifest::parse(
+            br#"{"id":"test.preset-pixels","name":"Preset pixels","kind":"filter",
+          "params":{"preset":{"type":"choice","options":["manual","soft"],"default":"soft"},
+          "radius":{"type":"number","min":1,"max":100,"default":8,"unit":"px"},
+          "fine":{"type":"number","min":0,"max":100,"default":45}},
+          "presetValues":{"soft":{"radius":12,"fine":70}}}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn default_preset_is_expanded_for_missing_and_null_choices() {
+        let m = preset_manifest();
+        for input in [Value::Null, json!({}), json!({"preset":null}), json!({"preset":"soft"})] {
+            let first = m.resolve_params(&input).unwrap();
+            assert_eq!(first["fine"], 70.0);
+            assert_eq!(first["radius"], 12.0);
+            assert_eq!(m.resolve_params(&Value::Object(first.clone())).unwrap(), first);
+        }
+        assert!(m.resolve_params(&json!({"preset":"invalid"})).is_err());
+        assert!(m.resolve_params(&json!({"preset":true})).is_err());
+    }
+
+    #[test]
+    fn named_presets_keep_scaled_pixels_after_repeated_resolution() {
+        let m = preset_manifest();
+        for input in [json!({}), json!({"preset":"soft","radius":99})] {
+            let mut p = input.as_object().unwrap().clone();
+            assert_eq!(m.preview_factor(&p, 16), 12);
+            m.scale_for_preview(&mut p, 4);
+            let resolved = m.resolve_params(&Value::Object(p)).unwrap();
+            assert_eq!(resolved["radius"], 3.0);
+            assert_eq!(resolved["fine"], 70.0);
+            assert_eq!(m.resolve_params(&Value::Object(resolved.clone())).unwrap(), resolved);
+        }
     }
 }

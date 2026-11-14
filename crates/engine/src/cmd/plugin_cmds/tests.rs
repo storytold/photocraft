@@ -5,6 +5,29 @@ use photocraft_geom::Rect;
 const INVERT: &[u8] = include_bytes!("../../../../plugins/tests/fixtures/invert.wasm");
 const INVERT_ID: &str = "org.photocraft.example.invert";
 
+/// Uses a non-returning module to verify background cancellation preserves both pixels and revision.
+#[test]
+fn background_plugin_runs_commit_once_and_cancel_without_editing() {
+    let id = "test.background-plugin";
+    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+    let mut s = doc(8);
+    let before = pixels(&s);
+    let revision = s.active().unwrap().revision;
+    let crate::jobs::Started::Job(job) = s.start(RUN, json!({"id":id})).unwrap() else { panic!("plugin.run blocked instead of starting a job") };
+    assert_eq!(s.active().unwrap().revision, revision);
+    s.wait_job(job).unwrap();
+    assert_ne!(pixels(&s), before);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pixels(&s), before);
+    registry::install_bytes(&wat_plugin(id, "{}", "(loop $forever (br $forever)) (i32.const 0)")).unwrap();
+    let revision = s.active().unwrap().revision;
+    let crate::jobs::Started::Job(job) = s.start(RUN, json!({"id":id})).unwrap() else { panic!("expected cancellable job") };
+    assert!(s.cancel_job(job));
+    assert!(matches!(s.wait_job(job), Err(EngineError::Cancelled)));
+    assert_eq!(s.active().unwrap().revision, revision);
+    assert_eq!(pixels(&s), before);
+}
+
 fn b64(b: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
@@ -20,6 +43,11 @@ fn b64(b: &[u8]) -> String {
 /// A WAT plug-in with its own `id` whose `pc_filter` body is `filter`.
 fn wat_plugin(id: &str, params: &str, filter: &str) -> Vec<u8> {
     let manifest = format!(r#"{{"id":"{id}","name":"Test {id}","version":"1","kind":"filter","params":{params}}}"#);
+    wat_module(&manifest, filter)
+}
+
+/// A complete manifest lets accelerator fixtures use the same WAT filter body.
+fn wat_module(manifest: &str, filter: &str) -> Vec<u8> {
     let src = format!(
         r#"(module
   (memory (export "memory") 1)
@@ -348,6 +376,295 @@ fn preference_folder_is_loaded() {
     assert_eq!(r["loaded"], json!(["test.cmds.folder"]));
     registry::remove("test.cmds.folder");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Round-trips preferences to prove preset namespaces survive restart and malformed command inputs are rejected.
+#[test]
+fn presets_survive_restart_and_are_isolated_and_validated() {
+    let plugin = photocraft_plugins::Plugin::load(
+        &wat_plugin("test.saved-presets", r#"{"fine":{"type":"number","min":0,"max":100,"default":45}}"#, GREY),
+        Default::default(),
+    )
+    .unwrap();
+    let id = plugin.id().to_string();
+    photocraft_plugins::registry::install(plugin);
+    let mut s = Session::new();
+    s.execute("plugin.preset.save", json!({"id":id,"name":"我的預設","params":{"fine":72}})).unwrap();
+    let mut restart = Session::new();
+    restart.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restart.execute("plugin.preset.load", json!({"id":id,"name":"我的預設"})).unwrap(), json!({"fine":72.0}));
+    assert_eq!(restart.execute("plugin.preset.list", json!({"id":"other.plugin"})).unwrap(), json!({}));
+    for p in [
+        json!({}),
+        json!({"id":id,"name":"","params":{"fine":72}}),
+        json!({"id":id,"name":"x","params":42}),
+        json!({"id":"../bad","name":"x","params":{"fine":72}}),
+    ] {
+        assert!(restart.execute("plugin.preset.save", p).is_err());
+    }
+    restart.execute("plugin.preset.remove", json!({"id":id,"name":"我的預設"})).unwrap();
+    assert_eq!(restart.execute("plugin.preset.list", json!({"id":id})).unwrap(), json!({}));
+}
+
+#[test]
+fn skin_smooth_preset_load_preserves_session_samples() {
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    let id = "local.skinsmooth.skin-smooth";
+    let mut session = Session::new();
+    let samples = json!({"positiveColors":[[0.7, 0.5, 0.4]], "negativeColors":[[0.2, 0.3, 0.8]]});
+    let mut params = samples.as_object().unwrap().clone();
+    params.insert("fine".into(), json!(72));
+    session.execute("plugin.preset.save", json!({"id":id,"name":"Portrait","params":params})).unwrap();
+    let mut loaded = Session::new();
+    loaded.load_prefs_json(&session.prefs_to_json()).unwrap();
+    let preset = loaded.execute("plugin.preset.load", json!({"id":id,"name":"Portrait"})).unwrap();
+    assert!(preset.get("positiveColors").is_none());
+    assert!(preset.get("negativeColors").is_none());
+    let mut current = samples.as_object().unwrap().clone();
+    current.extend(preset.as_object().unwrap().clone());
+    assert_eq!(current["positiveColors"], samples["positiveColors"]);
+    assert_eq!(current["negativeColors"], samples["negativeColors"]);
+    assert_eq!(current["fine"], json!(72.0));
+}
+
+/// Checks that rejected profiles leave no edit, while sRGB filtering preserves alpha, selection bounds and undo/redo.
+#[test]
+fn skin_smooth_checks_icc_before_editing_at_every_depth() {
+    use craft_cms::builtin::Builtin;
+    use std::sync::Arc;
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    for depth in [8, 16, 32] {
+        let mut s = doc(depth);
+        select_partial(&mut s);
+        let before = pixels(&s);
+        let params = json!({"id":"local.skinsmooth.skin-smooth", "params":{"skinOnly":false,"brightness":10}});
+        for profile in [Some(Builtin::DisplayP3.profile().to_bytes()), Some(Arc::new(vec![0; 128]))] {
+            Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = profile;
+            let revision = s.active().unwrap().revision;
+            assert!(s.execute(RUN, params.clone()).is_err());
+            assert_eq!(pixels(&s), before);
+            assert_eq!(s.active().unwrap().revision, revision);
+        }
+        Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(Builtin::Srgb.profile().to_bytes());
+        let mut full_strength = Session::new();
+        let mut full_doc = (*s.active().unwrap().doc).clone();
+        full_doc.selection.as_mut().unwrap().fill_rect(Rect::new(4, 4, 30, 20), &[1.0]);
+        full_strength.add_document(full_doc, None);
+        full_strength.select_layer(s.active().unwrap().active_layer.unwrap()).unwrap();
+        full_strength.execute(RUN, params.clone()).unwrap();
+        let full_strength = pixels(&full_strength);
+        let tolerance = match depth {
+            8 => 1.0 / 255.0,
+            16 => 1.0 / 65535.0,
+            _ => 1e-6,
+        };
+        s.execute(RUN, params).unwrap();
+        let after = pixels(&s);
+        assert_ne!(after, before);
+        let mut largest_change = 0.0_f32;
+        let mut full_change = 0.0_f32;
+        for (i, (original, filtered)) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0.iter()).enumerate() {
+            assert_eq!(original[3], filtered[3]);
+            let (x, y) = (i % 40, i / 40);
+            if !(4..30).contains(&x) || !(4..20).contains(&y) {
+                assert_eq!(original, filtered, "{depth}: pixel {x},{y} outside selection");
+            } else if y < 9 {
+                for channel in 0..3 {
+                    largest_change = largest_change.max((full_strength[i * 4 + channel] - original[channel]).abs());
+                    let expected = original[channel] * 0.6 + full_strength[i * 4 + channel] * 0.4;
+                    assert!((filtered[channel] - expected).abs() <= tolerance, "{depth}: 40% selection at {x},{y}, channel {channel}");
+                }
+            } else {
+                assert_eq!(&filtered[..3], &full_strength[i * 4..i * 4 + 3], "{depth}: 100% selection at {x},{y}");
+                for channel in 0..3 {
+                    full_change = full_change.max((filtered[channel] - original[channel]).abs());
+                }
+            }
+        }
+        assert!(largest_change > 4.0 * tolerance, "{depth}: the full-strength fractional region must change, delta={largest_change}");
+        assert!(full_change > 4.0 * tolerance, "{depth}: the fully selected region must change, delta={full_change}");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(pixels(&s), before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(pixels(&s), after);
+    }
+}
+
+/// Mutate the registry after capture, then run the real edit body without racing a worker.
+#[test]
+fn captured_plugin_keeps_its_color_requirement_after_registry_changes() {
+    use craft_cms::builtin::Builtin;
+    use std::sync::Arc;
+    for replace in [false, true] {
+        let id = if replace { "test.cmds.captured-replaced" } else { "test.cmds.captured-removed" };
+        for depth in [8, 16, 32] {
+            for supported in [false, true] {
+                let manifest = json!({"id":id,"name":"Captured Skin Smooth","version":"1","kind":"filter","params":{},"accelerator":"skinsmooth.v2"});
+                let captured = registry::install_bytes(&wat_module(&manifest.to_string(), GREY)).unwrap();
+                let mut s = doc(depth);
+                let profile = if supported { Builtin::Srgb } else { Builtin::DisplayP3 };
+                Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(profile.profile().to_bytes());
+                let before = pixels(&s);
+                let state = s.active().unwrap();
+                let (revision, history) = (state.revision, state.history.past_len());
+                if replace {
+                    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+                } else {
+                    assert!(registry::remove(id));
+                }
+                let params = json!({"id":id});
+                assert!(check_color(&s.active().unwrap().doc, &params).is_ok(), "ID lookup sees only the changed registry");
+                let result = run(&mut s, &params, captured);
+                if supported {
+                    result.unwrap();
+                    assert_ne!(pixels(&s), before, "sRGB remains filterable after registry changes");
+                } else {
+                    assert!(matches!(result, Err(EngineError::BadParams { .. })), "{id}, {depth}: {result:?}");
+                    assert_eq!(pixels(&s), before);
+                    let state = s.active().unwrap();
+                    assert_eq!((state.revision, state.history.past_len()), (revision, history));
+                }
+            }
+        }
+        registry::remove(id);
+    }
+}
+
+#[test]
+fn captured_plugin_does_not_inherit_a_replacements_color_requirement() {
+    use craft_cms::builtin::Builtin;
+    use std::sync::Arc;
+    let id = "test.cmds.captured-general";
+    let captured = registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+    let manifest = json!({"id":id,"name":"Replacement Skin Smooth","version":"1","kind":"filter","params":{},"accelerator":"skinsmooth.v2"});
+    registry::install_bytes(&wat_module(&manifest.to_string(), GREY)).unwrap();
+    let mut s = doc(8);
+    Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+    let before = pixels(&s);
+    let params = json!({"id":id});
+    assert!(check_color(&s.active().unwrap().doc, &params).is_err(), "ID lookup sees the replacement's restriction");
+    run(&mut s, &params, captured).unwrap();
+    assert_ne!(pixels(&s), before, "the captured ordinary filter accepts non-sRGB input");
+    registry::remove(id);
+}
+
+/// A +1-stop, tone-only run has an independent RGB oracle: double the input, then clamp.
+/// Keep the selection bounds; check unselected, 40%-selected and fully selected pixels.
+#[test]
+fn skin_smooth_selection_matches_independent_exposure_oracle_at_every_depth() {
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    for depth in [8, 16, 32] {
+        let mut s = doc(depth);
+        select_partial(&mut s);
+        let before = pixels(&s);
+        s.execute(
+            RUN,
+            json!({"id":"local.skinsmooth.skin-smooth", "params":{
+                "preset":"manual", "fine":0,"medium":0,"large":0,"detail":0,
+                "skinOnly":false,"brightness":100,"warmth":0,"redness":0
+            }}),
+        )
+        .unwrap();
+        let after = pixels(&s);
+        let tolerance = match depth {
+            8 => 1.0 / 255.0,
+            16 => 1.0 / 65535.0,
+            _ => 1e-6,
+        };
+        let mut largest_change = 0.0_f32;
+        for (i, (original, filtered)) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0.iter()).enumerate() {
+            let (x, y) = (i % 40, i / 40);
+            assert_eq!(filtered[3], original[3]);
+            // Unselected pixels and hidden RGB on fully transparent pixels stay exact.
+            if !(4..30).contains(&x) || !(4..20).contains(&y) || original[3] == 0.0 {
+                assert_eq!(original, filtered, "{depth}: unselected or transparent pixel {x},{y}");
+            } else {
+                let coverage = if y < 9 { 0.4 } else { 1.0 };
+                for channel in 0..3 {
+                    let exposed = (original[channel] * 2.0).min(1.0);
+                    let expected = original[channel] * (1.0 - coverage) + exposed * coverage;
+                    assert!((filtered[channel] - expected).abs() <= tolerance, "{depth}: coverage {coverage} at {x},{y}, channel {channel}");
+                    largest_change = largest_change.max((expected - original[channel]).abs());
+                }
+            }
+        }
+        assert!(largest_change > 4.0 * tolerance, "{depth}: the reference must exercise a visible RGB change");
+    }
+}
+
+#[test]
+fn skin_smooth_smart_rerender_checks_profile_before_using_cached_stages() {
+    use craft_cms::builtin::Builtin;
+    use std::sync::Arc;
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    let mut s = doc(8);
+    Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(Builtin::Srgb.profile().to_bytes());
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute(RUN, json!({"id":"local.skinsmooth.skin-smooth"})).unwrap();
+    Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+    let state = s.active().unwrap();
+    let LayerContent::Smart(sm) = &state.doc.layer(state.active_layer.unwrap()).unwrap().content else { panic!("expected smart object") };
+    assert!(crate::smart_cmds::render(&state.doc, sm).is_err());
+}
+
+/// Compares untagged and explicitly host-tagged pixels without assigning a profile as a filtering side effect.
+#[test]
+fn untagged_skin_smooth_matches_the_same_pixels_tagged_with_the_host_default() {
+    use std::sync::Arc;
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    for depth in [8, 16, 32] {
+        let mut untagged = doc(depth);
+        let mut tagged = doc(depth);
+        select_partial(&mut untagged);
+        select_partial(&mut tagged);
+        assert!(untagged.active().unwrap().doc.icc_profile.is_none());
+        let profile = crate::color_cmds::document_profile(&untagged.active().unwrap().doc);
+        Arc::make_mut(&mut tagged.active_mut().unwrap().doc).icc_profile = Some(profile.to_bytes());
+        let before = pixels(&untagged);
+        let params = json!({"id":"local.skinsmooth.skin-smooth", "params":{"brightness":10}});
+        untagged.execute(RUN, params.clone()).unwrap();
+        tagged.execute(RUN, params).unwrap();
+        assert_ne!(pixels(&untagged), before, "untagged RGB must actually be filtered at {depth} bits");
+        assert_eq!(pixels(&untagged), pixels(&tagged));
+        assert!(untagged.active().unwrap().doc.icc_profile.is_none(), "filtering never assigns a profile implicitly");
+        untagged.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(pixels(&untagged), before);
+    }
+}
+
+#[test]
+fn smart_plugin_progress_keeps_the_stacks_progress_interval() {
+    let id = "test.cmds.stack-progress";
+    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+    let canvas = photocraft_geom::Rect::new(0, 0, 32, 24);
+    let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
+    surface.fill_rect(canvas, &[0.2, 0.4, 0.6, 1.0]);
+    let ctx = crate::jobs::JobCtx::new();
+    ctx.progress(0.25, "stack");
+    let result = crate::filters::apply_filter_to_surface_in(RUN, &json!({"id":id}), &surface, canvas, None, canvas, &ctx).unwrap().unwrap();
+    assert_ne!(result.pixel(1, 1), surface.pixel(1, 1));
+    assert_eq!(ctx.fraction(), 0.25, "a plugin cannot complete the rest of the stack");
+    ctx.cancel();
+    assert!(matches!(crate::filters::apply_filter_to_surface_in(RUN, &json!({"id":id}), &surface, canvas, None, canvas, &ctx), Err(EngineError::Cancelled)));
+}
+
+#[test]
+fn preview_regions_cannot_restrict_committed_smart_filters() {
+    let id = "test.cmds.committed-preview";
+    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":32,"height":24,"background":"#204060"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute(RUN, json!({"id":id,"__previewRegion":[8,8,16,16]})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let photocraft_doc::LayerContent::Smart(sm) = &doc.layer(layer).unwrap().content else { panic!("smart object") };
+    assert!(sm.smart_filters.last().unwrap().params.get("__previewRegion").is_none());
+    assert_eq!(sm.cache.as_ref().unwrap().pixel(0, 0), sm.cache.as_ref().unwrap().pixel(12, 12));
+    let mut doc = (**doc).clone();
+    crate::smart_cmds::refresh(&mut doc, layer).unwrap();
+    let photocraft_doc::LayerContent::Smart(sm) = &doc.layer(layer).unwrap().content else { panic!("smart object") };
+    assert_eq!(sm.cache.as_ref().unwrap().pixel(0, 0), sm.cache.as_ref().unwrap().pixel(12, 12));
 }
 
 #[test]

@@ -885,9 +885,13 @@ pub(super) fn document_window_canvas(
     let mut out = (view.clone(), Rect::NOTHING);
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
         let rect = ui.available_rect_before_wrap();
+        // Embedded document windows share ROOT; retain their actual view identity.
+        let window_id = egui::Id::unique("canvas-doc-window");
+        ui.data_mut(|d| d.insert_temp(window_id, egui::ViewportId::from_hash_of(("docwin", w.id))));
         app.drawing_window = Some(w.id);
         out = (canvas_view(app, ui, w.document, rect, view, focused), rect);
         app.drawing_window = None;
+        ui.data_mut(|d| d.remove::<egui::ViewportId>(window_id));
     });
     out
 }

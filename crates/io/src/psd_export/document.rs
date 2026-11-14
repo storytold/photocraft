@@ -64,6 +64,7 @@ fn document_to_psd_sized_with_patterns(
     export_supported_document(doc, opts, depth, ctl, fmt, size_limit, patterns)
 }
 
+/// Builds PSD layer and composite data for a supported pixel format, collecting export warnings and reporting progress.
 fn export_supported_document(
     doc: &Document,
     opts: &PsdExportOptions,
