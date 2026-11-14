@@ -10,7 +10,7 @@ use craft::ui::runtime::requests::PathKind;
 
 pub(crate) const COMMAND: &str = photocraft_engine::lens_cmds::LENS_BATCH;
 
-const FORMATS: [(&str, &str); 5] = [("same", "Same as Source"), ("png", "PNG"), ("jpg", "JPEG"), ("psd", "PSD"), ("tiff", "TIFF")];
+const FORMATS: [(&str, &str); 4] = [("jpg", "JPG"), ("png", "PNG"), ("psd", "PSD"), ("tiff", "TIFF")];
 const PROFILES: [(&str, &str); 3] = [("auto", "Auto"), ("generic", "Generic"), ("none", "None")];
 const EDGES: [(&str, &str); 4] = [("edgeExtension", "Edge Extension"), ("transparency", "Transparency"), ("black", "Black Color"), ("white", "White Color")];
 
@@ -24,21 +24,22 @@ fn folder(key: &str, label: &'static str, default: String) -> Param {
     Param::new(key, label, ParamKind::text(default)).browse(PathKind::Folder)
 }
 
-/// The rows of the dialog, reading the images from `dir`. Correction Options lists the corrections, then scaling and
+/// The rows of the dialog, reading the images from `dir`. They open with the reference defaults (#13980): Chromatic
+/// Aberration and Vignette off, File Type PSD; the command's own defaults for scripts and the CLI are unchanged. Correction Options lists the corrections, then scaling and
 /// the edge fill, as the reference's left and right columns read.
 pub(crate) fn rows(dir: String) -> Vec<Param> {
     vec![
         Param::section(tl!("Source Files")),
         folder("input", tl!("Input"), dir.clone()),
         Param::section(tl!("Destination Folder")),
-        Param::new("format", tl!("File Type"), ParamKind::choice(opts(&FORMATS), Some("same".into()))),
+        Param::new("format", tl!("File Type"), ParamKind::choice(opts(&FORMATS), Some("psd".into()))),
         folder("output", tl!("Output"), format!("{dir}/corrected")),
         Param::section(tl!("Lens Correction Profile")),
         Param::new("profile", tl!("Profile"), ParamKind::choice(opts(&PROFILES), Some("auto".into()))),
         Param::section(tl!("Correction Options")),
         Param::new("correctDistortion", tl!("Geometric Distortion"), ParamKind::bool(true)),
-        Param::new("correctCA", tl!("Chromatic Aberration"), ParamKind::bool(true)),
-        Param::new("correctVignette", tl!("Vignette"), ParamKind::bool(true)),
+        Param::new("correctCA", tl!("Chromatic Aberration"), ParamKind::bool(false)),
+        Param::new("correctVignette", tl!("Vignette"), ParamKind::bool(false)),
         Param::new("autoScale", tl!("Auto Scale Image"), ParamKind::bool(true)),
         Param::new("edge", tl!("Edge"), ParamKind::choice(opts(&EDGES), Some("transparency".into()))),
     ]

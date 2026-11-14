@@ -104,13 +104,13 @@ fn edge_lists_the_reference_entries_in_order() {
     assert_eq!(labels("profile"), ["Auto", "Generic", "None"]);
 }
 
-/// OK sends the params the form sent before the layout: the same keys and values.
+/// OK sends the params the form sent before the layout: the same keys.
 #[test]
 fn ok_runs_the_command_with_the_same_params() {
     let (mut h, id) = opened();
     assert_eq!(
         params(&h, id),
-        json!({"input": ".", "output": "./corrected", "format": "same", "profile": "auto", "correctDistortion": true, "correctVignette": true, "correctCA": true, "autoScale": true, "edge": "transparency"})
+        json!({"input": ".", "output": "./corrected", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
     );
     let sources = source_folder();
     let results = tempfile::tempdir().unwrap();
