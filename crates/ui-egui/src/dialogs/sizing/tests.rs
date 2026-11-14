@@ -504,7 +504,8 @@ fn large_documents_in_physical_units_open_unchanged() {
 }
 
 /// #2329: Canvas Size opens on Width with its value selected: typing replaces it and Enter
-/// applies it. Image Size opens with no field focused (#14800, `image_size_focus_tests`).
+/// applies it. Image Size from the menu or its shortcut opens with no field focused (#14800,
+/// `image_size_focus_tests`).
 #[test]
 fn canvas_size_opens_on_width_selected() {
     use egui::accesskit::Role;

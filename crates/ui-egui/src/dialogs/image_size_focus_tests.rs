@@ -103,5 +103,9 @@ fn image_size_from_record_again_opens_on_width() {
     h.run_steps(4);
     let d = h.state().ui.dialogs.first().expect("the Record Again editor is open");
     assert_eq!(d.fields.get("__command").and_then(Value::as_str), Some("image.imageSize"));
+    assert!(crate::actions::record_again::owns(&d.fields), "opened by Record Again");
     assert!(width_focused(&h), "Width has focus");
+    h.event(egui::Event::Text("50".into()));
+    h.run_steps(2);
+    assert_eq!(field(&h, "width"), 50.0, "typing replaced the selected width");
 }
