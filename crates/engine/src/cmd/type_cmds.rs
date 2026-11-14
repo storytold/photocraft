@@ -157,9 +157,8 @@ pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
 /// Only an exact face is named: layout picks a named face before weight and italic, so naming a
 /// nearby face would override the requested weight (a variable font's axis, a weight between two
 /// faces) or italic. Without an exact face the style keeps no name and layout matches as before.
-fn installed_postscript(family: &str, weight: u16, italic: bool) -> Option<String> {
-    let mut shared = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-    let faces = shared.fonts.faces(family);
+fn installed_postscript(text: &mut photocraft_text::TextEngine, family: &str, weight: u16, italic: bool) -> Option<String> {
+    let faces = text.fonts.faces(family);
     let face = faces.iter().find(|f| f.italic == italic && f.weight.round() as u16 == weight)?;
     face.postscript_name.clone()
 }
@@ -239,15 +238,43 @@ fn step_char_metrics(t: &mut TextLayer, a: usize, b: usize, p: &Value) -> bool {
     true
 }
 
-/// Applies character-style keys from JSON. Returns true if any key was present.
+/// Applies character-style keys from JSON. Returns true if any key was present. Font names are
+/// resolved through the shared font engine, waiting for it ([`apply_char_props_with`]).
 pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
-    let mut any = apply_font_props(s, p);
+    apply_char_props_with(s, p, FontLookup::Shared)
+}
+
+/// Where [`apply_char_props_with`] resolves font names (PostScript names, named styles, the
+/// installed face's PostScript name).
+pub enum FontLookup<'a> {
+    /// The shared font engine, waiting for it while another thread holds it.
+    Shared,
+    /// An engine the caller already holds (the shared one, taken without waiting for a job).
+    Held(&'a mut photocraft_text::TextEngine),
+    /// None: the names stay as given (the engine isn't loaded yet, or a background job holds it).
+    Skip,
+}
+
+impl FontLookup<'_> {
+    fn with<R>(&mut self, f: impl FnOnce(&mut photocraft_text::TextEngine) -> R) -> Option<R> {
+        match self {
+            Self::Shared => Some(f(&mut photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner))),
+            Self::Held(engine) => Some(f(engine)),
+            Self::Skip => None,
+        }
+    }
+}
+
+/// [`apply_char_props`], resolving font names through `fonts`: code drawn every UI frame passes
+/// the engine it took without waiting for a background job, or [`FontLookup::Skip`].
+pub fn apply_char_props_with(s: &mut CharStyle, p: &Value, mut fonts: FontLookup<'_>) -> bool {
+    let mut any = apply_font_props(s, p, &mut fonts);
     any |= apply_char_values(s, p);
     any |= apply_char_features(s, p);
     any
 }
 
-fn apply_font_props(s: &mut CharStyle, p: &Value) -> bool {
+fn apply_font_props(s: &mut CharStyle, p: &Value, fonts: &mut FontLookup<'_>) -> bool {
     let mut any = false;
     let mut hit = |b: bool| any |= b;
     let font_key = ["font", "family", "fontStyle", "weight", "italic"].iter().any(|k| p.get(k).is_some());
@@ -256,16 +283,13 @@ fn apply_font_props(s: &mut CharStyle, p: &Value) -> bool {
         s.postscript_name = None;
         // Photoshop accepts either a family name or a face's PostScript name in the font field.
         // Resolve only exact PostScript matches here so an unknown family remains untouched.
-        let mut text = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-        if !text.fonts.has_family(v) {
-            let resolved = text.fonts.resolve_postscript(v);
-            if resolved.exact {
-                s.variations.retain(|f| f.axis != "wght");
-                s.font_family = resolved.family;
-                s.weight = resolved.weight;
-                s.italic = resolved.italic;
-                s.postscript_name = Some(v.to_string());
-            }
+        let resolved = fonts.with(|text| (!text.fonts.has_family(v)).then(|| text.fonts.resolve_postscript(v))).flatten();
+        if let Some(resolved) = resolved.filter(|r| r.exact) {
+            s.variations.retain(|f| f.axis != "wght");
+            s.font_family = resolved.family;
+            s.weight = resolved.weight;
+            s.italic = resolved.italic;
+            s.postscript_name = Some(v.to_string());
         }
         hit(true);
     }
@@ -279,7 +303,7 @@ fn apply_font_props(s: &mut CharStyle, p: &Value) -> bool {
         s.italic = l.contains("italic") || l.contains("oblique");
         let g = photocraft_text::fonts::guess_from_postscript(&format!("X-{}", v.replace(' ', "")));
         s.weight = g.weight;
-        if let Some(face) = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.named_face(&s.font_family, v) {
+        if let Some(face) = fonts.with(|text| text.fonts.named_face(&s.font_family, v)).flatten() {
             s.weight = face.weight.round() as u16;
             s.italic = face.italic;
             s.postscript_name = face.postscript_name;
@@ -311,7 +335,7 @@ fn apply_font_props(s: &mut CharStyle, p: &Value) -> bool {
     // A font named by family (or a style that matched no face) has no PostScript name yet: fill in
     // the installed face's real name, so the PSD does not invent "<Family>-Regular" (#3556).
     if font_key && s.postscript_name.is_none() {
-        s.postscript_name = installed_postscript(&s.font_family, s.weight, s.italic);
+        s.postscript_name = fonts.with(|text| installed_postscript(text, &s.font_family, s.weight, s.italic)).flatten();
     }
     any
 }
@@ -649,7 +673,9 @@ pub fn refresh(doc: &Document, t: &mut TextLayer) {
 /// pixel format. A caller holding the layer mutably reads them first instead of cloning the whole
 /// document to pass it, once per keystroke and pointer move while typing (#7092).
 pub fn refresh_at(dpi: f32, format: PixelFormat, t: &mut TextLayer) {
-    let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+    // Rendering a large layer holds the engine for long: a job's hold lets the panels skip their
+    // font reads meanwhile instead of waiting (`photocraft_text::lock_shared`).
+    let mut eng = photocraft_text::lock_shared();
     let (layout, r) = eng.render(t, dpi, format);
     t.cache = Some(r.surface);
     t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh(t, dpi, layout.bounds())));

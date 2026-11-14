@@ -1,19 +1,46 @@
 use super::defaults::apply;
 use super::{Arc, HashMap, PhotocraftApp, PoisonError, json};
 
+/// The shared font engine, unless a background job holds it (re-rendering type,
+/// `photocraft_text::lock_shared`): the panels read fonts every frame, and waiting for a job froze
+/// the window for all of it. Busy, the reads below show what they have instead (a cached list, the
+/// stored style name, no axis sliders) and try again next frame. Any other hold (a type command,
+/// the canvas laying out type) is short and waited out. Not loaded yet, it loads as before.
+pub(super) fn engine_unless_busy() -> Option<std::sync::MutexGuard<'static, photocraft_text::TextEngine>> {
+    lock_unless(photocraft_text::try_shared().unwrap_or_else(photocraft_text::shared), photocraft_text::background_holds_shared)
+}
+
+/// `m` locked, waiting while another thread holds it unless `busy()` says that hold is a job's
+/// (`None` then). The web runs jobs on its one thread, so there it just locks.
+fn lock_unless<T>(m: &std::sync::Mutex<T>, busy: impl Fn() -> bool) -> Option<std::sync::MutexGuard<'_, T>> {
+    use std::sync::TryLockError;
+    loop {
+        match m.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(TryLockError::Poisoned(e)) => return Some(e.into_inner()),
+            Err(TryLockError::WouldBlock) if busy() => return None,
+            Err(TryLockError::WouldBlock) if cfg!(target_arch = "wasm32") => return Some(m.lock().unwrap_or_else(PoisonError::into_inner)),
+            Err(TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_micros(200)),
+        }
+    }
+}
+
 /// Font families: bundled, system, and those the host serves (`photocraft_text::served`, fetched
 /// when picked). Cached until the shared engine registers fonts or the served catalog changes.
 pub fn families() -> Arc<Vec<String>> {
     type Cached = Option<((u64, u64), Arc<Vec<String>>)>;
     static FAMILIES: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
     let key = (photocraft_text::fonts::shared_generation(), photocraft_text::served::generation());
-    let mut cached = FAMILIES.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((k, v)) = cached.as_ref()
-        && *k == key
-    {
-        return v.clone();
-    }
-    let mut v = photocraft_text::shared().lock().map(|mut e| e.fonts.families()).unwrap_or_default();
+    // The cache is locked only to read and to write it, not while waiting for the engine, so other
+    // callers read it meanwhile.
+    let last = match FAMILIES.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        Some((k, v)) if *k == key => return v.clone(),
+        last => last.map(|(_, v)| v.clone()),
+    };
+    // Busy: the last list (if any) until the engine is free; nothing is cached meanwhile.
+    let Some(mut engine) = engine_unless_busy() else { return last.unwrap_or_default() };
+    let mut v = engine.fonts.families();
+    drop(engine);
     for f in photocraft_text::served::families() {
         if !v.contains(&f) {
             v.push(f);
@@ -21,7 +48,7 @@ pub fn families() -> Arc<Vec<String>> {
     }
     v.sort_by_key(|s| s.to_lowercase());
     let v = Arc::new(v);
-    *cached = Some((key, v.clone()));
+    *FAMILIES.lock().unwrap_or_else(PoisonError::into_inner) = Some((key, v.clone()));
     v
 }
 
@@ -49,14 +76,15 @@ fn localized_families() -> Arc<HashMap<String, String>> {
     type Cached = Option<(u64, Arc<HashMap<String, String>>)>;
     static LOCALIZED: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
     let key = photocraft_text::fonts::shared_generation();
-    let mut cached = LOCALIZED.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((k, v)) = cached.as_ref()
-        && *k == key
-    {
-        return v.clone();
-    }
-    let v = Arc::new(photocraft_text::shared().lock().map(|mut e| e.fonts.localized_family_names()).unwrap_or_default());
-    *cached = Some((key, v.clone()));
+    // As in `families`: the cache isn't held while waiting for the engine.
+    let last = match LOCALIZED.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        Some((k, v)) if *k == key => return v.clone(),
+        last => last.map(|(_, v)| v.clone()),
+    };
+    let Some(mut engine) = engine_unless_busy() else { return last.unwrap_or_default() };
+    let v = Arc::new(engine.fonts.localized_family_names());
+    drop(engine);
+    *LOCALIZED.lock().unwrap_or_else(PoisonError::into_inner) = Some((key, v.clone()));
     v
 }
 
@@ -106,7 +134,8 @@ fn weight_name(w: f32) -> &'static str {
 /// Style names available for a family: each face's actual OpenType subfamily (including numeric
 /// and nonstandard ones), plus the standard weights a variable face's `wght` axis covers.
 pub fn styles(family: &str) -> Vec<String> {
-    let faces = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.faces(family);
+    // Busy: just Regular until the engine is free.
+    let faces = engine_unless_busy().map(|mut e| e.fonts.faces(family)).unwrap_or_default();
     let v = style_names(&faces);
     if v.is_empty() { vec!["Regular".into()] } else { v }
 }
@@ -188,11 +217,12 @@ fn axis_label(tag: &str) -> String {
 /// One slider row per variable-font axis of the style's font, below the font style (#2985).
 pub(super) fn axis_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &photocraft_doc::text::CharStyle) {
     // Drawn every frame: no sliders until the background font scan is done (#3021).
-    let Some(engine) = photocraft_text::try_shared() else { return };
-    let axes = {
-        let faces = engine.lock().unwrap_or_else(PoisonError::into_inner).fonts.faces(&c.font_family);
-        slider_axes(&faces, c.italic)
-    };
+    // Nor while a job holds the engine (`engine_unless_busy`).
+    if photocraft_text::try_shared().is_none() {
+        return;
+    }
+    let Some(faces) = engine_unless_busy().map(|mut e| e.fonts.faces(&c.font_family)) else { return };
+    let axes = slider_axes(&faces, c.italic);
     let t = crate::theme::Tokens::get(ui.ctx());
     for axis in &axes {
         let (min, max) = (axis.1, axis.3);
@@ -222,13 +252,13 @@ pub(super) fn axis_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &photo
 /// PSD text can identify a face only by its PostScript name. Show its real subfamily too.
 pub(crate) fn selected_style(style: &photocraft_doc::text::CharStyle) -> String {
     // Drawn every frame: while the font scan runs, the stored style name stands in.
+    // So does it while a job holds the engine (`engine_unless_busy`).
     if let Some(ps) = &style.postscript_name
-        && let Some(engine) = photocraft_text::try_shared()
+        && photocraft_text::try_shared().is_some()
+        && let Some(faces) = engine_unless_busy().map(|mut e| e.fonts.faces(&style.font_family))
+        && let Some(face) = faces.into_iter().find(|f| f.postscript_name.as_ref() == Some(ps))
     {
-        let faces = engine.lock().unwrap_or_else(|e| e.into_inner()).fonts.faces(&style.font_family);
-        if let Some(face) = faces.into_iter().find(|f| f.postscript_name.as_ref() == Some(ps)) {
-            return face.style;
-        }
+        return face.style;
     }
     if style.font_style.is_empty() { if style.italic { "Italic".into() } else { "Regular".into() } } else { style.font_style.clone() }
 }
@@ -857,4 +887,53 @@ pub(super) fn wheel_family_index(index: usize, len: usize, notches: f32) -> Opti
     }
     let last = len - 1;
     Some(if notches < 0.0 { index.saturating_add(steps).min(last) } else { index.saturating_sub(steps) })
+}
+
+#[cfg(test)]
+mod busy_tests {
+    use super::lock_unless;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
+
+    /// Holds `m` on another thread until the returned sender is used (or dropped).
+    fn hold(m: &Arc<Mutex<u32>>) -> (mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+        let (held, wait_held) = mpsc::channel();
+        let (release, wait_release) = mpsc::channel::<()>();
+        let m = m.clone();
+        let job = std::thread::spawn(move || {
+            let _guard = m.lock().unwrap();
+            held.send(()).unwrap();
+            let _ = wait_release.recv();
+        });
+        wait_held.recv().unwrap();
+        (release, job)
+    }
+
+    /// A hold that isn't a job's (a layout on another thread, a test running in parallel) is
+    /// waited out.
+    #[test]
+    fn a_hold_that_is_not_a_jobs_is_waited_out() {
+        let m = Arc::new(Mutex::new(0));
+        let (release, job) = hold(&m);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            release.send(()).unwrap();
+        });
+        assert!(lock_unless(&m, || false).is_some(), "waits for it");
+        releaser.join().unwrap();
+        job.join().unwrap();
+    }
+
+    /// While a job holds it the reads give up at once, and read again as soon as it lets go.
+    #[test]
+    fn a_jobs_hold_is_busy_until_it_lets_go() {
+        let m = Arc::new(Mutex::new(0));
+        let job_holds = AtomicBool::new(true);
+        let (release, job) = hold(&m);
+        assert!(lock_unless(&m, || job_holds.load(Ordering::SeqCst)).is_none(), "busy");
+        release.send(()).unwrap();
+        job.join().unwrap();
+        job_holds.store(false, Ordering::SeqCst);
+        assert!(lock_unless(&m, || job_holds.load(Ordering::SeqCst)).is_some(), "free again: it reads");
+    }
 }

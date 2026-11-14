@@ -776,6 +776,8 @@ pub fn run<T: Send + 'static>(
         let spawned = std::thread::Builder::new().name(format!("photocraft-job-{}", job.id.0)).spawn(move || {
             let _authorization = AuthorizationScope::enter(authorization);
             let _document = crate::doc_path::scope(document.as_deref());
+            // The panels skip font reads while this job holds the font engine (`photocraft_text::lock_shared`).
+            let _fonts = photocraft_text::background_thread();
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&wctx).map(|t| Box::new(t) as Payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))));
             wctx.finish_work();
