@@ -17,6 +17,8 @@ const MAX_NODES: usize = 65_536;
 const MAX_DEPTH: usize = 32;
 
 #[cfg(test)]
+mod diagnostic_review_tests;
+#[cfg(test)]
 mod literal_profile_review_tests;
 #[cfg(test)]
 mod review_round2_tests;
@@ -166,6 +168,19 @@ fn note(notes: &mut Vec<String>, message: String) {
     if notes.len() < 128 && !notes.contains(&message) {
         notes.push(message);
     }
+}
+/// Bound inherited source strings before formatting: deduplication happens only
+/// after formatting, and one ancestor can apply to thousands of text nodes.
+fn diagnostic_value(value: &str) -> std::borrow::Cow<'_, str> {
+    const MAX_BYTES: usize = 256;
+    if value.len() <= MAX_BYTES {
+        return std::borrow::Cow::Borrowed(value);
+    }
+    let mut end = MAX_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    std::borrow::Cow::Owned(format!("{}…", value.get(..end).unwrap_or_default()))
 }
 /// Estimate a materialized native character style, including owned font, language, feature and variation strings.
 fn style_allocation(style: &CharStyle) -> usize {
@@ -1061,7 +1076,7 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                 "tt" => style.font_family = "monospace".into(),
                 "big" => size_scale *= 1.2,
                 "small" => size_scale /= 1.2,
-                _ => note(notes, format!("Source markup element {} is retained without native formatting", ancestor.tag_name().name())),
+                _ => note(notes, format!("Source markup element {} is retained without native formatting", diagnostic_value(ancestor.tag_name().name()))),
             }
             let mut explicit_alpha = None;
             for a in ancestor.attributes() {
@@ -1102,7 +1117,7 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                     "variant" | "font_variant" => match a.value() {
                         "normal" => style.caps = Caps::Normal,
                         "small-caps" => style.caps = Caps::SmallCaps,
-                        _ => note(notes, format!("Source font variant {} remains inert", a.value())),
+                        _ => note(notes, format!("Source font variant {} remains inert", diagnostic_value(a.value()))),
                     },
                     "stretch" | "font_stretch" => {
                         style.horizontal_scale = match a.value() {
@@ -1149,7 +1164,7 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                     "text_transform" => match a.value() {
                         "none" => style.caps = Caps::Normal,
                         "uppercase" => style.caps = Caps::AllCaps,
-                        _ => note(notes, format!("Source text transform {} remains inert", a.value())),
+                        _ => note(notes, format!("Source text transform {} remains inert", diagnostic_value(a.value()))),
                     },
                     "strikethrough" => style.strikethrough = a.value() == "true",
                     "foreground" | "fgcolor" | "color" => {
@@ -1185,7 +1200,7 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                         explicit_alpha = Some(alpha / max);
                     }
                     "lang" => style.language = Some(a.value().replace('_', "-")),
-                    _ => note(notes, format!("Source markup attribute {} is retained without native formatting", a.name())),
+                    _ => note(notes, format!("Source markup attribute {} is retained without native formatting", diagnostic_value(a.name()))),
                 }
             }
             // Explicit opacity overrides an RGBA foreground independently of XML

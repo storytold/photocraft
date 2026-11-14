@@ -116,7 +116,8 @@ fn borrowed_metadata_scan_leaves_tiny_native_allowance_for_the_final_known_value
         record(&mut data, &format!("unknown-{n}"), b"unused");
     }
     record(&mut data, "gimp-comment", b"final");
-    for allowance in [11, 12] {
+    let retained = std::mem::size_of::<(String, String)>() + "Comment".len() + "final".len();
+    for allowance in [retained - 1, retained] {
         let mut doc = photocraft_doc::Document::new(
             "Small allowance",
             photocraft_geom::Size::new(1, 1),
@@ -142,7 +143,7 @@ fn borrowed_metadata_scan_leaves_tiny_native_allowance_for_the_final_known_value
         let mut warnings = crate::ora::Warnings::default();
         crate::xcf::metadata::image(&mut doc, &props, 26, &mut Default::default(), &mut outcomes, owner, &mut budget, &mut warnings, &Interrupt::NONE).unwrap();
         let ImportConversion::Report(report) = outcomes.finish().unwrap() else { panic!("report") };
-        if allowance == 12 {
+        if allowance == retained {
             assert_eq!(budget, 0, "unknown names and replaced values consume no native metadata allocation");
             assert_eq!(doc.metadata.text, vec![("Comment".into(), "final".into())]);
             assert!(!report.entries.iter().any(|entry| entry.feature_code == "xcf.metadata_partial"));

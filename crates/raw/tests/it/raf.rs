@@ -30,6 +30,36 @@ fn every_storage_decodes_exactly() {
     }
 }
 
+const SMALL_ROW_VALUES: [u16; 16] = [0, 1, 0x3FFF, 0x2000, 0x1234, 42, 255, 0x1555, 0x2AAA, 2, 0x3FFE, 4096, 8191, 1023, 7, 37];
+
+#[test]
+fn small_word_packed_rows_decode_exactly() {
+    // Eight 14-bit samples need four words per row. At two rows this has the
+    // same payload size as U16, so the packed-word flag must select the decoder.
+    for data in [vec![1; 16], SMALL_ROW_VALUES.to_vec()] {
+        let mut spec = RafSpec::new(8, 2, data.clone(), RGGB.to_vec());
+        spec.packing = RafPacking::Words14;
+        spec.bits = 14;
+        let sensor = decode(&spec.build(), &Limits::default()).unwrap();
+        assert_eq!((sensor.width, sensor.height), (8, 2));
+        assert_eq!(sensor.data, data);
+    }
+}
+
+#[test]
+fn small_u16_rows_keep_their_container_packing() {
+    for le in [false, true] {
+        for data in [vec![1; 16], SMALL_ROW_VALUES.to_vec()] {
+            let mut spec = RafSpec::new(8, 2, data.clone(), RGGB.to_vec());
+            spec.packing = RafPacking::U16 { le };
+            spec.bits = 14;
+            let sensor = decode(&spec.build(), &Limits::default()).unwrap();
+            assert_eq!((sensor.width, sensor.height), (8, 2));
+            assert_eq!(sensor.data, data, "U16 little-endian: {le}");
+        }
+    }
+}
+
 #[test]
 fn xtrans_metadata() {
     let mut spec = xtrans(RafPacking::U16 { le: true }, 14);

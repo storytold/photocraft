@@ -214,14 +214,15 @@ fn cr2_cfa_phase_falls_back_to_the_model_table() {
         spec.data.iter_mut().for_each(|v| *v = 512);
         decode(&spec.build(), &Limits::default()).unwrap()
     };
-    // EOS 7D (Canon model ID 0x80000250): green/blue first.
+    // EOS 7D (Canon model ID 0x80000250): green/blue first, still an assumed phase.
     let s = flat(Some(0x8000_0250));
     assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), [1, 2, 0, 1]);
-    assert!(!s.warnings.iter().any(|w| w.contains("colour filter phase")), "{:?}", s.warnings);
+    assert!(s.warnings.iter().any(|w| w.contains("colour filter phase")), "{:?}", s.warnings);
     // Unknown model: red/green first, with a warning.
     let s = flat(Some(0x8000_0001));
     assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), [0, 1, 1, 2]);
     assert!(s.warnings.iter().any(|w| w.contains("colour filter phase")), "{:?}", s.warnings);
     let s = flat(None);
     assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), [0, 1, 1, 2]);
+    assert!(s.warnings.iter().any(|w| w.contains("colour filter phase")), "{:?}", s.warnings);
 }

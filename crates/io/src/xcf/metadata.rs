@@ -9,6 +9,8 @@ use crate::initial_view::{MAX_INITIAL_SAMPLERS, NativeInitialView};
 
 #[cfg(test)]
 mod resolution_review_tests;
+#[cfg(test)]
+mod text_storage_review_tests;
 
 /// Decode the last matching metadata property as an unsigned word; malformed payloads yield no value.
 fn word(props: &[Prop<'_>], kind: u32) -> Option<u32> {
@@ -183,6 +185,7 @@ pub(super) fn image<'a>(
     {
         warnings.note(&warning);
     }
+    let mut text_storage = TextStorage::default();
     let mut metadata_incomplete = false;
     let mut retention_limited = false;
     for p in props {
@@ -242,7 +245,7 @@ pub(super) fn image<'a>(
                             if let Ok(text) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(data))
                                 && !text.is_empty()
                             {
-                                let omitted = !push_text(doc, "Comment", text, budget);
+                                let omitted = !push_text(doc, "Comment", text, &mut text_storage, budget);
                                 metadata_incomplete |= omitted;
                                 retention_limited |= omitted;
                             }
@@ -271,6 +274,7 @@ pub(super) fn image<'a>(
                                 && tree.root_element().has_tag_name("metadata")
                             {
                                 for node in tree.root_element().children().filter(|n| n.has_tag_name("tag")) {
+                                    ctl.check().map_err(|_| super::IoError::Cancelled)?;
                                     if node.attribute("encoding").is_some() {
                                         metadata_incomplete = true;
                                         continue;
@@ -278,7 +282,7 @@ pub(super) fn image<'a>(
                                     if let (Some(key), Some(value)) = (node.attribute("name"), node.text())
                                         && matches!(key.split('.').next(), Some("Exif" | "Xmp" | "Iptc"))
                                     {
-                                        let omitted = !push_text(doc, key, value, budget);
+                                        let omitted = !push_text(doc, key, value, &mut text_storage, budget);
                                         metadata_incomplete |= omitted;
                                         retention_limited |= omitted;
                                     }
@@ -353,12 +357,85 @@ fn charge(budget: &mut usize, amount: usize) -> bool {
     true
 }
 
-/// Append a bounded native text-metadata entry while preserving meaningful duplicate values and shared-budget accounting.
-fn push_text(doc: &mut Document, key: &str, value: &str, budget: &mut usize) -> bool {
-    if key.len() > super::MAX_STRING || value.len() > super::MAX_STRING || !charge(budget, key.len().saturating_add(value.len())) {
+/// Slots already admitted during this image's metadata traversal. Capacity is charged,
+/// not just length, so short duplicate entries and spare vector slots cannot evade the cap.
+#[derive(Default)]
+struct TextStorage {
+    charged_capacity: usize,
+}
+
+/// Copy into fallibly allocated staging storage without mutating the admitted document.
+fn staged_text(value: &str) -> Option<String> {
+    let mut text = String::new();
+    text.try_reserve_exact(value.len()).ok()?;
+    text.push_str(value);
+    Some(text)
+}
+
+/// Admit all newly retained string and pair-vector storage before committing an entry.
+/// Duplicates remain separate: XMP bags, sequences and language alternatives need them.
+fn push_text(doc: &mut Document, key: &str, value: &str, storage: &mut TextStorage, budget: &mut usize) -> bool {
+    if key.len() > super::MAX_STRING || value.len() > super::MAX_STRING {
         return false;
     }
-    // Duplicate tag values are meaningful (XMP bags, sequences and language alternatives).
-    doc.metadata.text.push((key.to_owned(), value.to_owned()));
+    let entries = &mut doc.metadata.text;
+    let Some(length) = entries.len().checked_add(1) else { return false };
+    // Geometric growth keeps repeated short entries linear in total copying work.
+    // If the next complete buffer cannot fit, omit the optional entry rather
+    // than retrying exact +1 growth and copying the whole prefix on every tag.
+    let capacity = if length > entries.capacity() {
+        if entries.capacity() == 0 {
+            1
+        } else {
+            let Some(grown) = entries.capacity().checked_mul(2) else { return false };
+            grown.max(length)
+        }
+    } else {
+        entries.capacity()
+    };
+    let slot_bytes = std::mem::size_of::<(String, String)>();
+    let added_slots = capacity.saturating_sub(storage.charged_capacity);
+    let Some(minimum) = added_slots.checked_mul(slot_bytes).and_then(|bytes| bytes.checked_add(key.len())).and_then(|bytes| bytes.checked_add(value.len()))
+    else {
+        return false;
+    };
+    // Refuse before allocating even temporary copies. A previously allocated but
+    // uncharged vector still spends its complete retained capacity on first use.
+    if minimum > *budget {
+        return false;
+    }
+    let (Some(key), Some(value)) = (staged_text(key), staged_text(value)) else { return false };
+    let mut replacement = if length > entries.capacity() {
+        let mut next = Vec::new();
+        if next.try_reserve_exact(capacity).is_err() {
+            return false;
+        }
+        Some(next)
+    } else {
+        None
+    };
+    let capacity = replacement.as_ref().map_or(entries.capacity(), Vec::capacity);
+    // An allocator may grant extra capacity. Account for its actual retained
+    // buffers before swapping anything; refusal drops all staging and needs no refund.
+    let Some(cost) = capacity
+        .saturating_sub(storage.charged_capacity)
+        .checked_mul(slot_bytes)
+        .and_then(|bytes| bytes.checked_add(key.capacity()))
+        .and_then(|bytes| bytes.checked_add(value.capacity()))
+    else {
+        return false;
+    };
+    let Some(remaining) = budget.checked_sub(cost) else { return false };
+    if let Some(next) = &mut replacement {
+        next.append(entries);
+        next.push((key, value));
+    } else {
+        entries.push((key, value));
+    }
+    if let Some(next) = replacement {
+        *entries = next;
+    }
+    storage.charged_capacity = capacity;
+    *budget = remaining;
     true
 }

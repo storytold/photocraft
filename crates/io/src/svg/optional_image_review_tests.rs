@@ -140,3 +140,54 @@ fn bounded_non_strict_xml_omission_warns_while_strict_preview_still_refuses() {
     assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [1., 0., 0., 1.]);
     assert!(import_svg_preview_with_work("strict.svg", text.as_bytes(), MAX_RASTER_PIXELS).is_err());
 }
+
+#[test]
+fn raster_only_callers_reject_small_budget_omissions_while_import_keeps_its_warning() {
+    fn no_fonts() -> Arc<usvg::fontdb::Database> {
+        Arc::new(usvg::fontdb::Database::new())
+    }
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let text = drawing(&url("image/png", &png));
+    let parsed = || parse_with_image_limit(text.as_bytes(), no_fonts, 3).unwrap();
+    assert_eq!(parsed().image_usage.raster_limit_images, 1, "a valid four-pixel PNG exceeds the three-pixel allowance before decode");
+    assert!(matches!(complete_raster_tree(parsed()), Err(IoError::Svg(message)) if message.contains("incomplete drawing")));
+    let imported = import_parsed("limited.svg", parsed(), MAX_GROUP_DEPTH, None, false).unwrap();
+    assert_omission_warning(&imported, 1);
+    assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [1., 0., 0., 1.]);
+    let complete = parse_with_image_limit(text.as_bytes(), no_fonts, 4).unwrap();
+    assert_eq!(omitted_image_count(complete.image_usage), 0);
+    let pixels = rasterize_tree(&complete_raster_tree(complete).unwrap(), 1.).unwrap();
+    assert_eq!(pixels.get(1, 1), [0., 1., 0., 1.]);
+}
+
+#[test]
+fn raster_only_public_apis_reject_omitted_images_instead_of_returning_partial_pixels() {
+    let deep = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\">{}<rect width=\"2\" height=\"2\" fill=\"#00ff00\"/>{}</svg>",
+        "<g>".repeat(MAX_XML_DEPTH + 1),
+        "</g>".repeat(MAX_XML_DEPTH + 1)
+    );
+    for source in [url("image/png", &oversized_png(0)), url("image/svg+xml", deep.as_bytes()), url("image/png", b"not a PNG")] {
+        let text = drawing(&source);
+        assert!(matches!(rasterize(text.as_bytes(), 1.), Err(IoError::Svg(message)) if message.contains("incomplete drawing")));
+        assert!(matches!(rasterize_rgba8(text.as_bytes()), Err(IoError::Svg(message)) if message.contains("incomplete drawing")));
+        let imported = crate::import("outer.svg", text.as_bytes()).unwrap();
+        assert_omission_warning(&imported, 1);
+        assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [1., 0., 0., 1.]);
+    }
+}
+
+#[test]
+fn raster_only_public_apis_preserve_complete_embedded_image_pixels() {
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let green = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\"><rect width=\"2\" height=\"2\" fill=\"#00ff00\"/></svg>";
+    for source in [url("image/png", &png), url("image/svg+xml", green.as_bytes())] {
+        let text = drawing(&source);
+        assert_eq!(rasterize(text.as_bytes(), 1.).unwrap().get(1, 1), [0., 1., 0., 1.]);
+        let (width, height, pixels) = rasterize_rgba8(text.as_bytes()).unwrap();
+        assert_eq!((width, height), (2, 2));
+        assert_eq!(pixels, [0, 255, 0, 255].repeat(4));
+    }
+}
