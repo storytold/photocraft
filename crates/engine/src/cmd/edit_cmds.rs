@@ -486,6 +486,23 @@ pub(crate) fn clear_area(doc: &mut Document, id: LayerId, area: Rect, sel: Optio
     Ok(())
 }
 
+/// Edit › Clear: [`clear_area`], except that with a selection a layer with transparency loses
+/// each pixel's selection coverage up to all of it, `min(alpha, selection)`, as the Move tool's
+/// cut does (#7655). A selection that follows the pixels' own coverage, such as the outline a
+/// Move leaves (#7538) or the layer's transparency loaded as a selection, then clears them whole
+/// instead of leaving `a·(1 − a)` of every soft edge pixel. Opaque pixels clear as before
+/// (`1 − selection` left), and so does the Background, which takes the background colour (#12927).
+pub(crate) fn clear_coverage(doc: &mut Document, id: LayerId, area: Rect, sel: Option<&Surface>, background: [f32; 4]) -> Result<()> {
+    let Some(sel) = sel.filter(|_| !doc.is_background(id)) else {
+        return clear_area(doc, id, area, sel, background);
+    };
+    doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+    crate::pixels::try_lift_coverage(surf, area, sel)?;
+    surf.prune();
+    Ok(())
+}
+
 /// Paste as a new layer (or into the targeted mask or channel: [`paste_to_target`]). `in_place` keeps the original position; otherwise the pixels are centred
 /// on `center` (the view centre from the UI) or the canvas, unless they already overlap the canvas.
 fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {

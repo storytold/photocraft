@@ -352,6 +352,8 @@ pub struct Session {
 #[cfg(test)]
 mod brush_pressure_size_default_tests;
 #[cfg(test)]
+mod clear_soft_selection_tests;
+#[cfg(test)]
 mod embed_all_linked_tests;
 #[cfg(test)]
 mod eraser_gray_background_tests;
