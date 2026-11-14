@@ -3382,8 +3382,7 @@ fn batch_naming_serial_keeps_same_named_inputs_and_their_pixels() {
     }
 }
 
-/// Batch follows Photoshop's later-file-wins behavior. Image Processor and lens correction
-/// keep their existing collision error so their outputs are never silently replaced.
+/// Batch follows Photoshop's later-file-wins behavior. Lens correction reports collisions.
 #[test]
 fn batch_reports_inputs_that_share_an_output_name() {
     let dir = tmp("collide");
@@ -3397,7 +3396,6 @@ fn batch_reports_inputs_that_share_an_output_name() {
     png(&input, "b.tif", 8, 8, "#00ff00");
     for (cmd, extra) in [
         ("file.automate.batch", json!({"steps": [], "format": "jpg"})),
-        ("file.scripts.imageProcessor", json!({})),
         ("file.automate.lensCorrection", json!({"format": "jpg"})),
     ] {
         let out = join(&dir, cmd);
