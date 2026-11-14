@@ -504,6 +504,10 @@ pub struct UiState {
     /// Views per open document (index-aligned with the session's documents).
     pub views: Vec<View>,
     pub dialogs: Vec<Dialog>,
+    /// The batch Lens Correction settings of its last OK, for the next open in this session
+    /// (`lens_batch_ui::remember`); not kept across a restart.
+    #[serde(skip)]
+    pub lens_batch_kept: serde_json::Map<String, serde_json::Value>,
     pub windows: Vec<DocWindow>,
     pub theme: crate::theme::ThemeKind,
     pub workspace: String,
@@ -694,6 +698,7 @@ impl Default for UiState {
             panels: Panels::default(),
             views: Vec::new(),
             dialogs: Vec::new(),
+            lens_batch_kept: serde_json::Map::new(),
             windows: Vec::new(),
             theme: crate::theme::ThemeKind::ProMedium,
             workspace: "Essentials".into(),
