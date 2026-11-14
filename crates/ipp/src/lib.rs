@@ -551,6 +551,10 @@ fn chunked_complete(body: &[u8], resume: &mut usize) -> bool {
         // (checked, so `ffffffffffffffff` cannot overflow the slice arithmetic).
         let Some(end) = size.checked_add(2).filter(|_| size <= MAX_REPLY) else { return true };
         let Some(rest) = b.get(end..) else { return false };
+        // A full malformed separator must reach dechunk now, even if the server stays open.
+        if b.get(size..end) != Some(b"\r\n") {
+            return true;
+        }
         b = rest;
     }
 }
