@@ -296,13 +296,14 @@ fn control_channel_lists_sets_and_applies_the_selected_one() {
 /// different set.
 #[test]
 fn bad_index_from_the_control_channel_is_an_error() {
-    for bad in [json!(99), json!(-1), json!("Zed"), json!(1.5), Value::Null, json!(u64::MAX)] {
+    for bad in [json!(99), json!(3), json!(-1), json!("Zed"), json!(1.5), Value::Null, json!(u64::MAX), json!(4_294_967_296_u64)] {
         let mut h = opened();
         let id = h.state().ui.dialogs.last().unwrap().id;
         control(&mut h, "ui.dialog.set", json!({"dialog": id, "field": "index", "value": bad}));
         h.run_steps(2);
         let confirmed = control(&mut h, "ui.dialog.confirm", json!({"dialog": id}));
         assert_ne!(confirmed["ok"], true, "{bad}: {confirmed}");
+        assert_eq!(variables(&h).active, None, "{bad}: no set was applied");
         assert!(visible(&h), "{bad}");
         assert_eq!(history(&h), 0, "{bad}");
     }
@@ -322,4 +323,15 @@ fn no_data_sets_shows_an_empty_list_and_apply_reports_it() {
     h.run_steps(3);
     assert!(h.state().ui.dialogs.is_empty());
     assert!(!h.state().ui.status.is_empty(), "the failure is reported");
+}
+
+/// Every theme marks the selected row, also those without a row colour of their own.
+#[test]
+fn the_selected_row_is_visible_in_every_theme() {
+    for kind in photocraft_ui_egui::theme::ThemeKind::ALL {
+        let t = photocraft_ui_egui::theme::Tokens::for_kind(kind);
+        let fill = photocraft_ui_egui::panels::apply_data_set_ui::selected_fill(&t);
+        assert!(fill.a() > 0, "{kind:?}: the selected row has a fill");
+        assert_ne!(fill, t.field, "{kind:?}: it differs from the list background");
+    }
 }
