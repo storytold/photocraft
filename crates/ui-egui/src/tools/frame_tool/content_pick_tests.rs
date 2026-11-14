@@ -74,7 +74,7 @@ fn hidden_locked_and_nonimage_candidates_are_skipped_but_lower_eligible_content_
             })
             .unwrap();
         assert_eq!(content_layer(&app, [80, 60, 200, 160]), Some(red.0), "{kind} must not obscure eligible Red");
-        app.session.edit("Remove Red", |doc, _| { doc.remove(red); Ok(()) }).unwrap();
+        app.session.edit("Remove Red", |doc, _| { doc.remove(red).unwrap(); Ok(()) }).unwrap();
         assert_eq!(content_layer(&app, [80, 60, 200, 160]), None, "{kind} must not become frame content");
     }
     let (app, _, _, _) = scene();
