@@ -3731,6 +3731,59 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
     }
 }
 
+/// #10544: a click is replayed with the Alt of its press for the tools whose ⌥-click matters, and
+/// with the release's modifiers for every other tool.
+#[test]
+fn a_click_is_replayed_with_the_alt_of_its_press_for_alt_click_tools_only() {
+    use egui::Modifiers;
+    for tool in [Tool::Brush, Tool::Pencil, Tool::Gradient, Tool::PaintBucket, Tool::CloneStamp, Tool::Healing, Tool::MixerBrush] {
+        assert!(strokes::click_modifiers(tool, Modifiers::NONE, Modifiers::ALT).alt, "{tool:?}: Alt at the press");
+        assert!(!strokes::click_modifiers(tool, Modifiers::NONE, Modifiers::NONE).alt, "{tool:?}: no Alt at the press");
+        assert!(strokes::click_modifiers(tool, Modifiers::ALT, Modifiers::NONE).alt, "{tool:?}: Alt at the release only");
+        assert!(strokes::click_modifiers(tool, Modifiers::SHIFT, Modifiers::ALT).shift, "{tool:?}: the rest is the release's");
+    }
+    for tool in [Tool::Eraser, Tool::Move, Tool::RectMarquee, Tool::Zoom, Tool::Eyedropper] {
+        assert!(!strokes::click_modifiers(tool, Modifiers::NONE, Modifiers::ALT).alt, "{tool:?}: only the ⌥-click tools latch");
+    }
+}
+
+/// An Alt latched at a Brush press is not an ⌥-click for the Clone Stamp the tool was switched to.
+#[test]
+fn the_latched_press_alt_only_counts_for_the_tool_it_was_pressed_with() {
+    use egui::Modifiers;
+    assert!(strokes::press_alt_for(Tool::Brush, Some((Tool::Brush, Modifiers::ALT))).alt);
+    assert!(!strokes::press_alt_for(Tool::CloneStamp, Some((Tool::Brush, Modifiers::ALT))).alt, "another tool");
+    assert!(!strokes::press_alt_for(Tool::Brush, Some((Tool::Brush, Modifiers::NONE))).alt, "no Alt at the press");
+    assert!(!strokes::press_alt_for(Tool::Brush, None).alt, "no press");
+}
+
+/// Presses and releases in one frame keep the released click and the next held press distinct.
+#[test]
+fn primary_presses_and_releases_keep_their_own_alt_in_order() {
+    use egui::{Event, Modifiers, PointerButton};
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+    let press = |pos: Pos2, button, pressed, modifiers| Event::PointerButton { pos, button, pressed, modifiers };
+    let inside = Pos2::new(10.0, 10.0);
+    let outside = Pos2::new(300.0, 10.0);
+    let pair = |events: &[egui::Event], held| strokes::press_alt_events(events, rect, Tool::Brush, held);
+    let down = |alt| press(inside, PointerButton::Primary, true, alt);
+    let up = press(inside, PointerButton::Primary, false, Modifiers::NONE);
+    assert_eq!(
+        pair(&[down(Modifiers::ALT), up.clone(), down(Modifiers::NONE)], None),
+        (Some((Tool::Brush, Modifiers::ALT)), Some((Tool::Brush, Modifiers::NONE)))
+    );
+    assert_eq!(
+        pair(&[up.clone(), down(Modifiers::ALT)], Some((Tool::Brush, Modifiers::NONE))),
+        (Some((Tool::Brush, Modifiers::NONE)), Some((Tool::Brush, Modifiers::ALT)))
+    );
+    assert_eq!(pair(&[down(Modifiers::ALT), up.clone(), down(Modifiers::NONE), up], None), (Some((Tool::Brush, Modifiers::NONE)), None));
+    assert_eq!(pair(&[press(outside, PointerButton::Primary, true, Modifiers::ALT)], None), (None, None));
+    assert_eq!(pair(&[press(inside, PointerButton::Secondary, true, Modifiers::ALT)], None), (None, None));
+    let events = [press(inside, PointerButton::Primary, false, Modifiers::NONE), down(Modifiers::ALT)];
+    assert_eq!(strokes::pointer_button_modifiers(&events, PointerButton::Primary, false), Some(Modifiers::NONE));
+    assert_eq!(strokes::pointer_button_modifiers(&events, PointerButton::Primary, true), Some(Modifiers::ALT));
+}
+
 /// #8230: Edit › Fade opens with a Preview checkbox, and the canvas shows the layer faded with the
 /// dialog's opacity, at full size, on the background worker and the inline path alike. Cancel
 /// leaves the document, its history and Fade itself as they were; OK applies what was shown.

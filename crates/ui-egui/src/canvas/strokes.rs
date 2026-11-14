@@ -712,11 +712,58 @@ pub(super) fn pointer_moves(events: &[egui::Event], button: egui::PointerButton,
 /// Modifiers attached to the pointer event itself. Some input sources provide these without a
 /// separate `ModifiersChanged` event, so use them for click gestures before falling back to the
 /// frame-wide modifier state.
-pub(super) fn pointer_button_modifiers(events: &[egui::Event], button: egui::PointerButton) -> Option<egui::Modifiers> {
+pub(super) fn pointer_button_modifiers(events: &[egui::Event], button: egui::PointerButton, pressed: bool) -> Option<egui::Modifiers> {
     events.iter().rev().find_map(|e| match e {
-        egui::Event::PointerButton { button: b, modifiers, .. } if *b == button => Some(*modifiers),
+        egui::Event::PointerButton { button: b, pressed: down, modifiers, .. } if *b == button && *down == pressed => Some(*modifiers),
         _ => None,
     })
+}
+
+/// Where a canvas view keeps the Alt its current press started with.
+pub(super) fn press_alt_id(idx: usize) -> egui::Id {
+    egui::Id::unique(("tool-pointer-press-alt", idx))
+}
+
+type PressAlt = Option<(Tool, egui::Modifiers)>;
+
+/// The last released press belongs to the click egui reports; retain a later press for the next frame.
+pub(super) fn press_alt_events(events: &[egui::Event], rect: egui::Rect, tool: Tool, mut held: PressAlt) -> (PressAlt, PressAlt) {
+    let mut released = None;
+    for event in events {
+        match event {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers } => {
+                held = rect.contains(*pos).then_some((tool, *modifiers));
+            }
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. } => {
+                released = held.take();
+            }
+            _ => {}
+        }
+    }
+    (released, held)
+}
+
+/// The Alt stored at the press, for the click's tool only: a press that started under one tool (the
+/// Brush) must not make the click replayed under another (the Clone Stamp, whose ⌥ sets the source)
+/// an ⌥-click.
+pub(super) fn press_alt_for(tool: Tool, stored: PressAlt) -> egui::Modifiers {
+    stored.filter(|(at_press, _)| *at_press == tool).map_or(egui::Modifiers::NONE, |(_, mods)| mods)
+}
+
+/// The modifiers a click replays its tool events with. They are the release's, except that for
+/// the tools whose ⌥-click matters (the Eyedropper of the painting tools, the clone source, the
+/// Mixer Brush's paint load) Alt is what it was at the press: a click is decided by the Alt held
+/// when the button went down, so letting Alt go together with the button (or a platform that
+/// stamps the release without it) neither paints a dab nor drops the sample (#10544).
+pub(super) fn click_modifiers(tool: Tool, release: egui::Modifiers, press: egui::Modifiers) -> egui::Modifiers {
+    let alt_click = super::cursors::alt_samples(tool, egui::Modifiers::ALT) || matches!(tool, Tool::CloneStamp | Tool::Healing | Tool::MixerBrush);
+    if alt_click && press.alt {
+        // Ctrl+Alt is a resize gesture. Losing Ctrl on release must not turn it into a sample.
+        let ctrl = release.ctrl || (press.ctrl && crate::brush_resize::applies(tool));
+        egui::Modifiers { alt: true, ctrl, ..release }
+    } else {
+        release
+    }
 }
 
 /// The line from the brush to the pointer while stroke smoothing lags (Pulled String Mode and

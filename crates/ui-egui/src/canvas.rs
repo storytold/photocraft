@@ -108,7 +108,8 @@ pub(crate) use strokes::{
     ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live, unsmoothed_line,
 };
 use strokes::{
-    HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, live_stroke_busy, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure,
+    HOLD_REPEAT_MS, click_modifiers, draw_clone_preview, feed_live_stroke, live_stroke_busy, pointer_button_modifiers, pointer_moves, press_alt_events,
+    press_alt_for, press_alt_id, stroke_wants_time, tap_at_peak_pressure,
 };
 #[cfg(test)]
 pub(crate) use strokes::{SPOT_HEALING_TRAIL, live_retouch_points};
@@ -1070,10 +1071,31 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
         }
     }
 
+    // The Alt held at the press decides an ⌥-click for the whole press, as for the Brush's
+    // Eyedropper (`alt_sampling`): the click replayed on release, in a later frame than the
+    // press, must not paint because Alt was let go with the button (#10544).
+    let press_alt = press_alt_id(idx);
+    let held = ctx.data(|d| d.get_temp::<(Tool, egui::Modifiers)>(press_alt));
+    let (released, held) = ui.input(|i| press_alt_events(&i.events, rect, tool, held));
+
+    ctx.data_mut(|d| {
+        if let Some(released) = released {
+            d.insert_temp(press_alt, released);
+        } else {
+            d.remove::<(Tool, egui::Modifiers)>(press_alt);
+        }
+    });
     handle_canvas_tool_menus(app, input, mods, &mut buttons);
     handle_canvas_tool_navigation(app, ui, view, input, &mut buttons);
     handle_canvas_tool_stroke(app, ui, input, mods, capture_press, tool_press, &mut buttons);
     handle_canvas_tool_clicks(app, ui, view, input, mods, tool_press, &buttons);
+    ctx.data_mut(|d| {
+        if let Some(held) = held {
+            d.insert_temp(press_alt, held);
+        } else {
+            d.remove::<(Tool, egui::Modifiers)>(press_alt);
+        }
+    });
     crate::tools::type_path_placement::cancel_missing_release(app, ctx);
     // Clear the menu-dismissal flag on the gesture's pointer release, even when the release
     // occurs outside the canvas and produces no `buttons.clicked` event. It sits below (not
@@ -1261,7 +1283,7 @@ fn handle_canvas_tool_stroke(
     {
         let d = xf.to_doc(p);
         // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
-        let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
+        let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary, true)).unwrap_or(mods);
         tool_input::tool_event_with_view(
             app,
             ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
@@ -1447,7 +1469,7 @@ fn transform_press_moves(
         && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| input.rect.contains(*p))
     {
         let d = input.xf.to_doc(p);
-        let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
+        let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary, true)).unwrap_or(mods);
         tool_input::tool_event_with_view(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods, view);
         ctx.data_mut(|m| m.insert_temp(id, true));
     }
@@ -1568,12 +1590,18 @@ fn handle_canvas_tool_clicks(
             // The click is outside the open menu: it dismisses the menu, no tool action.
         } else {
             let click_button = if app.secondary_erase { PointerButton::Secondary } else { PointerButton::Primary };
-            let click_mods = ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods);
+            let click_mods = ui.input(|i| pointer_button_modifiers(&i.events, click_button, false)).unwrap_or(mods);
             let click_mods = if tool == Tool::ObjectSelection && click_button == PointerButton::Primary {
                 ctx.data(|d| d.get_temp(tool_press)).unwrap_or(click_mods)
             } else {
                 click_mods
             };
+            let press_alt = if click_button == PointerButton::Primary {
+                press_alt_for(tool, ctx.data(|d| d.get_temp(press_alt_id(input.idx))))
+            } else {
+                egui::Modifiers::NONE
+            };
+            let click_mods = click_modifiers(tool, click_mods, press_alt);
             let d = xf.to_doc(p);
             match tool {
                 Tool::Zoom if !transform_owns_pointer => {

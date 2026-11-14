@@ -752,3 +752,33 @@ fn help_letters_stay_typing_while_a_zoom_is_typed() {
     letter(&mut h, c);
     assert!(is_open(&h.ctx), "{c} ran no row: Help stays open");
 }
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn altgr_e_types_euro_without_opening_edit() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        |ui, state: &mut (PhotocraftApp, String)| {
+            crate::menus::menu_bar(&mut state.0, ui);
+            let label = ui.label("Text");
+            ui.text_edit_singleline(&mut state.1).labelled_by(label.id).request_focus();
+        },
+        (app(), String::new()),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    let key = |key, pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    h.input_mut().events.push(key(egui::Key::AltRight, true));
+    let ctx = h.ctx.clone();
+    let mut raw = h.input_mut().clone();
+    eframe::App::raw_input_hook(&mut h.state_mut().0, &ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.input_mut().events.extend([key(egui::Key::E, true), egui::Event::Text("€".into())]);
+    let ctx = h.ctx.clone();
+    let mut raw = h.input_mut().clone();
+    eframe::App::raw_input_hook(&mut h.state_mut().0, &ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    assert_eq!(h.state().1, "€");
+    assert!(!is_open(&h.ctx), "AltGr+E must not open Edit");
+}
