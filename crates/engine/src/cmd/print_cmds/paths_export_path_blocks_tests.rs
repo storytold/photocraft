@@ -32,7 +32,8 @@ fn circle(cx: f64, cy: f64, r: f64) -> Subpath {
     sp
 }
 
-fn doc_with(paths: Vec<(&str, Vec<Subpath>)>) -> Document {
+/// A 300 x 200 px document at 72 ppi holding each `(name, subpaths)` pair as a saved path.
+pub(super) fn doc_with(paths: Vec<(&str, Vec<Subpath>)>) -> Document {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 300, "height": 200, "background": "#ffffff", "name": "Blocks.psd"})).unwrap();
     s.edit("paths", |d, _| {
@@ -47,7 +48,7 @@ fn doc_with(paths: Vec<(&str, Vec<Subpath>)>) -> Document {
 }
 
 /// The text after the file's setup section: just the path blocks and the trailer.
-fn body(ai: &str) -> &str {
+pub(super) fn body(ai: &str) -> &str {
     let from = ai.find("%%EndSetup\n").map(|i| i + "%%EndSetup\n".len()).unwrap();
     &ai[from..ai.find("%%PageTrailer").unwrap()]
 }
@@ -81,10 +82,10 @@ fn a_two_subpath_path_is_one_block_with_two_groups() {
     assert_eq!(b.matches("Path_End").count(), 1);
     let lines: Vec<&str> = b.lines().collect();
     let first_end = lines.iter().position(|l| *l == "*U").unwrap();
-    // Group one: *u, note, XR, the circle (move plus four curves), n.
+    // Group one: *u, note, XR, the circle (move plus four curves ending on smooth knots), n.
     assert_eq!(&lines[1..4], ["*u", XOR.trim_end(), "1 XR"]);
     assert!(lines[4].ends_with(" m"));
-    assert!(lines[5..9].iter().all(|l| l.ends_with(" C")), "{lines:?}");
+    assert!(lines[5..9].iter().all(|l| l.ends_with(" c")), "{lines:?}");
     assert_eq!(&lines[9..=first_end], ["n", "*U"]);
     // Group two: the open line, ending with N.
     assert_eq!(&lines[first_end + 1..], ["*u", XOR.trim_end(), "1 XR", "150.0000 30.0000 m", "280.0000 30.0000 L", "N", "*U", "%Adobe_Photoshop_Path_End"]);

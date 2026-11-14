@@ -1585,16 +1585,21 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
             s.push_str("1 XR\n");
             let (x, y) = pt(sp.knots[0].anchor.x, sp.knots[0].anchor.y);
             s.push_str(&format!("{x:.4} {y:.4} m\n"));
-            for seg in sp.segments() {
+            for (i, seg) in sp.segments().into_iter().enumerate() {
                 let [a, c1, c2, b] = seg;
                 let straight = c1 == a && c2 == b;
+                // The operator follows the anchor the segment ends on: lower case for a smooth
+                // one. The closing segment of a closed subpath ends on the first knot.
+                let smooth_end = sp.knots[(i + 1) % sp.knots.len()].smooth;
                 let (bx, by) = pt(b.x, b.y);
                 if straight {
-                    s.push_str(&format!("{bx:.4} {by:.4} L\n"));
+                    let op = if smooth_end { 'l' } else { 'L' };
+                    s.push_str(&format!("{bx:.4} {by:.4} {op}\n"));
                 } else {
+                    let op = if smooth_end { 'c' } else { 'C' };
                     let (x1, y1) = pt(c1.x, c1.y);
                     let (x2, y2) = pt(c2.x, c2.y);
-                    s.push_str(&format!("{x1:.4} {y1:.4} {x2:.4} {y2:.4} {bx:.4} {by:.4} C\n"));
+                    s.push_str(&format!("{x1:.4} {y1:.4} {x2:.4} {y2:.4} {bx:.4} {by:.4} {op}\n"));
                 }
             }
             // Unpainted: `n` closes the path, `N` leaves it open.
@@ -1711,3 +1716,7 @@ mod paths_export_document_bounds_tests;
 #[cfg(test)]
 #[path = "print_cmds/paths_export_path_blocks_tests.rs"]
 mod paths_export_path_blocks_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/paths_export_smooth_operators_tests.rs"]
+mod paths_export_smooth_operators_tests;
