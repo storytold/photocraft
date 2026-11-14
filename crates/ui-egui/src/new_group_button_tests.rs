@@ -95,11 +95,11 @@ fn selecting_a_grouped_layer_opens_the_group() {
     assert!(rows.contains(&a.0) && rows.contains(&b.0), "{rows:?}");
 }
 
-/// ⌥-click asks in the New Group dialog first: New Group from Layers with several layers
-/// selected, New Group with one. Nothing changes until OK.
+/// ⌥-click asks in the New Group from Layers dialog first, with one layer selected too
+/// (#14717). Nothing changes until OK.
 #[test]
 fn alt_click_opens_the_new_group_dialog() {
-    for (both, command) in [(true, "layer.new.groupFromLayers"), (false, "layer.new.group")] {
+    for (both, command) in [(true, "layer.new.groupFromLayers"), (false, "layer.new.groupFromLayers")] {
         let (mut h, a, b) = selected(both);
         h.get_by_label("Create a new group").click_modifiers(Modifiers::ALT);
         h.run_steps(4);
@@ -114,7 +114,9 @@ fn alt_click_opens_the_new_group_dialog() {
         } else {
             let groups = groups(&h);
             assert_eq!(groups.len(), 1);
-            assert!(groups[0].children().unwrap().is_empty());
+            assert_eq!(groups[0].children().unwrap().iter().map(|l| l.id).collect::<Vec<_>>(), vec![b]);
+            let top: Vec<LayerId> = h.state().session.active().unwrap().doc.layers.iter().map(|l| l.id).collect();
+            assert_eq!(top[1..], [a, groups[0].id]);
         }
     }
 }
