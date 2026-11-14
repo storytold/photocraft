@@ -1,7 +1,7 @@
 use super::filters::{smart, smart_mut};
 use super::placing::detach_psd;
-use super::rendering::{refresh, refresh_or_fail, unapplied_filters};
-use super::source::{authorized_source_bytes, source_bytes};
+use super::rendering::{contents_digest, refresh, refresh_or_fail, unapplied_filters};
+use super::source::{authorized_source_bytes, source_bytes, source_image_keyed};
 use super::{
     Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad, base_name,
     decode_source, encode_source, json, layer_param, other,
@@ -71,8 +71,18 @@ pub fn replace_contents_from_bytes(s: &mut Session, p: &Value, file_name: &str, 
 
 /// Replace Contents from a file's name and bytes: what the desktop and web file pickers hand over.
 pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
-    decode_source(file_name, &bytes)?; // fail before touching the document
-    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) })
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    // Decode now, failing before touching the document. A raster file goes into the source cache
+    // under the key the re-render looks up (the digest of this very buffer, which every instance
+    // will hold), so it is decoded and hashed once; an SVG renders through its own vector path,
+    // so only its document is read here.
+    let bytes = Arc::new(bytes);
+    if photocraft_io::svg::is_svg(&bytes) {
+        decode_source(file_name, &bytes)?;
+    } else {
+        source_image_keyed(file_name, &bytes, (contents_digest(&bytes), doc.pixel_format()))?;
+    }
+    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes })
 }
 
 /// The file name and bytes of smart object `id`'s contents.
