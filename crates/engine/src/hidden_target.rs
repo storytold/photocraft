@@ -56,7 +56,9 @@ pub fn refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
     }
     let st = s.active()?;
     let layer = crate::commands::layer_param(s, &params).ok()?;
-    let why = if id == "paint.artHistoryBrush" { ART_HISTORY_HIDDEN } else { HIDDEN };
+    // The Art History Brush's text was measured on a layer's pixels only.
+    let pixels = crate::channel_cmds::target_of(&params) == crate::channel_cmds::Target::Pixels;
+    let why = if id == "paint.artHistoryBrush" && pixels { ART_HISTORY_HIDDEN } else { HIDDEN };
     (st.doc.layer(layer).is_some() && !shown(&st.doc, layer)).then_some(why)
 }
 

@@ -177,39 +177,48 @@ pub(super) fn enabled(s: &Session) -> std::result::Result<(), String> {
     super::has_pixel_layer(s).map_err(|why| if crate::active_layer_of(s).is_ok_and(|l| l.is_group()) { GROUP.into() } else { why })
 }
 
-/// Lock All or Lock Image Pixels on the targeted layer's pixels, refused with the alert text.
-/// A mask or channel target keeps the shared check (not measured).
-fn refuse_locked(s: &Session, id: Option<photocraft_doc::LayerId>, p: &Value) -> Result<()> {
+/// The targeted layer's pixels can't be painted: a group's (also one with a mask, which the
+/// precondition lets through for its mask), or Lock All or Lock Image Pixels, refused with the
+/// alert texts. A mask or channel target keeps the shared checks (not measured).
+fn refuse_layer(s: &Session, id: Option<photocraft_doc::LayerId>, p: &Value) -> Result<()> {
     let (Some(id), Some(st)) = (id, s.active()) else { return Ok(()) };
-    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels || st.doc.layer(id).is_none() {
-        return Ok(());
+    let Some(layer) = st.doc.layer(id).filter(|_| pixel_target(p)) else { return Ok(()) };
+    if layer.is_group() {
+        return Err(EngineError::Other(GROUP.into()));
     }
     let locks = st.doc.effective_locks(id);
     if locks.all || locks.pixels { Err(EngineError::Other(LOCKED.into())) } else { Ok(()) }
 }
 
+fn pixel_target(p: &Value) -> bool {
+    crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels
+}
+
 /// The source the stroke paints from, the History Brush's (the `state` or `snapshot` passed, else
 /// the History panel's source, through the shared [`super::history_source`]), refused with the
 /// alert texts: no source, then another canvas size, then another colour mode or a depth but 8
-/// bits ([`refuse_format`]), then a target layer the source state lacks. A missing mask or channel
-/// keeps today's text (not measured).
+/// bits ([`refuse_format`]), then a target layer the source state lacks. A mask or channel target
+/// keeps the History Brush's texts for the source refusals (not measured).
 fn source_surface(s: &Session, id: Option<photocraft_doc::LayerId>, p: &Value) -> Result<photocraft_raster::Surface> {
-    use crate::history_source_cmds::{SourceRefusal, checked_source};
+    use crate::history_source_cmds::{SourceRefusal, checked_source, paint_source};
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let doc = checked_source(st, p, CMD)?.map_err(|why| {
-        EngineError::Other(
-            match why {
-                SourceRefusal::NoSource => NO_SOURCE,
-                SourceRefusal::CanvasSize { .. } => CANVAS_SIZE,
-            }
-            .into(),
-        )
-    })?;
+    let pixels = pixel_target(p);
+    let doc = if pixels {
+        checked_source(st, p, CMD)?.map_err(|why| {
+            EngineError::Other(
+                match why {
+                    SourceRefusal::NoSource => NO_SOURCE,
+                    SourceRefusal::CanvasSize { .. } => CANVAS_SIZE,
+                }
+                .into(),
+            )
+        })?
+    } else {
+        paint_source(st, p, CMD)?
+    };
     refuse_format(&st.doc, &doc)?;
-    super::history_source(s, id, p, CMD).map_err(|e| {
-        let pixels = crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels;
-        if pixels && crate::channel_cmds::read_target_surface(&doc, id, p).is_err() { EngineError::Other(LACKS_LAYER.into()) } else { e }
-    })
+    super::history_source(s, id, p, CMD)
+        .map_err(|e| if pixels && crate::channel_cmds::read_target_surface(&doc, id, p).is_err() { EngineError::Other(LACKS_LAYER.into()) } else { e })
 }
 
 /// A source of another colour mode, then any document but an 8-bit one, refused with the reference
@@ -264,7 +273,7 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (stroke, id) = parse_brush(s, p, CMD)?;
     let _ = stroke;
-    refuse_locked(s, id, p)?;
+    refuse_layer(s, id, p)?;
     // Compare document modes: the pixel format reads Indexed and Multichannel as RGB (#12826).
     let src_surface = source_surface(s, id, p)?;
     // Truncating a huge row index only changes the seed.

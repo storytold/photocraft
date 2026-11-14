@@ -141,3 +141,32 @@ fn a_valid_stroke_still_paints() {
     s.execute("paint.artHistoryBrush", json!({"points": [[8, 16], [40, 16]], "size": 12, "hardness": 100, "state": 2})).unwrap();
     assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
 }
+
+/// A group with a mask passes the precondition (for its mask), but its pixels are still refused.
+#[test]
+fn a_group_with_a_mask_and_its_pixels_targeted() {
+    let (mut s, _) = session();
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    assert_eq!(refused(&mut s, "paint.artHistoryBrush", json!({"target": "pixels"})), GROUP);
+}
+
+/// A mask target was not measured: a hidden layer, no source and another canvas size keep the
+/// History Brush's texts.
+#[test]
+fn a_mask_target_keeps_todays_texts() {
+    let (mut s, id) = session();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let mask = json!({"target": "mask"});
+    s.execute("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
+    assert_eq!(refused(&mut s, "paint.artHistoryBrush", mask.clone()), HIDDEN);
+    s.execute("layer.setProps", json!({"layer": id, "visible": true})).unwrap();
+    s.execute("image.canvasSize", json!({"width": 60, "height": 32, "anchor": "topLeft"})).unwrap();
+    let e = refused(&mut s, "paint.artHistoryBrush", mask.clone());
+    assert!(e.contains("does not match that of the History Brush source"), "{e}");
+    let snap = s.execute("history.newSnapshot", json!({})).unwrap()["snapshot"].clone();
+    s.execute("history.setSource", json!({"snapshot": snap})).unwrap();
+    s.execute("history.deleteSnapshot", json!({"snapshot": snap})).unwrap();
+    let e = refused(&mut s, "paint.artHistoryBrush", mask);
+    assert!(e.contains("the History Brush source was deleted"), "{e}");
+}
