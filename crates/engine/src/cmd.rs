@@ -597,7 +597,7 @@ fn build() -> Vec<CommandSpec> {
                 let in_place = p.get("inPlace").and_then(Value::as_bool).unwrap_or(false);
                 let name = p.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string);
                 if crate::layer_multi_cmds::multi(s, p) {
-                    return crate::layer_multi_cmds::duplicate_selected(s, in_place, "Duplicate Layers");
+                    return crate::layer_multi_cmds::duplicate_selected(s, in_place, "Duplicate Layer");
                 }
                 let id = layer_param(s, p)?;
                 let add_copy = layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
@@ -1536,3 +1536,6 @@ mod parse_hex_tests {
         assert_eq!(parse_hex("#0f0f0fff"), Some([g, g, g, 1.0]));
     }
 }
+
+#[cfg(test)]
+mod layer_duplicate_multi_history_tests;
