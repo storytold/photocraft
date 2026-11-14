@@ -437,6 +437,21 @@ fn apply_char_features(s: &mut CharStyle, p: &Value) -> bool {
 }
 
 /// Applies paragraph-style keys from JSON. Returns true if any key was present.
+/// The History name of a `type.setStyle` call, as in the reference (#12048): only character keys
+/// are Set Character Style, only paragraph keys Set Paragraph Style; a mix was not measured.
+fn style_label(p: &Value) -> &'static str {
+    // Keys that pick targets or steer History, not a style.
+    const META: [&str; 5] = ["layer", "layers", "range", "metricsAsShown", "coalesce"];
+    let keys: Vec<&str> =
+        p.as_object().map(|o| o.keys().map(String::as_str).filter(|k| !META.contains(k) && !k.starts_with("__")).collect()).unwrap_or_default();
+    let para = keys.iter().filter(|k| apply_para_props(&mut ParagraphStyle::default(), &json!({ **k: p[**k].clone() }))).count();
+    match (para, keys.len() - para) {
+        (0, 1..) => "Set Character Style",
+        (1.., 0) => "Set Paragraph Style",
+        _ => "Set Type Style",
+    }
+}
+
 pub fn apply_para_props(s: &mut ParagraphStyle, p: &Value) -> bool {
     let mut any = false;
     if let Some(v) = p.get("align").and_then(Value::as_str) {
@@ -1081,7 +1096,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         Some((at as usize, by))
                     }
                 };
-                let label = if kern_pair.is_some() { "Kerning" } else { "Edit Type" };
+                let label = if kern_pair.is_some() { "Kerning" } else { "Edit Type Layer" };
                 with_text_layer(s, p, label, |t, dpi, rename| {
                     if let Some((at, by)) = kern_pair {
                         // Photoshop's Alt+←/→: the pair before the caret becomes manually kerned,
@@ -1182,7 +1197,7 @@ pub fn specs() -> Vec<CommandSpec> {
             run: |s, p| {
                 check_kerning(p).map_err(|m| bad("type.setStyle", m))?;
                 check_steps(p).map_err(|m| bad("type.setStyle", m))?;
-                let ids = with_text_targets(s, p, "Set Type Style", |t, (a, b)| {
+                let ids = with_text_targets(s, p, style_label(p), |t, (a, b)| {
                     let props = shown_style_params(t, p)?;
                     check_size_tracking(&props).map_err(|m| bad("type.setStyle", m))?;
                     let mut probe = CharStyle::default();
@@ -1312,3 +1327,7 @@ mod tests;
 #[cfg(test)]
 #[path = "type_vertical_history_name_tests.rs"]
 mod vertical_history_name_tests;
+
+#[cfg(test)]
+#[path = "type_history_names_tests.rs"]
+mod type_history_names_tests;

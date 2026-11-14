@@ -145,7 +145,9 @@ fn set_aa(s: &mut Session, p: &Value, aa: AntiAlias) -> Result<Value> {
 }
 
 fn set_orientation(s: &mut Session, p: &Value, o: Orientation) -> Result<Value> {
-    with_text_targets(s, p, "Change Text Orientation", |t, _| {
+    // Named after the result, as in the reference (#12048).
+    let label = if o == Orientation::Vertical { "Vertical Orientation" } else { "Horizontal Orientation" };
+    with_text_targets(s, p, label, |t, _| {
         t.orientation = o;
         Ok(())
     })?;
