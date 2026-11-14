@@ -15,6 +15,11 @@ use photocraft_vector::edit::Hit;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CanvasToolMenu {
     pub pos: [f32; 2],
+    /// The document the menu was opened on (#12359): its rows act on that document only, and the
+    /// menu closes when another becomes active. `None` (a menu built without a document, or saved
+    /// UI state from before this field) checks nothing.
+    #[serde(default)]
+    pub doc: Option<photocraft_doc::DocId>,
     pub tool: Tool,
     pub has_selection: bool,
     #[serde(default)]
@@ -372,6 +377,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
     let users = crate::crop_presets::user_presets(app).into_iter().map(|(name, _)| name).collect();
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
+        doc: app.session.active().map(|d| d.doc.id),
         tool,
         has_selection: false,
         has_path: false,
@@ -673,6 +679,12 @@ pub const SAMPLER_MENU: &[Row] = &[
     Some(("Total Ink", "colorSampler.readout.totalInk")),
 ];
 
+/// Is the document `menu` was opened on still the active one (#12359)? A menu built without a
+/// document checks nothing.
+pub(crate) fn opened_here(app: &PhotocraftApp, menu: &CanvasToolMenu) -> bool {
+    menu.doc.is_none_or(|doc| app.session.active().is_some_and(|st| st.doc.id == doc))
+}
+
 /// Does the Color Sampler menu's index still name the sampler it opened on, in the same document?
 /// `true` off a sampler, where there is nothing to go stale.
 fn sampler_current(app: &PhotocraftApp, menu: &CanvasToolMenu) -> bool {
@@ -866,6 +878,10 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
 
 /// Is `command` one of the open menu's rows, and enabled?
 pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    // A row never acts on another document than the menu's (#12359).
+    if !opened_here(app, menu) {
+        return false;
+    }
     (is_point(menu, command) && point_current(app, menu))
         || ((rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command) || is_crop(menu, command))
             && entry_enabled(app, menu, command))
@@ -1019,6 +1035,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
     app.ui.layer_menu = None;
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
+        doc: app.session.active().map(|d| d.doc.id),
         tool: app.ui.tool,
         has_selection: false,
         has_path: false,
@@ -1107,6 +1124,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
     app.ui.layer_menu = None;
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
+        doc: app.session.active().map(|d| d.doc.id),
         tool,
         has_selection: false,
         has_path: false,
@@ -1147,6 +1165,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
     app.ui.layer_menu = None;
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
+        doc: app.session.active().map(|d| d.doc.id),
         tool,
         has_selection: false,
         has_path: false,
@@ -1323,6 +1342,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     let color = if tool == Tool::Eyedropper && !text && !type_layer { doc.and_then(|d| crate::canvas::composite_color(app, d[0], d[1])) } else { None };
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
+        doc: app.session.active().map(|d| d.doc.id),
         tool,
         has_selection,
         has_path,
@@ -1358,6 +1378,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
     app.ui.layer_menu = None;
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
+        doc: app.session.active().map(|d| d.doc.id),
         tool,
         has_selection: false,
         has_path: false,
@@ -1705,6 +1726,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
         || (menu.type_layer && app.ui.text_edit.is_some())
         || (menu.crop.is_some() && !crate::crop_ui::pending(app))
         || (sampler_menu(&menu) && !sampler_current(app, &menu))
+        // Another document became active: the menu was opened on the other one (#12359).
+        || !opened_here(app, &menu)
     {
         app.ui.canvas_tool_menu = None;
         return;
@@ -1845,3 +1868,6 @@ mod convert_point_menu_tests;
 
 #[cfg(test)]
 mod object_selection_menu_tests;
+
+#[cfg(test)]
+mod document_switch_tests;

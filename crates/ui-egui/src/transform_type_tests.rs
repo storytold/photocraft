@@ -44,6 +44,7 @@ fn type_layers_offer_free_transform_but_not_distort_or_perspective() {
     // The same rows in the marquee's canvas context menu.
     let menu = crate::canvas_tool_menu::CanvasToolMenu {
         pos: [10.0, 10.0],
+        doc: None,
         tool: Tool::RectMarquee,
         has_selection: true,
         has_path: false,
