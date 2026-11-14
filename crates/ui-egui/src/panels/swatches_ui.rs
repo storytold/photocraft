@@ -49,14 +49,27 @@ fn colors(app: &PhotocraftApp, ctx: &egui::Context) -> Arc<Vec<Vec<Color32>>> {
     v
 }
 
-/// Set the foreground (or background) colour from a swatch.
+/// Set the foreground (or background) colour from a swatch. While the Gradient Editor is open on
+/// a colour stop, the swatch recolours that stop instead and the foreground stays (#10783).
 pub fn use_swatch(app: &mut PhotocraftApp, name: &str, background: bool) {
+    if !background
+        && let Some(rgb) = swatch_rgb(app, name)
+        && crate::gradient_ui::panel_color_picked(app, rgb, None)
+    {
+        return;
+    }
     let target = if background { "background" } else { "foreground" };
     if run(app, "swatches.use", json!({"swatch": name, "target": target})).is_some() && !background {
         // Clicking a swatch recolours the selected characters (#364), or the selected type and
         // shape layers whatever the tool, as in Photoshop (#9238).
         crate::apply_color::swatch_picked(app);
     }
+}
+
+/// The colour of the swatch called `name`, in the RGB working space as `swatches.use` sets it.
+fn swatch_rgb(app: &PhotocraftApp, name: &str) -> Option<[f32; 3]> {
+    let sw = app.session.presets.swatches.iter().flat_map(|g| &g.items).find(|s| s.name == name)?;
+    Some(photocraft_engine::presets::swatches::SwatchConv::new(&app.session).rgb(&sw.color))
 }
 
 /// The Swatches panel body.

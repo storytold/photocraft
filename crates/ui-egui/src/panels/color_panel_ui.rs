@@ -110,8 +110,17 @@ impl Model {
 
 /// The colour the panel edits.
 pub(crate) fn active(app: &PhotocraftApp) -> [f32; 3] {
-    let c = if app.ui.color_panel.background { app.session.tools.background } else { app.session.tools.foreground };
+    let c = edited(app, app.ui.color_panel.background);
     [c[0], c[1], c[2]].map(|x| x.clamp(0.0, 1.0))
+}
+
+/// The background, or in place of the foreground the Gradient Editor's selected colour stop
+/// while that window is open (#10783), else the foreground.
+pub(crate) fn edited(app: &PhotocraftApp, background: bool) -> [f32; 4] {
+    if background {
+        return app.session.tools.background;
+    }
+    crate::gradient_ui::editor_stop_color(app).map_or(app.session.tools.foreground, |c| [c[0], c[1], c[2], 1.0])
 }
 
 /// Set the background colour, or the foreground and recolour what is selected as the tool in hand
@@ -121,9 +130,20 @@ pub(crate) fn set_color(app: &mut PhotocraftApp, ctx: &egui::Context, background
     if background {
         app.session.tools.background = c;
     } else {
-        app.session.tools.foreground = c;
-        crate::apply_color::foreground_changed(app, crate::apply_color::gesture(ctx));
+        set_foreground(app, ctx, c);
     }
+}
+
+/// The foreground half of [`set_color`]: with the Gradient Editor open on a colour stop the
+/// colour goes to that stop and the foreground stays, as in Photoshop (#10783); else it sets the
+/// foreground and recolours what is selected (`apply_color`).
+pub(crate) fn set_foreground(app: &mut PhotocraftApp, ctx: &egui::Context, c: [f32; 4]) {
+    let gesture = crate::apply_color::gesture(ctx);
+    if crate::gradient_ui::panel_color_picked(app, [c[0], c[1], c[2]], gesture.clone()) {
+        return;
+    }
+    app.session.tools.foreground = c;
+    crate::apply_color::foreground_changed(app, gesture);
 }
 
 /// The key of the slider values last shown for `model`, kept while they still give the colour:

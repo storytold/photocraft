@@ -75,7 +75,10 @@ pub(crate) fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let bg_active = app.ui.color_panel.background;
     let key = egui::Id::unique(("color-field-hue", bg_active));
-    let mut hsva = srgb_hsva(if bg_active { app.session.tools.background } else { app.session.tools.foreground });
+    // The colour edited: the background, or the foreground (the Gradient Editor's selected stop
+    // while it is open, #10783).
+    let edited = crate::color_panel_ui::edited(app, bg_active);
+    let mut hsva = srgb_hsva(edited);
     // What the field showed last: a grey carries no hue, black neither hue nor saturation (#3228).
     let remembered: (f32, f32) = ui.data(|d| d.get_temp(key)).unwrap_or((hsva.h, hsva.s));
     hsva = field_hsva(hsva, remembered);
@@ -146,23 +149,21 @@ pub(crate) fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if field_pick.is_some() || strip_pick.is_some() {
             if bg_active {
                 app.session.tools.background = hsva_srgb(hsva);
-            } else if app.session.tools.foreground != hsva_srgb(hsva) {
+            } else if edited != hsva_srgb(hsva) {
                 // A held, unmoved press repeats the pick: restyle selected type only on a change.
-                app.session.tools.foreground = hsva_srgb(hsva);
-                crate::apply_color::foreground_changed(app, crate::apply_color::gesture(ui.ctx()));
+                crate::color_panel_ui::set_foreground(app, ui.ctx(), hsva_srgb(hsva));
             }
             ui.data_mut(|d| d.insert_temp(key, (hsva.h, hsva.s)));
         }
     });
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        let mut c = if bg_active { app.session.tools.background } else { app.session.tools.foreground };
+        let mut c = crate::color_panel_ui::edited(app, bg_active);
         if color_readout(ui, ui.scope_id().with(("color-field", bg_active)), &mut c) {
             if bg_active {
                 app.session.tools.background = c;
             } else {
-                app.session.tools.foreground = c;
-                crate::apply_color::foreground_changed(app, crate::apply_color::gesture(ui.ctx()));
+                crate::color_panel_ui::set_foreground(app, ui.ctx(), c);
             }
             // Keep the hue for greys, so the field marker doesn't jump to red; the saturation with
             // it, so a later black lands on the corner it was last dragged to (#3228).
