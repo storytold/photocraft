@@ -455,7 +455,7 @@ impl BrushContext {
         let rect = self.dab_rect(d, false);
         let mut cov = Vec::new();
         self.rasterize(d, false, rect, &mut cov);
-        Footprint { dab: *d, index, rect, cov }
+        Footprint { dab: *d, index, rect, cov, clip: crate::retouch::UNCLIPPED }
     }
 
     /// Stroke-level masks applied to accumulated coverage `c` at a pixel.

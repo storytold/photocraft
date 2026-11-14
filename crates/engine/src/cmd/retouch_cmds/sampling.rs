@@ -85,6 +85,9 @@ impl<'a> AllLayers<'a> {
             return effect(work, fp);
         }
         effect(visible, fp);
+        // Only under the dab. On a canvas-clipped stroke that reaches into the halo ring past the
+        // canvas, which is never written back, so the composite's hidden pixels there never reach
+        // the layer; Smudge picks up only on the canvas.
         let r = fp.rect.intersect(&work.rect);
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
