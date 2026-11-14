@@ -326,6 +326,11 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             return false;
         }
     }
+    // The Move and Up of a Move drag that a ⌘ Down began (above) still belong to that drag when
+    // they arrive without ⌘ (`ui.pointer` takes the modifiers per call).
+    if tool == Tool::ColorSampler && !matches!(ev, ToolEvent::Down { .. }) && app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move) {
+        return false;
+    }
     match (tool, ev) {
         (Tool::Ruler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
