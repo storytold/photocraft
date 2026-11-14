@@ -181,12 +181,13 @@ pub(crate) fn perspective_crop(painter: &Painter, zone: crate::perspective_crop_
             crate::icons::cursor_arrow(painter.ctx(), at);
             CursorIcon::None
         }
-        Zone::Corner(_) => {
+        // An edge midpoint shows the corner's arrowhead until #12235 gives it its own (#11801).
+        Zone::Corner(_) | Zone::Edge(_) => {
             // The tip of the arrowhead is at (4, 4) of its 24-unit box.
             crate::icons::cursor(painter.ctx(), "mouse-pointer-2", at, vec2(4.0, 4.0) / 24.0, 18.0);
             CursorIcon::None
         }
-        // A press there does nothing yet (#11801): the tool's usual crosshair.
+        // A press there turns the quad (#11801); its rotate pointer is #12235's.
         Zone::Outside => standard_crosshair(painter, at),
     }
 }

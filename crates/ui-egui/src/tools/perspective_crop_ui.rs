@@ -34,6 +34,11 @@ pub enum Drag {
     Corner { index: usize, offset: [f64; 2], press: [f64; 2], quad: [[f64; 2]; 4] },
     /// Moving the whole quad.
     Move { start: [f64; 2], quad: [[f64; 2]; 4] },
+    /// Moving edge `index` (from corner `index` to the next) by its midpoint handle, from `press`
+    /// with the quad then (#11801).
+    Edge { index: usize, press: [f64; 2], quad: [[f64; 2]; 4] },
+    /// Turning the quad about its centre, from a press outside it (#11801).
+    Rotate { press: [f64; 2], quad: [[f64; 2]; 4] },
 }
 
 #[derive(Default)]
@@ -116,9 +121,12 @@ pub enum Zone {
     Idle,
     /// Within the corner tolerance: a press drags that corner.
     Corner(usize),
+    /// Within the tolerance of edge `i`'s midpoint handle and no corner's: a press drags that
+    /// edge (#11801). Its own pointer is #12235's; until then it shows the corner's.
+    Edge(usize),
     /// Inside the quad: a press moves it.
     Inside,
-    /// Elsewhere with a quad: a press does nothing yet (edge handles and rotate are #11801).
+    /// Elsewhere with a quad: a press turns the quad (#11801); its own pointer is #12235's.
     Outside,
 }
 
@@ -129,7 +137,14 @@ pub fn zone(app: &PhotocraftApp, p: [f64; 2]) -> Zone {
     };
     let tol = crate::distort_ui::tolerance(app);
     let dist = |i: usize| (q[i][0] - p[0]).hypot(q[i][1] - p[1]);
-    match (0..4).filter(|&i| dist(i) <= tol).min_by(|&i, &j| dist(i).total_cmp(&dist(j))) {
+    // Corners win over the edge midpoints, which win over the inside (#11801).
+    let corner = (0..4).filter(|&i| dist(i) <= tol).min_by(|&i, &j| dist(i).total_cmp(&dist(j)));
+    if corner.is_none()
+        && let Some(index) = edge_at(&q, p, tol)
+    {
+        return Zone::Edge(index);
+    }
+    match corner {
         Some(index) => Zone::Corner(index),
         None if inside(&q, p) => Zone::Inside,
         None => Zone::Outside,
@@ -146,6 +161,8 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<Zone> {
         Some(Drag::New { .. }) => Zone::Idle,
         Some(Drag::Corner { index, .. }) => Zone::Corner(index),
         Some(Drag::Move { .. }) => Zone::Inside,
+        Some(Drag::Edge { index, .. }) => Zone::Edge(index),
+        Some(Drag::Rotate { .. }) => Zone::Outside,
         None => zone(app, p),
     })
 }
@@ -203,7 +220,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             }
             app.pcrop.drag = match (zone(app, p), app.ui.perspective_crop) {
                 (Zone::Corner(index), Some(q)) => Some(Drag::Corner { index, offset: [p[0] - q[index][0], p[1] - q[index][1]], press: p, quad: q }),
+                (Zone::Edge(index), Some(q)) => Some(Drag::Edge { index, press: p, quad: q }),
                 (Zone::Inside, Some(q)) => Some(Drag::Move { start: p, quad: q }),
+                (Zone::Outside, Some(q)) => Some(Drag::Rotate { press: p, quad: q }),
                 (Zone::Idle, _) => Some(Drag::New { start: p, cur: p, square: mods.shift, centred: mods.alt }),
                 _ => None,
             };
@@ -274,8 +293,100 @@ fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
             let (dx, dy) = (p[0] - start[0], p[1] - start[1]);
             app.ui.perspective_crop = Some(quad.map(|c| [c[0] + dx, c[1] + dy]));
         }
+        Some(Drag::Edge { index, press, quad }) => {
+            let d = [p[0] - press[0], p[1] - press[1]];
+            // ⇧ scales, ⌥ is symmetric; with both, ⇧ (not measured). Ctrl acts as a plain drag.
+            let q = if mods.shift {
+                scale_from_edge(quad, index, d)
+            } else if mods.alt {
+                let mut q = edge_moved(quad, index, d);
+                let opposite = edge_moved(quad, (index + 2) % 4, [-d[0], -d[1]]);
+                for k in [(index + 2) % 4, (index + 3) % 4] {
+                    q[k] = opposite[k];
+                }
+                q
+            } else {
+                edge_moved(quad, index, d)
+            };
+            if q.iter().flatten().all(|v| v.is_finite()) {
+                app.ui.perspective_crop = Some(q);
+            }
+        }
+        Some(Drag::Rotate { press, quad }) => {
+            let q = rotated(quad, press, p);
+            if q.iter().flatten().all(|v| v.is_finite()) {
+                app.ui.perspective_crop = Some(q);
+            }
+        }
         None => {}
     }
+}
+
+/// The midpoint of edge `i` of `q` (from corner `i` to the next).
+pub(crate) fn edge_mid(q: &[[f64; 2]; 4], i: usize) -> [f64; 2] {
+    let (a, b) = (q[i % 4], q[(i + 1) % 4]);
+    [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
+}
+
+/// The edge whose midpoint handle is within `tol` (document px) of `p`, the nearest if several.
+pub(crate) fn edge_at(q: &[[f64; 2]; 4], p: [f64; 2], tol: f64) -> Option<usize> {
+    let dist = |i: usize| {
+        let m = edge_mid(q, i);
+        (m[0] - p[0]).hypot(m[1] - p[1])
+    };
+    (0..4).filter(|&i| dist(i) <= tol).min_by(|&i, &j| dist(i).total_cmp(&dist(j)))
+}
+
+/// `q` with edge `i` dragged by `d` (#11801), as the reference application moves it: its two
+/// corners slide along their sides, towards the opposite edge's corners, by the same fraction of
+/// each side, the fraction that carries the edge's midpoint along with the drag (the drag's
+/// projection on the midpoint's own path). That keeps each corner on the line through its side;
+/// on a quad whose sides differ in length the two corners move by different amounts (measured: a
+/// 50 px drag moved them 53 and 46 px). Sides that cancel out (a zero-length or degenerate quad)
+/// move the edge straight by `d`.
+pub(crate) fn edge_moved(q: [[f64; 2]; 4], i: usize, d: [f64; 2]) -> [[f64; 2]; 4] {
+    let (a, b) = (i % 4, (i + 1) % 4);
+    let (to_a, to_b) = ((a + 3) % 4, (b + 1) % 4);
+    let sa = [q[to_a][0] - q[a][0], q[to_a][1] - q[a][1]];
+    let sb = [q[to_b][0] - q[b][0], q[to_b][1] - q[b][1]];
+    let m = [(sa[0] + sb[0]) / 2.0, (sa[1] + sb[1]) / 2.0];
+    let mm = m[0] * m[0] + m[1] * m[1];
+    let mut out = q;
+    if mm.is_finite() && mm > 1e-9 {
+        let t = (d[0] * m[0] + d[1] * m[1]) / mm;
+        out[a] = [q[a][0] + t * sa[0], q[a][1] + t * sa[1]];
+        out[b] = [q[b][0] + t * sb[0], q[b][1] + t * sb[1]];
+    } else {
+        out[a] = [q[a][0] + d[0], q[a][1] + d[1]];
+        out[b] = [q[b][0] + d[0], q[b][1] + d[1]];
+    }
+    out
+}
+
+/// ⇧ + edge drag (#11801): the whole quad scales by one factor about the centre of the opposite
+/// edge, the factor that carries the dragged edge's midpoint along with the drag (its projection
+/// on the line from that centre). A degenerate quad stays as it was.
+pub(crate) fn scale_from_edge(q: [[f64; 2]; 4], i: usize, d: [f64; 2]) -> [[f64; 2]; 4] {
+    let (m, c) = (edge_mid(&q, i), edge_mid(&q, i + 2));
+    let r = [m[0] - c[0], m[1] - c[1]];
+    let rr = r[0] * r[0] + r[1] * r[1];
+    if !rr.is_finite() || rr <= 1e-9 {
+        return q;
+    }
+    let s = 1.0 + (d[0] * r[0] + d[1] * r[1]) / rr;
+    q.map(|p| [c[0] + (p[0] - c[0]) * s, c[1] + (p[1] - c[1]) * s])
+}
+
+/// A drag outside the quad (#11801): all four corners turn about the quad's centre (the mean of
+/// its corners) by the change of the pointer's angle around it since `press`.
+pub(crate) fn rotated(q: [[f64; 2]; 4], press: [f64; 2], p: [f64; 2]) -> [[f64; 2]; 4] {
+    let c = [q.iter().map(|v| v[0]).sum::<f64>() / 4.0, q.iter().map(|v| v[1]).sum::<f64>() / 4.0];
+    let angle = (p[1] - c[1]).atan2(p[0] - c[0]) - (press[1] - c[1]).atan2(press[0] - c[0]);
+    let (sin, cos) = angle.sin_cos();
+    q.map(|v| {
+        let (x, y) = (v[0] - c[0], v[1] - c[1]);
+        [c[0] + x * cos - y * sin, c[1] + x * sin + y * cos]
+    })
 }
 
 /// `image.perspectiveCrop`'s size params from W, H and the resolution (the Crop tool's fields):
@@ -456,7 +567,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         }
         painter.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.5, color)));
         if !matches!(app.pcrop.drag, Some(Drag::New { .. })) {
-            for c in pts {
+            // The four corners and the four edge midpoints (#11801).
+            let mids: Vec<Pos2> = (0..4).map(|i| scr(edge_mid(&q, i))).collect();
+            for c in pts.into_iter().chain(mids) {
                 let r = egui::Rect::from_center_size(c, egui::vec2(8.0, 8.0));
                 painter.rect_filled(r, 0.0, Color32::WHITE);
                 painter.rect_stroke(r, 0.0, Stroke::new(1.25, color), egui::StrokeKind::Inside);
@@ -550,6 +663,10 @@ mod perspective_crop_modifiers_tests;
 #[cfg(test)]
 #[path = "perspective_crop_shield_tests.rs"]
 mod perspective_crop_shield_tests;
+
+#[cfg(test)]
+#[path = "perspective_crop_edge_rotate_tests.rs"]
+mod perspective_crop_edge_rotate_tests;
 
 #[cfg(test)]
 #[path = "perspective_crop_deselect_tests.rs"]
