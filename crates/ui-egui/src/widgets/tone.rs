@@ -329,11 +329,12 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, scope: H
         .filter(|l| photocraft_compose::masks::has_feather(l))
         .and_then(|l| photocraft_compose::masks::combined_mask(l, doc.bounds()))
         .map(|s| if k > 1 { photocraft_compose::proxy::downsample(&s, k) } else { s });
+    let min = reveal_min(doc.depth);
     let pixel = match (source, &combined) {
         (HistSource::BelowLayer(id), None) => d
             .layer(id)
             .and_then(|l| l.mask.as_ref())
-            .filter(|m| m.enabled && (!reveals_all(m) || below.and_then(|l| l.vector_mask.as_ref()).is_some_and(|v| v.enabled))),
+            .filter(|m| m.enabled && (!reveals_all(m, min) || below.and_then(|l| l.vector_mask.as_ref()).is_some_and(|v| v.enabled))),
         _ => None,
     };
     let vector = match &combined {
@@ -374,10 +375,10 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, scope: H
         if masked {
             if let Some(pass) = &mut sel_pass {
                 for (keep, value) in pass.iter_mut().zip(&revealed) {
-                    *keep &= reveals(*value);
+                    *keep &= reveals(*value, min);
                 }
             } else {
-                sel_pass = Some(revealed.iter().map(|&value| reveals(value)).collect());
+                sel_pass = Some(revealed.iter().map(|&value| reveals(value, min)).collect());
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -437,21 +438,27 @@ fn sampled_vector_values(mask: &photocraft_vector::CompiledVectorMask, rect: pho
     out
 }
 
-/// Whether a mask value blends the adjustment in visibly: at or above half an 8-bit level. The
-/// compositor blends in proportion to the value, so below that no 8-bit output changes; it also
-/// keeps the f32 residue a feather blur leaves past its edge (about 1e-8) from counting.
-fn reveals(value: f32) -> bool {
-    value >= REVEAL_MIN
+/// Whether a mask value blends the adjustment in visibly: at or above `min` ([`reveal_min`]).
+fn reveals(value: f32, min: f32) -> bool {
+    value >= min
 }
 
-/// Half an 8-bit level, the weakest mask value [`reveals`] counts.
-const REVEAL_MIN: f32 = 0.5 / 255.0;
+/// The weakest mask value [`reveals`] counts at `depth`: half the level the compositor rounds an
+/// adjustment's result to ([`photocraft_compose::adjustment_quantum`]), below which the blend
+/// changes no output. A 32-bit float document is not rounded, so there any value past the f32
+/// residue a feather blur leaves beyond its edge (about 1e-8) counts.
+fn reveal_min(depth: photocraft_doc::SampleType) -> f32 {
+    photocraft_compose::adjustment_quantum(depth).map_or(FEATHER_RESIDUE, |q| 0.5 / q)
+}
+
+/// Above the f32 drift of a feather blur's running sums, far below any visible blend.
+const FEATHER_RESIDUE: f32 = 1e-6;
 
 /// Whether a pixel mask reveals every pixel: no painted tiles and a default that [`reveals`] after
 /// density (counting it then changes nothing, so the per-band pass is skipped).
-fn reveals_all(m: &photocraft_doc::LayerMask) -> bool {
+fn reveals_all(m: &photocraft_doc::LayerMask, min: f32) -> bool {
     let d = m.surface.default_pixel().first().copied().unwrap_or(1.0);
-    m.surface.tile_count() == 0 && reveals(1.0 - m.density * (1.0 - d))
+    m.surface.tile_count() == 0 && reveals(1.0 - m.density * (1.0 - d), min)
 }
 
 /// Bin- and pixel-wise sum of two partial counts (saturating: a hostile canvas can exceed
@@ -1443,6 +1450,29 @@ mod tests {
         .unwrap();
         let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb, HistScope::WholeInput);
         assert_eq!(hist.pixel_count, 0);
+    }
+
+    /// #12325 review: the threshold follows the document's depth. The same 0.1% blend that no 8-bit
+    /// output shows moves a 16-bit level (rounded to 1/32768) and any 32-bit float value, so there
+    /// every pixel counts.
+    #[test]
+    fn a_faint_mask_counts_only_where_the_depth_shows_it() {
+        for (bits, expected) in [(8, 0), (16, 64 * 64), (32, 64 * 64)] {
+            let mut s = split_doc(64, 64, 32, Some(bits));
+            s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+            s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+            let id = s.active().unwrap().active_layer.unwrap();
+            s.edit("faint", |doc, active| {
+                let m = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
+                m.surface = photocraft_doc::Surface::with_default(photocraft_doc::PixelFormat::GRAY8, &[0.0]);
+                m.density = 0.999;
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(s.active().unwrap().doc.depth.bits(), bits);
+            let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb, HistScope::WholeInput);
+            assert_eq!(hist.pixel_count, expected, "{bits}-bit");
+        }
     }
 
     #[test]
