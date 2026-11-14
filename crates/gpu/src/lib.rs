@@ -44,6 +44,9 @@
 pub mod bounds;
 mod camera_raw;
 mod camera_raw_tone;
+// The preview shown from the GPU needs the blocking readback the web doesn't have.
+#[cfg(not(target_arch = "wasm32"))]
+mod camera_raw_view;
 mod fx;
 pub mod health;
 pub mod plan;
@@ -62,6 +65,8 @@ use photocraft_raster::{Surface, Tile};
 
 pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use camera_raw_tone::{CAMERA_RAW_FILTERS_SHADER, CAMERA_RAW_TONE_SHADER};
+#[cfg(not(target_arch = "wasm32"))]
+pub use camera_raw_view::{CAMERA_RAW_VIEW_SHADER, CameraRawDisplay, CameraRawFrame, CameraRawShaper, read_camera_raw_pixels};
 pub use health::{DeviceHealth, Fault};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};

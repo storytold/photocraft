@@ -80,16 +80,21 @@ pub struct CameraRawDialog {
     full_h: usize,
     preview_ppp: f32,
     pub(crate) detail: crate::camera_raw_detail_ui::DetailPreview,
-    display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
+    pub(crate) display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     pub(crate) viewport: Option<ERect>,
     /// Whether the main window had focus last frame (see [`show`]).
     main_focused: bool,
     pub(crate) float: bool,
     tex: Option<TextureHandle>,
+    /// The frame on screen when the GPU converted it ([`Self::tex`] holds the last CPU one).
+    gpu_tex: Option<egui::TextureId>,
     before_tex: Option<TextureHandle>,
     before_display_key: Option<u64>,
     pub(crate) before_histogram: RgbHistogram,
-    pub(crate) processed: Vec<[f32; 4]>,
+    pub(crate) processed: proxy::Processed,
+    /// Something on screen reads the developed pixels (set as the preview draws), so the worker
+    /// reads a frame kept on the GPU back with it.
+    pub(crate) wants_pixels: bool,
     pub(crate) lab_transform: std::sync::Arc<craft_cms::Transform>,
     pub(crate) scope_transform: std::sync::Arc<craft_cms::Transform>,
     pub(crate) scope: crate::camera_raw_scope_ui::ScopeView,
@@ -127,7 +132,8 @@ impl CameraRawDialog {
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
-            "renderMs": self.render_ms, "developMs": self.develop_ms, "developBackend": self.develop_backend, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before,
+            "renderMs": self.render_ms, "developMs": self.develop_ms, "developBackend": self.develop_backend, "histogramMs": self.histogram_ms,
+            "previewOnGpu": self.gpu_tex.is_some(), "pixelsOnGpu": self.processed.on_gpu(), "previewRevision": self.preview_revision, "before": self.show_before,
             "histogram": {"source": if self.show_before { "before" } else { "after" }, "approximate": true, "size": [self.pw, self.ph],
                 "sampleDomain": "preview-rgb", "range": [0, 1], "red": h.channels[0].as_slice(), "green": h.channels[1].as_slice(), "blue": h.channels[2].as_slice(),
                 "samples": h.samples, "transparent": h.transparent, "invalid": h.invalid, "underflow": h.underflow, "overflow": h.overflow, "shadows": h.shadows, "highlights": h.highlights}});
@@ -176,7 +182,7 @@ impl CameraRawDialog {
         non_defaults(&self.params)
     }
 
-    fn image(px: &[[f32; 4]], w: usize, h: usize, display: &photocraft_engine::display_color::CanvasDisplay) -> egui::ColorImage {
+    pub(crate) fn image(px: &[[f32; 4]], w: usize, h: usize, display: &photocraft_engine::display_color::CanvasDisplay) -> egui::ColorImage {
         // Bands copied straight from `px`, converted in parallel (#4682), not a whole copy of the
         // proxy converted on one thread.
         crate::camera_raw_detail_ui::display_image(Rect::new(0, 0, w as i32, h as i32), display, |r, out| {
@@ -210,13 +216,39 @@ impl CameraRawDialog {
             display: self.display.clone(),
             gpu: self.gpu.clone(),
             source_key: self.source_key,
+            view: true,
+            pixels: self.wants_pixels,
+            ticket: self.gpu.as_ref().map_or(0, crate::camera_raw_gpu::CameraRawGpu::ticket),
         }
     }
 
+    /// The texture of the frame the preview shows: the original, or the developed frame (from
+    /// the GPU or the CPU).
+    pub(crate) fn shown_texture(&self) -> Option<egui::TextureId> {
+        if self.show_before { self.before_tex.as_ref().map(TextureHandle::id) } else { self.gpu_tex.or_else(|| self.tex.as_ref().map(TextureHandle::id)) }
+    }
+
     fn publish(&mut self, ctx: &egui::Context, frame: ProxyFrame) {
-        match &mut self.tex {
-            Some(t) => t.set(frame.image, egui::TextureOptions::LINEAR),
-            None => self.tex = Some(ctx.load_texture("camera-raw-after", frame.image, egui::TextureOptions::LINEAR)),
+        match (frame.shown, self.gpu.clone()) {
+            (proxy::Shown::Gpu(shown), Some(gpu)) => {
+                self.gpu_tex = Some(gpu.texture_id(&shown));
+                gpu.show(Some(crate::camera_raw_gpu::slot(&shown)));
+            }
+            (shown, gpu) => {
+                let image = match shown {
+                    proxy::Shown::Image(image) => image,
+                    // A GPU frame without the dialog's GPU handle can't happen; convert its pixels.
+                    proxy::Shown::Gpu(_) => Self::image(frame.px.pixels(), self.pw, self.ph, &frame.display),
+                };
+                match &mut self.tex {
+                    Some(t) => t.set(image, egui::TextureOptions::LINEAR),
+                    None => self.tex = Some(ctx.load_texture("camera-raw-after", image, egui::TextureOptions::LINEAR)),
+                }
+                self.gpu_tex = None;
+                if let Some(gpu) = gpu {
+                    gpu.show(None);
+                }
+            }
         }
         if self.before_display_key != Some(frame.display.key) {
             let before = Self::image(&self.proxy, self.pw, self.ph, &frame.display);

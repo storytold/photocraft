@@ -3,7 +3,9 @@
 // named after, in the same order of operations; `camera_raw.rs` holds the bindings. The spatial
 // stages' filters (`camera_raw_tone.wgsl`, `camera_raw_filters.wgsl`) start from passes here
 // (`fs_log`, `fs_luma`, `fs_points`; Dehaze from a copy the CPU makes) and end here: Dehaze in `fs_dehaze`, Shadows
-// and Highlights as a gain per pixel, Clarity and Texture in `tonal`.
+// and Highlights as a gain per pixel, Clarity and Texture in `tonal`. With Detail, `fs_colour`
+// renders stages 1 to 7, Detail's filters run on that, and `fs` combines them in `detail` before
+// the effects.
 
 struct Params {
     size: vec2<u32>,
@@ -35,6 +37,10 @@ struct Params {
     spatial: vec4<f32>,
     // Dehaze's and Clarity's subsampling, the transmission's floor.
     spatial2: vec4<f32>,
+    // Detail: colour noise reduction's kept share; sharpening's amount, limit and scale.
+    detail: vec4<f32>,
+    // Sharpening's mask: its smoothstep edges.
+    detail2: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -53,6 +59,13 @@ struct Params {
 // Clarity's coefficients (a, b) on its copy; Texture's blur (red).
 @group(0) @binding(9) var clarity: texture_2d<f32>;
 @group(0) @binding(10) var blur: texture_2d<f32>;
+// Detail: stages 1 to 7 (`fs_colour`), the reduced luminance (red), the chroma's blur (red B − Y,
+// green R − Y), sharpening's blur and its mask's (red).
+@group(0) @binding(11) var colored: texture_2d<f32>;
+@group(0) @binding(12) var noise: texture_2d<f32>;
+@group(0) @binding(13) var chroma: texture_2d<f32>;
+@group(0) @binding(14) var sharp: texture_2d<f32>;
+@group(0) @binding(15) var sharp_mask: texture_2d<f32>;
 
 const GAINS: u32 = 0u;
 // The luminance stage: Contrast, Clarity or Texture.
@@ -73,6 +86,11 @@ const LOCAL_TONE: u32 = 16u;
 const DEHAZE: u32 = 17u;
 const CLARITY: u32 = 18u;
 const TEXTURE: u32 = 19u;
+const DETAIL: u32 = 20u;
+const LUMINANCE_NOISE: u32 = 21u;
+const COLOR_NOISE: u32 = 22u;
+const SHARPEN: u32 = 23u;
+const MASKING: u32 = 24u;
 
 const CURVE_LUT: i32 = 1024;
 const WB_STEPS: i32 = 33;
@@ -457,10 +475,8 @@ fn fs_points(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     return vec4(luma(m), max(max(m.x, m.y), m.z), 0.0, 1.0);
 }
 
-@fragment
-fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let p = vec2<i32>(floor(pos.xy));
-    let q = textureLoad(src, p, 0);
+// Stages 1 to 7 on the pixel at `p`: what Detail filters.
+fn colour(p: vec2<i32>) -> vec3<f32> {
     var c = tonal(p);
     // 3b. Whites and Blacks.
     if on(WHITES) || on(BLACKS) {
@@ -522,6 +538,58 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
                 c = c * exp2(masks[k] * P.tints[k].w / 100.0 * 0.6);
             }
         }
+    }
+    return c;
+}
+
+// 8. Detail at `p` (develop's `detail`): `fs_colour`'s pixel as luminance Y and chroma B − Y,
+// R − Y, the noise reductions' results put in, Y sharpened, and back to RGB.
+fn detail(p: vec2<i32>) -> vec3<f32> {
+    let q = textureLoad(colored, p, 0).rgb;
+    let y0 = luma(q);
+    var cb = q.z - y0;
+    var cr = q.x - y0;
+    var y = y0;
+    if on(LUMINANCE_NOISE) {
+        y = textureLoad(noise, p, 0).r;
+    }
+    if on(COLOR_NOISE) {
+        let b = textureLoad(chroma, p, 0);
+        cb = b.x + (cb - b.x) * P.detail.x;
+        cr = b.y + (cr - b.y) * P.detail.x;
+    }
+    if on(SHARPEN) {
+        let hp = clamp(y - textureLoad(sharp, p, 0).r, -P.detail.z, P.detail.z) * P.detail.w;
+        var m = 1.0;
+        if on(MASKING) {
+            // The smoothed luminance's central differences, edges clamped.
+            let n = vec2<i32>(P.size) - vec2(1);
+            let gx = textureLoad(sharp_mask, vec2(min(p.x + 1, n.x), p.y), 0).r - textureLoad(sharp_mask, vec2(max(p.x - 1, 0), p.y), 0).r;
+            let gy = textureLoad(sharp_mask, vec2(p.x, min(p.y + 1, n.y)), 0).r - textureLoad(sharp_mask, vec2(p.x, max(p.y - 1, 0)), 0).r;
+            m = smoothstep_(P.detail2.x, P.detail2.y, length(vec2(gx, gy)));
+        }
+        y += P.detail.y * hp * m;
+    }
+    let r = cr + y;
+    let b = cb + y;
+    return vec3(r, (y - 0.2126 * r - 0.0722 * b) / 0.7152, b);
+}
+
+// Stages 1 to 7, which Detail's filters read.
+@fragment
+fn fs_colour(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    return vec4(colour(vec2<i32>(floor(pos.xy))), 1.0);
+}
+
+@fragment
+fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = vec2<i32>(floor(pos.xy));
+    let q = textureLoad(src, p, 0);
+    var c: vec3<f32>;
+    if on(DETAIL) {
+        c = detail(p);
+    } else {
+        c = colour(p);
     }
     // 9. Vignette.
     if on(VIGNETTE) {

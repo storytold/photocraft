@@ -1,12 +1,15 @@
 //! Camera Raw's preview develop on the 858×572 proxy of a 6000×4000 image: the CPU develop
-//! against the GPU passes (upload, render, readback), for per-pixel settings and for the spatial
-//! stages (Dehaze, Shadows and Highlights, Clarity, Texture) with them. "Source uploaded every
+//! against the GPU passes (upload, render, readback), and the dialog's preview kept on the GPU
+//! (`develop_view`: render, display conversion and histogram, only the histogram read back) against
+//! the readback plus the CPU's histogram count, for per-pixel settings and for the spatial
+//! stages (Dehaze, Shadows and Highlights, Clarity, Texture, Detail) with them. "Source uploaded every
 //! time" also makes Dehaze's copy on the CPU every time, as a white balance drag does.
 //! `cargo run --release -p photocraft-gpu --example bench_camera_raw [-- --quick]`
 use std::time::Instant;
 
 use photocraft_algo::camera_raw::{CameraRaw, Wheel, develop, per_pixel, white_black_points};
-use photocraft_gpu::CameraRawDevelop;
+use photocraft_algo::histogram::RgbHistogram;
+use photocraft_gpu::{CameraRawDevelop, CameraRawDisplay};
 
 fn median(mut v: Vec<f64>) -> f64 {
     v.sort_by(f64::total_cmp);
@@ -102,7 +105,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("Clarity +50, Texture +50, Dehaze +40, every per-pixel stage", CameraRaw { clarity: 50.0, texture: 50.0, dehaze: 40.0, ..per_pixel_stages.clone() }),
         (
             "Clarity, Texture, Dehaze, Shadows, Highlights, every per-pixel stage",
-            CameraRaw { clarity: 50.0, texture: 50.0, dehaze: 40.0, shadows: 50.0, highlights: -50.0, ..per_pixel_stages },
+            CameraRaw { clarity: 50.0, texture: 50.0, dehaze: 40.0, shadows: 50.0, highlights: -50.0, ..per_pixel_stages.clone() },
+        ),
+        ("Sharpening 40", CameraRaw { sharpen_amount: 40.0, pixel_scale: scale, ..Default::default() }),
+        ("Sharpening 40, Masking 30", CameraRaw { sharpen_amount: 40.0, sharpen_masking: 30.0, pixel_scale: scale, ..Default::default() }),
+        ("Noise Reduction 30", CameraRaw { noise_luminance: 30.0, pixel_scale: scale, ..Default::default() }),
+        ("Color Noise Reduction 25", CameraRaw { noise_color: 25.0, pixel_scale: scale, ..Default::default() }),
+        (
+            "Sharpening 40, Masking 30, both noise reductions, every per-pixel stage",
+            CameraRaw { sharpen_amount: 40.0, sharpen_masking: 30.0, noise_luminance: 30.0, noise_color: 25.0, ..per_pixel_stages.clone() },
+        ),
+        (
+            "Detail, Clarity, Texture, Dehaze, Shadows, Highlights, every per-pixel stage",
+            CameraRaw {
+                sharpen_amount: 40.0,
+                sharpen_masking: 30.0,
+                noise_luminance: 30.0,
+                noise_color: 25.0,
+                clarity: 50.0,
+                texture: 50.0,
+                dehaze: 40.0,
+                shadows: 50.0,
+                highlights: -50.0,
+                ..per_pixel_stages
+            },
         ),
     ];
     for (name, p) in &sets {
@@ -116,11 +142,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let size = [w as u32, h as u32];
         let upload = try_time(runs, || pass.develop(&device, &queue, None, &src, None, size, &stages).map(drop))?;
         let cached = try_time(runs, || pass.develop(&device, &queue, None, &src, Some(1), size, &stages).map(drop))?;
+        let counted = try_time(runs, || {
+            pass.develop(&device, &queue, None, &src, Some(1), size, &stages).map(|px| {
+                std::hint::black_box(RgbHistogram::from_rgba(&px));
+            })
+        })?;
+        let display = CameraRawDisplay { encode_srgb: false, shaper: None, key: 0 };
+        let mut slot = None;
+        let kept =
+            try_time(runs, || pass.develop_view(&device, &queue, None, &src, Some(1), size, &stages, &display, slot, false).map(|f| slot = Some(f.slot)))?;
         println!("{name}:");
         println!("  CPU develop                          {cpu:7.2} ms");
         println!("  GPU, source uploaded every time      {upload:7.2} ms");
         println!("  GPU, source cached (slider drag)     {cached:7.2} ms");
-        if !toned && (p.whites != 0.0 || p.blacks != 0.0) {
+        println!("  GPU + readback + CPU histogram       {counted:7.2} ms (the preview before; plus its CPU display conversion)");
+        println!("  GPU preview kept on the GPU          {kept:7.2} ms (display and histogram on the GPU, histogram read back)");
+        if !p.spatial_tone() && (p.whites != 0.0 || p.blacks != 0.0) {
             let points_ms = time(runs, || {
                 std::hint::black_box(white_black_points(&src, w, h, p));
             });
