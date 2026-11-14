@@ -718,9 +718,9 @@ fn blend_range(v: &Value) -> Option<BlendRange> {
 /// Global Light is greyed in a document whose only layer is the Background (#14681): with any other
 /// layer it is available, even with the Background active and no effects.
 fn global_light_enabled(s: &Session) -> Enabled {
-    let doc = &s.active().ok_or("no document open")?.doc;
-    match doc.layers.as_slice() {
-        [only] if doc.is_background(only.id) => Err("the document has only the Background layer".into()),
+    has_doc(s)?;
+    match s.active().map(|d| (&d.doc, d.doc.layers.as_slice())) {
+        Some((doc, [only])) if doc.is_background(only.id) => Err("the document has only the Background layer".into()),
         _ => Ok(()),
     }
 }

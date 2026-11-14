@@ -14,7 +14,8 @@ fn background_blocks(id: &str, has_selection: bool) -> bool {
         return true;
     }
     if id.starts_with("layer.layerStyle.") {
-        // Global Light and Hide All Effects are document-wide.
+        // Global Light and Hide All Effects are document-wide (the engine greys Global Light when the
+        // Background is the only layer, #14681).
         return !matches!(id, "layer.layerStyle.globalLight" | "layer.layerStyle.hideAllEffects" | "layer.layerStyle.copyLayerStyle");
     }
     // Transforms and Content-Aware Scale need a selection on the Background (they then move the
@@ -241,7 +242,8 @@ mod tests {
         ] {
             assert!(off(&s, id), "{id} should be greyed on a lone Background");
         }
-        assert!(!off(&s, "layer.layerStyle.globalLight"));
+        assert!(!off(&s, "layer.layerStyle.globalLight"), "no Background rule of its own");
+        assert!(!s.is_enabled("layer.layerStyle.globalLight"), "the engine greys it while the Background is the only layer (#14681)");
         // A selection makes Free Transform available on the Background.
         s.execute("select.all", json!({})).unwrap();
         assert!(!off(&s, "edit.freeTransform"));
