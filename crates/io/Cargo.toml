@@ -10,6 +10,9 @@ rust-version.workspace = true
 workspace = true
 
 [features]
+# `pdf_budget_wasm`: the PDF image-budget check as a binary, run under node as wasm32 (see
+# wasm/pdf_budget_wasm.rs); off, so ordinary builds and installs don't carry it.
+wasm-budget-check = []
 # Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
 corpus = []
 # HEIC/HEIF decode (forwarded to photocraft-codecs; see its `heif` feature).
@@ -18,7 +21,7 @@ heif = ["photocraft-codecs/heif", "photocraft-formats/heif"]
 testgen = []
 # Editable PDF import (experimental): painted paths and embedded-font text become editable
 # layers; unsupported constructs keep the raster page.
-pdf-editable = ["dep:kurbo"]
+pdf-editable = []
 
 [dependencies]
 photocraft-geom = { workspace = true }
@@ -53,14 +56,11 @@ serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 # pdn.rs inflates Paint.NET's gzip pixel chunks.
 flate2 = { workspace = true }
+# The geometry type craft-pdf's interpreter hands a device (the version it uses).
+kurbo = "0.13"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The SVG fallback font search keeps each font file's character map (already in the tree through usvg).
 ttf-parser = { version = "0.25", default-features = false }
-# PDF import (pdf_import.rs): craft-pdf rasterizes pages in pure Rust; no shared library ships.
-craft-pdf = { workspace = true }
-# Editable PDF import (pdf_editable.rs): craft-pdf's Device trait uses kurbo paths and transforms.
-# This is the same kurbo 0.13 that craft-pdf already links; naming it adds no crate to the graph.
-kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
 lopdf = { version = "0.38", default-features = false }
@@ -78,3 +78,11 @@ proptest = { workspace = true }
 zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
 zune-core = { workspace = true }
 tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"] }
+
+[[bin]]
+name = "pdf_budget_wasm"
+path = "wasm/pdf_budget_wasm.rs"
+required-features = ["wasm-budget-check"]
+test = false
+bench = false
+doc = false

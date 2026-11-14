@@ -355,6 +355,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
             }
         }
         _ if crate::color_range_ui::owns(fields) => crate::color_range_ui::body(app, ui, fields),
+        _ if crate::pdf_import_ui::owns(fields) => crate::pdf_import_ui::body(app, ui, fields),
         _ if crate::prefs_ui::owns(fields) => crate::prefs_ui::body(app, ui, fields, d.id),
         _ if fields.contains_key("__export") => crate::export_dialog::body(app, ui, fields),
         // Image Size and Canvas Size open on Width, selected (#2329).
@@ -698,6 +699,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if web || fixed.is_some() {
                 ui.set_max_width(available.x);
                 ui.set_min_size(available);
+            } else if crate::pdf_import_ui::owns(&d.fields) {
+                ui.set_min_width(crate::pdf_import_ui::WIDTH);
+                ui.set_max_width(crate::pdf_import_ui::WIDTH);
             } else if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
                 ui.set_min_width(w);
                 ui.set_max_width(w);
@@ -938,6 +942,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::equalize_ui::owns,
     crate::color_picker_ui::owns,
     crate::color_range_ui::owns,
+    crate::pdf_import_ui::owns,
     crate::prefs_ui::owns,
     crate::open_prompt::owns,
     crate::replace_prompt::owns,
@@ -1173,6 +1178,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
             crate::color_picker_ui::confirm(app, &d.fields)
         }
         _ if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
+        _ if crate::pdf_import_ui::owns(&d.fields) => crate::pdf_import_ui::confirm(app, &d.fields),
         _ if crate::prefs_ui::owns(&d.fields) => crate::prefs_ui::confirm(app, &d.fields),
         _ if d.fields.contains_key("__export") => crate::export_dialog::confirm(app, &d.fields),
         _ => confirm_generic_command(app, d),
@@ -1255,6 +1261,10 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     app.ui.dialogs.retain(|d| !crate::layer_style::color_picker::child_of(&d.fields, id));
     app.filter_preview = None;
     app.color_range = None;
+    if crate::pdf_import_ui::owns(&closed.fields) {
+        // Only this dialog's file goes; another PDF's dialog keeps its own.
+        crate::pdf_import_ui::forget(app, id);
+    }
     crate::type_panels_ui::color_picker::prune(app);
     Ok(Value::Null)
 }
@@ -1359,6 +1369,7 @@ mod paths_export_default_tests;
 #[cfg(test)]
 mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
+pub mod pdf_import_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 pub mod replace_prompt;

@@ -73,7 +73,7 @@ id = "FILE-215-10"
 target = "Multi-page PDF save, PDF presentation, layer comps to PDF, vector/text output, PDF import"
 status = "partial"
 issue = 215
-note = "io pdf.rs: Save As / Save a Copy / CLI write one flattened RGB/Gray/CMYK page with ICC (#3401); print PDFs in print_cmds. Multi-page save, presentation, comps, vector/text output and PDF import (#2541) remain"
+note = "io pdf_import.rs: PDF import as Photoshop's Import PDF (pages or images, Crop To, resolution, mode, depth, anti-aliasing; one-image PDFs open as the image; #2541). io pdf.rs: Save As / Save a Copy / CLI write one flattened RGB/Gray/CMYK page with ICC (#3401); print PDFs in print_cmds. Multi-page save, presentation, comps and vector/text output remain"
 
 [[item]]
 id = "FILE-215-11"

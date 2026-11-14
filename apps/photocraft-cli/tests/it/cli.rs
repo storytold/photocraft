@@ -1605,6 +1605,43 @@ fn convert_opens_a_raw_at_the_raw_defaults_resolution() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+/// `--resolution NaN` (or inf) is refused; JSON has no NaN, so it used to turn into `null`, count
+/// as absent and silently open the PDF at 300 ppi.
+#[test]
+fn a_non_finite_pdf_resolution_is_refused() {
+    let d = tmp("pdf-nan-resolution");
+    let pdf = d.join("doc.pdf");
+    std::fs::write(
+        &pdf,
+        b"%PDF-1.7
+",
+    )
+    .unwrap();
+    for bad in ["NaN", "inf", "-inf"] {
+        let o = bin().args(["info"]).arg(&pdf).arg(format!("--resolution={bad}")).output().unwrap();
+        assert!(!o.status.success(), "{bad} was accepted");
+        assert!(String::from_utf8_lossy(&o.stderr).contains("resolution"), "{bad}: {}", String::from_utf8_lossy(&o.stderr));
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+/// `--pdf-dpi`/`--pdf-pages`/`--pdf-editable` (the artboard import) and Import PDF's answers (`--page`, …) pick
+/// different imports: given together, `convert` refuses rather than dropping one set.
+#[test]
+fn convert_refuses_artboard_and_import_pdf_flags_together() {
+    let d = tmp("pdf-mixed-flags");
+    let (pdf, out) = (d.join("doc.pdf"), d.join("out.png"));
+    std::fs::write(&pdf, b"%PDF-1.7\n").unwrap();
+    let mixed_sets: [&[&str]; 3] = [&["--pdf-dpi", "72", "--page", "1"], &["--pdf-pages", "1-2", "--crop", "mediaBox"], &["--pdf-editable", "--page", "1"]];
+    for mixed in mixed_sets {
+        let o = bin().arg("convert").arg(&pdf).arg(&out).args(mixed).output().unwrap();
+        assert!(!o.status.success(), "{mixed:?} was accepted");
+        assert!(String::from_utf8_lossy(&o.stderr).contains("use one set"), "{mixed:?}: {}", String::from_utf8_lossy(&o.stderr));
+        assert!(!out.exists(), "{mixed:?}: nothing is written");
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 /// `--out=-image.png` writes `-image.png`; `--out -image.png` is a usage error and writes nothing.
 #[test]
 fn a_value_starting_with_a_dash_is_written_with_equals() {

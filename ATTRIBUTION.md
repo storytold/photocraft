@@ -80,6 +80,7 @@ The built-in ICC profiles and the generated LUT looks come from `craft-cms`
 |---|---|---|---|---|
 | `docs/brand/` (all files) | ArtCraft name, wordmark and mark | ArtCraft Team | getartcraft.com | Not open source; trademarks of the ArtCraft Team, [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) |
 | `docs/images/photocraft-*.jpg` | PhotoCraft screenshots | PhotoCraft contributors (UI) | Rendered offscreen with the `snapshot` example | MIT OR Apache-2.0 (UI); the artwork in each is public domain, listed below |
+| `docs/images/import-pdf.png` | The Import PDF dialog over a synthetic three-page PDF (numbered pages, no artwork) | PhotoCraft contributors | Offscreen `snapshot` example | MIT OR Apache-2.0 |
 | `docs/images/embedded-vector-editor-en.png` | Embedded AI/PDF/EPS conversion warning and editor chooser (no artwork) | Don Omondi | Offscreen `smart_svg_ui::tests::capture_embedded_vector_conversion_prompt` with authored bytes and mock services | MIT OR Apache-2.0 |
 | `docs/images/embedded-vector-tabs-linux.png` | Shared VectorCraft window after a portal editor save and ordinary document launch | Don Omondi | Local Linux GUI acceptance with authored orange rectangle/blue circle SVGs; no private artwork | MIT OR Apache-2.0 |
 | `docs/images/preset-invalid-choice-before.png` | Gradient preset import before validation, with the collision dialog closed | @yoriswind | Offscreen PhotoCraft capture with the synthetic `Fire.grd` gradient fixture | MIT OR Apache-2.0 |
