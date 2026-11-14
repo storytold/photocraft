@@ -48,3 +48,31 @@ fn flatten_with_the_same_profile_runs_as_before() {
     assert_eq!(r["converted"], true, "{r}");
     assert_eq!(s.active().unwrap().history.entries().len(), entries + 1);
 }
+
+/// An Indexed document tagged with the destination's profile still converts as before (to RGB):
+/// the same-profile shortcut is only for the modes measured.
+#[test]
+fn an_indexed_document_with_the_same_profile_converts_as_before() {
+    let mut s = tagged();
+    s.execute("image.mode.indexedColor", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Indexed);
+    s.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
+    let r = s.execute("edit.convertToProfile", json!({"profile": "srgb"})).unwrap();
+    assert_eq!(r["converted"], true, "{r}");
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Rgb);
+}
+
+/// An embedded profile that can't be read is not taken for the destination's colours: the
+/// document is converted, and the profile replaced.
+#[test]
+fn an_unreadable_embedded_profile_is_still_replaced() {
+    let mut s = tagged();
+    s.edit("break the tag", |doc, _| {
+        doc.icc_profile = Some(std::sync::Arc::new(b"not an ICC profile".to_vec()));
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("edit.convertToProfile", json!({"profile": "srgb"})).unwrap();
+    assert_eq!(r["converted"], true, "{r}");
+    assert_ne!(s.active().unwrap().doc.icc_profile.as_deref().map(Vec::as_slice), Some(&b"not an ICC profile"[..]));
+}
