@@ -416,6 +416,8 @@ pub struct TextLayer {
     pub antialias: text::AntiAlias,
     /// Warp Text settings (applied to the glyph outlines when rendering).
     pub warp: Option<text::TextWarp>,
+    /// First baseline of an imported PSD text box, from its rendered `Txt2` line.
+    pub psd_first_baseline: Option<text::PsdFirstBaseline>,
 }
 
 impl Default for TextLayer {
@@ -434,6 +436,7 @@ impl Default for TextLayer {
             orientation: text::Orientation::Horizontal,
             antialias: text::AntiAlias::Smooth,
             warp: None,
+            psd_first_baseline: None,
         }
     }
 }

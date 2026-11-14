@@ -57,6 +57,13 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | Photoshop Raw (.raw) | R/W | no | no | |
 | Camera raw (via Camera Raw 18.7) | R | partial | – | See below |
 
+PSD paragraph type with matching `Txt2` text and a rendered first line keeps Photoshop's
+recorded baseline for the edit-mode redraw (#10999, 2026-11-03). The public `Project.psd` with its
+exact requested face changes from 902,648,399×88 to 901,649,401×88 on entry. Its cached pixels
+remain the import and Cancel image; the baseline also survives a resolution change, PSD save,
+reopen and another no-typing edit. Font substitution still changes width. No corpus floor or
+overall parity percentage changes.
+
 ## Camera raw
 
 Photoshop opens raws through Camera Raw 18.7 (the bundle registers cr2, crw, dcr, dng, erf, mos,
@@ -174,6 +181,7 @@ The original reference entry retains its source date and historical totals; curr
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-07 | minor | Fujifilm compressed RAF (lossless and lossy, X-Trans and Bayer) decodes instead of falling back to the embedded JPEG preview (#7377) |
+| 2026-11-03 | minor | PSD paragraph type: matching `Txt2` first-line baseline drives edit layout (#10999); exact-face public file stays within 1 px vertically and 2 px in width, with no font file committed; resolution change and PSD save/reopen retain the baseline |
 | 2026-11-07 | minor | Photoshop PDF read: pages import as raster artboards through the shared craft-pdf (Hayro) renderer, up to 16 pages, 8192 px per side and 64M px per page; editable text/vectors and PDFium are gone. Write is unchanged. |
 | 2026-11-06 | minor | Scripted PSD/PSB saves take `maximizeCompatibility` (Save, Save As, Save a Copy, `app.save`, serve `doc.save`, MCP `doc_save`/`doc_export`, Batch, Image Processor, Layers to Files) over Preferences › File Handling for one save, and the CLI `--no-maximize-compatibility` (#8064). Layer channels and the merged image were already RLE (ZIP with prediction at 32-bit), as Photoshop writes them (#8645) |
 | 2026-10-24 | minor | Hasselblad 3FR/FFF: the X2D II 100C's 16-bit uncompressed CFA decodes; compressed 3FR still opens as the embedded preview |

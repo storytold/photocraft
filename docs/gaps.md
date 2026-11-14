@@ -58,6 +58,10 @@ what an agent can't finish alone.
   refused at 2^30 px (#8456, #8169; opens since 2026-10-22, decoded a group of rows at a time into
   the layer, refused with an error when it doesn't fit in free memory; a single-strip file is still
   decoded whole beside the layer; layered TIFFs over the limit and huge PSBs still decode whole).
+  PSD paragraph type redraw now uses a matching `Txt2` first baseline (#10999, 2026-11-03):
+  with the requested face installed, the public file's edit-mode bounds move at most 1 px vertically;
+  the baseline survives resolution changes and PSD save/reopen; missing-font substitution can
+  still change its width.
   No test opens our exports in a third-party editor (FILE-216-4). Mockups whose smart object
   uses Transform Warp's Cylinder re-rendered flat after Replace Contents (#4112, fixed 2026-10-14;
   vertical cylinders and ones with perspective are still unread; Warp mode edits the cylinder
@@ -113,6 +117,9 @@ what an agent can't finish alone.
   word, line, paragraph and all text, with tests (TYPE-218-8, #3493). 2026-10-15: area type, type
   inside a closed path or shape, with holes (TYPE-218-10). The Type tool froze the app for
   60 s on one macOS machine (#2518).
+  2026-11-03: a no-typing edit of imported PSD paragraph type uses its rendered `Txt2` baseline
+  for glyphs and caret layout (#10999); synthetic PSD and exact-face public-file measurements
+  cover the handoff. Missing fonts and other layout differences remain in this gap.
 - **Estimate:** 120–200 h.
 
 ### G11. Actions and scripting
@@ -252,6 +259,10 @@ what an agent can't finish alone.
 ## UI / UX gaps
 
 ### G3. User-reported bug backlog
+- **Progress (2026-11-03, #10999):** the edit-mode redraw reads a matching PSD paragraph
+  baseline; the public file stays within 1 px vertically with its requested font loaded.
+  #6031 and #9751 report the same edit-mode shift, while #1431 also reports face and spacing
+  changes; their font and PSD cases still need separate measurements.
 - **2026-10-23 (#8864):** Frame Tool placeholders and handles persist after release; existing frames can be selected, moved/resized/rotated, filled/replaced and edited independently of their image. Shape/type conversion, solid strokes and two Layers thumbnails are available. [Behavior, evidence and remaining native Photoshop frame-file limits](frame-tool.md); no estimate or percentage changed.
 - **Missing:** fixes for 579 open issues (2026-10-10), filed mostly by 0.5/0.6 users. By title:
   ~150 UI/panels/menus/shortcuts, 94 file/format, 87 layers, 54 painting, 54 selection,
@@ -495,6 +506,7 @@ what an agent can't finish alone.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-08 | minor | G9: Units & Rulers › Column Size takes effect as the Columns width unit of Image Size and Canvas Size (#6214); preferences that do nothing 10 → 8 of 199 |
+| 2026-11-03 | minor | G1/G3/G8: #10999 edit redraw uses the PSD first-line baseline, including after resolution change and PSD save/reopen; exact-face public-file position stays within 1 px, missing-font width mismatch remains; estimates and percentages unchanged |
 | 2026-10-27 | minor | G5: Warp mode edits Photoshop's Cylinder warp (#4112): the Warp menu lists it after the presets, five handles set its silhouettes, edges, ellipse depths and wrap as in the reference (Bend, H and V stay greyed), and a smart object's stored cylinder opens in Warp mode as a cylinder and commits back as one; no estimate changed |
 | 2026-11-07 | minor | G14: Hasselblad 3FR/FFF, the X2D II 100C's uncompressed CFA, decodes; compressed 3FR still opens as the embedded preview |
 | 2026-11-06 | minor | G12: eraser end of flipped pens on Windows (Windows Ink on) selects the Eraser (#2285); no estimate changed |

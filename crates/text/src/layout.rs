@@ -303,6 +303,18 @@ impl Layouter {
             // places its own lines (`area` below).
             TextShape::Point | TextShape::Path { .. } | TextShape::Area { .. } => ((0.0, 0.0, 0.0, 0.0), false),
         };
+        let psd_first_baseline = if is_box && !vertical {
+            t.psd_first_baseline
+                .as_ref()
+                // Native documents can carry an edited or malformed hint. Keep the same
+                // bounds used at PSD import so it cannot clip the first line away.
+                .filter(|_| box_rect.1.is_finite() && box_rect.3.is_finite() && box_rect.3 > 0.0)
+                .filter(|b| b.offset_px >= -0.5 && b.offset_px <= box_rect.3 + 0.5)
+                .and_then(|b| runs.first().filter(|r| b.matches(&r.style)).map(|_| box_rect.1 + b.offset_px))
+                .filter(|baseline| baseline.is_finite())
+        } else {
+            None
+        };
         // Area type: the shape its lines wrap inside. A path that encloses nothing (only from a
         // hostile file; `type.fillPath` refuses one) lays out as point text.
         let area = match &t.shape {
@@ -322,6 +334,7 @@ impl Layouter {
             // Box and area text wrap, align within their lines and hide what doesn't fit.
             wraps: is_box || area.is_some(),
             box_rect,
+            psd_first_baseline,
             path_range: crate::warp::path_range_length(&t.shape).map(|n| n.min(f32::MAX as f64) as f32),
             area,
         };
@@ -381,6 +394,7 @@ struct Env<'a> {
     /// Box and area text wrap, align within their lines and hide what doesn't fit.
     wraps: bool,
     box_rect: (f32, f32, f32, f32),
+    psd_first_baseline: Option<f32>,
     /// Available explicit path span in text-space pixels, capped by the curve's capacity.
     /// `None` keeps legacy alignment around the start anchor (an alignment span of zero).
     path_range: Option<f32>,
