@@ -131,7 +131,7 @@ fn change(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad(cmd, format!("the text at {start}..{end} is {:?}, not {w:?}", &t[a..b])));
     }
-    s.edit("Check Spelling", |doc, _| {
+    s.edit("Spell Check", |doc, _| {
         let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
         if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
             replace_text(t, a, b, &to);
@@ -158,7 +158,7 @@ fn change_all(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     let count: usize = plan.iter().map(|(_, h)| h.len()).sum();
     if count > 0 {
-        s.edit("Check Spelling", |doc, _| {
+        s.edit("Spell Check", |doc, _| {
             let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
             for (id, hits) in &plan {
                 if let Some(LayerContent::Text(t)) = doc.layer_mut(*id).map(|l| &mut l.content) {

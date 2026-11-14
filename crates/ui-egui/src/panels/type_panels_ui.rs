@@ -55,6 +55,9 @@ pub struct SpellDialog {
     /// continues it ([`crate::actions::resume`]).
     #[serde(skip)]
     pub resume: Option<u64>,
+    /// The `coalesce` key of this run: its corrections are one "Spell Check" history state.
+    #[serde(skip)]
+    pub history_key: Option<String>,
 }
 
 /// The `dialog` that Check Spelling's results and a playback paused at its step name.
@@ -794,7 +797,10 @@ pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value,
         params["layer"] = json!(layer.ok_or("no layer was selected for this spelling check")?.0);
     }
     app.session.execute("edit.checkSpelling", params).map_err(|e| e.to_string())?;
-    app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, resume, ..Default::default() });
+    // The revision only grows and every correction bumps it, so a later run's key never matches
+    // the one an earlier run left in the history.
+    let history_key = app.session.active().map(|st| format!("spellCheck:{}:{}", st.doc.id.0, st.revision));
+    app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, resume, history_key, ..Default::default() });
     refresh_spelling(app);
     let d = app.ui.type_panels.spell.as_ref().map(|d| d.items.clone()).unwrap_or_default();
     Ok(json!({ "dialog": SPELLING, "misspellings": d }))
@@ -953,11 +959,18 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         "change" | "changeAll" => {
             if let Some(i) = &item {
-                let p = if a == "change" {
+                let mut p = if a == "change" {
                     json!({ "action": "change", "layer": i["layer"], "start": i["start"], "end": i["end"], "word": word, "replace": change_to })
                 } else {
                     spelling_change_all_params(i, &word, &change_to, all_layers)
                 };
+                // One history state per run (#14177). A paused action's corrections keep its own
+                // grouping (#10965).
+                if d.resume.is_none()
+                    && let Some(key) = &d.history_key
+                {
+                    p["coalesce"] = json!(key);
+                }
                 if let Err(error) = crate::actions::spelling_change(app, p) {
                     app.ui.status = error;
                     app.ui.status_error = true;
@@ -973,7 +986,7 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
-    fn app_with_text(text: &str) -> PhotocraftApp {
+    pub(super) fn app_with_text(text: &str) -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 300, "height": 120, "background": "white"})).unwrap();
         app.run("type.create", json!({"x": 10, "y": 60, "text": text})).unwrap();
@@ -1144,3 +1157,7 @@ mod tests {
         assert!(h.query_by_label("Hyphenate").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "type_spell_history_tests.rs"]
+mod spell_history_tests;
