@@ -133,6 +133,8 @@ fn frame_content_and_both_selection_follow_clicks_and_double_clicks() {
     drag(&mut app, [20., 30.], [120., 110.]);
     let frame = selected(&app).unwrap().id;
     let original = selected(&app).unwrap().frame.clone();
+    // This test exercises the click cycle from the frame thumbnail, independently of creation.
+    select(&mut app, frame, Target::Frame);
     double_click(&mut app, [65., 65.]);
     assert_eq!(app.ui.frame_tool.target, Target::Content);
     assert_eq!(app.session.active().unwrap().active_layer, Some(source));
