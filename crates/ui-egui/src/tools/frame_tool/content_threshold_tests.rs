@@ -62,7 +62,6 @@ fn degenerate_nonoverlapping_and_extreme_rectangles_are_safe() {
     assert_eq!(content_layer(&empty, [0, 0, 100, 100]), None);
 }
 
-
 #[test]
 fn raster_threshold_uses_the_whole_layer_with_a_smaller_selection() {
     let (mut app, layer) = candidate(Rect::new(0, 0, 600, 400));
