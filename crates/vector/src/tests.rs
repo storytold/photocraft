@@ -1324,6 +1324,54 @@ fn pixel_aligned_dashes_have_uniform_opaque_lengths_with_half_pixel_periods() {
     }
 }
 
+/// Edge alignment must not measure later sides using the snapped rectangle's perimeter.
+#[test]
+fn pixel_aligned_fractional_rectangle_preserves_dash_phase_on_later_sides() {
+    let clip = Rect::new(-32, -32, 48, 48);
+    for (start, end) in [(10.2, 30.6), (10.5, 30.5), (-10.5, 9.5)] {
+        let length = end - start;
+        let low = crate::pixel_align::snap_edge(start) as i32;
+        let high = crate::pixel_align::snap_edge(end) as i32 - 1;
+        for (width, offset) in [1.0, 2.0, 3.0].into_iter().flat_map(|width| [-0.75, 0.0, 0.5].map(|offset| (width, offset))) {
+            let shape = ShapeLayer {
+                path: shapes::rect(start, start, length, length),
+                use_aligned_rendering: true,
+                stroke: Some(ShapeStroke { width, dashes: vec![4.0, 2.0], dash_offset: offset, ..Default::default() }),
+                ..Default::default()
+            };
+            let original = shape.path.clone();
+            let compiled = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip);
+            for p in low + 4..high - 2 {
+                let probe = f64::from(p) + 0.5 - 1e-6;
+                for (x, y, distance) in
+                    [(p, low, probe - start), (high, p, length + probe - start), (p, high, 2.0 * length + end - probe), (low, p, 3.0 * length + end - probe)]
+                {
+                    let expected = f32::from((distance / f64::from(width) + f64::from(offset)).rem_euclid(6.0) < 4.0);
+                    let actual = compiled.render_rgba(Rect::from_xywh(x, y, 1, 1))[0][3];
+                    assert_eq!(actual, expected, "dash phase at ({x}, {y}), width={width}, offset={offset}");
+                }
+            }
+            assert_eq!(shape.path, original);
+        }
+    }
+}
+
+#[test]
+fn pixel_aligned_fractional_open_dashes_probe_the_original_centerline() {
+    let clip = Rect::new(0, 0, 80, 40);
+    let shape = ShapeLayer {
+        path: Path::new(vec![Subpath::polyline(&[(10.2, 20.5), (70.6, 20.5)])]),
+        use_aligned_rendering: true,
+        stroke: Some(ShapeStroke { width: 1.0, dashes: vec![4.0, 2.0], ..Default::default() }),
+        ..Default::default()
+    };
+    let compiled = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip);
+    for x in 14..67 {
+        let expected = f32::from((f64::from(x) + 0.5 - 1e-6 - 10.2).rem_euclid(6.0) < 4.0);
+        assert_eq!(compiled.render_rgba(Rect::from_xywh(x, 21, 1, 1))[0][3], expected, "x={x}");
+    }
+}
+
 /// Fractional butt dashes are selected by their centers, not their integrated area.
 #[test]
 fn pixel_aligned_fractional_butt_dashes_select_pixel_centers() {

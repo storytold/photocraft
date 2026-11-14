@@ -2,8 +2,10 @@
 
 `ui.set {useAlignedRendering: true}` changes the Align Edges tool preference for
 subsequent shape creation. `ui.inspect.toolOptions.useAlignedRendering` reports
-that preference, not the selected shape's setting. With an existing shape selected,
-the options-bar checkbox displays the layer's value. Use
+that preference, not the selected shape's setting. Shape-tool options display the
+selected shape's value. The Pen displays the target layer's value when appending
+to it, the captured value during a valid draft, or the tool preference for New Layer.
+Use
 `shape.edit {layer: id, useAlignedRendering: true}` to change an existing layer and
 `shape.info {layer: id}` to read its `useAlignedRendering` value (engine commands
 are invoked through `engine.execute` on this control channel).

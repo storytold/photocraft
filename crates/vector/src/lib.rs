@@ -633,6 +633,9 @@ impl CompiledShape {
     /// out in `gradient_frame`: measuring a shape beyond the canvas it is drawn in.
     pub fn with_frames(shape: &ShapeLayer, tol: f64, coverage: Rect, gradient_frame: Rect) -> Self {
         let pb = shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
+        // Dash arc lengths and phase belong to the stored geometry. Snap the
+        // resulting outline/coverage, never the path fed to dash generation.
+        let dashed_path = shape.stroke.as_ref().filter(|s| !s.dashes.is_empty()).map(|_| &shape.path);
         let aligned_shape = pixel_align::aligned_edge_path(shape).map(|path| ShapeLayer { path, live: None, ..shape.clone() });
         let shape = aligned_shape.as_ref().unwrap_or(shape);
         let g = gradient_frame;
@@ -648,18 +651,22 @@ impl CompiledShape {
         let all_closed = shape.path.subpaths.iter().all(|s| s.closed);
         let mut align = None;
         let coordinate_tolerance = pixel_align::coordinate_tolerance(shape, gradient_frame);
-        let pixel_rectangle = pixel_align::rectangle_bounds(shape, coordinate_tolerance);
+        let pixel_rectangle =
+            pixel_align::rectangle_bounds(shape, coordinate_tolerance).map(|bounds| dashed_path.and_then(Path::control_bounds).unwrap_or(bounds));
         let mut pixel_stroke = pixel_align::PixelRuns::stroke(shape, tol, coordinate_tolerance);
         // The stroker's round caps preserve circular area. Their half-circle
         // outside an integer dash boundary has area pi/8 at width 1. Use that
         // tie instead of 1/2, retaining the caps' extra pixel of raster length.
         let pixel_dash_threshold =
             if shape.stroke.as_ref().is_some_and(|s| s.cap == photocraft_doc::LineCap::Round) { std::f32::consts::PI / 8.0 } else { 0.5 };
-        let pixel_dash_caps = if shape.stroke.as_ref().is_some_and(|s| !s.dashes.is_empty()) {
+        let mut pixel_dash_caps = if shape.stroke.as_ref().is_some_and(|s| !s.dashes.is_empty()) {
             pixel_align::PixelRuns::stroke(shape, tol, coordinate_tolerance)
         } else {
             pixel_align::PixelRuns::default()
         };
+        if let Some(path) = dashed_path {
+            pixel_dash_caps.use_source_coordinates(path);
+        }
         let mut pixel_dash_bias = None;
         let stroke = shape.stroke.as_ref().filter(|s| s.width > 0.0 && s.opacity > 0.0).map(|s| {
             let mut st = stroke_style(s);
@@ -669,13 +676,21 @@ impl CompiledShape {
                 align = Some((area.clone(), s.align == StrokeAlign::Inside, 1.0));
             }
             if let Some((x0, y0, x1, y1)) = pixel_rectangle {
-                pixel_stroke = pixel_align::PixelRuns::default();
+                if dashed_path.is_some() {
+                    // The original stroke can sit entirely outside the selected row
+                    // at a half-pixel tie. Move its normal coverage before clipping.
+                    pixel_stroke.select_rectangle_interior((x0, y0, x1, y1));
+                    pixel_dash_caps.select_rectangle_interior((x0, y0, x1, y1));
+                } else {
+                    pixel_stroke = pixel_align::PixelRuns::default();
+                }
                 // Preserve dash positions from the original vector path.
                 // Select the interior pixel row for crisp 1px strokes.
-                let mask = shapes::rect(x0.round(), y0.round(), x1.round() - x0.round(), y1.round() - y0.round());
+                let (x0, y0, x1, y1) = (pixel_align::snap_edge(x0), pixel_align::snap_edge(y0), pixel_align::snap_edge(x1), pixel_align::snap_edge(y1));
+                let mask = shapes::rect(x0, y0, x1 - x0, y1 - y0);
                 align = Some((fill_rasterizer(&mask, tol), true, 2.0));
             }
-            let r = stroke_rasterizer_with_alignment(&shape.path, &st, tol, shape.use_aligned_rendering);
+            let r = stroke_rasterizer_with_alignment(dashed_path.unwrap_or(&shape.path), &st, tol, shape.use_aligned_rendering);
             if !pixel_dash_caps.is_empty() {
                 // A tiny positive translation resolves only otherwise indistinguishable cap
                 // ties. Reuse the compiled outline so dash lengths, phase and budgets agree.

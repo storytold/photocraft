@@ -12,13 +12,16 @@ path; it does not toggle render-time Align Edges or edit an existing layer.
 
 Alignment affects both fill and stroke. Straight horizontal and vertical source
 edges at fractional coordinates snap to document pixel boundaries on a render-only
-copy. Axis-aligned curve extrema snap too, including ellipse boundaries. Handles
+copy. Curve extrema at anchors with axis-aligned handles snap too, including
+ellipse boundaries; extrema inside a Bézier segment are not detected. Handles
 move with their anchors, preserving adjoining curve tangents.
 Curves and diagonals retain antialiasing; flattened curve chords are never snapped.
 Stored paths, live parameters, stroke widths and dash settings are unchanged.
 Turning the option off restores the original coverage. Existing one-pixel stroke
 and dash-cap coverage rules remain in use after edge alignment. Straight outline
-edges of wider integer-width strokes also snap. Centered fractional-width strokes
+edges of wider integer-width strokes also snap when every source knot has
+coincident handles. Paths with curved segments, including rounded rectangles,
+retain outline antialiasing on their straight sides too. Centered fractional-width strokes
 keep their area coverage so a subpixel outline cannot collapse to zero width.
 Inside/outside strokes use a doubled outline before clipping to the fill; some
 fractional requested widths therefore produce a snapped integral-width outline

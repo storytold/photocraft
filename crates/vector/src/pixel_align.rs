@@ -36,6 +36,8 @@ pub(crate) struct PixelRuns(Vec<Run>);
 struct Run {
     horizontal: bool,
     coordinate: i32,
+    negative_side: bool,
+    sample_offset: f64,
     start: f64,
     end: f64,
 }
@@ -69,7 +71,7 @@ impl PixelRuns {
             // Probe the original outline at the centerline and along-axis pixel centers.
             // The small negative bias preserves the existing positive-coordinate tie policy.
             let centers_rect = if run.horizontal { Rect::new(visible.x0, c, visible.x1, c + 1) } else { Rect::new(c, visible.y0, c + 1, visible.y1) };
-            let offset = if run.horizontal { (0.5 - 1e-6, 0.0) } else { (0.0, 0.5 - 1e-6) };
+            let offset = if run.horizontal { (0.5 - 1e-6, run.sample_offset) } else { (run.sample_offset, 0.5 - 1e-6) };
             if sample_centers {
                 let centers = rasterizer.point_samples(centers_rect, offset);
                 for y in visible.y0..visible.y1 {
@@ -172,7 +174,7 @@ impl PixelRuns {
         {
             return Self::default();
         }
-        Self(vec![Run { horizontal, coordinate: coordinate.round() as i32, start: start + 2.0, end: end - 2.0 }])
+        Self(vec![Run { horizontal, coordinate: coordinate.round() as i32, negative_side: false, sample_offset: 0.0, start: start + 2.0, end: end - 2.0 }])
     }
     /// Find straight source segments with bounded overlap checks; curves retain normal coverage.
     fn path(path: &Path, coordinate_tolerance: (f64, f64)) -> Self {
@@ -199,6 +201,35 @@ impl PixelRuns {
         }
         runs
     }
+    /// Probe dash centers on the stored segment even when its normal coordinate snapped.
+    /// Run discovery already caps the source to 256 knots and excludes overlaps.
+    pub(crate) fn use_source_coordinates(&mut self, path: &Path) {
+        if self.is_empty() {
+            return;
+        }
+        let segments: Vec<_> = path.subpaths.iter().flat_map(|s| s.segments()).collect();
+        for run in &mut self.0 {
+            for points in &segments {
+                let coordinate = if run.horizontal { points[0].y } else { points[0].x };
+                let on_axis = points.iter().all(|p| same(if run.horizontal { p.y } else { p.x }, coordinate));
+                let (a, b) = if run.horizontal { (points[0].x, points[3].x) } else { (points[0].y, points[3].y) };
+                if on_axis && snap_edge(coordinate) == f64::from(run.coordinate) && a.min(b) <= run.start && a.max(b) >= run.end {
+                    run.sample_offset = coordinate - f64::from(run.coordinate);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Rectangle strokes select the interior side on the right and bottom edges.
+    pub(crate) fn select_rectangle_interior(&mut self, (x0, y0, x1, y1): (f64, f64, f64, f64)) {
+        for run in &mut self.0 {
+            let (low, high) = if run.horizontal { (y0, y1) } else { (x0, x1) };
+            run.negative_side = f64::from(run.coordinate) == snap_edge(high);
+            run.sample_offset = if run.negative_side { high } else { low } - f64::from(run.coordinate);
+        }
+    }
+
     /// Combine normal-axis coverage in the selected pixel, sampling beyond tile boundaries.
     pub(crate) fn apply(&self, rect: Rect, coverage: &mut [f32], sample: impl Fn(Rect) -> Vec<f32>) {
         let width = rect.width() as usize;
@@ -221,7 +252,7 @@ impl PixelRuns {
                     let k = if run.horizontal { (x - source.x0) as usize } else { (y - source.y0) as usize * sw };
                     let adjacent = if run.horizontal { k + sw } else { k + 1 };
                     if let (Some(out), Some(a), Some(b)) = (coverage.get_mut(index), values.get(k), values.get(adjacent)) {
-                        *out = if (if run.horizontal { y } else { x }) == c { (*a + *b).min(1.0) } else { 0.0 };
+                        *out = if (if run.horizontal { y } else { x }) == c - i32::from(run.negative_side) { (*a + *b).min(1.0) } else { 0.0 };
                     }
                 }
             }
@@ -376,7 +407,7 @@ pub(crate) fn rectangle_bounds(shape: &ShapeLayer, tolerance: (f64, f64)) -> Opt
 pub(crate) fn rectangle_coverage_scale((x0, y0, x1, y1): (f64, f64, f64, f64), x: i32, y: i32) -> f32 {
     let mut normal: f64 = 1.0;
     for (pixel, edge, inside_positive) in [(x, x0, true), (x, x1, false), (y, y0, true), (y, y1, false)] {
-        let rounded = edge.round();
+        let rounded = snap_edge(edge);
         let row = (rounded as i32).saturating_sub(i32::from(!inside_positive));
         if pixel == row {
             normal = normal.min(0.5 + (edge - rounded) * if inside_positive { 1.0 } else { -1.0 });
