@@ -117,6 +117,8 @@ mod recovery_tests;
 mod shortcut_capture_tests;
 #[cfg(test)]
 mod shortcut_set_tests;
+#[cfg(test)]
+mod shortcut_summarize_tests;
 
 #[cfg(test)]
 mod tests;
