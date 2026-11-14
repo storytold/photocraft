@@ -131,6 +131,14 @@ const CURVE_GRAPH_PADDING: f32 = 5.0;
 
 const CURVE_SAMPLES: usize = 256;
 
+fn curve_overlay_changed(points: &[[f32; 2]]) -> bool {
+    points.len() > 2 || points.first().is_some_and(|q| q[0] != 0.0 || q[1] != 0.0) || points.last().is_some_and(|q| q[0] != 255.0 || q[1] != 255.0)
+}
+
+#[cfg(test)]
+#[path = "curves_overlay_end_points_tests.rs"]
+mod curves_overlay_end_points_tests;
+
 /// One entry per editor/channel, independent of selection, tint and stroke width.
 #[derive(Clone, Default)]
 struct CurvePolyline {
@@ -444,7 +452,7 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
                 continue;
             }
             let cp = read_curve(v, c.key);
-            if cp.len() > 2 || cp.first().is_some_and(|q| q[1] != 0.0) || cp.last().is_some_and(|q| q[1] != 255.0) {
+            if curve_overlay_changed(&cp) {
                 draw_curve(c.key, &cp, bar_color(c, &t).gamma_multiply(0.8), 1.0);
             }
         }
