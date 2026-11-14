@@ -324,6 +324,40 @@ pub fn default_name(s: &Session) -> String {
 /// where the working copy is larger per pixel. What is accepted always paints.
 const MAX_DEFINE_EDGE: u32 = 8000;
 
+/// Whether `sel` is a single sharp-edged rectangle: nothing selected outside its own bounds and
+/// every pixel inside fully selected.
+fn is_sharp_rect(sel: &Surface) -> bool {
+    let bounds = sel.content_bounds();
+    if bounds.is_empty() {
+        return false;
+    }
+    let (w, h) = (u64::from(bounds.width()), u64::from(bounds.height()));
+    if w.saturating_mul(h) > photocraft_doc::pattern::MAX_PAINT_PIXELS || sel.default_pixel().first().copied().unwrap_or(0.0) > 0.0 {
+        return false;
+    }
+    let n = sel.channels().max(1);
+    let band_rows = (BAND_PIXELS / bounds.width().max(1)).max(1) as i32;
+    let mut y = bounds.y0;
+    while y < bounds.y1 {
+        let y1 = y.saturating_add(band_rows).min(bounds.y1);
+        if !sel.read_region(Rect::new(bounds.x0, y, bounds.x1, y1)).chunks_exact(n).all(|px| px[0] >= 1.0) {
+            return false;
+        }
+        y = y1;
+    }
+    true
+}
+
+fn define_enabled(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    if let Some(sel) = &st.doc.selection
+        && !is_sharp_rect(sel)
+    {
+        return Err("Define Pattern requires no selection or a single sharp rectangular selection".into());
+    }
+    Ok(())
+}
+
 fn define(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.definePattern";
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -333,7 +367,14 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
             let v: Vec<i32> = a.iter().map(|x| x.as_f64().unwrap_or(0.0).round() as i32).collect();
             Rect::new(v[0], v[1], v[2], v[3])
         }
-        _ => doc.selection.as_ref().map_or(doc.bounds(), |m| m.content_bounds()),
+        _ => {
+            if let Some(sel) = &doc.selection
+                && !is_sharp_rect(sel)
+            {
+                return Err(bad(cmd, "Define Pattern requires no selection or a single sharp rectangular selection"));
+            }
+            doc.selection.as_ref().map_or(doc.bounds(), |m| m.content_bounds())
+        }
     }
     .intersect(&doc.bounds());
     if r.is_empty() {
@@ -552,7 +593,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &["Edit"],
             shortcut: None,
             params: r##"{"name":text,"rect":[x0,y0,x1,y1]?} → {"pattern":id} (name: default the document's name numbered past the library's names; rect: default the selection bounds or else the canvas; added to the library from the visible composite)"##,
-            enabled: has_doc,
+            enabled: define_enabled,
             journal: true,
             run: define,
         },
@@ -911,3 +952,6 @@ mod tests {
         assert!(e.to_string().contains("would paint nothing") && e.to_string().contains("65536 × 65536"), "{e}");
     }
 }
+
+#[cfg(test)]
+mod define_selection_shape_tests;
