@@ -330,7 +330,7 @@ failure, and its Cargo subprocess is supervised. Served artifact snapshots and p
 are preserved outside temporary storage for review. The enclosing managed unit must still finalize and prove all
 compiler/driver/Chrome descendants absent.
 
-Use wasm-bindgen-test-runner 0.2.130 to match the workspace's wasm-bindgen version, real Chrome/WebDriver configuration and
+Use wasm-bindgen-test-runner 0.2.129 to match the workspace's wasm-bindgen version, real Chrome/WebDriver configuration and
 existing Cargo target/cache. For example:
 
 ```sh
