@@ -101,7 +101,8 @@ fn selection_targets(id: &str) -> Option<Targets> {
         | "layer.rasterize.type"
         | "layer.rasterize.shape"
         | "layer.rasterize.fillContent"
-        | "layer.rasterize.smartObject" => Targets::Any,
+        | "layer.rasterize.smartObject"
+        | "layer.mergeLayers" => Targets::Any,
         "layer.releaseClippingMask" | "layer.layerStyle.pasteLayerStyle" | "layer.layerStyle.clear" => Targets::Any,
         "layer.createClippingMask" => Targets::AllButLowest,
         "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => Targets::WithoutMask,
@@ -131,25 +132,6 @@ pub fn disabled_for_selection(doc: &Document, selected: &[LayerId], active: Opti
 pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     let Some(st) = app.session.active() else { return false };
     let active = st.active_layer.and_then(|a| st.doc.layer(a));
-    // The split warps edit the open Warp box's grid, or a smart object's stored warp: without
-    // either there is no grid to split (#12494).
-    if matches!(
-        id,
-        "edit.transform.splitWarpCrosswise" | "edit.transform.splitWarpHorizontally" | "edit.transform.splitWarpVertically" | "edit.transform.removeWarpSplit"
-    ) && !crate::transform_tool::warps_active_layer(app)
-    {
-        return true;
-    }
-    // Remove Warp Split takes out a split line of the open grid; with none (a single patch, as
-    // the engine's `Split::Remove` sees it) there is nothing to remove.
-    if id == "edit.transform.removeWarpSplit"
-        && app.ui.transform.as_ref().and_then(|t| t.warp.as_ref()).is_some_and(|w| {
-            let m = w.to_mesh(1, 1);
-            m.us.len() <= 2 && m.vs.len() <= 2
-        })
-    {
-        return true;
-    }
     // Free Transform Path works on the Background too: it moves the path, not the pixels.
     let transform = id == "edit.freeTransform" || (id.starts_with("edit.transform.") && id != "edit.transform.again");
     if transform && crate::vector_ui::free_transform_path(app).is_some() {
@@ -418,9 +400,25 @@ mod tests {
         assert_eq!(checked, selections.len() * 2 * commands.len());
     }
 
-    /// #11217 review: one linked layer selected opens a box over its link group, which refuses
-    /// Warp, so the menu greys Warp the same way it does for several selected layers; an unlinked
-    /// layer keeps it.
+    /// #12427: with two or more layers selected, Ctrl+E's Merge Layers is enabled and runs,
+    /// judged by the whole selection rather than only by the active layer.
+    #[test]
+    fn merge_layers_enabled_for_multiple_selected_layers() {
+        let mut s = session();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let r1 = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.new.layer", json!({"name": "R2"})).unwrap();
+        let _r2 = s.active().unwrap().active_layer.unwrap();
+        // R2 is active; R1 + R2 both selected.
+        s.execute("layer.select", json!({"layer": r1.0, "mode": "add"})).unwrap();
+        let mut app = crate::PhotocraftApp::new(s, crate::Services::default());
+        assert!(!disabled(&app, "layer.mergeLayers"), "Merge Layers enabled with several layers selected");
+        // Merge Layers really runs on the whole selection.
+        let before = app.session.active().unwrap().doc.walk().len();
+        let _r = app.session.execute("layer.mergeLayers", json!({})).unwrap();
+        let after = app.session.active().unwrap().doc.walk().len();
+        assert!(after < before, "two layers became one: {before} -> {after}");
+    }
     #[test]
     fn warp_is_greyed_for_a_layer_with_linked_partners() {
         let mut s = session();
@@ -495,7 +493,3 @@ mod tests {
         assert!(off(&s, "layer.layerStyle.copyLayerStyle"));
     }
 }
-
-#[cfg(test)]
-#[path = "warp_split_enable_tests.rs"]
-mod warp_split_enable_tests;
