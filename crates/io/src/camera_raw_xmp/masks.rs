@@ -14,7 +14,9 @@
 
 use photocraft_algo::camera_raw::masks::{self, Component, Dab, Local, Mask, Op, Shape};
 
-use super::{CRS_NS, RDF_NS, escape};
+use craft_metadata::XmpValue;
+
+use super::escape;
 
 /// PhotoCraft's namespace in settings files.
 pub const PCRAFT_NS: &str = "http://ns.photocraft.app/camera-raw/1.0/";
@@ -51,44 +53,47 @@ pub fn is_corrections(name: &str) -> bool {
     KINDS.iter().any(|(k, _)| *k == name)
 }
 
+/// The `crs:` names of the corrections this module reads, in the order [`write`] writes them.
+pub fn correction_names() -> impl Iterator<Item = &'static str> {
+    KINDS.iter().map(|(k, _)| *k)
+}
+
 fn num(s: Option<&str>) -> Option<f32> {
     let s = s?.trim();
     let v: f32 = s.strip_prefix('+').unwrap_or(s).parse().ok()?;
     v.is_finite().then_some(v)
 }
 
-fn crs<'a>(n: roxmltree::Node<'a, '_>, key: &str) -> Option<&'a str> {
-    n.attribute((CRS_NS, key))
-        .or_else(|| n.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS) && c.tag_name().name() == key).and_then(|c| c.text()))
+/// The `crs:` field `key` of a structure (an attribute or a child element), as text.
+fn crs<'a>(n: &'a XmpValue, key: &str) -> Option<&'a str> {
+    child(n, key)?.text()
 }
 
-/// The `rdf:li` items of the `rdf:Seq` under `n`, each as the node carrying its properties
-/// (the `rdf:li` itself or its `rdf:Description`).
-fn items<'a, 'i>(n: roxmltree::Node<'a, 'i>) -> Vec<roxmltree::Node<'a, 'i>> {
-    let Some(seq) = n.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(RDF_NS) && c.tag_name().name() == "Seq") else {
-        return Vec::new();
-    };
-    seq.children()
-        .filter(|c| c.is_element() && c.tag_name().name() == "li")
-        .map(|li| li.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(RDF_NS) && c.tag_name().name() == "Description").unwrap_or(li))
-        .collect()
+/// The items of an `rdf:Seq` (anything else holds none). Each item is the structure carrying its
+/// properties, whether they sit on the `rdf:li`, in its `rdf:Description` or in
+/// `rdf:parseType="Resource"`: the XMP reader gives all three alike.
+fn items(n: &XmpValue) -> &[XmpValue] {
+    match n {
+        XmpValue::Array(items) => items,
+        _ => &[],
+    }
 }
 
-fn child<'a, 'i>(n: roxmltree::Node<'a, 'i>, name: &str) -> Option<roxmltree::Node<'a, 'i>> {
-    n.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS) && c.tag_name().name() == name)
+fn child<'a>(n: &'a XmpValue, name: &str) -> Option<&'a XmpValue> {
+    n.field(&format!("crs:{name}"))
 }
 
-/// The masks in one `crs:…BasedCorrections` element (one mask per correction), naming what it
-/// skips in `ignored`. Returns how many corrections the element holds.
-pub fn read(n: roxmltree::Node<'_, '_>, out: &mut Vec<Mask>, ignored: &mut Vec<String>) -> usize {
+/// The masks in one `crs:…BasedCorrections` value (one mask per correction), naming what it
+/// skips in `ignored`. Returns how many corrections the value holds.
+pub fn read(n: &XmpValue, out: &mut Vec<Mask>, ignored: &mut Vec<String>) -> usize {
     let all = items(n);
-    for corr in all.iter().copied().take(masks::MAX_MASKS) {
+    for corr in all.iter().take(masks::MAX_MASKS) {
         if crs(corr, "CorrectionActive").is_some_and(|v| v.eq_ignore_ascii_case("false")) {
             continue;
         }
         // A colour / luminance range restriction (Lightroom's Range Mask) has no counterpart
         // here: importing the correction without it would apply it unrestricted.
-        if crs(corr, "CorrectionRangeMask").is_some() || child(corr, "CorrectionRangeMask").is_some() {
+        if child(corr, "CorrectionRangeMask").is_some() {
             if !ignored.iter().any(|s| s == "CorrectionRangeMask") {
                 ignored.push("CorrectionRangeMask".into());
             }
@@ -106,7 +111,7 @@ pub fn read(n: roxmltree::Node<'_, '_>, out: &mut Vec<Mask>, ignored: &mut Vec<S
         // Every stroke (or run of one brush's settings) is its own Mask/Paint item and they all
         // go into one brush, so only the other kinds count against the component cap; the
         // item count is still bounded.
-        for m in child(corr, "CorrectionMasks").map(items).unwrap_or_default().into_iter().take(masks::MAX_COMPONENTS + masks::MAX_DABS) {
+        for m in child(corr, "CorrectionMasks").map(items).unwrap_or_default().iter().take(masks::MAX_COMPONENTS + masks::MAX_DABS) {
             let what = crs(m, "What").unwrap_or("");
             let value = num(crs(m, "MaskValue")).unwrap_or(1.0);
             if what != "Mask/Paint" && components.len() >= masks::MAX_COMPONENTS {
@@ -260,10 +265,10 @@ pub fn write(all: &[Mask]) -> String {
 }
 
 /// `pcraft:CameraRawMasks="…"` with every mask (`[]` when there are none, so loading the file
-/// over settings with masks clears them, as it sets every other control).
+/// over settings with masks clears them, as it sets every other control), on a line of its own.
 pub fn own_attribute(all: &[Mask]) -> String {
     let json = serde_json::to_string(all).unwrap_or_default();
-    format!("   pcraft:CameraRawMasks=\"{}\"\n", escape(&json))
+    format!("\n   pcraft:CameraRawMasks=\"{}\"", escape(&json))
 }
 
 #[cfg(test)]

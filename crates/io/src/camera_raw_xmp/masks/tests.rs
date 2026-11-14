@@ -2,7 +2,7 @@
 
 use photocraft_algo::camera_raw::CameraRaw;
 
-use super::super::{load, save};
+use super::super::{CRS_NS, RDF_NS, load, save};
 use super::*;
 
 fn comp(shape: Shape) -> Component {
