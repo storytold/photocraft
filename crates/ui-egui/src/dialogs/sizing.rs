@@ -153,6 +153,8 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         f.insert("resample".into(), json!(resample));
         f.insert("__resample".into(), json!(resample));
     } else {
+        // Only a Background takes the extension colour: without one the colour is greyed (#14546).
+        f.insert("__hasBackground".into(), json!(d.background().is_some()));
         f.insert("relative".into(), json!(false));
         f.insert("anchor".into(), json!("center"));
         f.insert("extensionColor".into(), json!("background"));
@@ -216,7 +218,8 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 fn label(ui: &mut egui::Ui, text: &str, width: f32) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
+    let color = if ui.is_enabled() { t.text_dim } else { t.text_dim.gamma_multiply(0.5) };
+    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), color);
 }
 
 fn info_row(ui: &mut egui::Ui, k: &str, v: String) {
@@ -510,19 +513,22 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
     });
     ui.add_space(4.0);
+    let has_background = f.get("__hasBackground").and_then(Value::as_bool).unwrap_or(true);
     ui.horizontal(|ui| {
-        label(ui, tl!("Canvas extension color:"), 150.0);
-        let mut cur = f.get("extensionColor").and_then(Value::as_str).unwrap_or("background").to_string();
-        let opts = [
-            ("foreground".to_string(), tl!("Foreground")),
-            ("background".to_string(), tl!("Background")),
-            ("white".to_string(), tl!("White")),
-            ("black".to_string(), tl!("Black")),
-            ("transparent".to_string(), tl!("Transparent")),
-        ];
-        if crate::widgets::dropdown(ui, "cs-ext", tl!("Canvas extension color:"), &mut cur, &opts, 140.0) {
-            f.insert("extensionColor".into(), json!(cur));
-        }
+        ui.add_enabled_ui(has_background, |ui| {
+            label(ui, tl!("Canvas extension color:"), 150.0);
+            let mut cur = f.get("extensionColor").and_then(Value::as_str).unwrap_or("background").to_string();
+            let opts = [
+                ("foreground".to_string(), tl!("Foreground")),
+                ("background".to_string(), tl!("Background")),
+                ("white".to_string(), tl!("White")),
+                ("black".to_string(), tl!("Black")),
+                ("transparent".to_string(), tl!("Transparent")),
+            ];
+            if crate::widgets::dropdown(ui, "cs-ext", tl!("Canvas extension color:"), &mut cur, &opts, 140.0) {
+                f.insert("extensionColor".into(), json!(cur));
+            }
+        });
     });
 }
 
@@ -582,3 +588,6 @@ fn anchor_grid(ui: &mut egui::Ui, current: &str, dw: f64, dh: f64) -> Option<&'s
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod canvas_extension_greyed_tests;
