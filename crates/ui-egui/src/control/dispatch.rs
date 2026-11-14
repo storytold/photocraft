@@ -411,7 +411,7 @@ impl ToolSet {
             app.ui.tool_options.vector_mode = m;
         }
         if let Some(o) = self.pen_path_op {
-            app.ui.tool_options.pen_path_op = o;
+            crate::path_components::set_pen_op(app, &o);
         }
     }
 

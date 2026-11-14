@@ -216,6 +216,8 @@ fn an_operation_without_a_selected_shape_starts_a_new_shape_layer() {
 #[test]
 fn path_mode_adds_subpaths_with_the_operation() {
     let mut app = app();
+    // Combine/Subtract/Intersect drawing is unmeasured by #12905: choose Combine explicitly.
+    app.ui.tool_options.pen_path_op = "combine".into();
     assert_eq!(pen_path_op(&app.ui.tool_options), Some("combine"));
     square(&mut app, 20.0, 20.0, 100.0);
     square(&mut app, 30.0, 30.0, 10.0);

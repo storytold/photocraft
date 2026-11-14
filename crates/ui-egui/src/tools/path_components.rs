@@ -78,11 +78,26 @@ pub(crate) fn selected_op(app: &PhotocraftApp) -> Option<&'static str> {
     ops.all(|o| o == first).then_some(first)
 }
 
+/// Set the shared path-tool option without editing components (also the control setter).
+/// The two selection tools always address the Path slot, independently of the Pens' mode.
+pub(crate) fn set_pen_op(app: &mut PhotocraftApp, op: &str) {
+    let shape_selected = app
+        .session
+        .active()
+        .is_some_and(|st| st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Shape(_))));
+    let path_only = matches!(app.ui.tool, Tool::PathSelection | Tool::DirectSelection);
+    app.ui.tool_options.set_pen_operation(op, shape_selected, path_only);
+}
+
 /// A Path Operations pick (menu or key): the selected components take `op`, and the tool keeps it
 /// for the next path. New Layer is not an operation a component can have: it only sets the tool.
 /// The first component always combines (it is what the others act on), so it keeps its operation.
 pub(crate) fn set_op(app: &mut PhotocraftApp, op: &str) -> Result<(), String> {
-    *crate::vector_ui::path_op_field(app) = op.into();
+    if matches!(app.ui.tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::PathSelection | Tool::DirectSelection) {
+        set_pen_op(app, op);
+    } else {
+        *crate::vector_ui::path_op_field(app) = op.into();
+    }
     if op == "newLayer" {
         return Ok(());
     }

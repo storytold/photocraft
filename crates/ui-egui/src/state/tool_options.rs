@@ -98,11 +98,16 @@ pub struct ToolOptions {
     pub enhance_edge: bool,
     /// Pen: "path" (work path) or "shape" (shape layer).
     pub vector_mode: String,
-    /// Pen, Freeform Pen and Curvature Pen › Path Operations (#1397): how a new path combines with
-    /// the path or shape it is drawn into: "newLayer" (Shape mode: a new shape layer; Path mode
-    /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
+    /// Legacy last Path Operations pick (#1397), retained for old settings and control inspection:
+    /// "newLayer", "combine", "subtract", "intersect" or "exclude". Shared mode slots take priority.
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
+    /// Path pick shared by all five path tools; Shape pick shared by the three Pens (#12905).
+    /// Missing fields retain legacy explicit picks; New Layer means Exclude in Path mode.
+    #[serde(default)]
+    pub pen_path_mode_op: Option<String>,
+    #[serde(default)]
+    pub pen_shape_mode_op: Option<String>,
     /// Shape tools › Path operations (#13235): how a drag combines with the active shape layer
     /// (Shape mode) or work path (Path mode). Same values as `pen_path_op`; in Path mode "newLayer"
     /// means Exclude Overlapping Shapes.
@@ -347,6 +352,25 @@ fn default_move_target() -> String {
     "layer".into()
 }
 
+impl ToolOptions {
+    /// Store a shared pick without changing the other mode. Selection tools use only the Path
+    /// slot (`path_only`), without changing the Pens' mode. Keep the legacy last pick for clients.
+    pub(crate) fn set_pen_operation(&mut self, op: &str, shape_selected: bool, path_only: bool) {
+        let legacy = self.pen_path_op.clone();
+        self.pen_path_mode_op.get_or_insert_with(|| if legacy == "newLayer" { "exclude".into() } else { legacy.clone() });
+        self.pen_shape_mode_op.get_or_insert(legacy);
+        if self.vector_mode == "shape" && !path_only {
+            // With no shape to act on, a menu pick does not replace New Layer (#12905).
+            if shape_selected {
+                self.pen_shape_mode_op = Some(op.into());
+            }
+        } else {
+            self.pen_path_mode_op = Some(op.into());
+        }
+        self.pen_path_op = op.into();
+    }
+}
+
 fn default_pen_path_op() -> String {
     "newLayer".into()
 }
@@ -525,6 +549,8 @@ impl Default for ToolOptions {
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
+            pen_path_mode_op: None,
+            pen_shape_mode_op: None,
             shape_path_op: default_shape_path_op(),
             shape_mode: "shape".into(),
             shape_fill: true,
