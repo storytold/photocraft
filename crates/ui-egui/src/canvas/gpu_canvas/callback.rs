@@ -20,6 +20,31 @@ pub(super) fn filter_mode(scale: f32) -> (f32, f32) {
     }
 }
 
+/// Conservative source-pixel support of the canvas filter, in document pixels. At reduced
+/// zoom, bilinear sampling of the coarsest contributing mip plus its reduction kernels fits
+/// within two mip texels of the pointer, including odd-sized textures and tile-edge clamping.
+/// `scale` is device pixels per document pixel, not egui points per document pixel.
+pub(crate) fn sampled_doc_rect(x: f64, y: f64, scale: f32) -> photocraft_geom::Rect {
+    use photocraft_geom::Rect;
+    if !x.is_finite() || !y.is_finite() || !scale.is_finite() || scale <= 0.0 {
+        return Rect::EMPTY;
+    }
+    let (mode, lod) = filter_mode(scale);
+    let radius = if mode == 0.0 { 2.0 * 2.0_f64.powi(lod.ceil() as i32) } else { 0.0 };
+    let axis = |v: f64| {
+        let (lo, hi) = if radius > 0.0 {
+            ((v - radius).floor(), (v + radius).ceil())
+        } else {
+            let texel = v - 0.5;
+            (texel.floor(), texel.ceil() + 1.0)
+        };
+        (lo.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32, hi.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32)
+    };
+    let (x0, x1) = axis(x);
+    let (y0, y1) = axis(y);
+    Rect::new(x0, y0, x1, y1)
+}
+
 pub(super) fn map_doc_px(origin: [f32; 2], scale: f32, center: [f32; 2], cos: f32, sin: f32, x: f32, y: f32) -> [f32; 2] {
     let dx = x - center[0];
     let dy = y - center[1];
