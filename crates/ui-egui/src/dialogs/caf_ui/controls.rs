@@ -9,11 +9,15 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
         cancel(app);
         return Ok(json!({"cancelled": true}));
     }
+    let multi_layer = app.session.active().is_some_and(|st| st.doc.layer_count() > 1);
     let before = app.distort.caf.as_ref().ok_or("Content-Aware Fill is not open")?.opts.clone();
     {
         let w = app.distort.caf.as_mut().ok_or("Content-Aware Fill is not open")?;
         let mut o = w.opts.clone();
         o.apply(ui)?;
+        if !multi_layer {
+            o.sample_all = false;
+        }
         // The sampling option goes through `set_sampling` (it resets the strokes).
         let sampling = std::mem::replace(&mut o.sampling, w.opts.sampling.clone());
         w.opts = o;
