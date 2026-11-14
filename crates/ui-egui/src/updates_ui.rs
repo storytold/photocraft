@@ -102,7 +102,9 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if app.services.update_installed.is_some_and(|installed| installed(&format!("v{}", release.version))) {
             let args = [("version", release.version.as_str()), ("running", photocraft_engine::build_info::VERSION)];
             let message = crate::i18n::fmt(
-                crate::i18n::t("PhotoCraft {version} was installed a moment ago, but the copy that is running still reports {running}, so the installer did not replace it."),
+                crate::i18n::t(
+                    "PhotoCraft {version} was installed a moment ago, but the copy that is running still reports {running}, so the installer did not replace it.",
+                ),
                 &args,
             );
             app.updates_rt.last_update = craft_update::updater::Status::InstallFailed(message);
