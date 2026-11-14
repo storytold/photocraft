@@ -5,7 +5,7 @@
 mod fixture;
 
 use fixture::{Marker, document};
-use photocraft_affinity::synth::Method;
+use craft_affinity::synth::Method;
 use photocraft_doc::{LayerContent, LayerId};
 use photocraft_engine::{Session, file_cmds::open_bytes_as};
 use photocraft_geom::{Point, Rect};
