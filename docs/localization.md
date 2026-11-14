@@ -31,6 +31,7 @@ the commit in `craft-i18n.rev`; without it PhotoCraft builds and runs in English
 | Nederlands | `nl` | one / other |
 | Magyar | `hu` | one / other (both read the same: "3 réteg") |
 | Tiếng Việt | `vi` | one form |
+| Türkçe | `tr` | one / other |
 | ไทย | `th` | one form |
 | தமிழ் | `ta` | one / other |
 | Srpski (latinica) | `sr-latn` | one / few / other (teens use other) |
@@ -40,6 +41,7 @@ the commit in `craft-i18n.rev`; without it PhotoCraft builds and runs in English
 | Suomi | `fi` | one / other (partitive after every count but 1) |
 | Dansk | `da` | one / other |
 | Norsk bokmål | `nb` | one / other |
+| العربية | `ar` | zero / one / two / few / many / other |
 | ქართული | `ka` | one / other (both count-neutral: `შრე: {n}`) |
 | עברית | `he` | one / two / other (two repeats other) |
 | اردو | `ur` | one / other |
