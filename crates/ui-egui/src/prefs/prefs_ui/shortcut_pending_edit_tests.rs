@@ -267,3 +267,28 @@ fn binding_changing_actions_drop_the_pending_key() {
         assert_ne!(main_key(&h, id, "edit.cut"), json!(FREE_TEXT), "{action}: the pending key did not come back");
     }
 }
+
+/// CodeRabbit on #14838: a key pressed into a field that is still open when OK is clicked joins the
+/// set as Enter would have put it there. It was dropped, and the old binding saved, without a word.
+#[test]
+fn ok_saves_a_key_still_pending_in_the_open_field() {
+    for further in [false, true] {
+        let (mut h, id) = dialog("edit.cut");
+        if further {
+            click(&mut h, "Add Shortcut");
+        } else {
+            click_cell(&mut h, "Cmd+X");
+        }
+        press(&mut h, FREE.0, FREE.1);
+        assert_eq!(field(&h, id, super::PENDING), json!(FREE_TEXT), "the key is only pending");
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        h.run_steps(4);
+        assert!(!open(&h, id), "OK closed the dialog (further key {further})");
+        let p = h.state().session.prefs();
+        if further {
+            assert!(p.alternates("edit.cut", Some("Cmd+X")).iter().any(|k| k == FREE_TEXT), "saved as one more key");
+        } else {
+            assert_eq!(p.shortcuts.get("edit.cut").map(String::as_str), Some(FREE_TEXT), "saved as the main key");
+        }
+    }
+}

@@ -355,6 +355,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             let mut alt: BTreeMap<String, Vec<String>> =
                 serde_json::from_value(alternates).map_err(|e| format!("alternates must map command IDs to lists of shortcuts: {e}"))?;
             let items = shortcut_items(app);
+            // A key pressed into a field still open joins the set first, as Enter would put it.
+            super::shortcuts::settle_pending(f, &items, &mut ov, &mut alt);
             // Newly assigned shortcuts are checked first and take theirs from any holder, custom
             // overrides included; unchanged overrides only take theirs from defaults. A
             // command's further keys (#3665) take and lose keys the same way.

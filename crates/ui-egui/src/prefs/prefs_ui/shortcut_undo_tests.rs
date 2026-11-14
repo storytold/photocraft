@@ -169,3 +169,42 @@ fn other_changes_are_not_undone_by_it() {
     assert_eq!(main_key(&h, id, "edit.cut"), Value::Null);
     assert_eq!(undo_button(&h), ("Undo", false));
 }
+
+/// CodeRabbit on #14838: Enter commits the key and leaves the conflict open; accepting it then
+/// is the same change, so Undo puts back every command's original keys, Cut's too.
+#[test]
+fn undo_after_enter_and_then_accept_and_go_to_conflict_restores_every_command() {
+    let (mut h, id) = dialog("edit.cut");
+    click_cell(&mut h, "Cmd+X");
+    press(&mut h, Key::C, Modifiers::COMMAND);
+    press(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(main_key(&h, id, "edit.cut"), json!("Cmd+C"), "Enter committed it");
+    click(&mut h, "Accept and Go to Conflict");
+    assert_eq!(main_key(&h, id, "edit.copy"), json!(""), "taken from Copy");
+    click(&mut h, "Undo");
+    assert_eq!(main_key(&h, id, "edit.cut"), Value::Null, "Cut is back to ⌘X");
+    assert_eq!(main_key(&h, id, "edit.copy"), Value::Null, "and Copy has ⌘C again");
+    click(&mut h, "Redo");
+    assert_eq!(main_key(&h, id, "edit.cut"), json!("Cmd+C"));
+    assert_eq!(main_key(&h, id, "edit.copy"), json!(""));
+}
+
+/// CodeRabbit on #14838: going from a main key's field to Add Shortcut (and back) starts a new
+/// edit, which disables Undo, though the command is the same.
+#[test]
+fn switching_between_the_main_key_and_add_shortcut_disables_undo() {
+    let (mut h, _) = dialog("edit.cut");
+    commit(&mut h, "Cmd+X", Key::Y, M);
+    assert_eq!(undo_button(&h), ("Undo", true), "the committed change can be undone");
+    click_cell(&mut h, "Cmd+Alt+Shift+Y");
+    press(&mut h, Key::U, M);
+    click(&mut h, "Add Shortcut");
+    assert_eq!(undo_button(&h), ("Undo", false), "main key to Add Shortcut starts a new edit");
+    press(&mut h, Key::Escape, Modifiers::NONE);
+    commit(&mut h, "Cmd+Alt+Shift+U", Key::I, M);
+    click(&mut h, "Add Shortcut");
+    press(&mut h, Key::O, M);
+    assert_eq!(undo_button(&h), ("Undo", false), "and so does a pending further key");
+    click_cell(&mut h, "Cmd+Alt+Shift+I");
+    assert_eq!(undo_button(&h), ("Undo", false), "Add Shortcut to the main key too");
+}

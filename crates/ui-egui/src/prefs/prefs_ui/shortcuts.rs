@@ -194,7 +194,7 @@ pub(crate) fn capture_key_press(capture_mods: egui::Modifiers, i: &egui::InputSt
 /// (click a shortcut, press keys; ⌫ removes it), menu visibility and colours, toolbar tools.
 /// The dialog field holding the key pressed into the open field until it is committed. The
 /// `__` prefix keeps it out of the dialog's ⌘Z history: only a committed key is an edit.
-const PENDING: &str = "__pending";
+pub(super) const PENDING: &str = "__pending";
 
 /// The box below the list while no shortcut is being edited (Photoshop's wording).
 const INSTRUCTIONS: &str = "To edit keyboard shortcuts:\n1) Click on the New Set button to create a copy of the selected set, or select a set to modify.\n2) Click in the \"Shortcut\" column for a command and press the keyboard shortcut to assign.\n3) Save the set when you are done editing to save all your changes.";
@@ -267,6 +267,21 @@ fn put_keys(keys: &Value, overrides: &mut BTreeMap<String, String>, alternates: 
     }
 }
 
+/// The keys to put back for a change that completes `last_change` (Enter committed the key, then
+/// Accept and Go to Conflict took it from the others): the earlier change's keys from before it,
+/// for the commands it covered, else what the commands hold now. Only while the bindings are still
+/// what that change left, so a later edit can't be folded into it.
+fn before_completing(last_change: Option<&Value>, now: Value, overrides: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>) -> Value {
+    let Some(prev) = last_change.filter(|c| c["undone"] != json!(true)) else { return now };
+    let ids: Vec<String> = prev["after"].as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
+    if ids.is_empty() || prev["after"] != keys_of(overrides, alternates, &ids) {
+        return now;
+    }
+    let (Value::Object(mut merged), Some(before)) = (now, prev["before"].as_object()) else { return Value::Null };
+    merged.extend(before.iter().map(|(k, v)| (k.clone(), v.clone())));
+    Value::Object(merged)
+}
+
 /// A committed change for Undo: the touched commands' keys before and after it.
 fn change(before: Value, overrides: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>, ids: &[String]) -> Value {
     json!({"before": before, "after": keys_of(overrides, alternates, ids), "undone": false})
@@ -317,6 +332,43 @@ fn commit_message(message: &mut String, warning: &mut bool, conflict: Option<&mu
     } else {
         *message = crate::i18n::fmt(tl!("{shortcut} assigned."), &[("shortcut", &crate::shortcuts::pretty(sc))]);
         *warning = false;
+    }
+}
+
+/// A key pressed into a field that is still open when OK is clicked joins the set as Enter would
+/// have put it there: the dialog keeps the field's row (`selected`), whether it was one more key
+/// (`captureAlt`) and the key (`PENDING`).
+pub(super) fn settle_pending(
+    f: &Map<String, Value>,
+    items: &[(String, String, Vec<String>, Option<String>)],
+    overrides: &mut BTreeMap<String, String>,
+    alternates: &mut BTreeMap<String, Vec<String>>,
+) {
+    let open = f.get("capture").and_then(Value::as_bool).unwrap_or(false) && f.get("tab").and_then(Value::as_u64).unwrap_or(0) == 0;
+    let (Some(sc), Some(command)) = (f.get(PENDING).and_then(Value::as_str), f.get("selected").and_then(Value::as_str).filter(|c| !c.is_empty())) else {
+        return;
+    };
+    if !open {
+        return;
+    }
+    if f.get("captureAlt").and_then(Value::as_bool).unwrap_or(false) {
+        let default = items.iter().find(|i| i.0 == command).and_then(|i| i.3.clone());
+        let main = match overrides.get(command) {
+            Some(s) if s.is_empty() => None,
+            Some(s) => Some(s.clone()),
+            None => default,
+        };
+        let mut p = prefs::Preferences::default();
+        if let Some(list) = alternates.get(command) {
+            p.alternate_shortcuts.insert(command.to_string(), list.clone());
+        }
+        let mut keys = p.alternates(command, main.as_deref());
+        if main.as_deref().and_then(prefs::normalize_shortcut).as_deref() != Some(sc) && !keys.iter().any(|k| k == sc) && keys.len() < prefs::MAX_ALTERNATES {
+            keys.push(sc.to_string());
+        }
+        alternates.insert(command.to_string(), keys);
+    } else {
+        overrides.insert(command.to_string(), sc.to_string());
     }
 }
 
@@ -737,7 +789,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             if ui.button(tl!("Accept and Go to Conflict")).on_hover_text(tl!("Take the shortcut from the other command and select it")).clicked() {
                 // One change for Undo: the key joining this command and leaving the others.
                 let ids = touched(command, Some(&c));
-                let before = keys_of(&overrides, &alt_overrides, &ids);
+                let before = before_completing(last_change.as_ref(), keys_of(&overrides, &alt_overrides, &ids), &overrides, &alt_overrides);
                 // A key still in the field joins the set first; if the command can't take it (it has as
                 // many further keys as it may), the other commands keep it.
                 if let Some(sc) = pending.take()
@@ -807,7 +859,9 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     }
     f.insert("conflict".into(), conflict.unwrap_or(Value::Null));
     // Opening a field starts a new edit, which Undo can't cross.
-    let opened = capture && (editing.is_none() || reopened);
+    // ... and so does moving between a command's main key and one more key.
+    let switched = editing.as_ref().is_some_and(|(_, alt)| *alt != capture_alt);
+    let opened = capture && (editing.is_none() || reopened || switched);
     let last_change = settle_change(last_change.filter(|_| !opened), &overrides, &alt_overrides, f.get("activeSet"));
     f.insert("lastChange".into(), last_change);
     f.insert("hidden".into(), json!(hidden));
