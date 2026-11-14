@@ -235,6 +235,14 @@ impl EngineStroke {
             Self::Mixer(s) => s.bounds(),
         }
     }
+    /// Include live gradient relayout in the first update; other live tools use their bounds.
+    fn initial_damage(&self) -> DRect {
+        match self {
+            Self::Brush(stroke) => stroke.initial_damage(),
+            Self::Retouch(stroke) => stroke.initial_damage(),
+            _ => self.bounds(),
+        }
+    }
     pub(super) fn push(&mut self, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
         match self {
             Self::Brush(s) => s.push(pts),
@@ -409,8 +417,8 @@ pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
     if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
 }
 
-/// Starts the live preview of the current drag, from the params its tool commits. `None` without
-/// an active document or drag, or when the tool's preview can't begin.
+/// Start the drag's live preview with the same parameters used at commit, and seed damage
+/// history with its first composite update. Return `None` if the preview cannot start.
 pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
@@ -463,7 +471,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
-    let damage = vec![stroke.bounds()];
+    let damage = vec![stroke.initial_damage()];
     Some(LiveStroke {
         seed: stroke.seed(),
         paint: PaintThread::start(stroke),
@@ -850,3 +858,6 @@ pub(crate) fn multiple_color_target(app: &PhotocraftApp) -> bool {
         && photocraft_engine::mask_view_cmds::current(st).is_none()
         && photocraft_engine::color_channels::selected(&app.session).is_some_and(|colors| colors.len() > 1)
 }
+
+#[cfg(test)]
+mod live_gradient_tests;

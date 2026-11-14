@@ -125,6 +125,8 @@ pub(crate) fn build_maps_prepared(
     } else {
         (None, None)
     };
+    let gradient_shape =
+        items.iter().any(|e| matches!(e, Effect::Stroke(st) if matches!(st.paint, FxPaint::Gradient(_)))).then(|| super::GradientShape::new(&shape, rect));
     let mut frames: Vec<(u32, Rect)> = Vec::new();
     for e in &items {
         if let Effect::Stroke(st) = e
@@ -132,11 +134,11 @@ pub(crate) fn build_maps_prepared(
         {
             let out_w = stroke_widths(st).1;
             if !frames.iter().any(|f| f.0 == out_w.to_bits()) {
-                frames.push((out_w.to_bits(), stroke_frame(&shape, out_w, rect)));
+                frames.push((out_w.to_bits(), stroke_frame(gradient_shape.as_ref().map_or(Rect::EMPTY, |s| s.bounds), out_w, rect)));
             }
         }
     }
-    FxMaps { rect, shape, per, bevel_paint, din, dout, dout_exact, vdout, vdout_exact, outline, frames }
+    FxMaps { rect, shape, per, bevel_paint, din, dout, dout_exact, vdout, vdout_exact, outline, frames, gradient_shape }
 }
 
 /// Far outside any shape (distance fill for cropped distance fields).
@@ -715,20 +717,12 @@ pub fn stroke_widths(st: &photocraft_doc::StrokeFx) -> (f32, f32) {
 /// spans the gradient over the stroke's extent, not the layer's: a 4 px outside stroke around a
 /// 22 px square runs its 90° gradient over 28 px (psd-tools stroke-effects), a 3 px one around
 /// 36 px of type over 40 px (psd-tools effect-stroke-gradient).
-fn stroke_frame(shape: &Map, out_w: f32, rect: Rect) -> Rect {
-    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
-    for y in 0..shape.h {
-        for x in 0..shape.w {
-            if shape.v[y * shape.w + x] > INSIDE_EPS {
-                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
-            }
-        }
-    }
-    if x0 == usize::MAX {
+fn stroke_frame(bounds: Rect, out_w: f32, rect: Rect) -> Rect {
+    if bounds.is_empty() {
         return rect;
     }
     let grow = if out_w.is_finite() { (out_w.min(MAX_REACH).ceil() as i32 - 1).max(0) } else { 0 };
-    Rect::new(rect.x0 + x0 as i32, rect.y0 + y0 as i32, rect.x0 + x1 as i32, rect.y0 + y1 as i32).inflate(grow)
+    bounds.inflate(grow)
 }
 
 /// A stroked shape's vector stroke, composited apart from its fill (which the compositor then

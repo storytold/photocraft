@@ -59,7 +59,7 @@ use composite::{blend_into_fill, blend_into_g, branchless_floor, composite_layer
 use composite::{composite_atop, composite_layer, composite_stack_at, dissolve_noise};
 #[cfg(test)]
 use content::render_fill;
-pub use content::{RENDER_TILE, channel_weights, fill_frame, layer_shape, render_fill_content, stroke_frame, surface_to_buffer};
+pub use content::{RENDER_TILE, channel_weights, fill_frame, gradient_stroke_layout, layer_shape, render_fill_content, stroke_frame, surface_to_buffer};
 use content::{empty_in, render_content};
 use ctx::{Ctx, prepare_effects};
 #[cfg(test)]

@@ -307,6 +307,8 @@ pub struct LiveRetouch {
     tail: Rect,
     /// The document and revision the stroke started on.
     base: (photocraft_doc::DocId, u64),
+    gradient_damage: Option<crate::brush_cmds::live_damage::Tracker>,
+    initial_damage: Rect,
     brush: Box<BrushSettings>,
     /// Every point rendered so far, in order.
     points: Vec<StrokePoint>,
@@ -354,6 +356,8 @@ impl LiveRetouch {
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
+        let gradient_damage =
+            if matches!(&paint, LivePaint::History(_)) && super::targets_pixels(p) { crate::brush_cmds::live_damage::Tracker::new(&pre, id) } else { None };
         // As `stroke_coverage`, which the commit uses.
         let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0);
         let opacity = stroke.brush.opacity;
@@ -378,11 +382,20 @@ impl LiveRetouch {
             lock,
             tail: Rect::EMPTY,
             base,
+            gradient_damage,
+            initial_damage: Rect::EMPTY,
             brush,
             points: Vec::new(),
         };
-        live.push(&stroke.points)?;
+        let first_damage = live.push(&stroke.points)?;
+        live.initial_damage = if live.gradient_damage.is_some() { live.bounds().union(&first_damage) } else { live.bounds() };
         Ok(live)
+    }
+
+    /// Composite damage of the points rendered by begin, including a changed gradient frame.
+    /// Kept separate from bounds(), which describes the painted pixels taken by the commit.
+    pub fn initial_damage(&self) -> Rect {
+        self.initial_damage
     }
 
     /// Everything the stroke has touched so far.
@@ -435,10 +448,14 @@ impl LiveRetouch {
     /// Invalid coordinates reject the whole batch without changing the preview.
     /// Only the position and pressure of `pts` are used: the commands take no tilt or times.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
-        let damage = self.push_inner(pts)?;
+        let raw_damage = self.push_inner(pts)?;
         if let Some(colors) = self.colors {
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
-            crate::color_channels::restrict_region(&self.pre_surf, surf, colors, damage)?;
+            crate::color_channels::restrict_region(&self.pre_surf, surf, colors, raw_damage)?;
+        }
+        let mut damage = raw_damage;
+        if let Some(tracker) = &mut self.gradient_damage {
+            damage = damage.union(&tracker.damage(&self.doc, raw_damage));
         }
         Ok(damage)
     }
