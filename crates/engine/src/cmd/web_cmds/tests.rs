@@ -1759,6 +1759,65 @@ fn flatten_before_srgb_is_only_the_measured_case() {
     assert!(!optimizer::flattens_before_srgb(&doc(&multiply)), "a colour-space-dependent blend mode");
 }
 
+/// The measured case looks at what renders: a hidden layer (or a hidden group's contents) does not
+/// decide the path, while effects, adjustment layers, Blend If, excluded channels and Advanced
+/// Blending were not measured and keep the per-layer conversion.
+#[test]
+fn flatten_before_srgb_ignores_hidden_layers_and_refuses_unmeasured_features() {
+    let doc = |s: &Session| (*s.active().unwrap().doc).clone();
+    let changed = |f: &dyn Fn(&mut photocraft_doc::Layer)| {
+        let mut s = wide_gamut_session();
+        s.edit("change", |d, _| {
+            f(d.layers.last_mut().unwrap());
+            Ok(())
+        })
+        .unwrap();
+        s
+    };
+
+    let hidden = changed(&|l| {
+        l.blend = photocraft_doc::BlendMode::Multiply;
+        l.visible = false;
+    });
+    assert!(optimizer::flattens_before_srgb(&doc(&hidden)), "a hidden Multiply layer");
+    let mut hidden_group = wide_gamut_session();
+    hidden_group
+        .edit("hidden group", |d, _| {
+            let mut inner = Layer::raster("Inner", d.pixel_format());
+            inner.blend = photocraft_doc::BlendMode::Screen;
+            let mut g = Layer::group("G", vec![inner]);
+            g.visible = false;
+            d.layers.push(g);
+            Ok(())
+        })
+        .unwrap();
+    assert!(optimizer::flattens_before_srgb(&doc(&hidden_group)), "a Screen layer inside a hidden group");
+
+    let shadow = changed(&|l| {
+        l.effects.enabled = true;
+        l.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    });
+    assert!(!optimizer::flattens_before_srgb(&doc(&shadow)), "a Multiply drop shadow");
+    let shadow_off = changed(&|l| {
+        l.effects.enabled = false;
+        l.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    });
+    assert!(optimizer::flattens_before_srgb(&doc(&shadow_off)), "effects turned off do not render");
+
+    let mut curves = wide_gamut_session();
+    curves.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&curves)), "an adjustment layer");
+
+    let blend_if = changed(&|l| {
+        l.blend_if.set(0, [photocraft_doc::BlendRange { black: [40, 40], white: [255, 255] }, photocraft_doc::BlendRange::default()]);
+    });
+    assert!(!optimizer::flattens_before_srgb(&doc(&blend_if)), "Blend If");
+    let excluded = changed(&|l| l.excluded_channels = 1);
+    assert!(!optimizer::flattens_before_srgb(&doc(&excluded)), "an excluded channel");
+    let knockout = changed(&|l| l.advanced.knockout = photocraft_doc::Knockout::Shallow);
+    assert!(!optimizer::flattens_before_srgb(&doc(&knockout)), "knockout");
+}
+
 /// The unmeasured cases export exactly as before: each layer converted, then blended.
 #[test]
 fn unmeasured_documents_keep_the_per_layer_srgb_conversion() {

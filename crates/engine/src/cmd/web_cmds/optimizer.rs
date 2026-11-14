@@ -60,20 +60,45 @@ pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Docu
 
 /// Whether Convert to sRGB blends first and converts the flattened image (#13796). Only the
 /// measured case: an 8-bit RGB document tagged with an Adobe RGB (1998)-compatible profile whose
-/// layers all blend Normal (groups may pass through). Documents without a profile are sRGB already;
+/// visible layers are plain (see [`plain_layers`]). Documents without a profile are sRGB already;
 /// every other document keeps the per-layer conversion until it is measured too.
 pub(super) fn flattens_before_srgb(doc: &Document) -> bool {
-    use photocraft_doc::BlendMode;
     if doc.mode != photocraft_color::ColorMode::Rgb || doc.depth != photocraft_color::SampleType::U8 {
+        return false;
+    }
+    // The layer check first: it is cheap, and the profile comparison samples a colour grid.
+    if !plain_layers(&doc.layers, 0) {
         return false;
     }
     let Some(profile) = doc.icc_profile.as_deref().and_then(|b| photocraft_cms::Profile::parse(b).ok()) else {
         return false;
     };
-    if !profile.same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile()) {
+    profile.same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile())
+}
+
+/// Whether every visible layer (hidden ones and the contents of hidden groups do not render) is
+/// a pixel-blending layer that blends Normal (a group may pass through) with no active effects,
+/// no Blend If ranges, no excluded channels and default Advanced Blending. Adjustment layers
+/// and everything else were not measured, so they keep the per-layer conversion.
+fn plain_layers(layers: &[photocraft_doc::Layer], depth: usize) -> bool {
+    use photocraft_doc::{BlendMode, LayerContent};
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
         return false;
     }
-    doc.walk().iter().all(|(_, _, l)| l.blend == BlendMode::Normal || (l.blend == BlendMode::PassThrough && l.children().is_some()))
+    layers.iter().filter(|l| l.visible).all(|l| {
+        let blend_ok = match l.children() {
+            Some(_) => matches!(l.blend, BlendMode::Normal | BlendMode::PassThrough),
+            None => l.blend == BlendMode::Normal,
+        };
+        let effects_on = l.effects.enabled && l.effects.items.iter().any(photocraft_doc::Effect::enabled);
+        blend_ok
+            && !effects_on
+            && !matches!(l.content, LayerContent::Adjustment(_))
+            && l.blend_if.is_default()
+            && l.excluded_channels == 0
+            && l.advanced.is_default()
+            && l.children().is_none_or(|kids| plain_layers(kids, depth + 1))
+    })
 }
 
 /// An optimised image.
