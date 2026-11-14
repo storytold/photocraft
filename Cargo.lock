@@ -5479,6 +5479,7 @@ dependencies = [
  "cap-std",
  "clap",
  "craft-ai-agents",
+ "craft-cms",
  "craft-flags",
  "craft-image-codecs",
  "craft-psd",
