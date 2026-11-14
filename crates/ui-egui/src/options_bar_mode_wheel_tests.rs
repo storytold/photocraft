@@ -176,3 +176,30 @@ fn the_paint_bucket_mode_dropdown_has_behind_and_clear() {
     assert!(!h.state().ui.tool_options.bucket_clear);
     assert_eq!(h.state().ui.tool_options.bucket_blend_mode, BlendMode::Darken);
 }
+
+/// Behind chosen on a pixel layer is the bucket's stored mode, so the Mode control keeps
+/// reading Behind after a switch to the Background — greyed in its dropdown menu there
+/// (#12531), as the Brush's Clear and the Pattern Stamp's Behind do with theirs — until a
+/// bucket click on the Background turns it off (#11897's rule, pinned for the click in
+/// `paint_bucket_behind_turns_off_on_the_background`). Switching layers alone clears
+/// nothing, so returning to a pixel layer finds Behind still chosen.
+#[test]
+fn the_paint_bucket_mode_still_reads_behind_on_the_background_until_a_click() {
+    let mut h = harness(Tool::PaintBucket);
+    let background = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.run_steps(4);
+    let pixel = h.state().session.active().unwrap().active_layer.unwrap();
+    assert_ne!(pixel, background, "the new pixel layer is active");
+    h.state_mut().ui.tool_options.bucket_behind = true;
+    h.run_steps(4);
+    assert!(combo(&h, "Behind").is_some(), "Behind reads on a pixel layer");
+    h.state_mut().session.active_mut().unwrap().active_layer = Some(background);
+    h.run_steps(4);
+    assert!(h.state().ui.tool_options.bucket_behind, "switching to the Background alone does not clear Behind");
+    assert!(combo(&h, "Behind").is_some(), "Mode still reads Behind on the Background");
+    h.state_mut().session.active_mut().unwrap().active_layer = Some(pixel);
+    h.run_steps(4);
+    assert!(h.state().ui.tool_options.bucket_behind, "Behind survives the round trip to the Background");
+    assert!(combo(&h, "Behind").is_some(), "and still reads Behind back on a pixel layer");
+}
