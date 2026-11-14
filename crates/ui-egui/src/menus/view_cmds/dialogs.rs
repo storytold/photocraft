@@ -191,6 +191,12 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ui.end_row();
                 continue;
             }
+            if k == "artboards" && f.contains_key(SELECTED_ARTBOARDS) {
+                ui.label("");
+                selected_artboards_field(ui, f);
+                ui.end_row();
+                continue;
+            }
             let new = match &v {
                 Value::Array(_) | Value::Object(_) | Value::Null => continue,
                 Value::Bool(b) => {
@@ -279,6 +285,10 @@ const JPEG_CUSTOM: &str = "__jpegCustom";
 const JPEG_QUALITY: &str = "__jpegQuality";
 /// The shell keys Alt+Reset restores along with a form's params.
 const RESET_SHELL_KEYS: [&str; 3] = [BATCH_QUALITY, JPEG_CUSTOM, JPEG_QUALITY];
+/// Artboards to Files' Export Selected Artboards (#13632): the ids of the artboards selected when
+/// the dialog opened, sent as `artboards` while the checkbox is ticked. Shell state, never a
+/// command parameter; set from the selection at every open, so nothing is remembered.
+const SELECTED_ARTBOARDS: &str = "__selectedArtboards";
 
 /// A Custom checkbox and the 0..12 Quality field it enables (Batch, the exports to files). Off,
 /// the command gets no quality and keeps its own defaults; `usable` false greys out both.
@@ -305,6 +315,35 @@ fn jpeg_quality_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     f.insert(JPEG_CUSTOM.into(), json!(custom));
     f.insert(JPEG_QUALITY.into(), json!(quality));
     f.insert("quality".into(), if jpeg && custom { json!(quality) } else { Value::Null });
+}
+
+/// Artboards to Files' Export Selected Artboards checkbox (#13632). It is greyed and unticked when
+/// the dialog opened without an artboard active. Ticked, the command gets the selected boards as
+/// `artboards`; unticked, `artboards` is null and every board is written.
+fn selected_artboards_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let selected = f.get(SELECTED_ARTBOARDS).and_then(Value::as_array).filter(|ids| !ids.is_empty()).cloned();
+    let mut ticked = selected.is_some() && f.get("artboards").is_some_and(Value::is_array);
+    ui.add_enabled_ui(selected.is_some(), |ui| {
+        crate::widgets::checkbox(ui, &mut ticked, tl!("Export Selected Artboards"));
+    });
+    f.insert("artboards".into(), selected.filter(|_| ticked).map_or(Value::Null, Value::Array));
+}
+
+/// The artboards Export Selected Artboards writes (#13632): the selected top-level artboards when
+/// the active layer is an artboard, else none, which greys the checkbox. A layer inside a board
+/// being active, or a hidden board among the selected ones, keeps today's export of every board:
+/// the reference application was not measured there.
+fn selected_artboards(app: &PhotocraftApp) -> Vec<u64> {
+    let Some(st) = app.session.active() else { return Vec::new() };
+    let board = |id: photocraft_doc::LayerId| st.doc.layers.iter().find(|l| l.id == id && l.artboard().is_some());
+    if st.active_layer.and_then(board).is_none() {
+        return Vec::new();
+    }
+    let boards: Vec<_> = st.selected_layers().into_iter().filter_map(board).collect();
+    if boards.iter().any(|l| !l.visible) {
+        return Vec::new();
+    }
+    boards.iter().map(|l| l.id.0).collect()
 }
 
 /// File Info's read-only Camera Data section (`__camera`, from the document's EXIF/XMP).
@@ -507,7 +546,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "selectedOnly": false,
                     "__order": ["dir", "prefix", "selectedOnly", "format", "quality"]})
             } else {
-                json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "__order": ["dir", "prefix", "format", "quality"]})
+                let selected = selected_artboards(app);
+                let ticked = if selected.is_empty() { Value::Null } else { json!(selected) };
+                json!({"dir": dir, "prefix": prefix, "artboards": ticked, SELECTED_ARTBOARDS: selected, "format": "png", "quality": null, JPEG_CUSTOM: false,
+                    JPEG_QUALITY: 10, "__order": ["dir", "prefix", "artboards", "format", "quality"]})
             };
             dialog(app, fields, json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}))
         }
@@ -765,3 +807,7 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
+
+#[cfg(test)]
+#[path = "../../artboards_to_files_selected_tests.rs"]
+mod artboards_to_files_selected_tests;
