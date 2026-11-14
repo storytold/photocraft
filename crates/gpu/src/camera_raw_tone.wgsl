@@ -58,14 +58,10 @@ struct Tone {
 @group(0) @binding(9) var uint_c: texture_2d<u32>;
 @group(0) @binding(10) var model: texture_2d<f32>;
 
-struct VOut {
-    @builtin(position) pos: vec4<f32>,
-}
-
 @vertex
-fn vs(@builtin(vertex_index) vi: u32) -> VOut {
+fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     let uv = vec2(f32((vi << 1u) & 2u), f32(vi & 2u));
-    return VOut(vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0));
+    return vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
 }
 
 fn pixel(pos: vec4<f32>) -> vec2<i32> {

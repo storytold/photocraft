@@ -49,6 +49,40 @@ fn a_compositor_with_failed_pipelines_draws_without_panicking() {
     let _ = render_to_vec(&mut comp, &device, &queue, &doc, doc.bounds());
 }
 
+/// The compositor's pipelines can be built on a dedicated build thread pool (#9969): building
+/// there renders exactly like the synchronous build, with the adapter's own format and on any
+/// backend that the synchronously built compositor renders on. The instance follows the
+/// environment (so `WGPU_BACKEND=gl` exercises the GL build, which the suite forces to one
+/// thread: `parallel_pipelines`).
+#[test]
+fn a_compositor_built_off_the_ui_thread_renders() {
+    let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+        eprintln!("skipping: no adapter");
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let format = Compositor::preferred_acc_format(&adapter);
+    let mut threaded = match Compositor::try_new_with_format_threads(&device, format, 4) {
+        Ok(c) => c,
+        Err(e) => {
+            // A backend asked for by name must work: the app builds the compositor on a worker
+            // thread there, so a failure is the app's, not the test's.
+            assert!(std::env::var_os("WGPU_BACKEND").is_none(), "WGPU_BACKEND is set but the compositor could not be built: {e}");
+            eprintln!("skipping: {e}");
+            return;
+        }
+    };
+    let mut sync = Compositor::try_new_with_format(&device, format).unwrap();
+    let doc = Document::with_background("t", Size::new(24, 18), ColorMode::Rgb, SampleType::U8, Color::rgba(0.5, 0.5, 0.5, 1.0));
+    let a = render_to_vec(&mut threaded, &device, &queue, &doc, doc.bounds()).unwrap();
+    let b = render_to_vec(&mut sync, &device, &queue, &doc, doc.bounds()).unwrap();
+    assert_eq!(a, b, "the threaded build renders like the synchronous one");
+    let cpu = photocraft_compose::flatten(&doc);
+    assert!(a.iter().zip(&cpu.px).all(|(p, c)| (0..4).all(|k| (p[k] - c[k]).abs() <= 1.0 / 255.0)), "the background is drawn");
+}
+
 /// #9173: the compositor builds its pipelines on several threads (#6419). On Direct3D 12 with FXC,
 /// wgpu-hal caches each compiled shader as an `ID3DBlob` whose reference count isn't atomic
 /// (gfx-rs/wgpu#10547), so two threads building pipelines from the same shader could free a blob

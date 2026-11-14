@@ -51,18 +51,31 @@ impl Pass {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            if photocraft_gpu::device_access_is_exclusive(adapter.get_info().backend) {
+                // The GL backend takes one context lock around every call, and building the
+                // pipeline holds it while the driver compiles the shader: on another thread that
+                // would race the app's own device calls and abort the process. Build here.
+                let _ = slot.set(Self::build_on_or_cpu(|| Self::build_on(device)));
+                return;
+            }
             let (on, out) = (device.clone(), slot.clone());
             let spawned = std::thread::Builder::new().name("camera-raw-pipeline".into()).spawn(move || {
-                let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Self::build_on(&on))).unwrap_or_else(|_| {
-                    log::warn!("building the RAW Develop pipeline panicked; RAW Develop develops on the CPU");
-                    None
-                });
+                let pass = Self::build_on_or_cpu(|| Self::build_on(&on));
                 let _ = out.set(pass);
             });
             if spawned.is_err() {
-                let _ = slot.set(Self::build_on(device));
+                let _ = slot.set(Self::build_on_or_cpu(|| Self::build_on(device)));
             }
         }
+    }
+
+    /// The pass, or `None` when the build failed or panicked: the CPU develop then, as when the
+    /// adapter cannot run the pass.
+    fn build_on_or_cpu(build: impl FnOnce() -> Option<Self>) -> Option<Self> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(build)).unwrap_or_else(|_| {
+            log::warn!("building the RAW Develop pipeline panicked; RAW Develop develops on the CPU");
+            None
+        })
     }
 
     /// The pass on `device`, whatever its adapter.
@@ -179,6 +192,13 @@ mod tests {
 
     /// The pass evaluates develop's expressions in f32 (see `photocraft-gpu`'s Camera Raw tests).
     const TOL: f32 = 1.0 / 4096.0;
+
+    /// A build that panics leaves the CPU develop, as the worker path does.
+    #[test]
+    fn a_panicking_pass_build_falls_back_to_the_cpu() {
+        let pass = Pass::build_on_or_cpu(|| panic!("the pipeline build gave up"));
+        assert!(pass.is_none(), "a panicking build leaves the CPU develop");
+    }
 
     /// The app on egui_kittest's device (a software adapter where there is one), or `None`.
     fn gpu_app(depth: u32) -> Option<(PhotocraftApp, egui::Context)> {

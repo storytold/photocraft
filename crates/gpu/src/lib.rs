@@ -44,6 +44,7 @@
 pub mod bounds;
 mod camera_raw;
 mod camera_raw_tone;
+mod device_calls;
 mod fx;
 pub mod health;
 pub mod plan;
@@ -65,6 +66,33 @@ pub use camera_raw_tone::{CAMERA_RAW_FILTERS_SHADER, CAMERA_RAW_TONE_SHADER};
 pub use health::{DeviceHealth, Fault};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
+
+/// Whether the compositor can draw layer effects on the GPU, and why not when it can't.
+///
+/// Layer effects need float render targets (the effect maps) and a pipeline per map kernel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectMaps {
+    /// The effect maps exist: layer effects composite on the GPU.
+    Built,
+    /// The adapter can't render to the float targets the effect maps need.
+    NoFloatTargets,
+    /// The GL backend: its float effect-map targets don't composite correctly on the adapters we
+    /// can test, so layer effects use the CPU compositor there.
+    GlBackend,
+}
+
+impl EffectMaps {
+    /// Why layer effects don't composite on the GPU here, if they don't.
+    pub fn unavailable_reason(self) -> Option<&'static str> {
+        match self {
+            EffectMaps::Built => None,
+            EffectMaps::NoFloatTargets => Some("layer effects need float effect-map render targets, which this GPU lacks"),
+            EffectMaps::GlBackend => {
+                Some("layer effects use the CPU compositor on the GL backend: its float effect-map render targets don't composite correctly")
+            }
+        }
+    }
+}
 
 /// GPU compositor. Create once per device; call [`Compositor::render`] per refresh.
 pub struct Compositor {
@@ -118,9 +146,9 @@ pub struct Compositor {
     /// out of memory.
     fail_allocs: u32,
     acc_format: wgpu::TextureFormat,
-    /// Whether the effect-map pipelines could be built (else documents with layer effects are
-    /// [`Unsupported`] and use the CPU compositor).
-    effect_maps: bool,
+    /// Whether the effect-map pipelines exist, and why not when they don't (else documents with
+    /// layer effects are [`Unsupported`] and use the CPU compositor).
+    effect_maps: EffectMaps,
     /// `CmykSpace::id` of the document being encoded (0: built-in coated CMYK).
     cmyk: u64,
     /// The device's health (see [`Compositor::set_health`]); `None` = assumed healthy.
@@ -144,7 +172,7 @@ mod paging;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod readback;
 mod setup;
-pub use setup::{BuildFailure, BuildFailureKind};
+pub use setup::{BuildFailure, BuildFailureKind, device_access_is_exclusive};
 mod textures;
 
 #[cfg(test)]

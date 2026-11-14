@@ -151,16 +151,19 @@ pub(crate) fn build_jobs(acc_format: wgpu::TextureFormat) -> Vec<BuildJob> {
 /// while still cached (gfx-rs/wgpu#10547, #9173). Each copy costs one compile of a three-line
 /// shader. Once a wgpu release fixes the cache, go back to one `vs` in `compose.wgsl` and let
 /// `build_jobs` split map kernels by format again.
+///
+/// It returns the position directly rather than a struct that holds only `@builtin(position)`:
+/// naga turns that into `VOut _tmp = VOut(...); gl_Position = _tmp.pos;`, which Intel's Windows
+/// OpenGL driver rejects (`GLSL compile failed`, empty log), so every compositor pipeline failed
+/// to build and the canvas fell back to the CPU (#7331). The fragment entry points in
+/// `compose.wgsl` take `@builtin(position) pos: vec4<f32>` for the same reason.
 pub(crate) fn vertex_shader(jobs: &[BuildJob]) -> String {
-    let mut s = String::from(
-        "struct VOut { @builtin(position) pos: vec4<f32> };
-",
-    );
+    let mut s = String::new();
     for job in jobs {
         s.push_str(&format!(
-            "@vertex fn {}(@builtin(vertex_index) vi: u32) -> VOut {{
+            "@vertex fn {}(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {{
     let uv = vec2(f32((vi << 1u) & 2u), f32(vi & 2u));
-    return VOut(vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0));
+    return vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
 }}
 ",
             job.vertex
