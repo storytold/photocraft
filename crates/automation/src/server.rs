@@ -133,7 +133,7 @@ pub struct ExportDataSetsParams {
     /// Document index from `session_list` (default: the active document).
     #[serde(default)]
     pub index: Option<usize>,
-    /// Only `psd` is accepted (every data set is written as a layered PSD); any other format is an error.
+    /// Format name (default `psd`, a layered PSD); another bare name such as `png` or `jpg` writes each data set in that format with its defaults.
     #[serde(default)]
     pub format: Option<String>,
     /// File extension of the written PSDs: `.psd` (default) or `.PSD`.
@@ -877,7 +877,7 @@ impl PhotocraftMcp {
     }
 
     #[tool(
-        description = "Export every data set of the document as its own layered PSD beneath the write root (the capability-scoped Export Data Sets). The batch is planned first, so colliding filenames are refused before any file is written."
+        description = "Export every data set of the document as its own file (a layered PSD unless `format` names another) beneath the write root (the capability-scoped Export Data Sets). The batch is planned first, so colliding filenames are refused before any file is written."
     )]
     async fn doc_export_data_sets(&self, Parameters(p): Parameters<ExportDataSetsParams>) -> Result<CallToolResult, McpError> {
         let mut opts = serde_json::Map::new();

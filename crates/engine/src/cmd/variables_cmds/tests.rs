@@ -775,8 +775,30 @@ fn data_sets_as_files_keeps_other_formats_for_scripts() {
     let png = s.execute("file.export.dataSetsAsFiles", json!({"dir": other, "format": "png", "dataSets": ["Data Set 1"]})).unwrap();
     assert_eq!(png["files"], json!([format!("{other}/Data_Set_1.png")]));
     assert!(std::fs::read(format!("{other}/Data_Set_1.png")).unwrap().starts_with(b"\x89PNG"), "a real PNG, not a PSD");
+    // A leading dot is the same name: `Data_Set_1.png`, never `Data_Set_1..png`.
+    let dotted = tmp("psd-png-dotted");
+    let png = s.execute("file.export.dataSetsAsFiles", json!({"dir": dotted, "format": ".png", "dataSets": ["Data Set 1"]})).unwrap();
+    assert_eq!(png["files"], json!([format!("{dotted}/Data_Set_1.png")]));
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&other);
+    let _ = std::fs::remove_dir_all(&dotted);
+}
+
+#[test]
+fn data_sets_as_files_path_shaped_format_cannot_leave_dir() {
+    // The format names each file's extension; a separator or `..` in it must not place files
+    // outside `dir`, even though the encoder only reads the part after the last separator.
+    let (mut s, _, _) = psd_export_session();
+    let root = tmp("psd-format-escape");
+    let dir = format!("{root}/out");
+    std::fs::create_dir_all(&dir).unwrap();
+    for bad in ["x/../../evil/png", "x\\..\\..\\evil\\png", "../png", "foo.psd", "p n g", "png/"] {
+        let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "format": bad, "dataSets": ["Data Set 1"]}));
+        assert!(r.is_err(), "`format` = {bad:?} must be refused, got {r:?}");
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing is written inside dir");
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1, "nothing is written beside dir");
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]

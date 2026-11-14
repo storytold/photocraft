@@ -297,7 +297,7 @@ impl Headless {
         })
     }
 
-    /// Export each data set of a document as its own layered PSD beneath the write root: the
+    /// Export each data set of a document as its own file (a layered PSD unless `format` names another) beneath the write root: the
     /// capability-scoped `file.export.dataSetsAsFiles` (#3216). As in the command, the whole
     /// batch is planned first and colliding names are refused before any file is written; the
     /// directory itself is created before that, so a refused batch can leave it empty behind.
