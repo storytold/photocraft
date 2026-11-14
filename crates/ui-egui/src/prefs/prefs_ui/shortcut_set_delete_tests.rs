@@ -36,6 +36,10 @@ fn shortcut_set_delete_requires_confirmation() {
     assert_eq!(field(&h, id, "activeSet"), "");
     assert_eq!(field(&h, id, "overrides"), json!({"actions.play:Sepia": "F6"}));
     assert_eq!(field(&h, id, "alternates"), json!({}));
-    let delete = h.get_by_role_and_label(egui::accesskit::Role::Button, "Delete");
+    let set_row_y = h.get_by_role_and_label(egui::accesskit::Role::Button, "New Set…").rect().center().y;
+    let delete = h
+        .get_all_by_role_and_label(egui::accesskit::Role::Button, "Delete")
+        .find(|button| button.rect().y_range().contains(set_row_y))
+        .expect("Delete button in the shortcut set row");
     assert!(delete.accesskit_node().is_disabled());
 }
