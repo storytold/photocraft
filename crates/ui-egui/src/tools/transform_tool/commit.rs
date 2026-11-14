@@ -42,7 +42,7 @@ pub fn commit(app: &mut PhotocraftApp) {
         match &t.warp {
             Some(w) if !w.is_identity() => p["warp"] = json!(w),
             Some(_) => return,
-            None if t.quad == corners(t.rect) => return,
+            None if t.quad == t.start_quad() => return,
             None => p["quad"] = json!(t.quad),
         }
         if let Err(e) = app.run("select.transformSelection", p) {
@@ -55,7 +55,7 @@ pub fn commit(app: &mut PhotocraftApp) {
         match &t.warp {
             Some(w) if w.is_identity() => return,
             Some(w) => p["warp"] = json!(w),
-            None if t.quad == corners(t.rect) => return,
+            None if t.quad == t.start_quad() => return,
             // Distort and Perspective map the path through the box (#3027).
             None => match rect_to_quad_affine(t.rect, t.quad) {
                 Some(a) => p["matrix"] = json!(a.m),
@@ -73,15 +73,53 @@ pub fn commit(app: &mut PhotocraftApp) {
     let made = t.made;
     let r = if let Some(w) = &t.warp {
         // Type with a Warp Text can be warped back to None; the engine skips an unchanged style.
-        if w.is_identity() && !type_layer {
+        // A smart object's untouched warp can still carry the box's move (`warp_place`).
+        if w.is_identity() && !type_layer && t.warp_place.is_none() {
             return;
         }
-        app.run("edit.transform.warp", json!({"layer": t.layer, "rect": t.rect, "warp": w, "interpolation": t.interpolation}))
+        match t.warp_place {
+            // A smart object's warp, edited in its contents' space: stored as it is, with the
+            // placement when the box moved it first, in one step (#8927). Untouched, no step.
+            Some(place) => {
+                // What Warp mode opened with: unchanged, no step.
+                let start = t.warp_origin.as_ref();
+                if start.is_some_and(|(sw, sp)| sw == w && *sp == place) {
+                    return;
+                }
+                let mut p = json!({"layer": t.layer, "contents": true, "warp": w});
+                if start.is_none_or(|(_, sp)| *sp != place) {
+                    p["placement"] = json!(place);
+                }
+                app.run("edit.transform.warp", p)
+            }
+            None => app.run("edit.transform.warp", json!({"layer": t.layer, "rect": t.rect, "warp": w, "interpolation": t.interpolation})),
+        }
+    } else if let Some(hw) = &t.held_warp {
+        // A warp kept from Warp mode under the box (one session): both in one step.
+        match t.held_place.map(photocraft_algo::transform::Homography) {
+            Some(place) => {
+                let mut p = json!({"layer": t.layer, "contents": true, "warp": hw});
+                // An untouched box keeps the placement exactly (the box's move would be the
+                // identity only to rounding).
+                if t.quad != t.start_quad() {
+                    p["placement"] = json!(t.box_move().mul(&place).0);
+                }
+                app.run("edit.transform.warp", p)
+            }
+            None => {
+                let w = t.held_doc_warp().unwrap_or_else(|| hw.clone());
+                app.run("edit.transform.warp", json!({"layer": t.layer, "rect": hw.bounds, "warp": w, "interpolation": t.interpolation}))
+            }
+        }
     } else {
-        if t.quad == corners(t.rect) {
+        if t.quad == t.start_quad() {
             return; // untouched: nothing to do and no history step; a ⌥⌘T copy or a place stays
         }
         let mut p = json!({"rect": t.rect, "quad": t.quad, "interpolation": t.interpolation});
+        if let Some(start) = t.start {
+            // The box opened on a smart object's placement: transform from there (#3649).
+            p["from"] = json!(start);
+        }
         if t.layers.is_empty() {
             p["layer"] = json!(t.layer);
         } else {
@@ -329,6 +367,9 @@ pub(crate) fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64) {
 /// Save for Web (Legacy): refused under an open box, as it would export without the preview (#6737).
 pub(crate) const SAVE_FOR_WEB: &str = "file.export.saveForWebLegacy";
 
+/// Layer › Smart Objects › Reset Transform: refused under an open box, whose start is the
+/// placement it would reset.
+const RESET_TRANSFORM: &str = "layer.smartObjects.resetTransform";
 /// Layer › Copy CSS: refused under an open box too, as it would copy the bounds from before it.
 const COPY_CSS: &str = photocraft_engine::layer_css_cmds::ID;
 
@@ -352,8 +393,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         i if i.starts_with("edit.transform.") && t.content_aware.is_some() => Some(false),
         "edit.undo" => Some(steps.is_some_and(|s| s.can_undo(&Step::of(t)))),
         "edit.redo" => Some(steps.is_some_and(|s| !s.redo.is_empty())),
-        // No Toggle Last State or history jump under the box, and one box at a time.
-        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" => Some(false),
+        // No Toggle Last State or history jump under the box, and one box at a time. Reset
+        // Transform would change the placement the box opened on (Photoshop greys it until Enter).
+        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | RESET_TRANSFORM => Some(false),
         // Save for Web exports the committed document and would ignore the pending box (#6737).
         // Copy CSS, likewise, would copy the layers' bounds from before the box.
         SAVE_FOR_WEB | COPY_CSS => Some(false),
@@ -404,7 +446,7 @@ fn box_preset(id: &str) -> Option<(f64, f64, f64)> {
 /// `None` for other commands or when not transforming.
 /// The commands the open box answers itself ([`is_enabled`], [`intercept`]).
 fn box_command(id: &str) -> bool {
-    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | COPY_CSS)
+    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | RESET_TRANSFORM | COPY_CSS)
         || box_preset(id).is_some()
 }
 
@@ -416,7 +458,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
     match id {
         "edit.undo" => Some(Ok(step(app, false))),
         "edit.redo" => Some(Ok(step(app, true))),
-        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | COPY_CSS => {
+        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | RESET_TRANSFORM | COPY_CSS => {
             Some(Err("Commit or cancel the transform first".into()))
         }
         _ => {
@@ -443,15 +485,24 @@ fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
     let Some(step) = from.pop() else { return serde_json::Value::Null };
     to.push(Step::of(t));
     s.settled = Some(step.clone());
-    let (had_warp, rect, quad) = (t.warp.is_some(), t.rect, t.quad);
+    let (had_warp, had_held, rect, quad) = (t.warp.is_some(), t.held_warp.is_some(), t.rect, t.quad);
     step.restore(t);
     // Across the Warp boundary, a stored warp's edit shows other texels (begin.rs): the step
     // brings its own box, so only the texels swap, and the other mode keeps the box it left.
-    if had_warp != t.warp.is_some()
-        && let Some(o) = pv.other_texels.as_mut()
-    {
-        std::mem::swap(&mut pv.texture, &mut o.texture);
-        (o.rect, o.quad) = (rect, quad);
+    // Once a changed warp was kept, the render with the stored warp belongs to the box before
+    // Warp alone: every state since (in Warp, or holding its warp) shows the source without it.
+    match pv.other_texels.as_mut() {
+        Some(o) if o.kept => {
+            let before = !had_warp && !had_held;
+            if before != (t.warp.is_none() && t.held_warp.is_none()) {
+                std::mem::swap(&mut pv.texture, &mut o.texture);
+            }
+        }
+        Some(o) if had_warp != t.warp.is_some() => {
+            std::mem::swap(&mut pv.texture, &mut o.texture);
+            (o.rect, o.quad) = (rect, quad);
+        }
+        _ => {}
     }
     json!({"transform": t})
 }

@@ -1099,8 +1099,9 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
     let right_at = crate::paint_mouse::right_click_at(response);
     let right_click = right_at.is_some();
     // Right-click while transforming: switch the box's mode (Free Transform, Scale, Rotate,
-    // Skew, Distort, Perspective, Warp), or rotate or flip the box.
-    let transforming = app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none());
+    // Skew, Distort, Perspective, Warp), or rotate or flip the box. Also in Warp mode, to leave it
+    // for another mode.
+    let transforming = app.ui.transform.is_some();
     if transforming && let Some(p) = right_at {
         crate::canvas_tool_menu::open_transform(app, ctx, [p.x, p.y]);
     }

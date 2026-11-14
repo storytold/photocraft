@@ -77,6 +77,137 @@ pub struct TransformSession {
     /// children).
     #[serde(default)]
     pub layers: Vec<u64>,
+    /// Where the box opened when that isn't `rect`'s corners: a smart object's placement, rotated,
+    /// skewed or distorted, as Photoshop keeps it (#3649). `rect` is then a frame of the same
+    /// size, so W and H start at 100 % and the angle and skew read the placement's; the commit
+    /// transforms from here to `quad`.
+    #[serde(default)]
+    pub start: Option<[[f64; 2]; 4]>,
+    /// Warp mode on a smart object: `warp` is in the contents' own space, and this (row-major 3×3,
+    /// contents → document) is where the placement and the box's move put it on screen, as
+    /// Photoshop shows a smart object's warp through its Distort (#8927). `None`: `warp` is in
+    /// document space.
+    #[serde(default)]
+    pub warp_place: Option<[f64; 9]>,
+    /// A warp made in Warp mode and kept when the box went back to another mode before Enter (one
+    /// transform session, as in Photoshop): the box then transforms the warped result. In the same
+    /// space as `warp` was (a smart object's contents, with `held_place` its placement; else
+    /// document space). Enter applies both in one step.
+    #[serde(default)]
+    pub held_warp: Option<photocraft_geom::warp::Warp>,
+    #[serde(default)]
+    pub held_place: Option<[f64; 9]>,
+    /// Warp mode: the warp it opened with (leaving with another one holds it, `held_warp`) and
+    /// the box as it was before (an untouched leave brings it back). In the session, so the
+    /// box's own Undo restores them with the rest.
+    #[serde(default)]
+    pub warp_entry: Option<photocraft_geom::warp::Warp>,
+    #[serde(default)]
+    pub warp_box: Option<WarpBox>,
+    /// Warp mode on a smart object: its stored warp and placement when Warp mode opened, which
+    /// the commit compares with and the selection outline is moved from.
+    #[serde(default)]
+    pub warp_origin: Option<(photocraft_geom::warp::Warp, [f64; 9])>,
+}
+
+/// How many patches per side [`TransformSession::held_doc_warp`] cuts a held warp into under a
+/// projective box.
+pub const HELD_SPLITS: usize = 16;
+
+/// The box as it was when Warp mode took over ([`TransformSession::warp_box`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WarpBox {
+    pub rect: [f64; 4],
+    pub quad: [[f64; 2]; 4],
+    pub start: Option<[[f64; 2]; 4]>,
+    pub pivot: [f64; 2],
+}
+
+impl TransformSession {
+    /// A point of the warp being edited, where it shows in the document ([`Self::warp_place`]).
+    pub fn warp_to_doc(&self, p: [f64; 2]) -> [f64; 2] {
+        match self.warp_place.map(photocraft_algo::transform::Homography) {
+            Some(h) => {
+                let (x, y) = h.apply(p[0], p[1]);
+                [x, y]
+            }
+            None => p,
+        }
+    }
+
+    /// A document point in the warp's own space (the inverse of [`Self::warp_to_doc`]).
+    pub fn doc_to_warp(&self, p: [f64; 2]) -> [f64; 2] {
+        match self.warp_place.and_then(|m| photocraft_algo::transform::Homography(m).inverse()) {
+            Some(h) => {
+                let (x, y) = h.apply(p[0], p[1]);
+                [x, y]
+            }
+            None => p,
+        }
+    }
+
+    /// The box's move since it opened (identity when it can't be inverted).
+    pub fn box_move(&self) -> photocraft_algo::transform::Homography {
+        use photocraft_algo::transform::Homography;
+        Homography::quad_to_quad(self.start_quad(), self.quad).unwrap_or(Homography::IDENTITY)
+    }
+
+    /// Where a smart object's held warp ([`Self::held_warp`], in its contents' space) shows a
+    /// point now: through its placement, then the box's move since it opened.
+    pub fn held_to_doc(&self) -> impl Fn([f64; 2]) -> [f64; 2] + use<> {
+        use photocraft_algo::transform::Homography;
+        let h = self.box_move().mul(&Homography(self.held_place.unwrap_or(Homography::IDENTITY.0)));
+        move |p| {
+            let (x, y) = h.apply(p[0], p[1]);
+            [x, y]
+        }
+    }
+
+    /// A layer's warp held under the box ([`Self::held_warp`] with no placement), as the box
+    /// leaves it, in document space: what Enter applies, and what the preview and the selection
+    /// outline show. An affine box maps the mesh's control points exactly; a Distort or
+    /// Perspective bends each patch, so the mesh is cut into [`HELD_SPLITS`]² finer patches first
+    /// and those are mapped, close enough to the curve that it shows as one.
+    pub fn held_doc_warp(&self) -> Option<photocraft_geom::warp::Warp> {
+        let w = self.held_warp.as_ref().filter(|_| self.held_place.is_none())?;
+        let d = self.box_move();
+        let mut mesh = w.to_mesh(1, 1);
+        let m = d.0;
+        if (m[6].abs() > 1e-12 || m[7].abs() > 1e-12) && mesh.us.len() <= HELD_SPLITS + 1 {
+            for k in 1..HELD_SPLITS {
+                let at = k as f64 / HELD_SPLITS as f64;
+                let _ = mesh.split_u(at);
+                let _ = mesh.split_v(at);
+            }
+        }
+        let mesh = mesh.map_points(|q| {
+            let (x, y) = d.apply(q[0], q[1]);
+            [x, y]
+        });
+        Some(photocraft_geom::warp::Warp::custom(mesh, w.bounds))
+    }
+
+    /// Document pixels per warp-space pixel near document point `p`: hit tolerances are given
+    /// in document pixels.
+    pub fn warp_scale_at(&self, p: [f64; 2]) -> f64 {
+        1.0 / self.warp_unit(self.doc_to_warp(p))
+    }
+
+    /// How long one document pixel is in the warp's space at warp-space point `q`: 1, or for a
+    /// smart object's warp the inverse of its placement's scale there, so hit tolerances and
+    /// snapping distances stay the same on screen whatever the contents' size.
+    pub fn warp_unit(&self, q: [f64; 2]) -> f64 {
+        let Some(h) = self.warp_place.map(photocraft_algo::transform::Homography) else { return 1.0 };
+        let s = h.local_scale(q[0], q[1]);
+        if s.is_finite() && s > 1e-9 { 1.0 / s } else { 1.0 }
+    }
+
+    /// The corners the box opened on: [`Self::start`], else `rect`'s. A box still there is
+    /// untouched.
+    pub fn start_quad(&self) -> [[f64; 2]; 4] {
+        let r = self.rect;
+        self.start.unwrap_or([[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]])
+    }
 }
 
 /// Content-Aware Scale's options bar: Amount, Protect and Protect Skin Tones.

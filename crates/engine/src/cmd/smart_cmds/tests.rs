@@ -1586,6 +1586,42 @@ fn native_digest_cache_misses_after_copy_on_write_and_keeps_recently_used_source
     assert!(weak.upgrade().is_none());
 }
 
+/// Reset Transform takes a linked layer mask back with the contents and refuses a
+/// position-locked smart object.
+#[test]
+fn reset_transform_takes_the_linked_mask_along_and_respects_locks() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    let _ = s.execute("select.deselect", json!({}));
+    let id = s.active().unwrap().active_layer.unwrap();
+    let mask_box = |s: &Session| {
+        let m = s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.clone();
+        let px = m.read_region(photocraft_geom::Rect::new(0, 0, 128, 128));
+        let on: Vec<usize> = (0..128 * 128).filter(|k| px[*k] > 0.5).collect();
+        let (xs, ys): (Vec<usize>, Vec<usize>) = on.iter().map(|k| (k % 128, k / 128)).unzip();
+        (*xs.iter().min().unwrap(), *ys.iter().min().unwrap(), *xs.iter().max().unwrap(), *ys.iter().max().unwrap())
+    };
+    let original = mask_box(&s);
+    s.execute("edit.transform", json!({"scaleX": 50, "scaleY": 50})).unwrap();
+    assert_ne!(mask_box(&s), original, "the transform moved the mask");
+    s.edit("lock", |doc, _| {
+        doc.layer_mut(id).unwrap().locks.position = true;
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({})).is_err(), "locked");
+    s.undo();
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let back = mask_box(&s);
+    let near = |a: usize, b: usize| (a as i64 - b as i64).abs() <= 1;
+    assert!(near(back.0, original.0) && near(back.1, original.1) && near(back.2, original.2) && near(back.3, original.3), "{back:?} vs {original:?}");
+}
+
 /// `replace` makes `params` the filter's whole settings, so a key the edit left out stops
 /// applying; without it the params merge, as partial edits rely on. Either way it is one undo.
 #[test]
