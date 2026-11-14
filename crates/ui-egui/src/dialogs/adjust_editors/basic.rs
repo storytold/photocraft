@@ -50,14 +50,17 @@ pub(super) fn track_stops<'a>(cx: &EditorCx, stops: &'a [Color32]) -> Option<&'a
 // ---------------------------------------------------------------------------------------------
 // Brightness/Contrast
 
-pub(super) fn brightness_contrast(ui: &mut egui::Ui, v: &mut Value) -> Edit {
+pub(super) fn brightness_contrast(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let legacy = flag(v, "legacy", false);
     let lo = if legacy { -100.0 } else { -50.0 };
     let mut e = sliders(ui, v, &[("brightness", tl!("Brightness"), -150.0, 150.0, 0.0, "", None), ("contrast", tl!("Contrast"), lo, 100.0, 0.0, "", None)]);
     let mut l = legacy;
     if widgets::checkbox(ui, &mut l, tl!("Use Legacy")).changed() {
         v["legacy"] = json!(l);
-        if !l {
+        if cx.dialog {
+            v["brightness"] = json!(0);
+            v["contrast"] = json!(0);
+        } else if !l {
             v["contrast"] = json!(num(v, "contrast", 0.0).max(-50.0));
         }
         e.add(Edit::discrete(true));
