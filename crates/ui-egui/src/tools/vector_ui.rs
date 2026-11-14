@@ -208,6 +208,9 @@ impl PenPath {
 mod tests;
 
 #[cfg(test)]
+mod custom_shape_history_name_tests;
+
+#[cfg(test)]
 mod path_drag_preview_tests;
 
 #[cfg(test)]

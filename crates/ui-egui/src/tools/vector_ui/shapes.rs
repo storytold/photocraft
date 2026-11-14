@@ -218,7 +218,7 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
             sp.op = path_op_of(op);
         }
         let path = photocraft_engine::vector_cmds::path_json(&path);
-        let r = app.run("path.set", json!({"name": "work", "path": path, "historyName": line_history_name(tool)}));
+        let r = app.run("path.set", json!({"name": "work", "path": path, "historyName": tool_history_name(tool)}));
         match r {
             Ok(_) => app.ui.selected_path = Some("work".into()),
             Err(e) => {
@@ -248,7 +248,7 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
                 }
             };
             let path = photocraft_engine::vector_cmds::path_json(&outline);
-            if let Err(e) = app.run("shape.create", json!({"kind": "path", "path": path, "addTo": id.0, "op": op})) {
+            if let Err(e) = app.run("shape.create", json!({"kind": "path", "path": path, "addTo": id.0, "op": op, "historyName": tool_history_name(tool)})) {
                 app.ui.status = e;
                 app.ui.status_error = true;
             }
@@ -261,7 +261,7 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         }
         return;
     }
-    p["historyName"] = json!(line_history_name(tool));
+    p["historyName"] = json!(tool_history_name(tool));
     // With an operation other than New Layer the drag joins the active shape layer.
     if let Some(op) = drag_path_op(app)
         && let Some(id) = super::options::selected_shape(&app.session)
@@ -291,10 +291,14 @@ fn path_op_of(op: &str) -> photocraft_doc::vector::PathOp {
     }
 }
 
-/// A Line tool drag is one History step named after the tool, as in Photoshop (#13244); the
-/// other Shape tools keep the commands' own names.
-fn line_history_name(tool: Tool) -> Option<&'static str> {
-    (tool == Tool::Line).then_some("Line Tool")
+/// A Line or Custom Shape tool drag is one History step named after the tool, as in Photoshop
+/// (#13244, #13461); the other Shape tools keep the commands' own names.
+fn tool_history_name(tool: Tool) -> Option<&'static str> {
+    match tool {
+        Tool::Line => Some("Line Tool"),
+        Tool::CustomShape => Some("Custom Shape Tool"),
+        _ => None,
+    }
 }
 
 pub(super) fn fill_param(app: &PhotocraftApp) -> Value {
