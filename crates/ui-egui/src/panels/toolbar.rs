@@ -301,7 +301,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     } else {
                                         tool
                                     };
-                                    crate::tool_memory::select(app, pick);
+                                    // A pending Perspective Crop asks "Crop the image?" first (#11969).
+                                    if !crate::perspective_crop_ui::ask_before_switch(app, pick) {
+                                        crate::tool_memory::select(app, pick);
+                                    }
                                 }
                                 // Double-clicking the Hand tool fits the image on screen (Photoshop).
                                 // Modified clicks only cycle / select: a second rapid Alt-click, or a
