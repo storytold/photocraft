@@ -86,21 +86,21 @@ fn visible(app: &PhotocraftApp, id: LayerId) -> bool {
 }
 fn content_layer(app: &PhotocraftApp, r: [i64; 4]) -> Option<u64> {
     let st = app.session.active()?;
-    let l = st.doc.layer(st.active_layer?)?;
-    if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_)) || st.doc.is_background(l.id) {
-        return None;
-    }
-    let locks = st.doc.effective_locks(l.id);
-    if locks.position || locks.all {
-        return None;
-    }
-    // Another frame's image stays in its frame; the drag draws an empty frame instead.
-    if photocraft_engine::frame_cmds::frame_of(&st.doc, l.id).is_some() {
-        return None;
-    }
-    let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, l);
-    (!b.is_empty() && i64::from(b.x0) < r[2] && r[0] < i64::from(b.x1) && i64::from(b.y0) < r[3] && r[1] < i64::from(b.y1)).then_some(l.id.0)
+    st.doc.walk().into_iter().rev().find_map(|(path, _, l)| {
+        if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Smart(_)) || st.doc.is_background(l.id) || !path_visible(&st.doc, &path) {
+            return None;
+        }
+        let locks = st.doc.effective_locks(l.id);
+        if locks.position || locks.all || photocraft_engine::frame_cmds::frame_of(&st.doc, l.id).is_some() {
+            return None;
+        }
+        let b = photocraft_engine::transform_cmds::transform_bounds(&st.doc, l);
+        (!b.is_empty() && i64::from(b.x0) < r[2] && r[0] < i64::from(b.x1) && i64::from(b.y0) < r[3] && r[1] < i64::from(b.y1)).then_some(l.id.0)
+    })
 }
+#[cfg(test)]
+mod content_pick_tests;
+
 fn report(app: &mut PhotocraftApp, r: Result<Value, String>) {
     if let Err(e) = r {
         app.ui.status = e;
