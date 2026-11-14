@@ -42,16 +42,16 @@ pub(crate) fn decode(
 pub(crate) fn geometry(
     name: &str,
     bytes: &[u8],
-    order: Option<HistoricalXcfSampleOrder>,
+    _order: Option<HistoricalXcfSampleOrder>,
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<((f64, f64), f64), crate::IoError> {
     ctl.check().map_err(|_| crate::IoError::Cancelled)?;
-    if order.is_none() || crate::is_psd(bytes) {
-        let result = crate::linked::source_geometry(name, bytes, ctl).map_err(crate::IoError::Unsupported);
-        // The legacy geometry API returns strings; retain cancellation as a typed outcome.
-        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
-        return result;
+    // Sample order affects drawable samples, not the big-endian canvas and resolution fields.
+    if let Some(geometry) = crate::xcf::source_geometry(name, bytes, ctl)? {
+        return Ok(geometry);
     }
-    let doc = decode(name, bytes, order, ctl)?;
-    Ok(((f64::from(doc.size.width), f64::from(doc.size.height)), f64::from(doc.resolution_dpi)))
+    let result = crate::linked::source_geometry(name, bytes, ctl).map_err(crate::IoError::Unsupported);
+    // The legacy geometry API returns strings; retain cancellation as a typed outcome.
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+    result
 }

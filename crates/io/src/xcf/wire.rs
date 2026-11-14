@@ -78,8 +78,14 @@ pub(super) fn props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
 /// Image properties can carry historical lengths that GIMP itself ignores. Resolve their
 /// documented framing using the actual file epoch rather than probing payload bytes as headers.
 pub(super) fn props_version<'a>(c: &mut Cursor<'a>, version: Option<u32>) -> Result<Vec<Prop<'a>>> {
+    props_version_with_interrupt(c, version, &photocraft_raster::Interrupt::NONE)
+}
+
+/// The same bounded property framing, with cancellation between records for header-only callers.
+pub(super) fn props_version_with_interrupt<'a>(c: &mut Cursor<'a>, version: Option<u32>, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<Prop<'a>>> {
     let mut out = Vec::new();
     loop {
+        ctl.check().map_err(|_| super::IoError::Cancelled)?;
         let offset = c.pos;
         let kind = c.u32()?;
         let len = c.u32()? as usize;
@@ -108,6 +114,7 @@ pub(super) fn props_version<'a>(c: &mut Cursor<'a>, version: Option<u32>) -> Res
             return Err(invalid(format!("property {kind} declares {len} bytes")));
         }
         let data = c.take(len)?;
+        out.try_reserve(1).map_err(|_| invalid("not enough memory for XCF properties"))?;
         out.push(Prop { offset, kind, data });
         if out.len() > 4096 {
             return Err(invalid("too many properties"));

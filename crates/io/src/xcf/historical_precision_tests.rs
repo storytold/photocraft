@@ -6,7 +6,7 @@
 
 use super::tests::{TestImage, TestLayer};
 use super::*;
-use photocraft_cms::{Builtin, Profile};
+use craft_cms::{Builtin, Profile};
 
 #[derive(Clone, Copy, Debug)]
 enum Encoding {

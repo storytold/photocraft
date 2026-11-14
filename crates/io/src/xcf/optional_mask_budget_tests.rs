@@ -243,8 +243,30 @@ fn inert_auxiliary_inventory_bounds_cycles_metadata_and_cancellation() {
     let mut bounded = self::image(&w.out, 0);
     let owner = coverage_owner(&mut bounded);
     bounded.meta_budget = 0;
-    assert!(bounded.inventory_coverage_effects(owner, &[effect], &Interrupt::NONE).is_err());
-    assert_eq!(bounded.budget, 0);
+    bounded.inventory_coverage_effects(owner, &[effect], &Interrupt::NONE).unwrap();
+    assert_eq!((bounded.budget, bounded.meta_budget), (0, 0), "optional inventory spends no exhausted allowance and never decodes auxiliary pixels");
+    let warnings = bounded.warnings.finish();
+    assert_eq!(warnings.len(), 2); // Existing inert-coverage disclosure plus one retention warning.
+    assert!(warnings.iter().any(|warning| warning.contains("metadata retention limits") && warning.contains("usable pixels")));
+    let conversion = bounded.outcomes.finish().unwrap();
+    let ImportConversion::Report(report) = &conversion else { panic!("bounded report") };
+    report.validate().unwrap();
+    let limited: Vec<_> = report.entries.iter().filter(|entry| entry.feature_code == "xcf.coverage_effect").collect();
+    assert_eq!(limited.len(), 1);
+    assert_eq!(limited[0].reason, ConversionReason::RetentionLimit);
+    assert!(
+        !report.entries.iter().any(|entry| entry.reason == ConversionReason::InvalidOptionalData),
+        "no effect framing or cyclic child was followed after admission stopped"
+    );
+    assert!(report.attachments.is_empty());
+    let mut document = Document::new("Usable saved pixels", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let mut layer = Layer::raster("Retained raster", PixelFormat::RGBA8);
+    let LayerContent::Raster(pixels) = &mut layer.content else { panic!("raster") };
+    pixels.fill_rect(document.bounds(), &[1., 0., 0., 1.]);
+    document.layers.push(layer);
+    document.metadata.import_conversion = Some(Arc::new(conversion));
+    let saved = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+    assert_eq!(photocraft_format::load_from_bytes(&saved).unwrap(), document);
 }
 
 #[test]

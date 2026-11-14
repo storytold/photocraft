@@ -1865,11 +1865,15 @@ fn error_titles(app: &PhotocraftApp) -> Vec<String> {
 fn files_dropped_with_no_document_open_all_open() {
     let dir = scratch("home");
     let names = ["a.png", "b.jpg", "c.psd", "d.tif"];
+    // The shared format detector routes a .tif suffix through typed IO even when
+    // the shell's import service is replaced. Supply real TIFF bytes for that route.
+    let image = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, [17u8, 31, 57].repeat(16)).unwrap();
+    let tiff = photocraft_codecs::encode(&image, photocraft_codecs::Format::Tiff, &Default::default()).unwrap();
     let files: Vec<_> = names
         .iter()
         .map(|n| {
             let p = dir.join(n);
-            std::fs::write(&p, b"x").unwrap();
+            std::fs::write(&p, if *n == "d.tif" { tiff.as_slice() } else { b"x" }).unwrap();
             dropped(p, Err("read from the path".into()))
         })
         .collect();

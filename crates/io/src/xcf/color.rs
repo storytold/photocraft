@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use photocraft_cms::{Builtin, ColorSpace, Curve, Intent, Profile, TransformOptions};
+use craft_cms::{Builtin, ColorSpace, Curve, Intent, Profile, TransformOptions};
 use photocraft_color::ColorMode;
 
 use super::{Precision, Result, invalid};
@@ -14,10 +14,17 @@ use super::{Precision, Result, invalid};
 #[cfg(test)]
 mod fallback_review_tests;
 #[cfg(test)]
+mod indexed_palette_review_tests;
+#[cfg(test)]
 mod review_tests;
+#[cfg(test)]
+mod untagged_review_tests;
 
 pub(super) struct ProfileSelection {
     pub bytes: Arc<Vec<u8>>,
+    /// Linear samples need an explicit encoding; an absent ordinary nonlinear assignment
+    /// remains absent so the host's missing-profile policy can still ask or assign a space.
+    pub tag_document: bool,
     /// Assigned colorants were unusable; callers must disclose the implicit interpretation
     /// and retain the original optional configuration within the report's existing bounds.
     pub fallback_reason: Option<String>,
@@ -28,9 +35,10 @@ pub(super) struct ProfileSelection {
 /// it does not transform pixels or claim to preserve the unavailable assigned colorants.
 pub(super) fn select_profile(mode: ColorMode, precision: Precision, assigned: Option<Vec<u8>>) -> Result<ProfileSelection> {
     let has_assigned = assigned.is_some();
+    let tag_document = has_assigned || precision.linear;
     match profile(mode, precision, assigned) {
-        Ok(bytes) => Ok(ProfileSelection { bytes, fallback_reason: None }),
-        Err(error) if has_assigned => Ok(ProfileSelection { bytes: profile(mode, precision, None)?, fallback_reason: Some(error.to_string()) }),
+        Ok(bytes) => Ok(ProfileSelection { bytes, tag_document, fallback_reason: None }),
+        Err(error) if has_assigned => Ok(ProfileSelection { bytes: profile(mode, precision, None)?, tag_document, fallback_reason: Some(error.to_string()) }),
         Err(error) => Err(error),
     }
 }
@@ -46,7 +54,7 @@ pub(super) fn profile(mode: ColorMode, precision: Precision, assigned: Option<Ve
         // ordinary native profiles. Keep their canonical bytes so native color
         // policy need not resample an equivalent profile to recognize them.
         None => match (expected, precision.linear) {
-            (ColorSpace::Gray, true) => photocraft_cms::builtin::linear_gray().clone(),
+            (ColorSpace::Gray, true) => craft_cms::builtin::linear_gray().clone(),
             (ColorSpace::Gray, false) => Builtin::SGray.profile().clone(),
             (_, true) => Builtin::LinearSrgb.profile().clone(),
             (_, false) => Builtin::Srgb.profile().clone(),
@@ -59,11 +67,11 @@ pub(super) fn profile(mode: ColorMode, precision: Precision, assigned: Option<Ve
         if !profile.is_matrix_shaper() || profile.b2a.iter().any(Option::is_some) {
             return Err(invalid("assigned ICC profile has no separable native matrix/TRC representation for the XCF sample encoding"));
         }
-        let curve = if precision.linear { Curve::Identity } else { photocraft_cms::curve::srgb_trc() };
+        let curve = if precision.linear { Curve::Identity } else { craft_cms::curve::srgb_trc() };
         if expected == ColorSpace::Gray {
             // A Lab-PCS Gray TRC encodes L*, not luminance. Until a PCS-aware
             // rewrite is available, refuse to persist a silently mislabelled curve.
-            if profile.pcs == photocraft_cms::Pcs::Lab {
+            if profile.pcs == craft_cms::Pcs::Lab {
                 return Err(invalid("assigned Gray Lab PCS requires a PCS-aware sample transfer-curve conversion"));
             }
             profile.gray_trc = Some(curve);
@@ -76,12 +84,8 @@ pub(super) fn profile(mode: ColorMode, precision: Precision, assigned: Option<Ve
     // Establish usability through the same native CMS used by document color policy. This
     // validates essentials before publishing a document, without transforming or clipping HDR.
     let destination = if expected == ColorSpace::Gray { Builtin::SGray } else { Builtin::Srgb };
-    photocraft_cms::transform::cached(
-        &profile,
-        destination.profile(),
-        TransformOptions { intent: Intent::RelativeColorimetric, bpc: false, ..Default::default() },
-    )
-    .map_err(|error| invalid(format!("assigned ICC profile is not usable by native color management: {error}")))?;
+    craft_cms::transform::cached(&profile, destination.profile(), TransformOptions { intent: Intent::RelativeColorimetric, bpc: false, ..Default::default() })
+        .map_err(|error| invalid(format!("assigned ICC profile is not usable by native color management: {error}")))?;
     Ok(profile.to_bytes())
 }
 
@@ -120,7 +124,7 @@ mod tests {
                 let precision = Precision::from_header(26, code).unwrap();
                 let bytes = profile(mode, precision, None).unwrap();
                 let expected = match (mode, precision.linear) {
-                    (ColorMode::Grayscale, true) => photocraft_cms::builtin::linear_gray(),
+                    (ColorMode::Grayscale, true) => craft_cms::builtin::linear_gray(),
                     (ColorMode::Grayscale, false) => Builtin::SGray.profile(),
                     (_, true) => Builtin::LinearSrgb.profile(),
                     (_, false) => Builtin::Srgb.profile(),
@@ -149,7 +153,7 @@ mod tests {
     /// samples.
     fn assigned_primaries_survive_linear_and_perceptual_encoding() {
         for source in [Builtin::DisplayP3, Builtin::AdobeRgbCompat, Builtin::ProPhotoCompat] {
-            for (code, expected) in [(600, Curve::Identity), (675, photocraft_cms::curve::srgb_trc())] {
+            for (code, expected) in [(600, Curve::Identity), (675, craft_cms::curve::srgb_trc())] {
                 let original = Profile::parse(&source.profile().to_bytes()).unwrap();
                 let converted = profile(ColorMode::Rgb, Precision::from_header(26, code).unwrap(), Some(original.to_bytes().as_ref().clone())).unwrap();
                 let parsed = Profile::parse(&converted).unwrap();

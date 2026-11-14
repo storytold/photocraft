@@ -14,8 +14,15 @@ fn tile_admission_checks_offsets_and_native_formats_before_writing() {
         // Two logical pixels straddle the tile boundary at y=0, including negative placement.
         let rect = Rect::new(-1, -1, 0, 1);
         let cost = usize::try_from(photocraft_raster::tile_storage_bytes(rect, &format)).unwrap();
-        let pixels =
-            Pixels { width: 1, height: 2, channels: surface.channels(), data: vec![0.5; 2 * surface.channels()], underflow: false, coverage_clamped: false };
+        let pixels = Pixels {
+            width: 1,
+            height: 2,
+            channels: surface.channels(),
+            data: vec![0.5; 2 * surface.channels()],
+            underflow: false,
+            coverage_clamped: false,
+            palette_fallback: false,
+        };
         let mut shortage = cost - 1;
         let error = write_pixels(&mut surface, &pixels, -1, -1, &mut shortage).unwrap_err();
         assert!(error.to_string().contains("pixel limit"));
@@ -33,7 +40,7 @@ fn retained_tiles_share_one_budget_but_pruned_tiles_do_not_spend_it() {
     let format = PixelFormat::RGBA8;
     let cost = usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &format)).unwrap();
     let mut budget = 2 * cost;
-    let mut pixels = Pixels { width: 1, height: 1, channels: 4, data: vec![0.; 4], underflow: false, coverage_clamped: false };
+    let mut pixels = Pixels { width: 1, height: 1, channels: 4, data: vec![0.; 4], underflow: false, coverage_clamped: false, palette_fallback: false };
     for _ in 0..4 {
         let mut surface = Surface::new(format);
         write_pixels(&mut surface, &pixels, 0, 0, &mut budget).unwrap();
@@ -59,7 +66,7 @@ fn hostile_drawable_shapes_fail_before_tile_allocation() {
     let mut surface = Surface::new(PixelFormat::RGBA8);
     let mut budget = MAX_PIXEL_BYTES;
     for (width, height, channels, data) in [(u32::MAX, 1, 4, Vec::new()), (0, 1, 4, Vec::new()), (1, 1, usize::MAX, vec![0.; 4]), (1, 1, 4, Vec::new())] {
-        let pixels = Pixels { width, height, channels, data, underflow: false, coverage_clamped: false };
+        let pixels = Pixels { width, height, channels, data, underflow: false, coverage_clamped: false, palette_fallback: false };
         assert!(write_pixels(&mut surface, &pixels, 0, 0, &mut budget).is_err());
         assert_eq!(surface.tile_count(), 0);
         assert_eq!(budget, MAX_PIXEL_BYTES);

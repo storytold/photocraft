@@ -267,7 +267,7 @@ mod tests {
     /// Reject nonfinite floating alpha and insufficient Gray-to-RGB allowance before publishing expanded native pixels.
     #[test]
     fn floating_coverage_validation_and_gray_expansion_obey_native_allocation_budget() {
-        let pixels = Pixels { width: 1, height: 1, channels: 2, data: vec![0.5, 1.0], underflow: false, coverage_clamped: false };
+        let pixels = Pixels { width: 1, height: 1, channels: 2, data: vec![0.5, 1.0], underflow: false, coverage_clamped: false, palette_fallback: false };
         assert!(gray_to_rgb(pixels, &mut 7, &Interrupt::NONE).is_err());
         let mut image = TestImage::rgb8(1, 1);
         image.precision = 650;
@@ -294,7 +294,11 @@ mod tests {
             (1, 1, 3, vec![0.; 3]),
         ] {
             let mut budget = usize::MAX;
-            let result = gray_to_rgb(Pixels { width, height, channels, data, underflow: false, coverage_clamped: false }, &mut budget, &Interrupt::NONE);
+            let result = gray_to_rgb(
+                Pixels { width, height, channels, data, underflow: false, coverage_clamped: false, palette_fallback: false },
+                &mut budget,
+                &Interrupt::NONE,
+            );
             assert!(result.is_err());
             assert_eq!(budget, usize::MAX);
         }
@@ -308,7 +312,7 @@ mod tests {
             let cancelled = || checks.fetch_add(1, Ordering::Relaxed) >= limit;
             let mut budget = 100_000;
             let result = gray_to_rgb(
-                Pixels { width: 4097, height: 1, channels: 2, data: vec![0.5; 4097 * 2], underflow: false, coverage_clamped: false },
+                Pixels { width: 4097, height: 1, channels: 2, data: vec![0.5; 4097 * 2], underflow: false, coverage_clamped: false, palette_fallback: false },
                 &mut budget,
                 &Interrupt::cancel_only(&cancelled),
             );
@@ -324,7 +328,7 @@ mod tests {
             let mut budget = 24;
             let data = if alpha { vec![-0.25, 0.375, 3.5, 0.75] } else { vec![-0.25, 3.5] };
             let expanded = gray_to_rgb(
-                Pixels { width: 2, height: 1, channels: if alpha { 2 } else { 1 }, data, underflow: true, coverage_clamped: false },
+                Pixels { width: 2, height: 1, channels: if alpha { 2 } else { 1 }, data, underflow: true, coverage_clamped: false, palette_fallback: false },
                 &mut budget,
                 &Interrupt::NONE,
             )
@@ -336,7 +340,7 @@ mod tests {
         let mut budget = 15;
         assert!(
             gray_to_rgb(
-                Pixels { width: 2, height: 1, channels: 1, data: vec![0.5; 2], underflow: false, coverage_clamped: false },
+                Pixels { width: 2, height: 1, channels: 1, data: vec![0.5; 2], underflow: false, coverage_clamped: false, palette_fallback: false },
                 &mut budget,
                 &Interrupt::NONE
             )

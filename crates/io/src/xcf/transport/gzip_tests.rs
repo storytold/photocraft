@@ -91,7 +91,8 @@ fn gzip_padding_is_cancellable_does_not_count_as_output_and_cannot_claim_other_f
     let cancelled = || armed.load(Ordering::Relaxed) && checks.fetch_add(1, Ordering::Relaxed) >= 5;
     let ctl = Interrupt::cancel_only(&cancelled);
     let mut input = Input { remaining: &bytes, ctl };
-    let mut reader = Gzip::new(&mut input);
+    let policy = GzipPolicy { strict: std::cell::Cell::new(true), verified_output: std::cell::Cell::new(0), rollback: std::cell::Cell::new(None) };
+    let mut reader = Gzip::new(&mut input, &policy);
     let mut output = vec![0; plain.len()];
     reader.read_exact(&mut output).unwrap();
     assert_eq!(output, plain);

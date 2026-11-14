@@ -1,12 +1,39 @@
 //! Native layer admission, metadata retention and hierarchy construction.
 
 use super::{
-    AlphaChannel, BlendMode, ConversionDisposition, ConversionEntry, ConversionReason, Image, Interrupt, IoError, LabelColor, Layer, LayerContent, LayerMask,
-    MAX_DEPTH, NativeTargetRef, Node, PendingLayerEffects, PixelFormat, Pixels, Prop, Rect, Result, Surface, be_f32, be_i32, be_u32, blend_mode, conversion,
-    effects, finish, invalid, label, metadata, parasites, paths, place, props, resources, text, write_pixels,
+    AlphaChannel, BlendMode, Channel, ConversionDisposition, ConversionEntry, ConversionReason, Image, Interrupt, IoError, LabelColor, Layer, LayerContent,
+    LayerMask, MAX_DEPTH, NativeTargetRef, Node, PendingLayerEffects, PixelFormat, Pixels, Prop, Rect, Result, Surface, be_f32, be_i32, be_u32, blend_mode,
+    conversion, finish, invalid, label, metadata, parasites, paths, place, props, resources, text, write_pixels,
 };
 
 impl<'a> Image<'a> {
+    /// Disclose omitted optional metadata after its native owner exists.
+    fn layer_metadata_limits(&mut self, outcome: usize, name_limited: bool, path_limited: bool, effects_limited: bool) -> Result<()> {
+        if name_limited {
+            self.metadata_limit(outcome, "xcf.layer_name", "Layer name omitted after the shared metadata allowance was exhausted")?;
+        }
+        if path_limited {
+            self.metadata_limit(
+                outcome,
+                "xcf.item_path",
+                "Layer item path omitted after the shared metadata allowance was exhausted; retained as a top-level layer",
+            )?;
+        }
+        if effects_limited {
+            self.metadata_limit(outcome, "xcf.layer_effect", "Layer effect pointers omitted after optional metadata retention limits were reached")?;
+        }
+        Ok(())
+    }
+
+    /// Bound retained hierarchy metadata before allocating it; omitted paths leave usable layers at the top level.
+    fn retained_item_path(&mut self, bytes: &[u8]) -> (Vec<u32>, bool) {
+        let count = (bytes.len() / 4).min(MAX_DEPTH + 1);
+        let Some(remaining) = self.meta_budget.checked_sub(count.saturating_mul(4)) else { return (Vec::new(), true) };
+        let path = bytes.as_chunks::<4>().0.iter().take(count).map(|word| u32::from_be_bytes(*word)).collect();
+        self.meta_budget = remaining;
+        (path, false)
+    }
+
     /// Decode layers in source order, then build the native hierarchy with the existing bounded-path policy.
     pub(super) fn import_layers(&mut self, pointers: &[usize], fmt: PixelFormat, mask_fmt: PixelFormat, ctl: &Interrupt<'_>) -> Result<(Vec<Layer>, bool)> {
         let total = pointers.len().max(1) as f32;
@@ -52,7 +79,7 @@ impl<'a> Image<'a> {
         let mut selection = None;
         for (ordinal, &ptr) in pointers.iter().enumerate() {
             ctl.check().map_err(|_| IoError::Cancelled)?;
-            let (name, cprops, px, coverage_effects) = self.channel(ptr, ctl)?;
+            let Channel { name, properties: cprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } = self.channel(ptr, ctl)?;
             let mut surface = Surface::new(mask_fmt);
             write_pixels(&mut surface, &px, 0, 0, &mut self.budget)?;
             let is_selection = cprops.iter().any(|p| p.kind == 4);
@@ -78,6 +105,16 @@ impl<'a> Image<'a> {
                 native_description: "Native coverage surface".into(),
                 attachments: Vec::new(),
             })?;
+            if name_limited {
+                self.metadata_limit(channel_outcome, "xcf.channel_name", "Channel name omitted after the shared metadata allowance was exhausted")?;
+            }
+            if effects_limited {
+                self.metadata_limit(
+                    channel_outcome,
+                    "xcf.coverage_effect",
+                    "Channel effect pointers omitted after the shared metadata allowance was exhausted",
+                )?;
+            }
             self.precision_underflow(channel_outcome, &px)?;
             self.inventory_coverage_effects(channel_outcome, &coverage_effects, ctl)?;
             let mut channel = AlphaChannel::new(name, surface);
@@ -493,14 +530,11 @@ impl<'a> Image<'a> {
     pub(super) fn layer(&mut self, ordinal: usize, ptr: usize, fmt: PixelFormat, mask_fmt: PixelFormat, ctl: &Interrupt<'_>) -> Result<Option<(Node, bool)>> {
         let mut c = self.c.at(ptr);
         let (lw, lh, kind) = (c.u32()?, c.u32()?, c.u32()?);
-        let name = c.string()?;
-        // Charge the owned name against the document-wide metadata budget: repeated layer
-        // offsets referencing one large name must not retain unbounded copies.
-        self.meta_budget = self.meta_budget.checked_sub(name.len()).ok_or_else(|| invalid("layer metadata exceeds the budget"))?;
+        let (name, name_limited) = self.metadata_name(&mut c, "Layer")?;
         let lprops = props(&mut c)?;
         let hptr = c.ptr()?;
         let mptr = c.ptr()?;
-        let effect_pointers = if self.version >= 20 { effects::read_pointers(&mut c, &mut self.meta_budget, ctl)? } else { Vec::new() };
+        let (effect_pointers, effects_limited) = if self.version >= 20 { self.optional_effect_pointers(&mut c, ctl)? } else { (Vec::new(), false) };
         let (type_rgb, alpha) = match kind {
             0 => (true, false),
             1 => (true, true),
@@ -519,6 +553,7 @@ impl<'a> Image<'a> {
         let mut group = false;
         let mut expanded = true;
         let mut path = Vec::new();
+        let mut path_limited = false;
         let mut text = false;
         let mut vector = false;
         let mut link = false;
@@ -551,9 +586,9 @@ impl<'a> Image<'a> {
                 28 => locks.pixels = v != 0,
                 29 => group = true,
                 30 => {
-                    path = p.data.as_chunks::<4>().0.iter().map(|s| u32::from_be_bytes(*s)).collect();
-                    self.meta_budget =
-                        self.meta_budget.checked_sub(path.len().saturating_mul(4)).ok_or_else(|| invalid("layer metadata exceeds the budget"))?;
+                    let (retained, limited) = self.retained_item_path(p.data);
+                    path = retained;
+                    path_limited |= limited;
                 }
                 31 => expanded = v & 1 != 0,
                 32 => locks.position = v != 0,
@@ -608,6 +643,7 @@ impl<'a> Image<'a> {
             native_description: if group { "Native group and its properties" } else { "Native raster layer and its properties" }.into(),
             attachments: Vec::new(),
         })?;
+        self.layer_metadata_limits(outcome, name_limited, path_limited, effects_limited)?;
         self.layer_identity_notices(outcome, &lprops, floating, gray_floating, legacy_linked)?;
         if link {
             self.layer_link(outcome, &lprops, hptr)?;
@@ -637,7 +673,15 @@ impl<'a> Image<'a> {
                     data.extend_from_slice(p);
                     data.push(1.0);
                 }
-                px = Pixels { width: px.width, height: px.height, channels: n + 1, data, underflow: px.underflow, coverage_clamped: px.coverage_clamped };
+                px = Pixels {
+                    width: px.width,
+                    height: px.height,
+                    channels: n + 1,
+                    data,
+                    underflow: px.underflow,
+                    coverage_clamped: px.coverage_clamped,
+                    palette_fallback: px.palette_fallback,
+                };
             }
             if gray_floating {
                 px = resources::gray_to_rgb(px, &mut self.budget, ctl)?;
@@ -656,18 +700,21 @@ impl<'a> Image<'a> {
         {
             match paths::vector_style(property.data) {
                 Ok(style) => {
-                    let strings = style
-                        .source_only
-                        .iter()
-                        .try_fold(
-                            std::mem::size_of::<paths::VectorStyle>()
-                                .saturating_add(style.source_only.capacity().saturating_mul(std::mem::size_of::<String>())),
-                            |bytes, note| bytes.checked_add(note.capacity()),
-                        )
-                        .ok_or_else(|| invalid("vector diagnostic size overflow"))?;
+                    let strings = style.source_only.iter().try_fold(
+                        std::mem::size_of::<paths::VectorStyle>().saturating_add(style.source_only.capacity().saturating_mul(std::mem::size_of::<String>())),
+                        |bytes, note| bytes.checked_add(note.capacity()),
+                    );
                     // Reused source records still create distinct owned diagnostics.
-                    self.meta_budget = self.meta_budget.checked_sub(strings).ok_or_else(|| invalid("vector diagnostics exceed the metadata allowance"))?;
-                    self.pending_vectors.push((layer.id, outcome, style));
+                    if let Some(remaining) = strings.and_then(|strings| self.meta_budget.checked_sub(strings)) {
+                        self.meta_budget = remaining;
+                        self.pending_vectors.push((layer.id, outcome, style));
+                    } else {
+                        self.metadata_limit(
+                            outcome,
+                            "xcf.vector_layer",
+                            "Editable vector metadata exceeds the remaining allowance; saved raster pixels retained",
+                        )?;
+                    }
                 }
                 Err(error) => self.outcomes.notice(
                     outcome,
@@ -687,7 +734,7 @@ impl<'a> Image<'a> {
         }
         self.retain_layer_properties(outcome, &lprops)?;
         if mptr != 0 {
-            let (mname, mprops, px, coverage_effects) = self.channel(mptr, ctl)?;
+            let Channel { name: mname, properties: mprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } = self.channel(mptr, ctl)?;
             let mut surface = Surface::new(mask_fmt);
             write_pixels(&mut surface, &px, x, y, &mut self.budget)?;
             let mask_outcome = self.outcomes.push(ConversionEntry {
@@ -704,6 +751,12 @@ impl<'a> Image<'a> {
                 native_description: "Native linked layer mask".into(),
                 attachments: Vec::new(),
             })?;
+            if name_limited {
+                self.metadata_limit(mask_outcome, "xcf.mask_name", "Layer mask name omitted after the shared metadata allowance was exhausted")?;
+            }
+            if effects_limited {
+                self.metadata_limit(mask_outcome, "xcf.coverage_effect", "Mask effect pointers omitted after the shared metadata allowance was exhausted")?;
+            }
             self.precision_underflow(mask_outcome, &px)?;
             self.inventory_coverage_effects(mask_outcome, &coverage_effects, ctl)?;
             layer.mask = Some(LayerMask { surface, enabled: apply_mask, linked: true, density: 1.0, feather: 0.0 });

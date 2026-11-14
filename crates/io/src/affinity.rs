@@ -1,13 +1,13 @@
 //! Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`): the native layers, curves,
-//! shapes, artboards, text, images and masks `photocraft-affinity` reads, mapped to PhotoCraft
+//! shapes, artboards, text, images and masks `craft-affinity` reads, mapped to PhotoCraft
 //! layers (groups, shape layers, type layers, embedded smart objects, pixel layers, layer and
 //! vector masks). What could not be mapped is listed in the warnings. A file whose native data
 //! can't be read opens as its embedded preview, with a warning saying why.
 
 use std::sync::Arc;
 
-use photocraft_affinity::model::{self as af, Align, Blend, Kind, Pixels};
-use photocraft_affinity::paint::{self as ap, Cap, GradientKind, Join};
+use craft_affinity::model::{self as af, Align, Blend, Kind, Pixels};
+use craft_affinity::paint::{self as ap, Cap, GradientKind, Join};
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::text::{CharStyle, ParagraphRun, ParagraphStyle, TextAlign, TextRun, TextShape};
 use photocraft_doc::vector::{Knot, LineCap, LineJoin, Path, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask};
@@ -19,7 +19,7 @@ use photocraft_raster::Surface;
 
 use crate::{ImportResult, IoError};
 
-pub use photocraft_affinity::is_affinity;
+pub use craft_affinity::is_affinity;
 
 /// Extensions recognized as Affinity documents.
 pub const EXTENSIONS: &[&str] = &["af", "afphoto", "afdesign", "afpub"];
@@ -45,7 +45,7 @@ pub fn has_extension(name: &str) -> bool {
 /// Translate readable Affinity layers into native data with prepared text and conversion warnings.
 /// Unreadable native content falls back to the bounded embedded preview; the source remains read only.
 pub(crate) fn import(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
-    match photocraft_affinity::read(bytes, photocraft_affinity::Limits::default()) {
+    match craft_affinity::read(bytes, craft_affinity::Limits::default()) {
         Ok(d) => {
             let mut b = Builder::new(name, &d)?;
             b.ctl = *ctl;
@@ -72,8 +72,8 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrup
 }
 
 /// The embedded preview, for files whose native document can't be read.
-fn preview(name: &str, bytes: &[u8], native: &photocraft_affinity::Error) -> Result<ImportResult, IoError> {
-    let p = photocraft_affinity::preview(bytes).map_err(|e| IoError::Unsupported(format!("{native}; its embedded preview can't be read either ({e})")))?;
+fn preview(name: &str, bytes: &[u8], native: &craft_affinity::Error) -> Result<ImportResult, IoError> {
+    let p = craft_affinity::preview(bytes).map_err(|e| IoError::Unsupported(format!("{native}; its embedded preview can't be read either ({e})")))?;
     let opts = photocraft_codecs::DecodeOptions {
         limits: photocraft_codecs::Limits { max_width: 4096, max_height: 4096, max_pixels: 4096 * 4096, max_alloc: 128 << 20 },
         ..Default::default()
@@ -285,7 +285,7 @@ impl Builder<'_> {
         }
         let children: Vec<Layer> = n.children.iter().filter_map(|c| self.layer(c, to_doc, false)).collect();
         let mut l = match &n.kind {
-            Kind::Layer | Kind::Group => self.group(n, children),
+            Kind::Layer | Kind::Group | Kind::Table(_) | Kind::MasterInstance { .. } => self.group(n, children),
             Kind::Unsupported if children.is_empty() => return None,
             Kind::Unsupported => self.group(n, children),
             Kind::Shape { path, fills, strokes, even_odd } => {
@@ -307,7 +307,10 @@ impl Builder<'_> {
                     g
                 }
             }
-            Kind::Artboard { rect, background } => {
+            Kind::Artboard { rect, background, .. } => {
+                if n.class != craft_affinity::stream::Tag::of(b"ShpN") {
+                    self.warn("a converted artboard outline (imported at its bounding box)");
+                }
                 let r = self.bbox(to_doc, *rect);
                 let bg = match background.first() {
                     Some(ap::Paint::Solid(c)) => {
@@ -561,6 +564,7 @@ impl Builder<'_> {
     fn pixels(&mut self, img: &af::Image) -> Option<(u32, u32, Vec<u8>)> {
         match &img.pixels {
             Pixels::Rgba8(v) => Some((img.width, img.height, v.clone())),
+            Pixels::Cmyka8(v) => Some((img.width, img.height, Pixels::cmyka8_to_rgba8(v))),
             Pixels::Encoded(bytes) => {
                 let opts = photocraft_codecs::DecodeOptions {
                     limits: photocraft_codecs::Limits { max_width: 65_535, max_height: 65_535, max_pixels: MAX_PIXELS, max_alloc: 512 << 20 },
@@ -598,7 +602,7 @@ impl Builder<'_> {
                 m,
                 Some(surface),
             )),
-            Pixels::Rgba8(_) => LayerContent::Raster(surface),
+            Pixels::Rgba8(_) | Pixels::Cmyka8(_) => LayerContent::Raster(surface),
         })
     }
 
@@ -681,6 +685,8 @@ fn default_name(k: &Kind) -> String {
         Kind::Shape { .. } => "Shape",
         Kind::Text(_) => "Text",
         Kind::Image(_) => "Image",
+        Kind::Table(_) => "Table",
+        Kind::MasterInstance { .. } => "Master",
         Kind::Unsupported => "Group",
     }
     .into()
@@ -721,7 +727,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, (width, height, pixels))| af::Node {
-                class: photocraft_affinity::synth::tag(b"ImgN"),
+                class: craft_affinity::synth::tag(b"ImgN"),
                 name: format!("Image {i}"),
                 visible: true,
                 locked: false,
@@ -730,6 +736,7 @@ mod tests {
                 kind: Kind::Image(af::Image { width, height, pixels, transform: af::Affine::IDENTITY }),
                 mask: None,
                 pixel_mask: None,
+                effects: Vec::new(),
                 children: Vec::new(),
             })
             .collect();
@@ -738,6 +745,8 @@ mod tests {
             spreads: vec![af::Spread { bounds: af::Rect { x0: 0.0, y0: 0.0, x1: 64.0, y1: 64.0 }, pages: Vec::new(), transparent: true, nodes }],
             saved_by: None,
             warnings: Vec::new(),
+            masters: Vec::new(),
+            cmyk_profile: None,
         }
     }
 
@@ -783,7 +792,7 @@ mod tests {
 
     fn node(kind: Kind) -> af::Node {
         af::Node {
-            class: photocraft_affinity::synth::tag(b"ImgN"),
+            class: craft_affinity::synth::tag(b"ImgN"),
             name: "n".into(),
             visible: true,
             locked: false,
@@ -792,6 +801,7 @@ mod tests {
             kind,
             mask: None,
             pixel_mask: None,
+            effects: Vec::new(),
             children: Vec::new(),
         }
     }
@@ -802,6 +812,8 @@ mod tests {
             spreads: vec![af::Spread { bounds: af::Rect { x0: 0.0, y0: 0.0, x1: 64.0, y1: 64.0 }, pages: Vec::new(), transparent: true, nodes }],
             saved_by: None,
             warnings: Vec::new(),
+            masters: Vec::new(),
+            cmyk_profile: None,
         }
     }
 
@@ -870,6 +882,7 @@ mod tests {
                 align: ap::Align::Center,
                 dash: None,
                 behind: false,
+                profile: None,
             }],
             even_odd: false,
         })]);

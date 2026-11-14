@@ -890,16 +890,14 @@ fn indexed_images_use_the_colormap() {
     assert!(r.warnings.iter().any(|w| w.contains("indexed")));
 }
 
-/// Reject invalid palettes and unsupported indexed precision rather than inventing grayscale pixels or discarding sample bytes.
+/// Keep malformed palette framing and unsupported indexed precision errors separate from optional missing entries.
 #[test]
-fn indexed_pixels_reject_missing_truncated_and_out_of_range_palettes() {
+fn indexed_pixels_reject_malformed_palettes_and_unsupported_precision() {
     for palette in [
-        None,
         Some(vec![0, 0, 0]),
         Some([2u32.to_be_bytes().as_slice(), &[20, 40, 60]].concat()),
         Some([257u32.to_be_bytes().as_slice(), &vec![0; 257 * 3]].concat()),
         Some([1u32.to_be_bytes().as_slice(), &[20, 40, 60, 80]].concat()),
-        Some([1u32.to_be_bytes().as_slice(), &[20, 40, 60]].concat()),
     ] {
         let mut image = TestImage::rgb8(1, 1);
         image.base_type = 2;
@@ -963,7 +961,7 @@ fn image_parasites_resolution_guides_and_comment() {
     guides.push(2);
     img.image_props.push((18, guides));
     let mut parasites = Vec::new();
-    let test_icc = photocraft_cms::Builtin::DisplayP3.profile().to_bytes();
+    let test_icc = craft_cms::Builtin::DisplayP3.profile().to_bytes();
     for (name, data) in [("gimp-comment", &b"hello\0"[..]), ("icc-profile", test_icc.as_slice())] {
         parasites.extend_from_slice(&(name.len() as u32 + 1).to_be_bytes());
         parasites.extend_from_slice(name.as_bytes());
@@ -980,7 +978,7 @@ fn image_parasites_resolution_guides_and_comment() {
     assert_eq!(d.resolution_dpi, 300.0);
     assert_eq!((d.guides.horizontal.as_slice(), d.guides.vertical.as_slice()), (&[4.0][..], &[7.0][..]));
     assert_eq!(d.metadata.text, vec![("Comment".to_string(), "hello".to_string())]);
-    assert_eq!(d.icc_profile.as_deref().map(|p| p.as_slice()), Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes().as_slice()));
+    assert_eq!(d.icc_profile.as_deref().map(|p| p.as_slice()), Some(craft_cms::Builtin::DisplayP3.profile().to_bytes().as_slice()));
 }
 
 /// Verify imported relationships and unsupported source features produce explicit outcomes alongside editable native layers.
@@ -1459,7 +1457,8 @@ fn blank_layers_are_not_charged_for_pruned_tiles() {
     let mut budget = MAX_PIXEL_BYTES;
     for _ in 0..4 {
         let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
-        let px = Pixels { width: 1, height: 300_000, channels: 4, data: vec![0.0; 1_200_000], underflow: false, coverage_clamped: false };
+        let px =
+            Pixels { width: 1, height: 300_000, channels: 4, data: vec![0.0; 1_200_000], underflow: false, coverage_clamped: false, palette_fallback: false };
         write_pixels(&mut surface, &px, 0, 0, &mut budget).unwrap();
     }
     assert_eq!(budget, MAX_PIXEL_BYTES);

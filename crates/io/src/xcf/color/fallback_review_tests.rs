@@ -12,7 +12,7 @@ fn unusable_assignments() -> Vec<AssignmentCase> {
     lut.a2b = Builtin::LabD50.profile().a2b.clone();
     let lut = lut.with_encoded_bytes().to_bytes();
     let mut gray_lab = Builtin::SGray.profile().clone();
-    gray_lab.pcs = photocraft_cms::Pcs::Lab;
+    gray_lab.pcs = craft_cms::Pcs::Lab;
     let gray_lab = gray_lab.with_encoded_bytes().to_bytes();
     let mut no_transform = Builtin::DisplayP3.profile().clone();
     no_transform.matrix = None;
@@ -122,7 +122,7 @@ fn usable_assignments_and_unassigned_encodings_do_not_report_a_fallback() {
                 assert_eq!(selected.bytes, profile(mode, precision, source.map(<[u8]>::to_vec)).unwrap());
                 let (bytes, _) = fixture(mode, code, source);
                 let imported = crate::import("usable-icc.xcf", &bytes).unwrap();
-                assert_eq!(imported.document.icc_profile.as_ref(), Some(&selected.bytes));
+                assert_eq!(imported.document.icc_profile.as_ref(), selected.tag_document.then_some(&selected.bytes));
                 assert!(!imported.warnings.iter().any(|warning| warning.contains("assigned ICC") && warning.contains("implicit")));
                 let Some(ImportConversion::Report(report)) = imported.document.metadata.import_conversion.as_deref() else { panic!("typed report") };
                 assert!(

@@ -1,6 +1,6 @@
 //! Portable stored color literals for native text and vectors.
 use super::ColorLiteral;
-use photocraft_cms::{Builtin, ColorSpace, Curve, Intent, Profile, Transform};
+use craft_cms::{Builtin, ColorSpace, Curve, Intent, Profile, Transform};
 
 #[cfg(test)]
 mod review_tests;
@@ -80,11 +80,11 @@ pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], 
         if !source.is_matrix_shaper() || source.b2a.iter().any(Option::is_some) {
             return Err("stored literal ICC has no separable native encoding representation".into());
         }
-        let curve = if linear { Curve::Identity } else { photocraft_cms::curve::srgb_trc() };
+        let curve = if linear { Curve::Identity } else { craft_cms::curve::srgb_trc() };
         if gray {
             // Gray Lab PCS curves yield L*/100, not luminance. An Identity or
             // sRGB luminance curve would silently change the literal's meaning.
-            if source.pcs == photocraft_cms::Pcs::Lab {
+            if source.pcs == craft_cms::Pcs::Lab {
                 return Err(LiteralColorError::GrayLabPcsTransfer);
             }
             source.gray_trc = Some(curve);
@@ -96,7 +96,9 @@ pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], 
         .map_err(|error| LiteralColorError::Other(format!("stored literal native color conversion: {error}")))?;
     let samples: Vec<_> = value.pixels.iter().take(channels).map(|v| f32::from(*v) / 255.0).collect();
     let mut rgb = [0.0; 3];
-    transform.convert_f32(&samples, channels, &mut rgb, 3, false);
+    transform
+        .convert_f32(&samples, channels, &mut rgb, 3, false)
+        .map_err(|error| LiteralColorError::Other(format!("stored literal native color conversion: {error}")))?;
     if rgb.iter().any(|v| !v.is_finite()) {
         return Err("stored literal conversion is nonfinite".into());
     }

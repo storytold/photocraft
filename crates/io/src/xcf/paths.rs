@@ -616,7 +616,7 @@ mod tests {
     /// Compare profiled and grayscale vector paints with the shared native CMS conversion and reject ambiguous encodings.
     #[test]
     fn portable_profiled_and_gray_vector_paints_use_native_cms() {
-        let profile = photocraft_cms::Builtin::DisplayP3.profile().to_bytes();
+        let profile = craft_cms::Builtin::DisplayP3.profile().to_bytes();
         let mut b = Vec::new();
         u(&mut b, 0);
         u(&mut b, 1);
@@ -629,15 +629,15 @@ mod tests {
         let mut cursor = Cursor { b: &b, pos: 0, wide: false };
         let mut notes = Vec::new();
         let actual = paint(&mut cursor, &mut notes).unwrap();
-        let transform = photocraft_cms::Transform::new(
-            photocraft_cms::Builtin::DisplayP3.profile(),
-            photocraft_cms::Builtin::Srgb.profile(),
-            photocraft_cms::Intent::RelativeColorimetric,
+        let transform = craft_cms::Transform::new(
+            craft_cms::Builtin::DisplayP3.profile(),
+            craft_cms::Builtin::Srgb.profile(),
+            craft_cms::Intent::RelativeColorimetric,
             false,
         )
         .unwrap();
         let mut expected = [0.; 3];
-        transform.convert_f32(&[1., 0., 0.], 3, &mut expected, 3, false);
+        transform.convert_f32(&[1., 0., 0.], 3, &mut expected, 3, false).unwrap();
         let Fill::Solid(color) = actual else { panic!("native solid paint") };
         for (actual, expected) in color.c.iter().zip(expected) {
             assert!((actual - expected).abs() < 0.00001);

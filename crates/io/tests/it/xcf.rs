@@ -216,9 +216,9 @@ fn float_linear_opens_as_32_bit_float_with_a_linear_profile() {
     let d = open("float-linear.xcf").document;
     assert_eq!((d.mode, d.depth), (ColorMode::Rgb, SampleType::F32));
     let icc = d.icc_profile.as_ref().expect("a linear-light profile");
-    let profile = photocraft_cms::Profile::parse(icc).expect("usable native ICC");
-    let expected = photocraft_cms::Profile::parse(&photocraft_cms::Builtin::LinearSrgb.profile().to_bytes()).unwrap();
-    assert_eq!(profile.color_space, photocraft_cms::ColorSpace::Rgb);
+    let profile = craft_cms::Profile::parse(icc).expect("usable native ICC");
+    let expected = craft_cms::Profile::parse(&craft_cms::Builtin::LinearSrgb.profile().to_bytes()).unwrap();
+    assert_eq!(profile.color_space, craft_cms::ColorSpace::Rgb);
     assert_eq!(profile.matrix, expected.matrix, "implicit source sRGB colorants are preserved");
     assert_eq!(profile.white_point, expected.white_point);
     for curve in profile.trc.as_ref().expect("native RGB curves") {

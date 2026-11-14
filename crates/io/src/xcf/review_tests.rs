@@ -29,9 +29,9 @@ fn unsupported_vertical_column_order_keeps_exact_saved_pixels() {
 
 #[test]
 fn one_way_assigned_profile_keeps_stored_text_pixels_instead_of_aborting() {
-    use photocraft_cms::pipeline::Stage;
-    use photocraft_cms::profile::{Lut, LutKind};
-    use photocraft_cms::{Builtin, Curve, Intent, Profile, Transform};
+    use craft_cms::pipeline::Stage;
+    use craft_cms::profile::{Lut, LutKind};
+    use craft_cms::{Builtin, Curve, Intent, Profile, Transform};
     let mut profile = Builtin::Srgb.profile().clone();
     profile.matrix = None;
     profile.trc = None;
@@ -42,7 +42,7 @@ fn one_way_assigned_profile_keeps_stored_text_pixels_instead_of_aborting() {
         outputs: 3,
         stages: vec![
             Stage::Curves(vec![Curve::Identity; 3]),
-            Stage::Clut(photocraft_cms::clut::Clut::sample(vec![2; 3], 3, |input, out| out.copy_from_slice(input))),
+            Stage::Clut(craft_cms::clut::Clut::sample(vec![2; 3], 3, |input, out| out.copy_from_slice(input)).unwrap()),
             Stage::Curves(vec![Curve::Identity; 3]),
         ],
     });

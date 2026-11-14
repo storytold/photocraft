@@ -156,19 +156,11 @@ fn before_layer_polls(bytes: &[u8]) -> usize {
 }
 
 #[test]
-fn historical_decode_and_geometry_cancel_mid_tiles_and_uncancelled_orders_keep_pixels() {
+fn historical_decode_cancels_mid_tiles_while_geometry_never_reads_them() {
     for (order, little) in [(Order::LittleEndian, true), (Order::BigEndian, false)] {
         let bytes = tiled_source(7, little);
-        for geometry in [false, true] {
-            let result = during_decode(Trigger::Layer(0.05), |ctl| {
-                if geometry {
-                    crate::smart_xcf_order::geometry("source.xcf", &bytes, Some(order), &ctl).map(|_| ())
-                } else {
-                    crate::smart_xcf_order::decode("source.xcf", &bytes, Some(order), &ctl).map(|_| ())
-                }
-            });
-            assert!(matches!(result, Err(crate::IoError::Cancelled)));
-        }
+        let result = during_decode(Trigger::Layer(0.05), |ctl| crate::smart_xcf_order::decode("source.xcf", &bytes, Some(order), &ctl));
+        assert!(matches!(result, Err(crate::IoError::Cancelled)));
         let doc = crate::smart_xcf_order::decode("source.xcf", &bytes, Some(order), &Interrupt::NONE).unwrap();
         assert_eq!(doc.size, Size::new(SIDE, HEIGHT));
         assert_eq!(doc.layers[0].surface().unwrap().pixel(511, 1023), [0x1234u16, 0x5678, 0x9abc, 0xffff].map(|sample| f32::from(sample) / 65535.));
@@ -177,11 +169,11 @@ fn historical_decode_and_geometry_cancel_mid_tiles_and_uncancelled_orders_keep_p
 }
 
 #[test]
-fn geometry_without_order_passes_cancellation_into_legacy_geometry_fallback() {
+fn geometry_without_order_cancels_in_header_and_conversion_still_cancels_in_pixels() {
     let bytes = tiled_source(3, false);
     let prefix = before_layer_polls(&bytes);
-    // geometry contributes one outer check before the independently measured import prefix.
-    let result = during_decode(Trigger::Poll(prefix + 1 + 2), |ctl| crate::smart_xcf_order::geometry("ordinary.xcf", &bytes, None, &ctl));
+    // Geometry checks its wrapper, then the XCF reader, then the first image property.
+    let result = during_decode(Trigger::Poll(3), |ctl| crate::smart_xcf_order::geometry("ordinary.xcf", &bytes, None, &ctl));
     assert!(matches!(result, Err(crate::IoError::Cancelled)));
     assert_eq!(crate::smart_xcf_order::geometry("ordinary.xcf", &bytes, None, &Interrupt::NONE).unwrap(), ((512., 1024.), 72.));
     let doc = document(SmartSource::Embedded { file_name: "ordinary.xcf".into(), bytes: Arc::new(bytes.clone()) }, None);
@@ -224,7 +216,9 @@ fn cancelled_source_conversion_and_composite_do_not_cache_fallbacks_or_copied_so
                 bytes: bytes.as_ref().clone(),
             })),
         ));
-        during_decode(Trigger::Layer(0.05), |ctl| {
+        // The retained source already has geometry in its header: cancellation occurs while
+        // reading image properties, rather than decoding its tile hierarchy.
+        during_decode(Trigger::Poll(4), |ctl| {
             let mut ex = exporter_with_interrupt(&known, ctl);
             assert!(ex.smart_source(smart(&known), None).is_err());
             assert!(ex.smart.linked_contents.is_empty(), "cancelled geometry must not proceed through a default-size fallback");

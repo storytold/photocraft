@@ -17,6 +17,8 @@ const MAX_NODES: usize = 65_536;
 const MAX_DEPTH: usize = 32;
 
 #[cfg(test)]
+mod literal_profile_review_tests;
+#[cfg(test)]
 mod review_round2_tests;
 #[cfg(test)]
 mod review_tests;
@@ -264,7 +266,7 @@ fn markup_color(text: &str) -> Result<Color> {
         "silver" => [192, 192, 192],
         "teal" => [0, 128, 128],
         "rebeccapurple" => [102, 51, 153],
-        _ => return photocraft_codecs::x11_color_rgb(&normalized).map(|[r, g, b]| Color::rgb(r, g, b)).ok_or_else(unsupported),
+        _ => return craft_raster_codecs::xpm::x11_color_rgb(&normalized).map(|[r, g, b]| Color::rgb(r, g, b)).ok_or_else(unsupported),
     };
     let [r, g, b] = rgb.map(|sample| f32::from(sample) / 255.);
     Ok(Color::rgb(r, g, b))
@@ -331,10 +333,10 @@ fn anchor_point_origin(layer: &mut TextLayer, dpi: f32) -> Result<()> {
 
 /// Admit the sRGB-literal conversion before replacing stored text/vector pixels.
 /// A valid input-only document profile can still lack the required reverse transform.
-pub(super) fn color_transform(bytes: &[u8]) -> Result<std::sync::Arc<photocraft_cms::Transform>> {
-    use photocraft_cms::{Builtin, Intent, Profile, TransformOptions};
+pub(super) fn color_transform(bytes: &[u8]) -> Result<std::sync::Arc<craft_cms::Transform>> {
+    use craft_cms::{Builtin, Intent, Profile, TransformOptions};
     let destination = Profile::parse(bytes).map_err(|e| invalid(format!("text destination profile: {e}")))?;
-    photocraft_cms::transform::cached(
+    craft_cms::transform::cached(
         Builtin::Srgb.profile(),
         &destination,
         TransformOptions { intent: Intent::RelativeColorimetric, bpc: false, precise_float: true },
@@ -343,9 +345,10 @@ pub(super) fn color_transform(bytes: &[u8]) -> Result<std::sync::Arc<photocraft_
 }
 
 /// Text decimal/markup RGB colors are sRGB literals, independently of the XCF
-/// pixel profile. Convert them once after the native document profile is known.
-pub(super) fn convert_colors(document: &mut photocraft_doc::Document) -> Result<()> {
-    use photocraft_cms::Transform;
+/// pixel profile. Convert them once using the reader's internal pixel encoding,
+/// even when no ICC assignment is attached to the document.
+pub(super) fn convert_colors(document: &mut photocraft_doc::Document, profile: &[u8]) -> Result<()> {
+    use craft_cms::Transform;
     /// Detect native Text or Shape content through groups before allocating a document color transform.
     fn has_special(layers: &[photocraft_doc::Layer]) -> bool {
         layers.iter().any(|layer| match &layer.content {
@@ -357,44 +360,46 @@ pub(super) fn convert_colors(document: &mut photocraft_doc::Document) -> Result<
     if !has_special(&document.layers) {
         return Ok(());
     }
-    let Some(bytes) = &document.icc_profile else {
-        return Err(invalid("native text color conversion requires the document profile"));
-    };
-    let transform = color_transform(bytes)?;
-    /// Convert native text-run and solid vector paints recursively into the assigned document color model.
-    fn visit(layers: &mut [photocraft_doc::Layer], transform: &Transform, mode: photocraft_color::ColorMode) {
+    // The reader's internal encoding can be known while the document remains deliberately
+    // untagged for missing-profile policy. Literal conversion must not invent an assignment.
+    let transform = color_transform(profile)?;
+    /// Convert native text-run and solid vector paints recursively into the internal document color model.
+    fn visit(layers: &mut [photocraft_doc::Layer], transform: &Transform, mode: photocraft_color::ColorMode) -> Result<()> {
         /// Use the native CMS transform for the literal color channels while retaining the color object alpha.
-        fn color(value: &mut Color, transform: &Transform, mode: photocraft_color::ColorMode) {
+        fn color(value: &mut Color, transform: &Transform, mode: photocraft_color::ColorMode) -> Result<()> {
             let mut converted = [0.0; 4];
-            transform.convert_f32(&value.c[..3], 3, &mut converted, if mode == photocraft_color::ColorMode::Grayscale { 1 } else { 3 }, false);
+            let channels = mode.color_channels();
+            let output = converted.get_mut(..channels).ok_or_else(|| invalid("native literal destination has too many channels"))?;
+            transform.convert_f32(&value.c[..3], 3, output, channels, false).map_err(|error| invalid(format!("native literal color conversion: {error}")))?;
             value.c = converted;
             value.mode = mode;
+            Ok(())
         }
         for layer in layers {
             match &mut layer.content {
                 photocraft_doc::LayerContent::Text(text) => {
                     for run in &mut text.runs {
-                        color(&mut run.style.color, transform, mode);
+                        color(&mut run.style.color, transform, mode)?;
                     }
                     text.sync_summary();
                 }
                 photocraft_doc::LayerContent::Shape(shape) => {
                     if let Some(photocraft_doc::Fill::Solid(value)) = &mut shape.fill {
-                        color(value, transform, mode);
+                        color(value, transform, mode)?;
                     }
                     if let Some(stroke) = &mut shape.stroke
                         && let photocraft_doc::Fill::Solid(value) = &mut stroke.paint
                     {
-                        color(value, transform, mode);
+                        color(value, transform, mode)?;
                     }
                 }
-                photocraft_doc::LayerContent::Group(group) => visit(&mut group.children, transform, mode),
+                photocraft_doc::LayerContent::Group(group) => visit(&mut group.children, transform, mode)?,
                 _ => {}
             }
         }
+        Ok(())
     }
-    visit(&mut document.layers, &transform, document.mode);
-    Ok(())
+    visit(&mut document.layers, &transform, document.mode)
 }
 
 /// Decode an unmodified `gimp-text-layer` parasite. Callers retain the source

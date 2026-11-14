@@ -3,7 +3,7 @@ use crate::xcf::tests::{TestImage, TestLayer, W};
 
 fn gray_lab_profile() -> std::sync::Arc<Vec<u8>> {
     let mut profile = Builtin::GrayGamma22.profile().clone();
-    profile.pcs = photocraft_cms::Pcs::Lab;
+    profile.pcs = craft_cms::Pcs::Lab;
     profile.with_encoded_bytes().to_bytes()
 }
 
@@ -17,7 +17,7 @@ fn gray_lab_literals_reject_luminance_rewrites_and_preserve_assigned_curve() {
     let source = Profile::parse(&bytes).unwrap();
     let transform = Transform::new(&source, Builtin::Srgb.profile(), Intent::RelativeColorimetric, false).unwrap();
     let mut expected = [0.; 3];
-    transform.convert_f32(&[128. / 255.], 1, &mut expected, 3, false);
+    transform.convert_f32(&[128. / 255.], 1, &mut expected, 3, false).unwrap();
     for encoding in ["Y' u8", "Y'A u8"] {
         let alpha = encoding.contains('A');
         let pixels = if alpha { &[128, 64][..] } else { &[128][..] };

@@ -6,8 +6,45 @@ const MAX_DEPTH: usize = 32;
 const MAX_NODES: usize = 8192;
 const MAX_TEXT: usize = 1 << 20;
 
+/// Keep retention policy distinct from malformed optional configuration syntax.
+#[derive(Debug)]
+pub(in crate::xcf) enum ConfigError {
+    MetadataLimit,
+    Invalid(String),
+}
+
+impl From<String> for ConfigError {
+    fn from(message: String) -> Self {
+        Self::Invalid(message)
+    }
+}
+
+impl From<&str> for ConfigError {
+    fn from(message: &str) -> Self {
+        Self::Invalid(message.into())
+    }
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MetadataLimit => formatter.write_str("effect configuration exceeds document metadata allowance"),
+            Self::Invalid(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl From<ConfigError> for crate::IoError {
+    fn from(error: ConfigError) -> Self {
+        match error {
+            ConfigError::MetadataLimit => Self::XcfMetadataLimit,
+            ConfigError::Invalid(message) => crate::xcf::invalid(message),
+        }
+    }
+}
+
 /// Parses bounded named configuration lists as data, charging the shared metadata allowance without evaluating expressions.
-pub(in crate::xcf) fn parse_config<'a>(raw: &'a str, budget: &mut usize) -> std::result::Result<Config<'a>, String> {
+pub(in crate::xcf) fn parse_config<'a>(raw: &'a str, budget: &mut usize) -> std::result::Result<Config<'a>, ConfigError> {
     if raw.len() > MAX_TEXT {
         return Err("effect configuration exceeds 1 MiB".into());
     }
@@ -28,8 +65,8 @@ struct Reader<'a, 'b> {
 
 impl<'a> Reader<'a, '_> {
     /// Rejects syntax storage beyond the remaining document metadata allowance before vector growth.
-    fn charge(&mut self, count: usize) -> std::result::Result<(), String> {
-        *self.budget = self.budget.checked_sub(count).ok_or_else(|| "effect configuration exceeds document metadata allowance".to_string())?;
+    fn charge(&mut self, count: usize) -> std::result::Result<(), ConfigError> {
+        *self.budget = self.budget.checked_sub(count).ok_or(ConfigError::MetadataLimit)?;
         Ok(())
     }
 
@@ -62,7 +99,7 @@ impl<'a> Reader<'a, '_> {
     }
 
     /// Builds ordered list data under depth and node caps, rejecting unmatched delimiters and charging storage before insertion.
-    fn sequence(&mut self, depth: usize, nested: bool) -> std::result::Result<Vec<ConfigExpr<'a>>, String> {
+    fn sequence(&mut self, depth: usize, nested: bool) -> std::result::Result<Vec<ConfigExpr<'a>>, ConfigError> {
         if depth > MAX_DEPTH {
             return Err("effect configuration nesting exceeds 32".into());
         }
@@ -99,7 +136,7 @@ impl<'a> Reader<'a, '_> {
     }
 
     /// Reads a symbol or finite number while rejecting control characters, empty atoms and nonfinite numeric input.
-    fn atom(&mut self) -> std::result::Result<ConfigExpr<'a>, String> {
+    fn atom(&mut self) -> std::result::Result<ConfigExpr<'a>, ConfigError> {
         let start = self.pos;
         while let Some(character) = self.peek() {
             if character.is_ascii_whitespace() || matches!(character, '(' | ')' | '#' | '"') {
@@ -124,7 +161,7 @@ impl<'a> Reader<'a, '_> {
     }
 
     /// Decodes bounded quoted text and octal bytes, preserving binary payloads instead of forcing invalid UTF-8 into text.
-    fn string(&mut self) -> std::result::Result<ConfigExpr<'a>, String> {
+    fn string(&mut self) -> std::result::Result<ConfigExpr<'a>, ConfigError> {
         self.advance('"');
         let mut text = Vec::new();
         loop {

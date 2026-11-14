@@ -970,7 +970,7 @@ pub enum OpenSource {
 
 /// Compressed envelopes require worker-side format probing; these signatures do not claim XCF.
 pub fn has_compressed_import_signature(bytes: &[u8]) -> bool {
-    bytes.starts_with(&[0x1f, 0x8b]) || bytes.starts_with(b"BZh") || bytes.starts_with(b"\xfd7zXZ\0")
+    photocraft_io::import_compression(bytes).is_some()
 }
 
 /// The command id open jobs report (there is no engine command: opening is the shell's).
@@ -2312,3 +2312,7 @@ pub(crate) mod historical_xcf_fixture;
 #[cfg(test)]
 #[path = "jobs/historical_source_tests.rs"]
 mod historical_source_tests;
+
+#[cfg(test)]
+#[path = "jobs/compressed_signature_tests.rs"]
+mod compressed_signature_tests;

@@ -231,7 +231,7 @@ fn assert_native_equal(before: &Document, after: &Document) {
 /// loss notices.
 fn rgb_double_offcanvas_layers_masks_and_channel_keep_native_bits_profile_and_owner_notices() {
     let mut source = Image::new(0, 750, 8);
-    source.profile = Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes().as_ref().clone());
+    source.profile = Some(craft_cms::Builtin::DisplayP3.profile().to_bytes().as_ref().clone());
     let mut front = drawable("Double foreground", 2, 1, 1, doubles([1. + 2f64.powi(-24), -2., 2f64.powi(-150), 0.25, 1. + 3. * 2f64.powi(-24), 4., -0., 0.75]));
     front.offset = (-1, 1);
     front.mask = Some(doubles([2f64.powi(-150), 0.5]));
@@ -289,8 +289,9 @@ fn gray_u32_color_alpha_mask_and_channel_normalize_to_native_float_without_u16_r
         document.channels[0].surface.read_region(Rect::new(0, 0, 2, 2)).iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
         [0, 0x2f800000, 0x3f800000, 0x3f800000]
     );
-    let profile = photocraft_cms::Profile::parse(document.icc_profile.as_ref().unwrap()).unwrap();
-    assert_eq!(profile.color_space, photocraft_cms::ColorSpace::Gray);
+    // Unassigned nonlinear samples stay untagged so the host can apply its missing-profile policy.
+    // Integer normalization changes storage depth, not the source's profile assignment.
+    assert!(document.icc_profile.is_none());
     assert_native_equal(document, &reopen(document));
 }
 
@@ -408,11 +409,11 @@ fn published_float_linear_import_retains_native_profile_depth_and_samples_on_nat
     let document = &imported.document;
     assert_eq!(document.depth, SampleType::F32);
     assert_native_equal(document, &reopen(document));
-    let profile = photocraft_cms::Profile::parse(document.icc_profile.as_ref().unwrap()).unwrap();
-    let target = photocraft_cms::Builtin::LinearSrgb.profile();
-    let transform = photocraft_cms::Transform::new(&profile, target, photocraft_cms::Intent::RelativeColorimetric, false).unwrap();
+    let profile = craft_cms::Profile::parse(document.icc_profile.as_ref().unwrap()).unwrap();
+    let target = craft_cms::Builtin::LinearSrgb.profile();
+    let transform = craft_cms::Transform::new(&profile, target, craft_cms::Intent::RelativeColorimetric, false).unwrap();
     let mut converted = [0.; 3];
-    transform.convert_f32(&[0.125, 0.25, 0.5], 3, &mut converted, 3, false);
+    transform.convert_f32(&[0.125, 0.25, 0.5], 3, &mut converted, 3, false).unwrap();
     for (actual, expected) in converted.into_iter().zip([0.125, 0.25, 0.5]) {
         assert!((actual - expected).abs() < 0.0001);
     }

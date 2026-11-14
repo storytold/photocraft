@@ -10,7 +10,7 @@ const MAX_PROPERTIES: usize = 4096;
 
 /// Debits effect metadata before allocation, rejecting requests that exceed the document's remaining allowance.
 fn charge(budget: &mut usize, bytes: usize) -> Result<()> {
-    *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("stored effects exceed the document metadata allowance"))?;
+    *budget = budget.checked_sub(bytes).ok_or(crate::IoError::XcfMetadataLimit)?;
     Ok(())
 }
 
@@ -113,6 +113,7 @@ pub(in crate::xcf) fn decode<'a>(base: &Cursor<'a>, offset: usize, version: u32,
                 let value_bytes = bytes.get(argument_cursor.pos..).ok_or_else(|| invalid("effect argument framing"))?;
                 let value = match argument(&mut argument_cursor, value_kind, budget) {
                     Ok(value) => value,
+                    Err(error @ (crate::IoError::XcfMetadataLimit | crate::IoError::Cancelled)) => return Err(error),
                     Err(error) => {
                         let message = error.to_string();
                         charge(budget, message.capacity())?;
@@ -206,7 +207,7 @@ fn argument<'a>(cursor: &mut Cursor<'a>, kind: u32, budget: &mut usize) -> Resul
         5 => ArgumentValue::Enum(cursor.u32()? as i32),
         6 => {
             let raw = string(cursor)?;
-            ArgumentValue::Config(parse_config(raw, budget).map_err(invalid)?)
+            ArgumentValue::Config(parse_config(raw, budget).map_err(crate::IoError::from)?)
         }
         7 => ArgumentValue::UInt(cursor.u32()?),
         8 => {

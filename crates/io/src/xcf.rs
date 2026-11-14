@@ -20,6 +20,7 @@ mod color;
 mod conversion;
 #[cfg(test)]
 mod dpi_review_tests;
+mod geometry;
 mod layers;
 mod samples;
 mod wire;
@@ -39,6 +40,8 @@ mod floating_gray_review_tests;
 #[cfg(test)]
 mod historical_precision_tests;
 mod metadata;
+#[cfg(test)]
+mod metadata_budget_review_tests;
 mod metadata_packets;
 #[cfg(test)]
 mod metadata_tests;
@@ -148,6 +151,16 @@ struct Image<'a> {
     native_color_error: Option<String>,
 }
 
+/// Drawable pixels remain essential even when their optional names/effect lists do not fit.
+struct Channel<'a> {
+    name: String,
+    properties: Vec<Prop<'a>>,
+    pixels: Pixels,
+    effects: Vec<usize>,
+    name_limited: bool,
+    effects_limited: bool,
+}
+
 /// Bounded header/configuration facts; auxiliary hierarchy pixels are never decoded.
 struct CoverageMaskHeader<'a> {
     name: String,
@@ -178,9 +191,54 @@ struct Pixels {
     data: Vec<f32>,
     underflow: bool,
     coverage_clamped: bool,
+    palette_fallback: bool,
 }
 
 impl<'a> Image<'a> {
+    fn metadata_limit(&mut self, owner: usize, feature: &str, source: &str) -> Result<()> {
+        self.outcomes.notice(
+            owner,
+            feature,
+            ConversionReason::RetentionLimit,
+            (source.into(), "Usable native pixels preserved; optional metadata not admitted beyond its retention limits".into()),
+            Some("reached optional metadata retention limits; usable pixels were preserved"),
+            &mut self.warnings,
+        )
+    }
+
+    /// Borrow framing first; do not allocate an input-sized name after its retention budget is gone.
+    fn metadata_name(&mut self, cursor: &mut Cursor<'a>, fallback: &str) -> Result<(String, bool)> {
+        let raw = cursor.string_bytes()?;
+        let worst = if std::str::from_utf8(raw).is_ok() { raw.len() } else { raw.len().saturating_mul(3) };
+        if worst > self.meta_budget {
+            return Ok((fallback.into(), true));
+        }
+        let name = String::from_utf8_lossy(raw).into_owned();
+        let Some(remaining) = self.meta_budget.checked_sub(name.capacity()) else {
+            return Ok((fallback.into(), true));
+        };
+        self.meta_budget = remaining;
+        Ok((name, false))
+    }
+
+    /// Effect pointers are optional and last in the owner header. A bounded pre-scan
+    /// admits the whole list before allocation; omitted lists need not be followed.
+    fn optional_effect_pointers(&mut self, cursor: &mut Cursor<'a>, ctl: &Interrupt<'_>) -> Result<(Vec<usize>, bool)> {
+        let mut scan = cursor.at(cursor.pos);
+        let charge = 4 * std::mem::size_of::<usize>().max(std::mem::size_of::<u64>());
+        for count in 0usize..=1024 {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            let pointer = if scan.wide { (u64::from(scan.u32()?) << 32) | u64::from(scan.u32()?) } else { u64::from(scan.u32()?) };
+            if pointer == 0 {
+                return effects::read_pointers(cursor, &mut self.meta_budget, ctl).map(|pointers| (pointers, false));
+            }
+            if count == 1024 || count.saturating_add(1).saturating_mul(charge) > self.meta_budget {
+                return Ok((Vec::new(), true));
+            }
+        }
+        Ok((Vec::new(), true))
+    }
+
     /// Reads a hierarchy (`hptr`): the first level's tiles into `channels` floats per pixel,
     /// `source_channels` as stored (indexed images expand to RGB here).
     fn hierarchy(&mut self, hptr: usize, source_channels: usize, coverage: bool, ctl: &Interrupt<'_>) -> Result<Pixels> {
@@ -220,6 +278,7 @@ impl<'a> Image<'a> {
         let mut data = vec![0.0f32; count];
         let mut underflow = false;
         let mut coverage_clamped = false;
+        let mut palette_fallback = false;
         let stride = w as usize * channels;
         for (i, &at) in tiles.iter().enumerate() {
             if i % 64 == 0 {
@@ -264,7 +323,10 @@ impl<'a> Image<'a> {
                     let output = data.get_mut(dst..end).ok_or_else(|| invalid("tile pixel exceeds its drawable"))?;
                     if indexed {
                         let idx = usize::from(*pixel.first().ok_or_else(|| invalid("indexed pixel has no palette index"))?);
-                        let [r, g, b] = self.colormap.get(idx).copied().ok_or_else(|| invalid(format!("palette index {idx} has no color entry")))?;
+                        let [r, g, b] = self.colormap.get(idx).copied().unwrap_or_else(|| {
+                            palette_fallback = true;
+                            [idx as u8; 3]
+                        });
                         let rgb = output.get_mut(..3).ok_or_else(|| invalid("indexed pixel has no RGB destination"))?;
                         rgb.copy_from_slice(&[f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0]);
                         if source_channels == 2 {
@@ -275,19 +337,18 @@ impl<'a> Image<'a> {
                 }
             }
         }
-        Ok(Pixels { width: w, height: h, channels, data, underflow, coverage_clamped })
+        Ok(Pixels { width: w, height: h, channels, data, underflow, coverage_clamped, palette_fallback })
     }
 
     /// A channel structure (a layer mask, the selection or an extra channel) as one-channel
     /// pixels, with its properties.
-    fn channel(&mut self, ptr: usize, ctl: &Interrupt<'_>) -> Result<(String, Vec<Prop<'a>>, Pixels, Vec<usize>)> {
+    fn channel(&mut self, ptr: usize, ctl: &Interrupt<'_>) -> Result<Channel<'a>> {
         let mut c = self.c.at(ptr);
         let (width, height) = (c.u32()?, c.u32()?);
-        let name = c.string()?;
-        self.meta_budget = self.meta_budget.checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?;
+        let (name, name_limited) = self.metadata_name(&mut c, "Channel")?;
         let props = props(&mut c)?;
         let hptr = c.ptr()?;
-        let effect_pointers = if self.version >= 26 { effects::read_pointers(&mut c, &mut self.meta_budget, ctl)? } else { Vec::new() };
+        let (effect_pointers, effects_limited) = if self.version >= 26 { self.optional_effect_pointers(&mut c, ctl)? } else { (Vec::new(), false) };
         let saved = (self.base_type, self.precision);
         // Channels are always one plain sample per pixel, even in indexed images.
         self.base_type = 0;
@@ -300,7 +361,7 @@ impl<'a> Image<'a> {
         if (px.width, px.height) != (width, height) {
             return Err(invalid(format!("channel or mask '{name}' hierarchy dimensions differ from the declared {width}x{height}")));
         }
-        Ok((name, props, px, effect_pointers))
+        Ok(Channel { name, properties: props, pixels: px, effects: effect_pointers, name_limited, effects_limited })
     }
 
     /// Follow only bounded mask framing and child-effect references. The hierarchy
@@ -318,7 +379,7 @@ impl<'a> Image<'a> {
             .len()
             .saturating_add(std::mem::size_of::<CoverageMaskHeader<'_>>())
             .saturating_add(properties.len().saturating_mul(std::mem::size_of::<Prop<'_>>()));
-        self.meta_budget = self.meta_budget.checked_sub(bytes).ok_or_else(|| invalid("auxiliary mask metadata exceeds its allowance"))?;
+        self.meta_budget = self.meta_budget.checked_sub(bytes).ok_or(IoError::XcfMetadataLimit)?;
         Ok(CoverageMaskHeader { name, properties, width, height, children })
     }
 
@@ -338,10 +399,10 @@ impl<'a> Image<'a> {
             return Ok(());
         }
         let owner_entry = self.outcomes.entry(owner)?.clone();
-        self.meta_budget = self
-            .meta_budget
-            .checked_sub(pointers.len().saturating_mul(6 * std::mem::size_of::<usize>()))
-            .ok_or_else(|| invalid("coverage effect traversal exceeds metadata allowance"))?;
+        let Some(remaining) = self.meta_budget.checked_sub(pointers.len().saturating_mul(6 * std::mem::size_of::<usize>())) else {
+            return self.metadata_limit(owner, "xcf.coverage_effect", "Coverage-effect inventory exceeds the remaining metadata allowance");
+        };
+        self.meta_budget = remaining;
         let mut work: Vec<(usize, usize, usize)> = pointers.iter().rev().map(|pointer| (*pointer, 0, owner)).collect();
         let mut effects_seen = std::collections::HashSet::new();
         let mut masks_seen = std::collections::HashSet::new();
@@ -356,7 +417,7 @@ impl<'a> Image<'a> {
             }
             let current_owner = self.outcomes.entry(source_owner)?.clone();
             if effects_seen.len() >= MAX_LAYERS {
-                return Err(invalid("coverage effects exceed 8,192 records"));
+                return self.metadata_limit(owner, "xcf.coverage_effect", "Coverage-effect inventory reached its bounded record limit");
             }
             let mut source = current_owner.source.clone();
             source.kind = format!("{}_effect", current_owner.source.kind);
@@ -376,14 +437,18 @@ impl<'a> Image<'a> {
                 })?;
                 continue;
             }
-            self.meta_budget = self
-                .meta_budget
-                .checked_sub(8 * std::mem::size_of::<usize>())
-                .ok_or_else(|| invalid("coverage effect traversal exceeds metadata allowance"))?;
+            let Some(remaining) = self.meta_budget.checked_sub(8 * std::mem::size_of::<usize>()) else {
+                return self.metadata_limit(owner, "xcf.coverage_effect", "Coverage-effect inventory exceeds the remaining metadata allowance");
+            };
+            self.meta_budget = remaining;
             let before_effect = self.meta_budget;
             let effect = match effects::decode(&self.c, pointer, self.version, &mut self.meta_budget, ctl) {
                 Ok(effect) => effect,
                 Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+                Err(IoError::XcfMetadataLimit) => {
+                    self.meta_budget = before_effect;
+                    return self.metadata_limit(owner, "xcf.coverage_effect", "Coverage-effect configuration exceeds the remaining metadata allowance");
+                }
                 Err(error) => {
                     // Failed decoding retains no effect allocation; preserve only the caller's traversal charges.
                     self.meta_budget = before_effect;
@@ -454,6 +519,11 @@ impl<'a> Image<'a> {
                 let record = match self.coverage_mask_header(start, ctl) {
                     Ok(record) => record,
                     Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+                    Err(IoError::XcfMetadataLimit) => {
+                        self.meta_budget = before_mask;
+                        self.metadata_limit(outcome, "xcf.coverage_effect_mask", "Auxiliary mask configuration exceeds the remaining metadata allowance")?;
+                        continue;
+                    }
                     Err(error) => {
                         // A failed optional header retains no child list or header allocation.
                         // Keep the outer effect/traversal debits, which precede this snapshot.
@@ -490,10 +560,10 @@ impl<'a> Image<'a> {
                 for property in &record.properties {
                     self.outcomes.property(mask_outcome, property.kind, property.offset, property.data)?;
                 }
-                self.meta_budget = self
-                    .meta_budget
-                    .checked_sub(record.children.len().saturating_mul(6 * std::mem::size_of::<usize>()))
-                    .ok_or_else(|| invalid("coverage effect work exceeds metadata allowance"))?;
+                let Some(remaining) = self.meta_budget.checked_sub(record.children.len().saturating_mul(6 * std::mem::size_of::<usize>())) else {
+                    return self.metadata_limit(outcome, "xcf.coverage_effect", "Nested coverage-effect inventory exceeds the remaining metadata allowance");
+                };
+                self.meta_budget = remaining;
                 work.extend(record.children.iter().rev().map(|pointer| (*pointer, depth + 1, mask_outcome)));
             }
         }
@@ -502,6 +572,19 @@ impl<'a> Image<'a> {
 
     /// Records per-owner numerical loss from coverage normalization or native precision narrowing.
     fn precision_underflow(&mut self, owner: usize, pixels: &Pixels) -> Result<()> {
+        if pixels.palette_fallback {
+            self.outcomes.notice(
+                owner,
+                "xcf.indexed_palette_fallback",
+                ConversionReason::InvalidOptionalData,
+                (
+                    "Stored palette indices have no matching color entries".into(),
+                    "Missing entries interpreted as grayscale index values; stored alpha preserved".into(),
+                ),
+                Some("has missing palette colors; unmatched indices open as grayscale with their stored alpha"),
+                &mut self.warnings,
+            )?;
+        }
         if pixels.coverage_clamped {
             self.outcomes.notice(
                 owner,
@@ -752,6 +835,10 @@ fn read_image_metadata<'a>(c: &mut Cursor<'a>, version: u32) -> Result<ImageMeta
     Ok(ImageMetadata { properties: image_props, compression, colormap, icc })
 }
 
+pub(crate) fn source_geometry(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<((f64, f64), f64)>> {
+    geometry::source_geometry(name, bytes, ctl)
+}
+
 /// Imports XCF with an explicit historical sample-order decision, preserving native data and durable
 /// conversion outcomes.
 pub(crate) fn import_with_sample_order(
@@ -797,7 +884,7 @@ pub(crate) fn import_with_sample_order(
 
     let ImageMetadata { properties: image_props, compression, colormap, icc } = read_image_metadata(&mut c, version)?;
     let assigned_profile = icc.is_some();
-    let color::ProfileSelection { bytes: native_profile, fallback_reason } = color::select_profile(mode, precision, icc)?;
+    let color::ProfileSelection { bytes: native_profile, fallback_reason, tag_document } = color::select_profile(mode, precision, icc)?;
     if let Some(reason) = &fallback_reason {
         warnings.note(&format!(
             "The assigned ICC profile could not be used: {reason}. Original samples use the implicit {} profile for their encoding; assigned colorants could not be preserved",
@@ -942,11 +1029,11 @@ pub(crate) fn import_with_sample_order(
         &mut image.meta_budget,
         &mut image.warnings,
     )?;
-    document.icc_profile = Some(native_profile);
-    image.outcomes.push(color_encoding_outcome(assigned_profile, precision, fallback_reason))?;
+    document.icc_profile = tag_document.then(|| native_profile.clone());
+    image.outcomes.push(color_encoding_outcome(assigned_profile, precision, fallback_reason, tag_document))?;
     import_paths(&mut document, &mut image, &image_props, &path_ptrs, omitted_paths, ctl)?;
     import_vectors(&mut document, &mut image, ctl)?;
-    text::convert_colors(&mut document)?;
+    text::convert_colors(&mut document, &native_profile)?;
     import_native_effects(&mut document, &mut image, ctl)?;
     add_document_warnings(&mut image, &document, precision, linear_compositing);
     let initial_view = (image.initial_view != Default::default()).then_some(image.initial_view);
@@ -959,7 +1046,7 @@ pub(crate) fn import_with_sample_order(
 }
 
 /// Describe the effective color interpretation without claiming unusable assigned colorants.
-fn color_encoding_outcome(assigned_profile: bool, precision: Precision, fallback_reason: Option<String>) -> ConversionEntry {
+fn color_encoding_outcome(assigned_profile: bool, precision: Precision, fallback_reason: Option<String>, tag_document: bool) -> ConversionEntry {
     ConversionEntry {
         feature_code: "xcf.color_encoding".into(),
         source: conversion::source("image", 0, 0, "", &[], None),
@@ -981,6 +1068,7 @@ fn color_encoding_outcome(assigned_profile: bool, precision: Precision, fallback
             Some(reason) => format!(
                 "The assigned ICC profile could not be used: {reason}. An encoding-correct implicit profile interprets the unchanged samples; assigned colorants could not be preserved. Optional source profile bytes remain inert when retention limits permit"
             ),
+            None if !tag_document => "Unassigned nonlinear samples remain untagged for ordinary native color policy; implicit sRGB/sGray meaning is used only for internal literal conversion".into(),
             None => "Native ICC profile preserves the source colorants and sample transfer curve; samples retain native precision and range".into(),
         },
         attachments: Vec::new(),
@@ -1028,6 +1116,11 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
             let effect = match effects::decode(&image.c, pointer, image.version, &mut image.meta_budget, ctl) {
                 Ok(effect) => effect,
                 Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+                Err(IoError::XcfMetadataLimit) => {
+                    image.meta_budget = before_effect;
+                    image.metadata_limit(pending.owner, "xcf.layer_effect", "Layer-effect configuration exceeds the remaining metadata allowance")?;
+                    break;
+                }
                 Err(error) => {
                     // Failed decoding retains no effect allocation; preserve only the caller's traversal charges.
                     image.meta_budget = before_effect;

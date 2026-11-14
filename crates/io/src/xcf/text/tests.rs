@@ -99,7 +99,7 @@ fn named_markup_aliases_preserve_alpha_and_reject_namespaced_reinterpretation() 
 /// Compare cached text-color conversion with an independent uncached CMS transform and native rendering after persistence at each depth.
 #[test]
 fn named_markup_native_cms_matches_uncached_transform_and_render_reopen_each_depth() {
-    use photocraft_cms::{Builtin, Intent, Profile, Transform};
+    use craft_cms::{Builtin, Intent, Profile, Transform};
     use photocraft_color::{ColorMode, SampleType};
     use photocraft_doc::{Document, Layer, LayerContent};
     let config=br#"(markup "<markup><span foreground=\"green\" foreground_alpha=\"50%\">MMMM</span><span fgcolor=\"gray\">X</span><span color=\"steelblue4\">Y</span></markup>") (font "Sans") (font-size 20)"#;
@@ -114,11 +114,12 @@ fn named_markup_native_cms_matches_uncached_transform_and_render_reopen_each_dep
             let mut doc = Document::new("Imported named text", photocraft_geom::Size::new(192, 80), mode, depth);
             doc.icc_profile = Some(bytes.clone());
             doc.layers.push(Layer::new("Editable named colors", LayerContent::Text(original.clone())));
-            convert_colors(&mut doc).unwrap();
+            convert_colors(&mut doc, &bytes).unwrap();
             let mut expected = original.clone();
             for (run, literal) in expected.runs.iter_mut().zip(literals) {
                 let mut converted = [0.; 4];
-                independent.convert_f32(&literal[..3], 3, &mut converted, if mode == ColorMode::Grayscale { 1 } else { 3 }, false);
+                let channels = mode.color_channels();
+                independent.convert_f32(&literal[..3], 3, &mut converted[..channels], channels, false).unwrap();
                 run.style.color = Color { mode, c: converted, alpha: literal[3] };
             }
             expected.sync_summary();
@@ -300,19 +301,15 @@ fn base_letter_spacing_is_independent_of_font_size_unit_at_each_dpi() {
 /// Compare portable typed/profiled colors with the shared native color conversion, including grayscale document output.
 #[test]
 fn typed_text_profile_and_gray_colors_use_shared_native_cms() {
-    let profile = photocraft_cms::Builtin::DisplayP3.profile().to_bytes();
+    let profile = craft_cms::Builtin::DisplayP3.profile().to_bytes();
     let escaped: String = profile.iter().map(|byte| format!("\\{byte:03o}")).collect();
     let config = format!("(text \"paint\") (color (color \"R'G'B'A u8\" 4 \"\\377\\0\\0\\200\" {} \"{}\"))", profile.len(), escaped);
     let parsed = decode(config.as_bytes(), 72., (0, 0)).unwrap();
-    let transform = photocraft_cms::Transform::new(
-        photocraft_cms::Builtin::DisplayP3.profile(),
-        photocraft_cms::Builtin::Srgb.profile(),
-        photocraft_cms::Intent::RelativeColorimetric,
-        false,
-    )
-    .unwrap();
+    let transform =
+        craft_cms::Transform::new(craft_cms::Builtin::DisplayP3.profile(), craft_cms::Builtin::Srgb.profile(), craft_cms::Intent::RelativeColorimetric, false)
+            .unwrap();
     let mut expected = [0.; 3];
-    transform.convert_f32(&[1., 0., 0.], 3, &mut expected, 3, false);
+    transform.convert_f32(&[1., 0., 0.], 3, &mut expected, 3, false).unwrap();
     for (actual, expected) in parsed.layer.color.c.iter().zip(expected) {
         assert!((actual - expected).abs() < 0.00001);
     }

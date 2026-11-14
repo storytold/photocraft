@@ -64,7 +64,7 @@ fn embedded_and_linked_historical_sources_keep_order_bytes_and_geometry_through_
                 assert_eq!(
                     crate::smart_map::stored_size(&placed.descriptor),
                     Some((1., 1.)),
-                    "source geometry must come from decoding, not the 2x2 display cache"
+                    "source geometry must come from its header, not the 2x2 display cache"
                 );
                 let imported = crate::import("roundtrip.psd", &file.to_bytes().unwrap()).unwrap().document;
                 let object = smart(&imported);
@@ -211,4 +211,33 @@ fn psd_source_conversion_decoding_and_composite_caches_distinguish_sample_order(
     assert_eq!(ex.smart.converted.len(), 3);
     let uuid = contents_uuid(contents, &bytes);
     assert!(ex.source_composite(&uuid, None).is_none());
+}
+
+#[test]
+fn retained_linked_xcf_geometry_uses_header_without_decoding_drawables() {
+    let mut bytes = b"gimp xcf v007\0".to_vec();
+    for word in [317u32, 193, 0, 250, 19, 8] {
+        bytes.extend_from_slice(&word.to_be_bytes());
+    }
+    bytes.extend_from_slice(&300f32.to_be_bytes());
+    bytes.extend_from_slice(&300f32.to_be_bytes());
+    bytes.extend_from_slice(&[0; 8]); // End properties; deliberately no drawable pointer table.
+    for order in [None, Some(Order::LittleEndian), Some(Order::BigEndian)] {
+        let mut doc = document(SmartSource::Linked { path: "retained".into() }, order);
+        doc.metadata.psd_global_blocks.push((
+            *b"8BIM",
+            *b"lnk2",
+            Arc::new(crate::linked::encode_linked_file(&crate::linked::LinkedFile {
+                uuid: "retained".into(),
+                file_name: "source.xcf".into(),
+                bytes: bytes.clone(),
+            })),
+        ));
+        let mut ex = exporter(&doc);
+        let source = ex.smart_source(smart(&doc), None).unwrap();
+        assert_eq!(source.size, (317., 193.), "must not fall back to the display cache size");
+        assert_eq!(source.dpi, 300.);
+        assert!(ex.smart.docs.is_empty(), "geometry must not populate a decoded-document cache");
+        assert!(ex.smart.composites.is_empty());
+    }
 }
