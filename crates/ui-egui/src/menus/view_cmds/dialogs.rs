@@ -134,6 +134,9 @@ pub fn form_keys(f: &Map<String, Value>) -> Vec<String> {
 
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    if crate::dialogs::conditional_mode_change_dialog::owns(f) {
+        return crate::dialogs::conditional_mode_change_dialog::body(ui, f);
+    }
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
     // Data-driven labels (a per-part checkbox shows the part's name, not a catalogue entry)
     // come from `__labels` verbatim; everything else goes through the catalogue.
@@ -484,11 +487,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             let (w, h, _) = doc?;
             dialog(app, json!({"width": w, "height": h, "dontEnlarge": false, "__compact": true}), json!({}))
         }
-        "file.automate.conditionalModeChange" => dialog(
-            app,
-            json!({"from": "any", "to": "rgb"}),
-            json!({"from": ["any", "rgb", "grayscale", "cmyk", "lab", "indexed", "bitmap", "duotone", "multichannel"], "to": ["rgb", "grayscale", "cmyk", "lab"]}),
-        ),
+        "file.automate.conditionalModeChange" => dialog(app, crate::dialogs::conditional_mode_change_dialog::fields(), json!({})),
         "view.newGuideLayout" => Some(Ok(json!({"dialog": crate::guide_layout_ui::open(app)}))),
         "type.warpText" => Some(Ok(json!({"dialog": crate::dialogs::open_command_dialog(app, id, label)}))),
         "file.export.layersToFiles" => {

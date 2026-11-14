@@ -1311,6 +1311,7 @@ pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
+pub(crate) mod conditional_mode_change_dialog;
 pub mod credits;
 pub mod dds_options_ui;
 pub mod delete_layer_prompt;
