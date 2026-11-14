@@ -191,7 +191,7 @@ fn fill_samples(row: &mut [f32], raw: impl Iterator<Item = [u16; 3]>, table: &[[
         phase = if phase + 1 == table.len() { 0 } else { phase + 1 };
         for k in 0..3 {
             let (black, range) = t[k];
-            let n = if range.is_nan() || range < 1.0 {
+            let n = if !range.is_finite() || range <= 0.0 {
                 0.0
             } else {
                 let n = (lin(raw[k]) - black) / range;
@@ -403,32 +403,45 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 let y = c.y + iy;
                 if periodic && s.float_data.is_none() && s.polynomials.is_empty() {
                     // Per column of the period: black and the combined scale × white-balance gain.
-                    let k: Vec<(f32, f32)> = (0..period)
+                    let k: Option<Vec<(f32, f32)>> = (0..period)
                         .map(|p| {
                             let x = c.x + p;
                             let black = bl.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), 0, 1);
                             let range = s.white[0] - black;
+                            // A fractional range can overflow an inverse gain even when the scalar
+                            // quotient is finite. Keep its division and non-finite fallback together.
+                            if range.is_finite() && range > 0.0 && range < 1.0 {
+                                return None;
+                            }
                             // A non-finite black (a BlackLevel DOUBLE beyond f32) gives 0, as
                             // `Scale::value` does, instead of (raw - inf) * 0 = NaN.
                             if !(range >= 1.0 && black.is_finite()) {
-                                return (0.0, 0.0);
+                                return Some((0.0, 0.0));
                             }
-                            (black, mult[usize::from(cfa.color(x, y)).min(2)] / range)
+                            Some((black, mult[usize::from(cfa.color(x, y)).min(2)] / range))
                         })
                         .collect();
-                    let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
-                    let ks = k.iter().cycle();
-                    match &sc.lin {
-                        None => {
-                            for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
-                                *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
+                    if let Some(k) = k {
+                        let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
+                        let ks = k.iter().cycle();
+                        match &sc.lin {
+                            None => {
+                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
+                                    *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
+                                }
+                            }
+                            Some(l) => {
+                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
+                                    let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
+                                    *v = ((lin - black) * gain).clamp(0.0, 1.0);
+                                }
                             }
                         }
-                        Some(l) => {
-                            for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
-                                let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
-                                *v = ((lin - black) * gain).clamp(0.0, 1.0);
-                            }
+                    } else {
+                        for (i, v) in row.iter_mut().enumerate() {
+                            let x = c.x + i;
+                            let ch = usize::from(cfa.color(x, y)).min(2);
+                            *v = (sc.value(x, y, 0) * mult[ch]).clamp(0.0, 1.0);
                         }
                     }
                 } else {
@@ -1239,6 +1252,67 @@ mod tests {
             sensor.black = crate::BlackLevels::uniform(0.);
             sensor.white = [128.; 3];
             assert_eq!((0..3).map(|x| Scale::new(&sensor).value(x, 0, 0)).collect::<Vec<_>>(), [0., 0.5, 1.]);
+
+            // Integer codes may have fractional metadata levels too. A zero delta changes
+            // dispatch only: both contiguous paths must retain the literal scalar results.
+            for (black, white, expected) in [
+                (0.5, 1., [0., 1., 1.]),
+                (0., 2., [0., 0.5, 1.]),
+                (1., 1., [0.; 3]),
+                (1., 0.5, [0.; 3]),
+                (0., f32::NAN, [0.; 3]),
+                (0., f32::INFINITY, [0.; 3]),
+                (-1e-40, 0., [1., 0., 0.]),
+            ] {
+                for samples in [1, 3] {
+                    let mut sensor = test_sensor(3, 1, None, samples);
+                    sensor.data = [0, 1, 2].into_iter().flat_map(|raw| vec![raw; samples]).collect();
+                    sensor.black = crate::BlackLevels::uniform(black);
+                    sensor.white = [white; 3];
+                    let mut row = vec![0.; 9];
+                    fill_linear_row(&Scale::new(&sensor), &[1.; 3], 0, 0, &mut row);
+                    let wanted: Vec<_> = expected.into_iter().flat_map(|value| [value; 3]).collect();
+                    assert_eq!(row, wanted, "contiguous {samples} samples, black {black}, white {white}");
+                    for (x, value) in expected.into_iter().enumerate() {
+                        assert_eq!(Scale::new(&sensor).value(x, 0, 0).clamp(0., 1.), value);
+                    }
+                    sensor.black.delta_h = vec![0.; 3];
+                    fill_linear_row(&Scale::new(&sensor), &[1.; 3], 0, 0, &mut row);
+                    assert_eq!(row, wanted, "zero deltas preserve the same values");
+                }
+            }
+
+            // The periodic CFA optimization must also agree with scalar division, including
+            // a subnormal range whose precomputed reciprocal would overflow to infinity.
+            let options = DevelopOptions { demosaic: Demosaic::Bilinear, white_balance: WhiteBalance::Multipliers([1.; 3]), ..Default::default() };
+            for (black, white, raw, expected) in [
+                (0.5, 1., 1, 1.),
+                (0., 2., 1, 0.5),
+                (1., 1., 1, 0.),
+                (1., 0.5, 1, 0.),
+                (0., f32::NAN, 1, 0.),
+                (0., f32::INFINITY, 1, 0.),
+                (-1e-40, 0., 0, 1.),
+                (-1e-40, 0., 1, 0.),
+            ] {
+                let mut sensor = test_sensor(8, 8, crate::Cfa::bayer("RGGB"), 1);
+                sensor.data.fill(raw);
+                sensor.black = crate::BlackLevels::uniform(black);
+                sensor.white = [white; 3];
+                sensor.tone_curve.clear();
+                assert_eq!(Scale::new(&sensor).value(0, 0, 0).clamp(0., 1.), expected);
+                let mut reference = sensor.clone();
+                reference.data.fill((expected * 2.) as u16);
+                reference.black = crate::BlackLevels::uniform(0.);
+                reference.white = [2.; 3];
+                for fused in [false, true] {
+                    let wanted = develop(&reference, &options, fused).unwrap().rgb;
+                    assert_eq!(develop(&sensor, &options, fused).unwrap().rgb, wanted, "CFA black {black}, white {white}, raw {raw}");
+                    let mut fallback = sensor.clone();
+                    fallback.black.delta_h = vec![0.; sensor.width];
+                    assert_eq!(develop(&fallback, &options, fused).unwrap().rgb, wanted, "CFA zero deltas change dispatch only");
+                }
+            }
         }
 
         /// Independent TIFF/DNG strip layout: three little-endian IEEE754 binary32
