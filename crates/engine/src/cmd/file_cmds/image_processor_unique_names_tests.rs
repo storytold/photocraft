@@ -153,7 +153,7 @@ fn current_and_open_document_sources_keep_their_output_naming() {
         let out = root.path().join("Current.png");
         fs::write(&out, b"old output").unwrap();
         let result = session.execute(COMMAND, json!({"source":source,"output":root.path(),"format":"png"})).unwrap();
-        assert_eq!(files(&result).unwrap(), [out.clone()]);
+        assert_eq!(files(&result).unwrap().as_slice(), std::slice::from_ref(&out));
         assert_eq!(result["errors"], json!([]));
         assert!(photocraft_io::import("Current.png", &fs::read(out).unwrap()).is_ok());
     }
