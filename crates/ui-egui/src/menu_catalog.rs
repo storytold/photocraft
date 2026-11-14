@@ -772,7 +772,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Window", "Workspace"], "New Workspace…", None, "window.workspace.newWorkspace"),
     (&["Window", "Workspace"], "Delete Workspace…", None, "window.workspace.deleteWorkspace"),
     (&["Window", "Workspace"], "---", None, "---"),
-    (&["Window", "Workspace"], "Keyboard Shortcuts…", Some("Cmd+Alt+Shift+K"), "edit.keyboardShortcuts"),
+    (&["Window", "Workspace"], "Keyboard Shortcuts & Menus…", None, "edit.keyboardShortcuts"),
     (&["Window", "Workspace"], "Lock Workspace", None, "window.workspace.lockWorkspace"),
     (&["Window"], "---", None, "---"),
     (&["Window"], "Actions", Some("Alt+F9"), "window.panel.actions"),

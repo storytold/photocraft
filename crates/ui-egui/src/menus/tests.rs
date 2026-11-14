@@ -608,3 +608,29 @@ fn transform_warp_is_checked_for_a_warped_layer() {
     app.run("layer.smartObjects.warp", json!({"style": "cylinder", "values": [8, 32, 32, 8, 0.5, 0.5, 0.85], "rect": [8, 8, 32, 32]})).unwrap();
     assert_eq!(checked(&app, "edit.transform.warp"), Some(true), "a stored warp");
 }
+
+#[test]
+fn window_workspace_keyboard_shortcuts_and_menus_has_no_key() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let items = menu_items(&app);
+
+    let edit_row = items.iter().find(|i| i.path == ["Edit"] && i.id == "edit.keyboardShortcuts").unwrap();
+    assert_eq!(edit_row.label, "Keyboard Shortcuts…");
+    assert_eq!(edit_row.shortcut.as_deref(), Some("Cmd+Alt+Shift+K"));
+
+    let ws: Vec<&MenuItem> = items.iter().filter(|i| i.path == ["Window", "Workspace"]).collect();
+    let idx = ws.iter().position(|i| i.id == "edit.keyboardShortcuts").unwrap();
+    assert_eq!(ws[idx].label, "Keyboard Shortcuts & Menus…");
+    assert_eq!(ws[idx].shortcut, None);
+    assert!(ws[idx].enabled);
+    assert_eq!(ws[idx - 1].label, "---");
+    assert_eq!(ws[idx - 2].id, "window.workspace.deleteWorkspace");
+    assert_eq!(ws[idx + 1].id, "window.workspace.lockWorkspace");
+
+    app.session.prefs.edit(|p| p.shortcuts.insert("edit.keyboardShortcuts".into(), "F12".into()));
+    let items_rebound = menu_items(&app);
+    let edit_rebound = items_rebound.iter().find(|i| i.path == ["Edit"] && i.id == "edit.keyboardShortcuts").unwrap();
+    assert_eq!(edit_rebound.shortcut.as_deref(), Some("F12"));
+    let ws_rebound = items_rebound.iter().find(|i| i.path == ["Window", "Workspace"] && i.id == "edit.keyboardShortcuts").unwrap();
+    assert_eq!(ws_rebound.shortcut, None);
+}
