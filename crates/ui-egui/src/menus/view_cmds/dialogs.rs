@@ -565,10 +565,12 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             json!({"paths": dir, "useOpenDocuments": false, "align": true, "removeGhosts": false, "mode": "32", "method": "localAdaptation", "radius": 7.0, "strength": 0.52, "gamma": 1.0, "exposure": 0.0, "detail": 30.0, "saturation": 20.0}),
             json!({"mode": ["32", "16", "8"], "method": ["localAdaptation", "exposureGamma", "highlightCompression", "equalizeHistogram"]}),
         ),
+        // Drawn by `lens_batch_ui`; the reference dialog has no Alt+Reset (#13981).
         "file.automate.lensCorrection" => dialog(
             app,
-            json!({"input": dir, "output": format!("{dir}/corrected"), "format": "same", "profile": "auto", "correctDistortion": true, "correctVignette": true, "correctCA": true, "autoScale": true, "edge": "transparency"}),
-            json!({"format": ["same", "png", "jpg", "psd", "tiff"], "profile": ["auto", "generic", "none"], "edge": ["transparency", "edgeExtension", "black", "white"]}),
+            // Opens as the reference dialog does (#13980); the command's own defaults stay for scripts.
+            json!({"input": dir, "output": format!("{dir}/corrected"), "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency", "__altReset": false}),
+            crate::dialogs::lens_batch_ui::choices(),
         ),
         "file.scripts.imageProcessor" => dialog(
             app,
