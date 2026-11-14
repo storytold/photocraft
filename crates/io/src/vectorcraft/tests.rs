@@ -166,10 +166,25 @@ fn a_canceled_open_stops_drawing() {
     assert!(matches!(e, IoError::Cancelled), "{e:?}");
 }
 
+#[test]
+fn a_canceled_open_stops_reading_the_file() {
+    // Reading the file stops before it finds that no PDF is carried.
+    let cancel = || true;
+    let e = import_scaled("Logo.vectorcraft", &file(None), 1.0, &Interrupt::cancel_only(&cancel)).unwrap_err();
+    assert!(matches!(e, IoError::Cancelled), "{e:?}");
+}
+
+#[test]
+fn a_canceled_open_stops_parsing_the_carried_pdf() {
+    let cancel = || true;
+    let result = open_with_cancellation(Arc::new(pdf(80, 40, 1)), &Interrupt::cancel_only(&cancel));
+    assert!(matches!(result, Err(CancellableOpenError::Cancelled)), "{:?}", result.err());
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn cancellation_after_the_draw_callback_starts_reaches_the_pdf_renderer() {
-    let pdf = carried_pdf(&file(Some(&pdf(80, 40, 1)))).unwrap();
+    let pdf = carried_pdf(&file(Some(&pdf(80, 40, 1))), None).unwrap();
     let pages = pdf.pages();
     let (page, _, _) = first_page(pages).unwrap();
     let options = Options { scale: [1.0; 2], size: Some([80, 40]), ..Options::default() };

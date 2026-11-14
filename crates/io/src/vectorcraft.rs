@@ -4,8 +4,9 @@
 //! reads the file and `craft-pdf` draws the page. A file without that PDF is refused with an
 //! error that names the option. Placed, the file becomes an embedded or linked smart object,
 //! drawn again from the PDF at its placement scale ([`import_scaled`]).
-//! Desktop cancellation is polled during drawing; extraction and PDF parsing cannot currently
-//! be interrupted.
+//! A canceled import stops while the file is read. Off wasm it also stops while the PDF is
+//! parsed and while the page is drawn; on wasm those two stop only when the import was canceled
+//! before they started.
 
 #[cfg(test)]
 mod tests;
@@ -16,7 +17,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use craft_doc::{Limits, RenditionKind};
 use craft_pdf::interpret::InterpreterSettings;
 use craft_pdf::raster::{self, Options, RenderCache};
+use craft_pdf::syntax::Cancellation;
 use craft_pdf::syntax::page::Page;
+use craft_pdf::{CancellableOpenError, OpenOptions};
 use photocraft_codecs::{ChannelLayout, Image, SampleType};
 use photocraft_raster::Interrupt;
 
@@ -49,7 +52,7 @@ pub fn import_scaled(name: &str, bytes: &[u8], scale: f32, ctl: &Interrupt) -> R
     if !scale.is_finite() || scale <= 0.0 {
         return Err(err(&format!("can't draw the artboard at scale {scale}")));
     }
-    let pdf = carried_pdf(bytes)?;
+    let pdf = carried_pdf(bytes, Some(ctl))?;
     let pages = pdf.pages();
     let (page, w, h) = first_page(pages)?;
     let opened_scale = max_scale(w, h).min(1.0);
@@ -134,7 +137,7 @@ static SCALE_LIMIT_CACHE: Mutex<Vec<([u8; 32], f32)>> = Mutex::new(Vec::new());
 fn read_scale_limit(bytes: &[u8]) -> Result<f32, IoError> {
     #[cfg(test)]
     SCALE_LIMIT_READS.with(|n| n.set(n.get() + 1));
-    let pdf = carried_pdf(bytes)?;
+    let pdf = carried_pdf(bytes, None)?;
     let pages = pdf.pages();
     let (_, w, h) = first_page(pages)?;
     let (open_w, open_h) = opened_size(w, h);
@@ -153,7 +156,7 @@ fn relative_limit(w: u32, h: u32) -> f32 {
 /// The size in pixels [`import`] draws the file's first artboard at, read from the carried PDF
 /// without drawing it.
 pub fn drawn_size(bytes: &[u8]) -> Result<(u32, u32), IoError> {
-    let pdf = carried_pdf(bytes)?;
+    let pdf = carried_pdf(bytes, None)?;
     let pages = pdf.pages();
     let (_, w, h) = first_page(pages)?;
     Ok(opened_size(w, h))
@@ -170,12 +173,40 @@ fn err(e: &dyn std::fmt::Display) -> IoError {
     IoError::VectorCraft(e.to_string())
 }
 
-/// The PDF the file carries, opened.
-fn carried_pdf(bytes: &[u8]) -> Result<craft_pdf::syntax::Pdf, IoError> {
-    let pdf = craft_doc::renditions(bytes, &Limits::default()).map_err(|e| err(&e))?.into_iter().find(|r| r.kind == RenditionKind::Pdf).ok_or_else(|| {
+/// The PDF the file carries, opened. With `ctl`, reading the file and parsing the PDF stop when
+/// it is canceled.
+fn carried_pdf(bytes: &[u8], ctl: Option<&Interrupt>) -> Result<craft_pdf::syntax::Pdf, IoError> {
+    let renditions = match ctl {
+        Some(ctl) => craft_doc::renditions_with_cancel(bytes, &Limits::default(), &|| ctl.cancelled()),
+        None => craft_doc::renditions(bytes, &Limits::default()),
+    };
+    let renditions = match renditions {
+        Err(craft_doc::Error::Cancelled) => return Err(IoError::Cancelled),
+        r => r.map_err(|e| err(&e))?,
+    };
+    let pdf = renditions.into_iter().find(|r| r.kind == RenditionKind::Pdf).ok_or_else(|| {
         IoError::VectorCraft("the file carries no PDF; save it in VectorCraft with Create PDF-Compatible File turned on, then try again".into())
     })?;
-    craft_pdf::open(Arc::new(pdf.bytes), None).map_err(|e| err(&format!("its PDF can't be read ({e})")))
+    let bytes = Arc::new(pdf.bytes);
+    let opened = match ctl {
+        Some(ctl) => open_with_cancellation(bytes, ctl),
+        None => craft_pdf::open(bytes, None).map_err(CancellableOpenError::Open),
+    };
+    match opened {
+        Ok(pdf) => Ok(pdf),
+        Err(CancellableOpenError::Cancelled) => Err(IoError::Cancelled),
+        Err(CancellableOpenError::Open(e)) => Err(err(&format!("its PDF can't be read ({e})"))),
+    }
+}
+
+/// Parse `bytes` as a PDF, stopping when `ctl` is canceled. The parser polls a flag; off wasm, a
+/// scoped thread sets that flag from `ctl` while the PDF is parsed.
+fn open_with_cancellation(bytes: Arc<Vec<u8>>, ctl: &Interrupt) -> Result<craft_pdf::syntax::Pdf, CancellableOpenError> {
+    with_cancel_flag(ctl, |cancelled| {
+        let cancelled = Arc::clone(cancelled);
+        let cancel = Cancellation::new(move || cancelled.load(Ordering::Relaxed));
+        craft_pdf::open_with_options_and_cancel(bytes, None, &OpenOptions::default(), &cancel)
+    })
 }
 
 /// The first page (the first artboard) and its size in points.
@@ -205,23 +236,31 @@ fn render(page: &Page<'_>, options: &Options, ctl: &Interrupt, buffer: &mut [u8]
 
 /// Forward cancellation while a draw is running, as well as before it starts.
 fn with_render_cancellation<T>(ctl: &Interrupt, draw: impl FnOnce(&InterpreterSettings) -> Result<T, raster::Error>) -> Result<T, raster::Error> {
+    if ctl.cancelled() {
+        return Err(raster::Error::Cancelled);
+    }
+    with_cancel_flag(ctl, |cancelled| {
+        let settings = InterpreterSettings { cancelled: Some(Arc::clone(cancelled)), ..InterpreterSettings::default() };
+        draw(&settings)
+    })
+}
+
+/// Run `work` with a flag that is set when `ctl` is canceled. The flag starts set when `ctl` is
+/// already canceled; off wasm, a scoped thread polls `ctl` and sets it while `work` runs.
+fn with_cancel_flag<T>(ctl: &Interrupt, work: impl FnOnce(&Arc<AtomicBool>) -> T) -> T {
     struct Finished<'a>(&'a AtomicBool);
     impl Drop for Finished<'_> {
         fn drop(&mut self) {
             self.0.store(true, Ordering::Relaxed);
         }
     }
-    if ctl.cancelled() {
-        return Err(raster::Error::Cancelled);
-    }
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let settings = InterpreterSettings { cancelled: Some(cancelled.clone()), ..InterpreterSettings::default() };
-    if cfg!(target_arch = "wasm32") {
-        return draw(&settings);
+    let cancelled = Arc::new(AtomicBool::new(ctl.cancelled()));
+    if cfg!(target_arch = "wasm32") || cancelled.load(Ordering::Relaxed) {
+        return work(&cancelled);
     }
     let done = AtomicBool::new(false);
     std::thread::scope(|sc| {
-        // Without the thread (the OS refused one), the page is drawn without polling `ctl`.
+        // Without the thread (the OS refused one), `work` runs without polling `ctl`.
         let _watch = std::thread::Builder::new().spawn_scoped(sc, || {
             while !done.load(Ordering::Relaxed) {
                 if ctl.cancelled() {
@@ -232,7 +271,7 @@ fn with_render_cancellation<T>(ctl: &Interrupt, draw: impl FnOnce(&InterpreterSe
             }
         });
         let _finished = Finished(&done);
-        draw(&settings)
+        work(&cancelled)
     })
 }
 
