@@ -26,7 +26,7 @@ pub use web::open_web;
 #[cfg(test)]
 use web::web_params;
 #[cfg(test)]
-use web::{WEB_COMMAND, WebCache, WebProxy, advance_preview, download_for_web, variants, web_frame_document};
+use web::{WEB_COMMAND, WebCache, WebProxy, advance_preview, download_for_web, select_variant, variants, web_frame_document};
 use web::{web_body, web_confirm};
 
 fn no_params(p: &Value) -> bool {
@@ -398,6 +398,256 @@ mod web_playback_tests {
             assert_eq!(source.timeline.as_ref().unwrap().current, 0);
             assert_eq!(photocraft_compose::flatten(&source).px[0], [1.0, 0.0, 0.0, 1.0]);
         }
+    }
+
+    /// Save for Web's 4-Up: a variant copies only the keys it carries and drops the palette.
+    #[test]
+    fn select_variant_copies_format_quality_and_colors() {
+        let mut f = json!({"format": "jpeg", "quality": 60, "matte": "#fff", "__view": "4up", "__preset": "JPEG High", "__tableSignature": "x", "__selectedColor": 1, "colorTable": ["#000"], "colorTableEdits": {"0": "#111"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let v = variants(&Value::Object(f.clone()));
+        select_variant(&mut f, &v[1]);
+        assert_eq!(f["quality"], 30.0);
+        assert_eq!(f["format"], "jpeg");
+        assert!(!f.contains_key("colorTable") && !f.contains_key("colorTableEdits"));
+        assert!(!f.contains_key("__tableSignature") && !f.contains_key("__selectedColor"), "the palette is rebuilt, not reused");
+        assert_eq!(f["__preset"], "", "settings no longer match the named preset");
+        let before = f.clone();
+        select_variant(&mut f, &v[1]);
+        assert_eq!(f, before, "choosing the current settings is a no-op");
+        assert_eq!((f["matte"].as_str(), f["__view"].as_str()), (Some("#fff"), Some("4up")));
+        assert!(!f.contains_key("colors"), "keys the variant lacks are not invented");
+
+        let mut f = json!({"format": "png24", "colors": 256, "__view": "4up"}).as_object().unwrap().clone();
+        let v = variants(&Value::Object(f.clone()));
+        select_variant(&mut f, &v[2]);
+        assert_eq!((f["format"].as_str(), f["colors"].as_u64()), (Some("gif"), Some(64)));
+        select_variant(&mut f, &json!("not an object"));
+        assert_eq!(f["format"], "gif");
+    }
+
+    type WebHarness = Harness<'static, (PhotocraftApp, Map<String, Value>)>;
+
+    /// The 4-Up dialog over a new 64 x 48 document (JPEG quality 60); `setup` may add slices.
+    fn four_up_harness_with(setup: impl FnOnce(&mut PhotocraftApp)) -> WebHarness {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        setup(&mut app);
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("jpeg"));
+        fields.insert("quality".into(), json!(60));
+        let mut h = harness(app, fields);
+        h.get_by_label("4-Up").click();
+        h.run_steps(3);
+        h
+    }
+
+    fn four_up_harness() -> WebHarness {
+        four_up_harness_with(|_| {})
+    }
+
+    /// The screen position of document pixel (`x`, `y`) in a pane: the 64 x 48 document is fitted
+    /// into the pane's rectangle, centred.
+    fn doc_point(h: &WebHarness, pane: usize, x: f32, y: f32) -> egui::Pos2 {
+        let r = &h.state().1["__previewRects"][pane];
+        let c = |i: usize| r[i].as_f64().unwrap() as f32;
+        let (w, ht) = (c(2) - c(0), c(3) - c(1));
+        let scale = (w / 64.0).min(ht / 48.0);
+        egui::pos2((c(0) + c(2)) / 2.0 + (x - 32.0) * scale, (c(1) + c(3)) / 2.0 + (y - 24.0) * scale)
+    }
+
+    /// A Shift-click at `at`.
+    fn shift_click_at(h: &mut WebHarness, at: egui::Pos2) {
+        let shift = egui::Modifiers::SHIFT;
+        h.event(egui::Event::ModifiersChanged(shift));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: shift });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: shift });
+        h.run_steps(3);
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.run_steps(1);
+    }
+
+    fn pane_center(h: &WebHarness, pane: usize) -> egui::Pos2 {
+        let r = &h.state().1["__previewRects"][pane];
+        let c = |i: usize| r[i].as_f64().unwrap() as f32;
+        egui::pos2((c(0) + c(2)) / 2.0, (c(1) + c(3)) / 2.0)
+    }
+
+    fn click_pane(h: &mut WebHarness, pane: usize) {
+        let at = pane_center(h, pane);
+        click_at(h, at);
+    }
+
+    fn click_at(h: &mut WebHarness, at: egui::Pos2) {
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(3);
+    }
+
+    /// #13405: a click on a 4-Up alternative makes it current; a drag only pans.
+    #[test]
+    fn four_up_click_selects_the_pane_and_a_drag_does_not() {
+        let mut h = four_up_harness();
+        let a = pane_center(&h, 2);
+        h.drag_at(a);
+        h.run_steps(1);
+        h.hover_at(a + egui::vec2(25.0, 10.0));
+        h.run_steps(1);
+        h.drop_at(a + egui::vec2(25.0, 10.0));
+        h.run_steps(3);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(60.0), "a drag must not select");
+        for pane in [0, 1] {
+            click_pane(&mut h, pane);
+            h.run_steps(3);
+            assert_eq!(h.state().1["quality"].as_f64(), Some(60.0), "pane {pane} changes nothing");
+        }
+        click_pane(&mut h, 2);
+        h.run_steps(3);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0));
+        // The grid regenerated around the new current settings: pane 3 is now a quarter of 30.
+        click_pane(&mut h, 3);
+        h.run_steps(3);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(8.0));
+    }
+
+    /// Presses `n` times at one spot without the pointer leaving in between.
+    fn press_repeatedly(h: &mut WebHarness, at: egui::Pos2, n: usize) {
+        h.hover_at(at);
+        h.run_steps(1);
+        for _ in 0..n {
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
+        }
+        h.run_steps(3);
+    }
+
+    /// A double-click (select, then a second press) must not select a second time: after the
+    /// layout regenerates around the first choice, the same pane would otherwise halve again.
+    #[test]
+    fn four_up_double_click_selects_once() {
+        let mut h = four_up_harness();
+        let at = pane_center(&h, 2);
+        press_repeatedly(&mut h, at, 2);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0), "the second click of a double-click does not select again");
+    }
+
+    /// The same for a triple-click.
+    #[test]
+    fn four_up_triple_click_selects_once() {
+        let mut h = four_up_harness();
+        let at = pane_center(&h, 2);
+        press_repeatedly(&mut h, at, 3);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0), "the third click does not select again");
+    }
+
+    /// With one small user slice, a click inside it picks the slice; a click in the automatic
+    /// region around it chooses the pane and leaves the slice selection alone (auto slices cover
+    /// the rest of the canvas); a Shift-click there is a slice gesture, not a pane choice.
+    #[test]
+    fn four_up_user_slice_blocks_the_choice_but_auto_slices_do_not() {
+        let mut h = four_up_harness_with(|app| {
+            app.run("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+        });
+        let at = doc_point(&h, 2, 16.0, 24.0);
+        click_at(&mut h, at);
+        assert_eq!(h.state().1["__selectedSlices"], json!([1]), "inside the user slice");
+        assert_eq!(h.state().1["quality"].as_f64(), Some(60.0), "the settings stay");
+        // Shift-click on the auto region: the auto slice (2) joins the selection, the pane is not chosen.
+        let at = doc_point(&h, 2, 48.0, 24.0);
+        shift_click_at(&mut h, at);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(60.0), "a Shift-click is a slice gesture");
+        assert_eq!(h.state().1["__selectedSlices"], json!([1, 2]));
+        // A plain click there chooses the pane and does not reset the selection.
+        let at = doc_point(&h, 2, 48.0, 24.0);
+        click_at(&mut h, at);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0), "the auto region chooses the pane");
+        assert_eq!(h.state().1["__selectedSlices"], json!([1, 2]), "the choice leaves the slice selection alone");
+    }
+
+    /// Outside the 4-Up alternatives, a click on an auto slice still selects it (#10548).
+    #[test]
+    fn single_pane_click_on_an_auto_slice_selects_it() {
+        let mut h = four_up_harness_with(|app| {
+            app.run("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+        });
+        h.state_mut().1.insert("__view".into(), json!("optimized"));
+        h.run_steps(3);
+        let at = doc_point(&h, 0, 48.0, 24.0);
+        click_at(&mut h, at);
+        assert_eq!(h.state().1["__selectedSlices"], json!([2]), "the auto slice is selected");
+        assert_eq!(h.state().1["quality"].as_f64(), Some(60.0));
+    }
+
+    /// A click that picks a slice in the pane is a slice selection, not a 4-Up choice.
+    #[test]
+    fn four_up_slice_click_selects_the_slice_not_the_variant() {
+        let mut h = four_up_harness_with(|app| {
+            app.run("slice.new", json!({"rect": [0, 0, 64, 48], "name": "all"})).unwrap();
+        });
+        click_pane(&mut h, 3);
+        assert_eq!(h.state().1["__selectedSlices"], json!([1]), "the click selected the slice");
+        assert_eq!(h.state().1["quality"].as_f64(), Some(60.0), "and left the settings alone");
+    }
+
+    /// Choosing a variant that keeps the format, colours and quality changes nothing, so the
+    /// palette edits survive.
+    #[test]
+    fn four_up_same_settings_variant_keeps_palette_edits() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("gif"));
+        fields.insert("colors".into(), json!(2));
+        let mut h = harness(app, fields);
+        h.get_by_label("4-Up").click();
+        h.run_steps(3);
+        h.state_mut().1.insert("colorTableEdits".into(), json!({"0": "#ffff00"}));
+        h.run_steps(2);
+        assert!(h.state().1.contains_key("colorTable"));
+        click_pane(&mut h, 2);
+        assert_eq!(h.state().1["colorTableEdits"], json!({"0": "#ffff00"}));
+        assert!(h.state().1.contains_key("colorTable"), "the palette stays");
+    }
+
+    /// A pane whose settings equal the current ones shows the edited palette Save will write.
+    #[test]
+    fn variants_with_the_current_settings_keep_the_palette_edits() {
+        let p = json!({"format": "gif", "colors": 2, "colorTable": ["#000", "#fff"], "colorTableEdits": {"0": "#ff0"}});
+        let v = variants(&p);
+        assert_eq!(v[1]["colorTableEdits"], p["colorTableEdits"], "colors stay 2, so the pane is the current settings");
+        let p = json!({"format": "gif", "colors": 128, "colorTable": ["#000"], "colorTableEdits": {"0": "#ff0"}});
+        let v = variants(&p);
+        assert!(v[1].get("colorTable").is_none() && v[1].get("colorTableEdits").is_none(), "a different palette size drops them");
+        let mut f = json!({"format": "jpeg", "quality": 2.0, "__preset": "x"}).as_object().unwrap().clone();
+        select_variant(&mut f, &json!({"format": "jpeg", "quality": 2}));
+        assert_eq!(f["__preset"], "x", "2 and 2.0 are the same quality");
+    }
+
+    /// Clicking a slice that is already selected is still a slice click.
+    #[test]
+    fn four_up_click_on_a_selected_slice_leaves_the_settings() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 64, 48], "name": "all"})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("jpeg"));
+        fields.insert("quality".into(), json!(60));
+        fields.insert("__selectedSlices".into(), json!([1]));
+        let mut h = harness(app, fields);
+        h.get_by_label("4-Up").click();
+        h.run_steps(3);
+        click_pane(&mut h, 2);
+        assert_eq!(h.state().1["__selectedSlices"], json!([1]));
+        assert_eq!(h.state().1["quality"].as_f64(), Some(60.0));
     }
 
     #[test]
