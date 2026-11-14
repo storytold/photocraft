@@ -55,6 +55,12 @@ pub struct SpellDialog {
     /// continues it ([`crate::actions::resume`]).
     #[serde(skip)]
     pub resume: Option<u64>,
+    /// The "Spell check complete." alert open at the end of the scope: closing it is Done.
+    #[serde(skip)]
+    pub complete: Option<u64>,
+    /// Nothing was found when it opened: only the alert shows, not the dialog.
+    #[serde(skip)]
+    pub hidden: bool,
 }
 
 /// The `dialog` that Check Spelling's results and a playback paused at its step name.
@@ -213,7 +219,14 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.ui.type_panels.glyphs = false;
         }
     }
-    if app.ui.type_panels.spell.is_some() {
+    // The "Spell check complete." alert closed, however (OK, Enter, Esc, its close box,
+    // `ui.dialog.*`): that is Done.
+    if let Some(alert) = app.ui.type_panels.spell.as_ref().and_then(|d| d.complete)
+        && app.ui.dialogs.iter().all(|d| d.id != alert)
+    {
+        close_spelling(app);
+    }
+    if app.ui.type_panels.spell.as_ref().is_some_and(|d| !d.hidden) {
         spelling_window(app, ctx);
     }
 }
@@ -794,8 +807,15 @@ pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value,
         params["layer"] = json!(layer.ok_or("no layer was selected for this spelling check")?.0);
     }
     app.session.execute("edit.checkSpelling", params).map_err(|e| e.to_string())?;
+    if let Some(alert) = app.ui.type_panels.spell.as_ref().and_then(|d| d.complete) {
+        app.ui.close_dialog(alert);
+    }
     app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, resume, ..Default::default() });
     refresh_spelling(app);
+    if let Some(s) = app.ui.type_panels.spell.as_mut() {
+        s.hidden = s.items.is_empty();
+    }
+    alert_when_complete(app);
     let d = app.ui.type_panels.spell.as_ref().map(|d| d.items.clone()).unwrap_or_default();
     Ok(json!({ "dialog": SPELLING, "misspellings": d }))
 }
@@ -805,6 +825,9 @@ pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value,
 /// on. When recording the step fails, the status keeps that error with the playback's outcome.
 pub fn close_spelling(app: &mut PhotocraftApp) {
     let Some(d) = app.ui.type_panels.spell.take() else { return };
+    if let Some(alert) = d.complete {
+        app.ui.close_dialog(alert);
+    }
     let mut recording_error = None;
     if app.session.actions.recording.is_some() && run(app, "edit.checkSpelling", json!({ "allLayers": d.all_layers })).is_none() {
         recording_error = Some(app.ui.status.clone());
@@ -815,6 +838,19 @@ pub fn close_spelling(app: &mut PhotocraftApp) {
             app.ui.status = format!("{error} ({})", app.ui.status);
             app.ui.status_error = true;
         }
+    }
+}
+
+/// At the end of the scope the reference says "Spell check complete." in an alert whose OK is
+/// Done (#14178).
+fn alert_when_complete(app: &mut PhotocraftApp) {
+    if app.ui.type_panels.spell.as_ref().is_none_or(|d| d.complete.is_some() || d.index < d.items.len()) {
+        return;
+    }
+    let fields = serde_json::Map::from_iter([("message".to_string(), json!(tl!("Spell check complete.")))]);
+    let alert = app.ui.open_dialog(crate::state::DialogKind::Error, fields);
+    if let Some(d) = app.ui.type_panels.spell.as_mut() {
+        d.complete = Some(alert);
     }
 }
 
@@ -894,9 +930,9 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     if crate::widgets::checkbox(ui, &mut all_layers, tl!("Check All Layers")).changed() {
                         act = Some("relist");
                     }
-                    let msg = if item.is_none() { tl!("Spell check complete.") } else { "" };
-                    if !msg.is_empty() {
-                        ui.label(RichText::new(msg).color(t.text).size(11.5));
+                    // Only left after toggling Check All Layers ends the scope, which opens no alert.
+                    if item.is_none() && d.complete.is_none() {
+                        ui.label(RichText::new(tl!("Spell check complete.")).color(t.text).size(11.5));
                     }
                 });
                 ui.vertical(|ui| {
@@ -967,13 +1003,17 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         _ => {}
     }
+    // Toggling Check All Layers mid-run is not measured: it keeps the line in the dialog.
+    if a != "relist" {
+        alert_when_complete(app);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn app_with_text(text: &str) -> PhotocraftApp {
+    pub(super) fn app_with_text(text: &str) -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 300, "height": 120, "background": "white"})).unwrap();
         app.run("type.create", json!({"x": 10, "y": 60, "text": text})).unwrap();
@@ -1144,3 +1184,7 @@ mod tests {
         assert!(h.query_by_label("Hyphenate").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "type_spell_complete_tests.rs"]
+mod spell_complete_tests;
