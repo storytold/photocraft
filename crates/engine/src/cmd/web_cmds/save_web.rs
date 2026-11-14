@@ -1,6 +1,6 @@
 use super::assets::{asset_output_path, asset_path_components};
 use super::optimizer::{optimize, web_document, web_exif, web_warnings, web_xmp};
-use super::settings::{WebSettings, rgb_hex};
+use super::settings::{WebFormat, WebSettings, rgb_hex};
 use super::{EngineError, Rect, ResolvedSlice, Result, Session, SliceKind, Value, bad, join, json, other, portable_device_name, slices, stem, write_file};
 
 /// A file-name-safe slice name.
@@ -218,6 +218,8 @@ fn slice_pick(p: &Value, cmd: &str, doc: &photocraft_doc::Document) -> Result<Sl
     Ok(SlicePick::Numbers(numbers))
 }
 
+/// Export the whole image or the requested slices. Validate every selected image slice's
+/// scaled, clipped dimensions against the codec limit before writing the first slice.
 fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
     if let Some(authorize) = s.authorize {
@@ -293,6 +295,24 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
     let trusted_slice_html = p.get("trustedSliceHtml").and_then(Value::as_bool).unwrap_or(false);
     let base = portable_generated_stem(single.map(stem).unwrap_or_else(|| slices::base_name(&doc)));
+    let piece_for = |r: &ResolvedSlice| scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
+    let limit = match st.format {
+        WebFormat::Gif => photocraft_codecs::Format::Gif.max_dimensions(),
+        WebFormat::Jpeg => photocraft_codecs::Format::Jpeg.max_dimensions(),
+        WebFormat::Webp if st.lossless => photocraft_codecs::Format::WebP.max_dimensions(),
+        // VP8 stores each dimension in 14 bits. Lossless WebP permits one more pixel.
+        WebFormat::Webp => Some((16_383, 16_383)),
+        _ => None,
+    };
+    // Reject a known codec failure before an earlier slice reaches the writer.
+    if let Some((w, h)) = limit {
+        for r in chosen.iter().copied().filter(|r| r.kind != SliceKind::NoImage) {
+            let piece = piece_for(r);
+            if !piece.is_empty() && (i64::from(piece.width()) > i64::from(w) || i64::from(piece.height()) > i64::from(h)) {
+                return Err(other(format!("Image slice {} exceeds the {w}x{h} limit for {}", r.number, st.format.ext())));
+            }
+        }
+    }
     let mut files = Vec::new();
     let mut cells: Vec<(Rect, String, String)> = Vec::new();
     let mut total = 0usize;
@@ -318,7 +338,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // empty cell, so the exported ones keep their place in the table.
     let mut texted = std::collections::HashSet::new();
     for r in &all {
-        let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
+        let piece = piece_for(r);
         if piece.is_empty() {
             continue;
         }
