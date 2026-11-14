@@ -9,7 +9,13 @@ pub struct Interaction {
     pub commit: bool,
 }
 
+/// Grab radius of the hosts the reference application was not measured in, so it stays as it is.
 const HIT_RADIUS: f32 = 9.0;
+/// Screen pixels a click in the **Curves graph** may sit from an existing point and still select it.
+/// The reference application selects a point clicked 8, 13 and 15 px away at 1 px per input level
+/// and still adds a point 30 px away, so this has to sit in that window; 16.0 is the smallest clean
+/// screen distance above the measured 15, and it is one pixel per level for 16 input levels.
+pub const CURVES_HIT_RADIUS: f32 = 16.0;
 /// Interior points disappear outside this margin and return on re-entry during the same drag.
 const DRAG_OFF: f32 = 12.0;
 
@@ -75,7 +81,26 @@ pub fn move_to(pts: &mut [[f32; 2]], i: usize, v: [f32; 2]) -> bool {
 
 /// Capture a point at button-down, preserve its grab offset, and keep it through release.
 /// `commit` ends a gesture; hosts decide how that becomes document history.
+///
+/// Uses today's 9 px grab radius, which the hosts the reference application was not measured in
+/// keep; the Curves graph asks for its own through [`interact_with_hit_radius`].
 pub fn interact(ui: &mut Ui, resp: &Response, graph: Rect, pts: &mut Vec<[f32; 2]>, state: &mut PointCurveState) -> Interaction {
+    interact_with_hit_radius(ui, resp, graph, pts, state, HIT_RADIUS)
+}
+
+/// [`interact`], with the host's grab radius in screen pixels: the Curves graph passes
+/// [`CURVES_HIT_RADIUS`]; a host the reference application was not measured in passes the 9 px
+/// default.
+pub fn interact_with_hit_radius(
+    ui: &mut Ui,
+    resp: &Response,
+    graph: Rect,
+    pts: &mut Vec<[f32; 2]>,
+    state: &mut PointCurveState,
+    hit_radius: f32,
+) -> Interaction {
+    // Hosts pass a constant; a hostile value must not leave every point ungrabbable.
+    let hit_radius = if hit_radius.is_finite() { hit_radius.max(0.0) } else { HIT_RADIUS };
     if !graph.is_finite() || graph.width() <= 0.0 || graph.height() <= 0.0 {
         *state = PointCurveState::default();
         return Interaction::default();
@@ -91,7 +116,7 @@ pub fn interact(ui: &mut Ui, resp: &Response, graph: Rect, pts: &mut Vec<[f32; 2
     if resp.secondary_clicked()
         && let Some(pos) = resp.interact_pointer_pos()
     {
-        if let Some(i) = hit(pts, to_scr, pos, HIT_RADIUS)
+        if let Some(i) = hit(pts, to_scr, pos, hit_radius)
             && delete(pts, i)
         {
             e.changed = true;
@@ -109,7 +134,7 @@ pub fn interact(ui: &mut Ui, resp: &Response, graph: Rect, pts: &mut Vec<[f32; 2
     if press && let Some(pos) = press_pos {
         resp.request_focus();
         let delete_pressed = ui.input(|i| i.modifiers.command);
-        match hit(pts, to_scr, pos, HIT_RADIUS) {
+        match hit(pts, to_scr, pos, hit_radius) {
             Some(i) if delete_pressed => {
                 if delete(pts, i) {
                     e.changed = true;

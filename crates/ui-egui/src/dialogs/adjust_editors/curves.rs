@@ -396,7 +396,7 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         }
         ui.data_mut(|d| d.insert_temp(stroke_id, (active, last)));
     } else {
-        let interaction = crate::point_curve::interact(ui, &resp, graph, &mut pts, &mut st.gesture);
+        let interaction = crate::point_curve::interact_with_hit_radius(ui, &resp, graph, &mut pts, &mut st.gesture, crate::point_curve::CURVES_HIT_RADIUS);
         changed = interaction.changed;
         e.commit |= interaction.commit;
     }
