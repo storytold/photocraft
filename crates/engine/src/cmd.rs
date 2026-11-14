@@ -58,6 +58,9 @@ pub mod actions_cmds;
 pub mod actions_edit_cmds;
 pub mod adjust_cmds;
 mod adjust_params;
+pub mod adjustment_brush_cmds;
+#[cfg(test)]
+mod adjustment_brush_cmds_tests;
 pub mod align_cmds;
 pub mod analysis_cmds;
 pub mod artboard_cmds;
@@ -1375,6 +1378,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::actions_edit_cmds::specs());
     v.extend(crate::swatch_cmds::specs());
     v.extend(crate::retouch_cmds::specs());
+    v.extend(crate::adjustment_brush_cmds::specs());
     v.extend(crate::redeye_cmds::specs());
     v.extend(crate::image_cmds::specs());
     v.extend(crate::perspective_crop_cmds::specs());

@@ -399,6 +399,11 @@ pub(crate) fn edits_channel(s: &Session) -> bool {
     })
 }
 
+/// Target the active layer's mask, as clicking its thumbnail does.
+pub(crate) fn target_layer_mask(s: &mut Session) {
+    target(s, ChannelTarget::LayerMask);
+}
+
 /// Make `t` the edit target and show it the way Photoshop does when its row is clicked.
 pub(super) fn target(s: &mut Session, t: ChannelTarget) {
     if let Some(st) = s.active_mut() {
