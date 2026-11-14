@@ -5,62 +5,18 @@ use serde_json::Value;
 
 use crate::PhotocraftApp;
 
-/// A self-update that left this copy unchanged, told to the user instead of offering the install
-/// again: the same install would fail the same way and the prompt would come back after every
-/// restart (#10477). The text is an English template, translated and filled in when drawn.
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) struct Problem {
-    template: &'static str,
-    args: Vec<(&'static str, String)>,
-    /// Where to get the release by hand.
-    pub(crate) url: String,
-}
-
-impl Problem {
-    const HELPER_FAILED: &'static str = "The last update could not be installed: {reason}";
-    const NOT_APPLIED: &'static str =
-        "PhotoCraft {version} was installed a moment ago, but the copy that is running still reports {running}, so the installer did not replace it.";
-
-    /// The update helper recorded `error` before it started the old copy again.
-    pub(crate) fn helper_failed(error: &str) -> Self {
-        let error = error.trim();
-        let reason = if error.is_empty() { "the update helper stopped without saying why" } else { error };
-        Self { template: Self::HELPER_FAILED, args: vec![("reason", reason.to_owned())], url: photocraft_engine::updates_cmds::RELEASES.to_owned() }
-    }
-
-    /// `version` was installed a moment ago, yet this copy (`running`) is still older. The page is
-    /// built from our own releases address, never taken from what the network answered.
-    pub(crate) fn not_applied(version: &str, running: &str) -> Self {
-        let url = format!("{}/tag/v{version}", photocraft_engine::updates_cmds::RELEASES);
-        Self { template: Self::NOT_APPLIED, args: vec![("version", version.to_owned()), ("running", running.to_owned())], url }
-    }
-
-    fn fill(&self, template: &str) -> String {
-        let args: Vec<(&str, &str)> = self.args.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        crate::i18n::fmt(template, &args)
-    }
-
-    /// The message in English, as `ui.inspect` reports it.
-    pub(crate) fn message(&self) -> String {
-        self.fill(self.template)
-    }
-
-    /// The message in the current language.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    fn text(&self) -> String {
-        self.fill(crate::i18n::t(self.template))
-    }
-}
-
 pub(crate) struct Runtime {
     startup_checked: bool,
     notified_version: Option<String>,
-    /// Why the update did not happen, until the user closes the window that says so.
-    pub(crate) problem: Option<Problem>,
     /// The startup prompt and the self-update behind it (desktop).
     #[cfg(not(target_arch = "wasm32"))]
     updater: craft_update::updater::Updater,
+    /// What the last self-update came to, shown in the result window until it is closed.
+    #[cfg(not(target_arch = "wasm32"))]
+    last_update: craft_update::updater::Status,
+    /// The check running was asked for with Help ▸ Check for Updates.
+    #[cfg(not(target_arch = "wasm32"))]
+    requested: bool,
 }
 
 impl Default for Runtime {
@@ -68,9 +24,12 @@ impl Default for Runtime {
         Self {
             startup_checked: false,
             notified_version: None,
-            problem: None,
             #[cfg(not(target_arch = "wasm32"))]
             updater: craft_update::updater::Updater::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION),
+            #[cfg(not(target_arch = "wasm32"))]
+            last_update: craft_update::updater::Status::Idle,
+            #[cfg(not(target_arch = "wasm32"))]
+            requested: false,
         }
     }
 }
@@ -102,28 +61,65 @@ pub(crate) fn check(app: &mut PhotocraftApp, _ctx: &egui::Context, params: Value
         app.updates_rt.startup_checked = true;
         // A release the user dismissed is offered again by a manual check.
         app.updates_rt.notified_version = None;
+        // The window shows this check from now on.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.updates_rt.requested = true;
+            app.updates_rt.updater.dismiss_status();
+            app.updates_rt.last_update = craft_update::updater::Status::Idle;
+            // A check made before the first frame leaves the last self-update's records for the
+            // next start.
+            app.services.last_update = None;
+        }
     }
     result
 }
 
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(read) = app.services.last_update.take() {
+        use craft_update::updater::Status as Shown;
+        app.updates_rt.last_update = match read() {
+            Some(Ok(version)) => Shown::Updated(version),
+            Some(Err(reason)) => Shown::InstallFailed(reason),
+            None => Shown::Idle,
+        };
+        if app.updates_rt.last_update != Shown::Idle {
+            app.ui.updates_open = true;
+        }
+    }
     // `updates.status` also polls (automation may consume the result before this frame).
     app.session.updates.poll();
     if let Status::Available { release } = &app.session.updates.status
         && app.updates_rt.notified_version.as_ref() != Some(&release.version)
     {
         app.updates_rt.notified_version = Some(release.version.clone());
-        // This copy installed that very release a moment ago and still is not it: the install
-        // does not take effect here, so offering it again would only loop (update, restart, the
-        // same prompt). Say so and point at the release page.
-        let installed_already = app.services.update_installed.is_some_and(|installed| installed(&format!("v{}", release.version)));
-        if installed_already {
-            app.updates_rt.problem = Some(Problem::not_applied(&release.version, photocraft_engine::build_info::VERSION));
+        app.ui.updates_open = true;
+        // This copy installed that very release a moment ago and still is not it: the install did
+        // not take effect here, so offering it again would only loop (update, restart, the same
+        // prompt). Say so in the result window instead (#10477).
+        #[cfg(not(target_arch = "wasm32"))]
+        if app.services.update_installed.is_some_and(|installed| installed(&format!("v{}", release.version))) {
+            let args = [("version", release.version.as_str()), ("running", photocraft_engine::build_info::VERSION)];
+            let message = crate::i18n::fmt(
+                crate::i18n::t("PhotoCraft {version} was installed a moment ago, but the copy that is running still reports {running}, so the installer did not replace it."),
+                &args,
+            );
+            app.updates_rt.last_update = craft_update::updater::Status::InstallFailed(message);
+            app.updates_rt.requested = false;
         } else {
-            app.ui.updates_open = true;
-            #[cfg(not(target_arch = "wasm32"))]
-            app.updates_rt.updater.offer(release_of(release));
+            let updater = &mut app.updates_rt.updater;
+            updater.offer(release_of(release));
+            // While an update installs or waits for the app to close, or while the launcher keeps
+            // this version, no prompt opens: a manual check reports that state in the result window.
+            if std::mem::take(&mut app.updates_rt.requested) && !updater.prompt_open() {
+                updater.check_now(ctx);
+            }
         }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if !matches!(app.session.updates.status, Status::Checking) {
+        app.updates_rt.requested = false;
     }
     if app.session.updates.check.is_none() {
         return;
@@ -148,7 +144,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     {
         let was_open = app.updates_rt.updater.prompt_open();
         app.updates_rt.updater.tick(ctx);
-        // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
+        // An update starts, and a ready one asks the app to close, only while no work is unsaved.
         let clean = !app.has_unsaved_work();
         match app.updates_rt.updater.show_if(ctx, clean) {
             craft_update::updater::Action::None => {}
@@ -157,62 +153,48 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             // relaunches once the process exits.
             craft_update::updater::Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
+        // The last self-update's outcome, hidden while the prompt showed, is still shown after it.
         if was_open && !app.updates_rt.updater.prompt_open() {
-            app.ui.updates_open = false;
+            app.ui.updates_open = app.updates_rt.last_update != craft_update::updater::Status::Idle;
         }
     }
     if let Some(url) = download {
         crate::links::open(app, ctx, &url);
     }
-    show_problem(app, ctx);
     if app.updates_rt.updater.prompt_open() {
         return;
     }
-    if app.ui.updates_open {
-        let dialog = craft_update::CheckResultDialog::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION);
-        match dialog.show(ctx, &check_status(&app.session.updates.status)) {
-            craft_update::CheckResultResponse::None => {}
-            craft_update::CheckResultResponse::Close => app.ui.updates_open = false,
-            craft_update::CheckResultResponse::CheckAgain => {
-                let _ = check(app, ctx, serde_json::json!({}));
-            }
+    let status = shown_status(app);
+    let dialog = craft_update::CheckResultDialog::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION);
+    match dialog.show(ctx, &status) {
+        craft_update::CheckResultResponse::None => {}
+        craft_update::CheckResultResponse::Close => {
+            app.ui.updates_open = false;
+            app.updates_rt.updater.dismiss_status();
+            app.updates_rt.last_update = craft_update::updater::Status::Idle;
         }
+        craft_update::CheckResultResponse::CheckAgain => {
+            let _ = check(app, ctx, serde_json::json!({}));
+        }
+        craft_update::CheckResultResponse::RestartToUpdate => app.updates_rt.updater.restart_to_update(),
     }
 }
 
-/// The window that says why PhotoCraft was not updated, with the release page to update by hand.
-/// It stays until closed, above the startup prompt when that is open too.
+/// What the open result window shows: the updater's answer to a manual check (an update installing
+/// or ready, or a version the launcher keeps), else the last self-update's outcome, else the
+/// engine's check.
 #[cfg(not(target_arch = "wasm32"))]
-fn show_problem(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some(problem) = app.updates_rt.problem.clone() else { return };
-    let (mut open_page, mut close) = (false, false);
-    egui::Window::new(tl!("Update Problem"))
-        .id(egui::Id::unique("photocraft_update_problem"))
-        .order(egui::Order::Foreground)
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .default_width(420.0)
-        .show(ctx, |ui| {
-            let t = crate::theme::Tokens::get(ctx);
-            ui.colored_label(t.warning, tl!("PhotoCraft was not updated."));
-            ui.add_space(4.0);
-            ui.label(problem.text());
-            ui.add_space(4.0);
-            ui.label(tl!("Download PhotoCraft from the release page and run its installer. Your documents and settings are not affected."));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                open_page = crate::widgets::primary_button(ui, tl!("Open Release Page"), 160.0).clicked();
-                close = ui.button(tl!("Close")).clicked();
-            });
-        });
-    if open_page {
-        crate::links::open(app, ctx, &problem.url);
-    }
-    // Opening the page leaves the window up: `links::open` cannot report a failed browser launch,
-    // and closing it would lose the explanation and the link.
-    if close {
-        app.updates_rt.problem = None;
+fn shown_status(app: &PhotocraftApp) -> craft_update::updater::Status {
+    use craft_update::updater::Status as Shown;
+    let updater = app.updates_rt.updater.status();
+    if !app.ui.updates_open {
+        Shown::Idle
+    } else if *updater != Shown::Idle {
+        updater.clone()
+    } else if app.updates_rt.last_update != Shown::Idle {
+        app.updates_rt.last_update.clone()
+    } else {
+        check_status(&app.session.updates.status)
     }
 }
 
@@ -366,6 +348,59 @@ mod tests {
         assert!(app.updates_rt.updater.prompt_open());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn press_escape(app: &mut PhotocraftApp, ctx: &egui::Context) {
+        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        let mut output = ctx.run_ui(egui::RawInput { events: vec![escape], ..Default::default() }, |ui| show(app, ui.ctx()));
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn the_last_update_opens_the_result_window_once_until_it_is_closed() {
+        use craft_update::updater::Status as Shown;
+        let (mut app, _, _) = app();
+        app.services.last_update = Some(|| Some(Ok("99.0.0".into())));
+        let ctx = egui::Context::default();
+        at(&mut app, &ctx, 0.0);
+        assert!(app.ui.updates_open);
+        assert_eq!(shown_status(&app), Shown::Updated("99.0.0".into()));
+        assert!(app.services.last_update.is_none(), "read once");
+        at(&mut app, &ctx, 1.0);
+        assert_eq!(shown_status(&app), Shown::Updated("99.0.0".into()), "shown until closed");
+        press_escape(&mut app, &ctx);
+        assert!(!app.ui.updates_open);
+        assert_eq!(app.updates_rt.last_update, Shown::Idle);
+        assert_eq!(shown_status(&app), Shown::Idle);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_failed_update_is_reported_until_a_manual_check_replaces_it() {
+        use craft_update::updater::Status as Shown;
+        let (mut app, calls, _) = app();
+        app.services.last_update = Some(|| Some(Err("the installer exited with code 1603".into())));
+        app.session.edit_prefs(|p| p.general.automatically_check_updates = false);
+        let ctx = egui::Context::default();
+        at(&mut app, &ctx, 0.0);
+        assert_eq!(shown_status(&app), Shown::InstallFailed("the installer exited with code 1603".into()));
+        menus::invoke(&mut app, &ctx, "help.checkForUpdates", serde_json::json!({})).unwrap();
+        assert_eq!(*calls.lock().unwrap(), 1);
+        assert_eq!(shown_status(&app), Shown::Checking, "the window shows the new check");
+
+        let (mut early, _, _) = self::app();
+        early.services.last_update = Some(|| Some(Err("unread".into())));
+        menus::invoke(&mut early, &ctx, "help.checkForUpdates", serde_json::json!({})).unwrap();
+        at(&mut early, &ctx, 0.0);
+        assert_eq!(shown_status(&early), Shown::Checking, "a check before the first frame is not replaced by the last update");
+        assert!(early.services.last_update.is_none());
+
+        let (mut quiet, _, _) = self::app();
+        quiet.services.last_update = Some(|| None);
+        at(&mut quiet, &ctx, 0.0);
+        assert!(!quiet.ui.updates_open, "nothing to report opens nothing");
+    }
+
     #[test]
     fn a_manual_check_that_fails_to_start_opens_the_status_window() {
         let mut app =
@@ -411,14 +446,11 @@ mod tests {
         assert!(!app.ui.updates_open);
     }
 
-    fn release(version: &str) -> Release {
-        Release { version: version.into(), url: format!("https://github.com/storytold/photocraft/releases/tag/v{version}") }
-    }
-
     /// An app whose automatic check has found `version`, with `installed` saying which tag this
     /// copy installed itself a moment ago.
+    #[cfg(not(target_arch = "wasm32"))]
     fn app_offered(version: &str, installed: Option<fn(&str) -> bool>) -> PhotocraftApp {
-        let found = release(version);
+        let found = Release { version: version.into(), url: format!("https://github.com/storytold/photocraft/releases/tag/v{version}") };
         let mut app = PhotocraftApp::new(
             Session::new(),
             Services {
@@ -437,90 +469,25 @@ mod tests {
         app
     }
 
+    /// The install of a release did not take effect: offering it again would loop (update, restart,
+    /// the same prompt), so the result window says so (#10477).
     #[test]
-    fn a_failure_the_update_helper_recorded_is_told_at_startup() {
-        let app = PhotocraftApp::new(
-            Session::new(),
-            Services { update_failure: Some("the Windows Installer stopped with error 1603\n".into()), ..Default::default() },
-        );
-        let problem = app.updates_rt.problem.as_ref().expect("the failure is shown");
-        assert_eq!(problem.message(), "The last update could not be installed: the Windows Installer stopped with error 1603");
-        assert_eq!(problem.url, photocraft_engine::updates_cmds::RELEASES, "the page to update by hand");
-        assert_eq!(app.services.update_failure, None, "told once");
-        let none = PhotocraftApp::new(Session::new(), Services::default());
-        assert!(none.updates_rt.problem.is_none(), "an ordinary start says nothing");
-        let blank = Problem::helper_failed("  ");
-        assert!(blank.message().contains("stopped without saying why"), "{}", blank.message());
-    }
-
-    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn a_release_that_was_just_installed_is_explained_instead_of_offered_again() {
-        let mut app = app_offered("99.0.0", Some(|tag| tag == "v99.0.0"));
-        let problem = app.updates_rt.problem.as_ref().expect("the loop is named");
-        let message = problem.message();
-        assert!(message.contains("99.0.0") && message.contains(photocraft_engine::build_info::VERSION), "{message}");
-        assert_eq!(problem.url, "https://github.com/storytold/photocraft/releases/tag/v99.0.0");
-        assert!(!app.ui.updates_open);
-        #[cfg(not(target_arch = "wasm32"))]
+        let app = app_offered("99.0.0", Some(|tag| tag == "v99.0.0"));
+        assert!(app.ui.updates_open);
         assert!(!app.updates_rt.updater.prompt_open(), "no install that would fail the same way");
-        let (req, _) = crate::control::ControlRequest::new("ui.inspect", serde_json::json!({}));
-        let crate::control::Outcome::Done(value) = crate::control::handle(&mut app, &egui::Context::default(), &req) else {
-            panic!("expected an immediate reply")
-        };
-        assert_eq!(value["result"]["updates"]["problem"], message);
+        let craft_update::updater::Status::InstallFailed(message) = shown_status(&app) else { panic!("the result window shows the loop") };
+        assert!(message.contains("99.0.0") && message.contains(photocraft_engine::build_info::VERSION), "{message}");
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn a_release_that_was_not_installed_here_is_offered_as_before() {
         for installed in [None, Some((|_: &str| false) as fn(&str) -> bool), Some(|tag: &str| tag == "v98.0.0")] {
             let app = app_offered("99.0.0", installed);
-            assert!(app.updates_rt.problem.is_none());
-            assert!(app.ui.updates_open);
-            #[cfg(not(target_arch = "wasm32"))]
+            assert!(app.updates_rt.last_update == craft_update::updater::Status::Idle);
             assert!(app.updates_rt.updater.prompt_open());
         }
-    }
-
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn the_problem_window_draws_above_the_prompt_and_stays_until_closed() {
-        let mut app = app_offered("99.0.0", Some(|_| false));
-        app.updates_rt.problem = Some(Problem::helper_failed("disk full"));
-        let ctx = egui::Context::default();
-        for time in [2.0, 3.0] {
-            let mut output = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| show(&mut app, ui.ctx()));
-            output.textures_delta.clear();
-        }
-        assert!(app.updates_rt.problem.is_some(), "nothing closes it but the user");
-        assert!(app.updates_rt.updater.prompt_open());
-    }
-
-    /// "Open Release Page" must not dismiss the explanation: `links::open` cannot report a browser
-    /// that failed to launch, and the window is the only place the release link survives.
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn opening_the_release_page_keeps_the_problem_window_until_close() {
-        use egui_kittest::kittest::Queryable;
-        let mut app = app_offered("99.0.0", Some(|_| false));
-        app.services.open_url = Some(Box::new(|_| Err("no browser".into())));
-        app.updates_rt.problem = Some(Problem::helper_failed("disk full"));
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
-                let ctx = ui.ctx().clone();
-                // The themed fonts are installed after the first frame.
-                if ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                    show_problem(app, &ctx);
-                }
-            },
-            app,
-        );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        h.run_steps(3);
-        h.get_by_label("Open Release Page").click();
-        h.run_steps(3);
-        assert!(h.state().updates_rt.problem.is_some(), "the page may not have opened");
-        h.get_by_label("Close").click();
-        h.run_steps(3);
-        assert!(h.state().updates_rt.problem.is_none());
     }
 }

@@ -5,10 +5,10 @@
 use crate::common;
 
 use common::*;
+use craft_psd::tiff::{ByteOrder, ImageSourceData};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, LayerContent};
 use photocraft_io::*;
-use photocraft_psd::tiff::{ByteOrder, ImageSourceData};
 
 fn tiff(doc: &Document, layers: bool) -> ExportResult {
     export(doc, "x.tif", &ExportOptions { tiff_layers: layers, ..Default::default() }).expect("export")
@@ -87,8 +87,8 @@ fn tiff_and_psd_open_as_the_same_document() {
         )
         .unwrap()
         .document;
-        let a = photocraft_compose::flatten(&d).px;
-        let b = photocraft_compose::flatten(&flat).px;
+        let a = photocraft_compose::flatten(&d).into_px();
+        let b = photocraft_compose::flatten(&flat).into_px();
         assert!(max_diff(&a, &b) <= 2.0 / 255.0, "{mode:?} {depth:?}: composite differs by {}", max_diff(&a, &b));
     }
 }
@@ -207,7 +207,7 @@ fn transparency_is_straight_in_the_composite() {
 /// transparency: it opens as no alpha channel, and a PSD save doesn't write it twice.
 #[test]
 fn photoshop_mtrn_marks_the_merged_transparency_of_a_layered_tiff() {
-    use photocraft_psd::{PsdFile, TaggedBlock};
+    use craft_psd::{PsdFile, TaggedBlock};
     for depth in [SampleType::U8, SampleType::U16] {
         let mut d = Document::new("t", photocraft_geom::Size::new(8, 6), ColorMode::Rgb, depth);
         let fmt = d.pixel_format();
@@ -248,7 +248,7 @@ fn big_documents_use_the_psb_signature() {
     let d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);
     let r = export(&d, "x.tif", &ExportOptions { force_psb: true, tiff_layers: true, ..Default::default() }).unwrap();
     let (_, layers) = tags(&r.bytes);
-    assert!(layers.unwrap().starts_with(photocraft_psd::tiff::SIGNATURE_PSB));
+    assert!(layers.unwrap().starts_with(craft_psd::tiff::SIGNATURE_PSB));
     let back = import("x.tif", &r.bytes).unwrap().document;
     assert_docs_eq(&d, &back);
 }
@@ -509,7 +509,7 @@ fn dtf_like_spot_is_written_in_full() {
 }
 
 fn assert_spot_resources(resources: &[u8], name: &str) {
-    use photocraft_psd::tiff::resources_from_bytes;
+    use craft_psd::tiff::resources_from_bytes;
     let (blocks, warnings) = resources_from_bytes(resources).unwrap();
     assert!(warnings.is_empty(), "{name} {warnings:?}");
     let block = |id: u16| blocks.iter().find(|b| b.id == id).unwrap_or_else(|| panic!("{name} missing {id}"));
@@ -693,7 +693,7 @@ fn ink(d: &Document) -> (f32, f32) {
 /// records. With `layers`, the layer data has a positive layer count and an `MTrn` block (the
 /// specification's key is `Mtrn`); without, the file is flat. Built from the PSD model of `doc`.
 fn photoshop_transparency_and_spot_tiff(doc: &Document, layers: bool) -> Vec<u8> {
-    use photocraft_psd::{Compression, TaggedBlock};
+    use craft_psd::{Compression, TaggedBlock};
 
     let opts = PsdExportOptions { merged_matte: false, merged_compression: Compression::Raw, ..Default::default() };
     let (file, _) = document_to_psd_with(doc, &opts);
@@ -703,7 +703,7 @@ fn photoshop_transparency_and_spot_tiff(doc: &Document, layers: bool) -> Vec<u8>
     let rgba: Vec<u8> = (0..n).flat_map(|i| (0..4).map(move |c| (i, c))).map(|(i, c)| planes[c * n + i]).collect();
     let mut img = photocraft_codecs::Image::from_raw(4, 4, photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8, rgba).unwrap();
     img.meta.extra_samples = vec![photocraft_codecs::ExtraSample { kind: 0, data: planes[4 * n..].to_vec() }];
-    img.meta.photoshop_resources = Some(photocraft_psd::tiff::resources_to_bytes(&file.resources).unwrap());
+    img.meta.photoshop_resources = Some(craft_psd::tiff::resources_to_bytes(&file.resources).unwrap());
     if layers {
         let mut isd = ImageSourceData::from_psd(&file);
         if let Some(info) = &mut isd.layer_info {
@@ -721,7 +721,7 @@ fn photoshop_transparency_and_spot_tiff(doc: &Document, layers: bool) -> Vec<u8>
 /// must also drop the `MTrn` marker, or the spot would read back as transparency.
 #[test]
 fn photoshop_mtrn_tiff_opens_without_a_transparency_channel() {
-    use photocraft_psd::TaggedBlock;
+    use craft_psd::TaggedBlock;
 
     let bytes = photoshop_transparency_and_spot_tiff(&transparent_art_with_white_spot(), true);
     let opened = import("t.tif", &bytes).unwrap().document;
@@ -884,10 +884,10 @@ fn assert_photoshop_layered_tiff(bytes: &[u8], with_spot: bool) {
 /// here. Everything round-trips, PSD → TIFF → PSD included.
 #[test]
 fn spot_ink_is_stored_as_zero_and_alpha_is_not() {
+    use craft_psd::PsdFile;
     use photocraft_color::{Color, PixelFormat};
     use photocraft_doc::{AlphaChannel, Layer};
     use photocraft_geom::{Rect, Size};
-    use photocraft_psd::PsdFile;
     use photocraft_raster::Surface;
 
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
@@ -977,7 +977,7 @@ fn identifiers(data: &[u8]) -> Vec<u32> {
 /// The identifiers in a TIFF's resource 1053 (none without one).
 fn tiff_alpha_identifiers(bytes: &[u8]) -> Vec<u32> {
     let resources = tags(bytes).0.expect("photoshop resources");
-    let (blocks, _) = photocraft_psd::tiff::resources_from_bytes(&resources).unwrap();
+    let (blocks, _) = craft_psd::tiff::resources_from_bytes(&resources).unwrap();
     blocks.iter().find(|b| b.id == 1053).map(|b| identifiers(&b.data)).unwrap_or_default()
 }
 
@@ -1054,7 +1054,7 @@ fn default_export_options_write_a_flat_tiff() {
 /// limit error as a PSD, instead of being converted.
 #[test]
 fn layered_tiff_nested_past_the_cap_is_rejected() {
-    use photocraft_psd::{GroupSpec, LayerSpec, PixelData, PsdBuilder, PsdFile};
+    use craft_psd::{GroupSpec, LayerSpec, PixelData, PsdBuilder, PsdFile};
     let tiff_nested = |levels: usize| {
         let mut b = PsdBuilder::new(4, 4);
         for _ in 0..levels {
@@ -1116,7 +1116,7 @@ fn channels_past_sixteen_leave_no_resources_behind() {
     let r = tiff(&doc, true);
     assert!(r.warnings.iter().any(|w| w.contains("19 extra channels") && w.contains("first 16")), "{:?}", r.warnings);
     let (resources, _) = tags(&r.bytes);
-    let (resources, _) = photocraft_psd::tiff::resources_from_bytes(&resources.expect("resources")).expect("parse resources");
+    let (resources, _) = craft_psd::tiff::resources_from_bytes(&resources.expect("resources")).expect("parse resources");
     let data = |id: u16| resources.iter().find(|r| r.id == id).map(|r| r.data.clone()).unwrap_or_default();
     let pascal = data(1006);
     let (mut at, mut names) = (0usize, 0usize);

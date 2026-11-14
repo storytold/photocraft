@@ -20,24 +20,23 @@ pub fn service() -> CheckFn {
     })
 }
 
+/// What the last self-update came to, once: `craft-update` removes its records as it reads them.
+pub fn last_update() -> Option<Result<String, String>> {
+    use craft_update::self_update::{Outcome, current_version, take_outcome};
+    let app = &photocraft_ui_egui::UPDATE_APP;
+    let paths = craft_update::Paths::for_app(app).ok()?;
+    let version = photocraft_engine::build_info::VERSION;
+    let running = current_version(app, version).map_or_else(|| version.to_string(), |v| v.to_string());
+    match take_outcome(&paths, &running)? {
+        Outcome::Installed(installed) => Some(Ok(installed.to_string())),
+        Outcome::Failed(reason) => Some(Err(reason)),
+    }
+}
+
 fn check() -> CheckResult {
     let http = craft_update::Http::new("PhotoCraft/Update")?;
     let found = craft_update::check_for_update(&photocraft_ui_egui::UPDATE_APP, &http, photocraft_engine::build_info::VERSION)?;
     Ok(found.map(|release| Release { version: release.tag.trim_start_matches(['v', 'V']).to_string(), url: release.html_url }))
-}
-
-/// Why the previous self-update failed, once: the update helper records its error beside the app's
-/// data before it starts the old copy again, and nothing else ever reads it, so without this a
-/// failed update is a silent restart into the same prompt (#10477).
-pub fn previous_failure() -> Option<String> {
-    let paths = craft_update::Paths::for_app(&photocraft_ui_egui::UPDATE_APP).ok()?;
-    failure_in(&paths)
-}
-
-fn failure_in(paths: &craft_update::Paths) -> Option<String> {
-    let error = craft_update::self_update::take_failure(paths)?;
-    log::warn!("The previous update failed: {}", error.trim());
-    Some(error)
 }
 
 /// Whether the release tagged `tag` is the one this copy installed itself within the last day. A
@@ -140,18 +139,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = craft_update::Paths::under(dir.path());
         (dir, paths)
-    }
-
-    #[test]
-    fn a_failure_the_update_helper_recorded_is_read_once() {
-        let (_dir, paths) = paths();
-        assert_eq!(failure_in(&paths), None, "nothing recorded");
-        let file = paths.logs().join("self-update-error.txt");
-        std::fs::create_dir_all(paths.logs()).unwrap();
-        std::fs::write(&file, "the Windows Installer stopped with error 1603").unwrap();
-        assert_eq!(failure_in(&paths).as_deref(), Some("the Windows Installer stopped with error 1603"));
-        assert_eq!(failure_in(&paths), None, "it is told once, then removed");
-        assert!(!file.exists());
     }
 
     #[test]
