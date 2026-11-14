@@ -39,7 +39,7 @@ fn steps(app: &PhotocraftApp) -> usize {
 }
 
 /// The open dialogs drawn over `app`, as the window shows them.
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(crate) fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
         |ui, app| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {

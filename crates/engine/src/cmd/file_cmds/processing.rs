@@ -1,3 +1,5 @@
+use photocraft_color::SampleType;
+
 use super::batch_run::{BatchInput, batch_inputs_tree, process_document_copies, process_tree};
 use super::open::import_opened;
 use super::paths::{file_name, list_images, read_file, stem, untitled_name};
@@ -17,6 +19,10 @@ mod image_processor_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "load_stack_name_tests.rs"]
 mod load_stack_name_tests;
+
+#[cfg(test)]
+#[path = "conditional_mode_change_targets_tests.rs"]
+mod conditional_mode_change_targets_tests;
 
 // ---------- Automate ----------
 
@@ -48,6 +54,34 @@ fn mode_name(m: ColorMode) -> &'static str {
     }
 }
 
+/// Why Conditional Mode Change has nothing to convert for a document in `mode`, in the order
+/// Photoshop's dialog checks it (#13681): `"noSource"`, `"noMatch"` or `"sameMode"`; `None` when
+/// it converts. `from` is the command's param ("any", one mode or a list; absent means "any"),
+/// and spellings the command does not know tick nothing. The dialog shows its alerts from this.
+pub fn nothing_to_convert(mode: ColorMode, from: Option<&Value>, to: &str) -> Option<&'static str> {
+    // One spelling per mode, for the array and the single-string forms alike (#7042).
+    let norm = |v: &str| {
+        let v = v.to_ascii_lowercase();
+        if v == "gray" { "grayscale".to_string() } else { v }
+    };
+    let known = |v: &String| ["any", "bitmap", "grayscale", "duotone", "indexed", "rgb", "cmyk", "lab", "multichannel"].contains(&v.as_str());
+    let from: Vec<String> = match from {
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(norm).filter(known).collect(),
+        Some(Value::String(v)) => Some(norm(v)).filter(known).into_iter().collect(),
+        _ => vec!["any".into()],
+    };
+    let cur = mode_name(mode);
+    if from.is_empty() {
+        Some("noSource")
+    } else if !from.iter().any(|f| f == "any" || f == cur) {
+        Some("noMatch")
+    } else if norm(to) == cur {
+        Some("sameMode")
+    } else {
+        None
+    }
+}
+
 pub(super) fn conditional_mode_change(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.conditionalModeChange";
     let to = str_param(p, "to", cmd)?.to_ascii_lowercase();
@@ -56,24 +90,70 @@ pub(super) fn conditional_mode_change(s: &mut Session, p: &Value) -> Result<Valu
         "rgb" => "rgb",
         "cmyk" => "cmyk",
         "lab" => "lab",
-        other => return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unsupported target mode \"{other}\" (rgb, grayscale, cmyk, lab)") }),
+        "bitmap" => "bitmap",
+        "duotone" => "duotone",
+        "indexed" => "indexed",
+        "multichannel" => "multichannel",
+        other => {
+            return Err(EngineError::BadParams {
+                cmd: cmd.into(),
+                msg: format!("unsupported target mode \"{other}\" (rgb, grayscale, cmyk, lab, bitmap, duotone, indexed, multichannel)"),
+            });
+        }
     };
-    let cur = mode_name(s.active().ok_or(EngineError::NoDocument)?.doc.mode);
-    // One spelling per source mode, for the array and the single-string forms alike (#7042).
-    let norm = |v: &str| {
-        let v = v.to_ascii_lowercase();
-        if v == "gray" { "grayscale".to_string() } else { v }
-    };
-    let from: Vec<String> = match p.get("from") {
-        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(norm).collect(),
-        Some(Value::String(v)) => vec![norm(v)],
-        _ => vec!["any".into()],
-    };
-    if cur == to || !(from.iter().any(|f| f == "any" || f == cur)) {
-        return Ok(json!({"changed": false, "mode": cur}));
+    let d = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let (cur, depth, layers) = (mode_name(d.mode), d.depth, d.layers.len());
+    let reason = nothing_to_convert(d.mode, p.get("from"), to);
+    if let Some(reason) = reason {
+        return Ok(json!({"changed": false, "mode": cur, "reason": reason}));
     }
-    s.execute(&format!("image.mode.{to}"), json!({}))?;
+    // The steps Photoshop takes on the way, each its own history state (measured in #13678).
+    // Routes to the new targets it was not measured on are refused rather than guessed.
+    let eight = depth == SampleType::U8;
+    let new_target = matches!(to, "bitmap" | "duotone" | "indexed" | "multichannel");
+    let steps: &[&str] = match (to, cur) {
+        ("bitmap" | "duotone", "rgb") if eight => &["image.mode.grayscale"],
+        ("bitmap" | "duotone" | "indexed" | "multichannel", "rgb" | "grayscale") if eight => &[],
+        // Only a one-layer 32-bit document was measured.
+        ("indexed", "rgb" | "grayscale") if depth == SampleType::U16 || layers == 1 => &["image.mode.bits8"],
+        ("bitmap" | "duotone" | "indexed" | "multichannel", _) => {
+            let msg = format!("converting this {}-bit {cur} document to {to} is not supported", depth.bits());
+            return Err(EngineError::BadParams { cmd: cmd.into(), msg });
+        }
+        ("rgb", "bitmap") => &["image.mode.grayscale"],
+        _ => &[],
+    };
+    // A new target's options are this command's other params, as its image.mode.* command reads
+    // them; the other targets run with none, as before.
+    let mut options = if new_target { p.as_object().cloned().unwrap_or_default() } else { Default::default() };
+    for key in ["from", "to", "coalesce"] {
+        options.remove(key);
+    }
+    let journal = s.journal.len();
+    let target = if to == "indexed" { "image.mode.indexedColor".to_string() } else { format!("image.mode.{to}") };
+    for (done, id) in steps.iter().enumerate() {
+        if let Err(e) = s.execute(id, json!({})) {
+            take_back(s, done, journal);
+            return Err(e);
+        }
+    }
+    if let Err(e) = s.execute(&target, Value::Object(options)) {
+        // As cancelling part-way in Photoshop: the state before the run is current again, the
+        // steps already taken stay as redo states.
+        take_back(s, steps.len(), journal);
+        return Err(e);
+    }
     Ok(json!({"changed": true, "mode": to}))
+}
+
+/// Undo the `n` steps a failed run took and drop them from the journal, so a recording action
+/// does not get them (a failed command is never journaled itself).
+fn take_back(s: &mut Session, n: usize, journal: usize) {
+    for _ in 0..n {
+        // Each of these steps recorded a state just now, so there is one to undo.
+        s.undo();
+    }
+    s.journal.truncate(journal);
 }
 
 /// One `[id, params]` / `{command, params}` / `{id, params}` step of an action.

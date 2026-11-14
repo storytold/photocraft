@@ -1109,6 +1109,7 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     }
     // Merge Channels with too few, repeated, closed or changed documents stays open (#11451).
     merge_channels_ui::preflight(app, id)?;
+    conditional_mode_change_dialog::preflight(app, id)?;
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::preset_group_prompt::owns(&d.fields)) {
         crate::preset_group_prompt::replace_choice(&d.fields)?;
     }
@@ -1311,6 +1312,7 @@ pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
+pub(crate) mod conditional_mode_change_dialog;
 pub mod credits;
 pub mod dds_options_ui;
 pub mod delete_layer_prompt;

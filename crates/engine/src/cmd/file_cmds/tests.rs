@@ -2346,7 +2346,7 @@ fn fit_image_and_conditional_mode_change() {
     assert_eq!(doc(&s).mode, ColorMode::Grayscale);
     s.execute("file.automate.conditionalModeChange", json!({"to": "rgb"})).unwrap();
     assert_eq!(doc(&s).mode, ColorMode::Rgb);
-    assert!(s.execute("file.automate.conditionalModeChange", json!({"to": "duotone"})).is_err());
+    assert!(s.execute("file.automate.conditionalModeChange", json!({"to": "hsb"})).is_err());
 }
 
 #[test]
@@ -2377,6 +2377,33 @@ fn conditional_mode_change_single_gray_source_matches_grayscale() {
     let r = s.execute("file.automate.conditionalModeChange", json!({"from": "Gray", "to": "rgb"})).unwrap();
     assert_eq!(r["changed"], true, "{r}");
     assert_eq!(doc(&s).mode, ColorMode::Rgb);
+}
+
+/// #13681: a run with nothing to convert says why, in Photoshop's order (no source, then a source
+/// that does not match, then the same mode as the target), and leaves the document alone. This is
+/// also the path of an action step, which runs the command through `Session::execute`.
+#[test]
+fn conditional_mode_change_says_why_nothing_converts() {
+    let mut s = session(4, 4, 8);
+    let history = s.active().unwrap().history.past_len();
+    for (from, to, reason) in [
+        (json!([]), "rgb", "noSource"),
+        (json!([]), "grayscale", "noSource"),
+        // Spellings the command does not know tick nothing, as in the dialog.
+        (json!(["hsb", 7]), "grayscale", "noSource"),
+        (json!("hsb"), "grayscale", "noSource"),
+        (json!(["cmyk"]), "grayscale", "noMatch"),
+        // Not measured which alert wins here; the order above makes it noMatch.
+        (json!("lab"), "rgb", "noMatch"),
+        (json!("any"), "rgb", "sameMode"),
+        (json!(["rgb", "lab"]), "RGB", "sameMode"),
+    ] {
+        let r = s.execute("file.automate.conditionalModeChange", json!({"from": from, "to": to})).unwrap();
+        assert_eq!(r, json!({"changed": false, "mode": "rgb", "reason": reason}), "{from} to {to}");
+    }
+    assert_eq!((doc(&s).mode, s.active().unwrap().history.past_len()), (ColorMode::Rgb, history));
+    let r = s.execute("file.automate.conditionalModeChange", json!({"from": "rgb", "to": "lab"})).unwrap();
+    assert_eq!(r, json!({"changed": true, "mode": "lab"}), "a run that converts gives no reason");
 }
 
 #[test]
