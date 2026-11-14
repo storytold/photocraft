@@ -802,10 +802,10 @@ fn composite(s: &Session, x: i32, y: i32) -> [f32; 4] {
 
 fn batch_log(path: &str) -> String {
     let bytes = std::fs::read(path).unwrap();
-    assert!(bytes.starts_with(&[0xff, 0xfe]), "Batch log needs a UTF-16 LE BOM");
+    assert!(bytes.starts_with(&[0xfe, 0xff]), "Batch log needs a UTF-16 BE BOM");
     let (pairs, remainder) = bytes[2..].as_chunks::<2>();
     assert!(remainder.is_empty(), "UTF-16 bytes must have even length");
-    let words: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
+    let words: Vec<u16> = pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect();
     String::from_utf16(&words).unwrap()
 }
 
@@ -824,8 +824,8 @@ fn batch_stop_on_error_reports_skipped_inputs_and_writes_the_error_log() {
     assert_eq!(result["stopped"], json!(missing), "{result}");
     assert_eq!(result["skipped"], json!([good]), "{result}");
     let text = batch_log(&log);
-    assert!(text.starts_with("Batch Start\r\n\r\n") && text.contains("missing.png") && text.contains("File: \"") && text.contains("Error: "), "{text}");
-    assert!(text.ends_with("Batch End\r\n"), "{text}");
+    assert!(text.starts_with("Start Batch\r\n\r\n") && text.contains("missing.png") && text.contains("File: \"") && text.contains("Error: "), "{text}");
+    assert!(text.ends_with("End Batch\r\n"), "{text}");
     assert!(!std::path::Path::new(&join(&output, "good.png")).exists());
 }
 
@@ -838,7 +838,7 @@ fn batch_writes_a_utf16_error_log_even_when_every_file_succeeds() {
     let result = Session::new().execute("file.automate.batch", json!({"steps": [], "input": [input], "output": output, "errorLog": log})).unwrap();
     assert_eq!(result["errors"], json!([]), "{result}");
     assert_eq!(result["errorLog"], json!(log));
-    assert_eq!(batch_log(&log), "Batch Start\r\n\r\nBatch End\r\n");
+    assert_eq!(batch_log(&log), "Start Batch\r\n\r\nEnd Batch\r\n");
 }
 
 #[test]

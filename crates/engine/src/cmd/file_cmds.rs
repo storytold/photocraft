@@ -437,6 +437,10 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests;
 
 #[cfg(test)]
+#[path = "file_cmds/batch_log_format_tests.rs"]
+mod batch_log_format_tests;
+
+#[cfg(test)]
 #[path = "file_cmds/export_clut_cube_header_tests.rs"]
 mod export_clut_cube_header_tests;
 
