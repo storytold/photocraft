@@ -177,6 +177,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             if tool == Tool::ArtHistoryBrush {
                                 let width = if t.pro { 62.0 } else { 66.0 };
                                 percent_field(ui, tl!("Opacity"), &mut brush.opacity, 1.0..=100.0, width);
+                                // Right after Opacity, as measured (#12629).
+                                let pressure = pressure_button(ui, brush.pressure_opacity, tl!("Always use pressure for opacity"), true);
+                                if pressure.on_hover_text(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure")).clicked() {
+                                    brush.pressure_opacity = !brush.pressure_opacity;
+                                }
                             }
                             crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
                             widgets::vline(ui, 22.0);
@@ -1070,3 +1075,7 @@ mod smudge_strength_alert_tests;
 #[cfg(test)]
 #[path = "../pattern_stamp_opacity_flow_tests.rs"]
 mod pattern_stamp_opacity_flow_tests;
+
+#[cfg(test)]
+#[path = "art_history_bar_controls_tests.rs"]
+mod art_history_bar_controls_tests;

@@ -1144,6 +1144,20 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::value_field(ui, &mut o.art_history_area, 0.0..=100.0, "", 50.0);
             opt(ui, tl!("Tolerance"));
             crate::widgets::value_field(ui, &mut o.art_history_tolerance, 0.0..=100.0, "", 50.0);
+            // Angle and Pressure for Size end the bar (#12629): they edit the tool's own brush,
+            // through `tools.setBrush`, with the Background Eraser's Angle field.
+            let before = app.session.tools.brush.clone();
+            let mut brush = before.clone();
+            if crate::eraser_ui::angle_field(ui, &mut brush) {
+                let message = tl!(crate::eraser_ui::ANGLE_RANGE_MESSAGE).to_string();
+                app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+            }
+            let name = tl!("Always use pressure for size");
+            let pressure = crate::icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), brush.pressure_size, name, false);
+            if pressure.on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
+                brush.pressure_size = !brush.pressure_size;
+            }
+            crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
             crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Stylized dabs from a history state"));
         }
