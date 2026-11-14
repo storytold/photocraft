@@ -642,3 +642,64 @@ fn each_chip_keeps_its_own_hue_on_black() {
     let [r, g, b] = srgb_bytes(h.state().session.tools.foreground);
     assert!(g > 200 && r < 64 && b < 64, "the foreground's green, not the background's blue: {:?}", [r, g, b]);
 }
+
+/// #10508: the slider modes' ramp marks the active colour — `ramp_position` inverts
+/// `ramp_color`, so the ring follows the edited colour instead of a stale pick point.
+#[test]
+fn ramp_position_inverts_ramp_color() {
+    use crate::state::ColorRamp;
+    let (fg, bg) = ([0.2, 0.4, 0.6], [0.9, 0.1, 0.3]);
+    // The RGB spectrum: hue across, the white→hue half for colours with saturation, the
+    // hue→black half for fully saturated ones.
+    for (x, y) in [(0.0, 0.0), (0.25, 0.25), (0.5, 0.4), (0.75, 0.6), (0.95, 0.95)] {
+        let c = color_panel_ui::ramp_color(ColorRamp::RgbSpectrum, false, fg, bg, x, y);
+        let (bx, by) = color_panel_ui::ramp_position(&[], ColorRamp::RgbSpectrum, false, fg, bg, c);
+        assert!((bx - x).abs() < 1e-3 && (by - y).abs() < 1e-3, "({x},{y}) -> {c:?} -> ({bx},{by})");
+    }
+    // The CMYK Spectrum's gamut shifts colours, so its ring marks the nearest drawn mesh
+    // position: on the mesh grid, and the colour there is the closest of all drawn positions
+    // to the requested colour (an independent scan over the same grid).
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let cmyk_mesh = || {
+        (0..=8)
+            .flat_map(|j| (0..=48).map(move |i| (i, j)))
+            .map(|(i, j)| color_panel_ui::ramp_color(ColorRamp::CmykSpectrum, false, fg, bg, i as f32 / 48.0, j as f32 / 8.0))
+    };
+    let mesh_colors: Vec<_> = cmyk_mesh().map(|c| Color32::from_rgb(q(c[0]), q(c[1]), q(c[2]))).collect();
+    for (x, y) in [(0.1, 0.2), (0.5, 0.5), (0.9, 0.8)] {
+        let c = color_panel_ui::ramp_color(ColorRamp::CmykSpectrum, false, fg, bg, x, y);
+        let (bx, by) = color_panel_ui::ramp_position(&mesh_colors, ColorRamp::CmykSpectrum, false, fg, bg, c);
+        assert!((bx * 48.0 - (bx * 48.0).round()).abs() < 1e-3, "the marker sits on the mesh across: ({bx},{by})");
+        assert!((by * 8.0 - (by * 8.0).round()).abs() < 1e-3, "the marker sits on the mesh down: ({bx},{by})");
+        let marked = color_panel_ui::ramp_color(ColorRamp::CmykSpectrum, false, fg, bg, bx, by);
+        let d = |p: [f32; 3]| (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2);
+        let best = cmyk_mesh().map(d).fold(f32::MAX, f32::min);
+        assert!(d(marked) <= best + 1e-6, "({x},{y}) marked {marked:?} at ({bx},{by}), best distance {best}");
+    }
+    // Grayscale across; Current Colors along the widest-span channel.
+    for x in [0.0, 0.3, 0.7, 1.0] {
+        let c = color_panel_ui::ramp_color(ColorRamp::GrayscaleRamp, false, fg, bg, x, 0.5);
+        let (bx, by) = color_panel_ui::ramp_position(&[], ColorRamp::GrayscaleRamp, false, fg, bg, c);
+        assert!((bx - x).abs() < 1e-4 && by == 0.5, "{x} -> {c:?} -> ({bx},{by})");
+        let c = color_panel_ui::ramp_color(ColorRamp::CurrentColors, false, fg, bg, x, 0.5);
+        let (bx, by) = color_panel_ui::ramp_position(&[], ColorRamp::CurrentColors, false, fg, bg, c);
+        assert!((bx - x).abs() < 1e-4 && by == 0.5, "{x} -> {c:?} -> ({bx},{by})");
+    }
+    // Landmark positions: red at the left middle, white top left, black bottom left, a grey on
+    // the saturation axis (the spectrum's nearest point for a colour it can't show exactly).
+    let at = |ramp, c| color_panel_ui::ramp_position(&[], ramp, false, fg, bg, c);
+    let (x, y) = at(ColorRamp::RgbSpectrum, [1.0, 0.0, 0.0]);
+    assert!(x < 1e-4 && (y - 0.5).abs() < 1e-4, "red: ({x},{y})");
+    let (x, y) = at(ColorRamp::RgbSpectrum, [1.0, 1.0, 1.0]);
+    assert!(x < 1e-4 && y < 1e-4, "white: ({x},{y})");
+    let (x, y) = at(ColorRamp::RgbSpectrum, [0.0, 0.0, 0.0]);
+    assert!(x < 1e-4 && (y - 1.0).abs() < 1e-4, "black: ({x},{y})");
+    let (x, y) = at(ColorRamp::RgbSpectrum, [0.5; 3]);
+    // A grey the spectrum can't show exactly stands on the hue→black half at its brightness,
+    // which approximates it better than the white corner does.
+    assert!(x < 1e-4 && (y - 0.75).abs() < 1e-4, "a grey stands on the brightness half: ({x},{y})");
+    // A web-safe ring stands on the drawn cell's centre, where a click picks.
+    let (x, y) = color_panel_ui::ramp_position(&[], ColorRamp::RgbSpectrum, true, fg, bg, [1.0, 0.0, 0.0]);
+    let centre = |f: f32, n: usize| ((f * n as f32).floor().clamp(0.0, (n - 1) as f32) + 0.5) / n as f32;
+    assert!((x - centre(0.0, 48)).abs() < 1e-6 && (y - centre(0.5, 8)).abs() < 1e-6, "web safe red: ({x},{y})");
+}

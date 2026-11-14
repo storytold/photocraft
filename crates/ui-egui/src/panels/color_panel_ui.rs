@@ -394,6 +394,65 @@ pub(crate) fn ramp_color(ramp: ColorRamp, web_safe: bool, fg: [f32; 3], bg: [f32
     if web_safe { c.map(|v| (v * 5.0).round() / 5.0) } else { c }
 }
 
+/// Where the ramp shows `rgb`, the inverse of [`ramp_color`] for the selection ring (#10508):
+/// the ring follows the colour the panel edits, so it can't mark a stale point. A colour the
+/// ramp can't show exactly (grays on the spectra, or a mix outside Current Colors' span) marks
+/// the nearest position, as Photoshop's ring does. The CMYK Spectrum's gamut shifts colours too
+/// much for that inverse, so there the ring marks the nearest colour `colors` (the ramp's own
+/// cached mesh, from [`ramp_colors`]) draws.
+pub(crate) fn ramp_position(colors: &[Color32], ramp: ColorRamp, web_safe: bool, fg: [f32; 3], bg: [f32; 3], rgb: [f32; 3]) -> (f32, f32) {
+    let (x, y) = match ramp {
+        // The spectrum's hue runs across; a colour sits on the white→hue half when saturation
+        // is what varies and on the hue→black half when brightness is, whichever half shows it
+        // more exactly (black lands on the bottom edge, white and grays on the top-left).
+        ColorRamp::RgbSpectrum => {
+            let [h, s, v] = rgb_to_hsb(rgb);
+            let hue = h.min(359.999);
+            let top = hsb_to_rgb([hue, s, 1.0]);
+            let bottom = hsb_to_rgb([hue, 1.0, v]);
+            let d = |p: [f32; 3]| (p[0] - rgb[0]).powi(2) + (p[1] - rgb[1]).powi(2) + (p[2] - rgb[2]).powi(2);
+            let y = if d(bottom) < d(top) { 0.5 + (1.0 - v) / 2.0 } else { s / 2.0 };
+            (h / 360.0, y)
+        }
+        ColorRamp::CmykSpectrum => {
+            let (nx, ny, half) = (if web_safe { RAMP_NX } else { RAMP_NX + 1 }, if web_safe { RAMP_NY } else { RAMP_NY + 1 }, if web_safe { 0.5 } else { 0.0 });
+            let c = rgb32(rgb);
+            let (r, g, b) = (f32::from(c.r()), f32::from(c.g()), f32::from(c.b()));
+            let mut best = (0.0, 0.0);
+            let mut best_d = f32::MAX;
+            for j in 0..ny {
+                for i in 0..nx {
+                    let (p, q) = ((i as f32 + half) / RAMP_NX as f32, (j as f32 + half) / RAMP_NY as f32);
+                    let drawn = colors.get(j * nx + i).copied().unwrap_or(Color32::BLACK);
+                    let d = (f32::from(drawn.r()) - r).powi(2) + (f32::from(drawn.g()) - g).powi(2) + (f32::from(drawn.b()) - b).powi(2);
+                    if d < best_d {
+                        best_d = d;
+                        best = (p, q);
+                    }
+                }
+            }
+            best
+        }
+        ColorRamp::GrayscaleRamp => (1.0 - rgb[0], 0.5),
+        ColorRamp::CurrentColors => {
+            // The interpolated channel with the widest span places the marker; with equal ends
+            // it stands midway.
+            let span = [0usize, 1, 2].map(|i| (bg[i] - fg[i]).abs());
+            let k = (0..3).max_by_key(|&i| (span[i] * 1000.0) as i32).unwrap_or(0);
+            let x = if span[k] > 1e-6 { (rgb[k] - fg[k]) / (bg[k] - fg[k]) } else { 0.5 };
+            (x, 0.5)
+        }
+    };
+    let (x, y) = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+    // Web-safe ramps pick the drawn cell's centre; the ring stands on the colour the click picks.
+    if web_safe {
+        let centre = |f: f32, n: usize| ((f * n as f32).floor().clamp(0.0, (n - 1) as f32) + 0.5) / n as f32;
+        (centre(x, RAMP_NX), centre(y, RAMP_NY))
+    } else {
+        (x, y)
+    }
+}
+
 /// Cells across and down the ramp's mesh.
 const RAMP_NX: usize = 48;
 const RAMP_NY: usize = 8;
@@ -489,6 +548,13 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
     let colors = ramp_colors(ui, cp.ramp, cp.web_safe_ramp, fg, bg);
     ui.painter().add(ramp_mesh(bar, &colors, cp.web_safe_ramp));
     ui.painter().rect_stroke(bar, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
+    // The active colour's ring (#10508): the slider modes' ramp marks the colour the panel edits,
+    // as the Hue Cube and the Color Picker dialog mark theirs.
+    let (mx, my) = ramp_position(&colors, cp.ramp, cp.web_safe_ramp, fg, bg, active(app));
+    let knob = pos2(bar.left() + mx * bar.width(), bar.top() + my * bar.height());
+    let painter = ui.painter().with_clip_rect(bar);
+    painter.circle_stroke(knob, 5.0, Stroke::new(1.5, Color32::WHITE));
+    painter.circle_stroke(knob, 6.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
     let (white, black) =
         (Rect::from_min_max(boxes.min, pos2(boxes.right(), boxes.center().y)), Rect::from_min_max(pos2(boxes.left(), boxes.center().y), boxes.max));
     ui.painter().rect_filled(white, 0.0, Color32::WHITE);
