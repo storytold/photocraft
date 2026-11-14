@@ -141,3 +141,7 @@ fn row(ui: &mut egui::Ui, w: f32, label: &str, add: impl FnOnce(&mut egui::Ui)) 
 #[cfg(test)]
 #[path = "lens_batch_layout_tests.rs"]
 mod lens_batch_layout_tests;
+
+#[cfg(test)]
+#[path = "lens_batch_defaults_tests.rs"]
+mod lens_batch_defaults_tests;
