@@ -2,8 +2,9 @@
 //!
 //! [`atomic_write`] never truncates the destination. It writes a temporary file in the **same
 //! directory**, flushes it to stable storage (`sync_all`), renames it over the destination and,
-//! on Unix, fsyncs the directory so the rename itself survives a power loss. If anything fails,
-//! the destination keeps its previous bytes and the temporary file is removed.
+//! flushes the directory so the rename itself survives a power loss. Failures before replacement
+//! keep the destination's previous bytes. On Windows a failed publication flush reports that the
+//! new file is in place but its durability could not be confirmed (#7858).
 //!
 //! - **Windows:** antivirus scanners and the search indexer briefly hold files open, which makes
 //!   the replacing rename fail with `PermissionDenied`. The rename is retried with exponential
@@ -20,6 +21,9 @@
 //! - **Network shares (macOS):** `sync_all` asks for a full flush to the disk's platters
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
+//! - **Hidden flags (network shares):** the temporary file's name never starts with a dot. An SMB
+//!   server that hides dot files marks one hidden when it is created, the mark survives the
+//!   rename, and the saved document then doesn't show in Finder (#11624). See [`temp_name`].
 //!
 //! On the web there is no file system: writes go through the platform services (downloads), so
 //! this module is never reached there; on `wasm32` every call returns the `std` "unsupported"
@@ -34,7 +38,7 @@
 
 pub mod meta;
 
-use std::io::{self, Write};
+use std::io::{self, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -55,11 +59,20 @@ pub trait AtomicFs {
         let _ = progress;
         self.write_new(tmp, bytes)
     }
+    /// Create `tmp` (it must not exist), let `write` fill it as it serializes, and flush it
+    /// ([`sync_file`]). By default the bytes are collected in memory and handed to
+    /// [`write_new`](Self::write_new) (test doubles); [`RealFs`] streams them into the file, so the
+    /// whole file never sits in memory (#6607).
+    fn write_new_stream(&self, tmp: &Path, write: &mut StreamWriter<'_>) -> io::Result<()> {
+        let mut bytes = io::Cursor::new(Vec::new());
+        write(&mut bytes)?;
+        self.write_new(tmp, bytes.get_ref())
+    }
     /// Rename `from` over `to`, replacing it.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
     /// Remove a (temporary) file.
     fn remove(&self, path: &Path) -> io::Result<()>;
-    /// Flush a directory entry change (Unix); a no-op elsewhere.
+    /// Flush a directory entry change on Unix and Windows; a no-op elsewhere.
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
     /// Copy the metadata a replacement should keep — mode, extended attributes, ACL — from the
     /// file about to be replaced onto the temporary file. Best effort; see [`meta`].
@@ -72,6 +85,13 @@ pub trait AtomicFs {
         self.rename(from, to)
     }
 }
+
+/// A stream [`atomic_write_stream`]'s writer fills: the temporary file (or, in tests, memory).
+pub trait WriteSeek: Write + Seek {}
+impl<T: Write + Seek + ?Sized> WriteSeek for T {}
+
+/// Fills the temporary file of a streaming atomic write, starting at its beginning.
+pub type StreamWriter<'a> = dyn FnMut(&mut dyn WriteSeek) -> io::Result<()> + 'a;
 
 /// The real file system.
 #[derive(Debug, Clone, Copy, Default)]
@@ -94,18 +114,43 @@ impl AtomicFs for RealFs {
         }
         sync_file(&f)
     }
+    fn write_new_stream(&self, tmp: &Path, write: &mut StreamWriter<'_>) -> io::Result<()> {
+        let f = std::fs::OpenOptions::new().write(true).create_new(true).open(tmp)?;
+        let mut out = io::BufWriter::new(f);
+        // `AlreadyExists` means a temporary name collided, which makes the caller retry with
+        // another name and leave this one alone: from the writer, once the file is ours, it is
+        // a plain failure (the partial file is removed, the writer is not run again).
+        write(&mut out).map_err(|e| if e.kind() == io::ErrorKind::AlreadyExists { io::Error::other(e) } else { e })?;
+        let f = out.into_inner().map_err(io::IntoInnerError::into_error)?;
+        sync_file(&f)
+    }
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         std::fs::rename(from, to)
     }
     fn remove(&self, path: &Path) -> io::Result<()> {
         std::fs::remove_file(path)
     }
+    /// Flush directory publication using a directory handle on Unix and Windows.
+    /// Windows requests only `FILE_ADD_FILE`; opening or flushing the handle can fail the save.
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         #[cfg(unix)]
         {
-            sync_file(&std::fs::File::open(dir)?)
+            open_dir_for_sync(dir)?.map_or(Ok(()), |d| sync_file(&d))
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+
+            // FILE_ADD_FILE is the directory equivalent of FILE_WRITE_DATA. Requesting only
+            // this right permits FlushFileBuffers without requiring GENERIC_WRITE's additional
+            // directory permissions. BACKUP_SEMANTICS opens a directory, not a volume: no
+            // administrative privilege or volume-wide flush is needed.
+            const FILE_ADD_FILE: u32 = 0x0002;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            let directory = std::fs::OpenOptions::new().access_mode(FILE_ADD_FILE).custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(dir)?;
+            directory.sync_all()
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = dir;
             Ok(())
@@ -172,8 +217,8 @@ impl RenameRetry {
 
 /// Atomically replace (or create) `path` with `bytes`. See the module docs.
 ///
-/// Errors keep their [`io::ErrorKind`] and say what happened and that the original file is
-/// unchanged.
+/// Errors keep their [`io::ErrorKind`]. Before replacement they say the original is unchanged;
+/// a Windows publication-flush error says the new file may not survive a power loss.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     atomic_write_with(&RealFs, RenameRetry::platform(), path, bytes)
 }
@@ -191,7 +236,83 @@ pub fn atomic_write_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, byt
 
 /// [`atomic_write_with`] reporting write progress (see [`atomic_write_progress`]).
 pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> io::Result<()> {
-    let target = resolve_symlink(path).map_err(|e| context(e, format!("cannot save {}", path.display())))?;
+    replace_with(fs, retry, path, true, &mut |tmp| fs.write_new_progress(tmp, bytes, progress))
+}
+
+/// [`atomic_write`] that never follows a symlink at `path`: a link there is replaced by the new
+/// file (the rename swaps the directory entry), so a link planted between a caller's own check
+/// and this write cannot carry it outside the folder (a store managing its own entries).
+pub fn atomic_write_no_follow(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    replace_with(&RealFs, RenameRetry::platform(), path, false, &mut |tmp| RealFs.write_new_progress(tmp, bytes, &|_| {}))
+}
+
+/// [`atomic_write`] for a file serialized as it is written (#6607): `write` fills the temporary
+/// file beside `path` from its start (it may seek back to patch lengths), then the file is
+/// flushed and renamed over `path` with [`atomic_write`]'s retries and errors. If `write` fails,
+/// the temporary file is removed and `path` is left as it was. `write` runs once (again only if
+/// a temporary name collided before anything was written).
+pub fn atomic_write_stream(path: &Path, write: &mut StreamWriter<'_>) -> io::Result<()> {
+    atomic_write_stream_with(&RealFs, RenameRetry::platform(), path, write)
+}
+
+/// [`atomic_write_stream`] reporting the fraction written to `progress` as it goes: the furthest
+/// position reached over `expected_len` (an estimate; capped below 1.0 until `write` is done).
+pub fn atomic_write_stream_progress(path: &Path, expected_len: u64, progress: &dyn Fn(f32), write: &mut StreamWriter<'_>) -> io::Result<()> {
+    atomic_write_stream_with(&RealFs, RenameRetry::platform(), path, &mut |w| {
+        let mut counted = Progress { w, pos: 0, reached: 0, reported: 0, expected: expected_len.max(1), progress };
+        write(&mut counted)?;
+        progress(1.0);
+        Ok(())
+    })
+}
+
+/// [`atomic_write_stream`] through an explicit file system and retry policy.
+pub fn atomic_write_stream_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, write: &mut StreamWriter<'_>) -> io::Result<()> {
+    replace_with(fs, retry, path, true, &mut |tmp| fs.write_new_stream(tmp, write))
+}
+
+/// A stream reporting how far it has got (see [`atomic_write_stream_progress`]), every
+/// [`WRITE_CHUNK`] bytes.
+struct Progress<'a, 'p> {
+    w: &'a mut dyn WriteSeek,
+    /// Tracked here: asking a buffered file for its position flushes it.
+    pos: u64,
+    reached: u64,
+    reported: u64,
+    expected: u64,
+    progress: &'p dyn Fn(f32),
+}
+
+impl Write for Progress<'_, '_> {
+    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+        let n = self.w.write(b)?;
+        self.pos += n as u64;
+        let at = self.pos;
+        if at > self.reached {
+            self.reached = at;
+            if at - self.reported >= WRITE_CHUNK as u64 {
+                self.reported = at;
+                (self.progress)((at as f64 / self.expected as f64).min(0.999) as f32);
+            }
+        }
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.w.flush()
+    }
+}
+
+impl Seek for Progress<'_, '_> {
+    fn seek(&mut self, to: io::SeekFrom) -> io::Result<u64> {
+        self.pos = self.w.seek(to)?;
+        Ok(self.pos)
+    }
+}
+
+/// The steps every atomic write shares: `write_tmp` fills a fresh temporary file beside the
+/// target, which is then renamed over it.
+fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, follow: bool, write_tmp: &mut dyn FnMut(&Path) -> io::Result<()>) -> io::Result<()> {
+    let target = if follow { resolve_symlink(path).map_err(|e| context(e, format!("cannot save {}", path.display())))? } else { path.to_path_buf() };
     let name = target.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: not a file path", path.display())))?;
     let dir = match target.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
@@ -207,7 +328,7 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
     let mut tmp = None;
     for _ in 0..8 {
         let candidate = dir.join(temp_name(&name.to_string_lossy()));
-        match fs.write_new_progress(&candidate, bytes, progress) {
+        match write_tmp(&candidate) {
             Ok(()) => {
                 tmp = Some(candidate);
                 break;
@@ -226,7 +347,10 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
     // default, its extended attributes, and its ACL. Best effort, and before the swap, so the
     // file the user ends up with never passes through a more permissive state.
     let replacing = target.exists();
-    if replacing {
+    // A link that is replaced rather than followed has nothing to carry over: reading the target's
+    // attributes would open whatever it points at (a FIFO with no writer blocks there).
+    let replaced_link = !follow && std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink());
+    if replacing && !replaced_link {
         let _ = fs.copy_metadata(&target, &tmp);
     }
 
@@ -238,10 +362,81 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
         let _ = fs.remove(&tmp);
         return Err(rename_error(e, path));
     }
-    // The new bytes are in place; a failed directory fsync can't be undone and must not report
-    // the save as failed, so it is best effort.
-    let _ = fs.sync_dir(&dir);
+    // The new bytes are in place, but until the directory is flushed the rename may not survive
+    // a power loss (#4968). Windows fails the save on any failed flush (#7858). Elsewhere a file
+    // system that can't flush directories at all counts as done; any other failure is reported,
+    // so the caller keeps the document unsaved and its recovery data instead of discarding them
+    // on a save that may not last.
+    #[cfg(windows)]
+    dir_synced(fs.sync_dir(&dir)).map_err(|e| publication_error(e, path))?;
+    #[cfg(not(windows))]
+    dir_synced(fs.sync_dir(&dir)).map_err(|e| unconfirmed_error(e, path))?;
     Ok(())
+}
+
+/// `dir` opened to flush it, or `None` when it can't be opened for that because it has no read
+/// permission (a write-and-search-only folder): no flush can be attempted there, so none failed.
+/// Any other error is returned.
+#[cfg(unix)]
+fn open_dir_for_sync(dir: &Path) -> io::Result<Option<std::fs::File>> {
+    match std::fs::File::open(dir) {
+        Ok(d) => Ok(Some(d)),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// `result` of flushing a directory, with "this file system can't flush directories" counted as
+/// success: `EINVAL` (Linux file systems without directory fsync), `ENOTSUP`/`EOPNOTSUPP` and,
+/// on Apple platforms, `ENOTTY`, or [`io::ErrorKind::Unsupported`]. Waiting or retrying won't
+/// change those, and failing every save there would make saving impossible. On Windows that is
+/// `ERROR_INVALID_FUNCTION` (1) and `ERROR_NOT_SUPPORTED` (50), which network shares (SMB, #9440)
+/// return when asked to flush a directory handle; access denied and I/O errors stay failures.
+/// Any other error is returned: the flush was attempted and failed.
+pub(crate) fn dir_synced(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(e) if dir_sync_unsupported(&e) => Ok(()),
+        other => other,
+    }
+}
+
+fn dir_sync_unsupported(e: &io::Error) -> bool {
+    if e.kind() == io::ErrorKind::Unsupported {
+        return true;
+    }
+    // Win32 codes, not errno: ERROR_INVALID_FUNCTION and ERROR_NOT_SUPPORTED.
+    if cfg!(windows) {
+        return matches!(e.raw_os_error(), Some(1 | 50));
+    }
+    // errno values: EINVAL is 22 everywhere; ENOTSUP and EOPNOTSUPP are 95 on Linux and
+    // Android, 45 and 102 on Apple platforms, 45 on the BSDs; ENOTTY is 25. Elsewhere 45 means
+    // something else (illumos: EDEADLK), so only EINVAL and `Unsupported` count there.
+    const EINVAL: i32 = 22;
+    let unsupported: &[i32] = if cfg!(any(target_os = "linux", target_os = "android")) {
+        &[EINVAL, 95]
+    } else if cfg!(target_vendor = "apple") {
+        &[EINVAL, 45, 102, 25]
+    } else if cfg!(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly")) {
+        &[EINVAL, 45]
+    } else if cfg!(unix) {
+        &[EINVAL]
+    } else {
+        &[]
+    };
+    e.raw_os_error().is_some_and(|code| unsupported.contains(&code))
+}
+
+/// The error for a file that was published but whose directory flush failed: same kind, saying
+/// the file is in place but may not survive a power loss. (Windows reports `publication_error`.)
+#[cfg(not(windows))]
+fn unconfirmed_error(e: io::Error, path: &Path) -> io::Error {
+    context(
+        e,
+        format!(
+            "{} was written, but the folder could not be flushed to disk, so the save may not survive a power loss or crash; save again or to another folder",
+            path.display()
+        ),
+    )
 }
 
 /// Run `rename`, retrying with backoff while it fails with `PermissionDenied` (see
@@ -301,13 +496,53 @@ fn resolve_symlink(path: &Path) -> io::Result<PathBuf> {
     Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{}: too many levels of symbolic links", path.display())))
 }
 
-/// A unique hidden temporary file name to write beside `file` before renaming over it.
+/// What every [`temp_name`] ends with.
+const TEMP_SUFFIX: &str = ".pcsave.tmp";
+
+/// How many characters of the file name a [`temp_name`] keeps.
+const TEMP_STEM_CHARS: usize = 64;
+
+/// A unique temporary file name to write beside `file` before renaming over it:
+/// `{file}.{pid}-{n}.pcsave.tmp`.
+///
+/// It does not start with a dot of its own, so it is not hidden: an SMB server that hides dot
+/// files sets the hidden flag on such a file when it is created, the flag survives the rename,
+/// and the saved document would be invisible in Finder (#11624). The cost is that the file shows
+/// in a folder listing while a save writes it, and one an interrupted save leaves beside the
+/// document stays visible until it is removed (#6604). The
+/// process id, counter and suffix keep it apart from the files people name, and it is created
+/// with `create_new`, so it can never replace one. Older versions wrote
+/// `.{file}.{pid}-{n}.pcsave.tmp`; [`temp_owner`] recognizes both.
 pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     // Keep the name short: a long file name plus the suffix must stay under NAME_MAX.
-    let stem: String = file.chars().take(64).collect();
-    format!(".{stem}.{}-{n}.pcsave.tmp", std::process::id())
+    let stem: String = file.chars().take(TEMP_STEM_CHARS).collect();
+    format!("{stem}.{}-{n}{TEMP_SUFFIX}", std::process::id())
+}
+
+/// The id of the process that wrote `name`, if it is a [`temp_name`]: today's
+/// `{file}.{pid}-{n}.pcsave.tmp` or the `.{file}.{pid}-{n}.pcsave.tmp` older versions wrote, so
+/// their leftovers are still cleaned up.
+pub fn temp_owner(name: &str) -> Option<u32> {
+    let rest = name.strip_suffix(TEMP_SUFFIX)?;
+    let (stem, ids) = rest.rsplit_once('.')?;
+    let (pid, n) = ids.split_once('-')?;
+    // Only a file part `temp_name` writes: at most `TEMP_STEM_CHARS` characters, or one more when
+    // the first is the dot older versions put in front of them.
+    let chars = stem.chars().count();
+    if chars > TEMP_STEM_CHARS && !(chars == TEMP_STEM_CHARS + 1 && stem.starts_with('.')) {
+        return None;
+    }
+    let stem = stem.strip_prefix('.').unwrap_or(stem);
+    // Only numbers `temp_name` writes: plain decimal digits with no leading zero (a lone "0" is
+    // fine), a `u32` pid and the `u64` counter it counts with. Any other name is someone else's
+    // file, and the sweep must not delete it.
+    let decimal = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
+    if stem.is_empty() || !decimal(pid) || !decimal(n) || n.parse::<u64>().is_err() {
+        return None;
+    }
+    pid.parse().ok()
 }
 
 fn context(e: io::Error, msg: String) -> io::Error {
@@ -315,6 +550,49 @@ fn context(e: io::Error, msg: String) -> io::Error {
 }
 
 const UNCHANGED: &str = "the original file was not changed";
+
+/// Marks the error of a Windows replacement that moved the original to its backup name and then
+/// could neither complete the save nor put the original back: the original survives only at that
+/// backup, so the destination is not the unchanged original and must never be reported as such
+/// (#11178). `rename_error` recognizes the marker and passes the error through untouched.
+const RECOVERY_UNRESOLVED: &str = "could not restore the original";
+
+/// The error for that unresolved Windows replacement state: names the recovery copy and says the
+/// destination is currently missing, instead of the usual `UNCHANGED` reassurance (#11178).
+/// When the restoration failed because the backup itself is gone (`NotFound`), nothing survives
+/// at that name and saying so would be a second false comfort after the lost original.
+/// Its kind is deliberately not `PermissionDenied`: the retry loop must not pick a fresh backup
+/// name over the unresolved recovery and forget where the original is.
+#[cfg(any(windows, test))]
+pub(crate) fn unresolved_recovery_error(dest: &Path, completion: &io::Error, restoration: &io::Error, recovery: &Path) -> io::Error {
+    let msg = if restoration.kind() == io::ErrorKind::NotFound {
+        format!(
+            "cannot save {}: the previous version moved to its backup name but {RECOVERY_UNRESOLVED} from it \
+             (completing the save failed: {completion}; the backup {} no longer exists: {restoration}), \
+             so the destination currently holds no file under that name — check whether it was moved",
+            dest.display(),
+            recovery.display()
+        )
+    } else {
+        format!(
+            "cannot save {}: the previous version moved to its backup name but {RECOVERY_UNRESOLVED} from it \
+             (completing the save failed: {completion}; restoring the backup failed: {restoration}); \
+             your document survives at {}, recover it from there before saving again",
+            dest.display(),
+            recovery.display()
+        )
+    };
+    io::Error::other(msg)
+}
+
+/// Replacement already happened: never claim that the original file is unchanged or undo it.
+#[cfg(windows)]
+pub(crate) fn publication_error(error: io::Error, path: &Path) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!("wrote {}, but could not confirm the save is durable; it may not survive a power loss or crash: {error}", path.display()),
+    )
+}
 
 fn write_error(e: io::Error, path: &Path, dir: &Path) -> io::Error {
     let msg = match e.kind() {
@@ -328,6 +606,12 @@ fn write_error(e: io::Error, path: &Path, dir: &Path) -> io::Error {
 }
 
 fn rename_error(e: io::Error, path: &Path) -> io::Error {
+    // A Windows replacement that moved the original to its backup and failed to restore it is
+    // already fully described (with the recovery location); never append the `UNCHANGED`
+    // reassurance, which would be false in that state (#11178).
+    if e.to_string().contains(RECOVERY_UNRESOLVED) {
+        return e;
+    }
     let msg = if is_cross_device(&e) {
         format!("cannot save {}: the temporary file is on a different volume than the destination ({e}); {UNCHANGED}", path.display())
     } else if e.kind() == io::ErrorKind::PermissionDenied {

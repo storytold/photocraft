@@ -45,17 +45,19 @@ Dispatch order matches `dialogs::show` in `dialogs.rs` (check earlier rows befor
 | Match | Module | Role |
 |---|---|---|
 | `__guideLayout` | `guide_layout_ui.rs` | View › New Guide Layout… |
+| `__newGuide` | `new_guide_ui.rs` | New Guide / Edit Selected Guides; typed positions and guide colours |
 | `__fill` | `fill_ui.rs` | Edit › Fill… |
 | `__patternFill` | `pattern_fill_ui.rs` | Pattern Fill layer / New Fill Layer › Pattern… |
 | `__stroke` | `stroke_ui.rs` | Edit › Stroke… |
 | `__createShape` | `shape_dialog.rs` | Click-with-shape-tool creation (rectangle, ellipse, …) |
 | `__deleteLayer` | `delete_layer_prompt.rs` | Layers panel trash confirmation |
+| `__replaceSaved` | `replace_prompt.rs` | Replace prompt when a save's added or lowercased extension names an existing file |
 | `__newLayer` | `new_layer_ui.rs` | Layer › New › Layer… (⇧⌘N; ⌥⇧⌘N makes the layer without it) |
 | `__rasterize` | `rasterize_prompt.rs` | Rasterize-before-paint prompt |
 | `__resetAllTools` | `tool_reset.rs` | Reset All Tools confirmation |
 | `__cropPresetNew` / `__cropPresetDelete` | `crop_presets.rs` | New / delete crop preset |
 | `__variables` | `variables_ui.rs` | Image › Variables (Define, Data Sets, Apply) |
-| `__web` / `__print` | `file_ui.rs` | Save for Web, Print |
+| `__web` / `__print` | `file_ui.rs` | Save for Web (reopens on the preview tab chosen last, #9174), Print |
 | `__colorPicker` | `color_picker_ui.rs` | Foreground/background, nested field/command pickers (see nested keys below) |
 | `__colorRange` | `color_range_ui.rs` | Select › Color Range… |
 | `__prefsui` | `prefs_ui.rs` | Edit › Preferences… and related preset/import subdialogs |
@@ -72,6 +74,12 @@ with `__command` + `__label`. Other dedicated modules are opened from `menus.rs`
 actions with their marker already set.
 
 ### Shared private keys
+
+New Guide and Edit Selected Guides keep the Position field in the Tab/Shift+Tab order and select
+its text on focus. Typed unit suffixes use the existing engine parser; bare numbers use the ruler
+unit. An untouched edit preserves the guide's exact pixel position behind its rounded readout,
+including when changing only its colour. Once Position is edited, the typed value is intentional,
+even if it matches that original readout. Confirming an unchanged guide preserves Redo.
 
 | Key | Meaning |
 |---|---|
@@ -101,6 +109,7 @@ actions with their marker already set.
 | `__stroke` | `stroke_ui` |
 | `__createShape` | `shape_dialog` |
 | `__deleteLayer` | `delete_layer_prompt` |
+| `__replaceSaved` | `replace_prompt` |
 | `__newLayer` | `new_layer_ui` |
 | `__rasterize` | `rasterize_prompt` |
 | `__resetAllTools` | `tool_reset` |
@@ -127,7 +136,7 @@ Same hub entry as standalone pickers; `color_picker_ui::confirm` branches on ext
 
 | System | Location | When |
 |---|---|---|
-| Unsaved changes | `discard_ui.rs` | Close, Revert, Close Others/All, Exit—Save / Don't Save / Cancel |
+| Unsaved changes | `discard_ui.rs` | Close, Close Others/All, Exit—Save / Don't Save / Cancel, where on macOS ⌘D is Don't Save too (#11282); Revert—Revert / Cancel, with no Don't Save for ⌘D to press |
 | Shell dialog | `control.rs`, `ui.inspect` id `"shell"` | Workspace, custom pixel aspect, show-extras options |
 | Camera Raw | `camera_raw_ui.rs` | Separate OS window on desktop; see control-protocol § Camera Raw |
 | Error message | `DialogKind::Error` | e.g. `move_lock`—message + OK |
@@ -214,6 +223,7 @@ Same hub entry as standalone pickers; `color_picker_ui::confirm` branches on ext
 
 | Date | Change |
 |---|---|
+| 2026-11-06 | New Guide / Edit Selected Guides: Position Tab focus and exact edit-position handling |
 | 2026-10-11 | Initial doc from dialog codebase audit |
 | 2026-10-11 | Document all `DialogKind` values and `Command` routing markers |
 | 2026-10-11 | Alt+Cancel → Reset hub (`dialog_alt_reset`); opt-in markers |

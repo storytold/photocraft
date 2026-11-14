@@ -1,49 +1,64 @@
 //! Object storage (ZIP or directory), incremental writer and loader.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+#[cfg(all(test, windows))]
+use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
+use std::io::Read;
+#[cfg(all(test, windows))]
+use std::io::Write;
+use std::path::Path;
+#[cfg(any(all(test, not(unix)), all(test, windows)))]
+use std::path::PathBuf;
 use std::sync::{Arc, Weak};
+#[cfg(all(test, windows))]
 use std::time::SystemTime;
 
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::Document;
 use photocraft_raster::{Rgba8Image, Tile};
 
-use crate::convert::{self, Fetch, Loader, Sink, is_valid_hash, swap_to_le};
+use crate::convert::{self, Fetch, Loader, Sink, swap_to_le};
 use crate::manifest::{ContentM, FORMAT_VERSION, Hash, LayerM, Manifest};
-use crate::zip::{ZipReader, ZipWriter};
+#[cfg(test)]
+use crate::zip::ZipReader;
 use crate::{FormatError, LoadOptions, Result, SaveOptions};
+#[cfg(test)]
+use craft_pcraft_format::is_valid_hash;
 
-pub(crate) const MANIFEST: &str = "manifest.json";
-pub(crate) const THUMB: &str = "thumb.png";
-pub(crate) const COMPOSITE: &str = "composite/preview.png";
+#[cfg(all(test, windows))]
+use craft_pcraft_format::SAVE_LOCK;
+#[cfg(test)]
+use craft_pcraft_format::{BLOBS_DIR, COMPOSITE_DIR, TILES_DIR};
+pub(crate) use craft_pcraft_format::{COMPOSITE, MANIFEST, THUMB};
+use craft_pcraft_format::{blob_path, tile_path};
+/// The flattened document at its canvas size, a PNG in `composite/`, named by the manifest's
+/// `full_composite` member.
+pub(crate) const FULL_COMPOSITE: &str = "composite/full.png";
+/// The manifest member that names [`FULL_COMPOSITE`].
+const FULL_COMPOSITE_MEMBER: &str = "full_composite";
+/// Bytes a ZIP bundle may hold, central directory included, and entries it may hold: the
+/// format's 32-bit offsets and 16-bit counts.
+const ZIP_LIMIT: (u64, usize) = (u32::MAX as u64, u16::MAX as usize);
+/// How long a directory save waits for another save of the same bundle to finish.
+#[cfg(all(test, windows))]
+const SAVE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn tile_path(h: &str) -> String {
-    format!("tiles/{h}.zst")
-}
-fn blob_path(h: &str) -> String {
-    format!("blobs/{h}.zst")
-}
+/// Delegates object frame encoding to craft-libs.
+struct ObjectEncoder;
 
-fn compress(data: &[u8]) -> Vec<u8> {
-    ruzstd::encoding::compress_to_vec(data, ruzstd::encoding::CompressionLevel::Fastest)
-}
-
-/// Decodes a zstd frame of at most `max` bytes (`LimitExceeded` beyond). With `exact`, the
-/// decoded length must be exactly that (`Corrupt` otherwise).
-fn decompress_bounded(data: &[u8], max: usize, exact: Option<usize>, what: &str) -> Result<Vec<u8>> {
-    let zstd = |e: &dyn std::fmt::Display| FormatError::corrupt(format!("{what}: zstd: {e}"));
-    let mut dec = ruzstd::decoding::StreamingDecoder::new(data).map_err(|e| zstd(&e))?;
-    let mut out = Vec::with_capacity(exact.unwrap_or(0).min(max).min(64 << 20));
-    // `max` may be `usize::MAX`: one byte past it must not overflow.
-    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
-    (&mut dec).take(limit).read_to_end(&mut out).map_err(|e| zstd(&e))?;
-    match exact {
-        Some(n) if out.len() != n => Err(FormatError::corrupt(format!("{what}: expected {n} bytes, got {}", out.len()))),
-        None if out.len() > max => Err(FormatError::LimitExceeded(format!("{what} exceeds {max} bytes"))),
-        _ => Ok(out),
+impl ObjectEncoder {
+    fn new() -> Self {
+        Self
     }
+
+    fn object(&mut self, object: &Object) -> Vec<u8> {
+        craft_pcraft_bundle::encode_frame(&object.content())
+    }
+}
+
+/// Decompresses an object through the shared bundle implementation.
+fn decompress_bounded(data: &[u8], max: usize, exact: Option<usize>, what: &str) -> Result<Vec<u8>> {
+    craft_pcraft_bundle::decode_frame(data, max, exact, what).map_err(bundle_error)
 }
 
 fn decompress(data: &[u8], expected: usize, what: &str) -> Result<Vec<u8>> {
@@ -51,13 +66,60 @@ fn decompress(data: &[u8], expected: usize, what: &str) -> Result<Vec<u8>> {
 }
 
 fn hash_bytes(b: &[u8]) -> Hash {
-    blake3::hash(b).to_hex().to_string()
+    craft_pcraft_bundle::hash_content(b)
 }
 
 fn png(img: &Rgba8Image) -> Result<Vec<u8>> {
-    let image = photocraft_codecs::Image::from_u8(img.width, img.height, photocraft_codecs::ChannelLayout::Rgba, img.pixels.clone())
-        .map_err(|e| FormatError::Unsupported(format!("preview: {e}")))?;
+    png_tagged(img, None)
+}
+
+/// [`png`] with `icc` embedded.
+fn png_tagged(img: &Rgba8Image, icc: Option<&[u8]>) -> Result<Vec<u8>> {
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(img.pixels.len()).map_err(|_| FormatError::LimitExceeded("not enough memory for PNG pixels".into()))?;
+    pixels.extend_from_slice(&img.pixels);
+    let image = photocraft_codecs::Image::from_u8(img.width, img.height, photocraft_codecs::ChannelLayout::Rgba, pixels)
+        .map_err(|e| FormatError::Unsupported(format!("preview: {e}")))?
+        .with_icc(icc.map(<[u8]>::to_vec));
     photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| FormatError::Unsupported(format!("preview: {e}")))
+}
+
+fn previews(opts: &SaveOptions) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let (full, (composite, thumbnail)) = beside(
+        opts.full_composite.is_some() && (opts.thumbnail.is_some() || opts.composite.is_some()),
+        || opts.full_composite.as_ref().map(|img| png_tagged(img, opts.full_composite_icc.as_deref())).transpose(),
+        || {
+            beside(
+                opts.thumbnail.is_some() && opts.composite.is_some(),
+                || opts.composite.as_ref().map(png).transpose(),
+                || opts.thumbnail.as_ref().map(png).transpose(),
+            )
+        },
+    );
+    let mut out = Vec::new();
+    if let Some(t) = thumbnail? {
+        out.push((THUMB, t));
+    }
+    if let Some(t) = composite? {
+        out.push((COMPOSITE, t));
+    }
+    // A full-size composite that cannot be encoded is left out; the save goes on without it.
+    if let Ok(Some(t)) = full {
+        out.push((FULL_COMPOSITE, t));
+    }
+    Ok(out)
+}
+
+fn beside<A: Send, B>(parallel: bool, a: impl FnOnce() -> Result<A> + Send, b: impl FnOnce() -> B) -> (Result<A>, B) {
+    if !parallel || cfg!(target_arch = "wasm32") {
+        let a = a();
+        return (a, b());
+    }
+    std::thread::scope(|sc| {
+        let h = sc.spawn(a);
+        let b = b();
+        (h.join().unwrap_or_else(|_| Err(FormatError::Io(std::io::Error::other("preview worker panicked")))), b)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -69,34 +131,54 @@ pub trait ByteSource {
 }
 
 pub(crate) struct ZipSource<'a> {
-    zip: ZipReader<'a>,
+    zip: std::sync::Mutex<craft_pcraft_bundle::ZipBundle<'a>>,
 }
 
 impl<'a> ZipSource<'a> {
     pub fn new(bytes: &'a [u8]) -> Result<Self> {
-        Ok(ZipSource { zip: ZipReader::new(bytes)? })
+        let zip = craft_pcraft_bundle::ZipBundle::open(bytes, craft_pcraft_bundle::Limits::default()).map_err(bundle_error)?;
+        Ok(ZipSource { zip: std::sync::Mutex::new(zip) })
     }
 }
 
 impl ByteSource for ZipSource<'_> {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
-        self.zip.read_by_name(path, max)
+        self.zip
+            .lock()
+            .map_err(|_| FormatError::corrupt("bundle reader lock poisoned"))?
+            .entry(path, max as u64)
+            .map_err(bundle_error)?
+            .ok_or_else(|| FormatError::corrupt(format!("missing `{path}`")))
+    }
+}
+
+fn bundle_error(error: craft_pcraft_bundle::Error) -> FormatError {
+    match error {
+        craft_pcraft_bundle::Error::LimitExceeded { entry, limit } => FormatError::LimitExceeded(format!("`{entry}` exceeds {limit} bytes")),
+        other => FormatError::corrupt(other.to_string()),
     }
 }
 
 pub(crate) struct DirSource {
-    pub root: PathBuf,
+    bundle: craft_pcraft_bundle::DirectoryBundle,
+}
+
+impl DirSource {
+    pub fn new(root: &Path, opts: &LoadOptions) -> Result<Self> {
+        let limits = craft_pcraft_bundle::Limits {
+            max_total_bytes: opts.max_total_bytes,
+            max_manifest_bytes: opts.max_manifest_bytes as u64,
+            max_object_bytes: opts.max_blob_bytes as u64,
+            max_decoded_object_bytes: opts.max_blob_bytes as u64,
+            ..Default::default()
+        };
+        Ok(Self { bundle: craft_pcraft_bundle::DirectoryBundle::open(root, limits).map_err(bundle_error)? })
+    }
 }
 
 impl ByteSource for DirSource {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
-        let p = self.root.join(path);
-        let metadata = std::fs::metadata(&p).map_err(|_| FormatError::corrupt(format!("missing `{path}`")))?;
-        if !metadata.is_file() {
-            return Err(FormatError::corrupt(format!("`{path}` is not a regular file")));
-        }
-        let mut file = std::fs::File::open(&p).map_err(|_| FormatError::corrupt(format!("missing `{path}`")))?;
-        read_entry(&mut file, metadata.len(), max, path)
+        self.bundle.entry(path, max as u64).map_err(bundle_error)?.ok_or_else(|| FormatError::corrupt(format!("missing `{path}`")))
     }
 }
 
@@ -117,51 +199,64 @@ pub fn read_entry(file: &mut impl std::io::Read, len: u64, max: usize, path: &st
 // Loading
 // ---------------------------------------------------------------------------
 
-/// Deepest JSON nesting a manifest may have: each group level adds three (the layer object, its
-/// content object and the `children` array), with headroom for the document and leaf layer fields.
-/// The saver checks the same bound, so every bundle it writes loads again.
-const MAX_MANIFEST_DEPTH: usize = 3 * (convert::MAX_GROUP_DEPTH + 1) + 64;
+/// The limits a manifest is checked against: craft-pcraft-format's item limit, the JSON nesting
+/// of [`convert::MAX_GROUP_DEPTH`] nested groups ([`craft_pcraft_format::manifest_depth`]) and at
+/// most `max_manifest_bytes` bytes. The saver checks the same nesting and items, so every bundle
+/// it writes loads again.
+fn manifest_limits(max_manifest_bytes: usize) -> craft_pcraft_format::Limits {
+    let mut limits = craft_pcraft_format::Limits::default();
+    limits.max_manifest_bytes = max_manifest_bytes;
+    limits.max_depth = craft_pcraft_format::manifest_depth(convert::MAX_GROUP_DEPTH);
+    limits
+}
 
-/// Rejects JSON nested deeper than [`MAX_MANIFEST_DEPTH`] with a linear scan (no recursion), so
-/// parsing with serde_json's recursion limit disabled can't exhaust the stack on hostile input.
-fn check_manifest_depth(json: &[u8]) -> Result<()> {
-    let (mut depth, mut in_str, mut escaped) = (0usize, false, false);
-    for &b in json {
-        if in_str {
-            match b {
-                _ if escaped => escaped = false,
-                b'\\' => escaped = true,
-                b'"' => in_str = false,
-                _ => {}
-            }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'[' | b'{' => {
-                depth += 1;
-                if depth > MAX_MANIFEST_DEPTH {
-                    return Err(FormatError::LimitExceeded(format!("manifest JSON nested deeper than {MAX_MANIFEST_DEPTH} levels")));
-                }
-            }
-            b']' | b'}' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
+/// The manifest as a save writes it: `manifest`, followed by a `full_composite` member naming
+/// [`FULL_COMPOSITE`] when `full_composite` is set. Without it the bytes are `manifest`'s own.
+fn manifest_json(manifest: &Manifest, full_composite: bool) -> Result<Vec<u8>> {
+    #[derive(serde::Serialize)]
+    struct WithFullComposite<'a> {
+        #[serde(flatten)]
+        manifest: &'a Manifest,
+        full_composite: &'static str,
     }
-    Ok(())
+    // serde_json writes NaN and the infinities as `null`, which the manifest's float fields
+    // refuse on load (issue #1101): refuse the save instead, naming the value.
+    crate::finite::check(manifest).map_err(|e| match e {
+        crate::finite::Problem::NonFinite { path } => FormatError::NonFinite { path },
+        crate::finite::Problem::Other(m) => FormatError::Unsupported(format!("manifest: {m}")),
+    })?;
+    let json = if full_composite {
+        serde_json::to_vec_pretty(&WithFullComposite { manifest, full_composite: FULL_COMPOSITE })?
+    } else {
+        serde_json::to_vec_pretty(manifest)?
+    };
+    // The nesting and the items only: a save checks no manifest size.
+    craft_pcraft_format::check_manifest(&json, &manifest_limits(usize::MAX))?;
+    Ok(json)
+}
+
+/// The entry the manifest's `full_composite` member names: `None` when the member is missing or
+/// `null`. A member that names any entry other than [`FULL_COMPOSITE`] is refused.
+pub(crate) fn read_full_composite_entry(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Option<&'static str>> {
+    let raw = src.get(MANIFEST, opts.max_manifest_bytes)?;
+    let manifest = craft_pcraft_format::parse_manifest(&raw, &manifest_limits(opts.max_manifest_bytes))?;
+    match manifest.get(FULL_COMPOSITE_MEMBER) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(entry)) if entry == FULL_COMPOSITE => Ok(Some(FULL_COMPOSITE)),
+        Some(other) => Err(FormatError::corrupt(format!("`{FULL_COMPOSITE_MEMBER}` names {other}, not {FULL_COMPOSITE:?}"))),
+    }
 }
 
 pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Manifest> {
     let raw = src.get(MANIFEST, opts.max_manifest_bytes)?;
-    // serde_json stops at 128 levels (about 40 nested groups); the bounded check replaces that limit.
-    check_manifest_depth(&raw)?;
-    let mut de = serde_json::Deserializer::from_slice(&raw);
-    de.disable_recursion_limit();
-    let mut v = <serde_json::Value as serde::Deserialize>::deserialize(&mut de)?;
-    de.end()?;
-    crate::migrate::migrate(&mut v)?;
-    let layers = take_array(&mut v, "/document/layers");
-    let mut m: Manifest = serde_json::from_value(v)?;
+    // serde_json stops at 128 levels (about 40 nested groups); `read_manifest_with` checks the
+    // nesting and the items in one pass, then parses without that limit.
+    let limits = manifest_limits(opts.max_manifest_bytes);
+    let mut layers = Vec::new();
+    let mut m: Manifest = craft_pcraft_format::read_manifest_with(&raw, &limits, crate::migrate::STEPS, FORMAT_VERSION, |mut document| {
+        layers = take_array(&mut document, "/layers");
+        Ok::<_, FormatError>(serde_json::from_value(document)?)
+    })?;
     m.document.layers = layers_from_json(layers)?;
     // A number past f32's range decodes as infinity, which no save could write back (#6862).
     if let Err(crate::finite::Problem::NonFinite { path }) = crate::finite::check(&m) {
@@ -218,11 +313,10 @@ impl LoadFetch<'_> {
 
 impl Fetch for LoadFetch<'_> {
     fn tile(&mut self, hash: &str, len: usize) -> Result<Vec<u8>> {
-        if !is_valid_hash(hash) {
+        let Some(path) = tile_path(hash) else {
             return Err(FormatError::corrupt(format!("invalid tile hash `{hash}`")));
-        }
+        };
         self.account(len)?;
-        let path = tile_path(hash);
         let z = self.src.get(&path, len + len / 8 + 4096)?;
         let data = decompress(&z, len, &path)?;
         if hash_bytes(&data) != hash {
@@ -231,18 +325,33 @@ impl Fetch for LoadFetch<'_> {
         Ok(data)
     }
 
+    /// Fetch a content-addressed blob under the load options' per-blob limit.
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>> {
+        self.blob_bounded(hash, self.opts.max_blob_bytes)
+    }
+
+    /// A content-addressed blob of at most `limit` bytes (never more than `max_blob_bytes`):
+    /// read once, decompressed within the limit, counted against the load's memory budget and
+    /// checked against its hash, then shared. Optional vector previews pass a 16 MiB limit.
+    fn blob_bounded(&mut self, hash: &str, limit: usize) -> Result<Arc<Vec<u8>>> {
+        let limit = limit.min(self.opts.max_blob_bytes);
         if let Some(b) = self.blobs.get(hash) {
-            return Ok(b.clone());
+            return if b.len() <= limit { Ok(b.clone()) } else { Err(FormatError::LimitExceeded("optional preview blob exceeds its limit".into())) };
         }
-        if !is_valid_hash(hash) {
+        let Some(path) = blob_path(hash) else {
             return Err(FormatError::corrupt(format!("invalid blob hash `{hash}`")));
-        }
-        let path = blob_path(hash);
-        let z = self.src.get(&path, self.opts.max_blob_bytes)?;
+        };
+        // A new blob is retained beside every earlier one, so it may inflate to no more than
+        // what the load's total budget has left: checking the total only after decompressing
+        // would let each of several blobs allocate a full `max_blob_bytes` first.
+        let left = usize::try_from(self.opts.max_total_bytes.saturating_sub(self.total)).unwrap_or(usize::MAX);
+        let limit = limit.min(left);
+        // The stored zstd frame of incompressible data is a little larger than the data, so a
+        // blob right at `limit` must still be read; `decompress_bounded` enforces `limit`.
+        let z = self.src.get(&path, limit.saturating_add(limit / 8).saturating_add(4096))?;
         // Blob length is not in the manifest; the frame header bounds it and
         // we cap at max_blob_bytes.
-        let data = decompress_bounded(&z, self.opts.max_blob_bytes, None, &path)?;
+        let data = decompress_bounded(&z, limit, None, &path)?;
         self.account(data.len())?;
         if hash_bytes(&data) != hash {
             return Err(FormatError::corrupt(format!("{path}: content does not match its hash")));
@@ -268,7 +377,14 @@ fn admit_canvas(size: photocraft_geom::Size, opts: &LoadOptions) -> Result<()> {
     Ok(())
 }
 
+/// Load a checked native bundle while discarding the internal decoded-byte accounting result.
 pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
+    load_measured(src, opts).map(|(doc, _)| doc)
+}
+
+/// Admit native canvas dimensions and return both the reconstructed document and the bytes actually fetched for its
+/// content.
+pub(crate) fn load_measured(src: &dyn ByteSource, opts: &LoadOptions) -> Result<(Document, u64)> {
     let m = read_manifest(src, opts)?;
     admit_canvas(m.document.size, opts)?;
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
@@ -280,7 +396,8 @@ pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document>
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
     };
-    loader.document(&m.document)
+    let document = loader.document(&m.document)?;
+    Ok((document, fetch.total))
 }
 
 // ---------------------------------------------------------------------------
@@ -304,19 +421,24 @@ pub struct SaveStats {
     pub manifest_bytes: usize,
 }
 
+type BlobHashCache = HashMap<usize, (Weak<Vec<u8>>, Hash)>;
+type TileHashCache = HashMap<(usize, SampleType), (Weak<Tile>, Hash)>;
+
 #[derive(Default)]
 struct Collect<'c> {
     tiles: BTreeMap<Hash, (Arc<Tile>, SampleType)>,
     blobs: BTreeMap<Hash, Arc<Vec<u8>>>,
-    hash_cache: Option<&'c mut HashMap<usize, (Weak<Tile>, Hash)>>,
+    hash_cache: Option<&'c mut TileHashCache>,
+    blob_hash_cache: Option<&'c mut BlobHashCache>,
 }
 
 impl Sink for Collect<'_> {
+    /// Reuses hashes by allocation and sample byte order without upgrading weak references.
     fn tile(&mut self, format: PixelFormat, tile: &Arc<Tile>) -> Hash {
-        let key = Arc::as_ptr(tile) as usize;
+        let key = (Arc::as_ptr(tile) as usize, format.sample);
         if let Some(cache) = self.hash_cache.as_deref_mut()
             && let Some((w, h)) = cache.get(&key)
-            && w.upgrade().is_some_and(|t| Arc::ptr_eq(&t, tile))
+            && std::ptr::eq(w.as_ptr(), Arc::as_ptr(tile))
         {
             let h = h.clone();
             self.tiles.entry(h.clone()).or_insert_with(|| (tile.clone(), format.sample));
@@ -330,20 +452,52 @@ impl Sink for Collect<'_> {
         h
     }
 
+    /// Reuses hashes for the same allocation without upgrading weak references.
     fn blob(&mut self, data: &Arc<Vec<u8>>) -> Hash {
+        let key = Arc::as_ptr(data) as usize;
+        if let Some(cache) = self.blob_hash_cache.as_deref_mut()
+            && let Some((w, h)) = cache.get(&key)
+            && std::ptr::eq(w.as_ptr(), Arc::as_ptr(data))
+        {
+            let h = h.clone();
+            self.blobs.entry(h.clone()).or_insert_with(|| data.clone());
+            return h;
+        }
         let h = hash_bytes(data);
+        if let Some(cache) = self.blob_hash_cache.as_deref_mut() {
+            cache.insert(key, (Arc::downgrade(data), h.clone()));
+        }
         self.blobs.entry(h.clone()).or_insert_with(|| data.clone());
         h
     }
 }
 
-fn tile_le(t: &Tile, sample: SampleType) -> std::borrow::Cow<'_, [u8]> {
+/// A tile's bytes in little-endian order: the tile itself (kept in memory while this lives), or
+/// a byte-swapped copy on big-endian machines.
+enum LeBytes<'a> {
+    Native(photocraft_raster::TileBytes<'a>),
+    Swapped(Vec<u8>),
+    Borrowed(&'a [u8]),
+}
+
+impl std::ops::Deref for LeBytes<'_> {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            LeBytes::Native(b) => b,
+            LeBytes::Swapped(b) => b,
+            LeBytes::Borrowed(b) => b,
+        }
+    }
+}
+
+fn tile_le(t: &Tile, sample: SampleType) -> LeBytes<'_> {
     if cfg!(target_endian = "big") {
         let mut b = t.bytes().to_vec();
         swap_to_le(&mut b, sample);
-        std::borrow::Cow::Owned(b)
+        LeBytes::Swapped(b)
     } else {
-        std::borrow::Cow::Borrowed(t.bytes())
+        LeBytes::Native(t.bytes())
     }
 }
 
@@ -365,20 +519,70 @@ pub const DEFAULT_REVERIFY_BUDGET: u64 = 16 * 1024 * 1024;
 /// [`Self::set_reverify_budget`]). Over enough saves every object is read again, and a damaged
 /// one is rewritten.
 pub struct PcraftWriter {
-    hash_cache: HashMap<usize, (Weak<Tile>, Hash)>,
+    hash_cache: TileHashCache,
+    blob_hash_cache: BlobHashCache,
     /// Compressed objects by bundle path (ZIP mode).
     compressed: HashMap<String, Arc<Vec<u8>>>,
+    compressed_budget: usize,
+    directory: craft_pcraft_bundle::DirectoryBundleWriter,
+    #[cfg(all(test, windows))]
     verified_directory: Option<DirectoryVerificationCache>,
+    #[cfg(all(test, windows))]
     reverify_budget: u64,
+    /// How long [`Self::save_dir`] waits for another save of the bundle ([`SAVE_LOCK_WAIT`]).
+    #[cfg(all(test, windows))]
+    lock_wait: std::time::Duration,
 }
 
 impl Default for PcraftWriter {
     fn default() -> Self {
-        Self { hash_cache: HashMap::new(), compressed: HashMap::new(), verified_directory: None, reverify_budget: DEFAULT_REVERIFY_BUDGET }
+        Self {
+            hash_cache: HashMap::new(),
+            blob_hash_cache: HashMap::new(),
+            compressed: HashMap::new(),
+            compressed_budget: usize::MAX,
+            directory: craft_pcraft_bundle::DirectoryBundleWriter::default(),
+            #[cfg(all(test, windows))]
+            verified_directory: None,
+            #[cfg(all(test, windows))]
+            reverify_budget: DEFAULT_REVERIFY_BUDGET,
+            #[cfg(all(test, windows))]
+            lock_wait: SAVE_LOCK_WAIT,
+        }
+    }
+}
+
+/// Hold `dir`'s [`SAVE_LOCK`] for a directory save, so two writers (two stores, or two
+/// processes) can't interleave: each lists the existing objects, writes its own, publishes its
+/// manifest and removes what that manifest doesn't reference. Interleaved, one writer's cleanup
+/// could remove an object the other's winning manifest needs (#4957). The lock is the OS's
+/// advisory file lock, released when the returned file is dropped or the process ends, so a
+/// crash leaves no stale lock. Another save holding it is waited for up to `wait`; after that the
+/// save fails without writing anything. A file system without file locks (some network shares)
+/// saves unlocked, as before.
+#[cfg(all(test, windows))]
+fn lock_bundle(dir: &Path, wait: std::time::Duration) -> Result<Option<std::fs::File>> {
+    let path = dir.join(SAVE_LOCK);
+    validate_bundle_file(dir, &path)?;
+    let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
+    let start = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < wait => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(FormatError::Io(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    format!("another save of {} is in progress; nothing was written", dir.display()),
+                )));
+            }
+            Err(std::fs::TryLockError::Error(_)) => return Ok(None),
+        }
     }
 }
 
 #[derive(Default)]
+#[cfg(all(test, windows))]
 struct DirectoryVerificationCache {
     directory: PathBuf,
     /// Directory saves so far; an object's `checked_at` is the save that last read it fully.
@@ -387,6 +591,7 @@ struct DirectoryVerificationCache {
 }
 
 #[derive(Clone, Copy)]
+#[cfg(all(test, windows))]
 struct Verified {
     signature: FileSignature,
     checked_at: u64,
@@ -394,6 +599,7 @@ struct Verified {
 
 /// What a file looked like when it was verified. Any change means "verify again".
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(all(test, windows))]
 struct FileSignature {
     len: u64,
     modified: SystemTime,
@@ -405,9 +611,32 @@ struct FileSignature {
 
 struct Prepared {
     manifest: Vec<u8>,
+    /// What `manifest` encodes, for a ZIP save that has to leave the full-size composite out.
+    model: Manifest,
+    /// Whether `manifest` names the full-size composite.
+    full_composite: bool,
     objects: BTreeMap<String, Object>,
-    previews: Vec<(&'static str, Vec<u8>)>,
     stats: SaveStats,
+}
+
+/// Refuse to write pixels of `doc` that are unreadable now, or that may have been read as a
+/// placeholder because some tile failed or recovered since `generation` (the save's start).
+/// Other documents' scratch failures do not block this save.
+fn scratch_ok(doc: &Document, generation: u64) -> Result<()> {
+    doc.scratch_health().map_err(FormatError::corrupt)?;
+    photocraft_raster::spill::check_since(generation).map_err(FormatError::corrupt)
+}
+
+impl Prepared {
+    /// Takes the full-size composite out of the manifest when `previews` does not hold it.
+    fn match_previews(&mut self, previews: &[(&str, Vec<u8>)]) -> Result<()> {
+        if self.full_composite && !previews.iter().any(|(name, _)| *name == FULL_COMPOSITE) {
+            self.full_composite = false;
+            self.manifest = manifest_json(&self.model, false)?;
+            self.stats.manifest_bytes = self.manifest.len();
+        }
+        Ok(())
+    }
 }
 
 enum Object {
@@ -416,24 +645,26 @@ enum Object {
 }
 
 impl Object {
-    fn compressed(&self) -> Vec<u8> {
-        compress(&self.content())
+    fn compressed(&self, compressor: &mut ObjectEncoder) -> Vec<u8> {
+        compressor.object(self)
     }
 
     /// The bytes this object stores (tiles little-endian).
-    fn content(&self) -> std::borrow::Cow<'_, [u8]> {
+    fn content(&self) -> LeBytes<'_> {
         match self {
             Object::Tile(tile, sample) => tile_le(tile, *sample),
-            Object::Blob(blob) => std::borrow::Cow::Borrowed(blob.as_slice()),
+            Object::Blob(blob) => LeBytes::Borrowed(blob.as_slice()),
         }
     }
 }
 
 /// Whether `compressed` decodes to exactly `expected`.
+#[cfg(all(test, windows))]
 fn content_matches(expected: &[u8], compressed: &[u8], what: &str) -> bool {
     decompress(compressed, expected.len(), what).is_ok_and(|actual| hash_bytes(&actual) == hash_bytes(expected))
 }
 
+#[cfg(all(test, windows))]
 fn file_signature(metadata: &std::fs::Metadata) -> Option<FileSignature> {
     #[cfg(unix)]
     let unix = {
@@ -448,6 +679,7 @@ fn file_signature(metadata: &std::fs::Metadata) -> Option<FileSignature> {
     })
 }
 
+#[cfg(all(test, windows))]
 fn path_signature(path: &Path) -> Result<Option<FileSignature>> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => Ok(file_signature(&metadata)),
@@ -457,6 +689,7 @@ fn path_signature(path: &Path) -> Result<Option<FileSignature>> {
     }
 }
 
+#[cfg(test)]
 fn unsafe_bundle_entry(path: &Path) -> FormatError {
     FormatError::Io(std::io::Error::new(
         std::io::ErrorKind::InvalidData,
@@ -466,6 +699,7 @@ fn unsafe_bundle_entry(path: &Path) -> FormatError {
 
 /// The generic atomic writer intentionally follows a destination symlink. Directory bundles
 /// must reject one instead: all of their managed entries stay below the bundle root.
+#[cfg(all(test, windows))]
 fn plain_file_or_missing(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => Ok(()),
@@ -475,6 +709,7 @@ fn plain_file_or_missing(path: &Path) -> Result<()> {
     }
 }
 
+#[cfg(all(test, windows))]
 fn plain_directory_or_missing(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() => Ok(()),
@@ -490,12 +725,13 @@ fn plain_directory_or_missing(path: &Path) -> Result<()> {
 /// Use the canonical root after creation so a later replacement of the caller's path cannot
 /// redirect subsequent bundle operations. The caller may choose a symlinked root, but managed
 /// subdirectories and files below its resolved target must not be symlinks.
+#[cfg(all(test, windows))]
 fn bundle_root(dir: &Path) -> Result<PathBuf> {
     let dir: PathBuf = dir.components().collect();
     std::fs::create_dir_all(&dir)?;
     let root = std::fs::canonicalize(&dir)?;
     plain_directory_or_missing(&root)?;
-    for sub in ["tiles", "blobs", "composite"] {
+    for sub in [TILES_DIR, BLOBS_DIR, COMPOSITE_DIR] {
         let path = root.join(sub);
         plain_directory_or_missing(&path)?;
         if !path.exists() {
@@ -513,9 +749,10 @@ fn bundle_root(dir: &Path) -> Result<PathBuf> {
     Ok(root)
 }
 
+#[cfg(all(test, windows))]
 fn validate_bundle_file(root: &Path, path: &Path) -> Result<()> {
     let parent = path.parent().ok_or_else(|| unsafe_bundle_entry(path))?;
-    if parent != root && parent != root.join("tiles") && parent != root.join("blobs") && parent != root.join("composite") {
+    if parent != root && parent != root.join(TILES_DIR) && parent != root.join(BLOBS_DIR) && parent != root.join(COMPOSITE_DIR) {
         return Err(unsafe_bundle_entry(path));
     }
     plain_directory_or_missing(parent)?;
@@ -525,14 +762,64 @@ fn validate_bundle_file(root: &Path, path: &Path) -> Result<()> {
     plain_file_or_missing(path)
 }
 
-fn write_bundle_file(root: &Path, path: &Path, data: &[u8]) -> Result<()> {
+/// Flush `dir`, the folder `written` was just renamed into, as `atomic_write` does (with the
+/// full-flush fallback of `sync_file`, #1336). Windows flushes through the injected `AtomicFs`
+/// and fails on any error (#7858).
+#[cfg(not(windows))]
+#[cfg(all(test, windows))]
+fn flush_bundle_dir(dir: &Path, written: &Path) -> std::io::Result<()> {
+    use crate::atomic::AtomicFs;
+    #[cfg(test)]
+    {
+        FLUSHED.with(|f| f.borrow_mut().push(dir.to_path_buf()));
+        let named = |p: Option<&Path>, name: &str| p.and_then(Path::file_name).is_some_and(|n| n == name);
+        if FAIL_DIR_FLUSH.with(|f| {
+            let hit = f.get().is_some_and(|name| named(Some(written), name) || named(written.parent(), name));
+            if hit {
+                f.set(None);
+            }
+            hit
+        }) {
+            return Err(std::io::Error::other("injected folder flush failure"));
+        }
+    }
+    let _ = written;
+    crate::atomic::RealFs.sync_dir(dir)
+}
+
+/// [`flush_bundle_dir`], as the save's error when the flush was attempted and failed: `written`
+/// is in place, but may not survive a power loss or crash (#4968).
+#[cfg(not(windows))]
+#[cfg(all(test, windows))]
+fn confirm_flushed(dir: &Path, written: &Path) -> Result<()> {
+    crate::atomic::dir_synced(flush_bundle_dir(dir, written)).map_err(|e| {
+        FormatError::Io(std::io::Error::new(
+            e.kind(),
+            format!("{} was written, but its folder could not be flushed to disk, so the save may not survive a power loss or crash: {e}", written.display()),
+        ))
+    })
+}
+
+/// Publish a validated bundle entry through a flushed temporary file and replacing rename.
+/// On Windows, propagate a failed directory barrier even though the new entry is already visible.
+#[cfg(all(test, windows))]
+fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atomic::AtomicFs) -> Result<()> {
+    #[cfg(not(windows))]
+    let _ = fs;
     validate_bundle_file(root, path)?;
     let parent = path.parent().ok_or_else(|| unsafe_bundle_entry(path))?;
     let name = path.file_name().ok_or_else(|| unsafe_bundle_entry(path))?;
     let mut temporary = None;
     for _ in 0..8 {
         let candidate = parent.join(crate::atomic::temp_name(&name.to_string_lossy()));
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        match opts.open(&candidate) {
             Ok(file) => {
                 temporary = Some((candidate, file));
                 break;
@@ -553,19 +840,24 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8]) -> Result<()> {
         validate_bundle_file(root, path)?;
         file.write_all(data)?;
         file.sync_all()?;
-        drop(file);
-        // Preserve the existing mode where possible, as the generic atomic writer does.
+        // Preserve the existing mode where possible, as the generic atomic writer does: through
+        // the open handle, so a staging entry swapped meanwhile is not what gets the mode.
         if let Ok(permissions) = std::fs::metadata(path).map(|m| m.permissions()) {
-            let _ = std::fs::set_permissions(&tmp, permissions);
+            let _ = file.set_permissions(permissions);
         }
+        drop(file);
         // Recheck the parent and target just before publishing. rename replaces a symlink
         // itself, never its referent, even if one appears after this check.
         validate_bundle_file(root, path)?;
         crate::atomic::retry_rename(crate::atomic::RenameRetry::platform(), || std::fs::rename(&tmp, path))?;
-        #[cfg(unix)]
+        #[cfg(windows)]
         {
-            let _ = std::fs::File::open(parent).and_then(|d| d.sync_all());
+            crate::atomic::dir_synced(fs.sync_dir(parent)).map_err(|e| crate::atomic::publication_error(e, path))?;
         }
+        // Elsewhere a failed flush is reported too (#4968), but a file system that can't flush a
+        // directory at all still saves, as in `atomic_write`.
+        #[cfg(not(windows))]
+        confirm_flushed(parent, path)?;
         Ok(())
     })();
     if result.is_err() && validate_bundle_file(root, &tmp).is_ok() {
@@ -576,6 +868,7 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8]) -> Result<()> {
 
 /// Keep the existing leaf/path validation and pin the actual unlink to opened
 /// directory handles on Unix. This closes the check-then-remove path-swap gap.
+#[cfg(all(test, windows))]
 fn remove_bundle_file(root: &Path, path: &Path, gc: &BundleGc) -> Result<()> {
     validate_bundle_file(root, path)?;
     let relative = path.strip_prefix(root).map_err(|_| unsafe_bundle_entry(path))?;
@@ -583,6 +876,7 @@ fn remove_bundle_file(root: &Path, path: &Path, gc: &BundleGc) -> Result<()> {
 }
 
 #[cfg(unix)]
+#[cfg(test)]
 struct BundleGc {
     root: rustix::fd::OwnedFd,
     tiles: rustix::fd::OwnedFd,
@@ -591,6 +885,7 @@ struct BundleGc {
 }
 
 #[cfg(unix)]
+#[cfg(test)]
 fn gc_directory_flags() -> rustix::fs::OFlags {
     use rustix::fs::OFlags;
 
@@ -607,15 +902,16 @@ fn gc_directory_flags() -> rustix::fs::OFlags {
 }
 
 #[cfg(unix)]
+#[cfg(test)]
 impl BundleGc {
     fn new(root: &Path) -> Result<Self> {
         use rustix::fs::{Mode, open, openat};
 
         let flags = gc_directory_flags();
         let root = open(root, flags, Mode::empty()).map_err(std::io::Error::from)?;
-        let tiles = openat(&root, "tiles", flags, Mode::empty()).map_err(std::io::Error::from)?;
-        let blobs = openat(&root, "blobs", flags, Mode::empty()).map_err(std::io::Error::from)?;
-        let composite = openat(&root, "composite", flags, Mode::empty()).map_err(std::io::Error::from)?;
+        let tiles = openat(&root, TILES_DIR, flags, Mode::empty()).map_err(std::io::Error::from)?;
+        let blobs = openat(&root, BLOBS_DIR, flags, Mode::empty()).map_err(std::io::Error::from)?;
+        let composite = openat(&root, COMPOSITE_DIR, flags, Mode::empty()).map_err(std::io::Error::from)?;
         Ok(Self { root, tiles, blobs, composite })
     }
 
@@ -624,9 +920,10 @@ impl BundleGc {
         let (handle, name) = match relative {
             THUMB => (&self.root, THUMB),
             COMPOSITE => (&self.composite, "preview.png"),
+            FULL_COMPOSITE => (&self.composite, "full.png"),
             _ => match relative.split_once('/') {
-                Some(("tiles", name)) if name.strip_suffix(".zst").is_some_and(is_valid_hash) => (&self.tiles, name),
-                Some(("blobs", name)) if name.strip_suffix(".zst").is_some_and(is_valid_hash) => (&self.blobs, name),
+                Some((TILES_DIR, name)) if name.strip_suffix(craft_pcraft_format::OBJECT_SUFFIX).is_some_and(is_valid_hash) => (&self.tiles, name),
+                Some((BLOBS_DIR, name)) if name.strip_suffix(craft_pcraft_format::OBJECT_SUFFIX).is_some_and(is_valid_hash) => (&self.blobs, name),
                 _ => return Err(FormatError::Unsupported(format!("invalid bundle cleanup target: {relative}"))),
             },
         };
@@ -636,11 +933,13 @@ impl BundleGc {
 }
 
 #[cfg(not(unix))]
+#[cfg(test)]
 struct BundleGc {
     root: PathBuf,
 }
 
 #[cfg(not(unix))]
+#[cfg(test)]
 impl BundleGc {
     fn new(root: &Path) -> Result<Self> {
         Ok(Self { root: root.to_path_buf() })
@@ -652,6 +951,7 @@ impl BundleGc {
     }
 }
 
+#[cfg(all(test, windows))]
 fn existing_object_is_valid(path: &Path, object: &Object, what: &str) -> Result<(bool, Option<FileSignature>)> {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
@@ -689,7 +989,8 @@ type Compressed<'a> = (&'a String, Arc<Vec<u8>>);
 fn par_compress<'a>(objects: &[(&'a String, &'a Object)]) -> Result<Vec<Compressed<'a>>> {
     let threads = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 32) };
     if threads < 2 || objects.len() < 2 {
-        return Ok(objects.iter().map(|(p, o)| (*p, Arc::new(o.compressed()))).collect());
+        let mut compressor = ObjectEncoder::new();
+        return Ok(objects.iter().map(|(p, o)| (*p, Arc::new(o.compressed(&mut compressor)))).collect());
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|sc| {
@@ -697,10 +998,11 @@ fn par_compress<'a>(objects: &[(&'a String, &'a Object)]) -> Result<Vec<Compress
             .map(|_| {
                 sc.spawn(|| {
                     let mut out = Vec::new();
+                    let mut compressor = ObjectEncoder::new();
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some((p, o)) = objects.get(i) else { break };
-                        out.push((*p, Arc::new(o.compressed())));
+                        out.push((*p, Arc::new(o.compressed(&mut compressor))));
                     }
                     out
                 })
@@ -726,96 +1028,214 @@ impl PcraftWriter {
     /// re-checks (oldest-checked first; at least one object when the budget is non-zero). `0`
     /// trusts unchanged signatures entirely; `u64::MAX` re-verifies everything on every save.
     pub fn set_reverify_budget(&mut self, bytes: u64) {
-        self.reverify_budget = bytes;
+        #[cfg(all(test, windows))]
+        {
+            self.reverify_budget = bytes;
+        }
+        self.directory.set_reverify_budget(bytes);
     }
 
+    /// Cap compressed payload capacity retained between ZIP saves. Clears the previous payload
+    /// cache; tile hashes remain reusable. The default is unbounded; `0` retains no payloads.
+    pub fn set_compressed_cache_budget(&mut self, bytes: usize) {
+        self.compressed_budget = bytes;
+        self.compressed.clear();
+    }
+
+    /// How long a directory save waits for another save of the same bundle to finish before
+    /// failing without writing anything (10 s by default; see [`Self::save_dir`]).
+    pub fn set_lock_wait(&mut self, wait: std::time::Duration) {
+        #[cfg(all(test, windows))]
+        {
+            self.lock_wait = wait;
+        }
+        self.directory.set_lock_wait(wait);
+    }
+
+    /// Validate nesting, bounded conversion reports and finite manifest data, then collect content-addressed objects
+    /// while pruning expired hash-cache entries. Preview encoding is scheduled separately by the save path.
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
+        doc.scratch_health().map_err(FormatError::corrupt)?;
+        let generation = photocraft_raster::spill::read_error_generation();
+        let prepared = self.prepare_inner(doc, opts);
+        if let Err(error) = photocraft_raster::spill::check_since(generation) {
+            // Failed reads may have hashed display placeholders. Never reuse those hashes
+            // when the original backing becomes readable and the same writer retries.
+            self.hash_cache.clear();
+            return Err(FormatError::corrupt(error));
+        }
+        prepared
+    }
+
+    fn prepare_inner(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
+        self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
-        let mut c = Collect { hash_cache: Some(&mut self.hash_cache), ..Default::default() };
-        let document = convert::doc_m(doc, &mut c);
-        let mut previews = Vec::new();
-        if let Some(t) = &opts.thumbnail {
-            previews.push((THUMB, png(t)?));
-        }
-        if let Some(t) = &opts.composite {
-            previews.push((COMPOSITE, png(t)?));
-        }
-        let manifest = Manifest {
-            format_version: FORMAT_VERSION,
-            generator: format!("photocraft-format {}", env!("CARGO_PKG_VERSION")),
-            document,
-            thumbnail: opts.thumbnail.as_ref().map(|_| THUMB.to_owned()),
-            composite: opts.composite.as_ref().map(|_| COMPOSITE.to_owned()),
-        };
-        // serde_json writes NaN and the infinities as `null`, which the manifest's float fields
-        // refuse on load (issue #1101): refuse the save instead, naming the value.
-        crate::finite::check(&manifest).map_err(|e| match e {
-            crate::finite::Problem::NonFinite { path } => FormatError::NonFinite { path },
-            crate::finite::Problem::Other(m) => FormatError::Unsupported(format!("manifest: {m}")),
-        })?;
-        let manifest = serde_json::to_vec_pretty(&manifest)?;
-        check_manifest_depth(&manifest)?;
+        let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
+        let document = convert::doc_m(doc, &mut c)?;
+        let mut model = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
+        model.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
+        model.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
+        let full_composite = opts.full_composite.is_some();
+        let manifest = manifest_json(&model, full_composite)?;
         let stats = SaveStats { tiles_total: c.tiles.len(), blobs_total: c.blobs.len(), manifest_bytes: manifest.len(), ..Default::default() };
+        let invalid = |h: &str| FormatError::corrupt(format!("invalid object hash `{h}`"));
         let mut objects = BTreeMap::new();
         for (h, (t, s)) in c.tiles {
-            objects.insert(tile_path(&h), Object::Tile(t, s));
+            objects.insert(tile_path(&h).ok_or_else(|| invalid(&h))?, Object::Tile(t, s));
         }
         for (h, b) in c.blobs {
-            objects.insert(blob_path(&h), Object::Blob(b));
+            objects.insert(blob_path(&h).ok_or_else(|| invalid(&h))?, Object::Blob(b));
         }
-        Ok(Prepared { manifest, objects, previews, stats })
+        doc.scratch_health().map_err(FormatError::corrupt)?;
+        Ok(Prepared { manifest, model, full_composite, objects, stats })
     }
 
     /// Save as a ZIP bundle in memory.
     pub fn save_zip(&mut self, doc: &Document, opts: &SaveOptions) -> Result<(Vec<u8>, SaveStats)> {
-        let p = self.prepare(doc, opts)?;
+        self.save_zip_within(doc, opts, ZIP_LIMIT)
+    }
+
+    /// [`Self::save_zip`] with `limit` (bytes, entries) in place of [`ZIP_LIMIT`]: an archive that
+    /// the full-size composite would take past either is saved without that composite.
+    fn save_zip_within(&mut self, doc: &Document, opts: &SaveOptions, limit: (u64, usize)) -> Result<(Vec<u8>, SaveStats)> {
+        let generation = photocraft_raster::spill::read_error_generation();
+        // Another thread encodes the previews while the document is collected and its new
+        // objects are compressed on all cores (zstd dominates a full save).
+        let (previews, prepared) = beside(
+            opts.thumbnail.is_some() || opts.composite.is_some() || opts.full_composite.is_some(),
+            || previews(opts),
+            || -> Result<_> {
+                let p = self.prepare(doc, opts)?;
+                let todo: Vec<(&String, &Object)> = p.objects.iter().filter(|(path, _)| !self.compressed.contains_key(*path)).collect();
+                let fresh: HashMap<String, Arc<Vec<u8>>> = par_compress(&todo)?.into_iter().map(|(path, data)| (path.clone(), data)).collect();
+                Ok((p, fresh))
+            },
+        );
+        let (mut p, mut fresh) = prepared?;
+        let mut previews = previews?;
+        p.match_previews(&previews)?;
         let mut stats = p.stats;
-        let mut z = ZipWriter::new();
-        z.add(MANIFEST, &p.manifest)?;
-        for (name, data) in &p.previews {
-            z.add(name, data)?;
-        }
-        let mut next = HashMap::with_capacity(p.objects.len());
-        // New objects are compressed on all cores first (zstd dominates a full save).
-        let todo: Vec<(&String, &Object)> = p.objects.iter().filter(|(path, _)| !self.compressed.contains_key(*path)).collect();
-        let mut fresh: HashMap<&String, Arc<Vec<u8>>> = par_compress(&todo)?.into_iter().collect();
+        let mut entries = Vec::with_capacity(p.objects.len());
+        let mut compressor: Option<ObjectEncoder> = None;
         for (path, obj) in &p.objects {
-            let data = match self.compressed.get(path) {
-                Some(d) => {
+            let (key, data) = match self.compressed.remove_entry(path) {
+                Some((key, data)) => {
                     if matches!(obj, Object::Tile(..)) {
                         stats.tiles_reused += 1;
                     }
-                    d.clone()
+                    (Some(key), data)
                 }
                 None => {
                     match obj {
                         Object::Tile(..) => stats.tiles_written += 1,
                         Object::Blob(_) => stats.blobs_written += 1,
                     }
-                    fresh.remove(path).unwrap_or_else(|| Arc::new(obj.compressed()))
+                    (None, fresh.remove(path).unwrap_or_else(|| Arc::new(obj.compressed(compressor.get_or_insert_with(ObjectEncoder::new)))))
                 }
             };
-            z.add(path, &data)?;
-            next.insert(path.clone(), data);
+            entries.push((path, key, data));
         }
+        // A STORE entry takes a 30-byte local header plus its name and data, and a 46-byte central
+        // directory record plus its name again; the archive ends with a 22-byte end record. The
+        // full-size composite is left out rather than fail a save that fits without it.
+        let stored = |name: &str, len: usize| 76 + 2 * name.len() as u64 + len as u64;
+        let total = 22
+            + stored(MANIFEST, p.manifest.len())
+            + previews.iter().map(|(name, data)| stored(name, data.len())).sum::<u64>()
+            + entries.iter().map(|(path, _, data)| stored(path, data.len())).sum::<u64>();
+        let mut manifest = p.manifest;
+        if (total > limit.0 || 1 + previews.len() + entries.len() > limit.1)
+            && let Some(at) = previews.iter().position(|(name, _)| *name == FULL_COMPOSITE)
+        {
+            previews.remove(at);
+            manifest = manifest_json(&p.model, false)?;
+            stats.manifest_bytes = manifest.len();
+        }
+        // The shared bundle crate owns the ZIP wire format and validates every stored object.
+        let mut z = craft_pcraft_bundle::ZipBundleWriter::default();
+        z.set_manifest(manifest).map_err(bundle_error)?;
+        for (name, data) in &previews {
+            z.set_preview(name, data.clone()).map_err(bundle_error)?;
+        }
+        let mut next = HashMap::with_capacity(entries.len());
+        let mut cached_bytes = 0usize;
+        for (path, key, data) in entries {
+            z.add_stored_object(path, data.as_ref().clone(), 1 << 30).map_err(bundle_error)?;
+            if data.capacity() <= self.compressed_budget.saturating_sub(cached_bytes) {
+                cached_bytes += data.capacity();
+                next.insert(key.unwrap_or_else(|| path.clone()), data);
+            }
+        }
+        scratch_ok(doc, generation)?;
         self.compressed = next;
-        Ok((z.finish()?, stats))
+        Ok((z.finish().map_err(bundle_error)?, stats))
     }
 
     /// Save into a directory bundle: reuses only valid existing objects,
     /// rewrites missing or damaged objects, then writes the manifest
-    /// atomically and removes unreferenced objects.
+    /// atomically and removes unreferenced objects. The whole save holds the bundle's
+    /// `save.lock`, so saves of one bundle from other writers or processes wait their turn.
     pub fn save_dir(&mut self, doc: &Document, dir: &Path, opts: &SaveOptions) -> Result<SaveStats> {
+        let generation = photocraft_raster::spill::read_error_generation();
+        let mut prepared = self.prepare(doc, opts)?;
+        let previews = previews(opts)?;
+        prepared.match_previews(&previews)?;
+        let mut writer = craft_pcraft_bundle::ZipBundleWriter::default();
+        writer.set_manifest(prepared.manifest.clone()).map_err(bundle_error)?;
+        for (name, bytes) in previews {
+            writer.set_preview(name, bytes).map_err(bundle_error)?;
+        }
+        let mut next = HashMap::with_capacity(prepared.objects.len());
+        let mut cached_bytes = 0usize;
+        for (path, object) in &prepared.objects {
+            let (key, bytes) = match self.compressed.remove_entry(path) {
+                Some((key, bytes)) => (key, bytes),
+                None => (path.clone(), Arc::new(object.compressed(&mut ObjectEncoder::new()))),
+            };
+            writer.stage_compressed_object(path, bytes.as_ref().clone()).map_err(bundle_error)?;
+            if bytes.capacity() <= self.compressed_budget.saturating_sub(cached_bytes) {
+                cached_bytes += bytes.capacity();
+                next.insert(key, bytes);
+            }
+        }
+        scratch_ok(doc, generation)?;
+        let directory_stats = self.directory.save_directory(dir, writer).map_err(bundle_error)?;
+        let mut stats = prepared.stats;
+        stats.objects_removed = directory_stats.removed;
+        for path in &directory_stats.written_objects {
+            match prepared.objects.get(path) {
+                Some(Object::Tile(..)) => stats.tiles_written += 1,
+                Some(Object::Blob(..)) => stats.blobs_written += 1,
+                None => {}
+            }
+        }
+        for path in &directory_stats.reused_objects {
+            if matches!(prepared.objects.get(path), Some(Object::Tile(..))) {
+                stats.tiles_reused += 1;
+            }
+        }
+        self.compressed = next;
+        Ok(stats)
+    }
+
+    /// The same save path with an injectable publication barrier, for failure/GC ordering tests.
+    #[cfg(all(test, windows))]
+    fn save_dir_with(&mut self, doc: &Document, dir: &Path, opts: &SaveOptions, fs: &dyn crate::atomic::AtomicFs) -> Result<SaveStats> {
+        let scratch_generation = photocraft_raster::spill::read_error_generation();
         let canonical_dir = bundle_root(dir)?;
         let dir = canonical_dir.as_path();
+        // Held until the end of the save: listing, writing, publishing and cleanup (#4957).
+        let _lock = lock_bundle(dir, self.lock_wait)?;
         let existing = list_objects(dir)?;
         // Reject a hostile existing entry before writing any object or manifest. This also
         // covers entries that this save would otherwise leave untouched or garbage-collect.
-        for path in [MANIFEST, THUMB, COMPOSITE] {
+        for path in [MANIFEST, THUMB, COMPOSITE, FULL_COMPOSITE] {
             validate_bundle_file(dir, &dir.join(path))?;
         }
-        let p = self.prepare(doc, opts)?;
+        let mut p = self.prepare(doc, opts)?;
+        let previews = previews(opts)?;
+        p.match_previews(&previews)?;
         let mut stats = p.stats;
         if self.verified_directory.as_ref().is_none_or(|cache| cache.directory != canonical_dir) {
             self.verified_directory = Some(DirectoryVerificationCache { directory: canonical_dir.clone(), ..Default::default() });
@@ -828,6 +1248,7 @@ impl PcraftWriter {
             None => 0,
         };
         let recheck = self.rolling_recheck(&p.objects);
+        let mut compressor: Option<ObjectEncoder> = None;
         for (path, obj) in &p.objects {
             let object_path = dir.join(path);
             // bundle_root and list_objects validated the fixed parent directories once. Check
@@ -862,7 +1283,9 @@ impl PcraftWriter {
                 Object::Tile(..) => stats.tiles_written += 1,
                 Object::Blob(_) => stats.blobs_written += 1,
             }
-            write_bundle_file(dir, &object_path, &obj.compressed())?;
+            let compressed = obj.compressed(compressor.get_or_insert_with(ObjectEncoder::new));
+            scratch_ok(doc, scratch_generation)?;
+            write_bundle_file(dir, &object_path, &compressed, fs)?;
             let written = path_signature(&object_path)?;
             if let Some(cache) = &mut self.verified_directory {
                 match written {
@@ -875,23 +1298,38 @@ impl PcraftWriter {
                 }
             }
         }
-        for (name, data) in &p.previews {
-            write_bundle_file(dir, &dir.join(name), data)?;
+        for (name, data) in &previews {
+            write_bundle_file(dir, &dir.join(name), data, fs)?;
         }
         // Pin all GC directories before removing stale previews or objects.
         // Unix cleanup then stays within these directories even if a pathname is swapped.
         let gc = BundleGc::new(dir)?;
-        for stale in [THUMB, COMPOSITE] {
-            if !p.previews.iter().any(|(n, _)| *n == stale) {
-                let path = dir.join(stale);
-                validate_bundle_file(dir, &path)?;
-                match remove_bundle_file(dir, &path, &gc) {
-                    Err(FormatError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    other => other?,
-                }
+        #[cfg(windows)]
+        {
+            // A previous attempt may have published an object and then failed its directory
+            // flush. The retry can reuse those valid bytes (including cached ones), so flush
+            // both object directories again before publishing a manifest that references them.
+            // This also persists the fixed subdirectories of a newly created bundle.
+            for sub in [TILES_DIR, BLOBS_DIR] {
+                crate::atomic::dir_synced(fs.sync_dir(&dir.join(sub))).map_err(|e| crate::atomic::publication_error(e, &dir.join(sub)))?;
             }
         }
-        write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest)?;
+        #[cfg(not(windows))]
+        for sub in [TILES_DIR, BLOBS_DIR] {
+            let folder = dir.join(sub);
+            if folder.is_dir() {
+                confirm_flushed(&folder, &folder)?;
+            }
+        }
+        scratch_ok(doc, scratch_generation)?;
+        write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest, fs)?;
+        // Omitted previews belong to the previous manifest until the new one commits.
+        // After commit, a locked leftover is only housekeeping, just like unused objects.
+        for stale in [THUMB, COMPOSITE, FULL_COMPOSITE] {
+            if !previews.iter().any(|(n, _)| *n == stale) {
+                let _ = remove_bundle_file(dir, &dir.join(stale), &gc);
+            }
+        }
         // The manifest is committed: the save has succeeded. Removing objects it no longer
         // references is best-effort housekeeping (a vanished or locked file must not turn a
         // complete save into a reported failure); a leftover is retried on the next save.
@@ -911,6 +1349,7 @@ impl PcraftWriter {
     /// The cached objects this save re-verifies even though their signature is unchanged:
     /// oldest-checked first, until their recorded sizes reach the re-verify budget (always at
     /// least one, so an object larger than the budget is still reached in turn).
+    #[cfg(all(test, windows))]
     fn rolling_recheck(&self, objects: &BTreeMap<String, Object>) -> HashSet<String> {
         let mut out = HashSet::new();
         let Some(cache) = &self.verified_directory else { return out };
@@ -945,6 +1384,219 @@ impl PcraftWriter {
     }
 }
 
+#[cfg(test)]
+#[test]
+fn tile_hash_cache_keeps_sample_byte_order_in_its_identity() {
+    let mut cache = HashMap::new();
+    let mut surface = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    surface.write_pixel(0, 0, &[0.1, 0.2, 0.3, 1.0]);
+    let tile = surface.tile(photocraft_geom::TileCoord::new(0, 0)).unwrap();
+    let mut collect = Collect { hash_cache: Some(&mut cache), ..Default::default() };
+    for sample in [SampleType::U8, SampleType::U16] {
+        let format = if sample == SampleType::U8 { PixelFormat::RGBA8 } else { PixelFormat::new(photocraft_color::ColorMode::Grayscale, sample, true) };
+        assert_eq!(collect.tile(format, tile), hash_bytes(&tile_le(tile, sample)));
+    }
+    drop(collect);
+    assert_eq!(cache.len(), 2);
+}
+
+#[cfg(test)]
+#[test]
+fn blob_hash_cache_tracks_arc_identity_without_retaining_payloads() {
+    let mut cache = HashMap::new();
+    let original = Arc::new(vec![1, 2, 3]);
+    let weak = Arc::downgrade(&original);
+    let mut collect = Collect { blob_hash_cache: Some(&mut cache), ..Default::default() };
+    let hash = collect.blob(&original);
+    assert_eq!(collect.blob(&original), hash);
+    let mut edited = original.clone();
+    Arc::make_mut(&mut edited)[0] = 7;
+    assert_eq!(collect.blob(&edited), hash_bytes(&[7, 2, 3]));
+    assert_ne!(collect.blob(&edited), hash);
+    drop(collect);
+    assert_eq!(cache.len(), 2);
+    drop(original);
+    assert!(weak.upgrade().is_none());
+}
+
+#[cfg(test)]
+#[test]
+fn compressed_cache_budget_limits_retained_capacity_without_changing_bytes() {
+    use photocraft_doc::{Layer, LayerContent};
+    use photocraft_geom::Size;
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("cache", Size::new(257, 1), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::new(doc.pixel_format());
+    surface.write_pixel(0, 0, &[0.2, 0.4, 0.6, 1.0]);
+    surface.write_pixel(256, 0, &[0.6, 0.4, 0.2, 1.0]);
+    doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+    let mut writer = PcraftWriter::new();
+    let (expected, _) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
+    let key = writer.compressed.keys().next().unwrap().clone();
+    let key_allocation = writer.compressed.get_key_value(&key).unwrap().0.as_ptr();
+    assert_eq!(writer.save_zip(&doc, &SaveOptions::default()).unwrap().0, expected);
+    assert_eq!(writer.compressed.get_key_value(&key).unwrap().0.as_ptr(), key_allocation);
+    let budget = writer.compressed.values().map(|v| v.capacity()).min().unwrap();
+    writer.set_compressed_cache_budget(budget);
+    assert!(writer.compressed.is_empty());
+    let (bytes, _) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(bytes, expected);
+    assert!(writer.compressed.values().map(|v| v.capacity()).sum::<usize>() <= budget);
+    assert!(!writer.compressed.is_empty());
+    let retained = writer.compressed.len();
+    let (bytes, stats) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(bytes, expected);
+    assert_eq!(stats.tiles_reused, retained);
+    writer.set_compressed_cache_budget(0);
+    let (bytes, stats) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(bytes, expected);
+    assert_eq!(stats.tiles_reused, 0);
+    assert!(writer.compressed.is_empty());
+}
+
+#[cfg(test)]
+#[test]
+fn previews_follow_the_manifest_with_the_bytes_of_a_serial_encode() {
+    use photocraft_doc::{Layer, LayerContent};
+    use photocraft_geom::Size;
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("previews", Size::new(600, 3), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::new(doc.pixel_format());
+    for x in 0..600 {
+        surface.write_pixel(x, 1, &[x as f32 / 600.0, 0.5, 0.25, 1.0]);
+    }
+    doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+    let image = |w: u32, h: u32, k: u8| {
+        let mut i = Rgba8Image::new(w, h);
+        i.pixels.iter_mut().enumerate().for_each(|(j, p)| *p = (j as u8).wrapping_mul(k));
+        i
+    };
+    let (thumb, composite, full) = (image(4, 3, 7), image(9, 5, 13), image(600, 3, 5));
+    for mask in 0..8u8 {
+        let (t, c, f) = (mask & 1 != 0, mask & 2 != 0, mask & 4 != 0);
+        let opts = SaveOptions {
+            thumbnail: t.then(|| thumb.clone()),
+            composite: c.then(|| composite.clone()),
+            full_composite: f.then(|| full.clone()),
+            ..Default::default()
+        };
+        let (bytes, _) = PcraftWriter::new().save_zip(&doc, &opts).unwrap();
+        let zip = ZipReader::new(&bytes).unwrap();
+        let names: Vec<&str> = zip.entries.iter().map(|e| e.name.as_str()).collect();
+        let mut want = vec![MANIFEST];
+        let mut previews_want: Vec<&str> = t.then_some(THUMB).into_iter().chain(c.then_some(COMPOSITE)).chain(f.then_some(FULL_COMPOSITE)).collect();
+        previews_want.sort();
+        want.extend(previews_want);
+        assert_eq!(names[..want.len()], want[..]);
+        assert!(names[want.len()..].iter().all(|n| n.starts_with("tiles/") || n.starts_with("blobs/")), "{names:?}");
+        for (name, img) in [(THUMB, opts.thumbnail.as_ref()), (COMPOSITE, opts.composite.as_ref()), (FULL_COMPOSITE, opts.full_composite.as_ref())] {
+            assert_eq!(zip.read_by_name(name, usize::MAX).ok(), img.map(|i| png(i).unwrap()), "{name}");
+        }
+        assert_eq!(crate::read_full_composite(&bytes).unwrap(), opts.full_composite.as_ref().map(|i| png(i).unwrap()));
+    }
+    let bad = SaveOptions { thumbnail: Some(Rgba8Image { width: 4, height: 3, pixels: vec![0; 5] }), composite: Some(composite.clone()), ..Default::default() };
+    assert!(matches!(PcraftWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
+    let bad = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(Rgba8Image { width: 9, height: 5, pixels: vec![0; 5] }), ..Default::default() };
+    assert!(matches!(PcraftWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
+    // A full-size composite that cannot be encoded is left out, and the save goes on without it.
+    let bad =
+        SaveOptions { thumbnail: Some(thumb.clone()), full_composite: Some(Rgba8Image { width: 600, height: 3, pixels: vec![0; 5] }), ..Default::default() };
+    let (bytes, stats) = PcraftWriter::new().save_zip(&doc, &bad).unwrap();
+    let zip = ZipReader::new(&bytes).unwrap();
+    assert!(zip.read_by_name(FULL_COMPOSITE, usize::MAX).is_err());
+    assert_eq!(zip.read_by_name(THUMB, usize::MAX).unwrap(), png(&thumb).unwrap());
+    assert_eq!(crate::read_full_composite(&bytes).unwrap(), None);
+    assert_eq!(stats.manifest_bytes, zip.read_by_name(MANIFEST, usize::MAX).unwrap().len());
+    let dir = std::env::temp_dir().join(format!("pcraft-bad-full-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    PcraftWriter::new().save_dir(&doc, &dir, &bad).unwrap();
+    assert!(!dir.join(FULL_COMPOSITE).exists());
+    assert!(!std::fs::read_to_string(dir.join(MANIFEST)).unwrap().contains("full_composite"));
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    let dir = std::env::temp_dir().join(format!("pcraft-previews-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let opts = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(composite.clone()), full_composite: Some(full.clone()), ..Default::default() };
+    PcraftWriter::new().save_dir(&doc, &dir, &opts).unwrap();
+    assert_eq!(std::fs::read(dir.join(THUMB)).unwrap(), png(&thumb).unwrap());
+    assert_eq!(std::fs::read(dir.join(COMPOSITE)).unwrap(), png(&composite).unwrap());
+    assert_eq!(std::fs::read(dir.join(FULL_COMPOSITE)).unwrap(), png(&full).unwrap());
+    // A later save without it removes the file once the new manifest is in place.
+    PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions { full_composite: None, ..opts }).unwrap();
+    assert!(!dir.join(FULL_COMPOSITE).exists());
+    assert!(dir.join(COMPOSITE).exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Keep bounded report blobs and their validation on the parallel-preview ZIP path, independently checking serialized preview bytes.
+#[cfg(test)]
+#[test]
+fn parallel_previews_preserve_conversion_blobs_and_propagate_report_limits() {
+    use photocraft_doc::import_conversion::{ImportConversion, MAX_CONVERSION_ATTACHMENTS};
+    let mut doc = Document::new("Report with previews", photocraft_geom::Size::new(3, 2), photocraft_color::ColorMode::Rgb, SampleType::U16);
+    let record = Arc::new(b"future inert report".to_vec());
+    let attachment = Arc::new(vec![7, 19, 31]);
+    let report = Arc::new(ImportConversion::Opaque { schema_version: 2, record: record.clone(), attachments: vec![attachment.clone()] });
+    doc.metadata.import_conversion = Some(report.clone());
+    let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 1)), composite: Some(Rgba8Image::new(3, 2)), ..Default::default() };
+    let mut writer = PcraftWriter::new();
+    let (bytes, stats) = writer.save_zip(&doc, &opts).unwrap();
+    assert_eq!(stats.blobs_total, 2, "the inert record and attachment remain content-addressed blobs");
+    let archive = ZipReader::new(&bytes).unwrap();
+    assert_eq!(archive.read_by_name(THUMB, usize::MAX).unwrap(), png(opts.thumbnail.as_ref().unwrap()).unwrap());
+    assert_eq!(archive.read_by_name(COMPOSITE, usize::MAX).unwrap(), png(opts.composite.as_ref().unwrap()).unwrap());
+    let (reopened, decoded) = crate::load_from_bytes_measured(&bytes, &LoadOptions::default()).unwrap();
+    assert_eq!(reopened.metadata.import_conversion, Some(report.clone()));
+    assert!(decoded >= (record.len() + attachment.len()) as u64, "report blobs remain included in measured decode admission");
+    doc.metadata.import_conversion =
+        Some(Arc::new(ImportConversion::Opaque { schema_version: 2, record, attachments: vec![attachment; MAX_CONVERSION_ATTACHMENTS + 1] }));
+    assert!(matches!(writer.save_zip(&doc, &opts), Err(FormatError::LimitExceeded(_))), "fallible manifest collection must not discard report limits");
+    doc.metadata.import_conversion = Some(report);
+    let recovered = writer.save_zip(&doc, &opts).unwrap().0;
+    assert_eq!(crate::load_from_bytes(&recovered).unwrap().metadata.import_conversion, doc.metadata.import_conversion);
+}
+
+#[cfg(test)]
+#[test]
+fn zip_save_leaves_the_full_composite_out_past_the_zip_limit() {
+    use photocraft_doc::{Layer, LayerContent};
+    use photocraft_geom::Size;
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("limit", Size::new(300, 200), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::new(doc.pixel_format());
+    surface.write_pixel(7, 9, &[0.2, 0.4, 0.6, 1.0]);
+    doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+    let mut full = Rgba8Image::new(300, 200);
+    full.pixels.iter_mut().enumerate().for_each(|(i, p)| *p = (i % 251) as u8);
+    let opts = SaveOptions {
+        thumbnail: Some(Rgba8Image::new(4, 3)),
+        composite: Some(Rgba8Image::new(9, 6)),
+        full_composite: Some(full.clone()),
+        ..Default::default()
+    };
+    let (whole, _) = PcraftWriter::new().save_zip(&doc, &opts).unwrap();
+    // The whole archive, central directory included, and how many entries it holds: what the
+    // limit compares.
+    let bytes = whole.len() as u64;
+    let count = ZipReader::new(&whole).unwrap().entries.len();
+    let (fits, _) = PcraftWriter::new().save_zip_within(&doc, &opts, (bytes, count)).unwrap();
+    assert_eq!(fits, whole, "an archive at the limit keeps the composite");
+    for limit in [(bytes - 1, count), (bytes, count - 1)] {
+        let (saved, stats) = PcraftWriter::new().save_zip_within(&doc, &opts, limit).unwrap();
+        let zip = ZipReader::new(&saved).unwrap();
+        let names: Vec<&str> = zip.entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&FULL_COMPOSITE), "{limit:?}: {names:?}");
+        assert!(names.contains(&THUMB) && names.contains(&COMPOSITE), "{limit:?}: {names:?}");
+        let manifest = zip.read_by_name(MANIFEST, usize::MAX).unwrap();
+        assert_eq!(stats.manifest_bytes, manifest.len());
+        assert!(!String::from_utf8(manifest).unwrap().contains("full_composite"));
+        assert_eq!(crate::load_from_bytes(&saved).unwrap(), doc);
+    }
+}
+
 #[cfg(all(test, unix))]
 #[test]
 fn gc_pinned_directory_handles_resist_subdirectory_swap() {
@@ -975,6 +1627,7 @@ fn gc_pinned_directory_handles_resist_subdirectory_swap() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(all(test, windows))]
 fn list_objects(dir: &Path) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
     for sub in ["tiles", "blobs"] {
@@ -1010,4 +1663,86 @@ fn list_objects(dir: &Path) -> Result<HashSet<String>> {
 pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     crate::atomic::atomic_write(path, data)?;
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod durability_tests;
+
+#[cfg(test)]
+#[test]
+fn reused_compressor_matches_compress_to_vec_and_round_trips() {
+    let mut state = 0x9e37_79b9_u32;
+    let mut noise = |n: usize| -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect()
+    };
+    let inputs: Vec<Vec<u8>> = vec![
+        Vec::new(),
+        vec![7],
+        b"hello hello hello hello hello".to_vec(),
+        noise(1000),
+        (0..300_000u32).map(|i| (i / 7 % 251) as u8).collect(),
+        noise(300_000),
+        vec![0; 262_144],
+        // A repeat after a big one proves the matcher state is reset between objects.
+        b"hello hello hello hello hello".to_vec(),
+    ];
+    let mut compressor = ObjectEncoder::new();
+    for data in inputs {
+        let expected = ruzstd::encoding::compress_to_vec(data.as_slice(), ruzstd::encoding::CompressionLevel::Fastest);
+        let got = compressor.object(&Object::Blob(Arc::new(data.clone())));
+        assert_eq!(got, expected, "len {}", data.len());
+        assert_eq!(decompress(&got, data.len(), "test").unwrap(), data);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn an_incompressible_blob_at_its_limit_still_loads() {
+    struct One(String, Vec<u8>);
+    impl ByteSource for One {
+        fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+            if path != self.0 || self.1.len() > max {
+                return Err(FormatError::LimitExceeded(format!("{path} over {max}")));
+            }
+            Ok(self.1.clone())
+        }
+    }
+    let mut x = 0x9e37_79b9_u32;
+    let data: Vec<u8> = (0..64 * 1024)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x as u8
+        })
+        .collect();
+    let z = ObjectEncoder::new().object(&Object::Blob(Arc::new(data.clone())));
+    assert!(z.len() > data.len(), "the fixture must not compress");
+    let hash = hash_bytes(&data);
+    let src = One(blob_path(&hash).unwrap(), z);
+    let mut fetch = LoadFetch { src: &src, opts: crate::LoadOptions::default(), total: 0, blobs: HashMap::new() };
+    assert_eq!(fetch.blob_bounded(&hash, data.len()).unwrap().as_slice(), data.as_slice());
+    assert!(LoadFetch { src: &src, opts: crate::LoadOptions::default(), total: 0, blobs: HashMap::new() }.blob_bounded(&hash, data.len() - 1).is_err());
+    // What the load's total budget has left bounds the decompression too.
+    let opts = crate::LoadOptions { max_total_bytes: 10 * data.len() as u64, ..Default::default() };
+    let spent = |total: u64| LoadFetch { src: &src, opts, total, blobs: HashMap::new() };
+    assert!(spent(9 * data.len() as u64).blob_bounded(&hash, usize::MAX).is_ok());
+    let e = spent(9 * data.len() as u64 + 1).blob_bounded(&hash, usize::MAX).unwrap_err();
+    assert!(matches!(e, FormatError::LimitExceeded(ref m) if m.contains(&format!("exceeds {} bytes", data.len() - 1))), "{e}");
+}
+
+/// A well-formed zstd frame that asks for a larger window than the object may decode to is over
+/// its limit, not damaged; one within the window decodes.
+#[test]
+fn a_zstd_window_past_the_limit_is_a_limit_not_corruption() {
+    // Magic, a header with a window descriptor only (exponent 15: a 32 MiB window), then one empty last raw block.
+    let frame = |window_descriptor: u8| [0x28, 0xB5, 0x2F, 0xFD, 0x00, window_descriptor, 0x01, 0x00, 0x00];
+    let e = decompress_bounded(&frame(15 << 3), 100, None, "tile").unwrap_err();
+    assert!(matches!(e, FormatError::LimitExceeded(_)), "{e}");
+    assert_eq!(decompress_bounded(&frame(0), 100, None, "tile").unwrap(), Vec::<u8>::new());
 }
