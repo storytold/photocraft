@@ -1092,6 +1092,14 @@ fn shift_rgba(px: &[[f32; 4]], w: usize, h: usize, dx: i32, dy: i32) -> Vec<[f32
         .collect()
 }
 
+/// `Untitled_HDR-N` with the smallest N >= 1 that no open document already uses.
+fn merged_hdr_name(s: &Session) -> String {
+    let taken: std::collections::HashSet<u64> =
+        s.documents().iter().filter_map(|d| d.doc.name.strip_prefix("Untitled_HDR-")).filter_map(|n| n.parse::<u64>().ok()).collect();
+    let n = (1u64..).find(|n| !taken.contains(n)).unwrap_or(1);
+    format!("Untitled_HDR-{n}")
+}
+
 fn merge_to_hdr(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.mergeToHdrPro";
     let t0 = Stopwatch::start();
@@ -1207,7 +1215,7 @@ fn merge_to_hdr(s: &mut Session, p: &Value) -> Result<Value> {
     for q in px.iter_mut() {
         q[3] = 1.0;
     }
-    let mut doc = Document::new(format!("Untitled_HDR{}", s.documents().len() + 1), Size::new(w as u32, h as u32), ColorMode::Rgb, depth);
+    let mut doc = Document::new(merged_hdr_name(s), Size::new(w as u32, h as u32), ColorMode::Rgb, depth);
     doc.icc_profile = if depth == SampleType::F32 { Some(craft_cms::builtin::Builtin::LinearSrgb.profile().to_bytes()) } else { icc };
     let fmt = doc.pixel_format();
     let n = fmt.channels();
@@ -1407,5 +1415,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod merge_hdr_name_tests;
 #[cfg(test)]
 mod tests;
