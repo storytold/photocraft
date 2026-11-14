@@ -311,7 +311,9 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             }
             (15, p, Some(vec![row]))
         }
-        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, .. } if lut3d_len(*size).is_some_and(|len| table.len() >= len) => {
+        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, domain_min, domain_max, .. }
+            if lut3d_len(*size).is_some_and(|len| table.len() >= len) =>
+        {
             // The flattened table (n³ RGB triplets) spans as many 4096-wide rows as it needs.
             let n = *size as usize;
             let rows = lut3d_len(*size)
@@ -325,6 +327,11 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
                 })
                 .collect();
             p[0] = [n as f32, if *tetrahedral { 1.0 } else { 0.0 }, if *dither { 1.0 } else { 0.0 }, 0.0];
+            // The input domain as the CPU applies it (compose::adjust::lut3d_sample_in): p1 the
+            // lower end, p2 the reciprocal span, both sanitised by the shared helper.
+            let (lo, inv) = photocraft_doc::adjust::lut_domain_scale(*domain_min, *domain_max);
+            p[1] = [lo[0], lo[1], lo[2], 0.0];
+            p[2] = [inv[0], inv[1], inv[2], 0.0];
             (16, p, Some(rows))
         }
         // Identity on the CPU too (not evaluated there).

@@ -36,8 +36,16 @@ fn unreadable_adjustments_warn_on_open() {
 #[test]
 fn readable_adjustments_open_without_warnings() {
     let lut: Vec<f32> = (0..8).flat_map(|i| [(i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32]).collect();
-    let lookup =
-        Adjustment::ColorLookup { name: "id.cube".into(), size: 2, lut: Some(std::sync::Arc::new(lut)), tetrahedral: false, dither: false, source: None };
+    let lookup = Adjustment::ColorLookup {
+        name: "id.cube".into(),
+        size: 2,
+        lut: Some(std::sync::Arc::new(lut)),
+        tetrahedral: false,
+        dither: false,
+        source: None,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
+    };
     for adj in [lookup, Adjustment::Invert] {
         let (doc, warnings) = reopen(adj, "x.psd", &ExportOptions::default());
         assert!(!matches!(&doc.layers[0].content, LayerContent::Adjustment(Adjustment::Unsupported { .. })));
@@ -90,13 +98,13 @@ fn synthetic_lookup_psd(version: Version, depth: u16, cube: &[u8]) -> Vec<u8> {
     file.to_bytes().expect("serialize synthetic PSD/PSB")
 }
 
-fn unsupported_lookup_raw(doc: &Document) -> &[u8] {
+/// The Color Lookup layer's input domain and its embedded source file bytes.
+fn lookup_domain_and_source(doc: &Document) -> ([f32; 3], [f32; 3], &[u8]) {
     let layer = doc.layers.iter().find(|layer| layer.name == "Custom-domain LUT").expect("lookup layer");
-    let LayerContent::Adjustment(Adjustment::Unsupported { psd_key, raw }) = &layer.content else {
-        panic!("expected preserved unsupported Color Lookup, got {:?}", layer.content)
+    let LayerContent::Adjustment(Adjustment::ColorLookup { size: 2, lut: Some(_), domain_min, domain_max, source: Some(source), .. }) = &layer.content else {
+        panic!("expected a working Color Lookup, got {:?}", layer.content)
     };
-    assert_eq!(psd_key, "clrL");
-    raw
+    (*domain_min, *domain_max, source.bytes.as_slice())
 }
 
 fn parsed_lookup_block(bytes: &[u8]) -> (String, Vec<u8>) {
@@ -115,7 +123,7 @@ fn photoshop_layout_color_lookup_round_trips_through_psb() {
     let opts = ExportOptions { force_psb: true, ..Default::default() };
     let (doc, warnings) = reopen(Adjustment::Unsupported { psd_key: "clrL".into(), raw: raw.as_slice().into() }, "x.psb", &opts);
     assert!(warnings.iter().all(|w| !w.contains("Teal Look")), "{warnings:?}");
-    let LayerContent::Adjustment(Adjustment::ColorLookup { name, size, lut: Some(table), tetrahedral: false, dither: false, source: Some(source) }) =
+    let LayerContent::Adjustment(Adjustment::ColorLookup { name, size, lut: Some(table), tetrahedral: false, dither: false, source: Some(source), .. }) =
         &doc.layers[0].content
     else {
         panic!("{:?}", doc.layers[0].content)
@@ -152,6 +160,8 @@ fn short_color_lookup_table_warns_on_open() {
         tetrahedral: false,
         dither: false,
         source: None,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
     };
     let (doc, warnings) = reopen(short, "x.pcraft", &ExportOptions::default());
     assert!(matches!(&doc.layers[0].content, LayerContent::Adjustment(Adjustment::ColorLookup { .. })), "{:?}", doc.layers[0].content);
@@ -166,19 +176,42 @@ fn short_color_lookup_table_warns_on_open() {
         tetrahedral: false,
         dither: false,
         source: None,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
     };
     let (_, warnings) = reopen(ok, "x.pcraft", &ExportOptions::default());
     assert!(warnings.iter().all(|w| !w.contains("Teal Look")), "{warnings:?}");
     // A missing table renders as the identity too.
-    let none = Adjustment::ColorLookup { name: "t.cube".into(), size: 2, lut: None, tetrahedral: false, dither: false, source: None };
+    let none = Adjustment::ColorLookup {
+        name: "t.cube".into(),
+        size: 2,
+        lut: None,
+        tetrahedral: false,
+        dither: false,
+        source: None,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
+    };
     let (_, warnings) = reopen(none, "x.pcraft", &ExportOptions::default());
     assert!(warnings.iter().any(|w| w.contains("Teal Look") && w.contains("no usable table")), "{warnings:?}");
 }
 
+/// #11620: a LUT with a declared input domain opens as a working Color Lookup carrying the domain
+/// (it used to stay unsupported with a warning), and the `clrL` block still round-trips verbatim
+/// through `.pcraft` and PSD/PSB.
 #[test]
-fn custom_domain_lookup_warns_and_round_trips_verbatim() {
-    let domains = ["DOMAIN_MIN 0 0 0\nDOMAIN_MAX 0.5 0.5 0.5\n", "DOMAIN_MIN 0 0.25 0\nDOMAIN_MAX 1 0.75 1\n", "LUT_3D_INPUT_RANGE 0 0.5\n"];
-    for domain in domains {
+fn custom_domain_lookup_opens_and_round_trips_verbatim() {
+    let domains = [
+        ("DOMAIN_MIN 0 0 0\nDOMAIN_MAX 0.5 0.5 0.5\n", [0.0; 3], [0.5; 3]),
+        ("DOMAIN_MIN 0 0.25 0\nDOMAIN_MAX 1 0.75 1\n", [0.0, 0.25, 0.0], [1.0, 0.75, 1.0]),
+        ("LUT_3D_INPUT_RANGE 0 0.5\n", [0.0; 3], [0.5; 3]),
+    ];
+    for (domain, min, max) in domains {
+        let want = |doc: &Document, what: &str| {
+            let (dmin, dmax, source) = lookup_domain_and_source(doc);
+            assert_eq!((dmin, dmax), (min, max), "{what}, {domain:?}");
+            assert_eq!(source, identity_cube(domain).as_slice(), "{what}, {domain:?}");
+        };
         let cube = identity_cube(domain);
         for (version, depth, extension) in [
             (Version::Psd, 8, "psd"),
@@ -192,21 +225,12 @@ fn custom_domain_lookup_warns_and_round_trips_verbatim() {
             let (_, source_block) = parsed_lookup_block(&input);
             let name = format!("input.{extension}");
             let opened = import(&name, &input).expect("open synthetic PSD/PSB");
-            assert_eq!(unsupported_lookup_raw(&opened.document), source_block, "{extension}, {depth}-bit, {domain:?}");
-            let warnings: Vec<_> = opened.warnings.iter().filter(|warning| warning.contains("Custom-domain LUT")).collect();
-            assert_eq!(warnings.len(), 1, "{extension}, {depth}-bit: {:?}", opened.warnings);
-            assert!(
-                warnings[0].contains("Color Lookup")
-                    && warnings[0].contains("DOMAIN_MIN")
-                    && warnings[0].contains("DOMAIN_MAX")
-                    && warnings[0].to_ascii_lowercase().contains("not supported"),
-                "{}",
-                warnings[0]
-            );
+            want(&opened.document, &format!("opened {extension}, {depth}-bit"));
+            assert!(opened.warnings.iter().all(|warning| !warning.contains("Custom-domain LUT")), "{extension}, {depth}-bit: {:?}", opened.warnings);
 
             let native = export(&opened.document, "preserved.pcraft", &ExportOptions::default()).expect("save native document");
             let native_open = import("preserved.pcraft", &native.bytes).expect("reopen native document");
-            assert_eq!(unsupported_lookup_raw(&native_open.document), source_block, "native preservation, {extension}, {depth}-bit");
+            want(&native_open.document, &format!("native preservation, {extension}, {depth}-bit"));
 
             let output_name = format!("roundtrip.{extension}");
             let options = ExportOptions { force_psb: version.is_psb(), ..Default::default() };
@@ -214,7 +238,7 @@ fn custom_domain_lookup_warns_and_round_trips_verbatim() {
             let (_, output_block) = parsed_lookup_block(&saved.bytes);
             assert_eq!(output_block, source_block, "saved block, {extension}, {depth}-bit, {domain:?}");
             let reopened = import(&output_name, &saved.bytes).expect("reopen re-exported PSD/PSB");
-            assert_eq!(unsupported_lookup_raw(&reopened.document), source_block, "reopened block, {extension}, {depth}-bit");
+            want(&reopened.document, &format!("reopened {extension}, {depth}-bit"));
         }
     }
 }

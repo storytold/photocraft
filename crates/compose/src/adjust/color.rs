@@ -123,6 +123,17 @@ pub fn bayer4(x: i32, y: i32) -> f32 {
     (M[((y & 3) * 4 + (x & 3)) as usize] + 0.5) / 16.0 - 0.5
 }
 
+/// Samples a 3D LUT over its input domain: `c` maps to `(c - lo) · inv` per channel before the
+/// table is read (`(lo, inv)` from [`photocraft_doc::adjust::lut_domain_scale`]), so trilinear
+/// and tetrahedral both see the normalised coordinate. The default domain (`lo` 0, `inv` 1)
+/// samples exactly as [`lut3d_sample`]. A table that can't be sampled leaves `c` alone.
+pub fn lut3d_sample_in(lut: &[f32], n: usize, c: [f32; 3], tetrahedral: bool, lo: [f32; 3], inv: [f32; 3]) -> [f32; 3] {
+    if n < 2 || n.checked_pow(3).and_then(|c| c.checked_mul(3)).is_none_or(|len| lut.len() < len) {
+        return c;
+    }
+    lut3d_sample(lut, n, std::array::from_fn(|k| (c[k] - lo[k]) * inv[k]), tetrahedral)
+}
+
 /// Samples a 3D LUT (`n`³ RGB triplets, red fastest) at `c`, trilinear or tetrahedral.
 pub fn lut3d_sample(lut: &[f32], n: usize, c: [f32; 3], tetrahedral: bool) -> [f32; 3] {
     // A degenerate or short table can't be sampled: leave the colour alone.
