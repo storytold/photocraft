@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use super::batch_run::{BatchInput, batch_inputs_tree, process_document_copies, process_tree};
 use super::open::import_opened;
 use super::paths::{file_name, list_images, read_file, stem, untitled_name};
@@ -7,6 +9,9 @@ use super::{
     str_param,
 };
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "image_processor_empty_source_tests.rs"]
+mod image_processor_empty_source_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "image_processor_formats_tests.rs"]
 mod image_processor_formats_tests;
@@ -98,7 +103,8 @@ pub(super) fn parse_steps(v: &Value) -> Result<Vec<(String, Value)>> {
 /// Resize and export folder inputs or copies of the current/all open documents.
 /// An omitted `source` keeps the folder-input contract; document sources include unsaved
 /// edits without modifying the original documents. Invalid parameters and missing documents
-/// return an error; processing failures and output-name collisions appear in per-file errors.
+/// return an error, as does a folder source with no openable images. Processing failures and
+/// output-name collisions appear in per-file errors.
 pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = IMAGE_PROCESSOR;
     let source = match p.get("source") {
@@ -131,8 +137,8 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(false)
     };
     let r = if source == "folder" {
-        let inputs = batch_inputs_tree(p, cmd, &output)?;
-        process_tree(s, &inputs, &output, format, save, "", &process)
+        let inputs = image_processor_folder_inputs(p, &output)?;
+        process_image_processor_folder(s, &inputs, &output, format, save, &process)?
     } else {
         let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().collect() };
         if documents.is_empty() {
@@ -145,6 +151,35 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
 
 const IMAGE_PROCESSOR: &str = "file.scripts.imageProcessor";
 const IMAGE_PROCESSOR_NO_FORMAT: &str = "You must save to at least one file type.";
+const IMAGE_PROCESSOR_NO_SOURCE: &str = "There were no source files that could be opened by PhotoCraft.";
+
+fn image_processor_folder_inputs(p: &Value, output: &str) -> Result<Vec<BatchInput>> {
+    if p.get("input").or_else(|| p.get("files")).and_then(Value::as_str) == Some("") {
+        // Treat the empty dialog field as an empty file list while retaining normal validation.
+        let mut params = p.clone();
+        params["input"] = json!([]);
+        return batch_inputs_tree(&params, IMAGE_PROCESSOR, output);
+    }
+    batch_inputs_tree(p, IMAGE_PROCESSOR, output)
+}
+
+/// The runner calls `process` only after it opens an input. Export and processing failures
+/// still belong in the per-file report, even when none of the opened inputs could be saved.
+fn process_image_processor_folder(
+    s: &Session,
+    inputs: &[BatchInput],
+    output: &str,
+    format: &str,
+    save: SaveOpts,
+    process: &dyn Fn(&mut Session, &str) -> Result<bool>,
+) -> Result<Value> {
+    let opened = Cell::new(false);
+    let result = process_tree(s, inputs, output, format, save, "", &|scratch, out| {
+        opened.set(true);
+        process(scratch, out)
+    });
+    if opened.get() { Ok(result) } else { Err(EngineError::Other(IMAGE_PROCESSOR_NO_SOURCE.into())) }
+}
 
 fn image_processor_param(message: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: IMAGE_PROCESSOR.into(), msg: message.into() }
@@ -221,7 +256,7 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
         return Err(image_processor_param(IMAGE_PROCESSOR_NO_FORMAT));
     }
     let inputs = match source {
-        "folder" => ProcessorInputs::Folder(batch_inputs_tree(p, IMAGE_PROCESSOR, output)?),
+        "folder" => ProcessorInputs::Folder(image_processor_folder_inputs(p, output)?),
         "current" => ProcessorInputs::Documents(vec![s.active().ok_or(EngineError::NoDocument)?]),
         _ if s.documents().is_empty() => return Err(EngineError::NoDocument),
         _ => ProcessorInputs::Documents(s.documents().iter().collect()),
@@ -246,7 +281,7 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
             Ok(false)
         };
         let mut result = match &inputs {
-            ProcessorInputs::Folder(inputs) => process_tree(s, inputs, output, format.extension, format.save, "", &process),
+            ProcessorInputs::Folder(inputs) => process_image_processor_folder(s, inputs, output, format.extension, format.save, &process)?,
             ProcessorInputs::Documents(documents) => process_document_copies(s, documents, output, format.extension, format.save, &process),
         };
         if let Some(Value::Array(written)) = result.get_mut("files").map(Value::take) {
