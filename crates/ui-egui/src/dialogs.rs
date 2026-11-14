@@ -620,7 +620,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut fields = d.fields.clone();
         let mut outcome: Option<bool> = None; // Some(true)=OK, Some(false)=Cancel
         let mut apply_requested = false;
-        let title = display_title(&d);
+        let title = display_title(&d, app);
         let id = egui::Id::unique(("dialog", d.id));
         // Opens where the same dialog was last left (centred the first time), then its top-left
         // stays put (offset from the window's top-left, moved by dragging the title bar; view
@@ -856,8 +856,19 @@ fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
     }
 }
 
+/// The File Info dialog's title: the active document's name without its extension (#13824).
+fn file_info_title(app: &PhotocraftApp) -> String {
+    app.session
+        .active()
+        .map(|st| match st.doc.name.rsplit_once('.') {
+            Some((stem, _)) if !stem.is_empty() => stem.to_string(),
+            _ => st.doc.name.clone(),
+        })
+        .unwrap_or_else(|| tl!("File Info").to_string())
+}
+
 /// The dialog title as shown: [`title`] in the UI language.
-fn display_title(d: &Dialog) -> String {
+pub(crate) fn display_title(d: &Dialog, app: &PhotocraftApp) -> String {
     match d.fields.get("__colorPicker").and_then(Value::as_str) {
         Some("foreground") => return crate::color_picker_ui::fixed_title("Color Picker (Foreground Color)", "Foreground Color"),
         Some("background") => return crate::color_picker_ui::fixed_title("Color Picker (Background Color)", "Background Color"),
@@ -868,6 +879,10 @@ fn display_title(d: &Dialog) -> String {
     }
     match d.kind {
         DialogKind::Command => {
+            // File Info is titled with the active document's name without its extension (#13824).
+            if d.fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
+                return file_info_title(app);
+            }
             let label = d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command");
             // Dialog labels are catalogued with their "…" ("Export As…"); some commands omit it.
             let with_dots = format!("{}…", label.trim_end_matches('…'));

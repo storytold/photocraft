@@ -458,6 +458,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                     "__order": ["title", "author", "authorTitle", "description", "keywords", "copyrightStatus", "copyright", "copyrightUrl"],
                     "__labels": {
                         "title": tl!("Document Title"),
+                        "authorTitle": tl!("Author Title"),
+                        "copyrightStatus": tl!("Copyright Status"),
                         "copyright": tl!("Copyright Notice"),
                         "copyrightUrl": tl!("Copyright Info URL"),
                     },

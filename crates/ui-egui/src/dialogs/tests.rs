@@ -598,10 +598,10 @@ fn file_info_multiline_fields_keep_enter_and_cancel_discards_edits() {
         let fields = [
             (Role::TextInput, "Document Title"),
             (Role::TextInput, "Author"),
-            (Role::TextInput, "Author title"),
+            (Role::TextInput, "Author Title"),
             (Role::MultilineTextInput, "Description"),
             (Role::MultilineTextInput, "Keywords"),
-            (Role::ComboBox, "Copyright status"),
+            (Role::ComboBox, "Copyright Status"),
             (Role::MultilineTextInput, "Copyright Notice"),
             (Role::TextInput, "Copyright Info URL"),
         ];
