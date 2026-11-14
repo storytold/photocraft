@@ -40,6 +40,7 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "workspace.autoShowHiddenPanels",
     "workspace.enableFloatingDocumentWindowDocking",
     "performance.legacyCompositing",
+    "performance.legacyCompositing",
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
     "type.textEngine",

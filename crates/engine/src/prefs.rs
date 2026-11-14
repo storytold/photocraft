@@ -932,7 +932,9 @@ pub struct UnitsAndRulers {
     /// Column Size › Width in points: Image Size and Canvas Size's Columns width unit
     /// (`n` columns are `n × column_width + (n − 1) × gutter`).
     pub column_width: f64,
-    /// Column Size › Gutter in points, the space between columns.
+    /// Gutter in points, as in Photoshop's Units & Rulers (12 pt default): the guide
+    /// layout dialog seeds its spacing from this value and converts it at the
+    /// document's resolution, so a bare number elsewhere still means pixels.
     pub gutter: f64,
     pub print_resolution: f64,
     pub screen_resolution: f64,

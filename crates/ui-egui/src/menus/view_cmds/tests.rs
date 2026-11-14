@@ -650,7 +650,9 @@ fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
     let (mut app, ctx) = app_with(1);
     let first = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
     assert_eq!(app.ui.dialog_mut(first).unwrap().fields["columns"], 8);
-    assert_eq!(app.ui.dialog_mut(first).unwrap().fields["gutter"], "20 px");
+    // The first layout takes its gutter from Preferences ▸ Units & Rulers (12 pt by default),
+    // shown in the ruler unit.
+    assert_eq!(app.ui.dialog_mut(first).unwrap().fields["gutter"], json!("12 px"));
     for (key, value) in [("columns", json!(2)), ("gutter", json!("0 px")), ("rows", json!(2)), ("rowGutter", json!("0 px"))] {
         app.ui.dialog_mut(first).unwrap().fields.insert(key.into(), value);
     }

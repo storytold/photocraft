@@ -188,6 +188,16 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
         f.insert("target".into(), json!("document"));
     }
     f.entry("__preset").or_insert_with(|| json!("custom"));
+    // Preferences ▸ Units & Rulers ▸ Gutter: the first layout (before the dialog has been
+    // confirmed and its values remembered) starts from the preferred gutter, as in
+    // Photoshop. A confirmed layout wins even when it equals the factory defaults, so
+    // the saved flag — not equality with the defaults — marks first use. The preference
+    // is in points (see UnitsAndRulers::gutter), so seed it as a typed length: it is
+    // shown in the ruler unit on open and converted at the document's resolution,
+    // instead of a bare number silently meaning pixels.
+    if !app.ui.view.guide_layout_saved {
+        f.insert("gutter".into(), json!(format!("{} pt", app.session.prefs().units_and_rulers.gutter)));
+    }
     f.entry("width").or_insert(Value::Null);
     f.entry("height").or_insert(Value::Null);
 
@@ -309,7 +319,6 @@ pub fn params_with(app: Option<&PhotocraftApp>, f: &Map<String, Value>) -> Value
     p.insert("height".into(), parse_length_value(f.get("height"), app, false, true));
     p.insert("gutter".into(), parse_length_value(f.get("gutter"), app, true, false));
     p.insert("rowGutter".into(), parse_length_value(f.get("rowGutter"), app, false, false));
-
     // A disabled axis must not be rejected for a stale width or gap typed before disabling it.
     for (key, size, gap) in [("columns", "width", "gutter"), ("rows", "height", "rowGutter")] {
         if p.get(key).and_then(Value::as_u64) == Some(0) {
@@ -378,6 +387,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         remembered.remove(key);
     }
     app.ui.view.guide_layout = Value::Object(remembered);
+    app.ui.view.guide_layout_saved = true;
     Ok(result)
 }
 
