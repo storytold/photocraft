@@ -1057,6 +1057,11 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         // The Stroke Path dialog reopens with the Simulate Pressure that was just applied (#10527).
         crate::canvas_tool_menu::remember_simulate_pressure(app, &params);
     }
+    if let Ok(r) = &result
+        && cmd == conditional_mode_change_dialog::COMMAND
+    {
+        conditional_mode_change_dialog::remember(app, &params, r);
+    }
     if result.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
     }
@@ -1311,6 +1316,7 @@ pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
+pub(crate) mod conditional_mode_change_dialog;
 pub mod credits;
 pub mod dds_options_ui;
 pub mod delete_layer_prompt;
