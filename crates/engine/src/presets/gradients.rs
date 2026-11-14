@@ -62,14 +62,15 @@ fn sample<V: Copy>(stops: &[(f32, V)], t: f32, mix: impl Fn(V, V, f32) -> V) -> 
     if t <= first.0 {
         return Some(first.1);
     }
-    for w in stops.windows(2) {
-        let ((t0, a), (t1, b)) = (w[0], w[1]);
-        if t <= t1 {
-            let u = if t1 > t0 { (t - t0) / (t1 - t0) } else { 1.0 };
-            return Some(mix(a, b, u));
-        }
+    // Sorted stops: bisect rather than rescan them for every generated position.
+    let j = stops.partition_point(|s| s.0 < t);
+    // j == 0 for a NaN position (no stop compares below it): the last stop, as a scan gave.
+    if j >= stops.len() || j == 0 {
+        return stops.last().map(|s| s.1);
     }
-    stops.last().map(|s| s.1)
+    let ((t0, a), (t1, b)) = (stops[j - 1], stops[j]);
+    let u = if t1 > t0 { (t - t0) / (t1 - t0) } else { 1.0 };
+    Some(mix(a, b, u))
 }
 
 impl GradientPreset {
@@ -775,4 +776,17 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
         },
     ]
+}
+
+#[cfg(test)]
+mod sample_tests {
+    use super::sample;
+
+    #[test]
+    fn a_nan_position_takes_the_last_stop_instead_of_panicking() {
+        let stops = [(0.0f32, 1.0f32), (0.5, 2.0), (1.0, 3.0)];
+        let lerp = |a: f32, b: f32, u: f32| a + (b - a) * u;
+        assert_eq!(sample(&stops, f32::NAN, lerp), Some(3.0));
+        assert_eq!(sample(&stops, 0.25, lerp), Some(1.5));
+    }
 }

@@ -1396,6 +1396,29 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
     }
 }
 
+#[test]
+fn refused_oversized_html_export_leaves_the_document_and_floating_selection_alone() {
+    let mut s = session(8);
+    let dir = tmp("oversized-html");
+    let list = (0..1100u32)
+        .map(|i| photocraft_doc::Slice { id: i + 1, rect: Rect::new(i as i32 % 64, i as i32 / 64, i as i32 % 64 + 1, i as i32 / 64 + 1), ..Default::default() })
+        .collect();
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).slices.list = list;
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
+    s.execute("select.float", json!({"dx": 32})).unwrap();
+    let (doc, label, revision) = {
+        let d = s.active().unwrap();
+        (d.doc.clone(), d.history.undo_label().map(str::to_string), d.revision)
+    };
+    let err = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "html": true})).unwrap_err();
+    assert!(err.to_string().contains("slices are more than"), "{err}");
+    let d = s.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&doc, &d.doc), "the floating move was never committed");
+    assert_eq!(d.history.undo_label().map(str::to_string), label);
+    assert_eq!(d.revision, revision);
+    assert!(crate::float_cmds::floating(d).is_some(), "the piece is still floating");
+}
+
 /// Quick Export as WebP goes through the regular exporter, which embeds a document's XMP and
 /// EXIF whole: the export preferences' metadata choice must still apply to it.
 #[test]

@@ -893,7 +893,7 @@ mod wand_antialias_tests;
 pub use distance::edt;
 pub use inverse::inverse_surface;
 pub(crate) use lasso::clip_segment;
-pub use lasso::{MAX_PAINTED_TILES, polygon_edge_tiles, polygon_surface};
+pub use lasso::{MAX_EDGE_SAMPLES, MAX_PAINTED_TILES, polygon_edge_samples, polygon_edge_tiles, polygon_surface};
 pub use marquee::{combine_sparse, combine_surfaces, ellipse_surface};
 
 /// Grows the selection by `r` pixels.

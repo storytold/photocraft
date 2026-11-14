@@ -76,6 +76,9 @@ fn scale_rect(r: Rect, sx: f64, sy: f64) -> Rect {
     )
 }
 
+/// Most slices one HTML export lays out (a table of at most about 4M cells).
+const MAX_HTML_SLICES: usize = 1024;
+
 /// The HTML table for `cells` (rect, td body) over a `w`×`h` image: one column per distinct x
 /// edge, one row per y edge, colspan/rowspan per slice, and a spacer row fixing column widths.
 fn html_table(title: &str, w: u32, h: u32, cells: &[(Rect, String, String)], spacer: Option<&str>) -> String {
@@ -85,8 +88,9 @@ fn html_table(title: &str, w: u32, h: u32, cells: &[(Rect, String, String)], spa
     xs.dedup();
     ys.sort_unstable();
     ys.dedup();
-    let col = |x: i32| xs.iter().position(|v| *v == x).unwrap_or(0);
-    let row = |y: i32| ys.iter().position(|v| *v == y).unwrap_or(0);
+    // Sorted and deduplicated: bisect, so a document of many slices is laid out in n log n.
+    let col = |x: i32| xs.binary_search(&x).unwrap_or(0);
+    let row = |y: i32| ys.binary_search(&y).unwrap_or(0);
     let (nc, nr) = (xs.len().saturating_sub(1), ys.len().saturating_sub(1));
     let mut taken = vec![false; nc * nr];
     let mut by_row: Vec<Vec<(usize, String)>> = vec![Vec::new(); nr];
@@ -227,9 +231,21 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let st = WebSettings::from_params(p, cmd)?;
     // So are the slices: committing a floating move doesn't change them.
     let pick = slice_pick(p, cmd, &s.active().ok_or(EngineError::NoDocument)?.doc)?;
-    // Direct platform calls must export the moved selection as it appears on the canvas,
-    // just as Session::execute does before dispatching the native command.
+    // So is the HTML table's size, which depends on the slices alone: an oversized one is refused
+    // before the floating move is committed, so the refusal changes nothing.
+    let given = |k: &str| p.get(k).and_then(Value::as_str).is_some_and(|v| !v.is_empty());
+    // (Only the exports that lay out the slices: `dir`, or `path` with `slices`.)
+    if p.get("html").and_then(Value::as_bool).unwrap_or(false) && (given("dir") || (given("path") && p.get("slices").is_some())) {
+        let n = slices::resolve(&s.active().ok_or(EngineError::NoDocument)?.doc).len();
+        if n > MAX_HTML_SLICES {
+            return Err(bad(cmd, format!("{n} slices are more than an HTML table of {MAX_HTML_SLICES} can lay out")));
+        }
+    }
+    // The export shows the moved selection as it appears on the canvas. `Session::execute` leaves
+    // it floating for this command (`keeps_floating`) so the checks above refuse without changing
+    // anything; it is dropped here, for direct platform calls too.
     crate::float_cmds::before_command(s, cmd)?;
+    crate::float_cmds::drop_floating(s)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let (wdoc, sx, sy) = web_document(&doc, p, &st)?;
