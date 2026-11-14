@@ -341,54 +341,95 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 }
 
 /// Box mean of a single-channel buffer (radius `r`, edge clamped): rows in parallel, then
-/// columns in parallel bands with running column sums (cache-friendly, no transposes).
+/// columns in parallel horizontal strips subdivided into L1-sized column bands (no transpose,
+/// per-band heap allocations or full-frame scatter pass).
 fn box_mean(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     if r == 0 || w == 0 || h == 0 {
         return v.to_vec();
     }
+    let (mut tmp, mut out) = (vec![0.0f32; w * h], vec![0.0f32; w * h]);
+    box_mean_into(v, &mut tmp, &mut out, w, h, r);
+    out
+}
+
+/// Writes the radius-`r` box mean of `v` (`w × h`) into `out`, using `tmp` (`w × h`) as row scratch.
+fn box_mean_into(v: &[f32], tmp: &mut [f32], out: &mut [f32], w: usize, h: usize, r: usize) {
+    let len = w * h;
+    if len == 0 {
+        return;
+    }
+    if r == 0 {
+        out[..len].copy_from_slice(&v[..len]);
+        return;
+    }
     let n = (2 * r + 1) as f64;
-    let mut tmp = vec![0.0f32; w * h];
-    par_rows(&mut tmp, w, 1, |y, row| {
+    par_rows(&mut tmp[..len], w, 1, |y, row| {
         let src = &v[y * w..(y + 1) * w];
-        let at = |k: i64| src[k.clamp(0, w as i64 - 1) as usize] as f64;
-        let mut acc: f64 = (-(r as i64)..=r as i64).map(at).sum();
-        for (x, o) in row.iter_mut().enumerate() {
-            *o = (acc / n) as f32;
-            acc += at(x as i64 + r as i64 + 1) - at(x as i64 - r as i64);
+        let last = w - 1;
+        let left = f64::from(src[0]);
+        let mut acc = (r + 1) as f64 * left;
+        for k in 1..=r {
+            acc += f64::from(src[k.min(last)]);
+        }
+        if w > 2 * r + 1 {
+            for (x, o) in row[..r].iter_mut().enumerate() {
+                *o = (acc / n) as f32;
+                acc += f64::from(src[x + r + 1]) - left;
+            }
+            let mid_end = w - r - 1;
+            for x in r..mid_end {
+                row[x] = (acc / n) as f32;
+                acc += f64::from(src[x + r + 1]) - f64::from(src[x - r]);
+            }
+            let right = f64::from(src[last]);
+            for x in mid_end..w {
+                row[x] = (acc / n) as f32;
+                acc += right - f64::from(src[x - r]);
+            }
+        } else {
+            let at = |k: i64| f64::from(src[k.clamp(0, last as i64) as usize]);
+            for (x, o) in row.iter_mut().enumerate() {
+                *o = (acc / n) as f32;
+                acc += at(x as i64 + r as i64 + 1) - at(x as i64 - r as i64);
+            }
         }
     });
     const BAND: usize = 256;
-    let bands = crate::photo_util::par_map(w.div_ceil(BAND), |b| {
-        let (x0, x1) = (b * BAND, ((b + 1) * BAND).min(w));
-        let bw = x1 - x0;
-        let row = |y: i64| &tmp[y.clamp(0, h as i64 - 1) as usize * w + x0..y.clamp(0, h as i64 - 1) as usize * w + x1];
-        let mut acc = vec![0.0f64; bw];
-        for y in -(r as i64)..=r as i64 {
-            for (a, v) in acc.iter_mut().zip(row(y)) {
-                *a += *v as f64;
+    let strip_h = (4 * r).clamp(64, 256).min(h);
+    let last_y = h as i64 - 1;
+    let rr = r as i64;
+    par_rows(&mut out[..len], w, strip_h, |strip_idx, strip| {
+        let y0 = strip_idx * strip_h;
+        let sh = strip.len() / w;
+        for b in 0..w.div_ceil(BAND) {
+            let x0 = b * BAND;
+            let bw = BAND.min(w - x0);
+            let mut acc_buf = [0.0f64; BAND];
+            let acc = &mut acc_buf[..bw];
+            for yy in (y0 as i64 - rr)..=(y0 as i64 + rr) {
+                let off = yy.clamp(0, last_y) as usize * w + x0;
+                for (a, &val) in acc.iter_mut().zip(&tmp[off..off + bw]) {
+                    *a += f64::from(val);
+                }
+            }
+            for sy in 0..sh {
+                let dst = &mut strip[sy * w + x0..sy * w + x0 + bw];
+                for (o, &a) in dst.iter_mut().zip(&*acc) {
+                    *o = (a / n) as f32;
+                }
+                if sy + 1 < sh {
+                    let y = (y0 + sy) as i64;
+                    let add_off = (y + rr + 1).min(last_y) as usize * w + x0;
+                    let sub_off = (y - rr).max(0) as usize * w + x0;
+                    let add = &tmp[add_off..add_off + bw];
+                    let sub = &tmp[sub_off..sub_off + bw];
+                    for ((a, &p), &m) in acc.iter_mut().zip(add).zip(sub) {
+                        *a += f64::from(p) - f64::from(m);
+                    }
+                }
             }
         }
-        let mut out = vec![0.0f32; bw * h];
-        for y in 0..h {
-            for (o, a) in out[y * bw..(y + 1) * bw].iter_mut().zip(&acc) {
-                *o = (*a / n) as f32;
-            }
-            let (add, sub) = (row(y as i64 + r as i64 + 1), row(y as i64 - r as i64));
-            for ((a, p), m) in acc.iter_mut().zip(add).zip(sub) {
-                *a += (*p - *m) as f64;
-            }
-        }
-        out
     });
-    let mut out = vec![0.0f32; w * h];
-    for (b, band) in bands.iter().enumerate() {
-        let (x0, x1) = (b * BAND, ((b + 1) * BAND).min(w));
-        let bw = x1 - x0;
-        for y in 0..h {
-            out[y * w + x0..y * w + x1].copy_from_slice(&band[y * bw..(y + 1) * bw]);
-        }
-    }
-    out
 }
 
 /// Approximate Gaussian (three box passes).
@@ -399,8 +440,12 @@ fn gauss(v: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
 /// Box means of radii `radii` in turn.
 fn box_means(v: &[f32], w: usize, h: usize, radii: &[usize]) -> Vec<f32> {
     let mut out = v.to_vec();
-    for &r in radii {
-        out = box_mean(&out, w, h, r);
+    if w > 0 && h > 0 && radii.iter().any(|&r| r > 0) {
+        let (mut tmp, mut next) = (vec![0.0f32; w * h], vec![0.0f32; w * h]);
+        for &r in radii.iter().filter(|&&r| r > 0) {
+            box_mean_into(&out, &mut tmp, &mut next, w, h, r);
+            std::mem::swap(&mut out, &mut next);
+        }
     }
     out
 }
@@ -453,16 +498,67 @@ fn guided_fast(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> 
 /// Guided filter of `p` guided by `i` (He et al. 2010).
 fn guided(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
     let mi = box_mean(i, w, h, r);
-    let mp = box_mean(p, w, h, r);
-    let ip: Vec<f32> = i.iter().zip(p).map(|(a, b)| a * b).collect();
-    let ii: Vec<f32> = i.iter().map(|a| a * a).collect();
-    let mip = box_mean(&ip, w, h, r);
-    let mii = box_mean(&ii, w, h, r);
-    let a: Vec<f32> = (0..w * h).map(|k| (mip[k] - mi[k] * mp[k]) / (mii[k] - mi[k] * mi[k] + eps)).collect();
-    let b: Vec<f32> = (0..w * h).map(|k| mp[k] - a[k] * mi[k]).collect();
-    let ma = box_mean(&a, w, h, r);
-    let mb = box_mean(&b, w, h, r);
-    (0..w * h).map(|k| ma[k] * i[k] + mb[k]).collect()
+    let n = w * h;
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut tmp = vec![0.0f32; n];
+    let mut ii = vec![0.0f32; n];
+    par_rows(&mut ii, w, 1, |y, row| {
+        for (o, &iv) in row.iter_mut().zip(&i[y * w..(y + 1) * w]) {
+            *o = iv * iv;
+        }
+    });
+    let mut mii = vec![0.0f32; n];
+    box_mean_into(&ii, &mut tmp, &mut mii, w, h, r);
+    if std::ptr::eq(i, p) {
+        let mut mi = mi;
+        crate::photo_util::par_rows2(&mut mii, &mut ii, w, |y, ar, br| {
+            let mir = &mi[y * w..(y + 1) * w];
+            for k in 0..ar.len() {
+                let var = ar[k] - mir[k] * mir[k];
+                let av = var / (var + eps);
+                ar[k] = av;
+                br[k] = mir[k] - av * mir[k];
+            }
+        });
+        box_mean_into(&mii, &mut tmp, &mut mi, w, h, r);
+        box_mean_into(&ii, &mut tmp, &mut mii, w, h, r);
+        par_rows(&mut ii, w, 1, |y, row| {
+            let (mar, mbr, ir) = (&mi[y * w..(y + 1) * w], &mii[y * w..(y + 1) * w], &i[y * w..(y + 1) * w]);
+            for k in 0..row.len() {
+                row[k] = mar[k] * ir[k] + mbr[k];
+            }
+        });
+        return ii;
+    }
+    let mut mp = vec![0.0f32; n];
+    box_mean_into(p, &mut tmp, &mut mp, w, h, r);
+    par_rows(&mut ii, w, 1, |y, row| {
+        let (ir, pr) = (&i[y * w..(y + 1) * w], &p[y * w..(y + 1) * w]);
+        for (o, (&iv, &pv)) in row.iter_mut().zip(ir.iter().zip(pr)) {
+            *o = iv * pv;
+        }
+    });
+    let mut mip = vec![0.0f32; n];
+    box_mean_into(&ii, &mut tmp, &mut mip, w, h, r);
+    crate::photo_util::par_rows2(&mut mip, &mut ii, w, |y, ar, br| {
+        let (mir, mpr, miir) = (&mi[y * w..(y + 1) * w], &mp[y * w..(y + 1) * w], &mii[y * w..(y + 1) * w]);
+        for k in 0..ar.len() {
+            let av = (ar[k] - mir[k] * mpr[k]) / (miir[k] - mir[k] * mir[k] + eps);
+            ar[k] = av;
+            br[k] = mpr[k] - av * mir[k];
+        }
+    });
+    box_mean_into(&mip, &mut tmp, &mut mp, w, h, r);
+    box_mean_into(&ii, &mut tmp, &mut mii, w, h, r);
+    par_rows(&mut ii, w, 1, |y, row| {
+        let (mar, mbr, ir) = (&mp[y * w..(y + 1) * w], &mii[y * w..(y + 1) * w], &i[y * w..(y + 1) * w]);
+        for k in 0..row.len() {
+            row[k] = mar[k] * ir[k] + mbr[k];
+        }
+    });
+    ii
 }
 
 /// Monotone cubic (Fritsch–Carlson) through `pts` (x ascending, 0..=1), evaluated into a LUT.
@@ -964,35 +1060,140 @@ fn haze_cells(px: &[[f32; 4]], w: usize, h: usize, d: &Dehaze, map: impl Fn([f32
     bands.into_iter().flatten().collect()
 }
 
+/// Separable `(2r + 1)²` minimum or maximum filter (van Herk–Gil–Werman prefix/suffix blocks):
+/// `O(1)` comparisons per pixel regardless of `r`, bit-identical to `.fold(start, pick)`
+/// (including `NaN` and all-`NaN` windows).
+fn rank_filter_2d(v: &[f32], sw: usize, sh: usize, r: usize, start: f32, pick: fn(f32, f32) -> f32) -> Vec<f32> {
+    if sw == 0 || sh == 0 {
+        return Vec::new();
+    }
+    if r == 0 {
+        return v[..sw * sh].iter().map(|&x| pick(start, x)).collect();
+    }
+    let k = 2 * r + 1;
+    let mut a = vec![0.0f32; sw * sh];
+    if sw == 1 {
+        for (o, &x) in a.iter_mut().zip(&v[..sw * sh]) {
+            *o = pick(start, x);
+        }
+    } else {
+        let strip_rows = 32.min(sh);
+        par_rows(&mut a, sw, strip_rows, |strip_idx, strip| {
+            let y0 = strip_idx * strip_rows;
+            let mut prefix = vec![0.0f32; sw];
+            let mut suffix = vec![0.0f32; sw];
+            let last = sw - 1;
+            for (ry, dst) in strip.chunks_exact_mut(sw).enumerate() {
+                let src = &v[(y0 + ry) * sw..(y0 + ry + 1) * sw];
+                for blk in 0..sw.div_ceil(k) {
+                    let s = blk * k;
+                    let e = ((blk + 1) * k).min(sw);
+                    prefix[s] = pick(start, src[s]);
+                    for i in (s + 1)..e {
+                        prefix[i] = pick(prefix[i - 1], src[i]);
+                    }
+                    suffix[e - 1] = pick(start, src[e - 1]);
+                    for i in (s..(e - 1)).rev() {
+                        suffix[i] = pick(src[i], suffix[i + 1]);
+                    }
+                }
+                for (i, o) in dst.iter_mut().enumerate() {
+                    let lo = i.saturating_sub(r);
+                    let hi = (i + r).min(last);
+                    *o = if lo / k < hi / k {
+                        pick(suffix[lo], prefix[hi])
+                    } else if lo.is_multiple_of(k) {
+                        prefix[hi]
+                    } else {
+                        suffix[lo]
+                    };
+                }
+            }
+        });
+    }
+    if sh == 1 {
+        return a;
+    }
+    const COL_BAND: usize = 64;
+    let bands = crate::photo_util::par_map(sw.div_ceil(COL_BAND), |b| {
+        let x0 = b * COL_BAND;
+        let bw = COL_BAND.min(sw - x0);
+        let mut prefix = vec![0.0f32; sh * bw];
+        let mut suffix = vec![0.0f32; sh * bw];
+        for blk in 0..sh.div_ceil(k) {
+            let s = blk * k;
+            let e = ((blk + 1) * k).min(sh);
+            for (o, &sv) in prefix[s * bw..(s + 1) * bw].iter_mut().zip(&a[s * sw + x0..s * sw + x0 + bw]) {
+                *o = pick(start, sv);
+            }
+            for y in (s + 1)..e {
+                let (prev, cur) = prefix.split_at_mut(y * bw);
+                let prev_row = &prev[(y - 1) * bw..y * bw];
+                let src_row = &a[y * sw + x0..y * sw + x0 + bw];
+                for ((o, &pv), &sv) in cur[..bw].iter_mut().zip(prev_row).zip(src_row) {
+                    *o = pick(pv, sv);
+                }
+            }
+            for (o, &sv) in suffix[(e - 1) * bw..e * bw].iter_mut().zip(&a[(e - 1) * sw + x0..(e - 1) * sw + x0 + bw]) {
+                *o = pick(start, sv);
+            }
+            for y in (s..(e - 1)).rev() {
+                let (head, tail) = suffix.split_at_mut((y + 1) * bw);
+                let next_row = &tail[..bw];
+                let src_row = &a[y * sw + x0..y * sw + x0 + bw];
+                for ((o, &sv), &nv) in head[y * bw..(y + 1) * bw].iter_mut().zip(src_row).zip(next_row) {
+                    *o = pick(sv, nv);
+                }
+            }
+        }
+        let mut out = vec![0.0f32; sh * bw];
+        let last_y = sh - 1;
+        for y in 0..sh {
+            let lo = y.saturating_sub(r);
+            let hi = (y + r).min(last_y);
+            let dst = &mut out[y * bw..(y + 1) * bw];
+            if lo / k < hi / k {
+                let suf = &suffix[lo * bw..(lo + 1) * bw];
+                let pre = &prefix[hi * bw..(hi + 1) * bw];
+                for ((o, &sv), &pv) in dst.iter_mut().zip(suf).zip(pre) {
+                    *o = pick(sv, pv);
+                }
+            } else if lo.is_multiple_of(k) {
+                dst.copy_from_slice(&prefix[hi * bw..(hi + 1) * bw]);
+            } else {
+                dst.copy_from_slice(&suffix[lo * bw..(lo + 1) * bw]);
+            }
+        }
+        out
+    });
+    let mut b = vec![0.0f32; sw * sh];
+    for (bi, band) in bands.iter().enumerate() {
+        let x0 = bi * COL_BAND;
+        let bw = COL_BAND.min(sw - x0);
+        for y in 0..sh {
+            b[y * sw + x0..y * sw + x0 + bw].copy_from_slice(&band[y * bw..(y + 1) * bw]);
+        }
+    }
+    b
+}
+
 fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
     // Transmission on a ≤ DEHAZE_SIDE px proxy, upsampled.
     let (k, [sw, sh], r, amount) = (d.factor, d.size, d.radius, d.amount);
     let small = haze_cells(px, w, h, d, |q| q);
-    // The minimum (or, with `f32::max`, maximum) over each (2r + 1)² window.
-    let rank_filter = |v: &[f32], start: f32, pick: fn(f32, f32) -> f32| -> Vec<f32> {
-        let mut a = vec![0.0f32; sw * sh];
-        for y in 0..sh {
-            for x in 0..sw {
-                let (x0, x1) = (x.saturating_sub(r), (x + r).min(sw - 1));
-                a[y * sw + x] = (x0..=x1).map(|xx| v[y * sw + xx]).fold(start, pick);
-            }
-        }
-        let mut b = vec![0.0f32; sw * sh];
-        for y in 0..sh {
-            for x in 0..sw {
-                let (y0, y1) = (y.saturating_sub(r), (y + r).min(sh - 1));
-                b[y * sw + x] = (y0..=y1).map(|yy| a[yy * sw + x]).fold(start, pick);
-            }
-        }
-        b
-    };
-    let min_filter = |v: &[f32]| rank_filter(v, f32::MAX, f32::min);
+    let min_filter = |v: &[f32]| rank_filter_2d(v, sw, sh, r, f32::MAX, f32::min);
     let dark = min_filter(&small.iter().map(|c| c[0].min(c[1]).min(c[2])).collect::<Vec<_>>());
     // Atmospheric light: mean colour of the brightest 0.1 % of the dark channel (ties in the
     // order of the cells).
     let mut idx: Vec<usize> = (0..sw * sh).collect();
-    idx.sort_by(|&a, &b| dark[b].total_cmp(&dark[a]));
-    let top = d.top;
+    let top = d.top.min(idx.len());
+    if top > 0 {
+        let cmp = |&a: &usize, &b: &usize| dark[b].total_cmp(&dark[a]).then_with(|| a.cmp(&b));
+        if top < idx.len() {
+            idx.select_nth_unstable_by(top - 1, cmp);
+        }
+        idx[..top].sort_unstable_by(cmp);
+    }
     let mut air = [0.0f32; 3];
     for &i in &idx[..top] {
         for c in 0..3 {
@@ -1006,7 +1207,7 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
     // haze-free and kept a bright halo (#9273). Opening shrinks dark regions back to their
     // outline and is still a lower bound of the dark channel over the window. It raises the dark
     // channel on average, so the ω weight is scaled to keep the slider's overall strength.
-    let opened = rank_filter(&norm_dark, f32::MIN, f32::max);
+    let opened = rank_filter_2d(&norm_dark, sw, sh, r, f32::MIN, f32::max);
     // Summed in f64: an f32 running sum over the copy's few hundred thousand cells drifts by about
     // 1e-5, which the low transmission beside haze multiplies up to a visible fraction of a level.
     let mean = |v: &[f32]| (v.iter().map(|x| f64::from(*x)).sum::<f64>() / v.len().max(1) as f64) as f32;
@@ -1015,10 +1216,21 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
     let guide: Vec<f32> = small.iter().map(|c| luma(*c)).collect();
     let t = guided(&guide, &t_raw, sw, sh, d.guide_radius, spatial::DEHAZE_EPS);
     let ks = k as f32;
+    let (max_x, max_y) = ((sw.saturating_sub(1)) as f32, (sh.saturating_sub(1)) as f32);
     par_rows(px, w, 1, |y, row| {
+        let fy = ((y as f32 + 0.5) / ks - 0.5).clamp(0.0, max_y);
+        let y0 = fy.floor() as usize;
+        let y1 = (y0 + 1).min(sh - 1);
+        let ty = fy - y0 as f32;
+        let (t0, t1) = (&t[y0 * sw..(y0 + 1) * sw], &t[y1 * sw..(y1 + 1) * sw]);
         for (x, q) in row.iter_mut().enumerate() {
-            let tv =
-                crate::photo_util::bilinear(&t, sw, sh, 1, 0, (x as f32 + 0.5) / ks - 0.5, (y as f32 + 0.5) / ks - 0.5).clamp(spatial::DEHAZE_T_FLOOR, 1.0);
+            let fx = ((x as f32 + 0.5) / ks - 0.5).clamp(0.0, max_x);
+            let x0 = fx.floor() as usize;
+            let x1 = (x0 + 1).min(sw - 1);
+            let tx = fx - x0 as f32;
+            let top_v = t0[x0] + (t0[x1] - t0[x0]) * tx;
+            let bot_v = t1[x0] + (t1[x1] - t1[x0]) * tx;
+            let tv = (top_v + (bot_v - top_v) * ty).clamp(spatial::DEHAZE_T_FLOOR, 1.0);
             for c in 0..3 {
                 let i = q[c];
                 let j = (i - air[c]) / tv + air[c];
@@ -1029,62 +1241,116 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
 }
 
 fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
+    let n_px = w * h;
+    if n_px == 0 {
+        return;
+    }
     // The controls' documented 0..=100 range: raw values drive the filter radii below.
     let [nl, nld, nc, ncd] = [p.noise_luminance, p.noise_luminance_detail, p.noise_color, p.noise_color_detail].map(|v| v.clamp(0.0, 100.0));
-    // Work in Y + chroma (BT.709 luma, B−Y, R−Y).
-    let mut y: Vec<f32> = px.iter().map(|q| luma([q[0], q[1], q[2]])).collect();
-    let mut cb: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[2] - l).collect();
-    let mut cr: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[0] - l).collect();
+    // Work in Y + chroma (BT.709 luma, B−Y, R−Y). Chroma planes are only materialised when
+    // colour noise reduction blurs them; otherwise `px` keeps `B − Y₀` and `R − Y₀` implicitly.
+    let mut y = vec![0.0f32; n_px];
+    par_rows(&mut y, w, 1, |ry, y_row| {
+        for (yl, q) in y_row.iter_mut().zip(&px[ry * w..(ry + 1) * w]) {
+            *yl = luma([q[0], q[1], q[2]]);
+        }
+    });
+    let chroma = (nc > 0.0).then(|| {
+        let (mut cb, mut cr) = (vec![0.0f32; n_px], vec![0.0f32; n_px]);
+        crate::photo_util::par_rows2(&mut cb, &mut cr, w, |ry, cb_row, cr_row| {
+            let (px_row, y_row) = (&px[ry * w..(ry + 1) * w], &y[ry * w..(ry + 1) * w]);
+            for k in 0..cb_row.len() {
+                let l = y_row[k];
+                cb_row[k] = px_row[k][2] - l;
+                cr_row[k] = px_row[k][0] - l;
+            }
+        });
+        (cb, cr)
+    });
     if nl > 0.0 {
         let n = nl / 100.0;
         let r = ((1.0 + 3.0 * n) * ps).round().max(1.0) as usize;
         let smooth = guided(&y, &y, w, h, r, (n * 0.06).powi(2) + 1e-6);
         let keep = nld / 100.0 * 0.5;
-        for i in 0..w * h {
-            y[i] = smooth[i] + (y[i] - smooth[i]) * keep;
-        }
+        par_rows(&mut y, w, 1, |ry, y_row| {
+            for (yv, &sv) in y_row.iter_mut().zip(&smooth[ry * w..(ry + 1) * w]) {
+                *yv = sv + (*yv - sv) * keep;
+            }
+        });
     }
-    if nc > 0.0 {
+    let chroma = chroma.map(|(mut cb, mut cr)| {
         let sigma = (nc / 100.0 * 6.0 * ps).max(0.3);
         let (bcb, bcr) = (gauss(&cb, w, h, sigma), gauss(&cr, w, h, sigma));
         let keep = ncd / 100.0 * 0.3;
-        for i in 0..w * h {
-            cb[i] = bcb[i] + (cb[i] - bcb[i]) * keep;
-            cr[i] = bcr[i] + (cr[i] - bcr[i]) * keep;
-        }
-    }
+        crate::photo_util::par_rows2(&mut cb, &mut cr, w, |ry, cb_row, cr_row| {
+            let (bcb_row, bcr_row) = (&bcb[ry * w..(ry + 1) * w], &bcr[ry * w..(ry + 1) * w]);
+            for k in 0..cb_row.len() {
+                cb_row[k] = bcb_row[k] + (cb_row[k] - bcb_row[k]) * keep;
+                cr_row[k] = bcr_row[k] + (cr_row[k] - bcr_row[k]) * keep;
+            }
+        });
+        (cb, cr)
+    });
     if p.sharpen_amount > 0.0 {
         let sigma = (p.sharpen_radius.clamp(0.5, 3.0) * ps).max(0.3);
         let blur = gauss(&y, w, h, sigma);
         // Masking: an edge mask from the gradient of a smoothed luminance.
-        let mask: Option<Vec<f32>> = (p.sharpen_masking > 0.0).then(|| {
+        let mask_smooth: Option<(Vec<f32>, f32)> = (p.sharpen_masking > 0.0).then(|| {
             let s = gauss(&y, w, h, 1.0 * ps.max(0.5));
             let t = p.sharpen_masking / 100.0 * 0.08;
-            crate::photo_util::par_map(w * h, |i| {
-                let (x, yy) = (i % w, i / w);
-                let gx = s[yy * w + (x + 1).min(w - 1)] - s[yy * w + x.saturating_sub(1)];
-                let gy = s[(yy + 1).min(h - 1) * w + x] - s[yy.saturating_sub(1) * w + x];
-                smoothstep(t * 0.5, t + 1e-4, gx.hypot(gy))
-            })
+            (s, t)
         });
         let amt = p.sharpen_amount / 100.0 * 1.2;
         let det = p.sharpen_detail / 100.0;
-        for i in 0..w * h {
-            let hp = y[i] - blur[i];
-            // Low Detail damps large (halo-producing) differences.
-            let limit = 0.03 + det * 0.3;
-            let hp = hp.clamp(-limit, limit) * (0.5 + 0.5 * det);
-            let m = mask.as_ref().map_or(1.0, |m| m[i]);
-            y[i] += amt * hp * m;
-        }
+        // Low Detail damps large (halo-producing) differences.
+        let limit = 0.03 + det * 0.3;
+        let scale = 0.5 + 0.5 * det;
+        par_rows(&mut y, w, 1, |yy, y_row| {
+            let blur_row = &blur[yy * w..(yy + 1) * w];
+            if let Some((s, t)) = &mask_smooth {
+                let s_cur = &s[yy * w..(yy + 1) * w];
+                let s_prev = &s[yy.saturating_sub(1) * w..(yy.saturating_sub(1) + 1) * w];
+                let s_next = &s[(yy + 1).min(h - 1) * w..((yy + 1).min(h - 1) + 1) * w];
+                for (x, (yv, &bv)) in y_row.iter_mut().zip(blur_row).enumerate() {
+                    let gx = s_cur[(x + 1).min(w - 1)] - s_cur[x.saturating_sub(1)];
+                    let gy = s_next[x] - s_prev[x];
+                    let m = smoothstep(*t * 0.5, *t + 1e-4, gx.hypot(gy));
+                    let hp = (*yv - bv).clamp(-limit, limit) * scale;
+                    *yv += amt * hp * m;
+                }
+            } else {
+                for (yv, &bv) in y_row.iter_mut().zip(blur_row) {
+                    let hp = (*yv - bv).clamp(-limit, limit) * scale;
+                    *yv += amt * hp;
+                }
+            }
+        });
     }
-    for i in 0..w * h {
-        let (l, b, r) = (y[i], cb[i], cr[i]);
-        let (rr, bb) = (r + l, b + l);
-        let g = (l - 0.2126 * rr - 0.0722 * bb) / 0.7152;
-        px[i][0] = rr;
-        px[i][1] = g;
-        px[i][2] = bb;
+    if let Some((cb, cr)) = &chroma {
+        par_rows(px, w, 1, |ry, row| {
+            let (y_row, cb_row, cr_row) = (&y[ry * w..(ry + 1) * w], &cb[ry * w..(ry + 1) * w], &cr[ry * w..(ry + 1) * w]);
+            for (k, q) in row.iter_mut().enumerate() {
+                let (l, b, r) = (y_row[k], cb_row[k], cr_row[k]);
+                let (rr, bb) = (r + l, b + l);
+                let g = (l - 0.2126 * rr - 0.0722 * bb) / 0.7152;
+                q[0] = rr;
+                q[1] = g;
+                q[2] = bb;
+            }
+        });
+    } else {
+        par_rows(px, w, 1, |ry, row| {
+            let y_row = &y[ry * w..(ry + 1) * w];
+            for (q, &l) in row.iter_mut().zip(y_row) {
+                let y0 = luma([q[0], q[1], q[2]]);
+                let (b, r) = (q[2] - y0, q[0] - y0);
+                let (rr, bb) = (r + l, b + l);
+                let g = (l - 0.2126 * rr - 0.0722 * bb) / 0.7152;
+                q[0] = rr;
+                q[1] = g;
+                q[2] = bb;
+            }
+        });
     }
 }
 
@@ -1454,5 +1720,141 @@ mod tests {
         develop(&mut plain, w, h, &base, false);
         develop(&mut textured, w, h, &CameraRaw { texture: 80.0, ..base }, false);
         assert_eq!(plain, textured);
+    }
+
+    #[test]
+    fn rank_filter_2d_matches_sliding_window_bit_for_bit() {
+        let naive = |v: &[f32], sw: usize, sh: usize, r: usize, start: f32, pick: fn(f32, f32) -> f32| -> Vec<f32> {
+            let mut a = vec![0.0f32; sw * sh];
+            for y in 0..sh {
+                for x in 0..sw {
+                    let (x0, x1) = (x.saturating_sub(r), (x + r).min(sw - 1));
+                    a[y * sw + x] = (x0..=x1).map(|xx| v[y * sw + xx]).fold(start, pick);
+                }
+            }
+            let mut b = vec![0.0f32; sw * sh];
+            for y in 0..sh {
+                for x in 0..sw {
+                    let (y0, y1) = (y.saturating_sub(r), (y + r).min(sh - 1));
+                    b[y * sw + x] = (y0..=y1).map(|yy| a[yy * sw + x]).fold(start, pick);
+                }
+            }
+            b
+        };
+        for &(sw, sh) in &[(1, 1), (1, 9), (9, 1), (2, 3), (5, 7), (14, 15), (15, 16), (23, 25), (25, 23), (33, 47), (70, 65)] {
+            let v: Vec<f32> = (0..sw * sh).map(|i| hash01((i % sw) as i64, (i / sw) as i64, 91)).collect();
+            for r in [0, 1, 2, 7, 15] {
+                let got_min = rank_filter_2d(&v, sw, sh, r, f32::MAX, f32::min);
+                let want_min = naive(&v, sw, sh, r, f32::MAX, f32::min);
+                for (k, (&g, &w)) in got_min.iter().zip(&want_min).enumerate() {
+                    assert_eq!(g.to_bits(), w.to_bits(), "min mismatch at {sw}x{sh} r={r} idx={k}");
+                }
+                let got_max = rank_filter_2d(&v, sw, sh, r, f32::MIN, f32::max);
+                let want_max = naive(&v, sw, sh, r, f32::MIN, f32::max);
+                for (k, (&g, &w)) in got_max.iter().zip(&want_max).enumerate() {
+                    assert_eq!(g.to_bits(), w.to_bits(), "max mismatch at {sw}x{sh} r={r} idx={k}");
+                }
+            }
+        }
+
+        // Partial-NaN and all-NaN windows match `.fold(start, pick)` (`f32::MAX` / `f32::MIN`
+        // rather than `NaN`), keeping global Dehaze transmission finite for finite regions.
+        let (sw, sh) = (35usize, 29usize);
+        let mut nan_plane: Vec<f32> = (0..sw * sh).map(|i| hash01((i % sw) as i64, (i / sw) as i64, 13)).collect();
+        for y in 2..14 {
+            for x in 3..15 {
+                nan_plane[y * sw + x] = f32::NAN;
+            }
+        }
+        nan_plane[0] = f32::NAN;
+        nan_plane[sw * sh - 1] = f32::NAN;
+        for r in [0, 1, 2, 4, 7] {
+            let got_min = rank_filter_2d(&nan_plane, sw, sh, r, f32::MAX, f32::min);
+            let want_min = naive(&nan_plane, sw, sh, r, f32::MAX, f32::min);
+            assert!(got_min.iter().all(|x| !x.is_nan()), "min filter must not emit NaN at r={r}");
+            for (k, (&g, &w)) in got_min.iter().zip(&want_min).enumerate() {
+                assert_eq!(g.to_bits(), w.to_bits(), "NaN min mismatch at r={r} idx={k}");
+            }
+            let got_max = rank_filter_2d(&nan_plane, sw, sh, r, f32::MIN, f32::max);
+            let want_max = naive(&nan_plane, sw, sh, r, f32::MIN, f32::max);
+            assert!(got_max.iter().all(|x| !x.is_nan()), "max filter must not emit NaN at r={r}");
+            for (k, (&g, &w)) in got_max.iter().zip(&want_max).enumerate() {
+                assert_eq!(g.to_bits(), w.to_bits(), "NaN max mismatch at r={r} idx={k}");
+            }
+        }
+        assert_eq!(rank_filter_2d(&nan_plane, sw, sh, 2, f32::MAX, f32::min)[8 * sw + 9], f32::MAX);
+        assert_eq!(rank_filter_2d(&nan_plane, sw, sh, 2, f32::MIN, f32::max)[8 * sw + 9], f32::MIN);
+
+        let (dw, dh) = (320usize, 240usize);
+        let mut float_px = img(dw, dh);
+        for y in 0..24 {
+            for x in 0..24 {
+                float_px[y * dw + x] = [f32::NAN, f32::NAN, f32::NAN, 1.0];
+            }
+        }
+        develop(&mut float_px, dw, dh, &CameraRaw { dehaze: 60.0, ..Default::default() }, true);
+        for y in 160..dh {
+            for x in 200..dw {
+                assert!(float_px[y * dw + x][..3].iter().all(|v| v.is_finite()), "finite pixel poisoned at ({x}, {y}): {:?}", float_px[y * dw + x]);
+            }
+        }
+    }
+
+    #[test]
+    fn self_guided_box_means_and_detail_preserve_reference_output() {
+        let ref_box_mean = |v: &[f32], w: usize, h: usize, r: usize| -> Vec<f32> {
+            if r == 0 || w == 0 || h == 0 {
+                return v.to_vec();
+            }
+            let n = (2 * r + 1) as f64;
+            let mut tmp = vec![0.0f32; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    let s: f64 = (-(r as i64)..=r as i64).map(|dx| f64::from(v[y * w + (x as i64 + dx).clamp(0, w as i64 - 1) as usize])).sum();
+                    tmp[y * w + x] = (s / n) as f32;
+                }
+            }
+            let mut out = vec![0.0f32; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    let s: f64 = (-(r as i64)..=r as i64).map(|dy| f64::from(tmp[(y as i64 + dy).clamp(0, h as i64 - 1) as usize * w + x])).sum();
+                    out[y * w + x] = (s / n) as f32;
+                }
+            }
+            out
+        };
+
+        for &(w, h, r) in &[(1, 1, 2), (9, 7, 3), (257, 65, 1), (260, 131, 9)] {
+            let v: Vec<f32> = (0..w * h).map(|i| hash01((i % w) as i64, (i / w) as i64, 17)).collect();
+            let got = box_mean(&v, w, h, r);
+            let want = ref_box_mean(&v, w, h, r);
+            for (k, (&g, &e)) in got.iter().zip(&want).enumerate() {
+                assert!((g - e).abs() <= 1e-6, "box_mean {w}x{h} r={r} idx={k}: {g} vs {e}");
+            }
+            // Self-guided fast path (`ptr::eq`) is bit-identical to distinct-slice guided filter.
+            let v_copy = v.clone();
+            let self_g = guided(&v, &v, w, h, r, 1e-3);
+            let pair_g = guided(&v, &v_copy, w, h, r, 1e-3);
+            for (k, (&g, &e)) in self_g.iter().zip(&pair_g).enumerate() {
+                assert_eq!(g.to_bits(), e.to_bits(), "self-guided mismatch at {w}x{h} r={r} idx={k}");
+            }
+        }
+
+        let (w, h) = (96usize, 70usize);
+        let v: Vec<f32> = (0..w * h).map(|i| hash01((i % w) as i64, (i / w) as i64, 53)).collect();
+        let chained = box_mean(&box_mean(&box_mean(&v, w, h, 1), w, h, 2), w, h, 3);
+        let ping_pong = box_means(&v, w, h, &[1, 2, 3]);
+        for (&g, &e) in ping_pong.iter().zip(&chained) {
+            assert_eq!(g.to_bits(), e.to_bits());
+        }
+
+        // Implicit-chroma detail (`noise_color == 0`) matches a tiny-epsilon colour pass when keep=1,
+        // and Dehaze handles tied brightest dark-channel cells deterministically.
+        let mut flat_ties: Vec<[f32; 4]> = (0..w * h).map(|i| if i < 20 { [0.8, 0.7, 0.9, 1.0] } else { [0.8, 0.7, 0.6, 1.0] }).collect();
+        let mut flat_ties_b = flat_ties.clone();
+        let dh = CameraRaw { dehaze: 40.0, sharpen_amount: 55.0, sharpen_masking: 45.0, noise_luminance: 25.0, ..Default::default() };
+        develop(&mut flat_ties, w, h, &dh, false);
+        develop(&mut flat_ties_b, w, h, &dh, false);
+        assert_eq!(flat_ties, flat_ties_b);
     }
 }
