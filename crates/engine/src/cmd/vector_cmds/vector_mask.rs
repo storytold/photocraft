@@ -168,11 +168,14 @@ pub(super) fn vector_mask_rasterize(s: &mut Session, p: &Value) -> Result<Value>
             l.mask = Some(mask);
             return Ok(());
         }
-        let vals = vector::vector_mask_values(&vm, area);
+        let mut vals = vector::vector_mask_values(&vm, area);
         // Outside the canvas the vector mask is 0 unless it is empty/inverted; keep the old default there.
         let old = mask.surface.read_region(area);
-        let merged: Vec<f32> = old.iter().zip(&vals).map(|(a, b)| a * b).collect();
-        mask.surface.write_region(area, &merged);
+        for (value, old) in vals.iter_mut().zip(old) {
+            let product = old * *value;
+            *value = product;
+        }
+        mask.surface.write_region(area, &vals);
         mask.surface.prune();
         l.mask = Some(mask);
         Ok(())
