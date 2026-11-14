@@ -294,7 +294,7 @@ fn grid(s: &Sensor, opts: &DevelopOptions, r: &Reference) -> Result<(usize, Vec<
     let c = s.crop;
     let in_data = c.x.checked_add(c.width).is_some_and(|v| v <= s.width) && c.y.checked_add(c.height).is_some_and(|v| v <= s.height);
     let need = s.width.checked_mul(s.height).and_then(|v| v.checked_mul(s.samples));
-    if c.is_empty() || !in_data || need.is_none_or(|n| s.data.len() < n) {
+    if c.is_empty() || !in_data || need.is_none_or(|n| s.sample_count() < n) {
         return reject("the crop lies outside the sensor data");
     }
     if !(s.samples == 3 || (s.samples == 1 && s.cfa.is_some())) {
