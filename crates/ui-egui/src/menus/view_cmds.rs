@@ -229,3 +229,7 @@ mod form_reset_tests {
 #[cfg(test)]
 #[path = "view_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "view_cmds/save_a_copy_name_tests.rs"]
+mod save_a_copy_name_tests;
