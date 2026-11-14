@@ -173,7 +173,7 @@ type LayerSource = (Arc<Document>, photocraft_doc::LayerId, Arc<Document>);
 /// The last layer composited for export. The dialog's size fields, its preview, its size
 /// estimate and the export itself each composited the layer again, on the CPU: about 17 s each
 /// for a large storyboard, the first and last on the UI thread.
-static LAYER_SOURCE: Mutex<Option<LayerSource>> = Mutex::new(None);
+static LAYER_SOURCE: std::sync::Mutex<Option<LayerSource>> = std::sync::Mutex::new(None);
 
 /// Layer `id` of `doc` composited for export, if it is the one [`layer_source`] made last.
 fn cached_layer_source(doc: &Arc<Document>, id: photocraft_doc::LayerId) -> Option<Arc<Document>> {
