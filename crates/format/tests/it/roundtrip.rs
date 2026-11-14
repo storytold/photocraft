@@ -805,7 +805,8 @@ fn bundles_without_the_full_composite_still_open() {
     }
     let older = z.finish().unwrap();
     assert_eq!(read_full_composite(&older).unwrap(), None);
-    // A member that names any other entry is refused, and the document still opens.
+    // A member that names any other entry is refused by the shared bundle reader,
+    // including when opening the document rather than extracting its preview.
     manifest["full_composite"] = serde_json::Value::from("thumb.png");
     let mut z = zip::ZipWriter::new();
     z.add("manifest.json", &serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
@@ -814,7 +815,7 @@ fn bundles_without_the_full_composite_still_open() {
     }
     let other = z.finish().unwrap();
     assert!(read_full_composite(&other).is_err());
-    assert_eq!(load_from_bytes(&other).unwrap(), doc);
+    assert!(load_from_bytes(&other).is_err());
     assert_eq!(load_from_bytes(&older).unwrap(), load_from_bytes(&bytes).unwrap());
     assert_eq!(load_from_bytes(&older).unwrap(), doc);
     // A save without it writes no member at all, as older writers did.

@@ -1,16 +1,11 @@
 //! Object storage (ZIP or directory), incremental writer and loader.
 
-#[cfg(all(test, windows))]
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
-#[cfg(all(test, windows))]
 use std::io::Write;
-use std::path::Path;
-#[cfg(any(all(test, not(unix)), all(test, windows)))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
-#[cfg(all(test, windows))]
 use std::time::SystemTime;
 
 use photocraft_color::{PixelFormat, SampleType};
@@ -22,12 +17,9 @@ use crate::manifest::{ContentM, FORMAT_VERSION, Hash, LayerM, Manifest};
 #[cfg(test)]
 use crate::zip::ZipReader;
 use crate::{FormatError, LoadOptions, Result, SaveOptions};
-#[cfg(test)]
 use craft_pcraft_format::is_valid_hash;
 
-#[cfg(all(test, windows))]
 use craft_pcraft_format::SAVE_LOCK;
-#[cfg(test)]
 use craft_pcraft_format::{BLOBS_DIR, COMPOSITE_DIR, TILES_DIR};
 pub(crate) use craft_pcraft_format::{COMPOSITE, MANIFEST, THUMB};
 use craft_pcraft_format::{blob_path, tile_path};
@@ -40,7 +32,6 @@ const FULL_COMPOSITE_MEMBER: &str = "full_composite";
 /// format's 32-bit offsets and 16-bit counts.
 const ZIP_LIMIT: (u64, usize) = (u32::MAX as u64, u16::MAX as usize);
 /// How long a directory save waits for another save of the same bundle to finish.
-#[cfg(all(test, windows))]
 const SAVE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Delegates object frame encoding to craft-libs.
@@ -155,6 +146,14 @@ impl ByteSource for ZipSource<'_> {
 fn bundle_error(error: craft_pcraft_bundle::Error) -> FormatError {
     match error {
         craft_pcraft_bundle::Error::LimitExceeded { entry, limit } => FormatError::LimitExceeded(format!("`{entry}` exceeds {limit} bytes")),
+        craft_pcraft_bundle::Error::Zip(error) => match error {
+            craft_zip::Error::TooManyEntries { .. }
+            | craft_zip::Error::TooManyEndRecords(_)
+            | craft_zip::Error::EntryTooLarge { .. }
+            | craft_zip::Error::BudgetSpent { .. } => FormatError::LimitExceeded(format!("zip: {error}")),
+            other => FormatError::corrupt(format!("zip: {other}")),
+        },
+        craft_pcraft_bundle::Error::Io(message) => FormatError::Io(std::io::Error::other(message)),
         other => FormatError::corrupt(other.to_string()),
     }
 }
@@ -524,13 +523,9 @@ pub struct PcraftWriter {
     /// Compressed objects by bundle path (ZIP mode).
     compressed: HashMap<String, Arc<Vec<u8>>>,
     compressed_budget: usize,
-    directory: craft_pcraft_bundle::DirectoryBundleWriter,
-    #[cfg(all(test, windows))]
     verified_directory: Option<DirectoryVerificationCache>,
-    #[cfg(all(test, windows))]
     reverify_budget: u64,
     /// How long [`Self::save_dir`] waits for another save of the bundle ([`SAVE_LOCK_WAIT`]).
-    #[cfg(all(test, windows))]
     lock_wait: std::time::Duration,
 }
 
@@ -541,12 +536,8 @@ impl Default for PcraftWriter {
             blob_hash_cache: HashMap::new(),
             compressed: HashMap::new(),
             compressed_budget: usize::MAX,
-            directory: craft_pcraft_bundle::DirectoryBundleWriter::default(),
-            #[cfg(all(test, windows))]
             verified_directory: None,
-            #[cfg(all(test, windows))]
             reverify_budget: DEFAULT_REVERIFY_BUDGET,
-            #[cfg(all(test, windows))]
             lock_wait: SAVE_LOCK_WAIT,
         }
     }
@@ -560,7 +551,6 @@ impl Default for PcraftWriter {
 /// crash leaves no stale lock. Another save holding it is waited for up to `wait`; after that the
 /// save fails without writing anything. A file system without file locks (some network shares)
 /// saves unlocked, as before.
-#[cfg(all(test, windows))]
 fn lock_bundle(dir: &Path, wait: std::time::Duration) -> Result<Option<std::fs::File>> {
     let path = dir.join(SAVE_LOCK);
     validate_bundle_file(dir, &path)?;
@@ -582,7 +572,6 @@ fn lock_bundle(dir: &Path, wait: std::time::Duration) -> Result<Option<std::fs::
 }
 
 #[derive(Default)]
-#[cfg(all(test, windows))]
 struct DirectoryVerificationCache {
     directory: PathBuf,
     /// Directory saves so far; an object's `checked_at` is the save that last read it fully.
@@ -591,7 +580,6 @@ struct DirectoryVerificationCache {
 }
 
 #[derive(Clone, Copy)]
-#[cfg(all(test, windows))]
 struct Verified {
     signature: FileSignature,
     checked_at: u64,
@@ -599,7 +587,6 @@ struct Verified {
 
 /// What a file looked like when it was verified. Any change means "verify again".
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[cfg(all(test, windows))]
 struct FileSignature {
     len: u64,
     modified: SystemTime,
@@ -659,12 +646,10 @@ impl Object {
 }
 
 /// Whether `compressed` decodes to exactly `expected`.
-#[cfg(all(test, windows))]
 fn content_matches(expected: &[u8], compressed: &[u8], what: &str) -> bool {
     decompress(compressed, expected.len(), what).is_ok_and(|actual| hash_bytes(&actual) == hash_bytes(expected))
 }
 
-#[cfg(all(test, windows))]
 fn file_signature(metadata: &std::fs::Metadata) -> Option<FileSignature> {
     #[cfg(unix)]
     let unix = {
@@ -679,7 +664,6 @@ fn file_signature(metadata: &std::fs::Metadata) -> Option<FileSignature> {
     })
 }
 
-#[cfg(all(test, windows))]
 fn path_signature(path: &Path) -> Result<Option<FileSignature>> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => Ok(file_signature(&metadata)),
@@ -689,7 +673,6 @@ fn path_signature(path: &Path) -> Result<Option<FileSignature>> {
     }
 }
 
-#[cfg(test)]
 fn unsafe_bundle_entry(path: &Path) -> FormatError {
     FormatError::Io(std::io::Error::new(
         std::io::ErrorKind::InvalidData,
@@ -699,7 +682,6 @@ fn unsafe_bundle_entry(path: &Path) -> FormatError {
 
 /// The generic atomic writer intentionally follows a destination symlink. Directory bundles
 /// must reject one instead: all of their managed entries stay below the bundle root.
-#[cfg(all(test, windows))]
 fn plain_file_or_missing(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => Ok(()),
@@ -709,7 +691,6 @@ fn plain_file_or_missing(path: &Path) -> Result<()> {
     }
 }
 
-#[cfg(all(test, windows))]
 fn plain_directory_or_missing(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() => Ok(()),
@@ -725,7 +706,6 @@ fn plain_directory_or_missing(path: &Path) -> Result<()> {
 /// Use the canonical root after creation so a later replacement of the caller's path cannot
 /// redirect subsequent bundle operations. The caller may choose a symlinked root, but managed
 /// subdirectories and files below its resolved target must not be symlinks.
-#[cfg(all(test, windows))]
 fn bundle_root(dir: &Path) -> Result<PathBuf> {
     let dir: PathBuf = dir.components().collect();
     std::fs::create_dir_all(&dir)?;
@@ -749,7 +729,6 @@ fn bundle_root(dir: &Path) -> Result<PathBuf> {
     Ok(root)
 }
 
-#[cfg(all(test, windows))]
 fn validate_bundle_file(root: &Path, path: &Path) -> Result<()> {
     let parent = path.parent().ok_or_else(|| unsafe_bundle_entry(path))?;
     if parent != root && parent != root.join(TILES_DIR) && parent != root.join(BLOBS_DIR) && parent != root.join(COMPOSITE_DIR) {
@@ -766,23 +745,8 @@ fn validate_bundle_file(root: &Path, path: &Path) -> Result<()> {
 /// full-flush fallback of `sync_file`, #1336). Windows flushes through the injected `AtomicFs`
 /// and fails on any error (#7858).
 #[cfg(not(windows))]
-#[cfg(all(test, windows))]
 fn flush_bundle_dir(dir: &Path, written: &Path) -> std::io::Result<()> {
     use crate::atomic::AtomicFs;
-    #[cfg(test)]
-    {
-        FLUSHED.with(|f| f.borrow_mut().push(dir.to_path_buf()));
-        let named = |p: Option<&Path>, name: &str| p.and_then(Path::file_name).is_some_and(|n| n == name);
-        if FAIL_DIR_FLUSH.with(|f| {
-            let hit = f.get().is_some_and(|name| named(Some(written), name) || named(written.parent(), name));
-            if hit {
-                f.set(None);
-            }
-            hit
-        }) {
-            return Err(std::io::Error::other("injected folder flush failure"));
-        }
-    }
     let _ = written;
     crate::atomic::RealFs.sync_dir(dir)
 }
@@ -790,7 +754,6 @@ fn flush_bundle_dir(dir: &Path, written: &Path) -> std::io::Result<()> {
 /// [`flush_bundle_dir`], as the save's error when the flush was attempted and failed: `written`
 /// is in place, but may not survive a power loss or crash (#4968).
 #[cfg(not(windows))]
-#[cfg(all(test, windows))]
 fn confirm_flushed(dir: &Path, written: &Path) -> Result<()> {
     crate::atomic::dir_synced(flush_bundle_dir(dir, written)).map_err(|e| {
         FormatError::Io(std::io::Error::new(
@@ -802,7 +765,6 @@ fn confirm_flushed(dir: &Path, written: &Path) -> Result<()> {
 
 /// Publish a validated bundle entry through a flushed temporary file and replacing rename.
 /// On Windows, propagate a failed directory barrier even though the new entry is already visible.
-#[cfg(all(test, windows))]
 fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atomic::AtomicFs) -> Result<()> {
     #[cfg(not(windows))]
     let _ = fs;
@@ -868,7 +830,6 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atom
 
 /// Keep the existing leaf/path validation and pin the actual unlink to opened
 /// directory handles on Unix. This closes the check-then-remove path-swap gap.
-#[cfg(all(test, windows))]
 fn remove_bundle_file(root: &Path, path: &Path, gc: &BundleGc) -> Result<()> {
     validate_bundle_file(root, path)?;
     let relative = path.strip_prefix(root).map_err(|_| unsafe_bundle_entry(path))?;
@@ -876,7 +837,6 @@ fn remove_bundle_file(root: &Path, path: &Path, gc: &BundleGc) -> Result<()> {
 }
 
 #[cfg(unix)]
-#[cfg(test)]
 struct BundleGc {
     root: rustix::fd::OwnedFd,
     tiles: rustix::fd::OwnedFd,
@@ -885,7 +845,6 @@ struct BundleGc {
 }
 
 #[cfg(unix)]
-#[cfg(test)]
 fn gc_directory_flags() -> rustix::fs::OFlags {
     use rustix::fs::OFlags;
 
@@ -902,7 +861,6 @@ fn gc_directory_flags() -> rustix::fs::OFlags {
 }
 
 #[cfg(unix)]
-#[cfg(test)]
 impl BundleGc {
     fn new(root: &Path) -> Result<Self> {
         use rustix::fs::{Mode, open, openat};
@@ -933,13 +891,11 @@ impl BundleGc {
 }
 
 #[cfg(not(unix))]
-#[cfg(test)]
 struct BundleGc {
     root: PathBuf,
 }
 
 #[cfg(not(unix))]
-#[cfg(test)]
 impl BundleGc {
     fn new(root: &Path) -> Result<Self> {
         Ok(Self { root: root.to_path_buf() })
@@ -951,7 +907,6 @@ impl BundleGc {
     }
 }
 
-#[cfg(all(test, windows))]
 fn existing_object_is_valid(path: &Path, object: &Object, what: &str) -> Result<(bool, Option<FileSignature>)> {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
@@ -1028,11 +983,7 @@ impl PcraftWriter {
     /// re-checks (oldest-checked first; at least one object when the budget is non-zero). `0`
     /// trusts unchanged signatures entirely; `u64::MAX` re-verifies everything on every save.
     pub fn set_reverify_budget(&mut self, bytes: u64) {
-        #[cfg(all(test, windows))]
-        {
-            self.reverify_budget = bytes;
-        }
-        self.directory.set_reverify_budget(bytes);
+        self.reverify_budget = bytes;
     }
 
     /// Cap compressed payload capacity retained between ZIP saves. Clears the previous payload
@@ -1045,11 +996,7 @@ impl PcraftWriter {
     /// How long a directory save waits for another save of the same bundle to finish before
     /// failing without writing anything (10 s by default; see [`Self::save_dir`]).
     pub fn set_lock_wait(&mut self, wait: std::time::Duration) {
-        #[cfg(all(test, windows))]
-        {
-            self.lock_wait = wait;
-        }
-        self.directory.set_lock_wait(wait);
+        self.lock_wait = wait;
     }
 
     /// Validate nesting, bounded conversion reports and finite manifest data, then collect content-addressed objects
@@ -1177,50 +1124,14 @@ impl PcraftWriter {
     /// atomically and removes unreferenced objects. The whole save holds the bundle's
     /// `save.lock`, so saves of one bundle from other writers or processes wait their turn.
     pub fn save_dir(&mut self, doc: &Document, dir: &Path, opts: &SaveOptions) -> Result<SaveStats> {
-        let generation = photocraft_raster::spill::read_error_generation();
-        let mut prepared = self.prepare(doc, opts)?;
-        let previews = previews(opts)?;
-        prepared.match_previews(&previews)?;
-        let mut writer = craft_pcraft_bundle::ZipBundleWriter::default();
-        writer.set_manifest(prepared.manifest.clone()).map_err(bundle_error)?;
-        for (name, bytes) in previews {
-            writer.set_preview(name, bytes).map_err(bundle_error)?;
-        }
-        let mut next = HashMap::with_capacity(prepared.objects.len());
-        let mut cached_bytes = 0usize;
-        for (path, object) in &prepared.objects {
-            let (key, bytes) = match self.compressed.remove_entry(path) {
-                Some((key, bytes)) => (key, bytes),
-                None => (path.clone(), Arc::new(object.compressed(&mut ObjectEncoder::new()))),
-            };
-            writer.stage_compressed_object(path, bytes.as_ref().clone()).map_err(bundle_error)?;
-            if bytes.capacity() <= self.compressed_budget.saturating_sub(cached_bytes) {
-                cached_bytes += bytes.capacity();
-                next.insert(key, bytes);
-            }
-        }
-        scratch_ok(doc, generation)?;
-        let directory_stats = self.directory.save_directory(dir, writer).map_err(bundle_error)?;
-        let mut stats = prepared.stats;
-        stats.objects_removed = directory_stats.removed;
-        for path in &directory_stats.written_objects {
-            match prepared.objects.get(path) {
-                Some(Object::Tile(..)) => stats.tiles_written += 1,
-                Some(Object::Blob(..)) => stats.blobs_written += 1,
-                None => {}
-            }
-        }
-        for path in &directory_stats.reused_objects {
-            if matches!(prepared.objects.get(path), Some(Object::Tile(..))) {
-                stats.tiles_reused += 1;
-            }
-        }
-        self.compressed = next;
-        Ok(stats)
+        // Keep the app's no-follow publication and best-effort post-commit GC.
+        // Object codecs and ZIP storage remain shared; directory saves must not
+        // report failure after publishing a complete manifest or lose previews
+        // when publication fails.
+        self.save_dir_with(doc, dir, opts, &crate::atomic::RealFs)
     }
 
     /// The same save path with an injectable publication barrier, for failure/GC ordering tests.
-    #[cfg(all(test, windows))]
     fn save_dir_with(&mut self, doc: &Document, dir: &Path, opts: &SaveOptions, fs: &dyn crate::atomic::AtomicFs) -> Result<SaveStats> {
         let scratch_generation = photocraft_raster::spill::read_error_generation();
         let canonical_dir = bundle_root(dir)?;
@@ -1349,7 +1260,6 @@ impl PcraftWriter {
     /// The cached objects this save re-verifies even though their signature is unchanged:
     /// oldest-checked first, until their recorded sizes reach the re-verify budget (always at
     /// least one, so an object larger than the budget is still reached in turn).
-    #[cfg(all(test, windows))]
     fn rolling_recheck(&self, objects: &BTreeMap<String, Object>) -> HashSet<String> {
         let mut out = HashSet::new();
         let Some(cache) = &self.verified_directory else { return out };
@@ -1627,7 +1537,6 @@ fn gc_pinned_directory_handles_resist_subdirectory_swap() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-#[cfg(all(test, windows))]
 fn list_objects(dir: &Path) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
     for sub in ["tiles", "blobs"] {
