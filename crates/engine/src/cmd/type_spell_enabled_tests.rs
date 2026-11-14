@@ -41,7 +41,7 @@ fn listing_a_document_without_type_layers_finds_nothing_and_adds_no_history() {
     s.execute("layer.new.layer", json!({"name": "Empty"})).unwrap();
     let before = history(&s);
     for params in [json!({"action": "list"}), json!({})] {
-        assert_eq!(s.execute(CMD, params.clone()).unwrap(), json!({"misspellings": [], "count": 0}), "{params}");
+        assert_eq!(s.execute(CMD, params.clone()).unwrap(), json!({"misspellings": [], "count": 0, "skipped": []}), "{params}");
     }
     assert_eq!(history(&s), before);
 }

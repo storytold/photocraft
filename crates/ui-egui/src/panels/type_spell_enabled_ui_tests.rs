@@ -65,8 +65,8 @@ fn check_spelling_is_greyed_without_a_document() {
     assert!(!open_edit_menu(&mut h));
 }
 
-/// Lock All on the only type layer is not measured: the menu keeps today's dialog, which opens
-/// with nothing listed (the hidden and locked layer prompts are #14175).
+/// Lock All on the only type layer is not measured: after its prompt (#14175) the menu keeps
+/// today's dialog, which opens with nothing listed.
 #[test]
 fn check_spelling_with_only_a_lock_all_type_layer_opens_an_empty_dialog() {
     let mut app = app(true);
@@ -75,6 +75,8 @@ fn check_spelling_with_only_a_lock_all_type_layer_opens_an_empty_dialog() {
     let mut h = harness(app);
     assert!(open_edit_menu(&mut h), "Check Spelling... is enabled");
     h.get_by_label_contains("Check Spelling").click();
+    h.run_steps(4);
+    h.get_by_label("Skip").click();
     h.run_steps(4);
     let spell = h.state().ui.type_panels.spell.as_ref().expect("the Check Spelling dialog opens");
     assert!(spell.items.is_empty(), "with nothing listed: {:?}", spell.items);
