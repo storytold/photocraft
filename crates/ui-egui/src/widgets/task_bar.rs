@@ -105,7 +105,7 @@ pub fn show<R>(
     let t = Tokens::get(ctx);
     let mut moved = None;
     let mut menu = MoreMenu { place: *place, shown: false, hide: false, picked: None };
-    let out = egui::Area::new(area_id()).order(egui::Order::Middle).fixed_pos(at).constrain(false).show(ctx, |ui| {
+    let out = egui::Area::new(area_id()).order(egui::Order::Middle).fixed_pos(at).sense(Sense::click_and_drag()).constrain(false).show(ctx, |ui| {
         egui::Frame::NONE
             .fill(t.card)
             .stroke(Stroke::new(1.0, t.field_border))

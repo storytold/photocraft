@@ -153,7 +153,14 @@ fn a_real_right_click_on_a_free_transform_box_opens_only_the_transform_menu() {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
     h.run_steps(2);
-    let c = h.state().last_canvas_rect.center();
+    // The small top-left transform box is not at the canvas centre, where its bar can sit.
+    let app = h.state();
+    let xf = crate::canvas::ViewXform::active(app).unwrap();
+    let quad = app.ui.transform.as_ref().unwrap().quad.map(|[x, y]| xf.to_screen(x as f32, y as f32));
+    let c = egui::Rect::from_points(&quad).center();
+    let [x0, y0, x1, y1] = crate::transform_task_bar::shown_rect(app, &ctx).expect("the transform bar remains visible");
+    assert!(xf.rect.contains(c), "the click remains on the canvas");
+    assert!(!egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1)).contains(c), "the click targets the box, not its bar");
     mouse_right_click(&mut h, c, Modifiers::NONE);
     assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.transform), "the transform menu");
     assert!(h.state().ui.brush_mode_menu.is_none(), "not the Mode list");

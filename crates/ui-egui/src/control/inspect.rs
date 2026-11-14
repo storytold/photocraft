@@ -31,7 +31,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     dialogs.extend(crate::discard_ui::inspect(app));
     // Last frame's task bar rect, unless the bar can't show now (hidden by `ui.set` before the
     // next draw).
-    let task_bar_rect = app.ui.task_bar_shown.filter(|_| crate::crop_task_bar::eligible(app));
+    let task_bar_rect = app.ui.task_bar_shown.filter(|_| crate::crop_task_bar::eligible(app)).or_else(|| crate::transform_task_bar::shown_rect(app, ctx));
     json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "scratch": photocraft_raster::spill::stats(),
