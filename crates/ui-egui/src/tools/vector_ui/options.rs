@@ -65,7 +65,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         } else {
             vec![("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))]
         };
-        crate::widgets::dropdown_enabled(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0, |m| m != "pixels");
+        // Photoshop's Freeform Pen stays in Path mode in an Indexed Color document (#12840). The
+        // mode is shared with the other pens, so one set to Shape elsewhere is reset here too.
+        let path_only = tool == Tool::FreeformPen && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed);
+        if path_only {
+            o.vector_mode = "path".into();
+        }
+        if crate::widgets::dropdown_enabled(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0, |m| m != "pixels") && path_only {
+            o.vector_mode = "path".into();
+        }
         crate::widgets::vline(ui, 22.0);
         if o.vector_mode == "shape" {
             crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0).accessible_name(tl!("Stroke:"));
