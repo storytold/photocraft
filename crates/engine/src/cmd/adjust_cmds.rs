@@ -336,13 +336,24 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// Image › Adjustments › Exposure: [`has_adjustable`], refused in the CMYK, Lab, Indexed Color and
-/// Multichannel documents measured in #14630 (Bitmap is refused for every adjustment but Invert
-/// before this runs). Duotone was not measured and keeps today's behaviour.
+/// Multichannel documents measured in #14630 (`Session::precondition` refuses Bitmap for every
+/// adjustment but Invert). Duotone and a targeted alpha channel, Quick Mask or layer mask (a gray
+/// plane in any mode) were not measured and keep today's behaviour.
 pub(crate) fn exposure_enabled(s: &Session) -> std::result::Result<(), String> {
     use photocraft_color::ColorMode;
+    if crate::channel_cmds::edits_channel(s) {
+        return Ok(());
+    }
     let d = s.active().ok_or("no document open")?;
-    if let m @ (ColorMode::Cmyk | ColorMode::Lab | ColorMode::Indexed | ColorMode::Multichannel) = d.doc.mode {
-        return Err(format!("Exposure needs an RGB or Grayscale document (this one is {m:?})"));
+    let mode = match d.doc.mode {
+        ColorMode::Cmyk => Some("CMYK Color"),
+        ColorMode::Lab => Some("Lab Color"),
+        ColorMode::Indexed => Some("Indexed Color"),
+        ColorMode::Multichannel => Some("Multichannel"),
+        _ => None,
+    };
+    if let Some(m) = mode {
+        return Err(format!("Exposure needs an RGB or Grayscale document (this one is {m})"));
     }
     has_adjustable(s)
 }

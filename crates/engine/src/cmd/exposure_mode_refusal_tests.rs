@@ -87,7 +87,19 @@ fn duotone_documents_keep_todays_behaviour() {
 /// The refusal names the document's mode, like the other RGB-or-Grayscale checks.
 #[test]
 fn the_refusal_names_the_documents_mode() {
-    let s = new_doc("lab", 8);
+    let s = new_doc("cmyk", 8);
     let why = crate::adjust_cmds::exposure_enabled(&s).unwrap_err();
-    assert!(why.contains("Lab"), "{why}");
+    assert!(why.contains("CMYK Color"), "{why}");
+}
+
+/// A targeted Quick Mask is a gray plane in any mode: not measured, so it keeps today's behaviour
+/// and Exposure still edits it in a CMYK document.
+#[test]
+fn a_quick_mask_in_a_cmyk_document_keeps_todays_behaviour() {
+    let mut s = new_doc("cmyk", 8);
+    s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    assert!(s.is_enabled(EXPOSURE), "the Quick Mask is not refused by this item");
+    let steps = s.active().unwrap().history.past_len();
+    s.execute(EXPOSURE, json!({"exposure": -1, "target": "quickMask"})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history state");
 }
