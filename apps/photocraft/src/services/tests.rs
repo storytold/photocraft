@@ -179,7 +179,9 @@ fn open_filters_cover_uppercase_and_mixed_case_extensions() {
     let svg_filter = open_filters().into_iter().find(|(name, _)| *name == "SVG").map(|(_, exts)| exts).unwrap_or_default();
     assert_eq!(svg_filter, open_filter_extensions(SVG_EXTS));
     let psd_filter = open_filters().into_iter().find(|(name, _)| *name == "Photoshop").map(|(_, exts)| exts).unwrap_or_default();
-    assert_eq!(psd_filter, open_filter_extensions(&["psd", "psb", "psdt"]));
+    assert_eq!(psd_filter, open_filter_extensions(&["psd", "psdt"]));
+    let psb_filter = open_filters().into_iter().find(|(name, _)| *name == "Large Document Format").map(|(_, exts)| exts).unwrap_or_default();
+    assert_eq!(psb_filter, open_filter_extensions(&["psb"]));
     assert!(psd_filter.iter().any(|glob| matches(glob, "psd")) && psd_filter.iter().any(|glob| matches(glob, "PSD")));
     assert!(svg_filter.iter().any(|glob| matches(glob, "svg")) && svg_filter.iter().any(|glob| matches(glob, "svgz")));
 }
