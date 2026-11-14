@@ -54,6 +54,10 @@ pub struct SpellDialog {
     /// The layers selected when it opened, which Check All Layers off checks (#14184).
     #[serde(skip)]
     pub layers: Vec<photocraft_doc::LayerId>,
+    /// Opened while editing type (#14186): the characters of `layer` it checks, the selection or
+    /// from the caret to the end of the text. Check All Layers is off and greyed.
+    #[serde(skip)]
+    pub range: Option<[usize; 2]>,
     pub message: String,
     /// The token of the action playback that opened the dialog at a Check Spelling step: Done
     /// continues it ([`crate::actions::resume`]).
@@ -96,7 +100,8 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         if app.session.active().is_some_and(|st| !photocraft_engine::type_extra_cmds::has_type_layers(&st.doc)) {
             return Some(app.session.execute("edit.checkSpelling", json!({"action": "list"})).map_err(|e| e.to_string()));
         }
-        return Some(open_spelling(app, params.get("allLayers").and_then(Value::as_bool).unwrap_or(true)));
+        let all_layers = params.get("allLayers").and_then(Value::as_bool).unwrap_or(true);
+        return Some(open_spelling_in(app, all_layers, edit_scope(app)));
     }
     if !handles(id) {
         return None;
@@ -779,8 +784,19 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 fn refresh_spelling(app: &mut PhotocraftApp) {
     let Some(d) = app.ui.type_panels.spell.clone() else { return };
     let mut p = json!({ "action": "list", "allLayers": d.all_layers, "suggestions": 8 });
+    let mut nothing = !d.all_layers && d.layer.is_none();
     // Check All Layers starts at the opening layer, or top to bottom (null) without one (#14174).
-    if d.all_layers {
+    if let (Some([a, b]), Some(layer)) = (d.range, d.layer) {
+        // Typing or undo can shorten the text under the range; a deleted layer lists nothing.
+        match app.session.active().and_then(|st| st.doc.layer(layer)).map(|l| &l.content) {
+            Some(photocraft_doc::LayerContent::Text(t)) => {
+                let n = t.text.chars().count();
+                p["layer"] = json!(layer.0);
+                p["range"] = json!([a.min(n), b.min(n)]);
+            }
+            _ => nothing = true,
+        }
+    } else if d.all_layers {
         p["from"] = json!(d.layer.map(|l| l.0));
     } else if let Some(layer) = d.layer {
         // A selected layer deleted while the dialog is open is dropped, so the others stay listed.
@@ -788,11 +804,7 @@ fn refresh_spelling(app: &mut PhotocraftApp) {
         p["layers"] = json!(d.layers.iter().filter(|l| doc.is_some_and(|doc| doc.layer(**l).is_some())).map(|l| l.0).collect::<Vec<_>>());
         p["from"] = json!(layer.0);
     }
-    let items = if !d.all_layers && d.layer.is_none() {
-        Vec::new()
-    } else {
-        run(app, "edit.checkSpelling", p).and_then(|r| r["misspellings"].as_array().cloned()).unwrap_or_default()
-    };
+    let items = if nothing { Vec::new() } else { run(app, "edit.checkSpelling", p).and_then(|r| r["misspellings"].as_array().cloned()).unwrap_or_default() };
     let ignored = |i: &Value| {
         let key = ignore_key(i["word"].as_str().unwrap_or(""));
         d.ignore.iter().any(|(layer, k)| i["layer"] == layer.0 && *k == key)
@@ -820,20 +832,63 @@ fn step_back(s: &mut SpellDialog, gone: impl Fn(&Value) -> bool) {
 /// Opens Edit › Check Spelling (returns the misspellings). Opening it again while an action waits
 /// at a Check Spelling step keeps that action's token, so Done still continues it.
 pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value, String> {
+    open_spelling_in(app, all_layers, None)
+}
+
+/// [`open_spelling`] limited to `edit`, the Type tool's [`edit_scope`], which only the menu passes:
+/// a played Check Spelling step keeps the Check All Layers it recorded.
+fn open_spelling_in(app: &mut PhotocraftApp, all_layers: bool, edit: Option<(photocraft_doc::LayerId, [usize; 2])>) -> Result<Value, String> {
     let resume = app.ui.type_panels.spell.as_ref().and_then(|d| d.resume);
-    let (layer, layers) = match app.ui.type_panels.spell.as_ref().filter(|_| resume.is_some()) {
-        Some(d) => (d.layer, d.layers.clone()),
-        None => app.session.active().map_or((None, Vec::new()), |st| (st.active_layer, st.selected_layers())),
+    let (layer, layers, range) = match app.ui.type_panels.spell.as_ref().filter(|_| resume.is_some()) {
+        Some(d) => (d.layer, d.layers.clone(), d.range),
+        None => match edit {
+            Some((layer, range)) => (Some(layer), vec![layer], Some(range)),
+            None => app.session.active().map_or((None, Vec::new(), None), |st| (st.active_layer, st.selected_layers(), None)),
+        },
     };
+    let all_layers = all_layers && range.is_none();
     let mut params = json!({"action":"list","allLayers":all_layers});
     if !all_layers {
         params["layer"] = json!(layer.ok_or("no layer was selected for this spelling check")?.0);
+        params["range"] = json!(range);
     }
     app.session.execute("edit.checkSpelling", params).map_err(|e| e.to_string())?;
-    app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, layers, resume, ..Default::default() });
+    app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, layers, range, resume, ..Default::default() });
     refresh_spelling(app);
     let d = app.ui.type_panels.spell.as_ref().map(|d| d.items.clone()).unwrap_or_default();
     Ok(json!({ "dialog": SPELLING, "misspellings": d }))
+}
+
+/// The layer the Type tool is editing and the characters Check Spelling checks there: the
+/// selection, or from the caret to the end of the text (#14186). A Type Mask session and an edit in
+/// another document are not measured and check as without one.
+fn edit_scope(app: &PhotocraftApp) -> Option<(photocraft_doc::LayerId, [usize; 2])> {
+    let ed = app.ui.text_edit.as_ref().filter(|ed| !ed.mask)?;
+    let st = app.session.active()?;
+    if ed.document.is_some_and(|d| d != st.doc.id.0) {
+        return None;
+    }
+    let layer = photocraft_doc::LayerId(ed.layer);
+    let photocraft_doc::LayerContent::Text(t) = &st.doc.layer(layer)?.content else { return None };
+    let n = t.text.chars().count();
+    Some((layer, crate::type_tool::selected_range(app).unwrap_or([ed.caret.min(n), n])))
+}
+
+/// Moves the text-edit range over the replaced characters `hits` (ascending), each now `len` long,
+/// so the words after a Change stay in it.
+fn shift_range(range: [usize; 2], hits: &[(usize, usize)], len: usize) -> [usize; 2] {
+    range.map(|p| hits.iter().rev().fold(p, |p, &(a, b)| if p >= b { p - (b - a) + len } else { p.min(a + len) }))
+}
+
+/// The characters a Change (`item`) or Change All (every `word` in its layer, also outside the
+/// range) replaces.
+fn replaced(app: &mut PhotocraftApp, action: &str, item: &Value, word: &str) -> Vec<(usize, usize)> {
+    let span = |i: &Value| Some((i["start"].as_u64()? as usize, i["end"].as_u64()? as usize));
+    if action == "change" {
+        return span(item).into_iter().collect();
+    }
+    let all = run(app, "edit.checkSpelling", json!({ "action": "list", "layer": item["layer"], "suggestions": 0 }));
+    all.and_then(|r| r["misspellings"].as_array().cloned()).unwrap_or_default().iter().filter(|j| j["word"] == word).filter_map(span).collect()
 }
 
 /// Done: an action being recorded gets one Check Spelling step with Check All Layers as the dialog
@@ -924,9 +979,12 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         });
                     });
                     ui.add_space(4.0);
-                    if crate::widgets::checkbox(ui, &mut all_layers, tl!("Check All Layers")).changed() {
-                        act = Some("relist");
-                    }
+                    // Greyed while editing type, which checks that layer only (#14186).
+                    ui.add_enabled_ui(d.range.is_none(), |ui| {
+                        if crate::widgets::checkbox(ui, &mut all_layers, tl!("Check All Layers")).changed() {
+                            act = Some("relist");
+                        }
+                    });
                     let msg = if item.is_none() { tl!("Spell check complete.") } else { "" };
                     if !msg.is_empty() {
                         ui.label(RichText::new(msg).color(t.text).size(11.5));
@@ -993,14 +1051,24 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 } else {
                     spelling_change_all_params(i, &word, &change_to)
                 };
+                let hits = d.range.map(|_| replaced(app, a, i, &word));
                 match crate::actions::spelling_change(app, p) {
-                    // The engine also replaced the passed occurrences in this layer.
-                    Ok(_) if a == "changeAll" => {
+                    Ok(_) => {
                         if let Some(s) = app.ui.type_panels.spell.as_mut() {
-                            step_back(s, |j| j["layer"] == i["layer"] && j["word"] == word);
+                            // The engine also replaced the passed occurrences in this layer.
+                            if a == "changeAll" {
+                                step_back(s, |j| j["layer"] == i["layer"] && j["word"] == word);
+                            }
+                            if let (Some(range), Some(hits)) = (s.range, &hits) {
+                                s.range = Some(shift_range(range, hits, change_to.chars().count()));
+                            }
+                        }
+                        // The caret and selection move with the text, so typing after Done lands
+                        // where it was.
+                        if let (Some(ed), Some(hits)) = (app.ui.text_edit.as_mut().filter(|ed| i["layer"] == ed.layer), &hits) {
+                            [ed.anchor, ed.caret] = shift_range([ed.anchor, ed.caret], hits, change_to.chars().count());
                         }
                     }
-                    Ok(_) => {}
                     Err(error) => {
                         app.ui.status = error;
                         app.ui.status_error = true;
