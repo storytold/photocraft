@@ -137,8 +137,32 @@ fn group_target_refusal_keeps_the_selection_and_adds_no_history_step() {
     let steps = history(&s);
     assert!(wand(&mut s, CLICK.0, CLICK.1, false).is_err());
     assert_eq!(selection_bounds(&s), before, "the old selection is untouched");
+    // The bounds alone would not show a changed interior: sample the mask inside and outside.
+    assert_eq!(coverage(&s, 30, 30), 1.0, "inside the old selection");
+    assert_eq!(coverage(&s, CLICK.0, CLICK.1), 0.0, "outside it, where the click was");
     assert_eq!(history(&s), steps, "the refusal adds no history step");
     assert!(!steps.iter().any(|e| e == "Magic Wand"), "{steps:?}");
+}
+
+/// The refusal does not depend on how the click would combine with the selection: Add, Subtract
+/// and Intersect leave the selection and the history alone, and with Sample All Layers on every
+/// mode still reads the composite.
+#[test]
+fn group_target_is_refused_in_every_selection_mode() {
+    for mode in ["replace", "add", "subtract", "intersect"] {
+        let mut s = group_session();
+        s.execute("select.rect", json!({ "x": 20, "y": 20, "width": 40, "height": 30 })).unwrap();
+        let (before, steps) = (selection_bounds(&s), history(&s));
+        let click = |s: &mut Session, all_layers: bool| {
+            s.execute("select.magicWand", json!({ "x": CLICK.0, "y": CLICK.1, "sampleAllLayers": all_layers, "mode": mode })).map_err(|e| e.to_string())
+        };
+        assert_eq!(click(&mut s, false).unwrap_err(), REFUSAL, "{mode}");
+        assert_eq!(selection_bounds(&s), before, "{mode}: the old selection is untouched");
+        assert_eq!(coverage(&s, 30, 30), 1.0, "{mode}: inside the old selection");
+        assert_eq!(history(&s), steps, "{mode}: no history step");
+        click(&mut s, true).unwrap_or_else(|e| panic!("{mode}: the composite is still read with Sample All Layers on, got {e}"));
+        assert_eq!(history(&s).last().map(String::as_str), Some("Magic Wand"), "{mode}");
+    }
 }
 
 #[test]

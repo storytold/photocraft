@@ -126,7 +126,8 @@ fn shown_gray(s: &Session) -> Option<(Rect, Vec<[u8; 4]>)> {
 /// 8-bit RGBA of the active layer (or the composite with `all_layers`) over the canvas. A layer
 /// with no surface of its own -- a group, an adjustment -- reads as the composite whatever
 /// `all_layers` says; the Magic Wand refuses its group case itself ([`WAND_GROUP_TARGET_ERROR`]),
-/// because the Paint Bucket and the Background Eraser rely on this fallback (#11784).
+/// and only when `sampleAllLayers` is off and no gray plane is shown, because the Paint Bucket and
+/// the Background Eraser rely on this fallback (#11784).
 pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[u8; 4]>)> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let area = d.doc.bounds();

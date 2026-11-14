@@ -1007,3 +1007,7 @@ pub(crate) fn command_guide_at(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mod
 #[cfg(test)]
 #[path = "art_history_shift_click_tests.rs"]
 mod art_history_shift_click_tests;
+
+#[cfg(test)]
+#[path = "wand_group_dialog_tests.rs"]
+mod wand_group_dialog_tests;
