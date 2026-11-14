@@ -114,7 +114,7 @@ pub(crate) fn unpremul_px(px: &mut [f32], alpha: bool) {
 
 /// One line of `w` interleaved `n`-channel samples, blurred in place by a running sum (edges
 /// clamped). `scratch` holds the untouched line so an in-place sweep can still read behind it.
-fn box_line_n(line: &mut [f32], w: usize, n: usize, r: usize, scratch: &mut Vec<f32>) {
+pub(crate) fn box_line_n(line: &mut [f32], w: usize, n: usize, r: usize, scratch: &mut Vec<f32>) {
     debug_assert!(n <= MAXC, "one accumulator per channel");
     scratch.clear();
     scratch.extend_from_slice(&line[..w * n]);
