@@ -105,12 +105,16 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
 /// The History Brush's source: the targeted surface (pixels, mask, channel) as it was in History
 /// panel row `state` or snapshot `snapshot` (default: the source set in the History panel,
 /// `history.setSource`, else the oldest state still held, the "Open" state unless trimmed).
-/// A layer that did not exist in that state has no pixels there, and the History Brush refuses it
-/// as Photoshop's does. `eraseToHistory` (the Eraser's Erase to History option) paints such a layer
-/// with that layer's own pixels (its opacity not applied) from a state holding a single layer,
-/// Background or not, or past its path with a shape's solid colour, else white, and refuses it
-/// from any other state: observed in Photoshop 27.11.0, where a state with a second layer, even an
-/// empty one, gives an error.
+/// A layer that did not exist in that state has no pixels there. From a state holding a single
+/// pixel layer, Background or not, the History Brush paints such a layer with that layer's pixels
+/// at the same document coordinates (#12620, observed in Photoshop 28.0.0); from any other state it
+/// refuses it as Photoshop's does. `eraseToHistory` (the Eraser's Erase to History option) paints
+/// such a layer with that layer's own pixels (its opacity not applied) from a state holding a
+/// single layer, Background or not, or past its path with a shape's solid colour, else white, and
+/// refuses it from any other state: observed in Photoshop 27.11.0, where a state with a second
+/// layer, even an empty one, gives an error. For the History Brush, a single group, type layer,
+/// shape or smart object, or a source in another colour mode or bit depth (Image › Mode ›
+/// Indexed Color flattens into a new layer), wasn't measured and is refused as before.
 pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let source_doc = crate::history_source_cmds::paint_source(st, p, cmd)?;
@@ -123,7 +127,12 @@ pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &
     match crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p) {
         Ok(surf) => Ok(surf.clone()),
         Err(_)
-            if flag(p, "eraseToHistory", false) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels && source_doc.layers.len() == 1 =>
+            if crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels
+                && source_doc.layers.len() == 1
+                && (flag(p, "eraseToHistory", false)
+                    || (cmd == "paint.historyBrush"
+                        && (source_doc.mode, source_doc.depth) == (st.doc.mode, st.doc.depth)
+                        && source_doc.layers.first().is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Raster(_))))) =>
         {
             let fmt = id.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()).map(Surface::format).ok_or_else(missing)?;
             let only = source_doc.layers.first().ok_or_else(missing)?;
@@ -314,3 +323,7 @@ pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "heal_indexed_tests.rs"]
 mod heal_indexed_tests;
+
+#[cfg(test)]
+#[path = "history_brush_single_layer_source_tests.rs"]
+mod history_brush_single_layer_source_tests;
