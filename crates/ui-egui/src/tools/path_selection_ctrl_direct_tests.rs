@@ -48,10 +48,6 @@ fn moved_by(d: [f64; 2]) -> Vec<[f64; 2]> {
     SQUARE.iter().map(|p| [p[0] + d[0], p[1] + d[1]]).collect()
 }
 
-/// "Drag Anchor Points" today; PR #13541 renames a one-anchor drag to the singular.
-fn is_anchor_drag_label(label: Option<&str>) -> bool {
-    matches!(label, Some("Drag Anchor Points" | "Drag Anchor Point"))
-}
 
 #[test]
 fn ctrl_drag_on_an_anchor_moves_only_that_anchor_in_one_step() {
@@ -59,7 +55,7 @@ fn ctrl_drag_on_an_anchor_moves_only_that_anchor_in_one_step() {
     let before = undo_label(&app);
     drag(&mut app, [100.0, 300.0], [80.0, 280.0], Modifiers::COMMAND);
     assert_eq!(anchors(&app), vec![[80.0, 280.0], SQUARE[1], SQUARE[2], SQUARE[3]], "only the pressed anchor moved");
-    assert!(is_anchor_drag_label(undo_label(&app).as_deref()), "one anchor-drag step: {:?}", undo_label(&app));
+    assert_eq!(undo_label(&app).as_deref(), Some("Drag Anchor Point"), "singular name for one anchor: {:?}", undo_label(&app));
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(anchors(&app), SQUARE.to_vec(), "one undo restores the square");
     assert_eq!(undo_label(&app), before, "the drag was a single History step");
@@ -89,4 +85,83 @@ fn releasing_ctrl_returns_to_moving_the_whole_component() {
     drag(&mut app, [200.0, 400.0], [210.0, 410.0], Modifiers::NONE);
     let expected: Vec<[f64; 2]> = after_ctrl.iter().map(|p| [p[0] + 10.0, p[1] + 10.0]).collect();
     assert_eq!(anchors(&app), expected, "a plain drag moves the whole component again");
+}
+
+#[test]
+fn eval_ctrl_drag_single_anchor_multi_iteration_sweep() {
+    let deltas = [
+        [-20.0, -20.0],
+        [15.0, 25.0],
+        [-5.0, 30.0],
+        [40.0, -10.0],
+        [-30.0, 50.0],
+        [12.5, -18.0],
+        [-22.0, 14.0],
+        [33.0, 33.0],
+        [-10.0, -40.0],
+        [20.0, 10.0],
+    ];
+
+    for (iter, [dx, dy]) in deltas.into_iter().enumerate() {
+        let mut app = setup();
+        let before_label = undo_label(&app);
+        let from = [100.0, 300.0];
+        let to = [from[0] + dx, from[1] + dy];
+
+        // Action: Ctrl-drag on single anchor (index 0)
+        drag(&mut app, from, to, Modifiers::COMMAND);
+
+        // Invariant 1: Exact coordinates - only anchor 0 moved
+        let expected = vec![to, SQUARE[1], SQUARE[2], SQUARE[3]];
+        assert_eq!(anchors(&app), expected, "iteration {iter}: only anchor 0 moved by [{dx}, {dy}]");
+
+        // Invariant 2: History step is strictly "Drag Anchor Point" (singular, #13627)
+        assert_eq!(
+            undo_label(&app).as_deref(),
+            Some("Drag Anchor Point"),
+            "iteration {iter}: singular label expected, got {:?}",
+            undo_label(&app)
+        );
+
+        // Invariant 3: Undo restores exact original square coordinates and label
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(anchors(&app), SQUARE.to_vec(), "iteration {iter}: undo restores original square");
+        assert_eq!(undo_label(&app), before_label, "iteration {iter}: undo restores original history label");
+
+        // Invariant 4: Redo restores moved coordinates and singular label
+        app.run("edit.redo", json!({})).unwrap();
+        assert_eq!(anchors(&app), expected, "iteration {iter}: redo restores moved anchor");
+        assert_eq!(
+            undo_label(&app).as_deref(),
+            Some("Drag Anchor Point"),
+            "iteration {iter}: redo restores singular label"
+        );
+    }
+}
+
+#[test]
+fn eval_direct_selection_multi_anchor_drag_records_plural_label() {
+    let mut app = setup();
+    app.ui.tool = Tool::DirectSelection;
+    // Marquee-select anchors 0 and 1
+    tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 250.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 350.0, y: 350.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 350.0, y: 350.0 }, Modifiers::NONE);
+
+    // Drag both selected anchors
+    drag(&mut app, [100.0, 300.0], [120.0, 320.0], Modifiers::NONE);
+
+    // Invariant 1: Exactly the two selected anchors moved
+    assert_eq!(
+        anchors(&app),
+        vec![[120.0, 320.0], [320.0, 320.0], SQUARE[2], SQUARE[3]],
+        "only the two selected anchors moved"
+    );
+
+    // Invariant 2: Multiple anchors must record "Drag Anchor Points" (plural)
+    assert_eq!(
+        undo_label(&app).as_deref(),
+        Some("Drag Anchor Points"),
+        "multiple anchors must record plural label"
+    );
 }
