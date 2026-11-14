@@ -372,7 +372,9 @@ fn commit_new(app: &mut PhotocraftApp, start: [f64; 2], cur: [f64; 2], square: b
     match app.run("layer.new.frame", p) {
         Ok(v) => {
             if let Some(id) = v.get("layer").and_then(Value::as_u64) {
-                select(app, LayerId(id), Target::Frame);
+                // A drag that took an image leaves that content active; empty frames select the container.
+                let target = if v.get("content").and_then(Value::as_u64).is_some() { Target::Content } else { Target::Frame };
+                select(app, LayerId(id), target);
             }
         }
         Err(e) => report(app, Err(e)),
@@ -897,3 +899,6 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 }
 #[cfg(test)]
 mod move_history_tests;
+
+#[cfg(test)]
+mod content_active_tests;
