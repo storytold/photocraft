@@ -580,6 +580,47 @@ fn a_play_step_naming_an_unloaded_set_is_reported() {
     assert_eq!(pixel(&mut s), [0.0, 0.0, 1.0, 1.0]);
 }
 
+/// A Play step qualified with the file's own set names a child that set does not hold, while
+/// another loaded set has a child of that name: the step must not play the other set's action. The
+/// load reports the lost target and playback refuses it (#11523).
+#[test]
+fn a_play_step_naming_a_missing_child_of_its_own_set_does_not_play_another_sets_child() {
+    // A `set` override renames the set the file's actions land in; the lost target is still the
+    // set's, not an unloaded one.
+    for (over, set) in [(None, "Own"), (Some("Renamed"), "Renamed")] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
+        s.execute("actions.load", json!({"data": RED_ATN})).unwrap();
+        let caller = Action { name: "Outer".into(), steps: vec![("actions.play".into(), json!({"action": "Child", "set": "Own"}))], ..Default::default() };
+        let (bytes, _) = export("Own", &[&caller], &[], false).unwrap();
+        let params = match over {
+            Some(name) => json!({"data": b64(&bytes), "set": name}),
+            None => json!({"data": b64(&bytes)}),
+        };
+        let r = s.execute("actions.load", params).unwrap();
+        let warnings: Vec<&str> = r["warnings"].as_array().map(|w| w.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        assert!(warnings.iter().any(|w| w.contains("Child") && w.contains(set) && w.contains("does not hold")), "{r}");
+        let played = s.execute("actions.play", json!({"action": "Outer"})).unwrap();
+        let error = played["failed"]["error"].as_str().unwrap_or_default();
+        assert!(error.contains("Child") && error.contains(set), "{played}");
+        assert_eq!(pixel(&mut s), [1.0, 1.0, 1.0, 1.0], "an unresolvable call plays nothing, not the Red child");
+    }
+}
+/// The same step with the child present in its own set keeps the bare form and plays that child,
+/// whichever other set holds a child of the name.
+#[test]
+fn a_play_step_naming_a_child_of_its_own_set_stays_bare_and_plays_it() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
+    s.execute("actions.load", json!({"data": RED_ATN})).unwrap();
+    let child = Action { name: "Child".into(), steps: vec![("image.adjustments.invert".into(), json!({}))], ..Default::default() };
+    let caller = Action { name: "Outer".into(), steps: vec![("actions.play".into(), json!({"action": "Child", "set": "Own"}))], ..Default::default() };
+    let (bytes, _) = export("Own", &[&child, &caller], &[], false).unwrap();
+    let r = s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
+    assert_eq!(r["warnings"], json!([]), "{r}");
+    let outer = s.actions.list.iter().find(|a| a.name == "Outer").unwrap();
+    assert_eq!(outer.steps, [("actions.play".to_string(), json!({"action": "Child 2"}))]);
+}
 /// The load warning tells the two reasons apart: a set the session has not loaded at all, and a
 /// loaded set that simply does not hold the child the call names (#11523).
 #[test]
@@ -3155,10 +3196,12 @@ fn partial_play_action_is_not_exported_as_whole_action_call() {
     assert_eq!(skipped, vec![Skipped { action: "Parent".into(), step: 0, id: "actions.play".into() }]);
     for params in [json!({"action": "Child"}), json!({"action": "Child", "from": 0})] {
         let whole = Action { name: "Parent".into(), steps: vec![("actions.play".into(), params)], ..Default::default() };
-        let (bytes, skipped) = export("Set", &[&whole], &[], false).unwrap();
+        // The called action is in the file, so the call keeps its bare form (#11523).
+        let child = Action { name: "Child".into(), ..Default::default() };
+        let (bytes, skipped) = export("Set", &[&child, &whole], &[], false).unwrap();
         assert!(skipped.is_empty());
         let imported = import(&bytes).unwrap();
-        assert_eq!(imported.actions[0].steps, vec![("actions.play".to_string(), json!({"action": "Child"}))]);
+        assert_eq!(imported.actions[1].steps, vec![("actions.play".to_string(), json!({"action": "Child"}))]);
     }
 }
 

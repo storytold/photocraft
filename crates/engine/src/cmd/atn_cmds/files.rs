@@ -71,6 +71,11 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
                 continue;
             }
             if id == "actions.play" {
+                // A qualifier the importer kept for a child its own set lacks names this import's
+                // set, which a `set` override renamed.
+                if params.get("set").and_then(Value::as_str) == Some(original_set.as_str()) {
+                    params["set"] = json!(imp.set);
+                }
                 if let Some((child, set)) = bind_play_target(params, &renamed) {
                     cross_set_calls.push((caller.clone(), child, set));
                 }
