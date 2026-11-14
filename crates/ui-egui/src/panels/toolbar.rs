@@ -294,6 +294,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 let prev_mod_id = key.with("click-mod");
                                 let prev_modified = ui.data(|d| d.get_temp::<bool>(prev_mod_id)).unwrap_or(false);
                                 let slot_click = resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key);
+                                // The click opened the Perspective Crop prompt: the double-click actions wait for its answer.
+                                let mut asked = false;
                                 if slot_click {
                                     let pick = if slot.len() > 1 && alt {
                                         let from = if slot.contains(&app.ui.tool) { app.ui.tool } else { tool };
@@ -301,13 +303,17 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     } else {
                                         tool
                                     };
-                                    crate::tool_memory::select(app, pick);
+                                    // A pending Perspective Crop asks "Crop the image?" first (#11969).
+                                    asked = crate::perspective_crop_ui::ask_before_switch(app, pick);
+                                    if !asked {
+                                        crate::tool_memory::select(app, pick);
+                                    }
                                 }
                                 // Double-clicking the Hand tool fits the image on screen (Photoshop).
                                 // Modified clicks only cycle / select: a second rapid Alt-click, or a
                                 // plain click that egui pairs with a prior modified click, must not
                                 // count as Hand/Zoom double-click after cycling onto those tools.
-                                let plain_double = resp.double_clicked() && !modified && !prev_modified;
+                                let plain_double = resp.double_clicked() && !modified && !prev_modified && !asked;
                                 if plain_double && tool == Tool::Hand {
                                     crate::tool_memory::select(app, tool);
                                     // With no document open there is nothing to fit.
