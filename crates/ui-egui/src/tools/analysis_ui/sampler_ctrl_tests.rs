@@ -45,9 +45,14 @@ fn alpha(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
 
 /// The temporary tool ⌘ held makes with the pointer over document point `at`.
 fn held_with_command(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<crate::hold_keys::Temporary> {
+    held_with(app, at, CMD)
+}
+
+/// The temporary tool the modifiers `m` make with the pointer over document point `at`.
+fn held_with(app: &mut PhotocraftApp, at: [f64; 2], m: Modifiers) -> Option<crate::hold_keys::Temporary> {
     app.hover_doc = Some(at);
     let ctx = egui::Context::default();
-    let raw = egui::RawInput { events: vec![egui::Event::ModifiersChanged(CMD)], ..Default::default() };
+    let raw = egui::RawInput { events: vec![egui::Event::ModifiersChanged(m)], ..Default::default() };
     ctx.begin_pass(raw);
     let t = crate::hold_keys::held_tool(app, &ctx);
     ctx.end_pass().textures_delta.clear();
@@ -87,6 +92,37 @@ fn held_command_is_the_move_tool_only_off_a_point() {
 fn without_command_a_drag_off_a_point_adds_one_as_before() {
     let mut app = app();
     drag(&mut app, [120.0, 120.0], [30.0, 20.0], Modifiers::NONE);
+    assert_eq!(samplers(&app).len(), 2, "a new point where the drag ends");
+    assert!(alpha(&app, 105, 105) > 0.5, "the layer stays");
+}
+
+/// CodeRabbit on #14684: only a plain ⌘ stays the Color Sampler over a point. ⌘⌥ and ⌘⇧ were the
+/// Move tool there before this change (the issue marks them unmeasured) and stay it.
+#[test]
+fn command_with_alt_or_shift_over_a_point_is_still_the_move_tool() {
+    let mut app = app();
+    for m in [Modifiers { alt: true, ..CMD }, Modifiers { shift: true, ..CMD }] {
+        assert_eq!(held_with(&mut app, [300.5, 200.5], m), Some(crate::hold_keys::Temporary::Move), "{m:?}");
+    }
+}
+
+/// The same over `ui.pointer`, where the modifiers come with the event: ⌘⌥ on a point still
+/// deletes it as the Color Sampler's Alt does, and ⌘⇧ still drags it.
+#[test]
+fn command_with_alt_or_shift_on_a_point_keeps_the_sampler_handler() {
+    let mut app = app();
+    drag(&mut app, [300.5, 200.5], [20.0, 10.0], Modifiers { shift: true, ..CMD });
+    assert_eq!(samplers(&app), vec![[320.5, 210.5]], "⌘⇧ drag moves the point");
+    drag(&mut app, [320.5, 210.5], [0.0, 0.0], Modifiers { alt: true, ..CMD });
+    assert!(samplers(&app).is_empty(), "⌘⌥ click deletes the point");
+}
+
+/// Off a point, ⌘⇧ over `ui.pointer` still goes to the Color Sampler's handler (a new point), as
+/// before ⌘ was the temporary Move tool there.
+#[test]
+fn command_with_shift_off_a_point_keeps_the_sampler_handler() {
+    let mut app = app();
+    drag(&mut app, [120.0, 120.0], [30.0, 20.0], Modifiers { shift: true, ..CMD });
     assert_eq!(samplers(&app).len(), 2, "a new point where the drag ends");
     assert!(alpha(&app, 105, 105) > 0.5, "the layer stays");
 }

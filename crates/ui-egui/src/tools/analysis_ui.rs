@@ -317,8 +317,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     let tol = tolerance(app);
     // ⌘ with the Color Sampler (#11731): a drag that starts on a point moves the point; one that
     // starts off a point is the temporary Move tool's (`hold_keys::cmd_move_held` makes it that in
-    // the app; over `ui.pointer` the event falls through to `event_tool`).
-    if tool == Tool::ColorSampler && mods.command && !matches!(app.ui.analysis.drag, Some(Drag::Sampler(..) | Drag::SamplerNew(_))) {
+    // the app; over `ui.pointer` the event falls through to `event_tool`). ⌘⌥ and ⌘⇧ were not
+    // measured and keep the handler below.
+    if tool == Tool::ColorSampler && mods.command && !mods.alt && !mods.shift && !matches!(app.ui.analysis.drag, Some(Drag::Sampler(..) | Drag::SamplerNew(_)))
+    {
         let on_point = matches!(ev, ToolEvent::Down { x, y, .. } if sampler_at(app, [x, y]).is_some());
         if !on_point {
             return false;
