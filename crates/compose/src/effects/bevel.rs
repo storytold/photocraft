@@ -193,11 +193,15 @@ pub(super) fn bevel_maps(shape: &Map, b: &Bevel, light: &GlobalLight, tex: &Text
     let on_bevel = |x: i64, y: i64| {
         hmap.get(x, y) > BEVEL_H_EPS || (reach_past && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| hmap.get(x + dx, y + dy) > BEVEL_H_EPS))
     };
-    // The gloss contour remaps the shading `n · light` before it splits into highlight (above
-    // what it maps a flat face's `sin(altitude)` to) and shadow. Applied to the highlight and shadow amounts
-    // instead, a contour that starts high (Rolling Slope - Descending) lit every pixel the light
-    // missed, so a bevelled glyph's flat face took the full highlight (#7360) where Photoshop
-    // leaves it at the layer's colour. The Linear contour changes nothing either way.
+    // The gloss contour remaps the shading `n · light` before it splits into highlight (above a
+    // flat face's own, unmapped `sin(altitude)`) and shadow (below it). Applied to the highlight
+    // and shadow amounts instead, a contour that starts high (Rolling Slope - Descending) lit
+    // every pixel the light missed (#7360). With the mapped `lut(sin(altitude))` as the neutral,
+    // a high light washed out whole faces: at altitude 69 that contour maps the flat 0.93 to
+    // 0.16, so every slope above 0.16 took the full highlight where Photoshop only glints where
+    // the shading nears 0. A contour that moves the flat shading lights or darkens the flat face
+    // too, as Photoshop does (oracles bevel-inner-gloss-ramp-peak / -double-ring-aa: faces at
+    // the full highlight and a 0.69 shadow). The Linear contour changes nothing either way.
     let gloss = contour_lut(&b.gloss_contour);
     let shade_into = |depth: f32, region_kind: u8| -> (Map, Map) {
         let (mut hi, mut sh) = (Map::new(shape.w, shape.h, 0.0), Map::new(shape.w, shape.h, 0.0));
@@ -219,7 +223,7 @@ pub(super) fn bevel_maps(shape: &Map, b: &Bevel, light: &GlobalLight, tex: &Text
                     let len = (n[0] * n[0] + n[1] * n[1] + 1.0).sqrt();
                     let shade = (n[0] * light_v[0] + n[1] * light_v[1] + n[2] * light_v[2]) / len;
                     let region = if region_kind == 0 { shape.v[i] } else { f32::from(shape.v[i] < 1.0 - INSIDE_EPS && on_bevel(x, y)) };
-                    let k = gloss.as_ref().map_or(shade - se, |l| lut_at(l, shade) - lut_at(l, se));
+                    let k = gloss.as_ref().map_or(shade, |l| lut_at(l, shade)) - se;
                     if k > 0.0 {
                         hi_row[x as usize] = (k / (1.0 - se).max(1e-3)).clamp(0.0, 1.0) * region;
                     } else {
