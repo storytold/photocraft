@@ -104,6 +104,7 @@ pub(crate) mod params {
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
         },
         ParamFamily {
+            check: Some(lens_batch_ui::check),
             listing: Some(lens_batch_ui::listing),
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == lens_batch_ui::COMMAND, filter_dialog::run)
