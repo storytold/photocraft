@@ -170,6 +170,7 @@ pub mod type_area_cmds;
 pub mod type_caret_cmds;
 pub mod type_cmds;
 pub mod type_extra_cmds;
+pub mod type_fit_cmds;
 #[cfg(test)]
 mod type_indexed_mode_tests;
 pub mod type_mask_cmds;
@@ -1393,6 +1394,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::exr_cmds::specs());
     v.extend(crate::type_extra_cmds::specs());
     v.extend(crate::type_area_cmds::specs());
+    v.extend(crate::type_fit_cmds::specs());
     v.extend(crate::type_styles_cmds::specs());
     v.extend(crate::type_spell_cmds::specs());
     v.extend(crate::type_caret_cmds::specs());

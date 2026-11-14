@@ -138,6 +138,32 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             orientation: text::Orientation::Vertical,
             antialias: text::AntiAlias::Crisp,
             warp: Some(TextWarp { style: "warpArc".into(), value: 25.0, ..Default::default() }),
+            fit: None,
+        }),
+    );
+    // Dynamic Text box type with the solver's lines, so every round trip carries a fit.
+    let dynamic = Layer::new(
+        "Dynamic Type",
+        LayerContent::Text(TextLayer {
+            text: "Big small words".into(),
+            font_family: "Inter".into(),
+            size_pt: 12.0,
+            color: Color::BLACK,
+            transform: Affine::translate(4.0, 8.0),
+            cache: None,
+            psd_raw: None,
+            runs: vec![TextRun { len: 15, style: CharStyle::default() }],
+            paragraphs: vec![ParagraphRun { len: 15, style: ParagraphStyle::default() }],
+            shape: TextShape::Box { x: 0.0, y: 0.0, width: 120.0, height: 80.0 },
+            fit: Some(text::TextFit {
+                word_gap: 25.0,
+                line_gap: -10.0,
+                lines: vec![text::FitLine { start: 0, scale: 2.5 }, text::FitLine { start: 4, scale: 1.25 }],
+                area_scale: 1.0,
+            }),
+            orientation: text::Orientation::Horizontal,
+            antialias: text::AntiAlias::default(),
+            warp: None,
         }),
     );
     let mut shape = Layer::new(
@@ -217,7 +243,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             perspective: None,
         }),
     );
-    d.layers.extend([paint, group, fill, grad, text, shape, smart, linked]);
+    d.layers.extend([paint, group, fill, grad, text, dynamic, shape, smart, linked]);
 
     let mut ch = Surface::new(PixelFormat::GRAY8.with_sample(depth));
     scribble(&mut ch, 13, false);

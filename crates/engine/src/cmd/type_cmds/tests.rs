@@ -675,6 +675,44 @@ fn style_range_reversed_is_a_no_op() {
     assert_eq!(t.runs.iter().map(|r| r.len).sum::<usize>(), t.text.len());
 }
 
+/// Dynamic Text's solved lines are byte offsets into the text they were solved for: an edit
+/// drops them, or a stale offset that still lands on a char boundary breaks a word mid-way.
+#[test]
+fn replacing_text_drops_solved_fit_lines() {
+    use photocraft_doc::text::{FitLine, TextFit};
+    let mut t = TextLayer::default();
+    replace_text(&mut t, 0, 0, "Hello world");
+    let lines = vec![FitLine { start: 0, scale: 1.0 }, FitLine { start: 6, scale: 1.2 }];
+    t.fit = Some(TextFit { lines: lines.clone(), ..Default::default() });
+    assert_eq!(t.fit.as_ref().unwrap().valid_lines(&t.text), lines.as_slice());
+    replace_text(&mut t, 5, 6, "");
+    assert_eq!(t.text, "Helloworld");
+    let fit = t.fit.as_ref().unwrap();
+    assert!(fit.lines.is_empty(), "stale solved lines survived the edit: {:?}", fit.lines);
+    // The rest of the Dynamic Text settings stay.
+    assert_eq!(fit.area_scale, 1.0);
+}
+
+/// A replacement that changes nothing (`type.edit` with the same text gives an empty span) keeps
+/// Dynamic Text's solved lines: the refresh after it only renders, so dropping them switched the
+/// layer to its natural breaks and sizes.
+#[test]
+fn an_empty_replacement_keeps_solved_fit_lines() {
+    use photocraft_doc::text::{FitLine, TextFit};
+    let mut t = TextLayer::default();
+    replace_text(&mut t, 0, 0, "Hello world");
+    let lines = vec![FitLine { start: 0, scale: 1.0 }, FitLine { start: 6, scale: 1.2 }];
+    t.fit = Some(TextFit { lines: lines.clone(), ..Default::default() });
+    let (a, b, new) = changed_span("Hello world", "Hello world");
+    replace_text(&mut t, a, b, new);
+    assert_eq!(t.text, "Hello world");
+    assert_eq!(t.fit.as_ref().unwrap().lines, lines, "the same text keeps its solved lines");
+    replace_text(&mut t, 5, 5, "");
+    assert_eq!(t.fit.as_ref().unwrap().lines, lines, "inserting nothing is no edit either");
+    replace_text(&mut t, 5, 5, ",");
+    assert!(t.fit.as_ref().unwrap().lines.is_empty(), "an insertion still drops them");
+}
+
 #[test]
 fn style_range_on_empty_text() {
     let mut t = TextLayer::default();

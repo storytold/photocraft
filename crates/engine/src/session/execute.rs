@@ -172,6 +172,9 @@ impl Session {
         if let Some(why) = bitmap_mode_refusal(self, spec.id, params) {
             return Err(why.into());
         }
+        if let Some(r) = crate::type_fit_cmds::named_layer_enabled(self, spec.id, params) {
+            return r;
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
 

@@ -13,6 +13,19 @@ const MAX_REFIT_RUN_NODES: usize = 16_384;
 
 const MAX_REFIT_RUN_BYTES: usize = 1 << 20;
 
+/// Whether `text` (`\r` breaks) has more paragraphs than a refitted run array can hold: every
+/// run costs at least one node of [`MAX_REFIT_RUN_NODES`], so its paragraph runs can't be
+/// refitted, and nothing sized by its paragraph count is built for it (16 MiB of breaks would
+/// otherwise allocate hundreds of MiB of per-paragraph lists before the run budget applies).
+fn too_many_paragraphs(text: &str) -> bool {
+    text.split_inclusive('\r').nth(MAX_REFIT_RUN_NODES).is_some()
+}
+
+/// The UTF-16 length of each paragraph of `text`; `None` past [`too_many_paragraphs`].
+fn paragraph_lengths(text: &str) -> Option<Vec<usize>> {
+    (!too_many_paragraphs(text)).then(|| text.split_inclusive('\r').map(|p| p.encode_utf16().count()).collect())
+}
+
 /// Whether `v` holds at most `budget` values, counting down `budget` (stops at the first one over).
 pub(super) fn fits(v: &E, budget: &mut usize) -> bool {
     let Some(left) = budget.checked_sub(1) else { return false };
@@ -56,7 +69,6 @@ pub(super) fn names_one_frame(object: &E) -> bool {
 /// runs (`/1 /1 /0`, one per paragraph) remade for the new paragraphs. `None` when the template
 /// can't be refitted.
 pub(super) fn new_object(template: &E, at: usize, text: &str) -> Option<E> {
-    let paragraphs: Vec<usize> = text.split_inclusive('\r').map(|p| p.encode_utf16().count()).collect();
     let frame = template.path(&["1", "0"]).and_then(E::as_array).and_then(|f| f.first()).and_then(|f| f.get("0")).cloned();
     let at = i64::try_from(at).ok()?;
     let mut object = edited_object(template, text)?;
@@ -73,7 +85,7 @@ pub(super) fn new_object(template: &E, at: usize, text: &str) -> Option<E> {
     }
     if let Some(runs) = view.path(&["1", "0"]).and_then(E::as_array) {
         let (mut nodes, mut bytes) = (MAX_REFIT_RUN_NODES, MAX_REFIT_RUN_BYTES);
-        let fitted = runs_per(runs, &paragraphs, "1", &mut nodes, &mut bytes)?;
+        let fitted = runs_per(runs, &paragraph_lengths(text)?, "1", &mut nodes, &mut bytes)?;
         view.get_mut("1")?.set("0", E::Array(fitted));
     }
     Some(object)
@@ -113,7 +125,8 @@ pub(super) fn edited_object(object: &E, text: &str) -> Option<E> {
     items.retain(|(k, _)| k != "21");
     let model = object.get_mut("0").filter(|m| matches!(m, E::Dict(_)))?;
     let total = utf16_len(text) as usize;
-    let paragraphs: Vec<usize> = text.split_inclusive('\r').map(|p| p.encode_utf16().count()).collect();
+    let paragraphs = paragraph_lengths(text);
+    let sources = model.get("0").and_then(E::as_str).and_then(|old| paragraph_sources(old, text));
     let E::Dict(entries) = model else { return None };
     let (mut nodes, mut bytes) = (MAX_REFIT_RUN_NODES, MAX_REFIT_RUN_BYTES);
     for (key, value) in entries.iter_mut() {
@@ -125,7 +138,7 @@ pub(super) fn edited_object(object: &E, text: &str) -> Option<E> {
             continue;
         };
         let fitted = if key.as_str() == "5" {
-            runs_per(runs, &paragraphs, "1", &mut nodes, &mut bytes)?
+            runs_from(runs, paragraphs.as_deref()?, sources.as_deref(), "1", &mut nodes, &mut bytes)?
         } else {
             runs_to_length(runs, total, "1", &mut nodes, &mut bytes)?
         };
@@ -154,7 +167,8 @@ pub(super) fn td_edited_object(object: &E, text: &str) -> Option<E> {
         return None;
     }
     let total = utf16_len(text) as usize;
-    let paragraphs: Vec<usize> = text.split_inclusive('\r').map(|p| p.encode_utf16().count()).collect();
+    let paragraphs = paragraph_lengths(text);
+    let sources = entries.iter().find(|(k, _)| k == "Text").and_then(|(_, v)| v.as_str()).and_then(|old| paragraph_sources(old, text));
     let (mut nodes, mut bytes) = (MAX_REFIT_RUN_NODES, MAX_REFIT_RUN_BYTES);
     for (key, value) in entries.iter_mut() {
         if key.as_str() == "Text" {
@@ -171,7 +185,7 @@ pub(super) fn td_edited_object(object: &E, text: &str) -> Option<E> {
         let fitted = match runs {
             E::Array(runs) if runs.iter().all(|x| matches!(x, E::Dict(_)) && x.get("Length").is_some()) => {
                 if key.as_str() == "ParagraphRun" {
-                    runs_per(runs, &paragraphs, "Length", &mut nodes, &mut bytes)?
+                    runs_from(runs, paragraphs.as_deref()?, sources.as_deref(), "Length", &mut nodes, &mut bytes)?
                 } else {
                     runs_to_length(runs, total, "Length", &mut nodes, &mut bytes)?
                 }
@@ -183,15 +197,73 @@ pub(super) fn td_edited_object(object: &E, text: &str) -> Option<E> {
     Some(object)
 }
 
+/// For each paragraph of `new` (`\r`-terminated), the paragraph of `old` it came from, when
+/// `new` is `old` with only its spacing and paragraph breaks changed (the same characters
+/// otherwise, in order): baking Dynamic Text splits a paragraph into one per line, and every
+/// piece keeps its own paragraph's style, not the style of whichever paragraph had its index.
+/// An empty paragraph of `new` is the empty paragraph `old` has at the same place, while one is
+/// left there, and keeps its style; a new empty one takes the next character's paragraph.
+/// `None` otherwise (and for unchanged text), and the paragraphs keep the file's by index.
+fn paragraph_sources(old: &str, new: &str) -> Option<Vec<usize>> {
+    let blank = |c: char| matches!(c, ' ' | '\r' | '\n');
+    // One entry per paragraph of each: past the run budget the paragraphs keep the file's by
+    // index (and a `new` that long can't be refitted at all).
+    if old == new || too_many_paragraphs(old) || too_many_paragraphs(new) || !old.chars().filter(|&c| !blank(c)).eq(new.chars().filter(|&c| !blank(c))) {
+        return None;
+    }
+    // Per old paragraph (not per character): how many non-blank characters come before it, and
+    // how many it holds.
+    let count = |p: &str| p.chars().filter(|&c| !blank(c)).count();
+    let mut old_paras: Vec<(usize, usize)> = Vec::new();
+    let mut before = 0usize;
+    for p in old.split_inclusive('\r') {
+        let n = count(p);
+        old_paras.push((before, n));
+        before = before.saturating_add(n);
+    }
+    // Past the last character: the last old paragraph that holds one.
+    let last_full = old_paras.iter().rposition(|&(_, n)| n > 0).unwrap_or(0);
+    // `owner`: the old paragraph holding the character at `seen`; `empty`: the next old paragraph
+    // an empty new one may be. Both only move forward, as `seen` does.
+    let (mut owner, mut empty, mut seen) = (0usize, 0usize, 0usize);
+    let mut out = Vec::new();
+    for p in new.split_inclusive('\r') {
+        let n = count(p);
+        while old_paras.get(owner).is_some_and(|&(at, len)| len == 0 || at.saturating_add(len) <= seen) {
+            owner += 1;
+        }
+        while old_paras.get(empty).is_some_and(|&(at, len)| if len == 0 { at < seen } else { at.saturating_add(len) <= seen }) {
+            empty += 1;
+        }
+        let src = if n == 0 && old_paras.get(empty).is_some_and(|&(at, len)| len == 0 && at == seen) {
+            empty += 1;
+            empty - 1
+        } else if owner < old_paras.len() {
+            owner
+        } else {
+            last_full
+        };
+        out.push(src);
+        seen = seen.saturating_add(n);
+    }
+    Some(out)
+}
+
 /// `runs` (`<< … /1 length >>`, the length key named `len_key`) remade with the lengths `lens`:
 /// run i keeps the content of the file's run i, else of its last one. `None` for an empty `runs`
 /// or when the cumulative `nodes` / `bytes` budget is exceeded.
 fn runs_per(runs: &[E], lens: &[usize], len_key: &str, nodes: &mut usize, bytes: &mut usize) -> Option<Vec<E>> {
+    runs_from(runs, lens, None, len_key, nodes, bytes)
+}
+
+/// [`runs_per`], run i keeping the content of the file's run `sources[i]` when `sources` is given
+/// (see [`paragraph_sources`]).
+fn runs_from(runs: &[E], lens: &[usize], sources: Option<&[usize]>, len_key: &str, nodes: &mut usize, bytes: &mut usize) -> Option<Vec<E>> {
     let last = runs.last()?;
     lens.iter()
         .enumerate()
         .map(|(i, &len)| {
-            let src = runs.get(i).unwrap_or(last);
+            let src = runs.get(sources.and_then(|s| s.get(i).copied()).unwrap_or(i)).unwrap_or(last);
             if !fits_budget(src, nodes, bytes) {
                 return None;
             }
@@ -317,4 +389,27 @@ pub fn set_text_index(tysh: &[u8], index: i32) -> Option<Vec<u8>> {
         }
     }
     Some(write_tysh(&t))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// More paragraphs than a refitted run array can hold: no per-paragraph list is built. The
+    /// old text past the budget keeps the file's paragraphs by index (a 16 MiB run of breaks, with
+    /// a space added, built a paragraph list of hundreds of MiB here), and an object whose
+    /// paragraph runs would need that many is not refitted.
+    #[test]
+    fn many_paragraphs_build_no_per_paragraph_lists() {
+        let many = "\r".repeat(MAX_REFIT_RUN_NODES + 1);
+        assert!(too_many_paragraphs(&many));
+        assert!(!too_many_paragraphs(&"\r".repeat(MAX_REFIT_RUN_NODES)));
+        assert_eq!(paragraph_sources(&many, &format!(" {many}")), None);
+        assert_eq!(paragraph_sources("AB CD\r", "AB\rCD\r"), Some(vec![0, 0]), "within the budget, as before");
+        let run = E::Dict(vec![("0".into(), E::dict()), ("1".into(), E::Int(2))]);
+        let model = E::Dict(vec![("0".into(), E::String("A\r".into())), ("5".into(), E::Dict(vec![("0".into(), E::Array(vec![run]))]))]);
+        let object = E::Dict(vec![("0".into(), model)]);
+        assert!(edited_object(&object, "B\r").is_some());
+        assert!(edited_object(&object, &many).is_none());
+    }
 }

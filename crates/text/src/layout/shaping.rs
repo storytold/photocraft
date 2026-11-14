@@ -5,16 +5,16 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::ops::Range;
 
-use parley::{Alignment, AlignmentOptions, FontFeatures, Layout, LayoutContext, PositionedLayoutItem, StyleProperty};
+use parley::{Alignment, AlignmentOptions, FontFeatures, Layout, LayoutContext, PositionedLayoutItem, StyleProperty, TextWrapMode};
 use photocraft_doc::text::{CharStyle, ParagraphStyle, TextAlign, TextDirection};
 
-use super::area::{LineMetrics, MAX_AREA_PASSES, area_metrics, break_area};
-use super::paragraphs::{TabWidth, strip_break, tab_widths};
+use super::area::{LineMetrics, MAX_AREA_PASSES, area_metrics, break_area, place_solved_area};
+use super::paragraphs::{TabWidth, tab_widths};
 use super::style::{
     SYNTHETIC_SMALL_CAPS_SCALE, SmallCapsMode, drawn_style, effective_horizontal_scale, feature_list, hangul_runs, probe_smcp, small_caps_mode, style_props,
 };
 use super::vertical::vertical_class;
-use super::{Env, FORCED_LINE_BREAK, Flow, LRM, RLM, RunBrush, Slot, VClass};
+use super::{Env, FORCED_LINE_BREAK, Flow, LRM, RLM, RunBrush, Slot, Unit, VClass};
 use crate::fonts::FontDb;
 use crate::layout::DEFAULT_TAB_STOP_PT;
 
@@ -88,7 +88,8 @@ struct ParaText {
 }
 
 /// The shaped text of the paragraph at `range` (`content_end` excludes its break), led by `prefix`.
-fn paragraph_text(env: &Env<'_>, prefix: &str, range: &Range<usize>, content_end: usize) -> ParaText {
+/// `sst` maps a run to the style this unit draws it with.
+fn paragraph_text(env: &Env<'_>, prefix: &str, range: &Range<usize>, content_end: usize, sst: impl Fn(usize) -> usize) -> ParaText {
     let content = &env.text[range.start..content_end];
     let mut ptext = String::with_capacity(prefix.len() + content.len());
     ptext.push_str(prefix);
@@ -112,7 +113,7 @@ fn paragraph_text(env: &Env<'_>, prefix: &str, range: &Range<usize>, content_end
         }
         let si = env.style_at(range.start + i);
         let synthetic = env.small_caps[si] == SmallCapsMode::Synthetic;
-        push_cased(&mut ptext, &mut synthetic_small_caps, ch, &env.styles[si], synthetic, env.k);
+        push_cased(&mut ptext, &mut synthetic_small_caps, ch, &env.styles[sst(si)], synthetic, env.k);
     }
     ParaText { ptext, synthetic_small_caps, tabs }
 }
@@ -180,6 +181,17 @@ impl VerticalPiece<'_> {
     }
 }
 
+/// One unit to lay out (a paragraph, or one solved Dynamic Text line of it) and what its
+/// paragraph shares.
+pub(super) struct UnitInput<'u> {
+    pub(super) unit: &'u Unit,
+    /// The unit's style for each run it touches (see `Para::sst`); empty at scale 1.
+    pub(super) unit_style: Vec<usize>,
+    pub(super) fallback: Vec<String>,
+    /// For a paragraph split into solved lines, whether its first strong character is RTL.
+    pub(super) para_rtl: Option<bool>,
+}
+
 /// What line placement needs of one paragraph: its text, styles, indents and the extents its lines
 /// break at.
 pub(super) struct Para<'a> {
@@ -189,6 +201,11 @@ pub(super) struct Para<'a> {
     pub(super) start: usize,
     pub(super) content_end: usize,
     pub(super) prefix: &'static str,
+    /// The paragraph's first unit (first-line indent, space before) and last (space after).
+    pub(super) first: bool,
+    pub(super) last: bool,
+    /// This unit's style for each run: `unit_style[i]` is run `si0 + i`; empty means its own.
+    unit_style: Vec<usize>,
     ptext: String,
     synthetic_small_caps: Vec<(Range<usize>, f32)>,
     /// Offsets in the paragraph text of the spaces standing in for tabs.
@@ -212,35 +229,46 @@ pub(super) struct Para<'a> {
 }
 
 impl<'a> Para<'a> {
-    pub(super) fn new(env: &'a Env<'a>, fonts: &FontDb, index: usize, range: Range<usize>, ps: ParagraphStyle) -> Self {
+    pub(super) fn new(env: &'a Env<'a>, input: UnitInput<'_>, ps: ParagraphStyle) -> Self {
         let k = env.k;
-        let content_end = strip_break(env.text, &range);
+        let UnitInput { unit, unit_style, fallback, para_rtl } = input;
+        let range = unit.range.clone();
+        let content_end = unit.content_end;
         let prefix = match ps.direction {
-            TextDirection::Auto => "",
+            // A paragraph split into solved lines keeps the direction of its first strong
+            // character: parley would otherwise detect it again on each line.
+            TextDirection::Auto => match para_rtl {
+                Some(true) => RLM,
+                Some(false) => LRM,
+                None => "",
+            },
             TextDirection::Ltr => LRM,
             TextDirection::Rtl => RLM,
         };
-        let ParaText { ptext, synthetic_small_caps, tabs } = paragraph_text(env, prefix, &range, content_end);
-        // Scripts the loaded fonts may lack (Arabic, Japanese, …): a host serving a font for them
-        // fetches it (`served`); it joins the fallback stack once it arrives.
-        crate::served::request_for_text(&ptext);
-        let fallback = fonts.fallback_stack().map(str::to_string).collect();
+        // The runs that can touch this unit: from the one at its start to the last starting
+        // before its end (never one of the scaled copies).
         let si0 = env.style_at(range.start);
-        let si_end = env.run_starts.partition_point(|&rs| rs < content_end).max(si0 + 1).min(env.styles.len());
+        let si_end = env.run_starts.partition_point(|&rs| rs < content_end).max(si0 + 1).min(env.runs.len());
+        let sst = |ri: usize| ri.checked_sub(si0).and_then(|i| unit_style.get(i)).copied().unwrap_or(ri);
+        let ParaText { ptext, synthetic_small_caps, tabs } = paragraph_text(env, prefix, &range, content_end, sst);
         let indent_start = ps.start_indent_pt * k;
         let indent_end = ps.end_indent_pt * k;
-        let first_indent = ps.first_line_indent_pt * k;
+        // Only a paragraph's first line takes the first-line indent.
+        let first_indent = if unit.first { ps.first_line_indent_pt * k } else { 0.0 };
         // Box extent along the lines: width, or height for vertical type (columns).
         let (box_x, box_y, box_w, box_h) = env.box_rect;
         let (line_origin, line_len) = if env.vertical { (box_y, box_h) } else { (box_x, box_w) };
         let avail = if env.is_box { Some((line_len - indent_start - indent_end).max(1.0)) } else { None };
         let mut para = Self {
             env,
-            index,
+            index: unit.paragraph,
             ps,
             start: range.start,
             content_end,
             prefix,
+            first: unit.first,
+            last: unit.last,
+            unit_style,
             ptext,
             synthetic_small_caps,
             tabs,
@@ -266,7 +294,10 @@ impl<'a> Para<'a> {
         let env = self.env;
         let mut roman = Vec::new();
         if env.vertical {
-            for (ri, st) in env.styles.iter().enumerate().take(self.si_end).skip(self.si0) {
+            for ri in self.si0..self.si_end {
+                let Some(st) = env.styles.get(self.sst(ri)) else {
+                    continue;
+                };
                 let rs = env.run_starts[ri];
                 let (a, z) = (rs.max(self.start), (rs + env.runs[ri].len).min(self.content_end));
                 if a >= z || st.rotate_roman {
@@ -286,7 +317,13 @@ impl<'a> Para<'a> {
     }
 
     pub(super) fn first_style(&self) -> &'a CharStyle {
-        &self.env.styles[self.si0]
+        &self.env.styles[self.sst(self.si0)]
+    }
+
+    /// The style this unit draws run `ri` with: its own, or for a solved Dynamic Text line not at
+    /// scale 1, the copy at that line's scale.
+    pub(super) fn sst(&self, ri: usize) -> usize {
+        ri.checked_sub(self.si0).and_then(|i| self.unit_style.get(i)).copied().unwrap_or(ri)
     }
 
     /// Text offset of the paragraph text's byte `o`, as the layer's text offset.
@@ -318,19 +355,32 @@ impl<'a> Para<'a> {
         if scale > 0.0 { scale } else { 1.0 }
     }
 
-    /// Shapes the paragraph, each tab widened by its letter spacing in `tab_spacing` (px).
-    fn shape(&self, lcx: &mut LayoutContext<RunBrush>, fcx: &mut parley::FontContext, tab_spacing: &[f32], roman_spacing: &[f32]) -> Layout<RunBrush> {
+    /// Shapes the paragraph, each tab widened by its letter spacing in `tab_spacing` (px), each
+    /// space in `word_spacing` (range in the paragraph text, px) by its word spacing, and each
+    /// upright roman character of vertical type by its `roman_spacing` (px).
+    fn shape(
+        &self,
+        lcx: &mut LayoutContext<RunBrush>,
+        fcx: &mut parley::FontContext,
+        tab_spacing: &[f32],
+        word_spacing: &[(Range<usize>, f32)],
+        roman_spacing: &[f32],
+    ) -> Layout<RunBrush> {
         let env = self.env;
         let mut b = lcx.ranged_builder(fcx, &self.ptext, 1.0, false);
         // Paragraph-start style as the default (covers the direction mark and empty
         // paragraphs), then every run piece intersecting this paragraph.
-        for p in style_props(&env.styles[self.si0], env.k, &self.fallback, self.si0 as u32, env.small_caps[self.si0]) {
+        let ui0 = self.sst(self.si0);
+        for p in style_props(&env.styles[ui0], env.k, &self.fallback, ui0 as u32, env.small_caps[self.si0]) {
             b.push_default(p);
         }
-        // Paragraph text breaks a word wider than the box at the box edge, as Photoshop
-        // does (#6694): parley's default only breaks at UAX #14 opportunities and lets the
-        // word run out of the box. Point text has no width to overflow.
-        if env.is_box {
+        // A solved line is already broken: it never wraps, even when wider than the box.
+        // Other paragraph text breaks a word wider than the box at the box edge, as
+        // Photoshop does (#6694): parley's default only breaks at UAX #14 opportunities and
+        // lets the word run out of the box. Point text has no width to overflow.
+        if env.solved {
+            b.push_default(StyleProperty::TextWrapMode(TextWrapMode::NoWrap));
+        } else if env.is_box {
             b.push_default(StyleProperty::OverflowWrap(parley::style::OverflowWrap::BreakWord));
         }
         for ri in self.si0..self.si_end {
@@ -347,9 +397,16 @@ impl<'a> Para<'a> {
         for (&at, &spacing) in self.tabs.iter().zip(tab_spacing) {
             b.push(StyleProperty::LetterSpacing(spacing), at..at + 1);
         }
+        // Parley widens each space (U+0020 and no-break space) by the word spacing.
+        for (range, spacing) in word_spacing {
+            b.push(StyleProperty::WordSpacing(*spacing), range.clone());
+        }
         for ((range, _, _, ri), &spacing) in self.roman.iter().zip(roman_spacing) {
             b.push(StyleProperty::LetterSpacing(spacing), range.clone());
-            let mut feats = feature_list(&env.styles[*ri], env.small_caps[*ri]);
+            let Some(st) = env.styles.get(self.sst(*ri)) else {
+                continue;
+            };
+            let mut feats = feature_list(st, env.small_caps[*ri]);
             feats.extend(["kern", "liga", "clig", "dlig"].map(|f| format!("\"{f}\" 0")));
             b.push(StyleProperty::FontFeatures(FontFeatures::Source(Cow::Owned(feats.join(", ")))), range.clone());
         }
@@ -365,11 +422,12 @@ impl<'a> Para<'a> {
             return;
         }
         let range = (a - self.start + self.prefix.len())..(z - self.start + self.prefix.len());
-        for p in style_props(&env.styles[ri], env.k, &self.fallback, ri as u32, env.small_caps[ri]) {
+        let ui = self.sst(ri);
+        for p in style_props(&env.styles[ui], env.k, &self.fallback, ui as u32, env.small_caps[ri]) {
             b.push(p, range.clone());
         }
         if env.vertical {
-            let piece = VerticalPiece { style: &env.styles[ri], run: ri, small_caps: env.small_caps[ri], start: range.start };
+            let piece = VerticalPiece { style: &env.styles[ui], run: ui, small_caps: env.small_caps[ri], start: range.start };
             piece.push_all(b, self.text_of(range));
         }
     }
@@ -377,8 +435,14 @@ impl<'a> Para<'a> {
     /// Where an area paragraph's first row goes: no higher than one leading (plus paragraph
     /// spacing) below the previous paragraph's last line.
     fn area_origin(&self, m: LineMetrics, flow: &Flow) -> f32 {
-        let space_before = if flow.prev_baseline.is_some() { self.ps.space_before_pt * self.env.k } else { 0.0 };
+        let space_before = if flow.prev_baseline.is_some() && self.first { self.ps.space_before_pt * self.env.k } else { 0.0 };
         match (&self.env.area, flow.prev_baseline) {
+            // A solved line stacks as in a box: the previous line's descent, its own ascent
+            // and the gap, a percentage of the larger of the two sizes.
+            (Some(_), Some(b)) if self.env.solved => {
+                let (prev_descent, prev_px) = flow.prev_line.unwrap_or((m.descent, m.px));
+                b + prev_descent + m.ascent + self.env.line_gap.unwrap_or(0.0) / 100.0 * prev_px.max(m.px) + flow.pending_space + space_before
+            }
             (Some(_), Some(b)) => b + m.leading + flow.pending_space + space_before,
             (Some(a), None) => a.bounds[1] + m.ascent,
             (None, _) => 0.0,
@@ -400,9 +464,13 @@ impl<'a> Para<'a> {
         // largest leading, measured on the unwrapped paragraph), so no wrapped line comes
         // out taller than the row it was planned in and no second plan is needed.
         layout.break_all_lines(None);
-        let m = area_metrics(layout, env.styles, &self.ps, env.k, self.first_style(), env.vertical);
+        let m = area_metrics(layout, env.styles, &self.ps, env.k, self.first_style(), env.vertical, env.line_gap);
         let from = self.area_origin(m, flow);
         let first_px = self.first_style().size_pt * env.k;
+        if env.solved {
+            let first = flow.prev_baseline.is_none().then_some(first_px);
+            return place_solved_area(layout, a, from, m, first, (self.indent_start, self.indent_end), self.first_indent, self.break_scale);
+        }
         break_area(layout, a, from, m, (self.indent_start, self.indent_end), first_px, self.break_scale, &self.area_budget)
     }
 
@@ -419,17 +487,27 @@ impl<'a> Para<'a> {
     pub(super) fn break_paragraph(&self, lcx: &mut LayoutContext<RunBrush>, fcx: &mut parley::FontContext, flow: &Flow) -> (Layout<RunBrush>, Vec<Slot>, bool) {
         let wide = if self.env.wraps { self.tab_px } else { 0.0 };
         let mut roman_spacing: Vec<f32> = self.roman.iter().map(|r| r.1).collect();
-        let mut layout = self.shape(lcx, fcx, &vec![wide; self.tabs.len()], &roman_spacing);
+        // Dynamic Text's word gap is a percent of each space's own width (-100 % removes it,
+        // +100 % doubles it): shape once without it to read every space's advance.
+        let word_spacing: Vec<(Range<usize>, f32)> = match self.env.word_gap {
+            Some(word_gap) if word_gap != 0.0 => {
+                let mut plain = self.shape(lcx, fcx, &vec![wide; self.tabs.len()], &[], &roman_spacing);
+                plain.break_all_lines(None);
+                super::space_advances(&plain, &self.ptext, &self.tabs).into_iter().map(|(r, adv)| (r, word_gap / 100.0 * adv)).collect()
+            }
+            _ => Vec::new(),
+        };
+        let mut layout = self.shape(lcx, fcx, &vec![wide; self.tabs.len()], &word_spacing, &roman_spacing);
         if !self.roman.is_empty() {
             let _ = self.break_lines(&mut layout, flow);
             let advances = cluster_advances(&layout, &self.roman);
             roman_spacing = self.roman.iter().zip(&advances).map(|((_, track, em, _), a)| a.map_or(*track, |a| em + track - (a - track))).collect();
-            layout = self.shape(lcx, fcx, &vec![wide; self.tabs.len()], &roman_spacing);
+            layout = self.shape(lcx, fcx, &vec![wide; self.tabs.len()], &word_spacing, &roman_spacing);
         }
         let (mut slots, mut full) = self.break_lines(&mut layout, flow);
         if self.env.wraps
             && !self.tabs.is_empty()
-            && let Some((settled, settled_slots, settled_full)) = self.settle_tabs(lcx, fcx, &layout, flow, &roman_spacing)
+            && let Some((settled, settled_slots, settled_full)) = self.settle_tabs(lcx, fcx, &layout, flow, &word_spacing, &roman_spacing)
         {
             layout = settled;
             slots = settled_slots;
@@ -445,13 +523,14 @@ impl<'a> Para<'a> {
         fcx: &mut parley::FontContext,
         layout: &Layout<RunBrush>,
         flow: &Flow,
+        word_spacing: &[(Range<usize>, f32)],
         roman_spacing: &[f32],
     ) -> Option<(Layout<RunBrush>, Vec<Slot>, bool)> {
         let first = self.tab_widths(layout);
         let mut want: Vec<f32> = first.iter().map(|t| t.width).collect();
         for _ in 0..4 {
             let spacing: Vec<f32> = first.iter().zip(&want).map(|(t, w)| w / t.scale - (t.advance - self.tab_px)).collect();
-            let mut next = self.shape(lcx, fcx, &spacing, roman_spacing);
+            let mut next = self.shape(lcx, fcx, &spacing, word_spacing, roman_spacing);
             let (next_slots, next_full) = self.break_lines(&mut next, flow);
             let got: Vec<f32> = self.tab_widths(&next).iter().map(|t| t.width).collect();
             if got.iter().zip(&want).all(|(a, b)| (a - b).abs() < 0.01) {

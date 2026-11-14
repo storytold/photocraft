@@ -24,6 +24,7 @@ pub mod craft_fonts;
 mod embolden;
 // The EngineData syntax of type layers is PSD format code: it lives in craft-psd.
 pub use craft_psd::engine_data;
+pub mod fit;
 pub mod font_class;
 pub mod fonts;
 pub mod glyphs;

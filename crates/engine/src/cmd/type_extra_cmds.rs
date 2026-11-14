@@ -76,6 +76,7 @@ fn has_defaults(s: &Session) -> std::result::Result<(), String> {
 pub(crate) fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32) -> Result<R>) -> Result<R> {
     let id = layer_param(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+    let cmd = crate::type_fit_cmds::guard_cmd(s, label);
     let typed = typed_name(s, id);
     s.edit(label, |doc, _| {
         let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
@@ -84,9 +85,11 @@ pub(crate) fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOn
         let LayerContent::Text(t) = &mut l.content else {
             return Err(EngineError::Other(format!("layer {} is {} {} layer, not a type layer", id.0, l.content.article(), l.content.kind_name())));
         };
+        let was_fitted = t.fit.is_some();
         // Only a text change renames: a style or layout edit keeps a copy's "Title copy" (#9023).
         let old_text = auto_named.then(|| t.text.clone());
         let r = f(t, dpi)?;
+        crate::type_fit_cmds::guard_fit(was_fitted, t, cmd)?;
         refresh_at(dpi, format, t);
         let name = old_text.is_some_and(|old| old != t.text).then(|| layer_name(&t.text));
         if let Some(n) = name {
@@ -155,47 +158,52 @@ fn set_orientation(s: &mut Session, p: &Value, o: Orientation) -> Result<Value> 
 // ---------- point ⇄ paragraph ----------
 
 fn to_paragraph(s: &mut Session, p: &Value) -> Result<Value> {
-    let r = with_text(s, p, "Convert to Paragraph Text", |t, dpi| {
-        let l = layout_at(dpi, t);
-        let size_px = t.char_runs().iter().map(|r| r.style.size_pt).fold(t.size_pt, f32::max) * dpi / 72.0;
-        let ps = t.paragraph_runs().first().map(|p| p.style.clone()).unwrap_or_default();
-        let indents = (ps.start_indent_pt + ps.end_indent_pt).max(0.0) * dpi / 72.0;
-        if l.vertical {
-            // Line space: u along the columns, v across them (first column centred on v = 0).
-            let [u0, v0, u1, v1] = l.line_bounds().unwrap_or([0.0, -size_px / 2.0, size_px, size_px / 2.0]);
-            let height = (u1 - u0).max(1.0) + indents + (size_px * 0.5).max(4.0);
-            let width = (v1 - v0).max(1.0) + size_px * 0.5;
-            let y = match ps.align {
-                TextAlign::Center | TextAlign::JustifyCenter => -height / 2.0,
-                TextAlign::Right | TextAlign::JustifyRight => -height,
-                _ => 0.0,
-            };
-            // The box's right edge is the first column's right edge, so the columns stay put.
-            let x = -v0 - width;
-            t.shape = TextShape::Box { x: 0.0, y: 0.0, width, height };
-            t.transform = then_translate(&t.transform, f64::from(x), f64::from(y));
-            return Ok(json!([x, y, width, height]));
-        }
-        let [x0, y0, x1, y1] = l.bounds().unwrap_or([0.0, -t.size_pt, t.size_pt, 0.0]);
-        // A little slack so no line re-wraps; the box keeps the text where it was.
-        let width = (x1 - x0).max(1.0) + indents + (size_px * 0.5).max(4.0);
-        let height = (y1 - y0).max(1.0) + size_px * 0.5;
-        let x = match ps.align {
-            TextAlign::Center | TextAlign::JustifyCenter => -width / 2.0,
-            TextAlign::Right | TextAlign::JustifyRight => -width,
+    let r = with_text(s, p, "Convert to Paragraph Text", |t, dpi| Ok(point_to_box(t, dpi)))?;
+    Ok(json!({"box": r}))
+}
+
+/// Turns point text into box text sized to its current layout, keeping the text where it was.
+/// Returns `[x, y, width, height]`, the box's place in the old text space.
+/// Shared by Convert to Paragraph Text and Convert to Dynamic Text.
+pub(crate) fn point_to_box(t: &mut TextLayer, dpi: f32) -> Value {
+    let l = layout_at(dpi, t);
+    let size_px = t.char_runs().iter().map(|r| r.style.size_pt).fold(t.size_pt, f32::max) * dpi / 72.0;
+    let ps = t.paragraph_runs().first().map(|p| p.style.clone()).unwrap_or_default();
+    let indents = (ps.start_indent_pt + ps.end_indent_pt).max(0.0) * dpi / 72.0;
+    if l.vertical {
+        // Line space: u along the columns, v across them (first column centred on v = 0).
+        let [u0, v0, u1, v1] = l.line_bounds().unwrap_or([0.0, -size_px / 2.0, size_px, size_px / 2.0]);
+        let height = (u1 - u0).max(1.0) + indents + (size_px * 0.5).max(4.0);
+        let width = (v1 - v0).max(1.0) + size_px * 0.5;
+        let y = match ps.align {
+            TextAlign::Center | TextAlign::JustifyCenter => -height / 2.0,
+            TextAlign::Right | TextAlign::JustifyRight => -height,
             _ => 0.0,
         };
-        let mut probe = t.clone();
-        probe.shape = TextShape::Box { x, y: y0, width, height };
-        // Box text puts the first baseline at the box top plus the ascender height: measure it and
-        // shift the box so that baseline stays at the point-text anchor (y = 0).
-        let b0 = layout_at(dpi, &probe).lines.first().map_or(0.0, |ln| ln.baseline);
-        let y = y0 - b0;
+        // The box's right edge is the first column's right edge, so the columns stay put.
+        let x = -v0 - width;
         t.shape = TextShape::Box { x: 0.0, y: 0.0, width, height };
         t.transform = then_translate(&t.transform, f64::from(x), f64::from(y));
-        Ok(json!([x, y, width, height]))
-    })?;
-    Ok(json!({"box": r}))
+        return json!([x, y, width, height]);
+    }
+    let [x0, y0, x1, y1] = l.bounds().unwrap_or([0.0, -t.size_pt, t.size_pt, 0.0]);
+    // A little slack so no line re-wraps; the box keeps the text where it was.
+    let width = (x1 - x0).max(1.0) + indents + (size_px * 0.5).max(4.0);
+    let height = (y1 - y0).max(1.0) + size_px * 0.5;
+    let x = match ps.align {
+        TextAlign::Center | TextAlign::JustifyCenter => -width / 2.0,
+        TextAlign::Right | TextAlign::JustifyRight => -width,
+        _ => 0.0,
+    };
+    let mut probe = t.clone();
+    probe.shape = TextShape::Box { x, y: y0, width, height };
+    // Box text puts the first baseline at the box top plus the ascender height: measure it and
+    // shift the box so that baseline stays at the point-text anchor (y = 0).
+    let b0 = layout_at(dpi, &probe).lines.first().map_or(0.0, |ln| ln.baseline);
+    let y = y0 - b0;
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width, height };
+    t.transform = then_translate(&t.transform, f64::from(x), f64::from(y));
+    json!([x, y, width, height])
 }
 
 fn to_point(s: &mut Session, p: &Value) -> Result<Value> {

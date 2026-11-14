@@ -173,7 +173,7 @@ fn data_sets(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Apply one data set's values to the document (visibility, text, pixels). A history step.
-fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<()> {
+fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet, cmd: &str) -> Result<()> {
     for dv in &set.values {
         let Some(def) = vars.def(&dv.variable) else { continue };
         match (&def.kind, &dv.value) {
@@ -190,12 +190,18 @@ fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<(
                     // As in Photoshop, the new text takes the style of the first character it
                     // replaces (and its paragraph's settings): clearing the runs fell back to the
                     // summary style and lost weight, italic, tracking, caps… (#2742).
+                    let was_fitted = t.fit.is_some();
                     let style = t.char_runs().into_iter().next().map(|r| r.style).unwrap_or_default();
                     let para = t.paragraph_runs().into_iter().next().map(|r| r.style).unwrap_or_default();
                     t.text = text.clone();
+                    // Solved Dynamic Text lines index the old text (see `type_cmds::replace_text`).
+                    if let Some(fit) = t.fit.as_mut() {
+                        fit.lines.clear();
+                    }
                     t.runs = vec![TextRun { len: t.text.len(), style }];
                     t.paragraphs = vec![ParagraphRun { len: t.text.len(), style: para }];
                     t.sync_summary();
+                    crate::type_fit_cmds::guard_fit(was_fitted, t, cmd)?;
                     // The compositor draws a type layer from its cache: clearing it left the
                     // layer blank until some other edit re-rendered it (#990).
                     crate::type_cmds::refresh_at(dpi, format, t);
@@ -278,7 +284,7 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
     let (set, idx) = resolve_set(s, p, "image.applyDataSet")?;
     let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
     authorize_pixel_paths(s, &set)?;
-    s.edit(&format!("Apply Data Set \"{}\"", set.name), |doc, _| apply_to_doc(doc, &vars, &set))?;
+    s.edit(&format!("Apply Data Set \"{}\"", set.name), |doc, _| apply_to_doc(doc, &vars, &set, "image.applyDataSet"))?;
     set_vars(s, |v| v.active = Some(idx))?;
     Ok(json!({"applied": set.name, "index": idx}))
 }
@@ -476,7 +482,7 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     let mut written = Vec::new();
     for (set, name) in sets.iter().zip(&names) {
         let mut doc = (*original).clone();
-        apply_to_doc(&mut doc, &vars, set)?;
+        apply_to_doc(&mut doc, &vars, set, "file.export.dataSetsAsFiles")?;
         // An untrusted session's PSD export embeds no file a linked smart object names.
         let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;

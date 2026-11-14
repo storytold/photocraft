@@ -1058,6 +1058,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "type.setPathPlacement"
             | "type.fillPath"
             | "type.detachFromPath"
+            | "type.convertToDynamicText"
             | "select.toWorkPath"
             | "layer.vectorMask.add"
             | "layer.vectorMask.edit"

@@ -295,6 +295,72 @@ pub struct TextWarp {
     pub horizontal: bool,
 }
 
+/// One solved line of Dynamic Text Box text: where it starts and its size multiplier.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FitLine {
+    /// Byte offset into the layer text where the line starts.
+    pub start: u32,
+    /// Size multiplier applied to the line.
+    pub scale: f32,
+}
+
+/// Dynamic Text (Photoshop 26.8 "Block" / "Dynamic fit"): the layer's sizes are derived so its
+/// text fills its box or area. The word gap is a percent of each space's own width (-100 removes
+/// the spaces, +100 doubles them); the line gap is a percent of the font size.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TextFit {
+    pub word_gap: f32,
+    pub line_gap: f32,
+    /// Solver output for Box text: where each line starts and its size multiplier.
+    /// Recomputed on every refresh; empty = not computed yet.
+    pub lines: Vec<FitLine>,
+    /// How much Area text's sizes have been scaled since it was converted (Area text holds its
+    /// fitted sizes): turning Dynamic Text off divides by it to give the text its own sizes back.
+    /// Always 1 for Box text, which keeps its base sizes.
+    pub area_scale: f32,
+}
+
+impl Default for TextFit {
+    fn default() -> Self {
+        Self { word_gap: 0.0, line_gap: 0.0, lines: Vec::new(), area_scale: 1.0 }
+    }
+}
+
+impl TextFit {
+    pub const WORD_GAP_MIN: f32 = -100.0;
+    pub const LINE_GAP_MIN: f32 = -50.0;
+    pub const GAP_MAX: f32 = 200.0;
+
+    /// Gaps clamped (non-finite becomes 0) and `lines` kept only if every start is a char
+    /// boundary of `text`, strictly increasing, first == 0, and every scale finite and > 0;
+    /// else cleared.
+    pub fn sanitized(self, text: &str) -> Self {
+        let (word_gap, line_gap) = self.gaps();
+        let valid = self.lines_valid(text);
+        let area_scale = if self.area_scale.is_finite() && self.area_scale > 0.0 { self.area_scale } else { 1.0 };
+        Self { word_gap, line_gap, lines: if valid { self.lines } else { Vec::new() }, area_scale }
+    }
+
+    /// The word and line gaps as [`Self::sanitized`] clamps them, without copying `lines`.
+    pub fn gaps(&self) -> (f32, f32) {
+        let clean = |g: f32, min: f32| if g.is_finite() { g.clamp(min, Self::GAP_MAX) } else { 0.0 };
+        (clean(self.word_gap, Self::WORD_GAP_MIN), clean(self.line_gap, Self::LINE_GAP_MIN))
+    }
+
+    /// `lines` if [`Self::sanitized`] would keep them for `text`, else empty; borrows, never copies.
+    pub fn valid_lines(&self, text: &str) -> &[FitLine] {
+        if self.lines_valid(text) { &self.lines } else { &[] }
+    }
+
+    fn lines_valid(&self, text: &str) -> bool {
+        self.lines.first().is_none_or(|l| l.start == 0)
+            && self.lines.iter().all(|l| l.scale.is_finite() && l.scale > 0.0 && text.is_char_boundary(l.start as usize))
+            && self.lines.windows(2).all(|w| w[0].start < w[1].start)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// Ensures `TextShape::Path` serializes backward-compatibly without an `"end"` field when `end` is `None`.
@@ -308,6 +374,57 @@ mod tests {
 
     use super::*;
     use crate::TextLayer;
+
+    fn fit(word_gap: f32, line_gap: f32, lines: Vec<FitLine>) -> TextFit {
+        TextFit { word_gap, line_gap, lines, area_scale: 1.0 }
+    }
+
+    #[test]
+    fn text_fit_sanitizes() {
+        let f = fit(f32::NAN, 900.0, vec![]).sanitized("");
+        assert_eq!(f, fit(0.0, TextFit::GAP_MAX, vec![]));
+        assert_eq!(fit(-70.0, f32::NEG_INFINITY, vec![]).sanitized(""), fit(-70.0, 0.0, vec![]));
+    }
+
+    #[test]
+    fn text_fit_sanitizes_lines() {
+        let l = |start, scale| FitLine { start, scale };
+        // Out-of-order starts are cleared.
+        assert!(fit(0.0, 0.0, vec![l(0, 1.0), l(6, 1.0), l(3, 1.0)]).sanitized("hello world").lines.is_empty());
+        // Not on a char boundary ("é" is bytes 1..3).
+        assert!(fit(0.0, 0.0, vec![l(0, 1.0), l(2, 1.0)]).sanitized("héllo").lines.is_empty());
+        // NaN, zero and negative scales are cleared; so is a first start that is not 0.
+        assert!(fit(0.0, 0.0, vec![l(0, f32::NAN)]).sanitized("hello").lines.is_empty());
+        assert!(fit(0.0, 0.0, vec![l(0, 0.0)]).sanitized("hello").lines.is_empty());
+        assert!(fit(0.0, 0.0, vec![l(1, 1.0)]).sanitized("hello").lines.is_empty());
+        // Past the end of the text.
+        assert!(fit(0.0, 0.0, vec![l(0, 1.0), l(99, 1.0)]).sanitized("hello").lines.is_empty());
+        // Valid lines are kept.
+        let good = vec![l(0, 1.5), l(6, 0.8)];
+        assert_eq!(fit(0.0, 0.0, good.clone()).sanitized("hello world").lines, good);
+    }
+
+    #[test]
+    fn gaps_and_valid_lines_borrow_what_sanitized_keeps() {
+        let l = |start, scale| FitLine { start, scale };
+        let f = fit(f32::NAN, -900.0, vec![l(0, 1.0), l(6, 2.0)]);
+        assert_eq!(f.gaps(), (0.0, TextFit::LINE_GAP_MIN));
+        assert_eq!(f.valid_lines("hello world"), &[l(0, 1.0), l(6, 2.0)]);
+        assert!(f.valid_lines("hello").is_empty(), "start 6 is past the end");
+        assert_eq!(fit(250.0, 10.0, vec![]).gaps(), (TextFit::GAP_MAX, 10.0));
+    }
+
+    #[test]
+    fn word_gap_allows_minus_100() {
+        assert_eq!(fit(-100.0, 0.0, vec![]).sanitized("").word_gap, -100.0);
+        assert_eq!(fit(-150.0, 0.0, vec![]).sanitized("").word_gap, -100.0);
+    }
+
+    #[test]
+    fn line_gap_still_clamps_at_minus_50() {
+        assert_eq!(fit(0.0, -50.0, vec![]).sanitized("").line_gap, -50.0);
+        assert_eq!(fit(0.0, -100.0, vec![]).sanitized("").line_gap, -50.0);
+    }
 
     fn run(len: usize, size: f32) -> TextRun {
         TextRun { len, style: CharStyle { size_pt: size, ..Default::default() } }

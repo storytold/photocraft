@@ -159,6 +159,7 @@ pub use cmd::type_area_cmds;
 pub use cmd::type_caret_cmds;
 pub use cmd::type_cmds;
 pub use cmd::type_extra_cmds;
+pub use cmd::type_fit_cmds;
 pub use cmd::type_mask_cmds;
 pub use cmd::type_spell_cmds;
 pub use cmd::type_styles_cmds;
@@ -231,6 +232,8 @@ pub struct Session {
     typed_layer: Option<(photocraft_doc::DocId, LayerId)>,
     /// Coalescing key of the command being executed.
     coalesce_request: Option<String>,
+    /// Id of the command `dispatch` is running, so shared edit helpers can name it in errors.
+    pub(crate) running_command: Option<&'static str>,
     /// The outer action's original document/history states, independent of command transactions.
     action_history: Option<actions_cmds::ActionHistory>,
     /// Weak leases expire when every copy of a suspended continuation is abandoned.

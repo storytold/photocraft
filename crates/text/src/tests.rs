@@ -1,11 +1,13 @@
 use photocraft_color::{Color, PixelFormat, SampleType};
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{AntiAlias, Caps, CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape};
+use photocraft_doc::text::{
+    AntiAlias, Caps, CharStyle, FitLine, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextFit, TextRun, TextShape,
+};
 use photocraft_geom::Affine;
 
 use crate::{TextEngine, fonts};
 
-fn point(text: &str, size_pt: f32) -> TextLayer {
+pub(crate) fn point(text: &str, size_pt: f32) -> TextLayer {
     TextLayer { text: text.into(), font_family: "Inter".into(), size_pt, ..Default::default() }
 }
 
@@ -1557,6 +1559,133 @@ fn edited_text_keeps_the_files_txt2_object() {
     }
 }
 
+/// Baking Dynamic Text splits a paragraph into one per line. Each new paragraph run of an edited
+/// `Txt2` object keeps the style of the paragraph it came from, as `TySh` does: by index, the
+/// second line of the first paragraph took the second paragraph's style.
+#[test]
+fn split_paragraphs_keep_their_own_txt2_paragraph_style() {
+    use crate::engine_data::Value as E;
+    let para = |leading: f64, len: usize| format!("<< /0 << /0 << /0 (\u{fe}\u{ff}) /5 << /7 {leading:.1} >> >> >> /1 {len} >> ");
+    let style = "<< /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /1 12.0 >> >> >> /1 9 >> ";
+    // "AB CD\rEF\r": two paragraphs, leading 1.0 and 2.0.
+    let prev = format!(
+        "\n\n/98 << /0 7 >> /0 << /8 << /0 [ << /0 << >> >> ] >> >> /1 << /0 << /0 1 >> /1 [ << /0 << /0 (\u{fe}\u{ff}\0A\0B\0 \0C\0D\0\r\0E\0F\0\r) /5 << /0 [ {}{}] >> /6 << /0 [ {style}] >> >> /1 << /0 [ << /0 0 >> ] >> >> ] >> >>",
+        para(1.0, 6),
+        para(2.0, 3)
+    );
+    let prev: Vec<u8> = prev.chars().map(|c| c as u32 as u8).collect();
+    let leadings = |text: &str| -> Vec<f64> {
+        let t = runs_of(text, &[(text.len(), CharStyle::default())]);
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        let object = &out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0];
+        object.path(&["0", "5", "0"]).and_then(E::as_array).unwrap().iter().map(|r| r.path(&["0", "0", "5", "7"]).and_then(E::as_f64).unwrap()).collect()
+    };
+    // The first paragraph baked into two lines, and with a lead-in paragraph before it.
+    assert_eq!(leadings("AB\nCD\nEF"), vec![1.0, 1.0, 2.0]);
+    assert_eq!(leadings("\nAB\nCD\nEF"), vec![1.0, 1.0, 1.0, 2.0]);
+    // Any other edit keeps the file's paragraphs by index.
+    assert_eq!(leadings("AB\nXY\nEF"), vec![1.0, 2.0, 2.0]);
+}
+
+/// Baking Dynamic Text sets paragraph indents and spacing (a split paragraph keeps its first-line
+/// indent and space before only on its first line; an area's scale scales them all). An edited
+/// `Txt2` object's paragraph runs take them from the layer, as its `TySh` does, in both the
+/// numbered objects (`/0 /0 /5`, `/1`–`/5`) and the older Photoshop's (`/Features`): they kept the
+/// file's, and Photoshop read those back. Every other paragraph key is kept.
+#[test]
+fn edited_txt2_paragraph_runs_take_the_layers_indents_and_spacing() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::{ParagraphRun, ParagraphStyle};
+    let para = |len: usize| format!("<< /0 << /0 << /0 (\u{fe}\u{ff}) /5 << /0 0 /1 9.0 /2 9.0 /3 9.0 /4 9.0 /5 9.0 /7 1.5 >> >> >> /1 {len} >> ");
+    let style = "<< /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /1 12.0 >> >> >> /1 9 >> ";
+    // "AB CD\rEF\r", every paragraph indented and spaced by 9.
+    let numbered = format!(
+        "\n\n/98 << /0 7 >> /0 << /8 << /0 [ << /0 << >> >> ] >> >> /1 << /0 << /0 1 >> /1 [ << /0 << /0 (\u{fe}\u{ff}\0A\0B\0 \0C\0D\0\r\0E\0F\0\r) /5 << /0 [ {}{}] >> /6 << /0 [ {style}] >> >> /1 << /0 [ << /0 0 >> ] >> >> ] >> >>",
+        para(6),
+        para(3)
+    );
+    let numbered: Vec<u8> = numbered.chars().map(|c| c as u32 as u8).collect();
+    let features = || {
+        let keys = ["Justification", "FirstLineIndent", "StartIndent", "EndIndent", "SpaceBefore", "SpaceAfter", "AutoLeading"];
+        E::Dict(
+            keys.iter()
+                .map(|k| (k.to_string(), if *k == "Justification" { E::Int(0) } else { E::Real(if *k == "AutoLeading" { 1.5 } else { 9.0 }) }))
+                .collect(),
+        )
+    };
+    let td_run = |len: i64| {
+        let sheet = E::Dict(vec![("Name".into(), E::String(String::new())), ("Features".into(), features())]);
+        E::Dict(vec![("RunData".into(), E::Dict(vec![("ParagraphSheet".into(), sheet)])), ("Length".into(), E::Int(len))])
+    };
+    let td_model = E::Dict(vec![
+        ("Text".into(), E::String("AB CD\rEF\r".into())),
+        ("ParagraphRun".into(), E::Dict(vec![("RunArray".into(), E::Array(vec![td_run(6), td_run(3)]))])),
+    ]);
+    let td = crate::engine_data::write_bare(&[
+        ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
+        ("0".into(), E::dict()),
+        ("DocumentObjects".into(), E::Dict(vec![("TextObjects".into(), E::Array(vec![E::Dict(vec![("Model".into(), td_model)])]))])),
+    ]);
+    // The first paragraph baked into two lines, the second line without its first-line indent and
+    // space before; then the second paragraph.
+    let first = ParagraphStyle { first_line_indent_pt: 4.0, start_indent_pt: 1.0, end_indent_pt: 2.0, space_before_pt: 3.0, ..Default::default() };
+    let rest = ParagraphStyle { first_line_indent_pt: 0.0, space_before_pt: 0.0, ..first.clone() };
+    let last = ParagraphStyle { space_after_pt: 5.0, ..Default::default() };
+    let mut t = runs_of("AB\nCD\nEF", &[(8, CharStyle::default())]);
+    t.paragraphs = vec![ParagraphRun { len: 3, style: first }, ParagraphRun { len: 3, style: rest }, ParagraphRun { len: 2, style: last }];
+    let want = [[4.0, 1.0, 2.0, 3.0, 0.0], [0.0, 1.0, 2.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 5.0]];
+    // At 144 ppi a point is two document points, as the style runs' sizes take it.
+    for (dpi, k) in [(72.0, 1.0), (144.0, 2.0)] {
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2_at(&[(0, &t)], Some(&numbered), dpi)).unwrap();
+        let runs = out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].path(&["0", "5", "0"]).and_then(E::as_array).unwrap();
+        assert_eq!(runs.len(), 3);
+        for (run, want) in runs.iter().zip(want) {
+            let p = run.path(&["0", "0", "5"]).unwrap();
+            let got: Vec<f64> = ["1", "2", "3", "4", "5"].iter().map(|k| p.get(k).and_then(E::as_f64).unwrap()).collect();
+            assert_eq!(got, want.map(|v| v * k), "at {dpi} ppi");
+            assert_eq!(p.get("7").and_then(E::as_f64), Some(1.5), "the file's other paragraph keys are kept");
+        }
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2_at(&[(0, &t)], Some(&td), dpi)).unwrap();
+        let entry = &out.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).unwrap()[0];
+        let runs = entry.path(&["Model", "ParagraphRun", "RunArray"]).and_then(E::as_array).unwrap();
+        assert_eq!(runs.len(), 3);
+        for (run, want) in runs.iter().zip(want) {
+            let f = run.path(&["RunData", "ParagraphSheet", "Features"]).unwrap();
+            let got: Vec<f64> =
+                ["FirstLineIndent", "StartIndent", "EndIndent", "SpaceBefore", "SpaceAfter"].iter().map(|k| f.get(k).and_then(E::as_f64).unwrap()).collect();
+            assert_eq!(got, want.map(|v| v * k), "older objects at {dpi} ppi");
+            assert_eq!(f.get("AutoLeading").and_then(E::as_f64), Some(1.5));
+        }
+    }
+}
+
+/// An empty paragraph the edit didn't add keeps its own `Txt2` paragraph style: matched by
+/// position only, it took the next character's paragraph (the last one's here), so adding a
+/// space, or baking, restyled it. An empty paragraph the edit adds still takes the next one's.
+#[test]
+fn existing_empty_paragraphs_keep_their_txt2_paragraph_style() {
+    use crate::engine_data::Value as E;
+    let para = |leading: f64, len: usize| format!("<< /0 << /0 << /0 (\u{fe}\u{ff}) /5 << /7 {leading:.1} >> >> >> /1 {len} >> ");
+    let style = "<< /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /1 12.0 >> >> >> /1 5 >> ";
+    // "A\r\rB\r": three paragraphs, the middle one empty, leading 1.0, 2.0 and 3.0.
+    let prev = format!(
+        "\n\n/98 << /0 7 >> /0 << /8 << /0 [ << /0 << >> >> ] >> >> /1 << /0 << /0 1 >> /1 [ << /0 << /0 (\u{fe}\u{ff}\0A\0\r\0\r\0B\0\r) /5 << /0 [ {}{}{}] >> /6 << /0 [ {style}] >> >> /1 << /0 [ << /0 0 >> ] >> >> ] >> >>",
+        para(1.0, 2),
+        para(2.0, 1),
+        para(3.0, 2)
+    );
+    let prev: Vec<u8> = prev.chars().map(|c| c as u32 as u8).collect();
+    let leadings = |text: &str| -> Vec<f64> {
+        let t = runs_of(text, &[(text.len(), CharStyle::default())]);
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        let object = &out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0];
+        object.path(&["0", "5", "0"]).and_then(E::as_array).unwrap().iter().map(|r| r.path(&["0", "0", "5", "7"]).and_then(E::as_f64).unwrap()).collect()
+    };
+    assert_eq!(leadings("A \n\nB"), vec![1.0, 2.0, 3.0], "a space added before the empty paragraph");
+    assert_eq!(leadings("A\n\n\nB"), vec![1.0, 2.0, 3.0, 3.0], "an added empty paragraph takes the next one's");
+    assert_eq!(leadings("\nA\n\nB"), vec![1.0, 1.0, 2.0, 3.0], "an empty paragraph added in front");
+}
+
 /// #8415: a style-only edit (`type.setStyle` with no text change) reaches the file's `Txt2`.
 /// Photoshop reads the character style from the object's style runs, and an object whose text
 /// still matched kept the file's runs, so Photoshop reopened the layer in its old font with faux
@@ -3074,7 +3203,7 @@ fn area_poly(pts: &[(f64, f64)]) -> photocraft_doc::vector::Path {
 }
 
 /// An ellipse from four kappa curves inside `[x, y, w, h]`.
-fn area_ellipse(x: f64, y: f64, w: f64, h: f64) -> photocraft_doc::vector::Path {
+pub(crate) fn area_ellipse(x: f64, y: f64, w: f64, h: f64) -> photocraft_doc::vector::Path {
     use photocraft_doc::vector::{Knot, Subpath};
     use photocraft_geom::Point;
     let (rx, ry, cx, cy) = (w / 2.0, h / 2.0, x + w / 2.0, y + h / 2.0);
@@ -3352,6 +3481,468 @@ fn area_justify_fills_each_span_but_the_last_line() {
     // The last line is set flush left, not stretched.
     let (s0, s1) = span_of(last);
     assert!((last.x0 - s0).abs() < 1.0 && last.x1 < s1 - 12.0, "{last:?} in {s0}..{s1}");
+}
+
+// Dynamic Text: overflow reporting and fit gaps.
+
+pub(crate) fn box_layer(text: &str, size_pt: f32, (x, y, width, height): (f32, f32, f32, f32)) -> TextLayer {
+    let mut t = point(text, size_pt);
+    t.shape = TextShape::Box { x, y, width, height };
+    t
+}
+
+pub(crate) fn area_ellipse_layer(text: &str, size_pt: f32, w: f64, h: f64) -> TextLayer {
+    let mut t = point(text, size_pt);
+    t.shape = TextShape::Area { path: area_ellipse(0.0, 0.0, w, h) };
+    t
+}
+
+fn layout_of(t: &TextLayer) -> crate::TextLayout {
+    TextEngine::new().layout(t, 72.0)
+}
+
+#[test]
+fn fit_none_layout_is_unchanged_by_gaps_code() {
+    let t = box_layer("alpha beta gamma delta", 20.0, (0.0, 0.0, 150.0, 300.0));
+    let a = layout_of(&t);
+    let mut t2 = t.clone();
+    t2.fit = Some(TextFit::default());
+    let b = layout_of(&t2);
+    // fit Some with zero gaps uses natural line height instead of auto leading, so only the
+    // fit-None layout is pinned to the old numbers: compare against a snapshot taken before
+    // this change.
+    assert_eq!(a.lines.len(), 2);
+    // Baselines and extents read before the gaps code existed.
+    for (line, (baseline, x0, x1)) in a.lines.iter().zip([(14.550781, 0.0, 98.7793), (38.55078, 0.0, 122.30469)]) {
+        assert!((line.baseline - baseline).abs() < 1e-3 && (line.x0 - x0).abs() < 1e-3 && (line.x1 - x1).abs() < 1e-3, "{line:?}");
+    }
+    assert!(!a.overflowed);
+    assert!(!b.lines.is_empty());
+}
+
+#[test]
+fn box_overflow_is_reported() {
+    let mut t = box_layer("one two three four five six seven eight nine ten", 24.0, (0.0, 0.0, 120.0, 40.0));
+    assert!(layout_of(&t).overflowed, "ten words at 24pt can't fit 120x40");
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 2000.0, height: 2000.0 };
+    assert!(!layout_of(&t).overflowed);
+}
+
+#[test]
+fn too_wide_word_breaks_and_is_not_overflow() {
+    // Broken at the box edge (#6694), the word fits a tall enough box.
+    let l = layout_of(&box_layer("Supercalifragilistic", 48.0, (0.0, 0.0, 60.0, 2000.0)));
+    assert!(l.lines.len() > 1 && !l.overflowed, "{:?}", l.lines);
+}
+
+#[test]
+fn area_overflow_is_reported() {
+    let t = area_ellipse_layer(&"word ".repeat(200), 18.0, 200.0, 120.0);
+    assert!(layout_of(&t).overflowed);
+    let t = area_ellipse_layer("hi", 18.0, 200.0, 120.0);
+    assert!(!layout_of(&t).overflowed);
+}
+
+#[test]
+fn area_word_wider_than_every_span_is_overflow() {
+    use photocraft_doc::vector::Subpath;
+    // Two 40 px columns: the long word is shown overflowing its span, not hidden.
+    let mut t = point("Wonderfulness is a long word", 12.0);
+    t.shape = TextShape::Area {
+        path: photocraft_doc::vector::Path::new(vec![
+            Subpath::polygon(&[(0.0, 0.0), (40.0, 0.0), (40.0, 200.0), (0.0, 200.0)]),
+            Subpath::polygon(&[(160.0, 0.0), (200.0, 0.0), (200.0, 200.0), (160.0, 200.0)]),
+        ]),
+    };
+    let l = layout_of(&t);
+    assert_eq!(l.lines.last().map(|line| line.range.end), Some(t.text.len()), "nothing hidden");
+    assert!(l.overflowed);
+}
+
+#[test]
+fn point_and_path_text_never_overflow() {
+    let t = point(&"word ".repeat(200), 48.0);
+    assert!(!layout_of(&t).overflowed);
+}
+
+#[test]
+fn line_gap_spreads_lines() {
+    let mut t = box_layer(
+        "a
+b",
+        20.0,
+        (0.0, 0.0, 400.0, 400.0),
+    );
+    t.fit = Some(TextFit { word_gap: 0.0, line_gap: 0.0, lines: vec![], area_scale: 1.0 });
+    let l0 = layout_of(&t);
+    t.fit = Some(TextFit { word_gap: 0.0, line_gap: 100.0, lines: vec![], area_scale: 1.0 });
+    let l1 = layout_of(&t);
+    let step = |l: &crate::TextLayout| l.lines[1].baseline - l.lines[0].baseline;
+    let px = 20.0 * l0.px_per_pt;
+    assert!((step(&l1) - step(&l0) - px).abs() < 0.5, "100% line gap adds one size: {} vs {}", step(&l1), step(&l0));
+}
+
+#[test]
+fn word_gap_widens_lines() {
+    let mut t = box_layer("aa bb cc dd", 20.0, (0.0, 0.0, 4000.0, 400.0));
+    t.fit = Some(TextFit::default());
+    let l0 = layout_of(&t);
+    let w0 = l0.lines[0].x1 - l0.lines[0].x0;
+    // The word gap is a percent of each space's own width: +100 % doubles every space.
+    let space = l0.clusters.iter().find(|c| c.range.start == 2).map(|c| c.advance).unwrap();
+    assert!(space > 1.0 && space < 0.5 * 20.0 * l0.px_per_pt, "a space is narrower than the size: {space}");
+    t.fit = Some(TextFit { word_gap: 100.0, line_gap: 0.0, lines: vec![], area_scale: 1.0 });
+    let w1 = {
+        let l = layout_of(&t);
+        l.lines[0].x1 - l.lines[0].x0
+    };
+    assert!((w1 - w0 - 3.0 * space).abs() < 1.0, "three spaces each widen by one space: {w0} -> {w1} (space {space})");
+}
+
+#[test]
+fn hanging_first_line_indent_that_fits_is_not_overflow() {
+    // Photoshop's hanging indent: the first line starts 30 px left of the others and is 30 px
+    // wider than them.
+    // Short words fill each line to within a few px of its width.
+    let t = box_layer(&"ab ".repeat(80), 12.0, (0.0, 0.0, 200.0, 1000.0));
+    let t = with_para(t, ParagraphStyle { start_indent_pt: 30.0, first_line_indent_pt: -30.0, ..Default::default() });
+    let l = layout_of(&t);
+    assert!(l.lines.len() >= 2);
+    assert!(l.lines[0].x1 - l.lines[0].x0 > 170.5, "the first line uses its extra width: {:?}", l.lines[0]);
+    assert!(!l.overflowed, "{:?}", l.lines);
+}
+
+#[test]
+fn first_word_too_wide_for_a_positive_first_line_indent_breaks_inside_the_box() {
+    // The word is broken at the indented box edge (#6694), so nothing overflows.
+    let t = box_layer("Wonderfulness is a long word", 12.0, (0.0, 0.0, 200.0, 1000.0));
+    let t = with_para(t, ParagraphStyle { first_line_indent_pt: 150.0, ..Default::default() });
+    let l = layout_of(&t);
+    assert!(l.lines[0].x1 <= 200.5, "{:?}", l.lines[0]);
+    assert!(!l.overflowed, "{:?}", l.lines);
+}
+
+#[test]
+fn horizontal_scale_does_not_count_as_overflow() {
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 12.0, horizontal_scale: 1.2, ..Default::default() };
+    let mut t = styled(BUBBLE_TEXT, style);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 1000.0 };
+    let l = layout_of(&t);
+    assert!(l.lines.len() >= 2);
+    assert!(width(&l) <= 200.5, "lines break at the scaled width (#5565): {:?}", l.lines);
+    assert!(!l.overflowed, "every line is inside the box");
+}
+
+#[test]
+fn hidden_empty_trailing_line_is_not_overflow() {
+    // Two 20 pt lines fill a 40 px box (baselines 14.6 and 38.6); the empty paragraph after
+    // the final break would sit below it.
+    let t = box_layer("alpha beta gamma delta\n", 20.0, (0.0, 0.0, 150.0, 40.0));
+    let l = layout_of(&t);
+    assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
+    assert!(!l.overflowed);
+    let t = box_layer("alpha beta gamma delta\n\n", 20.0, (0.0, 0.0, 150.0, 40.0));
+    assert!(!layout_of(&t).overflowed);
+    // Real text after the break is hidden: overflow.
+    let t = box_layer("alpha beta gamma delta\n\nx", 20.0, (0.0, 0.0, 150.0, 40.0));
+    assert!(layout_of(&t).overflowed);
+}
+
+#[test]
+fn hidden_empty_trailing_area_paragraph_is_not_overflow() {
+    // A 30 px tall rectangle holds one 18 pt line and nothing more.
+    let mut t = point("hi\n", 18.0);
+    t.shape = TextShape::Area { path: area_poly(&[(0.0, 0.0), (300.0, 0.0), (300.0, 30.0), (0.0, 30.0)]) };
+    let l = layout_of(&t);
+    assert_eq!(l.lines.len(), 1, "{:?}", l.lines);
+    assert!(!l.overflowed);
+    t.text = "hi\nthere".into();
+    assert!(layout_of(&t).overflowed);
+}
+
+#[test]
+fn area_line_gap_spreads_rows() {
+    let mut t = point(BUBBLE_TEXT, 12.0);
+    t.shape = TextShape::Area { path: area_poly(&[(0.0, 0.0), (120.0, 0.0), (120.0, 600.0), (0.0, 600.0)]) };
+    let step = |gap: f32| {
+        let mut t = t.clone();
+        t.fit = Some(TextFit { word_gap: 0.0, line_gap: gap, lines: vec![], area_scale: 1.0 });
+        let l = layout_of(&t);
+        assert!(l.lines.len() >= 3 && !l.overflowed, "{:?}", l.lines);
+        l.lines[1].baseline - l.lines[0].baseline
+    };
+    let (s0, s1) = (step(0.0), step(100.0));
+    assert!((s1 - s0 - 12.0).abs() < 0.5, "100% line gap adds one size: {s0} -> {s1}");
+}
+
+#[test]
+fn fit_ignores_explicit_and_auto_leading() {
+    let base = |leading_pt: Option<f32>, auto_leading: f32| {
+        let style = CharStyle { font_family: "Inter".into(), size_pt: 20.0, leading_pt, ..Default::default() };
+        let mut t = styled("a\nb", style);
+        t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 400.0, height: 400.0 };
+        let mut t = with_para(t, ParagraphStyle { auto_leading, ..Default::default() });
+        t.fit = Some(TextFit::default());
+        let l = layout_of(&t);
+        l.lines[1].baseline - l.lines[0].baseline
+    };
+    let natural = base(None, 1.2);
+    assert!((base(Some(60.0), 1.2) - natural).abs() < 1e-3);
+    assert!((base(None, 3.0) - natural).abs() < 1e-3);
+    // The natural height is the line's ascent plus descent, less than 1.2 × size here.
+    assert!(natural > 15.0 && natural < 30.0, "{natural}");
+}
+
+// Dynamic Text box lines: the solver's `lines` force the breaks and size each line.
+
+fn fit_lines(lines: &[(u32, f32)]) -> Option<TextFit> {
+    Some(TextFit {
+        word_gap: 0.0,
+        line_gap: 0.0,
+        lines: lines.iter().map(|&(start, scale)| photocraft_doc::text::FitLine { start, scale }).collect(),
+        area_scale: 1.0,
+    })
+}
+
+/// Em sizes (px) of the glyphs sitting on each line's baseline.
+fn line_sizes(l: &crate::TextLayout) -> Vec<Vec<f32>> {
+    l.lines.iter().map(|ln| l.glyphs.iter().filter(|g| (g.y - ln.baseline).abs() < 0.5).map(|g| l.faces[g.face as usize].size_px).collect()).collect()
+}
+
+fn same_layout(a: &crate::TextLayout, b: &crate::TextLayout) -> bool {
+    format!("{:?}{:?}{:?}{:?}", a.lines, a.glyphs, a.clusters, a.overflowed) == format!("{:?}{:?}{:?}{:?}", b.lines, b.glyphs, b.clusters, b.overflowed)
+}
+
+#[test]
+fn fit_lines_force_breaks() {
+    let mut t = box_layer("aa bb cc", 20.0, (0.0, 0.0, 4000.0, 400.0));
+    t.fit = fit_lines(&[(0, 1.0), (3, 1.0), (6, 1.0)]);
+    let l = layout_of(&t);
+    let starts: Vec<usize> = l.lines.iter().map(|ln| ln.range.start).collect();
+    assert_eq!(starts, [0, 3, 6], "{:?}", l.lines);
+    assert!(!l.overflowed);
+}
+
+/// A paragraph run edge inside a paragraph (as imported or hand-edited `paragraphs` can have)
+/// doesn't restyle the paragraph's later solved lines: all of them take its first run's style,
+/// as unsolved layout does.
+#[test]
+fn solved_lines_share_their_paragraphs_style() {
+    let mut t = box_layer("aa bb cc", 20.0, (0.0, 0.0, 4000.0, 400.0));
+    t.paragraphs = vec![
+        ParagraphRun { len: 3, style: ParagraphStyle::default() },
+        ParagraphRun { len: 5, style: ParagraphStyle { align: TextAlign::Right, ..Default::default() } },
+    ];
+    t.fit = fit_lines(&[(0, 1.0), (3, 1.0), (6, 1.0)]);
+    let l = layout_of(&t);
+    assert_eq!(l.lines.len(), 3, "{:?}", l.lines);
+    for line in &l.lines {
+        assert!(line.x0 < 1.0, "every line is left-aligned like the first: {line:?}");
+    }
+}
+
+#[test]
+fn fit_lines_keep_paragraphs() {
+    let mut t = box_layer("aa bb\ncc", 20.0, (0.0, 0.0, 4000.0, 400.0));
+    t.fit = fit_lines(&[(0, 1.0), (3, 1.0), (6, 1.0)]);
+    let l = layout_of(&t);
+    let got: Vec<(usize, usize)> = l.lines.iter().map(|ln| (ln.range.start, ln.paragraph)).collect();
+    assert_eq!(got, [(0, 0), (3, 0), (6, 1)], "{:?}", l.lines);
+}
+
+#[test]
+fn fit_lines_scale_sizes() {
+    let mut t = box_layer("aa bb", 20.0, (0.0, 0.0, 4000.0, 400.0));
+    t.fit = fit_lines(&[(0, 1.0)]);
+    let base = layout_of(&t);
+    t.fit = fit_lines(&[(0, 2.0), (3, 0.5)]);
+    let l = layout_of(&t);
+    assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
+    let px = 20.0 * l.px_per_pt;
+    let sizes = line_sizes(&l);
+    assert!(!sizes[0].is_empty() && sizes[0].iter().all(|s| (s / (2.0 * px) - 1.0).abs() < 0.02), "{sizes:?}");
+    assert!(!sizes[1].is_empty() && sizes[1].iter().all(|s| (s / (0.5 * px) - 1.0).abs() < 0.02), "{sizes:?}");
+    let a = base.lines[0].ascent;
+    assert!((l.lines[0].ascent / a - 2.0).abs() < 0.04 && (l.lines[1].ascent / a - 0.5).abs() < 0.01, "{:?} vs {a}", l.lines);
+}
+
+#[test]
+fn fit_lines_advance_uses_each_lines_scaled_size() {
+    let mut t = box_layer("aa bb", 20.0, (0.0, 0.0, 4000.0, 400.0));
+    t.fit = fit_lines(&[(0, 2.0), (3, 0.5)]);
+    t.fit.as_mut().unwrap().line_gap = 100.0;
+    let l = layout_of(&t);
+    let (l0, l1) = (&l.lines[0], &l.lines[1]);
+    // The second line's advance: the big line's (scaled) descent, its own (scaled) ascent and
+    // 100% of the larger scaled size, so the big line's descenders never reach it.
+    let want = l0.descent + l1.ascent + 2.0 * 20.0 * l.px_per_pt;
+    assert!((l1.baseline - l0.baseline - want).abs() < 0.5, "{:?}", l.lines);
+}
+
+#[test]
+fn fit_lines_scale_word_gap_and_baseline_shift() {
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 20.0, baseline_shift_pt: 4.0, ..Default::default() };
+    let mut t = styled("aa bb", style);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 4000.0, height: 400.0 };
+    t.fit = fit_lines(&[(0, 2.0)]);
+    let l0 = layout_of(&t);
+    let w0 = l0.lines[0].x1;
+    let space = l0.clusters.iter().find(|c| c.range.start == 2).map(|c| c.advance).unwrap();
+    t.fit.as_mut().unwrap().word_gap = 100.0;
+    let l = layout_of(&t);
+    assert!((l.lines[0].x1 - w0 - space).abs() < 1.0, "the space doubles at its scaled width: {w0} -> {} (space {space})", l.lines[0].x1);
+    assert!(l.glyphs.iter().all(|g| l.styles[g.style as usize].baseline_shift_pt == 8.0), "baseline shift scales with the line");
+}
+
+#[test]
+fn fit_lines_wider_than_box_do_not_rewrap() {
+    // A clamped line wider than the box keeps its words together and reports overflow.
+    let mut t = box_layer("aa bb cc", 20.0, (0.0, 0.0, 60.0, 400.0));
+    t.fit = fit_lines(&[(0, 1.0), (3, 3.0)]);
+    let l = layout_of(&t);
+    let starts: Vec<usize> = l.lines.iter().map(|ln| ln.range.start).collect();
+    assert_eq!(starts, [0, 3], "{:?}", l.lines);
+    assert!(l.lines[1].x1 - l.lines[1].x0 > 60.5);
+    assert!(l.overflowed);
+}
+
+/// Area type inside the polygon `pts` (text space).
+pub(crate) fn area_layer(text: &str, size_pt: f32, pts: &[(f64, f64)]) -> TextLayer {
+    let mut t = point(text, size_pt);
+    t.shape = TextShape::Area { path: area_poly(pts) };
+    t
+}
+
+#[test]
+fn fit_lines_apply_to_area_type() {
+    // A rectangle area path with two solved lines: the second line starts at "world" and is
+    // twice the size of the first, in its own row.
+    let mut t = area_layer("hello world", 20.0, &[(0.0, 0.0), (400.0, 0.0), (400.0, 300.0), (0.0, 300.0)]);
+    t.fit = Some(TextFit { lines: vec![FitLine { start: 0, scale: 1.0 }, FitLine { start: 6, scale: 2.0 }], ..TextFit::default() });
+    let out = layout_of(&t);
+    assert_eq!(out.lines.len(), 2, "{:?}", out.lines);
+    assert_eq!(out.lines[1].range.start, 6);
+    let h0 = out.lines[0].ascent + out.lines[0].descent;
+    let h1 = out.lines[1].ascent + out.lines[1].descent;
+    assert!((h1 / h0 - 2.0).abs() < 0.05, "{h0} {h1}");
+    // Stacked as solved box lines are: the previous descent, this ascent (line gap 0).
+    let (l0, l1) = (&out.lines[0], &out.lines[1]);
+    assert!((l1.baseline - l0.baseline - (l0.descent + l1.ascent)).abs() < 0.5, "{:?}", out.lines);
+}
+
+#[test]
+fn fit_lines_box_height_still_stops_lines() {
+    let mut t = box_layer("aa bb cc", 20.0, (0.0, 0.0, 4000.0, 40.0));
+    t.fit = fit_lines(&[(0, 1.0), (3, 1.0), (6, 1.0)]);
+    let l = layout_of(&t);
+    assert!(l.lines.len() < 3, "{:?}", l.lines);
+    assert!(l.overflowed);
+}
+
+#[test]
+fn fit_lines_ignored_without_fit_or_for_point_text() {
+    let lines = fit_lines(&[(0, 2.0), (3, 0.5), (6, 1.0)]);
+    let text = "aa bb cc dd ee ff";
+    // No fit: plain box text.
+    let plain = layout_of(&box_layer(text, 20.0, (0.0, 0.0, 60.0, 400.0)));
+    assert!(plain.lines.len() > 1 && plain.glyphs.iter().all(|g| plain.faces[g.face as usize].size_px == 20.0 * plain.px_per_pt));
+    // Area text lays its solved lines out (`fit_lines_apply_to_area_type`): one per line start.
+    let mut a = area_ellipse_layer(text, 12.0, 300.0, 300.0);
+    a.fit = Some(TextFit::default());
+    let without = layout_of(&a);
+    a.fit = lines.clone();
+    let solved = layout_of(&a);
+    assert!(!same_layout(&without, &solved));
+    assert_eq!(solved.lines.iter().map(|ln| ln.range.start).collect::<Vec<_>>(), [0, 3, 6], "{:?}", solved.lines);
+    // Point text ignores them.
+    let mut p = point(text, 20.0);
+    p.fit = Some(TextFit::default());
+    let without = layout_of(&p);
+    p.fit = lines;
+    assert!(same_layout(&without, &layout_of(&p)));
+}
+
+#[test]
+fn fit_lines_not_solved_yet_wrap_normally() {
+    // Refresh always fills `lines`; until it has run, a fitted box wraps at its width.
+    let mut t = box_layer("alpha beta gamma delta", 20.0, (0.0, 0.0, 150.0, 300.0));
+    t.fit = Some(TextFit::default());
+    let l = layout_of(&t);
+    assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
+    assert!(l.lines.iter().all(|ln| ln.x1 - ln.x0 <= 150.5));
+}
+
+#[test]
+fn fit_lines_invalid_for_the_text_are_ignored() {
+    // Out of order: laid out as if not solved yet, never panicking on a bad offset.
+    let mut t = box_layer("héllo world", 20.0, (0.0, 0.0, 4000.0, 300.0));
+    t.fit = Some(TextFit::default());
+    let unsolved = layout_of(&t);
+    for bad in [&[(0, 1.0), (2, 1.0)][..], &[(0, 1.0), (7, 1.0), (3, 1.0)], &[(0, 1.0), (99, 1.0)]] {
+        t.fit = fit_lines(bad);
+        assert!(same_layout(&unsolved, &layout_of(&t)), "{bad:?}");
+    }
+}
+
+#[test]
+fn fit_line_after_a_forced_line_break_adds_no_blank_line() {
+    let mut t = box_layer("aa\u{3}bb", 20.0, (0.0, 0.0, 4000.0, 400.0));
+    t.fit = fit_lines(&[(0, 1.0), (3, 1.0)]);
+    let l = layout_of(&t);
+    let starts: Vec<usize> = l.lines.iter().map(|ln| ln.range.start).collect();
+    assert_eq!(starts, [0, 3], "{:?}", l.lines);
+}
+
+#[test]
+fn fit_lines_narrower_than_the_box_follow_the_alignment() {
+    let t = box_layer("aa bb", 20.0, (0.0, 0.0, 400.0, 400.0));
+    let mut t = with_para(t, ParagraphStyle { align: TextAlign::Center, ..Default::default() });
+    t.fit = fit_lines(&[(0, 1.0), (3, 0.5)]);
+    let l = layout_of(&t);
+    for ln in &l.lines {
+        assert!(((ln.x0 + ln.x1) / 2.0 - 200.0).abs() < 1.0, "centred in the box: {ln:?}");
+    }
+}
+
+#[test]
+fn fit_lines_keep_the_paragraphs_auto_direction() {
+    // A Hebrew paragraph whose second solved line starts with a Latin word: that line still has
+    // the paragraph's RTL base, so the Hebrew after "abc" sits to its left.
+    let text = "שלום abc דג";
+    let mut t = box_layer(text, 20.0, (0.0, 0.0, 4000.0, 400.0));
+    t.fit = fit_lines(&[(0, 1.0), (9, 1.0)]);
+    let l = layout_of(&t);
+    let starts: Vec<usize> = l.lines.iter().map(|ln| ln.range.start).collect();
+    assert_eq!(starts, [0, 9], "{:?}", l.lines);
+    assert!(l.clusters.iter().all(|c| c.range.end <= text.len() && text.is_char_boundary(c.range.start)));
+    let at = |b: usize| l.clusters.iter().find(|c| c.range.start == b).unwrap_or_else(|| panic!("no cluster at {b}: {:?}", l.clusters));
+    assert!(at(9).line == 1 && at(13).line == 1);
+    assert!(at(13).rtl);
+    assert!(at(9).x > at(13).x, "RTL base: 'abc' right of the Hebrew: {:?} vs {:?}", at(9), at(13));
+}
+
+#[test]
+fn clamped_wide_fit_line_overflows_without_hiding() {
+    let mut t = box_layer("aa bb cc", 20.0, (0.0, 0.0, 60.0, 400.0));
+    t.fit = fit_lines(&[(0, 1.0), (3, 3.0)]);
+    let l = layout_of(&t);
+    assert!(l.overflowed && !l.hidden, "{:?}", l.lines);
+}
+
+#[test]
+fn hidden_reports_text_past_the_box_or_shape() {
+    let mut t = box_layer("aa bb cc", 20.0, (0.0, 0.0, 4000.0, 40.0));
+    t.fit = fit_lines(&[(0, 1.0), (3, 1.0), (6, 1.0)]);
+    let l = layout_of(&t);
+    assert!(l.hidden && l.overflowed);
+    let l = layout_of(&box_layer("one two three four five six seven eight nine ten", 24.0, (0.0, 0.0, 120.0, 40.0)));
+    assert!(l.hidden && l.overflowed);
+    let l = layout_of(&box_layer("Supercalifragilistic", 48.0, (0.0, 0.0, 60.0, 2000.0)));
+    assert!(!l.overflowed && !l.hidden, "a word too wide breaks at the box edge (#6694)");
+    let l = layout_of(&area_ellipse_layer(&"word ".repeat(200), 18.0, 200.0, 120.0));
+    assert!(l.hidden && l.overflowed);
+    let l = layout_of(&box_layer("alpha beta gamma delta\n", 20.0, (0.0, 0.0, 150.0, 40.0)));
+    assert!(!l.hidden && !l.overflowed, "an empty last paragraph is not hidden text");
 }
 
 /// #8602: each colour is rasterised only over its own glyphs instead of the whole text, and the
@@ -3917,4 +4508,50 @@ fn vertical_path_decoration_clipping_and_warp() {
     let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, Some(&warp));
     assert!(!rect.is_empty(), "clipped vertical decoration must draw");
     assert!(rect.y0 >= 19 && rect.y1 <= 61, "decoration bounds should be within clipped range: {rect:?}");
+}
+
+/// Dynamic Text's right-to-left check reads each paragraph as layout does: the paragraph style at
+/// its start, and for Auto the first strong character of that paragraph alone. Checking the
+/// whole text's first character, or each paragraph run's, disagreed with layout both ways.
+#[test]
+fn rtl_paragraphs_are_read_per_text_paragraph() {
+    use photocraft_doc::text::{ParagraphRun, ParagraphStyle, TextDirection};
+    let layer = |text: &str, paras: &[(usize, TextDirection)]| TextLayer {
+        text: text.into(),
+        paragraphs: paras.iter().map(|&(len, direction)| ParagraphRun { len, style: ParagraphStyle { direction, ..Default::default() } }).collect(),
+        ..Default::default()
+    };
+    let hebrew = "\u{5e9}\u{5dc}\u{5d5}\u{5dd}";
+    // A Hebrew second paragraph under one Auto run: it lays out right to left.
+    let t = layer(&format!("Hi\n{hebrew}"), &[]);
+    assert!(crate::layout::has_rtl_paragraph(&t));
+    // A Hebrew first paragraph set Left to Right, then a Latin Auto one: none is right to left.
+    let first = hebrew.len() + 1;
+    let t = layer(&format!("{hebrew}\nHi"), &[(first, TextDirection::Ltr), (2, TextDirection::Auto)]);
+    assert!(!crate::layout::has_rtl_paragraph(&t));
+    // A run edge inside a Latin-first paragraph doesn't make its Hebrew part a paragraph of its own.
+    let t = layer(&format!("Hi {hebrew}"), &[(3, TextDirection::Auto), (hebrew.len(), TextDirection::Auto)]);
+    assert!(!crate::layout::has_rtl_paragraph(&t));
+    // An explicit Right to Left paragraph is right to left whatever its characters.
+    let t = layer("Hi", &[(2, TextDirection::Rtl)]);
+    assert!(crate::layout::has_rtl_paragraph(&t));
+}
+
+/// UAX #9 P2 skips the text inside directional isolates when it looks for a paragraph's first
+/// strong character, as the layout's bidi pass does. A paragraph opening with an isolated Latin
+/// name before its Hebrew text is right-to-left: read without isolates, it looked left-to-right,
+/// so Dynamic Text accepted it and forced a left-to-right mark on its lines.
+#[test]
+fn first_strong_rtl_skips_directional_isolates() {
+    use crate::layout::first_strong_rtl;
+    let (lri, rli, fsi, pdi) = ('\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}');
+    assert_eq!(first_strong_rtl(&format!("{lri}Latin{pdi} \u{5e9}\u{5dc}\u{5d5}\u{5dd}")), Some(true));
+    assert_eq!(first_strong_rtl(&format!("{rli}\u{5e9}\u{5dc}\u{5d5}\u{5dd}{pdi} Latin")), Some(false));
+    assert_eq!(first_strong_rtl(&format!("{fsi}Latin{pdi}")), None, "only isolated text: no direction of its own");
+    // Nested isolates close one at a time; an unmatched initiator runs to the end.
+    assert_eq!(first_strong_rtl(&format!("{lri}a{rli}b{pdi}c{pdi}\u{5d0}")), Some(true));
+    assert_eq!(first_strong_rtl(&format!("{lri}Latin \u{5d0}")), None);
+    // A stray PDI changes nothing.
+    assert_eq!(first_strong_rtl(&format!("{pdi}Latin")), Some(false));
+    assert_eq!(first_strong_rtl("\u{5d0}bc"), Some(true));
 }
