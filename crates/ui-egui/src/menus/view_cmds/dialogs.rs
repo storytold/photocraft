@@ -330,6 +330,12 @@ fn default_dir(app: &PhotocraftApp) -> String {
 }
 
 /// Handle menu commands that need a shell action or a parameter dialog before execution.
+/// Artboards to PDF remembers Reverse Page Order after a successful run (#13644).
+pub(crate) fn remember_artboards_to_pdf(app: &mut PhotocraftApp, params: &Value) {
+    let Some(reverse) = params.get("reversePageOrder").and_then(Value::as_bool) else { return };
+    app.session.prefs.edit(|prefs| prefs.dialogs.insert("file.export.artboardsToPdf".into(), json!({"reversePageOrder": reverse})));
+}
+
 pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "file.closeAll" || id == "file.closeOthers" {
         // Keep the remaining document's view (views are index-aligned with documents).
@@ -514,7 +520,14 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
-            dialog(app, json!({"path": format!("{dir}/{stem}.pdf"), "quality": 10}), json!({}))
+            // Reverse Page Order starts unticked and reopens as the last successful run left it (#13644).
+            let reverse = app.session.prefs().dialogs.get(id).and_then(|v| v.get("reversePageOrder")).and_then(Value::as_bool).unwrap_or(false);
+            dialog(
+                app,
+                json!({"path": format!("{dir}/{stem}.pdf"), "quality": 10, "reversePageOrder": reverse, "__order": ["path", "quality", "reversePageOrder"],
+                    "__labels": {"reversePageOrder": tl!("Reverse Page Order")}}),
+                json!({}),
+            )
         }
         "file.export.dataSetsAsFiles" => {
             #[cfg(target_arch = "wasm32")]
