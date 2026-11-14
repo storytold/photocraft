@@ -59,6 +59,7 @@ codec_rt!(dpx_rgba16, "dpx", ColorMode::Rgb, SampleType::U16, true, 0.0);
 // Cineon stores 10-bit code values: within half a 10-bit step.
 codec_rt!(cin_gray16, "cin", ColorMode::Grayscale, SampleType::U16, false, 0.5 / 1023.0);
 codec_rt!(cin_rgb16, "cin", ColorMode::Rgb, SampleType::U16, false, 0.5 / 1023.0);
+codec_rt!(iff_rgb8_opaque, "iff", ColorMode::Rgb, SampleType::U8, false, 0.0);
 
 fn indexed_bmp_8() -> Vec<u8> {
     const FILE_HEADER_SIZE: usize = 14;
@@ -213,7 +214,7 @@ fn dpx_header_fields_and_encoding_notes_round_trip_through_the_document() {
 #[test]
 fn exr_rgba32() {
     let mut d = single(ColorMode::Rgb, SampleType::F32, true);
-    d.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+    d.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
     let r = export(&d, "exr", &ExportOptions::default()).expect("export");
     let back = import("x.exr", &r.bytes).expect("import").document;
     assert_eq!((back.size, back.mode, back.depth), (d.size, d.mode, d.depth));
@@ -263,7 +264,7 @@ fn gray_exr_and_hdr_store_linear_light() {
 /// profile, in which its samples are the colours saved.
 #[test]
 fn gray_exr_round_trips() {
-    use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
+    use craft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let r = export(&mid_gray(ColorMode::Grayscale, depth), "exr", &ExportOptions::default()).expect("export");
         let back = import("x.exr", &r.bytes).expect("import").document;
@@ -272,7 +273,7 @@ fn gray_exr_round_trips() {
         assert_eq!(profile.color_space, ColorSpace::Gray, "{depth:?}");
         let t = Transform::new(&profile, Builtin::SGray.profile(), Intent::RelativeColorimetric, false).expect("transform");
         let mut v = [back.layers[0].surface().expect("raster").pixel(1, 1)[0]];
-        t.apply(&mut v, 1);
+        t.apply(&mut v, 1).unwrap();
         assert!((v[0] - 128.0 / 255.0).abs() < 1e-4, "{depth:?}: reopened as {} in sGray", v[0]);
     }
 }
@@ -349,7 +350,7 @@ fn layered_to_png_warns_flatten() {
     assert!(r.warnings.iter().any(|w| w.contains("flattened")), "{:?}", r.warnings);
     let back = import("out.png", &r.bytes).unwrap().document;
     // Composite equals our flatten.
-    let flat = photocraft_compose::flatten(&d).px;
+    let flat = photocraft_compose::flatten(&d).into_px();
     let s = back.layers[0].surface().unwrap();
     let px: Vec<[f32; 4]> = s.read_region(back.bounds()).as_chunks::<4>().0.iter().map(|p| [p[0], p[1], p[2], p[3]]).collect();
     assert!(max_diff(&px, &flat) <= 1.0 / 255.0 + 1e-4);
@@ -489,7 +490,7 @@ fn psd_to_png_to_psd_chain() {
     let d3 = import("a.png", &png.bytes).unwrap().document;
     assert_eq!(d3.depth, SampleType::U16);
     let psd2 = export(&d3, "b.psd", &ExportOptions::default()).unwrap();
-    assert!(photocraft_psd::PsdFile::from_bytes(&psd2.bytes).is_ok());
+    assert!(craft_psd::PsdFile::from_bytes(&psd2.bytes).is_ok());
 }
 
 /// A one-layer document of 16-pixel-wide columns, each one straight colour (colour channels, then alpha).
@@ -558,7 +559,7 @@ fn transparency_is_composited_over_white_for_formats_without_alpha() {
 /// through the colour engine, instead of values that only mean something under the dropped profile.
 #[test]
 fn non_srgb_rgb_is_converted_to_srgb_for_formats_without_a_profile() {
-    use photocraft_cms::{Builtin, Intent, Transform};
+    use craft_cms::{Builtin, Intent, Transform};
     let cols: [&[f32]; 3] = [&[0.0, 0.05, 0.0, 1.0], &[0.2, 0.5, 0.8, 1.0], &[1.0, 0.25, 0.0, 1.0]];
     for (profile, depth) in [(Builtin::LinearSrgb, SampleType::F32), (Builtin::LinearSrgb, SampleType::U16), (Builtin::DisplayP3, SampleType::U8)] {
         let mut d = columns(ColorMode::Rgb, depth, &cols);
@@ -569,7 +570,7 @@ fn non_srgb_rgb_is_converted_to_srgb_for_formats_without_a_profile() {
             .iter()
             .map(|p| {
                 let mut v = p.clone();
-                t.apply(&mut v, 4);
+                t.apply(&mut v, 4).unwrap();
                 // The formats hold 8-bit sRGB: out-of-gamut colours clip.
                 v.iter().map(|c| c.clamp(0.0, 1.0)).collect()
             })
@@ -606,7 +607,7 @@ fn non_srgb_rgb_is_converted_to_srgb_for_formats_without_a_profile() {
 fn linear_gray_exports_without_profiles_use_display_encoding() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut d = columns(ColorMode::Grayscale, depth, &[&[0.25, 1.0], &[0.5, 1.0]]);
-        d.icc_profile = Some(photocraft_cms::builtin::linear_gray().to_bytes());
+        d.icc_profile = Some(craft_cms::builtin::linear_gray().to_bytes());
         let stored = column_pixels(&d, 2);
         for ext in ["tga", "bmp", "gif", "qoi"] {
             let r = export(&d, ext, &ExportOptions::default()).unwrap();
@@ -629,7 +630,7 @@ fn linear_gray_exports_without_profiles_use_display_encoding() {
 #[test]
 fn default_gray_exports_without_profiles_keep_samples() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-        for icc in [None, Some(photocraft_cms::Builtin::SGray.profile().to_bytes())] {
+        for icc in [None, Some(craft_cms::Builtin::SGray.profile().to_bytes())] {
             let mut d = columns(ColorMode::Grayscale, depth, &[&[0.25, 1.0], &[0.5, 1.0]]);
             d.icc_profile = icc;
             let stored = column_pixels(&d, 2);
@@ -651,7 +652,7 @@ fn default_gray_exports_without_profiles_keep_samples() {
 fn linear_gray_export_preserves_alpha_and_embeddable_profiles() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut d = columns(ColorMode::Grayscale, depth, &[&[0.25, 0.5]]);
-        d.icc_profile = Some(photocraft_cms::builtin::linear_gray().to_bytes());
+        d.icc_profile = Some(craft_cms::builtin::linear_gray().to_bytes());
         let stored = column_pixels(&d, 1);
         let r = export(&d, "tga", &ExportOptions::default()).unwrap();
         let img = photocraft_codecs::decode(&r.bytes).unwrap();
@@ -675,7 +676,7 @@ fn linear_gray_webp_exports_use_display_encoding() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         for alpha in [1.0, 0.5] {
             let mut d = columns(ColorMode::Grayscale, depth, &[&[0.25, alpha], &[0.5, alpha]]);
-            d.icc_profile = Some(photocraft_cms::builtin::linear_gray().to_bytes());
+            d.icc_profile = Some(craft_cms::builtin::linear_gray().to_bytes());
             let stored = column_pixels(&d, 2);
             for lossless in [true, false] {
                 let opts = ExportOptions { encode: EncodeOptions { webp_lossless: lossless, webp_quality: 100, ..Default::default() }, ..Default::default() };
@@ -706,7 +707,7 @@ fn linear_gray_webp_exports_use_display_encoding() {
 #[test]
 fn default_gray_webp_exports_keep_samples() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-        for icc in [None, Some(photocraft_cms::Builtin::SGray.profile().to_bytes())] {
+        for icc in [None, Some(craft_cms::Builtin::SGray.profile().to_bytes())] {
             let mut d = columns(ColorMode::Grayscale, depth, &[&[0.25, 0.5], &[0.5, 1.0]]);
             d.icc_profile = icc;
             let stored = column_pixels(&d, 2);
@@ -725,7 +726,7 @@ fn default_gray_webp_exports_keep_samples() {
 fn rgb_webp_exports_keep_embeddable_profiles() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut d = columns(ColorMode::Rgb, depth, &[&[0.25, 0.5, 0.75, 0.5]]);
-        d.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+        d.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
         let r = export(&d, "webp", &ExportOptions::default()).unwrap();
         let back = import("rgb.webp", &r.bytes).unwrap().document;
         assert_eq!(back.icc_profile, d.icc_profile, "{depth:?}: WebP keeps RGB ICC");
@@ -1189,4 +1190,40 @@ fn a_stereo_png_keeps_its_stereo_mark_on_save() {
     // An ordinary PNG gains no mark.
     let plain = export(&single(ColorMode::Rgb, SampleType::U8, false), "png", &ExportOptions::default()).unwrap();
     assert_eq!(photocraft_codecs::png_stereo(&plain.bytes), None);
+}
+
+/// #8563: a DDS export writes the document's alpha channel as the texture's alpha, as a 32-bit
+/// Targa does: exactly in an uncompressed texture, to 4 bits in BC2, interpolated in BC3, and on
+/// or off in BC1. With several alpha channels none is written, with a warning.
+#[test]
+fn dds_writes_the_alpha_channel_as_the_texture_alpha() {
+    use photocraft_codecs::DdsCompression;
+    let d = with_alpha_channel(single(ColorMode::Rgb, SampleType::U8, false), "Alpha 1");
+    for compression in DdsCompression::ALL {
+        let mut opts = ExportOptions::default();
+        opts.encode.dds.compression = compression;
+        let r = export(&d, "a.dds", &opts).unwrap();
+        let img = photocraft_codecs::decode(&r.bytes).expect("decode dds");
+        assert_eq!(img.layout(), photocraft_codecs::ChannelLayout::Rgba, "{compression:?}");
+        let (w, _) = img.dimensions();
+        let tolerance = match compression {
+            DdsCompression::None => 1.0,
+            DdsCompression::Bc2 => 9.0,
+            _ => 18.0,
+        };
+        for (i, px) in img.data().as_chunks::<4>().0.iter().enumerate() {
+            let x = i as u32 % w;
+            let want = alpha_value(x) * 255.0;
+            if compression == DdsCompression::Bc1 && x == 4 {
+                continue; // half opacity sits on BC1's on/off threshold
+            }
+            assert!((f32::from(px[3]) - want).abs() <= tolerance, "{compression:?} pixel {i}: alpha {} want {want}", px[3]);
+        }
+    }
+    // Two alpha channels: Photoshop's rule for Targa, none of them is written.
+    let two = with_alpha_channel(d.clone(), "Alpha 2");
+    let r = export(&two, "a.dds", &ExportOptions::default()).unwrap();
+    assert!(r.warnings.iter().any(|w| w.contains("several")), "{:?}", r.warnings);
+    let img = photocraft_codecs::decode(&r.bytes).expect("decode dds");
+    assert!(!img.layout().has_alpha() || img.data().as_chunks::<4>().0.iter().all(|p| p[3] == 255));
 }

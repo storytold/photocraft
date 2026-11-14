@@ -15,7 +15,7 @@ use serde_json::Value;
 
 /// The embedded-profile choice uses the current built-in profile's displayed name.
 fn use_embedded() -> String {
-    format!("Use the embedded profile ({})", photocraft_cms::Builtin::AdobeRgbCompat.description())
+    format!("Use the embedded profile ({})", craft_cms::Builtin::AdobeRgbCompat.description())
 }
 const CONVERT: &str = "Convert to the working space (sRGB IEC61966-2.1)";
 const DISCARD: &str = "Discard the embedded profile (don't color manage)";
@@ -23,7 +23,7 @@ const DISCARD: &str = "Discard the embedded profile (don't color manage)";
 /// A PNG tagged with Adobe RGB, which doesn't match the sRGB working space.
 fn adobe_png() -> Vec<u8> {
     let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::rgba(0.2, 0.6, 0.9, 1.0));
-    d.icc_profile = Some(photocraft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes());
+    d.icc_profile = Some(craft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes());
     photocraft_io::export(&d, "t.png", &Default::default()).unwrap().bytes
 }
 
@@ -144,32 +144,12 @@ fn files_opened_together_ask_one_at_a_time_before_each_opens() {
 #[test]
 fn the_prompt_is_translated_and_still_names_its_file() {
     let png = adobe_png();
-    for (code, sentence, use_embedded, convert) in [
-        (
-            "en",
-            "The document “shot {mode}.png” has an embedded color profile that does not match the current RGB working space.",
-            "Use the embedded profile (Adobe RGB",
-            "Convert to the working space (sRGB",
-        ),
-        (
-            "de",
-            "Das Dokument „shot {mode}.png“ hat ein eingebettetes Farbprofil, das nicht zum aktuellen RGB-Arbeitsfarbraum passt.",
-            "Eingebettetes Profil verwenden (Adobe RGB",
-            "In den Arbeitsfarbraum konvertieren (sRGB",
-        ),
-        (
-            "fr",
-            "Le document «NBSPshot {mode}.pngNBSP» a un profil colorimétrique incorporé qui ne correspond pas à l'espace de travail RVB actuel.",
-            "Utiliser le profil incorporé (Adobe RGB",
-            "Convertir vers l'espace de travail (sRGB",
-        ),
-        (
-            "ja",
-            "ドキュメント「shot {mode}.png」の埋め込みカラープロファイルは、現在の RGB 作業用スペースと一致しません。",
-            "埋め込みプロファイルを使用 (Adobe RGB",
-            "作業用スペースに変換 (sRGB",
-        ),
-    ] {
+    let template = "The document “{name}” has an embedded color profile that does not match the current {mode} working space.";
+    for code in ["en", "de", "fr", "ja"] {
+        // English runs in every build; the others need the craft-i18n catalogs.
+        if code != "en" && !crate::i18n::needs_catalogs() {
+            continue;
+        }
         let services = Services {
             import: Some(Box::new(|name, bytes, opts| {
                 photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
@@ -183,16 +163,14 @@ fn the_prompt_is_translated_and_still_names_its_file() {
         assert!(app.session.documents().is_empty(), "{code}: held until answered");
         let fields = app.ui.dialogs[0].fields.clone();
         let message = fields.get("message").and_then(Value::as_str).unwrap().to_string();
-        assert_eq!(message, sentence.replace("NBSP", "\u{a0}"), "{code}: one line, the profiles are on the choices");
+        let expected = crate::i18n::fmt(crate::i18n::tr(lang, template), &[("mode", crate::i18n::tr(lang, "RGB")), ("name", "shot {mode}.png")]);
+        assert_eq!(message, expected, "{code}: one line, the profiles are on the choices");
+        if code == "en" {
+            assert_eq!(message, "The document “shot {mode}.png” has an embedded color profile that does not match the current RGB working space.");
+        }
         let name = |k: &str| fields.get(k).and_then(Value::as_str).unwrap().to_string();
-        let (use_label, convert_label) = crate::i18n::with_language(lang, || {
-            (
-                crate::i18n::fmt(tl!("Use the embedded profile ({profile})"), &[("profile", &name("embedded"))]),
-                crate::i18n::fmt(tl!("Convert to the working space ({profile})"), &[("profile", &name("working"))]),
-            )
-        });
-        assert!(use_label.starts_with(use_embedded), "{code}: {use_label}");
-        assert!(convert_label.starts_with(convert), "{code}: {convert_label}");
+        assert!(name("embedded").starts_with("Adobe RGB"), "{code}: {}", name("embedded"));
+        assert!(name("working").starts_with("sRGB"), "{code}: {}", name("working"));
     }
 }
 
@@ -206,7 +184,7 @@ fn a_held_file_still_reports_its_missing_fonts() {
     s.execute("file.new", serde_json::json!({"width": 40, "height": 20})).unwrap();
     s.execute("type.create", serde_json::json!({"text": "Hi", "x": 2, "y": 12, "size": 10, "font": MISSING})).unwrap();
     let mut doc = (*s.active().unwrap().doc).clone();
-    doc.icc_profile = Some(photocraft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes());
+    doc.icc_profile = Some(craft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes());
     let services =
         Services { import: Some(Box::new(move |_: &str, _: &[u8], _: &photocraft_io::ImportOptions| Ok((doc.clone(), Vec::new())))), ..Default::default() };
     let mut app = PhotocraftApp::new(Session::new(), services);

@@ -13,6 +13,8 @@ fn fresh() -> Session {
     // Belt and braces with the EXTERNAL skip below: nothing in this process may reach a printer.
     photocraft_engine::print_cmds::disable_printing();
     let mut s = Session::new();
+    // `file.printers` and `file.print.printers` list no printers and do not ask the spooler.
+    s.printer_source = Some(std::sync::Arc::new(Vec::new));
     s.execute("file.new", json!({"width": 24, "height": 16})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 1, "y": 1, "width": 6, "height": 5})).unwrap();
@@ -30,9 +32,14 @@ static PANICS: AtomicUsize = AtomicUsize::new(0);
 /// One run at a time, so a panic is charged to the run that caused it.
 static RUN: Mutex<()> = Mutex::new(());
 
-/// Run `f` on a worker thread. `None` if it timed out, else whether it finished without
-/// panicking, contained or not (returning Ok or a graceful Err both count).
-fn run_watched(f: impl FnOnce() + Send + 'static) -> Option<bool> {
+/// Budget for the self-test below, which checks how panics are counted, not hangs. The panic hook
+/// prints a backtrace under `RUST_BACKTRACE=1` (as in CI), and on a loaded Windows runner the
+/// first symbol lookup alone can take 15–20 s.
+const SELF_TEST_DEADLINE: Duration = Duration::from_secs(120);
+
+/// Run `f` on a worker thread. `None` if it took longer than `deadline`, else whether it
+/// finished without panicking, contained or not (returning Ok or a graceful Err both count).
+fn run_watched(deadline: Duration, f: impl FnOnce() + Send + 'static) -> Option<bool> {
     static HOOK: Once = Once::new();
     HOOK.call_once(|| {
         let default = std::panic::take_hook();
@@ -48,13 +55,13 @@ fn run_watched(f: impl FnOnce() + Send + 'static) -> Option<bool> {
         let r = catch_unwind(AssertUnwindSafe(f));
         let _ = tx.send(r.is_ok());
     });
-    rx.recv_timeout(DEADLINE).ok().map(|ok| ok && PANICS.load(Ordering::SeqCst) == before)
+    rx.recv_timeout(deadline).ok().map(|ok| ok && PANICS.load(Ordering::SeqCst) == before)
 }
 
 /// Run `id` with `p` on a fresh session; see [`run_watched`].
 fn run_once(id: &str, p: &Value) -> Option<bool> {
     let (id, p) = (id.to_string(), p.clone());
-    run_watched(move || {
+    run_watched(DEADLINE, move || {
         let mut s = fresh();
         let _ = s.execute(&id, p);
     })
@@ -82,6 +89,11 @@ fn no_command_panics_or_hangs_on_adversarial_params() {
         json!({"x": -9, "y": -9, "radius": 0, "amount": 0, "angle": 0, "opacity": 0, "scale": 0, "levels": 0, "tolerance": 0, "gamma": 0, "layer": 999999, "channel": 999, "index": 999999, "count": 0}),
         json!({"x": 1e5, "y": -1e5, "radius": 300, "amount": 300, "angle": 1e5, "opacity": -100, "scale": -5, "gamma": -1}),
         json!({"points": [], "from": [0, 0], "to": [0, 0], "stops": [], "matrix": [0, 0, 0, 0, 0, 0], "colors": [], "name": "", "mode": "", "style": ""}),
+        // Color Range and Replace Color samples (#6280): far off the canvas, malformed, and a
+        // click order that doesn't match them.
+        json!({"points": [[1e9, -1e9], [0.5, 0.5]], "subtractPoints": [[-1e9, 1e9], [2, 2]], "order": ["+", "-", "x", 5], "localized": true, "range": 0}),
+        json!({"points": [[3, 3]], "subtractPoints": [[3]], "order": {}, "fuzziness": -1}),
+        json!({"subtractPoints": "none", "order": ["-"], "labMinimum": [0, 0, 0], "labMaximum": [100, 0, 0]}),
     ];
     let mut bad: Vec<String> = Vec::new();
     for spec in command_specs() {
@@ -107,11 +119,11 @@ fn no_command_panics_or_hangs_on_adversarial_params() {
 /// #4982: a panic the code under test contains still fails the run; a graceful `Err` does not.
 #[test]
 fn contained_panics_count_and_graceful_errors_do_not() {
-    let contained = run_watched(|| {
+    let contained = run_watched(SELF_TEST_DEADLINE, || {
         let _ = catch_unwind(|| panic!("contained, as Session::execute does"));
     });
     assert_eq!(contained, Some(false));
-    let graceful = run_watched(|| {
+    let graceful = run_watched(SELF_TEST_DEADLINE, || {
         let mut s = fresh();
         assert!(s.execute("layer.delete", json!({"layer": 999999})).is_err());
     });
