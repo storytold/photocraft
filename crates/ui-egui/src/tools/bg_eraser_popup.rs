@@ -51,8 +51,10 @@ pub fn set_size_control(b: &mut BrushSettings, control: &str) {
     }
 }
 
-/// The popup's controls, editing `b` and the tool's Tolerance control.
-pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, tolerance_control: &mut String) {
+/// The popup's controls, editing `b` and, when given, the tool's Tolerance control. Quick
+/// Selection's popup (#12928) is the same without the Tolerance row, which is the Background
+/// Eraser's alone.
+pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, tolerance_control: Option<&mut String>) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(WIDTH);
     ui.horizontal(|ui| {
@@ -108,6 +110,7 @@ pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, tolerance_control: &mut St
             set_size_control(b, &size);
         }
     });
+    let Some(tolerance_control) = tolerance_control else { return };
     ui.horizontal(|ui| {
         ui.label(RichText::new(tl!("Tolerance:")).color(t.text_dim));
         widgets::dropdown(ui, "bg-eraser-tolerance-control", tl!("Tolerance:"), tolerance_control, &options, 120.0);
