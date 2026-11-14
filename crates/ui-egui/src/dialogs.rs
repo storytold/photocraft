@@ -372,6 +372,8 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
             if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
                 let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
                 egui::ScrollArea::vertical().id_salt(("file-info-body", d.id)).max_height(room).show(ui, |ui| crate::view_cmds::form_body(ui, fields));
+            } else if crate::file_ui::contact_sheet::owns(fields) {
+                crate::file_ui::contact_sheet::body(ui, fields);
             } else {
                 crate::view_cmds::form_body(ui, fields);
             }
