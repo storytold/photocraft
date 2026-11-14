@@ -835,6 +835,17 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut act: Option<&str> = None;
     let mut change_to = d.change_to.clone();
     let mut all_layers = d.all_layers;
+    // Done is the default button (#14179): Enter (also in Change To, where it must not Change) and
+    // Escape run it. Consumed before the widgets and the canvas see them, and only while no modal
+    // dialog sits above this one; Enter on a focused button keeps that button's own action.
+    if ctx.memory(|m| m.top_modal_layer().is_none()) {
+        let enter_free = ctx.memory(|m| m.focused().is_none()) || ctx.egui_wants_keyboard_input();
+        let none = egui::Modifiers::NONE;
+        let (esc, enter) = ctx.input_mut(|i| (i.consume_key(none, egui::Key::Escape), enter_free && i.consume_key(none, egui::Key::Enter)));
+        if esc || enter {
+            act = Some("done");
+        }
+    }
     egui::Window::new(tl!("Check Spelling"))
         .id(egui::Id::unique("check-spelling"))
         .collapsible(false)

@@ -1309,6 +1309,9 @@ mod tool_flyout_drag_tests {
 mod type_flyout_tests;
 
 #[cfg(test)]
+mod type_spell_keys_tests;
+
+#[cfg(test)]
 mod toolbar_hidden_tests {
     use super::*;
 
