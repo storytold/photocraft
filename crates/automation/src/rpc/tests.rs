@@ -958,6 +958,7 @@ fn tcp_serves_loopback() {
     let auth = authenticate_tcp(&mut reader, &mut s, TOKEN);
     assert_eq!(auth["result"]["authenticated"], true);
     writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
+    let mut line = String::new();
     line.clear();
     reader.read_line(&mut line).unwrap();
     let v: Value = serde_json::from_str(&line).unwrap();
