@@ -488,7 +488,8 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                 } else {
                     c[3]
                 };
-                let nc = if i < table.colors.len() { table.rgb(i) } else { table.rgb(table.nearest([c[0], c[1], c[2]])) };
+                // An index past a shrunk table has no colour: black, as in Photoshop (#14342).
+                let nc = table.rgb(i);
                 let mut enc = [0.0f32; 8];
                 let m = photocraft_raster::from_rgba_into(&fmt, [nc[0], nc[1], nc[2], alpha], &mut enc);
                 q.copy_from_slice(&enc[..m]);
@@ -830,3 +831,6 @@ pub fn display_document(doc: &Document) -> Option<Document> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod color_table_index_tests;
