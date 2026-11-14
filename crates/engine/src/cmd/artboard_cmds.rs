@@ -675,7 +675,32 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
     }
 }
 
-/// File › Export › Artboards to Files: `<prefix>_<index:04>_<artboard name>.<format>` per board.
+/// What an Artboards to Files `format` writes (the dialog's File Type list).
+enum FileType {
+    /// One file per board through the format's encoder, with this extension.
+    Save(String),
+    /// One indexed (palette) PNG per board, as PNG-8.
+    Png8,
+    /// One truecolour PNG per board, as PNG-24: a Grayscale or other non-RGB board becomes RGB.
+    Png24,
+    /// One multi-page PDF, a page per board, bottom artboard first.
+    Pdf,
+}
+
+impl FileType {
+    fn of(format: &str) -> Self {
+        match format {
+            "png8" | "png-8" => FileType::Png8,
+            "png24" | "png-24" => FileType::Png24,
+            "targa" => FileType::Save("tga".into()),
+            "pdf" => FileType::Pdf,
+            ext => FileType::Save(ext.into()),
+        }
+    }
+}
+
+/// File › Export › Artboards to Files: `<prefix>_<index:04>_<artboard name>.<format>` per board,
+/// or for PDF one `<prefix>.pdf`.
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
@@ -684,18 +709,78 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
-    let mut files = Vec::new();
-    for (i, one) in chosen_documents(&doc, p)?.into_iter().enumerate() {
-        // Names may be identical, or collide after sanitizing or filesystem case folding.
-        let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
-        let path = join(&dir, &format!("{name}.{format}"));
-        save_doc(&one, &path, save)?;
-        files.push(path);
-    }
-    if files.is_empty() {
+    let boards = chosen_documents(&doc, p)?;
+    if boards.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
     }
+    let ext = match FileType::of(&format) {
+        FileType::Pdf => {
+            // The reference application's Multi-Page Document: the bottom artboard is page 1, and
+            // each page is the board's pixel size at 72 ppi.
+            let mut pages = Vec::new();
+            for one in boards.iter().rev() {
+                pages.push((one.size.width, one.size.height, 72.0, jpeg_page(one, save.quality.or(Some(10.0)))?));
+            }
+            let name = if prefix.is_empty() { stem(&doc.name) } else { prefix };
+            let path = join(&dir, &format!("{}.pdf", sanitize(&name)));
+            write_file(&path, &raster_pdf(&pages))?;
+            return Ok(json!({"files": [path]}));
+        }
+        FileType::Png8 => None,
+        FileType::Png24 => Some("png".to_string()),
+        FileType::Save(ext) => Some(ext),
+    };
+    let truecolour = matches!(FileType::of(&format), FileType::Png24);
+    let mut files = Vec::new();
+    for (i, one) in boards.into_iter().enumerate() {
+        // Names may be identical, or collide after sanitizing or filesystem case folding.
+        let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
+        let path = join(&dir, &format!("{name}.{}", ext.as_deref().unwrap_or("png")));
+        match &ext {
+            Some(_) if truecolour && one.mode != ColorMode::Rgb => {
+                save_doc(&rgb_copy(&one)?, &path, save)?;
+            }
+            Some(_) => {
+                save_doc(&one, &path, save)?;
+            }
+            None => write_file(&path, &png8(&one)?)?,
+        }
+        files.push(path);
+    }
     Ok(json!({"files": files}))
+}
+
+/// `one` as an indexed PNG: Generate Assets' PNG-8 (selective palette, no dither, transparency kept).
+fn png8(one: &Document) -> Result<Vec<u8>> {
+    use crate::web_cmds::{WebFormat, WebMetadata, WebSettings, optimize, web_document};
+    let st = WebSettings {
+        format: WebFormat::Png8,
+        dither: photocraft_algo::quantize::Dither::None,
+        matte: None,
+        metadata: WebMetadata::None,
+        ..WebSettings::default()
+    };
+    let (wdoc, _, _) = web_document(one, &json!({}), &st)?;
+    let buf = photocraft_compose::flatten(&wdoc);
+    Ok(optimize(&buf.px, wdoc.size.width as usize, wdoc.bounds(), &st, None, None, None, wdoc.resolution_dpi, false)?.bytes)
+}
+
+/// `one` converted to RGB (its depth, layers and transparency kept), for a truecolour file.
+fn rgb_copy(one: &Document) -> Result<Document> {
+    use crate::web_cmds::{WebSettings, web_document};
+    Ok(web_document(one, &json!({}), &WebSettings { convert_to_srgb: false, ..WebSettings::default() })?.0)
+}
+
+/// `one` flattened over white as a JPEG, for a PDF page.
+fn jpeg_page(one: &Document, quality: Option<f64>) -> Result<Vec<u8>> {
+    let buf = photocraft_compose::flatten(one).over_background([1.0, 1.0, 1.0]);
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
+    let mut surf = Surface::new(fmt);
+    let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
+    surf.write_region(one.bounds(), &vals);
+    flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
+    Ok(encode(&flat, "page.jpg", quality)?.0)
 }
 
 /// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
@@ -753,14 +838,7 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let quality = f64_param(p, "quality").or(Some(10.0));
     let mut pages = Vec::new();
     for one in chosen_documents(&doc, p)? {
-        let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
-        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
-        let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
-        let mut surf = Surface::new(fmt);
-        let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
-        surf.write_region(one.bounds(), &vals);
-        flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
-        let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
+        let jpeg = jpeg_page(&one, quality)?;
         pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
     }
     if pages.is_empty() {
@@ -829,7 +907,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files}"##,
+            r##"{"dir":folder,"format":"png|png24|png8|jpg|bmp|tga|tiff|psd|pdf|…"="png" (png24 = truecolour .png, png8 = indexed .png, tga = Targa; pdf = one multi-page <prefix>.pdf, bottom artboard first, pages at 72 ppi),"prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files}"##,
             export_artboards,
             artboards_to_files
         ),
@@ -844,6 +922,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "artboard_cmds/file_types_tests.rs"]
+mod file_types_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
