@@ -134,7 +134,7 @@ impl crate::DocState {
             Arc::make_mut(&mut self.doc).file_encoding.source_images = None;
         }
         self.path = Some(path);
-        self.saved_revision = self.revision;
+        self.mark_saved();
     }
 }
 
