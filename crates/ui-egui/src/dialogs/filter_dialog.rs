@@ -365,6 +365,14 @@ fn rememberable(kind: &Kind, value: &Value) -> bool {
     }
 }
 
+/// Color Lookup opens with no LUT chosen every time, as the reference application does: an OK with
+/// a built-in look or a LUT file leaves the next opening at "no LUT" (#14422). Its other values
+/// (Dither, Interpolation) are remembered like any schema dialog's. A recorded or scripted step
+/// still prefills, because the Actions panel seeds its own values after the dialog opens.
+fn forgotten(command: &str, key: &str) -> bool {
+    command == COLOR_LOOKUP && matches!(key, "lut" | "file")
+}
+
 fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &mut Map<String, Value>) {
     let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(command) else { return };
     // Select and Mask starts from its defaults unless Remember Settings was on, as in Photoshop
@@ -377,7 +385,7 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
         }
     }
     for p in parse_spec(spec) {
-        if let Some(v) = saved.get(&p.key).filter(|v| rememberable(&p.kind, v)) {
+        if let Some(v) = saved.get(&p.key).filter(|v| rememberable(&p.kind, v) && !forgotten(command, &p.key)) {
             fields.insert(p.key, v.clone());
         }
     }
@@ -389,8 +397,10 @@ pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<Stri
         return;
     }
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
-    let mut saved: Map<String, Value> =
-        parse_spec(spec.params).into_iter().filter_map(|p| fields.get(&p.key).filter(|v| rememberable(&p.kind, v)).map(|v| (p.key, v.clone()))).collect();
+    let mut saved: Map<String, Value> = parse_spec(spec.params)
+        .into_iter()
+        .filter_map(|p| fields.get(&p.key).filter(|v| rememberable(&p.kind, v) && !forgotten(command, &p.key)).map(|v| (p.key, v.clone())))
+        .collect();
     // Select and Mask with Remember Settings off keeps only that choice, so the next one starts
     // from the defaults (#9423).
     if command == crate::select_mask_view::COMMAND {

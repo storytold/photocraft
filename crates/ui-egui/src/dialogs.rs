@@ -1307,6 +1307,8 @@ pub(super) mod camera_raw_preview_ui;
 pub(super) mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
 pub mod channel_options_ui;
+#[cfg(test)]
+mod color_lookup_no_remember_tests;
 pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
