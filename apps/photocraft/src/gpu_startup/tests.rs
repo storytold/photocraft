@@ -597,3 +597,131 @@ fn intel_macs_skip_the_indirect_validation_shaders() {
         assert!(!create.instance_descriptor.flags.contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL));
     }
 }
+
+/// #12401: a start that ends without a driver crash clears its marker, or puts back the one a
+/// crashed previous start left, so the next start still steps past that backend.
+#[test]
+fn a_start_ended_without_a_crash_releases_its_marker() {
+    for previous in [None, Some(crashed("auto", "vulkan"))] {
+        let dir = temp_dir(if previous.is_some() { "release-previous" } else { "release-clean" });
+        let (_, s) = Sentinel::begin(&dir);
+        let mut s = s.expect("sentinel");
+        s.write(Marker { backend: "gl".into(), ..Default::default() }).unwrap();
+        let shared: SharedSentinel = Arc::new(Mutex::new(Some(s)));
+        release_without_crash(&shared, previous.as_ref());
+        assert!(shared.lock().unwrap().is_none(), "the sentinel is released");
+        let (prev, s) = begin_when_unlocked(&dir);
+        assert_eq!(prev.crashed(), previous.as_ref(), "not this start's gl marker");
+        s.expect("sentinel").finish();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The child process of [`termination_signals_are_not_graphics_crashes`]: with
+/// `PHOTOCRAFT_TEST_TERMINATION_DIR` set it starts as the app does (marker written, signals taken
+/// over), says so on stdout and waits to be signalled. Without it, it does nothing.
+#[cfg(target_os = "linux")]
+#[test]
+fn termination_child() {
+    let Some(dir) = std::env::var_os("PHOTOCRAFT_TEST_TERMINATION_DIR") else { return };
+    let dir = PathBuf::from(dir);
+    let (previous, s) = Sentinel::begin(&dir);
+    let mut s = s.expect("sentinel");
+    s.write(Marker { backend: "auto".into(), adapter: "Mesa Intel(R) Iris(R) Graphics 5100".into(), adapter_backend: "gl".into(), ..Default::default() })
+        .unwrap();
+    let shared: SharedSentinel = Arc::new(Mutex::new(Some(s)));
+    assert!(release_on_termination(shared, previous.crashed().cloned()));
+    println!("ready");
+    std::thread::sleep(std::time::Duration::from_secs(30));
+    panic!("not signalled");
+}
+
+/// #12401: SIGTERM, SIGINT or SIGHUP before the first frames clear the marker (the process still
+/// ends, with 128 + the signal's number), or put back a crashed previous start's; SIGKILL, which
+/// can't be caught, still leaves this start's marker as a crash does.
+#[cfg(target_os = "linux")]
+#[test]
+fn termination_signals_are_not_graphics_crashes() {
+    use std::io::BufRead;
+    /// Kills the child if an assertion fails before it ended.
+    struct Reap(std::process::Child);
+    impl Drop for Reap {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    // `ignore_hup`: started as `nohup` starts it, with SIGHUP ignored (kept across `exec`).
+    let start = |dir: &Path, ignore_hup: bool| -> Reap {
+        let exe = std::env::current_exe().unwrap();
+        let args = ["--exact", "gpu_startup::tests::termination_child", "--nocapture", "--test-threads=1"];
+        let mut command = if ignore_hup {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", "trap '' HUP; exec \"$0\" \"$@\""]).arg(exe).args(args);
+            c
+        } else {
+            let mut c = std::process::Command::new(exe);
+            c.args(args);
+            c
+        };
+        let child =
+            command.env("PHOTOCRAFT_TEST_TERMINATION_DIR", dir).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap();
+        let mut child = Reap(child);
+        let mut out = std::io::BufReader::new(child.0.stdout.take().unwrap());
+        let mut line = String::new();
+        while out.read_line(&mut line).unwrap() > 0 && !line.contains("ready") {
+            line.clear();
+        }
+        assert!(line.contains("ready"), "the child started");
+        child
+    };
+    let send = |child: &Reap, signal: &str| {
+        let sent = std::process::Command::new("kill").args([&format!("-{signal}"), &child.0.id().to_string()]).status().expect("the kill command");
+        assert!(sent.success());
+    };
+    let run = |dir: &Path, signal: &str| -> std::process::ExitStatus {
+        let mut child = start(dir, false);
+        send(&child, signal);
+        child.0.wait().unwrap()
+    };
+    use std::os::unix::process::ExitStatusExt;
+    for (signal, number) in [("TERM", 15), ("INT", 2), ("HUP", 1)] {
+        let dir = temp_dir(&format!("signal-{signal}"));
+        assert_eq!(run(&dir, signal).code(), Some(128 + number), "SIG{signal} ends the process");
+        assert_eq!(begin_when_unlocked(&dir).0, Previous::Clean, "SIG{signal} is not a crash");
+        // After a real crash on Vulkan, a signalled start on GL keeps the Vulkan crash on record.
+        let (_, s) = Sentinel::begin(&dir);
+        let mut s = s.expect("sentinel");
+        s.write(crashed("auto", "vulkan")).unwrap();
+        drop(s);
+        run(&dir, signal);
+        assert_eq!(begin_when_unlocked(&dir).0.crashed(), Some(&crashed("auto", "vulkan")), "SIG{signal} after a crash");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    // Started with SIGHUP ignored (`nohup`), a closed terminal leaves it running; SIGTERM still
+    // releases the marker.
+    let dir = temp_dir("signal-nohup");
+    let mut child = start(&dir, true);
+    send(&child, "HUP");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(child.0.try_wait().unwrap().is_none(), "an ignored SIGHUP stays ignored");
+    send(&child, "TERM");
+    assert_eq!(child.0.wait().unwrap().code(), Some(128 + 15));
+    assert_eq!(begin_when_unlocked(&dir).0, Previous::Clean, "SIGTERM after an ignored SIGHUP");
+    let _ = std::fs::remove_dir_all(&dir);
+    let dir = temp_dir("signal-KILL");
+    assert_eq!(run(&dir, "KILL").signal(), Some(9));
+    assert_eq!(begin_when_unlocked(&dir).0.crashed().map(|m| m.adapter_backend.as_str()), Some("gl"), "SIGKILL is still a crash");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #12401: the signals a parent left ignored are read from the `SigIgn` mask (bit n - 1 for n).
+#[test]
+fn ignored_signals_are_read_from_the_status_mask() {
+    let status = "Name:\tphotocraft\nSigBlk:\t0000000000000001\nSigIgn:\t0000000000001001\nSigCgt:\t0000000000000000\n";
+    assert!(ignored_in_status(status, 1), "SIGHUP");
+    assert!(ignored_in_status(status, 13), "SIGPIPE");
+    assert!(!ignored_in_status(status, 2) && !ignored_in_status(status, 15), "SIGINT and SIGTERM");
+    assert!(!ignored_in_status(status, 0) && !ignored_in_status(status, 65));
+    assert!(!ignored_in_status("SigIgn:\tnot hex\n", 1) && !ignored_in_status("", 1));
+}

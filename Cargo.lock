@@ -5406,6 +5406,7 @@ version = "0.23.1"
 dependencies = [
  "arboard",
  "async-io",
+ "async-signal",
  "base64 0.22.1",
  "blake3",
  "chrono",
