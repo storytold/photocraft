@@ -22,6 +22,7 @@ pub mod canvas_tool_menu;
 pub mod channel_view;
 mod cursors;
 mod display;
+mod doc_window_level;
 mod drag;
 mod filter_preview;
 mod gesture;
