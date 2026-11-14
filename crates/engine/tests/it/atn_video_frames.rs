@@ -15,7 +15,7 @@ const EVENTS: [(&str, &str); 3] = [
 ];
 
 /// Build typed source fixtures without asking the mapper to generate its own oracle.
-fn file(item: AtnItem) -> Vec<u8> {
+pub(super) fn file(item: AtnItem) -> Vec<u8> {
     atn::write(&AtnFile {
         name: UnicodeString::new_nul("Video"),
         actions: vec![AtnAction { name: UnicodeString::new_nul("Frame edit"), items: vec![item], ..Default::default() }],
@@ -24,33 +24,33 @@ fn file(item: AtnItem) -> Vec<u8> {
     .unwrap()
 }
 
-fn item(event: &str, descriptor: Option<Descriptor>) -> AtnItem {
+pub(super) fn item(event: &str, descriptor: Option<Descriptor>) -> AtnItem {
     AtnItem { event: AtnEvent::name(event), descriptor, ..Default::default() }
 }
 
 /// Exercise strict public export: skipping an unrepresentable step cannot pass this check.
-fn saved(action: &Action) -> AtnItem {
+pub(super) fn saved(action: &Action) -> AtnItem {
     let (bytes, skipped) = atn_cmds::export("Video", &[action], &[], false).unwrap();
     assert!(skipped.is_empty());
     atn::parse(&bytes).unwrap().actions[0].items[0].clone()
 }
 
 /// Playback tests require a native mapping, rather than a successfully loaded kept step.
-fn load(s: &mut Session, source: AtnItem) {
+pub(super) fn load(s: &mut Session, source: AtnItem) {
     let bytes = file(source);
     let report = s.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes)})).unwrap();
     assert_eq!(report["unsupported"], json!([]));
 }
 
 /// Compare actual pixel markers; VideoData equality checks only stack shape.
-fn pixels(s: &Session, id: LayerId, original: bool) -> Vec<Vec<f32>> {
+pub(super) fn pixels(s: &Session, id: LayerId, original: bool) -> Vec<Vec<f32>> {
     let video = s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap();
     let frames = if original { video.original_frames.as_ref().unwrap() } else { &video.frames };
     frames.iter().map(|frame| frame.pixel(0, 0)).collect()
 }
 
 /// Distinguish both frame order and original footage from the altered display cache.
-fn fixture(depth: u32) -> (Session, LayerId) {
+pub(super) fn fixture(depth: u32) -> (Session, LayerId) {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":2,"height":2,"depth":depth,"background":"transparent"})).unwrap();
     s.execute("timeline.create", json!({"duration":3,"fps":24})).unwrap();
