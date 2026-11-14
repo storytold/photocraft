@@ -18,7 +18,7 @@ fn params(fields: &DialogFields) -> serde_json::Value {
 #[test]
 fn source_files_is_a_files_row_that_also_picks_a_folder() {
     let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    let rows = super::rows(&app, ".".into());
+    let rows = super::rows(&app);
     let row = rows.iter().find(|p| p.key == "input").expect("a Source Files row");
     assert_eq!(row.label.as_str(), "Source Files");
     let ParamKind::Files { folder_mode, .. } = &row.kind else { panic!("Source Files is a files row: {:?}", row.kind) };
@@ -69,7 +69,7 @@ fn add_open_files_offers_saved_unchanged_documents_only() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.open_file(&saved.to_string_lossy(), &std::fs::read(&saved).unwrap()).unwrap();
     app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
-    let rows = super::rows(&app, ".".into());
+    let rows = super::rows(&app);
     let row = rows.iter().find(|p| p.key == "input").unwrap();
     let ParamKind::Files { open_files, .. } = &row.kind else { panic!("a files row") };
     assert_eq!(open_files, &[PathBuf::from(&saved)]);
