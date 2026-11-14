@@ -523,6 +523,11 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
         Some(Value::String(unit)) if unit == "pt" => PT,
         _ => return None,
     };
+    // Native playback validates a supplied percentage even when explicit sides override it.
+    // Dropping an invalid percentage would turn a refused action into a different, valid edit.
+    if p.get("percent").is_some_and(|value| value.as_f64().is_none_or(|pc| !pc.is_finite() || pc <= 0.0)) {
+        return None;
+    }
     // Resolution only with Resample on imports as keep-print-size; a command without it cannot be told apart.
     if jnum(p, "resolution").is_some()
         && jnum(p, "width").is_none()
