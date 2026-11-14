@@ -71,9 +71,22 @@ fn cr2_srgb_raw_is_unsupported() {
 fn nef_like_with_maker_tags() {
     let (w, h) = (24, 16);
     let data = mosaic(&scene(w, h), w, [2, 1, 1, 0], 0, 4095);
-    let b = tiff_ep("NIKON CORPORATION", w, h, &data, [2, 1, 1, 0], 12, vec![]);
+    // The explicit IFD0 Make overrides the generator's fallback identity.
+    let b = tiff_ep("NIKON", w, h, &data, [2, 1, 1, 0], 12, vec![(271, Val::Ascii("NIKON CORPORATION".into()))]);
+    // TIFF/EP fixtures use a little-endian TIFF header; assert the IFD itself has one Make,
+    // regardless of which duplicate-tag policy the decoder uses.
+    let ifd0 = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as usize;
+    let entry_count = u16::from_le_bytes([b[ifd0], b[ifd0 + 1]]) as usize;
+    let make_count = (0..entry_count)
+        .filter(|index| {
+            let entry = ifd0 + 2 + *index * 12;
+            u16::from_le_bytes([b[entry], b[entry + 1]]) == 271
+        })
+        .count();
+    assert_eq!(make_count, 1);
     assert_eq!(identify(&b), Some(RawFormat::Nef));
     let s = decode(&b, &Limits::default()).unwrap();
+    assert_eq!(s.make.as_deref(), Some("NIKON CORPORATION"));
     assert_eq!(s.data, data);
     assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), [2, 1, 1, 0]);
     assert!(s.warnings.iter().any(|w| w.contains("black level")));
