@@ -179,10 +179,14 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
 /// Mirror the renderer's mesh vertices before it allocates destination tiles. Without a warp,
 /// a homography has corner extrema only when its denominator keeps one nonzero sign.
 fn placed_bounds(sm: &SmartObject, size: Size) -> Result<Rect> {
-    let (mut w, mut h) = (f64::from(size.width), f64::from(size.height));
+    // The warp and transform sample the placed box — `Sz` when stored, else the source frame.
+    let (mut w, mut h) =
+        sm.placed_size.filter(|&(w, h)| w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).unwrap_or((f64::from(size.width), f64::from(size.height)));
     let warp = sm.warp.as_ref().filter(|warp| !warp.is_identity());
     if sm.warp.is_none() && sm.stack_mode.is_none() {
-        let scale = crate::smart_cmds::vector_scale(sm);
+        // Raster px per placed box unit: the rasterisation scale is chosen so this stays the
+        // transform's own axis scale, whatever the `Sz` stretch is.
+        let scale = crate::smart_cmds::vector_scale(sm, None);
         w = (w * scale).ceil() / scale;
         h = (h * scale).ceil() / scale;
     }

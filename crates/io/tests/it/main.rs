@@ -46,6 +46,7 @@ mod pcraft_full_composite;
 mod pcraft_manifest_name;
 mod pdf_import;
 mod pdn_corpus;
+mod placed_units;
 mod png_steps;
 mod png_text_metadata;
 mod psd16_merged_transparency;

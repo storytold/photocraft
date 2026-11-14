@@ -43,7 +43,7 @@ pub(super) fn placed_key(bytes: &[u8], fmt: PixelFormat, sm: &SmartObject, canva
     for v in sm.transform.m {
         h.update(&v.to_bits().to_le_bytes());
     }
-    h.update(format!("{fmt:?}|{:?}|{:?}|{:?}|{canvas:?}", sm.warp, sm.perspective, sm.stack_mode).as_bytes());
+    h.update(format!("{fmt:?}|{:?}|{:?}|{:?}|{:?}|{canvas:?}", sm.warp, sm.perspective, sm.stack_mode, sm.placed_size).as_bytes());
     *h.finalize().as_bytes()
 }
 
