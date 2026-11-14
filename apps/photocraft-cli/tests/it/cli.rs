@@ -1450,6 +1450,31 @@ fn extensionless_version_12_actions_file_is_read_as_atn() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+/// An Actions file is read only if it is a regular file, within the size `actions.load` takes:
+/// opening a FIFO with no writer blocked the batch, and a directory or an oversized file was read
+/// (or tried) whole. The FIFO read runs on its own thread so that a regression fails here instead
+/// of hanging the test run. The oversized file is sparse, so it takes no disk space.
+#[cfg(unix)]
+#[test]
+fn actions_file_must_be_a_regular_file_within_the_limit() {
+    let d = tmp("actions-special");
+    let fifo = d.join("actions.json");
+    assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success(), "mkfifo failed");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(photocraft_cli::load_actions_file(&fifo, None).map(|_| ()).map_err(|e| e.to_string())));
+    let error = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("reading a FIFO as an Actions file blocked").unwrap_err();
+    assert!(error.contains("not a regular file"), "{error}");
+    let folder = d.join("folder.atn");
+    std::fs::create_dir(&folder).unwrap();
+    let error = photocraft_cli::load_actions_file(&folder, None).unwrap_err().to_string();
+    assert!(error.contains("not a regular file"), "{error}");
+    let big = d.join("big.atn");
+    std::fs::File::create(&big).unwrap().set_len(photocraft_engine::preset_import_cmds::MAX_FILE_BYTES + 1).unwrap();
+    let error = photocraft_cli::load_actions_file(&big, None).unwrap_err().to_string();
+    assert!(error.contains("larger than"), "{error}");
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 /// What `photocraft_cli::run` returned and wrote, in-process.
 struct Invoke {
     code: i32,

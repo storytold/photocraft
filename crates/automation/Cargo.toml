@@ -48,6 +48,11 @@ photocraft-gpu = { workspace = true, optional = true }
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"], optional = true }
 pollster = { version = "1", optional = true }
 
+# Opening workspace files without blocking on a FIFO or device (O_NONBLOCK, then cleared on a
+# regular file); the tests also read back an extended attribute the write path preserved (#7095).
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+
 [dev-dependencies]
 photocraft-color = { workspace = true }
 photocraft-geom = { workspace = true }
@@ -60,6 +65,3 @@ craft-psd = { workspace = true, features = ["testgen"] }
 rmcp = { version = "3.5", default-features = false, features = ["client", "server", "macros", "transport-io"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync", "net", "io-util", "time"] }
 
-# Reading back an extended attribute the write path should have preserved (#7095).
-[target.'cfg(unix)'.dev-dependencies]
-rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
