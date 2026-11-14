@@ -31,6 +31,22 @@ fn set_list(f: &mut Map<String, Value>, list: Vec<String>) {
     f.remove(UNREADABLE);
 }
 
+/// The list Browse…, Add Open Files or a folder set as `input` gives. When the list and the
+/// destination were both empty, the destination becomes `results` next to the first source, as in
+/// the reference application (#13982); a destination already set (Choose…, typed, or set through
+/// `ui.dialog.set`) stays.
+fn add_sources(f: &mut Map<String, Value>, sources: Vec<String>) {
+    let was_empty = list(f).is_empty();
+    let first_dir = sources.first().and_then(|p| std::path::Path::new(p).parent()).map(|dir| dir.join("results"));
+    set_list(f, sources);
+    if was_empty
+        && f.get("output").and_then(Value::as_str).is_none_or(str::is_empty)
+        && let Some(results) = first_dir
+    {
+        f.insert("output".into(), json!(results.to_string_lossy()));
+    }
+}
+
 /// Appends `paths` that are not listed yet.
 fn append(f: &mut Map<String, Value>, paths: impl IntoIterator<Item = String>) {
     let mut listed = list(f);
@@ -39,7 +55,7 @@ fn append(f: &mut Map<String, Value>, paths: impl IntoIterator<Item = String>) {
             listed.push(path);
         }
     }
-    set_list(f, listed);
+    add_sources(f, listed);
 }
 
 /// The images the batch would read from `dir`: its image files by name, no sub-folders.
@@ -60,7 +76,7 @@ fn normalize(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
             let dir = dir.clone();
             f.insert(USE.into(), json!("folder"));
             match images(&dir) {
-                Ok(found) => set_list(f, found),
+                Ok(found) => add_sources(f, found),
                 Err(e) => {
                     app.ui.status = e;
                     f.insert(UNREADABLE.into(), json!(dir));
@@ -145,7 +161,7 @@ fn browse(app: &mut PhotocraftApp, id: u64, folder: bool) {
     let r = if folder {
         app.ask_folder(move |app, dir| {
             let found = images(&dir)?;
-            set_list(&mut app.ui.dialog_mut(id).ok_or("the dialog was closed")?.fields, found);
+            add_sources(&mut app.ui.dialog_mut(id).ok_or("the dialog was closed")?.fields, found);
             Ok(Value::Null)
         })
     } else {

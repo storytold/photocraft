@@ -196,7 +196,7 @@ fn ok_runs_the_command_with_the_same_params() {
         let mut h = harness();
         assert_eq!(
             crate::filter_dialog::params_of(fields(&h)),
-            json!({"input": [], "output": "./corrected", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
+            json!({"input": [], "output": "", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
         );
 
         let dir = fixture("ok");
@@ -239,7 +239,10 @@ fn browse_picks_the_source_and_choose_the_destination() {
             h.run_steps(2);
         };
         click(&mut h, "Browse…");
-        assert_eq!((&fields(&h)["input"], &fields(&h)["output"]), (&json!(["/tmp/sources/a.png"]), &json!("./corrected")));
+        assert_eq!(
+            (&fields(&h)["input"], &fields(&h)["output"]),
+            (&json!(["/tmp/sources/a.png"]), &json!(std::path::Path::new("/tmp/sources").join("results").to_string_lossy()))
+        );
         click(&mut h, "Choose…");
         assert_eq!((&fields(&h)["input"], &fields(&h)["output"]), (&json!(["/tmp/sources/a.png"]), &json!("/tmp/results")));
         assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Open { multiple: true, .. }, FileDialogRequest::Folder { .. }]));
