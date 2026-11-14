@@ -275,6 +275,8 @@ CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p photocraft
 
 New contributors and AI agents: start with [`AGENTS.md`](AGENTS.md), then [`docs/`](docs/).
 
+With Nix, use `nix develop`, `nix build`, or `nix run`. See [Nix development and packaging](docs/nix.md) for supported targets and desktop requirements.
+
 Installers for macOS, Windows, Linux, FreeBSD and the web are attached to each [GitHub release](https://github.com/storytold/photocraft/releases). On Linux you can pick an AppImage, a `.deb`, an `.rpm`, a tarball or a Flatpak bundle. The bundle needs the freedesktop runtime from [Flathub](https://flathub.org/setup), which `flatpak` offers to install along with it:
 
 ```sh

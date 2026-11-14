@@ -9,5 +9,7 @@ target/
 /temp
 /book/output
 /craft-fonts
+/result
+/result-*
 *.log
 __pycache__/
