@@ -48,3 +48,7 @@ pub(crate) fn rows(dir: String) -> Vec<Param> {
 #[cfg(test)]
 #[path = "lens_batch_layout_tests.rs"]
 mod lens_batch_layout_tests;
+
+#[cfg(test)]
+#[path = "lens_batch_defaults_tests.rs"]
+mod lens_batch_defaults_tests;

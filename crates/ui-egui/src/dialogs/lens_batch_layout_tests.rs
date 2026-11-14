@@ -39,6 +39,15 @@ pub(super) fn opened() -> (H, DialogId) {
     open_in(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()))
 }
 
+pub(super) fn field(h: &H, id: DialogId, key: &str) -> Value {
+    h.state()
+        .framework
+        .dialogs
+        .get_by_id::<HostedParamDialog>(id)
+        .and_then(|d| d.fields().get(key).and_then(|v| serde_json::to_value(v).ok()))
+        .unwrap_or(Value::Null)
+}
+
 pub(super) fn set(h: &mut H, id: DialogId, key: &str, value: Value) {
     let ctx = h.ctx.clone();
     h.state_mut().framework.dialogs.set_json_field(&ctx, id, key, value).unwrap_or_else(|e| panic!("{key}: {e}"));
