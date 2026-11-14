@@ -573,7 +573,15 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(st) = s.active_mut() {
             std::sync::Arc::make_mut(&mut st.doc).resolution_dpi = res as f32;
         }
-        let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
+        let sheet = &s.active().ok_or(EngineError::NoDocument)?.doc;
+        let fmt = sheet.pixel_format();
+        // Thumbnails go into the profile the sheet is read in: an RGB sheet's own, otherwise the
+        // working profile Image › Mode converts to (#13703).
+        let to = match crate::color_cmds::mode_space(fmt.mode) {
+            photocraft_cms::ColorSpace::Rgb => crate::color_cmds::document_profile(sheet),
+            _ => s.color.working(fmt.mode),
+        };
+        let opts = photocraft_cms::TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() };
         for (k, path) in chunk.iter().enumerate() {
             let k = k as u32;
             let (c, r) = if across { (k % cols, k / cols) } else { (k / rows, k % rows) };
@@ -581,7 +589,20 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
             let y0 = vs + f64::from(r) * (cell_h + vs);
             let thumb = (|| -> Result<photocraft_doc::Surface> {
                 let bytes = read_file(path)?;
-                let src = import(&file_name(path), &bytes)?;
+                let mut src = import(&file_name(path), &bytes)?;
+                // As File › Open: an untagged file is in the working space of its mode. The
+                // built-in profile is the fallback when the file's own profile cannot be linked.
+                let embedded = src.icc_profile.take();
+                let builtin = crate::color_cmds::composite_profile(&src);
+                src.icc_profile = embedded;
+                let tagged = src
+                    .icc_profile
+                    .as_ref()
+                    .and_then(|b| crate::color_cmds::profile_from_bytes(b).ok())
+                    .is_some_and(|p| p.color_space == crate::color_cmds::mode_space(src.mode));
+                if !tagged && s.color.settings.policy(src.mode) != crate::color_cmds::Policy::Off {
+                    src.icc_profile = Some(s.color.working(src.mode).to_bytes());
+                }
                 let mut t = Session::new();
                 t.add_document(src, None);
                 let (w, h) = t.active().map(|d| (f64::from(d.doc.size.width), f64::from(d.doc.size.height))).unwrap_or((1.0, 1.0));
@@ -598,10 +619,13 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
                 let ox = (x0 + (cell_w - tw) / 2.0).round() as i32;
                 let oy = (y0 + (box_h - th) / 2.0).round() as i32;
                 let n = fmt.channels();
-                let mut data = vec![0.0f32; buf.px.len() * n];
-                for (px, out) in buf.px.iter().zip(data.chunks_exact_mut(n)) {
-                    photocraft_raster::from_rgba_into(&fmt, *px, out);
-                }
+                let convert = |from: &photocraft_cms::Profile| -> Result<Vec<f32>> {
+                    let t = photocraft_cms::cached(from, &to, opts).map_err(|e| EngineError::Other(format!("colour management: {e}")))?;
+                    let mut data = vec![0.0f32; buf.px.len() * n];
+                    t.convert_f32(buf.px.as_flattened(), 4, &mut data, n, true);
+                    Ok(data)
+                };
+                let data = convert(&crate::color_cmds::composite_profile(d)).or_else(|_| convert(&builtin))?;
                 let mut surf = photocraft_doc::Surface::new(fmt);
                 surf.write_region(photocraft_geom::Rect::new(ox, oy, ox + tw as i32, oy + th as i32), &data);
                 Ok(surf)
@@ -701,3 +725,7 @@ mod tests;
 #[cfg(test)]
 #[path = "automate_cmds/contact_sheet_subfolders_tests.rs"]
 mod contact_sheet_subfolders_tests;
+
+#[cfg(test)]
+#[path = "automate_cmds/contact_sheet_gray_tests.rs"]
+mod contact_sheet_gray_tests;
