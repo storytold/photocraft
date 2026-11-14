@@ -402,6 +402,13 @@ struct Parsed {
     /// text while parsing, before any node reaches the conversion, so this is the only place
     /// that knows why the text is missing.
     fontless_text: bool,
+    /// The resolver left images out; an ordinary import must report that lost content.
+    omitted_images: bool,
+}
+
+fn omitted_images(resolver: &craft_svg::tree::ImageResolver) -> bool {
+    let usage = resolver.usage();
+    usage.raster_limit_images > 0 || usage.svg_limit_images > 0 || usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0
 }
 
 /// Parses a drawing, `.svgz` included. The XML is inflated and checked here, before the parser
@@ -452,7 +459,7 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
         // An embedded image over a budget was refused by the resolver and is left out of the
         // tree, so the rest of the drawing still opens (as before the craft-svg migration).
         // Only the bounded smart-object path refuses the whole drawing for it.
-        Ok(Parsed { tree, fontless_text })
+        Ok(Parsed { tree, fontless_text, omitted_images: omitted_images(&image_resolver) })
     })
     .map_err(IoError::from)
 }
@@ -556,7 +563,7 @@ fn parse_image_bounded_with(
         counter.svg_chain = usage.embedded_svg_depth as u64;
         if usage.raster_limit_images > 0 {
             counter.error.get_or_insert_with(|| "embedded SVG raster images exceed the decoded pixel budget".into());
-        } else if usage.svg_limit_images > 0 && (counter.strict || refusals.over_budget.load(Ordering::Relaxed)) {
+        } else if refusals.over_budget.load(Ordering::Relaxed) || (counter.strict && usage.svg_limit_images > 0) {
             counter.error.get_or_insert_with(|| "embedded SVG images exceed the byte or nesting budget".into());
         } else if counter.strict && (usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0) {
             counter.error.get_or_insert_with(|| "can't parse an embedded SVG image".into());
@@ -597,8 +604,25 @@ struct SvgRefusals {
     /// everything the byte budget had left, and so does a readable image that fits the budget
     /// only without those charges. Neither is the drawing's content.
     unread_charges: AtomicUsize,
+    /// Decoded UTF-8 content, independent of unreadable images' phantom resolver charges.
+    content_bytes: AtomicUsize,
     /// Bytes unpacked again to tell those images apart, at most one byte budget per drawing.
     rechecked: AtomicUsize,
+}
+
+fn charge_svg_content(bytes: usize, refusals: &SvgRefusals) {
+    let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX);
+    let mut used = refusals.content_bytes.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = used.checked_add(bytes).filter(|total| *total <= budget) else {
+            refusals.over_budget.store(true, Ordering::Relaxed);
+            return;
+        };
+        match refusals.content_bytes.compare_exchange_weak(used, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(current) => used = current,
+        }
+    }
 }
 
 /// Note in `refusals` what craft-svg will do with an embedded SVG's `data` when its images have
@@ -612,26 +636,33 @@ fn note_byte_refusal(data: &[u8], used: usize, refusals: &SvgRefusals) {
     let left = budget.saturating_sub(used);
     let unread = refusals.unread_charges.load(Ordering::Relaxed);
     match craft_svg::svgz::text(data, left) {
-        Ok(_) => {}
+        Ok(text) => charge_svg_content(text.len(), refusals),
         Err(craft_svg::svgz::Error::TooLarge(_)) if unread == 0 => refusals.over_budget.store(true, Ordering::Relaxed),
         Err(craft_svg::svgz::Error::TooLarge(_)) => {
-            let content_left = budget.saturating_sub(used.saturating_sub(unread));
+            let content_left = budget.saturating_sub(refusals.content_bytes.load(Ordering::Relaxed));
             // Plain data is only measured; compressed data is unpacked again.
             let compressed = data.starts_with(&[0x1f, 0x8b]);
             let limit = if compressed { content_left.min(budget.saturating_sub(refusals.rechecked.load(Ordering::Relaxed))) } else { content_left };
             // Every unpack is charged at least what it unpacked, so together they stay within one
             // budget; plain data is only measured.
-            let (unpacked, too_large) = match craft_svg::svgz::inflate(data, limit) {
-                Ok(std::borrow::Cow::Borrowed(_)) => (0, false),
-                Ok(std::borrow::Cow::Owned(xml)) => (xml.len(), false),
-                Err(craft_svg::svgz::Error::Nested(len)) => (len, false),
-                Err(craft_svg::svgz::Error::TooLarge(_)) => (if compressed { limit } else { 0 }, true),
-                Err(_) => (limit, false),
+            let (unpacked, decoded, too_large) = match craft_svg::svgz::inflate(data, limit) {
+                Ok(xml) => {
+                    // Decode the already-unpacked bytes, never inflate them again. Latin-1 can
+                    // expand in UTF-8, so raw work and decoded content need separate charges.
+                    let decoded = craft_svg::svgz::decode(&xml).ok().map(|text| text.len());
+                    (if compressed { xml.len() } else { 0 }, decoded, false)
+                }
+                Err(craft_svg::svgz::Error::Nested(len)) => (len, None, false),
+                Err(craft_svg::svgz::Error::TooLarge(_)) => (if compressed { limit } else { 0 }, None, true),
+                Err(_) => (limit, None, false),
             };
             refusals.rechecked.fetch_add(unpacked, Ordering::Relaxed);
             if too_large {
                 refusals.over_budget.store(true, Ordering::Relaxed);
             } else {
+                if let Some(decoded) = decoded {
+                    charge_svg_content(decoded, refusals);
+                }
                 refusals.unread_charges.fetch_add(left, Ordering::Relaxed);
             }
         }
@@ -784,7 +815,7 @@ fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: f
     let counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let decoded = max_pixels.min(MAX_RASTER_PIXELS).saturating_sub(counter.pixels);
     Ok(ParsedWork {
-        parsed: Parsed { tree, fontless_text: counter.fontless_text },
+        parsed: Parsed { tree, fontless_text: counter.fontless_text, omitted_images: omitted_images(&counter.resolver) },
         svg_images: counter.svg_images,
         svg_chain: counter.svg_chain,
         decoded,
@@ -1078,10 +1109,13 @@ fn import_parsed_with_limits(
     reject_cache_overflow: bool,
     pixel_budget: u64,
 ) -> Result<ImportResult, IoError> {
-    let Parsed { tree, fontless_text } = parsed;
+    let Parsed { tree, fontless_text, omitted_images } = parsed;
     let mut warnings = Vec::new();
     if fontless_text {
         warnings.push("SVG: the text needs a font and none is installed, so it was dropped".to_string());
+    }
+    if omitted_images {
+        warnings.push("SVG: some embedded images were omitted because they exceeded an import limit or could not be read".to_string());
     }
     let cv = canvas(&tree, &mut warnings);
     check_filter_cost(&tree, cv.scale)?;

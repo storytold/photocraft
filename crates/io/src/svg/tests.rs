@@ -1144,7 +1144,8 @@ fn a_latin1_embedded_svg_that_decodes_past_the_budget_is_refused() {
     latin1.extend_from_slice(b"--></svg>");
     let wide = embedded_image("image/svg+xml", &gzip(&latin1));
     let small = embedded_image("image/svg+xml", b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>");
-    assert!(parse_bounded(image_svg(&wide).as_bytes(), MAX_RASTER_PIXELS).is_ok(), "on its own it parses");
+    let error = parse_bounded(image_svg(&wide).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+    assert!(error.to_string().contains("byte or nesting budget"), "{error}");
     let error = parse_bounded(image_svg(&format!("{wide}{small}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
 }
@@ -1561,4 +1562,51 @@ fn every_raster_refusal_reason_is_reported_once() {
     let dropped = |what: &str| result.warnings.iter().filter(|w| w.contains("was dropped because") && w.contains(what)).count();
     assert_eq!(dropped("rasterising limit"), 1, "{:?}", result.warnings);
     assert_eq!(dropped("too much memory"), 1, "{:?}", result.warnings);
+}
+
+/// Decoded content remains bounded even when an unreadable image spent the resolver's budget.
+#[test]
+fn damaged_images_do_not_hide_decoded_text_byte_overruns() {
+    let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>";
+    let compressed = gzip(svg);
+    let damaged = embedded_image("image/svg+xml", &compressed[..compressed.len() / 2]);
+    let small = embedded_image("image/svg+xml", svg);
+    let omitted = parse_bounded(image_svg(&format!("{damaged}{damaged}{small}")).as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert!(!omitted.tree.root().has_children(), "both damaged images and the later small image stay omitted");
+    let latin1_image = |raw_bytes| {
+        let mut latin1 = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><!--".to_vec();
+        latin1.resize(raw_bytes, 0xe9);
+        latin1.extend_from_slice(b"--></svg>");
+        embedded_image("image/svg+xml", &gzip(&latin1))
+    };
+    let fitting = latin1_image(budget * 5 / 16); // About 10 MiB decoded; about 5 MiB of inflation work.
+    assert!(parse_bounded(image_svg(&fitting).as_bytes(), MAX_RASTER_PIXELS).is_ok());
+    assert!(parse_bounded(image_svg(&format!("{damaged}{fitting}{small}")).as_bytes(), MAX_RASTER_PIXELS).is_ok(), "unreadable content may still be omitted");
+    let wide = latin1_image(budget * 5 / 8); // About 20 MiB decoded, though inflation fits 16 MiB.
+    for images in [format!("{damaged}{wide}{small}"), format!("{damaged}{fitting}{fitting}")] {
+        let error = parse_bounded(image_svg(&images).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+        assert!(error.to_string().contains("byte or nesting budget"), "{error}");
+    }
+}
+
+/// Ordinary import keeps the rest of the drawing, but reports omitted image content once.
+#[test]
+fn imports_warn_when_embedded_images_are_omitted() {
+    let rect = "<rect width=\"1\" height=\"1\" fill=\"#ff0000\"/>";
+    let oversized = embedded_image("image/png", &png_dimensions(u32::MAX, u32::MAX));
+    let svg = image_svg(&format!("{oversized}{oversized}{rect}"));
+    let imported = import_svg("ordinary", svg.as_bytes()).unwrap();
+    let omission_warnings = |imported: &ImportResult| imported.warnings.iter().filter(|warning| warning.contains("embedded images were omitted")).count();
+    assert_eq!(omission_warnings(&imported), 1, "{:?}", imported.warnings);
+    assert_eq!(photocraft_compose::flatten(&imported.document).to_rgba8().pixels, vec![255, 0, 0, 255], "the readable red rectangle is retained");
+    let clean = import_svg("clean", image_svg(rect).as_bytes()).unwrap();
+    assert_eq!(omission_warnings(&clean), 0, "{:?}", clean.warnings);
+    let compressed = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+    let damaged = embedded_image("image/svg+xml", &compressed[..compressed.len() / 2]);
+    let svg = image_svg(&format!("{damaged}{rect}"));
+    let bounded = import_svg_bounded("bounded", svg.as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert_eq!(omission_warnings(&bounded), 1, "{:?}", bounded.warnings);
+    assert_eq!(photocraft_compose::flatten(&bounded.document).to_rgba8().pixels, vec![255, 0, 0, 255], "the bounded import retains the red rectangle");
+    assert!(parse_bounded_work_with(svg.as_bytes(), MAX_RASTER_PIXELS, true, fonts).is_err(), "stored previews must still be complete");
 }
