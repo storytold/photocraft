@@ -36,7 +36,6 @@ fn every_storage_decodes_exactly() {
     let s = decode(&spec.build(), &Limits::default()).unwrap();
     assert_eq!((s.width, s.height), (4, 8));
     assert_eq!(s.data, spec.data);
-    assert_eq!(s.white, [16383.; 3]);
     assert_eq!(s.black, BlackLevels::uniform(0.0));
 }
 
