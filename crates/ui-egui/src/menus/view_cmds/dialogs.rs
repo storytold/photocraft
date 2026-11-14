@@ -191,6 +191,12 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ui.end_row();
                 continue;
             }
+            if k == "artboards" && f.contains_key(SELECTED_ARTBOARDS) {
+                ui.label("");
+                selected_artboards_field(ui, f);
+                ui.end_row();
+                continue;
+            }
             let new = match &v {
                 Value::Array(_) | Value::Object(_) | Value::Null => continue,
                 Value::Bool(b) => {
@@ -279,6 +285,31 @@ const JPEG_CUSTOM: &str = "__jpegCustom";
 const JPEG_QUALITY: &str = "__jpegQuality";
 /// The shell keys Alt+Reset restores along with a form's params.
 const RESET_SHELL_KEYS: [&str; 3] = [BATCH_QUALITY, JPEG_CUSTOM, JPEG_QUALITY];
+/// Artboards to PDF's Export Selected Artboards (#13647): the artboards selected when the dialog
+/// opened, sent as `artboards` while the checkbox is ticked. Shell state, never a command
+/// parameter, and set from the selection at every open, so nothing is remembered.
+const SELECTED_ARTBOARDS: &str = "__selectedArtboards";
+
+/// The Export Selected Artboards checkbox: greyed and unticked when the dialog opened without an
+/// artboard active. Ticked, `artboards` holds the selected boards; unticked it is null, and the
+/// command exports every board.
+fn selected_artboards_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let selected = f.get(SELECTED_ARTBOARDS).and_then(Value::as_array).filter(|ids| !ids.is_empty()).cloned();
+    let mut ticked = selected.is_some() && f.get("artboards").is_some_and(Value::is_array);
+    ui.add_enabled_ui(selected.is_some(), |ui| crate::widgets::checkbox(ui, &mut ticked, tl!("Export Selected Artboards")));
+    f.insert("artboards".into(), selected.filter(|_| ticked).map_or(Value::Null, Value::Array));
+}
+
+/// The boards Export Selected Artboards exports: the selected top-level artboards while an
+/// artboard is the active layer, else none (the checkbox is greyed and every board is exported).
+fn selected_artboards(app: &PhotocraftApp) -> Vec<u64> {
+    let Some(st) = app.session.active() else { return Vec::new() };
+    let is_board = |id: &photocraft_doc::LayerId| st.doc.layers.iter().any(|l| l.id == *id && l.artboard().is_some());
+    if !st.active_layer.as_ref().is_some_and(is_board) {
+        return Vec::new();
+    }
+    st.selected_layers().into_iter().filter(is_board).map(|id| id.0).collect()
+}
 
 /// A Custom checkbox and the 0..12 Quality field it enables (Batch, the exports to files). Off,
 /// the command gets no quality and keeps its own defaults; `usable` false greys out both.
@@ -514,7 +545,14 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
-            dialog(app, json!({"path": format!("{dir}/{stem}.pdf"), "quality": 10}), json!({}))
+            // Export Selected Artboards, ticked when an artboard is active, set at every open.
+            let selected = selected_artboards(app);
+            let ticked = if selected.is_empty() { Value::Null } else { json!(selected) };
+            dialog(
+                app,
+                json!({"path": format!("{dir}/{stem}.pdf"), "artboards": ticked, SELECTED_ARTBOARDS: selected, "quality": 10, "__order": ["path", "artboards", "quality"]}),
+                json!({}),
+            )
         }
         "file.export.dataSetsAsFiles" => {
             #[cfg(target_arch = "wasm32")]
@@ -765,3 +803,7 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
+
+#[cfg(test)]
+#[path = "../../artboards_to_pdf_selected_tests.rs"]
+mod artboards_to_pdf_selected_tests;
