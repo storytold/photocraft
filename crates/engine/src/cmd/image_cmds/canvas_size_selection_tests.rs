@@ -1,7 +1,7 @@
 //! #14539: Canvas Size drops the active selection when it changes the canvas size, as the
 //! reference application does; undo brings back the old size and selection in the same step.
-//! A Canvas Size that keeps the size is not measured and keeps today's behaviour; Crop still
-//! moves the selection (`translate_doc` is unchanged).
+//! A Canvas Size that keeps the size is not measured and keeps today's behaviour; `translate_doc`
+//! is unchanged, so its other callers keep theirs (Crop still leaves no selection).
 
 use photocraft_geom::Rect;
 use serde_json::json;
