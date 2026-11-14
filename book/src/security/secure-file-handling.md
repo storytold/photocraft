@@ -1,7 +1,7 @@
 # Secure file handling
 
 PhotoCraft reads and writes documents in the desktop app, CLI, headless RPC server, and MCP server.
-Remote automation paths are untrusted relative names resolved beneath explicitly granted roots.
+Remote automation paths are untrusted names resolved beneath explicitly granted roots.
 
 ## Implemented
 
@@ -11,9 +11,11 @@ Remote automation paths are untrusted relative names resolved beneath explicitly
 - Native `.pcraft` saves use temporary-file/rename patterns in relevant store paths.
 - `AuthorizedWorkspace` holds independent read and write directory capabilities for remote
   automation.
-- Absolute paths, parent traversal, alternate separators, drive/device/stream prefixes, reserved
-  Windows device names, empty or dot components, and link escapes are rejected before file
-  effects.
+- Absolute paths beneath the canonical or configured spelling of the applicable granted root
+  are translated to relative paths and resolved through the held directory capability. Absolute
+  paths outside that root are rejected.
+- The relative path rejects parent traversal, alternate separators, drive/device/stream prefixes,
+  reserved Windows device names, empty or dot components, and link escapes before file effects.
 - Non-existent output files are supported when their parent already exists beneath the write
   root. Automation does not create caller-selected directory trees.
 - Filesystem-bearing engine commands that have not migrated to capability I/O fail closed for
@@ -40,9 +42,10 @@ AuthorizedWorkspace
 ```
 
 The handle is created from an explicit launch-time grant, preserves separate read/write
-permissions, rejects absolute and escaping paths, and performs operations relative to the held
-directory capability. New files require an existing in-root parent because a non-existent target
-cannot be canonicalized safely.
+permissions, checks absolute paths against the granted root and rejects escaping paths. Operations
+use the held directory capability; the requested path is never resolved with ambient authority.
+New files require an existing in-root parent because a non-existent target cannot be canonicalized
+safely.
 
 ## Design requirements
 
