@@ -962,6 +962,9 @@ mod smart_filter_rows_tests;
 mod blur_pins_tests;
 
 #[cfg(test)]
+mod new_doc_saved_tab_tests;
+
+#[cfg(test)]
 mod filter_preview_locator_tests;
 
 #[cfg(test)]

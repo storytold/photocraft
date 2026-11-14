@@ -523,6 +523,16 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
     }
 }
 
+/// The category tabs, left to right, as in Photoshop: Recent, Saved, then the preset categories.
+pub fn tabs() -> impl Iterator<Item = &'static str> {
+    CATEGORIES.iter().flat_map(|c| std::iter::once(c.0).chain((c.0 == CATEGORIES[0].0).then_some("Saved")))
+}
+
+/// Whether Create (and Enter) may confirm: not on an empty Saved tab, where nothing is selected.
+pub fn can_create(app: &crate::PhotocraftApp, f: &Map<String, Value>) -> bool {
+    get_s(f, "__category", "Recent") != "Saved" || !app.session.presets.documents.is_empty()
+}
+
 /// Returns whether a preset double-click requested creation, after applying its settings.
 /// A recent category click can make egui count the preset double-click as a triple-click.
 pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> bool {
@@ -535,7 +545,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
     // Category tabs.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 18.0;
-        for name in CATEGORIES.iter().map(|c| c.0).chain(["Saved"]) {
+        for name in tabs() {
             let on = cat == name;
             let label = if name == "Saved" { tl!("Saved") } else { tl!(name) };
             let r = ui
