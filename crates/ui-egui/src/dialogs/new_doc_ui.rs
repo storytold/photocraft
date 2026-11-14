@@ -3,7 +3,7 @@
 //! `resolution` in ppi, `mode`, `depth`, `background`, `name`), so `ui.dialog.set` drives it and
 //! Create runs `file.new` with them.
 
-use egui::{Align2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Map, Value, json};
 
 use photocraft_engine::prefs::UnitsAndRulers;
@@ -305,6 +305,18 @@ fn card_title(painter: &egui::Painter, title: &str, width: f32, color: egui::Col
     painter.layout_job(job)
 }
 
+/// A card's size line, broken before "@" onto a second row when it is wider than the card.
+fn card_size_line(painter: &egui::Painter, line: &str, width: f32, color: egui::Color32) -> std::sync::Arc<egui::Galley> {
+    let layout = |text: String| {
+        let mut job = egui::text::LayoutJob::simple(text, egui::FontId::proportional(10.5), color, width);
+        job.wrap.max_rows = 2;
+        job.halign = egui::Align::Center;
+        painter.layout_job(job)
+    };
+    let one = layout(line.to_owned());
+    if one.rows.len() <= 1 { one } else { layout(line.replacen(" @ ", "\n@ ", 1)) }
+}
+
 /// Paint a page thumbnail with the preset's aspect ratio.
 fn page_icon(ui: &egui::Ui, r: Rect, w: u32, h: u32, t: &Tokens) {
     let s = 30.0 / (w.max(h) as f32);
@@ -381,7 +393,7 @@ fn holds(f: &Map<String, Value>, settings: &DocumentSettings) -> bool {
 }
 
 /// A card in the preset grid: a built-in preset or a recently created document.
-enum Card {
+pub(crate) enum Card {
     Builtin(Preset),
     Recent(DocumentSettings),
 }
@@ -399,7 +411,7 @@ impl Card {
     }
 
     /// The preset's name; a recent document takes the name of the built-in preset it matches.
-    fn title(&self) -> &'static str {
+    pub(crate) fn title(&self) -> &'static str {
         match self {
             Card::Builtin(p) => p.0,
             Card::Recent(s) => {
@@ -409,7 +421,7 @@ impl Card {
     }
 
     /// The size line, in the unit the preset applies (a recent one: the unit it was made in).
-    fn size_line(&self, units: &UnitsAndRulers, f: &Map<String, Value>) -> String {
+    pub(crate) fn size_line(&self, units: &UnitsAndRulers, f: &Map<String, Value>) -> String {
         let (w, h, ppi) = self.size(units);
         let unit = match self {
             Card::Builtin(p) => preset_unit(p, f),
@@ -424,16 +436,15 @@ impl Card {
     }
 }
 
-/// The Recent category: the Clipboard preset, the documents recently created here (newest
-/// first), then the built-in defaults they don't already cover.
-fn recent_cards(f: &Map<String, Value>, recent: &[DocumentSettings], units: &UnitsAndRulers) -> Vec<Card> {
+/// The Recent category: the Clipboard preset, then the documents recently created here (newest
+/// first, as Photoshop lists only those), or the built-in defaults while there are none yet.
+pub(crate) fn recent_cards(f: &Map<String, Value>, recent: &[DocumentSettings]) -> Vec<Card> {
     let mut cards: Vec<Card> = clipboard_preset(f).map(Card::Builtin).into_iter().collect();
-    cards.extend(recent.iter().cloned().map(Card::Recent));
-    let defaults = CATEGORIES[0].1.iter().filter(|p| {
-        let (_, w, h, ppi) = at_pref_resolutions(p, units);
-        !recent.iter().any(|s| (s.width, s.height, s.resolution) == (w, h, ppi))
-    });
-    cards.extend(defaults.copied().map(Card::Builtin));
+    if recent.is_empty() {
+        cards.extend(CATEGORIES[0].1.iter().copied().map(Card::Builtin));
+    } else {
+        cards.extend(recent.iter().cloned().map(Card::Recent));
+    }
     cards
 }
 
@@ -553,9 +564,13 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
     widgets::hairline(ui);
     ui.add_space(8.0);
     let units = app.session.prefs().units_and_rulers.clone();
-    let presets: Vec<Card> = match CATEGORIES.iter().find(|c| c.0 == cat) {
-        Some(c) if c.0 != CATEGORIES[0].0 => c.1.iter().copied().map(Card::Builtin).collect(),
-        _ => recent_cards(f, &app.session.presets.recent_documents, &units),
+    // Recent items get Photoshop's heading and four columns; built-in presets keep three.
+    let (presets, recent_items): (Vec<Card>, bool) = match CATEGORIES.iter().find(|c| c.0 == cat) {
+        Some(c) if c.0 != CATEGORIES[0].0 => (c.1.iter().copied().map(Card::Builtin).collect(), false),
+        _ => {
+            let recent = &app.session.presets.recent_documents;
+            (recent_cards(f, recent), !recent.is_empty())
+        }
     };
     let presets: Vec<Card> = presets
         .into_iter()
@@ -573,12 +588,13 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                 create |= saved_presets(app, ui, f);
                 return;
             }
-            ui.label(RichText::new(crate::i18n::fmt(tl!("BLANK DOCUMENT PRESETS ({n})"), &[("n", &presets.len().to_string())])).size(11.0).color(t.text_faint));
+            let heading = if recent_items { tl!("YOUR RECENT ITEMS ({n})") } else { tl!("BLANK DOCUMENT PRESETS ({n})") };
+            ui.label(RichText::new(crate::i18n::fmt(heading, &[("n", &presets.len().to_string())])).size(11.0).color(t.text_faint));
             ui.add_space(6.0);
-            let card = vec2(164.0, 112.0);
+            let (columns, card) = if recent_items { (4, vec2(122.0, 112.0)) } else { (3, vec2(164.0, 112.0)) };
             // Up to 20 recent documents: scroll past three rows rather than grow the dialog.
             egui::ScrollArea::vertical().id_salt("new-document-presets").max_height(3.0 * (card.y + 8.0)).show(ui, |ui| {
-                for row in presets.chunks(3) {
+                for row in presets.chunks(columns) {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
                         for c in row {
@@ -608,7 +624,8 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                             let elided = title.elided;
                             ui.painter().galley(pos2(r.center().x, r.top() + 70.0 - title.size().y / 2.0), title, t.text);
                             let size = c.size_line(&units, f);
-                            ui.painter().text(pos2(r.center().x, r.top() + 97.0), Align2::CENTER_CENTER, &size, egui::FontId::proportional(10.5), t.text_faint);
+                            let line = card_size_line(ui.painter(), &size, card.x - 8.0, t.text_faint);
+                            ui.painter().galley(pos2(r.center().x, r.top() + 97.0 - line.size().y / 2.0), line, t.text_faint);
                             let resp = match c {
                                 // A recent document's tooltip names everything it restores.
                                 Card::Recent(s) => {
