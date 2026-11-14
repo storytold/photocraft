@@ -1148,3 +1148,7 @@ mod tests {
         assert!(h.query_by_label("Hyphenate").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "type_spell_enabled_ui_tests.rs"]
+mod spell_enabled_ui_tests;

@@ -493,3 +493,7 @@ mod tests {
         assert_eq!(s.execute("type.caret", json!({"layer": id, "index": inserted["caret"]})).unwrap()["index"], inserted["caret"]);
     }
 }
+
+#[cfg(test)]
+#[path = "type_spell_enabled_tests.rs"]
+mod enabled_tests;
