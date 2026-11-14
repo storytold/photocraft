@@ -1977,3 +1977,28 @@ fn paste_into_a_position_locked_artboards_own_mask_keeps_the_place_on_the_board(
     assert_eq!(r["offset"], json!([190, 10]), "moved by B's origin minus A's");
     assert!((mask_at(&s, b, 205, 25) - lum).abs() < 2.0 / 255.0, "the same spot on B");
 }
+
+/// #11605: Select All, Copy of a layer holding a small patch on a transparent canvas-sized layer
+/// copies only the patch, so File > New's Clipboard preset takes the patch's size (Photoshop).
+/// The second round has the rest of the layer erased: transparent, but with colour bytes left.
+#[test]
+fn select_all_copy_of_a_small_patch_has_the_patch_bounds() {
+    for erased_around in [false, true] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 1000, "height": 1000, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.edit("paint", |doc, a| {
+            let surf = doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap();
+            if erased_around {
+                surf.fill_rect(Rect::new(0, 0, 1000, 1000), &[0.2, 0.5, 0.0, 0.0]);
+            }
+            surf.fill_rect(Rect::from_xywh(300, 400, 200, 200), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        let r = s.execute("edit.copy", json!({})).unwrap_or_else(|e| panic!("rest of the layer erased {erased_around}: {e}"));
+        assert_eq!(r["bounds"], json!([300, 400, 200, 200]), "rest of the layer erased: {erased_around}");
+        assert_eq!(s.clipboard.as_ref().unwrap().bounds, Rect::from_xywh(300, 400, 200, 200));
+    }
+}
