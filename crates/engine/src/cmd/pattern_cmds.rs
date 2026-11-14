@@ -268,23 +268,34 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
 /// stay a few tens of MB however large the pattern.
 const BAND_PIXELS: u32 = 1 << 20;
 
-/// The visible composite over `r` as a surface in the document's pixel format (with alpha), and
-/// whether every pixel of it is opaque.
-fn composite_surface(doc: &Document, r: Rect) -> (Surface, bool) {
-    composite_surface_in_bands(doc, r, (BAND_PIXELS / r.width().max(1)).max(1))
+/// Error returned when `edit.definePattern` is invoked on a fully transparent area.
+pub const EMPTY_AREA_ERROR: &str = "Could not complete the Define Pattern command because the selected area is empty.";
+
+/// The visible composite over `r` as a surface in the document's pixel format (with alpha),
+/// whether every pixel of it is opaque, and whether any pixel has alpha above zero.
+fn composite_surface(doc: &Document, r: Rect) -> (Surface, bool, bool) {
+    composite_surface_visibility_in_bands(doc, r, (BAND_PIXELS / r.width().max(1)).max(1))
+}
+
+/// [`composite_surface`], `band_rows` rows at a time.
+fn composite_surface_in_bands(doc: &Document, r: Rect, band_rows: u32) -> (Surface, bool) {
+    let (s, opaque, _) = composite_surface_visibility_in_bands(doc, r, band_rows);
+    (s, opaque)
 }
 
 /// [`composite_surface`], `band_rows` rows at a time. Rendering and converting one band at a
-/// time, and noting opacity as it goes, keeps an 8000 × 8000 pattern (64 MP, about 1 GB per full
-/// `f32` copy) from holding several full-size copies at once. Opacity is judged on the stored
-/// samples, as the surface quantizes them: an alpha of 0.999 in an 8-bit document is stored as 255.
-fn composite_surface_in_bands(doc: &Document, r: Rect, band_rows: u32) -> (Surface, bool) {
+/// time, and noting opacity and visibility as it goes, keeps an 8000 × 8000 pattern (64 MP, about
+/// 1 GB per full `f32` copy) from holding several full-size copies at once. Opacity is judged on
+/// the stored samples, as the surface quantizes them: an alpha of 0.999 in an 8-bit document is
+/// stored as 255.
+fn composite_surface_visibility_in_bands(doc: &Document, r: Rect, band_rows: u32) -> (Surface, bool, bool) {
     let df = doc.pixel_format();
     let fmt = PixelFormat::new(df.mode, df.sample, true);
     let n = fmt.channels();
     let (width, height) = (r.width(), r.height());
     let mut s = Surface::new(fmt);
     let mut opaque = true;
+    let mut visible = false;
     let mut px = Vec::new();
     let mut top = 0;
     while top < height {
@@ -297,12 +308,20 @@ fn composite_surface_in_bands(doc: &Document, r: Rect, band_rows: u32) -> (Surfa
         }
         let band = Rect::new(0, top as i32, width as i32, (top + rows) as i32);
         s.write_region(band, &px);
-        if opaque {
-            opaque = s.read_region(band).chunks_exact(n).all(|q| q[n - 1] >= 1.0);
+        if opaque || !visible {
+            for q in s.read_region(band).chunks_exact(n) {
+                let a = q[n - 1];
+                if a < 1.0 {
+                    opaque = false;
+                }
+                if a > 0.0 {
+                    visible = true;
+                }
+            }
         }
         top += rows;
     }
-    (s, opaque)
+    (s, opaque, visible)
 }
 
 /// The name Define Pattern gives a pattern without one: the active document's name without its
@@ -349,7 +368,10 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
     if u64::from(r.width()) * u64::from(r.height()) > max_px {
         return Err(bad(cmd, format!("patterns in a {}-bit document are limited to {max_px} px in all", sample.bytes() * 8)));
     }
-    let (mut surf, opaque) = composite_surface(doc, r);
+    let (mut surf, opaque, visible) = composite_surface(doc, r);
+    if !visible {
+        return Err(bad(cmd, EMPTY_AREA_ERROR));
+    }
     // Opaque patterns drop their alpha channel (as Photoshop does).
     if opaque {
         let fmt = surf.format();
@@ -911,3 +933,6 @@ mod tests {
         assert!(e.to_string().contains("would paint nothing") && e.to_string().contains("65536 × 65536"), "{e}");
     }
 }
+
+#[cfg(test)]
+mod define_empty_area_tests;

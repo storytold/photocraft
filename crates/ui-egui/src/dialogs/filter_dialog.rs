@@ -331,6 +331,16 @@ pub const PREVIEWED: &[&str] = &[
     "edit.fade",
 ];
 
+/// Show the empty-area error alert when `edit.definePattern` fails from its Pattern Name dialog.
+pub(crate) fn show_define_pattern_empty_alert(app: &mut PhotocraftApp, command: &str, error: &str) -> bool {
+    if command == "edit.definePattern" && error.contains(photocraft_engine::pattern_cmds::EMPTY_AREA_ERROR) {
+        let message = photocraft_engine::pattern_cmds::EMPTY_AREA_ERROR;
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+        return true;
+    }
+    false
+}
+
 pub fn has_dialog(command: &str) -> bool {
     // The Filter Gallery has its own full-window dialog (gallery_ui).
     if command == "filter.filterGallery" {

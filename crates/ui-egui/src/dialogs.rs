@@ -813,7 +813,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         match outcome {
             Some(true) => {
-                if let Err(error) = confirm(app, d.id) {
+                if let Err(error) = confirm(app, d.id)
+                    && !error.contains(photocraft_engine::pattern_cmds::EMPTY_AREA_ERROR)
+                {
                     app.ui.status = error;
                 }
             }
@@ -1070,6 +1072,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         crate::actions::resume(app, &d.fields)?;
     } else {
         crate::actions::abandoned(app, &d.fields);
+        if let Err(error) = &result {
+            crate::filter_dialog::show_define_pattern_empty_alert(app, &cmd, error);
+        }
     }
     result
 }
