@@ -387,7 +387,7 @@ fn transform_menu_follows_photoshop_order() {
     }
 }
 
-fn labels(rows: &[Row]) -> Vec<Option<&str>> {
+pub(super) fn labels(rows: &[Row]) -> Vec<Option<&str>> {
     rows.iter().map(|row| row.map(|(label, _)| label)).collect()
 }
 
