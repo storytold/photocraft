@@ -260,7 +260,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut choose = false;
     let mut stop = false;
     let running = app.smart_svg.editing.iter().any(|edit| edit.target.doc == pending.target.doc && edit.target.contents_id == pending.target.contents_id);
-    let modal = egui::Modal::new(egui::Id::unique("smart-svg-editor")).show(ctx, |ui| {
+    let modal = crate::widgets::modal(ctx, egui::Id::unique("smart-svg-editor")).show(ctx, |ui| {
         let tokens = crate::theme::Tokens::get(ctx);
         ui.set_max_width(470.0);
         ui.label(

@@ -974,7 +974,7 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut cancel_it = false;
     // Photoshop doesn't dim the window behind its progress dialog either.
-    let modal = egui::Modal::new(egui::Id::unique("job-progress")).backdrop_color(Color32::from_black_alpha(36)).show(ctx, |ui| {
+    let modal = crate::widgets::modal(ctx, egui::Id::unique("job-progress")).backdrop_color(Color32::from_black_alpha(36)).show(ctx, |ui| {
         ui.set_width(360.0);
         ui.label(RichText::new(tl!(&j.label)).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);
