@@ -1,6 +1,6 @@
 use super::*;
 
-fn tmp(name: &str) -> String {
+pub(super) fn tmp(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("photocraft-automate-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
@@ -8,7 +8,7 @@ fn tmp(name: &str) -> String {
 }
 
 /// Writes `n` small PNGs (w×h, grey level i·40) into `dir`.
-fn images(dir: &str, n: usize, w: u32, h: u32) -> Vec<String> {
+pub(super) fn images(dir: &str, n: usize, w: u32, h: u32) -> Vec<String> {
     (0..n)
         .map(|i| {
             let mut s = Session::new();
@@ -631,7 +631,7 @@ fn contact_sheet_places_thumbnails_with_captions() {
     for depth in [8, 16] {
         let mut s = Session::new();
         let r = s
-            .execute("file.automate.contactSheetII", json!({"input": dir, "units": "pixels", "width": 400, "height": 300, "resolution": 72, "columns": 2, "rows": 2, "depth": depth, "fontSize": 10, "rotateForBestFit": true}))
+            .execute("file.automate.contactSheetII", json!({"input": dir, "units": "pixels", "width": 400, "height": 300, "resolution": 72, "columns": 2, "rows": 2, "depth": depth, "fontSize": 10, "rotateForBestFit": true, "flatten": false}))
             .unwrap();
         assert_eq!(r["pages"], 2, "5 images on 2×2 sheets");
         assert_eq!(r["images"], 5);

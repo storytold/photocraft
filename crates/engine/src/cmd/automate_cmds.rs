@@ -554,7 +554,7 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     let caption = p.get("caption").and_then(Value::as_bool).unwrap_or(true);
     let font = p.get("font").and_then(Value::as_str).unwrap_or(photocraft_text::fonts::DEFAULT_FAMILY).to_string();
     let font_pt = f("fontSize", 12.0);
-    let flatten = p.get("flatten").and_then(Value::as_bool).unwrap_or(false);
+    let flatten = p.get("flatten").and_then(Value::as_bool).unwrap_or(true);
     let mode = p.get("mode").and_then(Value::as_str).unwrap_or("rgb").to_string();
     let depth = crate::commands::int(p, "depth").unwrap_or(8);
     let caption_px = if caption { font_pt * res / 72.0 * 1.5 } else { 0.0 };
@@ -647,7 +647,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.contactSheetII",
             "Contact Sheet II…",
             &["File", "Automate"],
-            r##"{"input":folder|[paths],"units":"inches|cm|mm|pixels"="inches","width":8,"height":10,"resolution":ppi=300,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16=8,"columns":5,"rows":6,"placeAcrossFirst":bool=true,"autoSpacing":bool=true,"horizontal":units?,"vertical":units?,"rotateForBestFit":bool=false,"caption":bool=true (file name as caption),"font":family?,"fontSize":pt=12,"flatten":bool=false,"includeSubfolders":bool=true (a folder input also takes its subfolders' images, depth first after its own),"groupByFolder":bool=false (with includeSubfolders: each folder starts a new sheet)} → {documents, pages, images}"##,
+            r##"{"input":folder|[paths],"units":"inches|cm|mm|pixels"="inches","width":8,"height":10,"resolution":ppi=300,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16=8,"columns":5,"rows":6,"placeAcrossFirst":bool=true,"autoSpacing":bool=true,"horizontal":units?,"vertical":units?,"rotateForBestFit":bool=false,"caption":bool=true (file name as caption),"font":family?,"fontSize":pt=12,"flatten":bool=true,"includeSubfolders":bool=true (a folder input also takes its subfolders' images, depth first after its own),"groupByFolder":bool=false (with includeSubfolders: each folder starts a new sheet)} → {documents, pages, images}"##,
             native,
             contact_sheet
         ),
@@ -701,3 +701,7 @@ mod tests;
 #[cfg(test)]
 #[path = "automate_cmds/contact_sheet_subfolders_tests.rs"]
 mod contact_sheet_subfolders_tests;
+
+#[cfg(test)]
+#[path = "automate_cmds/contact_sheet_defaults_tests.rs"]
+mod contact_sheet_defaults_tests;

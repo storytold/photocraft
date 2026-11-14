@@ -45,7 +45,7 @@ fn the_checkboxes_sit_under_the_folder_with_the_reference_defaults() {
     let top = |label: &str| h.query_all_by_label(label).map(|n| n.rect().top()).reduce(f32::min).unwrap_or_else(|| panic!("no {label}"));
     let (input, include, group) = (top("Input"), top(INCLUDE), top(GROUP));
     assert!(input < include && include < group, "Input {input}, {INCLUDE} {include}, {GROUP} {group}");
-    for other in ["Auto spacing", "Caption", "Columns", "Flatten", "Width"] {
+    for other in ["Use Auto-Spacing", "Use Filename as Caption", "Columns", "Flatten All Layers", "Width"] {
         assert!(group < top(other), "{GROUP} {group} is above {other} {}", top(other));
     }
 }
@@ -101,6 +101,8 @@ fn ok_runs_the_sheet_with_both_settings() {
         fields.insert("input".into(), json!(dir.to_string_lossy()));
         // No captions: they wait on the app's fonts, which load in the background.
         fields.insert("caption".into(), json!(false));
+        // Image layers are counted, so the sheet stays unflattened.
+        fields.insert("flatten".into(), json!(false));
         if group {
             h.get_by_label(GROUP).click();
             h.run_steps(4);

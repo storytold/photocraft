@@ -439,7 +439,7 @@ fn web_size_dialog(app: PhotocraftApp) -> (egui_kittest::Harness<'static, Photoc
 }
 
 /// Types `text` into the number field now showing `value`, and leaves it with Tab.
-fn type_into_field(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, value: f64, text: &str) {
+pub(super) fn type_into_field(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, value: f64, text: &str) {
     use egui_kittest::kittest::{NodeT, Queryable};
     let field = h
         .query_all_by_role(egui::accesskit::Role::SpinButton)
