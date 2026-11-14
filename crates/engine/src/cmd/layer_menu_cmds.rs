@@ -522,49 +522,52 @@ fn native(_: &Session) -> Enabled {
 // ---------- layer style ----------
 
 fn blending_options(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "layer.layerStyle.blendingOptions";
     let id = layer_param(s, p)?;
+    s.edit("Blending Options", |doc, _| apply_blending_options(doc, id, p))?;
+    Ok(Value::Null)
+}
+
+/// Apply parsed blending settings inside the caller's document edit.
+pub(crate) fn apply_blending_options(doc: &mut Document, id: LayerId, p: &Value) -> Result<()> {
+    const CMD: &str = "layer.layerStyle.blendingOptions";
     let blend = match p.get("blend").and_then(Value::as_str) {
         Some(b) => Some(crate::commands::blend_from_str(b).ok_or_else(|| bad(CMD, format!("unknown blend mode `{b}`")))?),
         None => None,
     };
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
     let fill = p.get("fillOpacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
-    let mode = s.active().ok_or(EngineError::NoDocument)?.doc.mode;
+    let mode = doc.mode;
     let blend_if = match p.get("blendIf") {
         None => None,
         Some(v) => Some(blend_if_entries(v, mode)?),
     };
     let adv = advanced_params(p, mode)?;
-    s.edit("Blending Options", |doc, _| {
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        if let Some(b) = blend {
-            if b == BlendMode::PassThrough && !l.is_group() {
-                return Err(bad(CMD, "Pass Through is for groups"));
+    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    if let Some(b) = blend {
+        if b == BlendMode::PassThrough && !l.is_group() {
+            return Err(bad(CMD, "Pass Through is for groups"));
+        }
+        l.blend = b;
+    }
+    if let Some(o) = opacity {
+        l.opacity = o;
+    }
+    if let Some(f) = fill {
+        l.fill_opacity = f;
+    }
+    match &blend_if {
+        // `null`: Blend If back to the defaults.
+        Some(None) => l.blend_if = BlendIf::default(),
+        Some(Some(entries)) => {
+            for (i, this, under) in entries {
+                let [cur_this, cur_under] = l.blend_if.get(*i);
+                l.blend_if.set(*i, [this.unwrap_or(cur_this), under.unwrap_or(cur_under)]);
             }
-            l.blend = b;
         }
-        if let Some(o) = opacity {
-            l.opacity = o;
-        }
-        if let Some(f) = fill {
-            l.fill_opacity = f;
-        }
-        match &blend_if {
-            // `null`: Blend If back to the defaults.
-            Some(None) => l.blend_if = BlendIf::default(),
-            Some(Some(entries)) => {
-                for (i, this, under) in entries {
-                    let [cur_this, cur_under] = l.blend_if.get(*i);
-                    l.blend_if.set(*i, [this.unwrap_or(cur_this), under.unwrap_or(cur_under)]);
-                }
-            }
-            None => {}
-        }
-        adv.apply(l);
-        Ok(())
-    })?;
-    Ok(Value::Null)
+        None => {}
+    }
+    adv.apply(l);
+    Ok(())
 }
 
 /// The Advanced Blending parameters of `layer.layerStyle.blendingOptions`; `None` = keep.
@@ -716,7 +719,16 @@ fn blend_range(v: &Value) -> Option<BlendRange> {
 }
 
 fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
-    let cur = s.active().ok_or(EngineError::NoDocument)?.doc.global_light;
+    let current = s.active().ok_or(EngineError::NoDocument)?.doc.global_light;
+    let light = global_light_params(current, p)?;
+    s.edit("Global Light", |doc, _| {
+        doc.global_light = light;
+        Ok(())
+    })?;
+    Ok(json!({"angle": light.angle, "altitude": light.altitude}))
+}
+
+pub(crate) fn global_light_params(cur: photocraft_doc::effects::GlobalLight, p: &Value) -> Result<photocraft_doc::effects::GlobalLight> {
     // Read as f64 and reject what f32 can't hold: 1e39 would become inf, and rem_euclid NaN.
     let f32_param = |key: &str, default: f32| match p.get(key).and_then(Value::as_f64) {
         None => Ok(default),
@@ -726,12 +738,7 @@ fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
     let angle = f32_param("angle", cur.angle)?;
     let altitude = f32_param("altitude", cur.altitude)?.clamp(0.0, 90.0);
     let angle = (angle + 180.0).rem_euclid(360.0) - 180.0;
-    s.edit("Global Light", |doc, _| {
-        doc.global_light.angle = angle;
-        doc.global_light.altitude = altitude;
-        Ok(())
-    })?;
-    Ok(json!({"angle": angle, "altitude": altitude}))
+    Ok(photocraft_doc::effects::GlobalLight { angle, altitude })
 }
 
 fn scale_effects(s: &mut Session, p: &Value) -> Result<Value> {
