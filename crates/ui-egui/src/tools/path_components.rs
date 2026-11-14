@@ -43,19 +43,20 @@ pub(crate) fn untarget_saved_path_off(app: &mut PhotocraftApp, at: [f64; 2], tol
     }
 }
 
-/// The selected components: their path and the first subpath of each, in order. `None` with
-/// nothing selected, a selection on a path that is not an active one any more, or a tool other
-/// than Path Selection (the only one that shows it, so the only one that acts on it).
+/// The selected components: their path and the first subpath of each, in order. With Direct
+/// Selection, the components that have a selected anchor (#13219), on whichever path its marquee
+/// reached. `None` with nothing selected, a selection on a path that is gone or locked, or another
+/// tool (they show no selection, so they act on none).
 pub(crate) fn selected(app: &PhotocraftApp) -> Option<(PathRef, Path, Vec<usize>)> {
-    if app.ui.tool != Tool::PathSelection {
+    if !matches!(app.ui.tool, Tool::PathSelection | Tool::DirectSelection) {
         return None;
     }
     let sel = &app.ui.direct_selection;
     if !crate::direct_select::still_valid(app, sel) {
         return None;
     }
-    let r = sel.target.filter(|r| *r != PathRef::Pen)?;
-    let (_, path) = active_paths(app).into_iter().find(|(p, _)| *p == r)?;
+    let r = sel.target.filter(|r| *r != PathRef::Pen && crate::direct_select::writable(app, r))?;
+    let (_, path) = crate::direct_select::candidates(app).into_iter().find(|(p, _)| *p == r)?;
     let components = path.components();
     let mut heads: Vec<usize> = sel.anchors.iter().filter_map(|[s, _]| components.iter().find(|c| c.contains(s)).map(|c| c.start)).collect();
     heads.sort_unstable();
