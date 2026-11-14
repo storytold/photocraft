@@ -1,13 +1,17 @@
 //! Native GPU renderer adapter and session integration for headless automation.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use photocraft_doc::{DocId, Document, Rect};
-use photocraft_gpu::context::{NativeContext, NativeContextOptions};
+use photocraft_gpu::context::{AbandonedInit, GpuContextError, NativeContext, NativeContextOptions};
 use photocraft_gpu::{Compositor, readback};
 use photocraft_io::{BandRenderer, IoError, RenderBand, RenderError};
 
 use crate::AutomationError;
+
+/// Requests a GPU context, returning the initialization thread when the request times out.
+type RequestContext = fn(&NativeContextOptions) -> (Result<NativeContext, GpuContextError>, Option<AbandonedInit>);
 
 /// Headless GPU renderer implementing [`BandRenderer`] with device and compositor reuse.
 pub struct GpuRenderer {
@@ -19,14 +23,35 @@ pub struct GpuRenderer {
     init_error: Option<String>,
     diagnostics: Vec<String>,
     adapter_reported: bool,
+    abandoned_init: Option<AbandonedInit>,
+    request: RequestContext,
 }
 
 impl GpuRenderer {
     /// Create and immediately initialize a GPU renderer.
+    ///
+    /// When initialization times out, this waits up to 30 seconds for the initialization thread
+    /// to exit before it returns the error.
     pub fn new() -> Result<Self, AutomationError> {
         let mut r = Self::lazy();
-        r.ensure_init().map_err(|e| AutomationError::Other(format!("failed to initialize GPU renderer: {e}")))?;
+        if let Err(e) = r.init_now() {
+            // `init_now` has already waited for the initialization thread; dropping `r` does not wait again.
+            r.abandoned_init = None;
+            return Err(AutomationError::Other(format!("failed to initialize GPU renderer: {e}")));
+        }
         Ok(r)
+    }
+
+    /// Initialize now. When initialization times out, wait up to [`ABANDONED_INIT_WAIT`] for its
+    /// thread to exit before returning the error.
+    fn init_now(&mut self) -> Result<(), RenderError> {
+        let res = self.ensure_init();
+        if res.is_err()
+            && let Some(init) = &self.abandoned_init
+        {
+            init.wait(ABANDONED_INIT_WAIT);
+        }
+        res
     }
 
     /// Create a GPU renderer that lazily requests an adapter on first render.
@@ -40,6 +65,8 @@ impl GpuRenderer {
             init_error: None,
             diagnostics: Vec::new(),
             adapter_reported: false,
+            abandoned_init: None,
+            request: NativeContext::request_tracked,
         }
     }
 
@@ -54,6 +81,8 @@ impl GpuRenderer {
             init_error: None,
             diagnostics: Vec::new(),
             adapter_reported: false,
+            abandoned_init: None,
+            request: NativeContext::request_tracked,
         }
     }
 
@@ -75,7 +104,9 @@ impl GpuRenderer {
         }
 
         if self.context.is_none() {
-            match NativeContext::request(&self.options) {
+            let (requested, abandoned) = (self.request)(&self.options);
+            self.abandoned_init = abandoned;
+            match requested {
                 Ok(ctx) => match ctx.create_compositor() {
                     Ok(comp) => {
                         if !self.adapter_reported {
@@ -111,6 +142,11 @@ impl GpuRenderer {
         self.context.as_ref()
     }
 
+    /// The initialization thread that was still running when initialization timed out.
+    pub fn abandoned_init(&self) -> Option<&AbandonedInit> {
+        self.abandoned_init.as_ref()
+    }
+
     /// Whether this renderer is healthy.
     pub fn is_healthy(&self) -> bool {
         self.context.as_ref().is_some_and(|c| c.is_healthy())
@@ -142,6 +178,18 @@ impl GpuRenderer {
             comp.reset_cache();
         }
         self.last_doc_id = None;
+    }
+}
+
+/// How long dropping a renderer waits for its timed-out initialization thread to leave the
+/// graphics driver.
+const ABANDONED_INIT_WAIT: Duration = Duration::from_secs(30);
+
+impl Drop for GpuRenderer {
+    fn drop(&mut self) {
+        if let Some(init) = self.abandoned_init.take() {
+            init.wait(ABANDONED_INIT_WAIT);
+        }
     }
 }
 
@@ -207,5 +255,67 @@ impl BandRenderer for GpuRenderer {
 
     fn forget_document(&mut self, doc: DocId) {
         self.forget_doc(doc);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A timed-out renderer whose initialization thread runs until something starts waiting for
+    /// it, and a flag the thread sets only when a wait released it. The thread also ends without
+    /// setting the flag once every handle to it is dropped.
+    fn renderer_with_held_init() -> (GpuRenderer, Arc<AtomicBool>) {
+        let finished = Arc::new(AtomicBool::new(false));
+        let flag = finished.clone();
+        let init = AbandonedInit::spawn(move |waiting| {
+            if waiting.recv().is_ok() {
+                flag.store(true, Ordering::SeqCst);
+            }
+        })
+        .unwrap();
+        let mut r = GpuRenderer::lazy();
+        r.init_error = Some("no GPU adapter available: timed out".into());
+        r.abandoned_init = Some(init);
+        (r, finished)
+    }
+
+    #[test]
+    fn eager_initialization_waits_for_a_timed_out_thread_before_returning() {
+        let (mut r, finished) = renderer_with_held_init();
+        let init = r.abandoned_init().cloned().unwrap();
+        assert!(!init.is_finished());
+        assert!(r.init_now().is_err());
+        assert!(finished.load(Ordering::SeqCst), "eager initialization waits for its initialization thread");
+        assert!(init.is_finished());
+    }
+
+    #[test]
+    fn dropping_a_renderer_waits_for_its_running_initialization_thread() {
+        let (r, finished) = renderer_with_held_init();
+        let init = r.abandoned_init().cloned().unwrap();
+        assert!(!init.is_finished());
+        drop(r);
+        assert!(finished.load(Ordering::SeqCst), "dropping the renderer waits for its initialization thread");
+        assert!(init.is_finished());
+    }
+
+    #[test]
+    fn a_timed_out_initialization_keeps_its_thread() {
+        // The thread runs until the renderer waits for it, so the request is still running when it returns.
+        fn timed_out(_: &NativeContextOptions) -> (Result<NativeContext, GpuContextError>, Option<AbandonedInit>) {
+            let init = AbandonedInit::spawn(|waiting| {
+                let _ = waiting.recv();
+            });
+            (Err(GpuContextError::NoAdapter("timed out".into())), init.ok())
+        }
+        let mut r = GpuRenderer::lazy();
+        r.request = timed_out;
+        assert!(matches!(r.ensure_init(), Err(RenderError::Unavailable(ref msg)) if msg.contains("timed out")));
+        let init = r.abandoned_init().cloned().expect("a timed-out renderer keeps its initialization thread");
+        assert!(!init.is_finished());
+        drop(r);
+        assert!(init.is_finished());
     }
 }
