@@ -10,15 +10,33 @@ const STILL_APPLYING: &str = "Free Transform is still being applied";
 
 const STILL_WARPING: &str = "Warp is still being applied";
 
+/// Apply the box to the document it was opened in. When another document is active (its tab was
+/// picked, #13569), the box applies there and that document stays active; a box whose document
+/// has closed ends as Esc would.
 pub fn commit(app: &mut PhotocraftApp) {
     if committing(app).is_some() {
         return;
     }
     let document = app.transform_preview.as_ref().map(|pv| pv.doc.id);
-    if document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
-        cancel(app);
-        return;
+    match document {
+        Some(id) if app.session.active().is_none_or(|st| st.doc.id != id) => {
+            if app
+                .with_document(id, |app| {
+                    commit_active(app);
+                    Ok(())
+                })
+                .is_err()
+            {
+                cancel(app);
+            }
+        }
+        _ => commit_active(app),
     }
+}
+
+/// [`commit`] with the box's document active.
+fn commit_active(app: &mut PhotocraftApp) {
+    let document = app.transform_preview.as_ref().map(|pv| pv.doc.id);
     let type_layer = warps_type(app);
     let Some(t) = app.ui.transform.take() else { return };
     let mut preview = app.transform_preview.take();
@@ -169,11 +187,12 @@ fn keep_open(app: &mut PhotocraftApp, t: TransformSession, preview: Option<Trans
     app.ui.status = e;
 }
 
-/// A transform whose layer or document went away (undo, close) ends silently; picking another tool
-/// or selecting another layer (Layers panel, ⌘-click, the control channel) applies it, so the box
-/// never stays on a layer that is no longer the active one (#1400). Checked every frame and before
-/// each pointer event, so a press with a tool chosen just before it (`ui.pointer`'s `tool`) goes to
-/// that tool.
+/// A transform whose layer or document went away (undo, close) ends silently; picking another tool,
+/// selecting another layer (Layers panel, ⌘-click, the control channel) or making another document
+/// active (its tab, the Window menu, ⌃Tab) applies it, as clicking outside the canvas does in
+/// Photoshop, so the box never stays on a layer or document that is no longer the active one
+/// (#1400, #13569). Checked every frame and before each pointer event, so a press with a tool
+/// chosen just before it (`ui.pointer`'s `tool`) goes to that tool.
 pub fn end_if_left(app: &mut PhotocraftApp) {
     let Some(t) = &app.ui.transform else { return };
     if committing(app).is_some() {
@@ -185,6 +204,11 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
     let made = t.made;
     let preview_doc_id = app.transform_preview.as_ref().map(|pv| pv.doc.id);
     let switched_document = preview_doc_id.is_some_and(|id| id != st.doc.id);
+    // The box's own document, which stays open in its tab when another one is picked.
+    let home = match preview_doc_id {
+        Some(id) => app.session.documents().iter().find(|d| d.doc.id == id),
+        None => Some(st),
+    };
 
     let editing_placed_smart_object = switched_document
         && made == Some(MadeLayer::Place)
@@ -194,11 +218,12 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
     if editing_placed_smart_object {
         app.ui.transform = None;
         app.transform_preview = None;
-    } else if switched_document || moving_layers(t).iter().any(|id| st.doc.layer(*id).is_none()) || st.doc.layer(layer).is_none() {
+    } else if home.is_none_or(|home| moving_layers(t).iter().any(|id| home.doc.layer(*id).is_none()) || home.doc.layer(layer).is_none()) {
         cancel(app);
     } else if switched_away(app) {
         commit(app);
-        // Picking another tool or layer can't leave a refused transform open: it ends, as Esc would.
+        // Picking another tool, layer or document can't leave a refused transform open: it ends,
+        // as Esc would.
         // A commit still running in the background isn't refused: cancelling it would throw the
         // transform away (and a dropped file with it, #5665). It ends the session when it lands,
         // or ends it as Esc would if it is refused then (`on_job_event`).
@@ -208,12 +233,13 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
     }
 }
 
-/// Another tool picked, or (outside Transform Selection) another layer selected or the selected
-/// layers changed, since the box opened: the session ends ([`end_if_left`], #1400, #11101).
+/// Another document made active, another tool picked, or (outside Transform Selection) another
+/// layer selected or the selected layers changed, since the box opened: the session ends
+/// ([`end_if_left`], #1400, #11101, #13569).
 fn switched_away(app: &PhotocraftApp) -> bool {
     let (Some(t), Some(st)) = (&app.ui.transform, app.session.active()) else { return false };
     let opened = app.transform_preview.as_ref().and_then(|pv| pv.follow.as_ref()).and_then(|f| f.selected.as_deref());
-    app.transform_preview.as_ref().is_some_and(|pv| pv.tool != app.ui.tool)
+    app.transform_preview.as_ref().is_some_and(|pv| pv.doc.id != st.doc.id || pv.tool != app.ui.tool)
         || (!t.selection && st.active_layer.is_some_and(|active| active.0 != t.layer))
         || selected_layers_changed(st, t, opened)
 }
@@ -455,3 +481,7 @@ fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
     }
     json!({"transform": t})
 }
+
+#[cfg(test)]
+#[path = "tab_switch_tests.rs"]
+mod tab_switch_tests;
