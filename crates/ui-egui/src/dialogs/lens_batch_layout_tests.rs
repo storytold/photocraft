@@ -44,7 +44,7 @@ pub(super) fn type_into(h: &mut H, name: &str, text: &str) {
 }
 
 /// An entry of the open dropdown list (not the dropdown, which shows the current entry).
-fn entry<'a>(h: &'a H, label: &'a str) -> egui_kittest::Node<'a> {
+pub(super) fn entry<'a>(h: &'a H, label: &'a str) -> egui_kittest::Node<'a> {
     h.get_all_by_label(label).rfind(|n| n.accesskit_node().role() != Role::ComboBox).unwrap_or_else(|| panic!("no entry {label}"))
 }
 
