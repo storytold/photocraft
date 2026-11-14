@@ -370,6 +370,9 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let rect = crate::layer_multi_cmds::layer_bounds(l).unwrap_or(canvas);
         set_artboard(l, Artboard { rect, background, preset });
+        // As in the reference application, the new artboard is Normal at 100 % whatever the group had.
+        l.blend = photocraft_color::BlendMode::Normal;
+        l.opacity = 1.0;
         let shift = fit_canvas(doc);
         *active = Some(id);
         Ok((rect, shift))
@@ -843,6 +846,10 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
     ]
 }
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_group_reset_props_tests.rs"]
+mod from_group_reset_props_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
