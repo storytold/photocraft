@@ -1717,6 +1717,26 @@ impl Session {
 
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
+        // Last-resort guard (AGENTS.md, Never crash) around the whole dispatch: the checks before
+        // `run` and the bookkeeping after it see the same untrusted params as `run` (#8604). A
+        // panic there leaves no per-command flag set for the next command. It keeps the process
+        // alive, not the session consistent: anything else a panic left half-changed stays so.
+        // It needs an unwinding build; the desktop profiles unwind, the wasm32 web build aborts.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch_unguarded(id, params, background))).unwrap_or_else(|_| {
+            self.jobs.spawn = false;
+            self.coalesce_request = None;
+            self.color_restrict = None;
+            self.filter_mask_layer = None;
+            self.live_commit = None;
+            if let Some(job) = self.jobs.pending.take() {
+                job.ctx.cancel();
+            }
+            Err(EngineError::Other(format!("`{id}` failed with an internal error (logged)")))
+        })
+    }
+
+    /// [`Self::dispatch`] without its outer guard.
+    fn dispatch_unguarded(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
         // The offer belongs to this one dispatch. Early errors drop it locally, including
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
@@ -1822,17 +1842,31 @@ impl Session {
             self.hint_before = None;
         }
         let pending = self.jobs.pending.take();
+        // From here the edit is committed: a panic in the bookkeeping is logged and doesn't turn
+        // the command into an error (#8604). The damage it would have noted falls back to
+        // redrawing the whole document.
         if pending.is_none()
             && let Some((doc, revision)) = &before
+            && std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                #[cfg(test)]
+                panic_at("damage");
+                self.note_command_damage(id, doc, *revision);
+            }))
+            .is_err()
+            && let Some(st) = self.active_mut()
         {
-            self.note_command_damage(id, doc, *revision);
+            st.last_damage = None;
         }
         // Shape Blur by an installed shape's id or name records the geometry it ran with, as the
         // filter's own prepared params carry it: the journal (Last Filter, recorded actions)
         // replays where that shape is not installed. The run resolved it already, so it can't fail.
         let mut params = params;
         if r.is_ok() {
-            let _ = crate::filters_ext::resolve_shape_path(self, id, &mut params);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                #[cfg(test)]
+                panic_at("shape path");
+                crate::filters_ext::resolve_shape_path(self, id, &mut params)
+            }));
         }
         let out = match (r, pending) {
             (Err(e), Some(job)) => {
@@ -1854,21 +1888,28 @@ impl Session {
                 Ok(Started::Job(jid))
             }
             (Ok(v), None) => {
-                if let Some((before, _)) = &before {
-                    self.add_relayout_damage(before);
-                }
-                if let Some((doc_id, layer_id)) = new_fx_target
-                    && let Some(st) = self.active_mut()
-                    && st.doc.id == doc_id
-                    && st.doc.layer(layer_id).is_some_and(|l| !l.effects.items.is_empty())
-                {
-                    if expand_new_fx {
-                        st.fx_collapsed.retain(|id| *id != layer_id);
-                    } else if !st.fx_collapsed.contains(&layer_id) {
-                        st.fx_collapsed.push(layer_id);
+                // The command's edit is committed. A panic in the bookkeeping after it is logged,
+                // but the command still succeeds: reporting it as failed would invite a caller to
+                // apply the edit again (#8604). The journal entry is made even then.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Some((before, _)) = &before {
+                        self.add_relayout_damage(before);
                     }
-                }
-                self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
+                    if let Some((doc_id, layer_id)) = new_fx_target
+                        && let Some(st) = self.active_mut()
+                        && st.doc.id == doc_id
+                        && st.doc.layer(layer_id).is_some_and(|l| !l.effects.items.is_empty())
+                    {
+                        if expand_new_fx {
+                            st.fx_collapsed.retain(|id| *id != layer_id);
+                        } else if !st.fx_collapsed.contains(&layer_id) {
+                            st.fx_collapsed.push(layer_id);
+                        }
+                    }
+                }));
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before)
+                }));
                 Ok(Started::Done(v))
             }
         };
@@ -1950,13 +1991,19 @@ impl Session {
         pre_selected: Option<&[LayerId]>,
         before: &crate::actions_record::Before,
     ) {
-        // A layer-mask view ends when another layer becomes active (#196).
-        if let Some(st) = self.active_mut() {
-            crate::mask_view_cmds::fix(st);
-        }
-        crate::edit_menu_cmds::after_command(self, id, &params);
-        crate::automate_cmds::after_command(self, id);
-        self.sync_preset_store();
+        // The bookkeeping before the journal entry: a panic in it is logged, and the step is
+        // still journaled so an action recorded from it can replay the committed edit (#8604).
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            #[cfg(test)]
+            panic_at("after_command");
+            // A layer-mask view ends when another layer becomes active (#196).
+            if let Some(st) = self.active_mut() {
+                crate::mask_view_cmds::fix(st);
+            }
+            crate::edit_menu_cmds::after_command(self, id, &params);
+            crate::automate_cmds::after_command(self, id);
+            self.sync_preset_store();
+        }));
         if !journal {
             return;
         }
@@ -2200,6 +2247,21 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
             journal: false,
         },
     ]
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: the step of the bookkeeping after a committed command to make panic, as a bug there
+    /// would: "damage", "shape path" or "after_command".
+    pub(crate) static PANIC_AFTER_COMMAND: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Tests: panic if [`PANIC_AFTER_COMMAND`] names `step`.
+#[cfg(test)]
+fn panic_at(step: &str) {
+    if PANIC_AFTER_COMMAND.get() == Some(step) {
+        panic!("bookkeeping step `{step}` panics");
+    }
 }
 
 #[cfg(test)]
