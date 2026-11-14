@@ -146,8 +146,12 @@ pub fn open(app: &mut PhotocraftApp, target: &str) -> u64 {
     let label = if target == "background" { "Color Picker (Background Color)" } else { "Color Picker (Foreground Color)" };
     let mut fields = fields_with_web(app, target, label, rgb);
     // A colour that was picked as CMYK shows the inks it was picked as, not what its sRGB stand-in converts to (#4196).
-    if let Some(cmyk) = app.session.tools.picked_cmyk(rgb) {
+    let role = if target == "background" { 1 } else { 0 };
+    if let Some(cmyk) = app.session.tools.picked_role_cmyk(role) {
         seed_cmyk(&mut fields, cmyk);
+    }
+    if let Some(st) = app.session.active() {
+        fields.insert("__document".into(), json!(st.doc.id.0));
     }
     app.ui.open_dialog(DialogKind::Command, fields)
 }
@@ -156,14 +160,24 @@ pub fn open(app: &mut PhotocraftApp, target: &str) -> u64 {
 /// Reset restore them with the colour, so OK after either keeps them rather than inks recomputed
 /// from the colour's sRGB stand-in.
 pub(crate) fn seed_cmyk(f: &mut Map<String, Value>, cmyk: [f32; 4]) {
+    // Never retain native inks if Only Web Colors changed the opening RGB.
+    if f.get("__webSnapped") == Some(&json!(true)) {
+        return;
+    }
     f.insert("__cmyk".into(), json!(cmyk));
     f.insert("__origCmyk".into(), json!(cmyk));
+    if let Some(color) = f.get("color").cloned() {
+        f.insert("__cmykRgb".into(), color);
+    }
+    if let Some(orig) = f.get("__orig").cloned() {
+        f.insert("__origCmykRgb".into(), orig);
+    }
 }
 
 /// Current (the swatch) and Reset: the colour from when the picker opened, with its inks.
 fn restore_original(f: &mut Map<String, Value>) {
     let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or([0.0; 3]);
-    let keep = kept::<4>(f, "__origCmyk", orig, photocraft_color::convert::cmyk_to_rgb).map_or(Keep::Nothing, Keep::Cmyk);
+    let keep = kept_cmyk(f, "__origCmyk", "__origCmykRgb", orig).map_or(Keep::Nothing, Keep::Cmyk);
     set_rgb(f, orig, keep);
 }
 
@@ -185,10 +199,12 @@ pub(crate) fn initial_fields(target: &str, label: &str, rgb: [f32; 3]) -> Map<St
 /// picker never rewrites a fill behind the user's back (#4995).
 pub(crate) fn fields_with_web(app: &PhotocraftApp, target: &str, label: &str, rgb: [f32; 3]) -> Map<String, Value> {
     let mut f = initial_fields(target, label, rgb);
+    f.insert("__webSnapped".into(), json!(false));
     f.insert("__webOnly".into(), json!(app.ui.color_panel.web_only));
     if app.ui.color_panel.web_only {
         set_rgb(&mut f, rgb, Keep::Nothing);
         f.insert("__orig".into(), f["color"].clone());
+        f.insert("__webSnapped".into(), json!(f["color"] != json!(hex(rgb))));
     }
     f
 }
@@ -214,6 +230,18 @@ pub fn open_for_field(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], dialo
     let mut f = fields_with_web(app, "field", label, rgb);
     f.insert("__dialog".into(), json!(dialog));
     f.insert("__field".into(), json!(field));
+    // Keep the document associated with the parent dialog.
+    let parent_document = app.ui.dialog_mut(dialog).and_then(|d| d.fields.get("__document").cloned());
+    match parent_document {
+        Some(document) => {
+            f.insert("__document".into(), document);
+        }
+        None => {
+            if let Some(st) = app.session.active() {
+                f.insert("__document".into(), json!(st.doc.id.0));
+            }
+        }
+    }
     let id = app.ui.open_dialog(DialogKind::Command, f);
     live_preview::begin_field(app, id, dialog, field);
     id
@@ -306,7 +334,16 @@ pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
         .or_else(|| d.fields.get("__pickColorDefault").and_then(Value::as_str).and_then(parse_hex))
         .unwrap_or([0.0; 3]);
     d.fields.remove("__pickColorDefault");
-    open_for_field(app, &title, rgb, id, &field);
+
+    let cmyk = if field == "color" && crate::fill_ui::owns(&d.fields) { crate::fill_ui::associated_cmyk(&d.fields) } else { None };
+
+    let picker_id = open_for_field(app, &title, rgb, id, &field);
+
+    if let Some(inks) = cmyk
+        && let Some(picker) = app.ui.dialog_mut(picker_id)
+    {
+        seed_cmyk(&mut picker.fields, inks);
+    }
 }
 
 pub fn owns(f: &Map<String, Value>) -> bool {
@@ -330,9 +367,18 @@ pub fn top(app: &PhotocraftApp) -> Option<u64> {
 /// point (x, y). Off the image or over transparency nothing changes.
 pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) {
     let Some(id) = top(app) else { return };
-    let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return };
+    let picker_document = app.ui.dialog_mut(id).and_then(|d| d.fields.get("__document").and_then(Value::as_u64));
+    let active_document = app.session.active().map(|st| st.doc.id.0);
+    let same_document = picker_document.is_some() && picker_document == active_document;
+    let sampled = if same_document { crate::canvas::sampled_cmyk_color(app, x, y, "all") } else { None };
+    let (rgb, keep) = if let Some((rgb, inks)) = sampled {
+        (rgb, Keep::Cmyk(inks))
+    } else {
+        let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return };
+        (rgb, Keep::Nothing)
+    };
     if let Some(d) = app.ui.dialog_mut(id) {
-        set_rgb(&mut d.fields, rgb, Keep::Nothing);
+        set_rgb(&mut d.fields, rgb, keep);
     }
 }
 
@@ -363,11 +409,21 @@ where
     (hex(to_rgb(v)) == hex(rgb)).then_some(v)
 }
 
-/// The CMYK values typed into the picker, while they still match its colour: the inks a command
-/// should keep in a CMYK document (#4196, #8568).
+/// Preserve native CMYK inks using the RGB value associated with them.
+/// ICC-managed colour may differ from the generic CMYK-to-RGB conversion.
+fn kept_cmyk(f: &Map<String, Value>, key: &str, rgb_key: &str, rgb: [f32; 3]) -> Option<[f32; 4]> {
+    let inks: [f32; 4] = serde_json::from_value(f.get(key)?.clone()).ok()?;
+    if let Some(associated) = f.get(rgb_key) {
+        return (associated.as_str().and_then(parse_hex).map(hex).as_deref() == Some(hex(rgb).as_str())).then_some(inks);
+    }
+    // Compatibility with picker state created before RGB associations existed.
+    (hex(photocraft_color::convert::cmyk_to_rgb(inks)) == hex(rgb)).then_some(inks)
+}
+
+/// Native CMYK values, while they still match the displayed colour.
 pub(crate) fn picked_cmyk(f: &Map<String, Value>) -> Option<[f32; 4]> {
     let rgb = f.get("color").and_then(Value::as_str).and_then(parse_hex)?;
-    kept::<4>(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb)
+    kept_cmyk(f, "__cmyk", "__cmykRgb", rgb)
 }
 
 /// Current colour, keeping the stored HSB, Lab or CMYK values while they still match `color`.
@@ -377,7 +433,7 @@ pub fn current(f: &Map<String, Value>) -> Components {
         rgb,
         hsv: kept(f, "__hsv", rgb, hsb_to_rgb).unwrap_or_else(|| rgb_to_hsb(rgb)),
         lab: kept(f, "__lab", rgb, photocraft_color::convert::lab_to_srgb).unwrap_or_else(|| photocraft_color::convert::srgb_to_lab(rgb)),
-        cmyk: kept(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb).unwrap_or_else(|| photocraft_color::convert::rgb_to_cmyk(rgb)),
+        cmyk: kept_cmyk(f, "__cmyk", "__cmykRgb", rgb).unwrap_or_else(|| photocraft_color::convert::rgb_to_cmyk(rgb)),
     }
 }
 
@@ -385,7 +441,7 @@ fn set_rgb(f: &mut Map<String, Value>, rgb: [f32; 3], keep: Keep) {
     let web = f.get("__webOnly").and_then(Value::as_bool).unwrap_or(false);
     let (rgb, keep) = if web { (web_safe(rgb), Keep::Nothing) } else { (rgb, keep) };
     f.insert("color".into(), json!(hex(rgb)));
-    for key in ["__hsv", "__lab", "__cmyk"] {
+    for key in ["__hsv", "__lab", "__cmyk", "__cmykRgb"] {
         f.remove(key);
     }
     match keep {
@@ -398,6 +454,9 @@ fn set_rgb(f: &mut Map<String, Value>, rgb: [f32; 3], keep: Keep) {
         }
         Keep::Cmyk(k) => {
             f.insert("__cmyk".into(), json!(k));
+            if let Some(color) = f.get("color").cloned() {
+                f.insert("__cmykRgb".into(), color);
+            }
         }
     }
 }
@@ -998,8 +1057,25 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
         let (Some(dialog), Some(field)) = (f.get("__dialog").and_then(Value::as_u64), f.get("__field").and_then(Value::as_str)) else {
             return Err("the Color Picker has no field to set".into());
         };
+
+        let cmyk = picked_cmyk(f);
+
         let d = app.ui.dialog_mut(dialog).ok_or("the dialog this colour was for is closed")?;
         set_field(&mut d.fields, field, json!(color))?;
+
+        if crate::fill_ui::owns(&d.fields) && field == "color" {
+            match cmyk {
+                Some(inks) => {
+                    d.fields.insert("colorCmyk".into(), json!(inks));
+                    d.fields.insert("colorCmykRgb".into(), json!(color));
+                }
+                None => {
+                    d.fields.remove("colorCmyk");
+                    d.fields.remove("colorCmykRgb");
+                }
+            }
+        }
+
         return Ok(json!({ "color": color }));
     }
     if target == "widget" {
@@ -1030,7 +1106,7 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
     }
     let mut params = json!({ target: color });
     // The CMYK values the person entered stay the colour's inks: a CMYK document is filled with them (#4196).
-    if let Some(cmyk) = parse_hex(color).and_then(|rgb| kept::<4>(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb)) {
+    if let Some(cmyk) = picked_cmyk(f) {
         params[format!("{target}Cmyk")] = json!(cmyk);
     }
     let r = app.run("tools.setColors", params)?;

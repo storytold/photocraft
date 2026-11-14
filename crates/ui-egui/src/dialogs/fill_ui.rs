@@ -28,7 +28,7 @@ pub const CONTENTS: [(&str, &str); 9] = [
 ];
 
 /// Params the dialog edits and remembers.
-const KEYS: [&str; 7] = ["contents", "color", "pattern", "colorAdaptation", "mode", "opacity", "preserveTransparency"];
+const KEYS: [&str; 9] = ["contents", "color", "colorCmyk", "colorCmykRgb", "pattern", "colorAdaptation", "mode", "opacity", "preserveTransparency"];
 
 /// Is this dialog the Fill dialog?
 pub fn owns(fields: &Map<String, Value>) -> bool {
@@ -46,6 +46,8 @@ fn valid(app: &PhotocraftApp, key: &str, v: &Value) -> bool {
         "contents" => v.as_str().is_some_and(|c| CONTENTS.iter().any(|(k, _)| *k == c)),
         "mode" | "opacity" | "preserveTransparency" => crate::dialog_blend_ui::valid(key, v),
         "color" => v.as_str().is_some_and(|h| h.len() == 7 && h.starts_with('#') && h.get(1..).is_some_and(|d| d.chars().all(|c| c.is_ascii_hexdigit()))),
+        "colorCmyk" => v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(|x| x.as_f64().is_some_and(|n| n.is_finite() && (0.0..=1.0).contains(&n)))),
+        "colorCmykRgb" => valid(app, "color", v),
         "pattern" => v.as_str().is_some_and(|p| app.session.patterns.items.iter().any(|q| q.id == p)),
         "colorAdaptation" => v.is_boolean(),
         _ => false,
@@ -94,6 +96,8 @@ pub fn reset(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
             fields.insert(k.into(), v.clone());
         }
     }
+    fields.remove("colorCmyk");
+    fields.remove("colorCmykRgb");
 }
 
 /// Open Fill with the current editing target, so live UI changes cannot redirect confirmation.
@@ -110,6 +114,21 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     }
     f.insert("__target".into(), target);
     app.ui.open_dialog(crate::state::DialogKind::Command, f)
+}
+
+/// Native inks are valid only while their associated display RGB is unchanged.
+/// Legacy preferences without an association retain the original conversion check.
+pub(crate) fn associated_cmyk(f: &Map<String, Value>) -> Option<[f32; 4]> {
+    let inks: [f32; 4] = serde_json::from_value(f.get("colorCmyk")?.clone()).ok()?;
+    if !inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) {
+        return None;
+    }
+    let rgb = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex)?;
+    if let Some(associated) = f.get("colorCmykRgb") {
+        let paired = associated.as_str().and_then(crate::color_picker_ui::parse_hex)?;
+        return (crate::color_picker_ui::hex(paired) == crate::color_picker_ui::hex(rgb)).then_some(inks);
+    }
+    (crate::color_picker_ui::hex(photocraft_color::convert::cmyk_to_rgb(inks)) == crate::color_picker_ui::hex(rgb)).then_some(inks)
 }
 
 /// The `edit.fill` params of the dialog's fields: only the options of the chosen contents.
@@ -131,6 +150,11 @@ pub fn params(f: &Map<String, Value>) -> Value {
         && let Some(v) = f.get(k)
     {
         p[k] = v.clone();
+    }
+    if contents == "color"
+        && let Some(cmyk) = associated_cmyk(f)
+    {
+        p["colorCmyk"] = json!(cmyk);
     }
     if let Some(target) = f.get("__target") {
         p["target"] = target.clone();

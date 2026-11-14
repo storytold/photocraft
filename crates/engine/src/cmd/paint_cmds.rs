@@ -91,7 +91,14 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
         None
     };
     // A foreground picked as CMYK fills a CMYK document with the picked inks (#4196).
-    let inks = s.tools.picked_cmyk([c[0], c[1], c[2]]).filter(|_| c[3] >= 1.0 && pattern.is_none());
+    let inks = if source != "foreground" {
+        None
+    } else if p.get("color").is_none_or(Value::is_null) {
+        s.tools.picked_role_cmyk(0)
+    } else {
+        s.tools.matching_cmyk([c[0], c[1], c[2]])
+    }
+    .filter(|_| c[3] >= 1.0 && pattern.is_none());
     let layer = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { s.active().and_then(|st| st.active_layer) };
     // A click off the canvas, or on a pixel the selection leaves out, fills nothing and adds no
     // history state (#12535). A partly selected pixel still fills, clipped to the selection.

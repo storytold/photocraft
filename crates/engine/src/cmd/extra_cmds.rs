@@ -144,7 +144,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let width = stroke_width(p);
     let color = color_param("edit.stroke", p, "color", s.tools.foreground)?;
     // A colour picked as CMYK strokes a CMYK document with the picked inks (#4196).
-    let picked = s.tools.picked_cmyk([color[0], color[1], color[2]]);
+    let picked = if p.get("color").is_none_or(Value::is_null) { s.tools.picked_role_cmyk(0) } else { s.tools.matching_cmyk([color[0], color[1], color[2]]) };
     let mode = match p.get("mode") {
         None | Some(Value::Null) => photocraft_color::BlendMode::Normal,
         Some(Value::String(m)) => crate::commands::blend_from_str(m)

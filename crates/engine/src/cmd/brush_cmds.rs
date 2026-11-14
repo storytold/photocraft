@@ -230,7 +230,9 @@ pub fn resolve_brush(s: &Session, p: &Value, cmd: &str) -> Result<BrushSettings>
         b.smoothing.amount = v.clamp(0.0, 1.0);
     }
     b.color = color(p.get("color"), s.tools.foreground);
-    b.color_cmyk = s.tools.picked_cmyk([b.color[0], b.color[1], b.color[2]]).map(|k| ([b.color[0], b.color[1], b.color[2]], k));
+    let rgb = [b.color[0], b.color[1], b.color[2]];
+    b.color_cmyk =
+        if p.get("color").is_none_or(Value::is_null) { s.tools.picked_role_cmyk(0).map(|k| (rgb, k)) } else { s.tools.matching_cmyk(rgb).map(|k| (rgb, k)) };
     b.background = s.tools.background;
     b.erase = flag(p, "erase", false);
     b.seed = match p.get("seed").and_then(Value::as_u64) {
@@ -262,10 +264,11 @@ fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option
 
 /// Erasing a layer with locked transparency (e.g. the Background) can't remove opacity, so it
 /// paints the background colour instead (Photoshop).
-fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4]) {
+fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4], bg_inks: Option<[f32; 4]>) {
     if brush.erase && lock {
         brush.erase = false;
         brush.color = bg;
+        brush.color_cmyk = bg_inks.map(|inks| ([bg[0], bg[1], bg[2]], inks));
     }
 }
 
@@ -279,6 +282,7 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
 fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     let raw_bg = s.tools.background;
+    let bg_inks = s.tools.picked_role_cmyk(1);
     let bg = crate::color_cmds::swatch_in_doc(s, raw_bg);
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
@@ -301,12 +305,12 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
             let clip = paintable_area(canvas, surf);
             let mut brush = brush;
-            erase_locked(&mut brush, lock, bg);
+            erase_locked(&mut brush, lock, bg, bg_inks);
             if auto_erase {
                 // A stroke in the table's colour starts on what the foreground painted as.
                 let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
                 // Not in #11940: Pencil Auto Erase keeps the plain background colour.
-                apply_auto_erase(&mut brush, surf, pts.first(), fg, raw_bg);
+                apply_auto_erase(&mut brush, surf, pts.first(), fg, raw_bg, bg_inks);
             }
             let unpainted = table.as_ref().map(|_| surf.clone());
             let damage = if let Some(axis) = &symmetry {
@@ -351,7 +355,7 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
 /// layer would store it (its mode and depth) against the pixel, its alpha aside, so one level
 /// off paints the foreground. In a CMYK layer a foreground picked as CMYK is probed as the inks
 /// the stroke paints (#13060), not as its RGB stand-in converted back.
-fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&StrokePoint>, fg: [f32; 4], bg: [f32; 4]) {
+fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&StrokePoint>, fg: [f32; 4], bg: [f32; 4], bg_inks: Option<[f32; 4]>) {
     let Some(p0) = start else { return };
     let c = surf.rgba(p0.x.floor() as i32, p0.y.floor() as i32);
     let format = surf.format();
@@ -370,6 +374,7 @@ fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&St
     // Far below one 8-bit level: only the float noise of the conversion.
     if c[3] > 0.0 && (0..3).all(|i| (c[i] - stored[i]).abs() < 1e-5) {
         brush.color = bg;
+        brush.color_cmyk = bg_inks.map(|inks| ([bg[0], bg[1], bg[2]], inks));
     }
 }
 
@@ -649,10 +654,11 @@ impl LiveStroke {
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
         let clip = paintable_area(canvas, surf);
         let bg = crate::color_cmds::swatch_in_doc(s, s.tools.background);
-        erase_locked(&mut brush, lock, bg);
+        let bg_inks = s.tools.picked_role_cmyk(1);
+        erase_locked(&mut brush, lock, bg, bg_inks);
         if pencil && flag(p, "autoErase", false) {
             let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
-            apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
+            apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background, bg_inks);
         }
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip);
         let symmetry = s.active().and_then(|st| st.symmetry.clone());

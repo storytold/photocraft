@@ -330,10 +330,14 @@ fn use_swatch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // A CMYK swatch keeps its inks (as a colour picked in CMYK does, #4196): the Color Picker
     // shows them and a CMYK document is painted with them, not with the sRGB round trip (#7474).
+    let role = if target == "background" { 1 } else { 0 };
+    s.tools.clear_role_cmyk(role);
     if let SwatchColor::Cmyk(inks) = sw.color
         && inks.iter().all(|v| v.is_finite())
     {
-        s.tools.remember_cmyk(rgb, inks.map(|v| v.clamp(0.0, 1.0)));
+        let inks = inks.map(|v| v.clamp(0.0, 1.0));
+        s.tools.remember_role_cmyk(role, inks);
+        s.tools.remember_cmyk(rgb, inks);
     }
     Ok(json!({"swatch": sw.name, "target": target, "hex": hex(rgb)}))
 }

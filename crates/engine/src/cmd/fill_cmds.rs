@@ -11,7 +11,7 @@ use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
 
-use crate::commands::{blend_from_str, color_param, layer_param};
+use crate::commands::{blend_from_str, cmyk_param, color_param, layer_param};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "edit.fill";
@@ -105,10 +105,21 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({ "contents": contents });
     let restore = contents == "history";
     let source = match contents {
-        "foreground" => color_source(s, s.tools.foreground),
+        "foreground" => color_source(s, s.tools.foreground, 0),
         // As the document takes the swatch: its gray profile's value in a Grayscale document (#11940).
-        "background" => color_source(s, crate::color_cmds::swatch_in_doc(s, s.tools.background)),
-        "color" => color_source(s, color_param(CMD, p, "color", s.tools.foreground)?),
+        "background" => color_source(s, crate::color_cmds::swatch_in_doc(s, s.tools.background), 1),
+        "color" => {
+            let rgba = color_param(CMD, p, "color", s.tools.foreground)?;
+            match cmyk_param(CMD, p, "colorCmyk")? {
+                Some(cmyk) if rgba[3] >= 1.0 => Source::Cmyk { rgba, cmyk },
+                Some(_) => return Err(bad("`colorCmyk` requires an opaque color")),
+                None if p.get("color").is_none_or(Value::is_null) => color_source(s, rgba, 0),
+                None => match s.tools.matching_cmyk([rgba[0], rgba[1], rgba[2]]) {
+                    Some(cmyk) if rgba[3] >= 1.0 => Source::Cmyk { rgba, cmyk },
+                    _ => Source::Color(rgba),
+                },
+            }
+        }
         "black" => Source::Color([0.0, 0.0, 0.0, 1.0]),
         "gray" => Source::Color([128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0]),
         "white" => Source::Color([1.0; 4]),
@@ -164,8 +175,8 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// A fill colour: the inks it was picked as when it was picked as CMYK (#4196), else plain sRGB.
-fn color_source(s: &Session, c: [f32; 4]) -> Source {
-    match s.tools.picked_cmyk([c[0], c[1], c[2]]) {
+fn color_source(s: &Session, c: [f32; 4], role: usize) -> Source {
+    match s.tools.picked_role_cmyk(role) {
         Some(cmyk) if c[3] >= 1.0 => Source::Cmyk { rgba: c, cmyk },
         _ => Source::Color(c),
     }
@@ -494,6 +505,30 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
             }
             for (c, v) in px.iter_mut().enumerate().take(n) {
                 *v = photocraft_color::read_sample(pb, fmt.sample, c);
+            }
+            // Normal CMYK fills blend the chosen separation directly. Converting
+            // through the display RGB would discard it at partial opacity/coverage.
+            if fmt.mode == photocraft_color::ColorMode::Cmyk
+                && mode == BlendMode::Normal
+                && let Source::Cmyk { cmyk, .. } = source
+            {
+                let alpha = if fmt.alpha { px[4] } else { 1.0 };
+                let out_alpha = k + alpha * (1.0 - k);
+                let weight = if keep_alpha || !fmt.alpha {
+                    k
+                } else if out_alpha > 0.0 {
+                    k / out_alpha
+                } else {
+                    0.0
+                };
+                for (channel, ink) in cmyk.iter().enumerate() {
+                    enc[channel] = px[channel] * (1.0 - weight) + ink * weight;
+                }
+                if fmt.alpha {
+                    enc[4] = if keep_alpha { alpha } else { out_alpha };
+                }
+                photocraft_raster::encode_pixel(fmt, &enc[..n.min(8)], pb);
+                continue;
             }
             let d = to_rgba(fmt, &px[..n.min(8)]);
             let mut c = source.at(x, y);

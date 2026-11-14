@@ -162,6 +162,7 @@ impl PhotocraftApp {
             canvas_hover_layer: None,
             clone_preview: None,
             info_sample: None,
+            info_cmyk_sample: None,
             os_clip_sig: None,
             os_clip_svg: None,
             clip_unmirrored: true,

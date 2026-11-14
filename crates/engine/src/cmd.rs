@@ -373,7 +373,7 @@ fn build() -> Vec<CommandSpec> {
             "Fill…",
             ["Edit"],
             Some("Shift+F5"),
-            r##"{"contents":"foreground|background|color|contentAware|pattern|history|black|gray|white"="color","color":"#rrggbb|[r,g,b,a]"=foreground (contents=color),"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"state":row?,"snapshot":id? (contents=history: a History panel row as history.setSource, redo rows last, or a snapshot; default the History Brush source),"colorAdaptation":bool=true,"scaleAdaptation":bool=false,"mirror":bool=false,"rotationAdaptation":bool=false (contents=contentAware: enable quarter-turn source candidates within the sampling budget),"mode":"normal|multiply|…"="normal","opacity":0..100=100,"preserveTransparency":bool=false,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}?}"##,
+            r##"{"contents":"foreground|background|color|contentAware|pattern|history|black|gray|white"="color","color":"#rrggbb|[r,g,b,a]"=foreground (contents=color),"colorCmyk":[c,m,y,k]? (native inks 0..1 for contents=color),"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"state":row?,"snapshot":id? (contents=history: a History panel row as history.setSource, redo rows last, or a snapshot; default the History Brush source),"colorAdaptation":bool=true,"scaleAdaptation":bool=false,"mirror":bool=false,"rotationAdaptation":bool=false (contents=contentAware: enable quarter-turn source candidates within the sampling budget),"mode":"normal|multiply|…"="normal","opacity":0..100=100,"preserveTransparency":bool=false,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}?}"##,
             has_pixel_or_channel,
             crate::fill_cmds::fill
         ),
@@ -903,7 +903,8 @@ fn build() -> Vec<CommandSpec> {
                 // of what its sRGB stand-in converts back to through the document profile (#8568).
                 let inks = match cmyk_param("layer.newFillLayer.solidColor", p, "cmyk")? {
                     Some(k) => Some(k),
-                    None => s.tools.picked_cmyk([c[0], c[1], c[2]]),
+                    None if p.get("color").is_none_or(Value::is_null) => s.tools.picked_role_cmyk(0),
+                    None => s.tools.matching_cmyk([c[0], c[1], c[2]]),
                 };
                 let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
                 let id = s.edit("New Color Fill Layer", |doc, active| {
@@ -1066,19 +1067,28 @@ fn build() -> Vec<CommandSpec> {
                 let background = color_param("tools.setColors", p, "background", s.tools.background)?;
                 s.tools.foreground = foreground;
                 s.tools.background = background;
-                if let Some(k) = fg_cmyk {
-                    let [r, g, b, _] = s.tools.foreground;
-                    s.tools.remember_cmyk([r, g, b], k);
+
+                if p.get("foreground").is_some_and(|v| !v.is_null()) || fg_cmyk.is_some() {
+                    s.tools.clear_role_cmyk(0);
+                    if let Some(inks) = fg_cmyk {
+                        s.tools.remember_role_cmyk(0, inks);
+                        s.tools.remember_cmyk([foreground[0], foreground[1], foreground[2]], inks);
+                    }
                 }
-                if let Some(k) = bg_cmyk {
-                    let [r, g, b, _] = s.tools.background;
-                    s.tools.remember_cmyk([r, g, b], k);
+
+                if p.get("background").is_some_and(|v| !v.is_null()) || bg_cmyk.is_some() {
+                    s.tools.clear_role_cmyk(1);
+                    if let Some(inks) = bg_cmyk {
+                        s.tools.remember_role_cmyk(1, inks);
+                        s.tools.remember_cmyk([background[0], background[1], background[2]], inks);
+                    }
                 }
                 Ok(Value::Null)
             }
         ),
         cmd!("tools.swapColors", "Switch Foreground and Background Colors", [], Some("X"), "{}", always, |s, _| {
             std::mem::swap(&mut s.tools.foreground, &mut s.tools.background);
+            s.tools.cmyk_roles[0].swap(0, 1);
             Ok(Value::Null)
         }),
         cmd!("tools.defaultColors", "Default Foreground and Background Colors", [], Some("D"), "{}", always, |s, _| {
@@ -1089,6 +1099,8 @@ fn build() -> Vec<CommandSpec> {
                 s.tools.foreground = [0.0, 0.0, 0.0, 1.0];
                 s.tools.background = [1.0, 1.0, 1.0, 1.0];
             }
+            s.tools.clear_role_cmyk(0);
+            s.tools.clear_role_cmyk(1);
             Ok(Value::Null)
         }),
         // Queries (not journaled)

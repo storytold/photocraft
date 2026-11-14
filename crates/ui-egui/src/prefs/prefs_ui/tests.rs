@@ -2292,6 +2292,106 @@ fn tool_colors_first_saves_keep_other_instances_separate_edits() {
 }
 
 #[test]
+fn tool_cmyk_roles_merge_independent_window_edits() {
+    let store = Arc::new(Mutex::new(None));
+    let mut initial = app_on(&store, Arc::default());
+
+    initial
+        .run(
+            "tools.setColors",
+            json!({
+                "foreground": [0.2, 0.4, 0.6],
+                "foregroundCmyk": [1.0, 0.0, 0.0, 0.0]
+            }),
+        )
+        .unwrap();
+    crate::tool_memory::save_on_exit(&mut initial).unwrap();
+
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+
+    let bg_inks = [0.0, 1.0, 0.0, 0.0];
+
+    // Window A changes the background's native inks.
+    a.run(
+        "tools.setColors",
+        json!({
+            "background": [0.6, 0.4, 0.2],
+            "backgroundCmyk": bg_inks
+        }),
+    )
+    .unwrap();
+    crate::tool_memory::save_on_exit(&mut a).unwrap();
+
+    // Window B, still holding the old preferences, clears foreground inks.
+    b.run(
+        "tools.setColors",
+        json!({
+            "foreground": [0.8, 0.5, 0.1]
+        }),
+    )
+    .unwrap();
+    crate::tool_memory::save_on_exit(&mut b).unwrap();
+
+    let mut restored = app_on(&store, Arc::default());
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), None);
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(bg_inks));
+
+    let id = crate::color_picker_ui::open(&mut restored, "background");
+    assert_eq!(restored.ui.dialog_mut(id).unwrap().fields["__cmyk"], json!(bg_inks));
+    restored.ui.close_dialog(id);
+
+    restored
+        .run(
+            "file.new",
+            json!({
+                "width": 4, "height": 4, "mode": "cmyk"
+            }),
+        )
+        .unwrap();
+    restored.run("edit.fill", json!({"contents": "background"})).unwrap();
+
+    let st = restored.session.active().unwrap();
+    let pixel = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(0, 0);
+    assert!(pixel.iter().take(4).zip(bg_inks).all(|(a, b)| (*a - b).abs() < 0.01), "background fill lost its native inks: {pixel:?}");
+}
+
+#[test]
+fn tool_cmyk_roles_merge_when_old_preferences_lack_roles() {
+    let legacy = json!({
+        "toolColors": {
+            "foreground": [0.0, 0.0, 0.0, 1.0],
+            "background": [1.0, 1.0, 1.0, 1.0]
+        }
+    });
+    let store = Arc::new(Mutex::new(Some(legacy.to_string())));
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+
+    a.run(
+        "tools.setColors",
+        json!({
+            "background": [0.25, 0.5, 0.75],
+            "backgroundCmyk": [0.0, 1.0, 0.0, 0.0]
+        }),
+    )
+    .unwrap();
+    b.run(
+        "tools.setColors",
+        json!({
+            "foreground": [0.75, 0.5, 0.25],
+            "foregroundCmyk": [1.0, 0.0, 0.0, 0.0]
+        }),
+    )
+    .unwrap();
+
+    crate::tool_memory::save_on_exit(&mut a).unwrap();
+    crate::tool_memory::save_on_exit(&mut b).unwrap();
+
+    let restored = app_on(&store, Arc::default());
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some([1.0, 0.0, 0.0, 0.0]));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some([0.0, 1.0, 0.0, 0.0]));
+}
+
+#[test]
 fn tool_colors_survive_restart_before_the_first_frame() {
     let (mut app, store) = app_with_store();
     let ctx = egui::Context::default();
@@ -2358,8 +2458,8 @@ fn tool_colors_restore_cmyk_inks_for_picker_and_fill_after_swapping_and_exiting_
     app.session.tools.target_mask(true);
     crate::tool_memory::save_on_exit(&mut app).unwrap();
     let (mut restored, _) = app_with_saved(store.lock().unwrap().clone());
-    assert_eq!(restored.session.tools.picked_cmyk(fg), Some(cyan));
-    assert_eq!(restored.session.tools.picked_cmyk(bg), Some(magenta));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(cyan));
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(magenta));
     for (target, expected) in [("foreground", magenta), ("background", cyan)] {
         crate::color_picker_ui::open(&mut restored, target);
         assert_eq!(restored.ui.dialogs.last().unwrap().fields["__cmyk"], json!(expected));
@@ -2373,6 +2473,25 @@ fn tool_colors_restore_cmyk_inks_for_picker_and_fill_after_swapping_and_exiting_
         let pixel = surface.read_region(photocraft_geom::Rect::new(0, 0, 1, 1));
         assert!(pixel.iter().take(4).zip(expected).all(|(a, b)| (a - b).abs() < 0.01), "{command}: {pixel:?}");
     }
+}
+
+#[test]
+fn tool_cmyk_roles_keep_remote_rgb_and_inks_when_local_only_inks_changed() {
+    let store = Arc::new(Mutex::new(None));
+    let mut initial = app_on(&store, Arc::default());
+    let old_rgb = [0.2, 0.4, 0.6];
+    initial.run("tools.setColors", json!({"foreground": old_rgb, "foregroundCmyk": [1., 0., 0., 0.]})).unwrap();
+    crate::tool_memory::save_on_exit(&mut initial).unwrap();
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+    let new_rgb = [0.6, 0.4, 0.2];
+    let new_inks = [0., 1., 0., 0.];
+    a.run("tools.setColors", json!({"foreground": new_rgb, "foregroundCmyk": new_inks})).unwrap();
+    b.run("tools.setColors", json!({"foreground": old_rgb, "foregroundCmyk": [0., 0., 1., 0.]})).unwrap();
+    crate::tool_memory::save_on_exit(&mut a).unwrap();
+    crate::tool_memory::save_on_exit(&mut b).unwrap();
+    let restored = app_on(&store, Arc::default());
+    assert_eq!(&restored.session.tools.foreground[..3], &new_rgb);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(new_inks));
 }
 
 #[test]
@@ -2390,9 +2509,55 @@ fn tool_colors_save_changed_cmyk_inks_even_when_rgba_is_unchanged() {
     assert!(app.session.prefs.rev() > rev);
     tick(&mut app, &ctx);
     let (restored, _) = app_with_saved(store.lock().unwrap().clone());
-    assert_eq!(restored.session.tools.picked_cmyk(rgb), Some(inks));
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(inks));
 }
 
+#[test]
+fn tool_colors_preserve_distinct_cmyk_inks_with_identical_rgb_after_restart() {
+    let (mut app, store) = app_with_store();
+
+    let rgb = [0.0, 0.0, 0.0];
+    let foreground = [0.0, 0.0, 0.0, 1.0];
+    let background = [0.5, 0.5, 0.5, 1.0];
+
+    app.run(
+        "tools.setColors",
+        json!({
+            "foreground": rgb,
+            "background": rgb,
+            "foregroundCmyk": foreground,
+            "backgroundCmyk": background
+        }),
+    )
+    .unwrap();
+
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+
+    let (mut restored, _) = app_with_saved(store.lock().unwrap().clone());
+
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(foreground));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(background));
+
+    // Both pickers must show their own original separation.
+    for (target, expected) in [("foreground", foreground), ("background", background)] {
+        crate::color_picker_ui::open(&mut restored, target);
+        assert_eq!(restored.ui.dialogs.last().unwrap().fields["__cmyk"], json!(expected));
+    }
+
+    // Swap also swaps the native ink associations.
+    restored.run("tools.swapColors", json!({})).unwrap();
+
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(background));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(foreground));
+
+    // Mask colours must not overwrite the pixel colour pair.
+    restored.session.tools.target_mask(true);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), None);
+
+    restored.session.tools.target_mask(false);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(background));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(foreground));
+}
 #[test]
 fn tool_colors_restore_only_bounded_valid_cmyk_picks() {
     let limit = photocraft_engine::ToolState::CMYK_PICKS;
@@ -2482,4 +2647,128 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
     assert!(prefs.smart_quotes, "the Type settings are reset");
     assert_eq!(prefs.favorite_fonts, ["Bebas Neue"], "the favourites are kept");
     assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
+}
+
+#[test]
+fn legacy_cmyk_picks_merge_preserves_other_windows_foreground() {
+    let old_rgb = [0.2, 0.4, 0.6];
+    let old_inks = [1.0, 0.0, 0.0, 0.0];
+    let new_rgb = [0.7, 0.3, 0.2];
+    let new_inks = [0.0, 0.8, 0.2, 0.0];
+    let bg_inks = [0.2, 0.0, 0.8, 0.0];
+
+    let legacy = json!({
+        "toolColors": {
+            "foreground": [0.2, 0.4, 0.6, 1.0],
+            "background": [1.0, 1.0, 1.0, 1.0],
+            "cmykPicks": [[old_rgb, old_inks]]
+        }
+    });
+
+    let store = Arc::new(Mutex::new(Some(legacy.to_string())));
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+
+    assert_eq!(a.session.tools.picked_role_cmyk(0), Some(old_inks));
+    assert_eq!(b.session.tools.picked_role_cmyk(0), Some(old_inks));
+
+    // Window A changes foreground RGB and native CMYK.
+    a.run(
+        "tools.setColors",
+        json!({
+            "foreground": new_rgb,
+            "foregroundCmyk": new_inks
+        }),
+    )
+    .unwrap();
+
+    crate::tool_memory::save_on_exit(&mut a).unwrap();
+
+    // Window B still holds legacy preferences.
+    // It changes only background.
+    b.run(
+        "tools.setColors",
+        json!({
+            "background": [0.3, 0.6, 0.7],
+            "backgroundCmyk": bg_inks
+        }),
+    )
+    .unwrap();
+
+    crate::tool_memory::save_on_exit(&mut b).unwrap();
+
+    let restored = app_on(&store, Arc::default());
+
+    let picks = &restored.session.tools.cmyk_picks;
+
+    assert!(picks.contains(&(old_rgb, old_inks)), "Legacy CMYK pick must survive");
+    assert!(picks.contains(&(new_rgb, new_inks)), "Window A CMYK pick must survive");
+    assert!(picks.contains(&([0.3, 0.6, 0.7], bg_inks)), "Window B CMYK pick must survive");
+
+    assert_eq!(&restored.session.tools.foreground[..3], &new_rgb, "Foreground RGB from window A must survive");
+
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(new_inks), "Foreground native CMYK from window A must survive");
+
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(bg_inks), "Background native CMYK from window B must survive");
+}
+#[test]
+fn cmyk_picks_merge_same_rgb_keeps_latest_local_inks() {
+    let rgb = [0.2_f32, 0.4, 0.6];
+    let old_inks = [1.0_f32, 0.0, 0.0, 0.0];
+    let a_inks = [0.0_f32, 1.0, 0.0, 0.0];
+    let b_inks = [0.0_f32, 0.0, 1.0, 0.0];
+
+    let base = json!([[rgb, old_inks]]);
+    let ours = json!([[rgb, b_inks]]);
+    let mut theirs = json!([[rgb, a_inks]]);
+
+    super::save::merge_changes(&json!({"cmykPicks": base}), &json!({"cmykPicks": ours}), &mut {
+        let mut result = json!({"cmykPicks": theirs.clone()});
+        super::save::merge_changes(&json!({"cmykPicks": [[rgb, old_inks]]}), &json!({"cmykPicks": [[rgb, b_inks]]}), &mut result);
+        theirs = result["cmykPicks"].clone();
+        result
+    });
+
+    let picks: Vec<([f32; 3], [f32; 4])> = serde_json::from_value(theirs).unwrap();
+
+    assert_eq!(picks.len(), 1, "Same RGB must not be duplicated");
+    assert_eq!(picks[0], (rgb, b_inks));
+}
+
+#[test]
+fn legacy_mask_selection_survives_another_windows_pixel_edit() {
+    let store = Arc::new(Mutex::new(Some(
+        json!({"toolColors": {
+        "foreground": [0.0, 0.0, 0.0, 1.0], "background": [1.0, 1.0, 1.0, 1.0]
+        }})
+        .to_string(),
+    )));
+    let mut a = app_on(&store, Arc::default());
+    let mut b = app_on(&store, Arc::default());
+    a.session.tools.target_mask(true);
+    a.run("tools.setColors", json!({"foreground": [0.3, 0.3, 0.3], "foregroundCmyk": [0.1, 0.2, 0.3, 0.4]})).unwrap();
+    crate::tool_memory::save_on_exit(&mut a).unwrap();
+    b.run("tools.setColors", json!({"background": [0.2, 0.4, 0.6]})).unwrap();
+    crate::tool_memory::save_on_exit(&mut b).unwrap();
+    let mut restored = app_on(&store, Arc::default());
+    assert_eq!(restored.session.tools.background, b.session.tools.background);
+    restored.session.tools.target_mask(true);
+    assert_eq!(restored.session.tools.foreground, [0.3, 0.3, 0.3, 1.0]);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some([0.1, 0.2, 0.3, 0.4]));
+}
+
+#[test]
+fn reselected_cmyk_pick_survives_save_restore_and_eviction() {
+    let (mut app, store) = app_with_store();
+    let inks = [0.1, 0.2, 0.3, 0.4];
+    for i in 0..photocraft_engine::ToolState::CMYK_PICKS {
+        app.session.tools.remember_cmyk([i as f32 / 16.0, 0.2, 0.3], inks);
+    }
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+    let oldest = app.session.tools.cmyk_picks[0];
+    app.session.tools.remember_cmyk(oldest.0, oldest.1);
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+    let mut restored = app_on(&store, Arc::default());
+    assert_eq!(restored.session.tools.cmyk_picks.last(), Some(&oldest));
+    restored.session.tools.remember_cmyk([0.9, 0.8, 0.7], inks);
+    assert_eq!(restored.session.tools.picked_cmyk(oldest.0), Some(oldest.1));
 }

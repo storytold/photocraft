@@ -348,7 +348,7 @@ pub use widgets::text_field_menu;
 pub use widgets::tone;
 
 /// The Info panel's cached sample: pixel x, y, document revision, Eyedropper Sample Size and the view zoom's bits.
-type InfoSampleKey = (i32, i32, u64, u32, u32);
+type InfoSampleKey = (DocId, i32, i32, u64, u32, u32);
 
 pub struct PhotocraftApp {
     pub session: Session,
@@ -668,6 +668,8 @@ pub struct PhotocraftApp {
     pub(crate) clone_preview: Option<crate::canvas::ClonePreviewCache>,
     /// Info panel sample cache: ((x, y, revision, Sample Size), composite RGBA).
     info_sample: Option<(InfoSampleKey, [f32; 4])>,
+    /// Native CMYK sample cache, including unsupported samples (None).
+    info_cmyk_sample: Option<(InfoSampleKey, Option<[f32; 4]>)>,
     /// Guide being dragged (from a ruler or with the Move tool).
     pub(crate) guide_drag: Option<rulers::GuideDrag>,
     /// Move tool marquee selecting layers (`move_box`).

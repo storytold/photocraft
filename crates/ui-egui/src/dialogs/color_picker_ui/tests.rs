@@ -612,8 +612,7 @@ fn cmyk_values_survive_ok_and_a_reopen() {
     set_rgb(&mut d.fields, photocraft_color::convert::cmyk_to_rgb(cyan).map(|c| c.clamp(0.0, 1.0)), Keep::Cmyk(cyan));
     let fields = d.fields.clone();
     confirm(&mut app, &fields).unwrap();
-    let fg = app.session.tools.foreground;
-    assert_eq!(app.session.tools.picked_cmyk([fg[0], fg[1], fg[2]]), Some(cyan));
+    assert_eq!(app.session.tools.picked_role_cmyk(0), Some(cyan));
     let id = open(&mut app, "foreground");
     let again = current(&app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields);
     assert_eq!(again.cmyk, cyan);
@@ -659,4 +658,37 @@ fn the_top_picker_samples_the_image() {
     app.ui.close_dialog(about);
     sample_at(&mut app, 25.0, 5.0);
     assert_eq!(dialog_color(&app, id), "#00ff00");
+}
+
+// #11640: sampling a CMYK chart must retain its native ink separation.
+#[test]
+fn sampled_cmyk_primaries_keep_native_inks() {
+    let inks = [[1.0_f32, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    for depth in [8, 16] {
+        for ink in inks {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run(
+                "file.new",
+                json!({
+                    "width": 4,
+                    "height": 4,
+                    "mode": "cmyk",
+                    "depth": depth,
+                    "background": "white"
+                }),
+            )
+            .unwrap();
+            app.session
+                .edit("CMYK chart", |doc, _| {
+                    doc.layers[0].surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[ink[0], ink[1], ink[2], ink[3], 1.0]);
+                    Ok(())
+                })
+                .unwrap();
+
+            let id = open(&mut app, "foreground");
+            sample_at(&mut app, 2.0, 2.0);
+            let picked = current(&app.ui.dialog_mut(id).unwrap().fields);
+            assert_eq!(picked.cmyk, ink, "depth {depth}: the picker must retain the sampled inks");
+        }
+    }
 }

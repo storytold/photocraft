@@ -57,11 +57,28 @@ fn display_color(c: [f32; 3]) -> Color32 {
     Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
 }
 
+/// Share the same CMYK sampling decision between the comparison ring and the click.
+fn picked_eyedropper_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<([f32; 3], Option<[f32; 4]>)> {
+    if let Some((surface, canvas)) = eyedropper_mask_source(app) {
+        return sample_layer_mask(surface, canvas, x, y, app.ui.tool_options.eyedropper_size).map(|rgb| (rgb, None));
+    }
+
+    if super::paint_target(app) == json!("pixels") {
+        let layers = app.ui.tool_options.eyedropper_sample.clone();
+        if let Some((rgb, inks)) = sampled_cmyk_color(app, x, y, &layers) {
+            return Some((rgb, Some(inks)));
+        }
+    }
+
+    let rgb = eyedropper_color(app, x, y)?;
+    let rgb = if super::paint_target(app) == json!("pixels") { rgb } else { [photocraft_color::convert::rgb_to_gray(rgb); 3] };
+    Some((rgb, None))
+}
 /// The Eyedropper ring's two colours at document point (x, y): the colour under the pointer
 /// (what a click would pick) and the current foreground, or `None` where there is no colour
 /// to sample (#213).
 pub(crate) fn eyedropper_ring_colors(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<(Color32, Color32)> {
-    let new = eyedropper_color(app, x, y)?;
+    let new = picked_eyedropper_color(app, x, y)?.0;
     let fg = app.session.tools.foreground;
     Some((display_color(new), display_color([fg[0], fg[1], fg[2]])))
 }
@@ -374,18 +391,26 @@ pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: e
 
 /// [`sample_eyedropper`], true when it set a swatch.
 fn sampled_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) -> bool {
-    let rgb = if let Some((surface, canvas)) = eyedropper_mask_source(app) {
-        sample_layer_mask(surface, canvas, x, y, app.ui.tool_options.eyedropper_size)
-    } else {
-        eyedropper_color(app, x, y).map(|rgb| if super::paint_target(app) == json!("pixels") { rgb } else { [photocraft_color::convert::rgb_to_gray(rgb); 3] })
+    let Some((rgb, inks)) = picked_eyedropper_color(app, x, y) else {
+        return false;
     };
-    if let Some(rgb) = rgb {
-        let key = if mods.alt { "background" } else { "foreground" };
-        return app.run("tools.setColors", json!({ key: [rgb[0],rgb[1],rgb[2],1.0] })).is_ok();
-    }
-    false
-}
 
+    let key = if mods.alt { "background" } else { "foreground" };
+
+    if let Some(inks) = inks {
+        let ink_key = format!("{key}Cmyk");
+        app.run(
+            "tools.setColors",
+            json!({
+                key: [rgb[0], rgb[1], rgb[2], 1.0],
+                ink_key: inks
+            }),
+        )
+        .is_ok()
+    } else {
+        app.run("tools.setColors", json!({ key: [rgb[0], rgb[1], rgb[2], 1.0] })).is_ok()
+    }
+}
 /// Only the Eyedropper's Current Layer and Current & Below modes pick the targeted raster mask.
 fn eyedropper_mask_source(app: &PhotocraftApp) -> Option<(&photocraft_raster::Surface, photocraft_geom::Rect)> {
     use photocraft_engine::{channel_cmds::ChannelTarget, mask_view_cmds};
@@ -449,6 +474,30 @@ pub(crate) fn eyedropper_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Optio
 pub(crate) fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
     sample_color(app, x, y, "all")
 }
+
+/// A CMYK image pick with its native inks and the RGB stand-in the tool colour stores.
+/// Derive that stand-in from the retained inks so reopening the picker and painting
+/// use the same colour, including averaged samples and the document's ICC profile.
+pub(crate) fn sampled_cmyk_color(app: &PhotocraftApp, x: f64, y: f64, sample_layer: &str) -> Option<([f32; 3], [f32; 4])> {
+    use photocraft_engine::sample_cmds::{SampleLayers, sample_cmyk_at};
+    let st = app.session.active()?;
+    let inks = sample_cmyk_at(
+        &st.doc,
+        st.active_layer,
+        x,
+        y,
+        app.ui.tool_options.eyedropper_size,
+        Some(f64::from(app.current_zoom())),
+        SampleLayers::parse(sample_layer)?,
+    )?;
+    let space = photocraft_compose::cmyk_space(&st.doc);
+    let rgb = photocraft_color::convert::with_cmyk_space(space.as_ref(), || photocraft_color::convert::cmyk_to_rgb(inks));
+    Some((rgb.map(|v| v.clamp(0.0, 1.0)), inks))
+}
+
+#[cfg(test)]
+#[path = "../eyedropper_cmyk_tests.rs"]
+mod eyedropper_cmyk_tests;
 
 pub(crate) fn alt_loads_mixer(tool: Tool, mods: egui::Modifiers) -> bool {
     mods.alt && !mods.ctrl && tool == Tool::MixerBrush

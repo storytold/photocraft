@@ -83,6 +83,11 @@ fn fill(s: &mut Session, p: &Value, cmd: &str, background: bool, preserve: bool)
     }
     let c = if background { s.tools.background } else { s.tools.foreground };
     q.insert("color".into(), json!([c[0], c[1], c[2], 1.0]));
+    q.remove("colorCmyk");
+    let role = if background { 1 } else { 0 };
+    if let Some(inks) = s.tools.picked_role_cmyk(role) {
+        q.insert("colorCmyk".into(), json!(inks));
+    }
     q.insert("preserveTransparency".into(), json!(preserve));
     let edit_fill = crate::commands::find("edit.fill").ok_or_else(|| EngineError::Other("Fill is unavailable".into()))?;
     (edit_fill.run)(s, &Value::Object(q))
@@ -183,6 +188,48 @@ mod tests {
         photocraft_raster::to_rgba(&fmt, &v)
     }
 
+    #[test]
+    fn cmyk_color_history_preserves_inks_and_role_ambiguity() {
+        let mut s = session();
+        let a = [0.25, 0.5, 0.75, 1.0];
+        let b = [0.75, 0.5, 0.25, 1.0];
+        let cyan = [1.0, 0.0, 0.0, 0.0];
+        let magenta = [0.0, 1.0, 0.0, 0.0];
+
+        s.execute(
+            "tools.setColors",
+            json!({
+                "foreground": a,
+                "foregroundCmyk": cyan
+            }),
+        )
+        .unwrap();
+
+        s.execute(
+            "tools.setColors",
+            json!({
+                "foreground": b
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(s.tools.matching_cmyk([a[0], a[1], a[2]]), Some(cyan));
+
+        s.execute(
+            "tools.setColors",
+            json!({
+                "foreground": a,
+                "foregroundCmyk": cyan,
+                "background": a,
+                "backgroundCmyk": magenta
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(s.tools.picked_role_cmyk(0), Some(cyan));
+        assert_eq!(s.tools.picked_role_cmyk(1), Some(magenta));
+        assert_eq!(s.tools.matching_cmyk([a[0], a[1], a[2]]), None);
+    }
     #[test]
     fn foreground_fills_the_layer_without_a_selection() {
         let mut s = session();
@@ -321,6 +368,44 @@ mod tests {
         assert!(got.iter().zip([1.0, 0.0, 0.0, 0.0]).all(|(a, b)| (a - b).abs() < 0.01), "{got:?}");
     }
 
+    #[test]
+    fn foreground_and_background_with_same_rgb_fill_distinct_native_cmyk_inks() {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+
+            s.execute("file.new", json!({"width": 4, "height": 4, "depth": depth})).unwrap();
+            s.execute("image.mode.cmyk", json!({})).unwrap();
+
+            let foreground = [0.0, 0.0, 0.0, 1.0];
+            let background = [0.5, 0.5, 0.5, 1.0];
+
+            s.execute(
+                "tools.setColors",
+                json!({
+                    "foreground": "#000000",
+                    "background": "#000000",
+                    "foregroundCmyk": foreground,
+                    "backgroundCmyk": background
+                }),
+            )
+            .unwrap();
+
+            for (command, expected) in [("edit.fillForeground", foreground), ("edit.fillBackground", background)] {
+                s.execute(command, json!({})).unwrap();
+                let got = inks(&s);
+                assert!(got.iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.01), "{command}: expected {expected:?}, got {got:?}");
+            }
+
+            // Swapping RGB colours must also swap their native ink separations.
+            s.execute("tools.swapColors", json!({})).unwrap();
+
+            for (command, expected) in [("edit.fillForeground", background), ("edit.fillBackground", foreground)] {
+                s.execute(command, json!({})).unwrap();
+                let got = inks(&s);
+                assert!(got.iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.01), "{command} after swap: expected {expected:?}, got {got:?}");
+            }
+        }
+    }
     #[test]
     fn malformed_cmyk_pick_is_an_error_not_a_panic() {
         let mut s = session();

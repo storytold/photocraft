@@ -10,10 +10,10 @@ pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
 /// the Eyedropper's Sample Size over the box it reads at the view zoom, as in Photoshop (#1649,
 /// #11751), and cached per pixel, revision, size and zoom.
 pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
-    let rev = app.session.active()?.revision;
+    let (doc_id, rev) = app.session.active().map(|st| (st.doc.id, st.revision))?;
     let sample_size = app.ui.tool_options.eyedropper_size;
     let zoom = app.current_zoom();
-    let key = (x, y, rev, sample_size, zoom.to_bits());
+    let key = (doc_id, x, y, rev, sample_size, zoom.to_bits());
     if let Some((k, v)) = app.info_sample
         && k == key
     {
@@ -24,6 +24,37 @@ pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Opt
     let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
     app.info_sample = Some((key, v));
     Some(v)
+}
+
+/// Native CMYK at the pointer, cached by document, revision, pixel, size and zoom.
+/// Cache None as well, avoiding repeated composition for unsupported samples.
+fn pointer_cmyk_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
+    let (doc_id, rev) = app.session.active().map(|st| (st.doc.id, st.revision))?;
+    let sample_size = app.ui.tool_options.eyedropper_size;
+    let zoom = app.current_zoom();
+    let key = (doc_id, x, y, rev, sample_size, zoom.to_bits());
+
+    if let Some((cached_key, native)) = app.info_cmyk_sample
+        && cached_key == key
+    {
+        return native;
+    }
+
+    let native = {
+        let st = app.session.active()?;
+        photocraft_engine::sample_cmds::sample_cmyk_at(
+            &st.doc,
+            st.active_layer,
+            f64::from(x) + 0.5,
+            f64::from(y) + 0.5,
+            sample_size,
+            Some(f64::from(zoom)),
+            photocraft_engine::sample_cmds::SampleLayers::All,
+        )
+    };
+
+    app.info_cmyk_sample = Some((key, native));
+    native
 }
 
 /// The Info panel's W and H for a size of `wh` px (the selection's or the pending crop frame's):
@@ -74,10 +105,16 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         row(&mut cols[0], "R:", rgba.map_or_else(dash, |c| q(c[0]).to_string()));
         row(&mut cols[0], "G:", rgba.map_or_else(dash, |c| q(c[1]).to_string()));
         row(&mut cols[0], "B:", rgba.map_or_else(dash, |c| q(c[2]).to_string()));
-        // Colour-managed CMYK in percent like Photoshop's readout, through the same conversion as
-        // the Color Picker (#8101) and the Color Sampler readout (`sampler_cmds::device_cmyk`).
-        let cmyk =
-            rgba.map(|c| photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2])));
+        // Display native CMYK ink percentages when supported, matching the Eyedropper
+        // and Color Sampler. Fall back to colour-managed RGB-to-CMYK conversion
+        // for RGB documents and unsupported CMYK compositions.
+        let cmyk = rgba.map(|c| {
+            let native = pos.and_then(|p| pointer_cmyk_sample(app, p));
+
+            native.map(|inks| inks.map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as i32)).unwrap_or_else(|| {
+                photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2]))
+            })
+        });
         for (i, k) in ["C:", "M:", "Y:", "K:"].iter().enumerate() {
             row(&mut cols[1], k, cmyk.map_or_else(dash, |c| format!("{}%", c[i])));
         }

@@ -738,6 +738,44 @@ fn eraser_on_background_layer_paints_the_background_colour() {
 }
 
 #[test]
+fn replacing_a_stroke_with_background_replaces_its_native_inks() {
+    for depth in [8, 16, 32] {
+        for auto_erase in [false, true] {
+            for native_background in [false, true] {
+                let fg_inks = [0.6, 0.4, 0.4, 1.0];
+                let bg_inks = [0.0, 0.0, 0.0, 1.0];
+                let rgb = photocraft_color::convert::cmyk_to_rgb(fg_inks).map(|v| v.clamp(0.0, 1.0));
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width": 20, "height": 20, "mode": "cmyk", "depth": depth, "background": "white"})).unwrap();
+                let mut colors = json!({"foreground": rgb, "foregroundCmyk": fg_inks, "background": rgb});
+                if native_background {
+                    colors["backgroundCmyk"] = json!(bg_inks);
+                }
+                s.execute("tools.setColors", colors).unwrap();
+                if auto_erase {
+                    s.execute("paint.pencil", json!({"points": [[10, 10]], "size": 8})).unwrap();
+                }
+                let cmd = if auto_erase { "paint.pencil" } else { "paint.stroke" };
+                let p = json!({"points": [[10, 10]], "size": 8, "erase": !auto_erase, "autoErase": auto_erase, "smoothing": 0.0});
+                let expected = if native_background { bg_inks } else { photocraft_color::convert::rgb_to_cmyk(rgb) };
+                let live = LiveStroke::begin_with(&s, cmd, &p).unwrap();
+                let check = |surf: &Surface| {
+                    let got = surf.read_region(Rect::new(10, 10, 11, 11));
+                    let tolerance = if depth == 8 { 0.005 } else { 0.0001 };
+                    assert!(
+                        got.iter().take(4).zip(expected).all(|(a, b)| (a - b).abs() < tolerance),
+                        "depth {depth}, auto {auto_erase}, native {native_background}: {got:?}"
+                    );
+                };
+                check(live.doc.layers[0].surface().unwrap());
+                s.execute(cmd, p).unwrap();
+                check(&surface(&s));
+            }
+        }
+    }
+}
+
+#[test]
 fn live_stroke_matches_the_committed_stroke() {
     // The canvas previews strokes with `LiveStroke`; it must show what `paint.stroke` commits
     // (soft edge, scatter seed), not a stand-in.
