@@ -23,6 +23,8 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+#[cfg(test)]
+mod convert_profile_same_tests;
 mod profile_dither;
 
 // ------------------------------------------------------------------ state
@@ -1117,6 +1119,15 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
     let flatten = profile_option(p, "flatten")?;
     let rasterize = profile_option(p, "rasterizePlaced")?;
     let dither = profile_option(p, "dither")?;
+    // A document tagged with a profile of the same colours as the destination needs no colour
+    // conversion (compared by colour, not bytes). Without Flatten or Rasterize it stays as it is,
+    // with no history state, as in the reference application (#14261); with either, that still
+    // runs as before. An untagged document is still converted and tagged; neither was measured.
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let same = doc.icc_profile.is_some() && document_profile(doc).same_colors(&dst);
+    if same && !flatten && !rasterize {
+        return Ok(json!({ "profile": dst.description, "mode": format!("{:?}", doc.mode), "intent": intent.id(), "bpc": bpc, "converted": false }));
+    }
     s.edit("Convert to Profile", |doc, active| {
         if flatten {
             // Flatten consumes the displayed image; discarded hidden objects need no source read.
@@ -1124,10 +1135,16 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
         } else if rasterize {
             prepare_profile_smart_layers(doc, true)?;
         }
-        if dither { profile_dither::convert(doc, &dst, intent, bpc) } else { convert_document(doc, &dst, intent, bpc) }
+        if same {
+            Ok(())
+        } else if dither {
+            profile_dither::convert(doc, &dst, intent, bpc)
+        } else {
+            convert_document(doc, &dst, intent, bpc)
+        }
     })?;
     let d = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    Ok(json!({ "profile": dst.description, "mode": format!("{:?}", d.mode), "intent": intent.id(), "bpc": bpc }))
+    Ok(json!({ "profile": dst.description, "mode": format!("{:?}", d.mode), "intent": intent.id(), "bpc": bpc, "converted": true }))
 }
 
 fn profile_info(s: &mut Session, p: &Value) -> Result<Value> {
