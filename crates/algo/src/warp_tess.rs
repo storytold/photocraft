@@ -219,6 +219,10 @@ impl Net {
         }
         m
     }
+    /// The largest of the net's columns' [`need`]s, its inner control columns included.
+    fn cols_need(&self) -> f64 {
+        (0..self.nu).map(|i| need(&(0..self.nv).map(|j| self.at(i, j)).collect::<Vec<_>>())).fold(0.0, f64::max)
+    }
     /// The largest of the net's rows' [`need`]s, its inner control rows included.
     fn rows_need(&self) -> f64 {
         (0..self.nv).map(|j| need(&(0..self.nu).map(|i| self.at(i, j)).collect::<Vec<_>>())).fold(0.0, f64::max)
@@ -596,7 +600,7 @@ fn parent_of(c: &Cell) -> (i64, i64, i64, i64) {
 /// reference's split warps show (left and right cells of a row always agree there, whatever their
 /// own twist): the strip across the whole patch at that height splits when its top row of
 /// control quads twists past [`STRIP_TOP_TWIST_TOL`], when its columns at the patch's sides and
-/// middle ask for a split, or when the other strip's largest twist, per [`STRIP_WIDTH`] px of the
+/// middle or any column of its control net ask for a split, or when the other strip's largest twist, per [`STRIP_WIDTH`] px of the
 /// patch's width, passes [`STRIP_OTHER_TWIST_TOL`]. Their own twist then spreads no further.
 fn strip_down_cuts(net: &Net, level_cells: &[Cell], decisions: &mut [(bool, bool)], twisted: &mut [bool]) {
     let halves = level_cells.len() == 4 && level_cells.iter().all(|c| (c[1] - c[0] - 0.5).abs() < EPS && (c[3] - c[2] - 0.5).abs() < EPS);
@@ -605,7 +609,8 @@ fn strip_down_cuts(net: &Net, level_cells: &[Cell], decisions: &mut [(bool, bool
     }
     let strip = |v0: f64| {
         let s = net.sub([0.0, 1.0, v0, v0 + 0.5]);
-        let fv = [0.0, 0.5, 1.0].iter().map(|&u| need(&segment(&net.col(u), v0, v0 + 0.5))).fold(0.0, f64::max);
+        let sides = [0.0, 0.5, 1.0].iter().map(|&u| need(&segment(&net.col(u), v0, v0 + 0.5))).fold(0.0, f64::max);
+        let fv = sides.max(s.cols_need());
         (s.top_row_twist(), s.twist(), fv)
     };
     let (top, bottom) = (strip(0.0), strip(0.5));
@@ -1438,6 +1443,21 @@ mod tests {
         let bottom = |a: f64| move |u: f64, v: f64| [128.0 * u, 64.0 * v + a * (2.0 * pi * u).sin() * (0.5 * pi * (1.0 + v)).sin()];
         assert_eq!(decide(&bottom(12.0)), (true, true), "the 1 x 2 wave's bottom patch, amplitude 12");
         assert_eq!(decide(&bottom(11.0)), (false, true), "the 1 x 2 wave's bottom patch, amplitude 11");
+    }
+
+    /// A strip splits down when any column of its control net asks for it, though the columns at
+    /// the patch's sides and middle are straight: its inner control columns bow out and back.
+    #[test]
+    fn a_quilt_patch_strip_measures_its_inner_control_columns() {
+        let (bow, rows) = ([0.0, 1.0, -1.0, 0.0], [0.0, 0.0, 1.0, 1.0]);
+        let p = (0..16).map(|k: usize| [128.0 * (k % 4) as f64 / 3.0 + 8.0 * bow[k % 4] * rows[k / 4], 64.0 * (k / 4) as f64 / 3.0]).collect();
+        let net = Net { nu: 4, nv: 4, p };
+        let straight = [0.0, 0.5, 1.0].iter().map(|&u| need(&segment(&net.col(u), 0.0, 0.5))).fold(0.0, f64::max);
+        assert!(straight < 1e-9, "a side or middle column bends: {straight}");
+        let quarters: Vec<Cell> = vec![[0.0, 0.5, 0.0, 0.5], [0.5, 1.0, 0.0, 0.5], [0.0, 0.5, 0.5, 1.0], [0.5, 1.0, 0.5, 1.0]];
+        let mut d = vec![(true, false); 4];
+        strip_down_cuts(&net, &quarters, &mut d, &mut [false; 4]);
+        assert!(d[0].1 && d[1].1, "the top strip stayed whole: {d:?}");
     }
 
     /// In a quilt's patch the whole patch's own cut keeps only its halfway point on the middle row
