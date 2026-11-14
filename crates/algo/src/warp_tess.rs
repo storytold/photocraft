@@ -74,6 +74,8 @@ const SHALLOW_AFTER_REACH: f64 = 1.7;
 const SHALLOW_BEFORE_TOL: f64 = 0.5;
 /// See [`SHALLOW_BEFORE_TOL`].
 const SHALLOW_BEFORE_REACH: f64 = 0.42;
+/// The twist along a whole quilt patch's rows (document px) past which the patch splits across.
+const ROW_TWIST_ACROSS_TOL: f64 = 1.25;
 /// Twist of a cell's control net (document px) past which it splits.
 const TWIST_TOL: f64 = 1.0;
 /// The twist past which a one-patch full mesh's cell that already splits across splits down too:
@@ -654,6 +656,15 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
                     across = true;
                 }
             }
+            // A whole quilt patch whose twist runs along its rows (the rows stretch unevenly) past
+            // ROW_TWIST_ACROSS_TOL splits across, as twist across its rows splits it down.
+            if rules.twist_spreads && twisty && lu > 1.0 - EPS && lv > 1.0 - EPS {
+                let sub = net.sub(c);
+                let (p00, p10) = (sub.at(0, 0), sub.at(sub.nu - 1, 0));
+                if sub.twist_along([p10[0] - p00[0], p10[1] - p00[1]]) > ROW_TWIST_ACROSS_TOL + EPS {
+                    across = true;
+                }
+            }
             if let Some(tol) = rules.square_twist
                 && twisty
                 && square
@@ -767,7 +778,12 @@ fn own_points(
         }
         let w = 1.0 / f64::from(1u32 << lv);
         let (a, b) = (u - w, u + w);
-        if log.iter().any(|s| s.cell[0] <= a + 1e-9 && s.cell[1] >= b - 1e-9 && s.cell[2] < v - 1e-9 && s.cell[3] > v + 1e-9) {
+        // A point inside a cell that was cut through its row keeps its place on the surface; in a
+        // quilt's patch, the whole patch's own cut keeps only the patch's halfway point there.
+        let whole = |s: &Split| s.cell[1] - s.cell[0] > 1.0 - 1e-9 && s.cell[3] - s.cell[2] > 1.0 - 1e-9;
+        if log.iter().any(|s| {
+            !(rules.twist_spreads && lv >= 2 && whole(s)) && s.cell[0] <= a + 1e-9 && s.cell[1] >= b - 1e-9 && s.cell[2] < v - 1e-9 && s.cell[3] > v + 1e-9
+        }) {
             continue;
         }
         if need(&segment(&net.row(v), a, b)) < 1.0 - EPS {
@@ -1327,8 +1343,42 @@ mod tests {
         let wave = |u: f64, v: f64| [64.0 * u, 64.0 * v + 16.0 * u * v];
         assert!(!splits_down(&bend), "twist along the rows split the patch down");
         assert!(splits_down(&wave), "twist across the rows left the patch whole");
+        // Twist along the rows past ROW_TWIST_ACROSS_TOL splits the whole patch across instead.
+        let splits_across = |at: &dyn Fn(f64, f64) -> P| {
+            let (_, log) = cells(&cubic_net(at), true, &quilt);
+            log.iter().any(|s| s.across && s.cell[1] - s.cell[0] > 1.0 - 1e-9 && s.cell[3] - s.cell[2] > 1.0 - 1e-9)
+        };
+        assert!(splits_across(&bend), "16/9 px of twist along the rows left the patch whole across");
+        let slight = |u: f64, v: f64| [64.0 * u + 9.9 * u * v, 64.0 * v];
+        assert!(!splits_across(&slight), "1.1 px of twist along the rows split the patch across");
         let (_, log) = cells(&cubic_net(&bend), true, &Rules { twist_spreads: false, ..quilt });
         assert!(log.iter().any(|s| s.down), "a one-patch mesh splits for any twist");
+    }
+
+    /// In a quilt's patch the whole patch's own cut keeps only its halfway point on the middle row
+    /// where the surface puts it: the quarter points of a nearly straight middle row sit on the
+    /// row's chord, as on any other row. (The reference's 16-bit coordinate renders of rippled
+    /// split warps put them there, within 0.01 px.)
+    #[test]
+    fn a_quilt_patch_middle_row_drops_its_quarter_points_onto_the_chord() {
+        // Twisted across the rows (so the whole patch splits down) and waved along them, the wave
+        // strong at the top and bottom (so the halves split across) and slight on the middle row.
+        let pi = std::f64::consts::PI;
+        let at = |u: f64, v: f64| {
+            let wave = 8.0 * (2.0 * pi * u).sin() * (0.05 + 4.0 * (v - 0.5) * (v - 0.5));
+            [64.0 * u, 64.0 * v + 16.0 * u * v + wave]
+        };
+        let m = quilt_patch_mesh(&at).expect("finite");
+        let pos_of = |u: f64, v: f64| m.uv.iter().position(|p| (p[0] - u).abs() < 1e-12 && (p[1] - v).abs() < 1e-12).map(|k| m.pos[k]);
+        let (Some(q), Some(h)) = (pos_of(0.25, 0.5), pos_of(0.5, 0.5)) else {
+            panic!("the middle row wasn't cut at its quarters: {:?}", m.uv);
+        };
+        let s = at(0.25, 0.5);
+        assert!((q[0] - s[0]).hypot(q[1] - s[1]) > 0.05, "the quarter point stayed on the surface: {q:?}");
+        let (a, b) = (at(0.0, 0.5), at(0.5, 0.5));
+        let cross = ((b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0])).abs() / (b[0] - a[0]).hypot(b[1] - a[1]);
+        assert!(cross < 1e-9, "the quarter point is off the chord by {cross}");
+        assert_eq!(h, at(0.5, 0.5), "the halfway point moved");
     }
 
     /// A quilt patch measures its cells' rows by all the rows of their control nets: a bulge whose
