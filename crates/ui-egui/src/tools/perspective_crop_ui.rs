@@ -327,6 +327,11 @@ pub fn confirm_switch(app: &mut PhotocraftApp, f: &serde_json::Map<String, Value
     if crop {
         cancel_stale(app);
         let Some(q) = app.ui.perspective_crop else { return Err("there is no quad to crop".into()) };
+        // As a commit: a quad the crop can't use gets the alert, and the quad and the tool stay.
+        if !convex_quad_any_winding(&q) {
+            open_invalid_alert(app);
+            return Ok(json!({"cropped": false, "tool": Tool::PerspectiveCrop}));
+        }
         let mut p = json!({"corners": q});
         size_params(app, &mut p);
         app.run("image.perspectiveCrop", p)?;
