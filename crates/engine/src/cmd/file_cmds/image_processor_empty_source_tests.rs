@@ -1,4 +1,7 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde_json::{Value, json};
 
@@ -64,7 +67,9 @@ fn image_processor_skips_non_images_and_can_find_images_in_subfolders() {
         if per_format {
             expected.push(output.join("nested/test.tif"));
         }
-        assert_eq!(result, json!({"files": expected, "errors": []}));
+        let files: Vec<PathBuf> = serde_json::from_value(result["files"].clone()).unwrap();
+        assert_eq!(files, expected);
+        assert_eq!(result["errors"], json!([]));
         for path in expected {
             let image = photocraft_io::import(&path.to_string_lossy(), &fs::read(&path).unwrap()).unwrap();
             assert_eq!((image.document.size.width, image.document.size.height), (2, 1));
@@ -126,7 +131,8 @@ fn mixed_valid_and_corrupt_images_keep_the_corrupt_file_report() {
         if per_format {
             expected.push(output.join("test.tif"));
         }
-        assert_eq!(result["files"], json!(expected));
+        let files: Vec<PathBuf> = serde_json::from_value(result["files"].clone()).unwrap();
+        assert_eq!(files, expected);
         let errors = result["errors"].as_array().unwrap();
         assert_eq!(errors.len(), if per_format { 2 } else { 1 });
         assert!(errors.iter().all(|error| error["file"] == json!(corrupt)));
