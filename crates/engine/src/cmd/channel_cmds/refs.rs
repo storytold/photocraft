@@ -308,6 +308,16 @@ pub enum Blending {
 
 impl Blending {
     pub fn parse(p: &Value) -> std::result::Result<Self, String> {
+        Self::parse_inner(p, false)
+    }
+
+    /// Calculations blending: accepts Darker Color and Lighter Color in addition to the
+    /// separable modes, treating both as Normal on single channels.
+    pub(super) fn parse_calculations(p: &Value) -> std::result::Result<Self, String> {
+        Self::parse_inner(p, true)
+    }
+
+    fn parse_inner(p: &Value, allow_darker_lighter: bool) -> std::result::Result<Self, String> {
         let name = p.get("blending").and_then(Value::as_str).unwrap_or("multiply");
         let scale = p.get("scale").and_then(Value::as_f64).unwrap_or(1.0).clamp(1.0, 2.0) as f32;
         let offset = p.get("offset").and_then(Value::as_f64).unwrap_or(0.0).clamp(-255.0, 255.0) as f32 / 255.0;
@@ -316,6 +326,7 @@ impl Blending {
             "subtract" => Ok(Blending::Subtract { scale, offset }),
             other => match crate::commands::blend_from_str(other) {
                 Some(m) if m.is_separable() && !matches!(m, BlendMode::Dissolve | BlendMode::PassThrough) => Ok(Blending::Mode(m)),
+                Some(BlendMode::DarkerColor | BlendMode::LighterColor) if allow_darker_lighter => Ok(Blending::Mode(BlendMode::Normal)),
                 _ => Err(format!("unsupported blending `{other}`")),
             },
         }

@@ -24,6 +24,8 @@ use crate::commands::CommandSpec;
 use crate::{DocState, EngineError, Result, Session};
 
 #[cfg(test)]
+mod calculations_darker_lighter_tests;
+#[cfg(test)]
 mod tests;
 
 // ---------------------------------------------------------------------------------------------
