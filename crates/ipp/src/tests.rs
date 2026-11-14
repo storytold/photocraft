@@ -671,3 +671,34 @@ fn a_header_trickled_a_byte_at_a_time_is_found() {
     assert!(raw.ends_with(b"\r\n\r\nok"), "{:?}", String::from_utf8_lossy(&raw));
     server.join().unwrap();
 }
+
+#[test]
+fn a_content_length_body_cut_short_is_an_error() {
+    let valid = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    for body in [Vec::new(), b"o".to_vec(), valid] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let (mut line, mut len) = (String::new(), 0usize);
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = value.trim().parse().unwrap();
+                }
+            }
+            reader.read_exact(&mut vec![0u8; len]).unwrap();
+            let mut stream = reader.into_inner();
+            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n", body.len() + 1).as_bytes()).unwrap();
+            stream.write_all(&body).unwrap();
+        });
+        let result = printers(&Endpoint::Tcp(addr.ip().to_string(), addr.port()));
+        server.join().unwrap();
+        assert!(matches!(result, Err(Error::Protocol(_))), "accepted incomplete HTTP body: {result:?}");
+    }
+}
