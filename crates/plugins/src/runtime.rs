@@ -23,6 +23,10 @@ pub struct Limits {
     pub max_module_bytes: usize,
     /// Cap on a plug-in's linear memory.
     pub max_memory_bytes: usize,
+    /// Cap on the linear memory of all of one run's instances together: bands run in parallel
+    /// only as far as their [`Limits::max_memory_bytes`] fit in it, so a run's peak memory does
+    /// not grow with the number of cores (#8603).
+    pub max_total_memory_bytes: usize,
     /// Target size of one band of `f32` pixels handed to the plug-in.
     pub band_bytes: usize,
     /// Instructions (fuel) any call may use, plus [`Limits::fuel_per_sample`] per sample for
@@ -37,16 +41,28 @@ pub struct Limits {
 }
 
 impl Default for Limits {
+    /// The limits plug-ins run under unless a caller narrows them; see `docs/plugins.md`.
     fn default() -> Self {
         Self {
             max_module_bytes: 32 << 20,
             max_memory_bytes: 512 << 20,
+            max_total_memory_bytes: 2 << 30,
             band_bytes: 4 << 20,
             fuel_base: 50_000_000,
             fuel_per_sample: 4_000,
             max_recursion_depth: 1024,
             wall_time_ms: 60_000,
         }
+    }
+}
+
+impl Limits {
+    /// How many bands of one run may hold an instance at once on `threads` workers: no more
+    /// than [`Limits::max_memory_bytes`] fits into [`Limits::max_total_memory_bytes`], and always
+    /// at least one, so a tight budget runs bands one at a time instead of refusing the run.
+    pub fn parallel_bands(&self, threads: usize) -> usize {
+        let fit = self.max_total_memory_bytes.checked_div(self.max_memory_bytes).unwrap_or(threads);
+        threads.min(fit).max(1)
     }
 }
 
@@ -115,6 +131,62 @@ fn wasm_err(e: wasmi::Error) -> Error {
     if e.as_trap_code() == Some(wasmi::TrapCode::OutOfFuel) { Error::Limit("instruction budget".into()) } else { Error::Trap(e.to_string()) }
 }
 
+/// Reads an unsigned LEB128 `u32` at the start of `bytes`: the value and its length.
+fn leb_u32(bytes: &[u8]) -> Option<(u32, usize)> {
+    let mut value = 0u32;
+    for (i, &b) in bytes.iter().take(5).enumerate() {
+        value |= u32::from(b & 0x7f).checked_shl(7 * i as u32)?;
+        if b & 0x80 == 0 {
+            return Some((value, i + 1));
+        }
+    }
+    None
+}
+
+/// Refuses a code section that declares no functions but more bytes than that count. The spec
+/// makes the count the whole section then; wasmi 2.0's strict limits divide the section size by
+/// the function count before validating it, so such a module (crafted or truncated) panicked.
+/// Every code section is checked, since a duplicate one also reaches that division before
+/// validation refuses it. Anything else, malformed or not, is left to wasmi.
+fn check_code_section(bytes: &[u8]) -> Result<()> {
+    if bytes.get(4..8) != Some(&[1, 0, 0, 0][..]) {
+        return Ok(());
+    }
+    let mut pos = 8usize;
+    while let Some(&id) = bytes.get(pos) {
+        let Some((size, len)) = bytes.get(pos + 1..).and_then(leb_u32) else { return Ok(()) };
+        let start = pos + 1 + len;
+        if id == 10
+            && let Some((0, count_len)) = bytes.get(start..).and_then(leb_u32)
+            && size as usize > count_len
+        {
+            return Err(Error::Module(format!("the code section declares no functions but {size} bytes")));
+        }
+        pos = start.saturating_add(size as usize);
+    }
+    Ok(())
+}
+
+/// What a file that is not WebAssembly actually is, judged from its magic number, so the install
+/// error can name the format the person picked instead of only the one we wanted (public format
+/// facts: the PE/COFF, ELF, Mach-O and zip signatures). `None` for anything else. Reads with
+/// `starts_with`/`get`, so a file shorter than the signature is fine.
+fn format_hint(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"MZ") {
+        return Some("a Windows native executable or library (a .dll, or a Photoshop plug-in such as .8bf/.8bt)");
+    }
+    if bytes.get(..4) == Some(&[0x7f, b'E', b'L', b'F']) {
+        return Some("a Linux native library (ELF)");
+    }
+    if matches!(bytes.get(..4), Some(&[0xce, 0xfa, 0xed, 0xfe] | &[0xcf, 0xfa, 0xed, 0xfe] | &[0xca, 0xfe, 0xba, 0xbe] | &[0xbe, 0xba, 0xfe, 0xca])) {
+        return Some("a macOS native binary (Mach-O, thin or fat)");
+    }
+    if matches!(bytes.get(..4), Some(&[0x50, 0x4b, 0x03, 0x04] | &[0x50, 0x4b, 0x05, 0x06])) {
+        return Some("a zip archive");
+    }
+    None
+}
+
 impl Plugin {
     /// Validates and loads a module: checks the ABI version and reads the manifest.
     pub fn load(bytes: &[u8], limits: Limits) -> Result<Plugin> {
@@ -122,8 +194,13 @@ impl Plugin {
             return Err(Error::Module(format!("module is {} bytes (limit {})", bytes.len(), limits.max_module_bytes)));
         }
         if !bytes.starts_with(b"\0asm") {
-            return Err(Error::Module("not a WebAssembly binary (missing \\0asm header)".into()));
+            let msg = "not a WebAssembly binary (missing \\0asm header)";
+            return Err(Error::Module(match format_hint(bytes) {
+                Some(hint) => format!("{msg}; this file looks like {hint} - PhotoCraft plug-ins are WebAssembly modules (.wasm)"),
+                None => msg.to_string(),
+            }));
         }
+        check_code_section(bytes)?;
         let mut config = Config::default();
         config.consume_fuel(true).enforced_limits(EnforcedLimits::strict()).set_max_recursion_depth(limits.max_recursion_depth.max(16));
         let engine = Engine::new(&config);
@@ -184,8 +261,9 @@ impl Plugin {
         let limits = StoreLimitsBuilder::new().memory_size(self.limits.max_memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
         let mut store = Store::new(&self.engine, limits);
         store.limiter(|l| l);
-        // The start function (if any) runs on this fuel.
-        store.set_fuel(self.limits.fuel_base).map_err(wasm_err)?;
+        // The start function (if any) runs on this fuel. It cannot be interrupted to check the
+        // deadline the way a call can, so it gets no more than one slice, however much a call may use.
+        store.set_fuel(self.limits.fuel_base.min(FUEL_SLICE)).map_err(wasm_err)?;
         let linker = Linker::<StoreLimits>::new(&self.engine);
         let instance = linker.instantiate_and_start(&mut store, &self.module).map_err(wasm_err)?;
         let memory = instance.get_memory(&store, "memory").ok_or_else(|| Error::Abi("the module must export its linear memory as `memory`".into()))?;

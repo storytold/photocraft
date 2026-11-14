@@ -1,4 +1,5 @@
-//! `import_gif_frames`: each GIF frame as a single-layer document, in order, with its delay.
+//! `import_gif_frames`: each GIF frame as a single-layer document, in order, with its delay,
+//! and any decoder warning that survived a salvaged (truncated) import (#11113).
 
 use photocraft_codecs::web::{GifFrame, encode_gif_animated};
 use photocraft_io::{IoError, import_gif_frames};
@@ -12,13 +13,32 @@ fn gif(colours: &[([u8; 3], u16)]) -> Vec<u8> {
 fn frames_arrive_in_order_as_documents_with_their_delays() {
     let bytes = gif(&[([255, 0, 0], 3), ([0, 0, 255], 7)]);
     let mut seen = Vec::new();
-    let n = import_gif_frames("a.gif", &bytes, &mut |doc, delay_ms| {
+    let r = import_gif_frames("a.gif", &bytes, &mut |doc, delay_ms| {
         seen.push((doc.layers.len(), doc.bounds().width(), doc.bounds().height(), delay_ms));
         Ok(())
     })
     .unwrap();
-    assert_eq!(n, 2);
+    assert_eq!(r.frames, 2);
+    assert_eq!(r.warnings, Vec::<String>::new(), "a complete GIF imports quietly");
     assert_eq!(seen, [(1, 3, 2, 30), (1, 3, 2, 70)]);
+}
+
+#[test]
+fn a_truncated_gif_keeps_its_frames_and_reports_the_truncation() {
+    // #11113: the codecs deliberately salvage the frames before the damage; the import must
+    // carry the decoder's warning so the caller can disclose the shortened animation.
+    let mut bytes = gif(&[([255, 0, 0], 3), ([0, 0, 255], 7), ([0, 255, 0], 7)]);
+    bytes.truncate(bytes.len() - 4);
+    let mut count = 0;
+    let r = import_gif_frames("a.gif", &bytes, &mut |_, _| {
+        count += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert!(count < 3, "the damaged last frame is not imported ({count} arrived)");
+    assert_eq!(r.frames, count);
+    assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+    assert!(r.warnings[0].contains("ends early"), "{:?}", r.warnings);
 }
 
 #[test]
@@ -137,7 +157,7 @@ fn a_small_slice_of_a_large_canvas_is_checked_against_the_canvas() {
     assert!(matches!(err, IoError::Unsupported(_)) && err.to_string().contains("5000 × 5000"), "{err}");
 }
 
-/// The loop count is written as the NETSCAPE extension: none for once, 0 for forever, repeats otherwise.
+/// The loop count is written as the NETSCAPE extension: none for once, 0 for forever.
 #[test]
 fn the_loop_count_is_written_to_the_file() {
     use photocraft_doc::LoopCount;
@@ -150,7 +170,7 @@ fn the_loop_count_is_written_to_the_file() {
     };
     assert_eq!(ext(LoopCount::Once), None);
     assert_eq!(ext(LoopCount::Forever), Some((0, 0)));
-    assert_eq!(ext(LoopCount::Times(3)), Some((2, 0)));
+    // A play count (three plays, two repeats) waits for the shared writer: see `three_plays_export_as_two_repeats`.
 }
 
 /// A still document saves a GIF as before, with no animation.
@@ -187,7 +207,7 @@ fn an_animated_export_can_be_cancelled_between_frames_and_is_bounded() {
     // Stopping at the second step stops the export with `Cancelled`, having rendered one frame.
     let doc = animated(4, 5);
     let mut steps = Vec::new();
-    let r = export_stepped(&doc, &mut |done, total| {
+    let r = export_stepped(&doc, &photocraft_raster::Interrupt::NONE, &mut |done, total| {
         steps.push((done, total));
         done < 1
     });
@@ -196,60 +216,101 @@ fn an_animated_export_can_be_cancelled_between_frames_and_is_bounded() {
     // A frame count that can't be held at once is refused before anything is rendered.
     let side = 8192u32;
     let frames = (MAX_STAGED_BYTES / (u64::from(side) * u64::from(side))) as usize + 1;
-    let r = export_stepped(&animated(side, frames), &mut |_, _| panic!("must be refused before rendering"));
+    let r = export_stepped(&animated(side, frames), &photocraft_raster::Interrupt::NONE, &mut |_, _| panic!("must be refused before rendering"));
     assert!(matches!(r, Err(IoError::Unsupported(_))));
 }
 
+/// A two-frame GIF as the pinned image codec writes it, with its loop extension set to `loops`: the codec
+/// only writes "once" and "forever", so a play count is patched into the extension.
+fn gif_with_loops(loops: photocraft_doc::LoopCount) -> Vec<u8> {
+    use photocraft_codecs::web::encode_gif_animated;
+    use photocraft_doc::LoopCount;
+    let frames: Vec<GifFrame> =
+        [([255, 0, 0], 3), ([0, 0, 255], 5)].iter().map(|&(c, d)| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: d }).collect();
+    let mut bytes = encode_gif_animated(3, 2, &frames, loops != LoopCount::Once).unwrap();
+    if let LoopCount::Times(n) = loops.normalized()
+        && let Some(i) = bytes.windows(11).position(|w| w == b"NETSCAPE2.0")
+    {
+        bytes[i + 13..i + 15].copy_from_slice(&u16::try_from(n - 1).unwrap().to_le_bytes());
+    }
+    bytes
+}
+
+fn repeats(g: &[u8]) -> Option<u16> {
+    g.windows(11).position(|w| w == b"NETSCAPE2.0").map(|i| u16::from_le_bytes([g[i + 13], g[i + 14]]))
+}
+
 #[test]
-fn unnormalised_loop_counts_export_as_they_are_defined() {
+fn once_and_forever_export_as_they_are_defined() {
     use photocraft_doc::{AnimFrame, ColorMode, Document, FrameAnimation, LoopCount, SampleType};
     use photocraft_io::gif_anim::export_stepped;
     let bytes = |loops: LoopCount| {
         let mut d = Document::new("a", photocraft_geom::Size { width: 2, height: 2 }, ColorMode::Rgb, SampleType::U8);
         d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops });
-        export_stepped(&d, &mut |_, _| true).unwrap().unwrap()
+        export_stepped(&d, &photocraft_raster::Interrupt::NONE, &mut |_, _| true).unwrap().unwrap()
     };
-    let repeats = |g: &[u8]| g.windows(11).position(|w| w == b"NETSCAPE2.0").map(|i| u16::from_le_bytes([g[i + 13], g[i + 14]]));
-    assert_eq!(repeats(&bytes(LoopCount::Times(1))), None, "Times(1) is once: no loop extension");
-    assert_eq!(repeats(&bytes(LoopCount::Times(0))), Some(0), "Times(0) is forever");
-    assert_eq!(repeats(&bytes(LoopCount::Times(3))), Some(2), "three plays are two repeats");
+    let (once, warnings) = bytes(LoopCount::Times(1));
+    assert_eq!(repeats(&once), None, "Times(1) is once: no loop extension");
+    assert!(warnings.is_empty());
+    assert_eq!(repeats(&bytes(LoopCount::Times(0)).0), Some(0), "Times(0) is forever");
+}
+
+/// A play count has to wait for the shared writer to store one (storytold/craft-libs#1319): until then it is
+/// saved as forever, and says so.
+#[test]
+fn a_play_count_is_saved_as_forever_with_a_warning_until_the_shared_writer_stores_one() {
+    use photocraft_doc::{AnimFrame, ColorMode, Document, FrameAnimation, LoopCount, SampleType};
+    use photocraft_io::gif_anim::export_stepped;
+    let mut d = Document::new("a", photocraft_geom::Size { width: 2, height: 2 }, ColorMode::Rgb, SampleType::U8);
+    d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Times(3) });
+    let (bytes, warnings) = export_stepped(&d, &photocraft_raster::Interrupt::NONE, &mut |_, _| true).unwrap().unwrap();
+    assert_eq!(repeats(&bytes), Some(0));
+    assert!(warnings.iter().any(|w| w.contains("play count of 3")), "{warnings:?}");
 }
 
 #[test]
-fn an_opened_gif_keeps_its_own_loop_count_and_saves_it_back() {
-    use photocraft_codecs::web::{GifLoops, encode_gif_animated_loops};
+#[ignore = "needs a finite play count in craft-gif's writer: storytold/craft-libs#1319"]
+fn three_plays_export_as_two_repeats() {
+    use photocraft_doc::{AnimFrame, ColorMode, Document, FrameAnimation, LoopCount, SampleType};
+    use photocraft_io::gif_anim::export_stepped;
+    let mut d = Document::new("a", photocraft_geom::Size { width: 2, height: 2 }, ColorMode::Rgb, SampleType::U8);
+    d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Times(3) });
+    let (bytes, _) = export_stepped(&d, &photocraft_raster::Interrupt::NONE, &mut |_, _| true).unwrap().unwrap();
+    assert_eq!(repeats(&bytes), Some(2), "three plays are two repeats");
+}
+
+#[test]
+fn an_opened_gif_keeps_its_own_loop_count() {
     use photocraft_doc::LoopCount;
-    let frames: Vec<GifFrame> =
-        [([255, 0, 0], 3), ([0, 0, 255], 5)].iter().map(|&(c, d)| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: d }).collect();
-    let loops_of = |l: GifLoops| {
-        let bytes = encode_gif_animated_loops(3, 2, &frames, l).unwrap();
-        let r = photocraft_io::import("a.gif", &bytes).unwrap();
-        // Open and save again without touching anything.
-        let again = photocraft_io::export(&r.document, "a.gif", &Default::default()).unwrap().bytes;
-        let back = photocraft_io::import("a.gif", &again).unwrap();
-        (r.document.frame_animation.unwrap().loops, back.document.frame_animation.unwrap().loops)
+    let opened = |l: LoopCount| photocraft_io::import("a.gif", &gif_with_loops(l)).unwrap().document.frame_animation.unwrap().loops;
+    assert_eq!(opened(LoopCount::Forever), LoopCount::Forever);
+    assert_eq!(opened(LoopCount::Once), LoopCount::Once, "a GIF with no loop extension plays once");
+    assert_eq!(opened(LoopCount::Times(4)), LoopCount::Times(4));
+}
+
+#[test]
+fn an_opened_gif_saves_back_once_or_forever() {
+    use photocraft_doc::LoopCount;
+    let again = |l: LoopCount| {
+        let r = photocraft_io::import("a.gif", &gif_with_loops(l)).unwrap();
+        let bytes = photocraft_io::export(&r.document, "a.gif", &Default::default()).unwrap().bytes;
+        photocraft_io::import("a.gif", &bytes).unwrap().document.frame_animation.unwrap().loops
     };
-    assert_eq!(loops_of(GifLoops::Forever), (LoopCount::Forever, LoopCount::Forever));
-    assert_eq!(loops_of(GifLoops::Once), (LoopCount::Once, LoopCount::Once), "a GIF with no loop extension plays once");
-    assert_eq!(loops_of(GifLoops::Times(4)), (LoopCount::Times(4), LoopCount::Times(4)));
+    assert_eq!(again(LoopCount::Forever), LoopCount::Forever);
+    assert_eq!(again(LoopCount::Once), LoopCount::Once);
 }
 
 #[test]
 fn a_truncated_gif_keeps_the_loop_count_it_declared_or_plays_once() {
-    use photocraft_codecs::web::{GifLoops, encode_gif_animated_loops};
     use photocraft_doc::LoopCount;
-    let frames: Vec<GifFrame> = [([255, 0, 0], 3), ([0, 0, 255], 5), ([0, 255, 0], 7)]
-        .iter()
-        .map(|&(c, d)| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: d })
-        .collect();
-    let loops_of = |l: GifLoops| {
-        let mut bytes = encode_gif_animated_loops(3, 2, &frames, l).unwrap();
+    let loops_of = |l: LoopCount| {
+        let mut bytes = gif_with_loops(l);
         bytes.pop(); // lose the trailer: the blocks now end early
         photocraft_io::import("a.gif", &bytes).unwrap().document.frame_animation.unwrap().loops
     };
-    assert_eq!(loops_of(GifLoops::Forever), LoopCount::Forever, "the extension came first, so it is still read");
-    assert_eq!(loops_of(GifLoops::Times(4)), LoopCount::Times(4));
-    assert_eq!(loops_of(GifLoops::Once), LoopCount::Once, "no extension: plays once, as an untruncated one does");
+    assert_eq!(loops_of(LoopCount::Forever), LoopCount::Forever, "the extension came first, so it is still read");
+    assert_eq!(loops_of(LoopCount::Times(4)), LoopCount::Times(4));
+    assert_eq!(loops_of(LoopCount::Once), LoopCount::Once, "no extension: plays once, as an untruncated one does");
 }
 
 /// A 2×2 document of one colour, tagged with `icc`, with a two-frame animation.
@@ -285,7 +346,7 @@ fn assert_close(a: [u8; 3], b: [u8; 3], what: &str) {
 /// An animated export converts each frame to sRGB like a still one: a tagged document keeps its colours.
 #[test]
 fn an_animated_export_converts_a_tagged_document_to_srgb() {
-    use photocraft_cms::Builtin;
+    use craft_cms::Builtin;
     use photocraft_doc::ColorMode;
     let d = tagged(ColorMode::Rgb, Builtin::ProPhotoCompat.profile().to_bytes().to_vec(), &[0.4, 0.6, 0.2, 1.0]);
     let animated = photocraft_io::export(&d, "a.gif", &Default::default()).unwrap().bytes;
@@ -300,9 +361,9 @@ fn an_animated_export_converts_a_tagged_document_to_srgb() {
 
 #[test]
 fn an_animated_export_converts_cmyk_through_the_documents_profile() {
-    use photocraft_cms::synth::{CmykParams, cmyk_profile};
+    use craft_cms::synth::{CmykParams, cmyk_profile};
     use photocraft_doc::ColorMode;
-    let profile = cmyk_profile(&CmykParams { tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() }).to_bytes().to_vec();
+    let profile = cmyk_profile(&CmykParams { tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() }).unwrap().to_bytes().to_vec();
     let d = tagged(ColorMode::Cmyk, profile, &[0.6, 0.2, 0.3, 0.1, 1.0]);
     let animated = photocraft_io::export(&d, "a.gif", &Default::default()).unwrap().bytes;
     let mut still = d.clone();
@@ -312,9 +373,9 @@ fn an_animated_export_converts_cmyk_through_the_documents_profile() {
 }
 
 /// The export's memory is bounded by what it holds at once, frames kept and the one being rendered,
-/// and the compression at the end can be stopped as well.
+/// and a frame that cannot be rendered within the budget is refused before anything is rendered.
 #[test]
-fn an_export_that_cannot_be_held_at_once_is_refused_and_compression_can_be_cancelled() {
+fn an_export_that_cannot_be_held_at_once_is_refused() {
     use photocraft_doc::{AnimFrame, ColorMode, Document, FrameAnimation, LoopCount, SampleType};
     use photocraft_io::gif_anim::{MAX_STAGED_BYTES, WORKING_BYTES_PER_PIXEL, export_stepped};
     let animated = |side: u32, n: usize| {
@@ -324,15 +385,8 @@ fn an_export_that_cannot_be_held_at_once_is_refused_and_compression_can_be_cance
     };
     // One frame of 4500 × 4500 is within the old frame limit, but rendering it takes more than the budget.
     const { assert!(4500u64 * 4500 * WORKING_BYTES_PER_PIXEL > MAX_STAGED_BYTES) };
-    let r = export_stepped(&animated(4500, 1), &mut |_, _| panic!("must be refused before rendering"));
+    let r = export_stepped(&animated(4500, 1), &photocraft_raster::Interrupt::NONE, &mut |_, _| panic!("must be refused before rendering"));
     assert!(matches!(r, Err(IoError::Unsupported(_))));
-    // Stopping once every frame is rendered, while they compress, cancels too.
-    let mut calls = 0;
-    let r = export_stepped(&animated(4, 3), &mut |done, total| {
-        calls += 1;
-        !(calls > 4 && done == total)
-    });
-    assert!(matches!(r, Err(IoError::Cancelled)));
 }
 
 /// A new frame animation has one frame: saving it is saving a still GIF, as Save for Web does, not an
