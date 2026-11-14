@@ -469,3 +469,27 @@ fn a_preset_replaces_a_kept_photoshop_gradient() {
     s.execute("gradient.presets.select", json!({"preset": name})).unwrap();
     assert!(matches!(active_fill(&s), Fill::Gradient { interpolation: None, .. }));
 }
+
+/// #13557: Classic at Smoothness 0 drops the kept gradient, but an opacity midpoint off the
+/// middle (which a fill can't hold) is baked into the opacity stops, so the transparency is
+/// half way at the midpoint.
+#[test]
+fn dropping_a_kept_gradient_keeps_its_opacity_midpoints() {
+    use photocraft_compose::gradient_fill::Ramp;
+    let mut s = session(8, "white");
+    s.execute(CREATE, json!({"from": [0, 16], "to": [48, 16]})).unwrap();
+    let mut f = photoshop_fill();
+    if let Fill::Gradient { opacity_stops, interpolation: Some(src), .. } = &mut f {
+        src.opacity_stops = vec![(0.0, 1.0), (1.0, 0.0)];
+        src.opacity_midpoints = vec![0.2];
+        *opacity_stops = photocraft_io::gradient_bake::bake_interpolation_opacity(src).unwrap();
+    }
+    set_active_fill(&mut s, f);
+    s.execute(SET, json!({"method": "classic", "smoothness": 0})).unwrap();
+    let after = active_fill(&s);
+    assert!(matches!(after, Fill::Gradient { interpolation: None, .. }), "{after:?}");
+    let ramp = Ramp::new(&after).unwrap();
+    let at = |t: f32| ramp.sample(t)[3];
+    assert!((at(0.2) - 0.5).abs() < 0.02, "half way at the 20 % midpoint: {}", at(0.2));
+    assert!((at(0.0) - 1.0).abs() < 1e-3 && at(1.0).abs() < 1e-3);
+}

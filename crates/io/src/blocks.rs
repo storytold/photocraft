@@ -471,9 +471,12 @@ pub(crate) fn gradient_desc_source(src: &GradientInterpolation, opacity: &[(f32,
     let own = !src.opacity_stops.is_empty();
     let mut op: Vec<(f32, f32)> = if own { &src.opacity_stops } else { opacity }.iter().map(|(t, o)| (unit(*t), unit(*o))).collect();
     op.sort_by(|a, b| a.0.total_cmp(&b.0));
-    if op.len() < 2 || op.iter().all(|o| o.1 >= 1.0 - 1e-4) {
+    if op.iter().all(|o| o.1 >= 1.0 - 1e-4) {
         // Fully opaque (Photoshop's stop colours carry no alpha).
         op = vec![(0.0, 1.0), (1.0, 1.0)];
+    } else if let [(_, a)] = op[..] {
+        // One opacity stop holds across the whole gradient.
+        op = vec![(0.0, a), (1.0, a)];
     }
     let op_mids: &[f32] = if own { &src.opacity_midpoints } else { &[] };
     let smooth = if src.smoothness.is_finite() { src.smoothness.clamp(0.0, 100.0) } else { 0.0 };

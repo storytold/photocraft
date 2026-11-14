@@ -83,6 +83,10 @@ pub(super) fn overlay(gradient: &mut Gradient, interpolation: &mut Option<Gradie
         if opacity.len() != source.opacity_stops.len() {
             source.opacity_midpoints.clear();
         }
+        if opacity.is_empty() {
+            // No opacity stops: the gradient is opaque, as without a record.
+            gradient.opacity_stops.clear();
+        }
         source.opacity_stops = opacity;
     }
     edit_endpoint(source.stops.first_mut(), params, "from");
@@ -343,5 +347,17 @@ mod photoshop_source_tests {
         assert_eq!(src.opacity_stops, vec![(0.0, 1.0), (0.5, 0.5), (1.0, 0.0)]);
         assert!(src.opacity_midpoints.is_empty());
         assert_eq!(Some(gradient.opacity_stops), photocraft_io::gradient_bake::bake_interpolation_opacity(&src));
+    }
+
+    /// An explicit empty `opacityStops` makes the overlay opaque: Photoshop's opacity stops go
+    /// and so does the transparency rendered from them.
+    #[test]
+    fn empty_opacity_stops_make_an_imported_overlay_opaque() {
+        let (mut gradient, mut source) = imported();
+        assert!(gradient.opacity_stops.iter().any(|o| o.1 < 0.99));
+        overlay(&mut gradient, &mut source, &json!({"opacityStops": []}));
+        let src = source.unwrap();
+        assert!(src.opacity_stops.is_empty() && src.opacity_midpoints.is_empty(), "{src:?}");
+        assert!(gradient.opacity_stops.iter().all(|o| o.1 >= 1.0 - 1e-4), "{:?}", gradient.opacity_stops);
     }
 }

@@ -486,3 +486,20 @@ fn hostile_gradient_fill_records_are_safe() {
         assert!(!crate::gradient_bake::interpolation_matches(&broken, &[], &[]), "{broken:?}");
     }
 }
+
+/// #13557: a kept gradient with a single opacity stop below 100 % keeps that opacity when it is
+/// written: one stop holds across the whole ramp, it is not saved as opaque.
+#[test]
+fn gradient_fill_keeps_a_single_translucent_opacity_stop() {
+    use photocraft_compose::gradient_fill::Ramp;
+    let f = fill_from_desc(b"GdFl", &photoshop_gdfl(&THREE, &[(2048, 50.0, 50)], 4096.0, "Gcls")).unwrap();
+    let Fill::Gradient { interpolation: Some(src), .. } = &f else { panic!("{f:?}") };
+    assert_eq!(src.opacity_stops, vec![(0.5, 0.5)]);
+    let back = rewritten(&f);
+    let (a, b) = (Ramp::new(&f).unwrap(), Ramp::new(&back).unwrap());
+    for k in 0..=20 {
+        let t = k as f32 / 20.0;
+        assert!((a.sample(t)[3] - b.sample(t)[3]).abs() < 1e-4, "at {t}: {:?} vs {:?}", a.sample(t), b.sample(t));
+        assert!((b.sample(t)[3] - 0.5).abs() < 1e-3, "at {t}: {:?}", b.sample(t));
+    }
+}

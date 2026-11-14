@@ -61,18 +61,6 @@ pub fn rebake(mut edited: Fill, before: &Fill, original: &Fill) -> Fill {
     }
     let Some(src) = interpolation else { return edited };
     let lab = stops.iter().all(|(_, c)| c.mode == ColorMode::Lab);
-    let method = gradient_bake::interpolation_method(src);
-    if method.is_none_or(|m| m == gradient_bake::Method::Classic) && src.smoothness <= 0.0 && !lab {
-        *interpolation = None;
-        return edited;
-    }
-    if stops.len() != src.stops.len() {
-        // A new segment starts halfway; the view's midpoints already follow its stops.
-        midpoints.resize(stops.len().saturating_sub(1), 0.5);
-    }
-    src.stops = stops.clone();
-    src.midpoints = if midpoints.iter().all(|m| (m - 0.5).abs() < 1e-6) { Vec::new() } else { std::mem::take(midpoints) };
-    midpoints.clear();
     let opaque = opacity_stops.iter().all(|o| o.1 >= 1.0 - 1e-4);
     if opaque {
         src.opacity_stops.clear();
@@ -83,6 +71,22 @@ pub fn rebake(mut edited: Fill, before: &Fill, original: &Fill) -> Fill {
         }
         src.opacity_stops = opacity_stops.clone();
     }
+    let method = gradient_bake::interpolation_method(src);
+    if method.is_none_or(|m| m == gradient_bake::Method::Classic) && src.smoothness <= 0.0 && !lab {
+        // A fill holds no opacity midpoints: ones off the middle stay baked in.
+        if let Some(baked) = gradient_bake::bake_interpolation_opacity(src) {
+            *opacity_stops = baked;
+        }
+        *interpolation = None;
+        return edited;
+    }
+    if stops.len() != src.stops.len() {
+        // A new segment starts halfway; the view's midpoints already follow its stops.
+        midpoints.resize(stops.len().saturating_sub(1), 0.5);
+    }
+    src.stops = stops.clone();
+    src.midpoints = if midpoints.iter().all(|m| (m - 0.5).abs() < 1e-6) { Vec::new() } else { std::mem::take(midpoints) };
+    midpoints.clear();
     *stops = gradient_bake::bake_interpolation(src);
     if let Some(baked) = gradient_bake::bake_interpolation_opacity(src) {
         *opacity_stops = baked;
