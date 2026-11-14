@@ -1,5 +1,5 @@
-//! Define Pattern (#14302) and Define Brush Preset (#14279) refuse an empty or blank name at the
-//! dialog; the programmatic commands keep their default-name fallbacks.
+//! Define Brush Preset does nothing on OK with an empty or blank name (#14279); the
+//! programmatic command keeps its default-name fallback.
 
 use serde_json::{Value, json};
 
@@ -28,42 +28,6 @@ fn set_name(app: &mut PhotocraftApp, id: u64, name: Option<&str>) {
 
 fn still_open(app: &PhotocraftApp, id: u64) -> bool {
     app.ui.dialogs.iter().any(|d| d.id == id)
-}
-
-#[test]
-fn empty_or_blank_pattern_name_alerts_and_keeps_the_dialog() {
-    for name in [None, Some(""), Some("   ")] {
-        let mut app = app();
-        let id = open(&mut app, "edit.definePattern");
-        set_name(&mut app, id, name);
-        let before = app.session.patterns.items.len();
-        assert!(crate::dialogs::confirm(&mut app, id).is_err(), "{name:?}");
-        assert!(still_open(&app, id), "{name:?}: dialog stays open");
-        let alert = app.ui.dialogs.last().unwrap();
-        assert_eq!(alert.kind, DialogKind::Error);
-        assert_eq!(alert.fields["message"], "You must specify a name for the pattern.");
-        assert_eq!(crate::dialogs::title(alert), "Pattern Name");
-        assert_eq!(app.session.patterns.items.len(), before, "{name:?}: nothing defined");
-    }
-}
-
-#[test]
-fn named_pattern_still_defines() {
-    let mut app = app();
-    let id = open(&mut app, "edit.definePattern");
-    set_name(&mut app, id, Some("Bricks"));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert!(app.session.patterns.items.iter().any(|p| p.name == "Bricks"));
-    assert!(!still_open(&app, id));
-}
-
-#[test]
-fn programmatic_define_pattern_keeps_the_default_name() {
-    let mut app = app();
-    let before = app.session.patterns.items.len();
-    app.run("edit.definePattern", json!({})).unwrap();
-    assert_eq!(app.session.patterns.items.len(), before + 1);
-    assert!(app.session.patterns.items.last().is_some_and(|p| !p.name.trim().is_empty()));
 }
 
 #[test]

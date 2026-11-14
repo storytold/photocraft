@@ -20,12 +20,16 @@ pub(super) fn preflight(ui: &mut UiState, id: u64) -> Result<(), String> {
         return Ok(());
     };
     let command = d.fields.get("__command").and_then(Value::as_str);
-    if !matches!(command, Some(PATTERN | BRUSH_PRESET)) || !blank(&d.fields) {
+    let generic = d.fields.get("__filter").and_then(Value::as_bool) == Some(true) && !d.fields.contains_key("__spec");
+    if !generic || !matches!(command, Some(PATTERN | BRUSH_PRESET)) || !blank(&d.fields) {
         return Ok(());
     }
     if command == Some(PATTERN) {
         let message = tl!(PATTERN_ALERT).to_owned();
-        ui.open_dialog(DialogKind::Error, json!({ "message": message, "title": "Pattern Name" }).as_object().cloned().unwrap_or_default());
+        let shown = ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields.get("message").and_then(Value::as_str) == Some(&message));
+        if !shown {
+            ui.open_dialog(DialogKind::Error, json!({ "message": message, "__title": "Pattern Name" }).as_object().cloned().unwrap_or_default());
+        }
         return Err(message);
     }
     Err(String::new())

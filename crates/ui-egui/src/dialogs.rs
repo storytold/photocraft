@@ -895,7 +895,7 @@ pub fn title(d: &Dialog) -> String {
         DialogKind::About => "About PhotoCraft".into(),
         DialogKind::LayerStyle => "Layer Style".into(),
         DialogKind::Command => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command").trim_end_matches('…').to_string(),
-        DialogKind::Error => d.fields.get("title").and_then(Value::as_str).unwrap_or("Error").to_string(),
+        DialogKind::Error => d.fields.get("__title").and_then(Value::as_str).unwrap_or("Error").to_string(),
     }
 }
 
@@ -1316,7 +1316,7 @@ pub mod credits;
 pub mod dds_options_ui;
 mod define_name;
 #[cfg(test)]
-mod define_name_tests;
+mod define_pattern_empty_name_tests;
 pub mod delete_layer_prompt;
 pub mod dialog_alt_reset;
 pub mod dialog_blend_ui;
