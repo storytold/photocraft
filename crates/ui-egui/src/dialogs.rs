@@ -1057,6 +1057,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         // The Stroke Path dialog reopens with the Simulate Pressure that was just applied (#10527).
         crate::canvas_tool_menu::remember_simulate_pressure(app, &params);
     }
+    if result.is_ok() && cmd == "file.export.artboardsToPdf" {
+        crate::view_cmds::remember_artboards_to_pdf(app, &params);
+    }
     if result.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
     }

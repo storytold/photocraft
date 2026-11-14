@@ -751,6 +751,11 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
+    // Reverse Page Order (#13644): the default page order the other way round.
+    let reverse = match p.get("reversePageOrder") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`reversePageOrder` must be true or false"))?,
+    };
     let mut pages = Vec::new();
     for one in chosen_documents(&doc, p)? {
         let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
@@ -765,6 +770,9 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if pages.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
+    }
+    if reverse {
+        pages.reverse();
     }
     write_file(&path, &raster_pdf(&pages))?;
     Ok(json!({"path": path, "pages": pages.len()}))
@@ -837,7 +845,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board)"##,
+            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10,"reversePageOrder":bool=false (the default page order the other way round)} → {path, pages} (one raster page per board)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -847,6 +855,9 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_reverse_page_order_tests.rs"]
+mod pdf_reverse_page_order_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
