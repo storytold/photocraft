@@ -299,6 +299,13 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
             app.ui.pattern_stamp_phase = r.get("phase").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| o.pattern_stamp_aligned);
         }
         Ok(_) => {}
+        // The Art History Brush's source refusals are alerts with OK, as the press-time ones, and
+        // not in the status bar as well (#12638).
+        Err(e) if tool == Tool::ArtHistoryBrush && e.starts_with("Could not use the art history brush because") => {
+            app.ui.status.clear();
+            app.ui.status_error = false;
+            crate::brush_refusal::prompt(app, tl!(&e));
+        }
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;

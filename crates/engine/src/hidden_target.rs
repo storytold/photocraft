@@ -11,6 +11,9 @@ use crate::Session;
 /// Photoshop's alert text.
 pub const HIDDEN: &str = "Could not complete your request because the target layer is hidden.";
 
+/// The Art History Brush's own alert text (#12638).
+pub const ART_HISTORY_HIDDEN: &str = "Could not use the art history brush because the target layer is hidden.";
+
 /// Commands that paint on, or move, the target layer.
 const GATED: &[&str] = &[
     "paint.stroke",
@@ -53,7 +56,8 @@ pub fn refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
     }
     let st = s.active()?;
     let layer = crate::commands::layer_param(s, &params).ok()?;
-    (st.doc.layer(layer).is_some() && !shown(&st.doc, layer)).then_some(HIDDEN)
+    let why = if id == "paint.artHistoryBrush" { ART_HISTORY_HIDDEN } else { HIDDEN };
+    (st.doc.layer(layer).is_some() && !shown(&st.doc, layer)).then_some(why)
 }
 
 #[cfg(test)]
