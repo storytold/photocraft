@@ -2139,6 +2139,41 @@ fn kerning_modes_split_pairs() {
     assert!((adv(&mixed, 2) - adv(&plain, 2)).abs() < 1e-3, "AV out of it");
 }
 
+/// Metrics kerning sets Japanese characters on their proportional widths (`palt`), as Photoshop
+/// does, but leaves CJK punctuation on its full-width cell; "0" and vertical type keep every
+/// character full-width.
+#[test]
+fn metrics_kerning_sets_japanese_proportionally() {
+    use photocraft_doc::text::Kerning;
+    if !crate::CRAFT_FONTS.iter().any(|f| f.family == "Shippori Mincho") {
+        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+        return;
+    }
+    let mut e = TextEngine::new();
+    let s = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 100.0, ..Default::default() };
+    // カ タ 、 ！ ナ: Shippori Mincho's `palt` takes 131, 108, 500, 329 and 74 units off their
+    // advances and moves カ 35 units left.
+    let text = "カタ、！ナ";
+    let advances = |e: &mut TextEngine, t: &TextLayer| e.layout(t, 72.0).clusters.iter().map(|c| c.advance).collect::<Vec<_>>();
+    let metrics = advances(&mut e, &styled(text, s.clone()));
+    let off = advances(&mut e, &styled(text, CharStyle { kerning: Kerning::Off, ..s.clone() }));
+    assert!(off.iter().all(|a| (a - 100.0).abs() < 1e-3), "{off:?}");
+    for (got, want) in metrics.iter().zip([86.9, 89.2, 100.0, 100.0, 92.6]) {
+        assert!((got - want).abs() < 1e-3, "{metrics:?}");
+    }
+    let l = e.layout(&styled(text, s.clone()), 72.0);
+    assert!((l.glyphs[0].x - l.clusters[0].x + 3.5).abs() < 1e-3, "カ's placement: {:?}", l.glyphs[0]);
+    // A manual kern on a character keeps it full-width.
+    let manual = advances(&mut e, &runs_of(text, &[(3, CharStyle { kern: 10.0, ..s.clone() }), (text.len() - 3, s.clone())]));
+    assert!((manual[0] - 101.0).abs() < 1e-3 && (manual[1] - 89.2).abs() < 1e-3, "{manual:?}");
+    // Vertical type isn't set proportionally.
+    let mut vertical = |k: Kerning| {
+        let t = TextLayer { orientation: photocraft_doc::text::Orientation::Vertical, ..styled(text, CharStyle { kerning: k, ..s.clone() }) };
+        e.layout(&t, 72.0).glyphs.iter().map(|g| (g.x, g.y)).collect::<Vec<_>>()
+    };
+    assert_eq!(vertical(Kerning::Metrics), vertical(Kerning::Off));
+}
+
 #[test]
 fn japanese_dictionary_word_boundaries() {
     // Use only the existing bundled Latin fonts: segmentation must not require a CJK font.

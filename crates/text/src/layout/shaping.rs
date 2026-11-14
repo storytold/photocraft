@@ -11,7 +11,8 @@ use photocraft_doc::text::{CharStyle, ParagraphStyle, TextAlign, TextDirection};
 use super::area::{LineMetrics, MAX_AREA_PASSES, area_metrics, break_area};
 use super::paragraphs::{TabWidth, strip_break, tab_widths};
 use super::style::{
-    SYNTHETIC_SMALL_CAPS_SCALE, SmallCapsMode, drawn_style, effective_horizontal_scale, feature_list, hangul_runs, probe_smcp, small_caps_mode, style_props,
+    PALT, SYNTHETIC_SMALL_CAPS_SCALE, SmallCapsMode, drawn_style, effective_horizontal_scale, feature_list, hangul_runs, is_cjk_punctuation, probe_smcp,
+    proportional_metrics, small_caps_mode, style_props,
 };
 use super::vertical::vertical_class;
 use super::{Env, FORCED_LINE_BREAK, Flow, LRM, RLM, RunBrush, Slot, VClass};
@@ -133,6 +134,26 @@ fn push_cased(ptext: &mut String, small_caps: &mut Vec<(Range<usize>, f32)>, ch:
         }
     }
     ptext.push(ch);
+}
+
+/// Metrics kerning's proportional CJK widths for a horizontal run piece starting at `start`:
+/// `palt` on everything but its CJK punctuation (see [`proportional_metrics`]).
+fn push_proportional(b: &mut parley::RangedBuilder<'_, RunBrush>, feats: Vec<String>, start: usize, piece: &str) {
+    let plain = FontFeatures::Source(Cow::Owned(feats.join(", ")));
+    let mut with = feats;
+    with.push(PALT.into());
+    b.push(StyleProperty::FontFeatures(FontFeatures::Source(Cow::Owned(with.join(", ")))), start..start + piece.len());
+    let mut punct: Option<usize> = None;
+    for (i, ch) in piece.char_indices().chain(std::iter::once((piece.len(), ' '))) {
+        match (punct, is_cjk_punctuation(ch) && i < piece.len()) {
+            (None, true) => punct = Some(i),
+            (Some(from), false) => {
+                b.push(StyleProperty::FontFeatures(plain.clone()), start + from..start + i);
+                punct = None;
+            }
+            _ => {}
+        }
+    }
 }
 
 /// One run piece of vertical type, whose upright stretches get the vertical alternates and their
@@ -371,6 +392,8 @@ impl<'a> Para<'a> {
         if env.vertical {
             let piece = VerticalPiece { style: &env.styles[ri], run: ri, small_caps: env.small_caps[ri], start: range.start };
             piece.push_all(b, self.text_of(range));
+        } else if proportional_metrics(&env.styles[ri]) {
+            push_proportional(b, feature_list(&env.styles[ri], env.small_caps[ri]), range.start, self.text_of(range));
         }
     }
 
