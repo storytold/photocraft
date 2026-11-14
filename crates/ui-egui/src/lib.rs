@@ -934,6 +934,8 @@ mod move_shift_click_tests;
 mod move_target_default_tests;
 
 #[cfg(test)]
+mod paint_bucket_pasteboard_color_tests;
+#[cfg(test)]
 mod wand_press_inside_selection_tests;
 
 #[cfg(test)]
