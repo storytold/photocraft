@@ -210,10 +210,7 @@ fn open_filters_keep_literal_extensions_on_windows_and_macos() {
     assert_eq!(open_filter_extensions(OPEN_EXTS), OPEN_EXTS);
     assert_eq!(open_filter_extensions(&["pcraft"]), ["pcraft"]);
     assert_eq!(open_filters().into_iter().find(|(name, _)| *name == "SVG").map(|(_, exts)| exts), Some(vec!["svg".to_string(), "svgz".to_string()]));
-    assert_eq!(
-        open_filters().into_iter().find(|(name, _)| *name == "Photoshop").map(|(_, exts)| exts),
-        Some(vec!["psd".to_string(), "psb".to_string(), "psdt".to_string()])
-    );
+    assert_eq!(open_filters().into_iter().find(|(name, _)| *name == "Photoshop").map(|(_, exts)| exts), Some(vec!["psd".to_string(), "psdt".to_string()]));
 }
 
 #[test]
@@ -1002,7 +999,7 @@ fn save_types_list_the_document_formats_then_the_rest_by_name() {
     let key = |name: &&str| name.to_ascii_lowercase();
     assert!(names[3..].is_sorted_by_key(key), "{:?}", &names[3..]);
     let names: Vec<&str> = OPEN_FILTERS.iter().map(|(name, _)| *name).collect();
-    assert_eq!(names[..2], ["Photoshop", "PhotoCraft"]);
+    assert_eq!(names[..3], ["Photoshop", "Large Document Format", "PhotoCraft"]);
     let formats = names.iter().position(|name| *name == "Brushes").expect("the app's own resources");
-    assert!(names[2..formats].is_sorted_by_key(key), "{:?}", &names[2..formats]);
+    assert!(names[3..formats].is_sorted_by_key(key), "{:?}", &names[3..formats]);
 }
