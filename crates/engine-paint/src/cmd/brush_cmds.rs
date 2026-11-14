@@ -1190,7 +1190,16 @@ fn define_from_selection_with_renderer(
         }
     }
     let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
-    upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new(), captures: Default::default() });
+    // Defining a tip adds a preset, even when its name already exists.
+    std::sync::Arc::make_mut(&mut *s.tools.presets).push(BrushPreset {
+        name: name.clone(),
+        brush: brush.clone(),
+        builtin: false,
+        group: String::new(),
+        folder: Vec::new(),
+        captures: Default::default(),
+    });
+    s.brush_presets_changed();
     *s.tools.brush = brush;
     s.tools.current_preset = Some(name.clone());
     s.tools.brush_changed();
@@ -1618,3 +1627,5 @@ mod filter_mask_stroke_tests;
 
 #[cfg(test)]
 mod define_brush_size_limit_tests;
+#[cfg(test)]
+mod define_brush_duplicate_name_tests;
