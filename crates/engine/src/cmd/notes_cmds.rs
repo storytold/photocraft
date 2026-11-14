@@ -197,14 +197,7 @@ pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Va
         return Err(EngineError::Other(format!("{name} has no notes")));
     }
     let d = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let (w, h) = (f64::from(d.size.width), f64::from(d.size.height));
-    let mut notes = src.notes;
-    for n in &mut notes {
-        let (nx, ny) = (n.position[0].clamp(0.0, (w - 16.0).max(0.0)), n.position[1].clamp(0.0, (h - 20.0).max(0.0)));
-        let (dx, dy) = (nx - n.position[0], ny - n.position[1]);
-        n.position = [nx, ny];
-        n.popup = [n.popup[0] + dx, n.popup[1] + dy, n.popup[2] + dx, n.popup[3] + dy];
-    }
+    let (notes, outside) = place_notes(src.notes, [d.size.width, d.size.height], src.size.height)?;
     let count = notes.len();
     s.edit("Import Notes", |d, _| {
         d.notes.extend(notes);
@@ -212,7 +205,36 @@ pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Va
     })?;
     let mut r = list_json(&s.active().ok_or(EngineError::NoDocument)?.doc);
     r["imported"] = json!(count);
+    // Some icon's top-left landed off the canvas: the shell says so (#13914).
+    r["outside"] = json!(outside);
     Ok(r)
+}
+
+/// Where imported notes land on a `target` (width, height) canvas, as the reference application
+/// places them (#13914): each icon's top-left and its popup's top-left are multiplied by
+/// s = target height / `source_height` (one factor for x and y; the width ratio plays no part),
+/// the icon and popup keep their sizes, and nothing is clamped or rounded. Also returns whether
+/// any icon's top-left lies outside the canvas. A zero source height, or a scale or position that
+/// overflows, is an error.
+pub(crate) fn place_notes(mut notes: Vec<Note>, target: [u32; 2], source_height: u32) -> Result<(Vec<Note>, bool)> {
+    if source_height == 0 {
+        return Err(EngineError::Other("the notes' source has no height".into()));
+    }
+    let scale = f64::from(target[1]) / f64::from(source_height);
+    let (w, h) = (f64::from(target[0]), f64::from(target[1]));
+    let mut outside = false;
+    for n in &mut notes {
+        let [px, py] = [n.position[0] * scale, n.position[1] * scale];
+        let [l, t] = [n.popup[0] * scale, n.popup[1] * scale];
+        let [r, b] = [l + (n.popup[2] - n.popup[0]), t + (n.popup[3] - n.popup[1])];
+        if ![scale, px, py, l, t, r, b].iter().all(|v| v.is_finite()) {
+            return Err(EngineError::Other("the notes' positions overflow on this canvas".into()));
+        }
+        n.position = [px, py];
+        n.popup = [l, t, r, b];
+        outside |= !((0.0..w).contains(&px) && (0.0..h).contains(&py));
+    }
+    Ok((notes, outside))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -269,6 +291,10 @@ pub fn specs() -> Vec<CommandSpec> {
         },
     ]
 }
+
+#[cfg(test)]
+#[path = "notes_import_placement_tests.rs"]
+mod notes_import_placement_tests;
 
 #[cfg(test)]
 mod tests {
