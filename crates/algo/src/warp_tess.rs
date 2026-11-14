@@ -516,6 +516,7 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             start: START_FULL,
             force_down: true,
             twist_spreads: false,
+            twist_spreads_in_row: true,
             fixed_level: 1,
             mid_row_level: 1,
             cut_sides: false,
@@ -531,6 +532,7 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             start: START,
             force_down: false,
             twist_spreads: false,
+            twist_spreads_in_row: false,
             fixed_level: 2,
             mid_row_level: 1,
             cut_sides: !tall,
@@ -569,6 +571,7 @@ pub(crate) fn quilt_patch_mesh(at: &dyn Fn(f64, f64) -> P, seams: Seams) -> Opti
         start: 1,
         force_down: false,
         twist_spreads: true,
+        twist_spreads_in_row: false,
         fixed_level: 0,
         mid_row_level: 0,
         cut_sides: false,
@@ -593,6 +596,9 @@ struct Rules {
     force_down: bool,
     /// A cell split down for its twist splits the other cells cut from its parent down too.
     twist_spreads: bool,
+    /// A cell split down for its twist splits the cells beside it in its row, cut from the same
+    /// parent, down too (a one-patch full mesh).
+    twist_spreads_in_row: bool,
     /// Grid lines up to this many halvings in stay where they are on the surface (a T-junction
     /// further in sits on the chord of the edge it lies on): the starting grid's.
     fixed_level: u32,
@@ -671,6 +677,16 @@ fn spread_down(level_cells: &[Cell], decisions: &mut [(bool, bool)], from: &[boo
     }
     for (c, d) in level_cells.iter().zip(decisions) {
         if parents.contains(&parent_of(c)) {
+            d.1 = true;
+        }
+    }
+}
+
+/// Splits down every cell beside a cell marked in `from`: cut from the same parent, in the same row.
+fn spread_down_in_row(level_cells: &[Cell], decisions: &mut [(bool, bool)], from: &[bool]) {
+    let marked: Vec<Cell> = level_cells.iter().zip(from).filter(|(_, t)| **t).map(|(c, _)| *c).collect();
+    for (c, d) in level_cells.iter().zip(decisions) {
+        if marked.iter().any(|m| parent_of(m) == parent_of(c) && (m[2] - c[2]).abs() < EPS) {
             d.1 = true;
         }
     }
@@ -797,6 +813,9 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
         if rules.twist_spreads {
             strip_down_cuts(net, &level_cells, &mut decisions, &mut twisted);
             spread_down(&level_cells, &mut decisions, &twisted);
+        }
+        if rules.twist_spreads_in_row {
+            spread_down_in_row(&level_cells, &mut decisions, &twisted);
         }
         let first_level = level_cells.first().is_some_and(|c| (c[3] - c[2] - first).abs() < EPS);
         if first_level {
@@ -1169,6 +1188,7 @@ mod tests {
                 start: START_FULL,
                 force_down: true,
                 twist_spreads: false,
+                twist_spreads_in_row: true,
                 fixed_level: 1,
                 mid_row_level: 1,
                 cut_sides: false,
@@ -1381,6 +1401,7 @@ mod tests {
             start: 1,
             force_down: false,
             twist_spreads: true,
+            twist_spreads_in_row: false,
             fixed_level: 0,
             mid_row_level: 0,
             cut_sides: false,
@@ -1423,6 +1444,7 @@ mod tests {
             start: 1,
             force_down: false,
             twist_spreads: true,
+            twist_spreads_in_row: false,
             fixed_level: 0,
             mid_row_level: 0,
             cut_sides: false,
@@ -1497,6 +1519,32 @@ mod tests {
         assert!(sub.twist() < ACROSS_TWIST_TOL, "{}", sub.twist());
         let split = log.iter().find(|s| s.cell.iter().zip(&cell).all(|(a, b)| (a - b).abs() < 1e-9));
         assert!(split.is_some_and(|s| s.across && s.down), "the cell didn't split both ways: {:?}", split.map(|s| (s.across, s.down)));
+    }
+
+    /// A Fish saved as a full mesh (the reference application's redraws of re-saved presets): four
+    /// cells in its top and bottom rows whose neighbours in the row split down for their twist
+    /// split down too; nothing else changes, above or below them.
+    #[test]
+    fn a_full_mesh_twist_split_down_spreads_along_its_row() {
+        use photocraft_geom::warp::{Warp, WarpStyle};
+        let b = [96.0, 96.0, 224.0, 224.0];
+        let w = Warp::preset(WarpStyle::Fish, 50.0, b);
+        let at = |u: f64, v: f64| {
+            let (x, y) = w.map(b[0] + 128.0 * u, b[1] + 128.0 * v);
+            [x, y]
+        };
+        let net = cubic_net(&at);
+        let rules = one_patch_rules(&net, true);
+        let splits = |r: &Rules| {
+            let (_, log) = cells(&net, true, r);
+            log.iter().map(|s| (s.cell.map(|x| (x * 64.0).round() as i64), s.across, s.down)).collect::<std::collections::BTreeSet<_>>()
+        };
+        let (alone, spread) = (splits(&Rules { twist_spreads_in_row: false, ..rules }), splits(&rules));
+        let cut = [[8, 12, 0, 8], [8, 12, 56, 64], [52, 56, 0, 8], [52, 56, 56, 64]];
+        assert_eq!(alone.difference(&spread).cloned().collect::<Vec<_>>(), cut.map(|c| (c, true, false)), "cells that stopped splitting across only");
+        // Split down too, their halves split across only.
+        let halves = [[8, 12, 0, 4], [8, 12, 60, 64], [52, 56, 0, 4], [52, 56, 60, 64]];
+        assert_eq!(spread.difference(&alone).cloned().collect::<Vec<_>>(), halves.map(|c| (c, true, false)), "new splits");
     }
 
     /// In a quilt with a single row of patches, a point on a patch's inner seam stays where the
@@ -1916,6 +1964,7 @@ mod tests {
             start: START_FULL,
             force_down: true,
             twist_spreads: false,
+            twist_spreads_in_row: true,
             fixed_level: 1,
             mid_row_level: 1,
             cut_sides: false,
@@ -1948,6 +1997,7 @@ mod tests {
             start: START_FULL,
             force_down: true,
             twist_spreads: false,
+            twist_spreads_in_row: true,
             fixed_level: 1,
             mid_row_level: 1,
             cut_sides: false,
