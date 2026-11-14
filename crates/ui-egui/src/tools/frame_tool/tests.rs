@@ -133,6 +133,8 @@ fn frame_content_and_both_selection_follow_clicks_and_double_clicks() {
     drag(&mut app, [20., 30.], [120., 110.]);
     let frame = selected(&app).unwrap().id;
     let original = selected(&app).unwrap().frame.clone();
+    // This test exercises the click cycle from the frame thumbnail, independently of creation.
+    select(&mut app, frame, Target::Frame);
     double_click(&mut app, [65., 65.]);
     assert_eq!(app.ui.frame_tool.target, Target::Content);
     assert_eq!(app.session.active().unwrap().active_layer, Some(source));
@@ -261,6 +263,7 @@ fn free_transform_on_the_frame_thumbnail_previews_and_commits_only_the_clip() {
         .unwrap();
     drag(&mut app, [20., 30.], [120., 110.]);
     let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     let original = app.session.active().unwrap().doc.layer(source).unwrap().clone();
     let ctx = egui::Context::default();
     PhotocraftApp::setup_context(&ctx, Default::default());
@@ -300,6 +303,7 @@ fn real_canvas_clicks_select_both_then_double_click_selects_the_image() {
         .unwrap();
     drag(&mut app, [20., 30.], [120., 110.]);
     let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(egui::vec2(1000., 700.)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -359,6 +363,7 @@ fn frame_keyboard_nudges_change_only_the_selected_thumbnail() {
         .unwrap();
     drag(&mut app, [20., 30.], [120., 110.]);
     let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     let child = selected(&app).unwrap().children().unwrap()[0].clone();
     let ctx = egui::Context::default();
     for (key, mods) in [(egui::Key::ArrowRight, egui::Modifiers::NONE), (egui::Key::ArrowDown, egui::Modifiers::SHIFT)] {
@@ -428,6 +433,7 @@ fn drawing_a_frame_with_another_frames_image_selected_leaves_that_image_in_place
         .unwrap();
     drag(&mut app, [20., 30.], [120., 110.]);
     let first = selected(&app).unwrap().id;
+    select(&mut app, first, Target::Frame);
     double_click(&mut app, [65., 65.]);
     assert_eq!(app.session.active().unwrap().active_layer, Some(source));
     // Starts outside the first frame but overlaps the image's own bounds.
@@ -455,6 +461,8 @@ fn cancelling_a_frame_content_drag_clears_its_auto_commit() {
         })
         .unwrap();
     drag(&mut app, [20., 30.], [120., 110.]);
+    let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     double_click(&mut app, [65., 65.]);
     let ctx = egui::Context::default();
     crate::PhotocraftApp::setup_context(&ctx, Default::default());
@@ -530,6 +538,8 @@ fn filled_frame_closing_border_selects_frame() {
         })
         .unwrap();
     drag(&mut app, [20., 30.], [120., 110.]);
+    let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     double_click(&mut app, [65., 65.]);
     pointer(&mut app, ToolEvent::Down { x: 20., y: 50., pressure: 1. }, egui::Modifiers::NONE);
     assert_eq!(app.ui.frame_tool.target, Target::Frame);
@@ -550,6 +560,8 @@ fn overhanging_content_handles_start_transform_and_cancel() {
         })
         .unwrap();
     drag(&mut app, [20., 30.], [120., 110.]);
+    let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     double_click(&mut app, [65., 65.]);
     let ctx = egui::Context::default();
     crate::PhotocraftApp::setup_context(&ctx, Default::default());
