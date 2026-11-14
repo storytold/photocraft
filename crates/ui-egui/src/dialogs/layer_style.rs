@@ -23,6 +23,8 @@ use crate::{PhotocraftApp, widgets};
 
 #[cfg(test)]
 mod bevel_modes_tests;
+#[cfg(test)]
+mod bevel_reset_angle_tests;
 pub(crate) mod color_picker;
 mod contour;
 mod gradient_field;
@@ -100,6 +102,25 @@ fn fresh_params(kind: &str, light: f32, user: Option<&Value>) -> Value {
         p["angle"] = json!(light);
     }
     p
+}
+
+/// The shared light angle the dialog works with: the one edited since it opened, else the
+/// document's.
+fn light_angle(f: &Map<String, Value>) -> f64 {
+    f.get("pendingGlobalLight").or_else(|| f.get("globalLight")).and_then(Value::as_f64).unwrap_or(120.0)
+}
+
+/// The defaults Reset to Default lays over an instance, with the shared light angle seeded into a
+/// globally lit effect: the stored default carries its own `angle` (120 for the factory), and an
+/// effect lit by the global light shows and keeps the shared angle instead — the same rule
+/// [`fresh_params`] follows for a new instance (#14843).
+fn default_params(f: &Map<String, Value>, mut params: Value) -> Value {
+    if params.get("useGlobalLight").and_then(Value::as_bool) == Some(true)
+        && let Some(o) = params.as_object_mut()
+    {
+        o.insert("angle".into(), json!(light_angle(f)));
+    }
+    params
 }
 
 fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
@@ -1777,9 +1798,11 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
         ui.add_enabled_ui(page_kind, |ui| {
             if crate::widgets::secondary_button(ui, tl!("Reset to Default"), 130.0).clicked()
                 && let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": sel_kind}))
-                && let Some(e) = entry_mut(f, selected)
             {
-                e["params"] = v["params"].clone();
+                let params = default_params(f, v.get("params").cloned().unwrap_or(Value::Null));
+                if let Some(e) = entry_mut(f, selected) {
+                    e["params"] = params;
+                }
             }
             if crate::widgets::secondary_button(ui, tl!("Make Default"), 110.0).clicked()
                 && app.run("layer.layerStyle.makeDefault", json!({"kind": sel_kind, "params": disp})).is_ok()
