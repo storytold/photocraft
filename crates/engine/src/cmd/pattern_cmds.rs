@@ -319,10 +319,9 @@ pub fn default_name(s: &Session) -> String {
     (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or(base)
 }
 
-/// Longest edge Define Pattern accepts. Its area is limited too, to what the compositor holds
-/// (`Pattern::working_bytes`): 8000 x 8000 at 8 bits, and fewer pixels at 16 bits and float,
-/// where the working copy is larger per pixel. What is accepted always paints.
-const MAX_DEFINE_EDGE: u32 = 8000;
+/// Longest edge Define Pattern accepts, matching `photocraft_doc::pattern::MAX_EDGE`. Its area is
+/// limited separately by `max_paint_pixels` so what is accepted always paints.
+const MAX_DEFINE_EDGE: u32 = photocraft_doc::pattern::MAX_EDGE;
 
 fn define(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.definePattern";
@@ -340,7 +339,7 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "the area is empty"));
     }
     if r.width() > MAX_DEFINE_EDGE || r.height() > MAX_DEFINE_EDGE {
-        return Err(bad(cmd, "patterns are limited to 8000 × 8000 px"));
+        return Err(bad(cmd, format!("patterns are limited to {MAX_DEFINE_EDGE} × {MAX_DEFINE_EDGE} px")));
     }
     // A pattern the compositor could not hold would define but paint nothing: 8 bits go to the
     // edge limit, 16-bit documents to 33,554,432 px in all, float to 16,777,216 (4096 × 4096).
@@ -807,13 +806,13 @@ mod tests {
     }
 
     #[test]
-    fn define_pattern_accepts_edges_over_4000_up_to_8000() {
-        for (w, ok) in [(4100, true), (8000, true), (8001, false)] {
+    fn define_pattern_accepts_edges_over_8000_up_to_30000() {
+        for (w, h, ok) in [(4100, 2, true), (8000, 2, true), (8001, 2, true), (10_000, 2, true), (30_000, 2, true), (2, 30_000, true), (30_001, 2, false)] {
             let mut s = Session::new();
-            s.execute("file.new", json!({"width": w, "height": 2, "depth": 8})).unwrap();
+            s.execute("file.new", json!({"width": w, "height": h, "depth": 8})).unwrap();
             s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
             let r = s.execute("edit.definePattern", json!({}));
-            assert_eq!(r.is_ok(), ok, "width {w}: {r:?}");
+            assert_eq!(r.is_ok(), ok, "size {w}x{h}: {r:?}");
         }
     }
 
