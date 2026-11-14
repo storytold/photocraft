@@ -1657,3 +1657,221 @@ fn path_rows_dragged_onto_the_trash_are_deleted() {
     let doc = &h.state().session.active().unwrap().doc;
     assert_eq!((doc.layers.len(), doc.paths.len()), (layers, 1), "nothing is deleted");
 }
+
+/// Layer widgets must not intercept a gesture meant for the explicitly selected Work Path.
+#[test]
+fn explicit_work_path_shape_drags_do_not_edit_the_active_shape() {
+    for tool in [Tool::Rectangle, Tool::EllipseShape] {
+        for from in [[50.0, 50.0], [40.0, 40.0]] {
+            let mut app = app();
+            app.run("shape.create", json!({"kind": "roundedRect", "rect": [40, 40, 120, 80], "radii": 10})).unwrap();
+            let id = app.session.active().unwrap().active_layer.unwrap();
+            let layer = app.session.active().unwrap().doc.layer(id).unwrap().clone();
+            app.ui.tool_options.shape_mode = "path".into();
+            finish_shape(&mut app, tool, [10.0, 140.0], [30.0, 170.0], egui::Modifiers::NONE);
+            let before = app.session.active().unwrap().doc.work_path.clone().unwrap();
+            let n = app.session.active().unwrap().history.past_len();
+            app.ui.tool = tool;
+            crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, egui::Modifiers::NONE);
+            crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Move { x: 80.0, y: 80.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Up { x: 80.0, y: 80.0 }, egui::Modifiers::NONE);
+            let st = app.session.active().unwrap();
+            assert_eq!(st.doc.layer(id).unwrap(), &layer, "{tool:?}, {from:?}: active Shape must stay untouched");
+            let after = st.doc.work_path.clone().unwrap();
+            assert_eq!(after.subpaths.len(), 2);
+            assert_eq!(after.subpaths[0], before.subpaths[0]);
+            assert_eq!(st.history.past_len(), n + 1);
+            app.run("edit.undo", json!({})).unwrap();
+            assert_eq!(app.session.active().unwrap().doc.work_path.as_ref(), Some(&before));
+            app.run("edit.redo", json!({})).unwrap();
+            assert_eq!(app.session.active().unwrap().doc.work_path.as_ref(), Some(&after));
+        }
+    }
+}
+
+#[test]
+fn document_path_gestures_leave_shape_widgets_inactive() {
+    for name in ["work", "Saved drawing"] {
+        for tool in [Tool::PathSelection, Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star, Tool::Line] {
+            let mut app = app();
+            app.run("shape.create", json!({"kind": "roundedRect", "rect": [40, 40, 120, 80], "radii": 10})).unwrap();
+            let id = app.session.active().unwrap().active_layer.unwrap();
+            let path = photocraft_engine::vector_cmds::path_json(&active_shape_path(&app).unwrap().1);
+            app.run("path.set", json!({"name": name, "path": path})).unwrap();
+            app.ui.selected_path = Some(name.into());
+            app.ui.tool = tool;
+            app.ui.tool_options.shape_mode = "path".into();
+            let before = app.session.active().unwrap().doc.clone();
+            for p in [[50.0, 50.0], [40.0, 40.0]] {
+                let down = crate::canvas::ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 };
+                assert!(!crate::corner_radius::pointer(&mut app, down, egui::Modifiers::NONE), "{name}, {tool:?}: corner widget");
+                assert!(!crate::shape_bounds_box::pointer(&mut app, down, egui::Modifiers::NONE), "{name}, {tool:?}: shape bounds");
+            }
+            assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+            // Layer-path editing with Path Selection, or Shape-mode editing, restores the box.
+            app.ui.tool_options.shape_mode = "shape".into();
+            app.ui.selected_path = Some("layer".into());
+            let down = crate::canvas::ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 };
+            assert!(crate::shape_bounds_box::pointer(&mut app, down, egui::Modifiers::NONE));
+            assert_eq!(app.session.active().unwrap().active_layer, Some(id));
+        }
+    }
+}
+
+#[test]
+fn shape_created_work_path_target_survives_history_but_not_document_switches() {
+    for tool in [Tool::Rectangle, Tool::EllipseShape] {
+        let mut app = app();
+        app.ui.tool = Tool::PathSelection;
+        app.run("shape.create", json!({"kind": "rect", "rect": [40, 40, 120, 80]})).unwrap();
+        let first_layer = app.session.active().unwrap().active_layer.unwrap();
+        let path = photocraft_engine::vector_cmds::path_json(&active_shape_path(&app).unwrap().1);
+        app.run("path.set", json!({"name": "Saved drawing", "path": path})).unwrap();
+        app.ui.selected_path = Some("Saved drawing".into());
+        app.ui.tool_options.shape_mode = "path".into();
+        finish_shape(&mut app, tool, [10.0, 140.0], [30.0, 170.0], egui::Modifiers::NONE);
+        assert_eq!(super::free_transform_path(&app).unwrap().0["name"], "work");
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(app.session.active().unwrap().doc.work_path.is_none());
+        app.run("edit.redo", json!({})).unwrap();
+        assert_eq!(super::free_transform_path(&app).unwrap().0["name"], "work");
+        app.run("channel.target", json!({"channel": "red"})).unwrap();
+        assert_eq!(super::free_transform_path(&app).unwrap().0["name"], "work");
+        app.run("channel.target.composite", json!({})).unwrap();
+        app.ui.tool_options.shape_mode = "shape".into();
+        finish_shape(&mut app, tool, [100.0, 140.0], [130.0, 170.0], egui::Modifiers::NONE);
+        app.run("layer.select", json!({"layer": first_layer.0})).unwrap();
+        app.ui.selected_path = Some("Saved drawing".into());
+        assert_eq!(super::free_transform_path(&app).unwrap().0["name"], "Saved drawing");
+        app.ui.selected_path = Some("work".into());
+        assert_eq!(super::free_transform_path(&app).unwrap().0["name"], "work");
+        let source = app.session.active().unwrap().doc.clone();
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        assert!(app.ui.selected_path.is_none());
+        assert!(super::free_transform_path(&app).is_none());
+        app.run("document.activate", json!({"document": 0})).unwrap();
+        assert!(app.ui.selected_path.is_none());
+        assert_eq!(app.session.active().unwrap().doc, source);
+    }
+}
+
+#[test]
+fn selected_work_path_does_not_disable_move_layer_corner_controls() {
+    let mut app = app();
+    app.run("shape.create", json!({"kind": "roundedRect", "rect": [40, 40, 120, 80], "radii": 10})).unwrap();
+    app.ui.tool_options.shape_mode = "path".into();
+    finish_shape(&mut app, Tool::Rectangle, [10.0, 140.0], [30.0, 170.0], egui::Modifiers::NONE);
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_show_transform = true;
+    let down = crate::canvas::ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 };
+    assert!(crate::corner_radius::pointer(&mut app, down, egui::Modifiers::NONE));
+}
+
+#[test]
+fn first_path_mode_shape_drag_does_not_grab_layer_widgets() {
+    for tool in [Tool::Rectangle, Tool::EllipseShape] {
+        for from in [[50.0, 50.0], [40.0, 40.0]] {
+            let mut app = app();
+            app.run("shape.create", json!({"kind": "roundedRect", "rect": [40, 40, 120, 80], "radii": 10})).unwrap();
+            let id = app.session.active().unwrap().active_layer.unwrap();
+            let before = app.session.active().unwrap().doc.layer(id).unwrap().clone();
+            assert!(app.session.active().unwrap().doc.work_path.is_none());
+            app.ui.tool = tool;
+            app.ui.tool_options.shape_mode = "path".into();
+            for ev in [
+                crate::canvas::ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 },
+                crate::canvas::ToolEvent::Move { x: 80.0, y: 80.0, pressure: 1.0 },
+                crate::canvas::ToolEvent::Up { x: 80.0, y: 80.0 },
+            ] {
+                crate::canvas::tool_event(&mut app, ev, egui::Modifiers::NONE);
+            }
+            let doc = &app.session.active().unwrap().doc;
+            assert_eq!(doc.layer(id).unwrap(), &before);
+            assert_eq!(doc.work_path.as_ref().unwrap().subpaths.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn shape_mode_after_path_drawing_keeps_existing_shape_corner_controls() {
+    for name in ["work", "Saved drawing"] {
+        let mut app = app();
+        app.run("shape.create", json!({"kind": "roundedRect", "rect": [40, 40, 120, 80], "radii": 10})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.ui.tool = Tool::Rectangle;
+        app.ui.tool_options.shape_mode = "path".into();
+        finish_shape(&mut app, Tool::Rectangle, [10.0, 140.0], [30.0, 170.0], egui::Modifiers::NONE);
+        if name != "work" {
+            app.run("path.rename", json!({"name": "work", "to": name})).unwrap();
+            app.ui.selected_path = Some(name.into());
+        }
+        app.ui.tool_options.shape_mode = "shape".into();
+        app.run("layer.select", json!({"layer": id.0})).unwrap();
+        assert_eq!(app.ui.selected_path.as_deref(), Some(name));
+        let before = app.session.active().unwrap().doc.clone();
+        let steps = app.session.active().unwrap().history.past_len();
+        assert!(crate::corner_radius::hovers(&app, [50.0, 50.0]), "{name}: Shape mode keeps its corner widget");
+        for ev in [
+            crate::canvas::ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 },
+            crate::canvas::ToolEvent::Move { x: 60.0, y: 60.0, pressure: 1.0 },
+            crate::canvas::ToolEvent::Up { x: 60.0, y: 60.0 },
+        ] {
+            crate::canvas::tool_event(&mut app, ev, egui::Modifiers::NONE);
+        }
+        let st = app.session.active().unwrap();
+        let after = st.doc.layer(id).unwrap().clone();
+        let info = app.session.execute("shape.info", json!({"layer": id.0})).unwrap();
+        assert_eq!(info["live"]["radii"], json!([20.0, 20.0, 20.0, 20.0]));
+        let st = app.session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), before.layers.len(), "widget edit must not draw another layer");
+        assert_eq!(st.doc.work_path, before.work_path);
+        assert_eq!(st.doc.paths, before.paths);
+        assert_eq!(st.history.past_len(), steps + 1);
+        assert_eq!(app.ui.selected_path.as_deref(), Some(name));
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layer(id), before.layer(id));
+        app.run("edit.redo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layer(id), Some(&after));
+    }
+}
+
+#[test]
+fn shape_mode_after_path_drawing_keeps_new_shape_bounds_controls() {
+    for name in ["work", "Saved drawing"] {
+        let mut app = app();
+        app.run("shape.create", json!({"kind": "roundedRect", "rect": [40, 40, 120, 80], "radii": 10})).unwrap();
+        let first = app.session.active().unwrap().active_layer.unwrap();
+        app.ui.tool = Tool::Rectangle;
+        app.ui.tool_options.shape_mode = "path".into();
+        finish_shape(&mut app, Tool::Rectangle, [10.0, 140.0], [30.0, 170.0], egui::Modifiers::NONE);
+        if name != "work" {
+            app.run("path.rename", json!({"name": "work", "to": name})).unwrap();
+            app.ui.selected_path = Some(name.into());
+        }
+        app.ui.tool_options.shape_mode = "shape".into();
+        finish_shape(&mut app, Tool::Rectangle, [100.0, 140.0], [160.0, 190.0], egui::Modifiers::NONE);
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        assert_ne!(id, first);
+        assert_eq!(app.ui.selected_path.as_deref(), Some(name));
+        let before = app.session.active().unwrap().doc.clone();
+        let steps = app.session.active().unwrap().history.past_len();
+        let down = crate::canvas::ToolEvent::Down { x: 100.0, y: 140.0, pressure: 1.0 };
+        assert!(crate::shape_bounds_box::pointer(&mut app, down, egui::Modifiers::NONE), "{name}: new Shape keeps its bounds handle");
+        for ev in [crate::canvas::ToolEvent::Move { x: 90.0, y: 130.0, pressure: 1.0 }, crate::canvas::ToolEvent::Up { x: 90.0, y: 130.0 }] {
+            crate::canvas::tool_event(&mut app, ev, egui::Modifiers::NONE);
+        }
+        let st = app.session.active().unwrap();
+        let after = st.doc.layer(id).unwrap().clone();
+        assert_ne!(Some(&after), before.layer(id));
+        assert_eq!(st.doc.layers.len(), before.layers.len());
+        assert_eq!(st.doc.layer(first), before.layer(first));
+        assert_eq!(st.doc.work_path, before.work_path);
+        assert_eq!(st.doc.paths, before.paths);
+        assert_eq!(st.history.past_len(), steps + 1);
+        assert_eq!(app.ui.selected_path.as_deref(), Some(name));
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layer(id), before.layer(id));
+        app.run("edit.redo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layer(id), Some(&after));
+    }
+}

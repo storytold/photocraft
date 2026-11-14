@@ -62,7 +62,11 @@ pub struct Drag {
 /// The tools that show the box, while View › Extras and View › Show › Target Path show paths
 /// (the overlay draws it only then, so a hidden handle must not take a press either).
 fn shows(app: &PhotocraftApp) -> bool {
-    app.ui.transform.is_none()
+    // Only Path Selection gives a selected document path priority over the layer box;
+    // Shape mode still edits the layer even while that panel selection remains.
+    (app.ui.tool != Tool::PathSelection || crate::vector_ui::selected_document_path(app).is_none())
+        && app.ui.transform.is_none()
+        && !(crate::vector_ui::is_shape_tool(app.ui.tool) && crate::vector_ui::draws_path(&app.ui.tool_options))
         && app.ui.view.shows(app.ui.view.show.target_path)
         && matches!(app.ui.tool, Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line)
         // A live line shows its own controls instead (#13263); a drag from one of its ends keeps

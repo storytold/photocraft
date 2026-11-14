@@ -155,7 +155,11 @@ pub struct Drag {
 
 /// Do the widgets show with the current tool?
 fn shows(app: &PhotocraftApp) -> bool {
-    app.ui.transform.is_none()
+    // Path Selection gives an explicitly selected document path priority. Shape mode and
+    // Move still own their layer widgets even while that panel selection remains.
+    (app.ui.tool != Tool::PathSelection || crate::vector_ui::selected_document_path(app).is_none())
+        && app.ui.transform.is_none()
+        && !(crate::vector_ui::is_shape_tool(app.ui.tool) && crate::vector_ui::draws_path(&app.ui.tool_options))
         && match app.ui.tool {
             Tool::PathSelection | Tool::Rectangle | Tool::Triangle | Tool::Polygon | Tool::Star => true,
             Tool::Move => app.ui.tool_options.move_show_transform,
