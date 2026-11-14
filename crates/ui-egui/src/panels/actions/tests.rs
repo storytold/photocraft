@@ -102,6 +102,15 @@ fn single_history_dialog_refuses_intervening_edit_or_document_switch() {
 
 /// Prepare a real paused spelling step with a known document and history boundary, under either grouping policy.
 fn paused_history_spelling(single: bool, gate: Option<Gate>) -> (PhotocraftApp, std::sync::Arc<photocraft_doc::Document>, usize) {
+    paused_history_spelling_with(single, gate, |_| {})
+}
+
+/// [`paused_history_spelling`] with `edit` applied to the action before it plays, since Done ends a paused action that was changed.
+fn paused_history_spelling_with(
+    single: bool,
+    gate: Option<Gate>,
+    edit: impl FnOnce(&mut Action),
+) -> (PhotocraftApp, std::sync::Arc<photocraft_doc::Document>, usize) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":300,"height":100})).unwrap();
     app.run("type.create", json!({"x":10,"y":50,"text":"Teh brwon"})).unwrap();
@@ -117,6 +126,7 @@ fn paused_history_spelling(single: bool, gate: Option<Gate>) -> (PhotocraftApp, 
         ],
     );
     action.dialogs.insert(1);
+    edit(&mut action);
     app.session.actions.list.push(action);
     app.session.authorize = gate;
     let paused = play(&mut app, &json!({"action":"Spell"})).unwrap();
@@ -1938,6 +1948,78 @@ fn check_spelling_done_on_another_document_ends_the_waiting_action() {
     assert!(app.ui.status.contains("document"), "{}", app.ui.status);
 }
 
+/// Play an action that waits at Check Spelling, apply `edit` to the action list while the dialog is
+/// open, and press Done. Returns the app and the layer names from before Done.
+fn spelling_done_after(edit: impl FnOnce(&mut Vec<Action>)) -> (PhotocraftApp, Vec<String>) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 300, "height": 100})).unwrap();
+    app.run("type.create", json!({"x": 10, "y": 50, "text": "Teh cat"})).unwrap();
+    let mut a = Action::new("Spell", vec![("edit.checkSpelling".into(), json!({"allLayers": false})), ("layer.new.layer".into(), json!({"name": "after"}))]);
+    a.dialogs.insert(0);
+    app.session.actions.list.push(a);
+    let v = play(&mut app, &json!({"action": "Spell"})).unwrap();
+    assert_eq!(v["paused"]["dialog"], crate::type_panels_ui::SPELLING, "{v}");
+    let before = layer_names(&app);
+    edit(&mut app.session.actions.list);
+    crate::type_panels_ui::close_spelling(&mut app);
+    assert!(app.paused_playbacks.paused.is_empty());
+    (app, before)
+}
+
+/// Check Spelling leaves the Actions panel editable: Done after the waiting action was deleted and
+/// recorded again under the same name ends it there instead of playing the new action's steps.
+#[test]
+fn check_spelling_done_after_the_waiting_action_changed_ends_it() {
+    let (app, before) = spelling_done_after(|list| {
+        list.clear();
+        list.push(Action::new("Spell", vec![("layer.new.layer".into(), json!({"name": "first"})), ("layer.new.layer".into(), json!({"name": "replaced"}))]));
+    });
+    assert_eq!(layer_names(&app), before, "no step of either action ran");
+    assert!(app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("paused action changed"), "{}", app.ui.status);
+}
+
+/// Done after the waiting action was deleted, with nothing recorded in its place, ends it there.
+#[test]
+fn check_spelling_done_after_the_waiting_action_was_deleted_ends_it() {
+    let (app, before) = spelling_done_after(Vec::clear);
+    assert_eq!(layer_names(&app), before, "no step ran");
+    assert!(app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("paused action changed"), "{}", app.ui.status);
+}
+
+/// Done after a step of the waiting action was edited in place ends it there: neither the old nor
+/// the edited step runs.
+#[test]
+fn check_spelling_done_after_the_waiting_action_was_edited_ends_it() {
+    let (app, before) = spelling_done_after(|list| list[0].steps[1].1 = json!({"name": "edited"}));
+    assert_eq!(layer_names(&app), before, "no step ran");
+    assert!(app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("paused action changed"), "{}", app.ui.status);
+}
+
+/// Done after the waiting action's steps after Check Spelling were deleted, leaving nothing to
+/// play, still ends it with the reason instead of reporting a finished playback.
+#[test]
+fn check_spelling_done_after_the_waiting_actions_tail_was_deleted_ends_it() {
+    let (app, before) = spelling_done_after(|list| list[0].steps.truncate(1));
+    assert_eq!(layer_names(&app), before, "no step ran");
+    assert!(app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("paused action changed"), "{}", app.ui.status);
+}
+
+/// Changes to other actions while Check Spelling is open, including one added ahead of the waiting
+/// action, don't stop it: Done plays its remaining step.
+#[test]
+fn check_spelling_done_after_another_action_changed_continues() {
+    let (app, before) = spelling_done_after(|list| {
+        list.insert(0, Action::new("Other", vec![("layer.new.layer".into(), json!({"name": "other"}))]));
+        list[0].steps.push(("layer.new.layer".into(), json!({"name": "other 2"})));
+    });
+    assert_eq!(layer_names(&app), [before, vec!["after".to_string()]].concat(), "{}", app.ui.status);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+}
+
 fn deny_spelling(id: &str, p: &Value) -> photocraft_engine::Result<()> {
     if id == "edit.checkSpelling" && p.get("action").is_none() { Err(photocraft_engine::EngineError::Other("spelling denied".into())) } else { Ok(()) }
 }
@@ -2488,10 +2570,13 @@ fn a_changed_live_gate_cannot_be_replaced_for_the_remaining_action() {
     }
     for service in [false, true] {
         for nested in [false, true] {
-            let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
+            let (mut app, before, past) = paused_history_spelling_with(true, Some(deny_wide_blur), |action| {
+                if nested {
+                    action.steps[2] = ("actions.play".into(), json!({"action":"Nested tail"}));
+                }
+            });
             if nested {
                 app.session.actions.list.push(Action::new("Nested tail", vec![("layer.renameLayer".into(), json!({"name":"Forbidden tail"}))]));
-                app.session.actions.list[0].steps[2] = ("actions.play".into(), json!({"action":"Nested tail"}));
             }
             spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
             let corrected = app.session.active().unwrap().doc.clone();
@@ -2597,8 +2682,7 @@ fn configured_gates_require_one_composed_policy_for_automated_resume() {
 #[test]
 /// A policy change after the final spelling step must not discard completed edits when no tail remains to dispatch.
 fn a_changed_gate_after_the_last_spelling_step_keeps_completed_edits() {
-    let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
-    app.session.actions.list[0].steps.truncate(2);
+    let (mut app, before, past) = paused_history_spelling_with(true, Some(deny_wide_blur), |action| action.steps.truncate(2));
     spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
     let corrected = app.session.active().unwrap().doc.clone();
     app.session.authorize = Some(|_, _| Ok(()));
