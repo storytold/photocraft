@@ -324,11 +324,44 @@ fn people_without_face_detection_covers_nothing_even_inverted() {
     let people = Component { op: Op::Add, invert: true, shape: Shape::People { part: PeoplePart::Person } };
     for invert in [false, true] {
         let m = Mask { components: vec![people.clone()], invert, ..Mask::default() };
-        assert!(coverage_with(&m, &px, w, h, false).iter().all(|v| *v == 0.0), "mask invert {invert}");
+        assert!(coverage_with(&m, &px, w, h, false, Encoding::of(0.0)).iter().all(|v| *v == 0.0), "mask invert {invert}");
     }
     // With a detector, an inverted People component that finds no one covers everything.
     let m = Mask { components: vec![people], ..Mask::default() };
     if crate::faces::AVAILABLE {
-        assert!(coverage_with(&m, &px, w, h, true).iter().all(|v| *v > 0.99));
+        assert!(coverage_with(&m, &px, w, h, true, Encoding::of(0.0)).iter().all(|v| *v > 0.99));
     }
+}
+
+#[test]
+fn colour_and_luminance_ranges_read_the_document_encoding() {
+    // The same picture as an sRGB, a ProPhoto and a linear-sRGB document selects the same pixels.
+    let (w, h) = (64, 16);
+    let srgb = flat(w, h, |x, y| [x as f32 / (w - 1) as f32, 0.3 + 0.4 * y as f32 / (h - 1) as f32, 0.6 - 0.5 * x as f32 / (w - 1) as f32]);
+    let sample = [0.55, 0.45, 0.3];
+    let shapes = |to: &dyn Fn([f32; 3]) -> [f32; 3]| {
+        let s = to(sample);
+        [Shape::Color { samples: vec![s], amount: 30.0 }, Shape::Luminance { range: [40.0, 70.0], smoothness: 20.0 }]
+    };
+    let reference = shapes(&|c| c).map(|s| coverage(&Mask { components: vec![comp(s)], ..Mask::default() }, &srgb, w, h));
+    for gamma in [1.8, 1.0] {
+        let enc = Encoding::of(gamma);
+        let doc: Vec<[f32; 4]> = srgb
+            .iter()
+            .map(|q| {
+                let c = enc.back_from_srgb_encoded([q[0], q[1], q[2]]);
+                [c[0], c[1], c[2], q[3]]
+            })
+            .collect();
+        let p = CameraRaw { encoding_gamma: gamma, ..CameraRaw::default() };
+        for (s, want) in shapes(&|c| enc.back_from_srgb_encoded(c)).into_iter().zip(&reference) {
+            let got = coverage_for(&Mask { components: vec![comp(s.clone())], ..Mask::default() }, &doc, w, h, &p);
+            let worst = got.iter().zip(want).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+            assert!(worst < 0.02, "gamma {gamma} {s:?}: differs by {worst}");
+            assert!(want.iter().any(|v| *v > 0.9) && want.iter().any(|v| *v < 0.1), "{s:?} selects part of the picture");
+        }
+    }
+    // A mask's local develop keeps the document's primaries.
+    let base = CameraRaw { encoding_gamma: 1.8, document_primaries: Some([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), ..CameraRaw::default() };
+    assert_eq!(as_global(&Local::default(), &base).document_primaries, base.document_primaries);
 }

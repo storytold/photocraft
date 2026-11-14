@@ -21,7 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::CameraRaw;
+use super::{CameraRaw, Encoding};
 
 pub mod extra;
 pub mod shapes;
@@ -329,18 +329,28 @@ pub fn validate(masks: &[Mask]) -> Result<(), String> {
 /// A mask with a People component covers nothing where this build cannot detect faces (the
 /// browser build, see [`crate::faces::AVAILABLE`]), whatever its inversions: an empty People
 /// selection that is then inverted would otherwise silently adjust the whole image.
+///
+/// The pixels are read as an sRGB document's; [`coverage_for`] reads them in the encoding and
+/// primaries of the document `p` develops.
 pub fn coverage(m: &Mask, px: &[[f32; 4]], w: usize, h: usize) -> Vec<f32> {
-    coverage_with(m, px, w, h, crate::faces::AVAILABLE)
+    coverage_with(m, px, w, h, crate::faces::AVAILABLE, Encoding::of(0.0))
 }
 
-fn coverage_with(m: &Mask, px: &[[f32; 4]], w: usize, h: usize, faces_available: bool) -> Vec<f32> {
+/// [`coverage`] of pixels encoded as `p`'s document (its `encoding_gamma` and
+/// `document_primaries`), so Color and Luminance Range select the same colours in a ProPhoto,
+/// Adobe RGB, linear or P3 document as in sRGB.
+pub fn coverage_for(m: &Mask, px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) -> Vec<f32> {
+    coverage_with(m, px, w, h, crate::faces::AVAILABLE, p.encoding())
+}
+
+fn coverage_with(m: &Mask, px: &[[f32; 4]], w: usize, h: usize, faces_available: bool, enc: Encoding) -> Vec<f32> {
     let n = w.saturating_mul(h);
     if !faces_available && m.components.iter().any(|c| matches!(c.shape, Shape::People { .. })) {
         return vec![0.0; n];
     }
     let mut acc: Option<Vec<f32>> = None;
     for c in &m.components {
-        let mut v = shapes::render(&c.shape, px, w, h);
+        let mut v = shapes::render_in(&c.shape, px, w, h, enc);
         if c.invert {
             for x in v.iter_mut() {
                 *x = 1.0 - *x;
@@ -428,6 +438,7 @@ pub fn as_global(l: &Local, base: &CameraRaw) -> CameraRaw {
         noise_luminance: f(-l.sharpness.min(0.0) + l.noise.max(0.0), 0.0, 100.0),
         pixel_scale: base.pixel_scale,
         encoding_gamma: base.encoding_gamma,
+        document_primaries: base.document_primaries,
         seed: base.seed,
         ..CameraRaw::default()
     }
@@ -440,7 +451,7 @@ pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool
         return;
     }
     for m in p.masks.iter().take(MAX_MASKS).filter(|m| m.is_active()) {
-        let cov = coverage(m, px, w, h);
+        let cov = coverage_for(m, px, w, h, p);
         let local = as_global(&m.adjust, p);
         let a = &m.adjust;
         let extras = [a.color_sat, a.moire, a.defringe].iter().any(|v| v.is_finite() && *v > 0.0);

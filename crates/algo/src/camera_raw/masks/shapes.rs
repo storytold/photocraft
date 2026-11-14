@@ -4,6 +4,7 @@ use photocraft_color::convert::srgb_to_lab;
 use photocraft_geom::Rect;
 
 use super::{Dab, PeoplePart, Shape};
+use crate::camera_raw::Encoding;
 use crate::photo_util::par_rows;
 use crate::segment::{ImageSampler, RgbImage, sky, subject};
 
@@ -16,8 +17,22 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Coverage of `shape` over a `w × h` image of developed straight-RGBA pixels.
+/// CIE L*a*b* of document RGB `c` (clamped to the document's 0 … 1 first, as the ranges read
+/// it): through its curve and primaries to sRGB-encoded values, unclamped, so colours outside
+/// sRGB's gamut keep their place. Exactly `srgb_to_lab` of the clamped value for sRGB documents.
+fn lab(enc: Encoding, c: [f32; 3]) -> [f32; 3] {
+    srgb_to_lab(enc.to_srgb_encoded(c.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 })))
+}
+
+/// Coverage of `shape` over a `w × h` image of developed straight-RGBA pixels of an sRGB
+/// document; [`render_in`] reads another document's encoding.
 pub fn render(shape: &Shape, px: &[[f32; 4]], w: usize, h: usize) -> Vec<f32> {
+    render_in(shape, px, w, h, Encoding::of(0.0))
+}
+
+/// Coverage of `shape` over a `w × h` image of developed straight-RGBA pixels encoded as `enc`
+/// (Color and Luminance Range compare colours in L*a*b*, which depends on it).
+pub(crate) fn render_in(shape: &Shape, px: &[[f32; 4]], w: usize, h: usize, enc: Encoding) -> Vec<f32> {
     let n = w.saturating_mul(h);
     let mut out = vec![0.0f32; n];
     if n == 0 || px.len() < n {
@@ -57,13 +72,13 @@ pub fn render(shape: &Shape, px: &[[f32; 4]], w: usize, h: usize) -> Vec<f32> {
             });
         }
         Shape::Color { samples, amount } => {
-            let labs: Vec<[f32; 3]> = samples.iter().take(super::MAX_SAMPLES).map(|s| srgb_to_lab(s.map(|v| v.clamp(0.0, 1.0)))).collect();
+            let labs: Vec<[f32; 3]> = samples.iter().take(super::MAX_SAMPLES).map(|s| lab(enc, *s)).collect();
             // Tolerance in ΔE76: 5 at Amount 0, 65 at 100.
             let tol = 5.0 + amount.clamp(0.0, 100.0) * 0.6;
             par_rows(&mut out, w, 1, |y, row| {
                 for (x, v) in row.iter_mut().enumerate() {
                     let q = px[y * w + x];
-                    let l = srgb_to_lab([q[0], q[1], q[2]].map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 }));
+                    let l = lab(enc, [q[0], q[1], q[2]]);
                     let best = labs.iter().map(|s| ((l[0] - s[0]).powi(2) + (l[1] - s[1]).powi(2) + (l[2] - s[2]).powi(2)).sqrt()).fold(f32::MAX, f32::min);
                     *v = 1.0 - smooth(tol * 0.5, tol, best);
                 }
@@ -75,7 +90,7 @@ pub fn render(shape: &Shape, px: &[[f32; 4]], w: usize, h: usize) -> Vec<f32> {
             par_rows(&mut out, w, 1, |y, row| {
                 for (x, v) in row.iter_mut().enumerate() {
                     let q = px[y * w + x];
-                    let l = srgb_to_lab([q[0], q[1], q[2]].map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 }))[0];
+                    let l = lab(enc, [q[0], q[1], q[2]])[0];
                     *v = smooth(lo - fade, lo, l) * (1.0 - smooth(hi, hi + fade, l));
                 }
             });
