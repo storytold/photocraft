@@ -58,9 +58,30 @@ pub struct PresetUi {
     /// a list follow it in library order. Saved with the UI state.
     #[serde(rename = "groupOrder", alias = "group_order", deserialize_with = "lenient_group_order", skip_serializing_if = "BTreeMap::is_empty")]
     pub group_order: BTreeMap<String, Vec<String>>,
+    /// The options-bar Custom Shape picker's view, chosen in its gear menu.
+    #[serde(rename = "shapePickerView", alias = "shape_picker_view", deserialize_with = "lenient_shape_view")]
+    pub shape_picker_view: ShapeView,
     /// In-place rename: (panel, preset or "group:<name>", text).
     #[serde(skip)]
     pub renaming: Option<(String, String, String)>,
+}
+
+/// How the Custom Shape picker lists its shapes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShapeView {
+    TextOnly,
+    #[default]
+    SmallThumbnail,
+    LargeThumbnail,
+    SmallList,
+    LargeList,
+}
+
+/// Any value that is not a view name gives the default instead of failing the saved UI state.
+fn lenient_shape_view<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ShapeView, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
 /// Read `groupOrder` keeping what makes sense: non-object values, non-list entries and non-string
