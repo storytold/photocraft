@@ -166,7 +166,19 @@ pub fn paint_bounds(layer: &Layer) -> Option<Rect> {
 /// The frame a layer's effects are laid out in: [`paint_bounds`] for a shape, else the layer's
 /// bounds ([`layer_bounds`]). A Gradient Overlay spans it, linked patterns tile from its corner.
 pub fn effects_frame(layer: &Layer, canvas: Rect) -> Rect {
+    if reveal_all_group_mask(layer) {
+        return canvas;
+    }
     paint_bounds(layer).unwrap_or_else(|| layer_bounds(layer, canvas))
+}
+
+/// A group whose layer mask reveals everything and holds no pixels (Photoshop stores it with an
+/// empty rectangle and a white default): Photoshop lays the group's effects out over the whole
+/// document then: a Gradient Overlay on such a group spans the canvas, not its children's
+/// bounds (measured in Photoshop 2026 on a group over a wide band of children).
+fn reveal_all_group_mask(layer: &Layer) -> bool {
+    matches!(layer.content, LayerContent::Group(_))
+        && layer.mask.as_ref().is_some_and(|m| m.enabled && m.surface.tile_count() == 0 && m.surface.default_pixel().first().is_some_and(|v| *v >= 0.999))
 }
 
 /// The pixels a change from `a` to `b` repaints beyond those it changed: where a layer whose
