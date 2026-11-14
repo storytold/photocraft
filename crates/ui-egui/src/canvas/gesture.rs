@@ -10,6 +10,10 @@ use super::{PhotocraftApp, Tool, json};
 #[path = "rectangle_click_in_shape_tests.rs"]
 mod rectangle_click_in_shape_tests;
 
+#[cfg(test)]
+#[path = "ellipse_click_in_shape_tests.rs"]
+mod ellipse_click_in_shape_tests;
+
 pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     finish(app, d, None);
 }
@@ -117,6 +121,7 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
             && crate::shape_dialog::is_tool_click(t, &app.ui.tool_options, d.start, &d.points, app.point_zoom())
             && (crate::vector_ui::draws_path(&app.ui.tool_options)
                 || crate::shape_dialog::click_inside_active_rectangle(app, t, d.start)
+                || click_inside_active_ellipse(app, t, d.start)
                 || crate::shape_dialog::open(app, t, d.start).is_some()) => {}
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
         Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
@@ -190,6 +195,21 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
         }
         _ => {}
     }
+}
+
+/// A Shape-mode Ellipse click inside the active live ellipse leaves the shape alone (#13231); its
+/// bounding box corners outside the ellipse still open Create Ellipse.
+fn click_inside_active_ellipse(app: &PhotocraftApp, tool: Tool, at: [f64; 2]) -> bool {
+    use photocraft_doc::{LayerContent, LiveShape};
+
+    if tool != Tool::EllipseShape || app.ui.tool_options.shape_mode != "shape" {
+        return false;
+    }
+    let Some(layer) = app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))) else { return false };
+    let LayerContent::Shape(shape) = &layer.content else { return false };
+    let Some(LiveShape::Ellipse { rect: [x, y, w, h] }) = shape.live else { return false };
+    let (dx, dy) = ((at[0] - (x + w / 2.0)) / (w / 2.0), (at[1] - (y + h / 2.0)) / (h / 2.0));
+    dx.hypot(dy) <= 1.0
 }
 
 /// The release of selection drag `d` at `end` (`click`: see [`finish`]). A Single Row / Single

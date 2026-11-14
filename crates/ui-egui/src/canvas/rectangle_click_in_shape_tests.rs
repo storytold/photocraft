@@ -3,7 +3,7 @@ use crate::state::Tool;
 use crate::{PhotocraftApp, Services};
 use serde_json::json;
 
-fn app() -> PhotocraftApp {
+pub(super) fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.ui.tool = Tool::Rectangle;
@@ -12,19 +12,19 @@ fn app() -> PhotocraftApp {
     app
 }
 
-fn shape(app: &mut PhotocraftApp, kind: &str, radius: f64) {
+pub(super) fn shape(app: &mut PhotocraftApp, kind: &str, radius: f64) {
     let radii = [radius; 4];
     app.run("shape.create", json!({"kind": kind, "rect": [400, 300, 200, 100], "radii": radii, "fill": "#ff0000"})).unwrap();
 }
 
-fn gesture(app: &mut PhotocraftApp, [x, y]: [f64; 2], [end_x, end_y]: [f64; 2]) {
+pub(super) fn gesture(app: &mut PhotocraftApp, [x, y]: [f64; 2], [end_x, end_y]: [f64; 2]) {
     let mods = egui::Modifiers::NONE;
     tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
     tool_event(app, ToolEvent::Move { x: end_x, y: end_y, pressure: 1.0 }, mods);
     tool_event(app, ToolEvent::Up { x: end_x, y: end_y }, mods);
 }
 
-fn state(app: &PhotocraftApp) -> (usize, usize) {
+pub(super) fn state(app: &PhotocraftApp) -> (usize, usize) {
     let active = app.session.active().unwrap();
     (active.doc.layer_count(), active.history.past_len())
 }
