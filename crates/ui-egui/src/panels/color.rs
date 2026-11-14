@@ -157,7 +157,7 @@ pub(crate) fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         let mut c = if bg_active { app.session.tools.background } else { app.session.tools.foreground };
-        if color_readout(ui, ui.scope_id().with(("color-field", bg_active)), &mut c) {
+        if color_readout(ui, ui.scope_id().with(("color-field", bg_active)), &mut c, bg_active) {
             if bg_active {
                 app.session.tools.background = c;
             } else {
@@ -224,29 +224,60 @@ pub(crate) fn hsva_color32(h: egui::ecolor::Hsva) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// The Color panel's editable colour readout: a hex field and R, G, B fields, all drawn like the
+/// The Color panel's editable colour readout: a hex field and RGB or HSB fields, all drawn like the
 /// dock's [`widgets::value_field`] so they sit in the theme. Editing any of them sets `color`
 /// (sRGB-encoded floats) and returns `true`.
-pub(crate) fn color_readout(ui: &mut egui::Ui, id: egui::Id, color: &mut [f32; 4]) -> bool {
+pub(crate) fn color_readout(ui: &mut egui::Ui, id: egui::Id, color: &mut [f32; 4], background: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut changed = false;
+    let model_key = egui::Id::new("color-panel-readout-model");
+    let mut hsb_mode = ui.data(|d| d.get_temp::<bool>(model_key)).unwrap_or(false);
     // Wrapped so the fields fold onto a second line in a narrow dock instead of being clipped.
     ui.horizontal_wrapped(|ui| {
         // Docks zero the item spacing; keep the fields apart.
         ui.spacing_mut().item_spacing.x = 4.0;
+        ui.selectable_value(&mut hsb_mode, false, "RGB");
+        ui.selectable_value(&mut hsb_mode, true, "HSB");
         ui.label(RichText::new("#").font(theme::mono(12.0)).color(t.text_faint));
         changed = hex_edit(ui, id.with("hex"), color);
-        let [mut r, mut g, mut b] = srgb_bytes(*color).map(f32::from);
-        let mut rgb = false;
-        for (label, name, v) in [("R", tl!("Red"), &mut r), ("G", tl!("Green"), &mut g), ("B", tl!("Blue"), &mut b)] {
-            ui.label(RichText::new(label).font(theme::mono(11.0)).color(t.text_faint));
-            rgb |= widgets::value_field(ui, v, 0.0..=255.0, "", 38.0).accessible_name(name).changed();
-        }
-        if rgb {
-            *color = [r / 255.0, g / 255.0, b / 255.0, 1.0];
-            changed = true;
+        if hsb_mode {
+            let hsva_key = id.with("hsva");
+            let stored: Option<egui::ecolor::Hsva> = ui.data(|d| d.get_temp(hsva_key));
+            let hsva0 = stored.filter(|h| srgb_bytes(hsva_srgb(*h)) == srgb_bytes(*color)).unwrap_or_else(|| srgb_hsva(*color));
+            let mut hue = hsva0.h * 360.0;
+            let mut saturation = hsva0.s * 100.0;
+            let mut brightness = hsva0.v * 100.0;
+            let mut hsb_changed = false;
+            for (label, value, range, suffix) in
+                [("H", &mut hue, 0.0..=360.0, "°"), ("S", &mut saturation, 0.0..=100.0, "%"), ("B", &mut brightness, 0.0..=100.0, "%")]
+            {
+                ui.label(RichText::new(label).font(theme::mono(11.0)).color(t.text_faint));
+                hsb_changed |= widgets::value_field(ui, value, range, suffix, 38.0).changed();
+            }
+            if hsb_changed {
+                let hsva =
+                    egui::ecolor::Hsva::new((hue / 360.0).clamp(0.0, 1.0), (saturation / 100.0).clamp(0.0, 1.0), (brightness / 100.0).clamp(0.0, 1.0), 1.0);
+                *color = hsva_srgb(hsva);
+                ui.data_mut(|d| {
+                    d.insert_temp(hsva_key, hsva);
+                    d.insert_temp(egui::Id::new(("color-field-hue", background)), (hsva.h, hsva.s));
+                });
+                changed = true;
+            }
+        } else {
+            let [mut r, mut g, mut b] = srgb_bytes(*color).map(f32::from);
+            let mut rgb_changed = false;
+            for (label, name, value) in [("R", tl!("Red"), &mut r), ("G", tl!("Green"), &mut g), ("B", tl!("Blue"), &mut b)] {
+                ui.label(RichText::new(label).font(theme::mono(11.0)).color(t.text_faint));
+                rgb_changed |= widgets::value_field(ui, value, 0.0..=255.0, "", 38.0).accessible_name(name).changed();
+            }
+            if rgb_changed {
+                *color = [r / 255.0, g / 255.0, b / 255.0, 1.0];
+                changed = true;
+            }
         }
     });
+    ui.data_mut(|d| d.insert_temp(model_key, hsb_mode));
     changed
 }
 
