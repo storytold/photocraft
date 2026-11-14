@@ -38,7 +38,7 @@ pub use effects::{
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
 pub use frame::Frame;
-pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
+pub use mode::{ColorIndices, ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
@@ -930,6 +930,10 @@ pub struct Document {
     pub patterns: Vec<Pattern>,
     /// Indexed Color palette (Image › Mode › Color Table). Set while `mode` is Indexed.
     pub color_table: Option<ColorTable>,
+    /// Each pixel's Color Table index where it is known (recorded by opening a palette PNG, the
+    /// Indexed Color conversion and Color Table), so entries of one colour keep their own pixels
+    /// (#14342).
+    pub color_indices: Option<ColorIndices>,
     /// Duotone inks. Set while `mode` is Duotone.
     pub duotone: Option<Duotone>,
     /// Window › Layer Comps, top to bottom as listed in the panel.
@@ -1018,6 +1022,7 @@ impl Document {
             quick_mask_unselected: false,
             patterns: Vec::new(),
             color_table: None,
+            color_indices: None,
             duotone: None,
             layer_comps: Vec::new(),
             last_applied_comp: None,
@@ -1088,8 +1093,8 @@ impl Document {
     }
 
     /// Every pixel surface the document holds: layer pixels and caches, masks, smart filter
-    /// masks, video frames (including the originals), channels, the quick mask, patterns and
-    /// the selection. History snapshots and saves cover exactly these tiles.
+    /// masks, video frames (including the originals), channels, the quick mask, the Color Table
+    /// indices, patterns and the selection. History snapshots and saves cover exactly these tiles.
     pub fn for_each_surface(&self, mut visit: impl FnMut(&Surface)) {
         for (_, _, layer) in self.walk() {
             if let Some(surface) = layer.surface() {
@@ -1114,6 +1119,10 @@ impl Document {
         }
         for channel in self.channels.iter().chain(&self.quick_mask) {
             visit(&channel.surface);
+        }
+        if let Some(c) = &self.color_indices {
+            visit(&c.pixels);
+            visit(&c.indices);
         }
         for pattern in &self.patterns {
             visit(&pattern.surface);
