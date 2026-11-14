@@ -207,6 +207,43 @@ fn a_fill_layer_in_the_board_above_stays_inside_its_board() {
     }
 }
 
+/// A layer of the board above that lies outside the exported board still casts its drop shadow
+/// into it, as it does in the document: its pixels are not cut away before the effect is built.
+#[test]
+fn a_shadow_cast_into_the_exported_board_from_outside_it_still_shows() {
+    use photocraft_doc::effects::{Contour, FxCommon, Shadow};
+    let (mut s, [red, blue, _]) = session(8);
+    // Caster at 210..240 x 160..180 (in Blue Board, outside Red Board); its shadow, 40 px up and
+    // to the left, falls on 170..200 x 120..140, inside Red Board.
+    paint(&mut s, blue, "Caster", Rect::new(210, 160, 240, 180), [0, 160, 0]);
+    s.edit("Shadow", |doc, _| {
+        let caster = doc.layer_mut(LayerId(blue)).unwrap().children_mut().unwrap().last_mut().unwrap();
+        caster.effects.items.push(photocraft_doc::Effect::DropShadow(Shadow {
+            common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+            color: Color::rgb(0.0, 0.0, 0.0),
+            angle: -45.0,
+            use_global_light: false,
+            distance: 40.0_f32.hypot(40.0),
+            spread: 0.0,
+            size: 0.0,
+            contour: Contour::Linear,
+            anti_alias: false,
+            noise: 0.0,
+            knocks_out: true,
+        }));
+        Ok(())
+    })
+    .unwrap();
+    let source = px(&s.active().unwrap().doc, 185, 130);
+    assert_eq!(rgb(source), [0, 0, 0], "the shadow lands there in the document");
+    let out = Out::new("shadow");
+    for format in ["png", "psd"] {
+        let f = export(&mut s, &out, red, json!({"format": format}));
+        assert_eq!(px(&f, 185, 130), source, "{format}");
+        assert_eq!(rgb(px(&f, 110, 50)), RED, "{format}");
+    }
+}
+
 /// Not measured (keeps today's behaviour): a hidden board above shows nothing.
 #[test]
 fn a_hidden_board_above_does_not_show() {

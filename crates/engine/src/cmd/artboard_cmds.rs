@@ -698,9 +698,14 @@ fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
 /// Cuts the pixel layers in `layers` (and in groups inside them, `depth` levels down so far) to
 /// `keep`, as the reference application cuts an overlapping board's layers to the file. Layers
 /// whose pixels can't be cut stay whole; the group's mask still hides what lies past its board.
+/// A layer with effects, or inside a group with effects, stays whole too: pixels outside `keep`
+/// can cast a shadow or glow into it.
 fn cut_pixels(layers: &mut [Layer], keep: Rect, depth: usize) {
     const MAX_DEPTH: usize = 64;
     for l in layers {
+        if photocraft_compose::effects::has_effects(l) {
+            continue;
+        }
         match &mut l.content {
             LayerContent::Group(g) if depth < MAX_DEPTH => cut_pixels(&mut g.children, keep, depth + 1),
             LayerContent::Raster(surf) => {
