@@ -328,6 +328,23 @@ fn protractor_glyph() -> Vec<Vec<Vec2>> {
     vec![open_ring(&[vertex, vertex + vec2(11.0, 0.0)]), open_ring(&[vertex, vertex + vec2(7.8, -7.8)]), open_ring(&arc)]
 }
 
+/// The Note tool's pointer (#11794): a note sheet with three text lines and its top-right corner
+/// folded, the hotspot on the sheet's top-left corner, where a click puts the new note's icon.
+/// Our own drawing, in the same outlined pair the other tool pointers use.
+pub(crate) fn note(painter: &Painter, at: Pos2) -> CursorIcon {
+    outline(painter, at, note_sheet_rings(), false)
+}
+
+/// The note sheet's geometry, in points right of and below the hotspot on its top-left corner: the
+/// sheet, the folded corner, then the text lines.
+pub(crate) fn note_sheet_rings() -> Vec<Vec<Vec2>> {
+    let (w, h, fold) = (12.0, 15.0, 4.0);
+    let mut rings =
+        vec![vec![Vec2::ZERO, vec2(w - fold, 0.0), vec2(w, fold), vec2(w, h), vec2(0.0, h)], vec![vec2(w - fold, 0.0), vec2(w - fold, fold), vec2(w, fold)]];
+    rings.extend([6.5, 9.5, 12.5].map(|y| open_ring(&[vec2(2.5, y), vec2(w - 2.5, y)])));
+    rings
+}
+
 /// A ring through `pts` and back again: [`Shape::Outline`] closes its rings, so an open line has to
 /// list its points both ways instead of gaining the chord back to its start.
 fn open_ring(pts: &[Vec2]) -> Vec<Vec2> {
