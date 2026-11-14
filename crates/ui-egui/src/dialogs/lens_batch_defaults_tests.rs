@@ -21,7 +21,8 @@ fn first_open_shows_the_reference_defaults() {
 
 #[test]
 fn file_type_offers_jpg_png_psd_tiff_without_same() {
-    let rows = super::rows(".".into());
+    let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let rows = super::rows(&app, ".".into());
     let row = rows.iter().find(|p| p.key == "format").expect("a File Type row");
     let ParamKind::Choice { options, .. } = &row.kind else { panic!("File Type is a list") };
     let entries: Vec<(&str, &str)> = options.iter().map(|(id, label)| (id.as_str(), label.as_str())).collect();

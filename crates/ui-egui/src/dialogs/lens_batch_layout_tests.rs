@@ -72,7 +72,8 @@ pub(super) fn source_folder() -> tempfile::TempDir {
 
 /// The options of the list row `key`, as their labels.
 fn labels(key: &str) -> Vec<String> {
-    let rows = super::rows(".".into());
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let rows = super::rows(&app, ".".into());
     let row = rows.iter().find(|p| p.key == key).unwrap_or_else(|| panic!("a {key} row"));
     let ParamKind::Choice { options, .. } = &row.kind else { panic!("{key} is a list") };
     options.iter().map(|(_, label)| label.as_str().to_owned()).collect()
