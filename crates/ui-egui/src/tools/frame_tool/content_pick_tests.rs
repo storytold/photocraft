@@ -74,7 +74,12 @@ fn hidden_locked_and_nonimage_candidates_are_skipped_but_lower_eligible_content_
             })
             .unwrap();
         assert_eq!(content_layer(&app, [80, 60, 200, 160]), Some(red.0), "{kind} must not obscure eligible Red");
-        app.session.edit("Remove Red", |doc, _| { doc.remove(red).unwrap(); Ok(()) }).unwrap();
+        app.session
+            .edit("Remove Red", |doc, _| {
+                doc.remove(red).unwrap();
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(content_layer(&app, [80, 60, 200, 160]), None, "{kind} must not become frame content");
     }
     let (app, _, _, _) = scene();
@@ -84,14 +89,17 @@ fn hidden_locked_and_nonimage_candidates_are_skipped_but_lower_eligible_content_
 #[test]
 fn real_drag_takes_nested_content_preserves_its_parent_and_is_one_undo_step() {
     let (mut app, red, _, empty) = scene();
-    let group = app.session.edit("Nest Red", |doc, active| {
-        let red = doc.remove(red).unwrap();
-        let group = Layer::group("Outer", vec![Layer::group("Inner", vec![red])]);
-        let inner = group.children().unwrap()[0].id;
-        doc.layers.push(group);
-        *active = Some(empty);
-        Ok(inner)
-    }).unwrap();
+    let group = app
+        .session
+        .edit("Nest Red", |doc, active| {
+            let red = doc.remove(red).unwrap();
+            let group = Layer::group("Outer", vec![Layer::group("Inner", vec![red])]);
+            let inner = group.children().unwrap()[0].id;
+            doc.layers.push(group);
+            *active = Some(empty);
+            Ok(inner)
+        })
+        .unwrap();
     let before = app.session.active().unwrap().history.entries().len();
     drag(&mut app, [80., 60.], [200., 160.]);
     let st = app.session.active().unwrap();
