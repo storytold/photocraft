@@ -47,7 +47,7 @@ fn flattened(doc: &Document) -> Vec<u8> {
 /// Cached and uncached native previews retain native RGB samples with their exact profile,
 /// independently of the full-preview option, and normalize correctly through the tested CMS policy.
 fn reduced_native_previews_carry_their_rgb_profile_without_converting_pixels() {
-    use photocraft_cms::{Builtin, Intent, Profile, Transform};
+    use craft_cms::{Builtin, Intent, Profile, Transform};
     use std::sync::Arc;
 
     for (builtin, normalized) in [(Builtin::Srgb, [64u8, 128, 191]), (Builtin::LinearSrgb, [137, 188, 225]), (Builtin::DisplayP3, [32, 129, 197])] {
@@ -73,7 +73,7 @@ fn reduced_native_previews_carry_their_rgb_profile_without_converting_pixels() {
                     let source = Profile::parse(image.icc.as_ref().unwrap()).unwrap();
                     let transform = Transform::new(&source, Builtin::Srgb.profile(), Intent::RelativeColorimetric, true).unwrap();
                     let mut pixel = [64.0 / 255.0, 128.0 / 255.0, 191.0 / 255.0, 1.0];
-                    transform.apply(&mut pixel, 4);
+                    transform.apply(&mut pixel, 4).expect("convert to sRGB");
                     for (value, expected) in pixel[..3].iter().zip(normalized) {
                         assert!((value * 255.0 - f32::from(expected)).abs() <= 1.0, "{builtin:?}: {pixel:?}");
                     }
@@ -99,8 +99,8 @@ fn png_has_srgb(png: &[u8]) -> bool {
 
 /// Asserts that `icc` is an RGB profile with an invertible colorant matrix whose `(v, v, v)`
 /// has the color of gray `v` in `gray`.
-fn assert_rgb_view_of_gray(icc: &[u8], gray: &photocraft_cms::Profile, what: &str) {
-    use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform, math};
+fn assert_rgb_view_of_gray(icc: &[u8], gray: &craft_cms::Profile, what: &str) {
+    use craft_cms::{Builtin, ColorSpace, Intent, Profile, Transform, math};
     let rgb = Profile::parse(icc).expect("profile");
     assert_eq!(rgb.color_space, ColorSpace::Rgb, "{what}");
     assert!(math::invert(&rgb.matrix.expect("a colorant matrix")).is_some(), "{what}: the colorant matrix is not invertible");
@@ -111,8 +111,8 @@ fn assert_rgb_view_of_gray(icc: &[u8], gray: &photocraft_cms::Profile, what: &st
     for step in 0..=16 {
         let v = step as f32 / 16.0;
         let (mut a, mut b) = ([0f32; 3], [0f32; 3]);
-        from_rgb.eval(&[v, v, v], &mut a);
-        from_gray.eval(&[v], &mut b);
+        from_rgb.eval(&[v, v, v], &mut a).expect("RGB to Lab");
+        from_gray.eval(&[v], &mut b).expect("gray to Lab");
         assert!(math::delta_e76(decode(a), decode(b)) < 0.1, "{what}: gray {v} is {a:?} as RGB and {b:?} as gray");
     }
 }
@@ -121,7 +121,7 @@ fn assert_rgb_view_of_gray(icc: &[u8], gray: &photocraft_cms::Profile, what: &st
 /// Reduced RGBA previews use adapted RGB gray profiles or the compositor's sRGB fallback,
 /// never a document's incompatible gray, CMYK or Lab profile.
 fn reduced_native_profiles_follow_the_compositor_color_model() {
-    use photocraft_cms::{Builtin, ColorSpace, Profile};
+    use craft_cms::{Builtin, ColorSpace, Profile};
     use std::sync::Arc;
 
     let srgb = Builtin::Srgb.profile().to_bytes();
@@ -205,7 +205,7 @@ fn a_document_larger_than_the_preview_keeps_its_full_size() {
 
 #[test]
 fn the_full_composite_carries_the_profile_of_its_pixels() {
-    use photocraft_cms::{Builtin, ColorSpace, Profile};
+    use craft_cms::{Builtin, ColorSpace, Profile};
     let full_icc = |d: &Document| {
         let bytes = export(d, "a.pcraft", &on()).expect("export").bytes;
         let png = ZipReader::new(&bytes).expect("zip").read_by_name("composite/full.png", usize::MAX).expect("entry");
@@ -232,7 +232,7 @@ fn the_full_composite_carries_the_profile_of_its_pixels() {
     assert_rgb_view_of_gray(&full_icc(&g), &gray, "full composite");
     // A linear gray profile keeps its curve in the RGB view.
     let mut linear = Builtin::GrayGamma22.profile().clone();
-    linear.gray_trc = Some(photocraft_cms::Curve::Identity);
+    linear.gray_trc = Some(craft_cms::Curve::Identity);
     let linear = linear.with_encoded_bytes();
     g.icc_profile = Some(std::sync::Arc::new(linear.to_bytes().to_vec()));
     assert_rgb_view_of_gray(&full_icc(&g), &linear, "linear full composite");
