@@ -1597,3 +1597,23 @@ fn upright_preview_uses_the_full_canvas_analysis_the_filter_applies() {
     }
     assert!(proxy_own > 1e-2, "analysing the proxy itself picks another correction somewhere ({proxy_own} px)");
 }
+
+/// The proxy mixes the result by the selection as the filter does, by alpha: in the corner
+/// Geometry uncovers, a half selection keeps the layer's colour at half its alpha.
+#[test]
+fn geometry_preview_mixes_the_selection_by_alpha() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#406080"})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    let original = d.proxy[0];
+    d.selection = Some(std::sync::Arc::new(vec![0.5; d.pw * d.ph]));
+    d.params.perspective_rotate = 10.0;
+    d.render(&ctx);
+    let corner = d.processed[0];
+    let want = [original[0], original[1], original[2], original[3] * 0.5];
+    assert!(corner.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5), "{corner:?} != {want:?}");
+}

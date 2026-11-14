@@ -393,6 +393,7 @@ fn develop_framed(
     }
     let width = area.width() as usize;
     let channels = source.channels();
+    let has_alpha = source.format().alpha;
     let mut original = Vec::new();
     let mut row = Vec::new();
     for y in area.y0..area.y1 {
@@ -407,9 +408,8 @@ fn develop_framed(
                 Coverage::None => 1.0,
             }
             .clamp(0.0, 1.0);
-            for (out, original) in out.iter_mut().zip(original) {
-                *out = *original + (*out - *original) * alpha;
-            }
+            // Alpha-aware, exactly as the filter mixes its result by the selection.
+            photocraft_engine::lens_cmds::mix_by_coverage(out, original, alpha, has_alpha);
         }
         result.write_region(rect, &row);
     }
@@ -501,6 +501,20 @@ mod tests {
         assert_eq!(develop(&source, None, area, &params, &Coverage::None), expected);
         let mask = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
         assert_eq!(develop(&source, None, area, &params, &Coverage::Selection(mask)), source);
+    }
+    #[test]
+    fn selection_mixes_geometry_by_alpha_as_the_filter_does() {
+        // A half-transparent layer turned by Geometry under a half selection: in the corner the
+        // warp uncovers, the filter keeps the layer's colour at half its alpha.
+        let area = PixelRect::new(0, 0, 40, 30);
+        let mut source = Surface::new(PixelFormat::RGBA32F);
+        source.write_region(area, &[0.8, 0.4, 0.6, 0.5].repeat(40 * 30));
+        let params = CameraRaw { perspective_rotate: 10.0, ..Default::default() };
+        let mask = Surface::with_default(PixelFormat::GRAY8, &[0.5]);
+        let k = mask.sample_channel(0, 0, 0);
+        let shown = develop(&source, None, area, &params, &Coverage::Selection(mask));
+        let corner = [0, 1, 2, 3].map(|c| shown.sample_channel(0, 0, c));
+        assert!(corner.iter().zip([0.8, 0.4, 0.6, 0.5 * (1.0 - k)]).all(|(a, b)| (a - b).abs() < 1e-5), "{corner:?}");
     }
     #[test]
     fn geometry_preview_develops_the_canvas_as_the_filter_does() {

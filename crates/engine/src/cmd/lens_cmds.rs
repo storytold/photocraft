@@ -285,28 +285,38 @@ fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface) -> Surface {
         return out;
     }
     let n = fmt.channels();
-    let (o, w) = (old.read_region(area), new.read_region(area));
+    let (o, mut r) = (old.read_region(area), new.read_region(area));
     let aw = area.width() as usize;
-    let mut r = vec![0.0f32; o.len()];
-    for (i, ((op, np), rp)) in o.chunks_exact(n).zip(w.chunks_exact(n)).zip(r.chunks_exact_mut(n)).enumerate() {
-        let k = sel.sample_channel(area.x0 + (i % aw) as i32, area.y0 + (i / aw) as i32, 0).clamp(0.0, 1.0);
-        if !fmt.alpha {
-            for c in 0..n {
-                rp[c] = op[c] + (np[c] - op[c]) * k;
-            }
-            continue;
-        }
-        let a = n - 1;
-        let oa = op[a] + (np[a] - op[a]) * k;
-        rp[a] = oa;
-        for c in 0..a {
-            let pm = op[c] * op[a] + (np[c] * np[a] - op[c] * op[a]) * k;
-            rp[c] = if oa > 0.0 { pm / oa } else { 0.0 };
-        }
+    for (i, (op, rp)) in o.chunks_exact(n).zip(r.chunks_exact_mut(n)).enumerate() {
+        let k = sel.sample_channel(area.x0 + (i % aw) as i32, area.y0 + (i / aw) as i32, 0);
+        mix_by_coverage(rp, op, k, fmt.alpha);
     }
     out.write_region(area, &r);
     out.prune();
     out
+}
+
+/// One pixel of a filter's result (`out`, channels as a surface stores them, alpha last when
+/// `alpha`) mixed over the `old` pixel by coverage `k` (0 … 1), in place. With alpha the colour
+/// mixes premultiplied, so a pixel the filter made transparent (Geometry's uncovered corners)
+/// lends no colour to what stays of the old one. The filter's selection mix and the RAW Develop
+/// dialog's previews both use it, so they agree.
+pub fn mix_by_coverage(out: &mut [f32], old: &[f32], k: f32, alpha: bool) {
+    let k = if k.is_finite() { k.clamp(0.0, 1.0) } else { 0.0 };
+    let n = out.len().min(old.len());
+    let (Some(a), true) = (n.checked_sub(1), alpha) else {
+        for (o, p) in out.iter_mut().zip(old) {
+            *o = *p + (*o - *p) * k;
+        }
+        return;
+    };
+    let (oa, na) = (old[a], out[a]);
+    let ma = oa + (na - oa) * k;
+    for c in 0..a {
+        let pm = old[c] * oa + (out[c] * na - old[c] * oa) * k;
+        out[c] = if ma > 0.0 { pm / ma } else { 0.0 };
+    }
+    out[a] = ma;
 }
 
 /// Smart-filter hook: re-applies a stored filter of this module (`None` for other ids).
@@ -619,6 +629,22 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mixing_by_coverage_is_premultiplied() {
+        // A half-transparent pixel the filter made transparent, half selected: the old colour
+        // stays (the transparent result lends none), at half the old alpha.
+        let mut out = [1.0, 1.0, 1.0, 0.0];
+        mix_by_coverage(&mut out, &[0.8, 0.4, 0.6, 0.5], 0.5, true);
+        assert!(out.iter().zip([0.8, 0.4, 0.6, 0.25]).all(|(a, b)| (a - b).abs() < 1e-6), "{out:?}");
+        // Without alpha, and with hostile coverage, it stays a plain mix.
+        let mut out = [1.0, 0.0, 0.5];
+        mix_by_coverage(&mut out, &[0.0, 1.0, 0.5], 0.25, false);
+        assert_eq!(out, [0.25, 0.75, 0.5]);
+        let mut out = [1.0, 1.0, 1.0, 1.0];
+        mix_by_coverage(&mut out, &[0.0, 0.0, 0.0, 0.0], f32::NAN, true);
+        assert_eq!(out, [0.0; 4]);
+        mix_by_coverage(&mut [], &[0.5], 1.0, true);
+    }
 
     #[test]
     fn raw_develop_filter_keeps_its_automation_id() {

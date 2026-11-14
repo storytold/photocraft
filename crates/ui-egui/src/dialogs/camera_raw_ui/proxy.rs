@@ -131,10 +131,10 @@ impl ProxyJob {
             over_white(&mut px);
         }
         if let Some(mask) = &self.selection {
+            // Alpha-aware, as the filter mixes its result by the selection: what Geometry made
+            // transparent lends no colour to what stays of the original.
             let blend = |(out, (original, coverage)): (&mut [f32; 4], (&[f32; 4], &f32))| {
-                for (out, original) in out.iter_mut().zip(original) {
-                    *out = *original + (*out - *original) * coverage;
-                }
+                photocraft_engine::lens_cmds::mix_by_coverage(out, original, *coverage, true);
             };
             // Each pixel is independent, so bands of the proxy blend in parallel (#211, P36).
             #[cfg(not(target_arch = "wasm32"))]
