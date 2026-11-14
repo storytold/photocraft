@@ -137,7 +137,7 @@ fn guided_upsample(small: &Plane, d: &[f32], full: &Plane) -> Vec<f32> {
 mod tests {
     use super::*;
 
-    const SRGB: Encoding = Encoding(0.0);
+    const SRGB: Encoding = Encoding::SRGB;
 
     /// A full-size guide far outside the proxy's tones (a float image's highlight) cannot pull
     /// the upsampled move past the six-stop guard.

@@ -163,24 +163,25 @@ impl Correction {
     }
 
     /// `base` (the analytic model's result for the pixel `input`, both in encoding `enc`) with
-    /// the correction looked up at `input` added, in sRGB-encoded values. A result is kept to
+    /// the correction looked up at `input` added, in sRGB-encoded values in sRGB's primaries. A result is kept to
     /// 0 … 1 when the input was, like Photoshop's.
     pub(crate) fn apply(&self, input: [f32; 3], base: [f32; 3], enc: Encoding) -> [f32; 3] {
-        let to = |v: f32| if enc.0 > 0.0 { super::linear_to_srgb(enc.decode(v)) } else { v };
-        let from = |v: f32| if enc.0 > 0.0 { enc.encode(super::srgb_to_linear(v)) } else { v };
         let inside = input.iter().all(|v| (0.0..=1.0).contains(v));
-        let mut d = self.at(input.map(to));
+        // In sRGB's primaries and curve, where the grid was measured.
+        let mut d = self.at(enc.to_srgb_encoded(input));
         // A grey result stays grey (Saturation −100, Vibrance on a grey): the measured correction
         // there is a change of level only, and its 8-bit storage noise would tint it.
         if base.iter().fold(f32::MIN, |a, v| a.max(*v)) - base.iter().fold(f32::MAX, |a, v| a.min(*v)) < 1e-5 {
             let m = (d[0] + d[1] + d[2]) / 3.0;
             d = [m; 3];
         }
-        std::array::from_fn(|k| {
-            let s = to(base[k]);
-            let s = if inside { (s.clamp(0.0, 1.0) + d[k]).clamp(0.0, 1.0) } else { s + d[k] };
-            from(s)
-        })
+        let s = enc.to_srgb_encoded(base);
+        if !enc.srgb_primaries() {
+            // Kept to 0 … 1 in the document's own primaries: its gamut may reach past sRGB's.
+            let out = enc.back_from_srgb_encoded(std::array::from_fn(|k| s[k] + d[k]));
+            return if inside { out.map(|v| v.clamp(0.0, 1.0)) } else { out };
+        }
+        enc.back_from_srgb_encoded(std::array::from_fn(|k| if inside { (s[k].clamp(0.0, 1.0) + d[k]).clamp(0.0, 1.0) } else { s[k] + d[k] }))
     }
 }
 
@@ -207,7 +208,7 @@ mod tests {
         assert_eq!(correction(Slider::Tint, 400.0), correction(Slider::Tint, 100.0));
         let c = correction(Slider::Temperature, -100.0).unwrap();
         for q in [[f32::NAN, 0.5, 0.5], [2.0, -1.0, f32::INFINITY], [0.0; 3], [1.0; 3]] {
-            let o = c.apply(q, q, Encoding(0.0));
+            let o = c.apply(q, q, Encoding::of(0.0));
             assert!(o.iter().all(|v| v.is_finite() || q.iter().any(|x| !x.is_finite())), "{q:?} {o:?}");
         }
     }
@@ -222,10 +223,10 @@ mod tests {
         assert!(n(small) < n(large), "{small:?} {large:?}");
         let c = correction(Slider::Tint, 100.0).unwrap();
         for q in [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.9, 0.9, 0.1]] {
-            assert!(c.apply(q, q, Encoding(0.0)).iter().all(|v| (0.0..=1.0).contains(v)));
+            assert!(c.apply(q, q, Encoding::of(0.0)).iter().all(|v| (0.0..=1.0).contains(v)));
         }
         // A grey stays grey.
-        let g = correction(Slider::Temperature, -100.0).unwrap().apply([0.7, 0.2, 0.4], [0.35; 3], Encoding(1.8));
+        let g = correction(Slider::Temperature, -100.0).unwrap().apply([0.7, 0.2, 0.4], [0.35; 3], Encoding::of(1.8));
         assert!((g[0] - g[1]).abs() < 1e-6 && (g[1] - g[2]).abs() < 1e-6, "{g:?}");
     }
 

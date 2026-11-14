@@ -3,7 +3,7 @@
 //! same maths. [`develop`](super::develop) builds its own constants with the same functions.
 
 use super::whites_blacks::{RowOn, TonePoints};
-use super::{CameraRaw, Encoding, Wheel, contrast, curve_lut, exposure, hsv_to_rgb, is_linear, luma, parametric_lut, whites_blacks};
+use super::{CameraRaw, Wheel, contrast, curve_lut, exposure, hsv_to_rgb, is_linear, luma, parametric_lut, whites_blacks};
 
 /// Entries of the tone curve tables (parametric and point curves).
 pub const CURVE_LUT: usize = 1024;
@@ -209,7 +209,7 @@ pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) ->
     if (p.whites <= 0.0 && p.contrast == 0.0) || p.spatial() || px.len() != w.saturating_mul(h) {
         return None;
     }
-    let enc = Encoding::of(p.encoding_gamma);
+    let enc = p.encoding();
     let wb = super::white_balance::curves(p.temperature, p.tint);
     let m = exposure::primaries(enc);
     let ex = (p.exposure != 0.0).then(|| exposure::row(p.exposure));
@@ -247,11 +247,16 @@ pub fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<
     if p.temperature != 0.0 || p.tint != 0.0 {
         return None;
     }
+    // Whites down's measured correction reads the colour in sRGB's primaries; these stages look
+    // it up in the document's own, so a document in other primaries develops on the CPU.
+    if p.whites < 0.0 && !p.encoding().srgb_primaries() {
+        return None;
+    }
     let (whites, blacks) = (whites_blacks::whites_row(p.whites, points.map(|t| t[1])), whites_blacks::blacks_row(p.blacks));
     let whites_fix = (p.whites < 0.0).then(|| super::colour_lut::correction(super::colour_lut::Slider::Whites, p.whites)).flatten().map(|c| c.grid().to_vec());
     let whites_blacks = (whites.is_some() || blacks.is_some()).then_some(WhitesBlacks { whites, blacks, whites_fix });
     const ID: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-    let (to_prophoto, from_prophoto) = exposure::primaries(Encoding::of(p.encoding_gamma)).unwrap_or((ID, ID));
+    let (to_prophoto, from_prophoto) = exposure::primaries(p.encoding()).unwrap_or((ID, ID));
     let parametric_on = !(p.curve_highlights == 0.0 && p.curve_lights == 0.0 && p.curve_darks == 0.0 && p.curve_shadows == 0.0);
     let pts = |c: &Vec<[f32; 2]>| (!is_linear(c)).then(|| curve_lut(c, CURVE_LUT));
     Some(PerPixel {
@@ -261,7 +266,7 @@ pub fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<
         to_prophoto,
         from_prophoto,
         whites_blacks,
-        encoding: Encoding::of(p.encoding_gamma).0,
+        encoding: p.encoding().gamma(),
         presence: super::presence::presence(p.vibrance, p.saturation).map(|t| t.nodes().to_vec()),
         parametric: parametric_on.then(|| parametric_lut(p, CURVE_LUT)),
         point: [pts(&p.point_curve), pts(&p.point_curve_red), pts(&p.point_curve_green), pts(&p.point_curve_blue)],

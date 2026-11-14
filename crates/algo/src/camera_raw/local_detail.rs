@@ -131,8 +131,8 @@ fn apply_within(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, 
     }
     let no_memory = || format!("not enough memory for {} ({w}×{h} px)", model.name);
     let long = w.max(h) as f32;
-    let to = |x: f32| if enc.0 > 0.0 { linear_to_srgb(enc.decode(x)) } else { x };
-    let from = |x: f32| if enc.0 > 0.0 { enc.encode(srgb_to_linear(x)) } else { x };
+    // The models were fitted on sRGB: the pixels are read in sRGB's primaries and curve.
+    let to = |q: &[f32; 4]| enc.to_srgb_encoded([q[0], q[1], q[2]]);
     // Planes: encoded luminance, then (Texture) each channel's colour (channel − luminance).
     let np = if model.colour { 4 } else { 1 };
     let cover = |q: &[f32; 4]| if q[3].is_finite() { q[3].clamp(0.0, 1.0) } else { 0.0 };
@@ -158,7 +158,7 @@ fn apply_within(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, 
     };
     for (i, q) in px.iter().enumerate() {
         // A value that is not a number would spread through the blurs to its neighbours.
-        let s = [0, 1, 2].map(|c| Some(to(q[c])).filter(|v| v.is_finite()).unwrap_or(0.0));
+        let s = to(q).map(|v| if v.is_finite() { v } else { 0.0 });
         let lin = s.map(srgb_to_linear);
         let y = (0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]).max(0.0);
         let sy = linear_to_srgb(y);
@@ -226,18 +226,25 @@ fn apply_within(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, 
     for ((q, m), y) in px.iter_mut().zip(&mv).zip(&lum) {
         let inside = q[..3].iter().all(|x| (0.0..=1.0).contains(x));
         let fit = |s: f32| if inside { s.clamp(0.0, 1.0) } else { s };
-        if model.colour {
-            for c in 0..3 {
-                q[c] = from(fit(to(q[c]) + m[c].clamp(-1.0, 1.0)));
-            }
+        // A document in other primaries is kept to 0 … 1 in its own: its gamut may reach past
+        // sRGB's, so the sRGB values are left unclamped.
+        let srgb = enc.srgb_primaries();
+        let fit_srgb = |s: f32| if srgb { fit(s) } else { s };
+        let s = to(q);
+        let out = if model.colour {
+            std::array::from_fn(|c| fit_srgb(s[c] + m[c].clamp(-1.0, 1.0)))
         } else {
             // The luminance moves, the chromaticity stays: linear RGB scaled.
             let target = srgb_to_linear(fit(linear_to_srgb(*y) + m[0].clamp(-1.0, 1.0)));
             let r = if *y > 1e-6 { target / y } else { 1.0 };
-            for c in 0..3 {
-                let lin = srgb_to_linear(to(q[c])) * r;
-                q[c] = from(linear_to_srgb(if inside { lin.clamp(0.0, 1.0) } else { lin }));
-            }
+            s.map(|v| {
+                let lin = srgb_to_linear(v) * r;
+                linear_to_srgb(if inside && srgb { lin.clamp(0.0, 1.0) } else { lin })
+            })
+        };
+        let out = enc.back_from_srgb_encoded(out);
+        for c in 0..3 {
+            q[c] = if srgb { out[c] } else { fit(out[c]) };
         }
     }
     Ok(())
@@ -260,10 +267,10 @@ mod tests {
         let (w, h) = (24, 16);
         for m in [&TEXTURE, &CLARITY] {
             let mut px = image(w, h);
-            let err = apply_within(m, &mut px, w, h, 60.0, Encoding(0.0), 1024).unwrap_err();
+            let err = apply_within(m, &mut px, w, h, 60.0, Encoding::of(0.0), 1024).unwrap_err();
             assert!(err.contains(m.name) && err.contains("memory"), "{err}");
             assert_eq!(px, image(w, h));
-            assert!(apply_within(m, &mut px, w, h, 60.0, Encoding(0.0), usize::MAX).is_ok());
+            assert!(apply_within(m, &mut px, w, h, 60.0, Encoding::of(0.0), usize::MAX).is_ok());
             assert_ne!(px, image(w, h));
         }
     }
@@ -291,8 +298,8 @@ mod tests {
             let mut clean = image(w, h);
             let mut bad = clean.clone();
             bad[24 * w + 24] = [f32::NAN, f32::INFINITY, 0.5, 1.0];
-            apply(m, &mut clean, w, h, 80.0, Encoding(0.0)).unwrap();
-            apply(m, &mut bad, w, h, 80.0, Encoding(0.0)).unwrap();
+            apply(m, &mut clean, w, h, 80.0, Encoding::of(0.0)).unwrap();
+            apply(m, &mut bad, w, h, 80.0, Encoding::of(0.0)).unwrap();
             for (i, q) in bad.iter().enumerate().filter(|(i, _)| *i != 24 * w + 24) {
                 assert!(q[..3].iter().all(|v| v.is_finite()), "pixel {i}: {q:?}");
             }
@@ -309,8 +316,8 @@ mod tests {
         for m in [&TEXTURE, &CLARITY] {
             let hide = |hidden: [f32; 4]| -> Vec<[f32; 4]> { image(w, h).into_iter().enumerate().map(|(i, q)| if visible(i) { q } else { hidden }).collect() };
             let (mut white, mut black) = (hide([1.0, 1.0, 1.0, 0.0]), hide([0.0, 0.0, 0.0, 0.0]));
-            apply(m, &mut white, w, h, 100.0, Encoding(0.0)).unwrap();
-            apply(m, &mut black, w, h, 100.0, Encoding(0.0)).unwrap();
+            apply(m, &mut white, w, h, 100.0, Encoding::of(0.0)).unwrap();
+            apply(m, &mut black, w, h, 100.0, Encoding::of(0.0)).unwrap();
             for i in (0..w * h).filter(|i| visible(*i)) {
                 assert!(white[i][..3].iter().zip(&black[i][..3]).all(|(a, b)| (a - b).abs() < 1e-5), "pixel {i}: {:?} {:?}", white[i], black[i]);
             }
@@ -340,7 +347,7 @@ mod tests {
         ];
         for ((m, v), want) in [(&TEXTURE, 70.0), (&CLARITY, -60.0)].into_iter().zip(before) {
             let mut px = image(w, h);
-            apply(m, &mut px, w, h, v, Encoding(0.0)).unwrap();
+            apply(m, &mut px, w, h, v, Encoding::of(0.0)).unwrap();
             for (i, b) in [0usize, 5 * w + 7, 24 * w + 24, 47 * w + 30, w * h - 1].into_iter().zip(want) {
                 assert!(px[i][..3].iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6), "pixel {i}: {:?} vs {b:?}", px[i]);
             }
@@ -376,9 +383,9 @@ mod tests {
         let (w, h) = (300, 200);
         let base = image(w, h);
         let mut up = base.clone();
-        apply(&TEXTURE, &mut up, w, h, 100.0, Encoding(0.0)).unwrap();
+        apply(&TEXTURE, &mut up, w, h, 100.0, Encoding::of(0.0)).unwrap();
         let mut down = base.clone();
-        apply(&TEXTURE, &mut down, w, h, -100.0, Encoding(0.0)).unwrap();
+        apply(&TEXTURE, &mut down, w, h, -100.0, Encoding::of(0.0)).unwrap();
         assert!(contrast(&up) > contrast(&base) && contrast(&down) < contrast(&base), "{} {} {}", contrast(&up), contrast(&base), contrast(&down));
         assert!(up.iter().chain(&down).all(|q| q[..3].iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) && q[3] == 1.0));
     }
@@ -394,9 +401,9 @@ mod tests {
             })
             .collect();
         let mut up = base.clone();
-        apply(&CLARITY, &mut up, w, h, 100.0, Encoding(0.0)).unwrap();
+        apply(&CLARITY, &mut up, w, h, 100.0, Encoding::of(0.0)).unwrap();
         let mut down = base.clone();
-        apply(&CLARITY, &mut down, w, h, -100.0, Encoding(0.0)).unwrap();
+        apply(&CLARITY, &mut down, w, h, -100.0, Encoding::of(0.0)).unwrap();
         assert!(contrast(&up) > contrast(&base) && contrast(&down) < contrast(&base), "{} {} {}", contrast(&up), contrast(&base), contrast(&down));
     }
 
@@ -405,12 +412,12 @@ mod tests {
         let (w, h) = (40, 30);
         for m in [&TEXTURE, &CLARITY] {
             let mut flat = vec![[0.5f32, 0.4, 0.3, 1.0]; w * h];
-            apply(m, &mut flat, w, h, 100.0, Encoding(2.2)).unwrap();
+            apply(m, &mut flat, w, h, 100.0, Encoding::of(2.2)).unwrap();
             assert!(flat.iter().all(|q| (q[1] - 0.4).abs() < 0.05));
             let mut odd = vec![[f32::NAN, 2.0, -1.0, 1.0]; 6];
-            apply(m, &mut odd, 3, 2, 60.0, Encoding(0.0)).unwrap();
-            apply(m, &mut odd, 5, 5, 60.0, Encoding(0.0)).unwrap(); // wrong size: left alone
-            apply(m, &mut [], 0, 0, 60.0, Encoding(0.0)).unwrap();
+            apply(m, &mut odd, 3, 2, 60.0, Encoding::of(0.0)).unwrap();
+            apply(m, &mut odd, 5, 5, 60.0, Encoding::of(0.0)).unwrap(); // wrong size: left alone
+            apply(m, &mut [], 0, 0, 60.0, Encoding::of(0.0)).unwrap();
             assert!(m.coefficients(0.0).is_none() && m.coefficients(f32::NAN).is_none());
             assert_eq!(m.coefficients(300.0), m.coefficients(100.0));
         }

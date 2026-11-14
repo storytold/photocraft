@@ -78,21 +78,122 @@ pub use per_pixel::{
 pub use whites_blacks::{RowOn, TonePoints, Tones};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
-/// Adobe RGB's 2.2). The tone controls work on light, so the document's own curve decodes it.
+/// Adobe RGB's 2.2), and in which primaries. The tone controls work on light, so the document's
+/// own curve decodes it; the measured tables and models were fitted on sRGB, so they read the
+/// document's colours converted into sRGB's primaries (unclamped, so colours outside sRGB's
+/// gamut survive), and luminance is weighted in the document's primaries.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Encoding(f32);
+pub(crate) struct Encoding {
+    gamma: f32,
+    primaries: DocPrimaries,
+}
+
+/// The primaries of the document's linear RGB.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DocPrimaries {
+    Srgb,
+    ProPhoto,
+    AdobeRgb,
+    /// Any other: matrices to linear ProPhoto (D50) and back.
+    Matrix(exposure::Primaries),
+}
 
 impl Encoding {
+    /// sRGB's curve and primaries.
+    #[cfg(test)]
+    pub(crate) const SRGB: Encoding = Encoding { gamma: 0.0, primaries: DocPrimaries::Srgb };
+
+    /// The curve of `gamma`, with the primaries that go with it: ProPhoto's gamma 1.8 is
+    /// ProPhoto, Adobe RGB's 563/256 Adobe RGB, everything else sRGB's.
     pub(crate) fn of(gamma: f32) -> Self {
-        Encoding(if gamma.is_finite() && gamma > 0.0 { gamma.clamp(0.5, 4.0) } else { 0.0 })
+        let gamma = if gamma.is_finite() && gamma > 0.0 { gamma.clamp(0.5, 4.0) } else { 0.0 };
+        let primaries = match gamma {
+            g if (g - 1.8).abs() < 1e-3 => DocPrimaries::ProPhoto,
+            g if (g - 563.0 / 256.0).abs() < 1e-3 => DocPrimaries::AdobeRgb,
+            _ => DocPrimaries::Srgb,
+        };
+        Encoding { gamma, primaries }
     }
+
+    /// The curve of `gamma` with the document's own primaries, `to_prophoto` (its linear RGB to
+    /// linear ProPhoto); without one, or with one that is not finite or can't be inverted, the
+    /// primaries [`Encoding::of`] infers.
+    pub(crate) fn with_primaries(gamma: f32, to_prophoto: Option<[[f32; 3]; 3]>) -> Self {
+        let enc = Self::of(gamma);
+        match to_prophoto.and_then(|m| Some((m, exposure::invert(&m)?))) {
+            Some(pp) => Encoding { primaries: DocPrimaries::Matrix(pp), ..enc },
+            None => enc,
+        }
+    }
+
+    /// The power-law gamma, or 0 for the sRGB curve.
+    pub(crate) fn gamma(self) -> f32 {
+        self.gamma
+    }
+
     /// A value in this encoding as linear light.
     pub(crate) fn decode(self, v: f32) -> f32 {
-        if self.0 > 0.0 { v.max(0.0).powf(self.0) } else { srgb_to_linear(v) }
+        if self.gamma > 0.0 { v.max(0.0).powf(self.gamma) } else { srgb_to_linear(v) }
     }
     /// Linear light back into this encoding, the inverse of [`Encoding::decode`].
     pub(crate) fn encode(self, v: f32) -> f32 {
-        if self.0 > 0.0 { v.max(0.0).powf(1.0 / self.0) } else { linear_to_srgb(v) }
+        if self.gamma > 0.0 { v.max(0.0).powf(1.0 / self.gamma) } else { linear_to_srgb(v) }
+    }
+
+    /// The matrices to linear ProPhoto and back, `None` for ProPhoto (no conversion).
+    pub(crate) fn prophoto(self) -> Option<exposure::Primaries> {
+        match self.primaries {
+            DocPrimaries::Srgb => Some((exposure::SRGB_TO_PROPHOTO, exposure::PROPHOTO_TO_SRGB)),
+            DocPrimaries::ProPhoto => None,
+            DocPrimaries::AdobeRgb => Some((exposure::ADOBE_TO_PROPHOTO, exposure::PROPHOTO_TO_ADOBE)),
+            DocPrimaries::Matrix(pp) => Some(pp),
+        }
+    }
+
+    /// Whether the document's primaries are sRGB's.
+    pub(crate) fn srgb_primaries(self) -> bool {
+        self.primaries == DocPrimaries::Srgb
+    }
+
+    /// Linear document RGB in linear sRGB primaries (exactly `c` for sRGB documents).
+    fn to_srgb_linear(self, c: [f32; 3]) -> [f32; 3] {
+        match self.prophoto() {
+            _ if self.srgb_primaries() => c,
+            None => exposure::mat(&exposure::PROPHOTO_TO_SRGB, c),
+            Some((to, _)) => exposure::mat(&exposure::PROPHOTO_TO_SRGB, exposure::mat(&to, c)),
+        }
+    }
+
+    /// Linear sRGB back into the document's linear RGB, the inverse of `to_srgb_linear`.
+    fn back_from_srgb_linear(self, c: [f32; 3]) -> [f32; 3] {
+        match self.prophoto() {
+            _ if self.srgb_primaries() => c,
+            None => exposure::mat(&exposure::SRGB_TO_PROPHOTO, c),
+            Some((_, from)) => exposure::mat(&from, exposure::mat(&exposure::SRGB_TO_PROPHOTO, c)),
+        }
+    }
+
+    /// The relative luminance of linear document RGB `c`: Rec. 709's weights on its sRGB
+    /// equivalent (exactly [`luma`] for sRGB documents).
+    pub(crate) fn luminance(self, c: [f32; 3]) -> f32 {
+        luma(self.to_srgb_linear(c))
+    }
+
+    /// A pixel in this encoding as sRGB-encoded values in sRGB's primaries, the domain the
+    /// measured tables were fitted in; unclamped. Exactly `c` for sRGB documents.
+    pub(crate) fn to_srgb_encoded(self, c: [f32; 3]) -> [f32; 3] {
+        if self.srgb_primaries() {
+            return if self.gamma > 0.0 { c.map(|v| linear_to_srgb(self.decode(v))) } else { c };
+        }
+        self.to_srgb_linear(c.map(|v| self.decode(v))).map(linear_to_srgb)
+    }
+
+    /// The inverse of [`Encoding::to_srgb_encoded`].
+    pub(crate) fn back_from_srgb_encoded(self, s: [f32; 3]) -> [f32; 3] {
+        if self.srgb_primaries() {
+            return if self.gamma > 0.0 { s.map(|v| self.encode(srgb_to_linear(v))) } else { s };
+        }
+        self.back_from_srgb_linear(s.map(srgb_to_linear)).map(|v| self.encode(v))
     }
 }
 
@@ -185,6 +286,12 @@ pub struct CameraRaw {
     /// The document's transfer curve: 0 for sRGB's, else the gamma of a power-law space (1.8
     /// for ProPhoto). Set from the document's profile; Whites and Blacks act on light.
     pub encoding_gamma: f32,
+    /// The document's primaries: its linear RGB to linear ProPhoto RGB (D50), from its colour
+    /// profile; `None` for the primaries `encoding_gamma` implies (ProPhoto for 1.8, Adobe RGB
+    /// for 563/256, else sRGB). Set at run time by whoever knows the document (the command, the
+    /// dialog), never stored, so saved settings and Smart Filters read as before.
+    #[serde(skip)]
+    pub document_primaries: Option<[[f32; 3]; 3]>,
     // Calibration (Camera Raw's Calibration panel)
     /// Shadows › Tint: −100 (green) … 100 (magenta), strongest in the darkest tones.
     pub shadow_tint: f32,
@@ -248,6 +355,7 @@ impl Default for CameraRaw {
             seed: 0,
             pixel_scale: 1.0,
             encoding_gamma: 0.0,
+            document_primaries: None,
             shadow_tint: 0.0,
             calibration_hue: [0.0; 3],
             calibration_sat: [0.0; 3],
@@ -609,6 +717,10 @@ impl CameraRaw {
         [self.curve_highlights, self.curve_lights, self.curve_darks, self.curve_shadows].iter().all(|v| *v == 0.0)
             && [&self.point_curve, &self.point_curve_red, &self.point_curve_green, &self.point_curve_blue].iter().all(|c| is_linear(c))
     }
+    /// The document's encoding: its transfer curve and primaries.
+    pub(crate) fn encoding(&self) -> Encoding {
+        Encoding::with_primaries(self.encoding_gamma, self.document_primaries)
+    }
     /// True when every control is neutral (the filter is an identity).
     pub fn is_identity(&self) -> bool {
         self.wb_neutral()
@@ -662,12 +774,12 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
     let mut skipped: Option<String> = None;
     let ps = p.pixel_scale.clamp(0.01, 1.0);
     // 1. White balance (per-channel curves, see `white_balance`), then Exposure.
-    white_balance::apply(px, w, p.temperature, p.tint, Encoding::of(p.encoding_gamma));
+    white_balance::apply(px, w, p.temperature, p.tint, p.encoding());
     if p.exposure != 0.0 {
-        exposure::apply(px, w, &exposure::row(p.exposure), Encoding::of(p.encoding_gamma));
+        exposure::apply(px, w, &exposure::row(p.exposure), p.encoding());
     }
     if p.contrast != 0.0 {
-        let enc = Encoding::of(p.encoding_gamma);
+        let enc = p.encoding();
         let tones = tone_points(px, w, h, enc, |q| q);
         exposure::apply(px, w, &contrast::adaptive_row(p.contrast, Some(tones)), enc);
     }
@@ -693,28 +805,28 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
     if p.dehaze > 0.0 {
         dehaze(px, w, h, p.dehaze / 100.0);
     } else if p.dehaze < 0.0 {
-        add_haze(px, w, h, p.dehaze, Encoding::of(p.encoding_gamma));
+        add_haze(px, w, h, p.dehaze, p.encoding());
     }
     // 3. Tone. Highlights and Shadows: a local Laplacian filter (see `local_tone`).
     if p.highlights != 0.0 || p.shadows != 0.0 {
-        local_tone::apply(px, w, h, p.shadows, p.highlights, Encoding::of(p.encoding_gamma));
+        local_tone::apply(px, w, h, p.shadows, p.highlights, p.encoding());
     }
     // Texture and Clarity: fitted multi-scale models of local detail (see `local_detail`).
     // Without memory a stage is skipped and the rest still runs (a preview stays useful); the
     // first failure is returned at the end.
     if p.texture != 0.0
-        && let Err(e) = local_detail::apply(&local_detail::TEXTURE, px, w, h, p.texture, Encoding::of(p.encoding_gamma))
+        && let Err(e) = local_detail::apply(&local_detail::TEXTURE, px, w, h, p.texture, p.encoding())
     {
         skipped.get_or_insert(e);
     }
     if p.clarity != 0.0
-        && let Err(e) = local_detail::apply(&local_detail::CLARITY, px, w, h, p.clarity, Encoding::of(p.encoding_gamma))
+        && let Err(e) = local_detail::apply(&local_detail::CLARITY, px, w, h, p.clarity, p.encoding())
     {
         skipped.get_or_insert(e);
     }
     // 3b. Whites and Blacks: global curves, Whites up adapted to the image's tones.
     if p.whites != 0.0 || p.blacks != 0.0 {
-        let enc = Encoding::of(p.encoding_gamma);
+        let enc = p.encoding();
         let points = (p.whites > 0.0).then(|| tone_points(px, w, h, enc, |q| q));
         let (wr, br) = (whites_blacks::whites_row(p.whites, points), whites_blacks::blacks_row(p.blacks));
         let fix = (p.whites < 0.0).then(|| colour_lut::correction(colour_lut::Slider::Whites, p.whites)).flatten();
@@ -729,7 +841,7 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
         let mixer = color_mixer::mixer(&p.hsl_hue, &p.hsl_sat, &p.hsl_lum);
         let grade = !p.grade_neutral();
         let Grade { tints, lums, blend, balance: bal } = Grade::new(p);
-        let enc = Encoding::of(p.encoding_gamma);
+        let enc = p.encoding();
         // Vibrance and Saturation: measured tables (see `presence`).
         let presence = presence::presence(p.vibrance, p.saturation);
         par_rows(px, w, 1, |_, row| {
@@ -823,7 +935,7 @@ fn tone_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding, map: impl Fn(
                 let Some(&q) = px.get(y * w + x).filter(|q| q[3] > 0.0) else { continue };
                 let q = map(q);
                 let s = &mut sum[x / f];
-                s.0 += f64::from(luma([0, 1, 2].map(|c| enc.decode(q[c]))).max(0.0));
+                s.0 += f64::from(enc.luminance([0, 1, 2].map(|c| enc.decode(q[c]))).max(0.0));
                 s.1 += 1;
             }
         }
@@ -1118,20 +1230,20 @@ mod tests {
         let (w, h) = (200usize, 120usize);
         let base: Vec<[f32; 4]> = (0..w * h).map(|i| if (i % w) < 100 { [0.05, 0.08, 0.1, 1.0] } else { [0.9, 0.88, 0.85, 1.0] }).collect();
         let mut px = base.clone();
-        add_haze(&mut px, w, h, -100.0, Encoding(0.0));
+        add_haze(&mut px, w, h, -100.0, Encoding::of(0.0));
         assert!(px[0][0] > base[0][0] + 0.02, "{:?}", px[0]);
         assert!(px.iter().all(|q| q[..3].iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))));
         let mut half = base.clone();
-        add_haze(&mut half, w, h, -50.0, Encoding(1.8));
+        add_haze(&mut half, w, h, -50.0, Encoding::of(1.8));
         assert!(half[0][0] > base[0][0] && half[0][0] < px[0][0] + 0.2);
         for v in [0.0, 10.0, f32::NAN] {
             let mut same = base.clone();
-            add_haze(&mut same, w, h, v, Encoding(0.0));
+            add_haze(&mut same, w, h, v, Encoding::of(0.0));
             assert_eq!(same, base);
         }
-        add_haze(&mut [], 0, 0, -50.0, Encoding(0.0));
+        add_haze(&mut [], 0, 0, -50.0, Encoding::of(0.0));
         let mut odd = vec![[f32::NAN, 2.0, -1.0, 1.0]; 4];
-        add_haze(&mut odd, 2, 2, -80.0, Encoding(0.0));
+        add_haze(&mut odd, 2, 2, -80.0, Encoding::of(0.0));
     }
 
     /// The colour hidden under fully transparent pixels takes no part in the haze colour or in
@@ -1144,16 +1256,16 @@ mod tests {
             (0..w * h).map(|i| if visible(i) { [0.2 + 0.6 * ((i / w) as f32 / h as f32), 0.3, 0.25, 1.0] } else { hidden }).collect()
         };
         let (white, black) = (scene([1.0, 1.0, 1.0, 0.0]), scene([0.0, 0.0, 0.0, 0.0]));
-        assert_eq!(tone_points(&white, w, h, Encoding(0.0), |q| q), tone_points(&black, w, h, Encoding(0.0), |q| q));
+        assert_eq!(tone_points(&white, w, h, Encoding::of(0.0), |q| q), tone_points(&black, w, h, Encoding::of(0.0), |q| q));
         let (mut a, mut b) = (white.clone(), black.clone());
-        add_haze(&mut a, w, h, -100.0, Encoding(0.0));
-        add_haze(&mut b, w, h, -100.0, Encoding(0.0));
+        add_haze(&mut a, w, h, -100.0, Encoding::of(0.0));
+        add_haze(&mut b, w, h, -100.0, Encoding::of(0.0));
         for i in (0..w * h).filter(|i| visible(*i)) {
             assert_eq!(a[i], b[i], "pixel {i}");
         }
         // Everything transparent: the fallback tones.
         let clear = vec![[0.5, 0.5, 0.5, 0.0]; w * h];
-        assert_eq!(tone_points(&clear, w, h, Encoding(0.0), |q| q), [-16.0, -1.0, 0.0, -1.0]);
+        assert_eq!(tone_points(&clear, w, h, Encoding::of(0.0), |q| q), [-16.0, -1.0, 0.0, -1.0]);
     }
 
     /// A pixel that is not a number takes no part in the haze colour, so negative Dehaze
@@ -1165,8 +1277,8 @@ mod tests {
         let (mut with_nan, mut hidden) = (base.clone(), base.clone());
         with_nan[100] = [0.5, f32::NAN, 0.5, 1.0];
         hidden[100] = [0.5, 0.5, 0.5, 0.0];
-        add_haze(&mut with_nan, w, h, -100.0, Encoding(0.0));
-        add_haze(&mut hidden, w, h, -100.0, Encoding(0.0));
+        add_haze(&mut with_nan, w, h, -100.0, Encoding::of(0.0));
+        add_haze(&mut hidden, w, h, -100.0, Encoding::of(0.0));
         for i in (0..w * h).filter(|i| *i != 100) {
             assert!(with_nan[i][..3].iter().all(|v| v.is_finite()), "pixel {i}: {:?}", with_nan[i]);
             assert_eq!(with_nan[i], hidden[i], "pixel {i}");
@@ -1183,8 +1295,8 @@ mod tests {
         let inside = |i: usize| (240..272).contains(&(i % w)) && (240..272).contains(&(i / w));
         let mut padded: Vec<[f32; 4]> = (0..w * h).map(|i| if inside(i) { object } else { [0.0; 4] }).collect();
         let mut full = vec![object; w * h];
-        add_haze(&mut padded, w, h, -100.0, Encoding(0.0));
-        add_haze(&mut full, w, h, -100.0, Encoding(0.0));
+        add_haze(&mut padded, w, h, -100.0, Encoding::of(0.0));
+        add_haze(&mut full, w, h, -100.0, Encoding::of(0.0));
         for i in (0..w * h).filter(|i| inside(*i)) {
             for c in 0..3 {
                 assert!((padded[i][c] - full[i][c]).abs() < 1e-4, "pixel {i}: {:?} vs {:?}", padded[i], full[i]);
@@ -1196,7 +1308,7 @@ mod tests {
     #[test]
     fn a_short_buffer_is_left_alone() {
         let px = vec![[0.5, 0.4, 0.3, 1.0]; 3];
-        assert!(tone_points(&px, 2, 2, Encoding(0.0), |q| q).iter().all(|v| v.is_finite()));
+        assert!(tone_points(&px, 2, 2, Encoding::of(0.0), |q| q).iter().all(|v| v.is_finite()));
         let mut short = px.clone();
         develop(&mut short, 2, 2, &CameraRaw { contrast: 50.0, whites: 40.0, ..Default::default() }, false);
         assert_eq!(short, px);
@@ -1518,5 +1630,96 @@ mod tests {
         let v: Vec<f32> = (0..w * h).map(|i| ((i * 37) % 101) as f32 / 100.0).collect();
         assert_eq!(gauss(&v, w, h, 0.29), v);
         assert_ne!(gauss(&v, w, h, 1.0), v);
+    }
+
+    /// Display P3 (D65) linear RGB to linear ProPhoto (D50): P3's RGB → XYZ, Bradford D65 → D50,
+    /// then XYZ → ROMM RGB (published matrices).
+    fn p3_to_prophoto() -> [[f32; 3]; 3] {
+        let p3_xyz = [[0.486_570_9, 0.265_667_7, 0.198_217_3], [0.228_974_6, 0.691_738_5, 0.079_286_9], [0.0, 0.045_113_4, 1.043_944_4]];
+        let d65_d50 = [[1.047_811_2, 0.022_886_6, -0.050_127_0], [0.029_542_4, 0.990_484_4, -0.017_049_1], [-0.009_234_5, 0.015_043_6, 0.752_131_6]];
+        let xyz_romm = [[1.345_943_3, -0.255_607_5, -0.051_111_8], [-0.544_598_9, 1.508_167_3, 0.020_535_1], [0.0, 0.0, 1.211_812_8]];
+        let mul =
+            |a: [[f32; 3]; 3], b: [[f32; 3]; 3]| -> [[f32; 3]; 3] { std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| a[i][k] * b[k][j]).sum())) };
+        mul(xyz_romm, mul(d65_d50, p3_xyz))
+    }
+
+    /// A Display P3 document has sRGB's curve, so its curve alone made it read as sRGB: its own
+    /// primaries now give its luminance and its conversion into sRGB, and an out-of-gamut colour
+    /// survives the round trip.
+    #[test]
+    fn display_p3_is_not_read_as_srgb() {
+        let p3 = Encoding::with_primaries(0.0, Some(p3_to_prophoto()));
+        assert!(!p3.srgb_primaries());
+        assert_ne!(p3.prophoto(), Encoding::of(0.0).prophoto());
+        // P3's red is brighter than sRGB's, its green darker; white is white in both.
+        assert!(p3.luminance([1.0, 0.0, 0.0]) > luma([1.0, 0.0, 0.0]) + 0.01);
+        assert!(p3.luminance([0.0, 1.0, 0.0]) < luma([0.0, 1.0, 0.0]) - 0.01);
+        assert!((p3.luminance([1.0; 3]) - 1.0).abs() < 2e-3);
+        // P3's pure red lies outside sRGB: past 1 in red, below 0 in green and blue, and back.
+        let s = p3.to_srgb_encoded([1.0, 0.0, 0.0]);
+        assert!(s[0] > 1.0 && s[1] < 0.0 && s[2] < 0.0, "{s:?}");
+        let back = p3.back_from_srgb_encoded(s);
+        assert!(back.iter().zip([1.0, 0.0, 0.0]).all(|(a, b)| (a - b).abs() < 1e-4), "{back:?}");
+        // sRGB documents convert as before, exactly.
+        let srgb = CameraRaw::default().encoding();
+        assert_eq!(srgb.to_srgb_encoded([0.3, 1.2, -0.1]), [0.3, 1.2, -0.1]);
+        assert_eq!(srgb.luminance([0.2, 0.5, 0.9]).to_bits(), luma([0.2, 0.5, 0.9]).to_bits());
+        // A matrix that can't be inverted falls back to the primaries the curve implies.
+        assert_eq!(Encoding::with_primaries(1.8, Some([[0.0; 3]; 3])), Encoding::of(1.8));
+    }
+
+    /// The same picture in ProPhoto, or in Display P3, develops as it does in sRGB: the
+    /// sRGB-measured tables and models read its colours in sRGB's primaries, and Contrast
+    /// weighs its luminance in its own.
+    #[test]
+    fn other_primaries_develop_like_the_same_picture_in_srgb() {
+        let (w, h) = (96, 64);
+        let srgb: Vec<[f32; 4]> = img(w, h)
+            .into_iter()
+            .enumerate()
+            .map(|(i, q)| {
+                // Fine detail for Texture and Clarity, and colour that Contrast keeps within
+                // sRGB's gamut (outside it the sRGB document clips where the others don't).
+                let t = (((i % w) / 3 + (i / w) / 3) % 2) as f32 * 0.12;
+                let c = [q[0] + t * 0.5, (q[1] - t * 0.8).max(0.05), q[2] + t];
+                let m = (c[0] + c[1] + c[2]) / 3.0;
+                let d = |k: usize| m + (c[k] - m) * 0.6;
+                [d(0), d(1), d(2), 1.0]
+            })
+            .collect();
+        for p in [
+            CameraRaw { contrast: 45.0, ..Default::default() },
+            CameraRaw { whites: -60.0, ..Default::default() },
+            CameraRaw { texture: 70.0, ..Default::default() },
+            CameraRaw { clarity: 40.0, ..Default::default() },
+            CameraRaw { contrast: 45.0, whites: -60.0, texture: 70.0, clarity: 40.0, ..Default::default() },
+        ] {
+            let mut want = srgb.clone();
+            // As 32-bit documents: the final clip to 0 … 1 would cut each document's gamut apart.
+            develop(&mut want, w, h, &p, true);
+            let to_lin = |q: &[f32; 4]| [0, 1, 2].map(|c| srgb_to_linear(q[c]));
+            for (gamma, primaries) in [(1.8, None), (0.0, Some(p3_to_prophoto()))] {
+                let doc = CameraRaw { encoding_gamma: gamma, document_primaries: primaries, ..p.clone() };
+                let enc = doc.encoding();
+                let (to, from) = enc.prophoto().unwrap_or((exposure::IDENTITY, exposure::IDENTITY));
+                // sRGB linear → ProPhoto → the document's linear RGB, and encoded.
+                let mut px: Vec<[f32; 4]> = srgb
+                    .iter()
+                    .map(|q| {
+                        let d = exposure::mat(&from, exposure::mat(&exposure::SRGB_TO_PROPHOTO, to_lin(q)));
+                        [enc.encode(d[0]), enc.encode(d[1]), enc.encode(d[2]), 1.0]
+                    })
+                    .collect();
+                develop(&mut px, w, h, &doc, true);
+                let mut worst = 0.0f32;
+                for (q, r) in px.iter().zip(&want) {
+                    let back = exposure::mat(&exposure::PROPHOTO_TO_SRGB, exposure::mat(&to, [0, 1, 2].map(|c| enc.decode(q[c]))));
+                    for c in 0..3 {
+                        worst = worst.max((linear_to_srgb(back[c]) - r[c]).abs());
+                    }
+                }
+                assert!(worst < 3e-3, "{p:?} gamma {gamma}: off by {worst}");
+            }
+        }
     }
 }

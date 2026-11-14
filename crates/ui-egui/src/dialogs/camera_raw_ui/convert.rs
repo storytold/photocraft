@@ -130,6 +130,10 @@ pub(super) fn open_pixels(
     if params.encoding_gamma == 0.0 {
         params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
     }
+    // The preview develops in the document's primaries, as the command does.
+    if params.document_primaries.is_none() {
+        params.document_primaries = photocraft_engine::lens_cmds::document_primaries(&st.doc);
+    }
     let (area, w, h) = preview_area(canvas, &surf)?;
     let (proxy, pw, ph, k) = box_proxy(&surf, area, w, h);
     // Coverage at the centre of each proxy block.

@@ -415,6 +415,23 @@ pub fn encoding_gamma(doc: &Document) -> f32 {
         .map_or(0.0, |(_, g)| g)
 }
 
+/// `doc`'s primaries for Camera Raw ([`CameraRaw::document_primaries`]): its linear RGB to
+/// linear ProPhoto RGB, from the colour profile's colorants. `None` when the primaries are the
+/// ones [`encoding_gamma`] implies (sRGB, linear sRGB, ProPhoto, Adobe RGB), or the profile is
+/// not an RGB matrix profile (its pixels then develop as sRGB, as before).
+pub fn document_primaries(doc: &Document) -> Option<[[f32; 3]; 3]> {
+    use craft_cms::{Builtin, ColorSpace, math};
+    let profile = crate::color_cmds::document_profile(doc);
+    let implied = [Builtin::Srgb, Builtin::LinearSrgb, Builtin::ProPhotoCompat, Builtin::AdobeRgbCompat];
+    if profile.color_space != ColorSpace::Rgb || implied.iter().any(|b| profile.same_colors(b.profile())) {
+        return None;
+    }
+    let to_xyz = profile.matrix.as_ref()?;
+    let from_prophoto_xyz = math::invert(Builtin::ProPhotoCompat.profile().matrix.as_ref()?)?;
+    let m = math::mul(&from_prophoto_xyz, to_xyz).map(|r| r.map(|v| v as f32));
+    m.iter().flatten().all(|v| v.is_finite()).then_some(m)
+}
+
 fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     // The document's transfer curve goes with the settings, so a Smart Filter keeps it.
     let mut p = p.clone();
@@ -425,9 +442,11 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         m.insert("encodingGamma".into(), json!((f64::from(g) * 1e4).round() / 1e4));
     }
     let p = &p;
-    let cr = raw_params(RAW, p)?;
+    let mut cr = raw_params(RAW, p)?;
     // New settings are strict; stored Smart Filters re-apply through the lenient `raw_params`.
     cr.validate().map_err(|e| bad(RAW, e))?;
+    // The document's primaries, when its profile's aren't the ones the transfer curve implies.
+    cr.document_primaries = s.active().and_then(|d| document_primaries(&d.doc));
     // The pixel path works on the canvas plus the layer's content in one buffer; a legal
     // 65536×65536 canvas is 2^32 pixels, which overflowed the u32 size arithmetic (#962).
     if !cr.is_identity() {
@@ -728,6 +747,59 @@ mod tests {
         if let LayerContent::Smart(so) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
             assert!(so.smart_filters[0].params.get("encodingGamma").is_none());
         }
+    }
+
+    /// Display P3 shares sRGB's curve, so the curve alone made it develop as sRGB: its own
+    /// primaries now go with the settings. The primaries the curve implies add nothing.
+    #[test]
+    fn camera_raw_takes_the_documents_primaries() {
+        let mut s = session(16);
+        assert_eq!(document_primaries(&s.active().unwrap().doc), None);
+        for (profile, own) in [("display-p3", true), ("rec2020", true), ("prophoto-compat", false), ("adobe-rgb-compat", false), ("linear-srgb", false)] {
+            s.execute("edit.assignProfile", json!({"profile": profile})).unwrap();
+            let m = document_primaries(&s.active().unwrap().doc);
+            assert_eq!(m.is_some(), own, "{profile}: {m:?}");
+            if let Some(m) = m {
+                // White stays white (both D50-adapted), and the matrix is not sRGB's.
+                let white: Vec<f32> = m.iter().map(|r| r.iter().sum()).collect();
+                assert!(white.iter().all(|v| (v - 1.0).abs() < 1e-3), "{profile}: {white:?}");
+                assert!((m[0][0] - 0.529_345).abs() > 0.05, "{profile}: {m:?}");
+            }
+        }
+        // A P3 document develops with it: the same picture as in sRGB (converted to P3) comes
+        // out as it does in sRGB, within 16-bit rounding and the sRGB document's clipping of
+        // what Contrast pushes past its gamut (0.005; read as sRGB, the P3 picture was 0.03 off).
+        let params = json!({"texture": 80, "whites": -60, "contrast": 40});
+        let colourful = || {
+            let mut s = session(16);
+            s.edit("colours", |doc, active| {
+                let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                let fmt = surf.format();
+                for y in 0..80 {
+                    for x in 0..120 {
+                        let c = if (x / 4 + y / 4) % 2 == 0 { [0.8, 0.3, 0.2] } else { [0.2, 0.55, 0.75] };
+                        surf.write_pixel(x, y, &photocraft_raster::from_rgba(&fmt, [c[0], c[1], c[2], 1.0]));
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+            s
+        };
+        let mut srgb = colourful();
+        srgb.execute(RAW, params.clone()).unwrap();
+        let mut p3 = colourful();
+        p3.execute("edit.convertToProfile", json!({"profile": "display-p3", "intent": "relative"})).unwrap();
+        p3.execute(RAW, params).unwrap();
+        p3.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "relative"})).unwrap();
+        let mut worst = 0.0f32;
+        for (x, y) in [(5, 5), (30, 20), (60, 40), (90, 60), (110, 75), (17, 63)] {
+            let (a, b) = (active_px(&srgb, x, y), active_px(&p3, x, y));
+            for c in 0..3 {
+                worst = worst.max((a[c] - b[c]).abs());
+            }
+        }
+        assert!(worst < 0.012, "P3 develops off by {worst}");
     }
 
     #[test]

@@ -175,27 +175,38 @@ static CURVES: [[f32; STEPS]; 21] = [
 ];
 
 /// A row-major 3 × 3 matrix.
-type Mat = [[f32; 3]; 3];
+pub(crate) type Mat = [[f32; 3]; 3];
 /// Matrices to linear ProPhoto and back.
 pub(crate) type Primaries = (Mat, Mat);
+#[cfg(test)]
+pub(crate) const IDENTITY: Mat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 /// Linear sRGB (D65, Bradford-adapted to D50 as in its ICC profile) to linear ProPhoto RGB
 /// (ROMM, D50); and back.
-const SRGB_TO_PROPHOTO: Mat = [[0.529_345, 0.330_072, 0.140_580], [0.098_374, 0.873_461, 0.028_167], [0.016_883, 0.117_672, 0.865_444]];
-const PROPHOTO_TO_SRGB: Mat = [[2.034_078, -0.727_334, -0.306_739], [-0.228_813, 1.231_731, -0.002_920], [-0.008_570, -0.153_286, 1.161_857]];
+pub(crate) const SRGB_TO_PROPHOTO: Mat = [[0.529_345, 0.330_072, 0.140_580], [0.098_374, 0.873_461, 0.028_167], [0.016_883, 0.117_672, 0.865_444]];
+pub(crate) const PROPHOTO_TO_SRGB: Mat = [[2.034_078, -0.727_334, -0.306_739], [-0.228_813, 1.231_731, -0.002_920], [-0.008_570, -0.153_286, 1.161_857]];
 /// The same for Adobe RGB (1998).
-const ADOBE_TO_PROPHOTO: Mat = [[0.740_176, 0.113_207, 0.146_618], [0.137_555, 0.833_071, 0.029_374], [0.023_607, 0.073_788, 0.902_605]];
-const PROPHOTO_TO_ADOBE: Mat = [[1.389_521, -0.169_320, -0.220_201], [-0.228_813, 1.231_73, -0.002_917], [-0.017_637, -0.096_265, 1.113_902]];
+pub(crate) const ADOBE_TO_PROPHOTO: Mat = [[0.740_176, 0.113_207, 0.146_618], [0.137_555, 0.833_071, 0.029_374], [0.023_607, 0.073_788, 0.902_605]];
+pub(crate) const PROPHOTO_TO_ADOBE: Mat = [[1.389_521, -0.169_320, -0.220_201], [-0.228_813, 1.231_73, -0.002_917], [-0.017_637, -0.096_265, 1.113_902]];
 
-/// The primaries that go with a document encoding ([`Encoding`]): ProPhoto's gamma 1.8 is
-/// ProPhoto, Adobe RGB's 563/256 Adobe RGB, everything else sRGB's. `None` for ProPhoto (no
-/// conversion), else the matrices to linear ProPhoto and back.
+/// The document's primaries ([`Encoding`]): `None` for ProPhoto (no conversion), else the
+/// matrices to linear ProPhoto and back.
 pub(crate) fn primaries(enc: Encoding) -> Option<Primaries> {
-    match enc.0 {
-        g if (g - 1.8).abs() < 1e-3 => None,
-        g if (g - 563.0 / 256.0).abs() < 1e-3 => Some((ADOBE_TO_PROPHOTO, PROPHOTO_TO_ADOBE)),
-        _ => Some((SRGB_TO_PROPHOTO, PROPHOTO_TO_SRGB)),
+    enc.prophoto()
+}
+
+/// The inverse of `m`, `None` when it is singular or not finite (in f64, then back to f32).
+pub(crate) fn invert(m: &Mat) -> Option<Mat> {
+    let a = m.map(|r| r.map(f64::from));
+    let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+        + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return None;
     }
+    let c = |r0: usize, c0: usize, r1: usize, c1: usize| a[r0][c0] * a[r1][c1] - a[r0][c1] * a[r1][c0];
+    let inv = [[c(1, 1, 2, 2), -c(0, 1, 2, 2), c(0, 1, 1, 2)], [-c(1, 0, 2, 2), c(0, 0, 2, 2), -c(0, 0, 1, 2)], [c(1, 0, 2, 1), -c(0, 0, 2, 1), c(0, 0, 1, 1)]]
+        .map(|r| r.map(|v| (v / det) as f32));
+    inv.iter().flatten().all(|v| v.is_finite()).then_some(inv)
 }
 
 /// The Exposure curve at slider value `e` (stops, −5 … 5) as one row over grey levels 0, 1/64,

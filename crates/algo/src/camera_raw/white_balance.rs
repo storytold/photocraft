@@ -190,7 +190,7 @@ mod tests {
 
     fn grey(t: f32, tn: f32, level: f32) -> [f32; 3] {
         let v = level / 255.0;
-        let q = pixel([v, v, v, 1.0], &curves(t, tn).unwrap(), Encoding(0.0));
+        let q = pixel([v, v, v, 1.0], &curves(t, tn).unwrap(), Encoding::of(0.0));
         [q[0] * 255.0, q[1] * 255.0, q[2] * 255.0]
     }
 
@@ -214,7 +214,7 @@ mod tests {
         let small = grey(5.0, 0.0, 128.0);
         assert!((small[0] - 128.0).abs() < 12.0 && small[0] >= 128.0, "{small:?}");
         assert_eq!(curves(500.0, 0.0), curves(100.0, 0.0));
-        let q = pixel([2.0, -1.0, f32::INFINITY, 1.0], &curves(100.0, -100.0).unwrap(), Encoding(0.0));
+        let q = pixel([2.0, -1.0, f32::INFINITY, 1.0], &curves(100.0, -100.0).unwrap(), Encoding::of(0.0));
         assert!(q[0].is_finite() && q[1].is_finite());
     }
 }
