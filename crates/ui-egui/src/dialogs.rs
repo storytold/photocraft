@@ -367,6 +367,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         }
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
         _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
+        _ if crate::paragraph_text_size::owns(fields) => crate::paragraph_text_size::body(ui, fields),
         _ if crate::equalize_ui::owns(fields) => crate::equalize_ui::body(ui, fields),
         _ if fields.contains_key("__form") => {
             if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
@@ -935,6 +936,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::variables_ui::owns,
     crate::file_ui::owns,
     crate::new_guide_ui::owns,
+    crate::paragraph_text_size::owns,
     crate::equalize_ui::owns,
     crate::color_picker_ui::owns,
     crate::color_range_ui::owns,
@@ -1167,6 +1169,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
         _ if live_shape_prompt::owns(&d.fields) => live_shape_prompt::confirm(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
+        _ if crate::paragraph_text_size::owns(&d.fields) => crate::paragraph_text_size::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
             // OK sets the target as it was before the live preview showed the colour in it.
             crate::color_picker_ui::live_preview::end(app, d.id);
@@ -1354,6 +1357,7 @@ pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
+pub mod paragraph_text_size;
 #[cfg(test)]
 mod paths_export_default_tests;
 #[cfg(test)]

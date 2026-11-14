@@ -76,7 +76,7 @@ pub(crate) use panel::{OPENTYPE_BUTTONS, toggle_opentype};
 pub use panel::{character_panel, type_properties};
 #[cfg(test)]
 use pointer::{MIN_BOX, handle_sides, word_boundary};
-pub(crate) use pointer::{PathClick, box_handle_at, hover_path_target, inside_box};
+pub(crate) use pointer::{PathClick, box_handle_at, create_layer, create_params, hover_path_target, inside_box};
 #[cfg(test)]
 pub(crate) use pointer::{box_shape, click_selection, next_click_count, path_target};
 pub use pointer::{multi_click, pointer_down, pointer_move, pointer_up};

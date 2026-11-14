@@ -24,7 +24,7 @@ fn new_app(tool: Tool) -> PhotocraftApp {
 
 /// Start new text with a click and type `s`, as the canvas does.
 fn type_new(app: &mut PhotocraftApp, s: &str) {
-    super::pointer_up(app, [50.0, 100.0], [50.0, 100.0]);
+    super::pointer_up(app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     super::insert(app, s);
 }
 

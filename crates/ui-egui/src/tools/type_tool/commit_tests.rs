@@ -25,7 +25,7 @@ fn text_of(app: &PhotocraftApp, doc: usize, id: LayerId) -> Option<String> {
 
 /// Start a new type layer with a click and type `s` into it, as the canvas does.
 fn type_new(app: &mut PhotocraftApp, s: &str) -> LayerId {
-    super::pointer_up(app, [50.0, 100.0], [50.0, 100.0]);
+    super::pointer_up(app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     super::insert(app, s);
     LayerId(app.ui.text_edit.as_ref().unwrap().layer)
 }

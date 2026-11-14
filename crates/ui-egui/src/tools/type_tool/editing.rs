@@ -630,7 +630,7 @@ mod indexed_commit_tests {
     fn committing_in_indexed_color_or_bitmap_leaves_the_glyphs_selected() {
         // The bounds the same text covers where it does become a layer.
         let mut rgb = app("rgb");
-        pointer_up(&mut rgb, [80.0, 120.0], [80.0, 120.0]);
+        pointer_up(&mut rgb, [80.0, 120.0], [80.0, 120.0], egui::Modifiers::NONE);
         insert(&mut rgb, "Hi");
         commit(&mut rgb);
         let glyphs = rgb.session.active().unwrap().doc.layers.last().unwrap().surface().unwrap().content_bounds();
@@ -643,7 +643,7 @@ mod indexed_commit_tests {
             let (layers_before, states_before) = (layers(&app), states(&app));
 
             // Typing: the working layer is there, and shown, as measured.
-            pointer_up(&mut app, [80.0, 120.0], [80.0, 120.0]);
+            pointer_up(&mut app, [80.0, 120.0], [80.0, 120.0], egui::Modifiers::NONE);
             insert(&mut app, "Hi");
             assert!(app.ui.text_edit.is_some(), "{mode}: the session is open");
             assert_eq!(text_layers(&app), 1, "{mode}: the text is edited on a layer");
@@ -668,7 +668,7 @@ mod indexed_commit_tests {
         for mode in ["rgb", "indexed", "bitmap"] {
             let mut app = app(mode);
             let (layers_before, states_before) = (layers(&app), states(&app));
-            pointer_up(&mut app, [80.0, 120.0], [80.0, 120.0]);
+            pointer_up(&mut app, [80.0, 120.0], [80.0, 120.0], egui::Modifiers::NONE);
             insert(&mut app, "Hi");
             cancel(&mut app);
             assert!(app.ui.text_edit.is_none(), "{mode}: the session ended");
@@ -690,7 +690,7 @@ mod indexed_commit_tests {
         for mode in ["indexed", "bitmap"] {
             // A dragged paragraph box.
             let mut boxed = app(mode);
-            pointer_up(&mut boxed, [40.0, 60.0], [320.0, 180.0]);
+            pointer_up(&mut boxed, [40.0, 60.0], [320.0, 180.0], egui::Modifiers::NONE);
             insert(&mut boxed, "Hi");
             let box_layer = LayerId(boxed.ui.text_edit.as_ref().unwrap().layer);
             assert!(matches!(text_of(&boxed, box_layer).map(|t| t.shape), Some(TextShape::Box { .. })), "{mode}: the setup made paragraph text");
@@ -701,7 +701,7 @@ mod indexed_commit_tests {
             // Vertical point text.
             let mut column_app = app(mode);
             column_app.ui.tool = Tool::VerticalType;
-            pointer_up(&mut column_app, [80.0, 120.0], [80.0, 120.0]);
+            pointer_up(&mut column_app, [80.0, 120.0], [80.0, 120.0], egui::Modifiers::NONE);
             insert(&mut column_app, "Hi");
             let column = LayerId(column_app.ui.text_edit.as_ref().unwrap().layer);
             assert!(text_of(&column_app, column).is_some_and(|t| t.orientation == Orientation::Vertical), "{mode}: the setup made vertical text");

@@ -117,7 +117,7 @@ fn the_vertical_buttons_set_left_center_and_right_and_follow_the_paragraph() {
 fn the_horizontal_type_mask_tool_keeps_the_horizontal_buttons() {
     assert_eq!(shown(&bar(new_app(Tool::HorizontalTypeMask))), HORIZONTAL, "idle");
     let mut app = new_app(Tool::HorizontalTypeMask);
-    super::pointer_up(&mut app, [400.0, 100.0], [400.0, 100.0]);
+    super::pointer_up(&mut app, [400.0, 100.0], [400.0, 100.0], egui::Modifiers::NONE);
     assert!(app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask), "typing a mask");
     assert_eq!(shown(&bar(app)), HORIZONTAL, "editing");
 }

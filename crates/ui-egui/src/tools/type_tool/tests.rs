@@ -51,7 +51,7 @@ fn layer_text(app: &PhotocraftApp) -> String {
 /// A committed type layer reading `s` at the same spot as the others (stacked variants, #4320).
 fn stacked_variant(app: &mut PhotocraftApp, s: &str) -> LayerId {
     app.ui.text_edit = None;
-    pointer_up(app, [50.0, 100.0], [50.0, 100.0]);
+    pointer_up(app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     insert(app, s);
     commit(app);
     app.session.active().unwrap().active_layer.unwrap()
@@ -132,7 +132,7 @@ fn move_double_click_edits_the_shown_variant_not_one_in_a_hidden_group() {
 #[test]
 fn shift_click_on_existing_type_starts_new_text() {
     let mut app = app();
-    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     insert(&mut app, "Existing words");
     commit(&mut app);
     let existing = app.session.active().unwrap().doc.layers.last().unwrap().id;
@@ -148,7 +148,7 @@ fn shift_click_on_existing_type_starts_new_text() {
 fn click_creates_placeholder_selected_and_typing_replaces_it() {
     let mut app = app();
     assert!(!pointer_down(&mut app, 50.0, 100.0, egui::Modifiers::NONE));
-    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     let ed = app.ui.text_edit.clone().unwrap();
     assert_eq!((ed.anchor, ed.caret), (0, PLACEHOLDER.chars().count()));
     insert(&mut app, "Héllo");
@@ -183,7 +183,7 @@ fn closed_path_forward_hit_after_last_caret() {
         app.ui.tool_options.type_align = align.into();
         let path = photocraft_vector::shapes::rect(20.0, 20.0, 200.0, 100.0);
         app.run("path.set", json!({"path": photocraft_engine::vector_cmds::path_json(&path)})).unwrap();
-        pointer_up(&mut app, [20.0, 45.0], [20.0, 45.0]);
+        pointer_up(&mut app, [20.0, 45.0], [20.0, 45.0], egui::Modifiers::NONE);
         insert(&mut app, "ssssssssssss");
         let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
         let (l, _, _) = layout(&mut app, id).unwrap();
@@ -199,7 +199,7 @@ fn open_path_hits_keep_endpoint_clamping() {
     let mut app = app();
     let path = photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polyline(&[(20.0, 100.0), (380.0, 100.0)])]);
     app.run("path.set", json!({"path": photocraft_engine::vector_cmds::path_json(&path)})).unwrap();
-    pointer_up(&mut app, [200.0, 100.0], [200.0, 100.0]);
+    pointer_up(&mut app, [200.0, 100.0], [200.0, 100.0], egui::Modifiers::NONE);
     insert(&mut app, "ssss");
     let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
     assert_eq!(offset_at(&mut app, id, 198.0, 100.0), 0);
@@ -214,7 +214,7 @@ fn closed_path_backward_hit_before_first_caret() {
         app.ui.tool_options.type_align = align.into();
         let path = photocraft_vector::shapes::rect(20.0, 20.0, 200.0, 100.0);
         app.run("path.set", json!({"path": photocraft_engine::vector_cmds::path_json(&path)})).unwrap();
-        pointer_up(&mut app, [20.0, 45.0], [20.0, 45.0]);
+        pointer_up(&mut app, [20.0, 45.0], [20.0, 45.0], egui::Modifiers::NONE);
         insert(&mut app, "ssssssssssss");
         let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
         let (l, _, _) = layout(&mut app, id).unwrap();
@@ -232,7 +232,7 @@ fn closed_path_upstream_caret_rectangle_left_edge_roundtrip() {
     let mut app = app();
     let path = photocraft_vector::shapes::rect(20.0, 20.0, 200.0, 100.0);
     app.run("path.set", json!({"path": photocraft_engine::vector_cmds::path_json(&path)})).unwrap();
-    pointer_up(&mut app, [20.0, 45.0], [20.0, 45.0]);
+    pointer_up(&mut app, [20.0, 45.0], [20.0, 45.0], egui::Modifiers::NONE);
     insert(&mut app, "ssssssssssss");
     let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
     let (layout, _, _) = layout(&mut app, id).unwrap();
@@ -282,7 +282,7 @@ fn click_on_a_path_starts_type_on_the_path() {
     assert!(path_target(&app, 200.0, 160.0).is_none(), "off the path");
     let before = app.session.active().unwrap().history.entries().len();
     assert!(!pointer_down(&mut app, 200.0, 101.0, egui::Modifiers::NONE));
-    pointer_up(&mut app, [200.0, 101.0], [200.0, 101.0]);
+    pointer_up(&mut app, [200.0, 101.0], [200.0, 101.0], egui::Modifiers::NONE);
     let ed = app.ui.text_edit.clone().unwrap();
     assert_eq!((ed.anchor, ed.caret), (0, PLACEHOLDER.chars().count()), "the placeholder is selected");
     let shape = text_layer(&app.session.active().unwrap().doc, LayerId(ed.layer)).unwrap().shape.clone();
@@ -295,7 +295,7 @@ fn click_on_a_path_starts_type_on_the_path() {
     app.ui.tool = crate::state::Tool::VerticalType;
     assert!(!matches!(path_target(&app, 200.0, 101.0), Some(PathClick::OnPath { .. })));
     app.ui.tool = crate::state::Tool::Type;
-    pointer_up(&mut app, [200.0, 160.0], [200.0, 160.0]);
+    pointer_up(&mut app, [200.0, 160.0], [200.0, 160.0], egui::Modifiers::NONE);
     let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
     assert_eq!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, TextShape::Point);
 }
@@ -311,7 +311,7 @@ fn caret_hits_type_on_a_path_along_the_curve() {
             Ok(())
         })
         .unwrap();
-    pointer_up(&mut app, [300.0, 20.0], [300.0, 20.0]);
+    pointer_up(&mut app, [300.0, 20.0], [300.0, 20.0], egui::Modifiers::NONE);
     insert(&mut app, "ABCDEFGH");
     let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
     assert!(matches!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, photocraft_doc::text::TextShape::Path { .. }));
@@ -342,7 +342,7 @@ fn type_unit_follows_the_units_and_rulers_preference() {
 fn placeholder_preference_controls_new_type_layer_text() {
     let mut app = app();
     app.run("prefs.set", json!({"path": "type.fillNewTypeLayersWithPlaceholder", "value": false})).unwrap();
-    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     let ed = app.ui.text_edit.clone().unwrap();
     assert_eq!((ed.anchor, ed.caret), (0, 0), "nothing to select");
     assert_eq!(layer_text(&app), "");
@@ -369,7 +369,7 @@ fn smart_quotes_preference_controls_typed_quotes() {
     for (smart, expected) in [(true, "hi \u{201c}you\u{201d}"), (false, "hi \"you\"")] {
         let mut app = app();
         app.run("prefs.set", json!({"path": "type.smartQuotes", "value": smart})).unwrap();
-        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
         insert_typed(&mut app, "hi \"you\"");
         assert_eq!(layer_text(&app), expected, "smartQuotes={smart}");
     }
@@ -378,7 +378,7 @@ fn smart_quotes_preference_controls_typed_quotes() {
 #[test]
 fn a_name_from_text_after_blank_lines_keeps_following_the_text() {
     let mut app = app();
-    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     insert(&mut app, "\n\nTitle");
     let id = app.ui.text_edit.as_ref().unwrap().layer;
     commit(&mut app);
@@ -392,7 +392,7 @@ fn a_name_from_text_after_blank_lines_keeps_following_the_text() {
 #[test]
 fn dragging_a_box_handle_resizes_the_paragraph_box() {
     let mut app = app();
-    pointer_up(&mut app, [10.0, 10.0], [110.0, 60.0]);
+    pointer_up(&mut app, [10.0, 10.0], [110.0, 60.0], egui::Modifiers::NONE);
     let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
     let steps = app.session.active().unwrap().history.entries().len();
     // Top-left corner: the box keeps its bottom-right corner.
@@ -400,7 +400,7 @@ fn dragging_a_box_handle_resizes_the_paragraph_box() {
     assert_eq!(app.ui.text_edit.as_ref().unwrap().resize.map(|r| r.handle), Some(0));
     pointer_move(&mut app, 20.0, 25.0, egui::Modifiers::NONE);
     pointer_move(&mut app, 30.0, 30.0, egui::Modifiers::NONE);
-    pointer_up(&mut app, [10.0, 10.0], [30.0, 30.0]);
+    pointer_up(&mut app, [10.0, 10.0], [30.0, 30.0], egui::Modifiers::NONE);
     assert_eq!(box_shape(&app, id), Some((0.0, 0.0, 80.0, 30.0)));
     let aff = layout(&mut app, id).unwrap().1;
     assert_eq!((aff.m[4], aff.m[5]), (30.0, 30.0));
@@ -410,12 +410,12 @@ fn dragging_a_box_handle_resizes_the_paragraph_box() {
     // Right edge: only the width changes, and never below the minimum.
     assert!(pointer_down(&mut app, 110.0, 45.0, egui::Modifiers::NONE));
     pointer_move(&mut app, 0.0, 99.0, egui::Modifiers::NONE);
-    pointer_up(&mut app, [110.0, 45.0], [0.0, 99.0]);
+    pointer_up(&mut app, [110.0, 45.0], [0.0, 99.0], egui::Modifiers::NONE);
     assert_eq!(box_shape(&app, id), Some((0.0, 0.0, MIN_BOX, 30.0)));
     // ⌥ mirrors the drag about the centre: the left edge follows the right one out.
     assert!(pointer_down(&mut app, 34.0, 45.0, egui::Modifiers::ALT));
     pointer_move(&mut app, 70.0, 45.0, egui::Modifiers::ALT);
-    pointer_up(&mut app, [34.0, 45.0], [70.0, 45.0]);
+    pointer_up(&mut app, [34.0, 45.0], [70.0, 45.0], egui::Modifiers::NONE);
     assert_eq!(box_shape(&app, id), Some((0.0, 0.0, MIN_BOX + 72.0, 30.0)));
     let aff = layout(&mut app, id).unwrap().1;
     // Text space −36..40 (centre 2) through the translation: the doc centre stays at 32.
@@ -425,7 +425,7 @@ fn dragging_a_box_handle_resizes_the_paragraph_box() {
 #[test]
 fn ime_preedit_is_replaced_by_each_update_and_commit_finalises() {
     let mut app = app();
-    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     // Each preedit update replaces the previous one (and the placeholder selection first).
     ime_update(&mut app, "に", false);
     assert_eq!(layer_text(&app), "に");
@@ -454,7 +454,7 @@ fn ime_preedit_is_replaced_by_each_update_and_commit_finalises() {
 #[test]
 fn empty_new_layer_is_deleted_on_commit() {
     let mut app = app();
-    pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0]);
+    pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0], egui::Modifiers::NONE);
     let n = app.session.active().unwrap().doc.layers.len();
     insert(&mut app, "");
     if let Some(e) = app.ui.text_edit.as_mut() {
@@ -474,7 +474,7 @@ fn word_boundaries() {
 #[test]
 fn arrow_keys_reset_caret_blink_phase() {
     let mut app = app();
-    pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0]);
+    pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0], egui::Modifiers::NONE);
     insert(&mut app, "Hello");
     app.ui.caret_blink_time = 0.0;
     let ctx = egui::Context::default();
@@ -508,11 +508,11 @@ fn arrow_keys_reset_caret_blink_phase() {
 #[test]
 fn pointer_up_click_resets_caret_blink_phase() {
     let mut app = app();
-    pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0]);
+    pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0], egui::Modifiers::NONE);
     insert(&mut app, "Hello");
     app.ui.caret_blink_time = 0.0;
     app.last_frame_time = 12.3;
-    pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0]);
+    pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0], egui::Modifiers::NONE);
     assert_eq!(app.ui.caret_blink_time, 12.3);
 }
 
@@ -561,7 +561,7 @@ fn closed_path_aligned_selection_highlights_every_visible_cluster() {
         app.ui.tool_options.type_align = align.into();
         let path = photocraft_vector::shapes::rect(20.0, 20.0, 200.0, 100.0);
         app.run("path.set", json!({"path":photocraft_engine::vector_cmds::path_json(&path)})).unwrap();
-        pointer_up(&mut app, [20.0, 45.0], [20.0, 45.0]);
+        pointer_up(&mut app, [20.0, 45.0], [20.0, 45.0], egui::Modifiers::NONE);
         insert(&mut app, "ssssssssssss");
         let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
         let (l, _, _) = layout(&mut app, id).unwrap();

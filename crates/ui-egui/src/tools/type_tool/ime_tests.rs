@@ -13,7 +13,7 @@ fn app() -> PhotocraftApp {
     app.session.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.sync_views();
     app.ui.tool = crate::state::Tool::Type;
-    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     insert(&mut app, "abc");
     app
 }
@@ -1338,7 +1338,7 @@ fn document_replacement_cannot_reuse_the_previous_documents_reset() {
     end_if_left(&mut app);
     assert!(app.ui.text_edit.is_none(), "the new document starts without the previous edit target");
     app.ui.tool = crate::state::Tool::Type;
-    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     insert(&mut app, "new");
     assert_ne!(active_doc_id(&app), old_document);
     let before = layer_text(&app);

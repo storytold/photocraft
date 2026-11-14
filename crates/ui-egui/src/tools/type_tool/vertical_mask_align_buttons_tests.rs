@@ -13,7 +13,7 @@ use crate::state::Tool;
 
 /// The Vertical Type Mask tool typing a new mask; returns its hidden working layer.
 fn typing_a_mask(app: &mut PhotocraftApp) -> LayerId {
-    pointer_up(app, [400.0, 100.0], [400.0, 100.0]);
+    pointer_up(app, [400.0, 100.0], [400.0, 100.0], egui::Modifiers::NONE);
     let ed = app.ui.text_edit.as_ref().filter(|ed| ed.mask).expect("typing a mask");
     LayerId(ed.layer)
 }
