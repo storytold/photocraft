@@ -72,6 +72,10 @@ pub struct CanvasToolMenu {
     /// Opened with the Content-Aware Move tool inside the active selection (#12194).
     #[serde(default)]
     pub inside_selection: bool,
+    /// The active layer is a pixel layer other than the Background (the case measured for the Quick
+    /// Selection menu without a selection, #12935).
+    #[serde(default)]
+    pub pixel_layer: bool,
     /// Opened with the Delete Anchor Point or Convert Point tool over an anchor or a segment of the
     /// targeted path (#12771, #12744): the engine command that entry runs and its params. It heads
     /// the path menu, above a separator. The third part is the document id and revision it was read
@@ -390,6 +394,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         sampler_at: None,
         color: None,
         inside_selection: false,
+        pixel_layer: false,
         point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
@@ -544,9 +549,9 @@ pub const COUNT_MENU: &[Row] = &[
 /// Right-click with the Content-Aware Move tool inside an active selection (#12194).
 pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
 
-/// The selection menu as measured in the reference application with the Red Eye tool (#12577) and
-/// the Object Selection tool (#12866): no Distort or Perspective, and Delete and Fill Selection
-/// after the fills.
+/// The selection menu as measured in the reference application with the Red Eye tool (#12577), the
+/// Object Selection tool (#12866) and the Quick Selection tool (#12935): no Distort or
+/// Perspective, and Delete and Fill Selection after the fills.
 pub const MEASURED_SELECTION_MENU: &[Row] = selection_menu![
     None,
     Some(("Fill…", "edit.fill")),
@@ -830,6 +835,17 @@ pub fn selection_rows(has_selection: bool) -> &'static [Row] {
     if has_selection { SELECTION_MENU } else { NO_SELECTION_MENU }
 }
 
+/// Does `menu` list the Red Eye / Object Selection / Quick Selection rows measured in the reference
+/// application? Quick Selection without a selection was measured over a pixel layer only (#12935):
+/// over the Background, type or shape layers it keeps the selection tools' menu.
+fn measured_selection_menu(menu: &CanvasToolMenu) -> bool {
+    match menu.tool {
+        Tool::RedEye | Tool::ObjectSelection => true,
+        Tool::QuickSelection => menu.has_selection || menu.pixel_layer,
+        _ => false,
+    }
+}
+
 /// The rows of an open menu.
 pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
     if menu.crop.is_some() {
@@ -853,7 +869,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         SAMPLER_MENU
     } else if menu.tool == Tool::Count {
         COUNT_MENU
-    } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection) {
+    } else if measured_selection_menu(menu) {
         if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
     } else if menu.tool == Tool::Eyedropper {
         EYEDROPPER_MENU
@@ -1037,6 +1053,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         sampler_at: None,
         color: None,
         inside_selection: false,
+        pixel_layer: false,
         point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
@@ -1127,6 +1144,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         sampler_at: None,
         color: None,
         inside_selection: false,
+        pixel_layer: false,
         point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
@@ -1165,6 +1183,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         sampler_at: None,
         color: None,
         inside_selection: false,
+        pixel_layer: false,
         point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
@@ -1316,6 +1335,9 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     let spelling = if text { doc.and_then(|d| spelling_at(app, d)) } else { None };
     let point = if point_menu(tool) && has_path { doc.filter(|d| d.iter().all(|v| v.is_finite())).and_then(|d| point_at(app, d)) } else { None };
     let inside_selection = tool == Tool::ContentAwareMove && doc.is_some_and(|d| selected_at(app, d));
+    let pixel_layer = app.session.active().is_some_and(|st| {
+        st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)) && !st.doc.is_background(l.id))
+    });
     let sampler = if tool == Tool::ColorSampler { doc.and_then(|d| crate::analysis_ui::sampler_at(app, d)) } else { None };
     let sampler_at = sampler.and_then(|i| Some((app.session.active_index()?, *app.session.active()?.color_samplers.get(i)?)));
     // The Eyedropper reads the colour now, under the right-click: all layers, with the Sample
@@ -1341,6 +1363,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         sampler_at,
         color,
         inside_selection,
+        pixel_layer,
         point,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
@@ -1376,6 +1399,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         sampler_at: None,
         color: None,
         inside_selection: false,
+        pixel_layer: false,
         point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
@@ -1845,3 +1869,6 @@ mod convert_point_menu_tests;
 
 #[cfg(test)]
 mod object_selection_menu_tests;
+
+#[cfg(test)]
+mod quick_selection_menu_tests;
