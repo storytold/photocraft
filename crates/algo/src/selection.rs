@@ -879,6 +879,7 @@ pub fn tone_range(px: &[[f32; 4]], lo: f32, hi: f32, falloff: f32) -> Vec<f32> {
         .collect()
 }
 
+mod bevel;
 mod distance;
 #[cfg(test)]
 mod ellipse_aa_edge_tests;
@@ -890,6 +891,7 @@ mod morphology;
 #[cfg(test)]
 mod wand_antialias_tests;
 
+pub use bevel::bevel_corners;
 pub use distance::edt;
 pub use inverse::inverse_surface;
 pub(crate) use lasso::clip_segment;
