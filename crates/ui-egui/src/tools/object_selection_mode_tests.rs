@@ -152,7 +152,8 @@ fn the_badge_follows_the_bar_and_modifiers() {
         assert_eq!(badge(&app, Tool::ObjectSelection, Modifiers::NONE), want, "bar mode {mode}");
     }
     app.ui.selection_mode = 0;
-    assert_eq!(badge(&app, Tool::ObjectSelection, both), Some(Badge::Intersect));
+    // The keys still intersect, but the cursor shows no badge for them (#12865).
+    assert_eq!(badge(&app, Tool::ObjectSelection, both), None);
 }
 
 #[test]

@@ -144,6 +144,11 @@ pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badg
     if matches!(tool, Tool::Lasso | Tool::PolygonLasso) && app.drag.is_none() && app.session.active().is_none_or(|st| st.doc.selection.is_none()) {
         m.alt = false;
     }
+    // Object Selection draws no + / − / × for ⇧, ⌥ or ⇧⌥ (#12865), though they still add,
+    // subtract and intersect: only the options bar's mode shows (#12853).
+    if tool == Tool::ObjectSelection {
+        m = egui::Modifiers::NONE;
+    }
     Badge::from_mode(selection_mode(tool, app.ui.selection_mode, m))
 }
 
@@ -293,8 +298,8 @@ mod tests {
         assert_eq!(badge(&app, Tool::ObjectSelection, none), Some(Badge::Intersect));
         app.ui.selection_mode = 0;
         assert_eq!(badge(&app, Tool::ObjectSelection, none), None);
-        assert_eq!(badge(&app, Tool::ObjectSelection, shift), Some(Badge::Add));
-        assert_eq!(badge(&app, Tool::ObjectSelection, both), Some(Badge::Intersect));
+        assert_eq!(badge(&app, Tool::ObjectSelection, shift), None, "no badge for the keys (#12865)");
+        assert_eq!(badge(&app, Tool::ObjectSelection, both), None);
         // Other tools never show one.
         for t in [Tool::Brush, Tool::Move, Tool::Zoom, Tool::Crop] {
             assert_eq!(badge(&app, t, shift), None);
