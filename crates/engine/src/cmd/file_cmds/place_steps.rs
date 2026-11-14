@@ -38,7 +38,7 @@ pub(crate) struct PlaceSteps {
     /// What the import left out, such as artboards or artwork, reported with the place.
     warnings: Vec<String>,
     /// The mode and profile a VectorCraft file's sRGB pixels are converted to once flattened.
-    convert: Option<(photocraft_color::ColorMode, Arc<photocraft_cms::Profile>)>,
+    convert: Option<(photocraft_color::ColorMode, Arc<craft_cms::Profile>)>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -205,7 +205,7 @@ impl PlaceSteps {
         // placement has no smart-object render later to perform this conversion for it.
         let target = self.input.target.as_deref().filter(|_| self.vectorcraft && !self.input.smart);
         self.convert = target.map(|d| (d.mode, crate::color_cmds::document_profile(d))).filter(|(mode, profile)| {
-            let srgb = photocraft_cms::Builtin::Srgb.profile();
+            let srgb = craft_cms::Builtin::Srgb.profile();
             !(*mode == photocraft_color::ColorMode::Rgb && profile.to_bytes().as_ref() == srgb.to_bytes().as_ref())
         });
         let flatten_fmt = if self.convert.is_some() { src.pixel_format() } else { self.input.fmt };
@@ -216,7 +216,7 @@ impl PlaceSteps {
     /// The image is flattened: on to resizing it to fit, if it needs that.
     fn flattened(&mut self, mut px: Surface, ctx: &JobCtx) -> Result<()> {
         if let Some((_, profile)) = self.convert.take() {
-            use photocraft_cms::{Builtin, Intent, Transform};
+            use craft_cms::{Builtin, Intent, Transform};
             let transform = Transform::new(Builtin::Srgb.profile(), &profile, Intent::RelativeColorimetric, true)
                 .map_err(|e| EngineError::Other(format!("can't convert the VectorCraft placement's colours: {e}")))?;
             let fmt = self.input.fmt;

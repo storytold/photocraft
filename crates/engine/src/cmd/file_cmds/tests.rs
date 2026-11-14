@@ -145,7 +145,7 @@ fn batch_folder_input_controls(s: &mut Session, dir: &str, input: &str, first: &
     png(&output, "ignored.png", 3, 2, "#ffffff");
     let sub = join(input, "sub");
     std::fs::create_dir_all(&sub).unwrap();
-    let raw = join(&sub, "d.cr3");
+    let raw = join(&sub, "d.orf");
     std::fs::copy(first, &raw).unwrap();
     let result = s
         .execute(
@@ -481,8 +481,8 @@ fn batch_quiet_profile_open_uses_caller_policy_and_retains_diagnostics() {
     assert_eq!(result["notices"][0]["color"]["action"], "converted");
     assert_eq!(result["notices"][0]["color"]["ask"], false);
     let saved = photocraft_io::import("a.png", &std::fs::read(join(&output, "a.png")).unwrap()).unwrap().document;
-    let profile = photocraft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
-    assert!(profile.same_colors(photocraft_cms::Builtin::Srgb.profile()));
+    let profile = craft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
+    assert!(profile.same_colors(craft_cms::Builtin::Srgb.profile()));
     // A script calling an action with a failing inner Batch still retains both import reports.
     let inner = join(&dir, "inner");
     s.actions.list.push(crate::actions_cmds::Action::new(
@@ -678,8 +678,8 @@ fn background_recorded_batch_keeps_opening_and_destination_policies() {
     let bytes = std::fs::read(saved_path).unwrap();
     assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "the structured suffix does not choose the encoder");
     let saved = photocraft_io::import("result.png", &bytes).unwrap().document;
-    let profile = photocraft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
-    assert!(profile.same_colors(photocraft_cms::Builtin::Srgb.profile()));
+    let profile = craft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
+    assert!(profile.same_colors(craft_cms::Builtin::Srgb.profile()));
     assert_eq!(std::fs::read(source).unwrap(), original);
     assert_eq!(serde_json::to_value(s.prefs()).unwrap(), prefs);
     assert_eq!(s.color.settings, settings);
@@ -2108,7 +2108,7 @@ fn vectorcraft_smart_render_converts_into_the_document_profile() {
     let s = session(40, 40, 8);
     let srgb = (*s.active().unwrap().doc).clone();
     let mut linear = srgb.clone();
-    linear.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+    linear.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
     let bytes = Arc::new(vectorcraft_file(20, 20, "0.5 0.5 0.5"));
     let mut smart = SmartObject::new(SmartSource::Embedded { file_name: "Gray.vectorcraft".into(), bytes }, Affine { m: [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] }, None);
     let original = crate::smart_cmds::render(&srgb, &smart).unwrap().unwrap();
@@ -2176,7 +2176,7 @@ fn vectorcraft_raster_place_converts_before_resampling_at_every_depth() {
     for depth in [8, 16, 32] {
         for explicit in [true, false] {
             let mut s = session(40, 40, depth);
-            Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+            Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
             s.edit_prefs(|p| p.general.always_create_smart_objects_when_placing = explicit);
             let params = if explicit { json!({"smartObject": false, "scale": 200}) } else { json!({"scale": 200}) };
             let r = place_bytes(&mut s, "Gray.vectorcraft", vectorcraft_file(20, 20, "0.5 0.5 0.5"), None, &params).unwrap();
@@ -3347,14 +3347,14 @@ fn cube_export_uses_only_selected_adjustments_in_document_order() {
     let first = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
     let second = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
     let both = s.execute("file.export.colorLookupTables", json!({"size": 3})).unwrap();
-    let all = photocraft_cms::lutfile::parse_cube(both["cube"].as_str().unwrap()).unwrap();
+    let all = craft_cms::lutfile::parse_cube(both["cube"].as_str().unwrap()).unwrap();
     assert_eq!(both["layerCount"], 2);
     assert!(all.data[0] < 0.001, "two Invert adjustments produce identity");
 
     // Selection comes from the Layers panel rather than the active layer alone.
     s.execute("layer.select", json!({"layer": first})).unwrap();
     let selected = s.execute("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).unwrap();
-    let one = photocraft_cms::lutfile::parse_cube(selected["cube"].as_str().unwrap()).unwrap();
+    let one = craft_cms::lutfile::parse_cube(selected["cube"].as_str().unwrap()).unwrap();
     assert_eq!(selected["layerCount"], 1);
     assert!(one.data[0] > 0.999, "one invert maps black to white");
     assert_eq!(all.size, one.size);
@@ -3413,7 +3413,7 @@ fn exported_selected_cube_round_trips_through_lookup_importer() {
     assert_eq!(r["size"], 17);
     assert_eq!(r["layerCount"], 1);
     let text = std::fs::read_to_string(&path).unwrap();
-    let parsed = photocraft_cms::lutfile::parse_cube(&text).unwrap();
+    let parsed = craft_cms::lutfile::parse_cube(&text).unwrap();
     assert_eq!(parsed.size, 17);
     assert_eq!(parsed.data.len(), 17 * 17 * 17 * 3);
     assert!(parsed.data[..3].iter().all(|v| *v > 0.999));
@@ -3996,23 +3996,23 @@ fn folder_listing_recognises_gzipped_xcf_by_its_double_extension() {
 }
 
 /// A folder batch picks up every extension that the codecs open: Cineon, DICOM, Amiga IFF, PCX,
-/// XPM, DDS, the Netpbm family, and Photoshop templates. Not the raws whose usual files open only
-/// as the embedded JPEG preview (CR3, compressed ORF and RAF, RW2 other than raw formats 3, 4 and
-/// 5): a batch would process the thumbnail without a word.
+/// XPM, DDS, the Netpbm family, and Photoshop templates. Not raws that this build cannot decode
+/// natively (ORF, RAF, SRF, SR2, and RW2 variants other than raw formats 3, 4 and 5): a batch
+/// should not process an embedded JPEG preview without a word.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn folder_listing_takes_every_format_photocraft_opens() {
     let codecs = ["a.cin", "a.dcm", "a.dicom", "a.dc3", "a.iff", "a.lbm", "a.ilbm", "a.pcx", "a.xpm", "a.dds", "a.pbm", "a.pam", "a.pfm", "a.psdt", "A.PCX"];
-    let raws = ["a.dng", "IMG_0001.CR2", "a.nef", "a.nrw", "a.arw", "a.pef"];
+    let raws = ["a.dng", "IMG_0001.CR2", "a.nef", "a.nrw", "a.arw", "a.pef", "a.cr3"];
     for name in codecs.into_iter().chain(raws) {
         assert!(super::openable_name(name), "{name}");
     }
-    for f in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read) {
+    for f in photocraft_formats::Format::ALL.into_iter().filter(|f| f.capabilities().read == photocraft_formats::Availability::Available) {
         for ext in f.extensions() {
             assert!(super::openable_name(&format!("a.{ext}")), "{f:?} .{ext}");
         }
     }
-    for name in ["a.cr3", "IMG_0001.CR3", "a.orf", "a.raf", "a.rw2", "a.srf", "a.sr2"] {
+    for name in ["a.orf", "a.raf", "a.rw2", "a.srf", "a.sr2"] {
         assert!(!super::openable_name(name), "{name}");
     }
     // PhotoCraft does not read AVIF.

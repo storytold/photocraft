@@ -103,7 +103,7 @@ fn a_vectorcraft_place_job_equals_the_inline_place() {
     std::fs::write(&path, &file).unwrap();
     let linear = || {
         let mut s = session(40, 40, 8);
-        Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+        Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
         s
     };
     for smart in [true, false] {

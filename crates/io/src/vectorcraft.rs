@@ -83,7 +83,7 @@ pub fn import_scaled(name: &str, bytes: &[u8], scale: f32, ctl: &Interrupt) -> R
     let mut r = crate::flat::image_to_document_with(name, &img, ctl)?;
     r.document.resolution_dpi = PPI * drawn_scale;
     // craft-pdf draws in sRGB.
-    r.document.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+    r.document.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
     if drawn_scale < scale {
         r.warnings.push(format!(
             "VectorCraft: the first artboard ({w:.0} × {h:.0} pt) is larger than {} pixels on a side or {} pixels in all at {:.1} pixels per inch, so it was drawn at {:.1} pixels per inch ({width} × {height} pixels).",

@@ -52,7 +52,7 @@ fn the_first_artboard_is_drawn_from_the_carried_pdf() {
     let d = &r.document;
     assert_eq!((d.size.width, d.size.height), (80, 40));
     assert_eq!(d.resolution_dpi, 72.0);
-    assert_eq!(d.icc_profile, Some(photocraft_cms::Builtin::Srgb.profile().to_bytes()));
+    assert_eq!(d.icc_profile, Some(craft_cms::Builtin::Srgb.profile().to_bytes()));
     assert_eq!(d.layers.len(), 1);
     // Red where the rectangle is, transparent beside it.
     let red = pixel(&r, 10, 20);
