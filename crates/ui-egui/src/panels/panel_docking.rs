@@ -808,10 +808,7 @@ fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
     style.tab_height = if t.pro { 28.0 } else { 40.0 };
     style.min_pane = 0.0;
     style.background = t.card;
-    // Studio themes leave the strip transparent over the dock's card; a floating group has no
-    // card behind it, so the canvas showed through its titles (#4509).
-    style.tab_background = if t.tab_strip.a() == 0 { t.card } else { t.tab_strip };
-    style.active_background = t.card;
+    (style.tab_background, style.active_background) = tab_fills(&t);
     style.text = t.text;
     style.inactive_text = t.text_dim;
     style.border = egui::Stroke::new(1.0, t.card_border);
@@ -1567,6 +1564,17 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
     }
 }
 
+/// The dock's tab fills, inactive then active. Pro themes draw a darker strip and the active tab
+/// in the card's colour, merging with the panel below. Studio themes leave the strip transparent
+/// over the dock's card, but a floating group has no card behind it, so the canvas showed through
+/// its titles (#4509): their inactive tabs take the card's colour and the active tab the pressed
+/// colour, so the strip still shows which panel is in front (#13435).
+fn tab_fills(t: &crate::theme::Tokens) -> (egui::Color32, egui::Color32) {
+    let inactive = if t.tab_strip.a() == 0 { t.card } else { t.tab_strip };
+    let active = if inactive == t.card { t.pressed } else { t.card };
+    (inactive, active)
+}
+
 impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
     /// Draws panel `id`'s body in `ui`: the canvas, or an expanded panel's contents when the
     /// column leaves it at least 200 points.
@@ -1593,6 +1601,15 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         let body = |height: f32| (height - self.strip).max(0.0);
         let fill = if self.fillers.contains(id) { body(group.preferred_fill()).max(1.0) } else { 0.0 };
         Some(DockHeights::new(body(group.default_height())).compact(body(group.compact_height())).fill(fill))
+    }
+    /// The dock passes the active or inactive tab's colour, but plain text takes the theme's
+    /// override text colour instead, which made every tab look active (#13435). Pro tabs keep
+    /// that one colour, as Photoshop's do; the other themes dim the inactive tabs' labels.
+    fn label(&mut self, ui: &egui::Ui, _id: &String, logical: &str, _font: &egui::FontId, color: egui::Color32) -> egui::WidgetText {
+        if crate::theme::Tokens::get(ui.ctx()).pro {
+            return logical.into();
+        }
+        egui::RichText::new(logical).color(color).into()
     }
     fn panel_menu(&mut self, ui: &mut egui::Ui, id: &String) {
         panel_menu(self.app, ui, id);

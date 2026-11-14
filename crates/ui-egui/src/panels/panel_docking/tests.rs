@@ -365,6 +365,85 @@ fn floating_group_titles_are_opaque_in_studio_themes() {
     assert_eq!(magenta, 0, "canvas shows through the floating group's title strip {strip:?}");
 }
 
+fn luminance([r, g, b]: [u8; 3]) -> f32 {
+    let linear = |c: u8| {
+        let c = c as f32 / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+}
+
+/// WCAG contrast ratio of two colours.
+fn contrast(a: [u8; 3], b: [u8; 3]) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+#[test]
+fn the_active_panel_tab_stands_out_in_every_theme() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    // Studio themes drew the active and inactive tabs with the same fill and label colour (#13435).
+    for theme in crate::theme::ThemeKind::ALL {
+        let mut ready = false;
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).wgpu().build_ui_state(
+            move |ui, app: &mut PhotocraftApp| {
+                if !ready {
+                    PhotocraftApp::setup_context(ui.ctx(), theme);
+                    app.ui.theme = theme;
+                    ready = true;
+                    return;
+                }
+                crate::panels::dock_area(app, ui);
+                egui::CentralPanel::default().show(ui, |_| {});
+            },
+            app(),
+        );
+        h.run_steps(5);
+        let image = h.render().unwrap();
+        let ppp = image.width() as f32 / 1280.0;
+        // A tab's fill is its most common colour.
+        let fill = |panel: &str| {
+            let rect = tab_rect(&h, panel).shrink(2.0);
+            let mut counts = std::collections::HashMap::<[u8; 3], usize>::new();
+            for y in (rect.top() * ppp) as u32..(rect.bottom() * ppp) as u32 {
+                for x in (rect.left() * ppp) as u32..(rect.right() * ppp) as u32 {
+                    let p = image.get_pixel(x, y).0;
+                    *counts.entry([p[0], p[1], p[2]]).or_default() += 1;
+                }
+            }
+            counts.into_iter().max_by_key(|(_, n)| *n).map(|(c, _)| c).unwrap()
+        };
+        let (active, inactive) = (fill("layers"), fill("channels"));
+        let fills = contrast(active, inactive);
+        assert!(fills >= 1.1, "{theme:?}: active tab {active:?} vs inactive {inactive:?} (contrast {fills:.3})");
+    }
+}
+
+#[test]
+fn panel_tab_labels_keep_the_colour_the_dock_gives_them() {
+    // The themes set an override text colour, which plain label text took for every tab (#13435).
+    // Pro tabs keep that one colour; the other themes take the dock's active or inactive colour.
+    let red = egui::Color32::from_rgb(200, 0, 0);
+    for theme in crate::theme::ThemeKind::ALL {
+        let mut h = Harness::new_ui_state(
+            move |ui, app: &mut PhotocraftApp| {
+                crate::theme::apply(ui.ctx(), theme);
+                let t = crate::theme::Tokens::get(ui.ctx());
+                ui.visuals_mut().override_text_color = Some(t.text);
+                let empty = std::collections::HashSet::new();
+                let mut commands = Vec::new();
+                let mut content = PanelContent { app, collapsed: &empty, fillers: &empty, card: &empty, strip: 40.0, commands: &mut commands };
+                let font = egui::FontId::proportional(13.0);
+                let text = craft_ui::docking::DockContent::label(&mut content, ui, &"channels".to_string(), "Channels", &font, red);
+                let galley = text.into_galley(ui, None, f32::INFINITY, font);
+                assert_eq!(galley.job.sections[0].format.color, if t.pro { t.text } else { red }, "{theme:?}");
+            },
+            app(),
+        );
+        h.run();
+    }
+}
+
 #[test]
 fn escape_cancels_the_first_drag_without_replacing_the_legacy_workspace() {
     let mut h = harness(app(), vec2(1280.0, 800.0));
