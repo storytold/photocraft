@@ -180,11 +180,7 @@ fn pending_retouch_stroke_keeps_its_tool_after_selection_changes() {
     for tool in [Tool::Healing, Tool::CloneStamp] {
         for switched in [false, true] {
             let mut app = PhotocraftApp::new(sampled_session(8), Services::default());
-            app.ui.tool = if switched {
-                if tool == Tool::Healing { Tool::CloneStamp } else { Tool::Healing }
-            } else {
-                tool
-            };
+            app.ui.tool = if switched { if tool == Tool::Healing { Tool::CloneStamp } else { Tool::Healing } } else { tool };
             app.ui.tool_options.healing_aligned = false;
             app.ui.tool_options.clone_aligned = true;
             app.session.tools.brush.mode = photocraft_color::BlendMode::Overlay;
