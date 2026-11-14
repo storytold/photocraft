@@ -252,7 +252,7 @@ impl Drop for TempRemoval<'_> {
 fn written_kind(name: &str) -> bool {
     let Some((_, ext)) = name.rsplit_once('.') else { return false };
     let ext = ext.to_ascii_lowercase();
-    ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str()) || photocraft_codecs::from_extension(&ext).is_some()
+    ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str()) || photocraft_formats::from_extension(&ext).is_some()
 }
 
 /// Whether the file at `relative` starts like an image PhotoCraft reads (PSD/PSB or a codec's
@@ -262,7 +262,7 @@ fn holds_image(dir: &Dir, relative: &Path) -> bool {
     let Ok(mut file) = dir.open(relative) else { return false };
     let Ok(n) = file.read(&mut head) else { return false };
     let head = &head[..n];
-    head.starts_with(b"8BPS") || photocraft_codecs::detect(head).is_some()
+    head.starts_with(b"8BPS") || photocraft_formats::detect("", head).is_some()
 }
 
 fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
