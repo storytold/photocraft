@@ -68,6 +68,15 @@ fn parse_degree(p: &Value, key: &str) -> Result<u32> {
     }
 }
 
+/// A string param, `default` when absent or null; any other type is refused, never defaulted.
+fn str_param<'a>(p: &'a Value, key: &str, default: &'a str) -> Result<&'a str> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::String(s)) => Ok(s.as_str()),
+        Some(v) => Err(bad(format!("{key}: want a string (got {v})"))),
+    }
+}
+
 fn flag(p: &Value, key: &str, default: bool) -> bool {
     p.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
@@ -102,20 +111,28 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         (Kind::Colour(_), Some(v)) => return Err(bad(format!("tone: want a string (got {v})"))),
         (Kind::Tone(_), _) => None,
     };
-    let output = p.get("output").and_then(Value::as_str).unwrap_or("layerMask");
+    let output = str_param(p, "output", "layerMask")?;
     if !matches!(output, "layerMask" | "channel" | "selection") {
         return Err(bad(format!("unknown output `{output}` (layerMask, channel, selection)")));
     }
-    let operation = p.get("operation").and_then(Value::as_str).unwrap_or("new");
+    let operation = str_param(p, "operation", "new")?;
     if !matches!(operation, "new" | "replace" | "add" | "subtract" | "intersect") {
         return Err(bad(format!("unknown operation `{operation}`")));
     }
     let name = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
 
-    // Resolve the layers a layer mask goes to before any pixels are read.
-    let targets = if output == "layerMask" { crate::layer_multi_cmds::mask_targets(s, p)? } else { Vec::new() };
+    // Resolve the layers a layer mask goes to before any pixels are read. Every targeted layer
+    // gets the mask, replacing one it already has (unlike adding a mask, which skips those).
+    let targets = if output == "layerMask" { crate::layer_multi_cmds::targets(s, p)? } else { Vec::new() };
 
-    let (area, px) = crate::selection_cmds::sample_pixels(s, flag(p, "sampleAllLayers", true), None)?;
+    let all_layers = flag(p, "sampleAllLayers", true);
+    if !all_layers {
+        let has_pixels = s.active().and_then(|d| d.active_layer.and_then(|id| d.doc.layer(id))).is_some_and(|l| l.surface().is_some());
+        if !has_pixels {
+            return Err(bad("sampleAllLayers is false but the active layer has no pixels to sample"));
+        }
+    }
+    let (area, px) = crate::selection_cmds::sample_pixels(s, all_layers, None)?;
     if area.is_empty() || px.is_empty() {
         return Err(bad("the canvas is empty"));
     }

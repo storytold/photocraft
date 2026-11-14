@@ -1,4 +1,5 @@
 use super::*;
+use photocraft_doc::LayerId;
 
 /// A 40×20 document of the given depth: x 0..10 dark gray (#404040), x 10..20 mid gray
 /// (#808080), x 20..30 pure red, the rest the white Background.
@@ -133,6 +134,8 @@ fn bad_params_are_errors_not_panics() {
         json!({"kind": "bogus"}),
         json!({"kind": 3}),
         json!({"output": "bogus"}),
+        json!({"output": 3}),
+        json!({"operation": 3}),
         json!({"operation": "bogus"}),
         json!({"kind": "reds", "tone": "bogus"}),
         json!({"kind": "reds", "tone": 4}),
@@ -148,4 +151,40 @@ fn bad_params_are_errors_not_panics() {
 fn no_document_is_an_error() {
     let mut s = Session::new();
     assert!(s.execute(CMD, json!({})).is_err());
+}
+
+#[test]
+fn a_non_string_output_leaves_an_existing_mask_alone() {
+    let mut s = session_depth(8);
+    s.execute(CMD, json!({"kind": "lights"})).unwrap();
+    let before = mask_at(&s, 15);
+    assert!(s.execute(CMD, json!({"kind": "darks", "output": 3})).is_err());
+    assert_eq!(mask_at(&s, 15), before, "the refused call did not replace the mask");
+}
+
+#[test]
+fn several_selected_layers_all_get_the_mask_even_with_existing_masks() {
+    let mut s = session_depth(8);
+    let a = s.active().unwrap().active_layer.unwrap();
+    let b = LayerId(s.execute("layer.new.layer", json!({"name": "Second"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+    // Both already have a mask once the first run is done; the second run must replace both.
+    for kind in ["lights", "darks"] {
+        let r = s.execute(CMD, json!({"kind": kind, "output": "layerMask"})).unwrap();
+        assert_eq!(r["layers"], 2, "{kind}: both layers are masked");
+        for id in [a, b] {
+            assert!(doc(&s).layer(id).unwrap().mask.is_some());
+        }
+    }
+}
+
+#[test]
+fn layer_only_sampling_refuses_a_layer_without_pixels() {
+    let mut s = session_depth(8);
+    s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+    let err = s.execute(CMD, json!({"kind": "lights", "output": "channel", "sampleAllLayers": false}));
+    assert!(err.is_err(), "an adjustment layer has no pixels of its own");
+    assert_eq!(doc(&s).channels.len(), 0);
+    assert!(s.execute(CMD, json!({"kind": "lights", "output": "channel"})).is_ok(), "the composite still works");
 }

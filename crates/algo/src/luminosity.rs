@@ -69,6 +69,12 @@ pub fn tone_mask(px: &[[f32; 4]], tone: Tone, degree: u32) -> Vec<f32> {
 /// Magentas), multiplied by a tonal mask when `tone` is given as `(tone, degree)`.
 pub fn colour_mask(px: &[[f32; 4]], center: f32, tone: Option<(Tone, u32)>) -> Vec<f32> {
     let mut mask = hue_range(px, center);
+    // A NaN channel can leave the hue (and so the weight) NaN: such a pixel is never selected.
+    for m in &mut mask {
+        if !m.is_finite() {
+            *m = 0.0;
+        }
+    }
     if let Some((t, degree)) = tone {
         for (m, &[r, g, b, a]) in mask.iter_mut().zip(px) {
             let k = if a <= 0.0 { 0.0 } else { tone_value(luminance([r, g, b]), t, degree) };
@@ -133,6 +139,17 @@ mod tests {
             assert_eq!(m.len(), px.len());
             assert!(close(m[0], 0.0), "transparent is never selected");
             assert!(m.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+        }
+    }
+
+    #[test]
+    fn colour_mask_never_propagates_nan() {
+        let px = [[1.0, f32::NAN, 0.0, 1.0], [f32::NAN, 0.2, 0.9, 1.0], [0.9, 0.1, f32::NAN, 1.0]];
+        for tone in [None, Some((Tone::Lights, 2)), Some((Tone::Midtones, 1))] {
+            for centre in [0.0, 60.0, 120.0, 180.0, 240.0, 300.0] {
+                let m = colour_mask(&px, centre, tone);
+                assert!(m.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "centre {centre}: {m:?}");
+            }
         }
     }
 
