@@ -3,7 +3,7 @@
 use crate::common;
 use common::*;
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::text::{CharStyle, ParagraphStyle, TextRun};
+use photocraft_doc::text::{CharStyle, FitLine, ParagraphStyle, TextFit, TextRun, TextShape};
 use photocraft_doc::text_styles::{CharacterStyleDef, ParagraphStyleDef};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Slice, TextLayer, VarKind, VariableDef};
 use photocraft_format::*;
@@ -960,7 +960,6 @@ fn text_kerning_roundtrips_and_defaults() {
 /// Type on a path (#218): the path, start and end offsets, and flip survive .pcraft.
 #[test]
 fn path_text_shape_roundtrips() {
-    use photocraft_doc::text::TextShape;
     use photocraft_doc::vector::Subpath;
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let path = Subpath::polyline(&[(0.0, 0.0), (50.0, 20.0), (120.0, 5.5)]);
@@ -981,7 +980,6 @@ fn path_text_shape_roundtrips() {
 /// Area type (#218): the whole path, ops and fill rule included, survives .pcraft.
 #[test]
 fn area_text_shape_roundtrips() {
-    use photocraft_doc::text::TextShape;
     use photocraft_doc::vector::{FillRule, Path, PathOp, Subpath};
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let mut path = Path::new(vec![
@@ -1002,6 +1000,192 @@ fn area_text_shape_roundtrips() {
         _ => None,
     });
     assert_eq!(shape, Some(TextShape::Area { path }));
+}
+
+/// Rewrites every text layer's JSON in `manifest.json` (other entries pass through).
+fn edit_text_manifest(bytes: &[u8], edit: impl Fn(&mut serde_json::Map<String, serde_json::Value>)) -> Vec<u8> {
+    fn walk(v: &mut serde_json::Value, edit: &dyn Fn(&mut serde_json::Map<String, serde_json::Value>)) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if m.get("kind").and_then(|k| k.as_str()) == Some("text") {
+                    edit(m);
+                }
+                for c in m.values_mut() {
+                    walk(c, edit);
+                }
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(|c| walk(c, edit)),
+            _ => {}
+        }
+    }
+    let r = zip::ZipReader::new(bytes).unwrap();
+    let mut z = zip::ZipWriter::new();
+    for e in &r.entries {
+        let mut d = r.read(e, usize::MAX).unwrap();
+        if e.name == "manifest.json" {
+            let mut v: serde_json::Value = serde_json::from_slice(&d).unwrap();
+            walk(&mut v, &edit);
+            d = serde_json::to_vec(&v).unwrap();
+        }
+        z.add(&e.name, &d).unwrap();
+    }
+    z.finish().unwrap()
+}
+
+fn text_fits(doc: &Document) -> Vec<Option<photocraft_doc::text::TextFit>> {
+    doc.walk()
+        .into_iter()
+        .filter_map(|(_, _, l)| match &l.content {
+            LayerContent::Text(t) => Some(t.fit.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Dynamic Text: the fit gaps survive .pcraft.
+#[test]
+fn fit_round_trips() {
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
+    assert!(!ids.is_empty());
+    let fit = TextFit { word_gap: 10.0, line_gap: -5.0, lines: vec![], area_scale: 1.0 };
+    for id in ids {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 100.0 };
+            t.fit = Some(fit.clone());
+        }
+    }
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let fits = text_fits(&back);
+    assert!(!fits.is_empty() && fits.iter().all(|f| *f == Some(fit.clone())));
+}
+
+/// The solver's lines survive .pcraft; hostile ones are dropped on load.
+#[test]
+fn lines_round_trip() {
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
+    assert!(!ids.is_empty());
+    let lines = vec![FitLine { start: 0, scale: 1.5 }, FitLine { start: 6, scale: 0.8 }];
+    for id in ids {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            t.text = "hello world".into();
+            t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 100.0 };
+            t.fit = Some(TextFit { word_gap: 0.0, line_gap: 0.0, lines: lines.clone(), area_scale: 1.0 });
+        }
+    }
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let fits = text_fits(&back);
+    assert!(!fits.is_empty() && fits.iter().all(|f| f.as_ref().map(|f| &f.lines) == Some(&lines)));
+}
+
+/// A manifest fit without a `lines` key (a file saved before lines existed) loads with none.
+#[test]
+fn missing_lines_load_empty() {
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let old = edit_text_manifest(&bytes, |m| {
+        m.insert("fit".into(), serde_json::json!({ "wordGap": 5.0, "lineGap": 7.0 }));
+    });
+    let fits = text_fits(&load_from_bytes(&old).unwrap());
+    assert!(!fits.is_empty() && fits.iter().all(|f| f.as_ref().is_some_and(|f| f.lines.is_empty() && f.word_gap == 5.0 && f.line_gap == 7.0)));
+}
+
+/// Files saved before Dynamic Text have no `fit` key and load as ordinary type.
+#[test]
+fn missing_fit_loads_as_none() {
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let old = edit_text_manifest(&bytes, |m| {
+        m.remove("fit");
+    });
+    let fits = text_fits(&load_from_bytes(&old).unwrap());
+    assert!(!fits.is_empty() && fits.iter().all(Option::is_none));
+}
+
+/// Hostile gap values in a file are clamped on load.
+#[test]
+fn nan_gaps_clamp_on_load() {
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let hostile = edit_text_manifest(&bytes, |m| {
+        m.insert("fit".into(), serde_json::json!({ "lineGap": 1e9, "wordGap": -1e9 }));
+    });
+    let fits = text_fits(&load_from_bytes(&hostile).unwrap());
+    let want = Some(TextFit { word_gap: TextFit::WORD_GAP_MIN, line_gap: TextFit::GAP_MAX, lines: vec![], area_scale: 1.0 });
+    assert!(!fits.is_empty() && fits.iter().all(|f| *f == want));
+}
+
+/// Text layers of `doc` set to box text "héllo world" ("é" is bytes 1..3) fitted with `lines`.
+fn with_fit_lines(doc: &mut Document, lines: &[FitLine]) {
+    let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
+    assert!(!ids.is_empty());
+    for id in ids {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            t.text = "héllo world".into();
+            t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 100.0 };
+            t.fit = Some(TextFit { word_gap: 0.0, line_gap: 0.0, lines: lines.to_vec(), area_scale: 1.0 });
+        }
+    }
+}
+
+/// Hostile solved lines in a file (out of order, not on a char boundary, or a zero or negative
+/// scale) load empty.
+#[test]
+fn bad_lines_load_empty() {
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    with_fit_lines(&mut doc, &[]);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let load = |lines: serde_json::Value| {
+        let edited = edit_text_manifest(&bytes, |m| {
+            m.insert("fit".into(), serde_json::json!({ "wordGap": 0.0, "lineGap": 0.0, "lines": lines }));
+        });
+        let fits = text_fits(&load_from_bytes(&edited).unwrap());
+        assert!(!fits.is_empty() && fits.iter().all(Option::is_some));
+        fits.into_iter().flatten().map(|f| f.lines).collect::<Vec<_>>()
+    };
+    let l = |start: u32| serde_json::json!({ "start": start, "scale": 1.0 });
+    // Valid lines in the same file load as saved, so the cases below test the lines alone.
+    let good = load(serde_json::json!([l(0), l(7)]));
+    assert!(good.iter().all(|lines| *lines == [FitLine { start: 0, scale: 1.0 }, FitLine { start: 7, scale: 1.0 }]), "{good:?}");
+    let zero = serde_json::json!([l(0), { "start": 7, "scale": 0 }]);
+    let negative = serde_json::json!([{ "start": 0, "scale": -1 }, l(7)]);
+    for bad in [serde_json::json!([l(0), l(7), l(3)]), serde_json::json!([l(0), l(2)]), zero, negative] {
+        let got = load(bad.clone());
+        assert!(got.iter().all(Vec::is_empty), "{bad} loaded as {got:?}");
+    }
+}
+
+/// Bad solved lines in memory save as none, so the file holds nothing load would reject.
+#[test]
+fn bad_lines_save_empty() {
+    let l = |start| FitLine { start, scale: 1.0 };
+    for bad in [vec![l(0), l(7), l(3)], vec![l(0), l(2)]] {
+        let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+        with_fit_lines(&mut doc, &bad);
+        let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+        // Read the saved manifest itself: load would clear them anyway.
+        let saved = std::cell::RefCell::new(Vec::new());
+        edit_text_manifest(&bytes, |m| saved.borrow_mut().push(m.get("fit").and_then(|f| f.get("lines")).cloned()));
+        let saved = saved.into_inner();
+        assert!(!saved.is_empty() && saved.iter().all(|v| v.as_ref().is_none_or(|v| v.as_array().is_some_and(Vec::is_empty))), "{bad:?} saved as {saved:?}");
+    }
+}
+
+/// A non-finite gap in memory must not write a file that won't open (JSON has no NaN).
+#[test]
+fn non_finite_gaps_save_as_a_loadable_file() {
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
+    assert!(!ids.is_empty());
+    for id in ids {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            t.fit = Some(TextFit { word_gap: f32::NAN, line_gap: f32::INFINITY, lines: vec![], area_scale: 1.0 });
+        }
+    }
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let fits = text_fits(&back);
+    assert!(!fits.is_empty() && fits.iter().all(|f| *f == Some(TextFit { word_gap: 0.0, line_gap: 0.0, lines: vec![], area_scale: 1.0 })));
 }
 
 #[test]
