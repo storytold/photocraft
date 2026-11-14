@@ -78,6 +78,10 @@ const SHALLOW_BEFORE_REACH: f64 = 0.42;
 const ROW_TWIST_ACROSS_TOL: f64 = 1.25;
 /// Twist of a cell's control net (document px) past which it splits.
 const TWIST_TOL: f64 = 1.0;
+/// The same for a whole patch of a quilt: the reference application leaves a patch whose twist is
+/// spread evenly (a wave that grows linearly down the patch) whole up to about 1.73 and splits it
+/// from about 1.85.
+const WHOLE_PATCH_TWIST_TOL: f64 = 1.8;
 /// The twist past which a one-patch full mesh's cell that already splits across splits down too:
 /// a corner pulled out keeps its cell at (½..¾, 0..¼) whole up to a twist of 1.16 and splits it
 /// from 1.22 (a sweep of pulls), and an arc stored as a full mesh splits at 1.39.
@@ -636,7 +640,10 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
                     (false, _) if rules.twist_spreads && !whole => (0.9 * sub.twist_along(dv)).max(sub.twist_along(du)),
                     (false, _) => sub.twist(),
                 };
-                if tw > TWIST_TOL + EPS && (!across || tw > rules.across_twist + EPS) {
+                // A whole quilt patch splits for its twist only past WHOLE_PATCH_TWIST_TOL.
+                let tol = if rules.twist_spreads && whole { WHOLE_PATCH_TWIST_TOL } else { TWIST_TOL };
+                let across_tol = if rules.twist_spreads && whole { WHOLE_PATCH_TWIST_TOL } else { rules.across_twist };
+                if tw > tol + EPS && (!across || tw > across_tol + EPS) {
                     if goes_across {
                         across = true;
                     } else {
@@ -1330,7 +1337,8 @@ mod tests {
 
     /// A whole quilt patch splits down for the twist across its rows; rows that only stretch
     /// unevenly count half. Bent patches the reference redrew stay whole at 1.2 to 1.9 px of twist
-    /// along their rows; waved ones (twist across the rows) split from 1 px.
+    /// along their rows; waved ones (twist across the rows, spread evenly) stay whole up to about
+    /// 1.73 px and split from about 1.85 px.
     #[test]
     fn a_quilt_patch_bent_along_its_rows_does_not_split_down() {
         let quilt = quilt_rules();
@@ -1340,9 +1348,11 @@ mod tests {
         };
         // Straight rows and columns, twist 16/9 px per quad of the cubic net.
         let bend = |u: f64, v: f64| [64.0 * u + 16.0 * u * v, 64.0 * v];
-        let wave = |u: f64, v: f64| [64.0 * u, 64.0 * v + 16.0 * u * v];
+        let wave = |u: f64, v: f64| [64.0 * u, 64.0 * v + 20.7 * u * v];
+        let slight_wave = |u: f64, v: f64| [64.0 * u, 64.0 * v + 13.5 * u * v];
         assert!(!splits_down(&bend), "twist along the rows split the patch down");
-        assert!(splits_down(&wave), "twist across the rows left the patch whole");
+        assert!(splits_down(&wave), "2.3 px of twist across the rows left the patch whole");
+        assert!(!splits_down(&slight_wave), "1.5 px of twist across the rows split the patch down");
         // Twist along the rows past ROW_TWIST_ACROSS_TOL splits the whole patch across instead.
         let splits_across = |at: &dyn Fn(f64, f64) -> P| {
             let (_, log) = cells(&cubic_net(at), true, &quilt);
