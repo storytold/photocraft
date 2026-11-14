@@ -823,8 +823,12 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let quality = f64_param(p, "quality").or(Some(10.0));
     let background = p.get("includeBackground").and_then(Value::as_bool).unwrap_or(true);
     let mut pages = Vec::new();
-    for mut one in chosen_documents(&doc, p)? {
-        let masked = !background && drop_white_fill(&mut one);
+    for id in chosen_artboards(&doc, p) {
+        let Some(mut one) = artboard_document(&doc, id)? else { continue };
+        // A hidden board was not measured and keeps today's opaque page. `artboard_document`
+        // shows the board, so its visibility is read from the source.
+        let visible = doc.layer(id).is_some_and(|l| l.visible);
+        let masked = !background && visible && drop_white_fill(&mut one);
         let composite = photocraft_compose::flatten(&one);
         let mask = if masked { soft_mask(&composite.px)? } else { None };
         let buf = composite.over_background([1.0, 1.0, 1.0]);

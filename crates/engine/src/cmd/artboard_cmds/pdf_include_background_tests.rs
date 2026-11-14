@@ -203,6 +203,18 @@ fn the_cases_not_measured_keep_todays_page() {
         let (w, _, px) = colours(&all[0]);
         assert!(close(px[(60 * w + 150) as usize], [255, 255, 255], 3), "{depth} bit");
     }
+    // A hidden board keeps its fill.
+    let (mut s, [red, ..]) = session(8);
+    s.edit("Hide", |doc, _| {
+        doc.layer_mut(LayerId(red)).unwrap().visible = false;
+        Ok(())
+    })
+    .unwrap();
+    let pdf = export(&mut s, "hidden", json!({"artboards": [red], "includeBackground": false}));
+    assert!(!String::from_utf8_lossy(&pdf).contains("/SMask"), "hidden board");
+    let all = images(&pdf);
+    let (w, _, px) = colours(&all[0]);
+    assert!(close(px[(60 * w + 150) as usize], [255, 255, 255], 3), "hidden board");
     // A black board keeps its fill.
     let (mut s, [red, ..]) = session(8);
     s.execute("layer.artboard.set", json!({"layer": red, "background": "black"})).unwrap();
