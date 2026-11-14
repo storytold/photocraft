@@ -488,9 +488,16 @@ fn paste_into_each(s: &mut Session, _p: &Value) -> Result<Value> {
         ));
     }
     // Everything that can refuse is checked before anything changes, so a refusal leaves the
-    // document, the selection and the targeted layers as they were. A Lock-All group refuses its
-    // layer mask (rather than leave an unmasked paste), and a layer with no pixels has no
-    // transparency to mask a copy to (loading it would only clear the selection).
+    // document, the selection and the targeted layers as they were. A layer with no pixels has no
+    // transparency to mask a copy to (loading it would only clear the selection): it is skipped
+    // first, so it can't refuse the others. A Lock-All group refuses its layer mask (rather than
+    // leave an unmasked paste).
+    let canvas = d.doc.bounds();
+    let targets: Vec<LayerId> =
+        targets.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| !photocraft_compose::layer_bounds(l, canvas).is_empty())).collect();
+    if targets.is_empty() {
+        return Err(EngineError::Other("Could not paste: none of the selected layers has pixels".into()));
+    }
     for &id in &targets {
         if let Some(g) = parent_group(&d.doc, id) {
             crate::commands::check_all_unlocked(&d.doc, g)?;
@@ -499,12 +506,6 @@ fn paste_into_each(s: &mut Session, _p: &Value) -> Result<Value> {
     // Several copied layers would each be pasted for every target, and only the last masked.
     if s.clipboard.as_ref().and_then(|clip| clip.layers.as_deref()).is_some_and(|copied| copied.layers.len() > 1) {
         return Err(EngineError::Other("Paste Into Each Selected Layer needs one copied layer: copy the layers one at a time".into()));
-    }
-    let canvas = d.doc.bounds();
-    let targets: Vec<LayerId> =
-        targets.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| !photocraft_compose::layer_bounds(l, canvas).is_empty())).collect();
-    if targets.is_empty() {
-        return Err(EngineError::Other("Could not paste: none of the selected layers has pixels".into()));
     }
     // One key for every sub-step, taken once: each paste moves the revision on.
     let key = step_key(s, "pasteIntoEach");

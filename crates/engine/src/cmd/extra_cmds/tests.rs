@@ -908,6 +908,36 @@ fn paste_into_masks_to_the_selection() {
     assert_eq!((m.value(0, 0), m.value(22, 12)), (1.0, 0.0));
 }
 
+/// An empty layer in a Lock-All group is skipped like any layer without pixels: it doesn't refuse
+/// the paste into the other targets.
+#[test]
+fn paste_into_each_skips_an_empty_layer_in_a_locked_group() {
+    let mut s = session(8);
+    let frame = active(&s).id;
+    paint_square(&mut s, Rect::new(0, 0, 10, 10), [1.0, 0.0, 0.0, 1.0]);
+    // The art to place, copied before the locked group exists.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint_square(&mut s, Rect::new(14, 4, 18, 8), [0.0, 0.0, 1.0, 1.0]);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let empty = active(&s).id;
+    let group = LayerId(s.execute("layer.groupLayers", json!({"layer": empty.0})).unwrap()["layer"].as_u64().unwrap());
+    s.edit("Lock All", |doc, _| {
+        doc.layer_mut(group).unwrap().locks.all = true;
+        Ok(())
+    })
+    .unwrap();
+    {
+        let st = s.active_mut().unwrap();
+        st.selected_layers = vec![frame, empty];
+        st.active_layer = Some(frame);
+    }
+    let r = s.execute("edit.pasteSpecial.pasteIntoEach", json!({})).unwrap();
+    assert_eq!(r["layers"].as_array().map(Vec::len), Some(1), "one copy, for the layer with pixels: {r}");
+}
+
 /// Several copied layers are refused before anything changes: each would be pasted for every
 /// target, and only the last of them masked.
 #[test]
