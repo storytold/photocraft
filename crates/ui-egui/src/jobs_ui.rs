@@ -164,6 +164,8 @@ pub struct JobsUi {
     pub(crate) waiters: Vec<(JobId, Sender<ControlResponse>)>,
     /// Background opens, in tab order.
     pub opens: Vec<OpenTab>,
+    /// Source bytes of a pathless raw background open, kept until its job ends (#12415).
+    pub(crate) open_bytes: std::collections::HashMap<JobId, Arc<Vec<u8>>>,
     /// Sets of files opened together that still have members opening (see [`OpenOrder`]).
     pub(crate) batches: Vec<OpenBatch>,
     /// The id of the next set.
@@ -281,11 +283,20 @@ pub fn start_open(
     order: Option<OpenOrder>,
 ) -> Result<(), String> {
     let name = &app.open_name(name);
+    // A pathless open (drop, paste) of a raw has nothing to read again: keep its bytes until the job
+    // ends so Camera Raw can re-develop it (#12415). Any other file holds no second copy.
+    let kept = match (&source, &path) {
+        (OpenSource::Bytes(b), None) if photocraft_io::raw::is_raw(b) => Some(b.clone()),
+        _ => None,
+    };
     match app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())? {
         // Inline (wasm, or background jobs off): finish now, like a background open that ended at
         // once. A preflight keeps the slot and set order in its memory prompt.
-        Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
+        Started::Done(v) => finish_open_bytes(app, name, path.as_deref(), &v, slot, order, kept),
         Started::Job(job) => {
+            if let Some(kept) = kept {
+                app.jobs.open_bytes.insert(job, kept);
+            }
             track_open(app, OpenTab { job, name: name.to_string(), path, slot, order });
             Ok(())
         }
@@ -371,7 +382,13 @@ pub(crate) fn tab_slot(app: &mut PhotocraftApp, slot: Option<usize>, order: Opti
 /// [`JobsUi::opens`]: the document goes to the tab's slot, or to its place in its set. A memory
 /// preflight keeps both in its prompt.
 pub(crate) fn finish_open_tab(app: &mut PhotocraftApp, tab: &OpenTab, v: &Value) -> Result<(), String> {
-    let r = finish_open(app, &tab.name, tab.path.as_deref(), v, tab.slot, tab.order);
+    let kept = app.jobs.open_bytes.remove(&tab.job);
+    finish_open_tab_with(app, tab, v, kept)
+}
+
+/// [`finish_open_tab`] with the tab's kept source bytes already taken out of [`JobsUi::open_bytes`].
+fn finish_open_tab_with(app: &mut PhotocraftApp, tab: &OpenTab, v: &Value, kept: Option<Arc<Vec<u8>>>) -> Result<(), String> {
+    let r = finish_open_bytes(app, &tab.name, tab.path.as_deref(), v, tab.slot, tab.order, kept);
     end_batch(app);
     r
 }
@@ -636,11 +653,14 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         return;
     }
     if e.command == OPEN_JOB || app.jobs.opens.iter().any(|o| o.job == e.id) {
+        // Every end of the job frees its kept bytes, even when the tab is already gone (a cancelled
+        // open prompt clears the tabs).
+        let kept = app.jobs.open_bytes.remove(&e.id);
         let Some(i) = app.jobs.opens.iter().position(|o| o.job == e.id) else { return };
         let tab = app.jobs.opens.remove(i);
         match e.outcome {
             JobOutcome::Done(v) => {
-                if let Err(err) = finish_open_tab(app, &tab, &v) {
+                if let Err(err) = finish_open_tab_with(app, &tab, &v, kept) {
                     app.open_failed(&tab.name, &err);
                 }
             }
@@ -695,8 +715,23 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 /// What [`crate::PhotocraftApp::open_bytes`] does after decoding, for a background open's result
 /// (`{document, docId, warnings, color}` or `{held, …}`). `slot` and `order` are the tab position
 /// and set place the file keeps: through a memory prompt, a profile/damage prompt and the final
-/// document, so an inline completion lands where a background tab would.
+/// document, so an inline completion lands where a background tab would. It has no source bytes to
+/// keep: [`finish_open_bytes`] is the form for a pathless file.
 fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>, order: Option<OpenOrder>) -> Result<(), String> {
+    finish_open_bytes(app, name, path, v, slot, order, None)
+}
+
+/// [`finish_open`] for a file that came without a path: `bytes` are its contents, kept (only for a
+/// raw, which Camera Raw develops again) in the held open and handed to [`after_open`].
+fn finish_open_bytes(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<&str>,
+    v: &Value,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+    bytes: Option<Arc<Vec<u8>>>,
+) -> Result<(), String> {
     if let Some(preflight_id) = v.get("pendingPreflight").and_then(Value::as_u64) {
         let estimated = v.get("estimated").and_then(Value::as_u64).unwrap_or(0);
         let available = v.get("availableRam").and_then(Value::as_u64);
@@ -718,6 +753,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let bytes = bytes.filter(|_| crate::camera_raw_ui::wants_open_dialog(app, &warnings));
     let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
         doc,
         read_only,
@@ -725,7 +761,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         name: name.to_string(),
         path: path.map(str::to_string),
         warnings: warnings.clone(),
-        bytes: None,
+        bytes: bytes.clone(),
         slot,
         order,
         question,
@@ -754,7 +790,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     if let Some(slot) = tab_slot(app, slot, order) {
         let _ = app.run("document.move", json!({"document": index, "to": slot}));
     }
-    after_open(app, document, name, path, &warnings, None)
+    after_open(app, document, name, path, &warnings, bytes.as_deref().map(Vec::as_slice))
 }
 
 /// What every open does for its admitted document: remember where it came from, say
