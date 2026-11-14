@@ -5,7 +5,6 @@
 
 use serde_json::{Value, json};
 
-use super::active_board;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
@@ -24,23 +23,21 @@ pub(super) fn leave(app: &mut PhotocraftApp) {
     app.ui.artboard_tool.adding = false;
 }
 
-/// The size the options bar shows: the selected board's, else the canvas size (the engine's
-/// fallback for a board with no size).
-fn bar_size(app: &PhotocraftApp) -> Option<[i64; 2]> {
-    if let Some((_, r)) = active_board(app) {
-        return Some([r[2].saturating_sub(r[0]), r[3].saturating_sub(r[1])]);
-    }
-    let size = app.session.active()?.doc.size;
-    Some([i64::from(size.width), i64::from(size.height)])
-}
-
 /// A click at document point `p` on empty canvas: one `layer.new.artboard` with the bar's size and
 /// its top-left corner at the click, rounded to whole pixels. None when the mode is off.
 pub(super) fn click(app: &mut PhotocraftApp, p: [f64; 2]) -> Option<Result<Value, String>> {
     if !active(app) {
         return None;
     }
-    let [w, h] = bar_size(app)?;
+    app.session.active()?;
+    let [w, h] = super::bar::bar_size(app);
     let rect = [p[0].round() as i64, p[1].round() as i64, w, h];
-    Some(app.run("layer.new.artboard", json!({"rect": rect})))
+    let mut params = json!({"rect": rect});
+    // With no board selected the size is the tool option's, so the board also keeps its preset
+    // name (the engine stores it and, with an explicit `rect`, the rect still decides the size).
+    let preset = &app.ui.artboard_tool.preset;
+    if !preset.is_empty() && super::active_board(app).is_none() {
+        params["preset"] = json!(preset);
+    }
+    Some(app.run("layer.new.artboard", super::bar::with_background(app, params)))
 }
