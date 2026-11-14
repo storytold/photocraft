@@ -16,7 +16,7 @@ use photocraft_algo::selection::{self as sel, SelectionMode};
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, blend::blend_channel};
 use photocraft_doc::{AlphaChannel, ColorIndicates, Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
-use photocraft_raster::{Surface, from_rgba, to_rgba};
+use photocraft_raster::{Surface, from_rgba, from_rgba_into, to_rgba};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -119,6 +119,7 @@ mod targeting;
 mod tone_target;
 mod view;
 
+pub use calc::{ApplyPlanes, apply_image_pixel, apply_image_planes, apply_image_settings};
 use calc::{apply_image, calculations};
 use manage::{delete_channel, duplicate_channel, move_channel, new_channel, new_spot, options, rename_channel, set_visible};
 use planes::edit_mode;
@@ -127,7 +128,7 @@ pub use planes::{
     GraySurface, IsolatedCurveChannel, channel_format, color_count, curve_channel_for_colors, filter_mask_curve_channel, isolated_curve_channel,
     isolated_curve_channel_for, isolated_curve_channel_with_params, layer_mask_curve_channel, next_alpha_name,
 };
-pub(crate) use refs::source_spec;
+pub use refs::source_spec;
 pub use refs::{Blending, ChanRef, parse_ref};
 use selection::{load_selection, quick_mask, save_selection};
 use spot::{is_flat, merge, merge_spot, mergeable, split};

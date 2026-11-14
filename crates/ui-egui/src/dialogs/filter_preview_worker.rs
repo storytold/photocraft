@@ -11,7 +11,9 @@ use photocraft_engine::jobs::JobCtx;
 use crate::filter_dialog::FilterPreviewKey;
 
 pub(crate) struct Computed {
-    pub result: Option<(std::sync::Arc<photocraft_doc::Document>, photocraft_compose::Buffer)>,
+    /// The preview document and, unless the canvas renders just what it shows
+    /// ([`crate::canvas::filter_preview::flattens_whole`]), its whole composite.
+    pub result: Option<(std::sync::Arc<photocraft_doc::Document>, Option<photocraft_compose::Buffer>)>,
     pub ms: f64,
 }
 
@@ -37,6 +39,12 @@ pub(crate) struct Worker {
 impl Worker {
     pub fn busy(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// The request the worker is computing.
+    #[cfg(test)]
+    pub fn running(&self) -> Option<&FilterPreviewKey> {
+        self.running.as_ref().map(|r| &r.key)
     }
 
     /// Never wait for a previous computation and never spawn a second concurrent preview.
@@ -96,7 +104,7 @@ impl Worker {
 /// Stop and release previews of closed dialogs even when their canvas is no longer being drawn.
 pub(crate) fn discard_closed(app: &mut crate::PhotocraftApp) {
     let visible = app.ui.dialogs.iter().any(|d| {
-        d.fields.contains_key("__filter")
+        crate::filter_dialog::previews_on_canvas(&d.fields)
             && d.fields.get("__preview").and_then(serde_json::Value::as_bool) == Some(true)
             && d.fields.get("__smartFilter").is_none_or(|target| crate::smart_filter_dialog::validate_target(app, target).is_ok())
     });
