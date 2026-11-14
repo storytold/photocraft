@@ -767,3 +767,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "lens_batch_close_tests.rs"]
+mod lens_batch_close_tests;
