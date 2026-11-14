@@ -30,6 +30,8 @@ pub(crate) enum CliError {
     NestedFailure { id: String, message: String },
     #[error("{} is the input file, so the result would replace the original: choose another output, or pass --in-place to overwrite it", .0.display())]
     OutIsInput(PathBuf),
+    #[error("cannot overwrite {} in place because the opened document is no longer active", .0.display())]
+    InPlaceDocumentChanged(PathBuf),
     #[error("--out {} is the --in folder, so the results would replace the originals: choose another --out folder, or pass --in-place to overwrite them", .0.display())]
     OutIsIn(PathBuf),
     #[error("--naming: {0}")]

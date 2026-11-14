@@ -2121,3 +2121,85 @@ fn mcp_without_consent_works_headless() {
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&empty);
 }
+
+/// Temporary test directory removed when dropped so panics do not leak files.
+struct CleanDir(PathBuf);
+
+impl Drop for CleanDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// #12417: `run <file> --cmd … --in-place` without `--out` saves the edited document back to
+/// `<file>`, while omitting both `--in-place` and `--out` or targeting a different `--out` leaves
+/// `<file>` untouched.
+#[test]
+fn run_in_place_without_out_saves_back_to_input_file() {
+    let d = CleanDir(tmp("run-in-place-no-out"));
+    let doc = d.0.join("doc.psd");
+    let other = d.0.join("other.psd");
+    let create = r#"{"text":"Before","x":4,"y":30,"name":"Before"}"#;
+    let edit_after = r#"{"layer":"Before","text":"After"}"#;
+    let edit_other = r#"{"layer":"Before","text":"Other"}"#;
+    ok(bin().args(["run", "--new", r#"{"width":64,"height":64}"#, "--cmd", "type.create", "--params", create, "--out"]).arg(&doc));
+    let before = std::fs::read(&doc).unwrap();
+
+    // Without `--in-place` or `--out`, `run` executes the command and leaves `<file>` unchanged.
+    let dry = ok(bin().arg("run").arg(&doc).args(["--cmd", "type.edit", "--params", edit_after])).stdout;
+    let dry_line: Value = serde_json::from_str(dry.trim()).unwrap();
+    assert_eq!((dry_line["command"].as_str(), dry_line["result"]["text"].as_str()), (Some("type.edit"), Some("After")));
+    assert_eq!(std::fs::read(&doc).unwrap(), before, "run without --in-place or --out must not modify input");
+
+    // `--in-place` with an explicit different `--out` writes to `--out` and keeps `<file>` intact.
+    ok(bin().arg("run").arg(&doc).args(["--cmd", "type.edit", "--params", edit_other, "--in-place", "--out"]).arg(&other));
+    assert_eq!(std::fs::read(&doc).unwrap(), before, "explicit different --out must not overwrite input");
+    let other_info = ok(bin().arg("info").arg(&other).args(["--compact", "--detail"])).stdout;
+    assert!(other_info.contains(r#""text":"Other""#), "{other_info}");
+
+    // `--in-place` without `--out` saves the edited document back to `<file>`.
+    let out = ok(bin().arg("run").arg(&doc).args(["--cmd", "type.edit", "--params", edit_after, "--in-place"])).stdout;
+    let line: Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!((line["command"].as_str(), line["result"]["text"].as_str()), (Some("type.edit"), Some("After")));
+    assert_ne!(std::fs::read(&doc).unwrap(), before, "--in-place without --out must save back to doc.psd");
+    let info = ok(bin().arg("info").arg(&doc).args(["--compact", "--detail"])).stdout;
+    assert!(info.contains(r#""text":"After""#), "{info}");
+}
+
+/// #12417: both implicit `--in-place` and explicit `--out <FILE> --in-place` refuse to overwrite
+/// `<FILE>` when a command switches away from the opened document.
+#[test]
+fn run_in_place_refuses_to_overwrite_input_when_active_document_changes() {
+    let d = CleanDir(tmp("run-in-place-switched"));
+    let doc = d.0.join("doc.psd");
+    let create = r#"{"text":"Before","x":4,"y":30,"name":"Before"}"#;
+    ok(bin().args(["run", "--new", r#"{"width":64,"height":64}"#, "--cmd", "type.create", "--params", create, "--out"]).arg(&doc));
+    let before = std::fs::read(&doc).unwrap();
+
+    let implicit = bin().arg("run").arg(&doc).args(["--cmd", "file.new", "--params", r#"{"width":8,"height":8}"#, "--in-place"]).output().unwrap();
+    let implicit_err = String::from_utf8_lossy(&implicit.stderr);
+    assert_eq!(implicit.status.code(), Some(1), "{implicit_err}");
+    assert!(implicit_err.contains("opened document is no longer active"), "{implicit_err}");
+    assert_eq!(std::fs::read(&doc).unwrap(), before);
+
+    let explicit =
+        bin().arg("run").arg(&doc).args(["--cmd", "file.new", "--params", r#"{"width":8,"height":8}"#, "--in-place", "--out"]).arg(&doc).output().unwrap();
+    let explicit_err = String::from_utf8_lossy(&explicit.stderr);
+    assert_eq!(explicit.status.code(), Some(1), "{explicit_err}");
+    assert!(explicit_err.contains("opened document is no longer active"), "{explicit_err}");
+    assert_eq!(std::fs::read(&doc).unwrap(), before);
+}
+
+/// #12417: `run --in-place` without `<FILE>` (either with `--new` or with no source) is a usage error.
+#[test]
+fn run_in_place_requires_an_input_file() {
+    let with_new = bin().args(["run", "--new", r#"{"width":8,"height":8}"#, "--cmd", "image.adjustments.invert", "--in-place"]).output().unwrap();
+    let err = String::from_utf8_lossy(&with_new.stderr);
+    assert_eq!(with_new.status.code(), Some(2), "{err}");
+    assert!(err.contains("--in-place") && err.contains("cannot be used with"), "{err}");
+
+    let no_source = bin().args(["run", "--cmd", "image.adjustments.invert", "--in-place"]).output().unwrap();
+    let no_source_err = String::from_utf8_lossy(&no_source.stderr);
+    assert_eq!(no_source.status.code(), Some(2), "{no_source_err}");
+    assert!(no_source_err.contains("<FILE>"), "{no_source_err}");
+}
