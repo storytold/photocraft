@@ -382,7 +382,7 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
 /// ProPhoto's gamma 1.8 (raws open in it), Adobe RGB's 563/256, 1 for linear sRGB, else 0 for
 /// the sRGB curve.
 pub fn encoding_gamma(doc: &Document) -> f32 {
-    use photocraft_cms::Builtin;
+    use craft_cms::Builtin;
     let profile = crate::color_cmds::document_profile(doc);
     [(Builtin::ProPhotoCompat, 1.8), (Builtin::AdobeRgbCompat, 563.0 / 256.0), (Builtin::LinearSrgb, 1.0)]
         .into_iter()
