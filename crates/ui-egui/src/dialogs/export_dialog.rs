@@ -1155,7 +1155,15 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
         // replace the file itself (a document opened from photo.png): then the save dialog asks,
         // so replacing it is the user's choice (#6599).
         if same && saved && !photocraft_engine::web_cmds::quick_export_target_is_own_file(&app.session) {
-            return quick_export(app, json!({}));
+            // Beside the document is still a folder the user exported to: remember it, once the
+            // export worked, so Save As to Original Folder off starts there next (#9656).
+            let doc = app.session.active().map(|d| d.doc.id);
+            let done = quick_export(app, json!({}))?;
+            if let Some(path) = done["path"].as_str() {
+                app.remember_save_folder(doc, path);
+                app.remember_export_folder(path);
+            }
+            return Ok(done);
         }
         let st = app.session.active().ok_or("no document")?;
         let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a);
