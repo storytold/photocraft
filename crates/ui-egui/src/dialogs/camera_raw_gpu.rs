@@ -165,7 +165,7 @@ pub(crate) fn slot(frame: &GpuFrame) -> usize {
 pub(crate) type Renderer = Arc<egui::mutex::RwLock<eframe::egui_wgpu::Renderer>>;
 
 /// The display key and its transform's matrix/shaper (`None`: not one).
-type Shaper = Option<(u64, Option<photocraft_cms::GpuMatrixShaper>)>;
+type Shaper = Option<(u64, Option<craft_cms::GpuMatrixShaper>)>;
 
 /// The slot on screen when the preview shows a CPU image.
 const NONE_SHOWN: usize = usize::MAX;

@@ -35,7 +35,7 @@ pub struct CameraRawDisplay<'a> {
     pub key: u64,
 }
 
-/// `photocraft_cms::GpuMatrixShaper`'s parts.
+/// `craft_cms::GpuMatrixShaper`'s parts.
 #[derive(Clone, Copy, Debug)]
 pub struct CameraRawShaper<'a> {
     pub matrix: [[f32; 4]; 3],

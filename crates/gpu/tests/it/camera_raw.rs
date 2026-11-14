@@ -905,7 +905,7 @@ fn the_view_counts_transparent_out_of_range_and_non_finite_pixels() {
 /// CPU codes within one 8-bit step.
 #[test]
 fn the_view_applies_a_matrix_shaper_display_transform() {
-    use photocraft_cms::{Builtin, Intent, Transform};
+    use craft_cms::{Builtin, Intent, Transform};
     let Some(mut g) = gpu() else { return };
     let t = Transform::new(Builtin::DisplayP3.profile(), Builtin::Srgb.profile(), Intent::RelativeColorimetric, false).unwrap();
     let shaper = t.gpu_matrix_shaper().expect("a matrix/shaper transform");
@@ -925,7 +925,7 @@ fn the_view_applies_a_matrix_shaper_display_transform() {
         let px = photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &frame.pixels, &mut None).unwrap();
         let src8: Vec<u8> = px.iter().flat_map(|q| codes(*q, false)).collect();
         let mut cpu = src8.clone();
-        t.convert_u8(&src8, 4, &mut cpu, 4, true);
+        t.convert_u8(&src8, 4, &mut cpu, 4, true).unwrap();
         for (got, want) in read_bytes(&g, &frame.display).iter().zip(cpu.as_chunks::<4>().0) {
             let want = premultiplied(*want);
             worst = worst.max(got.iter().zip(&want).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0));

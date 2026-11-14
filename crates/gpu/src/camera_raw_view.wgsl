@@ -79,7 +79,7 @@ fn curve(c: vec3<f32>, offset: u32, entries: u32) -> vec3<f32> {
     );
 }
 
-// `photocraft_cms::GpuMatrixShaper`'s contract: input curves, the matrix, output curves sampled
+// `craft_cms::GpuMatrixShaper`'s contract: input curves, the matrix, output curves sampled
 // at the fourth root of the linear value. Returns 8-bit codes.
 fn shaper(rgb: vec3<u32>) -> vec3<u32> {
     let v = vec4(curve(vec3<f32>(rgb) / 255.0, 0u, V.curves.x), 1.0);

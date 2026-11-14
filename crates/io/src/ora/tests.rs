@@ -1,5 +1,7 @@
 use super::*;
+use craft_ora::{MAX_NODES, MIMETYPE};
 use photocraft_doc::{Adjustment, Color, Fill, LayerMask};
+use photocraft_format::zip::{ZipReader, ZipWriter};
 
 const CANVAS: Size = Size { width: 70, height: 50 };
 
@@ -202,7 +204,7 @@ fn deeply_nested_stack_xml_is_an_error_not_a_stack_overflow() {
     let stack = format!("<image w=\"4\" h=\"4\">{}{}</image>", "<stack>".repeat(20_000), "</stack>".repeat(20_000));
     let bytes = archive(&stack, &[]);
     let e = std::thread::Builder::new().stack_size(512 * 1024).spawn(move || crate::import("deep.ora", &bytes).err()).unwrap().join().unwrap();
-    assert!(matches!(&e, Some(IoError::Ora(m)) if m.contains("nested")), "{e:?}");
+    assert!(matches!(&e, Some(IoError::Ora(m)) if m.contains("nest")), "{e:?}");
 }
 
 fn solid_png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
@@ -467,17 +469,6 @@ fn truncated_and_corrupted_files_never_panic() {
 }
 
 #[test]
-fn zip_mimetype_reads_only_a_leading_stored_entry() {
-    assert_eq!(zip_mimetype(&archive("<image/>", &[])), Some(MIMETYPE));
-    assert_eq!(zip_mimetype(b"PK\x03\x04"), None);
-    assert_eq!(zip_mimetype(&[]), None);
-    let mut z = ZipWriter::new();
-    z.add("stack.xml", b"x").unwrap();
-    z.add("mimetype", MIMETYPE).unwrap();
-    assert_eq!(zip_mimetype(&z.finish().unwrap()), None);
-}
-
-#[test]
 fn export_names_route_through_the_crate_entry_point() {
     let d = doc(SampleType::U8);
     let out = crate::export(&d, "picture.ORA", &Default::default()).unwrap();
@@ -544,7 +535,7 @@ fn lossy_documents() -> Vec<(&'static str, Document)> {
         // Not the bottom layer: with its transparency lock, `Base` would become the Background.
         ("position lock", with(&|d| d.layers[1].locks.position = true)),
         ("float", doc(SampleType::F32)),
-        ("profile", with(&|d| d.icc_profile = Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes()))),
+        ("profile", with(&|d| d.icc_profile = Some(craft_cms::Builtin::DisplayP3.profile().to_bytes()))),
         ("metadata", with(&|d| d.metadata.xmp = Some("<x/>".into()))),
     ]
 }
@@ -566,7 +557,7 @@ fn plain_documents_lose_nothing() {
     for depth in [SampleType::U8, SampleType::U16] {
         let mut d = doc(depth);
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?}");
-        d.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+        d.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} tagged sRGB");
         assert_eq!(export(&d).unwrap().warnings, Vec::<String>::new());
         // OpenRaster's edit-locked and alpha-preserve hold Lock All and Lock Transparent Pixels.
