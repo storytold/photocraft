@@ -850,8 +850,8 @@ mod tests {
         let data = crate::testgen::mosaic(&cam, w, [0, 1, 1, 2], 0, 4095);
         let b = crate::testgen::tiff_ep("NIKON CORPORATION", w, h, &data, [0, 1, 1, 2], 12, vec![]);
         let mut s = crate::decode(&b, &crate::Limits::default()).unwrap();
-        // This synthetic camera has no model metadata: use the 12-bit scale
-        // used to generate its mosaic when testing the look fit.
+        // The fixture uses a 12-bit encoding scale. craft-raw's NEF reader takes no WhiteLevel
+        // tag and reads the brightest flat, noiseless patch as a saturation plateau.
         s.white = [4095.0; 3];
         let to_srgb = color::invert(&color::srgb_to_xyz_d50()).unwrap();
         let pro_to_srgb = color::mul(&to_srgb, &color::rgb_to_xyz(color::ROMM, color::D50_XY));
