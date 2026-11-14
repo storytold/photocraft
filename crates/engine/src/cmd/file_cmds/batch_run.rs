@@ -903,7 +903,16 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         return result;
     }
     let check_duplicates = recorded_output_guard(p);
-    let names = if save_and_close { None } else { batch_naming::plan(&inputs, &output, &format, p)? };
+    // A folder input the opener will refuse fails before its action starts, so it takes no serial.
+    let counts = |input: &BatchInput| {
+        #[cfg(not(target_arch = "wasm32"))]
+        if check_folder_format && !super::paths::openable_name(&input.path) {
+            return false;
+        }
+        let _ = (input, check_folder_format);
+        true
+    };
+    let names = if save_and_close { None } else { batch_naming::plan_counting(&inputs, &output, &format, p, &counts)? };
     let mut save = SaveOpts::from_params(s, p, cmd)?;
     if save_and_close {
         save.tiff_layers = save_close_tiff_layers;
