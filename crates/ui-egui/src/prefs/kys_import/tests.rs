@@ -212,6 +212,22 @@ fn an_imported_row_keeps_its_second_key() {
     assert_eq!(crate::shortcuts::effective_alternates(&app, "edit.undo"), ["F1"]);
 }
 
+/// With ⌘H Hides PhotoCraft on, a set giving Extras ⌘H keeps it as an override: ⌘H is
+/// Photoshop's default but not the one in effect (⌃⌘H), so clearing the override would move
+/// Extras off the imported key.
+#[test]
+fn an_imported_cmd_h_on_extras_stays_when_cmd_h_hides_photocraft() {
+    let mut app = app();
+    app.session.edit_prefs(|p| p.interface.cmd_h_hides_app = true);
+    let set = "<photoshop-keyboard-shortcuts><command name=\"Extras\"><shortcut>Cmd+H</shortcut></command></photoshop-keyboard-shortcuts>";
+    let r = super::import_text(&mut app, "ps.kys", set).unwrap();
+    assert_eq!(r["set"]["view.extras"], json!("Cmd+H"), "{r}");
+    let id = r["dialog"].as_u64().unwrap();
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let default = crate::shortcuts::default_in_effect(&app, "view.extras", crate::shortcuts::default_shortcut("view.extras"));
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "view.extras", default.as_deref()).as_deref(), Some("Cmd+H"));
+}
+
 type Store = std::sync::Arc<std::sync::Mutex<Option<String>>>;
 
 /// An app beside a Photoshop whose live set is `set`; `saved_prefs` is this app's own saved
