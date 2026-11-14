@@ -93,6 +93,26 @@ fn command_click_picks_when_auto_select_is_off() {
     assert_eq!(bounds(&app, a), Rect::new(8, 14, 24, 30));
 }
 
+/// #9619: the Move tool that ⌘ summons over another tool (here the Brush) takes Auto-Select as
+/// it is set, as in Photoshop: on, a ⌘-drag picks the layer under the pointer; off, it moves the
+/// selected one. Only in the Move tool itself does ⌘ turn the option round.
+#[test]
+fn command_over_another_tool_keeps_auto_select_as_set() {
+    let (mut app, a, _) = app();
+    app.ui.tool = Tool::Brush;
+    drag(&mut app, [16.0, 16.0], [0.0, 6.0], egui::Modifiers::COMMAND);
+    assert_eq!(active(&app), Some(a), "Auto-Select on: ⌘ over the Brush picks");
+    assert_eq!(bounds(&app, a), Rect::new(8, 14, 24, 30));
+    assert_eq!(app.ui.tool, Tool::Brush, "the Brush is still the tool");
+    let (mut app, a, b) = self::app();
+    app.ui.tool = Tool::Brush;
+    app.ui.tool_options.move_auto_select = false;
+    drag(&mut app, [16.0, 16.0], [0.0, 6.0], egui::Modifiers::COMMAND);
+    assert_eq!(active(&app), Some(b), "Auto-Select off: the selected layer moves");
+    assert_eq!(bounds(&app, b), Rect::new(40, 46, 56, 62));
+    assert_eq!(bounds(&app, a), Rect::new(8, 8, 24, 24));
+}
+
 #[test]
 fn group_mode_picks_and_moves_the_outermost_group() {
     let (mut app, a, b) = app();
