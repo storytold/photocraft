@@ -7012,3 +7012,16 @@ fn adjustment_layer_name_must_round_trip() {
         }
     }
 }
+
+/// #14417: an Image > Adjustments apply step without PrsL plays with Preserve Luminosity off;
+/// an explicit PrsL is honoured. (A layer edit's missing PrsL stays a merge, which the reset
+/// test pins on the setd path.)
+#[test]
+fn color_balance_event_defaults_preserve_luminosity_off() {
+    let e = event_for(&item("ClrB", "Color Balance", None).event).expect("ClrB is mapped");
+    let row = D::List(vec![long(10.0), long(0.0), long(0.0)]);
+    let Mapped::Steps(steps) = (e.from)(&desc("ClrB").with("MdtL", row.clone())) else { panic!("ClrB maps to a step") };
+    assert_eq!(steps[0].1, json!({"midtones": [10.0, 0.0, 0.0], "preserveLuminosity": false}), "no PrsL plays off");
+    let Mapped::Steps(on) = (e.from)(&desc("ClrB").with("MdtL", row).with("PrsL", D::Boolean(true))) else { panic!("ClrB maps to a step") };
+    assert_eq!(on[0].1["preserveLuminosity"], json!(true), "an explicit PrsL is honoured");
+}

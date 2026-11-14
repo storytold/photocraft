@@ -146,7 +146,7 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
             };
             for (i, key) in ["shadows", "midtones", "highlights"].iter().enumerate() {
                 if let Some(v) = r.numbers(key, 3)? {
-                    tones[i] = [v[0], v[1], v[2]].map(|x| x.clamp(-100.0, 100.0));
+                    tones[i] = [v[0], v[1], v[2]].map(|x| x.round().clamp(-100.0, 100.0));
                 }
             }
             Adjustment::ColorBalance {
