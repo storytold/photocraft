@@ -802,6 +802,10 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         "fileHandling.lutFolder",
         "fileHandling",
         "scratchDisks.disks",
+        "integrations",
+        "integrations.readRoot",
+        "integrations.writeRoot",
+        ".integrations.writeRoot",
         ".",
         "..historyLog.filePath",
     ] {
@@ -812,6 +816,12 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
     );
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "interface.language", "value": "fr"})).is_ok());
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "fileHandling.autosave", "value": false})).is_ok());
+    assert!(
+        authorize_engine_command("prefs.set", &serde_json::json!({"values": {"integrations.controlPort": 7878, "integrations.writeRoot": "/outside"}}))
+            .is_err(),
+        "a batch may not grant automation roots either"
+    );
+    assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "integrations.controlPort", "value": 7878})).is_ok());
 }
 
 #[test]
@@ -1011,6 +1021,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.convertPoint"
             | "path.addAnchor"
             | "path.deleteAnchor"
+            | "path.deleteSegment"
             | "path.mergeShapeComponents"
             | "path.setOperation"
             | "path.clippingPath.set"
