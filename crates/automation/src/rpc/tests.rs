@@ -547,7 +547,7 @@ fn doc_export_layers_reports_skips_in_workspace_and_trusted_sessions() {
         let mut h =
             if trusted { Headless::trusted_local() } else { Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&base), Some(&base)).unwrap()) };
         h.handle("doc.new", json!({"width": 4, "height": 4, "background": "white", "name": "card"})).unwrap();
-        let adjustment = h.handle("engine.execute", json!({"command": "layer.newAdjustmentLayer.levels"})).unwrap()["layer"].clone();
+        h.handle("engine.execute", json!({"command": "layer.newAdjustmentLayer.levels"})).unwrap();
         h.handle("engine.execute", json!({"command": "layer.setProps", "params": {"name": "Levels"}})).unwrap();
         let hidden = h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {"name": "Hidden"}})).unwrap()["layer"].clone();
         h.handle("engine.execute", json!({"command": "layer.setProps", "params": {"visible": false}})).unwrap();
@@ -560,23 +560,22 @@ fn doc_export_layers_reports_skips_in_workspace_and_trusted_sessions() {
         let reply: Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(reply["id"], 8491);
         assert_eq!(reply["ok"], true, "{reply}");
-        assert_eq!(reply["result"]["files"], json!([format!("{out_dir}/card_0001_Background.png")]));
+        assert_eq!(reply["result"]["files"], json!([format!("{out_dir}/card_0000_Levels.png"), format!("{out_dir}/card_0001_Background.png")]));
         if !trusted {
-            assert_eq!(reply["result"]["count"], 1);
+            assert_eq!(reply["result"]["count"], 2);
         }
         assert_eq!(
             reply["result"]["skipped"],
             json!([
-                {"layer": hidden, "name": "Hidden", "reason": "hidden by visibleOnly"},
-                {"layer": adjustment, "name": "Levels", "reason": "adjustment layer has no pixels of its own"}
+                {"layer": hidden, "name": "Hidden", "reason": "hidden by visibleOnly"}
             ])
         );
-        assert_eq!(std::fs::read_dir(base.join("out")).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(base.join("out")).unwrap().count(), 2);
         let mut h = h.into_inner().unwrap();
         let all_dir = base.join("all").to_string_lossy().into_owned();
         let all = h.export_layers(None, &all_dir, &json!({"visibleOnly": false})).unwrap();
-        assert_eq!(all["files"].as_array().unwrap().len(), 2);
-        assert_eq!(all["skipped"].as_array().unwrap().len(), 1);
+        assert_eq!(all["files"].as_array().unwrap().len(), 3);
+        assert_eq!(all["skipped"].as_array().unwrap().len(), 0);
         // Workspace no-overwrite errors still fail and remove only newly created files.
         if !trusted {
             let collision = base.join("collision");

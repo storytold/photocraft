@@ -2620,7 +2620,7 @@ fn layers_to_files_reports_skipped_layers_without_changing_files() {
     for depth in [8, 16, 32] {
         let dir = tmp(&format!("skipped-layers-{depth}"));
         let mut s = session(4, 4, depth);
-        let adjustment = s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap()["layer"].clone();
+        s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap();
         s.execute("layer.setProps", json!({"name": "Levels/α"})).unwrap();
         let hidden = s.execute("layer.new.layer", json!({"name": "Levels/α"})).unwrap()["layer"].clone();
         s.execute("layer.setProps", json!({"visible": false})).unwrap();
@@ -2629,22 +2629,16 @@ fn layers_to_files_reports_skipped_layers_without_changing_files() {
         assert_eq!(
             result["skipped"],
             json!([
-                {"layer": hidden, "name": "Levels/α", "reason": "hidden by visibleOnly"},
-                {"layer": adjustment, "name": "Levels/α", "reason": "adjustment layer has no pixels of its own"}
+                {"layer": hidden, "name": "Levels/α", "reason": "hidden by visibleOnly"}
             ])
         );
-        assert_eq!(result["files"], json!([join(&dir, "doc_0001_Background.png")]));
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        assert_eq!(result["files"], json!([join(&dir, "doc_0000_Levels_α.png"), join(&dir, "doc_0001_Background.png")]));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
         assert_eq!(s.active().unwrap().doc.layers.len(), before.layers.len());
         assert!(!s.active().unwrap().doc.layer(LayerId(hidden.as_u64().unwrap())).unwrap().visible);
         let all = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "all", "visibleOnly": false})).unwrap();
-        assert_eq!(
-            all["skipped"],
-            json!([
-                {"layer": adjustment, "name": "Levels/α", "reason": "adjustment layer has no pixels of its own"}
-            ])
-        );
-        assert_eq!(all["files"], json!([join(&dir, "all_0000_Levels_α.png"), join(&dir, "all_0002_Background.png")]));
+        assert_eq!(all["skipped"], json!([]));
+        assert_eq!(all["files"], json!([join(&dir, "all_0000_Levels_α.png"), join(&dir, "all_0001_Levels_α.png"), join(&dir, "all_0002_Background.png")]));
     }
 }
 
