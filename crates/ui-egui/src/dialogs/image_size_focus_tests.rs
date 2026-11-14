@@ -1,7 +1,7 @@
 //! Image Size opened from the menu or its shortcut starts with no field focused, so typing doesn't
-//! overwrite the width (#14800). Tab focuses Width first, Enter is OK and Escape cancels. Canvas
-//! Size, and Image Size shown by an action (playback or Record Again), still open on Width with
-//! its text selected (#2329).
+//! overwrite the width (#14800). Tab focuses Width first, Enter is OK and Escape cancels. Image
+//! Size shown by an action (playback or Record Again) still opens on Width, as Canvas Size does
+//! (#2329, `sizing::tests::canvas_size_opens_on_width_selected`).
 
 use egui::accesskit::Role;
 use egui_kittest::{Harness, kittest::Queryable};
@@ -65,15 +65,7 @@ fn tab_focuses_width_first_and_enter_is_ok() {
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert!(h.state().ui.dialogs.is_empty(), "Enter is OK with nothing focused");
-}
-
-#[test]
-fn canvas_size_still_opens_on_width_selected() {
-    let mut h = open_from_menu("image.canvasSize");
-    assert!(width_focused(&h), "Canvas Size: Width has focus");
-    h.event(egui::Event::Text("50".into()));
-    h.run_steps(2);
-    assert_eq!(field(&h, "width"), 50.0, "typing replaced the selected width");
+    assert_eq!(h.state().session.active().unwrap().doc.size.width, 200, "unchanged values applied");
 }
 
 /// Shown by an action (the dialog carries its paused playback's token), Image Size opens on Width.
@@ -82,5 +74,34 @@ fn image_size_shown_by_an_action_opens_on_width() {
     let h = open_with("image.imageSize", |f| {
         f.insert(crate::actions::RESUME.into(), json!(1));
     });
+    assert!(width_focused(&h), "Width has focus");
+}
+
+/// Record Again on a recorded Image Size step, from the Actions panel menu, opens on Width.
+#[test]
+fn image_size_from_record_again_opens_on_width() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("actions.record", json!({"name": "Resize"})).unwrap();
+    app.run("image.imageSize", json!({"width": 100, "height": 50})).unwrap();
+    app.run("actions.stop", json!({})).unwrap();
+    app.run("edit.undo", json!({})).unwrap();
+    app.ui.actions.selected = Some(0);
+    app.ui.actions.selected_step = Some(0);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
+        |ui, app| {
+            if app.ui.dialogs.is_empty() {
+                crate::actions::panel_menu(app, ui);
+            }
+            show(app, ui.ctx());
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(2);
+    h.get_by_label("Record Again").click();
+    h.run_steps(4);
+    let d = h.state().ui.dialogs.first().expect("the Record Again editor is open");
+    assert_eq!(d.fields.get("__command").and_then(Value::as_str), Some("image.imageSize"));
     assert!(width_focused(&h), "Width has focus");
 }

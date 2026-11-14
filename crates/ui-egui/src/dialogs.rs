@@ -362,7 +362,8 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         // (playback or Record Again) it opens on Width like Canvas Size (#14800).
         _ if fields.contains_key("__sizing")
             && fields.get("__command").and_then(Value::as_str) == Some("image.imageSize")
-            && !fields.contains_key(crate::actions::RESUME) =>
+            && !fields.contains_key(crate::actions::RESUME)
+            && !crate::actions::record_again::owns(fields) =>
         {
             crate::sizing::body(ui, fields)
         }

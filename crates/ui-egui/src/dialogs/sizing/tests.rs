@@ -506,7 +506,7 @@ fn large_documents_in_physical_units_open_unchanged() {
 /// #2329: Canvas Size opens on Width with its value selected: typing replaces it and Enter
 /// applies it. Image Size opens with no field focused (#14800, `image_size_focus_tests`).
 #[test]
-fn sizing_dialogs_open_on_width_selected() {
+fn canvas_size_opens_on_width_selected() {
     use egui::accesskit::Role;
     use egui_kittest::{Harness, kittest::Queryable};
     let command = "image.canvasSize";
