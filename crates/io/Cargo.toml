@@ -31,7 +31,7 @@ photocraft-algo = { workspace = true }
 craft-psd = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-raw = { workspace = true }
-photocraft-affinity = { workspace = true }
+craft-affinity = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-paint = { workspace = true }
 photocraft-vector = { workspace = true }
@@ -73,7 +73,7 @@ resvg = { version = "0.48", default-features = false, features = ["text", "raste
 lopdf = { version = "0.38", default-features = false }
 miniz_oxide = "0.9"
 crc32fast = "1.5"
-photocraft-affinity = { workspace = true, features = ["synth"] }
+craft-affinity = { workspace = true, features = ["synth"] }
 flate2 = { workspace = true }
 craft-psd = { workspace = true, features = ["testgen"] }
 photocraft-raw = { workspace = true, features = ["testgen"] }

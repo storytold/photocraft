@@ -1418,6 +1418,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-affinity"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=09dcbc225b95232998498a40ca56e24716571d53#09dcbc225b95232998498a40ca56e24716571d53"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "image",
+ "ruzstd",
+]
+
+[[package]]
 name = "craft-ai-agents"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-ai-integrations?rev=35e0352666a117407d62230a6c6c2366f3e21a3b#35e0352666a117407d62230a6c6c2366f3e21a3b"
@@ -3674,6 +3685,7 @@ dependencies = [
  "byteorder-lite",
  "color_quant",
  "gif",
+ "image-webp",
  "moxcms",
  "num-traits",
  "png 0.18.1",
@@ -5606,16 +5618,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "photocraft-affinity"
-version = "0.23.1"
-dependencies = [
- "crc32fast",
- "flate2",
- "proptest",
- "ruzstd",
-]
-
-[[package]]
 name = "photocraft-algo"
 version = "0.23.1"
 dependencies = [
@@ -5762,12 +5764,12 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "chrono",
+ "craft-affinity",
  "craft-cms",
  "craft-print",
  "craft-psd",
  "exr",
  "flate2",
- "photocraft-affinity",
  "photocraft-algo",
  "photocraft-codecs",
  "photocraft-color",
@@ -5855,6 +5857,7 @@ name = "photocraft-io"
 version = "0.23.1"
 dependencies = [
  "blake3",
+ "craft-affinity",
  "craft-cms",
  "craft-docpath",
  "craft-kra",
@@ -5870,7 +5873,6 @@ dependencies = [
  "kurbo 0.13.1",
  "lopdf",
  "miniz_oxide 0.9.1",
- "photocraft-affinity",
  "photocraft-algo",
  "photocraft-codecs",
  "photocraft-color",
