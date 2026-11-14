@@ -38,7 +38,17 @@ const MEASURED: &[&str] = &[
 ];
 
 /// The entries a click works on with a preset selected; every other one is greyed.
-const LIVE: &[&str] = &["New Brush Preset…", "Rename Brush…", "Delete Brush…", "Brush Name", "Brush Stroke", "Brush Tip", "Show Search Bar", "Import Brushes…"];
+const LIVE: &[&str] = &[
+    "New Brush Preset…",
+    "Rename Brush…",
+    "Delete Brush…",
+    "Brush Name",
+    "Brush Stroke",
+    "Brush Tip",
+    "Show Search Bar",
+    "Show Recent Brushes",
+    "Import Brushes…",
+];
 
 /// The entries that act on the selected preset.
 const NEEDS_PRESET: &[&str] = &["Rename Brush…", "Delete Brush…", "Export Selected Brushes…"];
