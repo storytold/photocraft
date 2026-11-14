@@ -2038,7 +2038,8 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             } else {
                 let painting = app.drag.is_some();
                 // Follow Perspective: the outline is the dab as it will land on the plane here.
-                let surface = crate::brush_cursor::surface_shape(app, tool, xf.to_doc(p));
+                let doc = xf.to_doc(p);
+                let surface = crate::brush_cursor::surface_shape(app, tool, doc);
                 crate::brush_cursor::remember_shape(ui.ctx(), surface);
                 let brush = &app.session.tools.brush;
                 let full = (brush.size / 2.0 * xf.zoom).max(1.0);
@@ -2048,10 +2049,18 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                     _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(painter, p, 5.0, 0.0),
                     // On a perspective plane (Follow Perspective) the dab's own size, squash and angle.
                     PaintingCursor::NormalTip | PaintingCursor::FullSizeTip if surface.is_some() => {
-                        let (r, angle, scale) = surface.unwrap_or((brush.size / 2.0, 0.0, 1.0));
+                        let (r, angle, scale, offset) =
+                            surface.map_or((brush.size / 2.0, 0.0, 1.0, [0.0; 2]), |c| (c.radius, c.proj_angle, c.proj_scale, c.offset));
                         let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
                         let axes = crate::brush_cursor::surface_axes(xf, r, angle, scale);
-                        crate::brush_cursor::cursor(painter, p, brush, (r * xf.zoom).max(1.0), axes, cur.painting == PaintingCursor::NormalTip, centre)
+                        // The dab may land off the pointer (Follow Folds): outline there, joined to the crosshair.
+                        let at = xf.to_screen(doc[0] as f32 + offset[0], doc[1] as f32 + offset[1]);
+                        if (at - p).length() > 1.0 {
+                            crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
+                            let t = crate::theme::Tokens::get(painter.ctx());
+                            painter.line_segment([p, at], egui::Stroke::new(1.0, t.accent));
+                        }
+                        crate::brush_cursor::cursor(painter, at, brush, (r * xf.zoom).max(1.0), axes, cur.painting == PaintingCursor::NormalTip, centre)
                     }
                     // The Pencil (and the Eraser in Pencil mode): the outline of the
                     // whole pixels its dab fills, on the pixel grid. A round tip is a

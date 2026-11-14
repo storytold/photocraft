@@ -150,7 +150,7 @@ impl ShadingBuilder {
     /// area's top. `img` must cover `band` and hold the colour model's channels.
     pub fn add_band(&mut self, img: &Image, band: Rect) -> Result<(), String> {
         let a = self.area;
-        let aligned = band.x0 == a.x0 && band.x1 == a.x1 && band.y0 >= a.y0 && band.y1 <= a.y1 && (band.y0 - a.y0) as usize % self.k == 0;
+        let aligned = band.x0 == a.x0 && band.x1 == a.x1 && band.y0 >= a.y0 && band.y1 <= a.y1 && ((band.y0 - a.y0) as usize).is_multiple_of(self.k);
         if !aligned {
             return Err("a shading band must span the area's width and start on a block row".to_string());
         }
@@ -186,7 +186,7 @@ impl ShadingBuilder {
         if self.gw > 0 && self.gh > 0 {
             gauss_blur_n(&mut self.packed, self.gw, self.gh, 2, self.sigma / self.k as f32);
         }
-        let y_ref = self.packed.chunks_exact(2).map(|c| if c[1] > 1e-6 && c[0].is_finite() { c[0] / c[1] } else { f32::NAN }).collect();
+        let y_ref = self.packed.as_chunks::<2>().0.iter().map(|c| if c[1] > 1e-6 && c[0].is_finite() { c[0] / c[1] } else { f32::NAN }).collect();
         ShadingField { area: self.area, k: self.k, gw: self.gw, gh: self.gh, y_ref, luma: self.luma }
     }
 }
@@ -296,6 +296,21 @@ pub struct PlaneSurface {
     pub scene: Scene,
 }
 
+/// Closed-form SVD of the 2x2 matrix `[[a, b], [c, d]]`: `(σ1, σ2, φ)` with σ1 ≥ σ2 ≥ 0 and φ the
+/// direction (radians, in the matrix's own axes) of the image of the unit circle's major axis,
+/// i.e. `U`'s first column. `None` for non-finite input or σ1 ≈ 0.
+pub fn svd2(m: [[f64; 2]; 2]) -> Option<(f64, f64, f64)> {
+    let [[a, b], [c, d]] = m;
+    let q = ((a + d).powi(2) + (c - b).powi(2)).sqrt();
+    let r = ((a - d).powi(2) + (c + b).powi(2)).sqrt();
+    let (s1, s2) = ((q + r) / 2.0, (q - r).abs() / 2.0);
+    if !(s1.is_finite() && s1 > 1e-9 && s2.is_finite()) {
+        return None;
+    }
+    let phi = 0.5 * (2.0 * (a * c + b * d)).atan2((a * a + b * b) - (c * c + d * d));
+    phi.is_finite().then_some((s1, s2, phi))
+}
+
 /// Squashes below this are an edge-on plane: no dab is drawn on it.
 const MIN_SQUASH: f64 = 1e-4;
 /// Finite-difference step in plane-unit coordinates.
@@ -339,19 +354,11 @@ impl PlaneSurface {
         if ![a, b, c, d].iter().all(|x| x.is_finite()) {
             return None;
         }
-        // Closed-form 2x2 SVD of [[a, b], [c, d]].
-        let q = ((a + d).powi(2) + (c - b).powi(2)).sqrt();
-        let r = ((a - d).powi(2) + (c + b).powi(2)).sqrt();
-        let (s1, s2) = ((q + r) / 2.0, (q - r).abs() / 2.0);
-        if !(s1.is_finite() && s1 > 1e-9) {
-            return None;
-        }
+        let (s1, s2, phi) = svd2([[a, b], [c, d]])?;
         let squash = s2 / s1;
         if squash.is_nan() || squash < MIN_SQUASH {
             return None;
         }
-        // Major axis in the image (x right, y down): the leading eigenvector of J Jᵀ.
-        let phi = 0.5 * (2.0 * (a * c + b * d)).atan2((a * a + b * b) - (c * c + d * d));
         // The minor axis is perpendicular; flip y for the y-up convention.
         let mut angle = -(phi + std::f64::consts::FRAC_PI_2);
         while angle > std::f64::consts::PI {
@@ -453,7 +460,7 @@ mod tests {
             let mut b = ShadingBuilder::new(ColorMode::Rgb, true, rect, sigma).unwrap();
             b.set_band_rows(3);
             let rows = b.band_rows() as i32;
-            assert!(rows >= 3 && rows as usize % whole.block() == 0);
+            assert!(rows >= 3 && (rows as usize).is_multiple_of(whole.block()));
             let mut y = 0;
             while y < 41 {
                 let band = Rect::new(0, y, 50, (y + rows).min(41));

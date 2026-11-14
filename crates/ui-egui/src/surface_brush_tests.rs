@@ -42,6 +42,9 @@ fn the_popover_toggles_reach_the_brush_settings() {
         checkbox(&h, "Follow Perspective").click();
         h.run_steps(3);
         assert!(h.state().session.tools.brush.surface.perspective, "{tool:?}: Follow Perspective");
+        checkbox(&h, "Follow Folds").click();
+        h.run_steps(3);
+        assert!(h.state().session.tools.brush.surface.folds, "{tool:?}: Follow Folds");
     }
 }
 
@@ -56,15 +59,15 @@ fn the_cursor_follows_a_plane_and_stays_round_off_it() {
     let mut app = app(Tool::Brush);
     app.run("tools.setBrush", json!({"brush": {"surface": {"perspective": true}}})).unwrap();
     // Off every plane (none stored yet): the plain outline.
-    assert_eq!(crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [120.0, 100.0]), None);
+    assert!(crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [120.0, 100.0]).is_none());
     app.run("perspective.setPlanes", json!({"planes": [[[70, 60], [170, 60], [220, 150], [20, 150]]]})).unwrap();
     let on = crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [120.0, 100.0]).expect("on the floor plane");
-    assert!(on.0 > 0.0 && on.2 > 0.0 && on.2 <= 1.0, "{on:?}");
-    assert_eq!(crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [5.0, 5.0]), None, "off the plane");
+    assert!(on.radius > 0.0 && on.proj_scale > 0.0 && on.proj_scale <= 1.0, "{on:?}");
+    assert!(crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [5.0, 5.0]).is_none(), "off the plane");
     // Follow Perspective off, or another tool: always plain.
-    assert_eq!(crate::brush_cursor::surface_shape(&mut app, Tool::Eraser, [120.0, 100.0]), None);
+    assert!(crate::brush_cursor::surface_shape(&mut app, Tool::Eraser, [120.0, 100.0]).is_none());
     app.run("tools.setBrush", json!({"brush": {"surface": {"perspective": false}}})).unwrap();
-    assert_eq!(crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [120.0, 100.0]), None);
+    assert!(crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [120.0, 100.0]).is_none());
 }
 
 #[test]
@@ -78,8 +81,29 @@ fn ui_inspect_reports_the_cursor_shape() {
         v
     };
     assert!(inspect(&mut app)["brushCursor"].is_null());
-    crate::brush_cursor::remember_shape(&ctx, Some((12.0, 0.5, 0.4)));
+    crate::brush_cursor::remember_shape(
+        &ctx,
+        Some(photocraft_engine::brush_cmds::CursorShape { radius: 12.0, proj_angle: 0.5, proj_scale: 0.4, offset: [1.0, 2.0] }),
+    );
     let v = inspect(&mut app);
     assert_eq!(v["brushCursor"]["projScale"], json!(0.4f32));
     assert_eq!(v["brushCursor"]["radius"], json!(12.0f32));
+    assert_eq!(v["brushCursor"]["offset"], json!([1.0f32, 2.0f32]));
+}
+
+#[test]
+fn folds_give_a_cursor_shape_over_a_fold_background() {
+    let mut app = app(Tool::Brush);
+    // A smooth ramp with a dark band: shading the engine reads as a fold.
+    for (i, c) in ["#808080", "#303030", "#c0c0c0"].iter().enumerate() {
+        app.run("select.rect", json!({"x": 40 * i as i32 + 40, "y": 0, "width": 40, "height": 160})).unwrap();
+        app.run("edit.fill", json!({"color": c})).unwrap();
+    }
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"size": 20.0, "surface": {"folds": true}}})).unwrap();
+    let shape = crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [80.0, 80.0]).expect("folds shape the dab");
+    assert!(shape.radius > 0.0 && shape.offset.iter().all(|v| v.is_finite()), "{shape:?}");
+    // Off: plain again.
+    app.run("tools.setBrush", json!({"brush": {"surface": {"folds": false}}})).unwrap();
+    assert!(crate::brush_cursor::surface_shape(&mut app, Tool::Brush, [80.0, 80.0]).is_none());
 }

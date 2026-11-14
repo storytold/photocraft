@@ -91,16 +91,18 @@ pub(crate) fn pen_axes(xf: &crate::canvas::ViewXform, brush: &BrushSettings, pen
     [axes[0] * x.x + axes[1] * x.y, axes[0] * y.x + axes[1] * y.y]
 }
 
-/// The dab outline the surface-aware brush will lay down at `doc`: `(radius, proj_angle,
-/// proj_scale)` from the engine, or `None` when Follow Perspective is off, the tool is not the
-/// Brush or Pencil, or the point is off every stored plane (the cursor then stays as it is).
-pub(crate) fn surface_shape(app: &mut crate::PhotocraftApp, tool: crate::Tool, doc: [f64; 2]) -> Option<(f32, f32, f32)> {
-    if !matches!(tool, crate::Tool::Brush | crate::Tool::Pencil) || !app.session.tools.brush.surface.perspective {
+/// The dab the surface-aware brush will lay down at `doc`: radius, foreshortening and the offset
+/// of its centre from the pointer, from the engine. `None` when neither Follow Perspective nor
+/// Follow Folds applies, the tool is not the Brush or Pencil, or nothing shapes the dab here (the
+/// cursor then stays as it is).
+pub(crate) fn surface_shape(app: &mut crate::PhotocraftApp, tool: crate::Tool, doc: [f64; 2]) -> Option<photocraft_engine::brush_cmds::CursorShape> {
+    let o = &app.session.tools.brush.surface;
+    if !matches!(tool, crate::Tool::Brush | crate::Tool::Pencil) || !(o.perspective || o.folds) {
         return None;
     }
     let base = app.session.tools.brush.size / 2.0;
     photocraft_engine::brush_cmds::brush_cursor_shape(&mut app.session, doc[0], doc[1], base)
-        .filter(|(r, a, s)| r.is_finite() && *r > 0.0 && a.is_finite() && s.is_finite())
+        .filter(|c| c.radius.is_finite() && c.radius > 0.0 && c.proj_angle.is_finite() && c.proj_scale.is_finite() && c.offset.iter().all(|v| v.is_finite()))
 }
 
 /// [`tip_axes`] for a dab of `radius` document pixels foreshortened by `proj_scale` along the
@@ -120,17 +122,17 @@ pub(crate) fn surface_axes(xf: &crate::canvas::ViewXform, radius: f32, proj_angl
 }
 
 fn shape_id() -> egui::Id {
-    egui::Id::new("photocraft-brush-cursor-shape")
+    egui::Id::unique("photocraft-brush-cursor-shape")
 }
 
 /// Remember the surface shape the cursor drew this frame (`None`: the plain outline), for `ui.inspect`.
-pub(crate) fn remember_shape(ctx: &egui::Context, shape: Option<(f32, f32, f32)>) {
+pub(crate) fn remember_shape(ctx: &egui::Context, shape: Option<photocraft_engine::brush_cmds::CursorShape>) {
     ctx.data_mut(|d| d.insert_temp(shape_id(), shape));
 }
 
 /// The surface shape last drawn by the cursor.
-pub(crate) fn last_shape(ctx: &egui::Context) -> Option<(f32, f32, f32)> {
-    ctx.data(|d| d.get_temp::<Option<(f32, f32, f32)>>(shape_id())).flatten()
+pub(crate) fn last_shape(ctx: &egui::Context) -> Option<photocraft_engine::brush_cmds::CursorShape> {
+    ctx.data(|d| d.get_temp::<Option<photocraft_engine::brush_cmds::CursorShape>>(shape_id())).flatten()
 }
 
 /// Outlines of the document's stored perspective planes, while Follow Perspective is on and the
@@ -338,7 +340,7 @@ mod tests {
     #[test]
     fn surface_shape_is_none_when_follow_perspective_is_off() {
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        assert!(!app.session.tools.brush.surface.perspective);
-        assert_eq!(surface_shape(&mut app, crate::Tool::Brush, [10.0, 10.0]), None);
+        assert!(!app.session.tools.brush.surface.perspective && !app.session.tools.brush.surface.folds);
+        assert!(surface_shape(&mut app, crate::Tool::Brush, [10.0, 10.0]).is_none());
     }
 }

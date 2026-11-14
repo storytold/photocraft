@@ -822,7 +822,7 @@ fn pct(p: &Value, k: &str, d: f32) -> f32 {
 
 pub mod mixer_live;
 pub mod surface_wire;
-pub use surface_wire::brush_cursor_shape;
+pub use surface_wire::{CursorShape, brush_cursor_shape};
 fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
     mixer_live::run(s, p)
 }

@@ -119,7 +119,7 @@ pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::Br
 /// `tools.setBrush`; Clear Planes runs `perspective.clearPlanes`.
 pub(super) fn surface_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) {
     use photocraft_paint::surface::{DETAIL_RANGE, SampleMode};
-    let on = b.surface.color || b.surface.perspective;
+    let on = b.surface.color || b.surface.perspective || b.surface.folds;
     let resp = icons::button(ui, "grid-3x3", 24.0, on, tl!("Surface options"));
     let resp = crate::brush_picker::named(resp, "Surface options");
     let clear_enabled = crate::menus::is_enabled(app, "perspective.clearPlanes");
@@ -134,12 +134,27 @@ pub(super) fn surface_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mu
             if widgets::slider_row(ui, tl!("Strength"), &mut percent, 0.0..=100.0, "%", None).changed() {
                 s.strength = (percent.round() / 100.0).clamp(0.0, 1.0);
             }
+        });
+        ui.add_enabled_ui(s.color || s.folds, |ui| {
             let mut detail = s.detail;
             if widgets::slider_row(ui, tl!("Detail"), &mut detail, *DETAIL_RANGE.start()..=*DETAIL_RANGE.end(), "px", None).changed() {
                 s.detail = detail.round().clamp(*DETAIL_RANGE.start(), *DETAIL_RANGE.end());
             }
             let modes = [(SampleMode::AllLayers, tl!("All Layers")), (SampleMode::CurrentLayer, tl!("Current Layer"))];
             widgets::dropdown(ui, "surface-sample", tl!("Sample"), &mut s.sample, &modes, 120.0);
+        });
+        ui.separator();
+        widgets::checkbox(ui, &mut s.folds, tl!("Follow Folds"))
+            .on_hover_text(tl!("Shapes dabs from the photo's shading; works best on smooth, evenly coloured surfaces"));
+        ui.add_enabled_ui(s.folds, |ui| {
+            let mut depth = (s.fold_depth * 100.0).clamp(0.0, 100.0);
+            if widgets::slider_row(ui, tl!("Fold Depth"), &mut depth, 0.0..=100.0, "%", None).changed() {
+                s.fold_depth = (depth.round() / 100.0).clamp(0.0, 1.0);
+            }
+            let mut bend = (s.fold_bend * 100.0).clamp(0.0, 100.0);
+            if widgets::slider_row(ui, tl!("Bend"), &mut bend, 0.0..=100.0, "%", None).changed() {
+                s.fold_bend = (bend.round() / 100.0).clamp(0.0, 1.0);
+            }
         });
         ui.separator();
         widgets::checkbox(ui, &mut s.perspective, tl!("Follow Perspective"))

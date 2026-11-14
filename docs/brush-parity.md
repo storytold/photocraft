@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-08 · **Change:** minor (Eraser's Erase to History, #10692; no estimate changed; Both Axes on Scatter headers, #3825 partial; parity refresh retains the expanded painting-menu limitations; right-click Brush Preset picker is partial while a pen barrel right-click with Windows Ink on still often paints a dot (#5364); Brush Tip Shape Spacing checkbox and percentage share one header, #3825 partial; Angle/Roundness fields left of the Brush Tip Shape widget, labels right-aligned, #3825 partial; the eraser end of the pen switches to the Eraser on Windows with Windows Ink on, #2285; no estimate changed; Art History Brush Opacity on the options bar, #10263; no estimate changed; Clone Stamp and Healing Brush clone from a source set in another open document; Shift+right-click menu for every painting tool: Edit Brush… and the tool's own Mode list; Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-14 · **Change:** minor (surface-aware brush, beyond parity, storytold/photocraft#14341; no estimate changed; Eraser's Erase to History, #10692; no estimate changed; Both Axes on Scatter headers, #3825 partial; parity refresh retains the expanded painting-menu limitations; right-click Brush Preset picker is partial while a pen barrel right-click with Windows Ink on still often paints a dot (#5364); Brush Tip Shape Spacing checkbox and percentage share one header, #3825 partial; Angle/Roundness fields left of the Brush Tip Shape widget, labels right-aligned, #3825 partial; the eraser end of the pen switches to the Eraser on Windows with Windows Ink on, #2285; no estimate changed; Art History Brush Opacity on the options bar, #10263; no estimate changed; Clone Stamp and Healing Brush clone from a source set in another open document; Shift+right-click menu for every painting tool: Edit Brush… and the tool's own Mode list; Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -110,6 +110,26 @@ tablets against Photoshop side by side.
 | Color Replacement | done | |
 | Quick Selection (brush-driven) | done | |
 
+## Surface-aware brush (beyond parity)
+
+The reference application has no equivalent: these options make a stroke follow the photo
+underneath instead of painting flat colour. They are brush options (Brush Settings › Surface),
+not blend modes, and are stored with each tool's brush. Tracked as
+[storytold/photocraft#14341](https://github.com/storytold/photocraft/issues/14341).
+
+| Feature | Status | Evidence |
+|---|---|---|
+| Surface Color: scales the paint per pixel by the photo's shading (luma over a blurred luma); options Strength (0..1), Detail (blur radius 1..512 px) and Sample (All Layers or Current Layer) | done | `crates/algo/src/surface.rs`, `crates/paint/src/surface.rs`; banded 16-bit square-root-coded luma, about 72 MB at 36 MP; no perf numbers yet |
+| Follow Perspective: dabs are sized and foreshortened by the saved Vanishing Point plane under them | done | `crates/paint/src/render.rs`, `dynamics.rs`; a stroke across planes uses one anchor scale, so sizes on different planes are only approximately comparable; a plane seen edge-on (squash below 1e-4) draws a plain dab |
+| Planes saved with the document (`filter.vanishingPoint` `keepPlanes`), with canvas-size staleness | done | `crates/doc/src/lib.rs`, `.pcraft` round trip; a same-size canvas change (rotate 180, flip) is not detected as stale; tear-off parent links are lost on reload; the PSD vanishing point resource stays opaque |
+| Adaptive brush cursor: the outline shows the dab the brush will paint on the plane under the pointer | done | `brush.cursorShape`, `crates/ui-egui/src/canvas.rs`; not yet checked visually |
+| Vanishing Point paste shade (`shade`, `shadeDetail`): pasted colour takes the photo's shading | done | `crates/engine/src/cmd/vp_cmds.rs` |
+| Tools wired | partial | Brush, Pencil and the painting tools that share the brush renderer; Mixer Brush and the retouch tools are not wired |
+| Phase 2: depth from a channel or layer (curved surfaces, light painting) | open | |
+| Phase 3: single-photo depth inference through a plug-in | open | blocked on the model licence |
+
+Compiled and tested on fork CI only; no local run, no performance measurement and no visual check yet.
+
 ## Presets
 
 | Behaviour | Status | Evidence |
@@ -124,6 +144,7 @@ tablets against Photoshop side by side.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Surface-aware brush, beyond parity: Surface Color (strength, detail, sample), Follow Perspective on saved Vanishing Point planes, adaptive cursor, Vanishing Point paste shade (storytold/photocraft#14341). Phases 2 and 3 open. No brush-feel estimate changed. |
 | 2026-11-06 | minor | Eraser end of the pen switches to the Eraser on Windows with Windows Ink on (#2285); row stays partial (X11, web); no estimate changed |
 | 2026-10-30 | minor | Art History Brush Opacity on the options bar, #10263; no estimate changed |
 | 2026-10-25 | minor | Art History Brush row added as partial (8 of 10 styles, TOOL-213-20, #1610). No brush-feel estimate changed. |

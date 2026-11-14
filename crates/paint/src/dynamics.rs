@@ -702,6 +702,9 @@ impl DabBuilder {
             if let Some(local) = self.surface.as_ref().and_then(|m| m.0.local(c)).filter(|l| l.is_valid()) {
                 let anchor = *self.anchor.get_or_insert(local.scale);
                 (radius, proj_angle, proj_scale) = surface_dab_shape(radius, Some(anchor), &local);
+                // Follow Folds' bend: the map was read at the undisplaced centre.
+                c.x += f64::from(local.offset[0]);
+                c.y += f64::from(local.offset[1]);
             }
             // Transfer.
             let tr = &b.transfer;

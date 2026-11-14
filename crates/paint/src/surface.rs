@@ -39,11 +39,18 @@ pub struct SurfaceOptions {
     pub sample: SampleMode,
     /// Follow Perspective: dabs are sized and foreshortened by the perspective plane under them.
     pub perspective: bool,
+    /// Follow Folds: dabs are foreshortened and shifted by the slope and height of the photo's
+    /// shading (a rough height map), so a stroke bends over folds. `detail` sets its scale too.
+    pub folds: bool,
+    /// 0..1: how strongly a slope foreshortens the dab.
+    pub fold_depth: f32,
+    /// 0..1: how far a fold's height shifts the dab.
+    pub fold_bend: f32,
 }
 
 impl Default for SurfaceOptions {
     fn default() -> Self {
-        Self { color: false, strength: 1.0, detail: 24.0, sample: SampleMode::AllLayers, perspective: false }
+        Self { color: false, strength: 1.0, detail: 24.0, sample: SampleMode::AllLayers, perspective: false, folds: false, fold_depth: 0.5, fold_bend: 0.3 }
     }
 }
 
@@ -55,6 +62,11 @@ impl SurfaceOptions {
         }
         if !self.detail.is_finite() || !DETAIL_RANGE.contains(&self.detail) {
             return Err(format!("surface detail must be between {} and {}, got {}", DETAIL_RANGE.start(), DETAIL_RANGE.end(), self.detail));
+        }
+        for (name, v) in [("fold depth", self.fold_depth), ("fold bend", self.fold_bend)] {
+            if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                return Err(format!("surface {name} must be between 0 and 1, got {v}"));
+            }
         }
         Ok(())
     }
@@ -85,6 +97,8 @@ pub struct Local {
     pub squash_angle: f32,
     /// σ2 / σ1 in `(0, 1]`: how much the minor axis is shortened.
     pub squash: f32,
+    /// Image pixels (y down) the dab centre moves by (Follow Folds' bend); `[0, 0]` for a plane.
+    pub offset: [f32; 2],
 }
 
 /// A perspective plane (or planes) the brush can follow.
@@ -95,8 +109,8 @@ pub trait SurfaceMap: Send + Sync {
 
 impl Local {
     /// Is this a usable projection (finite, positive scale)?
-    pub(crate) fn is_valid(&self) -> bool {
-        self.scale.is_finite() && self.scale > 0.0
+    pub fn is_valid(&self) -> bool {
+        self.scale.is_finite() && self.scale > 0.0 && self.offset.iter().all(|v| v.is_finite())
     }
 }
 
@@ -163,6 +177,10 @@ mod tests {
         assert!(SurfaceOptions { detail: 0.5, ..Default::default() }.validate().is_err());
         assert!(SurfaceOptions { detail: 600.0, ..Default::default() }.validate().is_err());
         assert!(SurfaceOptions { detail: f32::INFINITY, ..Default::default() }.validate().is_err());
+        for bad in [f32::NAN, -0.1, 1.5, f32::INFINITY] {
+            assert!(SurfaceOptions { fold_depth: bad, ..Default::default() }.validate().is_err());
+            assert!(SurfaceOptions { fold_bend: bad, ..Default::default() }.validate().is_err());
+        }
     }
 
     #[test]
@@ -175,7 +193,7 @@ mod tests {
 
     #[test]
     fn dab_shape_anchors_at_first_dab() {
-        let l = Local { scale: 2.0, squash_angle: 0.5, squash: 0.4 };
+        let l = Local { scale: 2.0, squash_angle: 0.5, squash: 0.4, offset: [0.0; 2] };
         let (r, a, s) = surface_dab_shape(10.0, None, &l);
         assert_eq!((r, a, s), (10.0, 0.5, 0.4));
         // Same place, anchored: unchanged. Half the scale: half the radius.
@@ -183,7 +201,7 @@ mod tests {
         let far = Local { scale: 1.0, ..l };
         assert_eq!(surface_dab_shape(10.0, Some(2.0), &far).0, 5.0);
         // Garbage never gives a non-finite dab.
-        let bad = Local { scale: f32::NAN, squash_angle: f32::NAN, squash: f32::NAN };
+        let bad = Local { scale: f32::NAN, squash_angle: f32::NAN, squash: f32::NAN, offset: [0.0; 2] };
         let (r, a, s) = surface_dab_shape(10.0, Some(2.0), &bad);
         assert_eq!((r, a, s), (10.0, 0.0, 1.0));
     }

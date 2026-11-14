@@ -137,7 +137,7 @@ struct Receding;
 
 impl SurfaceMap for Receding {
     fn local(&self, p: Point) -> Option<Local> {
-        (p.x >= 0.0 && p.x < 400.0).then(|| Local { scale: (2.0 - p.x / 200.0) as f32, squash_angle: 0.3, squash: 0.5 })
+        (p.x >= 0.0 && p.x < 400.0).then(|| Local { scale: (2.0 - p.x / 200.0) as f32, squash_angle: 0.3, squash: 0.5, offset: [0.0; 2] })
     }
 }
 
@@ -192,7 +192,7 @@ fn only_the_on_plane_part_of_a_stroke_is_projected() {
     let on = dabs_of(&b, &pts, Some(Arc::new(Receding)));
     let (inside, outside): (Vec<_>, Vec<_>) = on.iter().partition(|d| d.center.x < 400.0);
     assert!(!inside.is_empty() && !outside.is_empty());
-    assert!(inside.iter().all(|d| d.proj_scale == 0.5));
+    assert!(inside.iter().all(|d: &&Dab| d.proj_scale == 0.5));
     assert!(outside.iter().all(|d| d.radius == 10.0 && d.proj_scale == 1.0 && d.proj_angle == 0.0));
 }
 
