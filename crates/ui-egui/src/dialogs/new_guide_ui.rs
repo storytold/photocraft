@@ -1,0 +1,361 @@
+//! View › Guides › New Guide…: an orientation, a position with a unit and a colour, as in
+//! Photoshop.
+//!
+//! The position opens in the ruler unit ("0 cm") and takes any unit Photoshop's field takes:
+//! "50%", "2.5 cm", "1in", "12 pt", "3 pc", "100 px". A bare number is in the ruler unit, as in
+//! Photoshop. OK runs `view.newGuide` with the text, so the engine converts it with the document's
+//! resolution. A position the engine refuses reopens the dialog with what was typed and the
+//! engine's message, as Photoshop keeps New Guide open on a bad position. The
+//! dialog is an ordinary one in the UI state, so `ui.inspect`, `ui.dialog.confirm` and
+//! `ui.dialog.cancel` drive it. The last successful guide's orientation and colour open next
+//! time, with its position shown in the current ruler unit, as Photoshop does.
+//!
+//! Color lists Photoshop's guide colours (Cyan by default) and Custom…, whose swatch opens the
+//! Color Picker. The guide stores the chosen colour itself, so changing the preference guide
+//! colour later doesn't recolour it.
+//!
+//! Edit Selected Guides (the guide menu, `guide_select`) opens the same dialog on the selected
+//! guide: its orientation, its position in the ruler unit and its colour. OK runs `view.editGuide`,
+//! sending the colour only when it was changed, so a guide that uses the preference colour keeps
+//! doing so.
+
+use photocraft_engine::edit_cmds::GUIDE_COLORS;
+use photocraft_engine::prefs::Unit;
+use serde_json::{Map, Value, json};
+
+use crate::PhotocraftApp;
+use crate::state::DialogKind;
+
+const MARK: &str = "__newGuide";
+const COMMAND: &str = "view.newGuide";
+const EDIT_COMMAND: &str = "view.editGuide";
+/// In an Edit Selected Guides dialog: the guide being edited, as `{"orientation", "index"}`, and
+/// the colour it opened with.
+const EDIT: &str = "__edit";
+const INITIAL_COLOR: &str = "__initialColor";
+const CUSTOM: &str = "custom";
+/// New Guide's colour when nothing was remembered, as in Photoshop.
+const DEFAULT_COLOR: &str = "cyan";
+
+/// A colour's label in the list (the catalogue holds each one).
+pub(crate) fn color_label(name: &str) -> &'static str {
+    match name {
+        "lightBlue" => tl!("Light Blue"),
+        "lightRed" => tl!("Light Red"),
+        "green" => tl!("Green"),
+        "mediumBlue" => tl!("Medium Blue"),
+        "yellow" => tl!("Yellow"),
+        "magenta" => tl!("Magenta"),
+        "cyan" => tl!("Cyan"),
+        "lightGray" => tl!("Light Gray"),
+        "black" => tl!("Black"),
+        _ => tl!("Custom…"),
+    }
+}
+
+/// Accept the named guide colours and the explicit custom-colour choice.
+fn is_color_name(name: &str) -> bool {
+    name == CUSTOM || GUIDE_COLORS.iter().any(|(n, ..)| *n == name)
+}
+
+/// The Custom… colour as "#rrggbb", starting from Cyan's.
+fn custom_color(f: &Map<String, Value>) -> String {
+    f.get("customColor")
+        .and_then(Value::as_str)
+        .filter(|h| photocraft_engine::prefs::parse_hex(h).is_some())
+        .map_or_else(|| "#4affff".to_string(), str::to_string)
+}
+
+/// Identify the specialized New Guide or Edit Selected Guides dialog fields.
+pub fn owns(fields: &Map<String, Value>) -> bool {
+    fields.contains_key(MARK)
+}
+
+/// Read the ruler unit used for guide positions without an explicit suffix.
+fn ruler_unit(app: &PhotocraftApp) -> Unit {
+    app.session.prefs().units_and_rulers.rulers
+}
+
+/// "0 cm", "0 px", "0 %": a value in `unit` as the field shows it, with a space before the unit
+/// as in Photoshop.
+fn with_unit(value: &str, unit: Unit) -> String {
+    format!("{value} {}", unit.suffix())
+}
+
+/// `typed` with `unit` after its first number when that number has none ("300 / 2" with pixel
+/// rulers → "300 px / 2"); anything else as typed. Nor when a length later in its term makes it
+/// a plain factor ("2 / 2 * 50 px": the term is in px already).
+fn unit_on_first_number(typed: &str, unit: Unit) -> String {
+    let end = typed
+        .char_indices()
+        .find(|&(i, c)| !(c.is_ascii_digit() || matches!(c, '.' | ',') || (i == 0 && matches!(c, '-' | '+'))))
+        .map_or(typed.len(), |(i, _)| i);
+    let (number, rest) = typed.split_at(end);
+    let bare = !number.is_empty() && rest.trim_start().starts_with(['+', '-', '*', '/']) && !factor_has_unit(rest);
+    if bare { format!("{} {}{rest}", number, unit.suffix()) } else { typed.to_string() }
+}
+
+/// Whether an operand multiplied or divided in at the start of `rest` (up to the first `+` or `-`
+/// between operands) carries a unit, as the engine splits operands.
+fn factor_has_unit(mut rest: &str) -> bool {
+    while let Some(operand) = rest.trim_start().strip_prefix(['*', '/']).map(str::trim_start) {
+        // The operand runs to the next operator; a sign at its start is its own.
+        let end = operand.char_indices().find(|&(i, c)| i > 0 && matches!(c, '+' | '-' | '*' | '/')).map_or(operand.len(), |(i, _)| i);
+        let (operand, after) = operand.split_at(end);
+        if Unit::parse_length(operand).is_some_and(|(_, u)| u.is_some()) {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
+/// `px` (document pixels) in the ruler unit, as the field shows it: "14.11 cm". Percent is of the
+/// active document's width for a vertical guide and its height for a horizontal one.
+fn in_ruler_unit(app: &PhotocraftApp, px: f64, vertical: bool) -> String {
+    let units = &app.session.prefs().units_and_rulers;
+    let (dpi, extent) = app.session.active().map_or((72.0, 1.0), |st| {
+        let d = &st.doc;
+        (f64::from(d.resolution_dpi), f64::from(if vertical { d.size.width } else { d.size.height }))
+    });
+    with_unit(&units.format(px, dpi, extent), units.rulers)
+}
+
+/// Open the dialog with the last successful guide's orientation, position (in the current ruler
+/// unit) and colour, else horizontal at 0.
+pub fn open(app: &mut PhotocraftApp) -> u64 {
+    let saved = app.session.prefs().dialogs.get(COMMAND).and_then(Value::as_object).cloned().unwrap_or_default();
+    let orientation = saved.get("orientation").and_then(Value::as_str).filter(|o| matches!(*o, "horizontal" | "vertical")).unwrap_or("horizontal");
+    let px = saved.get("positionPx").and_then(Value::as_f64).filter(|p| p.is_finite()).unwrap_or(0.0);
+    let position = in_ruler_unit(app, px, orientation == "vertical");
+    let color = saved.get("color").and_then(Value::as_str).filter(|c| is_color_name(c)).unwrap_or(DEFAULT_COLOR).to_string();
+    let custom = custom_color(&saved);
+    let mut f = Map::new();
+    f.insert(MARK.into(), json!(true));
+    f.insert("__command".into(), json!(COMMAND));
+    f.insert("__label".into(), json!("New Guide…"));
+    f.insert("orientation".into(), json!(orientation));
+    f.insert("position".into(), json!(position));
+    f.insert("color".into(), json!(color));
+    f.insert("customColor".into(), json!(custom));
+    app.ui.open_dialog(DialogKind::Command, f)
+}
+
+/// The list entry (and Custom… colour) showing `rgb`: a named colour when it is one, else Custom….
+fn color_choice(rgb: [u8; 3]) -> (String, String) {
+    let hex = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+    match GUIDE_COLORS.iter().find(|(.., c)| *c == rgb) {
+        Some((name, ..)) => (name.to_string(), hex),
+        None => (CUSTOM.to_string(), hex),
+    }
+}
+
+/// Edit Selected Guides: the dialog on the selected guide, with its orientation, its position in
+/// the current ruler unit and its colour (its own, or the preference colour it is drawn in).
+pub fn open_edit(app: &mut PhotocraftApp) -> Result<u64, String> {
+    let (vertical, index) = crate::guide_select::selected(app).ok_or_else(|| "No guide is selected".to_string())?;
+    let (px, own) = app
+        .session
+        .active()
+        .and_then(|st| {
+            let g = &st.doc.guides;
+            let p = *if vertical { &g.vertical } else { &g.horizontal }.get(index)?;
+            Some((p, g.color(vertical, p)))
+        })
+        .ok_or_else(|| "No guide is selected".to_string())?;
+    let pref = photocraft_engine::prefs::parse_hex(&app.session.prefs().guides_grid_and_slices.guide_color).unwrap_or([0x4a, 0xff, 0xff]);
+    let (color, custom) = color_choice(own.unwrap_or(pref));
+    let orientation = if vertical { "vertical" } else { "horizontal" };
+    let mut f = Map::new();
+    f.insert(MARK.into(), json!(true));
+    f.insert("__command".into(), json!(EDIT_COMMAND));
+    f.insert("__label".into(), json!("Edit Selected Guides"));
+    f.insert(EDIT.into(), json!({"orientation": orientation, "index": index}));
+    f.insert("orientation".into(), json!(orientation));
+    f.insert("position".into(), json!(in_ruler_unit(app, px, vertical)));
+    f.insert(INITIAL_COLOR.into(), json!(if color == CUSTOM { custom.clone() } else { color.clone() }));
+    f.insert("color".into(), json!(color));
+    f.insert("customColor".into(), json!(custom));
+    let id = app.ui.open_dialog(DialogKind::Command, f.clone());
+    if let Err(error) = crate::guide_edit::begin(app, id, &f) {
+        app.ui.close_dialog(id);
+        return Err(error);
+    }
+    Ok(id)
+}
+
+/// Edit the dialog fields and show validation errors without changing the live guide.
+pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let mut orientation = f.get("orientation").and_then(Value::as_str).unwrap_or("horizontal").to_string();
+    let mut position = f.get("position").and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut color = f.get("color").and_then(Value::as_str).filter(|c| is_color_name(c)).unwrap_or(DEFAULT_COLOR).to_string();
+    if let Some(error) = f.get("__error").and_then(Value::as_str) {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+        ui.add_space(4.0);
+    }
+    egui::Grid::new("new-guide-dialog").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+        ui.label(tl!("Orientation"));
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut orientation, "horizontal".to_string(), tl!("Horizontal"));
+            ui.radio_value(&mut orientation, "vertical".to_string(), tl!("Vertical"));
+        });
+        ui.end_row();
+        let position_label = ui.label(tl!("Position"));
+        let response = ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0)).labelled_by(position_label.id);
+        if ui.is_enabled() {
+            crate::field_tab::register(ui.ctx(), response.id);
+        }
+        if response.gained_focus() {
+            crate::field_tab::select_all(ui.ctx(), response.id, &position);
+        }
+        if response.changed() && f.contains_key(EDIT) {
+            // A deliberately retyped rounded readout is a new position, not the untouched one.
+            f.insert("__positionEdited".into(), json!(true));
+        }
+        ui.end_row();
+        ui.label(tl!("Color"));
+        ui.horizontal(|ui| {
+            // Custom… first, then Photoshop's colours.
+            let options: Vec<(String, &str)> =
+                std::iter::once(CUSTOM).chain(GUIDE_COLORS.iter().map(|(n, ..)| *n)).map(|n| (n.to_string(), color_label(n))).collect();
+            crate::widgets::dropdown(ui, "new-guide-color", tl!("Color"), &mut color, &options, 140.0);
+            if color == CUSTOM {
+                let hex = custom_color(f);
+                let rgb = photocraft_engine::prefs::parse_hex(&hex).unwrap_or([0x4a, 0xff, 0xff]);
+                if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), tl!("Custom…")).clicked() {
+                    f.insert("customColor".into(), json!(hex));
+                    crate::color_picker_ui::request_field(f, "customColor", &crate::color_picker_ui::title_for(tl!("Guides")));
+                }
+                ui.label(egui::RichText::new(hex).monospace());
+            }
+        });
+        ui.end_row();
+    });
+    f.insert("orientation".into(), json!(orientation));
+    f.insert("position".into(), json!(position));
+    f.insert("color".into(), json!(color));
+}
+
+/// The command's parameters: a bare number gets the ruler unit; anything else goes as typed, for
+/// the engine to read (or refuse, keeping the dialog open). Custom… sends its "#rrggbb".
+pub fn params(app: &PhotocraftApp, f: &Map<String, Value>) -> Value {
+    let orientation = f.get("orientation").and_then(Value::as_str).unwrap_or("horizontal");
+    // A Unicode minus (U+2212) is a minus, as the engine reads it.
+    let typed = f.get("position").and_then(Value::as_str).unwrap_or_default().trim().replace('−', "-");
+    let position = match Unit::parse_length(&typed) {
+        Some((_, None)) => with_unit(&typed, ruler_unit(app)),
+        Some(_) => typed,
+        // Arithmetic (#10440): a first number without a unit is in the ruler unit, as in
+        // Photoshop ("300 / 2" is 150 px with pixel rulers); the engine evaluates the rest.
+        None => unit_on_first_number(&typed, ruler_unit(app)),
+    };
+    let color = f.get("color").and_then(Value::as_str).filter(|c| is_color_name(c)).unwrap_or(DEFAULT_COLOR);
+    let color = if color == CUSTOM { custom_color(f) } else { color.to_string() };
+    match f.get(EDIT) {
+        Some(edit) => {
+            let mut p = json!({"orientation": edit["orientation"], "index": edit["index"], "newOrientation": orientation, "position": position});
+            if f.get(INITIAL_COLOR).and_then(Value::as_str) != Some(color.as_str()) {
+                p["color"] = json!(color);
+            }
+            p
+        }
+        None => json!({"orientation": orientation, "position": position, "color": color}),
+    }
+}
+
+/// Dispatch New Guide or guarded guide editing, retaining typed fields on a retryable error.
+pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    let params = params(app, f);
+    if f.contains_key(EDIT) {
+        return confirm_edit(app, f);
+    }
+    match app.run(COMMAND, params.clone()) {
+        Ok(result) => {
+            // Remember where the guide landed (so it reopens in whatever the ruler unit is then),
+            // the list's choice (not the colour it sent) and the last Custom… colour.
+            let vertical = params["orientation"] == "vertical";
+            let landed = app.session.active().and_then(|st| if vertical { st.doc.guides.vertical.last() } else { st.doc.guides.horizontal.last() }.copied());
+            let remembered = json!({
+                "orientation": params["orientation"],
+                "positionPx": landed.unwrap_or(0.0),
+                "color": f.get("color").cloned().unwrap_or(json!(DEFAULT_COLOR)),
+                "customColor": custom_color(f),
+            });
+            app.session.prefs.edit(|prefs| prefs.dialogs.insert(COMMAND.into(), remembered));
+            Ok(result)
+        }
+        Err(e) => {
+            // `dialogs::confirm` has already closed it: open it again with the typed values.
+            let mut again = f.clone();
+            again.insert("__error".into(), json!(e));
+            app.ui.open_dialog(DialogKind::Command, again);
+            Err(e)
+        }
+    }
+}
+
+/// Edit Selected Guides' OK: the edited guide stays selected (at the end of the other list if it
+/// turned). A refused edit reopens the dialog, as New Guide does.
+fn confirm_edit(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    let (params, result) = match crate::guide_edit::finish(app, f) {
+        Ok(Some(applied)) => applied,
+        Ok(None) => return Ok(Value::Null),
+        Err(error) => {
+            if crate::guide_edit::retryable(app) {
+                let mut again = f.clone();
+                again.insert("__error".into(), json!(error));
+                let id = app.ui.open_dialog(DialogKind::Command, again);
+                if let Some(draft) = app.guide_edit.as_mut() {
+                    draft.dialog = id;
+                }
+            } else {
+                app.guide_edit = None;
+            }
+            return Err(error);
+        }
+    };
+    let (from, to) = (params["orientation"] == "vertical", params["newOrientation"] == "vertical");
+    let index = if from == to {
+        params["index"].as_u64().and_then(|i| usize::try_from(i).ok())
+    } else {
+        app.session.active().map(|st| if to { st.doc.guides.vertical.len() } else { st.doc.guides.horizontal.len() }.saturating_sub(1))
+    };
+    if let Some(i) = index {
+        crate::guide_select::select(app, to, i);
+    }
+    Ok(result)
+}
+
+/// The validated draft shown on the canvas, without changing the document or its history.
+pub fn edit_preview<'a>(app: &'a PhotocraftApp, doc: &photocraft_doc::Document) -> Option<&'a photocraft_doc::Guides> {
+    crate::guide_edit::preview(app, doc)
+}
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod arithmetic_tests {
+    use super::{Unit, unit_on_first_number};
+
+    /// #10440: a first number without a unit is in the ruler unit, the rest goes to the engine.
+    #[test]
+    fn a_leading_bare_number_gets_the_ruler_unit() {
+        assert_eq!(unit_on_first_number("300 / 2", Unit::Pixels), "300 px / 2");
+        assert_eq!(unit_on_first_number("3+1in", Unit::Centimeters), "3 cm+1in");
+        assert_eq!(unit_on_first_number("100% / 3", Unit::Pixels), "100% / 3");
+        assert_eq!(unit_on_first_number("abc", Unit::Pixels), "abc");
+    }
+
+    /// A bare number multiplied or divided within a term that has a length is a plain factor:
+    /// the length is the term's unit, so the ruler unit isn't added (it would make a length
+    /// times a length). A term of bare numbers still gets it.
+    #[test]
+    fn a_leading_factor_of_a_length_gets_no_ruler_unit() {
+        for typed in ["2 * 50 px", "2 / 2 * 50 px", "2*50px+10", "4 / 2 * 1in - 3", "2 * -1cm"] {
+            assert_eq!(unit_on_first_number(typed, Unit::Centimeters), typed);
+        }
+        assert_eq!(unit_on_first_number("2 * 3 + 1in", Unit::Centimeters), "2 cm * 3 + 1in");
+        assert_eq!(unit_on_first_number("6 / 2 / 3 - 1", Unit::Centimeters), "6 cm / 2 / 3 - 1");
+    }
+}
