@@ -455,9 +455,6 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
         if usage.svg_limit_images > 0 {
             return Err(IoError::Svg("embedded SVG images exceed the byte or nesting budget".into()));
         }
-        if usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0 {
-            return Err(IoError::Svg("can't parse an embedded SVG image".into()));
-        }
         Ok(Parsed { tree, fontless_text })
     })
     .map_err(IoError::from)
