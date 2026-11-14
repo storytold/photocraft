@@ -76,6 +76,7 @@ pub(super) fn curvature_hit(app: &PhotocraftApp, x: f64, y: f64) -> Option<usize
 /// Curvature Pen press: clicking the first anchor closes the path, pressing another anchor
 /// grabs it to move, anywhere else adds a smooth anchor (still draggable until the release).
 pub fn curvature_down(app: &mut PhotocraftApp, x: f64, y: f64) {
+    app.ui.pen_redo.clear();
     if !cancel_stale(app) {
         return;
     }

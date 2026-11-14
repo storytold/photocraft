@@ -143,9 +143,19 @@ fn same_draft(a: &PenPath, b: &PenPath) -> bool {
 /// Edit › Redo would put back the finish of the path the Pen is drawing, edited since Undo gave
 /// it back: the finished path would sit beside its own draft. Redo does nothing until the draft is
 /// finished (a new step, clearing Redo) or undone back to what Undo gave back.
+/// A valid new draft likewise blocks unrelated document Redo that would discard it; an invalidated
+/// draft does not claim document history.
 pub(crate) fn pen_blocks_redo(app: &PhotocraftApp) -> bool {
-    !box_steps(app, "edit.redo")
-        && resumed_finish(app).and_then(|i| app.finished_pens.get(i)).is_some_and(|f| app.ui.pen.as_ref().is_some_and(|pen| !same_draft(pen, &f.draft)))
+    if box_steps(app, "edit.redo") {
+        return false;
+    }
+    let Some(pen) = app.ui.pen.as_ref() else { return false };
+    if let Some(finished) = resumed_finish(app).and_then(|i| app.finished_pens.get(i)) {
+        return !same_draft(pen, &finished.draft);
+    }
+    // An unrelated document Redo would invalidate a live draft's captured source and drop it.
+    // Matching finish recovery above remains allowed; stale drafts do not own document history.
+    !pen.knots.is_empty() && pen.owner.as_ref().is_some_and(|owner| owner.valid(app))
 }
 
 /// Edit › Redo after [`pen_resume_on_undo`], with the path untouched since: finish it again.
@@ -183,7 +193,7 @@ pub(crate) fn pen_finish_on_redo(app: &mut PhotocraftApp) -> Result<bool, String
 
 /// Edit › Undo and Redo, and the History panel's Step Backward and Step Forward, which step the
 /// same way: a path being drawn loses its last anchor, Undo back to a finish gives the path back
-/// to the Pen, and Redo finishes it again. `None` leaves `id` to History.
+/// to the Pen, and Redo restores saved anchors before finishing it again. `None` leaves `id` to History.
 pub(crate) fn pen_history_step(app: &mut PhotocraftApp, id: &str) -> Option<Result<(), String>> {
     let undo = match id {
         "edit.undo" | "history.stepBackward" => true,
@@ -191,9 +201,16 @@ pub(crate) fn pen_history_step(app: &mut PhotocraftApp, id: &str) -> Option<Resu
         _ => return None,
     };
     if box_steps(app, id) {
-        return None;
+        // Hold this feature's Pen steps under the box; leave non-Pen routing to upstream.
+        return (id.starts_with("history.") && has_draft_history(app))
+            .then(|| Err(if app.ui.transform.is_some() { "Commit or cancel the transform first" } else { "Commit or cancel the crop first" }.into()));
     }
     if undo && super::pen_undo_last_point(app) {
+        return Some(Ok(()));
+    }
+    // Anchors belong to the draft even when Undo recovered it from a finished path.
+    // Restore them before the finish blocker or document Redo can consume that draft.
+    if !undo && super::pen_redo_last_point(app) {
         return Some(Ok(()));
     }
     match if undo { pen_resume_on_undo(app) } else { pen_finish_on_redo(app) } {
@@ -204,7 +221,8 @@ pub(crate) fn pen_history_step(app: &mut PhotocraftApp, id: &str) -> Option<Resu
 
 /// Whether [`pen_history_step`] decides if `id` is enabled: Undo and Step Backward take back the
 /// anchors of a path being drawn even with no History step yet; Redo and Step Forward grey out
-/// while they would put a finished path back beside its edited draft ([`pen_blocks_redo`]).
+/// while they would put a finished path back beside its edited draft ([`pen_blocks_redo`]),
+/// unless valid draft anchors can be restored first.
 pub(crate) fn pen_history_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
     let undo = match id {
         "edit.undo" | "history.stepBackward" => true,
@@ -212,9 +230,22 @@ pub(crate) fn pen_history_enabled(app: &PhotocraftApp, id: &str) -> Option<bool>
         _ => return None,
     };
     if box_steps(app, id) {
-        return None;
+        // Only Pen-owned panel steps wait here; Edit Undo/Redo use the box's enabled state.
+        return (id.starts_with("history.") && has_draft_history(app)).then_some(false);
     }
-    if undo { app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()).then_some(true) } else { pen_blocks_redo(app).then_some(false) }
+    if undo {
+        app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()).then_some(true)
+    } else if super::pen_can_redo(app) {
+        Some(true)
+    } else {
+        pen_blocks_redo(app).then_some(false)
+    }
+}
+
+/// Restrict modal Step commands only when this feature has a valid draft or anchor future.
+/// Non-Pen document history keeps upstream's own routing and enabled-state decisions.
+fn has_draft_history(app: &PhotocraftApp) -> bool {
+    app.ui.pen.as_ref().is_some_and(|pen| pen.owner.as_ref().is_some_and(|owner| owner.valid(app))) || super::pen::pen_future_valid(app)
 }
 
 /// Do Free Transform's or the Crop tool's own box steps take `id` (Undo/Redo) rather than History
