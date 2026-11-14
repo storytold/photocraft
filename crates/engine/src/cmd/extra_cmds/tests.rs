@@ -908,6 +908,30 @@ fn paste_into_masks_to_the_selection() {
     assert_eq!((m.value(0, 0), m.value(22, 12)), (1.0, 0.0));
 }
 
+/// Several copied layers are refused before anything changes: each would be pasted for every
+/// target, and only the last of them masked.
+#[test]
+fn paste_into_each_refuses_several_copied_layers() {
+    let mut s = session(8);
+    let first = active(&s).id;
+    paint_square(&mut s, Rect::new(0, 0, 10, 10), [1.0, 0.0, 0.0, 1.0]);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let second = active(&s).id;
+    paint_square(&mut s, Rect::new(20, 10, 30, 20), [0.0, 1.0, 0.0, 1.0]);
+    s.execute("select.deselect", json!({})).unwrap();
+    {
+        let st = s.active_mut().unwrap();
+        st.selected_layers = vec![first, second];
+        st.active_layer = Some(second);
+    }
+    s.execute("edit.copy", json!({})).unwrap();
+    assert!(s.clipboard.as_ref().and_then(|c| c.layers.as_deref()).is_some_and(|d| d.layers.len() == 2), "both layers copied");
+    let (layers_before, steps) = (doc(&s).layers.len(), s.active().unwrap().history.past_len());
+    let err = s.execute("edit.pasteSpecial.pasteIntoEach", json!({})).unwrap_err().to_string();
+    assert!(err.contains("one copied layer"), "{err}");
+    assert_eq!((doc(&s).layers.len(), s.active().unwrap().history.past_len()), (layers_before, steps), "nothing changed");
+}
+
 #[test]
 fn paste_into_each_selected_layer_masks_one_copy_to_each_layer() {
     let mut s = session(8);

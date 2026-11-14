@@ -491,6 +491,10 @@ fn paste_into_each(s: &mut Session, _p: &Value) -> Result<Value> {
             crate::commands::check_all_unlocked(&d.doc, g)?;
         }
     }
+    // Several copied layers would each be pasted for every target, and only the last masked.
+    if s.clipboard.as_ref().and_then(|clip| clip.layers.as_deref()).is_some_and(|copied| copied.layers.len() > 1) {
+        return Err(EngineError::Other("Paste Into Each Selected Layer needs one copied layer: copy the layers one at a time".into()));
+    }
     let canvas = d.doc.bounds();
     let targets: Vec<LayerId> =
         targets.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| !photocraft_compose::layer_bounds(l, canvas).is_empty())).collect();
