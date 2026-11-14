@@ -46,6 +46,9 @@ pub struct SpellDialog {
     /// Ignore All words for this check.
     pub ignore: Vec<String>,
     pub change_to: String,
+    /// A new word came up: Change To takes the focus with all of it selected (#14181).
+    #[serde(skip)]
+    pub focus_change_to: bool,
     pub all_layers: bool,
     /// Single-layer checks remain bound to their opening layer across refreshes and toggles.
     #[serde(skip)]
@@ -780,8 +783,15 @@ fn refresh_spelling(app: &mut PhotocraftApp) {
     };
     if let Some(s) = app.ui.type_panels.spell.as_mut() {
         s.items = items;
-        s.change_to = s.items.get(s.index).and_then(|i| i["suggestions"][0].as_str()).unwrap_or("").to_string();
+        show_word(s);
     }
+}
+
+/// Change To for the word that comes up: its first suggestion, or the word itself when it has
+/// none, focused and selected so typing replaces it.
+fn show_word(s: &mut SpellDialog) {
+    s.change_to = s.items.get(s.index).and_then(|i| i["suggestions"][0].as_str().or(i["word"].as_str())).unwrap_or("").to_string();
+    s.focus_change_to = true;
 }
 
 /// Opens Edit › Check Spelling (returns the misspellings). Opening it again while an action waits
@@ -834,6 +844,7 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let item = d.items.get(d.index).cloned();
     let mut act: Option<&str> = None;
     let mut change_to = d.change_to.clone();
+    let mut focused = false;
     let mut all_layers = d.all_layers;
     egui::Window::new(tl!("Check Spelling"))
         .id(egui::Id::unique("check-spelling"))
@@ -871,7 +882,12 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.add_enabled(false, egui::TextEdit::singleline(&mut shown.clone()).desired_width(240.0)).accessible_name(tl!("Not in Dictionary:"));
                     ui.add_space(4.0);
                     let change_label = ui.label(RichText::new(tl!("Change To:")).color(t.text_dim).size(11.5));
-                    ui.add_enabled(item.is_some(), egui::TextEdit::singleline(&mut change_to).desired_width(240.0)).labelled_by(change_label.id);
+                    let field = ui.add_enabled(item.is_some(), egui::TextEdit::singleline(&mut change_to).desired_width(240.0)).labelled_by(change_label.id);
+                    if item.is_some() && d.focus_change_to && !ui.is_sizing_pass() {
+                        field.request_focus();
+                        crate::field_tab::select_all(ui.ctx(), field.id, &change_to);
+                        focused = true;
+                    }
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("Suggestions:")).color(t.text_dim).size(11.5));
                     egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(3)).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
@@ -923,6 +939,7 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         });
     if let Some(s) = app.ui.type_panels.spell.as_mut() {
         s.change_to = change_to.clone();
+        s.focus_change_to &= !focused;
         s.all_layers = all_layers;
     }
     let Some(a) = act else { return };
@@ -934,11 +951,15 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 s.index = 0;
             }
             refresh_spelling(app);
+            // Check All Layers keeps the focus unless another word comes up.
+            if let Some(s) = app.ui.type_panels.spell.as_mut() {
+                s.focus_change_to &= s.items.first() != item.as_ref();
+            }
         }
         "ignore" => {
             if let Some(s) = app.ui.type_panels.spell.as_mut() {
                 s.index += 1;
-                s.change_to = s.items.get(s.index).and_then(|i| i["suggestions"][0].as_str()).unwrap_or("").to_string();
+                show_word(s);
             }
         }
         "ignoreAll" => {
