@@ -204,6 +204,9 @@ fn color_lookup_builtin_data_and_errors() {
     // (A fresh pixel layer: this `s` still has the adjustment layer active, and the command is
     // disabled there - the domain rejection itself needs a pixel layer to reach.)
     s.execute("layer.new.layer", json!({})).unwrap();
+    // #14429 refuses an empty pixel layer, so give this refusal-carrier pixels (the bucket
+    // floods the layer) before asking it to parse a domain-carrying .cube.
+    s.execute("paint.bucket", json!({"x": 5, "y": 5})).unwrap();
     let domained = "TITLE \"d\"
 DOMAIN_MIN 0.1 0.1 0.1
 DOMAIN_MAX 0.9 0.9 0.9
