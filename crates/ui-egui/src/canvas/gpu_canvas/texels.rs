@@ -21,15 +21,85 @@ pub(super) fn texel_bytes(format: wgpu::TextureFormat) -> u64 {
     if format == FORMAT_HIGH { 8 } else { 4 }
 }
 
-/// Straight-alpha f32 RGBA → premultiplied texels of `format`.
-pub(super) fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
+/// Straight-alpha f32 RGBA → premultiplied texels of `format` (public for `interactive_bench`):
+/// one of the canvas's two formats, RGBA8 or RGBA16F. `None` for any other format, whose texels
+/// these wouldn't be.
+pub fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Option<Vec<u8>> {
+    if format != FORMAT && format != FORMAT_HIGH {
+        return None;
+    }
+    let mut out = Vec::new();
+    texels_into(format, px, &mut out);
+    Some(out)
+}
+
+/// [`texels`] for the canvas's own textures, whose format is always one of the two.
+pub(super) fn canvas_texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
     let mut out = Vec::new();
     texels_into(format, px, &mut out);
     out
 }
 
-/// [`texels`] into `out` (resized; reusing it across bands saves page-faulting a fresh buffer).
+/// [`canvas_texels`] into `out` (resized; reusing it across bands saves page-faulting a fresh buffer).
 pub(super) fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mut Vec<u8>) {
+    let bpp = texel_bytes(format) as usize;
+    let convert = texel_converter(format);
+    out.clear();
+    out.resize(px.len() * bpp, 0);
+    #[cfg(not(target_arch = "wasm32"))]
+    if px.len() > 1 << 18 {
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(16);
+        let chunk = px.len().div_ceil(threads);
+        std::thread::scope(|s| {
+            for (src, dst) in px.chunks(chunk).zip(out.chunks_mut(chunk * bpp)) {
+                s.spawn(move || convert(src, dst));
+            }
+        });
+        return;
+    }
+    convert(px, out);
+}
+
+/// [`canvas_texels`] of the part `rect` of `buf` (which must cover it), converted row by row straight
+/// from `buf` rather than from a copy of the part. `None` when `buf` doesn't cover `rect`. Public
+/// for `interactive_bench`.
+pub fn texels_of_part(format: wgpu::TextureFormat, buf: &photocraft_compose::Buffer, rect: photocraft_geom::Rect) -> Option<Vec<u8>> {
+    if rect.is_empty() || !buf.rect.contains_rect(&rect) {
+        return None;
+    }
+    let (stride, w, h) = (buf.rect.width() as usize, rect.width() as usize, rect.height() as usize);
+    let (dx, dy) = ((rect.x0 - buf.rect.x0) as usize, (rect.y0 - buf.rect.y0) as usize);
+    if buf.px.len() < stride.checked_mul(dy + h)? {
+        return None;
+    }
+    let bpp = texel_bytes(format) as usize;
+    let convert = texel_converter(format);
+    let mut out = vec![0u8; w * h * bpp];
+    let rows = |first: usize, dst: &mut [u8]| {
+        for (i, row) in dst.chunks_mut(w * bpp).enumerate() {
+            let start = (dy + first + i) * stride + dx;
+            if let Some(src) = buf.px.get(start..start + w) {
+                convert(src, row);
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if w * h > 1 << 18 {
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(16);
+        let band = h.div_ceil(threads);
+        std::thread::scope(|s| {
+            for (i, dst) in out.chunks_mut(band * w * bpp).enumerate() {
+                s.spawn(move || rows(i * band, dst));
+            }
+        });
+        return Some(out);
+    }
+    rows(0, &mut out);
+    Some(out)
+}
+
+/// The straight-alpha f32 RGBA → premultiplied `format` texel conversion.
+fn texel_converter(format: wgpu::TextureFormat) -> fn(&[[f32; 4]], &mut [u8]) {
     fn rgba8(src: &[[f32; 4]], dst: &mut [u8]) {
         for (o, p) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src) {
             let a = p[3].clamp(0.0, 1.0);
@@ -46,22 +116,7 @@ pub(super) fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mu
             *o = [r[0], r[1], g[0], g[1], b[0], b[1], a[0], a[1]];
         }
     }
-    let bpp = texel_bytes(format) as usize;
-    let convert = if format == FORMAT_HIGH { rgba16f } else { rgba8 };
-    out.clear();
-    out.resize(px.len() * bpp, 0);
-    #[cfg(not(target_arch = "wasm32"))]
-    if px.len() > 1 << 18 {
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(16);
-        let chunk = px.len().div_ceil(threads);
-        std::thread::scope(|s| {
-            for (src, dst) in px.chunks(chunk).zip(out.chunks_mut(chunk * bpp)) {
-                s.spawn(move || convert(src, dst));
-            }
-        });
-        return;
-    }
-    convert(px, out);
+    if format == FORMAT_HIGH { rgba16f } else { rgba8 }
 }
 
 /// IEEE 754 binary32 → binary16, round to nearest even; overflow saturates to the largest
