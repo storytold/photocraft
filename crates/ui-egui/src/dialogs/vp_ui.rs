@@ -144,6 +144,8 @@ pub struct VpSession {
     pub paste_at: [f64; 2],
     /// Width of the pasted image as a fraction of the plane's width.
     pub paste_width: f64,
+    /// How much of the picture's shading the paste takes on (0..1; the entry's `shade`).
+    pub paste_shade: f64,
     pub new_layer: bool,
     clip: Option<Clip>,
     drag: Option<Drag>,
@@ -171,6 +173,7 @@ struct VpEdit {
     torn: Vec<Option<Torn>>,
     paste_at: [f64; 2],
     paste_width: f64,
+    paste_shade: f64,
     source: Option<[f64; 2]>,
     strokes: Vec<CloneSpec>,
     aligned_ref: Option<([f64; 2], [f64; 2])>,
@@ -223,6 +226,7 @@ impl VpSession {
             "paste": self.paste && self.clip.is_some(),
             "pasteAt": self.paste_at,
             "pasteWidth": self.paste_width,
+            "pasteShade": self.paste_shade,
             "newLayer": self.new_layer,
         })
     }
@@ -300,7 +304,11 @@ impl VpSession {
             .collect();
         let mut p = json!({"planes": planes});
         if let Some(i) = self.paste_plane() {
-            p["paste"] = json!([{"plane": i, "at": self.paste_at, "width": self.paste_width}]);
+            let mut entry = json!({"plane": i, "at": self.paste_at, "width": self.paste_width});
+            if self.paste_shade > 0.0 {
+                entry["shade"] = json!(self.paste_shade.clamp(0.0, 1.0));
+            }
+            p["paste"] = json!([entry]);
         }
         if !self.strokes.is_empty() {
             let clone: Vec<Value> = self
@@ -369,6 +377,7 @@ impl VpSession {
             torn: self.torn.clone(),
             paste_at: self.paste_at,
             paste_width: self.paste_width,
+            paste_shade: self.paste_shade,
             source: self.source,
             strokes: self.strokes.clone(),
             aligned_ref: self.aligned_ref,
@@ -383,8 +392,9 @@ impl VpSession {
     pub(crate) fn step(&mut self, step: Step) {
         let mut now = self.edit();
         if self.history.step(&mut now, step) {
-            let VpEdit { planes, torn, paste_at, paste_width, source, strokes, aligned_ref } = now;
+            let VpEdit { planes, torn, paste_at, paste_width, paste_shade, source, strokes, aligned_ref } = now;
             (self.planes, self.torn, self.paste_at, self.paste_width) = (planes, torn, paste_at, paste_width);
+            self.paste_shade = paste_shade;
             (self.source, self.strokes, self.aligned_ref) = (source, strokes, aligned_ref);
             self.drag = None;
             self.pending.clear();
@@ -795,6 +805,22 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         None => return Err("no active layer".into()),
     }
     let canvas = st.doc.bounds();
+    // The planes saved with the document (a previous Vanishing Point run), so the dialog reopens
+    // on them. Hostile or stale entries (non-finite, not convex) are skipped.
+    let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
+    let fresh = st.doc.perspective.valid_for(st.doc.size.width, st.doc.size.height);
+    let saved: Vec<VpPlane> = st
+        .doc
+        .perspective
+        .planes
+        .iter()
+        .filter(|_| fresh)
+        .filter(|c| c.iter().flatten().all(|v| v.is_finite() && v.abs() < 1e7))
+        .map(|c| VpPlane { corners: *c })
+        .filter(|pl| pl.check(center) != PlaneCheck::Invalid)
+        .take(MAX_PLANES)
+        .collect();
+    let saved_torn: Vec<Option<Torn>> = vec![None; saved.len()];
     let (base, doc_revision) = (st.doc.clone(), st.revision);
     let key = app.ui.alloc_id();
     let clip = app.session.clipboard.as_ref().and_then(|c| {
@@ -811,15 +837,16 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         document: st.doc.id,
         layer,
         canvas,
-        planes: Vec::new(),
-        torn: Vec::new(),
-        tool: VpTool::CreatePlane,
+        planes: saved.clone(),
+        torn: saved_torn.clone(),
+        tool: if saved.is_empty() { VpTool::CreatePlane } else { VpTool::EditPlane },
         pending: Vec::new(),
-        selected: None,
+        selected: (!saved.is_empty()).then_some(0),
         grid_size: 100.0,
         paste: clip.is_some(),
         paste_at: [0.25, 0.25],
         paste_width: 0.5,
+        paste_shade: 0.0,
         new_layer: false,
         clip,
         drag: None,
@@ -832,10 +859,11 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         doc_revision,
         preview: None,
         history: EditHistory::new(&VpEdit {
-            planes: Vec::new(),
-            torn: Vec::new(),
+            planes: saved,
+            torn: saved_torn,
             paste_at: [0.25, 0.25],
             paste_width: 0.5,
+            paste_shade: 0.0,
             source: None,
             strokes: Vec::new(),
             aligned_ref: None,
@@ -866,7 +894,25 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     let session = app.distort.vanishing.take();
     if params.get("paste").is_none() && params.get("clone").is_none() {
-        return Ok(json!({"committed": false}));
+        // Nothing to paste or clone: the planes themselves are the result. Keep them with the
+        // document when they differ from what it already holds.
+        let planes: Vec<[[f64; 2]; 4]> = session.as_ref().map(|s| s.planes.iter().map(|p| p.corners).collect()).unwrap_or_default();
+        let saved = app.session.active().map(|st| st.doc.perspective.clone()).unwrap_or_default();
+        let current = if saved.valid_for(app.session.active().map_or(0, |st| st.doc.size.width), app.session.active().map_or(0, |st| st.doc.size.height)) {
+            saved.planes
+        } else {
+            Vec::new()
+        };
+        if planes == current {
+            return Ok(json!({"committed": false}));
+        }
+        return match app.run("perspective.setPlanes", json!({"planes": planes})) {
+            Ok(r) => Ok(json!({"committed": true, "result": r})),
+            Err(e) => {
+                app.distort.vanishing = session;
+                Err(e)
+            }
+        };
     }
     match app.run(VP, params) {
         Ok(r) => Ok(json!({"committed": true, "result": r})),
@@ -940,6 +986,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     }
     if let Some(w) = ui.get("pasteWidth").and_then(Value::as_f64).filter(|w| w.is_finite()) {
         s.paste_width = w.clamp(0.01, 10.0);
+    }
+    if let Some(w) = ui.get("pasteShade").and_then(Value::as_f64).filter(|w| w.is_finite()) {
+        s.paste_shade = w.clamp(0.0, 1.0);
     }
     if let Some(b) = ui.get("newLayer").and_then(Value::as_bool) {
         s.new_layer = b;
@@ -1272,6 +1321,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let mut w = (s.paste_width * 100.0) as f32;
             if crate::widgets::value_field(ui, &mut w, 1.0..=1000.0, "%", 56.0).accessible_name(tl!("Width:")).changed() {
                 s.paste_width = f64::from(w) / 100.0;
+            }
+            ui.label(tl!("Shade:"));
+            let mut shade = (s.paste_shade * 100.0) as f32;
+            if crate::widgets::value_field(ui, &mut shade, 0.0..=100.0, "%", 56.0).accessible_name(tl!("Shade:")).changed() {
+                s.paste_shade = (f64::from(shade) / 100.0).clamp(0.0, 1.0);
             }
         }
     }

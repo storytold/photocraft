@@ -1812,6 +1812,7 @@ fn eyedropper_owns_image(app: &PhotocraftApp) -> bool {
 /// pointer position over another window paints nothing, then a guide under the pointer, then the
 /// tool's own cursor.
 fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool) {
+    crate::brush_cursor::draw_planes(app, input.painter, input.xf, input.tool);
     let ctx = input.ctx;
     let xf = input.xf;
     let response = input.response;
@@ -1990,6 +1991,58 @@ fn path_selection_cursor(app: &PhotocraftApp, ui: &egui::Ui, doc: [f64; 2], p: P
     egui::CursorIcon::None
 }
 
+/// The tip-outline cursor of a brush-like tool (Preferences › Cursors), with the surface-aware
+/// outline when Follow Perspective is on and the pointer is over a plane.
+fn brush_tip_cursor(
+    app: &mut PhotocraftApp,
+    ui: &egui::Ui,
+    input: &CanvasOverlayInput<'_>,
+    cur: &photocraft_engine::prefs::Cursors,
+    p: Pos2,
+    alt: bool,
+) -> egui::CursorIcon {
+    use photocraft_engine::prefs::PaintingCursor;
+    let (painter, xf, tool) = (input.painter, input.xf, input.tool);
+    let painting = app.drag.is_some();
+    // Follow Perspective: the outline is the dab as it will land on the plane here.
+    let doc = xf.to_doc(p);
+    let surface = crate::brush_cursor::surface_for_cursor(app, ui.ctx(), tool, doc, cur.painting);
+    let alt_held = alt || app.ui.shell.sticky_alt;
+    let normal = cur.painting == PaintingCursor::NormalTip;
+    let brush = &app.session.tools.brush;
+    let full = (brush.size / 2.0 * xf.zoom).max(1.0);
+    match cur.painting {
+        PaintingCursor::Standard => egui::CursorIcon::Default,
+        PaintingCursor::Precise => crate::tool_cursor::crosshair(painter, p, 6.0, 0.0),
+        _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(painter, p, 5.0, 0.0),
+        // On a perspective plane (Follow Perspective) the dab's own size, squash and angle.
+        _ if surface.is_some() => {
+            let centre = brush_tip_centre(tool, alt_held, cur.show_crosshair_in_brush_tip);
+            crate::brush_cursor::surface_cursor(painter, xf, p, brush, surface, normal, centre)
+        }
+        // The Pencil (and the Eraser in Pencil mode): the outline of the
+        // whole pixels its dab fills, on the pixel grid. A round tip is a
+        // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
+        // its square, 16 screen pixels at any zoom (#2770).
+        _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
+            let block = crate::eraser_ui::block_mode(app, tool);
+            let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
+            pencil_outline_cursor(painter, xf, p, size, block, cur.show_crosshair_in_brush_tip)
+        }
+        // The Healing Brush's ⌥ (source point): the reference's fixed target at any tip
+        // size (#12113). Unmeasured cases keep the tip with its centre mark below.
+        PaintingCursor::NormalTip if tool == Tool::Healing && alt_held => cursors::sample_target_cursor(painter, p),
+        // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
+        // traces its outline, turned and flipped with the view; a plain round
+        // tip keeps the circle.
+        _ => {
+            let centre = brush_tip_centre(tool, alt_held, cur.show_crosshair_in_brush_tip);
+            let axes = crate::brush_cursor::pen_axes(xf, brush, app.stylus.sample());
+            crate::brush_cursor::cursor(painter, p, brush, full, axes, normal, centre)
+        }
+    }
+}
+
 fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool, p: Pos2) {
     let painter = input.painter;
     let xf = input.xf;
@@ -2029,41 +2082,9 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         t if t.is_brushlike() || t == Tool::QuickSelection => {
             // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
             // full size), precise crosshair, or the standard pointer.
-            use photocraft_engine::prefs::PaintingCursor;
             let cur = app.session.prefs().cursors.clone();
             // ⇪ forces the precise crosshair, whatever the cursor preference (#1758).
-            if app.caps_lock {
-                crate::tool_cursor::crosshair(painter, p, 6.0, 0.0)
-            } else {
-                let painting = app.drag.is_some();
-                let brush = &app.session.tools.brush;
-                let full = (brush.size / 2.0 * xf.zoom).max(1.0);
-                match cur.painting {
-                    PaintingCursor::Standard => egui::CursorIcon::Default,
-                    PaintingCursor::Precise => crate::tool_cursor::crosshair(painter, p, 6.0, 0.0),
-                    _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(painter, p, 5.0, 0.0),
-                    // The Pencil (and the Eraser in Pencil mode): the outline of the
-                    // whole pixels its dab fills, on the pixel grid. A round tip is a
-                    // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
-                    // its square, 16 screen pixels at any zoom (#2770).
-                    _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
-                        let block = crate::eraser_ui::block_mode(app, tool);
-                        let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
-                        pencil_outline_cursor(painter, xf, p, size, block, cur.show_crosshair_in_brush_tip)
-                    }
-                    // The Healing Brush's ⌥ (source point): the reference's fixed target at any tip
-                    // size (#12113). Unmeasured cases keep the tip with its centre mark below.
-                    PaintingCursor::NormalTip if tool == Tool::Healing && (alt || app.ui.shell.sticky_alt) => cursors::sample_target_cursor(painter, p),
-                    // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
-                    // traces its outline, turned and flipped with the view; a plain round
-                    // tip keeps the circle.
-                    _ => {
-                        let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
-                        let axes = crate::brush_cursor::pen_axes(xf, brush, app.stylus.sample());
-                        crate::brush_cursor::cursor(painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
-                    }
-                }
-            }
+            if app.caps_lock { crate::tool_cursor::crosshair(painter, p, 6.0, 0.0) } else { brush_tip_cursor(app, ui, input, &cur, p, alt) }
         }
         // The Eyedropper: the comparison ring follows the pointer while it samples (#213);
         // otherwise its pipette, or the crosshair for precise Other Cursors.

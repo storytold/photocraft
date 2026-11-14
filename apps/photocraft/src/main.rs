@@ -71,6 +71,7 @@ mod services;
 mod single_instance;
 mod startup_report;
 // Tablet support (macOS AppKit monitor, Linux X11/Wayland, Windows barrel button).
+mod depth;
 mod tablet;
 mod ui_state;
 mod updates;

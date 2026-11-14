@@ -604,6 +604,10 @@ pub struct Services {
     pub alert: Option<fn()>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
+    /// Where the depth model's weights are kept and how to download them (desktop). `None` in the
+    /// web build, which has no depth model: the depth commands are disabled there.
+    pub depth_models_dir: Option<std::path::PathBuf>,
+    pub depth_fetch: Option<photocraft_engine::depth_cmds::FetchFn>,
     /// What the last self-update came to, read once at the first frame: `Ok` with the version it
     /// installed, `Err` with the reason it could not be installed (desktop).
     pub last_update: Option<LastUpdateFn>,

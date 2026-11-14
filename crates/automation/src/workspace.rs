@@ -660,6 +660,8 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
                 | "pattern.export"
                 | "edit.presets.migratePresets"
                 | "measurementLog.export"
+                // Reads host files by path (it only installs files with the pinned checksums).
+                | "depth.loadModelFiles"
                 | "layer.videoLayers.newVideoLayerFromFile"
                 | "layer.videoLayers.replaceFootage"
                 | "layer.videoLayers.reloadFrame"

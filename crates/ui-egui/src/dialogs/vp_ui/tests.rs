@@ -412,3 +412,70 @@ fn selecting_another_layer_keeps_the_stamp_preview() {
     assert!(Arc::ptr_eq(&after.0, &before.0));
     assert_eq!(after.1, before.1);
 }
+
+#[test]
+fn begin_loads_the_planes_saved_in_the_document() {
+    let (ctx, mut app) = app_with_layer();
+    let floor = [[70.0, 60.0], [170.0, 60.0], [220.0, 150.0], [20.0, 150.0]];
+    let id = app.session.active().unwrap().doc.id;
+    app.session
+        .edit("planes", |doc, _| {
+            // One good plane, one bow-tie and one with a NaN corner: the last two are skipped.
+            doc.perspective.planes =
+                vec![floor, [[0.0, 0.0], [100.0, 100.0], [100.0, 0.0], [0.0, 100.0]], [[f64::NAN, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]];
+            Ok(())
+        })
+        .unwrap();
+    app.sync_views();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    let s = app.distort.vanishing.as_ref().unwrap();
+    assert_eq!(s.document, id);
+    assert_eq!(s.planes.len(), 1);
+    assert_eq!(s.planes[0].corners, floor);
+    assert_eq!(s.torn, vec![None]);
+    assert_eq!(s.tool, VpTool::EditPlane);
+}
+
+#[test]
+fn ok_with_only_planes_saves_them_and_a_canvas_resize_makes_them_stale() {
+    let (ctx, mut app) = app_with_layer();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    for (x, y) in [(20.0, 150.0), (220.0, 150.0), (170.0, 60.0), (70.0, 60.0)] {
+        crate::distort_ui::pointer(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+        crate::distort_ui::pointer(&mut app, ToolEvent::Up { x, y }, egui::Modifiers::NONE);
+    }
+    let steps = app.session.active().unwrap().history.past_len();
+    let r = commit(&mut app).unwrap();
+    assert_eq!(r["committed"], true, "{r}");
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    let pp = app.session.active().unwrap().doc.perspective.clone();
+    assert_eq!(pp.planes, vec![[[70.0, 60.0], [170.0, 60.0], [220.0, 150.0], [20.0, 150.0]]]);
+    assert_eq!(pp.size, Some([240, 160]));
+    // Reopening and pressing OK again changes nothing.
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().planes.len(), 1);
+    assert_eq!(commit(&mut app).unwrap()["committed"], false);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    // After the canvas changes, the saved planes no longer fit and are not loaded.
+    app.session.execute("image.canvasSize", json!({"width": 300, "height": 160, "anchor": "topLeft"})).unwrap();
+    app.sync_views();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    assert!(app.distort.vanishing.as_ref().unwrap().planes.is_empty());
+}
+
+#[test]
+fn paste_shade_is_sent_only_when_set_and_steps_with_undo() {
+    let (ctx, mut app) = app_with_layer();
+    copy_red_square(&mut app);
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    control(&mut app, &json!({"planes": [{"corners": [[70, 60], [170, 60], [220, 150], [20, 150]]}]})).unwrap();
+    let s = app.distort.vanishing.as_ref().unwrap();
+    assert!(s.params()["paste"][0].get("shade").is_none(), "off by default: the entry is unchanged");
+    control(&mut app, &json!({"pasteShade": 0.6})).unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().params()["paste"][0]["shade"], json!(0.6));
+    // Out of range or non-numeric values are clamped or ignored.
+    control(&mut app, &json!({"pasteShade": 7})).unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().paste_shade, 1.0);
+    app.distort.vanishing.as_mut().unwrap().step(Step::Undo);
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().paste_shade, 0.6);
+}

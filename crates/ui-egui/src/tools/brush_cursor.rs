@@ -91,6 +91,139 @@ pub(crate) fn pen_axes(xf: &crate::canvas::ViewXform, brush: &BrushSettings, pen
     [axes[0] * x.x + axes[1] * x.y, axes[0] * y.x + axes[1] * y.y]
 }
 
+/// The dab the surface-aware brush will lay down at `doc`: radius, foreshortening and the offset
+/// of its centre from the pointer, from the engine. `None` when neither Follow Perspective nor
+/// Follow Depth applies, the tool is not the Brush or Pencil, or nothing shapes the dab here (the
+/// cursor then stays as it is).
+pub(crate) fn surface_shape(app: &mut crate::PhotocraftApp, tool: crate::Tool, doc: [f64; 2]) -> Option<photocraft_engine::brush_cmds::CursorShape> {
+    let o = &app.session.tools.brush.surface;
+    if !matches!(tool, crate::Tool::Brush | crate::Tool::Pencil) || !(o.perspective || o.depth) {
+        return None;
+    }
+    let base = app.session.tools.brush.size / 2.0;
+    photocraft_engine::brush_cmds::brush_cursor_shape(&mut app.session, doc[0], doc[1], base)
+        .filter(|c| c.radius.is_finite() && c.radius > 0.0 && c.proj_angle.is_finite() && c.proj_scale.is_finite() && c.offset.iter().all(|v| v.is_finite()))
+}
+
+/// [`surface_shape`] for the cursor under the painting-cursor preference `pref` (only the tip
+/// outlines follow the surface), remembered for `ui.inspect`.
+pub(crate) fn surface_for_cursor(
+    app: &mut crate::PhotocraftApp,
+    ctx: &egui::Context,
+    tool: crate::Tool,
+    doc: [f64; 2],
+    pref: photocraft_engine::prefs::PaintingCursor,
+) -> Option<photocraft_engine::brush_cmds::CursorShape> {
+    use photocraft_engine::prefs::PaintingCursor;
+    let shape = surface_shape(app, tool, doc).filter(|_| matches!(pref, PaintingCursor::NormalTip | PaintingCursor::FullSizeTip));
+    remember_shape(ctx, shape);
+    shape
+}
+
+/// [`tip_axes`] for a dab of `radius` document pixels foreshortened by `proj_scale` along the
+/// direction `proj_angle` (radians, counter-clockwise, y up: the renderer's convention).
+pub(crate) fn surface_axes(xf: &crate::canvas::ViewXform, radius: f32, proj_angle: f32, proj_scale: f32) -> [Vec2; 2] {
+    let axes = tip_axes(xf, radius * 2.0);
+    let scale = proj_scale.clamp(0.05, 1.0);
+    if scale >= 0.999 {
+        return axes;
+    }
+    let (sn, cs) = proj_angle.sin_cos();
+    let along = Vec2::new(cs, -sn);
+    let project = |v: Vec2| v + along * v.dot(along) * (scale - 1.0);
+    let x = project(Vec2::new(1.0, 0.0));
+    let y = project(Vec2::new(0.0, 1.0));
+    [axes[0] * x.x + axes[1] * x.y, axes[0] * y.x + axes[1] * y.y]
+}
+
+/// The brush cursor for a dab shaped by the surface (`shape`): the outline at the dab's centre,
+/// and, when that is off the pointer (`p`, , the crosshair at the
+/// pointer joined to it by a thin line.
+pub(crate) fn surface_cursor(
+    painter: &Painter,
+    xf: &crate::canvas::ViewXform,
+    p: Pos2,
+    brush: &BrushSettings,
+    shape: Option<photocraft_engine::brush_cmds::CursorShape>,
+    normal: bool,
+    centre: bool,
+) -> CursorIcon {
+    let plain = photocraft_engine::brush_cmds::CursorShape { radius: brush.size / 2.0, proj_angle: 0.0, proj_scale: 1.0, offset: [0.0; 2], outline: None };
+    let shape = shape.unwrap_or(plain);
+    let axes = surface_axes(xf, shape.radius, shape.proj_angle, shape.proj_scale);
+    let doc = xf.to_doc(p);
+    let at = xf.to_screen(doc[0] as f32 + shape.offset[0], doc[1] as f32 + shape.offset[1]);
+    if (at - p).length() > 1.0 {
+        crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
+        let t = crate::theme::Tokens::get(painter.ctx());
+        painter.line_segment([p, at], egui::Stroke::new(1.0, t.accent));
+    }
+    // A dab bent over the depth: its own 32-point outline.
+    if let Some(ring) = shape.outline.and_then(|rays| outline_ring(xf, &rays)) {
+        let extent = ring.iter().fold(0.0f32, |m, v| m.max(v.length()));
+        if extent < MIN_RADIUS {
+            return crate::tool_cursor::crosshair(painter, at, 4.0, 0.0);
+        }
+        return crate::tool_cursor::outline(painter, at, vec![ring], centre);
+    }
+    cursor(painter, at, brush, (shape.radius * xf.zoom).max(1.0), axes, normal, centre)
+}
+
+/// The screen vectors (from the dab centre) of the closed polygon through the rays of a surface
+/// outline (`k · 2π / 32`, counter-clockwise, y up in document pixels). `None` for a bad ray.
+pub(crate) fn outline_ring(xf: &crate::canvas::ViewXform, rays: &[f32]) -> Option<Vec<Vec2>> {
+    let n = rays.len();
+    if n < 3 || !rays.iter().all(|r| r.is_finite() && *r > 0.0) {
+        return None;
+    }
+    Some(
+        rays.iter()
+            .enumerate()
+            .map(|(k, r)| {
+                let (sn, cs) = (k as f32 * std::f32::consts::TAU / n as f32).sin_cos();
+                // Document y points down.
+                xf.map_vec(Vec2::new(r * cs, -r * sn))
+            })
+            .collect(),
+    )
+}
+
+fn shape_id() -> egui::Id {
+    egui::Id::unique("photocraft-brush-cursor-shape")
+}
+
+/// Remember the surface shape the cursor drew this frame (`None`: the plain outline), for `ui.inspect`.
+pub(crate) fn remember_shape(ctx: &egui::Context, shape: Option<photocraft_engine::brush_cmds::CursorShape>) {
+    ctx.data_mut(|d| d.insert_temp(shape_id(), shape));
+}
+
+/// The surface shape last drawn by the cursor.
+pub(crate) fn last_shape(ctx: &egui::Context) -> Option<photocraft_engine::brush_cmds::CursorShape> {
+    ctx.data(|d| d.get_temp::<Option<photocraft_engine::brush_cmds::CursorShape>>(shape_id())).flatten()
+}
+
+/// Outlines of the document's stored perspective planes, while Follow Perspective is on and the
+/// Brush or Pencil is active: thin quads in the theme's accent, so the user sees where dabs follow.
+pub(crate) fn draw_planes(app: &crate::PhotocraftApp, painter: &Painter, xf: &crate::canvas::ViewXform, tool: crate::Tool) {
+    if !matches!(tool, crate::Tool::Brush | crate::Tool::Pencil) || !app.session.tools.brush.surface.perspective {
+        return;
+    }
+    let Some(st) = app.session.active() else { return };
+    let persp = &st.doc.perspective;
+    if !persp.valid_for(st.doc.size.width, st.doc.size.height) {
+        return;
+    }
+    let t = crate::theme::Tokens::get(painter.ctx());
+    let stroke = egui::Stroke::new(1.0, t.accent);
+    for corners in persp.planes.iter().take(64) {
+        if !corners.iter().flatten().all(|v| v.is_finite() && v.abs() < 1e7) {
+            continue;
+        }
+        let pts: Vec<Pos2> = corners.iter().map(|c| xf.to_screen(c[0] as f32, c[1] as f32)).collect();
+        painter.add(egui::Shape::closed_line(pts, stroke));
+    }
+}
+
 /// Rings in radius units (document orientation) on screen, through [`tip_axes`].
 fn on_screen(rings: &[Vec<[f32; 2]>], axes: [Vec2; 2]) -> Vec<Vec<Vec2>> {
     rings.iter().map(|r| r.iter().map(|p| axes[0] * p[0] + axes[1] * p[1]).collect()).collect()
@@ -257,5 +390,24 @@ mod tests {
             let [ex, ey] = tip_axes(&view(30.0, true, 1.0), size);
             assert!(ex.x.is_finite() && ex.y.is_finite() && ey.x.is_finite() && ey.y.is_finite(), "size {size}");
         }
+    }
+
+    #[test]
+    fn surface_axes_foreshorten_along_the_minor_axis() {
+        let xf = view(0.0, false, 1.0);
+        assert_eq!(surface_axes(&xf, 10.0, 0.0, 1.0), tip_axes(&xf, 20.0));
+        let a = surface_axes(&xf, 10.0, 0.0, 0.5);
+        assert!(close(a[0], Vec2::new(10.0, 0.0)), "{a:?}");
+        assert!(close(a[1], Vec2::new(0.0, 20.0)), "{a:?}");
+        // Angle pi/2 is up the image (y up): the y axis is the one shortened.
+        let b = surface_axes(&xf, 10.0, std::f32::consts::FRAC_PI_2, 0.5);
+        assert!(close(b[0], Vec2::new(20.0, 0.0)) && close(b[1], Vec2::new(0.0, 10.0)), "{b:?}");
+    }
+
+    #[test]
+    fn surface_shape_is_none_when_follow_perspective_is_off() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        assert!(!app.session.tools.brush.surface.perspective && !app.session.tools.brush.surface.depth);
+        assert!(surface_shape(&mut app, crate::Tool::Brush, [10.0, 10.0]).is_none());
     }
 }

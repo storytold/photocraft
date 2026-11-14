@@ -16,6 +16,7 @@ use crate::{AuthorizedWorkspace, AutomationError, files};
 fn untrusted(filesystem: Filesystem) -> Headless {
     let mut session = Session::new();
     session.authorize = Some(authorize_engine_step);
+    session.depth.models_dir = crate::app_dirs::models_dir();
     Headless { session, writers: HashMap::new(), filesystem, renderer: None, pending_diagnostics: Vec::new(), waited: HashMap::new() }
 }
 
@@ -72,14 +73,10 @@ impl Headless {
     /// not a remote automation client, supplies these host paths. Nested
     /// `actions.play` steps are not re-checked: this caller is already trusted.
     pub fn trusted_local() -> Self {
-        Self {
-            session: Session::new(),
-            writers: HashMap::new(),
-            filesystem: Filesystem::TrustedLocal,
-            renderer: None,
-            pending_diagnostics: Vec::new(),
-            waited: HashMap::new(),
-        }
+        let mut session = Session::new();
+        // An already-downloaded depth model works headless; `depth.loadModelFiles` installs one.
+        session.depth.models_dir = crate::app_dirs::models_dir();
+        Self { session, writers: HashMap::new(), filesystem: Filesystem::TrustedLocal, renderer: None, pending_diagnostics: Vec::new(), waited: HashMap::new() }
     }
 
     /// Create an automation session with capability-scoped file access.

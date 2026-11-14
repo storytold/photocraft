@@ -20,6 +20,7 @@ use crate::brush::{BrushSettings, MaskMode, Pattern, TipShape};
 use crate::dynamics::{DabGenerator, grid_cell};
 use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
+use crate::surface::{Shade, ShadeSource, SurfaceMap, apply_strength};
 use crate::tile::{Mips, PatternImage};
 use crate::{Dab, StrokePoint, TipProfile};
 
@@ -348,12 +349,15 @@ impl BrushContext {
         let (fx, fy) = (if d.flip_x { -1.0 } else { 1.0 }, if d.flip_y { -1.0 } else { 1.0 });
         // Brush Projection: stretch the sampling coordinates along the tilt direction, which
         // foreshortens the tip there by `proj_scale`.
-        let proj = (!dual && d.proj_scale < 0.999).then(|| {
+        // A computed tip with a surface footprint is drawn inside that outline instead: the
+        // footprint already holds the foreshortening, so no projection, rotation or roundness.
+        let foot = surface_outline(d, dual, mips.is_some());
+        let proj = (!dual && foot.is_none() && d.proj_scale < 0.999).then(|| {
             let (ps, pc) = d.proj_angle.sin_cos();
             (pc, ps, 1.0 / d.proj_scale.max(0.05) - 1.0)
         });
         let r = d.radius;
-        let ro = d.roundness.max(0.5 / r).min(1.0);
+        let ro = tip_roundness(d, r, foot.is_some());
         let rm = (r * ro).max(0.5);
         let profile = TipProfile::new(rm, hardness);
         let reach = if aliased || mips.is_some() { rm } else { profile.reach().max(rm) };
@@ -377,6 +381,7 @@ impl BrushContext {
         if !(mips.is_some() || small || (aliased && b.square) || noise || tex_tip || wet)
             && depth.is_none()
             && proj.is_none()
+            && foot.is_none()
             // Rotation preserves a circle's distance; ellipses still need the transform.
             && (d.angle == 0.0 || ro == 1.0)
             && d.angle.is_finite()
@@ -413,6 +418,7 @@ impl BrushContext {
             fx,
             fy,
             proj,
+            foot,
             r,
             ro,
             rm,
@@ -769,6 +775,8 @@ pub struct StrokeRenderer {
     dual_area_left: u64,
     /// A dab was left out for want of budget.
     refused: bool,
+    /// Surface Color: the paint's colour is scaled per pixel by the photo's shading.
+    shade: Option<Shade>,
 }
 
 /// Most dab-rectangle pixels one stroke rasterizes: past it the stroke stops painting, so a very
@@ -902,6 +910,7 @@ impl StrokeRenderer {
                         area_left: p.area_left,
                         dual_area_left: p.dual_area_left,
                         refused: p.refused,
+                        shade: p.shade.clone(),
                     })
                 }
                 Some(m) => {
@@ -958,7 +967,22 @@ impl StrokeRenderer {
             area_left: MAX_STROKE_DAB_AREA,
             dual_area_left: MAX_STROKE_DAB_AREA,
             refused: false,
+            shade: None,
         }
+    }
+
+    /// Surface Color: scale the paint's colour per pixel by `source`'s shading at `strength`
+    /// (see [`apply_strength`]). Not for erasing. `None`, a zero or a non-finite strength paints as
+    /// without. The live preview and the commit use the same pixels.
+    pub fn with_shade(mut self, source: Option<Arc<dyn ShadeSource>>, strength: f32) -> Self {
+        self.shade = source.filter(|_| strength.is_finite() && strength != 0.0).map(|source| Shade { source, strength });
+        self
+    }
+
+    /// Follow Perspective: see [`DabGenerator::with_surface`]. Call it before the first point.
+    pub fn with_surface(mut self, map: Option<Arc<dyn SurfaceMap>>) -> Self {
+        self.generator = self.generator.with_surface(map);
+        self
     }
 
     /// Only paint where a dab can reach inside `clip` (the target's paintable area): a dab whose
@@ -1120,6 +1144,7 @@ impl StrokeRenderer {
             area_left: self.area_left,
             dual_area_left: self.dual_area_left,
             refused: self.refused,
+            shade: self.shade.clone(),
         };
         t.raster_pending();
         // Tiles whose coverage the tail doesn't change still composite the same: redraw them all.
@@ -1291,6 +1316,9 @@ impl StrokeRenderer {
         // gradient to band and are not dithered: a Pencil line at partial opacity is one flat
         // colour, as in Photoshop, not grain that a tolerance-0 Magic Wand or Paint Bucket trips on.
         let dither = fmt.sample == SampleType::U8 && !b.aliased;
+        // Surface Color applies to paint, not to erasing.
+        let shade = self.shade.as_ref().filter(|_| !b.erase);
+        let hdr = fmt.sample == SampleType::F32;
         let mut dmg = Rect::EMPTY;
         // Each tile composites into a buffer of its own (a large stroke's tiles in parallel, to
         // the same pixels); the writes to the target go one by one, in order. Batches keep the
@@ -1323,6 +1351,13 @@ impl StrokeRenderer {
                 // intended reading.)
                 let mut src = src;
                 let w = tr.width() as usize;
+                // The photo's shading over the tile, fetched once.
+                let mut shade_tile: Vec<f32> = Vec::new();
+                if let Some(sh) = shade {
+                    shade_tile.resize(w * tr.height() as usize, 1.0);
+                    sh.source.shade(tr, &mut shade_tile);
+                }
+                let mut shaded = [0.0f32; 8];
                 for y in tr.y0..tr.y1 {
                     for x in tr.x0..tr.x1 {
                         let ti = ((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize;
@@ -1362,25 +1397,34 @@ impl StrokeRenderer {
                                 src[ch] = p[ch] / c;
                             }
                         }
+                        // Surface Color: the colour scaled by the shading, before the blend.
+                        let mut sp: &[f32] = &src;
+                        if let Some(sh) = shade {
+                            let f = apply_strength(shade_tile.get(i).copied().unwrap_or(1.0), sh.strength);
+                            if f != 1.0 {
+                                shade_src(&fmt, &src[..n], f, hdr, &mut shaded);
+                                sp = &shaded;
+                            }
+                        }
                         if b.behind {
                             let Some(a) = a_idx else { continue };
                             let da = px[a];
                             if lock_transparency || da >= 1.0 {
                                 continue;
                             }
-                            let underneath = src[a] * k * (1.0 - da);
+                            let underneath = sp[a] * k * (1.0 - da);
                             let alpha = da + underneath;
                             if alpha > 0.0 {
                                 for channel in 0..a {
-                                    px[channel] = (px[channel] * da + src[channel] * underneath) / alpha;
+                                    px[channel] = (px[channel] * da + sp[channel] * underneath) / alpha;
                                 }
                                 px[a] = alpha;
                             }
                         } else if matches!(b.mode, BlendMode::Normal | BlendMode::Dissolve) {
-                            over_native(&fmt, px, &src[..n], k, lock_transparency);
+                            over_native(&fmt, px, &sp[..n], k, lock_transparency);
                         } else {
                             let d = to_rgba(&fmt, px);
-                            let sr = to_rgba(&fmt, &src[..n]);
+                            let sr = to_rgba(&fmt, &sp[..n]);
                             let o = if lock_transparency {
                                 photocraft_color::blend::composite_atop(b.mode, d, sr, k)
                             } else {
@@ -1410,6 +1454,29 @@ impl StrokeRenderer {
         }
         self.regions.0 = pool;
         if all { bounds } else { dmg }
+    }
+}
+
+/// `src` (the stroke's colour in native channels, alpha last) with its colour scaled by the shading
+/// factor `f`, into `out`. Grayscale and RGB scale their channels; other modes scale in RGB.
+/// Integer formats stay within 0..=1; 32-bit float may exceed 1.
+fn shade_src(fmt: &PixelFormat, src: &[f32], f: f32, hdr: bool, out: &mut [f32; 8]) {
+    let n = src.len().min(8);
+    out[..n].copy_from_slice(&src[..n]);
+    let limit = |v: f32| if hdr { v.max(0.0) } else { v.clamp(0.0, 1.0) };
+    match fmt.mode {
+        ColorMode::Rgb | ColorMode::Grayscale => {
+            for v in out.iter_mut().take(fmt.mode.color_channels().min(n)) {
+                *v = limit(*v * f);
+            }
+        }
+        _ => {
+            let mut c = to_rgba(fmt, &src[..n]);
+            for v in &mut c[..3] {
+                *v = limit(*v * f);
+            }
+            from_rgba_into(fmt, c, out);
+        }
     }
 }
 
@@ -1512,6 +1579,17 @@ impl RoundTip {
     }
 }
 
+/// The surface outline a dab's computed tip is drawn inside (`None`: a dual or sampled tip, or no
+/// valid footprint; those keep their ellipse).
+pub(super) fn surface_outline(d: &Dab, dual: bool, sampled: bool) -> Option<&crate::surface::Footprint> {
+    if dual || sampled { None } else { d.footprint.as_ref().filter(|f| f.is_valid()) }
+}
+
+/// The tip's roundness: 1 inside a surface outline (which holds the squash), else the dab's.
+pub(super) fn tip_roundness(d: &Dab, radius: f32, outlined: bool) -> f32 {
+    if outlined { 1.0 } else { d.roundness.max(0.5 / radius).min(1.0) }
+}
+
 /// The general rasterizer's per-dab state, one row at a time (see [`BrushContext::rasterize_into`]).
 #[derive(Clone, Copy)]
 struct GeneralTip<'a> {
@@ -1532,6 +1610,8 @@ struct GeneralTip<'a> {
     fx: f32,
     fy: f32,
     proj: Option<(f32, f32, f32)>,
+    /// The dab's surface outline (a round computed tip only).
+    foot: Option<&'a crate::surface::Footprint>,
     r: f32,
     ro: f32,
     rm: f32,
@@ -1602,6 +1682,9 @@ impl GeneralTip<'_> {
     #[inline(always)]
     fn to_tip(self, dx: f32, dy: f32) -> (f32, f32) {
         let (mut ux, mut uy) = (dx, -dy);
+        if let Some(f) = self.foot {
+            return f.to_tip(ux, uy, self.r);
+        }
         if let Some((ax, ay, k)) = self.proj {
             let t = (ux * ax + uy * ay) * k;
             ux += t * ax;
@@ -1702,3 +1785,6 @@ mod budget_tests;
 #[cfg(test)]
 #[path = "mip_cache_render_tests.rs"]
 mod mip_cache_tests;
+
+#[cfg(test)]
+mod surface_tests;

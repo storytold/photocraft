@@ -122,11 +122,11 @@ mod view;
 use calc::{apply_image, calculations};
 use manage::{delete_channel, duplicate_channel, move_channel, new_channel, new_spot, options, rename_channel, set_visible};
 use planes::edit_mode;
-pub(crate) use planes::tone;
 pub use planes::{
     GraySurface, IsolatedCurveChannel, channel_format, color_count, curve_channel_for_colors, filter_mask_curve_channel, isolated_curve_channel,
     isolated_curve_channel_for, isolated_curve_channel_with_params, layer_mask_curve_channel, next_alpha_name,
 };
+pub(crate) use planes::{plane_surface, tone};
 pub(crate) use refs::source_spec;
 pub use refs::{Blending, ChanRef, parse_ref};
 use selection::{load_selection, quick_mask, save_selection};

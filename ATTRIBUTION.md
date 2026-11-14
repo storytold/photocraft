@@ -154,3 +154,15 @@ longer used or shipped.
 | `hayro-interpret 0.7.0 / assets/Foxit*.pfb` (13 standard-14 font files) | Foxit Software Inc. / PDFium Authors | <https://github.com/storytold/craft-libs/tree/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/vendor/hayro-interpret/assets> | BSD-3-Clause | Renders non-embedded standard-14 PDF fonts |
 | `hayro-interpret 0.7.0 / assets/CGATS001Compat-v2-micro.icc` | Clinton Ingram (saucecontrol/Compact-ICC-Profiles) | <https://github.com/storytold/craft-libs/tree/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/vendor/hayro-interpret/assets> | CC0-1.0 | Default CMYK colour conversion |
 | `hayro-cmap 0.1.0 / assets/cmaps.brotli` | Adobe | <https://github.com/storytold/craft-libs/tree/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/vendor/hayro-cmap/assets> | BSD-3-Clause | Character-code mapping for CJK PDFs |
+
+## Downloaded on request
+
+These files are not in the repository or the installers. The app downloads them, after asking,
+when the user runs Estimate Depth; sizes and sha256 are pinned in `crates/depth/src/lib.rs`
+(`WEIGHTS`) and checked after download. The licence text is
+[`crates/depth/LICENSE-depth-anything-v2.txt`](crates/depth/LICENSE-depth-anything-v2.txt).
+
+| File | Title | Author | Source | Licence |
+| --- | --- | --- | --- | --- |
+| `dinov2_vits14.fp16.safetensors` (45,667,104 bytes) | DINOv2 ViT-S/14 backbone, fp16 candle conversion | Meta Platforms, Inc. (DINOv2); conversion by pcuenq | <https://huggingface.co/pcuenq/candle-depth-anything-v2-small/blob/11c7cdb8f744281f9264f36ffb541f00e36fe9b8/dinov2_vits14.fp16.safetensors> | Apache-2.0 |
+| `depth_anything_v2_vits.fp16.safetensors` (49,595,170 bytes) | Depth Anything V2 Small depth head, fp16 candle conversion | Depth Anything V2 authors (Lihe Yang et al.); conversion by pcuenq | <https://huggingface.co/pcuenq/candle-depth-anything-v2-small/blob/11c7cdb8f744281f9264f36ffb541f00e36fe9b8/depth_anything_v2_vits.fp16.safetensors> | Apache-2.0 |

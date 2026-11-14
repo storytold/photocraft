@@ -112,3 +112,79 @@ pub fn from_env() -> DataDir {
     let exe = std::env::current_exe().ok();
     resolve(|k| std::env::var_os(k), exe.as_deref().and_then(Path::parent))
 }
+
+/// The folder name of downloaded machine-learning models.
+const MODELS: &str = "models";
+
+/// Where downloaded model weights live. They are large and re-downloadable, so with the platform
+/// convention they go to the per-user cache (`$XDG_CACHE_HOME/photocraft/models` or
+/// `~/.cache/photocraft/models`, `%LOCALAPPDATA%\Photocraft\models`,
+/// `~/Library/Caches/Photocraft/models`) instead of the synced settings. An override or portable
+/// folder keeps everything in `<data dir>/models`. A relative `XDG_CACHE_HOME` is ignored, as the
+/// XDG spec asks.
+pub fn resolve_models(data: &DataDir, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    if data.mode == Mode::Platform {
+        let home = env("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+        if cfg!(windows) {
+            if let Some(local) = env("LOCALAPPDATA").filter(|l| !l.is_empty()) {
+                return Some(PathBuf::from(local).join("Photocraft").join(MODELS));
+            }
+        } else if cfg!(target_os = "macos") {
+            if let Some(h) = home {
+                return Some(h.join("Library/Caches/Photocraft").join(MODELS));
+            }
+        } else {
+            let cache = env("XDG_CACHE_HOME").map(PathBuf::from).filter(|c| c.is_absolute()).or_else(|| home.map(|h| h.join(".cache")));
+            if let Some(cache) = cache {
+                return Some(cache.join("photocraft").join(MODELS));
+            }
+        }
+    }
+    data.dir.as_ref().map(|d| d.join(MODELS))
+}
+
+/// [`resolve_models`] for this process's environment.
+pub fn models_dir() -> Option<PathBuf> {
+    resolve_models(&from_env(), |k| std::env::var_os(k))
+}
+
+#[cfg(test)]
+mod models_tests {
+    use super::*;
+
+    fn data(mode: Mode) -> DataDir {
+        DataDir { dir: Some(PathBuf::from("/settings")), mode, warning: None }
+    }
+
+    #[test]
+    fn override_and_portable_keep_models_beside_the_settings() {
+        let env = |k: &str| (k == "XDG_CACHE_HOME").then(|| OsString::from("/cache"));
+        for mode in [Mode::Override, Mode::Portable] {
+            assert_eq!(resolve_models(&data(mode), env), Some(PathBuf::from("/settings/models")), "{mode:?}");
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn platform_mode_uses_the_cache_folder() {
+        let d = data(Mode::Platform);
+        let xdg = |k: &str| match k {
+            "XDG_CACHE_HOME" => Some(OsString::from("/cache")),
+            "HOME" => Some(OsString::from("/home/u")),
+            _ => None,
+        };
+        assert_eq!(resolve_models(&d, xdg), Some(PathBuf::from("/cache/photocraft/models")));
+        let home = |k: &str| (k == "HOME").then(|| OsString::from("/home/u"));
+        assert_eq!(resolve_models(&d, home), Some(PathBuf::from("/home/u/.cache/photocraft/models")));
+        let relative = |k: &str| match k {
+            "XDG_CACHE_HOME" => Some(OsString::from("relative")),
+            "HOME" => Some(OsString::from("/home/u")),
+            _ => None,
+        };
+        assert_eq!(resolve_models(&d, relative), Some(PathBuf::from("/home/u/.cache/photocraft/models")));
+        // Nothing known: beside the settings.
+        assert_eq!(resolve_models(&d, |_| None), Some(PathBuf::from("/settings/models")));
+        let nowhere = DataDir { dir: None, mode: Mode::Platform, warning: None };
+        assert_eq!(resolve_models(&nowhere, |_| None), None);
+    }
+}

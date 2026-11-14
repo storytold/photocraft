@@ -891,6 +891,33 @@ pub struct Metadata {
     pub psd_global_blocks: Vec<PsdGlobalBlock>,
 }
 
+/// The perspective planes Vanishing Point last used, kept with the document so the dialog
+/// reopens on them and a perspective-aware tool can follow them. Plain data: `doc` cannot see the
+/// algorithm crate's plane type. Each plane is four absolute corners in image pixels, clockwise
+/// from the top-left.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PerspectivePlanes {
+    pub planes: Vec<[[f64; 2]; 4]>,
+    /// Focal length in pixels when the user set one; `None` lets it be estimated from the planes.
+    #[serde(default)]
+    pub focal: Option<f64>,
+    /// Canvas width and height when the planes were saved. Planes are absolute pixel positions, so
+    /// after a crop or resize they no longer match the picture ([`Self::valid_for`]).
+    #[serde(default)]
+    pub size: Option<[u32; 2]>,
+}
+
+impl PerspectivePlanes {
+    pub fn is_empty(&self) -> bool {
+        self.planes.is_empty()
+    }
+
+    /// There are planes, and they were saved for a canvas of `w` × `h` (or for an unknown size).
+    pub fn valid_for(&self, w: u32, h: u32) -> bool {
+        !self.planes.is_empty() && self.size.is_none_or(|s| s == [w, h])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
     pub id: DocId,
@@ -954,6 +981,8 @@ pub struct Document {
     /// How the document's lossy file was encoded (its JPEG quality, WebP lossy or lossless,
     /// PNG stereo pairing), so a save writes it back the same way rather than at fixed defaults.
     pub file_encoding: FileEncoding,
+    /// Vanishing Point planes saved with the document (see [`PerspectivePlanes`]).
+    pub perspective: PerspectivePlanes,
 }
 
 /// The encoder settings a document's file was opened or saved with: what File › Save and the
@@ -1029,6 +1058,7 @@ impl Document {
             variables: Variables::default(),
             timeline: None,
             file_encoding: FileEncoding::default(),
+            perspective: PerspectivePlanes::default(),
         }
     }
 

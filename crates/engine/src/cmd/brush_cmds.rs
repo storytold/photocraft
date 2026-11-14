@@ -191,6 +191,7 @@ pub(crate) fn validate_brush(brush: &BrushSettings, cmd: &str) -> Result<()> {
     if brush.dual_brush.enabled && !in_range(ds) {
         return Err(bad(cmd, format!("dual brush scatter amount {ds:?} is out of range: it must be between 0 and {scatter_max} (1000 %)")));
     }
+    brush.surface.validate().map_err(|e| bad(cmd, e))?;
     Ok(())
 }
 
@@ -288,6 +289,8 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
     // instead of rendering the whole stroke again (the hitch at pen-up).
     let live = s.live_commit.take().filter(|l| l.matches(s, cmd, p, &pts));
     let from_live = live.is_some();
+    // Surface Color and Follow Perspective, from the document as it is before the stroke.
+    let wiring = if from_live { surface_wire::Wiring::default() } else { surface_wire::Wiring::build(s, cmd, p, &brush, id)? };
     let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
         s.edit(label, |doc, _| {
             if let Some(l) = live {
@@ -315,23 +318,23 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                     .iter()
                     .filter(|p| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, p))
                     .map(|p| {
-                        let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip);
+                        let mut renderer = wiring.apply(StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip));
                         renderer.push(p);
                         renderer.finish();
                         renderer
                     })
                     .collect();
                 if copies.is_empty() {
-                    render_stroke_clipped(surf, &brush, &pts, sel.as_ref(), lock, zoom, Some(clip))
+                    render_one(&wiring, surf, &brush, &pts, sel.as_ref(), lock, zoom, clip)
                 } else {
                     let pre = surf.clone();
-                    let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip);
+                    let mut original = wiring.apply(StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip));
                     original.push(&pts);
                     original.finish();
                     original.composite_union_many(&copies, &pre, surf, sel.as_ref(), lock)
                 }
             } else {
-                render_stroke_clipped(surf, &brush, &pts, sel.as_ref(), lock, zoom, Some(clip))
+                render_one(&wiring, surf, &brush, &pts, sel.as_ref(), lock, zoom, clip)
             };
             if let (Some(table), Some(pre)) = (&table, &unpainted) {
                 crate::mode_cmds::keep_in_color_table(table, pre, surf, damage);
@@ -344,6 +347,29 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
         r["fromLive"] = json!(true);
     }
     Ok(r)
+}
+
+/// One stroke onto `surf`: [`render_stroke_clipped`], with the stroke's surface effects when it
+/// has any.
+#[allow(clippy::too_many_arguments)]
+fn render_one(
+    wiring: &surface_wire::Wiring,
+    surf: &mut Surface,
+    brush: &BrushSettings,
+    pts: &[StrokePoint],
+    sel: Option<&Surface>,
+    lock: bool,
+    zoom: f32,
+    clip: Rect,
+) -> Rect {
+    if !wiring.is_active() {
+        return render_stroke_clipped(surf, brush, pts, sel, lock, zoom, Some(clip));
+    }
+    let pre = surf.clone();
+    let mut r = wiring.apply(StrokeRenderer::new(brush, Some(surf.format()), zoom).with_clip(clip));
+    r.push(pts);
+    r.finish();
+    r.composite(&pre, surf, sel, lock, true)
 }
 
 /// Pencil Auto Erase: a stroke that starts on a pixel of the foreground colour paints the
@@ -640,6 +666,9 @@ impl LiveStroke {
         let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
         let (seed, fg) = (brush.seed, brush.color);
         let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
+        // As the commit does: from the document before the stroke, and before a locked layer's
+        // eraser turns into painting.
+        let wiring = surface_wire::Wiring::build(s, cmd, p, &brush, layer)?;
         let st = s.active().ok_or(EngineError::NoDocument)?;
         let base = (st.doc.id, st.revision);
         let mut doc = (*st.doc).clone();
@@ -654,10 +683,11 @@ impl LiveStroke {
             let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
-        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip);
+        let renderer = wiring.apply(StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip));
         let symmetry = s.active().and_then(|st| st.symmetry.clone());
-        let mirrors: Vec<_> =
-            (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip)).collect();
+        let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count()))
+            .map(|_| wiring.apply(StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip)))
+            .collect();
         let mirror_distinct = vec![false; mirrors.len()];
         let pre = surf.clone();
         let mut live = Self {
@@ -791,6 +821,8 @@ fn pct(p: &Value, k: &str, d: f32) -> f32 {
 }
 
 pub mod mixer_live;
+pub mod surface_wire;
+pub use surface_wire::{CursorShape, brush_cursor_shape};
 fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
     mixer_live::run(s, p)
 }
@@ -1377,7 +1409,8 @@ macro_rules! spec {
 
 /// Brush command specs.
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    let mut v = surface_wire::specs();
+    v.extend(vec![
         spec!(
             "brush.mixer.sample",
             "Sample Mixer Brush",
@@ -1473,7 +1506,8 @@ pub fn specs() -> Vec<CommandSpec> {
             set_brush,
             true
         ),
-    ]
+    ]);
+    v
 }
 
 #[cfg(test)]
@@ -1485,6 +1519,9 @@ mod color_replacement_modes_tests;
 
 #[cfg(test)]
 mod mixer_live_tests;
+
+#[cfg(test)]
+mod surface_wire_tests;
 
 #[cfg(test)]
 #[path = "color_replacement_history_name_tests.rs"]

@@ -41,6 +41,8 @@ pub const TABLE: &[(&str, Class)] = &[
     // IPP client for CUPS printing (pure Rust, no dependencies), used by `engine` on Unix.
     ("ipp", Class::Standalone),
     ("raw", Class::Standalone),
+    // Monocular depth estimation (candle, native only), used by `engine`.
+    ("depth", Class::Standalone),
     ("affinity", Class::Standalone),
     ("adobe-assets", Class::Standalone),
     // Pen tablet input (the one isolated `unsafe` helper: AppKit interop on macOS).

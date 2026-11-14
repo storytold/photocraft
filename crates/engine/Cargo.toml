@@ -27,6 +27,8 @@ chrono = { workspace = true }
 web-time = { workspace = true }
 photocraft-paint = { workspace = true }
 photocraft-algo = { workspace = true }
+photocraft-depth = { workspace = true }
+sha2 = "0.10"
 photocraft-text = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-io = { workspace = true }

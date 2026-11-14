@@ -4,7 +4,7 @@
 //! with `"newLayer": true` (Photoshop's advice for non-destructive Vanishing Point work).
 
 use photocraft_algo::vanishing::{Edge, PlaneCheck, Scene, VpPlane, clone_dabs, paste};
-use photocraft_doc::{Document, Layer, LayerContent, LayerId};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId, PerspectivePlanes};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -87,6 +87,23 @@ pub fn scene(p: &Value, canvas: Rect) -> Result<Scene> {
         return Err(bad("a plane is degenerate"));
     }
     Ok(sc)
+}
+
+/// The scene of planes saved with a document ([`PerspectivePlanes`]): absolute corners, the
+/// focal length the user set (if any; else estimated from the first plane), a camera centred on
+/// `canvas`. `None` without planes or with more than [`MAX_PLANES`]. A degenerate plane stays in
+/// the scene but is never hit (see `photocraft_algo::vanishing::Scene::plane_at`).
+pub fn scene_from_planes(planes: &[[[f64; 2]; 4]], focal: Option<f64>, canvas: Rect) -> Option<Scene> {
+    if planes.is_empty() || planes.len() > MAX_PLANES {
+        return None;
+    }
+    let center = [(canvas.x0 + canvas.x1) as f64 / 2.0, (canvas.y0 + canvas.y1) as f64 / 2.0];
+    let mut it = planes.iter().map(|c| VpPlane { corners: *c });
+    let first = it.next()?;
+    let focal = focal.filter(|f| f.is_finite() && *f > 0.0);
+    let mut sc = Scene::new(first, center, focal, canvas.width().max(canvas.height()) as f64);
+    sc.planes.extend(it);
+    Some(sc)
 }
 
 /// One stroke of `"clone"`.
@@ -183,9 +200,71 @@ fn has_layer(s: &Session) -> std::result::Result<(), String> {
 /// Pastes `src` (content in `rect`) onto plane `plane` of `sc` over `surf`, as the command's
 /// `"paste"` does. Returns the area the paste covers.
 pub fn paste_onto(sc: &Scene, surf: &mut Surface, plane: usize, src: &Surface, rect: Rect, at: [f64; 2], width: f64) -> Result<Rect> {
-    let Some(out) = paste(sc, plane, src, rect, at, width)? else { return Ok(Rect::EMPTY) };
+    paste_onto_shaded(sc, surf, plane, src, rect, at, width, None)
+}
+
+/// [`paste_onto`] with the pasted pixels' colour scaled by the photo's shading `(field, amount)`:
+/// `1 + amount · (S − 1)` per pixel, `S` from the field.
+#[allow(clippy::too_many_arguments)]
+pub fn paste_onto_shaded(
+    sc: &Scene,
+    surf: &mut Surface,
+    plane: usize,
+    src: &Surface,
+    rect: Rect,
+    at: [f64; 2],
+    width: f64,
+    shade: Option<(&photocraft_algo::surface::ShadingField, f32)>,
+) -> Result<Rect> {
+    let Some(mut out) = paste(sc, plane, src, rect, at, width)? else { return Ok(Rect::EMPTY) };
+    if let Some((field, amount)) = shade {
+        if out.format() != surf.format() {
+            out = out.convert(surf.format());
+        }
+        shade_pixels(&mut out, field, amount);
+    }
     over(surf, &out);
     Ok(out.content_bounds())
+}
+
+/// Scales the colour of every pixel of `surf` by the shading factor of `field` at amount `k`.
+/// Grayscale and RGB scale their channels, other models scale in RGB; integer depths stay in
+/// range, 32-bit float may exceed 1.
+fn shade_pixels(surf: &mut Surface, field: &photocraft_algo::surface::ShadingField, k: f32) {
+    use photocraft_color::{ColorMode, SampleType};
+    let b = surf.content_bounds();
+    if b.is_empty() || k == 0.0 || !k.is_finite() {
+        return;
+    }
+    let fmt = surf.format();
+    let (n, nc) = (fmt.channels(), fmt.mode.color_channels());
+    let limit = |v: f32| if fmt.sample == SampleType::F32 { v.max(0.0) } else { v.clamp(0.0, 1.0) };
+    let mut data = surf.read_region(b);
+    let w = b.width() as usize;
+    for (i, px) in data.chunks_exact_mut(n).enumerate() {
+        let (x, y) = (b.x0.saturating_add((i % w) as i32), b.y0.saturating_add((i / w) as i32));
+        let f = photocraft_paint::surface::apply_strength(field.shade_at(x, y), k);
+        if f == 1.0 {
+            continue;
+        }
+        match fmt.mode {
+            ColorMode::Rgb | ColorMode::Grayscale => {
+                for v in px.iter_mut().take(nc) {
+                    *v = limit(*v * f);
+                }
+            }
+            _ => {
+                let mut c = photocraft_raster::to_rgba(&fmt, px);
+                for v in &mut c[..3] {
+                    *v = limit(*v * f);
+                }
+                let mut enc = [0.0f32; 8];
+                let m = photocraft_raster::from_rgba_into(&fmt, c, &mut enc).min(n);
+                px[..m].copy_from_slice(&enc[..m]);
+            }
+        }
+    }
+    surf.write_region(b, &data);
 }
 
 /// Composites `top` over `dst` (premultiplied source-over), same format.
@@ -216,9 +295,11 @@ pub fn over(dst: &mut Surface, top: &Surface) {
 fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = st.doc.bounds();
+    let doc_size = [st.doc.size.width, st.doc.size.height];
     let sc = scene(p, canvas)?;
     // Paste sources resolved up front (layer pixels or the clipboard).
-    let mut pastes: Vec<(usize, Surface, Rect, [f64; 2], f64)> = Vec::new();
+    type Shade = Option<(std::sync::Arc<photocraft_algo::surface::ShadingField>, f32)>;
+    let mut pastes: Vec<(usize, Surface, Rect, [f64; 2], f64, Shade)> = Vec::new();
     for (k, item) in p.get("paste").and_then(Value::as_array).cloned().unwrap_or_default().iter().enumerate() {
         let plane = item.get("plane").and_then(Value::as_u64).unwrap_or(0) as usize;
         if plane >= sc.planes.len() {
@@ -236,13 +317,39 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let at = item.get("at").and_then(pt).unwrap_or([0.25, 0.25]);
         let width = item.get("width").and_then(Value::as_f64).unwrap_or(0.5).clamp(0.01, 10.0);
-        pastes.push((plane, surf, rect, at, width));
+        // The photo's shading, measured before anything is pasted.
+        let amount = match item.get("shade").filter(|v| !v.is_null()) {
+            None => 0.0,
+            Some(v) => v.as_f64().filter(|a| (0.0..=1.0).contains(a)).ok_or_else(|| bad(format!("paste {k}: `shade` must be a number from 0 to 1")))? as f32,
+        };
+        let detail = match item.get("shadeDetail").filter(|v| !v.is_null()) {
+            None => photocraft_paint::SurfaceOptions::default().detail,
+            Some(v) => v
+                .as_f64()
+                .filter(|d| (1.0..=512.0).contains(d))
+                .ok_or_else(|| bad(format!("paste {k}: `shadeDetail` must be a number from 1 to 512 pixels")))? as f32,
+        };
+        let field = if amount > 0.0 {
+            Some(std::sync::Arc::new(
+                crate::brush_cmds::surface_wire::field_from_surface(&visible_image(&st.doc), canvas, VP, detail).map_err(|e| bad(format!("paste {k}: {e}")))?,
+            ))
+        } else {
+            None
+        };
+        pastes.push((plane, surf, rect, at, width, field.map(|f| (f, amount))));
     }
     let clones = clone_specs(p)?;
     let new_layer = p.get("newLayer").and_then(Value::as_bool).unwrap_or(false);
     // The layer the mode was opened on (the UI passes it: other layers can be picked meanwhile).
     let layer = crate::commands::explicit_layer(s, p)?;
     let mut dabs = 0usize;
+    // The planes (all of them, torn-off ones as absolute corners) and the focal length the user
+    // set, kept in the document in the same history step.
+    let keep = p.get("keepPlanes").and_then(Value::as_bool).unwrap_or(true).then(|| PerspectivePlanes {
+        planes: sc.planes.iter().map(|pl| pl.corners).collect(),
+        focal: p.get("focalLength").and_then(Value::as_f64).filter(|f| f.is_finite() && *f > 0.0),
+        size: Some(doc_size),
+    });
     let target = s.edit("Vanishing Point", |doc: &mut Document, active| {
         if let Some(l) = layer
             && doc.layer(l).is_none()
@@ -269,8 +376,8 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
         }
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Vanishing Point needs a pixel layer".into()))?;
-        for (plane, src, rect, at, width) in &pastes {
-            paste_onto(&sc, surf, *plane, src, *rect, *at, *width)?;
+        for (plane, src, rect, at, width, shade) in &pastes {
+            paste_onto_shaded(&sc, surf, *plane, src, *rect, *at, *width, shade.as_ref().map(|(f, a)| (&**f, *a)))?;
         }
         // A new layer samples the visible image (merged with what's been pasted) and takes only
         // the pixels the strokes change; otherwise the strokes paint the layer itself.
@@ -282,6 +389,9 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
             dabs += clone_into(&sc, surf, work.as_mut(), c, canvas);
         }
         surf.prune();
+        if let Some(k) = &keep {
+            doc.perspective = k.clone();
+        }
         Ok(id)
     })?;
     let planes: Vec<Value> = sc
@@ -302,7 +412,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Vanishing Point…",
         menu: &["Filter"],
         shortcut: Some("Cmd+Alt+V"),
-        params: r##"{"planes":[{"corners":[[x,y]×4]} | {"from":plane,"edge":"top|right|bottom|left","angle":deg=90,"depth":1}],"focalLength":px=0,"paste":[{"plane":0,"layer":id? (else the clipboard),"at":[u,v]=[0.25,0.25],"width":0..1=0.5}],"clone":[{"source":[x,y],"points":[[x,y]],"size":px=40,"hardness":0..100=50,"opacity":0..100=100}],"newLayer":bool=false,"layer":id|name? (else the active layer)}"##,
+        params: r##"{"planes":[{"corners":[[x,y]×4]} | {"from":plane,"edge":"top|right|bottom|left","angle":deg=90,"depth":1}],"focalLength":px=0,"paste":[{"plane":0,"layer":id? (else the clipboard),"at":[u,v]=[0.25,0.25],"width":0..1=0.5,"shade":0..1=0 (scale the pasted colour by the photo's shading, measured before the paste),"shadeDetail":px 1..512=24 (blur radius the shading is measured against)}],"clone":[{"source":[x,y],"points":[[x,y]],"size":px=40,"hardness":0..100=50,"opacity":0..100=100}],"newLayer":bool=false,"keepPlanes":bool=true (save the planes and focal length with the document: see perspective.planes),"layer":id|name? (else the active layer)}"##,
         enabled: has_layer,
         run: vanishing_point,
         journal: true,
