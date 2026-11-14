@@ -21,6 +21,10 @@ type OwnedSourceHash = (std::sync::Arc<Vec<u8>>, [u8; 32]);
 #[cfg(test)]
 thread_local! { pub(crate) static EMBED_HASHED_SOURCE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+// Source composites rendered on this thread (redraws are admitted before rendering).
+#[cfg(test)]
+thread_local! { pub(crate) static SOURCE_RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 /// The actual payload digest used by the source-conversion cache, separate from preview checks.
 pub(super) fn embed_source_hash(bytes: &[u8]) -> [u8; 32] {
     #[cfg(test)]
@@ -64,13 +68,18 @@ pub(super) struct SmartOut {
     pub(super) composites: std::collections::HashMap<String, Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)>>,
     /// Preserved `FEid` items (by placed id).
     pub(super) old_fx: Vec<craft_psd::filter_effects::FilterEffectsItem>,
+    /// Their filter masks, decoded once each (by placed id) while they fit [`Self::fx_budget`]
+    /// beside what is held ([`Self::forget_masks`]).
+    pub(super) old_masks: std::collections::HashMap<String, Result<Option<photocraft_doc::LayerMask>, crate::smart_map::FilterCacheError>>,
+    pub(super) fx_budget: crate::smart_map::FilterCacheBudget,
     /// Placed ids whose preserved `FEid` item stays.
     pub(super) keep_fx: std::collections::HashSet<String>,
     /// Regenerated `FEid` items.
     pub(super) new_fx: Vec<craft_psd::filter_effects::FilterEffectsItem>,
     /// The unfiltered pixels of each smart object whose filter mask shows: its layer record holds
-    /// the filtered pixels without the mask, as Photoshop's do (`compose::filter_mask`).
-    pub(super) unfiltered: std::collections::HashMap<photocraft_doc::LayerId, Surface>,
+    /// the filtered pixels without the mask, as Photoshop's do (`compose::filter_mask`). With
+    /// what they were charged to [`Self::fx_budget`], given back once the record is written.
+    pub(super) unfiltered: std::collections::HashMap<photocraft_doc::LayerId, (Surface, u64)>,
     /// Source-bound previews shared by private blocks and smart-filter source documents.
     pub(super) vector_previews: crate::vector_preview::ExportCache,
 }
@@ -123,6 +132,21 @@ impl SmartOut {
             }
         }
         SmartOut { depth, globals, known, prune_ok: true, old_fx, linked_contents, placed_owners, unplaced_owners, ..Default::default() }
+    }
+
+    /// Forgets the remembered filter masks ([`Self::old_masks`]) and gives back their charge, to
+    /// make room for a cache that must be held; `false` when none were remembered. They are
+    /// decoded again if asked for.
+    pub(super) fn forget_masks(&mut self) -> bool {
+        if self.old_masks.is_empty() {
+            return false;
+        }
+        for (_, mask) in self.old_masks.drain() {
+            if let Ok(Some(m)) = mask {
+                self.fx_budget.release(crate::smart_map::mask_charge(&m));
+            }
+        }
+        true
     }
 
     /// The validated native preview of `sm`, checked against its embedded bytes or the preserved

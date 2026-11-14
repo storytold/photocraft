@@ -1,5 +1,6 @@
 //! Conservative preflight for the main PSD pixel paths. This bounds decoded layer/mask/
-//! merged and pattern pixels, not parser metadata or smart-filter caches (separate limits).
+//! merged and pattern pixels and the shapes rendered from their paths, not parser metadata or
+//! smart-filter caches (separate limits: `smart_map::FilterCacheBudget`).
 //!
 //! Reserve the sum of all possible retained tiles and the largest workspace, without credit
 //! for pruning or tile sharing. Reserving before any worker starts makes scheduling irrelevant.
@@ -178,7 +179,15 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
         mode => u64::from(mode.color_channels().unwrap_or(3)),
     };
     if super::psd_import::can_recover_layers(file) {
+        let dpi = super::psd_import::resolution_dpi(file);
         for rec in file.layers() {
+            // A shape without stored pixels, or a soft one, is rendered from its path: over the
+            // whole canvas when inverted or less than fully dense, from a record of a few bytes.
+            if let Some((area, shape)) = super::psd_import::shape_render_area(file, rec, dpi) {
+                budget.surface(Rect { top: area.y0, left: area.x0, bottom: area.y1, right: area.x1 }, cc + 1, sample)?;
+                let channels = usize::try_from(cc + 1).map_err(|_| overflow())?;
+                budget.scratch(photocraft_vector::render_workspace_bytes(&shape, area, channels));
+            }
             if !rec.rect.is_empty() && rec.channels.iter().any(|c| c.id >= 0 || c.id == -1) {
                 let (w, hh) = rec.rect.size()?;
                 let pixels = mul(w as u64, hh as u64)?;

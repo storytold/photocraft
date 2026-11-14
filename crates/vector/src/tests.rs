@@ -579,7 +579,7 @@ fn tile_bands_and_band_tiles_near_i32_max_do_not_overflow() {
 
     let band = Rect::new(i32::MAX - 10, 0, i32::MAX, 2);
     let data = vec![1.0f32; (band.width() * band.height()) as usize];
-    let tiles = band_tiles(band, &data, 1, |p| p[0] > 0.0);
+    let Ok(tiles) = band_tiles::<Unchecked>(band, &data, 1, |p| p[0] > 0.0);
     assert_eq!(tiles.len(), 1);
     assert_eq!(tiles[0].0, band);
 }
@@ -677,4 +677,130 @@ fn flatten_interrupt_stops_during_preparation() {
     assert!(flatten::flatten_path_with(&path, DEFAULT_TOLERANCE, &Interrupt::cancel_only(&cancel)).is_none());
     assert_eq!(polls.load(Ordering::Relaxed), 6);
     assert_eq!(flatten::flatten_path_with(&path, DEFAULT_TOLERANCE, &Interrupt::NONE), Some(flatten_path(&path, DEFAULT_TOLERANCE)));
+}
+
+/// Shapes that exercise every coverage kind: hard, dense, feathered, inverted, stroked (aligned,
+/// dashed) and gradient-filled.
+fn band_shapes(w: f64, h: f64) -> Vec<(&'static str, ShapeLayer)> {
+    let solid = |c: Color| Some(Fill::Solid(c));
+    let gradient =
+        Fill::gradient(vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.2, 1.0))], 30.0, 1.0, photocraft_doc::GradientStyle::Linear, false);
+    let stroke = |align, dashes: Vec<f32>| ShapeStroke { width: 9.0, paint: Fill::Solid(Color::rgb(0.0, 0.0, 1.0)), align, dashes, ..Default::default() };
+    let wide = shapes::ellipse(37.3, 21.9, w - 80.0, h - 40.0);
+    let mut inverted = shapes::polygon(w * 0.3, 10.0, w * 0.4, h - 20.0, 7, 0.45);
+    inverted.inverted = true;
+    vec![
+        ("hard ellipse", ShapeLayer { path: wide.clone(), fill: solid(Color::rgb(0.9, 0.4, 0.1)), ..Default::default() }),
+        ("gradient", ShapeLayer { path: wide.clone(), fill: Some(gradient), ..Default::default() }),
+        ("dense", ShapeLayer { path: wide.clone(), fill: solid(Color::rgb(0.2, 0.7, 0.3)), density: 0.6, ..Default::default() }),
+        ("feathered", ShapeLayer { path: wide.clone(), fill: solid(Color::rgb(0.2, 0.7, 0.3)), feather: 6.5, ..Default::default() }),
+        ("feathered and dense", ShapeLayer { path: wide.clone(), fill: solid(Color::rgb(0.5, 0.1, 0.8)), feather: 3.0, density: 0.4, ..Default::default() }),
+        ("inverted", ShapeLayer { path: inverted.clone(), fill: solid(Color::rgb(0.1, 0.1, 0.9)), ..Default::default() }),
+        ("inverted feathered", ShapeLayer { path: inverted, fill: solid(Color::rgb(0.1, 0.1, 0.9)), feather: 4.0, ..Default::default() }),
+        (
+            "outside stroke",
+            ShapeLayer { path: wide.clone(), fill: solid(Color::WHITE), stroke: Some(stroke(StrokeAlign::Outside, Vec::new())), ..Default::default() },
+        ),
+        ("dashed stroke", ShapeLayer { path: wide, stroke: Some(stroke(StrokeAlign::Center, vec![2.0, 1.5])), ..Default::default() }),
+    ]
+}
+
+/// The renderer as it was before bands were split into column chunks: whole-width bands of one
+/// tile row, every pixel written.
+fn whole_band_render(shape: &ShapeLayer, fmt: PixelFormat, clip: Rect) -> photocraft_raster::Surface {
+    let c = CompiledShape::new(shape, DEFAULT_TOLERANCE, clip);
+    let mut s = photocraft_raster::Surface::new(fmt);
+    let Some(b) = c.bounds() else { return s };
+    let area = b.intersect(&clip);
+    let ch = fmt.channels();
+    let mut y = area.y0.div_euclid(TILE_SIZE) * TILE_SIZE;
+    while y < area.y1 {
+        let band = Rect::new(area.x0, y.max(area.y0), area.x1, (y + TILE_SIZE).min(area.y1));
+        let rgba = c.render_rgba(band);
+        let mut vals = vec![0.0f32; rgba.len() * ch];
+        for (p, o) in rgba.iter().zip(vals.chunks_exact_mut(ch)) {
+            if p[3] > 0.0 {
+                photocraft_raster::from_rgba_into(&fmt, *p, o);
+            }
+        }
+        s.write_region(band, &vals);
+        y = band.y1;
+    }
+    s
+}
+
+/// Pieces of whole rows bound a render's buffers by the piece rather than the area, and draw
+/// exactly the pixels whole tile-row bands drew (at every depth), however wide the canvas.
+#[test]
+fn row_pieces_render_like_whole_bands() {
+    for canvas in [Rect::new(-5, 3, 2900, 700), Rect::new(0, 0, 300, 520)] {
+        let (w, h) = (f64::from(canvas.x1), f64::from(canvas.y1));
+        for (what, sh) in band_shapes(w, h) {
+            for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+                let pieces = render_shape(&sh, fmt, canvas);
+                let whole = whole_band_render(&sh, fmt, canvas);
+                assert!(pieces.read_region(canvas) == whole.read_region(canvas), "{what} {:?} over {canvas:?}", fmt.sample);
+                assert_eq!(pieces.content_bounds(), whole.content_bounds(), "{what}");
+                let tried = CompiledShape::new(&sh, DEFAULT_TOLERANCE, canvas).try_render(fmt, canvas).expect("fits in memory");
+                assert!(tried.read_region(canvas) == pieces.read_region(canvas), "{what} {:?}: the fallible render draws the same pixels", fmt.sample);
+            }
+        }
+    }
+}
+
+/// Pieces are whole rows within one tile row, at most `PIECE_PIXELS` unless one row is wider,
+/// and cover the area exactly once.
+#[test]
+fn tile_bands_split_tall_bands_into_whole_rows() {
+    for r in [Rect::new(-700, -300, 5000, 900), Rect::new(3, 4, 9, 5), Rect::new(0, 0, 300_000, 300), Rect::new(0, 0, 1024, 600)] {
+        let pieces = tile_bands(r);
+        let px: u64 = pieces.iter().map(|p| u64::from(p.width()) * u64::from(p.height())).sum();
+        assert_eq!(px, u64::from(r.width()) * u64::from(r.height()), "{r:?}: every pixel once");
+        for p in &pieces {
+            assert!(r.contains_rect(p) && !p.is_empty() && p.x0 == r.x0 && p.x1 == r.x1, "{p:?}: whole rows of {r:?}");
+            assert_eq!(p.y0.div_euclid(TILE_SIZE), (p.y1 - 1).div_euclid(TILE_SIZE), "{p:?} is within one tile row");
+            assert!(p.width() as usize * p.height() as usize <= PIECE_PIXELS.max(p.width() as usize), "{p:?}");
+        }
+    }
+    // A band of a 1024 px wide area is a whole tile row; one 300 000 px wide is a row at a time.
+    assert_eq!(tile_bands(Rect::new(0, 0, 1024, 600)).len(), 3);
+    assert!(tile_bands(Rect::new(0, 0, 300_000, 300)).iter().all(|p| p.height() == 1));
+}
+
+/// What a render holds besides its surface does not grow with the canvas width: a band of a
+/// 300 000 px wide canvas costs what one a tenth as wide does.
+#[test]
+fn render_workspace_is_bounded_by_the_chunk_not_the_width() {
+    let sh = ShapeLayer { path: shapes::rect(0.0, 0.0, 10.0, 10.0), fill: Some(Fill::Solid(Color::BLACK)), ..Default::default() };
+    let narrow = render_workspace_bytes(&sh, Rect::new(0, 0, 30_000, 4096), 4);
+    let wide = render_workspace_bytes(&sh, Rect::new(0, 0, 300_000, 4096), 4);
+    assert_eq!(wide, render_workspace_bytes(&sh, Rect::new(0, 0, 300_000, 300_000), 4), "nor with its height");
+    // Both hold at most the pixels of a group of full pieces (or one row, were it wider).
+    let group = pieces_in_flight(Rect::new(0, 0, 1, 1)) as u64;
+    let most = (group * PIECE_PIXELS as u64).max(300_000) * piece_bytes_per_pixel(4);
+    assert!(narrow <= most && wide <= most, "{narrow} {wide} {most}");
+    // A small render is charged for its own pixels only, and nothing for nothing.
+    assert!(render_workspace_bytes(&sh, Rect::new(0, 0, 10, 10), 4) < 10_000);
+    assert_eq!(render_workspace_bytes(&sh, Rect::EMPTY, 4), 0);
+    // A feather blurs a plane as large as the area it renders.
+    let soft = ShapeLayer { feather: 2.0, ..sh };
+    assert!(render_workspace_bytes(&soft, Rect::new(0, 0, 300_000, 4096), 4) > 300_000 * 4096 * 8);
+}
+
+/// The bounds a render is sized by before it is made contain what it then covers, without
+/// blurring a feather: the whole canvas for an inverted or less than fully dense fill.
+#[test]
+fn render_bounds_contain_the_rendered_bounds() {
+    let canvas = Rect::new(0, 0, 1500, 600);
+    for (what, sh) in band_shapes(1500.0, 600.0) {
+        let estimate = render_bounds(&sh, DEFAULT_TOLERANCE, canvas).map_or(Rect::EMPTY, |b| b.intersect(&canvas));
+        let compiled = CompiledShape::new(&sh, DEFAULT_TOLERANCE, canvas).bounds().map_or(Rect::EMPTY, |b| b.intersect(&canvas));
+        assert!(estimate.contains_rect(&compiled), "{what}: {estimate:?} holds {compiled:?}");
+        let drawn = render_shape(&sh, PixelFormat::RGBA8, canvas).content_bounds();
+        assert!(estimate.contains_rect(&drawn), "{what}: {estimate:?} holds the drawn {drawn:?}");
+        let everywhere = sh.path.inverted || sh.density < 1.0;
+        assert_eq!(estimate == canvas, everywhere || compiled == canvas, "{what}: {estimate:?}");
+    }
+    let nothing = ShapeLayer { path: Path::default(), fill: Some(Fill::Solid(Color::BLACK)), ..Default::default() };
+    assert_eq!(render_bounds(&nothing, DEFAULT_TOLERANCE, canvas), None);
 }

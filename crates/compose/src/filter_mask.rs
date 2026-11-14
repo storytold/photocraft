@@ -12,6 +12,37 @@ use photocraft_color::SampleType;
 use photocraft_doc::LayerMask;
 use photocraft_raster::Surface;
 
+#[cfg(any(test, feature = "testgen"))]
+thread_local! {
+    static VISITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Tiles [`mix`] and [`unmix`] have looked at on this thread, for tests that their work is
+/// bounded by the tiles the surfaces hold.
+#[cfg(any(test, feature = "testgen"))]
+pub fn tiles_visited() -> u64 {
+    VISITED.with(std::cell::Cell::get)
+}
+
+fn note_visit() {
+    #[cfg(any(test, feature = "testgen"))]
+    VISITED.with(|v| v.set(v.get().saturating_add(1)));
+}
+
+/// The tiles of `whole` [`mix`] and [`unmix`] work on: every one when a tile neither surface
+/// holds still changes (`every`: no alpha and different defaults), else only the tiles `a` or
+/// `b` holds. Two sparse surfaces far apart then cost the tiles they hold, not every tile of the
+/// rectangle between them (a source a file places a billion pixels away would take forever).
+fn work_tiles(a: &Surface, b: &Surface, whole: photocraft_geom::Rect, every: bool) -> Box<dyn Iterator<Item = photocraft_geom::TileCoord>> {
+    if every {
+        return Box::new(whole.tiles());
+    }
+    let mut held: Vec<photocraft_geom::TileCoord> = a.tiles().chain(b.tiles()).map(|(c, _)| *c).collect();
+    held.sort_unstable();
+    held.dedup();
+    Box::new(held.into_iter().filter(move |c| !c.rect().intersect(&whole).is_empty()))
+}
+
 /// `filtered` mixed over `base` (the unfiltered pixels) through `mask`: premultiplied, any
 /// channel layout. Pixels the mask hides entirely are `base`'s.
 pub fn mix(base: &Surface, filtered: &Surface, mask: &LayerMask) -> Surface {
@@ -29,7 +60,8 @@ pub fn mix(base: &Surface, filtered: &Surface, mask: &LayerMask) -> Surface {
     // Keep tile scratch for the operation. Reallocating these float buffers per tile
     // dominates large masks; every output sample is overwritten before publication.
     let (mut b, mut f, mut k, mut o) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for t in whole.tiles() {
+    for t in work_tiles(base, filtered, whole, !(fmt.alpha || same_default)) {
+        note_visit();
         let area = t.rect().intersect(&whole);
         let bare = !base.has_tiles_in(area) && !filtered.has_tiles_in(area);
         if area.is_empty() || (bare && (fmt.alpha || same_default)) {
@@ -101,7 +133,8 @@ pub fn unmix(base: &Surface, mixed: &Surface, mask: &LayerMask) -> Surface {
     // Non-alpha still needs every tile whose defaults differ (an unmix through a non-unit mask
     // would change that default, and the clone already holds the old one).
     let same_default = base.default_pixel() == mixed.default_pixel();
-    let mut tiles = whole.tiles().filter(|t| {
+    let mut tiles = work_tiles(base, mixed, whole, !(fmt.alpha || same_default)).filter(|t| {
+        note_visit();
         let area = t.rect().intersect(&whole);
         let bare = !base.has_tiles_in(area) && !mixed.has_tiles_in(area);
         !area.is_empty() && !(bare && (fmt.alpha || same_default))
@@ -546,10 +579,13 @@ mod tests {
         let (mut base, mut filtered) = (Surface::new(fmt), Surface::new(fmt));
         base.write_pixel(0, 0, &[0.2, 0.4, 0.6, 1.0]);
         filtered.write_pixel(100_000, 100_000, &[1.0, 0.0, 0.0, 1.0]);
+        let before = tiles_visited();
         let mixed = mix(&base, &filtered, &LayerMask::reveal_all());
         assert_eq!(mixed.pixel(100_000, 100_000), vec![1.0, 0.0, 0.0, 1.0]);
         let back = unmix(&base, &mixed, &LayerMask::reveal_all());
         assert_eq!(back.pixel(100_000, 100_000), vec![1.0, 0.0, 0.0, 1.0]);
+        // Nor walk its 153 000 tiles: only the two each surface holds, each way.
+        assert!(tiles_visited() - before <= 4, "{} tiles visited", tiles_visited() - before);
     }
 
     #[test]

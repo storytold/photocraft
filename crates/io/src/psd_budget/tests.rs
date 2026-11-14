@@ -601,3 +601,158 @@ fn real_import_admits_tile_pixels_against_scratch_room_only_while_spilling() {
         });
     });
 }
+
+/// A shape record without pixels whose path is just the initial-fill record: an inverted shape,
+/// which covers the whole canvas.
+fn inverted_shape_record(fill: photocraft_doc::Fill) -> craft_psd::LayerRecord {
+    use craft_psd::path::{PathData, VectorMaskBlock};
+    let vsms = VectorMaskBlock { version: 3, flags: 0, path: PathData::from_subpaths(&[], true) }.to_bytes();
+    let (key, data) = crate::blocks::write_fill(&fill);
+    craft_psd::LayerRecord {
+        name: b"shape".to_vec(),
+        blocks: vec![craft_psd::TaggedBlock::new(*b"vsms", vsms), craft_psd::TaggedBlock::new(key, data), craft_psd::TaggedBlock::unicode_name("shape")],
+        ..Default::default()
+    }
+}
+
+/// A shape the import renders from its path is charged before any pixel is decoded: an
+/// inverted one covers the whole canvas, which a record of a few bytes can make 300 000 px wide.
+/// A small one still opens, rendered (an inverted shape really covers the canvas).
+#[test]
+fn shapes_rendered_from_their_path_are_charged_before_decoding() {
+    let blue = photocraft_color::Color::rgb(0.0, 0.0, 1.0);
+    let mut file = testgen::small(Version::Psb, Compression::Raw);
+    let before = estimate(&file);
+    file.layers_mut().push(inverted_shape_record(photocraft_doc::Fill::Solid(blue)));
+    // One more RGBA tile at least: the 4x3 canvas the shape covers.
+    assert!(estimate(&file) >= before + 256 * 256 * 4, "{} vs {before}", estimate(&file));
+
+    let bytes = file.to_bytes().unwrap();
+    let doc = crate::import("small.psb", &bytes).unwrap().document;
+    let shape = doc.layers.iter().find(|l| l.name == "shape").expect("the shape layer");
+    let photocraft_doc::LayerContent::Shape(sh) = &shape.content else { panic!("{:?}", shape.content) };
+    let cache = sh.cache.as_ref().expect("rendered");
+    assert_eq!(cache.content_bounds(), photocraft_geom::Rect::new(0, 0, 4, 3));
+    assert_eq!(cache.pixel(3, 2), vec![0.0, 0.0, 1.0, 1.0]);
+
+    file.header.width = 300_000;
+    file.header.height = 4096;
+    assert!(matches!(check(&file, DEFAULT_PSD_IMPORT_PIXEL_BYTES), Err(IoError::PsdImportBudget { .. })));
+    // Without the merged image, which the refusal must come before.
+    let mut bytes = file.to_bytes().unwrap();
+    bytes.truncate(bytes.len() - file.image_data.data.len() - 2);
+    crate::memory::with_mock_memory(crate::memory::MemorySnapshot::UNKNOWN, || {
+        assert!(matches!(crate::import("huge.psb", &bytes), Err(IoError::PsdApprovalRequired { .. } | IoError::PsdImportBudget { .. })));
+    });
+}
+
+/// A shape that keeps its stored pixels (hard, with pixels) or renders only its own path costs
+/// no canvas: a small path on a huge canvas is charged for its tiles alone.
+#[test]
+fn a_small_rendered_shape_is_charged_for_its_own_area() {
+    use craft_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
+    let mut file = testgen::small(Version::Psb, Compression::Raw);
+    file.header.width = 300_000;
+    file.header.height = 4096;
+    let without = estimate(&file);
+    // A 10 px square at (0, 0): path coordinates are fractions of the canvas.
+    let (w, h) = (300_000.0, 4096.0);
+    let knot = |x: f64, y: f64| PsdKnot { linked: false, pre: (x / w, y / h), anchor: (x / w, y / h), post: (x / w, y / h) };
+    let square = PsdSubpath { closed: true, operation: 1, knots: vec![knot(0.0, 0.0), knot(10.0, 0.0), knot(10.0, 10.0), knot(0.0, 10.0)] };
+    let vsms = VectorMaskBlock { version: 3, flags: 0, path: PathData::from_subpaths(&[square], false) }.to_bytes();
+    let mut rec = inverted_shape_record(photocraft_doc::Fill::Solid(photocraft_color::Color::BLACK));
+    rec.blocks[0] = craft_psd::TaggedBlock::new(*b"vsms", vsms);
+    file.layers_mut().push(rec);
+    let with = estimate(&file);
+    assert!(with > without, "the square's tile is charged");
+    assert!(with - without < 64 << 20, "{} more", with - without);
+}
+
+/// A hard shape with stored pixels: testgen's 4x3 layer given a blue fill inverted around a
+/// rectangle (a leading subtract) with a 1 px stroke along it, under a clipped layer, on a
+/// `w`x`h` canvas.
+fn stored_stroked_shape(w: u32, h: u32) -> PsdFile {
+    use craft_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
+    let mut file = testgen::small(Version::Psd, Compression::Raw);
+    file.header.width = w;
+    file.header.height = h;
+    let (fw, fh) = (f64::from(w), f64::from(h));
+    let knot = |x: f64, y: f64| PsdKnot { linked: false, pre: (x / fw, y / fh), anchor: (x / fw, y / fh), post: (x / fw, y / fh) };
+    let rect = PsdSubpath { closed: true, operation: 2, knots: vec![knot(0.5, 0.5), knot(6.5, 0.5), knot(6.5, 5.5), knot(0.5, 5.5)] };
+    let vsms = VectorMaskBlock { version: 3, flags: 0, path: PathData::from_subpaths(&[rect], false) }.to_bytes();
+    let (key, fill) = crate::blocks::write_fill(&photocraft_doc::Fill::Solid(photocraft_color::Color::rgb(0.0, 0.0, 1.0)));
+    let stroke = photocraft_doc::ShapeStroke { width: 1.0, ..Default::default() };
+    let mut shape = file.layers()[0].clone();
+    shape.blocks.extend([
+        craft_psd::TaggedBlock::new(*b"vsms", vsms),
+        craft_psd::TaggedBlock::new(key, fill),
+        craft_psd::TaggedBlock::new(*b"vstk", crate::vector_map::vstk_bytes(Some(&stroke), true, 72.0)),
+    ]);
+    let mut clipped = file.layers()[2].clone();
+    clipped.clipping = 1;
+    file.layers_mut().clear();
+    file.layers_mut().extend([shape, clipped]);
+    file
+}
+
+/// The document without the shape's stroke: no split, its stored pixels under the clipped layer.
+fn unsplit(doc: &photocraft_doc::Document) -> photocraft_doc::Document {
+    let mut doc = doc.clone();
+    if let photocraft_doc::LayerContent::Shape(sh) = &mut doc.layers[0].content {
+        sh.stroke = None;
+    }
+    doc
+}
+
+/// A hard shape keeps its stored pixels at import, so it costs no render there. Composited
+/// under a visible clipped layer, its fill and stroke are split over the canvas to stack the
+/// stroke above that layer; the split is sized before it is drawn, so an inverted fill over a
+/// huge canvas isn't split, even for the first, small composite: the stored pixels composite as
+/// they are. A small canvas still splits.
+#[test]
+fn a_stored_shape_is_not_split_over_a_huge_canvas_when_composited() {
+    let viewport = photocraft_geom::Rect::new(0, 0, 8, 8);
+    let (small, _) = crate::psd_to_document(&stored_stroked_shape(64, 48));
+    let photocraft_doc::LayerContent::Shape(sh) = &small.layers[0].content else { panic!("{:?}", small.layers[0].content) };
+    assert!(small.layers[1].clipped && sh.stroke.is_some() && sh.path.inverted && !sh.path.subpaths.is_empty());
+    assert!(
+        photocraft_compose::render(&small, viewport) != photocraft_compose::render(&unsplit(&small), viewport),
+        "the stroke stacks above the clipped layer"
+    );
+
+    // 30000x30000: the inverted fill alone would draw 3.6 GB, past the split's draw limit.
+    let huge = stored_stroked_shape(30_000, 30_000);
+    assert!(check(&huge, DEFAULT_PSD_IMPORT_PIXEL_BYTES).is_ok(), "the stored pixels are all the import keeps");
+    let (doc, warnings) = crate::psd_to_document(&huge);
+    assert_eq!(doc.layers.len(), 2, "{warnings:?}");
+    // Composited cold: nothing has measured this shape yet.
+    let first = photocraft_compose::render(&doc, viewport);
+    assert!(first == photocraft_compose::render(&unsplit(&doc), viewport), "the stored pixels, unsplit");
+}
+
+/// A folder is imported as a group, never as a shape: a Photoshop Frame's stroke (`vstk`) along
+/// its vector mask is drawn by the compositor, not rendered at import, so a frame around a huge
+/// canvas costs the import nothing and the file opens.
+#[test]
+fn a_folder_with_a_frame_stroke_is_not_charged_as_a_shape() {
+    use craft_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
+    let mut file = testgen::small(Version::Psb, Compression::Raw);
+    let before = estimate(&file);
+    file.header.width = 300_000;
+    file.header.height = 4096;
+    let corner = |x: f64, y: f64| PsdKnot { linked: false, pre: (x, y), anchor: (x, y), post: (x, y) };
+    let frame = PsdSubpath { closed: true, operation: 1, knots: vec![corner(0.0, 0.0), corner(1.0, 0.0), corner(1.0, 1.0), corner(0.0, 1.0)] };
+    let vsms = VectorMaskBlock { version: 3, flags: 0, path: PathData::from_subpaths(&[frame], false) }.to_bytes();
+    let stroke = photocraft_doc::ShapeStroke { width: 8.0, ..Default::default() };
+    let folder = &mut file.layers_mut()[3];
+    assert!(folder.section_type().is_folder());
+    folder.blocks.push(craft_psd::TaggedBlock::new(*b"vsms", vsms));
+    folder.blocks.push(craft_psd::TaggedBlock::new(*b"vstk", crate::vector_map::vstk_bytes(Some(&stroke), true, 72.0)));
+    let est = check(&file, DEFAULT_PSD_IMPORT_PIXEL_BYTES).expect("the frame costs the import nothing");
+    assert_eq!(est.total_bytes, before, "only the layers' own pixels");
+    let (doc, warnings) = crate::psd_to_document(&file);
+    let group = doc.layers.iter().find(|l| l.is_group()).unwrap_or_else(|| panic!("{warnings:?}"));
+    assert!(group.vector_mask.is_some());
+    let photocraft_doc::LayerContent::Group(g) = &group.content else { panic!("{:?}", group.content) };
+    assert!(g.frame_stroke.is_some(), "the frame keeps its stroke");
+}
