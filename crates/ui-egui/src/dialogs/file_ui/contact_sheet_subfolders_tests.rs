@@ -45,7 +45,7 @@ fn the_checkboxes_sit_under_the_folder_with_the_reference_defaults() {
     let top = |label: &str| h.query_all_by_label(label).map(|n| n.rect().top()).reduce(f32::min).unwrap_or_else(|| panic!("no {label}"));
     let (input, include, group) = (top("Input"), top(INCLUDE), top(GROUP));
     assert!(input < include && include < group, "Input {input}, {INCLUDE} {include}, {GROUP} {group}");
-    for other in ["Auto spacing", "Caption", "Columns", "Flatten", "Width"] {
+    for other in ["Use Auto-Spacing", "Use Filename as Caption", "Columns", "Flatten All Layers", "Width"] {
         assert!(group < top(other), "{GROUP} {group} is above {other} {}", top(other));
     }
 }
