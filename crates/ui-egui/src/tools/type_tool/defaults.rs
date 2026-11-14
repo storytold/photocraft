@@ -202,10 +202,27 @@ pub(super) fn apply_defaults(app: &mut PhotocraftApp, props: &serde_json::Value)
     }
 }
 
-/// Apply only the supplied properties to the text-edit scope or selected type layers; without
-/// a type target, prepare the defaults for the next layer instead.
+/// A character setting the user gave a type target also becomes the next layer's, as in
+/// Photoshop (#9938). Paragraph settings stay with their paragraphs (TYPE-218-2); the options
+/// bar sets alignment and direction for new type itself. Colour is not one of them: new type
+/// takes the foreground colour.
+fn remember_character_defaults(app: &mut PhotocraftApp, props: &serde_json::Value) {
+    let Some(props) = props.as_object() else { return };
+    let chars: serde_json::Map<String, serde_json::Value> = props
+        .iter()
+        .filter(|(key, _)| key.as_str() != "color")
+        .filter(|(key, value)| !photocraft_engine::type_cmds::apply_para_props(&mut photocraft_doc::text::ParagraphStyle::default(), &json!({ (*key): value })))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    apply_defaults(app, &serde_json::Value::Object(chars));
+}
+
+/// Apply only the supplied properties to the text-edit scope or selected type layers, and keep
+/// their character settings for the next layer; without a type target, only the latter.
 pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_json::Value) {
+    // A font chosen at a caret is for the letters typed next there, and for new type.
     if insertion_style::set_font(app, &props) {
+        remember_character_defaults(app, &props);
         return;
     }
     app.ui.type_insertion_style = None;
@@ -221,7 +238,9 @@ pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_j
     if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()).or_else(|| drag_key(ctx)) {
         p["coalesce"] = json!(key);
     }
-    let _ = app.run("type.setStyle", p);
+    if app.run("type.setStyle", p).is_ok() {
+        remember_character_defaults(app, &props);
+    }
 }
 
 /// Open the shared Color Picker with a snapshot of the text target. Sampling or cancelling

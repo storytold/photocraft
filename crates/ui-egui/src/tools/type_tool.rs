@@ -139,7 +139,11 @@ mod canvas_tests;
 mod ctrl_period_cancel_tests;
 
 #[cfg(test)]
+mod defaults_tests;
+
+#[cfg(test)]
 mod font_commit_tests;
+
 #[cfg(test)]
 mod font_picker_tests;
 #[cfg(test)]
