@@ -5917,7 +5917,6 @@ dependencies = [
  "egui",
  "js-sys",
  "log",
- "photocraft-codecs",
  "photocraft-color",
  "photocraft-doc",
  "photocraft-engine",
