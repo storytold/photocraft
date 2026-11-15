@@ -141,7 +141,9 @@ pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> 
 /// Photoshop's do: Lens Flare's centre is a fraction of the object, and Clouds and Fibers fill it
 /// and size their pattern by it. The object is its placed content's bounds (which leaves out
 /// fully transparent edges of the source). The Blur Gallery pins and widths are fractions of the
-/// object, so they move, scale and rotate with it. The other filters use the canvas, as on a layer.
+/// object's axis-aligned box, so they follow it when it moves or is resized; a rotation is not
+/// mapped onto them (the box keeps no angle), so the pins keep their place in the box. The other
+/// filters use the canvas, as on a layer.
 fn filter_bounds(f: &SmartFilter, placed: &Surface, canvas: Rect) -> Rect {
     match placed.content_bounds() {
         b if works_in_object(f) && !b.is_empty() => b,
