@@ -818,9 +818,24 @@ fn shown_style_params<'a>(t: &TextLayer, p: &'a Value) -> Result<std::borrow::Co
 /// as Photoshop does, unless the user typed that name (`typed`, #9023).
 pub(crate) fn is_auto_named(l: &Layer, typed: Option<&str>) -> bool {
     let LayerContent::Text(t) = &l.content else { return false };
+    if psd_name_is_fixed(l) {
+        return false;
+    }
     let auto = layer_name(&t.text);
     // Duplicate Layer names a copy of "Title copy" "Title copy 2", not "Title copy copy".
     l.name == auto || (typed != Some(l.name.as_str()) && copy_root(&l.name).is_some_and(|root| root == copy_root(&auto).unwrap_or(&auto)))
+}
+
+/// Whether a layer read from a PSD carries a name Photoshop keeps when the text changes. Photoshop
+/// records where a layer's name came from in `lnsr`: `rend` for a type layer named after its
+/// text, `layr` for a name given in the Layers panel. A layer Photoshop wrote without `lnsr`
+/// (named by a script, or by an older version) keeps its name too, so a template whose type layer
+/// is called `name` and also reads "name" is not renamed after the text put into it.
+fn psd_name_is_fixed(l: &Layer) -> bool {
+    match l.psd_blocks.iter().find(|(key, _)| key == b"lnsr") {
+        Some((_, src)) => src.as_slice() != b"rend",
+        None => l.psd_id.is_some(),
+    }
 }
 
 /// The name the user last gave layer `id` in the active document, if any (see

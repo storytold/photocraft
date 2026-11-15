@@ -258,6 +258,31 @@ fn auto_name_follows_the_text() {
     assert_eq!(layer_name_of(&s, id), "Type Layer");
 }
 
+/// A type layer read from a PSD follows its text only when Photoshop's name source (`lnsr`) says
+/// the name came from the text (`rend`). A name given by hand (`layr`) or by a script (no `lnsr`
+/// on a layer with a PSD id) is kept, even when it equals the text, as Photoshop keeps it.
+#[test]
+fn a_psd_type_layer_keeps_a_name_photoshop_did_not_take_from_its_text() {
+    let mut s = session();
+    let mut ids = Vec::new();
+    for source in [None, Some(*b"layr"), Some(*b"rend")] {
+        let y = 40 + 40 * ids.len();
+        let id = s.execute("type.create", json!({"x": 0, "y": y, "text": "name"})).unwrap()["layer"].as_u64().unwrap();
+        let l = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(LayerId(id)).unwrap();
+        l.psd_id = Some(u32::try_from(id).unwrap());
+        if let Some(src) = source {
+            l.psd_blocks.push((*b"lnsr", std::sync::Arc::new(src.to_vec())));
+        }
+        ids.push(id);
+    }
+    for id in &ids {
+        s.execute("type.edit", json!({"layer": id, "text": "South Wind"})).unwrap();
+    }
+    assert_eq!(layer_name_of(&s, ids[0]), "name", "no lnsr on a PSD layer: a script's name is kept");
+    assert_eq!(layer_name_of(&s, ids[1]), "name", "layr: a name given by hand is kept");
+    assert_eq!(layer_name_of(&s, ids[2]), "South Wind", "rend: the name follows the text");
+}
+
 /// #9023: a duplicated type layer ("Title copy") is named after its new text once that is
 /// edited, as the original would be; a renamed copy keeps its name.
 #[test]
