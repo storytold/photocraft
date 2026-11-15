@@ -564,7 +564,14 @@ pub(crate) fn tab_title_at(app: &PhotocraftApp, i: usize, zoom: f32) -> String {
     let layer = active_layer.map(|l| format!("{}, ", l.name)).unwrap_or_default();
     // A save in progress: "name @ 100% (Layer 1, RGB/16) - Saving 45%", as Photoshop does (#3389).
     let saving = crate::jobs_ui::save_progress(app, st.doc.id).map(|s| format!(" - {s}")).unwrap_or_default();
-    format!("{} @ {}% ({layer}{model}/{}){}{saving}", st.doc.name, fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" })
+    format!("{} @ {}% ({layer}{model}/{}){}{saving}", titled_name(st), fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" })
+}
+
+/// The document's name as its tab and window title show it: "© name" when File Info marks it
+/// Copyrighted, as Photoshop does (#13821).
+fn titled_name(st: &photocraft_engine::DocState) -> String {
+    let copyrighted = photocraft_engine::file_cmds::copyright_marked(st.doc.metadata.xmp.as_deref());
+    format!("{}{}", if copyrighted { "\u{a9} " } else { "" }, st.doc.name)
 }
 
 /// The Studio strip's tab name: "name *" when unsaved, "name * - Saving 45%" while it saves (#3389).
@@ -812,7 +819,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let wins = app.ui.windows.clone();
     for w in wins.into_iter().filter(|w| w.open) {
         let Some(st) = app.session.documents().get(w.document) else { continue };
-        let title = format!("{} — window {}", st.doc.name, w.id);
+        let title = format!("{} — window {}", titled_name(st), w.id);
         let vid = egui::ViewportId::from_hash_of(("docwin", w.id));
         let mut builder = crate::os_window::builder().with_title(title).with_inner_size([800.0, 600.0]);
         if let Some([x, y]) = w.position {
@@ -837,14 +844,10 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if focused && !w.focused && app.session.active_index() != Some(w.document) {
                 app.session.set_active(w.document);
             }
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
-                let rect = ui.available_rect_before_wrap();
-                app.drawing_window = Some(w.id);
-                view = canvas_view(app, ui, w.document, rect, view.clone(), focused);
-                app.drawing_window = None;
-                // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
-                crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
-            });
+            let (shown, rect) = document_window_canvas(app, ui, &w, view.clone(), focused);
+            view = shown;
+            // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
+            crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
         });
         if shares && let Some(v) = app.ui.views.get_mut(w.document) {
             *v = view.clone();
@@ -858,6 +861,35 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     app.ui.windows.retain(|w| w.open);
+}
+
+/// The canvas of document window `w` (Window › New Window), drawn in its own viewport. Returns the
+/// view after this frame's input and the canvas rect.
+///
+/// Dialogs are modal, but their `egui::Modal` only blocks the viewport it is drawn in, the main
+/// window. Without a modal layer of its own, this window's canvas would take presses and drags
+/// under a dialog: a Move drag here committed a History step the dialog's Cancel never undid.
+/// So while a dialog is open the window gets an empty, transparent modal of its own, and its
+/// canvas is as inert as the main one's; the dialog's own gestures on the image (pan, zoom,
+/// eyedroppers) read the raw pointer and still work here, as they do there.
+pub(super) fn document_window_canvas(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    w: &crate::state::DocWindow,
+    view: crate::state::View,
+    focused: bool,
+) -> (crate::state::View, Rect) {
+    if !app.ui.dialogs.is_empty() {
+        egui::Modal::new(egui::Id::unique(("docwin-dialog-block", w.id))).backdrop_color(Color32::TRANSPARENT).frame(egui::Frame::NONE).show(ui.ctx(), |_| {});
+    }
+    let mut out = (view.clone(), Rect::NOTHING);
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
+        let rect = ui.available_rect_before_wrap();
+        app.drawing_window = Some(w.id);
+        out = (canvas_view(app, ui, w.document, rect, view, focused), rect);
+        app.drawing_window = None;
+    });
+    out
 }
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the
@@ -884,3 +916,7 @@ pub(super) fn move_target_after_filter(visible: &[usize], from: usize, to: usize
         None => document_count.saturating_sub(1),
     }
 }
+
+#[cfg(test)]
+#[path = "../file_info_copyright_title_tests.rs"]
+mod file_info_copyright_title_tests;

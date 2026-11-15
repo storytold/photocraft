@@ -474,7 +474,7 @@ fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
             return Err(e.to_string());
         }
     };
-    let recording = match actions_cmds::begin_playback(&mut app.session, &action) {
+    let recording = match actions_cmds::begin_playback_from(&mut app.session, &action, from) {
         Ok(r) => r,
         Err(e) => {
             actions_cmds::finish_pending_history(&mut app.session);

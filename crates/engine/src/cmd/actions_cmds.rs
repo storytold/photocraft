@@ -136,6 +136,9 @@ pub struct ActionsFile {
 
 pub const MAX_PLAYBACK_STEPS: u64 = 100_000;
 
+/// How deep batches and droplets may run inside one another (a droplet whose steps run a droplet).
+pub const MAX_BATCH_DEPTH: u8 = 4;
+
 /// Actions list and the recording / playback flags. Only `list` is persisted.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -156,6 +159,14 @@ pub struct ActionState {
     /// Number of steps executed by the current top-level playback tree.
     #[serde(skip)]
     pub playback_steps: u64,
+    /// Set for a batch nested in a played action or another batch: the playback counter it carries
+    /// is shared by every input, so a played action inside it does not restart the count.
+    #[serde(skip)]
+    pub budget_shared: bool,
+    /// How many batches (`file.automate.batch`, and droplets through it) are running inside one
+    /// another: each runs its steps in a scratch session that carries this on, plus one.
+    #[serde(skip)]
+    pub batch_depth: u8,
     /// How many scripts (`file.scripts.browse`) are running inside one another.
     #[serde(skip)]
     pub script_depth: u8,
@@ -303,6 +314,22 @@ pub fn consume_playback_step(s: &mut Session) -> bool {
         true
     }
 }
+
+/// Steps of the playback tree the next `actions.play` starts in has charged so far: a top-level
+/// call starts a new tree ([`begin_playback`] resets the counter).
+fn playback_steps_used(s: &Session) -> u64 {
+    if s.actions.playing > 0 || s.actions.budget_shared { s.actions.playback_steps } else { 0 }
+}
+
+/// Steps of `action` playback walks past without running them: the ones before `from` and the
+/// disabled ones after it. [`begin_playback`] charges them, so every stored step costs one unit
+/// of the playback budget once per call, run or not.
+fn skipped_steps(action: &Action, from: usize) -> u64 {
+    let len = action.steps.len();
+    let from = from.min(len);
+    let disabled = action.disabled.range(from..len).count();
+    u64::try_from(from.saturating_add(disabled)).unwrap_or(u64::MAX)
+}
 /// View-only menu commands recorded by the desktop shell. Headless playback reports
 /// them as unsupported instead of silently dropping them; Batch and droplets skip them.
 pub fn shell_view_command(id: &str) -> bool {
@@ -315,6 +342,14 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
         return Err(bad("actions.play", "an action is already playing"));
     }
     let idx = resolve(&s.actions.list, p, "actions.play")?;
+    // Every stored step of the call is charged to the playback tree (run, disabled or skipped),
+    // so refuse a call whose steps no longer fit before copying it: repeated calls to a large
+    // action would otherwise copy and walk it each time for free.
+    let len = s.actions.list.get(idx).map_or(0, |a| a.steps.len());
+    if playback_steps_used(s).saturating_add(u64::try_from(len).unwrap_or(u64::MAX)) > MAX_PLAYBACK_STEPS {
+        // A limit, not a bad parameter: an enclosing batch must fail the input instead of saving it.
+        return Err(EngineError::BatchLimit(format!("invalid parameters for `actions.play`: action playback exceeded the {MAX_PLAYBACK_STEPS}-step limit")));
+    }
     let action = s.actions.list.get(idx).cloned().ok_or_else(|| bad("actions.play", "no such action"))?;
     if s.actions.playback_stack.iter().any(|name| name == &action.name) || s.actions.recording.is_some_and(|(_, i)| i == idx) {
         return Err(bad("actions.play", format!("recursive action call to `{}`", action.name)));
@@ -751,7 +786,7 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
     let mut failed = None;
     for (i, (id, params)) in action.enabled_steps().skip_while(|(i, _)| *i < from) {
         if !consume_playback_step(s) {
-            failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", MAX_PLAYBACK_STEPS)}));
+            failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", MAX_PLAYBACK_STEPS), "limit": true}));
             break;
         }
         let effective = crate::file_cmds::batch_open_params(s, id, params);
@@ -768,6 +803,14 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
         }
         match playback_params(s, id, params).and_then(|p| if saves_smart_contents(s, id) { s.execute(SAVE_CONTENTS, json!({})) } else { s.execute(id, p) }) {
             Ok(value) => {
+                // A nested batch or action that stopped at a limit stops this action too.
+                if let Some(error) = limit_stop(&value) {
+                    // The child result stays, so the files a nested batch wrote before the stop are visible.
+                    let mut failure = json!({"step": i, "id": id, "error": error, "limit": true});
+                    failure["result"] = value;
+                    failed = Some(failure);
+                    break;
+                }
                 if let Some(error) = nested_failure(id, &value) {
                     // Like Scripts, retain the child result so partial Batch outputs remain visible.
                     let mut failure = json!({"step": i, "id": id, "error": error});
@@ -779,6 +822,11 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
             }
             Err(e) => {
                 failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+                if matches!(e, EngineError::BatchLimit(_))
+                    && let Some(f) = failed.as_mut()
+                {
+                    f["limit"] = json!(true);
+                }
                 break;
             }
         }
@@ -789,10 +837,31 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
 /// Suspend recording while a called action executes. Keep its commands in the journal
 /// for diagnostics, but record just the named call in the parent action.
 pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize, usize)>> {
+    begin_playback_from(s, action, 0)
+}
+
+/// [`begin_playback`] for a call that starts at step `from`: the steps before it are charged to the
+/// playback budget too.
+pub fn begin_playback_from(s: &mut Session, action: &Action, from: usize) -> Result<Option<(usize, usize)>> {
     flush_recording(s)?;
+    // The steps that run are charged one by one as they run; the ones walked past are charged
+    // here ([`playback_plan`] checked that the whole action fits). Refused before the history
+    // scope opens, so a rejected call leaves none behind.
+    let skipped = skipped_steps(action, from);
+    let max = crate::automate_cmds::MAX_SCRIPT_STEPS;
+    if s.actions.script_depth > 0 && s.actions.script_steps.saturating_add(skipped) > max {
+        return Err(bad("actions.play", format!("the script ran more than {max} steps in all")));
+    }
     if s.actions.playing == 0 {
         history::begin(s, &action.name);
-        s.actions.playback_steps = 0;
+        // A batch nested in a played action or another batch carries the shared count on.
+        if !s.actions.budget_shared {
+            s.actions.playback_steps = 0;
+        }
+    }
+    s.actions.playback_steps = s.actions.playback_steps.saturating_add(skipped);
+    if s.actions.script_depth > 0 {
+        s.actions.script_steps = s.actions.script_steps.saturating_add(skipped);
     }
     let recording = s.actions.recording.take();
     s.actions.playing = s.actions.playing.saturating_add(1);
@@ -820,6 +889,16 @@ pub fn restore_recording(s: &mut Session, idx: usize, action: &str, from: usize)
         params["from"] = json!(from);
     }
     s.journal.push(("actions.play".into(), params));
+}
+
+/// The message of a nesting or playback-limit stop reported by `value`, the result of a step: an
+/// input of a nested batch or droplet marked `"limit": true` in `errors`, or a played action whose
+/// failed step carries it. Such a stop fails the enclosing input rather than being swallowed.
+pub fn limit_stop(value: &Value) -> Option<String> {
+    let flagged = |v: &Value| v.get("limit") == Some(&json!(true));
+    let found =
+        value.get("errors").and_then(Value::as_array).and_then(|a| a.iter().find(|e| flagged(e))).or_else(|| value.get("failed").filter(|f| flagged(f)))?;
+    Some(found.get("error").and_then(Value::as_str).unwrap_or("batch limit reached").to_string())
 }
 
 /// What stops the caller of a Batch even where per-file errors don't (a direct Batch in a script
@@ -874,7 +953,7 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 /// recording while a gate is installed marks the recorded action ([`note_automation_step`]).
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
-    let recording = begin_playback(s, &action)?;
+    let recording = begin_playback_from(s, &action, from)?;
     // Nested calls and commands the steps run on their own behalf see the kept gate too.
     let kept = kept_gate(s, &action);
     if kept.is_some() {
@@ -1318,5 +1397,63 @@ mod security_tests {
         session.actions.playback_steps = MAX_PLAYBACK_STEPS - 1;
         assert!(consume_playback_step(&mut session));
         assert!(!consume_playback_step(&mut session));
+    }
+
+    /// A played action inside a nested batch (no enclosing playback) continues the shared count the
+    /// batch carries instead of restarting it for each input.
+    #[test]
+    fn a_nested_batch_input_does_not_reset_the_shared_playback_count() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        session.actions.list.push(Action::new("A", vec![("select.all".to_string(), json!({}))]));
+        session.actions.budget_shared = true;
+        session.actions.playback_steps = MAX_PLAYBACK_STEPS;
+        let r = session.execute("actions.play", json!({"action": "A"}));
+        assert!(matches!(r, Err(EngineError::BatchLimit(_))), "the carried count leaves no room for the action: {r:?}");
+        session.actions.budget_shared = false;
+        let r = session.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert_eq!(r["ran"], 1, "a top-level call starts its own count");
+    }
+
+    /// An action of mostly disabled steps, called over and over from a parent, is charged for
+    /// every step it stores, so the calls stop at the shared limit instead of each copying and
+    /// walking the whole action for free.
+    #[test]
+    fn disabled_steps_are_charged_to_the_playback_budget() {
+        let mut session = Session::new();
+        let mut child = Action::new("Child", (0..1000).map(|_| ("select.all".to_string(), json!({}))).collect());
+        child.disabled = (0..1000).collect();
+        let calls = MAX_PLAYBACK_STEPS as usize / 1000 * 2;
+        let parent = Action::new("Parent", (0..calls).map(|_| ("actions.play".to_string(), json!({"action": "Child"}))).collect());
+        session.actions.list.push(child);
+        session.actions.list.push(parent);
+        let r = session.execute("actions.play", json!({"action": "Parent"})).unwrap();
+        let failed = r["failed"]["error"].as_str().unwrap();
+        assert!(failed.contains("step limit"), "{failed}");
+        // Each call charges its 1000 stored steps plus the Play step itself.
+        let ran = r["ran"].as_u64().unwrap();
+        assert!(ran < MAX_PLAYBACK_STEPS / 1000, "{ran}");
+    }
+
+    /// Limit stops are recognised from a nested batch's `errors` and from a played action's `failed`;
+    /// an ordinary failure is not one.
+    #[test]
+    fn limit_stops_are_found_in_nested_results() {
+        let batch = json!({"files": [], "errors": [{"file": "a", "error": "x"}, {"file": "b", "error": "too deep", "limit": true}]});
+        assert_eq!(limit_stop(&batch).as_deref(), Some("too deep"));
+        let played = json!({"action": "A", "failed": {"step": 2, "id": "x", "error": "over", "limit": true}});
+        assert_eq!(limit_stop(&played).as_deref(), Some("over"));
+        assert_eq!(limit_stop(&json!({"errors": [{"file": "a", "error": "x"}], "failed": {"step": 0, "error": "y"}})), None);
+    }
+
+    #[test]
+    fn steps_before_from_are_charged() {
+        let action = Action::new("A", (0..10).map(|_| ("select.all".to_string(), json!({}))).collect());
+        assert_eq!(skipped_steps(&action, 7), 7);
+        assert_eq!(skipped_steps(&action, 50), 10);
+        let mut disabled = action.clone();
+        disabled.disabled = [1, 8, 9, 40].into_iter().collect();
+        assert_eq!(skipped_steps(&disabled, 7), 9);
+        assert_eq!(skipped_steps(&disabled, 0), 3);
     }
 }
