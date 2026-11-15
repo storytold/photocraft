@@ -85,6 +85,8 @@ fn drawn(start: [f64; 2], cur: [f64; 2], square: bool, centred: bool) -> [i64; 4
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])].map(|v| v.round() as i64)
 }
 #[cfg(test)]
+mod placeholder_tests;
+#[cfg(test)]
 mod shift_square_tests;
 #[cfg(test)]
 mod size_hud_tests;
@@ -577,10 +579,12 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             }
             let Some(f) = &l.frame else { continue };
             if l.children().is_some_and(|c| c.is_empty()) {
+                // An empty frame's placeholder: its box and an X, whatever its shape (#13872).
                 let q = f.corners().map(|p| xf.to_screen(p.x as f32, p.y as f32));
-                paint_path(painter, xf, &f.outline(), Stroke::new(1., t.text_faint));
-                painter.line_segment([q[0], q[2]], Stroke::new(1., t.text_faint));
-                painter.line_segment([q[1], q[3]], Stroke::new(1., t.text_faint));
+                let faint = Stroke::new(1., t.text_faint);
+                painter.add(egui::Shape::closed_line(q.to_vec(), faint));
+                painter.line_segment([q[0], q[2]], faint);
+                painter.line_segment([q[1], q[3]], faint);
             }
         }
     }
