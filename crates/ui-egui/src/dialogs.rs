@@ -1359,6 +1359,8 @@ pub(crate) mod guide_edit;
 pub mod guide_layout_ui;
 pub mod history_options_ui;
 mod image_processor_ui;
+#[cfg(test)]
+mod image_size_resample_off_tests;
 pub mod jpeg_options_ui;
 #[cfg(test)]
 mod label_column_tests;

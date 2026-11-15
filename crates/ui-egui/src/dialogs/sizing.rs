@@ -221,9 +221,15 @@ fn label(ui: &mut egui::Ui, text: &str, width: f32) {
 
 fn info_row(ui: &mut egui::Ui, k: &str, v: String) {
     let t = Tokens::get(ui.ctx());
+    info_row_value(ui, k, v, t.text);
+}
+
+/// [`info_row`] with its value drawn in `value`: Image Size greys the Dimensions line, without
+/// hiding it, while Resample is off (#14797).
+fn info_row_value(ui: &mut egui::Ui, k: &str, v: String, value: Color32) {
     ui.horizontal(|ui| {
         label(ui, tl!(k), 90.0);
-        ui.label(egui::RichText::new(v).color(t.text).size(12.0));
+        ui.label(egui::RichText::new(v).color(value).size(12.0));
     });
 }
 
@@ -288,13 +294,16 @@ fn field_unit(f: &Map<String, Value>, key: &str) -> String {
 }
 
 /// Unit menu beside the Width (`key` "width", which also offers Columns) or Height field.
-fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, id: &str) {
+/// `pixels` is whether Pixels can be picked there: Image Size greys it while Resample is off,
+/// since no pixel size is possible then (#14797); Percent stays pickable and its field greys
+/// instead (#2393). Canvas Size has no Resample, so it always passes true.
+fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, id: &str, pixels: bool) {
     let mut unit = field_unit(f, key);
     let mut opts: Vec<(String, &str)> = UNITS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
     if key == "width" {
         opts.push((COLUMNS.0.to_string(), COLUMNS.1));
     }
-    if crate::widgets::dropdown(ui, id, tl!("Units"), &mut unit, &opts, 110.0) {
+    if crate::widgets::dropdown_enabled(ui, id, tl!("Units"), &mut unit, &opts, 110.0, |u| pixels || u != "px") {
         set_unit(f, key, &unit);
     }
 }
@@ -314,6 +323,12 @@ fn set_unit(f: &mut Map<String, Value>, key: &str, unit: &str) {
     f.insert("__unit".into(), json!(unit));
 }
 
+/// Whether `u` names a physical size both fields can show: not Pixels, not Percent, and not
+/// Columns, which only Width has (#14797).
+fn physical_unit(u: &str) -> bool {
+    !matches!(u, "px" | "percent") && u != COLUMNS.0
+}
+
 fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
@@ -328,7 +343,9 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
     let (w, h) = (num(f, "width").round(), num(f, "height").round());
     info_row(ui, tl!("Image Size:"), crate::i18n::fmt(tl!("{size} (was {old})"), &[("size", &human_bytes(w * h * bpp)), ("old", &human_bytes(ow * oh * bpp))]));
-    info_row(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64));
+    // Photoshop greys the Dimensions line while Resample is off; it stays drawn and shows the
+    // pixels OK keeps (#2393), only dimmer (#14797).
+    info_row_value(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64), if resampling { t.text } else { t.text_faint });
     ui.add_space(6.0);
     // Photoshop keeps width and height linked while Resample is off.
     let mut constrain = !resampling || f.get("__constrain").and_then(Value::as_bool).unwrap_or(true);
@@ -336,18 +353,23 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // fields); a physical size (inches, cm…) changes the resolution instead.
     // Width in Columns is a physical size, so it stays editable while Height (in pixels) isn't.
     let editable = |f: &Map<String, Value>, key: &str| resampling || !matches!(field_unit(f, key).as_str(), "px" | "percent");
+    // The last physical unit the two fields showed, so turning Resample off can switch them back
+    // to it; a dialog that never showed one falls back to Inches (#14797).
+    if let Some(u) = f.get("__unit").and_then(Value::as_str).filter(|u| physical_unit(u)) {
+        f.insert("__physUnit".into(), json!(u));
+    }
     let w_row = ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
         let editable = editable(f, "width");
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w")).inner;
-        unit_dropdown(ui, f, "width", "is-unit-w");
+        unit_dropdown(ui, f, "width", "is-unit-w", resampling);
         c
     });
     let h_row = ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
         let editable = editable(f, "height");
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h")).inner;
-        unit_dropdown(ui, f, "height", "is-unit-h");
+        unit_dropdown(ui, f, "height", "is-unit-h", resampling);
         c
     });
     let (w_changed, h_changed) = (w_row.inner, h_row.inner);
@@ -437,29 +459,43 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             if !on {
                 f.insert("width".into(), json!(ow));
                 f.insert("height".into(), json!(oh));
+                // Fields showing Pixels or Percent can't take a new size without resampling, so
+                // Photoshop switches them to the physical unit they used last (Inches when none
+                // did) and they stay editable, typing a resolution instead. A Width already set
+                // to Columns is a physical size of its own and the Height menu's state was not
+                // measured, so both keep today's behaviour (#14797).
+                let shown = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
+                let columns = f.get("__unitW").and_then(Value::as_str) == Some(COLUMNS.0);
+                if (shown == "px" || shown == "percent") && !columns {
+                    let last = f.get("__physUnit").and_then(Value::as_str).filter(|u| physical_unit(u)).unwrap_or("in").to_string();
+                    f.insert("__unit".into(), json!(last));
+                }
             }
         }
-        if resampling {
-            let mut cur = resample.clone();
-            // Photoshop's list, then Lanczos.
-            let opts = [
-                ("automatic".to_string(), tl!("Automatic")),
-                ("preserveDetails".to_string(), tl!("Preserve Details")),
-                ("bicubicSmoother".to_string(), tl!("Bicubic Smoother (enlargement)")),
-                ("bicubicSharper".to_string(), tl!("Bicubic Sharper (reduction)")),
-                ("bicubic".to_string(), tl!("Bicubic (smooth gradients)")),
-                ("nearest".to_string(), tl!("Nearest Neighbor (hard edges)")),
-                ("bilinear".to_string(), tl!("Bilinear")),
-                ("lanczos".to_string(), tl!("Lanczos (sharp)")),
-            ];
-            // Indexed Color: every other method blends colours the colour table doesn't have,
-            // which the command doesn't use and a save quantises away (#6019).
-            let indexed = f.get("__indexed").and_then(Value::as_bool) == Some(true);
-            let opts: Vec<_> = opts.into_iter().filter(|(k, _)| !indexed || k == "automatic" || k == "nearest").collect();
+        // Resample off greys the method menu rather than hiding it, and it still reads the method
+        // turning the checkbox back on will use (#14797).
+        let shown_method = if resampling { resample.clone() } else { f.get("__resample").and_then(Value::as_str).unwrap_or("bicubic").to_string() };
+        let mut cur = shown_method;
+        // Photoshop's list, then Lanczos.
+        let opts = [
+            ("automatic".to_string(), tl!("Automatic")),
+            ("preserveDetails".to_string(), tl!("Preserve Details")),
+            ("bicubicSmoother".to_string(), tl!("Bicubic Smoother (enlargement)")),
+            ("bicubicSharper".to_string(), tl!("Bicubic Sharper (reduction)")),
+            ("bicubic".to_string(), tl!("Bicubic (smooth gradients)")),
+            ("nearest".to_string(), tl!("Nearest Neighbor (hard edges)")),
+            ("bilinear".to_string(), tl!("Bilinear")),
+            ("lanczos".to_string(), tl!("Lanczos (sharp)")),
+        ];
+        // Indexed Color: every other method blends colours the colour table doesn't have,
+        // which the command doesn't use and a save quantises away (#6019).
+        let indexed = f.get("__indexed").and_then(Value::as_bool) == Some(true);
+        let opts: Vec<_> = opts.into_iter().filter(|(k, _)| !indexed || k == "automatic" || k == "nearest").collect();
+        ui.add_enabled_ui(resampling, |ui| {
             if crate::widgets::dropdown(ui, "is-resample", tl!("Resample"), &mut cur, &opts, 200.0) {
                 f.insert("resample".into(), json!(cur));
             }
-        }
+        });
     });
 }
 
@@ -483,12 +519,12 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
         dim_field(ui, f, "width", "__origW", "cs-w");
-        unit_dropdown(ui, f, "width", "cs-unit-w");
+        unit_dropdown(ui, f, "width", "cs-unit-w", true);
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
         dim_field(ui, f, "height", "__origH", "cs-h");
-        unit_dropdown(ui, f, "height", "cs-unit-h");
+        unit_dropdown(ui, f, "height", "cs-unit-h", true);
     });
     ui.horizontal(|ui| {
         label(ui, "", 90.0);
