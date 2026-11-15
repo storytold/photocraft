@@ -159,7 +159,7 @@ fn apply_menu_ok_requires_a_row_but_not_variable_definitions() {
         assert!(h.state().ui.dialogs.is_empty());
         assert_eq!(h.state().session.active().unwrap().doc.variables.active, expected);
         if explicit {
-            assert!(h.state().ui.status.contains("no data set at index 0"));
+            assert!(h.state().ui.status.contains("no data sets in document"));
         } else {
             assert!(h.state().ui.status.is_empty(), "{}", h.state().ui.status);
         }

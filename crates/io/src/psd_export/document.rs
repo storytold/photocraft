@@ -127,7 +127,6 @@ fn export_supported_document(
     };
     let space = photocraft_compose::cmyk_space(doc);
     photocraft_color::convert::with_cmyk_space(space.as_ref(), || ex.emit(&doc.layers, &mut tick));
-    drop(tick);
     ctl.progress(layers_share);
 
     let merged = prepare_merged_planes(doc, &mut ex, opts, ctl, fmt, duotone_inks.is_some(), layers_share);
@@ -293,7 +292,7 @@ fn export_supported_document(
     // open a 32-bit file without them (#291).
     let color_mode_data = match duotone_inks {
         Some(raw) => raw,
-        None => photocraft_psd::hdr::color_mode_data_for_depth(header.depth),
+        None => craft_psd::hdr::color_mode_data_for_depth(header.depth),
     };
     let mut file = PsdFile {
         header,

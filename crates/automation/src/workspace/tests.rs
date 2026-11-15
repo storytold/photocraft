@@ -152,6 +152,32 @@ fn write_stream_seeks_back_and_keeps_the_original_on_failure() {
     assert_eq!(std::fs::read(inside.join("notes.txt")).unwrap(), b"keep");
 }
 
+/// #14355: files PhotoCraft can read but never writes (notes, data, rich text, read-only image
+/// formats such as XPM or DICOM) are not "a kind PhotoCraft writes", by name or by their bytes (#9439).
+#[test]
+fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
+    let (inside, _, workspace) = roots("read-only-kinds");
+    let files: [(&str, &[u8]); 7] = [
+        ("notes.md", b"# keep"),
+        ("data.csv", b"a,b\n1,2\n"),
+        ("letter.rtf", b"{\\rtf1 keep}"),
+        ("README", b"{\\rtf1 keep}"),
+        ("icon.xpm", b"/* XPM */ keep"),
+        ("scan.dcm", b"keep"),
+        ("TODO", b"/* XPM */ keep"),
+    ];
+    let replaced: Vec<&str> = files
+        .into_iter()
+        .filter(|(name, bytes)| {
+            std::fs::write(inside.join(name), bytes).unwrap();
+            workspace.write(name, b"\x89PNG\r\n\x1a\n").is_ok() || std::fs::read(inside.join(name)).unwrap() != *bytes
+        })
+        .map(|(name, _)| name)
+        .collect();
+    assert!(replaced.is_empty(), "replaced: {replaced:?}");
+    assert!(temp_files(&inside).is_empty());
+}
+
 /// A writer that panics leaves the original and no temporary file behind.
 #[test]
 fn write_stream_cleans_up_after_a_panicking_writer() {
@@ -449,7 +475,7 @@ fn windows_unc_root_writes_and_exports_when_supported() {
 #[cfg(windows)]
 #[test]
 fn windows_handle_relative_helpers_match_the_capability_operations() {
-    let (inside, outside, workspace) = roots("unc-helpers");
+    let (inside, _outside, workspace) = roots("unc-helpers");
     let root = workspace.write.as_ref().unwrap();
     assert!(!is_unc_root(root));
 
@@ -464,7 +490,15 @@ fn windows_handle_relative_helpers_match_the_capability_operations() {
     std::fs::create_dir(inside.join("dir")).unwrap();
     assert!(delete_on_close(&root.dir, Path::new("dir")).is_err());
     assert!(inside.join("dir").is_dir());
+}
 
+/// The ambient rename that stands in for the capability's below a UNC root (#10317).
+#[cfg(windows)]
+#[test]
+fn windows_rename_unc_matches_the_capability_rename() {
+    let (inside, outside, workspace) = roots("unc-rename");
+    let root = workspace.write.as_ref().unwrap();
+    std::fs::create_dir(inside.join("dir")).unwrap();
     // The ambient rename on the canonical root path behaves like the capability's: it creates,
     // replaces a file, replaces a link instead of writing through it, and refuses a directory.
     std::fs::write(inside.join("plain.tmp"), b"the longer first version").unwrap();
@@ -487,7 +521,15 @@ fn windows_handle_relative_helpers_match_the_capability_operations() {
         assert_eq!(std::fs::read(outside.join("target.png")).unwrap(), b"outside");
     }
     let _ = std::fs::remove_file(inside.join("plain.tmp"));
+}
 
+/// The directory walk that stands in for the capability's `create_dir_all` below a UNC root
+/// (#10317) creates, refuses files on the way and never follows a junction outside.
+#[cfg(windows)]
+#[test]
+fn windows_create_dir_all_unc_matches_the_capability_operation() {
+    let (inside, outside, workspace) = roots("unc-dirs");
+    let root = workspace.write.as_ref().unwrap();
     create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
     assert!(inside.join("a/b/c").is_dir());
     create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
@@ -786,6 +828,10 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         "fileHandling.lutFolder",
         "fileHandling",
         "scratchDisks.disks",
+        "integrations",
+        "integrations.readRoot",
+        "integrations.writeRoot",
+        ".integrations.writeRoot",
         ".",
         "..historyLog.filePath",
     ] {
@@ -796,6 +842,12 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
     );
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "interface.language", "value": "fr"})).is_ok());
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "fileHandling.autosave", "value": false})).is_ok());
+    assert!(
+        authorize_engine_command("prefs.set", &serde_json::json!({"values": {"integrations.controlPort": 7878, "integrations.writeRoot": "/outside"}}))
+            .is_err(),
+        "a batch may not grant automation roots either"
+    );
+    assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "integrations.controlPort", "value": 7878})).is_ok());
 }
 
 #[test]
@@ -995,6 +1047,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.convertPoint"
             | "path.addAnchor"
             | "path.deleteAnchor"
+            | "path.deleteSegment"
             | "path.mergeShapeComponents"
             | "path.setOperation"
             | "path.clippingPath.set"
@@ -1446,6 +1499,22 @@ fn same_root_leaf_link_save_replaces_the_link_without_writing_its_target() {
     assert!(!std::fs::symlink_metadata(inside.join("link.png")).unwrap().file_type().is_symlink());
 }
 
+/// A hardlink inside a root names the outside inode, so it reads that content. Writing over it is
+/// an atomic replace of the directory entry: the other name and its inode keep their bytes.
+#[cfg(unix)]
+#[test]
+fn hardlink_inside_a_root_reads_the_target_but_write_over_replaces_the_link() {
+    let (inside, outside, workspace) = roots("hardlink");
+    let target = outside.join("target.png");
+    std::fs::write(&target, b"outside").unwrap();
+    std::fs::hard_link(&target, inside.join("linked.png")).unwrap();
+
+    assert_eq!(workspace.read("linked.png").unwrap(), b"outside");
+    workspace.write("linked.png", b"replacement").unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"outside", "the outside inode is not modified");
+    assert_eq!(std::fs::read(inside.join("linked.png")).unwrap(), b"replacement");
+}
+
 #[test]
 fn directory_pcraft_uses_ordered_roots_without_falling_back_after_selection() {
     let (library, work, _) = roots("pcraft-ordered");
@@ -1492,7 +1561,7 @@ fn csh_import_requires_inline_data_in_automation() {
 
 /// A one-shape CSH set (version 2) named `name`, with a single open one-knot subpath.
 fn one_shape_csh(name: &str) -> Vec<u8> {
-    use photocraft_psd::path::{PathData, PsdKnot, PsdSubpath};
+    use craft_psd::path::{PathData, PsdKnot, PsdSubpath};
     let mut bytes = b"cush".to_vec();
     bytes.extend_from_slice(&2u32.to_be_bytes());
     bytes.extend_from_slice(&1u32.to_be_bytes());

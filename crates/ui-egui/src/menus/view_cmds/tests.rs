@@ -14,6 +14,49 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     menu_items(app).into_iter().find(|i| i.id == id).and_then(|i| i.checked)
 }
 
+/// The form must list every source first and default to Current only when a document exists.
+#[test]
+fn image_processor_source_choices_include_current_and_all_open_documents() {
+    for n in [0, 2] {
+        let (mut app, ctx) = app_with(n);
+        menu(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
+        let fields = &app.ui.dialogs.last().unwrap().fields;
+        assert_eq!(fields["source"], json!(if n == 0 { "folder" } else { "current" }));
+        assert_eq!(fields["__choices"]["source"], json!(["current", "open", "folder"]));
+        assert_eq!(fields["__labels"]["current"], json!("Current document"));
+        assert_eq!(fields["__labels"]["open"], json!("All open documents"));
+        assert_eq!(form_keys(fields).first().map(String::as_str), Some("source"));
+    }
+}
+
+/// Confirming either document source must ignore a stale input-folder field, export the
+/// expected number of copies and retain the open documents' original snapshots.
+#[test]
+fn image_processor_dialog_confirms_open_document_sources_without_reading_the_input_folder() {
+    for source in ["current", "open"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, ctx) = app_with(0);
+        for name in ["First", "Second"] {
+            app.run("file.new", json!({"name": name, "width": 100, "height": 80})).unwrap();
+        }
+        let before: Vec<_> = app.session.documents().iter().map(|st| st.doc.clone()).collect();
+        let id = menu(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+        fields.insert("source".into(), json!(source));
+        fields.insert("input".into(), json!(dir.path().join("missing-input")));
+        fields.insert("output".into(), json!(dir.path()));
+        fields.insert("format".into(), json!("png"));
+        fields.insert("width".into(), json!(50));
+        fields.insert("height".into(), json!(50));
+        let result = crate::dialogs::confirm(&mut app, id).unwrap();
+        assert_eq!(result["files"].as_array().unwrap().len(), if source == "current" { 1 } else { 2 }, "{result}");
+        assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+        for (st, original) in app.session.documents().iter().zip(&before) {
+            assert!(std::sync::Arc::ptr_eq(&st.doc, original));
+        }
+    }
+}
+
 /// #1209: the browser picker supplies bytes even when the engine cannot read native paths.
 #[test]
 fn place_embedded_enablement_does_not_require_native_doc() {
@@ -688,6 +731,7 @@ fn batch_dialogs_include_all_subfolders() {
             assert_eq!(fields["stopOnError"], json!(false));
             assert_eq!(fields["errorLog"], json!(""));
         }
+        fields.insert("source".into(), json!("folder"));
         fields.insert("input".into(), json!(input));
         fields.insert("output".into(), json!(dir.join(out).to_string_lossy()));
         fields.insert("includeSubfolders".into(), json!(true));
