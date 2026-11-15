@@ -23,7 +23,7 @@ photocraft-color = { path = "crates/color" }
 photocraft-raster = { path = "crates/raster" }
 photocraft-doc = { path = "crates/doc" }
 photocraft-ops = { path = "crates/ops" }
-craft-plist = { git = "https://github.com/storytold/craft-libs", rev = "cc4fc29cdba60f70e3af3b5d975c60bd0085cb1b" }
+craft-plist = { git = "https://github.com/storytold/craft-libs", rev = "e2e3b4213afb2b5e7651bc1b1a1cf72a8bb6313d" }
 craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "ad8faa1c136ce289e9f132c9137d0cd913bd4ef6" }
 photocraft-codecs = { package = "craft-image-codecs", git = "https://github.com/storytold/craft-libs", rev = "ad8faa1c136ce289e9f132c9137d0cd913bd4ef6" }
 photocraft-formats = { package = "craft-file-formats", git = "https://github.com/storytold/craft-libs", rev = "ad8faa1c136ce289e9f132c9137d0cd913bd4ef6", features = ["raster-codecs", "pdf", "svg", "ora", "kra", "xcf", "pdn", "raw", "psd", "affinity", "pcraft"] }
