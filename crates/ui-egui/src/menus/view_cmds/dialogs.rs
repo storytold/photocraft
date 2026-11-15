@@ -577,6 +577,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         }
         "file.export.colorLookupTables" => {
             let (_, _, name) = doc?;
+            // The document's checks come first: a refused document shows only the message (#13743).
+            if let Some(Err(msg)) = app.session.active().map(|st| photocraft_engine::file_cmds::color_lookup_check(&st.doc)) {
+                return Some(Err(msg));
+            }
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
             // A selected adjustment is a common use case, but existing no-selection exports
             // continue to bake the entire visible stack. The scope remains explicit in the UI.

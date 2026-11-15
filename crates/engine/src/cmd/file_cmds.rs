@@ -103,13 +103,21 @@ fn can_revert(s: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
-fn has_adjustments(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document open")?;
-    if d.doc.layers.iter().any(|l| l.visible && matches!(l.content, LayerContent::Adjustment(_))) {
-        Ok(())
-    } else {
-        Err("the document has no visible adjustment layers to export".into())
+/// What File › Export › Color Lookup Tables checks before anything else, in the reference
+/// application's words, in a stable order: the colour mode, then the Background, then the
+/// adjustment layers, hidden ones included (#13743). The menu entry itself is enabled whenever a
+/// document is open; a failed check shows its message and exports nothing.
+pub fn color_lookup_check(doc: &Document) -> std::result::Result<(), String> {
+    if !matches!(doc.mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Lab) {
+        return Err("Could not export Color Lookup Tables because only RGB, LAB, and CMYK color modes are supported.".into());
     }
+    if doc.background().is_none() {
+        return Err("Could not export Color Lookup Tables because this document has no background.".into());
+    }
+    if !doc.walk().into_iter().any(|(_, _, l)| matches!(l.content, LayerContent::Adjustment(_))) {
+        return Err("Could not export Color Lookup Tables because this document has no adjustment layers.".into());
+    }
+    Ok(())
 }
 
 fn has_shape(s: &Session) -> std::result::Result<(), String> {
@@ -435,8 +443,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "Color Lookup Tables…",
             &["File", "Export"],
             None,
-            r##"{"path":str? (.cube; omit to return the text),"size":2..129=33,"title":str?,"scope":"all|selected"="all","layers":[id,…]?} (selected layer IDs use original document stacking; masks are spatial and omitted)"##,
-            has_adjustments,
+            r##"{"path":str? (.cube; omit to return the text),"size":2..129=33,"title":str?,"scope":"all|selected"="all","layers":[id,…]?} (needs an RGB, CMYK or Lab document with a Background and an adjustment layer; all: the whole visible stack over the canvas; selected / layer IDs: those adjustment layers alone, in document stacking, masks omitted)"##,
+            has_doc,
             color_lookup_tables
         ),
         spec!(

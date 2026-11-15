@@ -3210,7 +3210,9 @@ fn nested_batches_retain_partial_results() {
 #[test]
 fn color_lookup_table_bakes_the_adjustment_stack() {
     let mut s = session(8, 8, 8);
-    assert!(!s.is_enabled("file.export.colorLookupTables"));
+    // Enabled for any open document; without an adjustment layer the export refuses (#13743).
+    assert!(s.is_enabled("file.export.colorLookupTables"));
+    assert!(s.execute("file.export.colorLookupTables", json!({"size": 3})).unwrap_err().to_string().contains("no adjustment layers"));
     s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
     let r = s.execute("file.export.colorLookupTables", json!({"size": 3})).unwrap();
     let cube = r["cube"].as_str().unwrap();

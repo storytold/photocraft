@@ -354,6 +354,7 @@ pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
 pub(super) fn color_lookup_tables(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "file.export.colorLookupTables";
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    super::color_lookup_check(&d.doc).map_err(EngineError::Other)?;
     let size = match p.get("size") {
         None | Some(Value::Null) => 33,
         Some(v) => v.as_u64().ok_or_else(|| EngineError::BadParams { cmd: CMD.into(), msg: "size must be an integer".into() })?,
@@ -417,3 +418,7 @@ mod layers_to_files_prefix_tests;
 #[cfg(test)]
 #[path = "export_clut_stack_tests.rs"]
 mod export_clut_stack_tests;
+
+#[cfg(test)]
+#[path = "export_clut_checks_tests.rs"]
+mod export_clut_checks_tests;
