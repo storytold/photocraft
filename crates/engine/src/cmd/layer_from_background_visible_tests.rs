@@ -53,3 +53,13 @@ fn an_implicit_conversion_keeps_a_hidden_background_hidden() {
     assert_eq!(l.name, "Layer 0");
     assert!(!l.visible);
 }
+
+#[test]
+fn an_action_step_keeps_a_hidden_background_hidden() {
+    // An action's `set` step on the Background plays with `show: false`.
+    let mut s = session(true);
+    s.execute("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false, "show": false})).unwrap();
+    let l = background(&s);
+    assert_eq!(l.name, "Layer 0");
+    assert!(!l.visible);
+}

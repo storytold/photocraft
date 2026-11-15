@@ -492,12 +492,17 @@ fn layer_from_background(s: &mut Session, p: &Value) -> Result<Value> {
     // `select: false`: the targeted layer stays targeted, as when a Photoshop action's `set`
     // names the Background while another layer is selected.
     let select = p.get("select").and_then(Value::as_bool).unwrap_or(true);
+    // `show: false`: an action's `set` step on the Background replays the conversion and keeps
+    // its visibility, like the implicit conversions.
+    let show = p.get("show").and_then(Value::as_bool).unwrap_or(true);
     let id = s.edit("Layer From Background", |doc, active| {
         let l = doc.background_mut().ok_or(EngineError::Other("the document has no Background layer".into()))?;
         unlock_background(l);
         // Only this explicit conversion shows a hidden Background, as in the reference
         // application; implicit ones through `background_to_layer` keep its visibility.
-        l.visible = true;
+        if show {
+            l.visible = true;
+        }
         if select || active.is_none() {
             *active = Some(l.id);
         }
@@ -1003,7 +1008,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layer From Background…",
             &["Layer", "New"],
             None,
-            r##"{"ifPresent":bool=false (true: a document without a Background is left as it is, as a Photoshop action's step needs on an image that opened as a normal layer),"select":bool=true (false: the targeted layer stays targeted)}"##,
+            r##"{"ifPresent":bool=false (true: a document without a Background is left as it is, as a Photoshop action's step needs on an image that opened as a normal layer),"select":bool=true (false: the targeted layer stays targeted),"show":bool=true (true: a hidden Background becomes a visible layer, as the menu command does; false: it keeps its visibility, as an action's step does)}"##,
             has_background,
             layer_from_background
         ),

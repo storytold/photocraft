@@ -997,7 +997,7 @@ fn background_from(d: &Descriptor) -> Mapped {
     // On an image that opened as a normal layer there is no Background to convert;
     // Photoshop stops there, but the step's purpose (an editable layer) is met.
     // Photoshop's `set` of another layer doesn't target it: the selected layer stays.
-    let mut v = vec![("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false}))];
+    let mut v = vec![("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false, "show": false}))];
     let mut props = Map::new();
     props.insert("layer".into(), "Layer 0".into());
     if let Some(t) = get_obj(d, "T   ") {
