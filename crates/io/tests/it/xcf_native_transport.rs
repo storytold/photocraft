@@ -150,8 +150,11 @@ fn bzip2_and_xz_use_the_same_native_import_and_validate_complete_streams() {
         corrupt[at] ^= 1;
         assert!(photocraft_io::import(name, &corrupt).is_err(), "{name}: checksum corruption");
     }
-    // LZMA2 property 28 requests 64 MiB plus decoder overhead, exceeding the 64 MiB budget.
-    let result = photocraft_io::import("excessive.xcf.xz", &xz(&source, 28));
+    // Property 28 requests the supported -9 dictionary; decoder overhead is admitted too.
+    let largest = photocraft_io::import("preset-9.xcf.xz", &xz(&source, 28)).unwrap().document;
+    assert_eq!(photocraft_compose::flatten(&largest).px, photocraft_compose::flatten(&expected).px);
+    // The next property requests 96 MiB and still exceeds the bounded dictionary policy.
+    let result = photocraft_io::import("excessive.xcf.xz", &xz(&source, 29));
     let Err(error) = result else { panic!("excessive XZ dictionary accepted") };
     assert!(error.to_string().contains("mem_limit_kb"), "{error}");
 }
