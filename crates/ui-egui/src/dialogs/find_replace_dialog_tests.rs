@@ -92,6 +92,86 @@ fn window_cursor_is_independent_of_headless_searches_and_bound_to_its_document()
     assert!(app.session.documents()[0].doc.layer(LayerId(layer)).is_some());
 }
 
+fn blocked_layer(app: &mut PhotocraftApp, name: &str, hidden: bool) -> u64 {
+    let layer = type_layer(app, "cat");
+    app.run("layer.setProps", json!({"layer": layer, "name": name, "visible": !hidden, "locked": !hidden})).unwrap();
+    layer
+}
+
+#[test]
+fn change_all_offers_skip_all_per_kind_and_cancel_keeps_the_document() {
+    let mut app = app();
+    let target = type_layer(&mut app, "cat cat");
+    let locked = blocked_layer(&mut app, "Locked title", false);
+    let hidden_below = blocked_layer(&mut app, "Hidden second", true);
+    let hidden_above = blocked_layer(&mut app, "Hidden first", true);
+    let before = app.session.active().unwrap().history.past_len();
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("cat")).unwrap();
+    set_field(&mut app, "replace", json!("dog")).unwrap();
+    let reply = command(&mut app, "changeAll").unwrap();
+    assert_eq!(reply["warning"], "The text layer “Hidden first” is hidden and cannot be searched.  Skip hidden layer and continue searching?");
+    assert_eq!(inspect(&app).unwrap()["warning"]["layer"], hidden_above);
+    command(&mut app, "skip").unwrap();
+    assert_eq!(inspect(&app).unwrap()["warning"]["layer"], hidden_below);
+    command(&mut app, "skipAll").unwrap();
+    assert_eq!(inspect(&app).unwrap()["warning"]["layer"], locked);
+    assert_eq!(command(&mut app, "cancelSearch").unwrap()["cancelled"], true);
+    assert_eq!(text(&app, target), "cat cat");
+    assert_eq!(app.session.active().unwrap().history.past_len(), before);
+
+    command(&mut app, "changeAll").unwrap();
+    assert_eq!(inspect(&app).unwrap()["warning"]["layer"], hidden_above, "Skip All is scoped to this search");
+    let reply = command(&mut app, "skipAll").unwrap();
+    assert_eq!(reply["warning"], "The text layer “Locked title” is locked and cannot be searched.  Skip locked layer and continue searching?");
+    assert_eq!(command(&mut app, "skip").unwrap()["count"], 2);
+    assert_eq!(app.session.active().unwrap().history.past_len(), before + 1);
+    assert_eq!(text(&app, target), "dog dog");
+    for unchanged in [hidden_above, hidden_below, locked] {
+        assert_eq!(text(&app, unchanged), "cat");
+    }
+}
+
+#[test]
+fn find_next_warns_when_it_reaches_a_blocked_layer() {
+    let mut app = app();
+    let last = type_layer(&mut app, "cat later");
+    let hidden = blocked_layer(&mut app, "Hidden", true);
+    let first = type_layer(&mut app, "cat first");
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("cat")).unwrap();
+    assert_eq!(command(&mut app, "find").unwrap()["found"]["layer"], first);
+    command(&mut app, "find").unwrap();
+    assert_eq!(inspect(&app).unwrap()["warning"]["layer"], hidden);
+    assert_eq!(app.session.active().unwrap().active_layer, Some(LayerId(first)));
+    assert_eq!(command(&mut app, "skip").unwrap()["found"]["layer"], last);
+    assert_eq!(inspect(&app).unwrap()["warning"], Value::Null);
+}
+
+#[test]
+fn warning_preference_is_per_kind_and_a_stale_confirmation_rechecks_layer_order() {
+    let mut app = app();
+    let visible = type_layer(&mut app, "cat visible");
+    let locked = blocked_layer(&mut app, "Locked", false);
+    let hidden = blocked_layer(&mut app, "Hidden", true);
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("cat")).unwrap();
+    command(&mut app, "find").unwrap();
+    set_field(&mut app, "dontShowAgain", json!(true)).unwrap();
+    let newest = blocked_layer(&mut app, "New hidden layer", true);
+    command(&mut app, "skip").unwrap();
+    assert_eq!(inspect(&app).unwrap()["warning"]["layer"], newest);
+    assert!(!super::super::dont_show_again::dismissed(&app, "findReplaceHidden"));
+
+    set_field(&mut app, "dontShowAgain", json!(true)).unwrap();
+    command(&mut app, "skip").unwrap();
+    assert_eq!(inspect(&app).unwrap()["warning"]["layer"], locked);
+    assert!(super::super::dont_show_again::dismissed(&app, "findReplaceHidden"));
+    assert!(!super::super::dont_show_again::dismissed(&app, "findReplaceLocked"));
+    assert_eq!(command(&mut app, "skip").unwrap()["found"]["layer"], visible);
+    assert_eq!(text(&app, hidden), "cat");
+}
+
 #[test]
 fn modeless_window_focus_enter_tab_and_escape() {
     use egui::{Event, Key, vec2};

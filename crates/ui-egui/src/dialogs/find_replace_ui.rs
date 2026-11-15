@@ -1,7 +1,7 @@
 //! Modeless Edit › Find and Replace Text. The engine owns matching and replacements.
 
 use photocraft_doc::{DocId, LayerId};
-use photocraft_engine::edit_menu_cmds::FindCursor;
+use photocraft_engine::edit_menu_cmds::{BlockedTextLayer, FindCursor, FindReplaceWarning, find_replace_warning};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -42,7 +42,7 @@ impl Fields {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Done,
     Find,
@@ -81,6 +81,61 @@ struct CanvasMatch {
     caret: usize,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Skips {
+    layers: Vec<LayerId>,
+    hidden: bool,
+    locked: bool,
+}
+
+impl Skips {
+    fn skip_kind(&mut self, reason: BlockedTextLayer) {
+        match reason {
+            BlockedTextLayer::Hidden => self.hidden = true,
+            BlockedTextLayer::Locked => self.locked = true,
+        }
+    }
+
+    fn contains(&self, id: LayerId, reason: BlockedTextLayer) -> bool {
+        self.layers.contains(&id)
+            || match reason {
+                BlockedTextLayer::Hidden => self.hidden,
+                BlockedTextLayer::Locked => self.locked,
+            }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WarningChoice {
+    Skip,
+    Cancel,
+    SkipAll,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PendingSearch {
+    action: Action,
+    warning: FindReplaceWarning,
+    skips: Skips,
+    revision: u64,
+    dont_show_again: bool,
+}
+
+fn warning_pref(reason: BlockedTextLayer) -> &'static str {
+    match reason {
+        BlockedTextLayer::Hidden => "findReplaceHidden",
+        BlockedTextLayer::Locked => "findReplaceLocked",
+    }
+}
+
+fn warning_message(warning: &FindReplaceWarning) -> String {
+    let message = match warning.reason {
+        BlockedTextLayer::Hidden => tl!("The text layer “{name}” is hidden and cannot be searched.  Skip hidden layer and continue searching?"),
+        BlockedTextLayer::Locked => tl!("The text layer “{name}” is locked and cannot be searched.  Skip locked layer and continue searching?"),
+    };
+    crate::i18n::fmt(message, &[("name", &warning.name)])
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct Open {
     doc: DocId,
@@ -90,6 +145,7 @@ struct Open {
     cursor: Option<FindCursor>,
     canvas_match: Option<CanvasMatch>,
     focus: Option<FocusField>,
+    pending: Option<PendingSearch>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -114,6 +170,7 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
             cursor: None,
             canvas_match: None,
             focus: Some(FocusField::Find),
+            pending: None,
         });
     }
     Ok(json!({"dialog": CONTROL_ID}))
@@ -167,15 +224,23 @@ fn update_fields(app: &mut PhotocraftApp, fields: Fields) {
         window.canvas_match = None;
         app.ui.find_replace.open = Some(window);
     }
+    if fields != app.ui.find_replace.fields
+        && let Some(window) = app.ui.find_replace.open.as_mut()
+    {
+        window.pending = None;
+    }
     app.ui.find_replace.fields = fields;
 }
 
-fn apply(app: &mut PhotocraftApp, action: Action) -> Result<Value, String> {
+fn apply(app: &mut PhotocraftApp, action: Action, skips: Skips) -> Result<Value, String> {
     if action == Action::Done {
         return close(app);
     }
     sync(app);
     let window = app.ui.find_replace.open.as_ref().ok_or("Find and Replace Text is closed")?;
+    if window.pending.is_some() {
+        return Err(tl!("Answer the layer warning to continue").into());
+    }
     let fields = &app.ui.find_replace.fields;
     if fields.find.is_empty() {
         return Err(tl!("Enter text to find").into());
@@ -189,6 +254,19 @@ fn apply(app: &mut PhotocraftApp, action: Action) -> Result<Value, String> {
         params["layer"] = json!(window.layer.ok_or("no layer was selected when Find and Replace Text opened")?.0);
     }
     let cursor = window.cursor.clone();
+    if matches!(action, Action::Find | Action::ChangeAll) {
+        let warning = find_replace_warning(&app.session, &params, cursor.as_ref(), |id, reason| {
+            skips.contains(id, reason) || super::dont_show_again::dismissed(app, warning_pref(reason))
+        })
+        .map_err(|err| err.to_string())?;
+        if let Some(warning) = warning {
+            let revision = app.session.active().ok_or("no document open")?.revision;
+            let reply = json!({"warning": warning_message(&warning)});
+            let window = app.ui.find_replace.open.as_mut().ok_or("Find and Replace Text is closed")?;
+            window.pending = Some(PendingSearch { action, warning, skips, revision, dont_show_again: false });
+            return Ok(reply);
+        }
+    }
     // The window owns its search position. Commands from actions and control clients have their own.
     let outside_cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, cursor);
     let result = app.run(COMMAND, params);
@@ -207,6 +285,31 @@ fn apply(app: &mut PhotocraftApp, action: Action) -> Result<Value, String> {
     Ok(reply)
 }
 
+fn answer(app: &mut PhotocraftApp, choice: WarningChoice) -> Result<Value, String> {
+    sync(app);
+    let window = app.ui.find_replace.open.as_mut().ok_or("Find and Replace Text is closed")?;
+    let mut pending = window.pending.take().ok_or("there is no layer warning")?;
+    if choice == WarningChoice::Cancel {
+        return Ok(json!({"cancelled": true}));
+    }
+    if app.session.active().is_none_or(|st| st.revision != pending.revision) {
+        return apply(app, pending.action, Skips::default());
+    }
+    if pending.dont_show_again {
+        super::dont_show_again::remember(app, warning_pref(pending.warning.reason));
+    }
+    match choice {
+        WarningChoice::Skip => pending.skips.layers.push(pending.warning.layer),
+        WarningChoice::SkipAll => pending.skips.skip_kind(pending.warning.reason),
+        WarningChoice::Cancel => {}
+    }
+    apply(app, pending.action, pending.skips)
+}
+
+pub(crate) fn warning_open(app: &PhotocraftApp) -> bool {
+    app.ui.find_replace.open.as_ref().is_some_and(|window| window.pending.is_some())
+}
+
 fn show_match(app: &mut PhotocraftApp, found: &Value) -> Option<CanvasMatch> {
     let layer = LayerId(found.get("layer")?.as_u64()?);
     let start = usize::try_from(found.get("start")?.as_u64()?).ok()?;
@@ -217,11 +320,22 @@ fn show_match(app: &mut PhotocraftApp, found: &Value) -> Option<CanvasMatch> {
 
 pub(crate) fn inspect(app: &PhotocraftApp) -> Option<Value> {
     let window = app.ui.find_replace.open.as_ref()?;
-    Some(json!({"id": CONTROL_ID, "kind": CONTROL_ID, "title": TITLE, "fields": app.ui.find_replace.fields, "hasMatch": has_match(app, window)}))
+    let warning = window
+        .pending
+        .as_ref()
+        .map(|pending| json!({"layer": pending.warning.layer.0, "message": warning_message(&pending.warning), "dontShowAgain": pending.dont_show_again}));
+    Some(
+        json!({"id": CONTROL_ID, "kind": CONTROL_ID, "title": TITLE, "fields": app.ui.find_replace.fields, "hasMatch": has_match(app, window), "warning": warning}),
+    )
 }
 
 pub(crate) fn set_field(app: &mut PhotocraftApp, key: &str, value: Value) -> Result<Value, String> {
     sync(app);
+    if key == "dontShowAgain" {
+        let pending = app.ui.find_replace.open.as_mut().and_then(|window| window.pending.as_mut()).ok_or("there is no layer warning")?;
+        pending.dont_show_again = value.as_bool().ok_or("`dontShowAgain` must be a boolean")?;
+        return Ok(Value::Null);
+    }
     let window = inspect(app).ok_or("Find and Replace Text is closed")?;
     let mut fields = window["fields"].clone();
     let previous = fields.get_mut(key).ok_or_else(|| format!("unknown field `{key}`"))?;
@@ -233,13 +347,16 @@ pub(crate) fn set_field(app: &mut PhotocraftApp, key: &str, value: Value) -> Res
 pub(crate) fn command(app: &mut PhotocraftApp, action: &str) -> Result<Value, String> {
     let action = match action {
         "done" => Action::Done,
+        "skip" => return answer(app, WarningChoice::Skip),
+        "skipAll" => return answer(app, WarningChoice::SkipAll),
+        "cancelSearch" => return answer(app, WarningChoice::Cancel),
         "find" => Action::Find,
         "change" => Action::Change,
         "changeAll" => Action::ChangeAll,
         "changeFind" => Action::ChangeFind,
         _ => return Err(format!("unknown Find and Replace Text action `{action}`")),
     };
-    apply(app, action)
+    apply(app, action, Skips::default())
 }
 
 fn field(ui: &mut egui::Ui, label: &str, buffer: &mut String, focus: bool) -> egui::Response {
@@ -259,7 +376,11 @@ pub(crate) fn escape(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         && !egui::Popup::is_any_open(ctx)
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
-        let _ = close(app);
+        if warning_open(app) {
+            let _ = answer(app, WarningChoice::Cancel);
+        } else {
+            let _ = close(app);
+        }
         return true;
     }
     false
@@ -335,12 +456,52 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui:
     }
     update_fields(app, fields);
     if let Some(action) = if open { action } else { Some(Action::Done) }
-        && let Err(error) = apply(app, action)
+        && let Err(error) = apply(app, action, Skips::default())
     {
         app.ui.status = error;
         app.ui.status_error = true;
     }
-    response.map(|r| r.response.rect)
+    show_warning(app, ctx).or_else(|| response.map(|r| r.response.rect))
+}
+
+fn show_warning(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui::Rect> {
+    let pending = app.ui.find_replace.open.as_mut()?.pending.as_mut()?;
+    let message = warning_message(&pending.warning);
+    let id = egui::Id::unique((CONTROL_ID, "layer-warning"));
+    let t = Tokens::get(ctx);
+    let mut choice = None;
+    let warning = egui::Modal::new(id).show(ctx, |ui| {
+        ui.set_width(388.0);
+        ui.horizontal_top(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+            crate::color_picker_ui::warning_triangle(ui.painter(), rect, t.warning, t.card);
+            ui.label(message);
+        });
+        ui.add_space(10.0);
+        widgets::checkbox(ui, &mut pending.dont_show_again, tl!("Don't show again"));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if widgets::primary_button(ui, tl!("Skip"), 82.0).clicked() {
+                choice = Some(WarningChoice::Skip);
+            }
+            if widgets::secondary_button(ui, tl!("Cancel"), 82.0).clicked() {
+                choice = Some(WarningChoice::Cancel);
+            }
+            if widgets::secondary_button(ui, tl!("Skip All"), 82.0).clicked() {
+                choice = Some(WarningChoice::SkipAll);
+            }
+        });
+    });
+    if choice.is_none() && warning.is_top_modal && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+        choice = Some(WarningChoice::Skip);
+    }
+    if let Some(choice) = choice
+        && let Err(error) = answer(app, choice)
+    {
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
+    Some(warning.response.rect)
 }
 
 #[cfg(test)]
