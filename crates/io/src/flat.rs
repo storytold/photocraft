@@ -1893,14 +1893,21 @@ fn contact_xmp(xmp: &str) -> Option<String> {
 /// elements) keeps only the value; qualifiers and any other attribute or child are left out.
 fn contact_value(prop: &str, el: &craft_xml::El) -> craft_xml::El {
     use craft_xml::El;
-    let value_of = |e: &El| -> String { e.child("rdf:value").map_or_else(|| e.text().trim().to_string(), |v| v.text().trim().to_string()) };
+    // A qualified value is written either as `rdf:parseType="Resource"` or as a nested
+    // `rdf:Description` holding the `rdf:value` and its qualifiers; the value is read the same.
+    let inner = |e: &'_ El| -> El { e.child("rdf:Description").cloned().unwrap_or_else(|| e.clone()) };
+    let value_of = |e: &El| -> String {
+        let e = inner(e);
+        e.child("rdf:value").map_or_else(|| e.text().trim().to_string(), |v| v.text().trim().to_string())
+    };
     let with_lang = |mut out: El, from: &El| {
         if let Some(l) = from.attr("xml:lang") {
             out.set_attr("xml:lang", l);
         }
         out
     };
-    let holder = el.child("rdf:value").unwrap_or(el);
+    let el_inner = inner(el);
+    let holder = el_inner.child("rdf:value").cloned().unwrap_or_else(|| el_inner.clone());
     let out = with_lang(El::new(prop), el);
     match holder.elements().find(|c| c.is("rdf:Alt") || c.is("rdf:Seq") || c.is("rdf:Bag")) {
         Some(array) => {

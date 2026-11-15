@@ -211,3 +211,19 @@ fn an_allowed_property_keeps_its_value_and_not_its_private_qualifiers() {
         }
     }
 }
+
+/// CodeRabbit on #15023: the qualified value written as a nested `rdf:Description` (not only as
+/// `rdf:parseType="Resource"`) keeps its value and drops its qualifiers, on a property and on an item.
+#[test]
+fn a_qualified_value_in_a_nested_description_keeps_its_value() {
+    let nested = r#"<rdf:Description rdf:about=""><mm:DocumentID><rdf:Description><rdf:value>xmp.did:test-doc-0001</rdf:value><dc:description>Private note one</dc:description></rdf:Description></mm:DocumentID><dc:title><rdf:Alt><rdf:li xml:lang="x-default"><rdf:Description><rdf:value>Harbor Study</rdf:value><dc:description>Private note two</dc:description></rdf:Description></rdf:li></rdf:Alt></dc:title></rdf:Description>"#;
+    for fmt in ["jpg", "png"] {
+        let bytes = export_packet(&format!("{HEAD}{nested}{TAIL}"), "copyright", fmt);
+        for kept in ["xmp.did:test-doc-0001", "Harbor Study"] {
+            assert!(contains(&bytes, kept), "{fmt}: {kept} kept");
+        }
+        for left in ["Private note one", "Private note two"] {
+            assert!(!contains(&bytes, left), "{fmt}: {left} left out");
+        }
+    }
+}
