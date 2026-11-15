@@ -54,7 +54,7 @@ fn artboards_to_files_keeps_its_top_first_order() {
     let r = s.execute("file.export.artboardsToFiles", json!({"dir": dir.to_string_lossy(), "prefix": "p"})).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     let files: Vec<&str> = r["files"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    // #13633: the prefix is followed directly by the board name, with PNG spaces hyphenated.
-    let names: Vec<&str> = files.iter().map(|path| std::path::Path::new(path).file_name().unwrap().to_str().unwrap()).collect();
-    assert_eq!(names, ["pEmpty-Board.png", "pBlue-Board.png", "pRed-Board.png"]);
+    // Files are named <prefix><artboard name>, spaces as hyphens (#13633); top artboard first.
+    let names: Vec<&str> = files.iter().map(|f| f.rsplit(['/', '\\']).next().unwrap_or(f)).collect();
+    assert_eq!(names, ["pEmpty-Board.png", "pBlue-Board.png", "pRed-Board.png"], "{files:?}");
 }

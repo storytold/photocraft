@@ -895,6 +895,8 @@ mod transform_drag_start_tests;
 mod transform_task_bar_tests;
 
 #[cfg(test)]
+mod artboard_from_group_label_tests;
+#[cfg(test)]
 mod layer_props_ui_tests;
 #[cfg(test)]
 mod notice_text_tests;
