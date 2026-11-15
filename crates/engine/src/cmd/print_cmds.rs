@@ -430,8 +430,10 @@ fn cups_server_name(server: &craft_print::cups::Server) -> String {
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
 fn cups_printers(server: &craft_print::cups::Server) -> std::result::Result<Vec<craft_print::cups::Queue>, craft_print::Error> {
     let endpoints = std::slice::from_ref(server);
-    let mut printers = craft_print::cups::queues_at(endpoints, false)?;
-    printers.extend(craft_print::cups::queues_at(endpoints, true).unwrap_or_default());
+    // Retain large-fleet discovery within the shared one-MiB response bound.
+    // The record ceiling is explicit; no reply is silently truncated.
+    let mut printers = craft_print::cups::queues_at_with_limit(endpoints, false, 65_536)?;
+    printers.extend(craft_print::cups::queues_at_with_limit(endpoints, true, 65_536).unwrap_or_default());
     let default = craft_print::cups::default_at(endpoints).unwrap_or(None);
     for printer in &mut printers {
         printer.is_default = default.as_deref() == Some(printer.name.as_str());

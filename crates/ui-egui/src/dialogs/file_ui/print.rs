@@ -405,6 +405,12 @@ pub(super) fn print_preview_image(l: photocraft_engine::print_cmds::PrintLayout,
     egui::Rect::from_min_size(egui::pos2(page.left() + x as f32 * k, page.bottom() - (y + h) as f32 * k), egui::vec2(w as f32 * k, h as f32 * k))
 }
 
+// Native discovery will initialize paper from the driver. Do not offer edits that this
+// initialization would discard; PDF/preview and non-native paper remain editable.
+fn paper_controls_enabled(f: &Map<String, Value>, native: bool) -> bool {
+    !native || !b(f, "__printerListingPending", false) || b(f, "dryRun", false) || !s(f, "output", "").is_empty()
+}
+
 /// Draws the print controls and paper-clipped preview using the engine's shared layout.
 /// Dragging the visible image updates dialog offsets live from a fixed gesture origin;
 /// the position row stays present while centered so switching to manual cannot move the page.
@@ -610,7 +616,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                     }
                 });
                 number(ui, f, "copies", tl!("Copies"), 1.0..=999.0, "", 1.0);
-                print_paper_controls(ui, f);
+                ui.add_enabled_ui(paper_controls_enabled(f, cfg!(windows)), |ui| print_paper_controls(ui, f));
             }
             head(ui, tl!("Color Management"));
             dropdown_str(
@@ -800,6 +806,20 @@ mod discovery_tests {
     use super::*;
     fn app() -> PhotocraftApp {
         PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
+    }
+    #[test]
+    fn native_discovery_disables_only_pending_native_paper_edits() {
+        let mut f = json!({"__printerListingPending": true}).as_object().unwrap().clone();
+        assert!(!paper_controls_enabled(&f, true));
+        assert!(paper_controls_enabled(&f, false));
+        f.insert("dryRun".into(), json!(true));
+        assert!(paper_controls_enabled(&f, true));
+        f.remove("dryRun");
+        f.insert("output".into(), json!("print.pdf"));
+        assert!(paper_controls_enabled(&f, true));
+        f.remove("output");
+        f.remove("__printerListingPending");
+        assert!(paper_controls_enabled(&f, true));
     }
     #[test]
     fn pending_poll_is_nonblocking_and_wrong_dialog_does_not_consume_result() {
