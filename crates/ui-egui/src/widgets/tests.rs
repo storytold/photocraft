@@ -2,6 +2,80 @@ use super::{hue_color, hue_stops};
 use egui::{Color32, Key, Modifiers};
 
 #[test]
+fn slider_outer_bands_accept_clicks_and_drags() {
+    use egui::{Event, PointerButton, Rect, pos2, vec2};
+    use egui_kittest::Harness;
+    for scale in [1.0, 1.25, 2.0] {
+        for gradient in [false, true] {
+            for dy in [-11.0, 11.0] {
+                for enabled in [true, false] {
+                    let mut h = Harness::builder().with_size(vec2(300.0, 140.0)).with_pixels_per_point(scale).build_ui_state(
+                        |ui, (value, rect): &mut (f32, Rect)| {
+                            // Neighbors prevent egui's nearest-widget fallback from hiding missed hits.
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.add_space(20.0);
+                            ui.add_sized(egui::vec2(ui.available_width(), 24.0), egui::Button::new("Above"));
+                            let colors = [Color32::BLACK, Color32::WHITE];
+                            ui.add_enabled_ui(enabled, |ui| {
+                                *rect = super::slider(ui, value, 0.0..=100.0, gradient.then_some(colors.as_slice())).rect;
+                            });
+                            ui.add_sized(egui::vec2(ui.available_width(), 24.0), egui::Button::new("Below"));
+                        },
+                        (50.0, Rect::NOTHING),
+                    );
+                    h.run();
+                    let rect = h.state().1;
+                    let at = pos2(rect.left() + 7.0 + (rect.width() - 14.0) * 0.75, rect.center().y + dy);
+                    h.hover_at(at);
+                    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                    h.run();
+                    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                    h.run();
+                    assert!(
+                        (h.state().0 - if enabled { 75.0 } else { 50.0 }).abs() < 0.01,
+                        "click: scale {scale}, gradient {gradient}, dy {dy}, enabled {enabled}"
+                    );
+                    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                    h.run();
+                    let to = pos2(rect.left() + 7.0 + (rect.width() - 14.0) * 0.25, at.y);
+                    h.hover_at(to);
+                    h.run();
+                    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                    h.run();
+                    assert!(
+                        (h.state().0 - if enabled { 25.0 } else { 50.0 }).abs() < 0.01,
+                        "drag: scale {scale}, gradient {gradient}, dy {dy}, enabled {enabled}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn slider_hit_area_does_not_take_neighboring_controls() {
+    use egui::{Rect, vec2};
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut h = Harness::builder().with_size(vec2(300.0, 160.0)).build_ui_state(
+        |ui, (value, rect, clicked): &mut (f32, Rect, bool)| {
+            ui.add_space(20.0);
+            *rect = super::slider(ui, value, 0.0..=100.0, None).rect;
+            *clicked |= ui.button("Neighbor").clicked();
+        },
+        (50.0, Rect::NOTHING, false),
+    );
+    h.run();
+    let at = h.get_by_label("Neighbor").rect().center_top() + vec2(0.0, 1.0);
+    h.hover_at(at);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    assert!(h.state().2);
+    assert_eq!(h.state().0, 50.0);
+}
+
+#[test]
 fn hue_stops_are_pure_and_evenly_spaced() {
     let c = |r, g, b| Color32::from_rgb(r, g, b);
     let want = [c(255, 0, 0), c(255, 255, 0), c(0, 255, 0), c(0, 255, 255), c(0, 0, 255), c(255, 0, 255), c(255, 0, 0)];
@@ -109,6 +183,85 @@ fn elided_label_never_exceeds_its_room() {
     });
     crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
     h.run_steps(2);
+}
+
+/// Every text shape drawn in `out`: its (whole) string, where it was drawn and whether it was elided.
+fn drawn_texts(out: &egui::FullOutput) -> Vec<(String, egui::Rect, bool)> {
+    let mut texts = Vec::new();
+    for s in &out.shapes {
+        if let egui::Shape::Text(t) = &s.shape {
+            texts.push((t.galley.text().to_string(), s.shape.visual_bounding_rect(), t.galley.elided));
+        }
+    }
+    texts
+}
+
+/// The Urdu Stroke heading has a negative left glyph bearing with the shipped fonts. Its ink
+/// must stay inside the panel at every scale, even though its logical advance starts at zero.
+#[test]
+fn section_labels_keep_glyph_bearings_inside_the_panel() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    for kind in crate::theme::ThemeKind::ALL {
+        crate::theme::apply(&ctx, kind);
+        for ppp in [1.0, 1.25, 2.0] {
+            ctx.set_pixels_per_point(ppp);
+            for label in ["Stroke", "\u{644}\u{6a9}\u{6cc}\u{631}", "Location"] {
+                let mut room = egui::Rect::NOTHING;
+                let mut out = ctx.run_ui(Default::default(), |ui| {
+                    ui.set_max_width(440.0);
+                    room = ui.max_rect();
+                    super::section_label(ui, label);
+                });
+                out.textures_delta.clear();
+                let texts = drawn_texts(&out);
+                assert_eq!(texts.len(), 1, "{kind:?} @{ppp}x: {label}");
+                let (_, ink, _) = &texts[0];
+                assert!(ink.left() >= room.left() - 0.01, "{kind:?} @{ppp}x: {label} ink {ink:?} in {room:?}");
+                assert!(ink.right() <= room.right() + 0.01, "{kind:?} @{ppp}x: {label} ink {ink:?} in {room:?}");
+            }
+        }
+    }
+}
+
+/// #9635: the shared dialog label column is as wide as its widest label, between the English
+/// width and a cap, and a label wider than the column elides inside it.
+#[test]
+fn column_label_stays_inside_its_column() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx, crate::theme::ThemeKind::ALL[0]);
+    // German "Canvas extension color": far wider than any column here.
+    let long = "Farbe der Zeichenflächenerweiterung:";
+    let mut col = egui::Rect::NOTHING;
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        assert_eq!(super::label_column_width(ui, &["Fill:"], 90.0, 240.0), 90.0, "never narrower than the English column");
+        let grown = super::label_column_width(ui, &["Fill:", "Dimensione immagine:"], 84.0, 240.0);
+        assert!(grown > 84.0 && grown < 240.0, "widens to the Italian label: {grown}");
+        assert_eq!(super::label_column_width(ui, &[long], 90.0, 100.0), 100.0, "capped");
+        assert_eq!(super::label_column_width(ui, &["Fill:"], 90.0, 10.0), 90.0, "a cap below the minimum keeps the minimum");
+        assert_eq!(super::label_column_width(ui, &[], f32::NAN, f32::INFINITY), 0.0, "bad bounds never panic");
+        ui.horizontal(|ui| col = super::column_label(ui, long, 100.0).rect);
+    });
+    out.textures_delta.clear();
+    assert_eq!(col.width(), 100.0, "the column keeps its width");
+    let texts = drawn_texts(&out);
+    let (_, at, elided) = texts.iter().find(|(t, ..)| t.starts_with("Farbe")).unwrap_or_else(|| panic!("label drawn: {texts:?}"));
+    assert!(*elided, "elided with '…'");
+    assert!(at.left() >= col.left() - 0.5 && at.right() <= col.right() - super::LABEL_COLUMN_GAP + 1.0, "{at:?} inside {col:?}");
+
+    // A label that fits is drawn whole, right-aligned against its field; an empty label draws
+    // nothing, and a bad width or gap never panics.
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        ui.horizontal(|ui| col = super::column_label(ui, "Fill:", 90.0).rect);
+        super::column_label(ui, "", 90.0);
+        super::column_label_padded(ui, "Bad width:", f32::NAN, f32::NAN);
+    });
+    out.textures_delta.clear();
+    let texts = drawn_texts(&out);
+    let (_, at, elided) = texts.iter().find(|(t, ..)| t == "Fill:").unwrap_or_else(|| panic!("label drawn: {texts:?}"));
+    assert!(!*elided, "a label that fits is drawn whole");
+    assert!((at.right() - (col.right() - super::LABEL_COLUMN_GAP)).abs() < 2.5 && at.left() > col.left(), "{at:?} right-aligned in {col:?}");
 }
 
 #[test]
@@ -930,10 +1083,15 @@ fn typed_arithmetic_evaluates() {
         ("(2+3)*4", 20.0),
         ("2^3", 8.0),
         ("10%3", 1.0),
+        // A decimal comma (#10729).
+        ("0,3", 0.3),
+        ("1,5*2", 3.0),
+        ("−2,25", -2.25),
     ] {
         assert_eq!(parse_num(text), Some(want), "{text}");
     }
-    for text in ["", "abc", "5+", "*2", "4/0", "0/0", "1+*2", "(2+3", "1e400"] {
+    // A comma beside a point, or two decimal separators, is not guessed at.
+    for text in ["", "abc", "5+", "*2", "4/0", "0/0", "1+*2", "(2+3", "1e400", "1.234,5", "1,2,3"] {
         assert_eq!(parse_num(text), None, "{text}");
     }
 }
@@ -1451,6 +1609,65 @@ fn value_field_applies_typed_arithmetic() {
     assert_eq!(type_and_press(1.0, "1280/3*2", Enter, true), 853.0);
 }
 
+/// #10729: a field such as Feather takes a decimal comma, as typed where the comma is the decimal
+/// separator.
+#[test]
+fn value_field_takes_a_decimal_comma() {
+    use egui::Key::{Enter, Tab};
+    assert!((type_and_press(1.0, "0,3", Enter, false) - 0.3).abs() < 1e-6);
+    assert!((type_and_press(1.0, "2,5", Tab, false) - 2.5).abs() < 1e-6);
+}
+
+/// Review on #10729: only where the system's separator is not the point. Where it is, a typed
+/// `1,234` is a thousands group, and reading the comma as a decimal point would be out by a
+/// factor of a thousand instead of invalid. Where the separator can't be read the field takes
+/// both, as it did before.
+#[test]
+fn a_decimal_comma_is_read_only_where_the_system_uses_one() {
+    let parse = |text: &str| super::units::plain(text);
+    crate::i18n::with_decimal_separator(Some(','), || {
+        assert_eq!(parse("0,3"), Some(0.3), "a comma system reads the comma");
+    });
+    crate::i18n::with_decimal_separator(Some('.'), || {
+        assert_eq!(parse("0,3"), None, "a point system does not: 0,3 stays invalid, not 0.3");
+        assert_eq!(parse("1,234"), None, "and a thousands group is not read as 1.234");
+        assert_eq!(parse("0.3"), Some(0.3), "its own separator still works");
+    });
+    crate::i18n::with_decimal_separator(None, || {
+        assert_eq!(parse("0,3"), Some(0.3), "unknown: both are taken, as zoom_field does");
+        assert_eq!(parse("0.3"), Some(0.3));
+    });
+}
+
+/// Review on #10729: each number in an expression decides for itself, so a comma in one operand
+/// and a point in another still computes. A single number holding both separators stays invalid
+/// rather than being guessed at.
+#[test]
+fn a_decimal_comma_is_read_per_operand_not_per_entry() {
+    let close = |got: Option<f64>, want: f64, what: &str| {
+        let v = got.unwrap_or_else(|| panic!("{what}: refused"));
+        assert!((v - want).abs() < 1e-9, "{what}: {v} is not {want}");
+    };
+    for sep in [Some(','), None] {
+        crate::i18n::with_decimal_separator(sep, || {
+            close(super::parse_num("1,5+2.0"), 3.5, "a comma and a point in one expression");
+            close(super::parse_num("2.0+1,5"), 3.5, "and the other way round");
+            close(super::parse_num("1,5*2"), 3.0, "a comma against a whole number");
+            close(super::parse_num("1,5"), 1.5, "a comma on its own");
+            close(super::parse_num("1.5"), 1.5, "a point on its own");
+            // One number carrying both is not guessed at, whichever side it sits on.
+            for text in ["1.234,5", "1,2,3", "1.234,5+1", "1+1.234,5"] {
+                assert_eq!(super::parse_num(text), None, "{text} stays invalid");
+            }
+        });
+    }
+    // A point system reads no comma at all, in an expression either: 1,5 is a thousands group.
+    crate::i18n::with_decimal_separator(Some('.'), || {
+        assert_eq!(super::parse_num("1,5+2.0"), None, "a point system refuses the comma operand");
+        close(super::parse_num("1.5+2.0"), 3.5, "its own separator computes");
+    });
+}
+
 #[test]
 fn numbers_drop_trailing_zero() {
     // #2434: the unit keys map to Photoshop's places, and the shared formatter trims zeros.
@@ -1747,6 +1964,23 @@ fn the_wheel_leaves_a_plain_dropdown_alone() {
     let mut h = mode_dropdown(false);
     wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::NONE);
     assert_eq!(*h.state(), 0);
+}
+
+#[test]
+fn brush_picker_footer_slider_stays_inside_the_dragged_height() {
+    use egui::vec2;
+    use egui_kittest::Harness;
+    let size = vec2(crate::brush_picker::DEFAULT_SIZE[0], crate::brush_picker::DEFAULT_SIZE[1]);
+    let mut h = Harness::builder().with_size(vec2(600.0, 700.0)).build_ui_state(
+        |ui, height: &mut f32| {
+            let mut brush = photocraft_engine::BrushSettings::default();
+            let mut list = crate::brush_picker::list_state();
+            *height = ui.scope(|ui| crate::brush_picker::body(ui, &mut brush, &[], None, &mut list, size)).response.rect.height();
+        },
+        0.0,
+    );
+    h.run();
+    assert!((*h.state() - size.y).abs() < 0.5, "picker {} tall for a {} drag", h.state(), size.y);
 }
 
 /// The middle of an overflowing menu's lower scroll arrow, from the menu's laid-out rect.

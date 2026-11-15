@@ -769,8 +769,13 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let lang = crate::i18n::current();
     let mut items = crate::menus::menu_items(app);
+    // AppKit swallows a key equivalent whose item is disabled: no action, no key-down for the
+    // window (#8965). While a Keyboard Shortcuts field waits for keys, every item with a key
+    // stays enabled, so its key comes back as a key press for the field to record (⌘Z, ⌘⌥Z,
+    // ⌘H…); a click on one is still dropped under the dialog ([`run`]).
+    let capturing = crate::prefs_ui::capturing_shortcut(app);
     for it in &mut items {
-        it.enabled &= crate::menus::modal_allows(app, &it.id);
+        it.enabled = if capturing && it.shortcut.is_some() { true } else { it.enabled && crate::menus::modal_allows(app, &it.id) };
     }
     let layout = app_layout(app, &items, lang, &app.session.prefs().interface.language);
     let Some(menu) = app.services.native_menu.as_mut() else { return };
@@ -806,12 +811,14 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     s.clipboard.is_some().hash(&mut h);
     // A running job greys the commands that would change its document.
     s.has_jobs().hash(&mut h);
+    (crate::actions::library::edit_undo_label(app), crate::vector_ui::pen_can_undo(app)).hash(&mut h);
     if let Some(d) = s.active() {
         (d.doc.id.0, d.revision, d.active_layer.map(|l| l.0), d.selected_layers.len(), d.isolated_layers.len()).hash(&mut h);
     }
     let ui = &app.ui;
     (&ui.recent_files, &ui.workspace, ui.palette_open, ui.transform.is_some(), ui.text_edit.is_some(), ui.dialogs.len()).hash(&mut h);
     (app.discard.is_some(), app.camera_raw.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
+    crate::prefs_ui::capturing_shortcut(app).hash(&mut h);
     // Edit / Clear Selected Guides are enabled only while a guide is selected.
     crate::guide_select::selected(app).hash(&mut h);
     serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool)).unwrap_or_default().hash(&mut h);
