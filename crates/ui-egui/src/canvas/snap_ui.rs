@@ -306,6 +306,13 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         crate::type_tool::box_handle_at(app, layer, p[0], p[1]).map(|_| (Gesture::Point, vec![layer]))
     } else if is_point_tool(tool) {
         Some((Gesture::Point, Vec::new()))
+    } else if tool == Tool::Frame {
+        // A frame being drawn snaps its corners; an empty frame being moved snaps its edges, not to
+        // itself (#13871).
+        crate::frame_tool::snap_press(app, p).map(|(moved, exclude)| match moved {
+            Some(rect) => (Gesture::Move { rect }, exclude),
+            None => (Gesture::Point, exclude),
+        })
     } else {
         None
     };
@@ -319,6 +326,12 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         // A guide never snaps to itself (or other guides).
         targets = targets.filtered(|k| k != SnapKind::Guide);
     }
+    // The Frame tool snaps to other layers' edges only, the case measured (#13871): guides, the
+    // grid and the document keep today's behaviour of not snapping it.
+    let frame_tool = tool == Tool::Frame;
+    if frame_tool {
+        targets = targets.filtered(|k| k == SnapKind::LayerEdge);
+    }
     if matches!(gesture, Gesture::SelectionMove { .. })
         || (matches!(gesture, Gesture::TransformMove { .. }) && app.ui.transform.as_ref().is_some_and(|t| crate::transform_tool::moves_selection(app, t)))
         || (matches!(gesture, Gesture::Move { .. }) && crate::move_ui::moves_selected_pixels_with(app, tool))
@@ -328,7 +341,8 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         targets = targets.filtered(|k| k != SnapKind::Selection);
     }
     let smart = if snap_on(app) && matches!(gesture, Gesture::Move { .. } | Gesture::CropImage) && smart_on(app) {
-        build(app, &exclude, true)
+        let smart = build(app, &exclude, true);
+        if frame_tool { smart.filtered(|k| k == SnapKind::LayerEdge) } else { smart }
     } else {
         SnapTargets::default()
     };
