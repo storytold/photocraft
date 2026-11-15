@@ -3811,7 +3811,9 @@ fn cylinder_of(app: &PhotocraftApp) -> [f64; 7] {
 fn the_warp_menu_lists_cylinder_after_the_presets_except_on_type() {
     let all: Vec<WarpStyle> = warp_style_options(false).collect();
     assert_eq!(all.last(), Some(&WarpStyle::Cylinder));
-    assert_eq!(all.len(), WarpStyle::all().count() + 1);
+    // Custom, the presets and Cylinder: None is no longer listed off type (#12500).
+    assert_eq!(all.len(), WarpStyle::all().count());
+    assert!(!all.contains(&WarpStyle::None));
     assert!(all.contains(&WarpStyle::Custom) && all.contains(&WarpStyle::Twist));
     let on_type: Vec<WarpStyle> = warp_style_options(true).collect();
     assert!(!on_type.contains(&WarpStyle::Cylinder) && !on_type.contains(&WarpStyle::Custom));
