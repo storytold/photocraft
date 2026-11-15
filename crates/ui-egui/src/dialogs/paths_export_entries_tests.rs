@@ -49,7 +49,7 @@ fn a_document_without_paths_offers_document_bounds_alone_without_separators() {
 #[test]
 fn a_saved_path_named_all_is_exported_as_that_path() {
     let mut app = app();
-    let one = app.run(COMMAND, json!({"paths": "path:all"})).unwrap();
+    let one = app.run(COMMAND, paths_export_params(COMMAND, json!({"paths": "path:all"}))).unwrap();
     assert_eq!(one["paths"], 1, "only the saved path named all");
     assert!(one["ai"].as_str().unwrap().contains("60.0000"), "its own points");
     let all = app.run(COMMAND, json!({"paths": "all"})).unwrap();
@@ -90,7 +90,51 @@ fn every_entry_has_its_own_value_even_for_awkward_names() {
     // The layer row and the saved path of the same display name export different geometry.
     let layer_rows: Vec<_> = names.iter().filter(|v| labels[v.as_str()] == json!("Rectangle 1 Shape Path")).collect();
     assert_eq!(layer_rows.len(), 2, "one saved path and the layer, same label: {layer_rows:?}");
-    let mut ai = |v: &str| app.run(COMMAND, json!({"paths": v})).unwrap()["ai"].as_str().unwrap().to_string();
+    // What the dialog's OK sends for a chosen row.
+    let mut ai = |v: &str| app.run(COMMAND, paths_export_params(COMMAND, json!({"paths": v}))).unwrap()["ai"].as_str().unwrap().to_string();
     assert!(ai("layer").contains("200.0000") && !ai("layer").contains("210.0000"));
     assert!(ai("Rectangle 1 Shape Path").contains("210.0000"));
+    assert!(ai("path:all").contains("60.0000 190.0000 m") && !ai("path:all").contains("180.0000 190.0000 m"), "the row for the path called all");
+    assert!(ai("path:path:all").contains("180.0000 190.0000 m"), "the row for the path called path:all");
+    assert!(ai("path:layer").contains("150.0000 190.0000 m"), "the row for the path called layer");
+}
+
+/// CodeRabbit on #15051: OK on the dialog sends the chosen saved path as `savedPath`, so with both `all` and
+/// `path:all` saved, the row for `all` exports `all` (not All Paths, not the one called `path:all`).
+#[test]
+fn ok_on_a_saved_path_row_exports_that_path() {
+    let mut app = app();
+    app.run("path.set", json!({"name": "path:all", "path": path(180.0)})).unwrap();
+    let ctx = egui::Context::default();
+    let id = crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    for (row, want, not) in [("path:all", "60.0000 190.0000 m", "180.0000 190.0000 m"), ("path:path:all", "180.0000 190.0000 m", "60.0000 190.0000 m")] {
+        let id = if row == "path:all" { id } else { crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap() };
+        let d = app.ui.dialog_mut(id).unwrap();
+        d.fields.insert("paths".into(), json!(row));
+        d.fields.remove("path");
+        let r = crate::dialogs::confirm(&mut app, id).unwrap();
+        let ai = r["ai"].as_str().unwrap_or_default();
+        assert!(ai.contains(want) && !ai.contains(not), "{row}: {ai}");
+        assert_eq!(r["paths"], 1, "{row}");
+    }
+}
+
+/// CodeRabbit on #15056: the Paths panel's selection key is the raw name, so `layer` and `work` can be a
+/// saved path as well as the layer row or the Work Path. The dialog then opens on All Paths instead of
+/// guessing; without such a saved path it opens on the selected row.
+#[test]
+fn a_selection_that_names_a_saved_path_and_a_reserved_row_opens_on_all_paths() {
+    let opens_on = |app: &mut PhotocraftApp, selected: &str| {
+        app.ui.selected_path = Some(selected.into());
+        let id = crate::menus::invoke(app, &egui::Context::default(), COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let on = app.ui.dialog_mut(id).unwrap().fields["paths"].as_str().unwrap().to_string();
+        let _ = crate::dialogs::cancel(app, id);
+        on
+    };
+    let mut app = app();
+    assert_eq!(opens_on(&mut app, "layer"), "layer", "no saved path called layer: the layer row");
+    assert_eq!(opens_on(&mut app, "work"), "work", "the fixture's `work` is the Work Path, no saved path");
+    app.run("path.set", json!({"name": "layer", "path": path(150.0)})).unwrap();
+    assert_eq!(opens_on(&mut app, "layer"), "all");
+    assert_eq!(opens_on(&mut app, "Rect A"), "Rect A", "a plain name is unambiguous");
 }
