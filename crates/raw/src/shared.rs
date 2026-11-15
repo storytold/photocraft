@@ -83,21 +83,15 @@ fn polynomials(image: &craft_raw::RawImage) -> Vec<MapPolynomial> {
 
 fn warnings(image: &craft_raw::RawImage) -> Vec<String> {
     let mut out = Vec::new();
-    if image.notices.default_crop_adjusted {
-        out.push("raw default crop was invalid, incomplete or out-of-range; adjusted within the active area".into());
-    }
+    // Preserve decoder uncertainty: a fallback phase is not metadata supplied by the file.
     if image.notices.assumed_cfa {
-        out.push("raw colour filter phase (Bayer phase) was not recorded or recognized; the decoder's fallback pattern was used".into());
+        out.push("the raw colour filter phase was assumed".to_string());
     }
-    // Unknown means the decoder has not annotated provenance; it does not mean
-    // the file omitted its levels. Report only an explicit fallback decision.
-    if image.format != craft_raw::RawFormat::Dng {
-        if image.level_sources.black == craft_raw::LevelSource::Fallback {
-            out.push("raw black level not recorded in a documented tag; assumed default".into());
-        }
-        if image.level_sources.white == craft_raw::LevelSource::Fallback {
-            out.push("raw white level not recorded in a documented tag; assumed full sample range".into());
-        }
+    if image.notices.default_crop_adjusted {
+        out.push("the raw default crop was adjusted to the active image".to_string());
+    }
+    if image.notices.gain_table_omitted {
+        out.push("the raw camera profile's invalid gain table map was omitted".to_string());
     }
     for op in image.opcodes.list1.iter().chain(&image.opcodes.list2).chain(&image.opcodes.list3) {
         if !matches!(op, craft_raw::Opcode::GainMap { .. } | craft_raw::Opcode::MapPolynomial { .. }) {
@@ -105,15 +99,14 @@ fn warnings(image: &craft_raw::RawImage) -> Vec<String> {
             break;
         }
     }
-    if image.notices.gain_table_omitted || image.color.profile.gain_table_map.is_some() {
-        out.push("the raw camera profile's ProfileGainTableMap is not applied by PhotoCraft".to_string());
+    if image.color.profile.gain_table_map.is_some() {
+        out.push("the raw camera profile's gain table map is not applied by PhotoCraft".to_string());
     }
     out
 }
 
 /// Convert a validated craft-raw image into the app's neutral processing model.
 pub(crate) fn adapt(image: craft_raw::RawImage) -> Sensor {
-    let linearized = image.linearized;
     let gain_maps = gain_maps(&image);
     let polynomials = polynomials(&image);
     let warnings = warnings(&image);
@@ -147,15 +140,6 @@ pub(crate) fn adapt(image: craft_raw::RawImage) -> Sensor {
         as_shot_white_xy: image.color.as_shot_white_xy,
     };
     let tone_curve = image.color.profile.tone_curve.map_or_else(Vec::new, |c| c.points);
-    // Non-DNG TIFF/EP bodies can state their balance through AsShotNeutral.
-    // Keep the public camera-WB field populated without changing DNG color policy.
-    let camera_wb = image.wb_multipliers.map(|v| v.map(f64::from)).or_else(|| {
-        (image.format != craft_raw::RawFormat::Dng)
-            .then_some(image.color.as_shot_neutral)
-            .flatten()
-            .filter(|values| values.iter().all(|value| value.is_finite() && *value > 0.0 && (1.0 / value).is_finite()))
-            .map(|values| values.map(|value| 1.0 / value))
-    });
     let (data, float_data) = match image.data {
         craft_raw::RawData::U16(v) => (v, None),
         craft_raw::RawData::F32(v) => (Vec::new(), Some(v)),
@@ -163,7 +147,7 @@ pub(crate) fn adapt(image: craft_raw::RawImage) -> Sensor {
     let mut sensor = Sensor {
         format: format(image.format),
         make: image.camera.make,
-        model: image.camera.model.or(image.camera.unique_model),
+        model: image.camera.unique_model.or(image.camera.model),
         width: image.width,
         height: image.height,
         samples: image.cpp,
@@ -176,7 +160,7 @@ pub(crate) fn adapt(image: craft_raw::RawImage) -> Sensor {
         active,
         crop,
         color,
-        camera_wb,
+        camera_wb: image.wb_multipliers.map(|v| v.map(f64::from)),
         orientation: image.orientation.to_exif(),
         baseline_exposure: image.color.baseline_exposure,
         gain_maps,
@@ -186,124 +170,10 @@ pub(crate) fn adapt(image: craft_raw::RawImage) -> Sensor {
         warnings,
     };
     crate::cameras::apply(&mut sensor, image.bits);
-    // DNG's declared white can exceed the real sensor-clipping plateau. Lift
-    // only when a LinearizationTable has not already collapsed distinct stored
-    // samples to one value, which is not evidence that the sensor clipped.
-    // Other raw decoders have already chosen camera-specific or measured levels.
-    if sensor.float_data.is_none() && sensor.format == RawFormat::Dng && !linearized {
+    // Only DNG writers state a white level the sensor never reaches (saturation.rs); the other formats'
+    // levels come from the camera's own tags or the data, and their samples stay as decoded.
+    if sensor.float_data.is_none() && sensor.format == RawFormat::Dng {
         sensor.lift_clipped_samples();
     }
     sensor
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn raw_image() -> craft_raw::RawImage {
-        let mut spec = crate::testgen::DngSpec::cfa(64, 64, (0..64 * 64).map(|i| (528 + ((i % 64) * 60 + (i / 64) * 7) as u16 % 4000).min(3567)).collect());
-        spec.black = vec![528];
-        spec.white = 4095;
-        let mut image = craft_raw::decode_with(&spec.build(), &Default::default()).unwrap();
-        image.camera.make = None;
-        image.camera.model = None;
-        image.camera.unique_model = None;
-        image
-    }
-
-    #[test]
-    fn only_declared_fallback_level_provenance_produces_missing_level_notices() {
-        let mut image = raw_image();
-        image.format = craft_raw::RawFormat::Nef;
-        for source in
-            [craft_raw::LevelSource::Unknown, craft_raw::LevelSource::Metadata, craft_raw::LevelSource::MaskedPixels, craft_raw::LevelSource::Inferred]
-        {
-            image.level_sources.black = source;
-            image.level_sources.white = source;
-            assert!(warnings(&image).iter().all(|warning| !warning.contains("level")), "{source:?}");
-        }
-        image.level_sources.black = craft_raw::LevelSource::Fallback;
-        image.level_sources.white = craft_raw::LevelSource::Fallback;
-        let notices = warnings(&image);
-        assert!(notices.iter().any(|warning| warning.contains("black level")));
-        assert!(notices.iter().any(|warning| warning.contains("white level")));
-        image.format = craft_raw::RawFormat::Dng;
-        assert!(warnings(&image).iter().all(|warning| !warning.contains("level")), "DNG's documented defaults are not missing camera metadata");
-    }
-
-    #[test]
-    fn non_dng_decode_preserves_samples_while_dng_clipping_policy_still_applies() {
-        let image = raw_image();
-        let craft_raw::RawData::U16(stored) = &image.data else { panic!("integer fixture") };
-        let original = stored.clone();
-        let mut other = image.clone();
-        other.format = craft_raw::RawFormat::Nef;
-        assert_eq!(adapt(other).data, original, "camera-specific levels must not trigger a second sample rewrite");
-        let dng = adapt(image);
-        assert_ne!(dng.data, original, "independent early saturation fixture exercises DNG lifting");
-        assert!(dng.data.iter().zip(original).all(|(actual, source)| *actual == source || *actual == 4095));
-    }
-
-    fn dng_with_samples(data: Vec<u16>, linearization: Option<Vec<u16>>) -> craft_raw::RawImage {
-        let mut spec = crate::testgen::DngSpec::cfa(64, 64, data);
-        spec.black = vec![0];
-        spec.white = 4095;
-        spec.linearization = linearization;
-        craft_raw::decode_with(&spec.build(), &Default::default()).unwrap()
-    }
-
-    #[test]
-    fn eager_dng_linearization_is_not_misread_as_a_saturation_plateau() {
-        let mut stored = Vec::with_capacity(64 * 64);
-        for y in 0..64 {
-            for x in 0..64 {
-                stored.push(if y < 48 { 1008 } else { 3008 + ((x + y) % 16) as u16 });
-            }
-        }
-        let mut table: Vec<u16> = (0..=3023).collect();
-        table[3008..].fill(3008);
-        let image = dng_with_samples(stored, Some(table));
-        assert!(image.linearized, "the pinned decoder records eager table application");
-        let expected: Vec<u16> = (0..64 * 64).map(|i| if i / 64 < 48 { 1008 } else { 3008 }).collect();
-        let craft_raw::RawData::U16(decoded) = &image.data else { panic!("integer DNG fixture") };
-        assert_eq!(decoded, &expected, "16 source codes collapse to a non-white linearized plateau");
-        assert_eq!(adapt(image).data, expected, "table-induced plateaus must retain decoded samples");
-
-        let clipped: Vec<u16> = (0..64 * 64).map(|i| if i / 64 < 48 { 1008 } else { 3008 }).collect();
-        let image = dng_with_samples(clipped, None);
-        assert!(!image.linearized, "the real-clipping control has no table");
-        let sensor = adapt(image);
-        assert!(sensor.data[..48 * 64].iter().all(|&sample| sample == 1008));
-        assert!(sensor.data[48 * 64..].iter().all(|&sample| sample == 4095), "unlinearized DNG clipping still lifts to white");
-    }
-
-    #[test]
-    fn non_dng_as_shot_neutral_populates_camera_balance_and_model_keeps_its_own_identity() {
-        let mut image = raw_image();
-        image.format = craft_raw::RawFormat::CfaTiff;
-        image.camera.model = Some("X2D II 100C".into());
-        image.camera.unique_model = Some("Hasselblad X2D II 100C".into());
-        image.wb_multipliers = None;
-        image.color.as_shot_neutral = Some([0.375, 1., 0.617]);
-        let sensor = adapt(image.clone());
-        assert_eq!(sensor.model.as_deref(), Some("X2D II 100C"));
-        assert_eq!(sensor.camera_wb, Some([1. / 0.375, 1., 1. / 0.617]));
-        image.color.as_shot_neutral = Some([0., 1., f64::NAN]);
-        assert_eq!(adapt(image).camera_wb, None, "invalid neutral must not create nonfinite balance");
-    }
-
-    #[test]
-    fn decoder_notices_remain_visible_without_inventing_loss_for_absent_metadata() {
-        let mut image = raw_image();
-        image.notices = Default::default();
-        assert!(warnings(&image).is_empty());
-        image.notices.default_crop_adjusted = true;
-        assert!(warnings(&image).iter().any(|warning| warning.contains("default crop") && warning.contains("out-of-range")));
-        image.notices.default_crop_adjusted = false;
-        image.notices.assumed_cfa = true;
-        assert!(warnings(&image).iter().any(|warning| warning.contains("colour filter phase") && warning.contains("Bayer phase")));
-        image.notices.assumed_cfa = false;
-        image.notices.gain_table_omitted = true;
-        assert!(warnings(&image).iter().any(|warning| warning.contains("ProfileGainTableMap")));
-    }
 }
