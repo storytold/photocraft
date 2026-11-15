@@ -233,7 +233,9 @@ fn tl_keys(sources: &[(PathBuf, String)]) -> BTreeSet<Key> {
             rest = literal;
             let bytes = rest.as_bytes();
             let mut end = 0;
-            while end < bytes.len() && !(bytes[end] == b'"' && (end == 0 || bytes[end - 1] != b'\\')) {
+            let mut escaped = false;
+            while end < bytes.len() && (bytes[end] != b'"' || escaped) {
+                escaped = bytes[end] == b'\\' && !escaped;
                 end += 1;
             }
             if let Some(raw) = rest.get(..end) {
@@ -490,7 +492,9 @@ fn quoted_strings(source: &str) -> Vec<String> {
         rest = rest.get(at + 1..).unwrap_or("");
         let bytes = rest.as_bytes();
         let mut end = 0;
-        while end < bytes.len() && !(bytes[end] == b'"' && (end == 0 || bytes[end - 1] != b'\\')) {
+        let mut escaped = false;
+        while end < bytes.len() && (bytes[end] != b'"' || escaped) {
+            escaped = bytes[end] == b'\\' && !escaped;
             end += 1;
         }
         if let Some(raw) = rest.get(..end) {
@@ -505,6 +509,10 @@ fn unescape_rust_string(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars();
     while let Some(ch) = chars.next() {
+        // Rust normalizes physical CRLF pairs before interpreting escapes.
+        if ch == '\r' && chars.as_str().starts_with('\n') {
+            continue;
+        }
         if ch != '\\' {
             out.push(ch);
             continue;
@@ -711,6 +719,34 @@ mod tests {
             let source = format!("tl!(\n    \"{raw}\"\n);");
             assert_eq!(tl_keys(&[(PathBuf::from("ui.rs"), source)]), BTreeSet::from([Key { context: String::new(), source: expected.into() }]), "{raw:?}");
         }
+    }
+
+    #[test]
+    fn literal_boundaries_distinguish_escaped_quotes_and_trailing_backslashes() {
+        for (literal, expected) in [(r#""Folder\\""#, "Folder\\"), (r#""Say \"Open\".""#, "Say \"Open\"."), (r#""Folder\\\\""#, "Folder\\\\")] {
+            assert_eq!(quoted_strings(literal), vec![expected]);
+            for padding in ["", "\n    "] {
+                let source = format!("tl!({padding}{literal}{padding}); tl!(\"next\");");
+                let expected = [expected, "next"].into_iter().map(|source| Key { context: String::new(), source: source.into() }).collect();
+                assert_eq!(tl_keys(&[(PathBuf::from("ui.rs"), source)]), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn physical_crlf_keys_match_rust_string_values() {
+        let expected = "A\
+                        B
+C";
+        assert_eq!(expected, "AB\nC");
+        for newline in ["\n", "\r\n"] {
+            let source = format!("tl!(\n    \"A\\{newline}  B{newline}C\"\n);");
+            assert_eq!(tl_keys(&[(PathBuf::from("ui.rs"), source)]), BTreeSet::from([Key { context: String::new(), source: expected.into() }]));
+            let source = format!("tl!(\"A{newline}B\");");
+            assert_eq!(tl_keys(&[(PathBuf::from("ui.rs"), source)]), BTreeSet::from([Key { context: String::new(), source: "A\nB".into() }]));
+        }
+        let source = r#"tl!("A\r\nB");"#;
+        assert_eq!(tl_keys(&[(PathBuf::from("ui.rs"), source.into())]), BTreeSet::from([Key { context: String::new(), source: "A\r\nB".into() }]));
     }
 
     #[test]
