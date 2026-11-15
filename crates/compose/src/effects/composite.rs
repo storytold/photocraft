@@ -330,12 +330,11 @@ struct EffectPass<'a> {
     /// Layer bounds (gradients aligned with the layer use the whole layer, independent of the
     /// render rect).
     sb: Rect,
-    /// Linked patterns tile from the effects reference point (else the layer's top-left).
+    /// The pattern paints other than a Pattern Overlay tile from the effects reference point (else
+    /// the layer's top-left).
     anchor: (f64, f64),
-    /// A linked Pattern Overlay tiles from the effects reference point, or from the document origin
-    /// when the layer has none (#14960): the measured reference application starts a new overlay's
-    /// grid there, and a layer move records the reference point (see the Move command), so the grid
-    /// follows the layer's moves without ever becoming its corner.
+    /// The Pattern Overlay's origin: the effects reference point, else the document origin on the
+    /// content kinds #14960 measured, else the layer's top-left (see [`crate::pattern::overlay_anchor`]).
     overlay_anchor: (f64, f64),
     /// The enabled effects. Multiple instances: the first listed is on top, so paint in reverse.
     items: Vec<&'a Effect>,
@@ -361,7 +360,7 @@ impl<'a> EffectPass<'a> {
             h: big.height() as usize,
             sb,
             anchor: layer.effects.reference.unwrap_or((f64::from(sb.x0), f64::from(sb.y0))),
-            overlay_anchor: layer.effects.reference.unwrap_or((0.0, 0.0)),
+            overlay_anchor: crate::pattern::overlay_anchor(layer, sb),
             items: layer.effects.items.iter().filter(|e| e.enabled()).collect(),
         }
     }

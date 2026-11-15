@@ -330,9 +330,31 @@ pub fn moved(doc: &Document, ids: &[LayerId], dx: i32, dy: i32) -> Result<Docume
 /// gets the document grid again). Only content that moves as a picture gets one: an adjustment or
 /// fill layer has no position, and a move of one changes nothing about it.
 fn note_move_phase(l: &mut Layer, dx: i32, dy: i32) {
-    if l.effects.reference.is_none() && (dx != 0 || dy != 0) && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_)) {
+    if l.effects.reference.is_none() && (dx != 0 || dy != 0) && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_)) && records_move_phase(l) {
         l.effects.reference = Some((f64::from(dx), f64::from(dy)));
     }
+}
+
+/// Whether the layer's style has a linked pattern paint that is not a Pattern Overlay: a pattern
+/// stroke, a pattern glow or a bevel texture. Those are not measured by #14960 (#14839 covers the
+/// texture) and still anchor at the layer's corner, so recording a reference point would drag them
+/// off it.
+fn other_linked_pattern(l: &Layer) -> bool {
+    use photocraft_doc::{Effect, FxPaint};
+    l.effects.items.iter().filter(|e| e.enabled()).any(|e| match e {
+        Effect::Stroke(s) => matches!(s.paint, FxPaint::Pattern { .. }),
+        Effect::OuterGlow(g) | Effect::InnerGlow(g) => matches!(g.paint, FxPaint::Pattern { .. }),
+        Effect::BevelEmboss(b) => b.texture.as_ref().is_some_and(|t| t.link),
+        _ => false,
+    })
+}
+
+/// A linked Pattern Overlay needs the recorded phase, so it wins over another pattern paint sharing
+/// the layer (one reference point per layer); otherwise such a layer keeps `reference: None` and its
+/// stroke, glow or texture stays glued to the layer's corner across a move.
+fn records_move_phase(l: &Layer) -> bool {
+    let overlay = l.effects.items.iter().any(|e| matches!(e, photocraft_doc::Effect::PatternOverlay { link: true, .. } if e.enabled()));
+    overlay || !other_linked_pattern(l)
 }
 
 /// [`note_move_phase`] over a moved layer and the layers inside it: the commit path shifts the
@@ -1113,5 +1135,84 @@ mod style_phase_tests {
             assert_eq!(after, before, "the whole document is unchanged for {what}");
             assert_eq!(reference(&after, id), None, "no reference point for {what}");
         }
+    }
+
+    /// The measured 20 x 20 pattern of #14960: quadrants red / green / blue / black, and one white
+    /// marker pixel at tile (0, 0).
+    fn quad_pattern() -> photocraft_doc::Pattern {
+        let mut tile = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+        tile.fill_rect(Rect::new(0, 0, 10, 10), &[1.0, 0.0, 0.0, 1.0]);
+        tile.fill_rect(Rect::new(10, 0, 20, 10), &[0.0, 1.0, 0.0, 1.0]);
+        tile.fill_rect(Rect::new(0, 10, 10, 20), &[0.0, 0.0, 1.0, 1.0]);
+        tile.fill_rect(Rect::new(10, 10, 20, 20), &[0.0, 0.0, 0.0, 1.0]);
+        tile.fill_rect(Rect::new(0, 0, 1, 1), &[1.0, 1.0, 1.0, 1.0]);
+        photocraft_doc::Pattern::new("quadrants", tile, 20, 20)
+    }
+
+    /// A document with the #14960 pattern registered and `layer` in it.
+    fn fixture(layer: Layer) -> Document {
+        let mut d = Document::new("origin", Size::new(80, 80), ColorMode::Rgb, SampleType::U8);
+        d.patterns.push(quad_pattern());
+        d.layers.push(layer);
+        d
+    }
+
+    /// The flattened `rect` as one letter per pixel, row-major (W white, R red, G green, B blue,
+    /// K black, `?` for anything else), so a test can compare what the compositor painted.
+    fn letters(doc: &Document, rect: Rect) -> Vec<char> {
+        let q = |v: f32| v > 0.5;
+        photocraft_compose::render(doc, rect)
+            .px
+            .iter()
+            .map(|p| match (q(p[0]), q(p[1]), q(p[2])) {
+                (true, false, false) => 'R',
+                (false, true, false) => 'G',
+                (false, false, true) => 'B',
+                (false, false, false) => 'K',
+                (true, true, true) => 'W',
+                _ => '?',
+            })
+            .collect()
+    }
+
+    /// Review point 2 (#14960): a pattern stroke is not measured by this issue, and today it
+    /// anchors at the layer's corner, so it stays exactly where it was relative to its layer across
+    /// a move. Recording the move phase must not become the anchor of a layer whose style carries a
+    /// pattern paint other than the overlay.
+    #[test]
+    fn a_pattern_stroke_stays_where_it_is_relative_to_its_layer_across_a_move() {
+        let pat = quad_pattern();
+        let mut l = Layer::new("Shape", shape(Rect::new(20, 20, 40, 40)));
+        l.effects.items = vec![Effect::Stroke(photocraft_doc::StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            size: 3.0,
+            position: photocraft_doc::StrokePosition::Outside,
+            paint: photocraft_doc::FxPaint::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0 },
+            overprint: false,
+        })];
+        let id = l.id;
+        let d = fixture(l);
+        let before = letters(&d, Rect::new(14, 22, 46, 28));
+        let after = moved(&d, &[id], 5, 3).expect("the layer moves");
+        assert_eq!(reference(&after, id), None, "a layer whose style carries a pattern stroke records no move phase");
+        // The same window of pixels, followed by the move: the stroke must read identically.
+        assert_eq!(before, letters(&after, Rect::new(19, 25, 51, 31)), "the pattern stroke moved with the layer, unchanged");
+    }
+
+    /// Review point 1 (#14960): a shape layer is one of the kinds the issue did not measure, so a
+    /// linked Pattern Overlay on it keeps today's anchor at the layer's corner and moves with the
+    /// layer instead of staying on the document grid.
+    #[test]
+    fn a_linked_overlay_on_a_shape_layer_moves_with_the_layer() {
+        let path = photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(20.0, 20.0), (40.0, 20.0), (40.0, 40.0), (20.0, 40.0)])]);
+        let sh = photocraft_doc::ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(1.0, 0.5, 0.0))), ..Default::default() };
+        let mut l = Layer::new("Shape", LayerContent::Shape(sh));
+        l.effects.items = vec![linked_overlay()];
+        let id = l.id;
+        let d = fixture(l);
+        let before = letters(&d, Rect::new(22, 22, 38, 38));
+        let after = moved(&d, &[id], 7, 4).expect("the shape layer moves");
+        assert_eq!(reference(&after, id), None, "a shape layer records no move phase");
+        assert_eq!(before, letters(&after, Rect::new(29, 26, 45, 42)), "the overlay moved with the shape layer, unchanged");
     }
 }

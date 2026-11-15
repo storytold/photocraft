@@ -879,10 +879,10 @@ impl<'a> Planner<'a> {
         }
 
         // Linked patterns tile from the effects reference point (else the layer's top-left); a
-        // Pattern Overlay from the reference point, else the document origin (#14960).
+        // Pattern Overlay through the shared `overlay_anchor` rule (#14960).
         let premerge = photocraft_compose::effects::premerges_layer(layer);
         let anchor = layer.effects.reference.unwrap_or((f64::from(sb.x0), f64::from(sb.y0)));
-        let overlay_anchor = layer.effects.reference.unwrap_or((0.0, 0.0));
+        let overlay_anchor = photocraft_compose::pattern::overlay_anchor(layer, sb);
         let vector_shape = matches!(layer.content, LayerContent::Shape(_)) && !outline;
         let rev = items.iter().copied().enumerate().rev().collect();
         let mut work = EffectState {
