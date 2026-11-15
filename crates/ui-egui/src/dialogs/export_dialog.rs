@@ -1459,12 +1459,11 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
     if !cfg!(target_arch = "wasm32") {
         let prefs = app.session.prefs().export.clone();
         let fmt = serde_json::to_value(prefs.quick_export_format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "png".into());
-        let same = serde_json::to_value(prefs.quick_export_location).ok().is_some_and(|v| v == "sameFolder");
-        let saved = app.session.active().is_some_and(|d| d.path.is_some());
-        // Same Folder writes beside the document's file without asking, except when that would
-        // replace the file itself (a document opened from photo.png): then the save dialog asks,
-        // so replacing it is the user's choice (#6599).
-        if same && saved && !photocraft_engine::web_cmds::quick_export_target_is_own_file(&app.session) {
+        // The assets folder location writes without asking, saved or not (#13794), except when
+        // that would replace the document's own file: then the save dialog asks, so replacing it
+        // is the user's choice (#6599).
+        let target = photocraft_engine::web_cmds::quick_export_target(&app.session).is_some();
+        if target && !photocraft_engine::web_cmds::quick_export_target_is_own_file(&app.session) {
             return quick_export(app, json!({}));
         }
         let st = app.session.active().ok_or("no document")?;

@@ -538,12 +538,14 @@ fn export_preferences_drive_quick_export() {
     let r = s.execute("file.export.exportPreferences", json!({"quickExportFormat": "jpg", "jpegQuality": 40, "quickExportLocation": "sameFolder"})).unwrap();
     assert_eq!(r["values"]["quickExportFormat"], "jpg");
     assert!(s.execute("file.export.exportPreferences", json!({"quickExportFormat": "bmp"})).is_err());
-    // Unsaved document: a path is needed.
-    assert!(s.execute("file.export.quickExport", json!({})).is_err());
+    // The assets folder location (#13794): an unsaved document goes into `<Documents>-assets`
+    // (a scratch Documents folder in the engine's tests), a saved one into `<name>-assets`.
+    let r = s.execute("file.export.quickExport", json!({})).unwrap();
+    assert!(r["path"].as_str().unwrap().contains("Documents-assets"), "{r}");
     s.active_mut().unwrap().path = Some(format!("{dir}/web.psd"));
     let r = s.execute("file.export.quickExport", json!({})).unwrap();
-    assert_eq!(r["path"], json!(format!("{dir}/web.jpg")));
-    assert_eq!(decode(&format!("{dir}/web.jpg")).dimensions(), (64, 48));
+    assert_eq!(r["path"], json!(format!("{dir}/web-assets/web.jpg")));
+    assert_eq!(decode(&format!("{dir}/web-assets/web.jpg")).dimensions(), (64, 48));
     s.execute("file.export.exportPreferences", json!({"quickExportFormat": "gif"})).unwrap();
     let r = s.execute("file.export.quickExport", json!({"path": format!("{dir}/x.gif")})).unwrap();
     assert_eq!(r["format"], "gif");
@@ -551,9 +553,9 @@ fn export_preferences_drive_quick_export() {
     s.execute("prefs.reset", json!({"path": "export"})).unwrap();
 }
 
-/// #6599: with Location = Same Folder, a document opened from `photo.png` would be exported over
-/// `photo.png` itself. Without a `path` that is refused and the file is left alone; named
-/// explicitly (the save dialog's answer) it is written.
+/// #6599: a document opened from `photo.png` is never exported over `photo.png` without being
+/// asked. Since #13794 the location writes into `photo-assets/`, so the file is left alone and
+/// the export goes there; named explicitly (the save dialog's answer) the file itself is written.
 #[test]
 fn quick_export_never_replaces_the_documents_own_file_unasked() {
     let dir = tmp("quick_own_file");
@@ -562,21 +564,12 @@ fn quick_export_never_replaces_the_documents_own_file_unasked() {
     let own = format!("{dir}/photo.png");
     std::fs::write(&own, b"original").unwrap();
     s.active_mut().unwrap().path = Some(own.clone());
-    assert_eq!(quick_export_target(&s), Some(own.clone()));
-    assert!(quick_export_target_is_own_file(&s));
-    let e = s.execute("file.export.quickExport", json!({})).unwrap_err().to_string();
-    assert!(e.contains("own file"), "{e}");
+    assert_eq!(quick_export_target(&s), Some(format!("{dir}/photo-assets/photo.png")));
+    assert!(!quick_export_target_is_own_file(&s));
+    assert_eq!(s.execute("file.export.quickExport", json!({})).unwrap()["path"], json!(format!("{dir}/photo-assets/photo.png")));
     assert_eq!(std::fs::read(&own).unwrap(), b"original", "the source is untouched");
     s.execute("file.export.quickExport", json!({"path": own})).unwrap();
     assert_eq!(decode(&own).dimensions(), (64, 48));
-    // Another format, or a PSD's earlier export beside it, is still written without asking.
-    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "jpg"})).unwrap();
-    assert!(!quick_export_target_is_own_file(&s));
-    assert_eq!(s.execute("file.export.quickExport", json!({})).unwrap()["path"], json!(format!("{dir}/photo.jpg")));
-    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png"})).unwrap();
-    s.active_mut().unwrap().path = Some(format!("{dir}/photo.psd"));
-    assert!(!quick_export_target_is_own_file(&s));
-    assert_eq!(s.execute("file.export.quickExport", json!({})).unwrap()["path"], json!(own));
     s.execute("prefs.reset", json!({"path": "export"})).unwrap();
 }
 
@@ -1357,7 +1350,7 @@ fn quick_export_exr_preserves_linear_hdr_and_alpha() {
         s.execute("file.export.exportPreferences", json!({"quickExportFormat": "exr", "quickExportLocation": "sameFolder", "convertToSrgb": convert})).unwrap();
         let result = s.execute("file.export.quickExport", json!({})).unwrap();
         assert_eq!(result["format"], "exr");
-        let path = format!("{dir}/source.exr");
+        let path = format!("{dir}/source-assets/source.exr");
         assert_eq!(result["path"], path);
         assert_eq!(result["bytes"].as_u64(), Some(std::fs::metadata(&path).unwrap().len()));
         let decoded = decode(&path);
@@ -1368,11 +1361,13 @@ fn quick_export_exr_preserves_linear_hdr_and_alpha() {
         }
         assert_eq!(actual.len(), samples.len());
     }
-    // The format preference must never silently overwrite the source EXR.
+    // The format preference must never silently overwrite the source EXR: the export goes into
+    // its assets folder (#13794).
     let own = format!("{dir}/source.exr");
+    std::fs::copy(format!("{dir}/source-assets/source.exr"), &own).unwrap();
     s.active_mut().unwrap().path = Some(own.clone());
     let before = std::fs::read(&own).unwrap();
-    assert!(s.execute("file.export.quickExport", json!({})).is_err());
+    assert_eq!(s.execute("file.export.quickExport", json!({})).unwrap()["path"], json!(format!("{dir}/source-assets/source.exr")));
     assert_eq!(std::fs::read(&own).unwrap(), before);
     s.execute("file.export.quickExport", json!({"path": format!("{dir}/explicit.exr")})).unwrap();
     assert_eq!(decode(&format!("{dir}/explicit.exr")).dimensions(), (2, 1));

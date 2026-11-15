@@ -1,6 +1,6 @@
 use super::optimizer::{optimize, web_document, web_exif, web_warnings, web_xmp};
 use super::settings::WebSettings;
-use super::{EngineError, Result, Session, Value, bad, join, json, other, stem, write_file};
+use super::{EngineError, Result, Session, Value, bad, json, other, stem, write_file};
 
 // ---------- Export Preferences / Quick Export ----------
 
@@ -33,14 +33,42 @@ fn quick_export_ext(s: &Session) -> String {
     serde_json::to_value(s.prefs().export.quick_export_format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "png".into())
 }
 
-/// Where Quick Export writes the active document with no `path` given: `<name>.<format>` beside
-/// its file, when Export Preferences › Location is Same Folder and the document has a file.
+/// Where Quick Export writes the active document with no `path` given, when Export Preferences ›
+/// Location is "Export files to an assets folder next to the current document" (stored as
+/// `sameFolder`): see [`assets_target`]. `None` with "Ask where to export each time".
 pub fn quick_export_target(s: &Session) -> Option<String> {
-    let same = s.prefs().export.quick_export_location == crate::prefs::ExportLocation::SameFolder;
-    let dp = s.active()?.path.as_deref().filter(|_| same)?;
-    let dir = std::path::Path::new(dp).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
-    Some(join(&dir, &format!("{}.{}", stem(dp), quick_export_ext(s))))
+    let assets = s.prefs().export.quick_export_location == crate::prefs::ExportLocation::SameFolder;
+    let d = s.active().filter(|_| assets)?;
+    // The engine's own tests never write into the real home folder.
+    #[cfg(test)]
+    let documents = Some(std::env::temp_dir().join(format!("pc-quick-home-{}", std::process::id())).join("Documents"));
+    #[cfg(not(test))]
+    let documents = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join("Documents"));
+    assets_target(d.path.as_deref(), &d.doc.name, &quick_export_ext(s), documents.as_deref())
 }
+
+/// The assets-folder target, as measured in the reference application (#13794): a saved
+/// `dir/photo.psd` writes `dir/photo-assets/photo.<ext>`; an unsaved document writes into an
+/// `-assets` folder named after the user's Documents folder, beside it
+/// (`~/Documents-assets/<name>.<ext>`). `None` for an unsaved document without a home folder.
+pub fn assets_target(doc_path: Option<&str>, doc_name: &str, ext: &str, documents: Option<&std::path::Path>) -> Option<String> {
+    let (folder, name) = match doc_path {
+        Some(dp) => {
+            let dir = std::path::Path::new(dp).parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+            (dir.join(format!("{}-assets", stem(dp))), stem(dp))
+        }
+        None => {
+            let documents = documents?;
+            let folder = documents.with_file_name(format!("{}-assets", documents.file_name()?.to_string_lossy()));
+            (folder, stem(doc_name))
+        }
+    };
+    Some(folder.join(format!("{name}.{ext}")).to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+#[path = "quick_assets_folder_tests.rs"]
+mod quick_assets_folder_tests;
 
 /// Whether [`quick_export_target`] is the active document's own file (a document opened from
 /// `photo.png` and exported as PNG), which Quick Export must not replace without asking (#6599).
@@ -59,11 +87,16 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => v.to_string(),
         None => {
             let Some(target) = quick_export_target(s) else {
-                return Err(bad(cmd, "missing `path` (Export Preferences › Location is \"ask\", or the document was never saved)"));
+                return Err(bad(cmd, "missing `path` (Export Preferences › Location is \"ask\")"));
             };
             // The document's own file is never replaced by an export the user didn't name (#6599).
             if quick_export_target_is_own_file(s) {
                 return Err(bad(cmd, format!("the export would replace the document's own file {target}; give a `path`")));
+            }
+            // The assets folder is made on demand; one that can't be is an error, not a crash.
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(folder) = std::path::Path::new(&target).parent() {
+                std::fs::create_dir_all(folder).map_err(|e| other(format!("cannot create the assets folder {}: {e}", folder.display())))?;
             }
             target
         }
