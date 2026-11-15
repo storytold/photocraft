@@ -68,6 +68,8 @@ fn pixel_replacement_harness() -> (tempfile::TempDir, Harness<'static, Photocraf
     let path = dir.path().join("blue.png");
 
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
+    // The alert assertions use English text; don't follow the system locale.
+    app.session.prefs.edit(|p| p.interface.language = "en".into());
     app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();
     photocraft_ui_egui::menus::invoke(&mut app, &egui::Context::default(), "image.variables.dataSets", json!({})).unwrap();
