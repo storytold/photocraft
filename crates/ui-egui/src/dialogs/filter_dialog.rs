@@ -545,7 +545,8 @@ fn assign_profile_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>)
     fields.insert("__profiles".into(), json!(allowed));
 }
 
-/// Alt+Cancel (Reset): schema defaults + command hooks, without last-used remembered prefs.
+/// Alt+Cancel (Reset): schema defaults + command hooks, without last-used remembered prefs. Fade
+/// returns to the values it opened with instead, once its Opacity was changed.
 pub fn reset_fields(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     if !fields.contains_key("__filter") || fields.contains_key("__adjust") {
         return;
@@ -554,6 +555,11 @@ pub fn reset_fields(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     let spec =
         fields.get("__spec").and_then(Value::as_str).map(str::to_owned).or_else(|| photocraft_engine::commands::find(&command).map(|c| c.params.to_owned()));
     let Some(spec) = spec else { return };
+    // Fade returns to its opening values once its Opacity was changed, the case measured (#13812).
+    let fade_opened = (command == super::fade_modes::COMMAND)
+        .then(|| fields.get(FADE_OPENED).and_then(Value::as_object).cloned())
+        .flatten()
+        .filter(|opened| opened.get("opacity").and_then(Value::as_f64) != fields.get("opacity").and_then(Value::as_f64));
     // Drop user params; keep private `__` chrome (and fixed keys outside the schema for `__spec`).
     let schema_keys: std::collections::HashSet<String> = parse_spec(&spec).into_iter().map(|p| p.key).collect();
     fields.retain(|k, _| k.starts_with("__") || !schema_keys.contains(k));
@@ -569,7 +575,26 @@ pub fn reset_fields(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     if crate::blur_pins::handles(&command) {
         crate::blur_pins::reset(fields);
     }
+    // Fade's Reset goes back to the values it opened with, the last ones confirmed (#13812).
+    if let Some(opened) = fade_opened {
+        fields.extend(opened);
+    }
 }
+
+/// The Fade dialog's opening values, for its Reset (#13812).
+const FADE_OPENED: &str = "__fadeOpened";
+
+/// Keep the Fade dialog's opening values (the last confirmed Fade's, or the defaults), so Reset
+/// returns to them rather than to 100 % Normal (#13812). A Reset after changing only the Mode
+/// wasn't measured and keeps the defaults.
+fn fade_keep_opening_values(fields: &mut Map<String, Value>) {
+    let opened: Map<String, Value> = fields.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    fields.insert(FADE_OPENED.into(), Value::Object(opened));
+}
+
+#[cfg(test)]
+#[path = "fade_reset_tests.rs"]
+mod fade_reset_tests;
 
 /// Open the command's schema dialog using current settings and editing target.
 pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
@@ -608,6 +633,9 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         // The document picker lists every open document (params refer to them by index).
         let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
         fields.insert("__docs".into(), json!(names));
+    }
+    if command == super::fade_modes::COMMAND {
+        fade_keep_opening_values(&mut fields);
     }
     if command == MATCH_COLOR {
         let destination = app.session.active().map(|st| (st.doc.id, st.active_layer));
