@@ -135,7 +135,10 @@ fn sampler_keeps_command(app: &PhotocraftApp, i: &InputState) -> bool {
 /// `hover_doc` is written after the temporary tool is chosen, so a pointer that moves onto
 /// something and presses in one frame would be judged where it was.
 fn pointer_doc(app: &PhotocraftApp, i: &InputState) -> Option<[f64; 2]> {
-    match (i.pointer.latest_pos(), crate::canvas::ViewXform::active(app)) {
+    // A press in this frame is routed at its origin even when the pointer has moved on before the
+    // frame ends, so the Command decision uses that point.
+    let at = if i.pointer.primary_pressed() { i.pointer.press_origin().or(i.pointer.latest_pos()) } else { i.pointer.latest_pos() };
+    match (at, crate::canvas::ViewXform::active(app)) {
         (Some(at), Some(xf)) => Some(xf.to_doc(at)),
         _ => app.hover_doc,
     }

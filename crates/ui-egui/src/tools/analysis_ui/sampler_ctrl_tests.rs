@@ -163,3 +163,24 @@ fn the_pointer_of_this_frame_decides_whether_command_is_the_move_tool() {
     assert_eq!(held(&mut app, on_point), None, "this frame's pointer is on the point: the Color Sampler");
     assert_eq!(held(&mut app, off_point), Some(crate::hold_keys::Temporary::Move), "this frame's pointer is off it: Move");
 }
+
+/// CodeRabbit on #14684: a press and a move off the point in one frame is still a press on the
+/// point: the decision uses where the press began, not where the pointer ended the frame.
+#[test]
+fn a_press_and_a_move_off_the_point_in_one_frame_is_decided_at_the_press() {
+    let mut app = app();
+    app.sync_views();
+    let xf = crate::canvas::ViewXform::active(&app).expect("the view's mapping");
+    let (on_point, off_point) = (xf.to_screen(300.5, 200.5), xf.to_screen(50.0, 50.0));
+    app.hover_doc = Some([50.0, 50.0]);
+    let ctx = egui::Context::default();
+    let press = egui::Event::PointerButton { pos: on_point, button: egui::PointerButton::Primary, pressed: true, modifiers: CMD };
+    let raw = egui::RawInput {
+        events: vec![egui::Event::PointerMoved(on_point), egui::Event::ModifiersChanged(CMD), press, egui::Event::PointerMoved(off_point)],
+        ..Default::default()
+    };
+    ctx.begin_pass(raw);
+    let held = crate::hold_keys::held_tool(&app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(held, None, "the press began on the point: the Color Sampler keeps ⌘");
+}
