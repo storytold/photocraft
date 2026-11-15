@@ -735,11 +735,13 @@ fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn scale_effects(s: &mut Session, p: &Value) -> Result<Value> {
-    let k = num(p, "scale", 100.0).clamp(1.0, 1000.0) / 100.0;
+    // Actions and scripts may pass more than the dialog's 1000 % (5000 scales by 50); below 1
+    // counts as 1, as before (#14989).
+    let pct = p.get("scale").and_then(Value::as_f64).unwrap_or(100.0).max(1.0);
     let id = layer_param(s, p)?;
     s.edit("Scale Effects", |doc, _| {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        crate::image_cmds::scale_effects(&mut l.effects, k);
+        crate::image_cmds::scale_effects_rounded(&mut l.effects, pct);
         l.effects.psd_raw = None;
         Ok(())
     })?;
@@ -1075,7 +1077,14 @@ pub fn specs() -> Vec<CommandSpec> {
             global_light
         ),
         spec!("layer.layerStyle.createLayer", "Create Layer", ["Layer", "Layer Style"], r##"{"layer":id?}"##, has_effects, create_layer),
-        spec!("layer.layerStyle.scaleEffects", "Scale Effects…", ["Layer", "Layer Style"], r##"{"scale":1..1000=100}"##, has_effects, scale_effects),
+        spec!(
+            "layer.layerStyle.scaleEffects",
+            "Scale Effects…",
+            ["Layer", "Layer Style"],
+            r##"{"scale":1..1000=100} (%: actions and scripts may pass more, 5000 scales by 50; sizes and distances are stored rounded half up to whole pixels within their ranges)"##,
+            has_effects,
+            scale_effects
+        ),
         spec!(
             "layer.layerStyle.transferEffects",
             "Move Layer Effects",
@@ -1113,3 +1122,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "scale_effects_rounding_tests.rs"]
+mod scale_effects_rounding_tests;

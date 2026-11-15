@@ -140,6 +140,56 @@ pub fn scale_effects(fx: &mut Effects, k: f32) {
     scale_effects_with(fx, k, true);
 }
 
+/// Layer Style › Scale Effects at `pct` percent (#14989): every size and distance is stored rounded
+/// half up to a whole pixel and held to its field's range, as the reference does (Distance 3 /
+/// Size 7 at 50 % become 2 / 4). Bevel Soften is rounded but not capped; pattern scales are held
+/// to 1..1000 % as in [`scale_effects`]. Computed as `v × pct / 100` in f64, so a whole value at
+/// a whole percent lands exactly on its half (10 at 35 % is 3.5, not 3.4999).
+pub fn scale_effects_rounded(fx: &mut Effects, pct: f64) {
+    const SIZE: (f64, f64) = (0.0, 250.0);
+    const DISTANCE: (f64, f64) = (0.0, 30000.0);
+    let px = |v: &mut f32, (min, max): (f64, f64)| *v = whole_px(f64::from(*v) * pct / 100.0, min, max);
+    let k = (pct / 100.0) as f32;
+    let pattern = |scale: &mut f32| scale_pattern(scale, k, true);
+    for e in &mut fx.items {
+        match e {
+            Effect::DropShadow(s) | Effect::InnerShadow(s) => {
+                px(&mut s.distance, DISTANCE);
+                px(&mut s.size, SIZE);
+            }
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => px(&mut g.size, SIZE),
+            Effect::Stroke(s) => {
+                px(&mut s.size, (1.0, 250.0));
+                if let FxPaint::Pattern { scale, .. } = &mut s.paint {
+                    pattern(scale);
+                }
+            }
+            Effect::Satin(s) => {
+                px(&mut s.distance, SIZE);
+                px(&mut s.size, SIZE);
+            }
+            Effect::BevelEmboss(b) => {
+                px(&mut b.size, SIZE);
+                px(&mut b.soften, (0.0, f64::from(f32::MAX)));
+                if let Some(t) = &mut b.texture {
+                    pattern(&mut t.scale);
+                }
+            }
+            Effect::PatternOverlay { scale, .. } => pattern(scale),
+            Effect::GradientOverlay { .. } | Effect::ColorOverlay { .. } => {}
+        }
+    }
+    if pct != 100.0 {
+        fx.psd_raw = None;
+    }
+}
+
+/// `v` rounded half up to a whole number within `min..=max`, as an f32; NaN (a zero value at an
+/// infinite scale) is `min`, and an infinite value is held to the range.
+fn whole_px(v: f64, min: f64, max: f64) -> f32 {
+    if v.is_nan() { min as f32 } else { (v + 0.5).floor().clamp(min, max) as f32 }
+}
+
 /// [`scale_effects`] for a preview that draws a style at a reduced resolution: pattern scales
 /// follow `k` exactly, so the preview matches the style it stands for (a 2 % pattern drawn at a
 /// quarter of the size is 0.5 %, not the dialog's 1 % minimum).
