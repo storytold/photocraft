@@ -141,3 +141,18 @@ fn the_next_frame_takes_the_options_bar_stroke() {
 fn the_shape_tools_stroke_default_is_unchanged() {
     assert_eq!(photocraft_doc::ShapeStroke::default().width, 3.0);
 }
+
+/// CodeRabbit on #15155: the field clamps what it shows to 0–288 px, but only an edit changes the width. A
+/// retained or stored width past it (500 px) is not rewritten by drawing the bar, and changing the
+/// alignment of a frame that stores it keeps it.
+#[test]
+fn a_stored_width_past_the_range_is_kept_unless_the_field_is_edited() {
+    let mut app = app();
+    app.ui.frame_tool.stroke_style.width = 500.0;
+    let mut h = harness(app);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.frame_tool.stroke_style.width, 500.0, "drawing the bar leaves the retained width");
+    // Typing a width is an edit, and clamps as before.
+    type_width(&mut h, "400");
+    assert_eq!(h.state().ui.frame_tool.stroke_style.width, 288.0);
+}
