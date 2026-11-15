@@ -552,10 +552,11 @@ pub fn drags_offset(f: &Map<String, Value>) -> bool {
 }
 
 /// A drag on the image with a shadow or Satin page selected: [`drag_satin`] on a Satin page, else
-/// [`drag_shadow`] (which does nothing off a shadow page).
-pub fn drag_offset(f: &mut Map<String, Value>, start: bool, total: [f64; 2]) {
+/// [`drag_shadow`] (which does nothing off a shadow page, and ignores `origin`, the press origin
+/// in screen points that tells a Satin drag its gesture; #14985).
+pub fn drag_offset(f: &mut Map<String, Value>, start: bool, total: [f64; 2], origin: [f64; 2]) {
     if drags_satin(f) {
-        drag_satin(f, start, total);
+        drag_satin(f, start, total, origin);
     } else {
         drag_shadow(f, start, total);
     }
@@ -568,22 +569,38 @@ pub fn canvas_drag_hint(f: &Map<String, Value>) -> Option<&'static str> {
     drags_satin(f).then(|| tl!("Click and drag to adjust the satin effect."))
 }
 
-/// A drag on the image with a Satin page selected: `start` is true on the press (it records the
-/// satin's angle and distance then), `total` the pointer's movement since in document pixels.
-/// The offset vector (−cos angle, sin angle) × distance follows the pointer; the new distance is
-/// its length truncated to a whole pixel (1 to 250) and the new angle its direction truncated
-/// toward zero to a whole degree, the previous angle kept when the vector collapses. A Satin never
-/// uses Global Light, so only this instance's `angle` and `distance` change (#14985).
-pub fn drag_satin(f: &mut Map<String, Value>, start: bool, total: [f64; 2]) {
+/// A drag on the image with a Satin page selected: `start` is true on the press, `total` the
+/// pointer's movement since in document pixels and `origin` the press origin in screen points.
+/// The drag keeps the satin's angle and distance as shown, the selected instance, `origin` and
+/// `total` at its baseline, retaken on the press and whenever that record is missing, malformed or
+/// for another press or instance (a press the drag did not see begin, as after a middle-button
+/// pan): the satin then moves by the travel since the baseline, never from an earlier gesture's
+/// values. The offset vector (−cos angle, sin angle) × distance follows the pointer; the new
+/// distance is its length truncated to a whole pixel (1 to 250) and the new angle its direction
+/// truncated toward zero to a whole degree, the angle shown kept when the vector collapses. A
+/// Satin never uses Global Light, so only this instance's `angle` and `distance` change (#14985).
+pub fn drag_satin(f: &mut Map<String, Value>, start: bool, total: [f64; 2], origin: [f64; 2]) {
     const KEY: &str = "__satinDrag";
     let Some(id) = f.get("selected").and_then(Value::as_str).map(str::to_string).filter(|_| drags_satin(f)) else { return };
     let Some(p) = entry(f, &id).and_then(|e| e.get("params")) else { return };
-    if start || f.get(KEY).is_none() {
-        let angle = p.get("angle").and_then(Value::as_f64).unwrap_or(90.0);
-        let distance = p.get("distance").and_then(Value::as_f64).unwrap_or(50.0);
-        f.insert(KEY.into(), json!([angle, distance]));
-    }
-    let Some([angle, distance]) = f.get(KEY).and_then(Value::as_array).and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?])) else { return };
+    let shown_angle = p.get("angle").and_then(Value::as_f64).unwrap_or(90.0);
+    let shown_distance = p.get("distance").and_then(Value::as_f64).unwrap_or(50.0);
+    let pair = |v: Option<&Value>| {
+        let a = v?.as_array()?;
+        Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?])
+    };
+    let stored = f.get(KEY).filter(|k| k.get("id").and_then(Value::as_str) == Some(id.as_str()) && pair(k.get("origin")) == Some(origin)).and_then(|k| {
+        let [bx, by] = pair(k.get("base"))?;
+        Some(([bx, by], k.get("angle")?.as_f64()?, k.get("distance")?.as_f64()?))
+    });
+    let (base, angle, distance) = match stored {
+        Some(s) if !start => s,
+        _ => {
+            f.insert(KEY.into(), json!({"id": id, "origin": origin, "base": total, "angle": shown_angle, "distance": shown_distance}));
+            (total, shown_angle, shown_distance)
+        }
+    };
+    let total = [total[0] - base[0], total[1] - base[1]];
     let a = angle.to_radians();
     let (ox, oy) = (-a.cos() * distance + total[0], a.sin() * distance + total[1]);
     let d = ox.hypot(oy);
@@ -595,7 +612,7 @@ pub fn drag_satin(f: &mut Map<String, Value>, start: bool, total: [f64; 2]) {
         // Truncation, so a hair under a whole degree from float noise (89.999999…) must not drop one.
         (deg + 1e-9 * deg.signum()).trunc()
     } else {
-        angle
+        shown_angle
     };
     set_param(f, &id, "angle", json!(new_angle));
     set_param(f, &id, "distance", json!(d.trunc().clamp(1.0, 250.0)));

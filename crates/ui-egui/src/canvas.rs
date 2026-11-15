@@ -909,7 +909,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             let (start, origin) = input.ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.press_origin().unwrap_or(p)));
             let total = input.xf.unmap_vec(p - origin) / (input.view.zoom / input.ppp);
             if let Some(d) = app.ui.dialogs.last_mut() {
-                crate::layer_style::drag_offset(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)]);
+                crate::layer_style::drag_offset(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)], [f64::from(origin.x), f64::from(origin.y)]);
             }
         }
     } else if gradient_drag && !input.middle && crate::dialogs::free_pointer_over(input.ctx, input.rect).is_some() {
