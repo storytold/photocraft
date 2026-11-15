@@ -156,7 +156,7 @@ fn the_turn_drops_guide_colours_as_it_does_today() {
 
 #[test]
 fn crop_with_an_angle_still_drops_the_guides() {
-    // The Crop tool's straighten turn runs the same rotation with `keep_counts` off; its guides are
+    // The Crop tool's straighten turn runs the same rotation with `image_rotation` off; its guides are
     // not measured, so they keep going away.
     let mut s = doc();
     s.execute("image.crop", json!({"x": 50, "y": 40, "width": 300, "height": 200, "angle": 30})).unwrap();
