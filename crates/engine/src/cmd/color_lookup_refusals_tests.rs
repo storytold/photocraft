@@ -154,3 +154,63 @@ fn a_selection_still_applies_inside_it_with_one_history_step() {
     let surf = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
     assert_ne!(surf.rgba(4, 12).to_vec(), surf.rgba(28, 12).to_vec(), "inside the selection changed, outside did not");
 }
+
+/// The Background (white, so not empty) and a "top" layer above it, which is the active one. The
+/// bucket floods "top" when `fill` is set, otherwise it stays an empty pixel layer. Returns the
+/// session with both layer ids.
+fn bg_and_top(fill: bool) -> (Session, u64, u64) {
+    let mut s = session(ColorMode::Rgb);
+    let bg = s.active().unwrap().active_layer.unwrap().0;
+    let top = s.execute("layer.new.layer", json!({"name": "top"})).unwrap()["layer"].as_u64().unwrap();
+    if fill {
+        s.execute("paint.bucket", json!({"x": 5, "y": 5})).unwrap();
+    }
+    (s, bg, top)
+}
+
+/// The pixel at (16, 12) of layer `id`.
+fn pixel(s: &Session, id: u64) -> Vec<f32> {
+    s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().surface().unwrap().rgba(16, 12).to_vec()
+}
+
+#[test]
+fn a_hidden_explicit_target_is_refused_although_the_active_layer_is_visible_and_not_empty() {
+    // The target the params name is what Color Lookup edits, so it is the one checked: the
+    // active layer ("top": visible, filled) must not stand in for it (#14429).
+    let (mut s, bg, top) = bg_and_top(true);
+    s.execute("layer.hideLayers", json!({"layer": bg})).unwrap();
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, top);
+    let before = pixel(&s, bg);
+    refused(&mut s, "hidden explicit target", NOT_AVAILABLE, json!({"lut": "warm", "layer": bg}));
+    assert_eq!(pixel(&s, bg), before, "the hidden target was not edited");
+}
+
+#[test]
+fn an_empty_active_layer_does_not_reject_a_nonempty_explicit_target() {
+    let (mut s, bg, top) = bg_and_top(false);
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, top);
+    let (before, past) = (pixel(&s, bg), s.active().unwrap().history.past_len());
+    s.execute("image.adjustments.colorLookup", json!({"lut": "warm", "layer": bg})).expect("a visible, filled target runs while the active layer is empty");
+    assert_ne!(pixel(&s, bg), before, "the targeted layer was edited");
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, top, "the active layer is unchanged");
+}
+
+#[test]
+fn a_hidden_active_layer_does_not_reject_a_visible_explicit_target() {
+    let (mut s, bg, top) = bg_and_top(true);
+    s.execute("layer.hideLayers", json!({"layer": top})).unwrap();
+    let before = pixel(&s, bg);
+    s.execute("image.adjustments.colorLookup", json!({"lut": "warm", "layer": bg})).expect("a visible target runs while the active layer is hidden");
+    assert_ne!(pixel(&s, bg), before, "the targeted layer was edited");
+    assert!(!s.is_enabled("image.adjustments.colorLookup"), "the menu entry still follows the active layer");
+}
+
+#[test]
+fn an_empty_explicit_target_gets_the_empty_layer_message_although_the_active_layer_is_filled() {
+    let (mut s, bg, top) = bg_and_top(false);
+    s.execute("layer.select", json!({"layer": bg})).unwrap();
+    let before = pixel(&s, bg);
+    refused(&mut s, "empty explicit target", EMPTY_LAYER, json!({"lut": "warm", "layer": top}));
+    assert_eq!(pixel(&s, bg), before, "the filled active layer was not edited");
+}

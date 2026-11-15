@@ -1302,7 +1302,9 @@ fn build() -> Vec<CommandSpec> {
                 "blackWhite" => Some("Cmd+Alt+Shift+B"),
                 _ => None,
             },
-            params,
+            // Color Lookup edits the layer its `layer` param names (the active one by default), so
+            // its precondition is checked on that layer (#14429).
+            params: if kind == "colorLookup" { Box::leak(format!(r#"{params} + {{"layer":id?=the active layer}}"#).into_boxed_str()) } else { params },
             // Color Lookup has its own target checks (#14429); the other adjustments share
             // the plain one.
             enabled: if kind == "colorLookup" { crate::adjust_cmds::has_color_lookup_target } else { crate::adjust_cmds::has_adjustable },

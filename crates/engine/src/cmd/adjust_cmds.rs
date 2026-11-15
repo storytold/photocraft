@@ -346,8 +346,9 @@ pub(crate) const COLOR_LOOKUP_UNAVAILABLE: &str = "The command \"Color Lookup\" 
 pub(crate) const COLOR_LOOKUP_EMPTY_LAYER: &str = "Could not complete the Color Lookup command because the active layer is empty.";
 
 /// The document-mode and visibility half of the Color Lookup checks, shared by the menu and
-/// by apply (#14429).
-fn color_lookup_target_ok(s: &Session) -> std::result::Result<(), String> {
+/// by apply (#14429). `layer` is the layer the step edits: `None` (the menu, which has no
+/// params) means the active layer, apply passes the one the params resolve to.
+fn color_lookup_target_ok(s: &Session, layer: Option<photocraft_doc::LayerId>) -> std::result::Result<(), String> {
     has_adjustable(s)?;
     let d = s.active().ok_or("no document open")?;
     if matches!(
@@ -364,7 +365,7 @@ fn color_lookup_target_ok(s: &Session) -> std::result::Result<(), String> {
     if crate::channel_cmds::edits_channel(s) {
         return Ok(());
     }
-    let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
+    let l = layer.or(d.active_layer).and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
     if !l.visible {
         return Err(COLOR_LOOKUP_UNAVAILABLE.into());
     }
@@ -373,7 +374,7 @@ fn color_lookup_target_ok(s: &Session) -> std::result::Result<(), String> {
 
 /// The enabled check picked for `image.adjustments.colorLookup` (#14429).
 pub(crate) fn has_color_lookup_target(s: &Session) -> std::result::Result<(), String> {
-    color_lookup_target_ok(s)
+    color_lookup_target_ok(s, None)
 }
 
 /// The apply-time check for Color Lookup (#14429): the menu refusals answer the same text when
@@ -381,7 +382,9 @@ pub(crate) fn has_color_lookup_target(s: &Session) -> std::result::Result<(), St
 /// than at the menu, and an empty pixel layer gets its own message. Runs before the edit, so a
 /// refusal leaves no history state and no pixel touched.
 pub(crate) fn color_lookup_applicable(s: &Session, p: &Value) -> std::result::Result<(), String> {
-    color_lookup_target_ok(s)?;
+    // The layer the edit and the smart-filter path act on (`layer` param, else the active one).
+    let target = crate::commands::layer_param(s, p).map_err(|e| e.to_string())?;
+    color_lookup_target_ok(s, Some(target))?;
     if crate::commands::is_mask_target(p) {
         return Err(COLOR_LOOKUP_UNAVAILABLE.into());
     }
@@ -392,7 +395,7 @@ pub(crate) fn color_lookup_applicable(s: &Session, p: &Value) -> std::result::Re
     if crate::channel_cmds::edits_channel(s) {
         return Ok(());
     }
-    if let Some(l) = d.active_layer.and_then(|id| d.doc.layer(id))
+    if let Some(l) = d.doc.layer(target)
         && let LayerContent::Raster(surf) = &l.content
         && surf.content_bounds().is_empty()
     {
