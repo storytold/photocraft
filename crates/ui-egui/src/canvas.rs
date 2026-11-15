@@ -1063,7 +1063,7 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
             // This raw press bypasses egui's widget ownership. Leave presses on the Free Transform bar to its controls.
             let on_transform_bar = app.session.active_index() == Some(idx)
                 && crate::transform_task_bar::shown_rect(app, ctx).is_some_and(|[x0, y0, x1, y1]| Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)).contains(p));
-            if !on_transform_bar {
+            if !on_transform_bar && !egui::Popup::is_any_open(ctx) {
                 let d = xf.to_doc(p);
                 tool_input::tool_event_with_view(
                     app,
