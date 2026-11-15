@@ -67,8 +67,7 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// [`rotate_arbitrary`]; `keep_counts` leaves the count points where they were (Image Rotation,
-/// unlike the turned Crop and Straighten, keeps the Color Sampler points — #11762). The Crop
-/// tool's straighten turn moves them with the image, as before. `keep_guides` turns the guides
+/// #11762). The Crop tool's straighten turn moves them with the image, as before. `keep_guides` turns the guides
 /// with the canvas (#14508, measured for Image Rotation > Arbitrary) instead of dropping them,
 /// as the turned Crop and the Straighten still do (not measured there).
 pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: bool, keep_guides: bool) -> Result<Value> {
