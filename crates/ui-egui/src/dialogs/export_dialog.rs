@@ -524,8 +524,12 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
 /// transparent one stays transparent. Other modes and depths keep what the GIF encoder does.
 fn matte_partial_alpha(doc: &mut Document) -> Result<(), String> {
     let fmt = doc.pixel_format();
-    let data: Vec<f32> = photocraft_compose::flatten(doc)
-        .into_px()
+    let px = photocraft_compose::flatten(doc).into_px();
+    // A canvas past the render limit comes back empty: writing that over the full bounds would assert.
+    if px.len() as u64 != u64::from(doc.size.width) * u64::from(doc.size.height) {
+        return Err("the image is too large to export as GIF".into());
+    }
+    let data: Vec<f32> = px
         .into_iter()
         .flat_map(|[r, g, b, a]| {
             let q = if a < 0.5 / 255.0 { [r, g, b, 0.0] } else { [r * a + 1.0 - a, g * a + 1.0 - a, b * a + 1.0 - a, 1.0] };
