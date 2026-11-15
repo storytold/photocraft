@@ -481,7 +481,7 @@ fn base_with_hole(rect: Rect, parts: &[Rect]) -> Base {
         let (x, y) = (rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32);
         *cell = parts.iter().any(|p| p.contains(x, y));
     }
-    Base { window: rect, rect, hole, base: vec![false; w * h] }
+    Base::new(rect, rect, hole, vec![false; w * h])
 }
 
 /// #10506: the fill area is outlined by merged runs, as the canvas outlines a selection, so it
