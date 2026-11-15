@@ -103,6 +103,10 @@ impl RowOrigin {
     pub(crate) fn key(&self) -> (usize, usize) {
         (Arc::as_ptr(&self.archive) as usize, self.set)
     }
+    /// Classify the native empty-name category without exposing or changing its physical identity.
+    pub(crate) fn has_empty_wire_name(&self) -> Result<bool> {
+        Ok(self.file()?.name.to_string_lossy().is_empty())
+    }
     /// Resolve this physical row in its retained archive, rejecting an invalid ordinal.
     fn file(&self) -> Result<&AtnFile> {
         self.archive.parsed.sets.get(self.set).ok_or_else(|| "missing original set".into())
@@ -260,8 +264,7 @@ fn decode_inner(bytes: &[u8], trusted: bool) -> Result<ActionState> {
     );
     let literal_ungrouped = set_names.claim(atn_cmds::UNGROUPED_SET);
     let mut scopes = std::collections::HashMap::new();
-    let mut physical = 0usize;
-    for (set, file) in archive.parsed.sets.iter().enumerate().filter(|(index, _)| Some(*index) != archive.hidden) {
+    for (physical, (set, file)) in archive.parsed.sets.iter().enumerate().filter(|(index, _)| Some(*index) != archive.hidden).enumerate() {
         let wire_name = file.name.to_string_lossy();
         let logical_name = if wire_name == atn_cmds::UNGROUPED_SET {
             literal_ungrouped.as_str()
@@ -292,7 +295,6 @@ fn decode_inner(bytes: &[u8], trusted: bool) -> Result<ActionState> {
         }
         state.library.order.push(key.clone());
         scopes.insert(wire_name.clone(), logical_name.to_string());
-        physical += 1;
         for (index, original) in file.actions.iter().enumerate() {
             let (mut action, cohorts) = atn_cmds::library_action(file, original, if wire_name.is_empty() { "" } else { logical_name })?;
             total = total.checked_add(action.steps.len()).filter(|count| *count <= atn::MAX_TOTAL_ITEMS).ok_or("too many native steps in Actions library")?;
@@ -826,10 +828,10 @@ pub(crate) fn projected_groups(state: &ActionState) -> Result<Vec<(GroupKey, &st
             .as_ref()
             .and_then(|origin| retained_rows.get(&(origin.row.key(), action.set.as_deref().filter(|name| !name.is_empty()))).copied());
         if let Some(name) = action.set.as_ref().filter(|name| !name.is_empty()) {
-            if let Some(GroupKey::Legacy(previous, serial)) = retained {
-                if previous == name {
-                    return GroupKey::Legacy(name.clone(), *serial);
-                }
+            if let Some(GroupKey::Legacy(previous, serial)) = retained
+                && previous == name
+            {
+                return GroupKey::Legacy(name.clone(), *serial);
             }
             GroupKey::Legacy(
                 name.clone(),
@@ -890,7 +892,13 @@ pub(crate) fn projected_groups(state: &ActionState) -> Result<Vec<(GroupKey, &st
         if actions.is_empty() && matches!(key, GroupKey::Implicit(_)) && raw.is_none() {
             continue;
         }
-        let source = raw.as_ref().and_then(|row| row.metadata.clone()).or_else(|| actions.first().and_then(|action| sidecar::selection(state, action).source));
+        // A real move rebinds the action's set metadata; its raw record still belongs to the old row.
+        // Empty physical rows have no action carrier and keep their original row metadata.
+        let source = match actions.first() {
+            Some(action) if action.atn_metadata.is_some() => sidecar::selection(state, action).source,
+            Some(action) => sidecar::selection(state, action).source.or_else(|| raw.as_ref().and_then(|row| row.metadata.clone())),
+            None => raw.as_ref().and_then(|row| row.metadata.clone()),
+        };
         out.push((key, name, sidecar::Selection { actions, source, raw }));
         if out.len() > atn::MAX_SETS {
             return Err("too many physical rows in local Actions library".into());
@@ -905,17 +913,17 @@ pub(crate) fn insert_folder(state: &mut ActionState, at: usize, name: &str, copy
     let origin = copy.and_then(|slot| state.library.rows.get(slot).cloned().flatten());
     let metadata = copy.and_then(|slot| state.atn_set_rows.iter().find(|entry| entry.slot == slot).map(|entry| entry.source.clone()));
     for key in &mut state.library.order {
-        if let GroupKey::Folder(slot) = key {
-            if *slot >= at {
-                *slot += 1;
-            }
+        if let GroupKey::Folder(slot) = key
+            && *slot >= at
+        {
+            *slot += 1;
         }
     }
     for action in &mut state.list {
-        if let Some(slot) = &mut action.set_slot {
-            if *slot >= at {
-                *slot += 1;
-            }
+        if let Some(slot) = &mut action.set_slot
+            && *slot >= at
+        {
+            *slot += 1;
         }
     }
     for row in &mut state.atn_set_rows {

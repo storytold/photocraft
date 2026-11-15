@@ -589,10 +589,8 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     }
     super::library::check_definition(&proposed, &keys).map_err(|error| bad(SAVE, error))?;
     // A new ID must reach the definition backend before any key is rebound to it.
-    if new_identity {
-        if let Some(store) = s.preset_store.as_mut() {
-            store.commit_action_definitions(&proposed, next.library_revision).map_err(|error| bad(SAVE, error))?;
-        }
+    if new_identity && let Some(store) = s.preset_store.as_mut() {
+        store.commit_action_definitions(&proposed, next.library_revision).map_err(|error| bad(SAVE, error))?;
     }
     // Encoding succeeded. Publish definitions without replacing the live capture/owner state.
     s.actions.list = proposed.list;

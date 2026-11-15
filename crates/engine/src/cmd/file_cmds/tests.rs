@@ -4679,7 +4679,7 @@ fn embedded_open_document_batch_restores_the_callers_namespace_on_every_exit() {
                 );
             }
             "no_document" => assert!(matches!(result, Err(EngineError::NoDocument))),
-            _ => unreachable!(),
+            _ => panic!("unexpected fixture outcome: {outcome}"),
         }
         assert_eq!(s.actions.playback_namespace, 41, "{outcome}: restore the caller, not the embedded namespace");
         assert_eq!(s.actions.playback_stack, stack);

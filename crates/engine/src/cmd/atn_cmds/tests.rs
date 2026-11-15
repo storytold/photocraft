@@ -7137,7 +7137,10 @@ fn whole_library_conditional_scopes_roundtrip_without_borrowing_external_targets
     assert!(params.get("thenActionId").is_none(), "included target must remain resolvable: {params}");
     assert_eq!(params.get("elseActionId"), Some(&Value::Null), "external unresolved scope cannot borrow an included target");
     let error = s.execute("actions.save", json!({})).unwrap_err().to_string();
-    assert!(error.contains("`actions.conditional`"), "strict save must reject the unresolved conditional: {error}");
+    assert!(
+        error.contains("step 1 of `Caller`") && error.contains("absent or ambiguous ID-bound target"),
+        "strict save must reject the unresolved conditional, not omit it or borrow a target: {error}"
+    );
 }
 
 #[test]
@@ -7169,11 +7172,13 @@ fn loading_a_function_key_disables_displaced_occurrence_without_reviving_legacy(
     original.action_id = Some(id.into());
     original.legacy_shortcut_owner = true;
     s.actions.list.push(original);
+    s.actions.list.push(Action::new("Legacy", vec![]));
     let occurrence = crate::actions_cmds::occurrence_key(id);
     s.edit_prefs(|prefs| {
         prefs.shortcuts.insert("actions.play:Existing".into(), "F5".into());
         prefs.shortcuts.insert(occurrence.clone(), "F6".into());
         prefs.shortcuts.insert("edit.fill".into(), "F5".into());
+        prefs.shortcuts.insert("actions.play:Legacy".into(), "F6".into());
     });
     let action = Action::new("Imported", vec![]);
     let (bytes, _) = export("Imported Set", &[&action], &[("Imported".into(), "F6".into())], false).unwrap();
@@ -7183,4 +7188,7 @@ fn loading_a_function_key_disables_displaced_occurrence_without_reviving_legacy(
     assert_eq!(s.prefs().shortcuts.get("actions.play:Existing").map(String::as_str), Some("F5"));
     assert_eq!(s.prefs().shortcuts.get("edit.fill").map(String::as_str), Some("F5"));
     assert_eq!(s.prefs().shortcuts.get("actions.play:Imported").map(String::as_str), Some("F6"));
+    assert!(!s.prefs().shortcuts.contains_key("actions.play:Legacy"));
+    assert_eq!(crate::actions_cmds::action_shortcut(&s, 1), None);
+    assert_eq!(crate::actions_cmds::action_shortcut(&s, 2), Some("F6"));
 }

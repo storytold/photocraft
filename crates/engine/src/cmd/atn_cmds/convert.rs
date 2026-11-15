@@ -755,10 +755,10 @@ fn export_targeted_items(id: &str, params: &Value, set: &str, targets: &ExportTa
             params[*scope] = json!(targets.wire_sets.get(&std::ptr::from_ref(action)).copied().unwrap_or(set));
         } else if let Some(target) = params.get(*name).and_then(Value::as_str) {
             let original_scope = params.get(*scope).filter(|value| !value.is_null()).or_else(|| params.get("set")).and_then(Value::as_str);
-            if targets.internal(target, original_scope) {
-                if let Some(action) = targets.by_name(target, original_scope) {
-                    params[*scope] = json!(targets.wire_sets.get(&std::ptr::from_ref(action)).copied().unwrap_or(set));
-                }
+            if targets.internal(target, original_scope)
+                && let Some(action) = targets.by_name(target, original_scope)
+            {
+                params[*scope] = json!(targets.wire_sets.get(&std::ptr::from_ref(action)).copied().unwrap_or(set));
             }
         }
     }

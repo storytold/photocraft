@@ -190,6 +190,17 @@ fn integer(raw: &RawDescriptor, key: &str) -> i32 {
         _ => panic!("integer expected"),
     }
 }
+fn assert_fields_equal(actual: &[u8], expected: &[u8], names: &[&str]) {
+    let actual_descriptor = RawDescriptor::new(actual).unwrap();
+    let expected_descriptor = RawDescriptor::new(expected).unwrap();
+    let (_, actual_fields) = actual_descriptor.fields().unwrap();
+    let (_, expected_fields) = expected_descriptor.fields().unwrap();
+    for name in names {
+        let actual_field = actual_fields.iter().find(|field| field.key.is(name)).unwrap();
+        let expected_field = expected_fields.iter().find(|field| field.key.is(name)).unwrap();
+        assert_eq!(actual_descriptor.source.get(actual_field.span.clone()), expected_descriptor.source.get(expected_field.span.clone()), "opaque field {name}");
+    }
+}
 
 #[test]
 fn public_load_save_all_keeps_positional_metadata_and_raw_descriptor_bytes() {
@@ -200,7 +211,7 @@ fn public_load_save_all_keeps_positional_metadata_and_raw_descriptor_bytes() {
     assert_eq!(session.actions.list[0].icon, "future-icon");
     assert_eq!(session.actions.list[1].description, "Second description");
     assert_eq!(session.actions.list[1].icon, "");
-    assert_eq!(session.actions.sets, ["A", "B", "Empty"]);
+    assert_eq!(session.actions.set_rows, ["A", "B", "Empty"]);
     let files = saved(&mut session, json!({}));
     assert_eq!(files.len(), 4);
     assert_eq!(files.last().unwrap().actions[0].items[0].descriptor.as_ref().unwrap().to_bytes(), fixture.outer);
@@ -237,7 +248,7 @@ fn unedited_empty_first_and_interleaved_rows_keep_whole_sidecar_bytes_and_positi
 }
 
 #[test]
-fn moving_a_later_physical_set_keeps_panel_order_and_positional_metadata_after_reload() {
+fn moving_a_later_physical_set_keeps_row_order_and_restores_panel_order_after_reload() {
     let note = "Interleaved move\0";
     let fixture = fixture(&["A", "B", "A"], false, note);
     let mut session = loaded(&fixture.bytes);
@@ -246,28 +257,26 @@ fn moving_a_later_physical_set_keeps_panel_order_and_positional_metadata_after_r
     assert_eq!(panel_groups(&session), expected);
     let bytes = saved_bytes(&mut session, json!({}));
     let files = atn::parse_sets(&bytes).unwrap();
+    let original = atn::parse_sets(&fixture.bytes).unwrap();
     assert_eq!(files.len(), 4);
     let sets = metadata(&files).list("sets").unwrap();
-    for (index, name, action, source) in [(0, "A", "Same 3", 2), (1, "A", "Same", 0), (2, "B", "Same 2", 1)] {
+    for (index, name, action, source) in [(0, "A", "Same", 0), (1, "B", "Same 2", 1), (2, "A", "Same 3", 2)] {
         assert_eq!(files[index].name.to_string_lossy(), name);
         assert_eq!(files[index].actions.len(), 1);
         assert_eq!(files[index].actions[0].name.to_string_lossy(), action);
+        let mut expected_record = original[index].actions.clone();
+        expected_record[0].name = UnicodeString::new_nul(action);
+        assert_eq!(files[index].actions, expected_record, "only the portable duplicate-name projection may change the action name");
         assert_eq!(sets[index].bytes(), set_entry(source, std::slice::from_ref(&fixture.entries[source])));
     }
-    let (_, outer) = sidecar_data(
-        &[
-            set_entry(2, std::slice::from_ref(&fixture.entries[2])),
-            set_entry(0, std::slice::from_ref(&fixture.entries[0])),
-            set_entry(1, std::slice::from_ref(&fixture.entries[1])),
-        ],
-        note,
-    );
-    assert_eq!(files[3].actions[0].items[0].descriptor.as_ref().unwrap().to_bytes(), outer);
+    let outer = files[3].actions[0].items[0].descriptor.as_ref().unwrap().to_bytes();
+    assert_fields_equal(&outer, &fixture.outer, &["Msge", "Cntn"]);
+    assert_fields_equal(metadata(&files).bytes(), fixture.payload.get(4..).unwrap(), &["futureGlobal"]);
     assert_eq!(panel_groups(&loaded(&bytes)), expected);
 }
 
 #[test]
-fn moving_between_actions_of_one_source_keeps_three_source_runs_after_reload() {
+fn moving_between_actions_keeps_physical_rows_and_restores_global_order_after_reload() {
     let note = "Source runs\0";
     let fixture = fixture_rows(&[("A", 2), ("A", 1)], None, note);
     let mut session = loaded(&fixture.bytes);
@@ -276,19 +285,26 @@ fn moving_between_actions_of_one_source_keeps_three_source_runs_after_reload() {
     assert_eq!(panel_groups(&session), expected);
     let bytes = saved_bytes(&mut session, json!({}));
     let files = atn::parse_sets(&bytes).unwrap();
-    assert_eq!(files.len(), 4);
+    let original = atn::parse_sets(&fixture.bytes).unwrap();
+    assert_eq!(files.len(), 3);
     let sets = metadata(&files).list("sets").unwrap();
-    let mut expected_sets = Vec::new();
-    for (index, action, source, entry) in [(0, "Same", 0, 0), (1, "Same 3", 1, 2), (2, "Same 2", 0, 1)] {
-        assert_eq!(files[index].name.to_string_lossy(), "A");
-        assert_eq!(files[index].actions.len(), 1);
-        assert_eq!(files[index].actions[0].name.to_string_lossy(), action);
-        let raw = set_entry(source, std::slice::from_ref(&fixture.entries[entry]));
-        assert_eq!(sets[index].bytes(), raw);
-        expected_sets.push(raw);
+    assert_eq!(files[0].name.to_string_lossy(), "A");
+    assert_eq!(files[0].actions.iter().map(|action| action.name.to_string_lossy()).collect::<Vec<_>>(), ["Same", "Same 2"]);
+    let mut expected_first = original[0].actions.clone();
+    for (record, name) in expected_first.iter_mut().zip(["Same", "Same 2"]) {
+        record.name = UnicodeString::new_nul(name);
     }
-    let (_, outer) = sidecar_data(&expected_sets, note);
-    assert_eq!(files[3].actions[0].items[0].descriptor.as_ref().unwrap().to_bytes(), outer);
+    assert_eq!(files[0].actions, expected_first, "the first physical row stays intact apart from its portable duplicate-name projection");
+    assert_eq!(sets[0].bytes(), set_entry(0, &[fixture.entries[0].clone(), fixture.entries[1].clone()]));
+    assert_eq!(files[1].name.to_string_lossy(), "A");
+    assert_eq!(files[1].actions.iter().map(|action| action.name.to_string_lossy()).collect::<Vec<_>>(), ["Same 3"]);
+    let mut expected_second = original[1].actions.clone();
+    expected_second[0].name = UnicodeString::new_nul("Same 3");
+    assert_eq!(files[1].actions, expected_second, "the second physical row stays intact apart from its portable duplicate-name projection");
+    assert_eq!(sets[1].bytes(), set_entry(1, std::slice::from_ref(&fixture.entries[2])));
+    let outer = files[2].actions[0].items[0].descriptor.as_ref().unwrap().to_bytes();
+    assert_fields_equal(&outer, &fixture.outer, &["Msge", "Cntn"]);
+    assert_fields_equal(metadata(&files).bytes(), fixture.payload.get(4..).unwrap(), &["futureGlobal"]);
     assert_eq!(panel_groups(&loaded(&bytes)), expected);
 }
 
@@ -364,9 +380,24 @@ fn clone_and_rename_keep_action_entry_and_assign_set_rebinds_only_set_metadata()
     let set = set_metadata(&files, "B");
     assert_eq!(integer(&set, "setColorIndex"), 22);
     assert_eq!(set.list("actions").unwrap()[0].bytes(), fixture.entries[0]);
+    let whole = saved(&mut session, json!({}));
+    let b = set_metadata(&whole, "B");
+    assert_eq!(integer(&b, "setColorIndex"), 22);
+    let b_actions = b.list("actions").unwrap();
+    let clone_index = whole
+        .iter()
+        .find(|file| file.name.to_string_lossy() == "B")
+        .unwrap()
+        .actions
+        .iter()
+        .position(|action| action.name.to_string_lossy() == "Clone")
+        .unwrap();
+    assert_eq!(b_actions[clone_index].bytes(), fixture.entries[0]);
     session.execute("actions.assignSet", json!({"action": "Clone", "set": "New"})).unwrap();
     let files = saved(&mut session, json!({"action": "Clone"}));
     assert_eq!(integer(&set_metadata(&files, "New"), "setColorIndex"), 0);
+    let whole = saved(&mut session, json!({}));
+    assert_eq!(integer(&set_metadata(&whole, "New"), "setColorIndex"), 0);
 }
 
 #[test]
@@ -390,7 +421,7 @@ fn replacement_retires_only_target_rows_and_keeps_other_set_metadata() {
     let replacement = fixture(&["A"], false, "Note\0");
     session.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&replacement.bytes)})).unwrap();
     assert_eq!(session.actions.list.len(), 2);
-    assert_eq!(session.actions.sets.iter().filter(|name| *name == "A").count(), 1);
+    assert_eq!(session.actions.set_rows.iter().filter(|name| *name == "A").count(), 1);
     let files = saved(&mut session, json!({}));
     assert_eq!(integer(&set_metadata(&files, "B"), "setColorIndex"), 22);
     assert_eq!(integer(&set_metadata(&files, "Empty"), "setColorIndex"), 99);
@@ -477,6 +508,33 @@ fn empty_wire_category_and_legacy_none_share_one_group_and_export_empty_name() {
     assert_eq!(files[0].name.to_string_lossy(), "");
     assert_eq!(files[0].actions.len(), 2);
     assert_eq!(integer(&set_metadata(&files, ""), "setColorIndex"), 11);
+
+    // A fresh action may join one raw empty-name row, but multiple such rows remain distinct.
+    let mut ambiguous = loaded(&fixture(&["", ""], false, "Ambiguous empty rows\0").bytes);
+    ambiguous.actions.list.push(Action::new("Loose", vec![]));
+    let portable = groups(&ambiguous.actions, None).unwrap();
+    assert_eq!(portable.len(), 3, "do not choose arbitrarily between two physical empty-name rows");
+    assert_eq!(portable.iter().filter(|(_, selection)| selection.raw.is_some()).count(), 2);
+    assert_eq!(portable.iter().filter(|(_, selection)| selection.raw.is_none()).count(), 1);
+
+    // A source row whose logical caption was overridden is not the default category, even
+    // though its retained raw file still has an empty wire name.
+    let mut renamed = Session::new();
+    renamed
+        .execute(
+            "actions.load",
+            json!({
+                "data": photocraft_paint::tile::b64_encode(&fixture(&[""], false, "Renamed empty row\0").bytes),
+                "replace": false,
+                "set": "Retouch"
+            }),
+        )
+        .unwrap();
+    renamed.actions.list.push(Action::new("Loose", vec![]));
+    let renamed_groups = groups(&renamed.actions, None).unwrap();
+    assert_eq!(renamed_groups.len(), 2, "do not merge a loose action into a renamed physical row");
+    assert!(renamed_groups.iter().any(|(name, selection)| *name == "Retouch" && selection.raw.is_some()));
+    assert!(renamed_groups.iter().any(|(name, selection)| *name == super::super::UNGROUPED_SET && selection.raw.is_none()));
 }
 
 #[test]
@@ -510,12 +568,12 @@ fn sidecar_overhead_is_reserved_before_appending_a_physical_set() {
     assert!(append(&mut files, &selections).is_err());
     assert_eq!(files.len(), atn::MAX_SETS);
 
-    // The move needs one more physical row for S1/S2/S1. Never merge it to fit.
+    // The hidden carrier also consumes one physical set slot; a full folder inventory cannot append it.
     let mut session = loaded(&fixture_rows(&[("A", 2), ("A", 1)], None, "Capacity\0").bytes);
     session.execute("actions.move", json!({"action":"Same 3","to":1})).unwrap();
-    session.actions.sets.extend((0..atn::MAX_SETS - 3).map(|index| format!("Empty {index}")));
-    assert_eq!(session.actions.sets.len(), atn::MAX_SETS - 1);
-    let before = (session.actions.list.clone(), session.actions.sets.clone(), session.actions.atn_set_rows.clone());
+    session.actions.set_rows.extend((0..atn::MAX_SETS - 2).map(|index| format!("Empty {index}")));
+    assert_eq!(session.actions.set_rows.len(), atn::MAX_SETS);
+    let before = (session.actions.list.clone(), session.actions.sets.clone(), session.actions.set_rows.clone(), session.actions.atn_set_rows.clone());
     let prefs = serde_json::to_value(session.prefs()).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("existing.atn");
@@ -524,7 +582,8 @@ fn sidecar_overhead_is_reserved_before_appending_a_physical_set() {
     assert!(error.to_string().contains("no space for its metadata sidecar"), "{error}");
     assert_eq!(session.actions.list, before.0);
     assert_eq!(session.actions.sets, before.1);
-    assert_eq!(session.actions.atn_set_rows, before.2);
+    assert_eq!(session.actions.set_rows, before.2);
+    assert_eq!(session.actions.atn_set_rows, before.3);
     assert_eq!(serde_json::to_value(session.prefs()).unwrap(), prefs);
     assert_eq!(std::fs::read(path).unwrap(), b"keep previous archive");
 }
@@ -552,8 +611,9 @@ fn native_group_operations_keep_row_carriers_through_copy_move_delete_and_name_r
         ("B".into(), vec!["Same 2".into()]),
         ("A".into(), vec!["Same".into()]),
         ("A copy".into(), vec!["Same copy".into()]),
-        ("Empty".into(), vec![]),
+        // Empty legacy names are listed before imported physical empty rows.
         ("Empty copy".into(), vec![]),
+        ("Empty".into(), vec![]),
     ];
     assert_eq!(panel_groups(&session), expected);
     let bytes = saved_bytes(&mut session, json!({}));

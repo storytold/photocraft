@@ -53,6 +53,20 @@ fn retain_calls(list: &mut [Action], original: &[Action], targets: &std::collect
     }
 }
 
+/// Imported function keys displace action bindings only. An ID override must remain explicitly
+/// empty so the displaced occurrence cannot fall back to its still-valid legacy name binding.
+fn install_function_keys(shortcuts: &mut std::collections::BTreeMap<String, String>, keys: &[(String, String)]) {
+    for (name, key) in keys {
+        for (command, value) in shortcuts.iter_mut() {
+            if crate::actions_cmds::is_action_key(command) && !command.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX) && value == key {
+                value.clear();
+            }
+        }
+        shortcuts.retain(|command, value| !(command.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX) && value == key));
+        shortcuts.insert(format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX), key.clone());
+    }
+}
+
 /// Validate and normalize an external archive before committing actions, physical rows and shortcuts.
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.load";
@@ -169,10 +183,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     }
     proposed.list.extend(added);
     let mut shortcuts = s.prefs().shortcuts.clone();
-    for (name, key) in &keys {
-        shortcuts.retain(|k, v| !(k.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX) && v == key));
-        shortcuts.insert(format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX), key.clone());
-    }
+    install_function_keys(&mut shortcuts, &keys);
     // The exact durable representation owns group, sidecar and byte limits. Refuse before
     // publishing either the actions or preferences so a rejected import leaves both intact.
     crate::actions_cmds::library::check_definition(&proposed, &shortcuts).map_err(|error| bad(cmd, error))?;
@@ -187,11 +198,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     s.actions.atn_set_rows = proposed.atn_set_rows;
     if !keys.is_empty() {
         s.edit_prefs(|prefs| {
-            for (name, key) in &keys {
-                // A function key belongs to one action.
-                prefs.shortcuts.retain(|k, v| !(k.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX) && v == key));
-                prefs.shortcuts.insert(format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX), key.clone());
-            }
+            install_function_keys(&mut prefs.shortcuts, &keys);
         });
     }
     s.actions.touch();

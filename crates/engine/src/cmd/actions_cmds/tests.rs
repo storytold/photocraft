@@ -1054,7 +1054,7 @@ fn recording_a_later_legacy_occurrence_persists_its_id_and_step() {
     let id = s.actions.list[2].action_id.clone().unwrap();
     assert_eq!(
         s.actions.list[4].steps,
-        [("actions.play".to_string(), json!({"action": "Invert Colors", "actionId": id, "set":crate::atn_cmds::UNGROUPED_SET, "from": 1}))]
+        [("actions.play".to_string(), json!({"action": "Invert Colors", "actionId": id, "set":"PhotoCraft Basics", "from": 1}))]
     );
     s.execute("actions.move", json!({"action": 2, "to": 3})).unwrap();
     let saved = serde_json::to_string(&s.actions.list).unwrap();
@@ -2199,7 +2199,15 @@ fn recording_a_unique_idless_action_keeps_plain_name_calls() {
     s.execute("actions.play", json!({"action": 0})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     assert_eq!(s.actions.list[0].action_id, None);
-    assert_eq!(s.actions.list[1].steps, [("actions.play".to_string(), json!({"action": "Plain"}))]);
+    assert_eq!(s.actions.list[1].steps, [("actions.play".to_string(), json!({"action": "Plain", "set":crate::atn_cmds::UNGROUPED_SET}))]);
+    let mut named = Action::new("Plain", vec![("layer.new.layer".into(), json!({"name": "wrong named group"}))]);
+    named.set = Some("Other".into());
+    s.actions.list.insert(0, named);
+    let recorded = s.execute("actions.play", json!({"action": "Recorder"})).unwrap();
+    assert!(recorded.get("failed").is_none(), "{recorded}");
+    assert_eq!(s.active().unwrap().doc.layers.iter().filter(|layer| layer.name == "plain target").count(), 2);
+    assert!(!s.active().unwrap().doc.layers.iter().any(|layer| layer.name == "wrong named group"));
+    s.actions.list.remove(0);
     s.actions.list.insert(0, Action::new("Plain", vec![("layer.new.layer".into(), json!({"name": "plain first"}))]));
     let result = s.execute("actions.play", json!({"action": "Plain"})).unwrap();
     assert_eq!(result["ran"], 1, "{result}");

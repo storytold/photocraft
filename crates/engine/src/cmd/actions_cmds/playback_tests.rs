@@ -132,7 +132,7 @@ fn classic_capture_retains_its_resolved_equal_row_at_the_same_revision() {
 
 #[test]
 fn classic_capture_rebinds_only_to_an_unambiguous_unchanged_definition() {
-    for change in ["reorder", "ambiguous", "replaced", "same-revision-replaced"] {
+    for change in ["reorder", "ambiguous", "replaced", "same-revision-replaced", "namespace"] {
         let mut s = Session::new();
         let recorder = Action::new("Recorder", Vec::new());
         s.actions.list = vec![recorder.clone(), Action::new("Child", Vec::new())];
@@ -142,6 +142,7 @@ fn classic_capture_rebinds_only_to_an_unambiguous_unchanged_definition() {
         match change {
             "reorder" => s.actions.list.swap(0, 1),
             "ambiguous" => s.actions.list.push(recorder),
+            "namespace" => s.actions.playback_namespace += 1,
             _ => s.actions.list[0].description = "A replacement definition".into(),
         }
         if change != "same-revision-replaced" {
@@ -160,6 +161,76 @@ fn classic_capture_rebinds_only_to_an_unambiguous_unchanged_definition() {
         } else {
             assert!(s.actions.recording.is_none(), "{change}: stale or ambiguous definitions cannot receive capture");
             assert_eq!(s.journal, journal, "{change}: no call is journaled into a refused destination");
+        }
+    }
+}
+
+#[test]
+fn classic_capture_keeps_existing_ids_and_flushes_only_actual_steps() {
+    for (identified, pending, duplicate_child) in [(false, false, false), (true, false, false), (false, true, false), (true, true, true)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+        let mut recorder = Action::new("Recorder", Vec::new());
+        recorder.action_id = identified.then(|| "a".repeat(32));
+        let original_id = recorder.action_id.clone();
+        s.actions.list = vec![recorder, Action::new("Child", Vec::new())];
+        if duplicate_child {
+            s.actions.list.push(Action::new("Child", Vec::new()));
+        }
+        s.execute("actions.record", json!({"action": 0})).unwrap();
+        let revision = s.actions.rev;
+        if pending {
+            s.execute("layer.new.layer", json!({"name": "captured layer"})).unwrap();
+        }
+        let child_row = if duplicate_child { 2 } else { 1 };
+        let (_, _, owner) = playback::Owner::library(&mut s, &json!({"action": child_row})).unwrap();
+        assert_eq!(s.actions.list[0].action_id, original_id, "suspending capture does not mint or replace its identity");
+        assert_eq!(s.actions.rev, revision + u64::from(pending) + u64::from(duplicate_child));
+        assert_eq!(s.actions.list[0].steps.len(), usize::from(pending), "nonempty capture still flushes before suspension");
+        assert_eq!(s.actions.list[child_row].action_id.is_some(), duplicate_child, "a recorded namesake call still gets a durable ID");
+        owner.validate(&s).unwrap();
+        owner.finish(&mut s);
+        assert_eq!(s.actions.recording.map(|(_, row)| row), Some(0));
+        s.execute("actions.stop", json!({})).unwrap();
+        let call = &s.actions.list[0].steps[usize::from(pending)];
+        assert_eq!(call.0, "actions.play");
+        assert_eq!(call.1["action"], "Child");
+        assert_eq!(call.1["set"], crate::atn_cmds::UNGROUPED_SET);
+        assert_eq!(call.1.get("actionId").and_then(Value::as_str), s.actions.list[child_row].action_id.as_deref());
+        assert!(s.actions.held_playback.is_none());
+        assert!(!s.actions.playback_yielding);
+    }
+}
+
+#[test]
+fn classic_capture_existing_id_refuses_a_duplicate_identity_and_foreign_namespace() {
+    for change in ["idless namesake", "duplicate ID", "namespace"] {
+        let mut s = Session::new();
+        let mut recorder = Action::new("Recorder", Vec::new());
+        recorder.action_id = Some("a".repeat(32));
+        s.actions.list = vec![recorder.clone(), Action::new("Child", Vec::new())];
+        s.execute("actions.record", json!({"action": 0})).unwrap();
+        let (_, _, owner) = playback::Owner::library(&mut s, &json!({"action": 1})).unwrap();
+        let journal = s.journal.clone();
+        match change {
+            "idless namesake" => s.actions.list.push(Action::new("Recorder", Vec::new())),
+            "duplicate ID" => s.actions.list.push(recorder),
+            _ => s.actions.playback_namespace += 1,
+        }
+        s.actions.touch();
+        let valid = change == "idless namesake";
+        assert_eq!(owner.validate(&s).is_ok(), valid, "{change}");
+        owner.finish(&mut s);
+        assert!(s.actions.held_playback.is_none());
+        assert!(!s.actions.playback_yielding);
+        if valid {
+            assert_eq!(s.actions.recording.map(|(_, row)| row), Some(0));
+            s.execute("actions.stop", json!({})).unwrap();
+            assert_eq!(s.actions.list[0].steps.len(), 1);
+            assert!(s.actions.list[2].steps.is_empty());
+        } else {
+            assert!(s.actions.recording.is_none());
+            assert_eq!(s.journal, journal, "a refused owner must not receive the recorded call");
         }
     }
 }

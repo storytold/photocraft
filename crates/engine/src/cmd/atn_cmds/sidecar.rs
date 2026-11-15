@@ -346,10 +346,10 @@ pub(crate) fn portable_actions(state: &ActionState, groups: &[(String, Selection
                     continue;
                 }
                 let target = if id == "actions.play" { Some(params.clone()) } else { crate::actions_cmds::conditional_branch(params, name).ok().flatten() };
-                if let Some(index) = target.as_ref().and_then(|target| crate::actions_cmds::resolve_play_target(&state.list, target, "actions.save").ok()) {
-                    if let Some(group) = target_sets.get(&std::ptr::from_ref(&state.list[index])) {
-                        params[scope] = serde_json::json!(group);
-                    }
+                if let Some(index) = target.as_ref().and_then(|target| crate::actions_cmds::resolve_play_target(&state.list, target, "actions.save").ok())
+                    && let Some(group) = target_sets.get(&std::ptr::from_ref(&state.list[index]))
+                {
+                    params[scope] = serde_json::json!(group);
                 }
             }
             if !matches!(id, "actions.play" | "file.automate.batch" | "file.automate.createDroplet")
@@ -374,11 +374,39 @@ pub(crate) fn portable_actions(state: &ActionState, groups: &[(String, Selection
 
 /// Build the portable logical-set selection, preserving its opaque metadata and enforcing archive limits.
 pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<Vec<(&'a str, Selection<'a>)>> {
-    Ok(crate::actions_cmds::library::projected_groups(state)?
-        .into_iter()
-        .filter(|(_, name, _)| only.is_none_or(|only| only == *name))
-        .map(|(_, name, selection)| (name, selection))
-        .collect())
+    let mut projected = crate::actions_cmds::library::projected_groups(state)?;
+
+    // Portable Actions files cannot distinguish a fresh ungrouped action from one imported
+    // from a single empty-name wire row. Coalesce only that unambiguous export case. Durable
+    // library projection remains row-based and keeps physical identities separate.
+    let mut empty_wire = Vec::new();
+    let mut loose = Vec::new();
+    for (index, (_, _, selection)) in projected.iter().enumerate() {
+        if selection.raw.as_ref().map(crate::actions_cmds::library::RowOrigin::has_empty_wire_name).transpose()?.unwrap_or(false) {
+            empty_wire.push(index);
+        }
+        if selection.raw.is_none()
+            && selection.source.is_none()
+            && !selection.actions.is_empty()
+            && selection.actions.iter().all(|action| {
+                action.set_slot.is_none() && action.library_origin.is_none() && action.atn_metadata.is_none() && action.set.as_deref().is_none_or(str::is_empty)
+            })
+        {
+            loose.push(index);
+        }
+    }
+    if let ([empty_index], [loose_index]) = (empty_wire.as_slice(), loose.as_slice())
+        && empty_index != loose_index
+        && projected[*empty_index].1 == super::UNGROUPED_SET
+    {
+        let loose_actions = std::mem::take(&mut projected[*loose_index].2.actions);
+        projected[*empty_index].2.actions.extend(loose_actions);
+        let order: std::collections::HashMap<_, _> = state.list.iter().enumerate().map(|(index, action)| (std::ptr::from_ref(action), index)).collect();
+        projected[*empty_index].2.actions.sort_by_key(|action| order.get(&std::ptr::from_ref(*action)).copied().unwrap_or(usize::MAX));
+        projected.remove(*loose_index);
+    }
+
+    Ok(projected.into_iter().filter(|(_, name, _)| only.is_none_or(|only| only == *name)).map(|(_, name, selection)| (name, selection)).collect())
 }
 
 pub(crate) struct Decoded {

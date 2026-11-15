@@ -589,18 +589,11 @@ fn scalar_native_call_parameters_survive_projection_without_panicking() {
             let bytes = native_archive(&[("S", std::slice::from_ref(&action))]);
             let state = library::decode(&bytes).unwrap();
             // An unrelated edit forces the native projection path through library_items.
-            let fresh = ActionState {
-                list: state
-                    .list
-                    .into_iter()
-                    .map(|mut action| {
-                        action.library_origin = None;
-                        action.library_steps.clear();
-                        action
-                    })
-                    .collect(),
-                ..Default::default()
-            };
+            let mut fresh = library::definition_copy(&state);
+            for action in &mut fresh.list {
+                action.library_origin = None;
+                action.library_steps.clear();
+            }
             assert_eq!(library::decode(&encode(&fresh)).unwrap().list[0].steps, action.steps);
             let (portable, _) = atn_cmds::export("S", &[&action], &[], false).unwrap();
             assert_eq!(atn_cmds::import(&portable).unwrap().actions[0].steps, action.steps);
@@ -672,11 +665,20 @@ fn import_checks_exact_durable_group_capacity_before_changing_actions_or_prefere
     assert_eq!(encode(&session.actions), before);
     assert_eq!(session.prefs(), &preferences);
     assert_eq!(session.actions.rev, revision);
-    // Replacing an existing empty group keeps the durable group count at the limit and is admitted.
+    // Replacement must also reserve the local identity carrier's physical set, not just its action.
     let bytes = native_archive(&[("Local set 0", &[Action::new("Replacement", vec![])])]);
+    let error = session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap_err().to_string();
+    assert!(error.contains("no space for its metadata sidecar"), "{error}");
+    assert_eq!(encode(&session.actions), before);
+    assert_eq!(session.prefs(), &preferences);
+    assert_eq!(session.actions.rev, revision);
+    // One free physical row admits the same replacement plus its carrier, still at MAX_SETS total.
+    session.actions.set_rows.pop().unwrap();
     session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
-    let restored = library::decode(&encode(&session.actions)).unwrap();
-    assert_eq!(restored.set_rows.len(), atn::MAX_SETS);
+    let encoded = encode(&session.actions);
+    assert_eq!(atn::parse_sets(&encoded).unwrap().len(), atn::MAX_SETS);
+    let restored = library::decode(&encoded).unwrap();
+    assert_eq!(restored.set_rows.len(), atn::MAX_SETS - 1);
     assert_eq!(restored.list.len(), 1);
     assert_eq!(restored.list[0].name, "Replacement");
 }
@@ -1138,7 +1140,7 @@ fn review_numeric_import_scopes_keep_aliases_indices_and_session_prefixes() {
         assert_eq!(session.active().unwrap().doc.size.width, 7);
         let document = session.active().unwrap().doc.id;
         let played = session.execute("actions.play", json!({"action":"Wrong","set":"Ungrouped Actions 2"})).unwrap();
-        assert!(played["failed"]["error"].as_str().unwrap().contains("not in set"), "{played}");
+        assert!(played["failed"]["error"].as_str().unwrap().contains("the selected action is not in its named set"), "{played}");
         assert_eq!(session.active().unwrap().doc.id, document, "a mismatched scope cannot run Loose");
         assert_eq!(session.active().unwrap().doc.size.width, 7);
     }
@@ -1194,16 +1196,13 @@ fn review_same_row_scoped_duplicate_targets_refuse_without_rejecting_occurrences
 fn review_interleaved_scoped_calls_load_across_rows_but_duplicate_targets_refuse() {
     let child = Action::new("Child", vec![("file.new".into(), json!({"width":7,"height":1}))]);
     let caller = Action { set: Some("C".into()), ..Action::new("Caller", vec![("actions.play".into(), json!({"action":"Child","set":"A"}))]) };
-    let state = ActionState {
-        list: vec![
-            Action { set: Some("A".into()), ..Action::new("First", vec![]) },
-            Action { set: Some("B".into()), ..Action::new("Other", vec![]) },
-            Action { set: Some("A".into()), ..child.clone() },
-            caller.clone(),
-        ],
-        ..Default::default()
-    };
-    let bytes = encode(&state);
+    // Physical A/B/A rows are a wire property, not three caption-only groups in a fresh legacy list.
+    let bytes = native_archive(&[
+        ("A", &[Action::new("First", vec![])]),
+        ("B", &[Action::new("Other", vec![])]),
+        ("A", std::slice::from_ref(&child)),
+        ("C", std::slice::from_ref(&caller)),
+    ]);
     let mut session = crate::Session::new();
     session.actions.list.push(Action::new("Child", vec![]));
     session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"replace":false})).unwrap();
@@ -1396,7 +1395,14 @@ fn portable_conditionals_use_the_exported_wire_set_name() {
             assert_eq!(params["if"], "hasLayers");
             assert_eq!(params["then"], "Child");
             assert_eq!(params["else"], "Child");
-            assert_eq!(params["set"], logical);
+            // Ordinary import retains the native common wire scope; normalized branch scopes win.
+            assert_eq!(params["set"], wire);
+            for branch in ["then", "else"] {
+                assert_eq!(params[format!("{branch}Set")], logical);
+                let target = super::conditional_branch(params, branch).unwrap().unwrap();
+                assert_eq!(target["set"], logical);
+                assert_eq!(super::resolve_play_target(&imported.actions, &target, "actions.conditional").unwrap(), 0);
+            }
         }
     }
 }

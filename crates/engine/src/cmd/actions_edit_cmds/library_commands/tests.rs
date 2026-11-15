@@ -574,9 +574,9 @@ fn whole_replace_preserves_explicit_atn_play_and_conditional_set_scopes() {
     })
     .unwrap();
     let ordinary = crate::atn_cmds::import(&caller).unwrap();
-    assert!(ordinary.actions[0].steps[0].1.get("set").is_none());
-    assert!(ordinary.actions[0].steps[2].1.get("thenSet").is_none());
-    assert!(ordinary.actions[0].steps[3].1.get("set").is_none());
+    assert_eq!(ordinary.actions[0].steps[0].1["set"], "Wanted");
+    assert_eq!(ordinary.actions[0].steps[2].1["thenSet"], "Wanted");
+    assert_eq!(ordinary.actions[0].steps[3].1["set"], 2);
 
     let mut archive = set("Decoy", Some(("Target", 0)));
     archive.extend_from_slice(&set("Wanted", Some(("Target", 0)))[4..]);
