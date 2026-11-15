@@ -125,6 +125,8 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             "PNG"
         } else {
             match app.session.prefs().export.quick_export_format {
+                // Smaller File (8-bit) on: "Quick Export as PNG-8" (#13785).
+                QuickExportFormat::Png if app.session.prefs().export.png_smaller_file => "PNG-8",
                 QuickExportFormat::Png => "PNG",
                 QuickExportFormat::Jpg => "JPG",
                 QuickExportFormat::Gif => "GIF",
