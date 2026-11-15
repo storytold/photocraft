@@ -1226,3 +1226,32 @@ fn lossy_jpeg_rejects_other_depths_and_sample_counts() {
     let err = decode(&bytes, &Limits::default()).unwrap_err();
     assert!(matches!(&err, RawError::Unsupported(m) if m.contains("4 samples")), "{err}");
 }
+
+/// Decoder fallback notices must survive both the adapter and development.
+#[test]
+fn adjusted_crop_and_omitted_gain_table_notices_survive_development() {
+    let mut spec = DngSpec::cfa(16, 12, vec![1000; 16 * 12]);
+    spec.active_area = Some([2, 3, 10, 14]);
+    let check = |spec: &DngSpec, crop: Rect, crop_warning: bool, gain_warning: bool| {
+        let s = sensor(&spec.build());
+        assert_eq!(s.crop, crop);
+        let d = develop_sensor(&s, &DevelopOptions { orient: false, ..Default::default() }).unwrap();
+        assert_eq!((d.width as usize, d.height as usize), (crop.width, crop.height));
+        for warnings in [&s.warnings, &d.warnings] {
+            assert_eq!(warnings.iter().any(|w| w.contains("default crop")), crop_warning, "{warnings:?}");
+            assert_eq!(warnings.iter().any(|w| w.contains("gain table map") && w.contains("omitted")), gain_warning, "{warnings:?}");
+        }
+    };
+    check(&spec, Rect::new(3, 2, 11, 8), false, false);
+    spec.default_crop = Some(([1, 1], [4, 4]));
+    check(&spec, Rect::new(4, 3, 4, 4), false, false);
+    spec.default_crop = Some(([8, 1], [5, 4]));
+    check(&spec, Rect::new(11, 3, 3, 4), true, false);
+    spec.default_crop_origin_double = Some([1e300, 0.0]);
+    check(&spec, Rect::new(3, 2, 11, 8), true, false);
+    spec.profile_gain_table_map = Some(vec![0; 16]);
+    check(&spec, Rect::new(3, 2, 11, 8), true, true);
+    spec.default_crop = None;
+    spec.default_crop_origin_double = None;
+    check(&spec, Rect::new(3, 2, 11, 8), false, true);
+}

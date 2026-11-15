@@ -1046,7 +1046,14 @@ fn the_deepest_chain_of_embedded_svg_images_fits_a_small_stack() {
             for levels in 1..=MAX_EMBEDDED_SVG_DEPTH + 1 {
                 match rasterize_bounded(chain(levels).as_bytes(), 1.0, MAX_RASTER_PIXELS) {
                     Ok(buf) => {
-                        assert!(buf.px[4 * 8 + 4][3] > 0.99, "{levels} levels: the innermost rect draws through every level");
+                        let drawn = buf.px[4 * 8 + 4][3] > 0.99;
+                        if levels > MAX_EMBEDDED_SVG_DEPTH {
+                            // A chain past the limit is left out rather than rejected; it must not
+                            // still draw its innermost image through the exhausted depth budget.
+                            assert!(!drawn, "{levels} levels: the too-deep image is left out");
+                            break;
+                        }
+                        assert!(drawn, "{levels} levels: the innermost rect draws through every level");
                         accepted = levels;
                     }
                     Err(_) => assert!(accepted > 0, "a one-level chain renders"),
@@ -1133,9 +1140,8 @@ fn a_damaged_embedded_svgz_is_left_out() {
     assert!(parse_bounded_work_with(image_svg(&damaged).as_bytes(), MAX_RASTER_PIXELS, true, fonts).is_err());
 }
 
-/// craft-svg limits an embedded SVG's bytes before decoding, so a Latin-1 one fits and is
-/// charged its longer UTF-8 text: past the byte budget, the drawing is refused, not drawn with
-/// the next image left out.
+/// Latin-1 bytes may fit while their decoded UTF-8 text exceeds the shared budget.
+/// Refuse the drawing even when this is its only child, rather than silently omitting it.
 #[test]
 fn a_latin1_embedded_svg_that_decodes_past_the_budget_is_refused() {
     let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
@@ -1144,7 +1150,8 @@ fn a_latin1_embedded_svg_that_decodes_past_the_budget_is_refused() {
     latin1.extend_from_slice(b"--></svg>");
     let wide = embedded_image("image/svg+xml", &gzip(&latin1));
     let small = embedded_image("image/svg+xml", b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>");
-    assert!(parse_bounded(image_svg(&wide).as_bytes(), MAX_RASTER_PIXELS).is_ok(), "on its own it parses");
+    let error = parse_bounded(image_svg(&wide).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+    assert!(error.to_string().contains("byte or nesting budget"), "{error}");
     let error = parse_bounded(image_svg(&format!("{wide}{small}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
 }
