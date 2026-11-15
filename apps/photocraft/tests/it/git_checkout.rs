@@ -2,10 +2,10 @@
 //! when a `rerun-if-changed` path is missing, so only existing paths may be watched.
 
 #[allow(dead_code)]
-#[path = "../git_checkout.rs"]
-mod git_checkout;
+#[path = "../../git_checkout.rs"]
+mod helper;
 
-use git_checkout::{watch_paths, watched};
+use helper::{watch_paths, watched};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
