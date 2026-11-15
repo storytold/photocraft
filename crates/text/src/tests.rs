@@ -1979,7 +1979,7 @@ fn legacy_origin_lines_up_ink_with_the_ink_bounding_box() {
 /// signature (a real writer's ink box differs from the layout box). It stays as stored.
 #[test]
 fn point_text_with_equal_boxes_keeps_its_stored_transform() {
-    use photocraft_psd::descriptor::{Descriptor, Id, Value as D};
+    use craft_psd::descriptor::{Descriptor, Id, Value as D};
 
     let source = with_para(
         styled("ELI", CharStyle { font_family: "Inter".into(), size_pt: 552.0, ..Default::default() }),
