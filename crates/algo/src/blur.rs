@@ -179,7 +179,7 @@ pub(crate) fn box_widths(params: &FilterParams) -> Option<Vec<usize>> {
         FilterParams::BoxBlur { radius } => {
             // Capped: the line scratch grows with the radius, and `2 * r + 1` must not overflow
             // (Photoshop's largest Box Blur radius is 999).
-            let r = radius.clamp(0.0, MAX_BOX_RADIUS).round() as usize;
+            let r = box_radius(radius.min(MAX_BOX_RADIUS));
             (r > 4).then(|| vec![2 * r + 1])
         }
         _ => None,
@@ -402,11 +402,17 @@ fn box_passes(src: &Image, out: Rect, alpha: bool, boxes: &[usize]) -> Vec<f32> 
     res
 }
 
+/// The whole-pixel reach of a Box Blur: Photoshop drops the fraction, so 2.6 px is the same
+/// 5-wide box as 2 px (#14918).
+fn box_radius(radius: f32) -> usize {
+    radius.max(0.0).floor() as usize
+}
+
 pub(crate) fn boxed(src: &Image, out: Rect, ctx: &Ctx, radius: f32) -> Vec<f32> {
     match box_widths(&FilterParams::BoxBlur { radius }) {
         Some(boxes) => box_passes(src, out, ctx.alpha, &boxes),
         None => {
-            let r = radius.max(0.0).round() as usize;
+            let r = box_radius(radius);
             let k = vec![1.0 / (2 * r + 1) as f32; 2 * r + 1];
             conv_sep(src, out, &k, &k, ctx.alpha)
         }
