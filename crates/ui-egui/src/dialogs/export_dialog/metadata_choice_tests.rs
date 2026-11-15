@@ -52,8 +52,13 @@ fn doc() -> Document {
 }
 
 fn export_with(metadata: &str, fmt: &str) -> Vec<u8> {
+    export_packet(PACKET, metadata, fmt)
+}
+
+fn export_packet(packet: &str, metadata: &str, fmt: &str) -> Vec<u8> {
     let f = json!({"format": fmt, "scale": 100, "metadata": metadata, "profile": "document"}).as_object().unwrap().clone();
-    let doc = doc();
+    let mut doc = doc();
+    doc.metadata.xmp = Some(packet.into());
     let out = export_document(&doc, &f, None, &photocraft_engine::color_cmds::document_profile(&doc)).unwrap();
     photocraft_io::export(&out, &format!("out.{fmt}"), &settings(&f).io_options()).unwrap().bytes
 }
@@ -156,4 +161,53 @@ fn a_remembered_exif_opens_on_copyright() {
     });
     open_dialog(&mut h);
     assert!(selected(&h, COPYRIGHT));
+}
+
+const HEAD: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:mm="http://ns.adobe.com/xap/1.0/mm/" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">"#;
+const TAIL: &str = "</rdf:RDF></x:xmpmeta>";
+
+/// CodeRabbit on #15023: only the document's own descriptions count. A title or id inside an excluded
+/// structure (an ancestor's description) is not written, even when the document has nothing allowed.
+#[test]
+fn a_description_nested_in_an_excluded_structure_is_not_the_documents() {
+    let nested = r#"<rdf:Description rdf:about=""><photoshop:DocumentAncestors><rdf:Bag><rdf:li><rdf:Description><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Ancestor title</rdf:li></rdf:Alt></dc:title><mm:DocumentID>xmp.did:nested-0009</mm:DocumentID></rdf:Description></rdf:li></rdf:Bag></photoshop:DocumentAncestors>"#;
+    for fmt in ["jpg", "png"] {
+        // Nothing allowed at the document level: no packet at all.
+        let only_nested = format!("{HEAD}{nested}</rdf:Description>{TAIL}");
+        let bytes = export_packet(&only_nested, "copyright", fmt);
+        for left in ["Ancestor title", "nested-0009"] {
+            assert!(!contains(&bytes, left), "{fmt}: {left} left out");
+        }
+        // Something allowed at the top: only that is written.
+        let both = format!(
+            "{HEAD}{nested}<dc:rights><rdf:Alt><rdf:li xml:lang=\"x-default\">Example Studio 2026</rdf:li></rdf:Alt></dc:rights></rdf:Description>{TAIL}"
+        );
+        let bytes = export_packet(&both, "copyright", fmt);
+        assert!(contains(&bytes, "Example Studio 2026"), "{fmt}: the document's own rights");
+        for left in ["Ancestor title", "nested-0009"] {
+            assert!(!contains(&bytes, left), "{fmt}: {left} left out beside it");
+        }
+    }
+}
+
+/// A standalone `rdf:Description` (no `rdf:RDF` around it) is still read.
+#[test]
+fn a_standalone_description_is_still_read() {
+    let packet = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" rdf:about=""><dc:rights><rdf:Alt><rdf:li xml:lang="x-default">Example Studio 2026</rdf:li></rdf:Alt></dc:rights></rdf:Description>"#;
+    assert!(contains(&export_packet(packet, "copyright", "png"), "Example Studio 2026"));
+}
+
+/// CodeRabbit on #15023: an allowed property keeps its value, not the qualifiers beside it.
+#[test]
+fn an_allowed_property_keeps_its_value_and_not_its_private_qualifiers() {
+    let qualified = r#"<rdf:Description rdf:about=""><mm:DocumentID rdf:parseType="Resource"><rdf:value>xmp.did:test-doc-0001</rdf:value><dc:description>Private qualifier note</dc:description></mm:DocumentID><dc:title><rdf:Alt><rdf:li xml:lang="x-default" rdf:parseType="Resource"><rdf:value>Harbor Study</rdf:value><dc:description>Second private note</dc:description></rdf:li></rdf:Alt></dc:title></rdf:Description>"#;
+    for fmt in ["jpg", "png"] {
+        let bytes = export_packet(&format!("{HEAD}{qualified}{TAIL}"), "copyright", fmt);
+        for kept in ["xmp.did:test-doc-0001", "Harbor Study"] {
+            assert!(contains(&bytes, kept), "{fmt}: {kept} kept");
+        }
+        for left in ["Private qualifier note", "Second private note"] {
+            assert!(!contains(&bytes, left), "{fmt}: {left} left out");
+        }
+    }
 }

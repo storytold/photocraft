@@ -1859,10 +1859,20 @@ const CONTACT_PROPS: [&str; 6] = ["dc:title", "dc:creator", "dc:rights", "xmpRig
 fn contact_xmp(xmp: &str) -> Option<String> {
     let canon = craft_xml::Canonical::new(&[("rdf", XMP_RDF), ("dc", XMP_DC), ("xmpRights", XMP_RIGHTS), ("xmpMM", XMP_MM)]);
     let root = craft_xml::Options::canonical(&canon).parse(xmp.trim_start_matches('\u{feff}').as_bytes()).ok()?;
-    let descriptions: Vec<&craft_xml::El> = if root.is("rdf:Description") { vec![&root] } else { root.find_all("rdf:Description").collect() };
+    // The document's own descriptions: a standalone `rdf:Description`, or the ones directly under the
+    // packet's `rdf:RDF`. Never a description nested in another property (an ancestor's, say), whose
+    // title or id is not the document's.
+    let descriptions: Vec<&craft_xml::El> = if root.is("rdf:Description") {
+        vec![&root]
+    } else {
+        let rdf = if root.is("rdf:RDF") { Some(&root) } else { root.find("rdf:RDF") };
+        rdf.map(|r| r.children("rdf:Description").collect()).unwrap_or_default()
+    };
     let mut body = String::new();
     for prop in CONTACT_PROPS {
-        let el = descriptions.iter().find_map(|d| d.child(prop).cloned().or_else(|| d.attr(prop).map(|v| craft_xml::El::new(prop).with_text(v))));
+        let el = descriptions
+            .iter()
+            .find_map(|d| d.child(prop).map(|e| contact_value(prop, e)).or_else(|| d.attr(prop).map(|v| craft_xml::El::new(prop).with_text(v))));
         if let Some(el) = el {
             body.push_str("   ");
             el.write_xml(&mut body);
@@ -1876,6 +1886,32 @@ fn contact_xmp(xmp: &str) -> Option<String> {
     Some(format!(
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"{XMP_RDF}\">\n  <rdf:Description rdf:about=\"\" xmlns:dc=\"{XMP_DC}\" xmlns:xmpRights=\"{XMP_RIGHTS}\" xmlns:xmpMM=\"{XMP_MM}\">\n{body}  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
     ))
+}
+
+/// The allowed property `prop` rebuilt from its value alone: its text, or its `rdf:Alt` / `rdf:Seq` /
+/// `rdf:Bag` of `rdf:li` texts with their `xml:lang`. A qualified value (`rdf:value` beside other
+/// elements) keeps only the value; qualifiers and any other attribute or child are left out.
+fn contact_value(prop: &str, el: &craft_xml::El) -> craft_xml::El {
+    use craft_xml::El;
+    let value_of = |e: &El| -> String { e.child("rdf:value").map_or_else(|| e.text().trim().to_string(), |v| v.text().trim().to_string()) };
+    let with_lang = |mut out: El, from: &El| {
+        if let Some(l) = from.attr("xml:lang") {
+            out.set_attr("xml:lang", l);
+        }
+        out
+    };
+    let holder = el.child("rdf:value").unwrap_or(el);
+    let out = with_lang(El::new(prop), el);
+    match holder.elements().find(|c| c.is("rdf:Alt") || c.is("rdf:Seq") || c.is("rdf:Bag")) {
+        Some(array) => {
+            let mut a = El::new(array.name.clone());
+            for li in array.children("rdf:li") {
+                a.push(with_lang(El::new("rdf:li"), li).with_text(value_of(li)));
+            }
+            out.with_child(a)
+        }
+        None => out.with_text(value_of(el)),
+    }
 }
 
 /// `img` made storable as `format`: matted over white without alpha support, CMYK converted for a
