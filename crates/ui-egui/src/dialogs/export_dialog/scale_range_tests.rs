@@ -143,7 +143,7 @@ fn an_idle_frame_does_not_turn_a_pixel_size_into_a_scale() {
 /// 2000 x 1000 source is 20 x 10 at 1 %, with the warning.
 #[test]
 fn width_and_height_stop_at_one_percent_of_the_source() {
-    assert_eq!((min_side_px(2000.0), min_side_px(1000.0), min_side_px(150.0), min_side_px(1.0)), (20.0, 10.0, 2.0, 1.0));
+    assert_eq!((min_side_px(2000.0), min_side_px(1000.0), min_side_px(150.0), min_side_px(201.0), min_side_px(1.0)), (20.0, 10.0, 2.0, 2.0, 1.0));
     let mut h = harness_sized(2000, 1000);
     open_dialog(&mut h);
     type_into(&mut h, "Width", "1");
@@ -151,4 +151,47 @@ fn width_and_height_stop_at_one_percent_of_the_source() {
     type_into(&mut h, "Scale", "50");
     type_into(&mut h, "Height", "1");
     assert_eq!(state(&h), (20.0, 10.0, 1.0, true));
+}
+
+/// CodeRabbit on #15032: a preset past the pixel limit applies clamped and says so.
+#[test]
+fn a_preset_past_the_limit_clamps_with_the_warning() {
+    let mut h = harness_sized(100_000, 100_000);
+    open_dialog(&mut h);
+    h.get_by_label("▾").click();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::Button, "500%").click();
+    h.run_steps(4);
+    assert_eq!(state(&h), (300_000.0, 300_000.0, 300.0, true));
+    // Exactly reaching the limit with a preset is still a clamp: 100000 x 1 at 400 %.
+    let mut h = harness_sized(100_000, 1);
+    open_dialog(&mut h);
+    h.get_by_label("▾").click();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::Button, "400%").click();
+    h.run_steps(4);
+    assert_eq!(state(&h), (300_000.0, 3.0, 300.0, true));
+}
+
+/// CodeRabbit on #15032: the 1 % that Scale itself gives is not pushed up by the side bounds.
+#[test]
+fn a_valid_scale_result_is_not_resized_again_by_the_side_bounds() {
+    let mut h = harness_sized(201, 151);
+    open_dialog(&mut h);
+    type_into(&mut h, "Scale", "1");
+    h.run_steps(6);
+    let f = &h.state().ui.dialogs.last().unwrap().fields;
+    assert_eq!((n(f, "width", 0.0), n(f, "height", 0.0), s(f, "sizing")), (2.0, 2.0, "scale".to_string()));
+}
+
+/// CodeRabbit on #15032: with Constrain proportions the edited side is also bounded by the linked
+/// side's limit: 4000 px wide on a 100 x 10000 source would be 400000 px tall.
+#[test]
+fn a_linked_side_limits_the_edited_one() {
+    assert_eq!(side_range(100.0, 10_000.0, true), (1.0, 3000.0));
+    assert_eq!(side_range(100.0, 10_000.0, false), (1.0, 7500.0));
+    let mut h = harness_sized(100, 10_000);
+    open_dialog(&mut h);
+    type_into(&mut h, "Width", "4000");
+    assert_eq!(state(&h), (3000.0, 300_000.0, 3000.0, true));
 }

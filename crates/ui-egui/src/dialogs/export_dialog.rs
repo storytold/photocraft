@@ -890,10 +890,25 @@ fn max_scale(src_w: f64, src_h: f64) -> f64 {
     by_pixels.clamp(1.0, MAX_SCALE)
 }
 
-/// The smallest side a source side `src` can be exported at: 1 % of it (rounded up), so the scale
-/// the sides imply is never under the 1 % the Scale field shows.
+/// The smallest side a source side `src` can be exported at: what Scale's own 1 % gives it, rounded
+/// the way `resize_from_scale` rounds (201 px at 1 % is 2 px, 150 px is 2), so a valid Scale result is
+/// never pushed up by the side bounds into another size.
 fn min_side_px(src: f64) -> f64 {
-    (src.max(1.0) / 100.0).ceil().max(1.0)
+    (src.max(1.0) / 100.0).round().max(1.0)
+}
+
+/// The range an edited side can take: its own 1 %..=7500 % of the source and pixel limit, and, with
+/// Constrain proportions on, the range that keeps the linked side (`other`, from its source) inside
+/// its own too (a 100 × 10000 source takes at most 3000 px wide, which is 300000 px tall).
+fn side_range(src: f64, other: f64, lock: bool) -> (f64, f64) {
+    let (min, mut max) = (min_side_px(src), max_side_px(src));
+    if lock {
+        let k = src.max(1.0) / other.max(1.0);
+        // Only the top: the linked side is never below 1 px, and a lower bound from it would push
+        // a valid Scale result (200 x 150 at 1 % is 2 x 2) up to 3 x 2.
+        max = max.min((max_side_px(other) * k).floor());
+    }
+    (min, max.max(min))
 }
 
 /// Whether `exact` pixels had to be rounded to a whole number.
@@ -939,13 +954,15 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
     let edited = preset.is_some() || clamped || (f64::from(sc) - f64::from(passed as f32)).abs() > 1e-9;
     if edited && let Ok(size) = resize_from_scale(src_w, src_h, sc_r) {
         let inexact = rounded(src_w.max(1.0) * sc_r / 100.0) || rounded(src_h.max(1.0) * sc_r / 100.0);
+        // A preset past the limit is applied clamped: say so, as for a typed value.
+        let preset_clamped = preset.is_some_and(|p| (p - sc_r).abs() > 1e-9);
         write_size(f, size, "scale");
-        f.insert("__sizeWarn".into(), json!(clamped || inexact));
+        f.insert("__sizeWarn".into(), json!(clamped || preset_clamped || inexact));
     }
     let lock = f.get("lockAspect").and_then(Value::as_bool).unwrap_or(true);
     for edited_width in [true, false] {
         let (key, label, src, other) = if edited_width { ("width", tl!("Width"), src_w, src_h) } else { ("height", tl!("Height"), src_h, src_w) };
-        let (min, max) = (min_side_px(src), max_side_px(src));
+        let (min, max) = side_range(src, other, lock);
         let stored = n(f, key, src.max(1.0));
         let mut v = stored.clamp(min, max) as f32;
         let mut clamped = false;
