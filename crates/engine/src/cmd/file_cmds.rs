@@ -544,3 +544,7 @@ mod aces_exr_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "file_cmds/load_stack_order_tests.rs"]
+mod load_stack_order_tests;

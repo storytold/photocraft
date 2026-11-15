@@ -2868,7 +2868,8 @@ fn load_files_into_stack_and_image_processor_and_batch() {
     let r = s.execute("file.scripts.loadFilesIntoStack", json!({"paths": [a, b]})).unwrap();
     assert_eq!(r["layers"], 2);
     assert_eq!((doc(&s).size.width, doc(&s).size.height), (40, 30));
-    assert_eq!(doc(&s).layers[0].name, "a.png");
+    // The first file is the top layer (#13995): b.png, the last, is the bottom one.
+    assert_eq!(doc(&s).layers[0].name, "b.png");
     // Image Processor: fit into 20×20 JPEGs.
     let out = join(&dir, "jpg");
     let r = s.execute("file.scripts.imageProcessor", json!({"input": input, "output": out, "format": "jpg", "width": 20, "height": 20})).unwrap();
