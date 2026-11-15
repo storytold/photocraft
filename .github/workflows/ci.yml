@@ -123,11 +123,13 @@ jobs:
           fi
 
   # The Linux gate. Its rust-cache entry is the one `test (without heif)` restores.
+  # Keep both cache-version inputs together; the cache contract test checks the pair.
   gate:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
+      cache-version: v1
       # egui/winit/rfd.
       packages: >-
         libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
@@ -144,7 +146,7 @@ jobs:
       timeout-minutes: 100
       # fmt, clippy, layers, panel-commands, scorecard, tests, panic_hunt, doctests and the wasm32 check, with
       # `--locked --features heif`, then the missing-translations report (xtask/src/main.rs).
-      command: python3 scripts/test-ci-gpu-lavapipe.py && cargo xtask ci && python3 scripts/ci-gpu-lavapipe.py
+      command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-cache-key.py && cargo xtask ci && python3 scripts/ci-gpu-lavapipe.py
 
   # Windows tests run as two legs in parallel: the unit tests and the integration tests. As one job
   # they took ~28 min on the Windows runner; the legs take ~13 and ~15. Splitting the integration
@@ -259,7 +261,8 @@ jobs:
     # The gate's runner: its cache entry is keyed on the OS.
     runs-on: ubuntu-24.04
     env:
-      # The gate sets these; rust-cache hashes CARGO_* and RUST* variables into its key.
+      # The gate leg sets these, and rust-cache hashes every CARGO*/RUST* variable into its key, so
+      # this set has to stay equal to the gate's (scripts/test-ci-cache-key.py checks it).
       CARGO_INCREMENTAL: 0
       CARGO_NET_RETRY: 10
     steps:
@@ -283,16 +286,26 @@ jobs:
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
             libgtk-3-dev
 
+      # A pin change can change exported cache-key variables: compare this leg's key with the gate's.
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: stable
 
-      # gate.yml keys its cache `<cache-version>-rust-<hash of Cargo.toml>-gate`.
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      # Restore the gate leg's dependency cache and never save one: the dependencies are the same and
+      # the 10 GB cache budget is tight (#2688). The shared action owns the key formula: it hashes
+      # the canonical root [profile] table rather than this manifest. We match the gate's version,
+      # name its entry's job (`gate`), and use `align-environment` to keep the CARGO_HOME that the
+      # toolchain action exports out of the key; the gate leg does not set it, and in the recorded run
+      # the two keys therefore differed (craft-common-actions#212).
+      #
+      # This needs `actions/rust-cache` on craft-common-actions @main: land that change first, or this
+      # job fails to resolve the action.
+      - uses: storytold/craft-common-actions/actions/rust-cache@main
         with:
-          prefix-key: v1-rust
-          shared-key: ${{ hashFiles('Cargo.toml') }}-gate
-          save-if: false
+          cache-version: v1
+          job: gate
+          save-if: "false"
+          align-environment: true
 
       - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
         with:
