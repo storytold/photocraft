@@ -3700,3 +3700,69 @@ fn physical_recording_reveal_restores_only_its_saved_occurrence() {
     assert!(h.query_by_label("Other occurrence").is_none());
     assert_eq!(h.state().session.prefs().collapsed_action_set_rows.get(&0), Some(&("Same".into(), true)));
 }
+
+
+/// Same-caption implicit and physical folders have separate disclosure containers.
+fn recording_reveals_only_its_folder_identity(panel_entry: bool) {
+    use egui_kittest::{Harness, kittest::Queryable};
+    for target in [0, 1] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":8,"height":8})).unwrap();
+        app.session.actions.set_rows = vec!["Same".into()];
+        app.session.actions.list = [
+            Action { set: Some("Same".into()), set_slot: Some(0), ..Action::new("Physical target", vec![]) },
+            Action { set: Some("Same".into()), ..Action::new("Implicit target", vec![]) },
+        ].into();
+        app.session.prefs.edit(|prefs| {
+            prefs.collapsed_action_sets.insert("Same".into(), true);
+            prefs.collapsed_action_set_rows.insert(0, ("Same".into(), true));
+        });
+        app.ui.actions.collapsed_sets.push("Same".into());
+        app.ui.actions.select(target, None);
+        let mut h = Harness::builder().with_size(vec2(420.0, 640.0)).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(2);
+        let names = ["Physical target", "Implicit target"];
+        for name in names {
+            assert!(h.query_by_label(name).is_none());
+        }
+        if panel_entry {
+            begin_recording(h.state_mut(), true);
+        } else {
+            h.state_mut().run("actions.record", json!({"action":target})).unwrap();
+        }
+        h.run_steps(2);
+        assert_eq!(h.state().session.actions.recording.unwrap().1, target);
+        assert!(h.query_by_label(names[target]).is_some());
+        assert!(h.query_by_label(names[1 - target]).is_none(), "the namesake folder must stay collapsed");
+        assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Same"), Some(&true));
+        assert_eq!(h.state().session.prefs().collapsed_action_set_rows.get(&0), Some(&("Same".into(), true)));
+        // A user collapse during this take must not be undone by subsequent recorded steps.
+        if target == 0 {
+            h.state_mut().ui.actions.collapsed_set_slots.push(0);
+        } else {
+            h.state_mut().ui.actions.collapsed_sets.push("Same".into());
+        }
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.run_steps(2);
+        for name in names {
+            assert!(h.query_by_label(name).is_none(), "a continuing take respects manual collapse");
+        }
+        h.state_mut().run("actions.stop", json!({})).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.actions.collapsed_sets, ["Same"]);
+        assert_eq!(h.state().ui.actions.collapsed_set_slots, [0]);
+        for name in names {
+            assert!(h.query_by_label(name).is_none(), "stop restores both saved disclosures");
+        }
+    }
+}
+
+#[test]
+fn panel_recording_reveals_only_the_resolved_folder_identity() {
+    recording_reveals_only_its_folder_identity(true);
+}
+
+#[test]
+fn direct_recording_reveals_only_the_resolved_folder_identity() {
+    recording_reveals_only_its_folder_identity(false);
+}

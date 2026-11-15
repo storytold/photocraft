@@ -1079,11 +1079,10 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     }
     app.ui.actions.expanded[i] = true;
     // Its set too, in case its folder is collapsed.
-    if let Some(set) = app.session.actions.list.get(i).and_then(|a| a.set.as_ref()) {
-        app.ui.actions.collapsed_sets.retain(|c| c != set);
-    }
     if let Some(slot) = app.session.actions.list.get(i).and_then(|a| a.set_slot) {
         app.ui.actions.collapsed_set_slots.retain(|&value| value != slot);
+    } else if let Some(set) = app.session.actions.list.get(i).and_then(|a| a.set.as_ref()) {
+        app.ui.actions.collapsed_sets.retain(|c| c != set);
     }
 }
 
@@ -2507,11 +2506,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         sync_physical_disclosures(app, true);
     }
     if started && let Some(row) = recording_row.and_then(|(i, _)| rows.get(i)) {
-        if let Some(set) = &row.set {
-            app.ui.actions.collapsed_sets.retain(|name| name != set);
-        }
         if let Some(slot) = row.set_slot {
             app.ui.actions.collapsed_set_slots.retain(|&value| value != slot);
+        } else if let Some(set) = &row.set {
+            app.ui.actions.collapsed_sets.retain(|name| name != set);
         }
     }
     if let Some((i, _)) = reveal {
