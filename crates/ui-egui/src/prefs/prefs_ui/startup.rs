@@ -31,6 +31,7 @@ pub(super) fn sync_view_state(app: &mut PhotocraftApp) {
         }
         app.prefs_rt.action_sets_state = Some((rev, choices.clone()));
     }
+    crate::actions::sync_physical_disclosures(app, false);
 }
 
 /// View › Rulers was toggled: remember it for the next launch (Photoshop keeps the last state).
@@ -245,7 +246,13 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
         match rx.try_recv() {
             Ok(opened) => {
                 app.services.preset_store = None;
-                let warnings = app.session.attach_preset_store(opened);
+                // A clean library load has no early definitions waiting for a write.
+                let clean_load = app.session.actions.rev == 0 && !opened.store.actions_load_failed();
+                let (warnings, actions_written) = app.session.attach_preset_store_with_action_write(opened);
+                if clean_load {
+                    app.ui.actions.set_preset_store_disconnected(false);
+                }
+                crate::actions::finish_deferred_shortcut_conflicts(app, actions_written);
                 if let Some(w) = warnings.first() {
                     app.ui.status = if warnings.len() == 1 {
                         w.clone()
@@ -263,7 +270,10 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => app.services.preset_store = None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                app.services.preset_store = None;
+                app.ui.actions.set_preset_store_disconnected(true);
+            }
         }
     }
     if let Some(w) = app.session.preset_store.as_mut().map(|s| s.take_warnings()).and_then(|w| w.into_iter().next()) {

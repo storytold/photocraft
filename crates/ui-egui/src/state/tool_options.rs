@@ -13,6 +13,8 @@ pub struct ToolOptions {
     pub sample_all: SampleAllLayers,
     /// Object Selection › Object Finder: hovering highlights the object a click selects (#4087).
     pub object_finder: bool,
+    /// Object Selection › Hard Edge (#12855): off, the result gets a softer, slightly wider rim.
+    pub object_hard_edge: bool,
     /// Remove tool: the fill goes to a new layer above the target (Photoshop's Create a new layer).
     pub remove_new_layer: bool,
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
@@ -133,6 +135,17 @@ pub struct ToolOptions {
     pub arrow_width: f32,
     pub arrow_length: f32,
     pub arrow_concavity: f32,
+    /// Rectangle tool › gear (#13343): how a drag sizes the rectangle: "unconstrained" (the
+    /// default), "square", "fixedSize" or "proportional".
+    pub rect_constraint: String,
+    /// Rectangle tool › gear › Fixed Size W and H in px; 0 is an empty field, as they start.
+    pub rect_fixed_width: f32,
+    pub rect_fixed_height: f32,
+    /// Rectangle tool › gear › Proportional W : H, 1 : 1 to start.
+    pub rect_ratio_width: f32,
+    pub rect_ratio_height: f32,
+    /// Rectangle tool › gear › From Center: every drag draws from its centre. Off to start.
+    pub rect_from_center: bool,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -321,7 +334,7 @@ pub struct ToolOptions {
 }
 
 fn default_art_history_style() -> String {
-    "tightMedium".into()
+    "tightShort".into()
 }
 
 pub(super) fn yes() -> bool {
@@ -467,6 +480,7 @@ impl Default for ToolOptions {
             anti_alias: true,
             sample_all: SampleAllLayers::default(),
             object_finder: true,
+            object_hard_edge: true,
             remove_new_layer: false,
             remove_after_each_stroke: true,
             feather: 0.0,
@@ -530,6 +544,12 @@ impl Default for ToolOptions {
             arrow_width: 5.0,
             arrow_length: 10.0,
             arrow_concavity: 0.0,
+            rect_constraint: "unconstrained".into(),
+            rect_fixed_width: 0.0,
+            rect_fixed_height: 0.0,
+            rect_ratio_width: 1.0,
+            rect_ratio_height: 1.0,
+            rect_from_center: false,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
             pen_rubber_band: false,

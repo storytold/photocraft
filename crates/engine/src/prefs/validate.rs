@@ -173,7 +173,7 @@ pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
 
 /// Free-form map keys, including command ids and folder names that contain dots.
 pub(super) fn keyed(path: &str) -> Option<(&str, &str)> {
-    for prefix in ["shortcuts.", "alternateShortcuts.", "menus.colors.", "collapsedActionSets."] {
+    for prefix in ["shortcuts.", "alternateShortcuts.", "menus.colors.", "collapsedActionSets.", "collapsedActionSetRows."] {
         if let Some(id) = path.strip_prefix(prefix) {
             return Some((&prefix[..prefix.len() - 1], id));
         }

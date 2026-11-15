@@ -132,13 +132,40 @@ pub fn form_keys(f: &Map<String, Value>) -> Vec<String> {
     keys
 }
 
+/// Batch keeps its normal caption fields. Only same-name actions in the chosen set need another selector.
+fn batch_occurrence_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    use crate::actions::{BATCH_OCCURRENCE, BATCH_OCCURRENCES};
+
+    let Some(choices) = f.get(BATCH_OCCURRENCES).and_then(Value::as_array) else { return };
+    let action = f.get("action");
+    let set = f.get("set").filter(|set| !set.is_null());
+    let mut choices: Vec<_> = choices
+        .iter()
+        .filter(|choice| choice.get("action") == action && choice.get("set").filter(|set| !set.is_null()) == set)
+        .filter_map(|choice| Some((Some(choice["row"].as_u64()?), choice["label"].as_str()?)))
+        .collect();
+    if choices.len() < 2 {
+        return;
+    }
+    let name = tl!("Occurrence");
+    let mut current = f.get(BATCH_OCCURRENCE).and_then(Value::as_u64).filter(|row| choices.iter().any(|(choice, _)| *choice == Some(*row)));
+    choices.insert(0, (None, tl!("By name")));
+    ui.label(name);
+    if crate::widgets::dropdown_literal(ui, "form-batch-occurrence", name, &mut current, &choices, 200.0) {
+        f.insert(BATCH_OCCURRENCE.into(), json!(current));
+    }
+    ui.end_row();
+}
+
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
     // Data-driven labels (a per-part checkbox shows the part's name, not a catalogue entry)
     // come from `__labels` verbatim; everything else goes through the catalogue.
     let labels = f.get("__labels").cloned().unwrap_or(Value::Null);
-    let file_info = f.get("__command").and_then(Value::as_str) == Some("file.fileInfo");
+    let command = f.get("__command").and_then(Value::as_str);
+    let file_info = command == Some("file.fileInfo");
+    let image_processor = command == Some("file.scripts.imageProcessor");
     let label = |k: &str| {
         if file_info {
             match k {
@@ -154,7 +181,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut browse: Option<String> = None;
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
-            if f.get("__command").and_then(Value::as_str) == Some("file.scripts.imageProcessor")
+            if image_processor
                 && f.get("source").and_then(Value::as_str).is_some_and(|source| source != "folder")
                 && matches!(k.as_str(), "input" | "includeSubfolders")
             {
@@ -194,7 +221,13 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 Value::Bool(b) => {
                     ui.label("");
                     let mut b = *b;
-                    ui.checkbox(&mut b, label(&k));
+                    // A checkbox named in `__enabledBy` is greyed while the checkbox it names is off.
+                    let on =
+                        f.get("__enabledBy").and_then(|m| m.get(&k)).and_then(Value::as_str).is_none_or(|by| f.get(by).and_then(Value::as_bool) != Some(false));
+                    let response = ui.add_enabled(on, egui::Checkbox::new(&mut b, label(&k)));
+                    if let Some(tip) = f.get("__tooltips").and_then(|m| m.get(&k)).and_then(Value::as_str) {
+                        response.on_hover_text(tip).on_disabled_hover_text(tip);
+                    }
                     json!(b)
                 }
                 Value::String(s) => {
@@ -224,7 +257,13 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                                 });
                             } else {
                                 ui.horizontal(|ui| {
-                                    ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(&k));
+                                    let field = ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(&k));
+                                    if image_processor && crate::dialogs::is_folder_field(&k) {
+                                        crate::field_tab::register(ui.ctx(), field.id);
+                                        if crate::field_tab::reached(ui.ctx(), field.id) {
+                                            crate::field_tab::select_all(ui.ctx(), field.id, &s);
+                                        }
+                                    }
                                     // A folder field gets the system folder picker (#7942, #9357).
                                     if crate::dialogs::is_folder_field(&k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
                                         browse = Some(k.clone());
@@ -247,8 +286,12 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     }
                 }
             };
+            let batch_action = k == "action" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch");
             f.insert(k, new);
             ui.end_row();
+            if batch_action {
+                batch_occurrence_field(ui, f);
+            }
         }
     });
     if let Some(key) = browse {
@@ -468,7 +511,16 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         }
         "file.automate.fitImage" => {
             let (w, h, _) = doc?;
-            dialog(app, json!({"width": w, "height": h, "dontEnlarge": false, "__compact": true}), json!({}))
+            // The values Fit Image last ran with, else the document's size (#13853). A stored
+            // value that isn't a usable size is ignored.
+            let kept = app.session.prefs().dialogs.get(photocraft_engine::file_cmds::FIT_IMAGE).cloned().unwrap_or_default();
+            let size = |key: &str| kept.get(key).and_then(Value::as_u64).filter(|v| (1..=300_000).contains(v));
+            let enlarge = kept.get("dontEnlarge").and_then(Value::as_bool).unwrap_or(false);
+            dialog(
+                app,
+                json!({"width": size("width").unwrap_or(w.into()), "height": size("height").unwrap_or(h.into()), "dontEnlarge": enlarge, "__compact": true}),
+                json!({}),
+            )
         }
         "file.automate.conditionalModeChange" => dialog(
             app,
@@ -561,16 +613,19 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             json!({
                 "source": if doc.is_some() { "current" } else { "folder" },
                 "input": dir, "includeSubfolders": false, "output": format!("{dir}/processed"),
-                "format": "jpg", "quality": 8, "width": 0, "height": 0, "convertToSrgb": true,
+                "jpeg": {"enabled": true, "quality": 5, "convertToSrgb": false, "resize": false, "width": 1, "height": 1},
+                "psd": {"enabled": false, "maximizeCompatibility": true, "resize": false, "width": 1, "height": 1},
+                "tiff": {"enabled": false, "lzw": false, "resize": false, "width": 1, "height": 1},
                 "__labels": {"current": tl!("Current document"), "open": tl!("All open documents"), "folder": tl!("Folder"), "includeSubfolders": tl!("Include All Subfolders")},
-                "__order": ["source", "input", "includeSubfolders", "output", "format", "quality", "width", "height", "convertToSrgb"]
+                "__order": ["source", "input", "includeSubfolders", "output"]
             }),
-            json!({"source": ["current", "open", "folder"], "format": ["jpg", "png", "psd", "tiff", "webp"]}),
+            json!({"source": ["current", "open", "folder"]}),
         ),
         "file.automate.batch" => {
-            let Some(action) = crate::actions::selected_action(app) else {
+            let Some(row) = crate::actions::selected_action_row(app) else {
                 return Some(Err("record an action in the Actions panel first".into()));
             };
+            let action = &app.session.actions.list[row];
             let (name, set) = (action.name.clone(), action.set.clone());
             let (names, sets) = crate::actions::action_form_choices(app);
             let mut fields = json!({
@@ -585,7 +640,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             if let Some(set) = set {
                 fields["set"] = json!(set);
             }
-            dialog(app, fields, json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"]}))
+            let choices = json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"]});
+            let dialog = form(app, id, label, fields, choices);
+            crate::actions::bind_batch_dialog(app, dialog, row);
+            Some(Ok(json!({"dialog": dialog})))
         }
         // Channel workflow dialogs (see channels_panel.rs for the channel references).
         "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => {
@@ -670,16 +728,23 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
     }
 }
 
+/// The name Save a Copy suggests: "<name> copy.psd" for a document with a file, or with
+/// Preferences › File Handling › Do not append "copy" to filename (`copy_suffix` empty) the
+/// document's own name (only the extension may change), as in Photoshop (#8080). A document that
+/// was never saved suggests its own name without " copy" either way (#14169).
+pub(super) fn suggested_copy_name(doc_name: &str, has_file: bool, copy_suffix: &str) -> String {
+    let stem = doc_name.rsplit_once('.').map_or(doc_name, |(a, _)| a);
+    let suffix = if has_file { copy_suffix } else { "" };
+    format!("{stem}{suffix}.psd")
+}
+
 /// File › Save a Copy: pick a name, encode with the export service, write; the document's path
 /// and saved state are untouched. An action being recorded keeps it as a `file.saveACopy` step
 /// with its path (#4373).
 fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let doc = app.session.active().ok_or("no document")?.doc.clone();
-    let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a);
-    // "<name> copy.psd", or with Preferences › File Handling › Do not append "copy" to filename
-    // when saving a copy the document's own name (only the extension may change), as in
-    // Photoshop (#8080).
-    let suggested = format!("{stem}{}.psd", app.session.prefs().file_handling.copy_suffix());
+    let has_file = app.session.active().is_some_and(|d| d.path.is_some());
+    let suggested = suggested_copy_name(&doc.name, has_file, app.session.prefs().file_handling.copy_suffix());
     // The copy is of the document as it was when asked.
     app.pick_save(&suggested, move |app, path| {
         // An RGB Targa asks for its bits per pixel first, a DDS texture for its compression, a
