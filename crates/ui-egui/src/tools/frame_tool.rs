@@ -51,6 +51,8 @@ pub fn default_stroke_style() -> photocraft_doc::ShapeStroke {
 }
 
 #[cfg(test)]
+mod options_stroke_target_tests;
+#[cfg(test)]
 mod stroke_options_tests;
 /// The options bar's stroke width range (#13873).
 pub const STROKE_WIDTH: std::ops::RangeInclusive<f32> = 0.0..=288.0;
@@ -863,20 +865,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         crate::preset_panels::shape_picker(app, ui);
     }
     crate::widgets::vline(ui, 22.);
-    let gesture = crate::vector_ui::paint_gesture(ui, ui.scope_id().with("frame-options-gesture"));
-    let coalesce = format!("frame-stroke-{}-{gesture}", ui.scope_id().value());
-    let stroke = selected(app).and_then(|l| l.frame.as_ref()).map_or_else(|| app.ui.frame_tool.stroke.clone(), |f| f.stroke.clone());
+    // The tool's own stroke, the one the next frame gets (#13874): a selected frame keeps its own,
+    // which the Properties panel's frame section edits.
+    let stroke = app.ui.frame_tool.stroke.clone();
     let (changed, alert) = options_stroke_controls(app, ui, &stroke);
     if alert {
         crate::panels::options_bar::range_alert(&mut app.ui, STROKE_WIDTH_ALERT);
     }
     if let Some(stroke) = changed {
-        app.ui.frame_tool.stroke = stroke.clone();
-        if let Some(id) = selected(app).map(|l| l.id) {
-            let params = stroke.as_ref().map(stroke_json).unwrap_or(Value::Null);
-            let r = app.run("layer.frame.set", json!({"layer":id.0,"stroke":params,"coalesce":coalesce}));
-            report(app, r);
-        }
+        app.ui.frame_tool.stroke = stroke;
     }
     true
 }
