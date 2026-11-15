@@ -15,8 +15,8 @@ use crate::PhotocraftApp;
 
 const CMD: &str = "layer.layerStyle.scaleEffects";
 
-/// The dialog's fields, and whether an Enter reached the dialog's buttons after the body.
-type State = (Map<String, Value>, bool);
+/// The dialog's fields, whether an Enter reached the dialog's buttons after the body, and an Esc.
+type State = (Map<String, Value>, bool, bool);
 
 /// The fields Scale Effects opens with, on a layer that has an effect.
 fn scale_fields() -> Map<String, Value> {
@@ -36,8 +36,11 @@ fn harness(fields: Map<String, Value>) -> Harness<'static, State> {
             if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 s.1 = true;
             }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                s.2 = true;
+            }
         },
-        (fields, false),
+        (fields, false, false),
     );
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(3);
@@ -101,7 +104,7 @@ fn a_whole_value_in_range_says_nothing() {
     type_into(&mut h, "Scale", "250", egui::Key::Tab);
     assert_eq!(scale(&h), 250.0);
     assert!(!alert_up(&h));
-    assert_eq!(params_of(&h.state().0), json!({"scale": 250.0}), "OK sends a whole percent");
+    assert_eq!(params_of(&h.state().0), json!({"scale": 250}), "OK sends a whole percent, as an integer");
 }
 
 #[test]
@@ -173,4 +176,35 @@ fn other_wide_range_fields_keep_their_decimals() {
     let radius = h.state().0.get("radius").and_then(Value::as_f64).unwrap();
     assert!((radius - 33.6).abs() < 1e-3, "Feather keeps 33.6: {radius}");
     assert!(!alert_up(&h));
+}
+
+#[test]
+fn esc_after_a_wrong_value_gives_up_the_entry_without_the_alert() {
+    let mut h = harness(scale_fields());
+    type_into(&mut h, "Scale", "0", egui::Key::Escape);
+    assert!(!alert_up(&h), "Esc raises no alert");
+    assert!(h.query_by_label(SCALE_ALERT_TITLE).is_none());
+    assert!(h.state().2, "the dialog still sees the Esc (it cancels as for any Esc)");
+}
+
+#[test]
+fn a_held_enter_does_not_close_the_alert_or_press_ok() {
+    let mut h = harness(scale_fields());
+    field(&h, "Scale").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("1001".into()));
+    h.run_steps(1);
+    // The Enter goes down and stays down: the first press leaves the field, the rest are repeats.
+    let enter = |repeat| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat, modifiers: egui::Modifiers::NONE };
+    h.event(enter(false));
+    h.run_steps(2);
+    assert!(alert_up(&h), "the first press raises the alert");
+    for _ in 0..3 {
+        h.event(enter(true));
+        h.run_steps(2);
+    }
+    assert!(alert_up(&h), "repeats do not close the alert");
+    assert!(!h.state().1, "nor reach the dialog's OK");
+    assert_eq!(scale(&h), 1000.0);
 }
