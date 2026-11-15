@@ -53,3 +53,18 @@ fn edit_selected_guides_opens_on_position_selected() {
     h.run_steps(3);
     assert_eq!(guides(h.state()), (vec![], vec![100.0]));
 }
+
+/// A keystroke in the very frame Position takes the keyboard replaces the readout too: the text
+/// is selected before the field reads its first event, not after.
+#[test]
+fn typing_on_the_first_focused_frame_replaces_the_readout() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let d = crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    // The window's sizing pass draws nothing that can take the keyboard.
+    h.step();
+    assert!(h.query_by_label("Position").is_none_or(|n| !n.is_focused()), "the sizing pass leaves the focus alone");
+    h.event(egui::Event::Text("120".into()));
+    h.run_steps(2);
+    assert_eq!(h.state_mut().ui.dialog_mut(d).unwrap().fields["position"], "120", "typing replaced the selected \"0 px\"");
+}
