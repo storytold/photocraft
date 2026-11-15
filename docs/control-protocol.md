@@ -580,7 +580,7 @@ a driver process crash is detected by the startup marker on the next launch.
 
 ### Camera Raw dialog
 
-On the desktop the dialog is a window of its own (title bar, moved and resized like any window), as Adobe Camera Raw is; the main window is dimmed and takes no input while it is open, and closing the window is Cancel. Where the platform has no extra windows (the web build) it is drawn over the main window.
+On the desktop the dialog is a window of its own (title bar, moved and resized like any window), as Adobe Camera Raw is; the main window is dimmed and takes no input while it is open, and closing the window is Cancel. Where the platform has no extra windows (the web build) it is drawn over the main window. Key presses that reach the main window while the dialog is open (`ui.key`, `ui.type`, and on the Mac the menu bar's key equivalents of the dialog's own keys, whose items stay enabled for that) are handed to the dialog's window, so `ui.key` drives its shortcuts there too; `ui.inspect.cameraRaw.shortcuts` lists them (action id → chord).
 
 **Screenshots:** `ui.screenshot` captures the main window only, and eframe cannot capture an
 immediate viewport, so while Camera Raw has its own window the PNG shows the dimmed main window,

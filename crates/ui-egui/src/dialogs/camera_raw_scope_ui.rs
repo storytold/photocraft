@@ -683,20 +683,3 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut Cam
         ui.painter().text(q + vec2(7.0, 7.0), Align2::LEFT_TOP, format!("{}", i + 1), crate::theme::mono(11.0), t.text);
     }
 }
-
-pub(crate) fn shortcuts(ctx: &egui::Context, view: &mut CameraRawScopeState) {
-    if ctx.text_edit_focused() {
-        return;
-    }
-    ctx.input_mut(|i| {
-        if i.consume_key(egui::Modifiers::NONE, egui::Key::U) {
-            view.shadows = !view.shadows;
-        }
-        if i.consume_key(egui::Modifiers::NONE, egui::Key::O) {
-            view.highlights = !view.highlights;
-        }
-        if i.consume_key(egui::Modifiers::NONE, egui::Key::S) {
-            view.sampler_tool = !view.sampler_tool;
-        }
-    });
-}

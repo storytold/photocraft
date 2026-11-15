@@ -33,6 +33,28 @@ pub(crate) enum Action {
     Section(u8),
     /// Removes the selected guide, mask, spot or red eye.
     DeleteSelected,
+    /// The dialog's own undo and redo.
+    Undo,
+    Redo,
+    /// The preview fit in view, at 100 %, a step in, a step out.
+    ZoomFit,
+    Zoom100,
+    ZoomIn,
+    ZoomOut,
+    /// The preview's Hand and Zoom tools (a local tool waits while they take the preview).
+    HandTool,
+    ZoomTool,
+    /// Before / after.
+    BeforeAfter,
+    /// The shadow and highlight clipping warnings, and the Color Sampler tool.
+    ShadowClipping,
+    HighlightClipping,
+    ColorSampler,
+    /// Every raw in the filmstrip selected (while several raws open).
+    SelectAllRaws,
+    /// Esc: an active sub-tool put down first (Guided Upright's, the sampler) or a gesture
+    /// cancelled, else Cancel.
+    Cancel,
 }
 
 /// The most sections the keymap can number (⌘1 … ⌘9).
@@ -52,6 +74,20 @@ impl Action {
             Action::GuidedUpright => "geometry.guidedUpright".into(),
             Action::Section(n) => format!("edit.section.{n}"),
             Action::DeleteSelected => "selection.delete".into(),
+            Action::Undo => "edit.undo".into(),
+            Action::Redo => "edit.redo".into(),
+            Action::ZoomFit => "view.fit".into(),
+            Action::Zoom100 => "view.actualPixels".into(),
+            Action::ZoomIn => "view.zoomIn".into(),
+            Action::ZoomOut => "view.zoomOut".into(),
+            Action::HandTool => "view.hand".into(),
+            Action::ZoomTool => "view.zoom".into(),
+            Action::BeforeAfter => "view.beforeAfter".into(),
+            Action::ShadowClipping => "view.shadowClipping".into(),
+            Action::HighlightClipping => "view.highlightClipping".into(),
+            Action::ColorSampler => "view.colorSampler".into(),
+            Action::SelectAllRaws => "filmstrip.selectAll".into(),
+            Action::Cancel => "dialog.cancel".into(),
         }
     }
 
@@ -71,6 +107,20 @@ impl Action {
             "mask.overlay" => Action::MaskOverlay,
             "geometry.guidedUpright" => Action::GuidedUpright,
             "selection.delete" => Action::DeleteSelected,
+            "edit.undo" => Action::Undo,
+            "edit.redo" => Action::Redo,
+            "view.fit" => Action::ZoomFit,
+            "view.actualPixels" => Action::Zoom100,
+            "view.zoomIn" => Action::ZoomIn,
+            "view.zoomOut" => Action::ZoomOut,
+            "view.hand" => Action::HandTool,
+            "view.zoom" => Action::ZoomTool,
+            "view.beforeAfter" => Action::BeforeAfter,
+            "view.shadowClipping" => Action::ShadowClipping,
+            "view.highlightClipping" => Action::HighlightClipping,
+            "view.colorSampler" => Action::ColorSampler,
+            "filmstrip.selectAll" => Action::SelectAllRaws,
+            "dialog.cancel" => Action::Cancel,
             _ => return None,
         })
     }
@@ -80,7 +130,10 @@ impl Action {
 /// K or M Masking (K is listed first, so it is the one tooltips show), ⇧E Red Eye; `[` `]` brush size and ⇧`[` ⇧`]` feather; A
 /// the mask brush's Auto Mask (Lightroom's key for it; free in Camera Raw's table); O the mask overlay while masking
 /// (elsewhere O stays the highlight clipping warning's); ⇧T Guided Upright; ⌘1 … ⌘9
-/// the Edit sections; Delete the selection.
+/// the Edit sections; Delete the selection. And the dialog's own, in both views: ⌘Z ⇧⌘Z its undo and redo,
+/// ⌘0 fit, ⌥⌘0 100 %, ⌘+ (⌘=) and ⌘− zoom, H the Hand and Z the Zoom tool, Y before / after, U and O the
+/// shadow and highlight clipping warnings, S the Color Sampler, ⌘A every raw in the filmstrip, Esc
+/// Cancel.
 pub(crate) const CAMERA_RAW: &[(&str, &str)] = &[
     ("tool.edit", "E"),
     ("tool.heal", "B"),
@@ -104,6 +157,20 @@ pub(crate) const CAMERA_RAW: &[(&str, &str)] = &[
     ("edit.section.8", "Cmd+8"),
     ("edit.section.9", "Cmd+9"),
     ("selection.delete", "Delete"),
+    ("edit.undo", "Cmd+Z"),
+    ("edit.redo", "Cmd+Shift+Z"),
+    ("view.fit", "Cmd+0"),
+    ("view.actualPixels", "Cmd+Alt+0"),
+    ("view.zoomIn", "Cmd+="),
+    ("view.zoomOut", "Cmd+-"),
+    ("view.hand", "H"),
+    ("view.zoom", "Z"),
+    ("view.beforeAfter", "Y"),
+    ("view.shadowClipping", "U"),
+    ("view.highlightClipping", "O"),
+    ("view.colorSampler", "S"),
+    ("filmstrip.selectAll", "Cmd+A"),
+    ("dialog.cancel", "Escape"),
 ];
 
 /// A table of shortcuts read for matching: each action's chord, as written and parsed.
@@ -139,6 +206,11 @@ impl Keymap {
     /// `name` followed by `action`'s chord in parentheses (`Masking (K)`); bare `name` unbound.
     pub(crate) fn tip(&self, name: &str, action: Action) -> String {
         self.label(action).map_or_else(|| name.to_string(), |k| format!("{name} ({k})"))
+    }
+
+    /// Whether a press of `chord` (`Cmd+Z` form, as a menu item's shortcut) is one of this table's.
+    pub(crate) fn takes(&self, chord: &str) -> bool {
+        crate::shortcuts::parse(chord).is_some_and(|sc| self.bindings.iter().any(|b| crate::shortcuts::key_matches(&b.2, sc.logical_key, sc.modifiers)))
     }
 
     /// The table as the control channel describes it: action id → chord.
@@ -182,6 +254,8 @@ mod tests {
     #[test]
     fn camera_raws_table_reads_whole_and_each_chord_is_its_action() {
         let map = Keymap::default();
+        let dropped: Vec<_> = CAMERA_RAW.iter().filter(|(_, c)| !map.bindings.iter().any(|b| b.1 == *c)).collect();
+        assert!(dropped.is_empty(), "rows dropped: {dropped:?}");
         assert_eq!(map.bindings.len(), CAMERA_RAW.len(), "no row was dropped");
         for (id, _) in CAMERA_RAW {
             let a = Action::from_id(id).unwrap();

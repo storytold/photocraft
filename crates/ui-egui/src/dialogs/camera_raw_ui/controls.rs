@@ -55,15 +55,6 @@ pub(super) fn redo_edit(d: &mut CameraRawDialog) -> bool {
     true
 }
 
-fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
-    let cmd_shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
-    if ctx.input_mut(|i| i.consume_key(cmd_shift, egui::Key::Z)) {
-        redo_edit(d);
-    } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
-        undo_edit(d);
-    }
-}
-
 pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
     if let Some(d) = app.camera_raw.as_mut() {
         d.sync_develop();
@@ -402,15 +393,46 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
     let builder = crate::os_window::builder().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
     let mut close = false;
+    // Keys that reach the main window while the dialog is open are the dialog's: a native menu's
+    // key equivalent comes back as a key press there (AppKit takes it before the dialog's window
+    // sees it; `native_menu::NativeMenu::raw_input`), and so does the control channel's `ui.key`
+    // (eframe's `raw_input_hook` feeds the main window only, never an immediate viewport's). The
+    // main window runs no shortcut under the dialog (`shortcuts::preflight_keys`).
+    let forwarded = forwarded_keys(ctx);
     ctx.show_viewport_immediate(window, builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             close = true;
+        }
+        if !forwarded.is_empty() {
+            ui.ctx().input_mut(|i| i.events.extend(forwarded.iter().cloned()));
         }
         draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
     });
     if close && app.camera_raw.is_some() {
         cancel(app);
     }
+}
+
+/// The dialog's shortcuts this frame, all from its keymap: undo, zoom, Hand and Zoom, before /
+/// after, clipping, the sampler, ⌘A, Esc, ⇧T, Delete, and the develop view's tools, brush and
+/// section keys. `filmstrip`: several raws are open.
+fn dialog_keys(app: &mut PhotocraftApp, ctx: &egui::Context, filmstrip: bool) -> super::keys::Outcome {
+    let Some(d) = app.camera_raw.as_mut() else { return Default::default() };
+    let guides_were_active = d.guides.active;
+    let view =
+        super::keys::View { nav: &mut app.ui.camera_raw_preview, scope: &mut app.ui.camera_raw_scope, filmstrip: filmstrip && d.target == Target::OpenRaw };
+    let keys = super::keys::handle(d, view, ctx);
+    // Shift+T took the Guided Upright tool up: it puts the Color Sampler down (the newest tool
+    // wins), rather than the sampler putting the new tool straight down again.
+    if d.guides.active && !guides_were_active {
+        app.ui.camera_raw_scope.sampler_tool = false;
+    }
+    keys
+}
+
+/// The key and text events of the main window's input this frame, for the dialog's own window.
+fn forwarded_keys(ctx: &egui::Context) -> Vec<egui::Event> {
+    ctx.input(|i| i.events.iter().filter(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))).cloned().collect())
 }
 
 /// Keeps the mask brush's Auto Mask and its preference (`rawDefaults.brushAutoMask`) together: the
@@ -615,20 +637,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         Some(doc) => app.session.color.canvas_display(&doc).ok(),
         None => app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok()),
     };
-    let mut action: Option<&str> = None;
-    let mut film_click: Option<super::filmstrip::FilmClick> = None;
+    let filmstrip = app.raw_shelf.len() > 1;
+    let keys = dialog_keys(app, ctx, filmstrip);
+    let mut action: Option<&str> = keys.cancel.then_some("cancel");
+    let mut film_click: Option<super::filmstrip::FilmClick> = keys.select_all.then_some(super::filmstrip::FilmClick::SelectAll);
     egui::Area::new(egui::Id::unique("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
-        history_keys(d, ctx);
-        let guides_were_active = d.guides.active;
-        // the dialog's shortcuts (its keymap): ⇧T, Delete, and the develop view's tools, brush
-        // and section keys
-        super::keys::handle(d, ctx);
-        // Shift+T took the Guided Upright tool up: it puts the Color Sampler down (the newest
-        // tool wins), rather than the sampler putting the new tool straight down again.
-        if d.guides.active && !guides_were_active {
-            app.ui.camera_raw_scope.sampler_tool = false;
-        }
         let pointer = ctx.input(|i| i.pointer.primary_down());
         // Edits made elsewhere (the guides, a sidecar) reach the develop settings first.
         d.sync_develop();
@@ -676,12 +690,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             let film = ERect::from_min_max(body.min, pos2(body.left() + film_w - 1.0, body.bottom()));
             painter.rect_filled(film, 0.0, t.dock);
             painter.line_segment([film.right_top(), film.right_bottom()], Stroke::new(1.0, t.separator));
-            film_click = super::filmstrip::filmstrip(ui, film, &mut app.raw_shelf, d.raw_open.as_ref().map(|r| r.document), &t);
-            // ⌘A selects every raw in the filmstrip. Application shortcuts don't run under the
-            // dialog (`shortcuts::preflight_keys`), so it never selects the document behind it.
-            if !ctx.text_edit_focused() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
-                film_click = Some(super::filmstrip::FilmClick::SelectAll);
-            }
+            // (⌘A, every raw, is the keymap's: application shortcuts don't run under the dialog,
+            // `shortcuts::preflight_keys`, so it never selects the document behind it)
+            film_click = super::filmstrip::filmstrip(ui, film, &mut app.raw_shelf, d.raw_open.as_ref().map(|r| r.document), &t).or(film_click.take());
         }
         let panel_w = look.panel_w;
         let preview_body =
@@ -748,11 +759,16 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let toolbar = ERect::from_min_max(pos2(preview_body.left() + 16.0, view.bottom() + 8.0), preview_body.right_bottom() - vec2(16.0, 4.0));
         let mut nav_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar).layout(egui::Layout::left_to_right(egui::Align::Center)));
         nav_ui.set_clip_rect(preview_body.intersect(ui.clip_rect()));
-        let mut tool_taken = scope.sampler_tool || d.guides.active;
+        let mut tool_taken = scope.sampler_tool || d.guides.active || local_tool;
         crate::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut tool_taken);
         if !tool_taken {
             scope.sampler_tool = false;
             d.guides.active = false;
+            if local_tool {
+                // the Hand or Zoom button took the preview: the tool waits until it is picked again
+                d.local.paused = true;
+                d.local.end_gesture();
+            }
         }
         if d.detail.pending() {
             nav_ui.spinner();
@@ -901,7 +917,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             });
         });
         crate::camera_raw_scope_ui::floating(ctx, d, scope, right);
-        crate::camera_raw_scope_ui::shortcuts(ctx, scope);
+        d.typing = ctx.text_edit_focused();
         d.dirty |= dirty;
         if d.dirty {
             ctx.request_repaint();
@@ -949,14 +965,6 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if super::filmstrip::refresh_shown_thumbnail(app) {
             ctx.request_repaint();
         }
-    }
-    if ctx.input(|i| i.key_pressed(egui::Key::Y))
-        && let Some(d) = app.camera_raw.as_mut()
-    {
-        d.show_before = !d.show_before;
-    }
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !app.camera_raw.as_mut().is_some_and(|d| d.guides.escape()) {
-        action = Some("cancel");
     }
     match action {
         Some("ok") => {

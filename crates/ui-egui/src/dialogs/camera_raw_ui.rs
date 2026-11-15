@@ -92,6 +92,9 @@ pub struct CameraRawDialog {
     pub(crate) viewport: Option<ERect>,
     /// Whether the main window had focus last frame (see [`show`]).
     main_focused: bool,
+    /// A text field of the dialog had the keyboard at the end of the last frame (egui takes its
+    /// focus away at the start of a frame whose input has Esc, before the dialog reads the keys).
+    pub(crate) typing: bool,
     pub(crate) float: bool,
     tex: Option<TextureHandle>,
     before_tex: Option<TextureHandle>,
@@ -185,6 +188,8 @@ impl CameraRawDialog {
         result["maskComponent"] = json!(self.local.component);
         result["maskDraw"] = json!(format!("{:?}", self.local.draw).to_lowercase());
         result["maskOverlay"] = json!(self.local.overlay);
+        // the Hand or Zoom has the preview, the local tool waiting until it is picked again
+        result["toolPaused"] = json!(self.local.paused);
         result["maskOverlayShown"] = json!(self.local.overlay_tex.as_ref().map(|(_, id)| *id));
         result["selectedSpot"] = json!(self.local.spot);
         result["selectedEye"] = json!(self.local.eye);
@@ -429,6 +434,13 @@ impl CameraRawDialog {
 
 /// The open dialog as the control channel describes it ([`CameraRawDialog::describe`]), with the
 /// filmstrip of raws being opened together.
+/// Whether the open dialog has a shortcut on `chord` (`Cmd+Z` form). On the Mac a menu item with
+/// that key equivalent must stay enabled while the dialog is open: AppKit swallows the key of a
+/// disabled item before any window sees it (#8965), so ⌘Z, ⌘0, ⌘+ … would never reach the dialog.
+pub(crate) fn takes_shortcut(app: &PhotocraftApp, chord: &str) -> bool {
+    app.camera_raw.as_ref().is_some_and(|d| d.keymap.takes(chord))
+}
+
 pub fn describe(app: &PhotocraftApp) -> Option<Value> {
     let mut v = app.camera_raw.as_ref()?.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview);
     v["filmstrip"] = filmstrip::describe(app);

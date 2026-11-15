@@ -775,7 +775,10 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // ⌘H…); a click on one is still dropped under the dialog ([`run`]).
     let capturing = crate::prefs_ui::capturing_shortcut(app);
     for it in &mut items {
-        it.enabled = if capturing && it.shortcut.is_some() { true } else { it.enabled && crate::menus::modal_allows(app, &it.id) };
+        // Likewise an item whose key is one of Camera Raw's own while it is open (⌘Z, ⌘0, ⌘+,
+        // ⌘−, ⌘A …): its key comes back as a key press, which the dialog's window takes
+        let dialog_key = it.shortcut.as_deref().is_some_and(|k| crate::camera_raw_ui::takes_shortcut(app, k));
+        it.enabled = if (capturing || dialog_key) && it.shortcut.is_some() { true } else { it.enabled && crate::menus::modal_allows(app, &it.id) };
     }
     let layout = app_layout(app, &items, lang, &app.session.prefs().interface.language);
     let Some(menu) = app.services.native_menu.as_mut() else { return };

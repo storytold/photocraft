@@ -7,16 +7,36 @@
 //! the dialog at all (`shortcuts::preflight_keys`), so `[` here is never the canvas brush's `[`.
 
 use super::CameraRawDialog;
-use super::controls::{remember_shortcut_edit, snapshot};
+use super::controls::{redo_edit, remember_shortcut_edit, snapshot, undo_edit};
 use super::keymap::Action;
 use super::local::Draw;
 use super::rail::Tool;
+use crate::camera_raw_preview_ui::NavKey;
+use crate::state::{CameraRawPreviewState, CameraRawScopeState};
 
-/// This frame's shortcuts. The classic panel has only Guided Upright's (⇧T and Delete); the
-/// develop view (a raw the shared engine develops) has them all.
-pub(super) fn handle(d: &mut CameraRawDialog, ctx: &egui::Context) {
+/// What the dialog's frame does with this frame's keys beyond the dialog itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Outcome {
+    /// ⌘A: every raw in the filmstrip.
+    pub select_all: bool,
+    /// Esc with nothing to put down: Cancel.
+    pub cancel: bool,
+}
+
+/// The preview's navigation and the scope's view, which the dialog's keys also drive.
+pub(super) struct View<'a> {
+    pub nav: &'a mut CameraRawPreviewState,
+    pub scope: &'a mut CameraRawScopeState,
+    /// Several raws are being opened: the filmstrip shows.
+    pub filmstrip: bool,
+}
+
+/// This frame's shortcuts. The classic panel has the dialog's own (undo, zoom, Hand and Zoom,
+/// before / after, clipping, the sampler, Esc) and Guided Upright's (⇧T and Delete); the develop
+/// view (a raw the shared engine develops) has them all.
+pub(super) fn handle(d: &mut CameraRawDialog, view: View<'_>, ctx: &egui::Context) -> Outcome {
     if ctx.text_edit_focused() {
-        return;
+        return Outcome::default();
     }
     let develop = d.develop.is_some();
     if develop {
@@ -29,22 +49,41 @@ pub(super) fn handle(d: &mut CameraRawDialog, ctx: &egui::Context) {
     let delete = guides_take_delete(d) || local_tool_live(d);
     // A only while the mask brush paints: elsewhere the key is left alone
     let brush = develop && d.tool == Tool::Masking && d.local.draw == Draw::Brush;
+    let masking = develop && d.tool == Tool::Masking;
+    // (Esc closes an open menu or list first, as everywhere)
+    let popup = egui::Popup::is_any_open(ctx);
     let actions = d.keymap.take(ctx, |a| match a {
-        Action::GuidedUpright => true,
+        Action::GuidedUpright
+        | Action::Undo
+        | Action::Redo
+        | Action::HandTool
+        | Action::ZoomTool
+        | Action::BeforeAfter
+        | Action::ShadowClipping
+        | Action::ColorSampler => true,
+        Action::ZoomFit | Action::Zoom100 | Action::ZoomIn | Action::ZoomOut => d.viewport.is_some(),
         Action::DeleteSelected => delete,
         Action::AutoMask => brush,
         // O shows / hides the mask overlay while masking (Lightroom's key); elsewhere it is the
         // highlight clipping warning's, as in Camera Raw
-        Action::MaskOverlay => develop && d.tool == Tool::Masking,
+        Action::MaskOverlay => masking,
+        Action::HighlightClipping => !masking,
+        Action::SelectAllRaws => view.filmstrip,
+        // (nor while a field is being typed in: its Esc leaves the field)
+        Action::Cancel => !popup && !d.typing,
         _ => develop,
     });
+    let mut out = Outcome::default();
     for action in actions {
-        perform(d, action);
+        perform(d, action, view.nav, view.scope, &mut out);
     }
+    out
 }
 
-fn perform(d: &mut CameraRawDialog, action: Action) {
+fn perform(d: &mut CameraRawDialog, action: Action, nav: &mut CameraRawPreviewState, scope: &mut CameraRawScopeState, out: &mut Outcome) {
     match action {
+        // the tool's own key while the Hand or Zoom has the preview: back to the tool
+        Action::Tool(t) if d.tool == t && d.local.paused => d.local.paused = false,
         Action::Tool(t) => pick_tool(d, d.tool.after_picking(t)),
         Action::GuidedUpright => guided_upright(d),
         Action::Section(n) => section(d, n),
@@ -57,6 +96,60 @@ fn perform(d: &mut CameraRawDialog, action: Action) {
             d.local.overlay = !d.local.overlay;
             d.dirty = true;
         }
+        Action::Undo => {
+            undo_edit(d);
+        }
+        Action::Redo => {
+            redo_edit(d);
+        }
+        Action::ZoomFit | Action::Zoom100 | Action::ZoomIn | Action::ZoomOut => {
+            let Some(viewport) = d.viewport else { return };
+            let size = egui::vec2(d.full_w as f32, d.full_h as f32) / d.preview_ppp.max(0.01);
+            let key = match action {
+                Action::ZoomFit => NavKey::Fit,
+                Action::Zoom100 => NavKey::ActualPixels,
+                Action::ZoomIn => NavKey::In,
+                _ => NavKey::Out,
+            };
+            crate::camera_raw_preview_ui::nav_key(nav, key, viewport, size);
+        }
+        Action::HandTool | Action::ZoomTool => {
+            crate::camera_raw_preview_ui::pick_tool(nav, action == Action::HandTool);
+            // the Hand or Zoom takes the preview: the sampler and Guided Upright's tool go down,
+            // and a local tool (Masking's brush, Heal, Red Eye) waits until it is picked again
+            scope.sampler_tool = false;
+            d.guides.active = false;
+            if d.develop.is_some() && d.tool != Tool::Edit {
+                d.local.paused = true;
+                d.local.end_gesture();
+            }
+        }
+        Action::BeforeAfter => d.show_before = !d.show_before,
+        Action::ShadowClipping => scope.shadows = !scope.shadows,
+        Action::HighlightClipping => scope.highlights = !scope.highlights,
+        Action::ColorSampler => {
+            scope.sampler_tool = !scope.sampler_tool;
+            if scope.sampler_tool {
+                d.guides.active = false;
+            }
+        }
+        Action::SelectAllRaws => out.select_all = true,
+        Action::Cancel => escape(d, scope, out),
+    }
+}
+
+/// Esc: what is up is put down first (a gesture in progress, Guided Upright's tool, the Color
+/// Sampler, the Hand or Zoom over a local tool), one per press; with nothing up, Cancel.
+fn escape(d: &mut CameraRawDialog, scope: &mut CameraRawScopeState, out: &mut Outcome) {
+    if d.local.gesture_active() {
+        d.local.end_gesture();
+    } else if d.guides.escape() {
+    } else if scope.sampler_tool {
+        scope.sampler_tool = false;
+    } else if d.local.paused && d.develop.is_some() && d.tool != Tool::Edit {
+        d.local.paused = false;
+    } else {
+        out.cancel = true;
     }
 }
 

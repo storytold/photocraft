@@ -174,6 +174,11 @@ impl LocalTools {
         self.gesture = None;
     }
 
+    /// A gesture is going on (a stroke being painted, a handle dragged).
+    pub(crate) fn gesture_active(&self) -> bool {
+        self.gesture.is_some()
+    }
+
     /// Masking was picked: ready to paint at once. The selected mask stays selected (a drag does
     /// what its selected component's kind does: paints on a brush); with none, the Brush is armed
     /// as the new mask's kind, and the mask is made by the first stroke ([`Self::armed`]), so

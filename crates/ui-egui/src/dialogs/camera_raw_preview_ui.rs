@@ -1,5 +1,5 @@
 //! Camera Raw navigation in source-pixel coordinates. No document edits.
-use egui::{Key, Modifiers, PointerButton, Pos2, Rect, Response, Sense, Ui, Vec2, vec2};
+use egui::{Key, PointerButton, Pos2, Rect, Response, Sense, Ui, Vec2, vec2};
 use serde_json::Value;
 
 use crate::{state::CameraRawPreviewState, widgets};
@@ -183,6 +183,10 @@ pub(crate) fn interact(
             state.zoom_at(1.0, at, viewport, size);
         } else if modifiers.alt {
             state.zoom_at(state.scale(viewport, size) / 1.25, at, viewport, size);
+        } else if state.zoom_tool {
+            // the Zoom tool picked: a step in at the pointer, as Photoshop's
+            let nz = crate::zoom_levels::step_in_range(state.scale(viewport, size), 1, MIN_ZOOM, MAX_ZOOM);
+            state.zoom_at(nz, at, viewport, size);
         } else if state.zoom.is_none() {
             state.zoom_at(1.0, at, viewport, size);
         } else {
@@ -222,40 +226,43 @@ pub(crate) fn interact(
             }
         });
     });
-    if !ui.ctx().text_edit_focused() {
-        ui.input_mut(|i| {
-            if i.consume_key(Modifiers::COMMAND | Modifiers::ALT, Key::Num0) {
-                state.zoom_at(1.0, viewport.center(), viewport, size);
-            } else if i.consume_key(Modifiers::COMMAND, Key::Num0) {
-                state.fit();
-            }
-            if i.consume_key(Modifiers::COMMAND, Key::Plus) || i.consume_key(Modifiers::COMMAND, Key::Equals) {
-                state.zoom_at(state.scale(viewport, size) * 1.25, viewport.center(), viewport, size);
-            }
-            if i.consume_key(Modifiers::COMMAND, Key::Minus) {
-                state.zoom_at(state.scale(viewport, size) / 1.25, viewport.center(), viewport, size);
-            }
-            if i.consume_key(Modifiers::NONE, Key::H) {
-                state.hand = true;
-                *sampler = false;
-            }
-            if i.consume_key(Modifiers::NONE, Key::Z) {
-                state.hand = false;
-                *sampler = false;
-            }
-        });
-    }
     (state.image_rect(viewport, size), response, panning || temporary_zoom, zoom_box)
+}
+
+/// A navigation key ([`super::camera_raw_ui`]'s keymap: ⌘0, ⌥⌘0, ⌘+, ⌘−) on the preview
+/// `viewport` of an image `size` points large.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NavKey {
+    Fit,
+    ActualPixels,
+    In,
+    Out,
+}
+
+pub(crate) fn nav_key(state: &mut CameraRawPreviewState, key: NavKey, viewport: Rect, size: Vec2) {
+    match key {
+        NavKey::Fit => state.fit(),
+        NavKey::ActualPixels => state.zoom_at(1.0, viewport.center(), viewport, size),
+        NavKey::In => state.zoom_at(state.scale(viewport, size) * 1.25, viewport.center(), viewport, size),
+        NavKey::Out => state.zoom_at(state.scale(viewport, size) / 1.25, viewport.center(), viewport, size),
+    }
+}
+
+/// The Hand (`hand`) or the Zoom tool picked (H, Z, the toolbar).
+pub(crate) fn pick_tool(state: &mut CameraRawPreviewState, hand: bool) {
+    state.hand = hand;
+    state.zoom_tool = !hand;
 }
 
 pub(crate) fn toolbar(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport: Rect, size: Vec2, sampler: &mut bool) {
     let zoom_tool = crate::icons::button(ui, "zoom-in", 28.0, !state.hand && !*sampler, tl!("Zoom Tool"));
     zoom_tool.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Zoom Tool")));
+    // a double-click on the Zoom tool is 100 %, on the Hand Fit in View, as in Photoshop
     if zoom_tool.double_clicked() {
-        state.fit();
+        state.zoom_at(1.0, viewport.center(), viewport, size);
     }
     if zoom_tool.clicked() {
-        state.hand = false;
+        pick_tool(state, false);
         *sampler = false;
     }
     let hand_tool = crate::icons::button(ui, "hand", 28.0, state.hand && !*sampler, tl!("Hand Tool"));
@@ -264,7 +271,7 @@ pub(crate) fn toolbar(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport: 
         state.fit();
     }
     if hand_tool.clicked() {
-        state.hand = true;
+        pick_tool(state, true);
         *sampler = false;
     }
     if widgets::secondary_button(ui, tl!("Fit in View"), 84.0).clicked() {
@@ -317,7 +324,7 @@ mod tests {
         let viewport = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
         let size = vec2(1600.0, 1200.0);
         let at = pos2(400.0, 300.0);
-        let mut state = CameraRawPreviewState { zoom: Some(1.0), center: [0.5, 0.5], hand: false };
+        let mut state = CameraRawPreviewState { zoom: Some(1.0), center: [0.5, 0.5], hand: false, zoom_tool: false };
         let scale_before = state.scale(viewport, size);
         let n = 1i32;
         let dir = if n > 0 { 1 } else { -1 };
@@ -341,10 +348,10 @@ mod tests {
         let viewport = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
         let size = vec2(1600.0, 1200.0);
         let at = viewport.center();
-        let state = CameraRawPreviewState { zoom: Some(MAX_ZOOM), center: [0.5, 0.5], hand: false };
+        let state = CameraRawPreviewState { zoom: Some(MAX_ZOOM), center: [0.5, 0.5], hand: false, zoom_tool: false };
         let nz = crate::zoom_levels::step_in_range(state.scale(viewport, size), 1, MIN_ZOOM, MAX_ZOOM);
         assert_eq!(nz, state.scale(viewport, size), "at max, step up stays put");
-        let state_lo = CameraRawPreviewState { zoom: Some(MIN_ZOOM), center: [0.5, 0.5], hand: false };
+        let state_lo = CameraRawPreviewState { zoom: Some(MIN_ZOOM), center: [0.5, 0.5], hand: false, zoom_tool: false };
         let nz = crate::zoom_levels::step_in_range(state_lo.scale(viewport, size), -1, MIN_ZOOM, MAX_ZOOM);
         assert_eq!(nz, state_lo.scale(viewport, size), "at min, step down stays put");
         let _ = at;
@@ -370,7 +377,7 @@ mod tests {
         let viewport = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
         let size = vec2(1600.0, 1200.0);
         let at = pos2(300.0, 200.0);
-        let mut state = CameraRawPreviewState { zoom: Some(1.0), center: [0.5, 0.5], hand: false };
+        let mut state = CameraRawPreviewState { zoom: Some(1.0), center: [0.5, 0.5], hand: false, zoom_tool: false };
         let rect_before = state.image_rect(viewport, size);
         let point_before = (at - rect_before.min) / rect_before.size();
         let nz = crate::zoom_levels::step_in_range(1.0, 1, MIN_ZOOM, MAX_ZOOM);
@@ -384,7 +391,7 @@ mod tests {
     fn tiny_images_nonfinite_state_and_resize_stay_centered_and_finite() {
         let viewport = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 400.0));
         let size = vec2(40.0, 20.0);
-        let mut view = CameraRawPreviewState { zoom: Some(f32::NAN), center: [f32::INFINITY, f32::NAN], hand: true };
+        let mut view = CameraRawPreviewState { zoom: Some(f32::NAN), center: [f32::INFINITY, f32::NAN], hand: true, zoom_tool: false };
         assert!(view.image_rect(viewport, size).is_finite());
         view.zoom_at(1.0, pos2(100.0, 100.0), viewport, size);
         assert_eq!(view.image_rect(viewport, size).center(), viewport.center());

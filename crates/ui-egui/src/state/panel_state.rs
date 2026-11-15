@@ -117,10 +117,13 @@ pub struct CameraRawPreviewState {
     pub zoom: Option<f32>,
     pub center: [f32; 2],
     pub hand: bool,
+    /// The Zoom tool was picked (Z, its button): a click zooms in a step at the pointer (⌥ out),
+    /// as Photoshop's does. Unpicked, a click toggles Fit and 100 %, as Camera Raw's loupe does.
+    pub zoom_tool: bool,
 }
 
 impl Default for CameraRawPreviewState {
     fn default() -> Self {
-        Self { zoom: None, center: [0.5, 0.5], hand: false }
+        Self { zoom: None, center: [0.5, 0.5], hand: false, zoom_tool: false }
     }
 }

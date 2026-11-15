@@ -184,7 +184,7 @@ fn invalid_view_requests_are_atomic_and_reopening_starts_in_fit_view() {
     menu(&mut h, json!({"cancel":true})).unwrap();
     menu(&mut h, json!({})).unwrap();
     h.run_steps(2);
-    assert_eq!(inspect(&h)["view"], json!({"zoom":null,"center":[0.5,0.5],"hand":false}));
+    assert_eq!(inspect(&h)["view"], json!({"zoom":null,"center":[0.5,0.5],"hand":false,"zoomTool":false}));
     h.get_by_label(photocraft_ui_egui::i18n::tr(photocraft_ui_egui::i18n::current(), "100%")).click();
     h.run_steps(2);
     assert_eq!(zoom(&h), 1.0);

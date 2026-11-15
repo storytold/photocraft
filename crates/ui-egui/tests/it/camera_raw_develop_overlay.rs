@@ -44,6 +44,8 @@ fn key(h: &mut Harness<'_, PhotocraftApp>, key: Key) {
         h.event(Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: Modifiers::NONE });
     }
     h.run_steps(2);
+    // (the overlay shown is the one a render has landed for)
+    settle(h);
 }
 
 fn button(h: &mut Harness<'_, PhotocraftApp>, pos: Pos2, pressed: bool) {
