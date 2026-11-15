@@ -614,3 +614,51 @@ fn canonical_ungrouped_category_keeps_classic_loose_rows_flat_and_order_stable()
     h.run_steps(3);
     h.get_by_label(photocraft_engine::atn_cmds::UNGROUPED_SET);
 }
+
+#[test]
+fn cancelling_a_delete_question_uses_its_id_after_marker_edits() {
+    for marker in [None, Some(Value::Null), Some(json!(999))] {
+        let mut app = app();
+        app.session.actions.list.push(Action::new("Retain me", Vec::new()));
+        let id = ask_delete(&mut app, Some(0), None).unwrap()["dialog"].as_u64().unwrap();
+        if let Some(value) = marker {
+            let (req, _rx) = crate::control::ControlRequest::new("ui.dialog.set", json!({"dialog":id,"field":DELETE,"value":value}));
+            let crate::control::Outcome::Done(reply) = crate::control::handle(&mut app, &egui::Context::default(), &req) else {
+                panic!("editing the delete marker must complete immediately");
+            };
+            assert_eq!(reply["ok"], true, "{reply}");
+        } else {
+            assert!(app.ui.dialog_mut(id).unwrap().fields.remove(DELETE).is_some());
+        }
+        let (req, _rx) = crate::control::ControlRequest::new("ui.dialog.cancel", json!({"dialog":id}));
+        let crate::control::Outcome::Done(reply) = crate::control::handle(&mut app, &egui::Context::default(), &req) else {
+            panic!("cancelling the delete question must complete immediately");
+        };
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert!(app.ui.dialogs.iter().all(|dialog| dialog.id != id));
+        assert!(app.actions_runtime.delete.is_none(), "the closed question releases its owner");
+        assert_eq!(app.session.actions.list.len(), 1);
+        assert_eq!(app.session.actions.list[0].name, "Retain me");
+        let next = ask_delete(&mut app, Some(0), None).unwrap()["dialog"].as_u64().unwrap();
+        assert_ne!(next, id);
+        crate::dialogs::cancel(&mut app, next).unwrap();
+        assert!(app.actions_runtime.delete.is_none());
+    }
+}
+
+#[test]
+fn cancelling_a_foreign_dialog_cannot_release_the_delete_owner() {
+    let mut app = app();
+    app.session.actions.list.push(Action::new("Retain me", Vec::new()));
+    let owner = ask_delete(&mut app, Some(0), None).unwrap()["dialog"].as_u64().unwrap();
+    let foreign = app.ui.open_dialog(crate::state::DialogKind::Command, json!({"__label":"Foreign question"}).as_object().unwrap().clone());
+    assert_ne!(foreign, owner);
+    crate::dialogs::cancel(&mut app, foreign).unwrap();
+    assert_eq!(app.actions_runtime.delete.as_ref().map(|(id, _, _)| *id), Some(owner));
+    assert!(app.ui.dialogs.iter().any(|dialog| dialog.id == owner));
+    assert!(ask_delete(&mut app, Some(0), None).is_err());
+    assert_eq!(app.session.actions.list.len(), 1);
+    crate::dialogs::cancel(&mut app, owner).unwrap();
+    assert!(app.actions_runtime.delete.is_none());
+    assert_eq!(app.session.actions.list[0].name, "Retain me");
+}

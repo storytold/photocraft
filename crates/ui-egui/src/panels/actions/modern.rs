@@ -943,9 +943,9 @@ pub(crate) fn delete_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String
     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
 }
 
-/// Clear only the delete owner named by this dialog, leaving a later question intact.
-pub(crate) fn delete_cancel(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) {
-    if app.actions_runtime.delete.as_ref().is_some_and(|(id, _, _)| fields.get(DELETE).and_then(Value::as_u64) == Some(*id)) {
+/// Clear only the closed dialog's delete owner, even if its editable fields changed.
+pub(crate) fn delete_cancel(app: &mut PhotocraftApp, closed: u64) {
+    if app.actions_runtime.delete.as_ref().is_some_and(|(id, _, _)| *id == closed) {
         app.actions_runtime.delete = None;
     }
 }
