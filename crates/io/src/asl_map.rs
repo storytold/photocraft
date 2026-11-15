@@ -18,7 +18,7 @@ use photocraft_doc::{Effect, FxPaint, Pattern};
 
 use crate::blocks::{enum_of, get_desc, num};
 use crate::effects_map::{blend_from_id, blend_value, effects_descriptor, effects_from_descriptor, is_known_effects_key};
-use crate::pattern_map::{from_psd, to_psd_patterns};
+use crate::pattern_map::{PatternCharge, PatternFileLimits, admit_patterns, convert_patterns, to_psd_patterns};
 
 /// One style as PhotoCraft keeps it.
 #[derive(Clone, Debug, PartialEq)]
@@ -48,8 +48,13 @@ pub struct AslImport {
 /// Patterns an effect list refers to: `(name, id)` in first-use order, without repeats.
 pub fn referenced_patterns(effects: &[Effect]) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
+    // A reference without an id repeats one of the same name; one with an id, one of that id.
+    let (mut names, mut ids): (HashSet<String>, HashSet<String>) = Default::default();
     let mut push = |name: &str, id: &str| {
-        if !out.iter().any(|(n, i)| if id.is_empty() { n == name } else { i == id }) {
+        let seen = if id.is_empty() { names.contains(name) } else { ids.contains(id) };
+        if !seen {
+            names.insert(name.to_string());
+            ids.insert(id.to_string());
             out.push((name.to_string(), id.to_string()));
         }
     };
@@ -101,8 +106,28 @@ impl Taken {
 
 /// Reads an `.asl` style library.
 pub fn read_asl(bytes: &[u8]) -> Result<AslImport, String> {
+    read_asl_with(bytes, PatternFileLimits::default())
+}
+
+/// The pattern section of a style library (version u16, `8BSL`, sub-version u16, length u32,
+/// then the patterns as a `Patt` block), when the header reads.
+fn pattern_section(bytes: &[u8]) -> Option<&[u8]> {
+    if bytes.get(2..6)? != b"8BSL" {
+        return None;
+    }
+    let len = usize::try_from(u32::from_be_bytes(bytes.get(8..12)?.try_into().ok()?)).ok()?;
+    bytes.get(12..12usize.checked_add(len)?)
+}
+
+/// [`read_asl`] with the file's patterns held to `limits`, inspected before they decode.
+pub fn read_asl_with(bytes: &[u8], limits: PatternFileLimits) -> Result<AslImport, String> {
+    if let Some(section) = pattern_section(bytes) {
+        let inspected = craft_psd::patterns::pattern_block_memory(section, &mut craft_psd::patterns::PatternBudget::default());
+        admit_patterns(inspected.iter().map(PatternCharge::inspected), limits)?;
+    }
     let file = asl::parse(bytes).map_err(|e| format!("not a readable style library (.asl): {e}"))?;
-    let mut out = AslImport { patterns: file.patterns.iter().filter_map(from_psd).collect(), ..Default::default() };
+    admit_patterns(file.patterns.iter().map(PatternCharge::of), limits)?;
+    let mut out = AslImport { patterns: convert_patterns(&file.patterns)?, ..Default::default() };
     if let Some(e) = &file.pattern_error {
         out.warnings.push(format!("the file's patterns could not be read and were skipped ({e})"));
     }
@@ -112,6 +137,8 @@ pub fn read_asl(bytes: &[u8]) -> Result<AslImport, String> {
     }
     let mut taken = Taken::default();
     let mut missing: BTreeSet<String> = BTreeSet::new();
+    let ids: HashSet<&str> = out.patterns.iter().map(|p| p.id.as_str()).collect();
+    let names: HashSet<&str> = out.patterns.iter().map(|p| p.name.as_str()).collect();
     for (i, s) in file.styles.iter().enumerate() {
         let base = if s.name.trim().is_empty() { format!("Style {}", i + 1) } else { s.name.trim().to_string() };
         let name = taken.unique(&base);
@@ -143,7 +170,8 @@ pub fn read_asl(bytes: &[u8]) -> Result<AslImport, String> {
             }
         }
         for (pname, pid) in referenced_patterns(&style.effects) {
-            if !out.patterns.iter().any(|p| if pid.is_empty() { p.name == pname } else { p.id == pid }) {
+            let embedded = if pid.is_empty() { names.contains(pname.as_str()) } else { ids.contains(pid.as_str()) };
+            if !embedded {
                 missing.insert(if pname.is_empty() { pid } else { pname });
             }
         }
@@ -208,6 +236,7 @@ pub fn write_asl(styles: &[AslStyle], patterns: &[Pattern]) -> Result<Vec<u8>, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pattern_map::MAX_FILE_PATTERNS;
     use craft_psd::descriptor::UnicodeString;
     use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
     use photocraft_doc::{BevelTexture, FxCommon, StrokePosition};
@@ -399,6 +428,80 @@ mod tests {
         assert_eq!(imp.styles.len(), asl::MAX_STYLES);
         assert_eq!(imp.styles[1].name, "A 2");
         assert_eq!(imp.styles.last().unwrap().name, format!("A {}", asl::MAX_STYLES));
+    }
+
+    /// A 1 × 1 RGBA pattern at `depth` bits: a few bytes in the file, a whole tile once imported.
+    fn dot(i: usize, depth: u16) -> craft_psd::patterns::PsdPattern {
+        let bytes = usize::from(depth / 8);
+        craft_psd::patterns::PsdPattern {
+            mode: 3,
+            width: 1,
+            height: 1,
+            name: format!("Dot {i}"),
+            id: format!("dot-{i}"),
+            palette: None,
+            depth,
+            channels: vec![vec![0x3f; bytes]; 3],
+            alpha: Some(vec![0x3f; bytes]),
+        }
+    }
+
+    fn library(patterns: Vec<craft_psd::patterns::PsdPattern>) -> Vec<u8> {
+        let style = asl::AslStyle { name: "S".into(), id: "x".into(), style: Descriptor::new("Styl").with("Lefx", Value::Descriptor(Descriptor::new("Lefx"))) };
+        asl::write(&AslFile { patterns, pattern_error: None, styles: vec![style] }).unwrap()
+    }
+
+    /// A style library's patterns are charged like a `.pat` file's, before they decode: four
+    /// 1 MiB float tiles are refused under a 3 MiB allowance, two are imported.
+    #[test]
+    fn style_library_patterns_are_refused_by_the_memory_their_tiles_take() {
+        let four: Vec<_> = (0..4).map(|i| dot(i, 32)).collect();
+        let small = PatternFileLimits { patterns: MAX_FILE_PATTERNS, bytes: 3 << 20 };
+        let error = read_asl_with(&library(four.clone()), small).unwrap_err();
+        assert!(error.contains("memory"), "{error}");
+        assert_eq!(read_asl_with(&library(four[..2].to_vec()), small).unwrap().patterns.len(), 2);
+        assert_eq!(read_asl(&library(four)).unwrap().patterns.len(), 4);
+    }
+
+    /// A library holds at most as many patterns as the pattern library keeps.
+    #[test]
+    fn style_libraries_with_too_many_patterns_are_refused() {
+        let many: Vec<_> = (0..=MAX_FILE_PATTERNS).map(|i| dot(i, 8)).collect();
+        let error = read_asl(&library(many)).unwrap_err();
+        assert!(error.contains("too many patterns"), "{error}");
+    }
+
+    /// A style with a long list of strokes, each naming its own pattern, imports in linear time:
+    /// patterns are looked up and de-duplicated through sets, not by scanning lists.
+    #[test]
+    fn a_style_with_many_distinct_pattern_strokes_imports_quickly() {
+        const N: usize = 50_000;
+        let stroke = |i: usize| {
+            Value::Descriptor(
+                Descriptor::new("FrFX")
+                    .with("enab", Value::Boolean(true))
+                    .with("PntT", Value::Enumerated { type_id: Id::new("FrFl"), value: Id::new("Ptrn") })
+                    .with(
+                        "Ptrn",
+                        Value::Descriptor(
+                            Descriptor::new("Ptrn")
+                                .with("Nm  ", Value::Text(UnicodeString::new_nul(&format!("P{i}"))))
+                                .with("Idnt", Value::Text(UnicodeString::new_nul(&format!("id-{i}")))),
+                        ),
+                    ),
+            )
+        };
+        let lefx = Descriptor::new("null").with("frameFXMulti", Value::List((0..N).map(stroke).collect()));
+        let style = Descriptor::new("Styl").with("Lefx", Value::Descriptor(lefx));
+        let file = AslFile { patterns: vec![dot(0, 8)], pattern_error: None, styles: vec![asl::AslStyle { name: "S".into(), id: "x".into(), style }] };
+        let bytes = asl::write(&file).unwrap();
+        let start = std::time::Instant::now();
+        let imp = read_asl(&bytes).unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+        assert_eq!(imp.styles[0].effects.len(), N);
+        assert_eq!(referenced_patterns(&imp.styles[0].effects).len(), N);
+        let missing = imp.warnings.iter().find(|w| w.contains("patterns not in the file")).unwrap();
+        assert!(missing.contains("P0") && missing.contains(&format!("P{}", N - 1)), "{}", &missing[..200]);
     }
 
     #[test]

@@ -488,3 +488,75 @@ fn dual_brush_spacing_comes_from_its_tip() {
     assert!((spacing(dual(tip.clone().with("Spcn", prc(10.0)))) - 0.10).abs() < 1e-6, "the tip's 10 %, not the outer 100 %");
     assert!((spacing(dual(tip)) - 1.0).abs() < 1e-6, "no tip spacing: the outer value");
 }
+
+fn indexed(width: u32, height: u32, depth: u16, idx: Vec<u8>) -> PsdPattern {
+    let palette = (0..768).map(|i| (i * 7 % 256) as u8).collect();
+    PsdPattern { mode: 2, width, height, name: "Indexed".into(), id: "idx".into(), palette: Some(palette), depth, channels: vec![idx], alpha: None }
+}
+
+/// An indexed pattern is read only at 8 bits with an index for every pixel: a packed 1-bit or
+/// a short plane stands in as the procedural texture instead of a tile sized by its header.
+#[test]
+fn indexed_patterns_need_eight_bit_indices_for_every_pixel() {
+    let valid = pattern_tile(&indexed(4, 2, 8, (0..8).collect())).unwrap();
+    assert_eq!((valid.width, valid.height), (4, 2));
+    assert!(pattern_tile(&indexed(4, 2, 1, vec![])).is_none(), "packed 1-bit indices");
+    assert!(pattern_tile(&indexed(4, 2, 1, vec![0xff; 2])).is_none(), "packed 1-bit indices, with data");
+    assert!(pattern_tile(&indexed(4, 2, 16, vec![0; 16])).is_none(), "16-bit indices");
+    assert!(pattern_tile(&indexed(4, 2, 8, vec![1; 4])).is_none(), "fewer indices than pixels");
+    let mut no_palette = indexed(4, 2, 8, (0..8).collect());
+    no_palette.palette = None;
+    assert!(pattern_tile(&no_palette).is_none());
+}
+
+/// Presets that name one embedded pattern share its texture tile, as they share a sampled tip,
+/// instead of decoding it once per preset.
+#[test]
+fn presets_naming_one_pattern_share_its_tile() {
+    let bytes = write_v6(2, &[sample("$tip-1", 4, 4, 8)], &[grit_pattern()], &[full_preset(), full_preset()], false).unwrap();
+    let imp = read_abr(&bytes, "Shared").unwrap();
+    assert_eq!(imp.presets.len(), 2);
+    let tile = |i: usize| match &imp.presets[i].brush.texture.pattern {
+        Pattern::Tile(t) => t.data.clone(),
+        other => panic!("embedded pattern expected, got {other:?}"),
+    };
+    assert!(std::sync::Arc::ptr_eq(&tile(0), &tile(1)), "one decode, shared by both presets");
+}
+
+/// Lookups by id, then by name, keep their first-match order once indexed: a pattern listed
+/// twice under one id or name resolves to the first, and a preset whose id matches nothing falls
+/// back to its name.
+#[test]
+fn pattern_lookup_keeps_first_match_by_id_then_name() {
+    let gray = |name: &str, id: &str, v: u8| PsdPattern {
+        mode: 1,
+        width: 1,
+        height: 1,
+        name: name.into(),
+        id: id.into(),
+        palette: None,
+        depth: 8,
+        channels: vec![vec![v]],
+        alpha: None,
+    };
+    let patterns = [gray("Grit", "other", 10), gray("Grit", "pat-uuid", 20), gray("Grit", "pat-uuid", 30), gray("Named", "", 40)];
+    let textured = |ptrn: Descriptor| {
+        Descriptor::new("brushPreset")
+            .with("Brsh", Value::Descriptor(Descriptor::new("computedBrush").with("Dmtr", u(b"#Pxl", 10.0))))
+            .with("useTexture", Value::Boolean(true))
+            .with("Txtr", Value::Descriptor(ptrn))
+    };
+    let presets = [
+        textured(Descriptor::new("Ptrn").with("Nm  ", t("Grit")).with("Idnt", t("pat-uuid"))),
+        textured(Descriptor::new("Ptrn").with("Nm  ", t("Grit")).with("Idnt", t("missing"))),
+        textured(Descriptor::new("Ptrn").with("Nm  ", t("Named"))),
+    ];
+    let bytes = write_v6(2, &[], &patterns, &presets, false).unwrap();
+    let imp = read_abr(&bytes, "Lookup").unwrap();
+    let first = |i: usize| match &imp.presets[i].brush.texture.pattern {
+        Pattern::Tile(t) => t.data[0],
+        other => panic!("embedded pattern expected, got {other:?}"),
+    };
+    let q = |v: u8| (f32::from(v) / 255.0 * 65535.0 + 0.5) as u16;
+    assert_eq!((first(0), first(1), first(2)), (q(20), q(10), q(40)));
+}

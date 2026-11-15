@@ -52,11 +52,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(IMPORT, "the file holds no styles"));
     }
     // Everything is checked: change the library.
-    let mut pattern_ids = Vec::new();
-    for pat in imp.patterns {
-        pattern_ids.push(pat.id.clone());
-        s.patterns.upsert(pat);
-    }
+    let pattern_ids = s.patterns.upsert_all(imp.patterns);
     let styles = &mut s.presets.styles;
     if replace {
         styles.retain(|g| g.name != group);

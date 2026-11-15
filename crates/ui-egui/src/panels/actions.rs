@@ -821,6 +821,12 @@ fn source(name: &str, bytes: &[u8]) -> Value {
     json!({"data": photocraft_engine::paint::tile::b64_encode(bytes)})
 }
 
+/// Steps of a loaded file with no PhotoCraft equivalent: `actions.load` lists the first ones and
+/// counts them all.
+fn unsupported_count(r: &Value) -> usize {
+    r["unsupportedCount"].as_u64().map_or_else(|| r["unsupported"].as_array().map_or(0, Vec::len), |n| usize::try_from(n).unwrap_or(usize::MAX))
+}
+
 /// Load a `.atn` file's bytes into the Actions panel (the panel menu's Load Actions…).
 pub fn load_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Result<Value, String> {
     load_source(app, name, source(name, bytes))
@@ -830,7 +836,7 @@ pub fn load_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Result<V
 fn load_source(app: &mut PhotocraftApp, name: &str, params: Value) -> Result<Value, String> {
     let r = app.run("actions.load", params)?;
     let n = r["actions"].as_array().map_or(0, Vec::len) as u64;
-    let unsupported = r["unsupported"].as_array().map_or(0, Vec::len);
+    let unsupported = unsupported_count(&r);
     let shown = crate::file_open::display_name(name);
     let loaded =
         crate::i18n::fmt(&crate::i18n::trn(crate::i18n::current(), n, "Loaded {n} action from {file}", "Loaded {n} actions from {file}"), &[("file", &shown)]);
@@ -895,7 +901,7 @@ fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
                     let shown = crate::file_open::display_name(&name);
                     let set = r["set"].as_str().unwrap_or_default().to_string();
                     let n = r["actions"].as_array().map_or(0, Vec::len);
-                    let unsupported = r["unsupported"].as_array().map_or(0, Vec::len);
+                    let unsupported = unsupported_count(&r);
                     if let Some(entry) = sets.iter_mut().find(|e| e.0 == set) {
                         replaced.push(crate::i18n::fmt(
                             tl!("{set} from {file} replaced the one from {earlier}"),
