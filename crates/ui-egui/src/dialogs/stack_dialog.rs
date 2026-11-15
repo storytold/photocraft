@@ -54,8 +54,17 @@ fn files(f: &Map<String, Value>) -> Vec<String> {
     f.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 
-fn selected(f: &Map<String, Value>) -> Option<usize> {
-    f.get("selected").and_then(Value::as_u64).map(|i| i as usize)
+/// The selected rows, in list order (#14004: the list is multi-select). A single index, as
+/// before, still reads as one row.
+fn selected(f: &Map<String, Value>) -> Vec<usize> {
+    let mut rows: Vec<usize> = match f.get("selected") {
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_u64).map(|i| i as usize).collect(),
+        Some(v) => v.as_u64().map(|i| vec![i as usize]).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    rows.sort_unstable();
+    rows.dedup();
+    rows
 }
 
 /// Add `paths` to the Files list, skipping those already in it, in their order.
@@ -152,9 +161,21 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             egui::ScrollArea::vertical().id_salt("load-stack-files").max_height(160.0).auto_shrink([false, false]).show(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                     for (i, p) in shown.iter().enumerate() {
-                        let row = ui.add(egui::Button::selectable(sel == Some(i), file_name(p))).on_hover_text(p.as_str());
+                        let row = ui.add(egui::Button::selectable(sel.contains(&i), file_name(p))).on_hover_text(p.as_str());
                         if row.clicked() {
-                            f.insert("selected".into(), json!(i));
+                            // A click selects one row; Ctrl+click (Cmd+click on the Mac) adds it to
+                            // the selection, or takes a selected row out again.
+                            let mut rows = sel.clone();
+                            if ui.input(|i| i.modifiers.command) {
+                                if let Some(at) = rows.iter().position(|r| *r == i) {
+                                    rows.remove(at);
+                                } else {
+                                    rows.push(i);
+                                }
+                            } else {
+                                rows = vec![i];
+                            }
+                            f.insert("selected".into(), json!(rows));
                         }
                     }
                 });
@@ -166,12 +187,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             if widgets::secondary_button(ui, tl!("Browse…"), 120.0).clicked() {
                 browse_now = true;
             }
-            let can_remove = sel.is_some_and(|i| i < files(f).len());
-            if ui.add_enabled_ui(can_remove, |ui| widgets::secondary_button(ui, tl!("Remove"), 120.0)).inner.clicked()
-                && let Some(i) = sel
-            {
-                let mut list = files(f);
-                list.remove(i);
+            // Remove takes out every selected row at once; the rest keep their order.
+            let count = files(f).len();
+            let can_remove = sel.iter().any(|i| *i < count);
+            if ui.add_enabled_ui(can_remove, |ui| widgets::secondary_button(ui, tl!("Remove"), 120.0)).inner.clicked() {
+                let list: Vec<String> = files(f).into_iter().enumerate().filter(|(i, _)| !sel.contains(i)).map(|(_, p)| p).collect();
                 f.insert("files".into(), json!(list));
                 f.remove("selected");
             }
@@ -242,3 +262,6 @@ mod add_open_files_tests;
 
 #[cfg(test)]
 mod folder_append_tests;
+
+#[cfg(test)]
+mod multi_select_tests;
