@@ -266,6 +266,15 @@ impl FlatBuilder {
 /// next to the layer, only the indices themselves (a byte per pixel) are held.
 fn png_color_indices(bytes: &[u8], doc: &Document) -> Option<ColorIndices> {
     let table = doc.color_table.as_ref()?;
+    // Only entries that share a colour need the file. When every entry has its own colour, each
+    // pixel's colour names its entry and Color Table's nearest entry finds it. Reading the file
+    // again is one pass over all its rows that neither a stepped import (the web build) splits
+    // up nor a cancel stops, so it is skipped when it can't add anything.
+    let mut colors = table.colors.clone();
+    colors.sort_unstable();
+    if !colors.windows(2).any(|w| w[0] == w[1]) {
+        return None;
+    }
     let [layer] = doc.layers.as_slice() else { return None };
     let surface = layer.surface()?;
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));

@@ -245,6 +245,19 @@ fn a_transparent_entry_keeps_its_index() {
 }
 
 #[test]
+fn a_palette_png_without_shared_colours_is_not_read_again() {
+    // Every entry its own colour: the colours already name the entries, so the open skips the
+    // second pass over the file, and Color Table still recolours by entry.
+    let png = photocraft_codecs::encode_png_indexed(3, 1, &[0, 1, 2], &[[0, 0, 0], [255, 255, 255], [0, 0, 255]], Some(0), None, None).unwrap();
+    let mut s = Session::new();
+    s.add_document(photocraft_io::import("unique.png", &png).unwrap().document, None);
+    assert!(s.active().unwrap().doc.color_indices.is_none());
+    s.execute("image.mode.colorTable", json!({"entries": {"1": "#00ff00"}})).unwrap();
+    let surf = s.active().unwrap().doc.layers[0].surface().unwrap();
+    assert_eq!([0, 1, 2].map(|x| surf.rgba(x, 0)), [[0.0; 4], GREEN, BLUE]);
+}
+
+#[test]
 fn a_turned_palette_png_records_no_indices() {
     // EXIF orientation 2 (mirrored): the file's indices aren't where its pixels open, and with
     // two white entries the colours can't show it.

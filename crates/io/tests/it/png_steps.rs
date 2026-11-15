@@ -42,11 +42,13 @@ fn assert_same(a: &Document, b: &Document, what: &str) {
     let (mut a, mut b) = (a.clone(), b.clone());
     b.id = a.id;
     assert_eq!(a.layers.len(), b.layers.len(), "{what}");
+    // The indices' layer maps along with the layers, so indices naming no layer still differ.
+    let indices_layer = b.color_indices.as_ref().and_then(|c| b.layers.iter().zip(&a.layers).find(|(y, _)| y.id == c.layer)).map(|(_, x)| x.id);
+    if let (Some(c), Some(id)) = (b.color_indices.as_mut(), indices_layer) {
+        c.layer = id;
+    }
     for (x, y) in a.layers.iter_mut().zip(&mut b.layers) {
         y.id = x.id;
-    }
-    if let (Some(x), Some(y)) = (&a.color_indices, b.color_indices.as_mut()) {
-        y.layer = x.layer;
     }
     assert!(a == b, "{what}: the documents differ");
 }
