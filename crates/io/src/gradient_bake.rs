@@ -197,7 +197,9 @@ pub fn bake_source(src: &photocraft_doc::adjust::GradientSource) -> Vec<(f32, [f
 /// already interpolates linearly in sRGB.
 pub fn bake(stops: Vec<(f32, Color)>, midpoints: &[f32], smoothness: f32, method: Method) -> Vec<(f32, Color)> {
     if method == Method::Stripes {
-        return stripes(stops);
+        // Only two opaque colour stops are the measured case (#12004); more colours, or opacity merged
+        // into the stops, were not and keep the straight stops.
+        return if stops.len() == 2 && stops.iter().all(|(_, c)| c.alpha >= 1.0) { stripes(stops) } else { stops };
     }
     let plain_mids = midpoints.iter().all(|m| (m - 0.5).abs() < 1e-3);
     // Classic interpolates in the stops' own model: Lab stops (Lab documents) blend in L*a*b*, which the
@@ -209,8 +211,14 @@ pub fn bake(stops: Vec<(f32, Color)>, midpoints: &[f32], smoothness: f32, method
     let mut s = stops;
     s.sort_by(|a, b| a.0.total_cmp(&b.0));
     let alpha = |t: f32| -> f32 {
-        // Stop colours carry no alpha in Photoshop (opacity has its own stops); keep the nearest.
-        s.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())).map_or(1.0, |x| x.1.alpha)
+        // Stop colours carry no alpha in Photoshop (opacity has its own stops), so a stop list from a
+        // file is opaque. Opacity merged into the stops (`paint.gradient`) stays linear between them,
+        // as the straight stops had it: the nearest stop's alpha made a staircase of the ramp.
+        let Some(i) = s.iter().position(|x| x.0 >= t) else { return s.last().map_or(1.0, |x| x.1.alpha) };
+        let Some(prev) = i.checked_sub(1).and_then(|k| s.get(k)) else { return s[i].1.alpha };
+        let (a, b) = (prev, &s[i]);
+        let h = b.0 - a.0;
+        if h > 1e-9 { a.1.alpha + (b.1.alpha - a.1.alpha) * ((t - a.0) / h).clamp(0.0, 1.0) } else { b.1.alpha }
     };
     let pts: Vec<(f32, [f32; 3])> = s.iter().map(|(t, c)| (*t, if lab { [c.c[0], c.c[1], c.c[2]] } else { into_space(method, c.to_rgb()) })).collect();
     const N: usize = 96;

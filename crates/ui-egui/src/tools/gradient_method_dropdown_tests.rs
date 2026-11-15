@@ -142,3 +142,38 @@ fn an_unknown_method_keeps_straight_stops_and_never_panics() {
         let _ = a.run("paint.gradient", json!({"from": [100, 300], "to": [700, 300], "method": bad}));
     }
 }
+
+/// Alpha of the pixel at `x`, 300, on a transparent layer painted by `params`.
+fn alpha_at(params: serde_json::Value, x: i32) -> f32 {
+    let mut a = app();
+    a.run("layer.new.layer", json!({})).unwrap();
+    a.run("paint.gradient", params).unwrap();
+    let st = a.session.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, 300)[3]
+}
+
+/// CodeRabbit on #15017: a Classic drag keeps a Foreground to Transparent ramp linear. Baking the
+/// merged stops gave each sample the alpha of its nearest stop, a four-level staircase.
+#[test]
+fn a_classic_drag_with_transparency_keeps_the_alpha_linear() {
+    let base = json!({"from": [100, 300], "to": [700, 300], "method": "classic", "dither": false, "transparency": [[0, 100], [1, 0]]});
+    for x in [175, 220, 250, 340, 520] {
+        let t = (x as f32 + 0.5 - 100.0) / 600.0;
+        let a = alpha_at(base.clone(), x);
+        assert!((a - (1.0 - t)).abs() < 0.02, "x {x}: alpha {a} vs linear {}", 1.0 - t);
+    }
+}
+
+/// CodeRabbit on #15017: only two opaque colour stops are the measured Stripes case. More colours,
+/// or transparency, keep today's straight stops.
+#[test]
+fn stripes_beyond_two_opaque_stops_keep_the_straight_stops() {
+    let mut a = app();
+    a.run("paint.gradient", json!({"from": [100, 300], "to": [700, 300], "method": "stripes", "dither": false, "colors": ["#000000", "#ff0000", "#ffffff"]}))
+        .unwrap();
+    // Straight stops: black to red over the first half, so x 250 (t = 0.25) is half way to red.
+    assert!((red(&a, 250) - 127).abs() <= 2, "straight: {}", red(&a, 250));
+    let t = (175.5 - 100.0) / 600.0;
+    let alpha = alpha_at(json!({"from": [100, 300], "to": [700, 300], "method": "stripes", "dither": false, "transparency": [[0, 100], [1, 0]]}), 175);
+    assert!((alpha - (1.0 - t)).abs() < 0.02, "straight alpha: {alpha}");
+}
