@@ -16,7 +16,7 @@ use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, apply_liquify, apply
 use photocraft_algo::perspective::{PerspectiveMap, Plane, Straighten, straighten};
 use photocraft_algo::puppet::{PuppetDensity, PuppetMesh, PuppetMode, PuppetPin, PuppetWarp, puppet_warp, puppet_warp_with_mask_with, warp_with_mesh};
 use photocraft_algo::transform::Interp;
-use photocraft_algo::warp::{Fold, warp_mesh_gray, warp_mesh_surface, warp_mesh_surface_with};
+use photocraft_algo::warp::{Fold, warp_mesh_gray_ctl, warp_mesh_surface_with};
 use photocraft_color::PixelFormat;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Locks, SmartFilter};
 use photocraft_geom::Rect;
@@ -513,12 +513,17 @@ fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     }
     let it = interp(p);
     let map = PerspectiveMap::new(&planes);
-    let mask_fn: MaskFn = Some(Box::new(move |m, sel, _| {
+    let mask_fn: MaskFn = Some(Box::new(move |m, sel, ctl| {
         let Some(map) = &map else { return Ok(m.clone()) };
         let f = |x, y| map.map(x, y);
-        let whole = |m: &Surface| Ok(warp_mesh_gray(m, &f, Interp::Bilinear));
+        let whole = |m: &Surface| warp_mesh_gray_ctl(m, &f, Fold::Rows, Interp::Bilinear, ctl).ok_or(EngineError::Cancelled);
         match sel {
-            Some(sel) => crate::transform_cmds::move_gray_selected(m, sel, &|lifted, src| Ok(warp_mesh_surface(lifted, src, &f, Interp::Bilinear)), &whole),
+            Some(sel) => crate::transform_cmds::move_gray_selected(
+                m,
+                sel,
+                &|lifted, src| warp_mesh_surface_with(lifted, src, &f, Fold::Rows, Interp::Bilinear, ctl).ok_or(EngineError::Cancelled),
+                &whole,
+            ),
             None => whole(m),
         }
     }));
