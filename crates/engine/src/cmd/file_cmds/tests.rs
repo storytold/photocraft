@@ -4657,7 +4657,7 @@ fn embedded_open_document_batch_restores_the_callers_namespace_on_every_exit() {
         s.actions.playback_stack.push(PlaybackTarget::from("Enclosing"));
         let stack = s.actions.playback_stack.clone();
         let leaf = if outcome == "step_error" {
-            Action::new("Embedded", vec![("layer.rename".into(), json!({}))])
+            Action::new("Embedded", vec![("layer.renameLayer".into(), json!({"name":false}))])
         } else {
             Action::new("Embedded", vec![("layer.new.layer".into(), json!({"name":"embedded leaf"}))])
         };
@@ -4671,6 +4671,8 @@ fn embedded_open_document_batch_restores_the_callers_namespace_on_every_exit() {
             "step_error" => {
                 let result = result.unwrap();
                 assert_eq!(result["errors"].as_array().unwrap().len(), 1, "the embedded command must actually fail: {result}");
+                let error = result["errors"][0]["error"].as_str().unwrap();
+                assert!(error.contains("layer.renameLayer") && error.contains("missing `name`"), "the registered leaf must execute, not fail command preflight: {error}");
             }
             "no_document" => assert!(matches!(result, Err(EngineError::NoDocument))),
             _ => unreachable!(),
