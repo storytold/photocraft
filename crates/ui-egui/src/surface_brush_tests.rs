@@ -146,7 +146,7 @@ fn estimate_depth_with_an_unset_tool_opens_the_missing_model_window() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app(Tool::Brush);
     app.session.depth.ai.set_host(empty_host(dir.path()));
-    let reason = app.session.depth.ai.status_reason().expect("nothing is set up");
+    let reason = app.session.depth.ai.status_reason_now().expect("nothing is set up");
     assert_eq!(crate::dialogs::depth_ui::unavailable_reason(&app), Some(reason));
     crate::dialogs::depth_ui::start(&mut app);
     assert_eq!(crate::dialogs::depth_ui::inspect(&app)["phase"], "loading");

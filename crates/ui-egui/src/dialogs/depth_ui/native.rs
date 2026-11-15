@@ -227,8 +227,16 @@ pub fn start(app: &mut PhotocraftApp) {
         app.ui.status_error = true;
         return;
     };
+    // A window already open keeps its setup (its download, its choices): replacing it would drop
+    // a running download without stopping it. A failed one has nothing running and is replaced.
+    if let Some(w) = &app.depth_ai.window {
+        if !matches!(w.stage, Stage::Failed) {
+            return;
+        }
+        cancel(app);
+    }
     let ask = Ask::now(app);
-    if app.session.depth.ai.status_reason().is_none() {
+    if app.session.depth.ai.status_reason_now().is_none() {
         estimate(app, &ask);
         return;
     }
@@ -346,8 +354,8 @@ fn apply(app: &mut PhotocraftApp, msg: Msg) -> Option<Ask> {
 /// leave nothing running.
 fn finish(app: &mut PhotocraftApp, current: Option<DocId>) -> Option<Ask> {
     let w = app.depth_ai.window.as_mut()?;
-    if app.session.depth.ai.status_reason().is_some() {
-        w.error = Some(app.session.depth.ai.status_reason().unwrap_or_default());
+    if let Some(reason) = app.session.depth.ai.status_reason_now() {
+        w.error = Some(reason);
         w.stage = Stage::Failed;
         return None;
     }
@@ -489,16 +497,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     match act {
         Act::None => {}
         Act::Close => cancel(app),
-        Act::Back => {
-            if let Some(w) = app.depth_ai.window.as_mut() {
-                if let Stage::Setup(session) = &mut w.stage {
-                    session.cancel();
-                }
-                w.stage = Stage::Loading;
-                w.started = false;
-                w.error = None;
-            }
-        }
+        Act::Back => go_back(app),
         Act::Choose(connection, model) => {
             if let Some(w) = app.depth_ai.window.as_mut() {
                 w.working = true;
@@ -542,6 +541,24 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         }
         Act::Setup(action) => setup_action(app, ctx, *action),
+    }
+}
+
+/// Back from the setup screen to the first one: stops the download and starts reading again. The
+/// answers channel is replaced, so a worker still running from before (a plan, a choice, an
+/// adoption) sends into a channel nobody reads and cannot move this window to a stale screen.
+fn go_back(app: &mut PhotocraftApp) {
+    if let Some(w) = app.depth_ai.window.as_mut() {
+        if let Stage::Setup(session) = &mut w.stage {
+            session.cancel();
+        }
+        let (tx, rx) = mpsc::channel();
+        w.tx = tx;
+        w.rx = rx;
+        w.working = false;
+        w.stage = Stage::Loading;
+        w.started = false;
+        w.error = None;
     }
 }
 
@@ -652,6 +669,58 @@ mod tests {
         }
         assert!(apply(&mut app, Msg::Chosen(Ok(()))).is_some());
         assert!(app.depth_ai.window.is_none());
+    }
+
+    /// A second Estimate Depth while a download runs keeps the window and its download.
+    #[test]
+    fn a_second_start_keeps_the_running_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app(dir.path());
+        start(&mut app);
+        let host = app.depth_ai.window.as_ref().map(|w| w.host.clone()).unwrap();
+        let plan = prepare(&host, "candle", Folder::Destination(dir.path().join("models"))).expect("a setup plan");
+        let mut session = SetupSession::new(plan);
+        session.accept_licences(true);
+        let _request = session.start().expect("the download starts");
+        assert!(session.busy());
+        if let Some(w) = app.depth_ai.window.as_mut() {
+            w.stage = Stage::Setup(Box::new(session));
+            w.provider = Some("candle".into());
+        }
+        let started_on = active_doc(&app);
+        // Another document, and the button again.
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        start(&mut app);
+        let w = app.depth_ai.window.as_ref().expect("the window is kept");
+        assert_eq!(Some(w.doc), started_on, "still bound to the document that asked");
+        assert_eq!(w.provider.as_deref(), Some("candle"));
+        assert!(matches!(&w.stage, Stage::Setup(s) if s.busy()), "the download was not dropped");
+        // A failed window has nothing running and is replaced.
+        if let Some(w) = app.depth_ai.window.as_mut() {
+            w.stage = Stage::Failed;
+        }
+        start(&mut app);
+        assert_eq!(inspect(&app)["phase"], "loading");
+    }
+
+    /// An answer from a worker started before Back cannot reach the window.
+    #[test]
+    fn an_answer_from_before_back_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app(dir.path());
+        start(&mut app);
+        let stale = app.depth_ai.window.as_ref().map(|w| w.tx.clone()).unwrap();
+        if let Some(w) = app.depth_ai.window.as_mut() {
+            w.stage = Stage::Planning;
+            w.working = true;
+        }
+        go_back(&mut app);
+        let w = app.depth_ai.window.as_ref().unwrap();
+        assert!(!w.working);
+        assert_eq!(inspect(&app)["phase"], "loading");
+        // The stale worker's answer goes nowhere, and nothing is waiting in the window's channel.
+        assert!(stale.send(Msg::Failed("stale".into())).is_err());
+        assert!(matches!(app.depth_ai.window.as_ref().unwrap().rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[test]

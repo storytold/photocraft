@@ -7,11 +7,12 @@
 //! Set up AI flow (the launcher, or the app's own screen over the same pieces).
 
 use std::io::Cursor;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use craft_ai_client::{AiClient, AppTools, RoleStatus};
-use craft_ai_core::{AppId, ConsentLedger, InputRole, Payload};
+use craft_ai_client::{AiClient, AppTools, Job, RoleStatus};
+use craft_ai_core::{AppId, ConsentLedger, Event, InputRole, JobState, Locality, Output, Payload};
 use craft_ai_native::shared::SharedStore;
 use serde_json::json;
 
@@ -25,6 +26,9 @@ pub const TOOL: &str = "estimate-depth";
 const APP: &str = "photocraft";
 /// The longest the tool may take before it is stopped.
 const LIMIT: Duration = Duration::from_secs(10 * 60);
+/// How often a job on this computer is looked at (an online one once a second).
+const LOCAL_STEP: Duration = Duration::from_millis(15);
+const REMOTE_STEP: Duration = Duration::from_secs(1);
 /// How often a waiting job looks at its cancel flag.
 const CANCEL_TICK: Duration = Duration::from_millis(30);
 /// How long a status answer is reused, so enabling checks do not read the shared store each frame.
@@ -74,19 +78,70 @@ impl AiHost {
     }
 }
 
-/// What the session keeps of the AI layer, behind locks so a `&Session` (the `enabled` checks) can
-/// create it lazily.
+/// What the session keeps of the AI layer. Shared behind an `Arc` so the background status refresh
+/// can write its answer; the locks let a `&Session` (the `enabled` checks) create things lazily.
 #[derive(Default)]
 pub struct AiState {
     /// Replaces the tool when set (tests).
     pub estimator: Option<Estimator>,
+    inner: Arc<Inner>,
+}
+
+#[derive(Default)]
+struct Inner {
     host: Mutex<Option<AiHost>>,
     tools: Mutex<Option<Arc<AppTools>>>,
     status: Mutex<Option<(web_time::Instant, Option<String>)>>,
+    /// Bumped when the cached status is forgotten, so a refresh that began before is not stored.
+    epoch: AtomicU64,
+    /// A background refresh is running (at most one at a time).
+    refreshing: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Said while the first status answer is being read in the background.
+const CHECKING: &str = "Checking Estimate Depth\u{2026}";
+
+impl Inner {
+    fn host(&self) -> std::result::Result<AiHost, String> {
+        lock(&self.host).clone().ok_or_else(|| "Estimate Depth is not set up in this frontend".to_owned())
+    }
+
+    fn tools(&self) -> std::result::Result<Arc<AppTools>, String> {
+        let mut slot = lock(&self.tools);
+        if let Some(tools) = slot.as_ref() {
+            return Ok(tools.clone());
+        }
+        let tools = Arc::new(AppTools::with_client(self.host()?.client()?));
+        *slot = Some(tools.clone());
+        Ok(tools)
+    }
+
+    /// Reads the shared store, the key store and the model files: slow, never on the UI thread
+    /// per frame.
+    fn compute(&self) -> Option<String> {
+        match self.tools() {
+            Err(e) => Some(e),
+            Ok(tools) => match tools.status(TOOL) {
+                RoleStatus::Ready(_) => None,
+                RoleStatus::Unavailable { reason } => Some(reason),
+            },
+        }
+    }
+
+    /// Computes the status and keeps it, unless it was forgotten meanwhile.
+    fn refresh(&self) -> Option<String> {
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        let reason = self.compute();
+        let mut slot = lock(&self.status);
+        if self.epoch.load(Ordering::SeqCst) == epoch {
+            *slot = Some((web_time::Instant::now(), reason.clone()));
+        }
+        reason
+    }
 }
 
 impl AiState {
@@ -94,7 +149,7 @@ impl AiState {
     /// nothing reads a person's AI settings unless a frontend asks for it with
     /// [`use_standard_host`](Self::use_standard_host).
     pub fn host(&self) -> std::result::Result<AiHost, String> {
-        lock(&self.host).clone().ok_or_else(|| "Estimate Depth is not set up in this frontend".to_owned())
+        self.inner.host()
     }
 
     /// Uses the person's real shared AI store (`CRAFT_AI_DIR` moves it). The desktop app and the
@@ -106,49 +161,70 @@ impl AiState {
 
     /// Uses `host` instead of the real store (tests). Forgets the tools and the cached status.
     pub fn set_host(&self, host: AiHost) {
-        *lock(&self.host) = Some(host);
-        *lock(&self.tools) = None;
+        *lock(&self.inner.host) = Some(host);
+        *lock(&self.inner.tools) = None;
         self.forget_status();
     }
 
     /// The tools view over the host, made on first use. A failure is not kept, so a later call
     /// tries again.
     pub fn tools(&self) -> std::result::Result<Arc<AppTools>, String> {
-        let mut slot = lock(&self.tools);
-        if let Some(tools) = slot.as_ref() {
-            return Ok(tools.clone());
-        }
-        let tools = Arc::new(AppTools::with_client(self.host()?.client()?));
-        *slot = Some(tools.clone());
-        Ok(tools)
+        self.inner.tools()
     }
 
-    /// Why Estimate Depth cannot run now, in words for the person, or `None` when it can. Reused
-    /// for a second; call [`forget_status`](Self::forget_status) after setup to see a change at once.
+    /// Why Estimate Depth cannot run now, in words for the person, or `None` when it can. Never
+    /// blocks: it returns the last answer at once and, when that is older than a second, reads the
+    /// store again on a background thread. Before the first answer it says the tool is being
+    /// checked. For a decision that must be right (running the command), use
+    /// [`status_reason_now`](Self::status_reason_now).
     pub fn status_reason(&self) -> Option<String> {
         if self.estimator.is_some() {
             return None;
         }
-        let now = web_time::Instant::now();
-        if let Some((at, reason)) = lock(&self.status).as_ref()
-            && now.duration_since(*at) < STATUS_TTL
-        {
-            return reason.clone();
+        let known = lock(&self.inner.status).clone();
+        match known {
+            Some((at, reason)) => {
+                if web_time::Instant::now().duration_since(at) >= STATUS_TTL {
+                    self.refresh_in_background();
+                }
+                reason
+            }
+            None => {
+                self.refresh_in_background();
+                Some(CHECKING.to_owned())
+            }
         }
-        let reason = match self.tools() {
-            Err(e) => Some(e),
-            Ok(tools) => match tools.status(TOOL) {
-                RoleStatus::Ready(_) => None,
-                RoleStatus::Unavailable { reason } => Some(reason),
-            },
-        };
-        *lock(&self.status) = Some((now, reason.clone()));
-        reason
     }
 
-    /// Drops the cached status.
+    /// As [`status_reason`](Self::status_reason) but reads the store now, on this thread, and keeps
+    /// the answer. For a person's action, not for a frame.
+    pub fn status_reason_now(&self) -> Option<String> {
+        if self.estimator.is_some() {
+            return None;
+        }
+        self.inner.refresh()
+    }
+
+    /// Starts one background refresh unless one is already running.
+    fn refresh_in_background(&self) {
+        if self.inner.refreshing.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let inner = self.inner.clone();
+        let started = std::thread::Builder::new().name("photocraft-depth-status".into()).spawn(move || {
+            // A panic in the shared layer must not leave `refreshing` set for good.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inner.refresh()));
+            inner.refreshing.store(false, Ordering::SeqCst);
+        });
+        if started.is_err() {
+            self.inner.refreshing.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// Drops the cached status; the next [`status_reason`](Self::status_reason) reads it again.
     pub fn forget_status(&self) {
-        *lock(&self.status) = None;
+        self.inner.epoch.fetch_add(1, Ordering::SeqCst);
+        *lock(&self.inner.status) = None;
     }
 
     /// What a job calls: send `png` (`w` x `h`) and get the gray PNG back.
@@ -176,29 +252,59 @@ fn call_tool(tools: &AppTools, ctx: &JobCtx, png: Vec<u8>, quality: Quality) -> 
     if plan.needs_consent(&ledger) {
         return Err(bad("The chosen model for Estimate Depth needs your agreement first. Use Estimate Depth from the brush settings in the app to review it."));
     }
-    let canceller = tools.canceller();
-    let outputs = std::thread::scope(|scope| {
-        let worker = scope.spawn(|| tools.run_for(&plan, &ledger, LIMIT));
-        while !worker.is_finished() {
-            if ctx.cancelled() {
-                // Asked again every tick: the job may not have been listed yet the first time.
-                let _ = canceller.cancel();
-            }
-            std::thread::sleep(CANCEL_TICK);
-        }
-        worker.join().unwrap_or_else(|_| Err("Estimate Depth stopped unexpectedly".to_owned()))
-    });
+    // This job's own handle: cancelling it must not stop another document's estimate, which the
+    // session's shared tools may be waiting for at the same time.
+    let job = tools.client().start(&plan, &ledger).map_err(|e| bad(e.message))?;
+    let step = match plan.disclosure().locality {
+        Locality::Remote => REMOTE_STEP,
+        Locality::Local => LOCAL_STEP,
+    };
+    let done = wait_cancellable(|| ctx.cancelled(), || job.cancel().is_ok(), || job.wait(step, LIMIT))
+        .unwrap_or_else(|| Err(craft_ai_core::AiError::invalid("Estimate Depth stopped unexpectedly")));
     if ctx.cancelled() {
         return Err(EngineError::Cancelled);
     }
-    let outputs = outputs.map_err(bad)?;
-    outputs
+    // A wait that ended without the job ending asks it to stop; say so when it would not.
+    let done =
+        done.map_err(|e| if stopped(&job) { bad(e.message) } else { bad(format!("{} It could not be stopped, so it may still be running.", e.message)) })?;
+    match done.state {
+        JobState::Succeeded => {}
+        JobState::Failed { error } => return Err(bad(error.message)),
+        JobState::Cancelled => return Err(EngineError::Cancelled),
+        _ => return Err(bad("The job did not finish.")),
+    }
+    done.events
         .into_iter()
-        .find_map(|o| match o.payload {
-            Payload::Inline { media_type, data } if media_type.as_str() == "image/png" => Some(data),
+        .find_map(|e| match e {
+            Event::Output(Output { payload: Payload::Inline { media_type, data }, .. }) if media_type.as_str() == "image/png" => Some(data),
             _ => None,
         })
         .ok_or_else(|| bad("Estimate Depth returned no picture"))
+}
+
+/// True when `job` stopped or had already ended after its wait gave up.
+fn stopped(job: &Job) -> bool {
+    match job.cancel() {
+        Ok(()) => true,
+        Err(_) => job.poll().is_ok_and(|snap| snap.state.is_terminal()),
+    }
+}
+
+/// Runs `wait` on a worker thread and, while it runs, calls `cancel` every tick once `cancelled`
+/// says so (asked again each tick: the job may not have been known to the service the first time).
+/// `cancel` belongs to the one job `wait` waits for, never to a shared list of jobs. `None` when
+/// the worker panicked.
+fn wait_cancellable<T: Send>(cancelled: impl Fn() -> bool + Sync, cancel: impl Fn() -> bool + Sync, wait: impl FnOnce() -> T + Send) -> Option<T> {
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(wait);
+        while !worker.is_finished() {
+            if cancelled() {
+                let _ = cancel();
+            }
+            std::thread::sleep(CANCEL_TICK);
+        }
+        worker.join().ok()
+    })
 }
 
 /// Encode interleaved 8-bit RGB as a PNG (size-checked against the layer's inline limit).
@@ -268,4 +374,70 @@ pub(crate) fn encode_gray16(data: &[u16], w: u32, h: u32) -> Vec<u8> {
     writer.write_image_data(&bytes).unwrap();
     drop(writer);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use super::*;
+
+    /// A job as the wait sees it: it ends when released or when asked to stop, and counts the stops.
+    struct Fake {
+        release: AtomicBool,
+        stop: AtomicBool,
+        stops: AtomicUsize,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            Self { release: AtomicBool::new(false), stop: AtomicBool::new(false), stops: AtomicUsize::new(0) }
+        }
+
+        fn wait(&self) -> &'static str {
+            loop {
+                if self.stop.load(Ordering::SeqCst) {
+                    return "stopped";
+                }
+                if self.release.load(Ordering::SeqCst) {
+                    return "done";
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        fn cancel(&self) -> bool {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+            self.stop.store(true, Ordering::SeqCst);
+            true
+        }
+    }
+
+    /// Cancelling one document's estimate stops only that one while another keeps running.
+    #[test]
+    fn cancelling_one_wait_leaves_a_concurrent_one_running() {
+        let (a, b) = (Fake::new(), Fake::new());
+        let (cancel_a, cancel_b) = (AtomicBool::new(false), AtomicBool::new(false));
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| wait_cancellable(|| cancel_a.load(Ordering::SeqCst), || a.cancel(), || a.wait()));
+            let second = scope.spawn(|| wait_cancellable(|| cancel_b.load(Ordering::SeqCst), || b.cancel(), || b.wait()));
+            std::thread::sleep(Duration::from_millis(100));
+            cancel_a.store(true, Ordering::SeqCst);
+            assert_eq!(first.join().unwrap(), Some("stopped"));
+            // The other job was never asked to stop and still runs.
+            std::thread::sleep(Duration::from_millis(150));
+            assert!(!second.is_finished());
+            assert_eq!(b.stops.load(Ordering::SeqCst), 0);
+            b.release.store(true, Ordering::SeqCst);
+            assert_eq!(second.join().unwrap(), Some("done"));
+        });
+        assert!(a.stops.load(Ordering::SeqCst) >= 1);
+        assert_eq!(b.stops.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_panicking_wait_is_none() {
+        let done: Option<u8> = wait_cancellable(|| false, || true, || -> u8 { std::panic::panic_any("boom") });
+        assert_eq!(done, None);
+    }
 }

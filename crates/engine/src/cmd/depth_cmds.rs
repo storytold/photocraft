@@ -15,7 +15,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-use crate::channel_cmds::{channel_format, plane_surface};
+use crate::channel_cmds::channel_format;
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
@@ -161,36 +161,91 @@ fn fit(w: usize, h: usize, max_side: usize) -> (usize, usize) {
     (((w as f64 * scale).round() as usize).max(1), ((h as f64 * scale).round() as usize).max(1))
 }
 
-/// Bilinear resize of one plane (pixel centres aligned).
-fn resize_plane(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f32> {
-    if (sw, sh) == (dw, dh) {
-        return src.to_vec();
-    }
-    if sw == 0 || sh == 0 || src.len() < sw * sh {
-        return vec![0.0; dw * dh];
-    }
-    let (fx, fy) = (sw as f32 / dw as f32, sh as f32 / dh as f32);
-    let xs: Vec<(usize, usize, f32)> = (0..dw)
+/// Column taps of a bilinear resize from `sw` to `dw` columns: (left, right, weight).
+fn column_taps(sw: usize, dw: usize) -> Vec<(usize, usize, f32)> {
+    let fx = sw as f32 / dw as f32;
+    (0..dw)
         .map(|x| {
-            let u = ((x as f32 + 0.5) * fx - 0.5).clamp(0.0, (sw - 1) as f32);
+            let u = ((x as f32 + 0.5) * fx - 0.5).clamp(0.0, sw.saturating_sub(1) as f32);
             let x0 = u.floor() as usize;
-            (x0, (x0 + 1).min(sw - 1), u - x0 as f32)
+            (x0, (x0 + 1).min(sw.saturating_sub(1)), u - x0 as f32)
         })
-        .collect();
-    let mut out = Vec::with_capacity(dw * dh);
-    for y in 0..dh {
+        .collect()
+}
+
+/// Rows `rows` of the bilinear resize of one plane (pixel centres aligned), appended to `out`.
+/// `taps` is [`column_taps`]`(sw, dw)`. A source that is too small gives zeros.
+fn resize_rows(
+    src: &[f32],
+    (sw, sh): (usize, usize),
+    (dw, dh): (usize, usize),
+    taps: &[(usize, usize, f32)],
+    rows: std::ops::Range<usize>,
+    out: &mut Vec<f32>,
+) {
+    if sw == 0 || sh == 0 || src.len() < sw.saturating_mul(sh) {
+        out.resize(out.len() + dw * rows.len(), 0.0);
+        return;
+    }
+    let fy = sh as f32 / dh as f32;
+    for y in rows {
         let v = ((y as f32 + 0.5) * fy - 0.5).clamp(0.0, (sh - 1) as f32);
         let y0 = v.floor() as usize;
         let y1 = (y0 + 1).min(sh - 1);
         let wy = v - y0 as f32;
-        let (r0, r1) = (&src[y0 * sw..(y0 + 1) * sw], &src[y1 * sw..(y1 + 1) * sw]);
-        out.extend(xs.iter().map(|&(x0, x1, wx)| {
+        let (Some(r0), Some(r1)) = (src.get(y0 * sw..(y0 + 1) * sw), src.get(y1 * sw..(y1 + 1) * sw)) else {
+            out.resize(out.len() + dw, 0.0);
+            continue;
+        };
+        out.extend(taps.iter().map(|&(x0, x1, wx)| {
             let a = r0[x0] + (r0[x1] - r0[x0]) * wx;
             let b = r1[x0] + (r1[x1] - r1[x0]) * wx;
             a + (b - a) * wy
         }));
     }
+}
+
+/// Bilinear resize of one plane (pixel centres aligned).
+fn resize_plane(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f32> {
+    if (sw, sh) == (dw, dh) {
+        return src.to_vec();
+    }
+    let mut out = Vec::with_capacity(dw * dh);
+    resize_rows(src, (sw, sh), (dw, dh), &column_taps(sw, dw), 0..dh, &mut out);
     out
+}
+
+/// Rows of the channel written per band (the document-size plane is never held whole).
+const BAND_ROWS: usize = 128;
+
+/// The channel surface for `rect` made from the refined grid `refined` (`rw` x `rh`) stretched to
+/// the document, one band of rows at a time: the same values as `plane_surface` of
+/// `resize_plane(..)` without a document-size float plane.
+fn refined_surface(refined: &[f32], (rw, rh): (usize, usize), rect: Rect, fmt: photocraft_color::PixelFormat) -> Surface {
+    let (w, h) = (rect.width() as usize, rect.height() as usize);
+    let mut surface = Surface::new(fmt);
+    let taps = column_taps(rw, w.max(1));
+    let mut band = Vec::with_capacity(w * BAND_ROWS.min(h));
+    let mut y = 0;
+    while y < h {
+        let end = (y + BAND_ROWS).min(h);
+        band.clear();
+        if (rw, rh) == (w, h) {
+            band.extend_from_slice(refined.get(y * w..end * w).unwrap_or(&[]));
+            band.resize(w * (end - y), 0.0);
+        } else {
+            resize_rows(refined, (rw, rh), (w, h), &taps, y..end, &mut band);
+        }
+        for v in &mut band {
+            *v = v.clamp(0.0, 1.0);
+        }
+        // `y` is below `h`, which fits the document's `i32` bounds.
+        let (y0, y1) = (rect.y0.saturating_add(y as i32), rect.y0.saturating_add(end as i32));
+        surface.write_region(Rect::new(rect.x0, y0, rect.x1, y1), &band);
+        y = end;
+    }
+    surface.prune();
+    surface
 }
 
 fn channel_name(p: &Value) -> Result<String> {
@@ -268,9 +323,7 @@ fn read_image(doc: &Document, ctx: &crate::jobs::JobCtx) -> Result<(Reduced, Red
 
 /// What an estimate produced.
 struct Estimated {
-    /// The depth at document size (0..1).
-    plane: Vec<f32>,
-    /// The refined plane before it was stretched to the document, and its size.
+    /// The refined plane (0..1), before it is stretched to the document, and its size.
     refined: Vec<f32>,
     refined_size: (usize, usize),
 }
@@ -278,8 +331,6 @@ struct Estimated {
 /// Send the picture to the tool and refine its map to the document size: edges follow the photo.
 #[cfg(not(target_arch = "wasm32"))]
 fn estimate_plane(doc: &Document, ctx: &crate::jobs::JobCtx, backend: &ai::Backend, quality: Quality) -> Result<Estimated> {
-    let rect = doc.bounds();
-    let (w, h) = (rect.width() as usize, rect.height() as usize);
     let ((rgb, (rw, rh)), (luma, (lw, lh))) = read_image(doc, ctx)?;
     let bytes: Vec<u8> = rgb.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
     drop(rgb);
@@ -309,8 +360,7 @@ fn estimate_plane(doc: &Document, ctx: &crate::jobs::JobCtx, backend: &ai::Backe
         return Err(EngineError::Cancelled);
     }
     ctx.progress(0.95, "");
-    let plane = resize_plane(&refined, lw, lh, w, h);
-    Ok(Estimated { plane, refined, refined_size: (lw, lh) })
+    Ok(Estimated { refined, refined_size: (lw, lh) })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -326,7 +376,7 @@ fn estimate_depth(s: &mut Session, p: &Value) -> Result<Value> {
     let name = channel_name(p)?;
     let quality = quality_param(p)?;
     s.active().ok_or(EngineError::NoDocument)?;
-    if let Some(reason) = s.depth.ai.status_reason() {
+    if let Some(reason) = s.depth.ai.status_reason_now() {
         return Err(bad(reason));
     }
     let backend = s.depth.ai.backend().map_err(bad)?;
@@ -338,7 +388,7 @@ fn estimate_depth(s: &mut Session, p: &Value) -> Result<Value> {
         move |doc, _, ctx| {
             let est = estimate_plane(doc, ctx, &backend, quality)?;
             let rect = doc.bounds();
-            let surface = plane_surface(&est.plane, rect, channel_format(doc));
+            let surface = refined_surface(&est.refined, est.refined_size, rect, channel_format(doc));
             let snapshot = surface.clone();
             let index = match doc.channels.iter().position(|c| c.name == name) {
                 Some(i) => {
@@ -354,10 +404,14 @@ fn estimate_depth(s: &mut Session, p: &Value) -> Result<Value> {
             let keep = pw.saturating_mul(ph) <= MAX_PRECISE_FLOATS && est.refined.len() == pw * ph;
             let entry =
                 keep.then(|| PreciseDepth { doc: doc.id, channel: name, surface: snapshot, plane: Arc::new(est.refined), width: pw as u32, height: ph as u32 });
-            *precise.lock().unwrap_or_else(PoisonError::into_inner) = entry;
-            Ok((index, rect.width(), rect.height()))
+            Ok((index, rect.width(), rect.height(), entry))
         },
-        move |(index, w, h)| json!({"channel": index, "width": w, "height": h, "quality": quality.name(), "ms": started.elapsed().as_millis() as u64}),
+        // Only a committed edit replaces the kept plane: a cancelled job or a failed commit leaves
+        // the previous one, which still matches its channel.
+        move |(index, w, h, entry)| {
+            *precise.lock().unwrap_or_else(PoisonError::into_inner) = entry;
+            json!({"channel": index, "width": w, "height": h, "quality": quality.name(), "ms": started.elapsed().as_millis() as u64})
+        },
     )
 }
 
@@ -378,6 +432,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
+    use crate::channel_cmds::plane_surface;
     use craft_ai_client::AiClient;
     use craft_ai_core::AppId;
     use craft_ai_native::secrets::MemoryStore;
@@ -428,7 +483,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut s = session(16, 16);
         s.depth.ai.set_host(empty_host(dir.path()));
-        let reason = s.depth.ai.status_reason().expect("nothing is set up");
+        let reason = s.depth.ai.status_reason_now().expect("nothing is set up");
         assert!(!reason.trim().is_empty());
         let e = s.execute("image.estimateDepth", json!({})).unwrap_err().to_string();
         assert!(e.contains(&reason), "{e} vs {reason}");
@@ -442,11 +497,51 @@ mod tests {
         assert!(s.depth.ai.status_reason().is_some());
     }
 
+    /// The per-frame status never waits for the shared store: it answers at once and fills in the
+    /// real reason from a background thread.
+    #[test]
+    fn the_per_frame_status_does_not_block_on_the_store() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        let s = Session::new();
+        s.depth.ai.set_host(AiHost::new(SharedStore::new("/nonexistent/x.json"), move || {
+            // The slow part (key-store setup) blocks until the test lets it go.
+            let _ = release_rx.lock().unwrap().recv();
+            Err("no AI folder here".to_owned())
+        }));
+        let began = std::time::Instant::now();
+        let first = s.depth.ai.status_reason().expect("provisional while checking");
+        assert!(began.elapsed() < std::time::Duration::from_secs(5), "blocked for {:?}", began.elapsed());
+        assert!(first.contains("Checking"), "{first}");
+        // Asking again while the read runs starts nothing else and still answers at once.
+        assert_eq!(s.depth.ai.status_reason(), Some(first));
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if s.depth.ai.status_reason().as_deref() == Some("no AI folder here") {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "the background read never answered");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// A new host drops what was known about the old one.
+    #[test]
+    fn a_new_host_is_seen_at_once() {
+        let s = Session::new();
+        s.depth.ai.set_host(AiHost::new(SharedStore::new("/nonexistent/x.json"), || Err("old".to_owned())));
+        assert_eq!(s.depth.ai.status_reason_now().as_deref(), Some("old"));
+        s.depth.ai.set_host(AiHost::new(SharedStore::new("/nonexistent/x.json"), || Err("new".to_owned())));
+        assert_eq!(s.depth.ai.status_reason_now().as_deref(), Some("new"));
+        assert_eq!(s.depth.ai.status_reason().as_deref(), Some("new"));
+    }
+
     #[test]
     fn a_host_that_cannot_be_made_is_the_reason() {
         let mut s = session(8, 8);
         s.depth.ai.set_host(AiHost::new(SharedStore::new("/nonexistent/x.json"), || Err("no AI folder here".to_owned())));
-        assert_eq!(s.depth.ai.status_reason().as_deref(), Some("no AI folder here"));
+        assert_eq!(s.depth.ai.status_reason_now().as_deref(), Some("no AI folder here"));
         assert!(s.execute("image.estimateDepth", json!({})).is_err());
     }
 
@@ -605,6 +700,49 @@ mod tests {
         assert!(s.cancel_job(job));
         let _ = release_tx.send(());
         assert_eq!(channels(&s), 0);
+    }
+
+    /// A job that does not commit (cancelled after its worker finished) leaves the plane kept for
+    /// the channel as it still is.
+    #[test]
+    fn a_job_that_does_not_commit_keeps_the_previous_precise_plane() {
+        let (mut s, _) = fake_session(32, 32);
+        let id = s.active().unwrap().doc.id;
+        s.execute("image.estimateDepth", json!({})).unwrap();
+        let surface = s.active().unwrap().doc.channels[0].surface.clone();
+        let (before, _, _) = precise_depth_plane(&s, id, "Depth", &surface).expect("plane after the first estimate");
+        // A second estimate whose worker finishes, then is cancelled before its result is applied.
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+        s.depth.ai.estimator = Some(Arc::new(move |_, w, h, _| {
+            let _ = entered_tx.send(());
+            Ok(ai::encode_gray16(&vec![30000; (w * h) as usize], w, h))
+        }));
+        let crate::jobs::Started::Job(job) = s.start("image.estimateDepth", json!({})).unwrap() else { panic!("the estimate runs as a background job") };
+        entered_rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        // Long enough for the worker to refine and finish; the result is not polled yet.
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert!(s.cancel_job(job));
+        let now = s.active().unwrap().doc.channels[0].surface.clone();
+        let (after, _, _) = precise_depth_plane(&s, id, "Depth", &now).expect("the cancelled job did not replace the plane");
+        assert_eq!(*before, *after);
+    }
+
+    /// The channel built band by band equals the one built from a full document-size plane.
+    #[test]
+    fn the_banded_channel_matches_the_full_plane_path() {
+        let doc = session(4, 4).active().unwrap().doc.clone();
+        let fmt = channel_format(&doc);
+        for (rw, rh, w, h) in [(50usize, 40usize, 70usize, 300usize), (64, 48, 64, 48), (97, 301, 20, 40), (3, 5, 300, 131), (1, 1, 5, 129)] {
+            let refined: Vec<f32> = (0..rw * rh).map(|i| ((i * 7919) % 1000) as f32 / 999.0).collect();
+            for (x0, y0) in [(0, 0), (-13, 29)] {
+                let rect = Rect::new(x0, y0, x0 + w as i32, y0 + h as i32);
+                let old = plane_surface(&resize_plane(&refined, rw, rh, w, h), rect, fmt);
+                let new = refined_surface(&refined, (rw, rh), rect, fmt);
+                let (a, b) = (old.read_region(rect), new.read_region(rect));
+                assert_eq!(a.len(), b.len());
+                assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= 1.0 / 65535.0), "{rw}x{rh} -> {w}x{h} at ({x0},{y0})");
+            }
+        }
     }
 
     #[test]
