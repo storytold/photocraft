@@ -1236,6 +1236,11 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if inside_selection(menu) && command == "select.loadSelection" {
         return app.session.active().is_some_and(|st| st.doc.channels.iter().any(|c| c.spot.is_none())) && crate::menus::is_enabled(app, command);
     }
+    // The generic layer menu with several layers selected and no pixel selection: the reference
+    // greys the rows that act on one layer only (#13491).
+    if matches!(command, LAYER_STYLE | "select.colorRange" | "select.loadSelection") && several_layers_without_selection(app, menu) {
+        return false;
+    }
     if menu.transform || !path_menu(menu.tool) {
         return crate::menus::is_enabled(app, command);
     }
@@ -1272,6 +1277,12 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
         "paint.symmetryDisable" => st.symmetry.is_some(),
         _ => false,
     }
+}
+
+/// Is `menu` the generic layer menu ([`COUNT_MENU`]) opened with several layers selected and no
+/// pixel selection?
+fn several_layers_without_selection(app: &PhotocraftApp, menu: &CanvasToolMenu) -> bool {
+    !menu.has_selection && rows(menu) == COUNT_MENU && app.session.active().is_some_and(|st| st.selected_layers().len() > 1)
 }
 
 pub fn open(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]) -> bool {
