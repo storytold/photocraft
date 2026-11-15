@@ -220,6 +220,11 @@ fn range_swatches(ui: &mut egui::Ui, v: &Value, range: &mut usize, colorize: boo
             } else {
                 p.circle_stroke(c, r, Stroke::new(1.0, t.field_border));
             }
+            // Keyboard focus gets its own accent ring, clear of the selection ring, so tabbing to
+            // a swatch shows where Space or Enter will act without moving the selection.
+            if resp.has_focus() {
+                p.circle_stroke(c, r + 3.0, Stroke::new(1.0, t.accent));
+            }
             let label = tl!(label);
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, label));
             resp.on_hover_text(label);

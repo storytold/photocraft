@@ -112,6 +112,35 @@ fn reds_after_a_hue_shift_label_both_centres() {
     assert!(has_text(&h, "0° / 30°"));
 }
 
+/// Circles stroked in `color` whose centre lies inside `rect`.
+fn rings_in(h: &Harness<'_, Value>, rect: egui::Rect, color: egui::Color32) -> usize {
+    h.output()
+        .shapes
+        .iter()
+        .filter(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.stroke.color == color && c.stroke.width > 0.0 && rect.contains(c.center)))
+        .count()
+}
+
+#[test]
+fn a_focused_swatch_shows_focus_apart_from_the_selection() {
+    let mut h = harness(json!({}));
+    let accent = crate::theme::Tokens::get(&h.ctx).accent;
+    let blue = h.query_all_by_role_and_label(Role::RadioButton, "Blue").next().expect("the Blue swatch").rect();
+    let master = h.query_all_by_role_and_label(Role::RadioButton, "Master").next().expect("the Master swatch").rect();
+    assert_eq!(rings_in(&h, blue, accent), 0, "no focus ring before focus");
+
+    h.query_all_by_role_and_label(Role::RadioButton, "Blue").next().expect("the Blue swatch").focus();
+    h.run_steps(3);
+    assert_eq!(range(&h), Some(0), "focus alone keeps Master selected");
+    assert_eq!(rings_in(&h, blue, accent), 1, "the focused Blue swatch has a focus ring");
+    assert_eq!(rings_in(&h, master, accent), 0, "the selected Master swatch has none");
+    assert!(swatches(&h).iter().all(|(l, on)| *on == (l == "Master")), "selection unchanged: {:?}", swatches(&h));
+
+    h.key_press(egui::Key::Space);
+    h.run_steps(3);
+    assert_eq!(range(&h), Some(5), "Space selects the focused swatch");
+}
+
 #[test]
 fn colorize_collapses_the_row_into_one_disc() {
     let h = harness(json!({"colorize": true, "hue": 120, "saturation": 25}));
