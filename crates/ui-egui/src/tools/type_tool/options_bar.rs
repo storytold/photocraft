@@ -25,10 +25,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.status_error = true;
         }
     }
-    // Font family and style menus (one placeholder in their place while the fonts load).
-    // Keep the following controls' positional IDs stable when the font menus replace the
-    // loading placeholder: both states occupy one slot in the parent UI.
-    ui.scope_builder(egui::UiBuilder::new().id_salt("type-options-fonts"), |ui| {
+    // Font family and style menus (one placeholder in their place while the fonts load), in one
+    // scope so the controls after them keep their ids when the fonts finish loading: a click
+    // pressed before and released after still lands. The salt keeps the menus' ids apart from the
+    // Character panel's font menus.
+    ui.push_id("type-options-fonts", |ui| {
         if fonts_ready(ui, 170.0 + ui.spacing().item_spacing.x + 110.0) {
             if let Some(picked) = font_picker(app, ui, &mut fam, 170.0) {
                 app.ui.tool_options.type_font = fam.clone();
@@ -36,7 +37,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let picked = picked.filter(|s| st.contains(s));
                 style = match &picked {
                     Some(s) => s.clone(),
-                    None if st.contains(&style) => style,
+                    None if st.contains(&style) => style.clone(),
                     None => st.first().cloned().unwrap_or_else(|| "Regular".into()),
                 };
                 app.ui.tool_options.type_style = style.clone();
@@ -503,6 +504,10 @@ fn size_field(ui: &mut egui::Ui, display: &mut f32, unit: f32, label: &str) -> O
     .flatten();
     preset.or(typed.then_some(MetricChoice::Typed(*display)))
 }
+
+#[cfg(test)]
+#[path = "fonts_loading_tests.rs"]
+mod fonts_loading_tests;
 
 #[cfg(test)]
 #[path = "size_presets_tests.rs"]
