@@ -28,6 +28,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod pattern_overlay_link_toggle_tests;
 
 #[derive(Clone, Copy)]
 enum P {
@@ -1569,6 +1571,16 @@ fn checkbox_line(ui: &mut egui::Ui, on: &mut bool, label: &str) -> bool {
     .inner
 }
 
+/// Anchor point used by `Placement::anchored` when `PatternOverlay` is linked to the layer.
+fn pattern_overlay_anchor(app: &PhotocraftApp, f: &Map<String, Value>) -> Option<(f64, f64)> {
+    let st = app.session.active()?;
+    let id = f.get("layer").and_then(Value::as_u64).map(photocraft_doc::LayerId).or(st.active_layer)?;
+    let layer = st.doc.layer(id)?;
+    let sb = photocraft_compose::effects_frame(layer, st.doc.bounds());
+    let fallback = if sb.is_empty() { (0.0, 0.0) } else { (f64::from(sb.x0), f64::from(sb.y0)) };
+    Some(layer.effects.reference.unwrap_or(fallback))
+}
+
 /// The selected page: the Styles gallery, Blending Options, or an effect's parameters.
 fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str, invalid: Option<&str>, style_click: &mut Option<String>) {
     let t = Tokens::get(ui.ctx());
@@ -1764,6 +1776,21 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                     let value = json!(b);
                     disp[key] = value.clone();
                     set_param(f, selected, key, value);
+                    if sel_kind == "patternOverlay"
+                        && key == "link"
+                        && let Some((ax, ay)) = pattern_overlay_anchor(app, f)
+                    {
+                        let px = disp.get("phaseX").and_then(Value::as_f64).unwrap_or(0.0);
+                        let py = disp.get("phaseY").and_then(Value::as_f64).unwrap_or(0.0);
+                        let (nx, ny) = if b { (px - ax, py - ay) } else { (px + ax, py + ay) };
+                        if nx.is_finite() && ny.is_finite() {
+                            let (vx, vy) = (json!(nx), json!(ny));
+                            disp["phaseX"] = vx.clone();
+                            disp["phaseY"] = vy.clone();
+                            set_param(f, selected, "phaseX", vx);
+                            set_param(f, selected, "phaseY", vy);
+                        }
+                    }
                 }
             }
         }
