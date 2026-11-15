@@ -113,3 +113,18 @@ fn the_schema_keeps_the_0_to_100_range_with_100_by_default() {
     assert!(matches!(p.kind, crate::filter_dialog::Kind::Range { min: 0.0, max: 100.0, default: 100.0 }));
     assert!(spec.params.contains("whole %"));
 }
+
+/// CodeRabbit on #15099: scrubbing the field is not typing. A scrub's fractions (37.5, from the drag speed)
+/// are rounded like any field's drag, not read without their dot (375, clamped to 100); typed text still is.
+#[test]
+fn a_scrub_drag_rounds_and_does_not_drop_the_dot() {
+    use super::read_fade_opacity;
+    // Typed: the dot goes.
+    assert_eq!(read_fade_opacity(12.3, true), 123.0);
+    assert_eq!(read_fade_opacity(0.4, true), 4.0);
+    assert_eq!(read_fade_opacity(50.0, true), 50.0);
+    // A drag: the number itself, which the field rounds (37.5 -> 38, never 375 -> 100).
+    assert_eq!(read_fade_opacity(37.5, false), 37.5);
+    assert_eq!(read_fade_opacity(37.5, false).round().clamp(0.0, 100.0), 38.0);
+    assert_eq!(read_fade_opacity(12.3, false).round(), 12.0);
+}

@@ -1140,6 +1140,13 @@ fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
 /// it (#13811).
 pub(crate) const FADE_OPACITY_RANGE_ALERT: &str = "An integer between 0 and 100 is required. Closest value inserted.";
 
+/// A value the Fade Opacity field holds, read as the reference application reads it: typed text loses
+/// its dot (`12.3` is 123, `0.4` is 4); anything else, a scrub drag's fractions included (`37.5`), is
+/// the number itself, rounded by the caller.
+fn read_fade_opacity(value: f32, typing: bool) -> f32 {
+    if value.fract() == 0.0 || !typing { value } else { format!("{value}").replace('.', "").parse::<f32>().unwrap_or(value) }
+}
+
 /// Edit › Fade's Opacity (#13811): whole percents 0..=100, a field with `%` and a slider. A typed
 /// fraction is read without its dot, as the reference application reads it (`12.3` is 123, `0.4`
 /// is 4); a typed value past the range becomes the closest end and, once the field is left,
@@ -1172,9 +1179,11 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
         ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
     }
     if r.changed() && typed.is_finite() {
-        let whole = if typed.fract() == 0.0 { typed } else { format!("{typed}").replace('.', "").parse::<f32>().unwrap_or(typed) };
-        v = whole.round().clamp(0.0, 100.0);
+        // Typed text is read without its dot; a scrub drag, whose fractions come from the drag speed, is
+        // only rounded, as every other field's drag is (a drag to 37.5 is 38, not 375).
         let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
+        let whole = read_fade_opacity(typed, typing);
+        v = whole.round().clamp(0.0, 100.0);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, typing && !(0.0..=100.0).contains(&whole)));
         if typing && r.has_focus() {
             ui.ctx().data_mut(|d| d.insert_temp(draft_id, (typed, v, Some(r.id))));
