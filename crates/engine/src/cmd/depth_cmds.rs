@@ -11,7 +11,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use photocraft_doc::{AlphaChannel, DocId, Document};
-use photocraft_geom::Rect;
+use photocraft_geom::{Rect, Size};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -60,6 +60,9 @@ struct PreciseDepth {
     channel: String,
     /// The channel as written, to tell later whether it was edited since.
     surface: Surface,
+    /// The document's size at the estimate: a canvas resize can leave the channel's surface equal
+    /// while the plane no longer covers the same pixels.
+    size: Size,
     plane: Arc<Vec<f32>>,
     width: u32,
     height: u32,
@@ -79,7 +82,8 @@ struct PreciseDepth {
 pub fn precise_depth_plane(s: &Session, doc: DocId, channel_name: &str, current_channel_surface: &Surface) -> Option<(Arc<Vec<f32>>, u32, u32)> {
     let guard = s.depth.precise.lock().unwrap_or_else(PoisonError::into_inner);
     let p = guard.as_ref()?;
-    let same = p.doc == doc && p.channel == channel_name && p.surface == *current_channel_surface;
+    let current = s.documents().iter().find(|d| d.doc.id == doc)?;
+    let same = p.doc == doc && p.channel == channel_name && p.size == current.doc.size && p.surface == *current_channel_surface;
     let sized = p.plane.len() == (p.width as usize).saturating_mul(p.height as usize);
     (same && sized).then(|| (p.plane.clone(), p.width, p.height))
 }
@@ -402,8 +406,15 @@ fn estimate_depth(s: &mut Session, p: &Value) -> Result<Value> {
             };
             let (pw, ph) = est.refined_size;
             let keep = pw.saturating_mul(ph) <= MAX_PRECISE_FLOATS && est.refined.len() == pw * ph;
-            let entry =
-                keep.then(|| PreciseDepth { doc: doc.id, channel: name, surface: snapshot, plane: Arc::new(est.refined), width: pw as u32, height: ph as u32 });
+            let entry = keep.then(|| PreciseDepth {
+                doc: doc.id,
+                channel: name,
+                surface: snapshot,
+                size: doc.size,
+                plane: Arc::new(est.refined),
+                width: pw as u32,
+                height: ph as u32,
+            });
             Ok((index, rect.width(), rect.height(), entry))
         },
         // Only a committed edit replaces the kept plane: a cancelled job or a failed commit leaves
@@ -656,6 +667,25 @@ mod tests {
         let now = s.active().unwrap().doc.channels[0].surface.clone();
         assert!(precise_depth_plane(&s, id, "Depth", &now).is_some());
         assert!(precise_depth_plane(&s, id, "Depth", &edited).is_none());
+    }
+
+    /// A canvas change that leaves the channel's surface equal (a top-left expansion adds nothing
+    /// the surface stores) must not return a plane that covers the old extent.
+    #[test]
+    fn the_precise_plane_is_dropped_when_the_canvas_size_changes() {
+        let (mut s, _) = fake_session(64, 48);
+        let id = s.active().unwrap().doc.id;
+        s.execute("image.estimateDepth", json!({})).unwrap();
+        let surface = s.active().unwrap().doc.channels[0].surface.clone();
+        assert!(precise_depth_plane(&s, id, "Depth", &surface).is_some());
+        s.edit("Canvas", |doc, _| {
+            doc.size = Size::new(128, 48);
+            Ok(())
+        })
+        .unwrap();
+        let now = s.active().unwrap().doc.channels[0].surface.clone();
+        assert!(now == surface, "the channel surface is unchanged");
+        assert!(precise_depth_plane(&s, id, "Depth", &now).is_none());
     }
 
     #[test]

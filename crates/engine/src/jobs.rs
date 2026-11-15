@@ -112,7 +112,12 @@ struct Shared {
 
 impl Shared {
     fn cancelled(&self) -> bool {
-        self.state.load(Ordering::Acquire) & CANCEL_REQUESTED != 0 || self.parent.as_ref().is_some_and(|parent| parent.cancelled())
+        let state = self.state.load(Ordering::Acquire);
+        // A committed context is past the point of no return: a cancel (its own or its parent's) no longer applies.
+        if state & COMMITTED != 0 {
+            return false;
+        }
+        state & CANCEL_REQUESTED != 0 || self.parent.as_ref().is_some_and(|parent| parent.cancelled())
     }
 }
 

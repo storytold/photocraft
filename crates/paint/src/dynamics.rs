@@ -1158,7 +1158,7 @@ mod surface_scale_tests {
 
     impl SurfaceMap for Flat {
         fn local(&self, _: Point) -> Option<Local> {
-            Some(Local { scale: self.0, squash_angle: 0.0, squash: 1.0 })
+            Some(Local { scale: self.0, squash_angle: 0.0, squash: 1.0, offset: [0.0; 2] })
         }
         fn reference_scale(&self) -> Option<f32> {
             Some(1.0)
@@ -1181,7 +1181,7 @@ mod surface_scale_tests {
 
     #[test]
     fn the_scale_ratio_is_clamped_once_and_rejects_bad_input() {
-        let local = |scale| Local { scale, squash_angle: 0.0, squash: 1.0 };
+        let local = |scale| Local { scale, squash_angle: 0.0, squash: 1.0, offset: [0.0; 2] };
         assert_eq!(surface_scale_ratio(1.0, &local(1.0e-6)), Some(1e-3));
         assert_eq!(surface_scale_ratio(1.0, &local(1.0e6)), Some(1e3));
         assert_eq!(surface_scale_ratio(2.0, &local(1.0)), Some(0.5));

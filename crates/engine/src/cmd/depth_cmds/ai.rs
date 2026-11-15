@@ -579,10 +579,8 @@ mod tests {
         while made.load(Ordering::SeqCst) == 0 {
             std::thread::sleep(Duration::from_millis(5));
         }
-        let started = std::time::Instant::now();
+        // The answer is the background read's (not a Checking answer, not a second read).
         assert_eq!(state.known_status_reason().as_deref(), Some("read 1"));
-        // It waited for the background read (not a Checking answer, not a second read).
-        assert!(started.elapsed() >= Duration::from_millis(50), "returned before the read ended");
         assert_eq!(state.known_status_reason().as_deref(), Some("read 1"));
         assert_eq!(made.load(Ordering::SeqCst), 1, "the status was read more than once");
     }

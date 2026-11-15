@@ -175,7 +175,7 @@ impl Footprint {
         if d <= 1e-6 {
             return (ux, uy);
         }
-        let edge = self.radius_at(uy.atan2(ux)).clamp(radius * 0.01, radius.max(0.01));
+        let edge = self.radius_at(uy.atan2(ux)).clamp(1e-3, radius.max(1e-3));
         let k = radius / edge;
         (ux * k, uy * k)
     }
@@ -284,5 +284,18 @@ mod tests {
         let bad = Local { scale: f32::NAN, squash_angle: f32::NAN, squash: f32::NAN, offset: [0.0; 2] };
         let (r, a, s) = surface_dab_shape(10.0, Some(2.0), &bad);
         assert_eq!((r, a, s), (10.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn a_short_footprint_ray_is_not_stretched_with_the_dab_radius() {
+        // One 1 px ray (towards +x) on a 1000 px dab: the outline there is 1 px from the centre.
+        let mut rays = [1000.0; FOOTPRINT_RAYS];
+        rays[0] = 1.0;
+        let foot = Footprint { rays };
+        let (x, y) = foot.to_tip(1.0, 0.0, 1000.0);
+        assert!((x - 1000.0).abs() < 1e-2 && y == 0.0, "({x}, {y})");
+        // Beyond the 1 px outline the point maps outside the tip, so nothing is painted there.
+        let (x, _) = foot.to_tip(5.0, 0.0, 1000.0);
+        assert!(x > 1000.0, "{x}");
     }
 }
