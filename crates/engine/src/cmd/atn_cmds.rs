@@ -3,7 +3,7 @@
 //! (Photoshop's Insert Stop) and `actions.photoshopStep` (a step PhotoCraft has no command for
 //! yet, kept verbatim so Save Actions writes it back unchanged).
 //!
-//! Parsing and writing live in `photocraft-psd` (`atn`); this module maps Photoshop *events*
+//! Parsing and writing live in `craft-psd` (`atn`); this module maps Photoshop *events*
 //! (`gaussianBlur` with `Rds`, `make` of an adjustment layer, `set` of the selection…) onto
 //! PhotoCraft commands and back. An event is keyed by both its four-character code (`GsnB`,
 //! older files) and its string name (`gaussianBlur`, Photoshop 2024 and later), as the two are
@@ -18,8 +18,8 @@
 //! {"offset"}`, the document that many places from the active one in opening order, not dragged
 //! tab order (#7103).
 
-use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
-use photocraft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
+use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
+use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use serde_json::{Map, Value, json};
 
 use crate::actions_cmds::Action;
@@ -35,6 +35,8 @@ mod files;
 mod menu_item;
 
 mod steps_artboard;
+mod steps_artboard_section;
+mod steps_automate;
 mod steps_batch;
 mod steps_calculations;
 mod steps_channels;
@@ -43,6 +45,7 @@ mod steps_direct_adjustments;
 mod steps_distort;
 mod steps_doc;
 mod steps_droplet;
+mod steps_frame_section;
 mod steps_gallery;
 mod steps_gradient;
 mod steps_image;
@@ -50,6 +53,8 @@ mod steps_layer;
 mod steps_layer_style;
 mod steps_lookup;
 mod steps_make;
+mod steps_measurement;
+mod steps_mode_change;
 mod steps_path;
 mod steps_perspective_warp;
 mod steps_type_path;
@@ -123,8 +128,20 @@ fn photoshop_step_run(_: &mut Session, p: &Value) -> Result<Value> {
     Err(EngineError::Other(format!("Photoshop step \"{name}\" ({event}) has no PhotoCraft equivalent yet; switch it off in the Actions panel to skip it")))
 }
 
+pub use files::validate_replacement;
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec {
+            id: "actions.replace",
+            label: "Replace Actions…",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"path":".atn file"?,"data":base64?,"confirm":true,"encoding":label?} → {sets,actions,warnings,unsupported}. Replaces the whole library with the complete ATN archive."#,
+            enabled: crate::actions_edit_cmds::library_change_enabled,
+            run: files::replace,
+            journal: false,
+        },
         CommandSpec {
             id: "actions.load",
             label: "Load Actions…",
@@ -140,7 +157,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Save Actions…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".atn file"? (else the bytes come back as base64 `data`),"set":name? (that set's actions, none for an empty New Set set; default: every action, as the set "PhotoCraft Actions"),"action":name|index? (one action),"skipUnsupported":bool=false (leave out steps with no Photoshop equivalent instead of failing)} → {set, actions:[names], steps, bytes, skipped:[{action, step, id}], path|data}"##,
+            params: r##"{"path":".atn file"? (else the bytes come back as base64 `data`),"set":name? (default: every action, as "PhotoCraft Actions"),"setSlot":index? (one folder occurrence from actions.list; requires set to match its current caption, e.g. {"set":"My Set","setSlot":0}),"action":name|index? (one action),"skipUnsupported":bool=false (omit steps with no Photoshop equivalent)} → {set, actions:[names], steps, bytes, skipped:[{action, step, id}], path|data}"##,
             enabled: always,
             run: save,
             journal: false,
@@ -185,7 +202,16 @@ mod tests;
 mod layer_props_tests;
 
 #[cfg(test)]
+mod layer_list_tests;
+
+#[cfg(test)]
+mod automate_tests;
+
+#[cfg(test)]
 mod stylize_tests;
+
+#[cfg(test)]
+mod measurement_tests;
 
 #[cfg(test)]
 mod selection_tests;
@@ -194,4 +220,20 @@ mod selection_tests;
 mod render_tests;
 
 #[cfg(test)]
+mod frame_section_tests;
+
+#[cfg(test)]
 mod recorded_tools_tests;
+
+#[cfg(test)]
+mod mode_change_tests;
+
+#[cfg(test)]
+mod artboard_section_tests;
+
+#[cfg(test)]
+mod fade_step_tests;
+
+#[cfg(test)]
+#[path = "atn_cmds/canvas_size_default_anchor_tests.rs"]
+mod canvas_size_default_anchor_tests;

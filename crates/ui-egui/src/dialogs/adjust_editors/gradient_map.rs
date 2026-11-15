@@ -9,8 +9,11 @@ use super::{
 
 type Stop = (f32, [f32; 3]);
 
-fn read_stops(v: &Value) -> Vec<Stop> {
-    let mut s: Vec<Stop> = v
+/// The stops the editor shows: Photoshop's own when the map keeps them (`source`, #8351), else
+/// the map's.
+pub(super) fn read_stops(v: &Value) -> Vec<Stop> {
+    let held = v.get("source").filter(|s| s.is_object()).unwrap_or(v);
+    let mut s: Vec<Stop> = held
         .get("stops")
         .and_then(Value::as_array)
         .map(|a| {
@@ -30,10 +33,22 @@ fn read_stops(v: &Value) -> Vec<Stop> {
     s
 }
 
-fn write_stops(v: &mut Value, s: &[Stop]) {
+/// Write the edited stops back: into Photoshop's gradient when the map keeps one (its midpoints
+/// follow the segments, a new one halfway; the engine bakes it again), else as the map's stops.
+pub(super) fn write_stops(v: &mut Value, s: &[Stop]) {
     let mut s = s.to_vec();
     s.sort_by(|a, b| a.0.total_cmp(&b.0));
-    v["stops"] = json!(s.iter().map(|(t, c)| json!([round(*t, 0.001), adjust_params::hex(*c)])).collect::<Vec<_>>());
+    let stops = json!(s.iter().map(|(t, c)| json!([round(*t, 0.001), adjust_params::hex(*c)])).collect::<Vec<_>>());
+    match v.get_mut("source").filter(|src| src.is_object()) {
+        Some(src) => {
+            let segments = s.len().saturating_sub(1);
+            let mut mids: Vec<Value> = src.get("midpoints").and_then(Value::as_array).cloned().unwrap_or_default();
+            mids.resize(segments, json!(0.5));
+            src["midpoints"] = Value::Array(mids);
+            src["stops"] = stops;
+        }
+        None => v["stops"] = stops,
+    }
 }
 
 fn sample_stops(s: &[Stop], t: f32) -> [f32; 3] {
@@ -180,44 +195,43 @@ pub(super) fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> E
         label(ui, tl!("Preset:"));
         let mut picked = None;
         let (press, close) = crate::press_menu::PressCombo::before(ui, cx.mem.with("gm-preset"));
-        let combo = craft_ui::ComboBox::from_id_salt(cx.mem.with("gm-preset"))
-            .selected_text(tl!("Custom"))
-            .width(ui.available_width().min(190.0))
-            .height(420.0)
-            .icon(widgets::chevron_icon)
-            .close_behavior(close)
-            .show_ui(ui, |ui| {
-                let gear = crate::icons::button(ui, "settings", 24.0, false, tl!("Gradient Preset Options"));
-                egui::containers::menu::SubMenu::new().show(ui, &gear, |ui| {
-                    if ui.button(tl!("Import .GRD")).clicked() {
-                        e.import_gradients = true;
-                        ui.close();
-                    }
-                });
-                ui.separator();
-                for g in &cx.gradients {
-                    ui.label(RichText::new(&g.name).color(t.text_faint));
-                    for p in &g.items {
-                        ui.horizontal(|ui| {
-                            // A map has no transparency: colour stops only, shown opaque.
-                            let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
-                            let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
-                            crate::preset_panels::paint_gradient(ui, r, &rgba);
-                            // Both, not short-circuited: the name is drawn either way.
-                            let name = ui.selectable_label(false, &p.name);
-                            if press.chosen(ui, &swatch) | press.chosen(ui, &name) {
-                                picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
-                            }
-                        });
-                    }
+        let width = ui.available_width().min(190.0);
+        let combo = widgets::combo_list(ui, cx.mem.with("gm-preset"), tl!("Custom"), width, close, |ui| {
+            let gear = crate::icons::button(ui, "settings", 24.0, false, tl!("Gradient Preset Options"));
+            egui::containers::menu::SubMenu::new().show(ui, &gear, |ui| {
+                if ui.button(tl!("Import .GRD")).clicked() {
+                    e.import_gradients = true;
+                    ui.close();
                 }
             });
+            ui.separator();
+            for g in &cx.gradients {
+                ui.label(RichText::new(&g.name).color(t.text_faint));
+                for p in &g.items {
+                    ui.horizontal(|ui| {
+                        // A map has no transparency: colour stops only, shown opaque.
+                        let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
+                        let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
+                        crate::preset_panels::paint_gradient(ui, r, &rgba);
+                        // Both, not short-circuited: the name is drawn either way.
+                        let name = ui.selectable_label(false, &p.name);
+                        if press.chosen(ui, &swatch) | press.chosen(ui, &name) {
+                            picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
+                        }
+                    });
+                }
+            }
+        });
         press.after(&combo.response);
         let _ = combo.response.accessible_name(tl!("Preset:"));
         if let Some(p) = picked {
             stops = p;
             selected = 0;
             ui.data_mut(|d| d.remove::<MapStopDrag>(cx.mem.with("gm-stop-drag")));
+            // A preset replaces the gradient, Photoshop's settings with it.
+            if let Some(o) = v.as_object_mut() {
+                o.insert("source".into(), Value::Null);
+            }
             write_stops(v, &stops);
             e.add(Edit::discrete(true));
         }
@@ -275,6 +289,18 @@ pub(super) fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> E
         e.changed = true;
     }
     ui.data_mut(|d| d.insert_temp(selection, selected));
+    // The rest of Photoshop's gradient, kept as it came (#8351).
+    if let Some(src) = v.get("source").filter(|s| s.is_object()) {
+        let smooth = src.get("smoothness").and_then(Value::as_f64).unwrap_or(0.0) * 100.0;
+        let method = match src.get("method").and_then(Value::as_str).unwrap_or("classic") {
+            "perceptual" => tl!("Perceptual"),
+            "linear" => tl!("Linear"),
+            "smooth" => tl!("Smooth"),
+            _ => tl!("Classic"),
+        };
+        let line = crate::i18n::fmt(tl!("Smoothness {s}% · {method}"), &[("s", &format!("{smooth:.0}")), ("method", method)]);
+        ui.label(RichText::new(line).color(t.text_faint));
+    }
     ui.horizontal(|ui| {
         for (key, text) in [("reverse", tl!("Reverse")), ("dither", tl!("Dither"))] {
             let mut b = flag(v, key, false);

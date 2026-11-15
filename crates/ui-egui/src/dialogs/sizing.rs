@@ -13,6 +13,56 @@ use crate::theme::Tokens;
 const UNITS: [(&str, &str); 7] =
     [("px", "Pixels"), ("percent", "Percent"), ("in", "Inches"), ("cm", "Centimeters"), ("mm", "Millimeters"), ("pt", "Points"), ("pica", "Picas")];
 
+/// Width-only unit of Image Size and Canvas Size (height has no Columns). Image Size measures it
+/// in columns of Preferences › Units & Rulers › Column Size; Canvas Size in whole inches (see
+/// [`canvas_columns_to_px`]).
+const COLUMNS: (&str, &str) = ("col", "Columns");
+
+/// Decimal places a Columns field shows.
+const COLUMN_DECIMALS: u32 = 3;
+
+/// Column Size in points, read from the dialog: (width, gutter). Photoshop's 180 pt / 12 pt when
+/// missing or degenerate: a width that isn't a positive finite number, or a gutter that isn't a
+/// finite number of at least zero (0 then), so the conversion never divides by zero.
+fn column_size(f: &Map<String, Value>) -> (f64, f64) {
+    let w = f.get("__colWidth").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(180.0);
+    let g = f.get("__colGutter").and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(12.0, |g| g.max(0.0));
+    (w, g)
+}
+
+/// Pixels → columns: `n` columns span `n × width + (n − 1) × gutter` points, so a width of
+/// `pt` points is `(pt + gutter) / (width + gutter)` columns. With `relative` (Canvas Size's
+/// deltas) the count applies to the magnitude and zero stays zero.
+fn px_to_columns(px: f64, res: f64, ppi: f64, (w, g): (f64, f64), relative: bool) -> f64 {
+    let pt = px / res.max(1.0) * ppi;
+    if relative {
+        if pt == 0.0 {
+            return 0.0;
+        }
+        return pt.signum() * (pt.abs() + g) / (w + g);
+    }
+    (pt + g) / (w + g)
+}
+
+/// Columns → pixels, the inverse of [`px_to_columns`].
+fn columns_to_px(n: f64, res: f64, ppi: f64, (w, g): (f64, f64), relative: bool) -> f64 {
+    let span = |n: f64| n * (w + g) - g;
+    let pt = if relative { if n == 0.0 { 0.0 } else { n.signum() * span(n.abs()).max(0.0) } } else { span(n) };
+    pt / ppi * res.max(1.0)
+}
+
+/// Canvas Size's Columns, measured in the reference application: one column is one inch at the
+/// document resolution, whatever Column Size says, and only whole columns count (1.5 is 2; a
+/// 1001 px canvas at 300 ppi shows as 3). Relative deltas the same way.
+fn canvas_columns_to_px(n: f64, res: f64) -> f64 {
+    n.round() * res.max(1.0)
+}
+
+/// Pixels → Canvas Size columns, rounded for display; the inverse of [`canvas_columns_to_px`].
+fn canvas_px_to_columns(px: f64, res: f64) -> f64 {
+    (px / res.max(1.0)).round()
+}
+
 /// Dialog unit for the Units & Rulers preference.
 fn pref_unit(u: photocraft_engine::prefs::Unit) -> &'static str {
     use photocraft_engine::prefs::Unit;
@@ -40,6 +90,65 @@ pub(crate) fn pref_resample(i: photocraft_engine::prefs::Interpolation) -> &'sta
         Interpolation::PreserveDetails => "preserveDetails",
     }
 }
+
+/// Whether the Resample list offers `method`. Indexed Color: every method but Automatic and
+/// Nearest Neighbor blends colours the colour table doesn't have, which the command doesn't use
+/// and a save quantises away (#6019).
+fn resample_offered(f: &Map<String, Value>, method: &str) -> bool {
+    let indexed = f.get("__indexed").and_then(Value::as_bool) == Some(true);
+    !indexed || method == "automatic" || method == "nearest"
+}
+
+/// Alt+1 to Alt+8 (Option on macOS) and the Resample method each picks, as in the reference
+/// application. Alt+3 is Preserve Details 2.0, which PhotoCraft doesn't have yet (#2942), and
+/// Lanczos has no key.
+const RESAMPLE_KEYS: [(egui::Key, Option<&str>); 8] = [
+    (egui::Key::Num1, Some("automatic")),
+    (egui::Key::Num2, Some("preserveDetails")),
+    (egui::Key::Num3, None),
+    (egui::Key::Num4, Some("bicubicSmoother")),
+    (egui::Key::Num5, Some("bicubicSharper")),
+    (egui::Key::Num6, Some("bicubic")),
+    (egui::Key::Num7, Some("nearest")),
+    (egui::Key::Num8, Some("bilinear")),
+];
+
+/// Takes Alt+1 to Alt+8 presses out of this frame's input and picks the Resample method of the
+/// last one that Resample (on) and the list offer; the others do nothing. It runs before the
+/// fields are drawn, so the press never reaches a focused field, and neither does the text the
+/// key types (the digit, or Option's character on macOS), which winit sends right after its press.
+/// Other typing in the same frame is kept. Ctrl+Alt is left alone: on Windows it's AltGr, which
+/// types characters on many layouts.
+fn resample_shortcut(ui: &egui::Ui, f: &mut Map<String, Value>) {
+    let resampling = f.get("resample").and_then(Value::as_str).unwrap_or("bicubic") != "none";
+    let picked = ui.ctx().input_mut(|i| {
+        let mut picked = None;
+        let mut swallow_text = false;
+        i.events.retain(|e| {
+            if let egui::Event::Text(_) = e {
+                return !std::mem::take(&mut swallow_text);
+            }
+            swallow_text = false;
+            let egui::Event::Key { key, pressed, modifiers, .. } = e else { return true };
+            if !modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+                return true;
+            }
+            let Some(&(_, method)) = RESAMPLE_KEYS.iter().find(|(k, _)| k == key) else { return true };
+            if *pressed {
+                swallow_text = true;
+                if let Some(method) = method.filter(|m| resampling && resample_offered(f, m)) {
+                    picked = Some(method);
+                }
+            }
+            false
+        });
+        picked
+    });
+    if let Some(method) = picked {
+        f.insert("resample".into(), json!(method));
+    }
+}
+
 const ANCHORS: [&str; 9] = ["topLeft", "top", "topRight", "left", "center", "right", "bottomLeft", "bottom", "bottomRight"];
 
 pub fn is_sizing(command: &str) -> bool {
@@ -72,6 +181,8 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     let unit = pref_unit(app.session.prefs().units_and_rulers.rulers);
     let mut resample = pref_resample(app.session.prefs().general.image_interpolation);
     let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
+    let column_width = app.session.prefs().units_and_rulers.column_width;
+    let column_gutter = app.session.prefs().units_and_rulers.gutter;
     let d = &app.session.active()?.doc;
     let (w, h, res) = (d.size.width as f64, d.size.height as f64, d.resolution_dpi as f64);
     let label = photocraft_engine::commands::find(command).map(|c| c.label).unwrap_or("Image Size…");
@@ -84,6 +195,8 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     f.insert("__origRes".into(), json!(res));
     f.insert("__unit".into(), json!(unit));
     f.insert("__ptPerIn".into(), json!(pt_per_in));
+    f.insert("__colWidth".into(), json!(column_width));
+    f.insert("__colGutter".into(), json!(column_gutter));
     f.insert("__bytesPerPixel".into(), json!(d.layers.first().and_then(|l| l.surface()).map_or(4, |s| s.format().bytes_per_pixel())));
     f.insert("width".into(), json!(w));
     f.insert("height".into(), json!(h));
@@ -94,6 +207,21 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
             resample = "nearest";
         }
         f.insert("__indexed".into(), json!(indexed));
+        // The "Image Size:" readout counts the flat image (#14768): the mode's colour channels at
+        // the document's depth, no alpha, whatever the first layer's surface stores.
+        // An Indexed image is one index channel and a Bitmap one 1-bit channel, though both are
+        // stored expanded for editing. A Multichannel image counts its inks, not a fixed three; with
+        // no inks it keeps the old count.
+        let image_bytes_per_pixel = match d.mode {
+            photocraft_color::ColorMode::Bitmap => 1.0 / 8.0,
+            photocraft_color::ColorMode::Indexed => 1.0,
+            photocraft_color::ColorMode::Multichannel => {
+                let inks = d.channels.iter().filter(|c| c.spot.is_some()).count();
+                (if inks == 0 { d.mode.color_channels() } else { inks } * d.depth.bytes()) as f64
+            }
+            mode => (mode.color_channels() * d.depth.bytes()) as f64,
+        };
+        f.insert("__imageBytesPerPixel".into(), json!(image_bytes_per_pixel));
         f.insert("__constrain".into(), json!(true));
         f.insert("resolution".into(), json!(res));
         f.insert("resample".into(), json!(resample));
@@ -151,6 +279,28 @@ pub fn human_bytes(b: f64) -> String {
     }
 }
 
+/// The Image Size dialog's "Image Size:" figure (#14768): whole bytes below 1K (`3 bytes`), then
+/// K, M, G or T (1K = 1024 bytes) with one decimal in the system's decimal mark (`351.6K`, `351,6K`).
+fn image_size_bytes(b: f64) -> String {
+    let n = if b.is_finite() { b.max(0.0).round() } else { 0.0 };
+    if n < 1024.0 {
+        return crate::i18n::trn(crate::i18n::current(), n as u64, "{n} byte", "{n} bytes");
+    }
+    let (mut v, mut unit) = (n / 1024.0, "K");
+    for next in ["M", "G", "T"] {
+        // A figure that would round to 1024.0 reads as 1.0 of the next unit.
+        if (v * 10.0).round() < 10240.0 {
+            break;
+        }
+        (v, unit) = (v / 1024.0, next);
+    }
+    let text = format!("{v:.1}{unit}");
+    match crate::i18n::decimal_separator() {
+        Some(',') => text.replace('.', ","),
+        _ => text,
+    }
+}
+
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if f.get("__command").and_then(Value::as_str) == Some("image.canvasSize") {
         canvas_size(ui, f);
@@ -175,11 +325,34 @@ fn info_row(ui: &mut egui::Ui, k: &str, v: String) {
 
 /// Width / height field in the current unit, writing back pixels. Returns true when edited.
 fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key: &str, id: &str) -> bool {
-    let unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
+    let unit = field_unit(f, key);
     let res = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
     let orig = num(f, orig_key);
     let px = num(f, key);
     let ppi = pt_per_in(f);
+    if unit == COLUMNS.0 && f.get("__command").and_then(Value::as_str) == Some("image.canvasSize") {
+        let mut v = canvas_px_to_columns(px, res) as f32;
+        let lim = (300000.0 / res.max(1.0)).ceil() as f32;
+        let changed = crate::widgets::value_field_prec(ui, &mut v, -lim..=lim, "", 90.0, 0).accessible_name(tl!("Width")).changed();
+        if changed {
+            f.insert(key.into(), json!(canvas_columns_to_px(v as f64, res)));
+        }
+        let _ = id;
+        return changed;
+    }
+    if unit == COLUMNS.0 {
+        let cols = column_size(f);
+        let relative = f.get("relative").and_then(Value::as_bool).unwrap_or(false);
+        let mut v = px_to_columns(px, res, ppi, cols, relative) as f32;
+        let lim = px_to_columns(300000.0, res, ppi, cols, false).max(30000.0) as f32;
+        // No typed-unit conversion: Columns aren't a unit the field parser knows.
+        let changed = crate::widgets::value_field_prec(ui, &mut v, -lim..=lim, "", 90.0, COLUMN_DECIMALS).accessible_name(tl!("Width")).changed();
+        if changed {
+            f.insert(key.into(), json!(columns_to_px(v as f64, res, ppi, cols, relative)));
+        }
+        let _ = id;
+        return changed;
+    }
     let mut v = to_unit(px, &unit, orig, res, ppi) as f32;
     // The engine's 300000 px limit in this unit (never below 30000), so a large document's size
     // isn't clamped when the field is drawn: egui clamps the shown value to the range, and the
@@ -200,18 +373,47 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
     changed
 }
 
-fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, id: &str) {
-    let mut unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
-    let opts: Vec<(String, &str)> = UNITS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-    if crate::widgets::dropdown(ui, id, tl!("Units"), &mut unit, &opts, 110.0) {
-        f.insert("__unit".into(), json!(unit));
+/// The unit `key`'s field shows: the dialog's shared `__unit`, except a Width set to Columns
+/// (`__unitW`), which height can't follow.
+fn field_unit(f: &Map<String, Value>, key: &str) -> String {
+    let shared = f.get("__unit").and_then(Value::as_str).unwrap_or("px");
+    if key == "width" && f.get("__unitW").and_then(Value::as_str) == Some(COLUMNS.0) {
+        return COLUMNS.0.to_string();
     }
+    if shared == COLUMNS.0 { "px".to_string() } else { shared.to_string() }
+}
+
+/// Unit menu beside the Width (`key` "width", which also offers Columns) or Height field.
+fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, id: &str) {
+    let mut unit = field_unit(f, key);
+    let mut opts: Vec<(String, &str)> = UNITS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
+    if key == "width" {
+        opts.push((COLUMNS.0.to_string(), COLUMNS.1));
+    }
+    if crate::widgets::dropdown(ui, id, tl!("Units"), &mut unit, &opts, 110.0) {
+        set_unit(f, key, &unit);
+    }
+}
+
+/// Picks `unit` from `key`'s menu: Columns applies to Width alone; any other unit applies to both
+/// fields, and on Width it leaves Columns.
+fn set_unit(f: &mut Map<String, Value>, key: &str, unit: &str) {
+    if unit == COLUMNS.0 {
+        if key == "width" {
+            f.insert("__unitW".into(), json!(COLUMNS.0));
+        }
+        return;
+    }
+    if key == "width" {
+        f.remove("__unitW");
+    }
+    f.insert("__unit".into(), json!(unit));
 }
 
 fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
+    resample_shortcut(ui, f);
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
-    let bpp = num(f, "__bytesPerPixel").max(1.0);
     let resample = f.get("resample").and_then(Value::as_str).unwrap_or("bicubic").to_string();
     let resampling = resample != "none";
     if !resampling {
@@ -220,26 +422,40 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert("width".into(), json!(ow));
         f.insert("height".into(), json!(oh));
     }
-    let (w, h) = (num(f, "width").round(), num(f, "height").round());
-    info_row(ui, tl!("Image Size:"), crate::i18n::fmt(tl!("{size} (was {old})"), &[("size", &human_bytes(w * h * bpp)), ("old", &human_bytes(ow * oh * bpp))]));
+    // The sides the command applies: whole pixels from 1 to MAX_CANVAS_SIDE, as image.imageSize clamps.
+    let side = |key| num(f, key).round().clamp(1.0, f64::from(photocraft_format::MAX_CANVAS_SIDE));
+    let (w, h, orig_w, orig_h) = (side("width"), side("height"), side("__origW"), side("__origH"));
+    // "(was …)" appears only once the pixel dimensions differ from the original (#14768).
+    let image_bpp = num(f, "__imageBytesPerPixel").max(0.0);
+    // Rows hold whole bytes, so a Bitmap row of w bits takes ceil(w / 8) bytes.
+    let flat = |width: f64, height: f64| (width * image_bpp).ceil() * height;
+    let (size, old) = (flat(w, h), flat(orig_w, orig_h));
+    let readout = if (w, h) == (orig_w, orig_h) {
+        image_size_bytes(size)
+    } else {
+        crate::i18n::fmt(tl!("{size} (was {old})"), &[("size", &image_size_bytes(size)), ("old", &image_size_bytes(old))])
+    };
+    info_row(ui, tl!("Image Size:"), readout);
     info_row(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64));
     ui.add_space(6.0);
     // Photoshop keeps width and height linked while Resample is off.
     let mut constrain = !resampling || f.get("__constrain").and_then(Value::as_bool).unwrap_or(true);
     // With Resample off, a size in pixels or percent can't change (Photoshop disables those
     // fields); a physical size (inches, cm…) changes the resolution instead.
-    let unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
-    let editable = resampling || !matches!(unit.as_str(), "px" | "percent");
+    // Width in Columns is a physical size, so it stays editable while Height (in pixels) isn't.
+    let editable = |f: &Map<String, Value>, key: &str| resampling || !matches!(field_unit(f, key).as_str(), "px" | "percent");
     let w_row = ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
+        let editable = editable(f, "width");
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w")).inner;
-        unit_dropdown(ui, f, "is-unit-w");
+        unit_dropdown(ui, f, "width", "is-unit-w");
         c
     });
     let h_row = ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
+        let editable = editable(f, "height");
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h")).inner;
-        unit_dropdown(ui, f, "is-unit-h");
+        unit_dropdown(ui, f, "height", "is-unit-h");
         c
     });
     let (w_changed, h_changed) = (w_row.inner, h_row.inner);
@@ -298,13 +514,19 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 // Without resampling the pixel count is fixed: physical size follows resolution.
                 f.insert("width".into(), json!(ow));
                 f.insert("height".into(), json!(oh));
-            } else if !matches!(unit.as_str(), "px" | "percent") {
+            } else {
                 // Resampling in a physical unit keeps the print size: the pixels follow the
-                // resolution (Photoshop). In pixels or percent the pixel count stays.
+                // resolution (Photoshop). In pixels or percent the pixel count stays. Each field
+                // has its own unit (Width can be Columns, a physical unit, beside Height in
+                // pixels); with Constrain Proportions on, one physical side scales both.
+                let physical = |key: &str| !matches!(field_unit(f, key).as_str(), "px" | "percent");
+                let (pw, ph) = (physical("width"), physical("height"));
                 let old = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
                 if old > 0.0 && old.is_finite() {
-                    for key in ["width", "height"] {
-                        f.insert(key.into(), json!((num(f, key) * r / old).max(1.0)));
+                    for (key, scale) in [("width", pw || (constrain && ph)), ("height", ph || (constrain && pw))] {
+                        if scale {
+                            f.insert(key.into(), json!((num(f, key) * r / old).max(1.0)));
+                        }
                     }
                 }
             }
@@ -338,10 +560,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ("bilinear".to_string(), tl!("Bilinear")),
                 ("lanczos".to_string(), tl!("Lanczos (sharp)")),
             ];
-            // Indexed Color: every other method blends colours the colour table doesn't have,
-            // which the command doesn't use and a save quantises away (#6019).
-            let indexed = f.get("__indexed").and_then(Value::as_bool) == Some(true);
-            let opts: Vec<_> = opts.into_iter().filter(|(k, _)| !indexed || k == "automatic" || k == "nearest").collect();
+            let opts: Vec<_> = opts.into_iter().filter(|(k, _)| resample_offered(f, k)).collect();
             if crate::widgets::dropdown(ui, "is-resample", tl!("Resample"), &mut cur, &opts, 200.0) {
                 f.insert("resample".into(), json!(cur));
             }
@@ -369,12 +588,12 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
         dim_field(ui, f, "width", "__origW", "cs-w");
-        unit_dropdown(ui, f, "cs-unit-w");
+        unit_dropdown(ui, f, "width", "cs-unit-w");
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
         dim_field(ui, f, "height", "__origH", "cs-h");
-        unit_dropdown(ui, f, "cs-unit-h");
+        unit_dropdown(ui, f, "height", "cs-unit-h");
     });
     ui.horizontal(|ui| {
         label(ui, "", 90.0);
@@ -467,4 +686,11 @@ fn anchor_grid(ui: &mut egui::Ui, current: &str, dw: f64, dh: f64) -> Option<&'s
 }
 
 #[cfg(test)]
+#[path = "image_size_readout_tests.rs"]
+mod image_size_readout_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "image_size_resample_shortcuts_tests.rs"]
+mod image_size_resample_shortcuts_tests;
