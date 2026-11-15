@@ -11,6 +11,11 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use clipboard_reads::{Answer, Request};
+
+// Built everywhere so it is tested everywhere; only Linux and the BSDs read through its worker.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+mod clipboard_reads;
 #[cfg(test)]
 mod recovery_tests;
 
@@ -702,6 +707,111 @@ fn svg_clipboard_source(text: Option<String>) -> Result<Option<Vec<u8>>, String>
     Ok(Some(text.into_bytes()))
 }
 
+/// `request` read through `cb`, as a paste takes it ([`clipboard_read`], [`clipboard_text`]). A
+/// bitmap arboard can't read on Linux is looked for in the clipboard's other image types
+/// ([`wayland_clipboard_image`]) before the read fails.
+fn clipboard_answer(cb: &mut arboard::Clipboard, request: Request) -> Answer {
+    match request {
+        Request::Files => Answer::Files(clipboard_read(cb.get().file_list())),
+        Request::Image => Answer::Image(match cb.get_image() {
+            Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned()))),
+            Err(error) => {
+                #[cfg(target_os = "linux")]
+                if let Some(image) = wayland_clipboard_image() {
+                    return Answer::Image(Ok(Some(image)));
+                }
+                match error {
+                    arboard::Error::ContentNotAvailable => Ok(None),
+                    _ => Err(error.to_string()),
+                }
+            }
+        }),
+        Request::Text => Answer::Text(clipboard_text(cb.get_text())),
+    }
+}
+
+/// How long after an unanswered read was sent dropping the reads waits for it to end. On X11 the
+/// last arboard handle dropped hands what the app copied to a clipboard manager, and a text read
+/// tries six formats and waits up to 4 s for each, so the wait is 25 s. On the compositor's
+/// data-control protocol, where a read may never end and nothing is handed over, there is no wait.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn clipboard_reads_finish() -> std::time::Duration {
+    // arboard 3.7 opens data-control where `WAYLAND_DISPLAY` is set and wl-clipboard-rs finds the
+    // protocol, and X11 otherwise.
+    #[cfg(target_os = "linux")]
+    let data_control = std::env::var_os("WAYLAND_DISPLAY").is_some() && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok();
+    #[cfg(not(target_os = "linux"))]
+    let data_control = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    if data_control { std::time::Duration::ZERO } else { std::time::Duration::from_secs(25) }
+}
+
+/// The OS clipboard's arboard handles, opened on first use. On Linux and the BSDs paste reads run
+/// on a worker with a handle of its own ([`clipboard_reads`]): a text or file-list read waits 2 s
+/// at most for the app that copied, a bitmap read 10 s, and while one has no answer later reads
+/// fail at once, until a copy in PhotoCraft replaces the clipboard's contents. Elsewhere reads use
+/// the write handle.
+#[derive(Default)]
+struct OsClipboard {
+    /// Dropped before `cb`, and waits for its worker's handle to go, on X11 up to 25 s after an
+    /// unanswered read was sent: there the last handle dropped hands what the app copied to the
+    /// clipboard manager.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    reads: Option<clipboard_reads::Loads<Request, Answer>>,
+    /// Workers taken out of use by a copy while their read was unanswered, kept until they end:
+    /// also dropped before `cb`, with the same wait.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    retired: Vec<clipboard_reads::Loads<Request, Answer>>,
+    /// Writes, and on Windows and macOS reads.
+    cb: Option<arboard::Clipboard>,
+}
+
+impl OsClipboard {
+    /// The write handle, opened when it isn't yet.
+    fn writer(&mut self) -> Result<&mut arboard::Clipboard, arboard::Error> {
+        match &mut self.cb {
+            Some(cb) => Ok(cb),
+            slot => Ok(slot.insert(arboard::Clipboard::new()?)),
+        }
+    }
+
+    /// `request` read as [`clipboard_answer`] reads it.
+    fn read(&mut self, request: Request) -> Answer {
+        #[cfg_attr(all(unix, not(target_os = "macos")), allow(unused_variables))]
+        let cb = match self.writer() {
+            Ok(cb) => cb,
+            Err(error) => return Answer::failed(request, error.to_string()),
+        };
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let reads = match &mut self.reads {
+                Some(reads) => reads,
+                slot => {
+                    let mut reader = match arboard::Clipboard::new() {
+                        Ok(reader) => reader,
+                        Err(error) => return Answer::failed(request, error.to_string()),
+                    };
+                    let read = move |request| match crate::crash_guard::guard("Paste", || Ok(clipboard_answer(&mut reader, request))) {
+                        Ok(answer) => answer,
+                        Err(why) => Answer::failed(request, why),
+                    };
+                    match clipboard_reads::Loads::spawn("clipboard-read", clipboard_reads_finish(), read) {
+                        Some(reads) => slot.insert(reads),
+                        None => return Answer::failed(request, "the clipboard's reader didn't start".into()),
+                    }
+                }
+            };
+            let answer = clipboard_reads::read_on(reads, request, clipboard_reads::wait_for(request));
+            if matches!(&answer, Answer::Files(Err(why)) | Answer::Image(Err(why)) | Answer::Text(Err(why)) if why == clipboard_reads::GONE) {
+                // A reader that stopped is started again on the next read.
+                self.reads = None;
+            }
+            answer
+        }
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        clipboard_answer(cb, request)
+    }
+}
+
 /// The shell command that starts this install under XWayland, where winit delivers file drops
 /// (winit 0.30 has none on Wayland, #386). A Flatpak gets the X11 socket only without the Wayland
 /// one, an AppImage relaunches by its own path, and anything else is `photocraft` on the PATH.
@@ -757,7 +867,7 @@ pub fn automation(workspace: Option<photocraft_automation::AuthorizedWorkspace>)
 }
 
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
-    let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
+    let clip: Rc<RefCell<OsClipboard>> = Rc::default();
     let clip_unreadable: Rc<Cell<bool>> = Rc::default();
     let automation = self::automation(automation);
     Services {
@@ -797,12 +907,16 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         clipboard_set_image: Some({
             let clip = clip.clone();
             guarded_clipboard_set(move |w: u32, h: u32, px: &[u8]| {
-                let mut slot = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
-                let cb = match slot.as_mut() {
-                    Some(c) => c,
-                    None => slot.insert(arboard::Clipboard::new().map_err(|e| e.to_string())?),
-                };
-                cb.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(px) }).map_err(|e| e.to_string())
+                let mut os = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
+                let cb = os.writer().map_err(|e| e.to_string())?;
+                cb.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(px) }).map_err(|e| e.to_string())?;
+                // A read of what the clipboard held before has no bearing on this copy.
+                #[cfg(all(unix, not(target_os = "macos")))]
+                {
+                    let os = &mut *os;
+                    clipboard_reads::forget_unanswered(&mut os.reads, &mut os.retired);
+                }
+                Ok(())
             })
         }),
         open_external_svg: Some(Box::new(crate::external_svg::open)),
@@ -810,47 +924,23 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             let clip = clip.clone();
             let unreadable = clip_unreadable.clone();
             guarded_clipboard_get(move || {
-                let mut slot = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
-                let cb = match slot.as_mut() {
-                    Some(c) => c,
-                    None => {
-                        // arboard opens only when some backend works. In a Flatpak on Wayland none
-                        // does (#5031): the sandbox hides the data-control protocol from it, and
-                        // `--socket=fallback-x11` gives no X server while a compositor runs.
-                        let opened = arboard::Clipboard::new();
-                        unreadable.set(opened.is_err());
-                        slot.insert(opened.map_err(|e| e.to_string())?)
-                    }
-                };
-                clipboard_image(
-                    cb,
-                    |cb| clipboard_read(cb.get().file_list()),
-                    |cb| match cb.get_image() {
-                        Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned()))),
-                        Err(error) => {
-                            #[cfg(target_os = "linux")]
-                            if let Some(image) = wayland_clipboard_image() {
-                                return Ok(Some(image));
-                            }
-                            match error {
-                                arboard::Error::ContentNotAvailable => Ok(None),
-                                _ => Err(error.to_string()),
-                            }
-                        }
-                    },
-                    |cb| clipboard_text(cb.get_text()),
-                )
+                let mut os = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
+                if os.cb.is_none() {
+                    // arboard opens only when some backend works. In a Flatpak on Wayland none
+                    // does (#5031): the sandbox hides the data-control protocol from it, and
+                    // `--socket=fallback-x11` gives no X server while a compositor runs.
+                    let opened = os.writer().map(|_| ());
+                    unreadable.set(opened.is_err());
+                    opened.map_err(|e| e.to_string())?;
+                }
+                clipboard_image(&mut *os, |os| os.read(Request::Files).files(), |os| os.read(Request::Image).image(), |os| os.read(Request::Text).text())
             })
         }),
         clipboard_get_svg: Some({
             let clip = clip.clone();
             guarded_clipboard_svg(move || {
-                let mut slot = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
-                let cb = match slot.as_mut() {
-                    Some(c) => c,
-                    None => slot.insert(arboard::Clipboard::new().map_err(|e| e.to_string())?),
-                };
-                svg_clipboard_source(clipboard_text(cb.get_text())?)
+                let mut os = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
+                svg_clipboard_source(os.read(Request::Text).text()?)
             })
         }),
         clipboard_unreadable: Some(Box::new(move || clip_unreadable.get())),
