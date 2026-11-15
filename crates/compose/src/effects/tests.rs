@@ -807,10 +807,10 @@ fn glow_range_stretches_the_contour() {
         noise: 0.0,
         source: GlowSource::Edge,
     };
-    let l = glow_lut(&g).unwrap();
+    let l = glow_lut(&g, true).unwrap();
     assert!((lut_at(&l, 0.25) - 0.5).abs() < 1e-3 && (lut_at(&l, 0.75) - 1.0).abs() < 1e-6);
     g.range = 1.0;
-    assert!(glow_lut(&g).is_none());
+    assert!(glow_lut(&g, true).is_none());
 }
 
 /// Photoshop 27.11, measured on a 128 px square (Normal, black, 100 %, Range 50 %): a precise

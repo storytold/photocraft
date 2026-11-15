@@ -32,18 +32,34 @@ pub(super) fn lut_at(l: &[f32], v: f32) -> f32 {
 
 /// A glow's coverage transfer: its contour applied over the Range (Photoshop maps the glow's
 /// coverage `v` through `contour(min(v / range, 1))`, so the default 50 % doubles a blurred
-/// edge's 0.5 to full strength). `None` = identity. At the minimum Range (1 %) the transfer also
-/// drops what is under one 8-bit level of coverage and spreads the rest over 3.75 levels instead
-/// of 2.55: Photoshop's Range 1 % size-10 glow is 8 solid pixels, one at 0.85 and then nothing
-/// (inner G 0 x8, 19, 128; outer R 0 x8, 39, 255), where `v / 0.01` made 9 solid and a light one
-/// (#14929, #14958). The CPU and the GPU both build their table here.
-pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
+/// edge's 0.5 to full strength). `None` = identity. An Edge-source glow at the smallest Ranges
+/// (1 % up to 3.75 / 255) also drops what is under one 8-bit level of coverage and reaches full
+/// strength at 3.75 levels instead of 2.55: the reference's Range 1 % size-10 glow is 8 solid
+/// pixels, one at 0.85 and then nothing (inner G 0 x8, 19, 128; outer R 0 x8, 39, 255), where
+/// `v / 0.01` made 9 solid and a light one (#14929, #14958). An inner glow with the Center source
+/// (not measured) keeps the plain transfer. The CPU and the GPU both build their table here.
+pub fn glow_lut(g: &Glow, inner: bool) -> Option<Vec<f32>> {
+    let measured = !(inner && g.source == GlowSource::Center);
+    if measured && g.range.is_finite() && g.range < MIN_RANGE_FULL {
+        let base = contour_lut(&g.contour);
+        let n = 4096;
+        return Some(
+            (0..n)
+                .map(|k| {
+                    let c = k as f32 / (n - 1) as f32;
+                    let v = if c < MIN_RANGE_FLOOR { 0.0 } else { (c / MIN_RANGE_FULL).min(1.0) };
+                    base.as_ref().map_or(v, |l| lut_at(l, v))
+                })
+                .collect(),
+        );
+    }
     ranged_lut(&g.contour, g.range)
 }
 
-/// Coverage below this (one 8-bit level) is no glow at Range 1 %.
+/// Coverage below this (one 8-bit level) is no glow at the smallest Ranges.
 const MIN_RANGE_FLOOR: f32 = 1.0 / 255.0;
-/// The coverage that reaches full strength at Range 1 %, in 8-bit levels.
+/// The coverage that reaches full strength at the smallest Ranges (3.75 8-bit levels): Ranges
+/// from 1 % up to here render alike, and the plain `v / range` stretch takes over from here.
 const MIN_RANGE_FULL: f32 = 3.75 / 255.0;
 
 /// A contour applied over a Range (`contour(min(v / range, 1))`); `None` = identity.
@@ -54,12 +70,10 @@ pub fn ranged_lut(contour: &Contour, range: f32) -> Option<Vec<f32>> {
         return base;
     }
     let n = 4096;
-    let minimum = range <= 0.0101;
     Some(
         (0..n)
             .map(|k| {
-                let c = k as f32 / (n - 1) as f32;
-                let v = if minimum { if c < MIN_RANGE_FLOOR { 0.0 } else { (c / MIN_RANGE_FULL).min(1.0) } } else { (c / range).min(1.0) };
+                let v = ((k as f32 / (n - 1) as f32) / range).min(1.0);
                 base.as_ref().map_or(v, |l| lut_at(l, v))
             })
             .collect(),
@@ -323,7 +337,7 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
             m
         }
     };
-    m = apply_lut(m, glow_lut(g));
+    m = apply_lut(m, glow_lut(g, inner));
     if inner && g.source == GlowSource::Center {
         m = m.map(|v| 1.0 - v);
     }

@@ -75,10 +75,33 @@ fn ranges_25_50_100_are_unchanged() {
 }
 
 #[test]
-fn the_gpu_table_is_the_same_one() {
-    // `photocraft-gpu` builds its glow table from this function, so Range 1 % reads alike there.
-    let l = glow_lut(&glow(0.01)).unwrap();
+fn glow_lut_at_range_one_matches_the_measured_table() {
+    // `photocraft-gpu` builds its glow table from this function too, so Range 1 % reads alike there.
+    let l = glow_lut(&glow(0.01), true).unwrap();
     assert_eq!(lut_at(&l, 0.0025), 0.0);
     assert!((lut_at(&l, 0.0125) - 0.85).abs() < 0.02);
     assert_eq!(lut_at(&l, 0.0325), 1.0);
+}
+
+/// The coverage at which the table first reaches full strength.
+fn full_at(l: &[f32]) -> f32 {
+    l.iter().position(|v| *v >= 1.0).map_or(f32::INFINITY, |k| k as f32 / (l.len() - 1) as f32)
+}
+
+#[test]
+fn raising_the_range_never_shortens_the_glow() {
+    let reach: Vec<f32> = [0.010, 0.012, 0.0147, 0.016, 0.02].iter().map(|r| full_at(&glow_lut(&glow(*r), true).unwrap())).collect();
+    assert!(reach.windows(2).all(|w| w[0] <= w[1] + 1e-6), "full-strength coverage must not decrease: {reach:?}");
+    assert!((reach[0] - reach[1]).abs() < 1e-6, "1 % and 1.2 % render alike: {reach:?}");
+}
+
+#[test]
+fn an_inner_center_glow_at_range_one_keeps_the_plain_transfer() {
+    let mut g = glow(0.01);
+    g.source = GlowSource::Center;
+    assert_eq!(glow_lut(&g, true), ranged_lut(&g.contour, 0.01), "unmeasured: unchanged");
+    // The Center source means nothing to an outer glow, which keeps the measured Range 1 %.
+    assert_ne!(glow_lut(&g, false), ranged_lut(&g.contour, 0.01));
+    g.source = GlowSource::Edge;
+    assert_ne!(glow_lut(&g, true), ranged_lut(&g.contour, 0.01));
 }
