@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use photocraft_engine::{
     Session,
     actions_cmds::{ActionState, is_action_key},
-    preset_store::{self, PresetBackend, *},
+    preset_store::{
+        self, ACTIONS_FILE, ActionsMigration, INDEX_FILE, LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES, MAX_GROUP_BYTES, MAX_GROUPS, MAX_INDEX_BYTES,
+        MAX_PATTERNS_BYTES, MAX_PRESETS_PER_GROUP, MAX_STORE_BYTES, MAX_TIP_BYTES, MIGRATED_ACTIONS_FILE, PATTERNS_FILE, PresetBackend,
+    },
 };
 use serde_json::{Value, json};
 
@@ -243,10 +246,10 @@ impl Bridge {
         s.action_revision = revision;
         s.committed_keys = keys.clone();
         s.current_keys = keys.clone();
-        if revision == 0 && !s.writing {
-            if let Some(migration) = &mut s.migration {
-                migration.keys = keys;
-            }
+        if revision == 0 && !s.writing
+            && let Some(migration) = &mut s.migration
+        {
+            migration.keys = keys;
         }
     }
 

@@ -1,6 +1,6 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
