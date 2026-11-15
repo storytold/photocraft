@@ -132,3 +132,51 @@ fn serialized_curves_keep_17_to_19_points_and_hundredths_through_from_params() {
     let level = |k: usize, i: usize| back["points"][k][i].as_f64().unwrap_or(f64::NAN);
     assert!((level(1, 0) - 43.35).abs() < 1e-3 && (level(1, 1) - 33.2).abs() < 1e-3, "hundredths survive: {back}");
 }
+
+/// A curve a file carries with 17 to 19 points, on an adjustment layer: the Properties panel's
+/// eyedropper and a command editing another curve of it read it back through `to_params` and
+/// `from_params`, which keep the file's limit; only points a command is given are held to 16.
+#[test]
+fn an_imported_19_point_curve_survives_the_eyedropper_and_an_edit() {
+    let pts: Vec<[f64; 2]> = (0..19).map(|k| [k as f64 * 14.0, (k as f64 * 14.0 + 6.0).min(255.0)]).collect();
+    let imported = from_params("curves", &json!({"points": pts}), None, ColorMode::Rgb).unwrap();
+    assert!(matches!(&imported, Adjustment::Curves { master, .. } if master.len() == 19));
+    let mut s = crate::Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"color": [0.6, 0.5, 0.4]})).unwrap();
+    s.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    let place = |s: &mut crate::Session, adjustment: &Adjustment| {
+        s.edit("Import", |doc, _| {
+            let id = doc.layers.last().map(|l| l.id).ok_or(crate::EngineError::Other("no layer".into()))?;
+            let l = doc.layer_mut(id).ok_or(crate::EngineError::NoLayer(id))?;
+            l.content = photocraft_doc::LayerContent::Adjustment(adjustment.clone());
+            Ok(())
+        })
+        .unwrap();
+    };
+    let master_len = |s: &crate::Session| match s.active().unwrap().doc.layers.last().map(|l| l.content.clone()) {
+        Some(photocraft_doc::LayerContent::Adjustment(Adjustment::Curves { master, .. })) => master.len(),
+        other => panic!("expected a Curves layer, got {other:?}"),
+    };
+    for point in ["black", "white"] {
+        place(&mut s, &imported);
+        s.execute("layer.setAdjustment", json!({"eyedropper": {"point": point, "at": [2, 2]}})).unwrap_or_else(|e| panic!("{point} on 19 points: {e}"));
+        assert_eq!(master_len(&s), 19, "the {point} point replaces an end of the 19-point curve");
+    }
+    // Editing another curve of the layer merges over the 19-point base without touching it.
+    place(&mut s, &imported);
+    s.execute("layer.setAdjustment", json!({"red": [[0, 0], [100, 120], [255, 255]]})).unwrap();
+    assert_eq!(master_len(&s), 19, "the composite curve keeps its 19 points");
+    // An eyedropper with another key of the same call reads that key over the 19-point base too.
+    place(&mut s, &imported);
+    s.execute("layer.setAdjustment", json!({"red": [[0, 0], [100, 120], [255, 255]], "eyedropper": {"point": "white", "at": [2, 2]}})).unwrap();
+    assert_eq!(master_len(&s), 19);
+    // A command's own points stay held to 16, on a layer with that base as well.
+    let seventeen: Vec<[usize; 2]> = (0..17).map(|k| [k * 15, k * 15]).collect();
+    place(&mut s, &imported);
+    assert!(s.execute("layer.setAdjustment", json!({"points": seventeen})).is_err(), "17 points handed to a command are refused");
+    // The same call that also asks for an eyedropper reads its own points as a command's.
+    place(&mut s, &imported);
+    let with_pick = json!({"points": seventeen, "eyedropper": {"point": "white", "at": [2, 2]}});
+    assert!(s.execute("layer.setAdjustment", with_pick).is_err(), "17 points handed to a command are refused beside an eyedropper");
+}

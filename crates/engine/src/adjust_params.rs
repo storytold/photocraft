@@ -1014,7 +1014,7 @@ pub fn layer_eyedropper(s: &crate::Session, layer: photocraft_doc::LayerId, p: &
     if let Some(o) = rest.as_object_mut() {
         o.remove("eyedropper");
     }
-    let current = if user_keys(&rest).is_empty() { adj.clone() } else { from_params(kind, &rest, Some(adj), d.doc.mode)? };
+    let current = if user_keys(&rest).is_empty() { adj.clone() } else { from_command_params(kind, &rest, Some(adj), d.doc.mode)? };
     let (picker, sample) = eyedropper_sample(&d.doc, Some(layer), e, None)?;
     adjustment_eyedropper(kind, &to_params(&current), picker, sample, d.doc.mode).map(Some)
 }
