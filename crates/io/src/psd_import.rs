@@ -68,9 +68,15 @@ pub(crate) struct Ctx<'a> {
     /// a surface clones by sharing its tiles.
     pub filter_masks: std::collections::HashMap<String, Option<LayerMask>>,
     /// The same for the unfiltered pixels the mask mixes back in.
-    pub unfiltered: std::collections::HashMap<String, Option<Surface>>,
-    /// Pixel bytes retained in [`Self::unfiltered`], held under [`MAX_UNFILTERED_BYTES`].
-    pub unfiltered_bytes: u64,
+    /// `Err` when the source was refused for the smart-filter cache budget.
+    pub unfiltered: std::collections::HashMap<String, Result<Option<Surface>, crate::smart_map::FilterCacheError>>,
+    /// The pixels kept in [`Self::filter_masks`] and [`Self::unfiltered`], and the tiles mixing
+    /// adds to smart objects, charged as they are made (the import budget doesn't cover them). A
+    /// source gives its charge back once the last layer naming it is built ([`Self::placed_uses`]).
+    pub smart_filter_budget: crate::smart_map::FilterCacheBudget,
+    /// How many layer records name each placed id, counted down as they are built: an
+    /// unfiltered source is dropped after its last use.
+    pub placed_uses: std::collections::HashMap<String, usize>,
     /// Placed layers naming the same source share editable contents, not their placement.
     pub smart_contents: std::collections::HashMap<String, SmartContentsId>,
     /// Source sizes of `PlLd`-only placed layers, by source id (read once per embedded file).
@@ -114,6 +120,39 @@ fn row_bands(top: i32, h: usize, rows: usize) -> Vec<(usize, usize)> {
         r1 = end + rows;
     }
     out
+}
+
+/// Bytes of the tiles mixing `source` into `stored` adds ([`photocraft_compose::filter_mask::mix`]
+/// keeps the stored tiles and writes the source's): one per tile the source has and they don't.
+fn added_tiles_bytes(source: &Surface, stored: &Surface, fmt: &PixelFormat) -> u64 {
+    let added = source.tiles().filter(|(c, _)| stored.tile(**c).is_none()).count();
+    photocraft_raster::stored_tiles_bytes(added as u64, fmt)
+}
+
+/// How many smart objects [`Ctx::build`] makes of `nodes` (to `depth` groups deep, as it does)
+/// that name each placed id in their `SoLd`/`SoLE`: the layers whose build counts the use down
+/// ([`Ctx::used_placed`]). Folders are groups, and records [`Ctx::layer_from_record`] makes
+/// adjustment or type layers don't name a source.
+fn count_placed_uses(records: &[LayerRecord], nodes: &[LayerNode], depth: usize, uses: &mut std::collections::HashMap<String, usize>) {
+    for node in nodes {
+        match node {
+            LayerNode::Layer { index } => {
+                let Some(rec) = records.get(*index) else { continue };
+                let smart = !ADJUSTMENT_KEYS.into_iter().any(|k| rec.block(k).is_some())
+                    && rec.block(b"TySh").is_none()
+                    && SMART_KEYS.into_iter().any(|k| rec.block(k).is_some());
+                if let Some(p) = rec.block(b"SoLd").or_else(|| rec.block(b"SoLE")).and_then(|b| crate::smart_map::parse_sold(&b.data))
+                    && smart
+                    && !p.placed.is_empty()
+                {
+                    *uses.entry(p.placed).or_insert(0) += 1;
+                }
+            }
+            // The nesting cap `build` applies: deeper children are not imported.
+            LayerNode::Group { children, .. } if depth < photocraft_doc::MAX_GROUP_DEPTH => count_placed_uses(records, children, depth + 1, uses),
+            LayerNode::Group { .. } => {}
+        }
+    }
 }
 
 fn import_format(file: &PsdFile) -> (ColorMode, bool, bool, SampleType) {
@@ -171,6 +210,89 @@ fn soft_shape_fill(rec: &LayerRecord, has_vector: bool, fill_key: Option<&[u8; 4
     // its vector mask.
     let pattern = matches!(fill, photocraft_doc::Fill::Pattern { .. });
     pattern.then_some((fill, soft))
+}
+
+/// Placed-layer keys: `SoLE` (a linked smart object) before `PlLd`, as a `PlLd` alone is Photoshop
+/// CS2's record.
+const SMART_KEYS: [&[u8; 4]; 3] = [b"SoLd", b"SoLE", b"PlLd"];
+
+fn fill_key(rec: &LayerRecord) -> Option<&'static [u8; 4]> {
+    [b"SoCo", b"GdFl", b"PtFl"].into_iter().find(|k| rec.block(k).is_some())
+}
+
+fn vector_key(rec: &LayerRecord) -> Option<&'static [u8; 4]> {
+    [b"vsms", b"vmsk"].into_iter().find(|k| rec.block(k).is_some())
+}
+
+/// The blocks of a shape layer: a vector path with a fill or stroke, or shape fill content.
+fn has_shape_blocks(rec: &LayerRecord, vector: bool, fill: bool) -> bool {
+    (vector && (fill || rec.block(b"vstk").is_some())) || rec.block(b"vscg").is_some()
+}
+
+/// Whether [`Ctx::layer_from_record`] makes `rec` a shape layer: it has shape blocks and is not
+/// an adjustment, type or placed layer, nor a pattern-filled shape (a fill layer). Folders and
+/// their end markers are groups ([`Ctx::build`]): a Frame's `vstk` there is drawn by the
+/// compositor, never rendered at import.
+fn is_shape_record(rec: &LayerRecord) -> bool {
+    use craft_psd::tagged::SectionType;
+    if matches!(rec.section_type(), SectionType::OpenFolder | SectionType::ClosedFolder | SectionType::BoundingDivider) {
+        return false;
+    }
+    let (fill, vector) = (fill_key(rec), vector_key(rec).is_some());
+    let other = ADJUSTMENT_KEYS.into_iter().any(|k| rec.block(k).is_some())
+        || rec.block(b"TySh").is_some()
+        || SMART_KEYS.into_iter().any(|k| rec.block(k).is_some())
+        || soft_shape_fill(rec, vector, fill).is_some();
+    !other && has_shape_blocks(rec, vector, fill.is_some())
+}
+
+/// A shape record's path, fill, stroke, density and feather (no pixels) in a `w`×`h` document of
+/// `dpi`.
+fn shape_geometry(rec: &LayerRecord, w: u32, h: u32, dpi: f32) -> ShapeLayer {
+    let fill = fill_key(rec).and_then(|k| rec.block(k).and_then(|b| blocks::parse_fill(k, &b.data)));
+    let mut sh = ShapeLayer { fill, ..Default::default() };
+    let lookup = |k: &[u8; 4]| rec.block(k).map(|b| b.data.clone());
+    crate::vector_map::shape_from_blocks(&mut sh, &lookup, w, h, dpi);
+    (sh.density, sh.feather) = shape_mask_params(rec);
+    sh
+}
+
+/// Whether the importer renders a shape from its path and fill rather than keep its stored
+/// pixels: it has none (32-bit documents, files saved without layer pixels), as Photoshop renders
+/// it when it opens the file, or it is soft (its stored pixels hold the shape alone, without the
+/// fill its density and feather show beyond the path).
+fn shape_rendered(sh: &ShapeLayer, rec: &LayerRecord) -> bool {
+    let soft = sh.has_soft_mask() && sh.fill.is_some();
+    soft || ((rec.rect.is_empty() || rec.rect.size().is_err()) && (!sh.path.subpaths.is_empty() || sh.path.inverted))
+}
+
+/// The document resolution an import reads: the last Resolution Info resource that parses, else
+/// [`Document::new`]'s 72 dpi. Type sizes and stroke widths given in points depend on it.
+pub(crate) fn resolution_dpi(file: &PsdFile) -> f32 {
+    file.resources
+        .iter()
+        .rev()
+        .filter(|r| r.id == ids::RESOLUTION_INFO)
+        .find_map(|r| craft_psd::ResolutionInfo::from_bytes(&r.data).ok())
+        .map_or(72.0, |info| info.h_res() as f32)
+}
+
+/// The canvas area the importer renders `rec`'s shape over ([`shape_rendered`]) and the shape, or
+/// `None` when its pixels are not rendered: the import budget charges the render before any pixel
+/// is decoded. An inverted shape, or one whose density is below 100 %, covers the whole canvas;
+/// others their path, stroke and feather. `dpi` is [`resolution_dpi`].
+pub(crate) fn shape_render_area(file: &PsdFile, rec: &LayerRecord, dpi: f32) -> Option<(Rect, ShapeLayer)> {
+    if !is_shape_record(rec) {
+        return None;
+    }
+    let (w, h) = (file.header.width, file.header.height);
+    let sh = shape_geometry(rec, w, h, dpi);
+    if !shape_rendered(&sh, rec) {
+        return None;
+    }
+    let canvas = Rect::new(0, 0, i32::try_from(w).unwrap_or(i32::MAX), i32::try_from(h).unwrap_or(i32::MAX));
+    let area = photocraft_vector::render_bounds(&sh, photocraft_vector::DEFAULT_TOLERANCE, canvas)?.intersect(&canvas);
+    (!area.is_empty()).then_some((area, sh))
 }
 
 #[derive(Clone, Copy)]
@@ -409,8 +531,12 @@ impl Ctx<'_> {
             return done.clone();
         }
         let item = self.filter_effects.iter().find(|i| i.id == placed)?;
-        let mask = match crate::smart_map::mask_from_item(item, self.mask_fmt.sample, stack) {
+        let mask = match crate::smart_map::mask_from_item(item, self.mask_fmt.sample, stack, &mut self.smart_filter_budget) {
             Ok(m) => m,
+            Err(crate::smart_map::FilterCacheError::Allocation(e)) => {
+                self.allocation_failed(format!("layer \"{name}\" filter mask: {e}"));
+                None
+            }
             Err(e) => {
                 self.warn(format!("layer \"{name}\": {e}; the filter mask was ignored"));
                 None
@@ -506,11 +632,10 @@ impl Ctx<'_> {
 
     fn layer_from_record(&mut self, rec: &LayerRecord) -> Layer {
         let name = rec.name();
-        let fill_key = [b"SoCo", b"GdFl", b"PtFl"].into_iter().find(|k| rec.block(k).is_some());
-        let vector_key = [b"vsms", b"vmsk"].into_iter().find(|k| rec.block(k).is_some());
+        let fill_key = fill_key(rec);
+        let vector_key = vector_key(rec);
         let adj_key = ADJUSTMENT_KEYS.into_iter().find(|k| rec.block(k).is_some());
-        // `SoLE` (a linked smart object) before `PlLd`: a `PlLd` alone is Photoshop CS2's record.
-        let smart_key = [b"SoLd", b"SoLE", b"PlLd"].into_iter().find(|k| rec.block(k).is_some());
+        let smart_key = SMART_KEYS.into_iter().find(|k| rec.block(k).is_some());
         let blocks = preserved_blocks(rec);
         // `psd_raw` shares the Arc of the matching `psd_blocks` entry.
         let principal = |k: &[u8; 4]| blocks.iter().find(|(bk, _)| bk == k).map(|(_, d)| d.clone());
@@ -593,21 +718,22 @@ impl Ctx<'_> {
                 fill_cache = Some(FillCache { fill: f.clone(), surface: self.record_surface(rec, &name) });
             }
             LayerContent::Fill(f)
-        } else if (vector_key.is_some() && (fill_key.is_some() || rec.block(b"vstk").is_some())) || rec.block(b"vscg").is_some() {
-            let fill = fill_key.and_then(|k| rec.block(k).and_then(|b| blocks::parse_fill(k, &b.data)));
-            let mut sh = ShapeLayer { fill, cache: Some(self.record_surface(rec, &name)), psd_raw: vector_key.and_then(principal), ..Default::default() };
-            let lookup = |k: &[u8; 4]| rec.block(k).map(|b| b.data.clone());
-            crate::vector_map::shape_from_blocks(&mut sh, &lookup, self.file.header.width, self.file.header.height, self.dpi);
-            (sh.density, sh.feather) = shape_mask_params(rec);
-            // No stored pixels (32-bit documents, files saved without layer pixels): render the
-            // shape from its path and fill, as Photoshop does when it opens the file. A soft
-            // shape's stored pixels hold the shape alone, without the fill its density and feather
-            // show beyond the path: render it too.
-            let soft = sh.has_soft_mask() && sh.fill.is_some();
-            if self.fatal_error.is_none() && (soft || ((rec.rect.is_empty() || rec.rect.size().is_err()) && (!sh.path.subpaths.is_empty() || sh.path.inverted)))
-            {
+        } else if has_shape_blocks(rec, vector_key.is_some(), fill_key.is_some()) {
+            let mut sh = shape_geometry(rec, self.file.header.width, self.file.header.height, self.dpi);
+            sh.cache = Some(self.record_surface(rec, &name));
+            sh.psd_raw = vector_key.and_then(principal);
+            // The import budget charged this render ([`shape_render_area`]); it can still cover
+            // the whole canvas, so its allocations are fallible.
+            if self.fatal_error.is_none() && shape_rendered(&sh, rec) {
                 let canvas = Rect::new(0, 0, self.file.header.width as i32, self.file.header.height as i32);
-                sh.cache = Some(photocraft_vector::render_shape(&sh, self.fmt, canvas));
+                match photocraft_vector::try_render_shape(&sh, self.fmt, canvas) {
+                    Ok(mut cache) => {
+                        // An inverted or less dense fill is one uniform tile over most of the canvas.
+                        cache.share_uniform_tiles(&mut self.uniform);
+                        sh.cache = Some(cache);
+                    }
+                    Err(error) => self.allocation_failed(format!("layer \"{name}\" shape: {error}")),
+                }
             }
             LayerContent::Shape(sh)
         } else if let Some(k) = fill_key {
@@ -676,6 +802,10 @@ impl Ctx<'_> {
         // ones (`FEid`) back in through it; our smart objects hold the mixed result.
         let stored = self.record_surface(rec, name);
         let shown = stack.enabled && stack.filters.iter().any(|f| f.visible);
+        // A mask that would show but can't be mixed in for the cache budget is dropped with the
+        // mix: the layer keeps its stored pixels, and a mask kept over pixels it wasn't mixed
+        // into would be unmixed from them again on save.
+        let mut ignore_mask = false;
         let cache = match (&placed, filter_mask.as_ref().filter(|m| m.enabled && shown)) {
             (Some(p), Some(m)) => {
                 let unfiltered = match self.unfiltered.get(&p.placed) {
@@ -684,25 +814,50 @@ impl Ctx<'_> {
                         // Every distinct source is kept until the import ends, so what they add up to is
                         // bounded: past the limit the layer keeps its stored pixels, unmixed.
                         let item = self.filter_effects.iter().find(|i| i.id == p.placed);
-                        // The surface keeps whole tiles over the item's rect, not its logical pixels.
-                        let cost = item
-                            .map_or(0, |i| photocraft_raster::tile_storage_bytes(Rect::new(i.rect.left, i.rect.top, i.rect.right, i.rect.bottom), &self.fmt));
-                        let fits = self.unfiltered_bytes.saturating_add(cost) <= MAX_UNFILTERED_BYTES;
-                        let made = item.filter(|_| fits).and_then(|i| crate::smart_map::unfiltered_from_item(i, self.fmt));
-                        if made.is_some() {
-                            self.unfiltered_bytes += cost;
-                        }
+                        let made = match item.map(|i| crate::smart_map::unfiltered_from_item(i, self.fmt, &mut self.smart_filter_budget)) {
+                            Some(Ok(made)) => Ok(made),
+                            Some(Err(crate::smart_map::FilterCacheError::Allocation(e))) => {
+                                self.allocation_failed(format!("layer \"{name}\" unfiltered smart object pixels: {e}"));
+                                Ok(None)
+                            }
+                            Some(Err(e)) => {
+                                self.warn(format!("layer \"{name}\": {e}; its filter mask was ignored"));
+                                Err(e)
+                            }
+                            None => Ok(None),
+                        };
                         self.unfiltered.insert(p.placed.clone(), made.clone());
                         made
                     }
                 };
                 match unfiltered {
-                    Some(u) => photocraft_compose::filter_mask::mix(&u, &stored, m),
-                    None => stored,
+                    // The mixed layer keeps the stored tiles (which the import budget charged)
+                    // and gains a tile wherever the source has one they don't: charged per layer
+                    // (it stays with the document), as many layers can share one source.
+                    Ok(Some(u)) if self.smart_filter_budget.try_charge(added_tiles_bytes(&u, &stored, &self.fmt)) => {
+                        photocraft_compose::filter_mask::mix(&u, &stored, m)
+                    }
+                    Ok(Some(_)) => {
+                        let e = crate::smart_map::FilterCacheError::TooLarge;
+                        self.warn(format!("layer \"{name}\": {e}; its filter mask was ignored"));
+                        ignore_mask = true;
+                        stored
+                    }
+                    Err(_) => {
+                        ignore_mask = true;
+                        stored
+                    }
+                    // A source that can't be read: the stored pixels, as Photoshop's cache would
+                    // be without it (saving keeps the cache as it is).
+                    Ok(None) => stored,
                 }
             }
             _ => stored,
         };
+        let filter_mask = if ignore_mask { None } else { filter_mask };
+        if let Some(p) = &placed {
+            self.used_placed(&p.placed);
+        }
         // The global blocks' data lives in `self.global` (an owned open moves it out of the file).
         let vector_preview = rec.block(&crate::vector_preview::PSD_KEY).and_then(|block| {
             let global = &self.global;
@@ -726,6 +881,22 @@ impl Ctx<'_> {
         };
         crate::smart_map::pin_puppet_meshes(&mut sm);
         LayerContent::Smart(sm)
+    }
+
+    /// Counts a layer naming `placed` as built; after the last one its unfiltered source is
+    /// dropped and gives its charge back.
+    fn used_placed(&mut self, placed: &str) {
+        let Some(left) = self.placed_uses.get_mut(placed) else { return };
+        *left = left.saturating_sub(1);
+        if *left > 0 {
+            return;
+        }
+        self.placed_uses.remove(placed);
+        if let Some(Ok(Some(_))) = self.unfiltered.remove(placed)
+            && let Some(item) = self.filter_effects.iter().find(|i| i.id == placed)
+        {
+            self.smart_filter_budget.release(crate::smart_map::unfiltered_charge(item, self.fmt));
+        }
     }
 
     /// Typed vector mask from `vsms`/`vmsk` (non-shape layers). A user mask that Photoshop
@@ -868,9 +1039,6 @@ pub(crate) fn group_depth(file: &PsdFile) -> usize {
 /// Additional-layer-information keys (Adobe PSD spec, plus `cust`, `vowv` and `SoLE` seen in
 /// Photoshop's files) that are not an adjustment of their own: names, ids, locks, effects,
 /// masks, metadata, and the fill, type, placed and shape content read before.
-/// Most pixel bytes the smart-filter `FEid` sources may keep decoded across one import.
-const MAX_UNFILTERED_BYTES: u64 = 1 << 30;
-
 const LAYER_INFO_KEYS: [&[u8; 4]; 50] = [
     b"luni", b"lyid", b"lnsr", b"lsct", b"lsdk", b"lspf", b"lclr", b"iOpa", b"clbl", b"infx", b"knko", b"tsly", b"lmgm", b"vmgm", b"brst", b"shmd", b"fxrp",
     b"lfx2", b"lfxs", b"lmfx", b"lrFX", b"lyvr", b"sn2P", b"cust", b"CgEd", b"vmsk", b"vsms", b"vogk", b"vowv", b"vstk", b"vscg", b"artb", b"artd", b"abdd",
@@ -1343,7 +1511,8 @@ fn psd_to_document_global(
         filter_effects: Vec::new(),
         filter_masks: Default::default(),
         unfiltered: Default::default(),
-        unfiltered_bytes: 0,
+        smart_filter_budget: Default::default(),
+        placed_uses: Default::default(),
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
         vector_previews: Default::default(),
@@ -1457,6 +1626,9 @@ fn import_layered(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_
     let DecodedImport { file, merged, sizes, canvas, depth, fmt, .. } = import;
     let cc = fmt.mode.color_channels();
     let tree = file.layer_tree_max_depth(photocraft_doc::MAX_GROUP_DEPTH);
+    if !cx.filter_effects.is_empty() {
+        count_placed_uses(file.layers(), &tree, 0, &mut cx.placed_uses);
+    }
     let space = photocraft_compose::cmyk_space(doc);
     doc.layers = photocraft_color::convert::with_cmyk_space(space.as_ref(), || cx.build(&tree, 0));
     mark_background(file, &mut doc.layers);

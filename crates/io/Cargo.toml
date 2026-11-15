@@ -69,6 +69,7 @@ crc32fast = "1.5"
 craft-affinity = { workspace = true, features = ["synth"] }
 flate2 = { workspace = true }
 craft-psd = { workspace = true, features = ["testgen"] }
+photocraft-compose = { workspace = true, features = ["testgen"] }
 photocraft-raw = { workspace = true, features = ["testgen"] }
 photocraft-testkit = { workspace = true }
 proptest = { workspace = true }

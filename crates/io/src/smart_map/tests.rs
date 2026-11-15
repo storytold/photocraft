@@ -2313,3 +2313,64 @@ fn render_filters_made_in_photocraft_are_written() {
     assert!(item_for_filter(&sf("filter.render.lensFlare", json!({"lens": "fisheye"}))).unwrap_err().contains("fisheye"));
     assert!(item_for_filter(&sf("filter.render.clouds", json!({"foreground": "red"}))).is_err());
 }
+
+/// An `FEid` item whose filter mask covers `rect`, all black (a mask that hides the filter
+/// everywhere is not pruned away), at `depth` bits.
+fn masked_item(rect: PsdRect, depth: u32, compression: Compression) -> FilterEffectsItem {
+    let (w, h) = rect.size().unwrap();
+    let plane = vec![0u8; w * h * (depth as usize / 8)];
+    let mask = EffectsPlane::encode(compression, &plane, w, h, depth as u16).unwrap();
+    FilterEffectsItem { id: "p".into(), version: 1, rect, depth, max_channels: 3, slots: vec![None; 5], mask: Some((rect, mask)) }
+}
+
+/// A filter mask is charged to the smart-filter cache budget before it is decoded: one larger
+/// than what is left is refused without being decoded (an undecodable one says it is too large,
+/// not that it is damaged), and one that fits is charged for the tiles it keeps. The depth is
+/// checked first too.
+#[test]
+fn filter_masks_are_charged_before_they_are_decoded() {
+    let stack = FilterStack { enabled: true, filters: Vec::new(), mask_enabled: true, mask_linked: false };
+    let rect = PsdRect::from_xywh(-3, 5, 600, 300);
+    let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::U16, false);
+    let tiles = photocraft_raster::tile_storage_bytes(psd_rect(&rect), &fmt);
+    for depth in [8u32, 16, 32] {
+        let sample = crate::pixels::sample_for_depth(depth as u16);
+        let item = masked_item(rect, depth, Compression::Zip);
+        let cost = photocraft_raster::tile_storage_bytes(psd_rect(&rect), &PixelFormat::new(ColorMode::Grayscale, sample, false));
+        let mut budget = FilterCacheBudget::new(cost);
+        let mask = mask_from_item(&item, sample, &stack, &mut budget).unwrap().expect("a black mask");
+        assert_eq!(budget.used(), cost, "{depth}-bit: charged for its tiles");
+        assert_eq!(mask.surface.pixel(-3, 5), vec![0.0]);
+        assert_eq!(mask.surface.pixel(-4, 5), vec![1.0], "white beyond its bounds");
+        // Nothing is left for a second one.
+        assert_eq!(mask_from_item(&item, sample, &stack, &mut budget), Err(FilterCacheError::TooLarge));
+        assert_eq!(budget.used(), cost);
+    }
+    // Data that would not even decode is refused for its size first: it was never decoded.
+    let mut broken = masked_item(rect, 16, Compression::Raw);
+    if let Some((_, plane)) = &mut broken.mask {
+        plane.data.truncate(1);
+    }
+    assert!(broken.decoded_mask().is_none());
+    assert_eq!(mask_from_item(&broken, SampleType::U16, &stack, &mut FilterCacheBudget::new(tiles - 1)), Err(FilterCacheError::TooLarge));
+    assert!(matches!(mask_from_item(&broken, SampleType::U16, &stack, &mut FilterCacheBudget::new(tiles)), Err(FilterCacheError::Unreadable(_))));
+    // The wrong depth is reported before the size or the data.
+    let err = mask_from_item(&broken, SampleType::U8, &stack, &mut FilterCacheBudget::new(0)).unwrap_err();
+    assert!(matches!(&err, FilterCacheError::Unreadable(why) if why.contains("16-bit")), "{err:?}");
+}
+
+/// The unfiltered pixels of an item are refused before decoding when their tiles don't fit,
+/// and charged once made.
+#[test]
+fn unfiltered_sources_are_charged_before_they_are_decoded() {
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let mut source = Surface::new(fmt);
+    source.fill_rect(GeomRect::new(0, 0, 300, 20), &[0.2, 0.4, 0.6, 1.0]);
+    let item = feid_item("p", &source, None, GeomRect::new(0, 0, 300, 20), fmt).unwrap();
+    let cost = photocraft_raster::tile_storage_bytes(psd_rect(&item.rect), &fmt);
+    assert_eq!(unfiltered_from_item(&item, fmt, &mut FilterCacheBudget::new(cost - 1)).map(|s| s.is_some()), Err(FilterCacheError::TooLarge));
+    let mut budget = FilterCacheBudget::new(cost);
+    let back = unfiltered_from_item(&item, fmt, &mut budget).unwrap().expect("decoded");
+    assert_eq!(budget.used(), cost);
+    assert_eq!(back.read_region(GeomRect::new(0, 0, 300, 20)), source.read_region(GeomRect::new(0, 0, 300, 20)));
+}

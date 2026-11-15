@@ -195,47 +195,183 @@ pub fn filter_stack(fx: &Descriptor) -> FilterStack {
 
 // ---------- the filter mask (`FEid`) ----------
 
+/// Most pixel bytes the smart-filter caches may keep decoded across one PSD import or export: the
+/// unfiltered `FEid` sources, the filter masks and the smart objects mixed through them. These are
+/// not in the PSD import budget, which they could exceed many times over from a small file (one
+/// cache can serve any number of layers).
+pub const MAX_SMART_FILTER_CACHE_BYTES: u64 = 1 << 30;
+
+/// What is left of [`MAX_SMART_FILTER_CACHE_BYTES`] (or a lower cap) in one import or export:
+/// every smart-filter cache it keeps is charged here before it is decoded or made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FilterCacheBudget {
+    used: u64,
+    cap: u64,
+}
+
+impl Default for FilterCacheBudget {
+    fn default() -> Self {
+        #[cfg(test)]
+        if let Some(cap) = TEST_CACHE_CAP.with(std::cell::Cell::get) {
+            return Self::new(cap);
+        }
+        Self::new(MAX_SMART_FILTER_CACHE_BYTES)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CACHE_CAP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with every [`FilterCacheBudget`] made on this thread capped at `cap` (an import's or
+/// an export's), so a test needs no gigabyte of caches to reach the cap.
+#[cfg(test)]
+pub(crate) fn with_test_cache_cap<R>(cap: u64, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<u64>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_CACHE_CAP.with(|c| c.set(self.0));
+        }
+    }
+    let _reset = Reset(TEST_CACHE_CAP.with(|c| c.replace(Some(cap))));
+    f()
+}
+
+impl FilterCacheBudget {
+    pub fn new(cap: u64) -> Self {
+        Self { used: 0, cap }
+    }
+
+    /// Bytes charged so far.
+    pub fn used(&self) -> u64 {
+        self.used
+    }
+
+    /// Whether `bytes` more fit under the cap.
+    pub fn fits(&self, bytes: u64) -> bool {
+        self.used.checked_add(bytes).is_some_and(|total| total <= self.cap)
+    }
+
+    /// Charges `bytes` when they fit (`true`); charges nothing otherwise.
+    pub fn try_charge(&mut self, bytes: u64) -> bool {
+        let fits = self.fits(bytes);
+        if fits {
+            self.used = self.used.saturating_add(bytes);
+        }
+        fits
+    }
+
+    /// Gives back `bytes` charged earlier, once what they paid for is freed: the budget bounds
+    /// what is held at once, not what passes through.
+    pub fn release(&mut self, bytes: u64) {
+        self.used = self.used.saturating_sub(bytes);
+    }
+}
+
+/// What [`mask_from_item`] charged for the `mask` it made.
+pub fn mask_charge(mask: &LayerMask) -> u64 {
+    photocraft_raster::stored_tiles_bytes(mask.surface.tile_count() as u64, &mask.surface.format())
+}
+
+/// What [`unfiltered_from_item`] charged for the pixels it made of `item` in `fmt`.
+pub fn unfiltered_charge(item: &FilterEffectsItem, fmt: PixelFormat) -> u64 {
+    photocraft_raster::tile_storage_bytes(psd_rect(&item.rect), &fmt)
+}
+
+/// Why a smart-filter cache was not read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FilterCacheError {
+    /// Damaged or unsupported data; the cache is ignored.
+    Unreadable(String),
+    /// More pixels than are left of the [`FilterCacheBudget`]; the cache is ignored.
+    TooLarge,
+    /// Its pixels could not be allocated: the open fails.
+    Allocation(photocraft_raster::AllocationError),
+}
+
+impl std::fmt::Display for FilterCacheError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable(why) => f.write_str(why),
+            Self::TooLarge => f.write_str("the smart filter caches are too large to keep in memory"),
+            Self::Allocation(e) => write!(f, "the smart filter cache could not be allocated: {e}"),
+        }
+    }
+}
+
+fn psd_rect(r: &PsdRect) -> GeomRect {
+    GeomRect::new(r.left, r.top, r.right, r.bottom)
+}
+
 /// The filter mask stored in an `FEid` item, in document coordinates and white beyond its bounds
 /// (`filterMaskExtendWithWhite`), as a grayscale mask of `sample` depth. `Ok(None)` when the
-/// item has no mask or it is all white (no mask); `Err` when it can't be decoded.
-pub fn mask_from_item(item: &FilterEffectsItem, sample: SampleType, stack: &FilterStack) -> Result<Option<LayerMask>, String> {
-    if item.mask.is_none() {
-        return Ok(None);
-    }
-    let (rect, plane) = item.decoded_mask().ok_or("the smart filter mask could not be decoded")?;
+/// item has no mask or it is all white (no mask); `Err` when it can't be decoded, or its tiles
+/// don't fit what is left of `budget` (checked before anything is decoded; the tiles kept are
+/// charged).
+pub fn mask_from_item(
+    item: &FilterEffectsItem,
+    sample: SampleType,
+    stack: &FilterStack,
+    budget: &mut FilterCacheBudget,
+) -> Result<Option<LayerMask>, FilterCacheError> {
+    let Some((rect, _)) = &item.mask else { return Ok(None) };
     if item.depth != u32::from(crate::pixels::psd_depth(sample)) {
-        return Err(format!("the smart filter mask is {}-bit in a {:?} document", item.depth, sample));
+        return Err(FilterCacheError::Unreadable(format!("the smart filter mask is {}-bit in a {:?} document", item.depth, sample)));
     }
-    let (w, h) = rect.size().map_err(|e| e.to_string())?;
+    let (w, h) = rect.size().map_err(|e| FilterCacheError::Unreadable(e.to_string()))?;
     let fmt = PixelFormat::new(ColorMode::Grayscale, sample, false);
+    let area = psd_rect(rect);
+    if !budget.fits(photocraft_raster::tile_storage_bytes(area, &fmt)) {
+        return Err(FilterCacheError::TooLarge);
+    }
+    let unreadable = || FilterCacheError::Unreadable("the smart filter mask could not be decoded".into());
+    let (_, mut plane) = item.decoded_mask().ok_or_else(unreadable)?;
+    if w.checked_mul(h).and_then(|n| n.checked_mul(sample.bytes())) != Some(plane.len()) {
+        return Err(unreadable());
+    }
+    // One channel: its big-endian samples become native in place (float bits kept as they are).
+    #[cfg(target_endian = "little")]
+    for s in plane.chunks_exact_mut(sample.bytes()) {
+        s.reverse();
+    }
     let mut surface = Surface::with_default(fmt, &[1.0]);
-    let n = w.checked_mul(h).ok_or("the smart filter mask is too large")?;
-    let bytes = crate::pixels::interleave(&[Some(&plane)], &[crate::pixels::zero_sample(sample)], n, sample, &[false]);
-    surface.write_interleaved(GeomRect::new(rect.left, rect.top, rect.right, rect.bottom), &bytes);
-    photocraft_raster::scratch::give(bytes);
+    surface.try_write_interleaved(area, &plane).map_err(FilterCacheError::Allocation)?;
+    drop(plane);
     surface.prune();
     if surface.content_bounds().is_empty() {
         return Ok(None);
     }
+    budget.try_charge(photocraft_raster::stored_tiles_bytes(surface.tile_count() as u64, &fmt));
     Ok(Some(LayerMask { surface, enabled: stack.mask_enabled, linked: stack.mask_linked, density: 1.0, feather: 0.0 }))
 }
 
 /// The unfiltered placed pixels of an `FEid` item (the inverse of [`feid_item`]), in `fmt`: colour
-/// channels from slot 0, transparency from the last slot (opaque without it). `None` when the
-/// item has no colour planes, its depth isn't `fmt`'s, or a plane doesn't decode.
-pub fn unfiltered_from_item(item: &FilterEffectsItem, fmt: PixelFormat) -> Option<Surface> {
-    let depth = u16::try_from(item.depth).ok()?;
-    if u32::from(crate::pixels::psd_depth(fmt.sample)) != item.depth || !fmt.alpha {
-        return None;
+/// channels from slot 0, transparency from the last slot (opaque without it). `Ok(None)` when the
+/// item has no colour planes, its depth isn't `fmt`'s, or a plane doesn't decode;
+/// [`FilterCacheError::TooLarge`] when its tiles don't fit what is left of `budget` (checked
+/// before anything is decoded; charged when it is made).
+pub fn unfiltered_from_item(item: &FilterEffectsItem, fmt: PixelFormat, budget: &mut FilterCacheBudget) -> Result<Option<Surface>, FilterCacheError> {
+    let Some(depth) = u16::try_from(item.depth).ok().filter(|_| u32::from(crate::pixels::psd_depth(fmt.sample)) == item.depth && fmt.alpha) else {
+        return Ok(None);
+    };
+    let Ok((w, h)) = item.rect.size() else { return Ok(None) };
+    let Some(n) = w.checked_mul(h) else { return Ok(None) };
+    let area = psd_rect(&item.rect);
+    // The surface keeps whole tiles over the item's rect, not its logical pixels.
+    let cost = photocraft_raster::tile_storage_bytes(area, &fmt);
+    if !budget.fits(cost) {
+        return Err(FilterCacheError::TooLarge);
     }
-    let (w, h) = item.rect.size().ok()?;
-    let n = w.checked_mul(h)?;
     let cc = fmt.mode.color_channels();
     let mut planes = Vec::with_capacity(cc + 1);
     for slot in (0..cc).chain(std::iter::once(item.slots.len().saturating_sub(1))) {
         planes.push(match item.slots.get(slot).and_then(Option::as_ref) {
-            Some(p) => Some(p.decode(w, h, depth).ok()?),
-            None if slot < cc => return None,
+            Some(p) => match p.decode(w, h, depth) {
+                Ok(p) => Some(p),
+                Err(_) => return Ok(None),
+            },
+            None if slot < cc => return Ok(None),
             None => None,
         });
     }
@@ -249,15 +385,24 @@ pub fn unfiltered_from_item(item: &FilterEffectsItem, fmt: PixelFormat) -> Optio
     });
     let mut invert = vec![fmt.mode == ColorMode::Cmyk; cc];
     invert.push(false);
-    let mut bytes = crate::pixels::interleave(&refs, &fill, n, fmt.sample, &invert);
+    let mut bytes = match crate::pixels::try_interleave(&refs, &fill, n, fmt.sample, &invert) {
+        Ok(bytes) => bytes,
+        Err(craft_psd::PsdError::OutOfMemory(_)) => {
+            return Err(FilterCacheError::Allocation(photocraft_raster::AllocationError::NotEnoughMemory { bytes: n.saturating_mul(fmt.bytes_per_pixel()) }));
+        }
+        Err(_) => return Ok(None),
+    };
+    drop(refs);
+    drop(planes);
     if fmt.mode == ColorMode::Lab && fmt.sample == SampleType::U16 {
         crate::pixels::lab16_chroma(&mut bytes, cc + 1, true);
     }
     let mut surface = Surface::new(fmt);
-    surface.write_interleaved(GeomRect::new(item.rect.left, item.rect.top, item.rect.right, item.rect.bottom), &bytes);
+    surface.try_write_interleaved(area, &bytes).map_err(FilterCacheError::Allocation)?;
     photocraft_raster::scratch::give(bytes);
     surface.prune();
-    Some(surface)
+    budget.try_charge(cost);
+    Ok(Some(surface))
 }
 
 /// An `FEid` item for a smart object with filters: the unfiltered placed pixels Photoshop
