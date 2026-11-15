@@ -863,8 +863,8 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if close {
                 win.open = false;
                 if closing_owner {
-                    app.clear_move_blocked();
                     app.layer_box = None;
+                    app.clear_move_blocked();
                 }
             }
         }
