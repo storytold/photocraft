@@ -837,17 +837,33 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut all_layers = d.all_layers;
     // Done is the default button (#14179): Enter (also in Change To, where it must not Change) and
     // Escape run it. Consumed before the widgets and the canvas see them, and only while no modal
-    // dialog sits above this one; Enter on a focused button keeps that button's own action.
+    // dialog sits above this one. They only count when nothing is focused or the focus is inside this
+    // window (a key typed into another open window, such as Styles, is not ours), and Enter also
+    // needs that focus to be a text edit, so a focused button keeps its own Enter (its click).
+    // A text edit gives up its focus on Escape or Enter, possibly before this runs, so with either key
+    // down the focus of the frame before is used when nothing is focused now.
+    let window_id = egui::Id::unique("check-spelling");
+    let last_focus_id = egui::Id::unique("check-spelling-last-focus");
+    let focused = ctx.memory(|m| m.focused());
+    let key_down = ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter));
+    let last_focus = ctx.data(|d| d.get_temp::<Option<egui::Id>>(last_focus_id)).flatten();
+    if !key_down {
+        ctx.data_mut(|d| d.insert_temp(last_focus_id, focused));
+    }
     if ctx.memory(|m| m.top_modal_layer().is_none()) {
-        let enter_free = ctx.memory(|m| m.focused().is_none()) || ctx.egui_wants_keyboard_input();
+        let window_layer = egui::LayerId::new(egui::Order::Middle, window_id);
+        let in_window = |f: egui::Id| ctx.read_response(f).is_some_and(|r| r.layer_id == window_layer);
+        let key_focus = focused.or(if key_down { last_focus } else { None });
+        let inside = key_focus.is_none_or(in_window);
+        let enter_free = key_focus.is_none_or(|f| in_window(f) && egui::TextEdit::load_state(ctx, f).is_some());
         let none = egui::Modifiers::NONE;
-        let (esc, enter) = ctx.input_mut(|i| (i.consume_key(none, egui::Key::Escape), enter_free && i.consume_key(none, egui::Key::Enter)));
+        let (esc, enter) = ctx.input_mut(|i| (inside && i.consume_key(none, egui::Key::Escape), enter_free && i.consume_key(none, egui::Key::Enter)));
         if esc || enter {
             act = Some("done");
         }
     }
     egui::Window::new(tl!("Check Spelling"))
-        .id(egui::Id::unique("check-spelling"))
+        .id(window_id)
         .collapsible(false)
         .resizable(false)
         .frame(float_frame(&t).inner_margin(egui::Margin::same(14)))
