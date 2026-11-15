@@ -90,7 +90,9 @@ pub fn quick_export_xmp(doc: &Document, contact: bool) -> Option<String> {
     let info = crate::file_cmds::read_file_info(Some(xmp));
     let mut keep = serde_json::Map::new();
     for k in ["author", "copyright", "title", "copyrightStatus", "copyrightUrl"] {
-        if let Some(v) = info.get(k).filter(|v| v.as_str().is_some_and(|s| !s.is_empty() && s != "unknown")) {
+        // `unknown` is only the copyrighted flag's "not set" (`read_file_info`): the same word in an
+        // author, a title or a notice is text the user wrote.
+        if let Some(v) = info.get(k).filter(|v| v.as_str().is_some_and(|s| !s.is_empty() && !(k == "copyrightStatus" && s == "unknown"))) {
             keep.insert(k.into(), v.clone());
         }
     }

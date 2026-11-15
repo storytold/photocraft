@@ -152,9 +152,53 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
         wdoc.resolution_dpi,
         false,
     )?;
-    write_file(&path, &opt.bytes)?;
+    // The web exporter's PNG-8 carries no XMP (Save for Web keeps that), so Quick Export adds its packet
+    // to the palette PNG itself, as an `iTXt` chunk like the PNG-24 one.
+    let bytes = match (st.format, xmp.as_deref()) {
+        (crate::web_cmds::WebFormat::Png8, Some(packet)) => png_with_xmp(opt.bytes, packet),
+        _ => opt.bytes,
+    };
+    write_file(&path, &bytes)?;
     crate::automate_cmds::fire_event(s, "export");
-    Ok(json!({"path": path, "format": fmt, "bytes": opt.bytes.len(), "warnings": web_warnings(&st, exif, wdoc.resolution_dpi)}))
+    Ok(json!({"path": path, "format": fmt, "bytes": bytes.len(), "warnings": web_warnings(&st, exif, wdoc.resolution_dpi)}))
+}
+
+/// `png` with an `iTXt` chunk `XML:com.adobe.xmp` holding `packet`, placed before the first `IDAT`.
+/// A PNG that does not parse is returned as it was.
+pub(super) fn png_with_xmp(png: Vec<u8>, packet: &str) -> Vec<u8> {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    let chunk = |kind: &[u8; 4], data: &[u8]| -> Vec<u8> {
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        let mut c = Vec::with_capacity(data.len() + 12);
+        c.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        c.extend_from_slice(kind);
+        c.extend_from_slice(data);
+        c.extend_from_slice(&crc.sum().to_be_bytes());
+        c
+    };
+    if !png.starts_with(SIGNATURE) {
+        return png;
+    }
+    let mut at = SIGNATURE.len();
+    while at + 8 <= png.len() {
+        let len = u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]) as usize;
+        if &png[at + 4..at + 8] == b"IDAT" {
+            // keyword, NUL, not compressed, method 0, no language tag, no translated keyword, the text.
+            let mut data = b"XML:com.adobe.xmp\0\0\0\0\0".to_vec();
+            data.extend_from_slice(packet.as_bytes());
+            let mut out = png[..at].to_vec();
+            out.extend(chunk(b"iTXt", &data));
+            out.extend_from_slice(&png[at..]);
+            return out;
+        }
+        at = match at.checked_add(len).and_then(|v| v.checked_add(12)) {
+            Some(next) => next,
+            None => break,
+        };
+    }
+    png
 }
 
 #[cfg(test)]

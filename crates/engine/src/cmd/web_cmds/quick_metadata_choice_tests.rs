@@ -41,13 +41,11 @@ fn session() -> Session {
 }
 
 fn quick_export(s: &mut Session, ext: &str) -> Vec<u8> {
-    let dir = std::env::temp_dir().join(format!("pc-quick-meta-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("out.{ext}"));
+    // Its own folder per call, removed with the guard, so tests running together never meet.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(format!("out.{ext}"));
     s.execute("file.export.quickExport", json!({"path": path.to_string_lossy()})).unwrap();
-    let bytes = std::fs::read(&path).unwrap();
-    std::fs::remove_file(&path).unwrap();
-    bytes
+    std::fs::read(&path).unwrap()
 }
 
 fn contains(bytes: &[u8], s: &str) -> bool {
@@ -111,4 +109,49 @@ fn save_for_web_keeps_its_own_metadata_packets() {
     let contact = web_xmp(&doc, super::super::settings::WebMetadata::CopyrightAndContact).unwrap();
     assert!(contact.contains("Test Author") && contact.contains("Head of nothing") && !contact.contains("Harbor Study"));
     assert_eq!(web_xmp(&doc, super::super::settings::WebMetadata::All).as_deref(), Some(PACKET));
+}
+
+/// CodeRabbit on #15080: the packet reaches the PNG-8 file too (Smaller File on), with Copyright and
+/// Contact Info; None still writes none.
+#[test]
+fn png8_carries_the_packet_when_copyright_is_chosen_and_none_otherwise() {
+    let mut s = session();
+    s.execute("file.export.exportPreferences", json!({"pngSmallerFile": true, "metadata": "copyright"})).unwrap();
+    let bytes = quick_export(&mut s, "png");
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    assert!(contains(&bytes, "PLTE"), "a palette PNG");
+    let xmp = read_xmp(&bytes, "png").expect("a packet in the PNG-8");
+    for kept in KEPT {
+        assert!(xmp.contains(kept), "{kept} in {xmp}");
+    }
+    assert!(LEFT_OUT.iter().all(|t| !contains(&bytes, t)), "no keywords, description or position");
+    s.execute("file.export.exportPreferences", json!({"metadata": "none"})).unwrap();
+    let bytes = quick_export(&mut s, "png");
+    assert_eq!(read_xmp(&bytes, "png"), None);
+    assert!(!contains(&bytes, "XML:com.adobe.xmp"));
+}
+
+#[test]
+fn a_png_that_does_not_parse_is_returned_as_it_was() {
+    use super::super::quick::png_with_xmp;
+    assert_eq!(png_with_xmp(b"not a png".to_vec(), "<x/>"), b"not a png");
+    let bare = b"\x89PNG\r\n\x1a\n".to_vec();
+    assert_eq!(png_with_xmp(bare.clone(), "<x/>"), bare, "no IDAT to put it before");
+}
+
+/// CodeRabbit on #15080: the word `unknown` is dropped only as the copyrighted flag's unset value; an
+/// author, title or notice that says `unknown` is kept.
+#[test]
+fn a_field_that_literally_says_unknown_is_kept() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
+    let packet = PACKET.replace("Test Author", "unknown").replace("Harbor Study", "unknown").replace("Example Studio 2026", "unknown");
+    s.edit("metadata", |d, _| {
+        d.metadata.xmp = Some(packet.clone().into());
+        Ok(())
+    })
+    .unwrap();
+    s.execute("file.export.exportPreferences", json!({"metadata": "copyright"})).unwrap();
+    let xmp = read_xmp(&quick_export(&mut s, "png"), "png").expect("a packet");
+    assert_eq!(xmp.matches(">unknown<").count(), 3, "author, title and notice: {xmp}");
 }
