@@ -37,7 +37,8 @@ fn the_stack_is_an_unsaved_untitled_document() {
     assert_eq!(st.doc.name, "Untitled-1", "not named after a_base.png");
     assert_eq!(st.path, None, "no file behind it, so Save asks for a name and location");
     let names: Vec<&str> = st.doc.layers.iter().map(|l| l.name.as_str()).collect();
-    assert_eq!(names, ["a_base.png", "b_shift.png"], "the layers keep the file names");
+    // Stored bottom first: the first file is the top layer (#13995).
+    assert_eq!(names, ["b_shift.png", "a_base.png"], "the layers keep the file names");
     assert_eq!(s.documents().len(), 1, "no source document opens alongside it");
 }
 
