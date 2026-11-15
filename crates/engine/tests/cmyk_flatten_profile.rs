@@ -204,9 +204,10 @@ fn rasterize_layer_style_separates_through_the_document_profile() {
 /// synthesis, which pays the whole synthesis once per document, fails here.
 ///
 /// The cache-identity check below runs on this test's own copy of those bytes. Another test's
-/// document holds the shared allocation, and when two threads miss at once [`CmykSpace::for_profile`]
-/// builds a space each and finds the first inserted one for both lookups (it releases its lock to
-/// build), so a shared key would make the identity assertion race.
+/// document holds the shared allocation, and [`CmykSpace::for_profile`] releases its lock to build
+/// and inserts without rechecking: two threads missing at once each return the space they built,
+/// while a later lookup finds the first one inserted, so a shared key would make the identity
+/// assertion race.
 #[test]
 fn the_fixture_profile_is_synthesized_once_and_is_the_test_uncoated_profile() {
     let (first, second) = (profile(), profile());
