@@ -422,7 +422,16 @@ pub fn start_save(
         },
         move |_, warnings: Vec<String>| Ok(json!({"path": result_path, "warnings": warnings})),
     );
-    match started.map_err(|e| e.to_string())? {
+    let started = match started {
+        Ok(started) => started,
+        // The worker can fail after it published (a folder flush): the other tabs' files are the
+        // same file this document just wrote.
+        Err(e) => {
+            app.detach_others_after_replaced_write(&path, doc);
+            return Err(e.to_string());
+        }
+    };
+    match started {
         Started::Done(v) => {
             let warnings = warnings_of(&v);
             if invalidate_savepoint {
@@ -477,6 +486,9 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
             if save.invalidate_savepoint {
                 app.invalidate_incomplete_copy(save.doc, &save.path, false);
             }
+            // Whatever this document's own saved state, a copy that landed still stands in for the
+            // file the other tabs hold.
+            app.detach_others_after_replaced_write(&save.path, save.doc);
             // Don't close the window over the error.
             app.jobs.close_after_saves = false;
             notices::error(app, crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &err)]));

@@ -1430,3 +1430,45 @@ fn a_held_quit_asks_about_the_file_a_finished_copy_replaced() {
     assert!(!h.state().allow_close, "quitting is not agreed to until it is answered");
     assert_eq!(h.state().session.documents().len(), 1, "the window stays open");
 }
+
+/// A background copy of A over another open document B's file that publishes and then fails must
+/// detach B like a successful copy does, even though A's own copy is complete (so
+/// `invalidate_savepoint` is false). The unpublised half is the control. Expected from source; not
+/// an executed result until hosted CI runs it.
+#[test]
+fn a_background_copy_that_published_before_failing_detaches_the_other_documents_file() {
+    for published in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let other = dir.path().join("b.tif").to_string_lossy().into_owned();
+        std::fs::write(&other, b"saved original").unwrap();
+        let mut h = app_harness();
+        h.state_mut().services.file_stamp = Some(Box::new(|path: &str| {
+            let meta = std::fs::metadata(path).ok()?;
+            Some(crate::services::FileStamp { len: meta.len(), modified: meta.modified().ok() })
+        }));
+        h.state_mut().run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        let b = h.state().active_doc_id().unwrap();
+        h.state_mut().session.active_mut().unwrap().saved_to(other.clone());
+        h.state_mut().remember_stamp(b, &other);
+        h.state_mut().session.set_active(0);
+        h.state_mut().services.save_file = Some(Arc::new(move |_, path, _, ctl| {
+            ctl.check()?;
+            if published {
+                photocraft_format::atomic_write(std::path::Path::new(path), b"a's copy").map_err(|e| e.to_string())?;
+                return Err("the folder could not be flushed after the write".into());
+            }
+            Err("disk full".into())
+        }));
+        let settings = crate::ExportSettings { tiff_layers: true, ..Default::default() };
+        h.state_mut().write_document(other.clone(), &settings, true).unwrap();
+        step_until(&mut h, |app| !app.saving());
+        let b_state = h.state().session.documents().iter().find(|st| st.doc.id == b).unwrap();
+        assert_eq!(b_state.path.is_none(), published, "published={published}: the other tab loses a file that now holds this document");
+        assert_eq!(b_state.is_dirty(), published, "published={published}: the other tab is unsaved once its file holds another document");
+        assert_eq!(
+            std::fs::read(&other).unwrap() != b"saved original",
+            published,
+            "published={published}: the file holds the copy only when the write published"
+        );
+    }
+}

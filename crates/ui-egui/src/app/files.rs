@@ -602,6 +602,9 @@ impl PhotocraftApp {
         if invalidate {
             self.invalidate_incomplete_copy(doc, &path, written_bytes.is_ok());
         }
+        if written_bytes.is_err() {
+            self.detach_others_after_replaced_write(&path, doc);
+        }
         written_bytes?;
         let revision = saved_revision_after_write(!self.services.write_unconfirmed, written, previous);
         self.saved(doc, revision, &path, &warnings, copy);
@@ -644,6 +647,18 @@ impl PhotocraftApp {
     fn bound_file_changed(&self, doc: DocId) -> bool {
         let Some((own, then)) = self.disk_stamps.get(&doc) else { return false };
         self.services.file_stamp.as_ref().and_then(|stamp| stamp(own)).is_some_and(|now| now != *then)
+    }
+
+    /// A copy that failed after the atomic writer replaced its bytes stands in for the file all the
+    /// same: the other open documents bound to it no longer match it, exactly as they are detached
+    /// after a successful write. Runs whatever this document's own saved state was left as — a
+    /// complete copy leaves `invalidate` false — and never re-stamps, since a stamp cannot tell our
+    /// write from another app's.
+    pub(crate) fn detach_others_after_replaced_write(&mut self, path: &str, saver: DocId) {
+        if self.published_over(path) {
+            self.detach_others_from_file(path, saver);
+            self.sync_views();
+        }
     }
 
     /// Whether a write to `path` replaced the file behind one of the documents saved there even
@@ -919,6 +934,9 @@ impl PhotocraftApp {
         let written_bytes = write(&target, &bytes);
         if invalidate {
             self.invalidate_incomplete_copy(doc, &target, written_bytes.is_ok());
+        }
+        if written_bytes.is_err() {
+            self.detach_others_after_replaced_write(&target, doc);
         }
         written_bytes?;
         self.saved_automation(doc, revision, &target, &warnings, false);

@@ -745,6 +745,9 @@ pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document
     if invalidate {
         app.invalidate_incomplete_copy(doc.id, path, written.is_ok());
     }
+    if written.is_err() {
+        app.detach_others_after_replaced_write(path, doc.id);
+    }
     written?;
     app.remember_written_savepoint(doc.id, path);
     app.detach_others_from_file(path, doc.id);

@@ -494,3 +494,81 @@ fn a_failed_copy_over_a_hard_link_leaves_the_source_clean() {
         }
     }
 }
+
+/// A copy of A over another open document B's file that publishes and then fails must detach B the
+/// way a successful copy does: B loses the file that now holds A. `A` copies completely here (two
+/// layers, layered TIFF), so its own `invalidate` is false — the case where nothing used to happen
+/// at all. The `published = false` half is the control that a failure before the rename leaves B
+/// alone. Expected from source; not an executed result until hosted CI runs it.
+#[test]
+fn a_failed_copy_that_published_detaches_the_other_documents_file() {
+    for entry in ["file.saveACopy", "writeDocument", "app.save"] {
+        for published in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let own = dir.path().join("a.tif").to_string_lossy().into_owned();
+            let other = dir.path().join("b.tif").to_string_lossy().into_owned();
+            std::fs::write(&other, b"saved original").unwrap();
+            let mut app = app_at(&own);
+            real_stamps(&mut app);
+            app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+            let b = app.session.active().unwrap().doc.id;
+            app.session.active_mut().unwrap().saved_to(other.clone());
+            app.remember_stamp(b, &other);
+            let a = app.session.documents()[0].doc.id;
+            app.session.set_active(0);
+            app.services.write = Some(Box::new(failing_after_write(published)));
+            let settings = crate::ExportSettings { tiff_layers: true, ..Default::default() };
+            let r = match entry {
+                "file.saveACopy" => app.replay_save(entry, &json!({"path": other, "tiffLayers": true})),
+                "writeDocument" => app.write_document(other.clone(), &settings, true).map(|_| json!({})),
+                _ => app.save_automation_with(Some(other.clone()), crate::FormatChoices::from_params(&json!({"tiffLayers": true}), "app.save").unwrap()),
+            };
+            assert!(r.is_err(), "{entry}, published={published}: the write reported a failure");
+            let b_state = app.session.documents().iter().find(|st| st.doc.id == b).unwrap();
+            assert_eq!(b_state.path.is_none(), published, "{entry}, published={published}: the other tab loses a file that now holds this document");
+            assert_eq!(b_state.is_dirty(), published, "{entry}, published={published}: the other tab is unsaved once its file holds another document");
+            assert_eq!(std::fs::read(&other).unwrap() != b"saved original", published, "{entry}: the file holds the copy only when the write published");
+            let a_state = app.session.documents().iter().find(|st| st.doc.id == a).unwrap();
+            assert!(!a_state.is_dirty(), "{entry}, published={published}: the copying document was not saved by the failed copy");
+            assert_eq!(a_state.path.as_deref(), Some(own.as_str()), "{entry}: the copying document keeps its file");
+        }
+    }
+}
+
+/// The same failed copy through a hard link to B's file: the rename replaces the link's entry and
+/// leaves B's own entry with its bytes, so B keeps its file and stays clean.
+#[test]
+fn a_failed_copy_over_a_hard_link_leaves_the_other_documents_file_alone() {
+    for entry in ["file.saveACopy", "writeDocument", "app.save"] {
+        for published in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let own = dir.path().join("a.tif").to_string_lossy().into_owned();
+            let other = dir.path().join("b.tif").to_string_lossy().into_owned();
+            let alias = dir.path().join("b-alias.tif").to_string_lossy().into_owned();
+            std::fs::write(&other, b"saved original").unwrap();
+            std::fs::hard_link(&other, &alias).unwrap();
+            let mut app = app_at(&own);
+            real_stamps(&mut app);
+            app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+            let b = app.session.active().unwrap().doc.id;
+            app.session.active_mut().unwrap().saved_to(other.clone());
+            app.remember_stamp(b, &other);
+            app.session.set_active(0);
+            app.services.write = Some(Box::new(failing_after_write(published)));
+            let settings = crate::ExportSettings { tiff_layers: true, ..Default::default() };
+            let r = match entry {
+                "file.saveACopy" => app.replay_save(entry, &json!({"path": alias, "tiffLayers": true})),
+                "writeDocument" => app.write_document(alias.clone(), &settings, true).map(|_| json!({})),
+                _ => app.save_automation_with(Some(alias.clone()), crate::FormatChoices::from_params(&json!({"tiffLayers": true}), "app.save").unwrap()),
+            };
+            assert!(r.is_err(), "{entry}, published={published}: the write reported a failure");
+            let b_state = app.session.documents().iter().find(|st| st.doc.id == b).unwrap();
+            assert_eq!(b_state.path.as_deref(), Some(other.as_str()), "{entry}, published={published}: B keeps its own file");
+            assert!(!b_state.is_dirty(), "{entry}, published={published}: B's file never changed");
+            assert_eq!(std::fs::read(&other).unwrap(), b"saved original".to_vec(), "{entry}: B's bytes are untouched");
+            if published {
+                assert_ne!(std::fs::read(&alias).unwrap(), b"saved original".to_vec(), "{entry}: the link entry is what was replaced");
+            }
+        }
+    }
+}
