@@ -10,13 +10,13 @@
 
 use std::sync::Arc;
 
+use craft_psd::resources::ids;
+use craft_psd::tiff::{ByteOrder, ImageSourceData, resources_from_bytes, resources_to_bytes};
+use craft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, ImageResource, ResolutionInfo};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CSample};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document};
 use photocraft_geom::Rect;
-use craft_psd::resources::ids;
-use craft_psd::tiff::{ByteOrder, ImageSourceData, resources_from_bytes, resources_to_bytes};
-use craft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, ImageResource, ResolutionInfo};
 use photocraft_raster::Surface;
 
 use crate::flat::{csample, encode_image, image_to_document, layout_for, single_layer, try_buffer};
