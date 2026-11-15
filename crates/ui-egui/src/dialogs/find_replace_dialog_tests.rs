@@ -212,3 +212,37 @@ fn modeless_window_focus_enter_tab_and_escape() {
     assert!(inspect(h.state()).is_none());
     assert!(h.state().ui.text_edit.is_none());
 }
+
+#[test]
+fn warning_escape_cancels_the_search_and_enter_uses_skip() {
+    use egui::{Key, vec2};
+
+    let mut app = app();
+    let visible = type_layer(&mut app, "cat");
+    let hidden = blocked_layer(&mut app, "Hidden", true);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(960.0, 660.0)).build_ui_state(
+        |ui, app| {
+            escape(app, ui.ctx());
+            super::show(app, ui.ctx());
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    open(h.state_mut()).unwrap();
+    set_field(h.state_mut(), "find", json!("cat")).unwrap();
+    set_field(h.state_mut(), "replace", json!("dog")).unwrap();
+    command(h.state_mut(), "changeAll").unwrap();
+    h.run_steps(5);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert_eq!(inspect(h.state()).unwrap()["warning"], Value::Null);
+    assert_eq!(text(h.state(), visible), "cat");
+
+    command(h.state_mut(), "changeAll").unwrap();
+    h.run_steps(3);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(inspect(h.state()).unwrap()["warning"], Value::Null);
+    assert_eq!(text(h.state(), visible), "dog");
+    assert_eq!(text(h.state(), hidden), "cat");
+}
