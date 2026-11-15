@@ -153,6 +153,9 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         f.insert("resample".into(), json!(resample));
         f.insert("__resample".into(), json!(resample));
     } else {
+        let (channels, bytes_per_channel) = flat_format(d.mode, d.depth);
+        f.insert("__channels".into(), json!(channels));
+        f.insert("__bytesPerChannel".into(), json!(bytes_per_channel));
         f.insert("relative".into(), json!(false));
         f.insert("anchor".into(), json!("center"));
         f.insert("extensionColor".into(), json!("background"));
@@ -203,6 +206,41 @@ pub fn human_bytes(b: f64) -> String {
     } else {
         format!("{:.0}K", (b / 1024.0).max(1.0))
     }
+}
+
+/// The flat image's format for the Canvas Size readout: colour channels (no alpha) and bytes per
+/// channel, so a 400x300 RGB 8 document reads 351.6K like the reference application instead of
+/// the layer-backed 469K.
+fn flat_format(mode: photocraft_color::ColorMode, depth: photocraft_color::SampleType) -> (usize, usize) {
+    (mode.color_channels(), depth.bytes())
+}
+
+/// Channels × bytes per channel from the dialog fields; a missing or invalid field falls back to
+/// RGB 8 (3 channels, 1 byte) so the readout never shows NaN.
+fn canvas_flat_bpp(f: &Map<String, Value>) -> f64 {
+    let channels = f.get("__channels").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 1.0).unwrap_or(3.0);
+    let per_channel = f.get("__bytesPerChannel").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 1.0).unwrap_or(1.0);
+    channels * per_channel
+}
+
+/// The Canvas Size readout for `bytes` of flat image data: whole bytes below 1024, one decimal
+/// K/M with the system's decimal mark, today's G style above 1G.
+fn canvas_size_text(bytes: f64) -> String {
+    let bytes = if bytes.is_finite() { bytes.max(0.0) } else { 0.0 };
+    if bytes < 1024.0 {
+        format!("{:.0} bytes", bytes)
+    } else if bytes < 1024.0 * 1024.0 {
+        canvas_decimal(format!("{:.1}K", bytes / 1024.0))
+    } else if bytes < 1024.0 * 1024.0 * 1024.0 {
+        canvas_decimal(format!("{:.1}M", bytes / (1024.0 * 1024.0)))
+    } else {
+        format!("{:.2}G", bytes / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+/// The readout's `.` becomes the system decimal mark, but only when it is `,`; English tests keep `.`.
+fn canvas_decimal(s: String) -> String {
+    if crate::i18n::decimal_separator() == Some(',') { s.replacen('.', ",", 1) } else { s }
 }
 
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -466,10 +504,10 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
-    let bpp = num(f, "__bytesPerPixel").max(1.0);
+    let flat = canvas_flat_bpp(f);
     let relative = f.get("relative").and_then(Value::as_bool).unwrap_or(false);
     ui.label(egui::RichText::new(tl!("Current Size")).font(crate::theme::semibold(12.0)).color(t.text));
-    info_row(ui, tl!("Size:"), human_bytes(ow * oh * bpp));
+    info_row(ui, tl!("Size:"), canvas_size_text(ow * oh * flat));
     info_row(ui, tl!("Width:"), format!("{} px", ow as i64));
     info_row(ui, tl!("Height:"), format!("{} px", oh as i64));
     ui.add_space(6.0);
@@ -478,7 +516,7 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let (nw, nh) = if relative { (ow + num(f, "width"), oh + num(f, "height")) } else { (num(f, "width"), num(f, "height")) };
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("New Size")).font(crate::theme::semibold(12.0)).color(t.text));
-        ui.label(egui::RichText::new(human_bytes(nw.max(0.0) * nh.max(0.0) * bpp)).color(t.text_dim).size(12.0));
+        ui.label(egui::RichText::new(canvas_size_text(nw.max(0.0) * nh.max(0.0) * flat)).color(t.text_dim).size(12.0));
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
@@ -580,5 +618,7 @@ fn anchor_grid(ui: &mut egui::Ui, current: &str, dw: f64, dh: f64) -> Option<&'s
     picked
 }
 
+#[cfg(test)]
+mod canvas_size_readout_tests;
 #[cfg(test)]
 mod tests;
