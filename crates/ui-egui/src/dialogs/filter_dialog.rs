@@ -365,7 +365,14 @@ fn rememberable(kind: &Kind, value: &Value) -> bool {
     }
 }
 
+/// HDR Toning reopens at its factory defaults after every OK, as in Photoshop (#14737). Values an
+/// earlier version remembered for it are ignored too.
+const HDR_TONING: &str = "image.adjustments.hdrToning";
+
 fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &mut Map<String, Value>) {
+    if command == HDR_TONING {
+        return;
+    }
     let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(command) else { return };
     // Select and Mask starts from its defaults unless Remember Settings was on, as in Photoshop
     // (#9423).
@@ -385,7 +392,7 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
 
 /// Remember successful built-in schema dialogs; failed or cancelled dialogs do not persist.
 pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<String, Value>) {
-    if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") {
+    if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") || command == HDR_TONING {
         return;
     }
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
@@ -1778,6 +1785,10 @@ impl FilterPreviewKey {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "hdr_toning_reopen_tests.rs"]
+mod hdr_toning_reopen_tests;
 
 #[cfg(test)]
 mod multi_channel_dialog_tests {
