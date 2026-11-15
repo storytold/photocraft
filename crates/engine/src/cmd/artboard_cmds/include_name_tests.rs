@@ -63,7 +63,8 @@ fn export(s: &mut Session, dir: &str, extra: Value) -> Vec<(String, Document)> {
         .iter()
         .map(|f| {
             let f = f.as_str().unwrap();
-            let name = if f.contains("Red Board") { "Red" } else { "Blue" };
+            // Files are named <prefix><artboard name>, spaces as hyphens (#13633).
+            let name = if f.contains("Red-Board") { "Red" } else { "Blue" };
             (name.to_string(), photocraft_io::import("x.png", &std::fs::read(f).unwrap()).unwrap().document)
         })
         .collect()
