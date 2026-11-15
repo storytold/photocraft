@@ -235,6 +235,7 @@ mod tests {
         app.run("paint.pencil", json!({"points": [[16, 30], [28, 30]], "size": 4, "color": "#0000ff"})).unwrap();
         app.run("select.lasso", json!({"points": [[6, 14], [38, 14], [38, 46], [6, 46]]})).unwrap();
         app.ui.tool = Tool::ContentAwareMove;
+        app.ui.tool_options.cam_transform_on_drop = false;
         let m = egui::Modifiers::NONE;
         let steps = app.session.active().unwrap().history.past_len();
 

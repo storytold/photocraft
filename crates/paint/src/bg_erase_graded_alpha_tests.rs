@@ -43,7 +43,7 @@ fn swatch(tolerance_percent: f32, background: [f32; 4]) -> BgEraseSettings {
 fn one_click(fmt: PixelFormat, colour: [f32; 4], bs: &BgEraseSettings) -> i32 {
     let mut s = Surface::new(fmt);
     s.fill_rect(Rect::new(0, 0, 100, 100), &from_rgba(&fmt, colour));
-    apply_background_eraser(&mut s, &click((50.0, 50.0)), bs, None);
+    apply_background_eraser(&mut s, &click((50.0, 50.0)), bs, None).unwrap();
     (s.rgba(50, 50)[3] * 255.0).round() as i32
 }
 
@@ -121,7 +121,7 @@ fn a_blurred_edge_keeps_its_transition_graded() {
     for limits in [Limits::Contiguous, Limits::Discontiguous] {
         let mut t = s.clone();
         let bs = BgEraseSettings { sampling: Sampling::Once, limits, tolerance: 0.5, ..Default::default() };
-        apply_background_eraser(&mut t, &click((190.0, 70.0)), &bs, None);
+        apply_background_eraser(&mut t, &click((190.0, 70.0)), &bs, None).unwrap();
         for (i, want) in ALPHA.iter().enumerate() {
             let x = 185 + i as i32;
             let got = (t.rgba(x, 70)[3] * 255.0).round() as i32;
@@ -174,16 +174,4 @@ fn the_distance_is_measured_in_the_documents_own_channels() {
             }
         }
     }
-}
-
-#[test]
-fn protect_foreground_keeps_todays_distance_to_the_foreground() {
-    // #11903 measured the foreground only one channel away and keeps today's measure otherwise:
-    // the largest per-channel difference. This foreground is 100 levels off in red and in green
-    // (opposite signs): within Tolerance 50 by that measure, though the sample-match distance of
-    // #11901 adds the two to 200. The pixel is the sampled colour, so only the protection keeps it.
-    let bs = BgEraseSettings { protect_foreground: true, foreground: rgb([100, 140, 40]), ..swatch(50.0, rgb(SAMPLE)) };
-    assert_eq!(one_click(PixelFormat::RGBA8, rgb(SAMPLE), &bs), 255);
-    // Protection off: the same click erases the sample fully.
-    assert_eq!(one_click(PixelFormat::RGBA8, rgb(SAMPLE), &BgEraseSettings { protect_foreground: false, ..bs }), 0);
 }

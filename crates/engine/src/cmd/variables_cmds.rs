@@ -27,6 +27,16 @@ fn has_data_sets(s: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// File > Import > Variable Data Sets needs variables to fill: without any, every header column
+/// is an unknown name and the import makes empty data sets (#13920).
+fn has_variables(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or_else(|| "no document".to_string())?;
+    if st.doc.variables.defs.is_empty() {
+        return Err("no variables in document".into());
+    }
+    Ok(())
+}
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
@@ -268,7 +278,7 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
     let (set, idx) = resolve_set(s, p, "image.applyDataSet")?;
     let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
     authorize_pixel_paths(s, &set)?;
-    s.edit(&format!("Apply Data Set \"{}\"", set.name), |doc, _| apply_to_doc(doc, &vars, &set))?;
+    s.edit("Apply Data Set", |doc, _| apply_to_doc(doc, &vars, &set))?;
     set_vars(s, |v| v.active = Some(idx))?;
     Ok(json!({"applied": set.name, "index": idx}))
 }
@@ -332,7 +342,10 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
         sets.push(DataSet { name, values });
     }
     let n = sets.len();
-    set_vars(s, |v| v.data_sets = sets)?;
+    s.edit("Import Data Sets", |doc, _| {
+        doc.variables.data_sets = sets;
+        Ok(())
+    })?;
     Ok(json!({"imported": n}))
 }
 
@@ -530,6 +543,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Variable Data Sets…",
             &["File", "Import"],
             "{path, delimiter?} → {imported}: CSV header = variable names, each row a data set (first column may be the data-set name)",
+            has_variables,
             |s, p| import_data_sets(s, p)
         ),
         spec!(
@@ -554,4 +568,12 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+mod import_history_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod import_enabled_tests;
+
+#[cfg(test)]
+mod apply_history_name_tests;
