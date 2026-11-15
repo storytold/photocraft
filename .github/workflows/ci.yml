@@ -214,7 +214,15 @@ jobs:
       # cache found nothing to restore or save and every run built all dependencies from scratch.
       - name: Target directory for the dependency cache
         id: cache-target
-        run: echo "relative=$(realpath -m --relative-to="$(cygpath -u "$GITHUB_WORKSPACE")" "$(cygpath -u "$CARGO_TARGET_DIR")")" >> "$GITHUB_OUTPUT"
+        # An empty path would make rust-cache treat the checkout itself as the target directory,
+        # which its cleanup then prunes, so stop rather than write one.
+        run: |
+          relative=$(realpath -m --relative-to="$(cygpath -u "$GITHUB_WORKSPACE")" "$(cygpath -u "$CARGO_TARGET_DIR")")
+          if [ -z "$relative" ] || [ "$relative" = . ]; then
+            echo "::error::no target directory for rust-cache from CARGO_TARGET_DIR='$CARGO_TARGET_DIR'"
+            exit 1
+          fi
+          echo "relative=$relative" >> "$GITHUB_OUTPUT"
         shell: bash
 
       # Only main saves caches; PRs restore main's, so the repo's 10 GB cache budget keeps main's.
