@@ -1,0 +1,176 @@
+//! #14995: Layer Style › Scale Effects' Scale field takes whole percents 1..1000. A value typed
+//! past the range or with decimals ("33,6") becomes the closest whole number in range, and once
+//! the field is left an alert titled "Scale Layer Effects" says so over the still-open dialog. A
+//! typed "." is ignored ("33.6" reads 336). Up/Down step by 1, Shift+Up/Down by 10, and stop at
+//! the ends without an alert. Other dialogs' wide-range fields keep their decimals.
+
+use egui::accesskit::Role;
+use egui::vec2;
+use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
+use serde_json::{Map, Value, json};
+
+use super::{SCALE_ALERT, SCALE_ALERT_TEXT, SCALE_ALERT_TITLE, body, open, params_of};
+use crate::PhotocraftApp;
+
+const CMD: &str = "layer.layerStyle.scaleEffects";
+
+/// The dialog's fields, and whether an Enter reached the dialog's buttons after the body.
+type State = (Map<String, Value>, bool);
+
+/// The fields Scale Effects opens with, on a layer that has an effect.
+fn scale_fields() -> Map<String, Value> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({"name": "Shape"})).unwrap();
+    app.run("layer.layerStyle.dropShadow", json!({"distance": 10, "size": 4})).unwrap();
+    let id = open(&mut app, CMD).unwrap();
+    app.ui.dialog_mut(id).unwrap().fields.clone()
+}
+
+/// The dialog body, as a dialog draws it; after it, an Enter still pending would press OK.
+fn harness(fields: Map<String, Value>) -> Harness<'static, State> {
+    let mut h = Harness::builder().with_size(vec2(520.0, 360.0)).build_ui_state(
+        |ui, s: &mut State| {
+            body(ui, &mut s.0);
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                s.1 = true;
+            }
+        },
+        (fields, false),
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(3);
+    h
+}
+
+fn field<'a>(h: &'a Harness<'static, State>, name: &str) -> egui_kittest::Node<'a> {
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().is_some_and(|l| l.trim_end_matches(':') == name)).expect("the field")
+}
+
+/// Types `text` into the field named `name`, then leaves it with `leave`.
+fn type_into(h: &mut Harness<'static, State>, name: &str, text: &str, leave: egui::Key) {
+    field(h, name).click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(1);
+    h.key_press(leave);
+    h.run_steps(3);
+}
+
+fn scale(h: &Harness<'static, State>) -> f64 {
+    h.state().0.get("scale").and_then(Value::as_f64).unwrap()
+}
+
+fn alert_up(h: &Harness<'static, State>) -> bool {
+    h.state().0.get(SCALE_ALERT).and_then(Value::as_bool) == Some(true)
+}
+
+#[test]
+fn values_past_the_range_insert_the_closest_and_raise_the_alert() {
+    for (text, want) in [("0", 1.0), ("-5", 1.0), ("1001", 1000.0)] {
+        let mut h = harness(scale_fields());
+        type_into(&mut h, "Scale", text, egui::Key::Tab);
+        assert_eq!(scale(&h), want, "{text}");
+        assert!(alert_up(&h), "{text} raises the alert");
+        let shown = h.query_by_label(SCALE_ALERT_TITLE).is_some() && h.query_by_label(SCALE_ALERT_TEXT).is_some();
+        assert!(shown, "{text}: the alert is titled and worded as measured");
+    }
+}
+
+#[test]
+fn a_decimal_comma_rounds_to_34_with_the_alert() {
+    let mut h = harness(scale_fields());
+    type_into(&mut h, "Scale", "33,6", egui::Key::Tab);
+    assert_eq!(scale(&h), 34.0);
+    assert!(alert_up(&h));
+}
+
+#[test]
+fn a_typed_point_is_ignored() {
+    let mut h = harness(scale_fields());
+    type_into(&mut h, "Scale", "33.6", egui::Key::Tab);
+    assert_eq!(scale(&h), 336.0);
+    assert!(!alert_up(&h), "336 is in range");
+}
+
+#[test]
+fn a_whole_value_in_range_says_nothing() {
+    let mut h = harness(scale_fields());
+    type_into(&mut h, "Scale", "250", egui::Key::Tab);
+    assert_eq!(scale(&h), 250.0);
+    assert!(!alert_up(&h));
+    assert_eq!(params_of(&h.state().0), json!({"scale": 250.0}), "OK sends a whole percent");
+}
+
+#[test]
+fn arrows_step_by_1_and_shift_arrows_by_10_and_stop_at_the_ends_quietly() {
+    let mut h = harness(scale_fields());
+    assert_eq!(scale(&h), 100.0);
+    field(&h, "Scale").click();
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(scale(&h), 101.0);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(scale(&h), 111.0);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(scale(&h), 110.0);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(scale(&h), 100.0);
+
+    let mut fields = scale_fields();
+    fields.insert("scale".into(), json!(1000));
+    let mut h = harness(fields);
+    field(&h, "Scale").click();
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(scale(&h), 1000.0);
+    assert!(!alert_up(&h), "a step past the end is no typed value");
+}
+
+#[test]
+fn the_enter_that_leaves_a_wrong_value_does_not_press_ok() {
+    let mut h = harness(scale_fields());
+    type_into(&mut h, "Scale", "0", egui::Key::Enter);
+    assert_eq!(scale(&h), 1.0);
+    assert!(alert_up(&h), "the alert is up");
+    assert!(!h.state().1, "the dialog's OK saw no Enter");
+}
+
+#[test]
+fn ok_enter_and_esc_each_close_the_alert_and_keep_the_dialog() {
+    for close in ["OK", "Enter", "Esc"] {
+        let mut h = harness(scale_fields());
+        type_into(&mut h, "Scale", "1001", egui::Key::Tab);
+        assert!(alert_up(&h), "{close}: the alert is up");
+        match close {
+            "OK" => h.get_by_role_and_label(Role::Button, "OK").click(),
+            "Enter" => h.key_press(egui::Key::Enter),
+            _ => h.key_press(egui::Key::Escape),
+        }
+        h.run_steps(3);
+        assert!(!alert_up(&h), "{close} closes the alert");
+        assert!(!h.state().1, "{close}: the dialog's OK saw no Enter");
+        assert_eq!(scale(&h), 1000.0, "{close}: the inserted value stays");
+    }
+}
+
+#[test]
+fn other_wide_range_fields_keep_their_decimals() {
+    let mut fields = Map::new();
+    fields.insert("__command".into(), json!("select.modify.feather"));
+    fields.insert("radius".into(), json!(1.0));
+    let mut h = harness(fields);
+    type_into(&mut h, "Radius", "33.6", egui::Key::Tab);
+    let radius = h.state().0.get("radius").and_then(Value::as_f64).unwrap();
+    assert!((radius - 33.6).abs() < 1e-3, "Feather keeps 33.6: {radius}");
+    assert!(!alert_up(&h));
+}
