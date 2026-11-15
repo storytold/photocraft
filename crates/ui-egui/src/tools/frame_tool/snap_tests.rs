@@ -82,3 +82,52 @@ fn guides_and_the_document_edges_are_not_targets() {
     drag(&mut app, [300.0, 4.0], [380.0, 60.0]);
     assert_eq!(frames(&app), vec![[300, 4, 380, 60]], "not onto the guide at 304 nor the top edge");
 }
+
+fn click(app: &mut PhotocraftApp, at: [f64; 2]) {
+    let m = egui::Modifiers::NONE;
+    tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, m);
+    tool_event(app, ToolEvent::Up { x: at[0], y: at[1] }, m);
+}
+
+/// CodeRabbit on #15141: what a press hits is decided at the pointer, not where Snap puts a new frame's
+/// corner. A press just outside an empty frame, whose edge it snaps onto, starts a new frame; it does not
+/// edit (move or resize) the frame it snapped to.
+#[test]
+fn a_press_that_snaps_onto_an_existing_frames_edge_still_draws_a_new_frame() {
+    let mut app = app(false);
+    drag(&mut app, [137.0, 200.0], [217.0, 260.0]);
+    assert_eq!(frames(&app), vec![[137, 200, 217, 260]]);
+    app.ui.extras.snap = true;
+    // Outside the frame (x 130), 7 px from its left edge: the corner snaps to x 137.
+    drag(&mut app, [130.0, 220.0], [150.0, 240.0]);
+    let all = frames(&app);
+    assert_eq!(all.len(), 2, "a second frame, not an edit of the first: {all:?}");
+    assert!(all.contains(&[137, 200, 217, 260]), "the first frame is where it was: {all:?}");
+    assert!(all.contains(&[137, 220, 150, 240]), "the new frame starts at the snapped corner: {all:?}");
+}
+
+/// CodeRabbit on #15141: a moved frame snaps by its edges. Its centre line near another layer's edge is no
+/// alignment: a 40 px frame centred on x 137 (the layer's right edge), nudged 3 px, has no edge near one.
+#[test]
+fn a_moved_frame_does_not_snap_its_centre_to_an_edge() {
+    let mut app = app(false);
+    drag(&mut app, [117.0, 100.0], [157.0, 130.0]);
+    assert_eq!(frames(&app), vec![[117, 100, 157, 130]]);
+    app.ui.extras.snap = true;
+    drag(&mut app, [135.0, 115.0], [138.0, 115.0]);
+    assert_eq!(frames(&app), vec![[120, 100, 160, 130]], "moved by the pointer, +3 px: its centre did not jump to 137");
+}
+
+/// CodeRabbit on #15141: a click on an empty frame does not move it, even with a layer edge in reach of the
+/// frame's own edge.
+#[test]
+fn a_click_on_an_empty_frame_does_not_move_it() {
+    let mut app = app(false);
+    drag(&mut app, [140.0, 100.0], [190.0, 130.0]);
+    assert_eq!(frames(&app), vec![[140, 100, 190, 130]]);
+    app.ui.extras.snap = true;
+    let before = app.session.active().unwrap().history.entries();
+    click(&mut app, [150.0, 110.0]);
+    assert_eq!(frames(&app), vec![[140, 100, 190, 130]], "still where it was, 3 px from the layer's edge at 137");
+    assert_eq!(app.session.active().unwrap().history.entries(), before, "no Move step");
+}
