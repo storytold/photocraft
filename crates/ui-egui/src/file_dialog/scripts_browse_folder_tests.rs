@@ -117,3 +117,20 @@ fn a_folder_that_is_gone_and_the_other_pickers_keep_todays_start() {
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(start_dir(&mut app, &asked, "file.scripts.browse"), super::last_used_dir(&app.ui.recent_files));
 }
+
+/// CodeRabbit on #15114: the folder is remembered when the pick is made, before the file is read, so a script
+/// that has gone or cannot be read still moves the next Browse… to its folder; a cancelled picker changes nothing.
+#[test]
+fn an_unreadable_pick_still_remembers_its_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut app, asked) = new_app();
+    let (dir, _) = script(root.path(), "gone-soon");
+    let missing = std::path::Path::new(&dir).join("removed.jsx").to_string_lossy().into_owned();
+    let _ = start_dir(&mut app, &asked, "file.scripts.browse");
+    answer(&mut app, &asked, Some(FileDialogAnswer::Paths(vec![missing])));
+    assert_eq!(app.session.prefs().file_handling.scripts_folder, dir, "remembered although the file could not be read");
+    assert_eq!(start_dir(&mut app, &asked, "file.scripts.browse"), Some(dir));
+    let before = app.session.prefs().file_handling.scripts_folder.clone();
+    answer(&mut app, &asked, None);
+    assert_eq!(app.session.prefs().file_handling.scripts_folder, before, "a cancelled picker changes nothing");
+}

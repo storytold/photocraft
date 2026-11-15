@@ -293,22 +293,30 @@ impl PhotocraftApp {
         then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.pick_file_bytes_titled(extensions, initial_dir, None, None, then)
+        self.pick_file_bytes_titled(extensions, initial_dir, None, None, None, then)
     }
 
     /// [`Self::pick_file_bytes_filtered`] starting in `initial_dir`, with the picker's `title` and
-    /// the filter's name (#13846).
+    /// the filter's name (#13846). `picked`, when given, is told the chosen path before the file is read,
+    /// so a file that then cannot be read still counts as where the user went (a cancelled picker never
+    /// reaches it).
     pub(crate) fn pick_file_bytes_titled(
         &mut self,
         extensions: &[&str],
         initial_dir: Option<String>,
         title: Option<&str>,
         filter_name: Option<&str>,
+        picked: Option<fn(&mut Self, &str)>,
         then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
         let extensions = (!extensions.is_empty()).then(|| extensions.iter().map(|s| (*s).to_string()).collect());
         let (title, filter_name) = (title.map(str::to_owned), filter_name.map(str::to_owned));
         self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions, title, filter_name }, move |app, answer| {
+            if let (Some(picked), FileDialogAnswer::Paths(paths)) = (picked, &answer)
+                && let Some(first) = paths.first()
+            {
+                picked(app, first);
+            }
             let (name, bytes) = read_picked(answer)?;
             then(app, name, bytes)
         })

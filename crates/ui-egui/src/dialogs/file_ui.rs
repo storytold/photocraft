@@ -129,15 +129,22 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             // The reference picker is titled "Load", its one filter named for scripts (#13846).
             // It starts in the folder of the script picked last, which a pick remembers (#13848).
             let start = app.scripts_start_dir();
-            return Some(app.pick_file_bytes_titled(SCRIPT_EXTENSIONS, start, Some(tl!("Load")), Some(tl!("Script Files")), |app, name, bytes| {
-                app.remember_scripts_folder(&name);
-                let r = app.run("file.scripts.browse", json!({"name": name, "script": String::from_utf8_lossy(&bytes)}));
-                if r.is_ok() {
-                    let template = "Ran script {name}";
-                    app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &name)]);
-                }
-                r
-            }));
+            let picked: fn(&mut PhotocraftApp, &str) = PhotocraftApp::remember_scripts_folder;
+            return Some(app.pick_file_bytes_titled(
+                SCRIPT_EXTENSIONS,
+                start,
+                Some(tl!("Load")),
+                Some(tl!("Script Files")),
+                Some(picked),
+                |app, name, bytes| {
+                    let r = app.run("file.scripts.browse", json!({"name": name, "script": String::from_utf8_lossy(&bytes)}));
+                    if r.is_ok() {
+                        let template = "Ran script {name}";
+                        app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &name)]);
+                    }
+                    r
+                },
+            ));
         }
         "file.scripts.scriptEventsManager" => {
             let enabled = app.session.prefs().script_events.enabled;
