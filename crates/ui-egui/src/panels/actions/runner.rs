@@ -77,6 +77,14 @@ pub(crate) fn token_of(app: &PhotocraftApp, dialog: DialogId) -> Option<u64> {
     paused_token(app, &json!(dialog.value()))
 }
 
+/// The paused playback waiting at dialog `from` waits at `to` instead: a step dialog whose OK opens another dialog
+/// (Conditional Mode Change's target mode) continues the action after that one.
+pub(crate) fn hand_over(app: &mut PhotocraftApp, from: DialogId, to: DialogId) {
+    if let Some(paused) = app.paused_playbacks.paused.values_mut().find(|p| p.dialog == Some(from)) {
+        paused.dialog = Some(to);
+    }
+}
+
 /// Replay edits synchronously, with view steps handled by the shell in the same order.
 /// Engine steps keep the headless action semantics (no dialogs or background jobs).
 pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
