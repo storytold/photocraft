@@ -43,6 +43,47 @@ def job(name):
     return rest[:end.start()] if end else rest
 
 
+def literal_scalar(source):
+    # Only the literal scalar spellings used by this cache call are supported. Reject aliases,
+    # expressions, escapes and other YAML encodings instead of silently guessing their value.
+    match = re.fullmatch(r'''(?:"([^"\\]*)"|'([^']*)'|([A-Za-z0-9_./@-]+))[ \t]*(?:#.*)?''', source.strip())
+    if match is None:
+        raise AssertionError(f'unsupported cache input scalar: {source!r}')
+    return next(value for value in match.groups() if value is not None)
+
+
+def cache_inputs(text):
+    # Read the selected literal mapping; unsupported shapes fail closed.
+    starts = list(re.finditer(r'(?m)^      -[ \t]+', text))
+    matches = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        block = text[start.end():end]
+        uses = re.findall(r'(?m)^(?:        )?uses:[ \t]*(.*)$', block)
+        if not uses or literal_scalar(uses[0]) != CACHE_ACTION:
+            continue
+        if len(uses) != 1:
+            raise AssertionError('cache step has duplicate uses fields')
+        header = re.search(r'(?m)^        with:[ \t]*(?:#.*)?$', block)
+        if header is None:
+            raise AssertionError('cache inputs must be a literal mapping')
+        fields = {}
+        for line in block[header.end():].splitlines():
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            indent = len(line) - len(line.lstrip(' '))
+            if indent <= 8:
+                break
+            field = re.fullmatch(r'          ([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(.*)', line)
+            if field is None or field[1] in fields:
+                raise AssertionError(f'unsupported or duplicate cache input: {line!r}')
+            fields[field[1]] = literal_scalar(field[2])
+        matches.append(fields)
+    if len(matches) != 1:
+        raise AssertionError(f'expected one selected cache step, found {len(matches)}')
+    return matches[0]
+
+
 def workflow_environment():
     """The `env:` block at the top of the workflow, as KEY: value pairs."""
     block = re.search(r'^env:\n((?:  [A-Za-z_][A-Za-z0-9_]*:.*\n)+)', WORKFLOW, re.M)
@@ -70,8 +111,12 @@ def job_environment(job_text):
 
 def hashed(environment):
     """The variables rust-cache hashes, exactly as src/config.ts filters them."""
-    return {name: value for name, value in environment.items()
-            if name.startswith(PREFIXES) and value and not value.startswith('${{')}
+    matched = {name: value for name, value in environment.items()
+               if name.startswith(PREFIXES) and value}
+    for name, value in matched.items():
+        if '${{' in value:
+            raise ValueError(f'unresolved cache environment expression: {name}')
+    return matched
 
 
 def cache_key(profile, job_name, environment, lock=RECORDED_LOCK):
@@ -93,11 +138,11 @@ def profile_key(manifest):
 class WithoutHeifJobTests(unittest.TestCase):
     def setUp(self):
         self.text = job('test-without-heif')
+        self.cache = cache_inputs(self.text)
 
     def test_restores_the_gate_entry_through_the_shared_action(self):
-        self.assertIn(f'uses: {CACHE_ACTION}', self.text)
-        self.assertIn('job: gate', self.text)
-        self.assertIn('align-environment: true', self.text)
+        self.assertEqual(self.cache['job'], 'gate')
+        self.assertEqual(self.cache['align-environment'], 'true')
 
     def test_the_gate_and_restore_explicitly_select_the_same_cache_version(self):
         versions = []
@@ -110,7 +155,20 @@ class WithoutHeifJobTests(unittest.TestCase):
 
     def test_never_saves_a_cache(self):
         # Only the default branch saves, and this job must not write over the gate's entry.
-        self.assertIn('save-if: "false"', self.text)
+        self.assertEqual(self.cache['save-if'], 'false')
+
+    def test_cache_inputs_are_parsed_not_matched_in_comments(self):
+        changed = self.text.replace('save-if: "false"', 'save-if: "true" # save-if: "false"', 1)
+        self.assertEqual(cache_inputs(changed)['save-if'], 'true')
+
+    def test_cache_input_mapping_rejects_unsupported_or_duplicate_fields(self):
+        for changed in (
+            self.text.replace('        with:\n          cache-version:', '        with: |\n          cache-version:', 1),
+            self.text.replace('          job: gate', '          job: gate\n          job: other', 1),
+        ):
+            with self.subTest(workflow=changed):
+                with self.assertRaises(AssertionError):
+                    cache_inputs(changed)
 
     def test_does_not_carry_its_own_copy_of_the_key(self):
         for copied in ("prefix-key:", "shared-key:", "hashFiles('Cargo.toml')",
@@ -157,6 +215,14 @@ class WithoutHeifJobTests(unittest.TestCase):
 
 
 class KeyTests(unittest.TestCase):
+    def test_unresolved_matching_environment_is_rejected(self):
+        for prefix in PREFIXES:
+            for value in ('${{ vars.EXTRA }}', 'value-${{ vars.EXTRA }}'):
+                with self.subTest(prefix=prefix, value=value):
+                    with self.assertRaisesRegex(ValueError, 'unresolved'):
+                        hashed({prefix + '_EXTRA': value})
+        self.assertEqual(hashed({'PHOTOCRAFT_FULL_SWEEP': '${{ inputs.full_sweep }}'}), {})
+
     def test_the_alignment_reaches_the_gate_env_hash(self):
         without_home = cache_key(RECORDED_PROFILE, 'gate', GATE_VARIABLES)
         self.assertEqual(without_home, GATE_KEY)
