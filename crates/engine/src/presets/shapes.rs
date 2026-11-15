@@ -383,7 +383,7 @@ fn place(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let path = fit(&shape.path, rect, keep);
     let mut q = json!({"kind": "path", "path": path_json(&path), "name": str_param(p, "name").unwrap_or(&shape.name)});
-    for k in ["fill", "stroke", "addTo", "op"] {
+    for k in ["fill", "stroke", "addTo", "op", "historyName"] {
         if let Some(v) = p.get(k) {
             q[k] = v.clone();
         }
