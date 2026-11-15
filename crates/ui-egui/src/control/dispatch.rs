@@ -272,12 +272,12 @@ impl UiSet {
         Ok(Self { tools, crop, panels, view, theme, brush, legacy_update })
     }
 
-    /// Apply (nothing but the final `brushSize` command can fail).
+    /// Apply validated fields, propagating command failures from selection and brush updates.
     fn apply(mut self, app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> std::result::Result<Value, String> {
         // All fields are validated. Select the requested frame thumbnail before applying the
         // remaining view state, so a denied selection leaves the other fields intact.
         self.tools.select_frame_target(app)?;
-        self.tools.apply(app);
+        self.tools.apply(app)?;
         self.crop.apply(app);
         self.panels.apply_options(app);
         if let Some(k) = self.theme {
@@ -371,7 +371,7 @@ impl ToolSet {
     }
 
     /// Apply a validated patch, selecting the tool before its per-tool settings.
-    fn apply(self, app: &mut PhotocraftApp) {
+    fn apply(self, app: &mut PhotocraftApp) -> std::result::Result<(), String> {
         if let Some(shape) = &self.frame_shape {
             app.ui.frame_tool.ellipse = shape == "ellipse";
             app.ui.frame_tool.shape.clone_from(shape);
@@ -415,7 +415,7 @@ impl ToolSet {
         if let Some(f) = self.layer_filter {
             crate::layer_filter_ui::apply(app, f);
             // As a filter edit in the panel: deselect the layers it now hides, row shown or not.
-            crate::layer_filter_ui::selection::follow(app);
+            crate::layer_filter_ui::selection::try_follow(app)?;
         }
         if let Some(m) = self.pen_mode {
             app.ui.tool_options.vector_mode = m;
@@ -423,6 +423,7 @@ impl ToolSet {
         if let Some(o) = self.pen_path_op {
             app.ui.tool_options.pen_path_op = o;
         }
+        Ok(())
     }
 
     fn apply_gradient_and_trace(&self, app: &mut PhotocraftApp) {

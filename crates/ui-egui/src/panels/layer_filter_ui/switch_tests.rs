@@ -485,6 +485,37 @@ fn a_failed_deselection_is_retried() {
     assert!(app.session.active().unwrap().selected_layers().is_empty());
 }
 
+/// A control client must see a refused deselection instead of receiving a false success.
+#[test]
+fn control_patch_reports_a_refused_deselection_and_retries_the_same_filter() {
+    fn deny_deselect(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "select.deselectLayers" {
+            Err(photocraft_engine::EngineError::Other("deselection refused".into()))
+        } else {
+            Ok(())
+        }
+    }
+    let mut app = app();
+    app.ui.layers_panel_options.show_filters = false;
+    let blue = layer(&app, "Blue");
+    let history = app.session.active().unwrap().history.past_len();
+    app.services.automation_authorize = Some(deny_deselect);
+    let patch = json!({"layerFilter":{"by":"name","name":"Red"}});
+    let refused = call(&mut app, "ui.set", patch.clone());
+    assert_eq!(refused["ok"], false);
+    assert!(refused["error"].as_str().unwrap().contains("deselection refused"), "{refused}");
+    assert_eq!(app.session.active().unwrap().selected_layers(), [blue]);
+    assert!(Filter::of(&app).on, "the failed filter application remains pending for retry");
+    assert!(app.session.authorize.is_none(), "the control gate is restored after refusal");
+    app.services.automation_authorize = None;
+    assert_eq!(call(&mut app, "ui.set", patch.clone())["ok"], true);
+    assert!(app.session.active().unwrap().selected_layers().is_empty());
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    app.run("layer.select", json!({"layer":blue.0})).unwrap();
+    assert_eq!(call(&mut app, "ui.set", patch)["ok"], true);
+    assert_eq!(app.session.active().unwrap().selected_layers(), [blue], "after success an identical patch does not prune a later selection");
+}
+
 /// Off because nothing is picked yet keeps the controls usable: the first Kind button turns it on.
 #[test]
 fn controls_stay_usable_while_nothing_is_picked() {

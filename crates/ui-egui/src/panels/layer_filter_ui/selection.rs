@@ -14,10 +14,19 @@ use crate::PhotocraftApp;
 /// Returning to a tab or changing document-derived context does not apply the same filter again.
 /// A failed deselection is tried again on the next call.
 pub fn follow(app: &mut PhotocraftApp) {
+    let _ = try_follow(app);
+}
+
+/// Control callers need the refusal as well as the panel's next-frame retry.
+pub(crate) fn try_follow(app: &mut PhotocraftApp) -> Result<(), String> {
     let now = Filter::of(app);
-    if super::switch::changed_since_draw(app, &now) && now.active() && deselect_hidden(app).is_err() {
+    if super::switch::changed_since_draw(app, &now) && now.active()
+        && let Err(error) = deselect_hidden(app)
+    {
         super::switch::forget_applied(app);
+        return Err(error);
     }
+    Ok(())
 }
 
 /// Deselect the active document's selected layers that [`super::FilterContext`] doesn't list: through
