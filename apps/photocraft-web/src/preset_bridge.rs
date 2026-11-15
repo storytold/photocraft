@@ -246,7 +246,8 @@ impl Bridge {
         s.action_revision = revision;
         s.committed_keys = keys.clone();
         s.current_keys = keys.clone();
-        if revision == 0 && !s.writing
+        if revision == 0
+            && !s.writing
             && let Some(migration) = &mut s.migration
         {
             migration.keys = keys;
