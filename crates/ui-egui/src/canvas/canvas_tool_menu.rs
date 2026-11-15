@@ -1223,13 +1223,18 @@ pub fn open_perspective_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool,
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
+        type_shape: None,
         guide: false,
         spelling: None,
         crop: None,
         sampler: None,
         sampler_at: None,
+        color: None,
+        inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
