@@ -145,11 +145,11 @@ const FIRST_LEVEL_SPREAD_FV: f64 = 1.5;
 /// moved across (its rows' first point lags) but not the one right of it, where the second point
 /// lags as much (moved-point probes and their mirror images; 0.7 to 0.75 fit both).
 const FIRST_POINT_ROW_WEIGHT: f64 = 0.75;
-/// [`FIRST_POINT_ROW_WEIGHT`] for a cell on the mesh's left edge (u = 0). With an inner control
-/// point moved 11 to 14 px across, the reference application cuts these cells across where the
-/// same drift elsewhere stays whole. 0.86 to 0.94 fit: from 0.95 a pinch preset and split redraws
-/// are cut where the reference keeps them whole.
-const LEFT_EDGE_FIRST_POINT_WEIGHT: f64 = 0.9;
+/// [`FIRST_POINT_ROW_WEIGHT`] for a first cell (half the mesh wide) on the mesh's left edge
+/// (u = 0): its rows' first inner point counts in full. With an inner control point moved 11 to
+/// 14 px across, the reference application cuts these cells across where the same drift
+/// elsewhere stays whole (0.97 to 1.25 fit; from 1.3 a probe moved 8 px is cut too).
+const LEFT_EDGE_FIRST_POINT_WEIGHT: f64 = 1.0;
 /// A fold tip: on a chord shorter than this (document px) whose inner points reach past its end
 /// once and never before its start, the point past the end still counts toward the mean drift
 /// along the chord, held at the end. Crease redraws keep such narrow tips whole where the inside
@@ -800,7 +800,7 @@ fn cell_needs<'a>(net: &Net, c: Cell, rules: &Rules, sub: impl Fn() -> &'a Net) 
     let fu = if rules.twist_spreads {
         sub().rows_need()
     } else {
-        let w = match (full_one, u0 < EPS) {
+        let w = match (full_one, u0 < EPS && u1 - u0 > 0.5 - EPS) {
             (true, true) => LEFT_EDGE_FIRST_POINT_WEIGHT,
             (true, false) => FIRST_POINT_ROW_WEIGHT,
             (false, _) => 0.0,
@@ -2657,15 +2657,18 @@ mod tests {
         assert!(!narrow(&right, 0.5), "the cell right of it stays whole across");
     }
 
-    /// A one-patch full mesh's cell on the mesh's left edge weighs its rows' first inner point at
-    /// 0.9, not 0.75: with an inner point of the top row moved 11 px across, the quarter-tall cells
-    /// at the top left are cut across; the mirror cells on the right edge stay whole.
+    /// A one-patch full mesh's first cell on the mesh's left edge weighs its rows' first inner point
+    /// in full, not at 0.75: with an inner point moved 11 px across, the top left quarter is cut
+    /// across, whether the point is in the top or the bottom row; the mirror cells on the right
+    /// edge stay whole.
     #[test]
     fn a_full_mesh_cell_on_the_left_edge_weighs_its_first_point_more() {
         let rules = one_patch_rules(&moved_point_net(1, 1, [0.0, 0.0]), true);
         let leaf = |leaves: &[Cell], c: Cell| leaves.iter().any(|l| (0..4).all(|k| (l[k] - c[k]).abs() < EPS));
         let (left, _) = cells(&moved_point_net(2, 1, [11.0, 0.0]), true, &rules);
         assert!(leaf(&left, [0.0, 0.25, 0.0, 0.25]), "left edge: cut across");
+        let (lower, _) = cells(&moved_point_net(2, 2, [11.0, 0.0]), true, &rules);
+        assert!(leaf(&lower, [0.0, 0.25, 0.0, 0.25]), "point in the bottom row: cut across too");
         let (right, _) = cells(&moved_point_net(1, 1, [-11.0, 0.0]), true, &rules);
         assert!(leaf(&right, [0.5, 1.0, 0.0, 0.25]), "right edge: whole across");
     }
