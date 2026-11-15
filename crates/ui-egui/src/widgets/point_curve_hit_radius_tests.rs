@@ -98,6 +98,14 @@ fn the_curves_hit_radius_sits_inside_the_measured_window() {
     assert!((15.0..30.0).contains(&CURVES_HIT_RADIUS), "the Curves grab radius is {CURVES_HIT_RADIUS} px, outside the measured 15..30 px window");
 }
 
+/// The issue lists layer Properties among the hosts that were not measured: the Curves editor
+/// there keeps today's radius, only the dialog gets the measured one.
+#[test]
+fn the_properties_panel_keeps_todays_radius_and_the_dialog_gets_the_curves_radius() {
+    assert_eq!(point_curve::curves_grab_radius(true), CURVES_HIT_RADIUS);
+    assert_eq!(point_curve::curves_grab_radius(false), TODAY);
+}
+
 /// Not measured in the reference application, so the other hosts keep today's radius exactly: a
 /// click 8 or 9 px away grabs the point, one 10 px away still adds a second point.
 #[test]

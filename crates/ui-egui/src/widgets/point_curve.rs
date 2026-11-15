@@ -16,6 +16,11 @@ const HIT_RADIUS: f32 = 9.0;
 /// and still adds a point 30 px away, so this has to sit in that window; 16.0 is the smallest clean
 /// screen distance above the measured 15, and it is one pixel per level for 16 input levels.
 pub const CURVES_HIT_RADIUS: f32 = 16.0;
+/// Grab radius of the Curves editor: the measured [`CURVES_HIT_RADIUS`] in the Image > Adjustments
+/// dialog; the Properties panel hosts the same editor but was not measured, so it keeps today's.
+pub fn curves_grab_radius(in_dialog: bool) -> f32 {
+    if in_dialog { CURVES_HIT_RADIUS } else { HIT_RADIUS }
+}
 /// Interior points disappear outside this margin and return on re-entry during the same drag.
 const DRAG_OFF: f32 = 12.0;
 
@@ -187,7 +192,7 @@ pub fn interact_with_hit_radius(
     }
     // Arrows edit this graph rather than navigating to another widget on the next frame.
     ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() }));
-    // Keys while the graph has focus: Delete/Backspace removes, arrows nudge (Shift: ×10).
+    // Keys while the graph has focus: Delete/Backspace removes, arrows nudge (Shift: Ã—10).
     if resp.has_focus() {
         crate::shortcut_dispatch::claim_delete_keys(ui.ctx(), resp.id);
     }
