@@ -47,7 +47,7 @@ fn images(dir: &str) -> Result<Vec<String>, String> {
     photocraft_engine::file_cmds::list_images(dir).map_err(|e| e.to_string())
 }
 
-/// `input` as the list: a folder (a step recorded before the list, `ui.dialog.set`) lists its
+/// `input` as the list: a folder path (set over the control API, `ui.dialog.set`) lists its
 /// images in Folder mode, anything else that is not a list becomes an empty one. A folder that
 /// cannot be read stays as it is, so OK hands it to the command and gets the command's error.
 fn normalize(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
