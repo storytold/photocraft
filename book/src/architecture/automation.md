@@ -18,8 +18,9 @@ The control and headless TCP listeners are restricted to loopback addresses. Std
 
 Loopback is not authentication. TCP transports require a bearer token and enforce request-byte,
 batch-step, and active-connection limits. Remote file methods use an `AuthorizedWorkspace` with
-independent read and write directory capabilities; paths are relative to a configured root and
-fail closed when the applicable root is absent. General per-method scopes, client identity,
+independent read and write directory capabilities; paths may be relative or absolute beneath an
+applicable granted root. File methods fail closed when the applicable read or write authority is
+absent. General per-method scopes, client identity,
 encryption, and operation budgets are not implemented. See the
 [Automation security model](../automation/security-model.md) and
 [Automation security](../security/automation-security.md) before exposing or extending these
