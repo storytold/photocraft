@@ -152,9 +152,27 @@ fn a_control_confirm_with_nothing_ticked_is_refused_and_keeps_the_dialog() {
     open_dialog(&mut h);
     click(&mut h, Role::CheckBox, "Select All");
     let id = h.state().ui.dialogs.last().unwrap().id;
-    let err = crate::dialogs::confirm_preflight(h.state_mut(), id).unwrap_err();
+    let err = crate::dialogs::confirm(h.state_mut(), id).unwrap_err();
     assert!(err.contains("Nothing is selected"), "{err}");
     assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "the dialog stays open");
     click(&mut h, Role::CheckBox, "Select All");
     assert!(crate::dialogs::confirm_preflight(h.state_mut(), id).is_ok(), "ticked again: allowed");
+}
+
+/// CodeRabbit on #15030: in a layer dialog the row reads the layer's trimmed size, which preview and
+/// export use, not the document's.
+#[test]
+fn a_layer_dialog_row_shows_the_layers_trimmed_size() {
+    let mut h = harness();
+    {
+        let st = h.state_mut().session.active_mut().unwrap();
+        let id = st.active_layer.unwrap();
+        let surface = Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().surface_mut().unwrap();
+        let fmt = surface.format();
+        surface.fill_rect(photocraft_geom::Rect::new(10, 10, 70, 50), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+    }
+    let id = h.state().session.active().unwrap().active_layer.unwrap();
+    open_layer(h.state_mut(), id).unwrap();
+    h.run_steps(6);
+    row_text(&mut h, "PNG  60 x 40  ");
 }

@@ -1206,7 +1206,10 @@ fn asset_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &Document, p
         }
         ui.vertical(|ui| {
             ui.label(egui::RichText::new(&name).color(t.text));
-            let (w, h) = export_pixels(f64::from(doc.size.width), f64::from(doc.size.height), &effective_fields(f), None).unwrap_or((0.0, 0.0));
+            // The source the dialog sizes from (`__w` × `__h`): the layer's trimmed bounds in a layer
+            // dialog, the document's size otherwise, as preview and export use.
+            let (sw, sh) = (n(f, "__w", f64::from(doc.size.width)), n(f, "__h", f64::from(doc.size.height)));
+            let (w, h) = export_pixels(sw, sh, &effective_fields(f), None).unwrap_or((0.0, 0.0));
             let est = f.get("__estimate").and_then(Value::as_f64).map_or("—".to_string(), crate::sizing::estimate_text);
             ui.label(egui::RichText::new(format!("{}  {w} x {h}  {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
         });
