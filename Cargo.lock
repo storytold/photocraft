@@ -1573,6 +1573,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-plist"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=cc4fc29cdba60f70e3af3b5d975c60bd0085cb1b#cc4fc29cdba60f70e3af3b5d975c60bd0085cb1b"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=ad8faa1c136ce289e9f132c9137d0cd913bd4ef6#ad8faa1c136ce289e9f132c9137d0cd913bd4ef6"
@@ -1584,14 +1592,6 @@ dependencies = [
  "tempfile",
  "winprint",
  "winsafe",
-]
-
-[[package]]
-name = "craft-plist"
-version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=cc4fc29cdba60f70e3af3b5d975c60bd0085cb1b#cc4fc29cdba60f70e3af3b5d975c60bd0085cb1b"
-dependencies = [
- "thiserror 2.0.21",
 ]
 
 [[package]]
