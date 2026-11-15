@@ -266,7 +266,7 @@ pub struct CafWorkspace {
 
 impl CafWorkspace {
     pub fn describe(&self) -> Value {
-        let sampled = self.mask.iter().zip(&self.hole_px).filter(|(m, h)| **m && !**h).count();
+        let sampled = self.mask.iter().zip(&self.hole_px).zip(&self.base.eligible_px).filter(|((m, h), eligible)| **m && !**h && **eligible).count();
         json!({
             "layer": self.layer.0,
             "tool": self.tool.name(),
@@ -294,6 +294,11 @@ impl CafWorkspace {
         Rect::new(0, 0, self.pw as i32, self.ph as i32)
     }
 
+    fn proxy_center(&self, x: usize, y: usize) -> (f64, f64) {
+        let k = self.k as f64;
+        (f64::from(self.canvas.x0) + (x as f64 + 0.5) * k, f64::from(self.canvas.y0) + (y as f64 + 0.5) * k)
+    }
+
     /// `s` in proxy coordinates: proxy pixel `(px, py)` is centred on document point
     /// `canvas.x0 + (px + 0.5) k`, so the stroke's points and size scale by `1 / k`.
     fn proxy_stroke(&self, s: &SamplingStroke) -> SamplingStroke {
@@ -314,10 +319,9 @@ impl CafWorkspace {
     /// strokes over it.
     fn set_base(&mut self, b: Base) {
         self.outline = outline(&b);
-        let k = self.k as f64;
         for py in 0..self.ph {
             for px in 0..self.pw {
-                let (x, y) = (f64::from(self.canvas.x0) + (px as f64 + 0.5) * k, f64::from(self.canvas.y0) + (py as f64 + 0.5) * k);
+                let (x, y) = self.proxy_center(px, py);
                 let i = b.index(x, y);
                 let at = |v: &[bool]| i.is_some_and(|i| v.get(i).copied().unwrap_or(false));
                 self.base_px[py * self.pw + px] = at(&b.base);

@@ -143,6 +143,43 @@ fn an_erased_sampling_area_previews_as_an_error() {
     assert!(d["previewError"].is_null(), "{d}");
 }
 
+/// The overlay, preview and commit all exclude transparency, including a brush stroke past
+/// the original sampling window. Sample All Layers makes the opaque layer beneath it usable.
+#[test]
+fn transparent_brush_samples_are_excluded_by_the_workspace() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 360, "height": 160, "background": "white"})).unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    app.session
+        .edit("paint", |doc, active| {
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surface.fill_rect(Rect::new(0, 0, 30, 160), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("select.rect", json!({"x": 30, "y": 70, "width": 20, "height": 20})).unwrap();
+    open(&mut app).unwrap();
+    let d = control(&mut app, &json!({"sampling": "rectangular"})).unwrap();
+    assert_eq!(d["sampledProxyPixels"], 30 * 160);
+    control(&mut app, &json!({"sampling": "custom", "output": "current"})).unwrap();
+    let stroke = json!({"stroke": {"points": [[280.0, 80.0]], "size": 10}});
+    let d = control(&mut app, &stroke).unwrap();
+    assert_eq!(d["sampledProxyPixels"], 0, "{d}");
+    let err = control(&mut app, &json!({"waitPreview": true})).unwrap_err();
+    assert!(err.contains("nothing to sample from"), "{err}");
+    let err = control(&mut app, &json!({"commit": true})).unwrap_err();
+    assert!(err.contains("nothing to sample from"), "{err}");
+    let d = control(&mut app, &json!({"sampleAllLayers": true, "waitPreview": true})).unwrap();
+    assert!(d["sampledProxyPixels"].as_u64().unwrap() > 0);
+    let (rect, img) = ws(&app).preview.pending_image.as_ref().unwrap();
+    let i = (80 - rect.y0) as usize * img.size[0] + (40 - rect.x0) as usize;
+    assert_eq!(img.pixels[i], Color32::WHITE);
+    control(&mut app, &json!({"commit": true})).unwrap();
+    assert_eq!(px(&app, layer, 40, 80), vec![1.0; 4]);
+    assert_eq!(px(&app, layer, 280, 80)[3], 0.0);
+}
+
 /// OK whose fill fails keeps the workspace open with the error in its panel, from the button
 /// and from the control channel, so the work isn't thrown away; once the fill can run, OK
 /// fills and closes.
@@ -481,7 +518,7 @@ fn base_with_hole(rect: Rect, parts: &[Rect]) -> Base {
         let (x, y) = (rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32);
         *cell = parts.iter().any(|p| p.contains(x, y));
     }
-    Base { window: rect, rect, hole, base: vec![false; w * h] }
+    Base { window: rect, rect, hole, base: vec![false; w * h], eligible_px: vec![true; w * h] }
 }
 
 /// #10506: the fill area is outlined by merged runs, as the canvas outlines a selection, so it

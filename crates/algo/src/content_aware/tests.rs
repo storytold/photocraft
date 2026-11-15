@@ -142,7 +142,8 @@ fn adaptations_run_and_stay_deterministic() {
     let (img, hole) = stripes(w, h);
     let rgb: Vec<f32> = img.iter().flat_map(|v| [*v, *v * 0.5, 1.0 - *v]).collect();
     let src = vec![true; w * h];
-    let opts = FillOptions { color_adaptation: color_level("high"), rotations: rotation_level("low"), scale: true, mirror: true, seed: 7 };
+    let opts =
+        FillOptions { color_adaptation: color_level("high"), rotations: rotation_level("low"), scale: true, mirror: true, seed: 7, ..Default::default() };
     let a = fill(w, h, 3, &rgb, &hole, &src, &opts);
     let b = fill(w, h, 3, &rgb, &hole, &src, &opts);
     assert_eq!(a, b);

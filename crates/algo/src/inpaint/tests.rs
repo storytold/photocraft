@@ -417,6 +417,7 @@ fn full_patches_measure_as_clipped_ones() {
                 tmom: Vec::new(),
                 smom: Vec::new(),
                 adapt,
+                unadapted_channel: None,
                 ctl: none,
             };
             s.prepare(keep);
