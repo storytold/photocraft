@@ -88,6 +88,7 @@ pub(crate) fn handle_delete_key(app: &mut PhotocraftApp, ctx: &egui::Context) ->
         // The finished Work Path keeps its existing Delete shortcut.
         Some(_) => return false,
         None if !app.ui.direct_selection.anchors.is_empty()
+            && app.ui.direct_selection.owner.as_ref().is_some_and(|owner| owner.tool() == Tool::PathSelection)
             && matches!(app.ui.direct_selection.target, Some(PathRef::Layer(_) | PathRef::Saved(_) | PathRef::TypePath(_))) =>
         {
             None

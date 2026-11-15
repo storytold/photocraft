@@ -156,6 +156,10 @@ impl Owner {
         self.validation.borrow().computations
     }
 
+    pub(crate) fn tool(&self) -> Tool {
+        self.tool
+    }
+
     fn same_target(&self, app: &PhotocraftApp) -> bool {
         self.same_path_target(app) && app.ui.tool == self.tool
     }

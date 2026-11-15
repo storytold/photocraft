@@ -227,17 +227,17 @@ fn replacing_a_saved_path_invalidates_its_component_selection() {
     click(&mut app, 20.0, 20.0, Modifiers::NONE);
     assert_eq!(super::selected(&app).unwrap().2, [0]);
     app.session.execute("path.set", json!({"name":"Path 1","path":{"subpaths":[{"closed":true,"knots":[[90,90],[120,90],[120,130],[90,130]]}]}})).unwrap();
-    let before = saved_path(&app).clone();
+    let replacement = saved_path(&app).clone();
     assert!(super::selected(&app).is_none());
     let active = app.session.active().unwrap();
     let (layers, steps) = (active.doc.layers.clone(), active.history.past_len());
     press(&mut app, Key::Delete);
     let active = app.session.active().unwrap();
     assert_eq!(active.doc.layers, layers);
-    assert!(active.doc.paths.is_empty());
-    assert_eq!((active.history.past_len(), active.history.undo_label()), (steps + 1, Some("Delete Path")));
+    assert_eq!(saved_path(&app), &replacement);
+    assert_eq!(active.history.past_len(), steps);
     app.run("edit.undo", json!({})).unwrap();
-    assert_eq!(saved_path(&app), &before);
+    assert_eq!(saved_path(&app).subpaths.len(), 3);
 }
 
 #[test]
