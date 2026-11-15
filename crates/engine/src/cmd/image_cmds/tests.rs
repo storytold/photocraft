@@ -205,8 +205,20 @@ fn image_size_keeps_canvas_edges_opaque() {
             let mut s = Session::new();
             s.execute("file.new", json!({"width": 30, "height": 20, "depth": depth, "background": "#336699"})).unwrap();
             s.execute("select.all", json!({})).unwrap();
+            // The Crop tool's W x H x Resolution mode still resamples the selection with the
+            // pixels: a full selection keeps reaching the canvas edges.
+            let mut cropped = (*doc(&s)).clone();
+            let ch = (20 * w + 15) / 30;
+            resample_doc(&mut cropped, "test", w, ch, Resample::Bicubic).unwrap();
+            let sel = cropped.selection.as_ref().unwrap();
+            let (x1, y1) = (cropped.size.width as i32 - 1, cropped.size.height as i32 - 1);
+            for (x, y) in [(0, 0), (x1, 0), (0, y1), (x1, y1)] {
+                assert!(sel.pixel(x, y)[0] > 0.99, "{depth} {resample}: selection at ({x},{y})");
+            }
             s.execute("image.imageSize", json!({"width": w, "resample": resample})).unwrap();
             let d = doc(&s);
+            // Image Size drops the selection when it resamples (#13856).
+            assert!(d.selection.is_none(), "{depth} {resample}: Image Size dropped the selection");
             let flat = photocraft_compose::flatten(d);
             let (w, h) = (flat.rect.width() as usize, flat.rect.height() as usize);
             let mid = flat.px[(h / 2) * w + w / 2];
@@ -214,11 +226,6 @@ fn image_size_keeps_canvas_edges_opaque() {
             for p in &flat.px {
                 let off = p.iter().zip(mid).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
                 assert!(off < 0.01, "{depth} {resample} {w}: {p:?} vs {mid:?}");
-            }
-            let sel = d.selection.as_ref().unwrap();
-            let (x1, y1) = (d.size.width as i32 - 1, d.size.height as i32 - 1);
-            for (x, y) in [(0, 0), (x1, 0), (0, y1), (x1, y1)] {
-                assert!(sel.pixel(x, y)[0] > 0.99, "{depth} {resample}: selection at ({x},{y})");
             }
         }
     }
@@ -295,6 +302,37 @@ fn image_size_with_a_new_resolution_scales_type_with_the_pixels_only() {
         crate::type_cmds::refresh(d, &mut t);
         let after = t.cache.unwrap().content_bounds().height();
         assert!(after.abs_diff(h0 * k) <= 2, "{params}: re-rendered {h0} -> {after}");
+    }
+}
+
+/// Type in a font that isn't installed keeps its own pixels (a PSD's rendering), resampled,
+/// through Image Size instead of re-rendering in a substitute face (#8860). Export As
+/// previews through Image Size, so its preview showed the wrong font. Type in an installed
+/// font still re-renders.
+#[test]
+fn image_size_keeps_the_pixels_of_type_in_a_missing_font() {
+    for depth in [8, 16, 32] {
+        for (font, kept) in [("No Such Font 8860", true), ("", false)] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 100, "height": 100, "depth": depth})).unwrap();
+            let cache = s
+                .edit("type", |doc, active| {
+                    let mut t = photocraft_doc::TextLayer { text: "Hello!".into(), font_family: font.into(), size_pt: 26.0, ..Default::default() };
+                    t.transform = photocraft_geom::Affine::translate(10.0, 60.0);
+                    // Deliberately not what PhotoCraft would draw, so a re-render shows.
+                    let fmt = doc.pixel_format();
+                    let mut cache = Surface::new(fmt);
+                    cache.fill_rect(Rect::new(10, 20, 90, 60), &photocraft_raster::from_rgba(&fmt, [0.4, 0.2, 0.6, 1.0]));
+                    t.cache = Some(cache.clone());
+                    *active = Some(doc.insert_above(None, Layer::new("Hello!", LayerContent::Text(t))));
+                    Ok(cache)
+                })
+                .unwrap();
+            s.execute("image.imageSize", json!({"width": 50, "height": 50, "resample": "bilinear"})).unwrap();
+            let LayerContent::Text(t) = &doc(&s).layers.last().unwrap().content else { panic!("type layer") };
+            let resampled = resize_surface_in_canvas(&cache, 0.5, 0.5, Resample::Bilinear, Rect::from_xywh(0, 0, 100, 100));
+            assert_eq!(t.cache.as_ref() == Some(&resampled), kept, "font {font:?}, depth {depth}");
+        }
     }
 }
 
@@ -427,6 +465,101 @@ fn crop_to_explicit_rect_can_extend_canvas() {
     s.execute("image.crop", json!({"x": -10, "y": 0, "width": 60, "height": 20})).unwrap();
     assert_eq!(doc(&s).size, Size::new(60, 20));
     assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(20, 5), vec![1.0, 0.0, 0.0, 1.0]);
+}
+
+/// A rectangle that is passed but invalid is refused, not replaced by the selection (#9279).
+#[test]
+fn crop_refuses_a_bad_explicit_rect_instead_of_cropping_to_the_selection() {
+    let bad = [
+        json!({"x": 10, "y": 10, "width": 0, "height": 50}),
+        json!({"x": 10, "y": 10, "width": 20, "height": 0}),
+        json!({"x": 10, "y": 10, "width": -50, "height": 50}),
+        json!({"x": 10, "y": 10, "width": "100", "height": 50}),
+        json!({"x": 10, "y": 10, "width": true, "height": 50}),
+        json!({"width": 20, "height": 10}),
+        json!({"x": 1, "y": 1}),
+        json!({"x": 1, "y": null, "width": 20, "height": 10}),
+        json!({"height": 10}),
+    ];
+    for p in bad {
+        for selection in [true, false] {
+            let mut s = session();
+            if selection {
+                s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+            }
+            let (size, past) = (doc(&s).size, s.active().unwrap().history.past_len());
+            let err = s.execute("image.crop", p.clone()).unwrap_err();
+            assert!(matches!(err, EngineError::BadParams { .. }), "{p} (selection: {selection}): {err:?}");
+            assert_eq!(doc(&s).size, size, "{p} (selection: {selection})");
+            assert_eq!(doc(&s).selection.is_some(), selection, "{p}: the selection stays");
+            assert_eq!(s.active().unwrap().history.past_len(), past, "{p} (selection: {selection})");
+        }
+    }
+    // No rectangle at all (or every side null) still crops to the selection.
+    for p in [json!({}), json!({"x": null, "y": null, "width": null, "height": null})] {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+        s.execute("image.crop", p.clone()).unwrap();
+        assert_eq!(doc(&s).size, Size::new(20, 10), "{p}");
+    }
+    // Whole-number floats, as the Crop tool sends them, are a valid rectangle.
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+    s.execute("image.crop", json!({"x": 1.0, "y": 1.0, "width": 30.0, "height": 15.0})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(30, 15));
+    // Fractional pixels round, like the rectangle's `x`/`y` and every other pixel param
+    // (`commands::int`); a side that rounds to 0 is refused.
+    let mut s = session();
+    s.execute("image.crop", json!({"x": 0.4, "y": 0.6, "width": 20.6, "height": 9.5})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(21, 10));
+    let err = s.execute("image.crop", json!({"x": 0, "y": 0, "width": 0.4, "height": 5})).unwrap_err();
+    assert!(matches!(err, EngineError::BadParams { .. }), "{err:?}");
+    assert_eq!(doc(&s).size, Size::new(21, 10));
+}
+
+/// The explicit rectangle of #9279's edge cases, each with a selection elsewhere that a fallback
+/// would crop to: `0` is a given origin, numeric strings are not numbers (refused, as `x`/`y`
+/// already were), and a rectangle partly past the canvas is used as passed, never clamped.
+#[test]
+fn crop_rect_edge_cases_never_fall_back_to_the_selection() {
+    let with_selection = || {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+        s
+    };
+    // `x`/`y` of 0 count as given: the red square (10, 5)..(20, 15) stays where it was, where a
+    // crop to the selection would have moved it to (5, 3).
+    let mut s = with_selection();
+    s.execute("image.crop", json!({"x": 0, "y": 0, "width": 15, "height": 10})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(15, 10));
+    assert_eq!(doc(&s).layers[1].surface().unwrap().content_bounds(), Rect::new(10, 5, 15, 10));
+    // Numeric strings are refused on every side, with or without a selection.
+    for p in [
+        json!({"x": "0", "y": "0", "width": "15", "height": "10"}),
+        json!({"x": "0", "y": 0, "width": 15, "height": 10}),
+        json!({"x": 0, "y": 0, "width": 15, "height": "10"}),
+    ] {
+        for mut s in [with_selection(), session()] {
+            let err = s.execute("image.crop", p.clone()).unwrap_err();
+            assert!(matches!(err, EngineError::BadParams { .. }), "{p}: {err:?}");
+            assert_eq!(doc(&s).size, Size::new(40, 20), "{p}");
+        }
+    }
+    // Partly outside the canvas: the canvas grows to the rectangle, not to its overlap with the
+    // canvas or the selection.
+    let mut s = with_selection();
+    s.execute("image.crop", json!({"x": -10, "y": -5, "width": 30, "height": 40})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(30, 40));
+    assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(20, 10), vec![1.0, 0.0, 0.0, 1.0]);
+    // Reveal All passes all four sides through the same check (here x = y = 0: the hidden pixels
+    // are past the right and bottom edges), so a selection doesn't change what it reveals.
+    let mut s = with_selection();
+    s.execute("image.canvasSize", json!({"width": 12, "height": 8, "anchor": "topLeft"})).unwrap();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 4, "height": 4})).unwrap();
+    assert_eq!(s.execute("image.revealAll", json!({})).unwrap()["changed"], true);
+    let size = doc(&s).size;
+    assert!(size.width >= 20 && size.height >= 15, "{size:?}: the red square is revealed");
+    assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(19, 14), vec![1.0, 0.0, 0.0, 1.0]);
 }
 
 #[test]

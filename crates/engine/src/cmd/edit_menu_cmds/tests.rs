@@ -23,6 +23,33 @@ fn active(s: &Session) -> &Layer {
     st.doc.layer(st.active_layer.unwrap()).unwrap()
 }
 
+/// #8230: the Fade dialog's preview is the document Fade would leave, at every depth and in a
+/// blend mode, with no history step and nothing changed until OK; with nothing to fade or a bad
+/// mode it is an error, not a panic.
+#[test]
+fn fade_preview_matches_fade_without_a_step() {
+    for depth in [8, 16, 32] {
+        assert!(fade_preview(&session(depth), &json!({"opacity": 50})).is_err(), "nothing to fade yet");
+        for p in [json!({"opacity": 25}), json!({"opacity": 60, "mode": "difference"}), json!({})] {
+            let mut s = session(depth);
+            s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+            let (steps, revision) = (s.active().unwrap().history.past_len(), s.active().unwrap().revision);
+            let preview = fade_preview(&s, &p).and_then(FadePreview::render).unwrap();
+            assert_eq!((s.active().unwrap().history.past_len(), s.active().unwrap().revision), (steps, revision), "depth {depth} {p}: no step");
+            assert_eq!(px(&s, 5, 5)[0], 0.0, "depth {depth} {p}: the layer is untouched");
+            let id = s.active().unwrap().active_layer.unwrap();
+            let shown = preview.layer(id).unwrap().surface().unwrap().pixel(5, 5);
+            s.execute("edit.fade", p.clone()).unwrap();
+            assert_eq!(shown, px(&s, 5, 5), "depth {depth} {p}: the preview is what OK applies");
+        }
+        let mut s = session(depth);
+        s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+        assert!(fade_preview(&s, &json!({"mode": "nonsense"})).is_err());
+        s.execute("layer.new.layer", json!({})).unwrap();
+        assert!(fade_preview(&s, &json!({})).is_err(), "not right after the step");
+    }
+}
+
 #[test]
 fn fade_blends_last_step_at_all_depths() {
     for depth in [8, 16, 32] {
@@ -119,7 +146,11 @@ fn fade_an_alpha_channel_or_the_quick_mask_at_all_depths() {
                 assert!((channel(&s, 5, 5) - (1.0 - was)).abs() < 0.01, "depth {depth}, quick mask {quick_mask}: inverted");
                 let expected = was + (1.0 - 2.0 * was) * k;
                 let steps = s.active().unwrap().history.past_len();
+                // The Fade dialog's preview (#8230) shows the channel as OK leaves it.
+                let preview = fade_preview(&s, &json!({"opacity": opacity})).and_then(FadePreview::render).unwrap();
+                let shown = if quick_mask { preview.quick_mask.as_ref() } else { preview.channels.first() }.unwrap().surface.pixel(5, 5)[0];
                 s.execute("edit.fade", json!({"opacity": opacity})).unwrap();
+                assert_eq!(shown, channel(&s, 5, 5), "depth {depth}, quick mask {quick_mask}, {opacity} %: the preview is what OK applies");
                 for (x, y) in [(0, 0), (5, 5), (63, 47)] {
                     let v = channel(&s, x, y);
                     assert!((v - expected).abs() < 0.02, "depth {depth}, quick mask {quick_mask}, {opacity} %, ({x}, {y}): {v}");

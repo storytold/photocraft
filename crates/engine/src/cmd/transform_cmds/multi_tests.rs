@@ -223,24 +223,24 @@ fn bad_layers_params_are_errors_not_panics() {
 }
 
 #[test]
-fn straighten_layer_rotates_every_selected_layer() {
-    // Photoshop's Straighten Layer turns all the selected layers, not just the active one; it
-    // goes through `edit.transform` without a layer, so it takes the selection like Free Transform.
+fn straighten_layer_wants_one_selected_layer() {
+    // #12033: the reference greys Straighten Layer out while two layers are selected, so it no
+    // longer turns the whole selection the way Free Transform does
+    // (`free_transform_moves_every_selected_layer_in_one_step` covers that).
     let (mut s, paint, text) = two_layers();
     let (p0, m0) = (bounds(&s, paint), text_matrix(&s, text));
     s.execute("image.analysis.rulerTool", json!({"start": [10, 30], "end": [70, 25]})).unwrap();
     let steps = s.active().unwrap().history.past_len();
-    let r = s.execute("image.analysis.straightenLayer", json!({})).unwrap();
-    assert_eq!(r["cropped"], false);
-    assert!(bounds(&s, paint) != p0, "the selected pixel layer turned too");
-    assert!(text_matrix(&s, text)[1].abs() > 0.05 && m0[1].abs() < 1e-9, "the active type layer turned");
-    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history step");
-    assert!(s.undo());
-    assert_eq!((bounds(&s, paint), text_matrix(&s, text)), (p0, m0), "and one Undo takes both back");
+    assert_eq!(s.active().unwrap().selected_layers().len(), 2, "both selected, the type layer active");
+    assert!(!s.is_enabled("image.analysis.straightenLayer"), "two selected layers");
+    assert!(s.execute("image.analysis.straightenLayer", json!({})).is_err());
+    assert_eq!((bounds(&s, paint), text_matrix(&s, text)), (p0, m0), "nothing turned");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "and no history step");
 
     // With one layer selected, only that layer turns.
     s.execute("layer.select", json!({"layer": paint.0})).unwrap();
     s.execute("image.analysis.rulerTool", json!({"start": [10, 30], "end": [70, 25]})).unwrap();
+    assert!(s.is_enabled("image.analysis.straightenLayer"), "a single layer");
     s.execute("image.analysis.straightenLayer", json!({})).unwrap();
     assert!(bounds(&s, paint) != p0);
     assert_eq!(text_matrix(&s, text), m0, "an unselected layer stays put");

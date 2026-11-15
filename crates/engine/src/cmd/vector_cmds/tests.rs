@@ -312,6 +312,23 @@ fn reapplying_unchanged_live_rectangle_keeps_nonuniformly_scaled_corners() {
     }
 }
 
+/// #13442 review: a component added with `addTo` takes `op` on its first subpath; its joined
+/// subpaths (holes) stay joined instead of turning into components of their own.
+#[test]
+fn shape_add_to_keeps_joined_subpaths() {
+    use photocraft_doc::vector::{Path, PathOp, Subpath};
+    let mut s = session(100, 100, 8);
+    let id = s.execute("shape.create", json!({"kind": "rect", "rect": [0, 0, 40, 40]})).unwrap()["layer"].as_u64().unwrap();
+    let ring = Path::new(vec![
+        Subpath::polygon(&[(50.0, 50.0), (90.0, 50.0), (90.0, 90.0), (50.0, 90.0)]),
+        Subpath::polygon(&[(60.0, 60.0), (60.0, 80.0), (80.0, 80.0), (80.0, 60.0)]).with_op(PathOp::Join),
+    ]);
+    let path = crate::vector_cmds::path_json(&ring);
+    s.execute("shape.create", json!({"kind": "path", "path": path, "addTo": id, "op": "subtract"})).unwrap();
+    let ops: Vec<PathOp> = shape(&s, id).path.subpaths.iter().map(|sp| sp.op).collect();
+    assert_eq!(ops, [PathOp::Combine, PathOp::Subtract, PathOp::Join]);
+}
+
 #[test]
 fn shape_add_to_with_path_ops() {
     let mut s = session(100, 100, 8);
@@ -566,6 +583,26 @@ fn open_pen_paths_make_the_same_selection_as_closed_paths() {
         assert_eq!(at(60, 40), if matches!(mode, "add" | "subtract") { 1.0 } else { 0.0 }, "{mode}: previous-only");
         assert_eq!(at(40, 40), if mode == "subtract" { 0.0 } else { 1.0 }, "{mode}: overlap");
     }
+}
+
+/// ⇧⌘↩, ⌥⌘↩ and ⇧⌥⌘↩'s commands are Make Selection from Path with their mode (#7726), whatever
+/// `mode` the params ask for.
+#[test]
+fn the_fixed_mode_path_commands_combine_as_their_mode() {
+    let mut s = session(80, 80, 8);
+    let square = |x: f64| path_json(&vector::shapes::rect(x, 20.0, 30.0, 30.0));
+    s.execute("path.set", json!({"name": "Sq", "path": square(30.0)})).unwrap();
+    for (id, mode) in [("path.addToSelection", "add"), ("path.subtractFromSelection", "subtract"), ("path.intersectWithSelection", "intersect")] {
+        s.execute("select.rect", json!({"x": 10, "y": 20, "width": 30, "height": 30, "antiAlias": false})).unwrap();
+        s.execute("path.toSelection", json!({"name": "Sq", "mode": mode, "antiAlias": false})).unwrap();
+        let want = selection_mask(&s);
+        s.execute("select.rect", json!({"x": 10, "y": 20, "width": 30, "height": 30, "antiAlias": false})).unwrap();
+        s.execute(id, json!({"name": "Sq", "mode": "replace", "antiAlias": false})).unwrap();
+        assert_eq!(selection_mask(&s), want, "{id} is mode {mode}");
+    }
+    // Intersecting keeps only the 10 px both squares cover.
+    let mask = selection_mask(&s);
+    assert_eq!(mask.iter().filter(|v| **v > 0.5).count(), 10 * 30);
 }
 
 #[test]
@@ -1427,7 +1464,7 @@ fn arrowhead_dimensions_reject_invalid_values_without_mutation() {
     for (key, invalids) in [
         ("arrowWidth", [json!("52"), json!(null), json!([]), json!(0), json!(4097)]),
         ("arrowLength", [json!("50"), json!(null), json!([]), json!(0), json!(4097)]),
-        ("arrowConcavity", [json!("0"), json!(null), json!([]), json!(-1), json!(101)]),
+        ("arrowConcavity", [json!("0"), json!(null), json!([]), json!(-51), json!(51)]),
     ] {
         for invalid in invalids {
             let mut create = json!({
@@ -1447,6 +1484,35 @@ fn arrowhead_dimensions_reject_invalid_values_without_mutation() {
             assert_eq!(s.active().unwrap().history.past_len(), original_history, "{key} edit changed history");
         }
     }
+}
+
+/// Concavity takes -50..50 % (#13258); a shape saved with the old 0..100 range still edits.
+#[test]
+fn arrow_concavity_takes_minus_fifty_to_fifty() {
+    let mut s = session(160, 120, 8);
+    let concavity = |s: &Session, id: u64| match s.active().unwrap().doc.layer(LayerId(id)).map(|l| &l.content) {
+        Some(LayerContent::Shape(sh)) => match sh.live {
+            Some(LiveShape::ArrowLine { concavity, .. }) => concavity,
+            _ => panic!("expected a live arrow"),
+        },
+        _ => panic!("expected a shape layer"),
+    };
+    let created = s.execute("shape.create", json!({"kind": "line", "from": [10, 20], "to": [120, 20], "arrowEnd": true, "arrowConcavity": -50})).unwrap();
+    let id = created["layer"].as_u64().unwrap();
+    assert_eq!(concavity(&s, id), -50.0);
+    s.execute("shape.edit", json!({"layer": id, "arrowConcavity": 50})).unwrap();
+    assert_eq!(concavity(&s, id), 50.0);
+    // Whole percents only, as the fields take them.
+    s.execute("shape.edit", json!({"layer": id, "arrowConcavity": -20.6})).unwrap();
+    assert_eq!(concavity(&s, id), -21.0);
+
+    if let Some(LayerContent::Shape(sh)) = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(LayerId(id)).map(|l| &mut l.content)
+        && let Some(LiveShape::ArrowLine { concavity, .. }) = &mut sh.live
+    {
+        *concavity = 80.0;
+    }
+    s.execute("shape.edit", json!({"layer": id, "arrowWidth": 12})).unwrap();
+    assert_eq!(concavity(&s, id), 50.0, "an old 0..100 value is clamped, not refused");
 }
 
 #[test]
