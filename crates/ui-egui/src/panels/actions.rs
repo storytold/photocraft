@@ -332,12 +332,6 @@ pub(crate) struct ActionOccurrence {
 }
 
 impl ActionOccurrence {
-    pub(crate) fn capture(s: &photocraft_engine::Session, row: usize) -> Option<Self> {
-        let action = s.actions.list.get(row)?.clone();
-        let unique_name = s.actions.list.iter().filter(|other| other.name == action.name).take(2).count() == 1;
-        Some(Self { row, rev: s.actions.rev, unique_name, action })
-    }
-
     fn capture_pending(s: &photocraft_engine::Session, rows: &[usize]) -> Vec<Self> {
         if rows.is_empty() {
             return Vec::new();
