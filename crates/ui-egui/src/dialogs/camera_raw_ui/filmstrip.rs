@@ -772,26 +772,27 @@ pub(super) fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], c
             let shown = Some(held.raw.document) == current;
             let selected = held.selected || shown;
             let p = ui.painter();
-            // Selected: a highlighted tile (thumbnail and name); the shown raw is outlined as well.
-            p.rect_filled(tile, 2.0, if selected { t.row_selected } else { Color32::TRANSPARENT });
-            p.rect_filled(frame, 2.0, if response.hovered() { t.hover } else { t.canvas });
+            let look = TileLook::of(selected, shown, response.hovered(), t);
+            // Unselected tiles sit on the strip itself; a selected one is a lighter tile with an
+            // accent outline, the shown one's outline heavier.
+            p.rect_filled(tile, 3.0, look.fill);
             if let Some(tex) = &held.tex {
                 let size = tex.size_vec2();
-                let fit = ((frame.width() - 8.0) / size.x.max(1.0)).min((frame.height() - 8.0) / size.y.max(1.0));
+                let fit = ((frame.width() - 10.0) / size.x.max(1.0)).min((frame.height() - 10.0) / size.y.max(1.0));
                 let r = ERect::from_center_size(frame.center(), size * fit);
                 widgets::checker(p, r, 6.0);
-                p.image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                p.image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), look.tint);
             }
-            if shown {
-                p.rect_stroke(frame, 2.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+            if look.outline > 0.0 {
+                p.rect_stroke(tile, 3.0, Stroke::new(look.outline, look.outline_color), egui::StrokeKind::Inside);
             }
             if held.kept.as_ref().is_some_and(|(p, _)| !p.is_identity()) {
                 p.circle_filled(frame.right_top() + vec2(-7.0, 7.0), 3.0, t.text);
             }
             let name = ERect::from_min_max(pos2(tile.left(), frame.bottom()), tile.max);
-            let font = FontId::proportional(10.5);
-            let label = tail_fitting(p, &held.raw.name, font.clone(), name.width());
-            p.with_clip_rect(name).text(name.center(), Align2::CENTER_CENTER, label, font, t.text_dim);
+            let font = if shown { crate::theme::semibold(10.5) } else { FontId::proportional(10.5) };
+            let label = tail_fitting(p, &held.raw.name, font.clone(), name.width() - 6.0);
+            p.with_clip_rect(name).text(name.center(), Align2::CENTER_CENTER, label, font, look.name);
             let response = response.on_hover_text(&held.raw.name);
             response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &held.raw.name));
             if response.clicked() {
@@ -807,6 +808,34 @@ pub(super) fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], c
         }
     });
     clicked
+}
+
+/// How a filmstrip tile is drawn: unselected ones recede into the strip (no tile, the thumbnail a
+/// little dimmed, a faint name), selected ones stand out (a lighter tile, an accent outline, a
+/// bright name), and the shown one has the heavier, full-strength outline and a bold name.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct TileLook {
+    pub fill: Color32,
+    pub outline: f32,
+    pub outline_color: Color32,
+    pub tint: Color32,
+    pub name: Color32,
+}
+
+impl TileLook {
+    pub(super) fn of(selected: bool, shown: bool, hovered: bool, t: &Tokens) -> TileLook {
+        match (selected || shown, shown) {
+            (true, true) => TileLook { fill: t.row_selected, outline: 2.5, outline_color: t.accent, tint: Color32::WHITE, name: t.text },
+            (true, false) => TileLook { fill: t.row_selected, outline: 1.0, outline_color: t.accent.gamma_multiply(0.6), tint: Color32::WHITE, name: t.text },
+            _ => TileLook {
+                fill: if hovered { t.hover.gamma_multiply(0.6) } else { Color32::TRANSPARENT },
+                outline: 0.0,
+                outline_color: Color32::TRANSPARENT,
+                tint: Color32::from_gray(if hovered { 235 } else { 190 }),
+                name: t.text_faint,
+            },
+        }
+    }
 }
 
 /// `name`, or "…" and as much of its end as fits in `width`: raws from one shoot differ at the

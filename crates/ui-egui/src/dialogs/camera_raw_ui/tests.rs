@@ -2106,3 +2106,22 @@ fn the_camera_raw_window_opens_where_it_was_left() {
     assert_eq!(size, Some(egui::vec2(2560.0, 1440.0 - crate::work_area::TASKBAR)));
     assert_eq!(pos, Some(egui::pos2(0.0, 0.0)));
 }
+
+/// The filmstrip's selection reads at a glance: an unselected tile is the strip itself (no fill,
+/// its thumbnail dimmed, a faint name), a selected one a lighter tile with an accent outline and a
+/// bright name, and the shown raw's outline heavier than the other selected ones', in every theme.
+#[test]
+fn filmstrip_selection_stands_out_from_unselected_tiles() {
+    use filmstrip::TileLook;
+    let luma = |c: Color32| 0.2126 * f32::from(c.r()) + 0.7152 * f32::from(c.g()) + 0.0722 * f32::from(c.b());
+    for kind in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::ProLightGray, crate::theme::ThemeKind::ProLight] {
+        let t = Tokens::for_kind(kind);
+        let (off, on, shown) = (TileLook::of(false, false, false, &t), TileLook::of(true, false, false, &t), TileLook::of(true, true, false, &t));
+        assert_eq!(off.fill, Color32::TRANSPARENT, "{kind:?}: unselected tiles sit on the strip");
+        assert_eq!(off.outline, 0.0);
+        assert!((luma(on.fill) - luma(t.dock)).abs() >= 20.0, "{kind:?}: a selected tile stands out from the strip");
+        assert!(on.outline >= 1.0 && shown.outline > on.outline, "{kind:?}: the shown raw is outlined heavier");
+        assert!(luma(off.tint) < luma(on.tint), "{kind:?}: unselected thumbnails recede");
+        assert!((luma(on.name) - luma(on.fill)).abs() > (luma(off.name) - luma(t.dock)).abs(), "{kind:?}: selected names are brighter");
+    }
+}

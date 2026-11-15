@@ -96,9 +96,13 @@ fn a_dragged_slider_redraws_the_other_selected_thumbnails() {
     let mut h = fixture();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.run_steps(3);
-    let (before_other, before_unselected) = (tile_brightness(&mut h, NAMES[1]), tile_brightness(&mut h, NAMES[2]));
+    let before_other = tile_brightness(&mut h, NAMES[1]);
     h.get_by_label(NAMES[2]).click_modifiers(Modifiers::COMMAND);
     h.run_steps(3);
+    // (measured unselected and not hovered: an unselected tile's thumbnail is dimmed)
+    h.event(egui::Event::PointerMoved(egui::pos2(600.0, 10.0)));
+    h.run_steps(2);
+    let before_unselected = tile_brightness(&mut h, NAMES[2]);
     // Exposure dragged well down with real pointer events.
     let label = photocraft_ui_egui::i18n::tr_ctx(photocraft_ui_egui::i18n::current(), "cameraRaw", "Exposure");
     let track = h.get_by_role_and_label(egui::accesskit::Role::Slider, label).rect();
@@ -174,4 +178,66 @@ fn the_shown_raws_tile_follows_its_edit() {
     let (after_shown, after_other) = (tile_brightness(&mut h, NAMES[0]), tile_brightness(&mut h, NAMES[1]));
     assert!(after_shown > before_shown + 10.0, "the shown raw's tile brightened: {before_shown} → {after_shown}");
     assert!((after_other - before_other).abs() < 1.0, "an unselected raw's didn't: {before_other} → {after_other}");
+}
+
+/// Two of three raws selected: the unselected tile is the strip itself and the selected ones
+/// stand out, the shown one outlined heavier. `PHOTOCRAFT_LC_SNAPSHOTS=<dir>` saves
+/// `filmstrip-selection.png` there (at 2 pixels per point); `PHOTOCRAFT_LC_RAWS=<a>|<b>|<c>` uses
+/// those three raws.
+#[test]
+fn two_of_three_selected_stand_out_in_the_filmstrip() {
+    let raws: Vec<(String, Vec<u8>)> = match std::env::var("PHOTOCRAFT_LC_RAWS") {
+        Ok(paths) => {
+            paths.split('|').map(|p| (std::path::Path::new(p).file_name().unwrap().to_string_lossy().into_owned(), std::fs::read(p).unwrap())).collect()
+        }
+        Err(_) => {
+            use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+            let (w, h) = (48, 32);
+            let dng = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 30000)).build();
+            NAMES.iter().map(|n| (n.to_string(), dng.clone())).collect()
+        }
+    };
+    let names: Vec<String> = raws.iter().map(|(n, _)| n.clone()).collect();
+    let mut h = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).with_pixels_per_point(2.0).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+        let services = Services {
+            import: Some(Box::new(|name: &str, b: &[u8], opts: &photocraft_io::ImportOptions| {
+                photocraft_io::import_with_options(name, b, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        for (name, bytes) in &raws {
+            app.open_bytes(name, bytes).unwrap();
+        }
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label(&names[2]).click_modifiers(Modifiers::COMMAND);
+    for _ in 0..200 {
+        h.run_steps(1);
+        let film = photocraft_ui_egui::control::inspect(h.state(), &h.ctx)["cameraRaw"]["filmstrip"].clone();
+        if film.as_array().is_some_and(|f| f.iter().all(|t| t["thumbnailPending"] != true)) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    h.run_steps(3);
+    let toggled = |h: &Harness<'_, PhotocraftApp>, n: &str| h.get_by_label(n).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+    assert_eq!(names.iter().map(|n| toggled(&h, n)).collect::<Vec<_>>(), [true, false, true]);
+    // the tiles' corners (outside the thumbnail): the strip's colour for the unselected one, the
+    // lighter tile for the selected ones
+    let image = h.render().unwrap();
+    let ppp = h.ctx.pixels_per_point();
+    let corner = |n: &str| {
+        let r = h.get_by_label(n).rect();
+        let p = image.get_pixel(((r.left() + 5.0) * ppp) as u32, ((r.bottom() - 5.0) * ppp) as u32);
+        (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0
+    };
+    let (shown, off, other) = (corner(&names[0]), corner(&names[1]), corner(&names[2]));
+    assert!(other - off >= 20.0 && shown - off >= 20.0, "selected tiles stand out: shown {shown}, unselected {off}, selected {other}");
+    if let Ok(dir) = std::env::var("PHOTOCRAFT_LC_SNAPSHOTS") {
+        std::fs::create_dir_all(&dir).unwrap();
+        image.save(std::path::Path::new(&dir).join("filmstrip-selection.png")).unwrap();
+    }
 }
