@@ -240,18 +240,95 @@ mod tests {
         assert_eq!(s.active().unwrap().doc.perspective.focal, Some(500.0));
     }
 
+    fn saved(s: &Session) -> PerspectivePlanes {
+        s.active().unwrap().doc.perspective.clone()
+    }
+
+    /// `planes` with every corner moved by `(dx, dy)`.
+    fn shifted(planes: &[[[f64; 2]; 4]], dx: f64, dy: f64) -> Vec<[[f64; 2]; 4]> {
+        planes.iter().map(|pl| pl.map(|c| [c[0] + dx, c[1] + dy])).collect()
+    }
+
     #[test]
-    fn planes_go_stale_when_the_canvas_changes() {
+    fn a_size_change_with_no_map_drops_the_planes_and_undo_restores_them() {
         let mut s = session();
         vp(&mut s, json!({}));
+        let original = saved(&s);
         assert_eq!(s.execute(PLANES, json!({})).unwrap()["stale"], false);
-        s.execute("image.canvasSize", json!({"width": 500, "height": 300, "anchor": "topLeft"})).unwrap();
-        let q = s.execute(PLANES, json!({})).unwrap();
-        assert_eq!(q["stale"], true);
-        assert_eq!(q["planes"], json!([]));
-        assert!(!s.active().unwrap().doc.perspective.valid_for(500, 300));
+        // Nothing maps this resize, so the planes cannot follow it.
+        s.edit("resize", |doc, _| {
+            doc.size = photocraft_geom::Size { width: 500, height: 300 };
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(saved(&s), PerspectivePlanes::default());
+        assert!(!saved(&s).valid_for(500, 300));
         s.undo();
+        assert_eq!(saved(&s), original);
         assert_eq!(s.execute(PLANES, json!({})).unwrap()["stale"], false);
+    }
+
+    #[test]
+    fn a_crop_moves_the_planes_with_the_picture() {
+        let mut s = session();
+        vp(&mut s, json!({}));
+        let original = saved(&s);
+        assert_eq!(original.planes.len(), 2);
+        s.execute("image.crop", json!({"x": 50, "y": 40, "width": 300, "height": 200})).unwrap();
+        let after = saved(&s);
+        assert_eq!(after.planes, shifted(&original.planes, -50.0, -40.0));
+        assert_eq!(after.size, Some([300, 200]));
+        assert!(after.valid_for(300, 200));
+        assert_eq!(s.execute(PLANES, json!({})).unwrap()["stale"], false);
+        // One undo step brings the original planes back, with their canvas.
+        s.undo();
+        assert_eq!(saved(&s), original);
+        assert!(saved(&s).valid_for(400, 300));
+    }
+
+    #[test]
+    fn a_crop_then_a_canvas_change_back_to_the_old_size_does_not_revive_the_old_corners() {
+        let mut s = session();
+        vp(&mut s, json!({}));
+        let original = saved(&s);
+        s.execute("image.crop", json!({"x": 50, "y": 40, "width": 300, "height": 200})).unwrap();
+        s.execute("image.canvasSize", json!({"width": 400, "height": 300, "anchor": "topLeft"})).unwrap();
+        let after = saved(&s);
+        assert_eq!(after.size, Some([400, 300]));
+        assert_ne!(after.planes, original.planes, "the planes stay on the pixels they were drawn on");
+        assert_eq!(after.planes, shifted(&original.planes, -50.0, -40.0));
+        // A centred Canvas Size moves them by the margin it adds.
+        s.execute("image.canvasSize", json!({"width": 500, "height": 300, "anchor": "center"})).unwrap();
+        assert_eq!(saved(&s).planes, shifted(&original.planes, -50.0 + 50.0, -40.0));
+        assert!(saved(&s).valid_for(500, 300));
+    }
+
+    #[test]
+    fn image_size_scales_the_planes_and_the_focal_length_and_a_flip_keeps_them_clockwise() {
+        let mut s = session();
+        s.execute(SET, json!({"planes": [FLOOR], "focal": 500})).unwrap();
+        s.execute("image.imageSize", json!({"width": 200, "height": 150})).unwrap();
+        let half = saved(&s);
+        assert_eq!(half.planes[0], FLOOR.map(|c| [c[0] / 2.0, c[1] / 2.0]));
+        assert_eq!(half.size, Some([200, 150]));
+        assert!((half.focal.unwrap() - 250.0).abs() < 1e-9, "{:?}", half.focal);
+        // Mirrored across the canvas: x -> 200 - x, and the order reverses to stay clockwise.
+        s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap();
+        let flipped = saved(&s);
+        let c = half.planes[0];
+        let mirror = |p: [f64; 2]| [200.0 - p[0], p[1]];
+        assert_eq!(flipped.planes[0], [mirror(c[0]), mirror(c[3]), mirror(c[2]), mirror(c[1])]);
+        assert!(flipped.valid_for(200, 150));
+        assert_eq!(flipped.focal, half.focal);
+    }
+
+    #[test]
+    fn a_focal_length_with_no_planes_follows_a_resize_too() {
+        let mut s = session();
+        s.execute(SET, json!({"planes": [], "focal": 500})).unwrap();
+        s.execute("image.imageSize", json!({"width": 200, "height": 150})).unwrap();
+        assert!((saved(&s).focal.unwrap() - 250.0).abs() < 1e-9);
+        assert!(saved(&s).planes.is_empty());
     }
 
     #[test]

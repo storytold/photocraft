@@ -113,9 +113,16 @@ fn follow_perspective_needs_saved_planes() {
     assert!(layer_surface(&s).content_bounds().is_empty());
     assert!(LiveStroke::begin_with(&s, "paint.stroke", &p).is_err());
     // Planes saved for another canvas size do not count either.
+    s.edit("planes for another canvas", |doc, _| {
+        doc.perspective = photocraft_doc::PerspectivePlanes { planes: vec![FLOOR], focal: None, size: Some([500, 300]) };
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("paint.stroke", p.clone()).is_err());
+    // A Canvas Size carries the planes along with the picture, so they still count.
     s.execute("perspective.setPlanes", json!({"planes": [FLOOR]})).unwrap();
     s.execute("image.canvasSize", json!({"width": 500, "height": 300, "anchor": "topLeft"})).unwrap();
-    assert!(s.execute("paint.stroke", p).is_err());
+    s.execute("paint.stroke", p).unwrap();
 }
 
 /// Painted pixels across row `y` of the active layer.
@@ -748,4 +755,42 @@ fn an_all_layers_field_is_rebuilt_when_the_global_light_changes() {
     s.execute("layer.layerStyle.globalLight", json!({"angle": 45, "altitude": 60})).unwrap();
     folds_stroke(&mut s, 70);
     assert_eq!(s.surface_cache.field_builds(), 2, "the composite depends on the global light");
+}
+
+#[test]
+fn surface_color_at_strength_zero_builds_no_field_even_on_a_canvas_over_the_sample_limit() {
+    let mut s = folds_doc(200, 100);
+    s.execute("paint.stroke", stroke(json!({"color": true, "strength": 0}))).unwrap();
+    assert_eq!(s.surface_cache.field_builds(), 0, "strength 0 shades nothing, so nothing is sampled");
+    // A canvas over the sampler's limit refuses a shaded stroke, but a plain one still paints.
+    let side = 8200u32;
+    assert!(u64::from(side) * u64::from(side) > super::surface_wire::MAX_SAMPLE_PIXELS);
+    let mut big = Session::new();
+    big.execute("file.new", json!({"width": side, "height": side, "background": "transparent"})).unwrap();
+    big.execute("layer.new.layer", json!({})).unwrap();
+    let p = |strength: f64| {
+        json!({"points": [[20, 50], [80, 50]], "color": "#808080", "target": "pixels",
+            "brush": {"size": 10, "hardness": 1, "surface": {"color": true, "strength": strength}}})
+    };
+    assert!(big.execute("paint.stroke", p(1.0)).is_err(), "a shaded stroke needs a sample");
+    big.execute("paint.stroke", p(0.0)).unwrap();
+    assert!(!layer_surface(&big).content_bounds().is_empty());
+    assert_eq!(big.surface_cache.field_builds(), 0);
+}
+
+#[test]
+fn an_all_layers_field_is_rebuilt_when_the_documents_patterns_change() {
+    let mut s = folds_doc(200, 100);
+    folds_stroke(&mut s, 30);
+    folds_stroke(&mut s, 50);
+    assert_eq!(s.surface_cache.field_builds(), 1);
+    s.edit("add a pattern", |doc, _| {
+        let mut tile = Surface::new(photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8, true));
+        tile.fill_rect(Rect::new(0, 0, 2, 2), &[0.2, 0.4, 0.6, 1.0]);
+        doc.patterns.push(photocraft_doc::pattern::Pattern::new("tile", tile, 2, 2));
+        Ok(())
+    })
+    .unwrap();
+    folds_stroke(&mut s, 70);
+    assert_eq!(s.surface_cache.field_builds(), 2, "layer styles read the document's patterns");
 }

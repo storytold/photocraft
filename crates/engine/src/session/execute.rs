@@ -315,6 +315,33 @@ impl Session {
         if let Some(a) = symmetry_map {
             st.symmetry = st.symmetry.take().and_then(|sym| sym.transform(&a));
         }
+        // The saved Vanishing Point planes are absolute pixel corners, so they follow the canvas
+        // geometry like the samplers do: through the edit's map, or, when a size change comes with
+        // none, they are dropped (they no longer match the picture, and a later resize back to the
+        // old size must not make them look valid again). Before the history record, so undo
+        // restores them. An edit that set the planes itself (Vanishing Point) is left alone.
+        if st.doc.perspective == before.perspective && st.doc.perspective != photocraft_doc::PerspectivePlanes::default() {
+            if let Some(a) = symmetry_map {
+                let size = st.doc.size;
+                let doc = Arc::make_mut(&mut st.doc);
+                let pp = &mut doc.perspective;
+                for plane in &mut pp.planes {
+                    for c in plane.iter_mut() {
+                        let q = a.apply(photocraft_geom::Point::new(c[0], c[1]));
+                        *c = [q.x, q.y];
+                    }
+                    // A flip reverses the winding; planes run clockwise from their first corner.
+                    if a.determinant() < 0.0 {
+                        *plane = [plane[0], plane[3], plane[2], plane[1]];
+                    }
+                }
+                pp.size = Some([size.width, size.height]);
+                let k = a.determinant().abs().sqrt();
+                pp.focal = pp.focal.map(|f| f * k).filter(|f| f.is_finite() && *f > 0.0);
+            } else if st.doc.size != before.size {
+                Arc::make_mut(&mut st.doc).perspective = Default::default();
+            }
+        }
         // The pixels the edit can have changed, as its undo would report them: nothing for a
         // selection, guides or a layer's name (a new lasso selection used to recomposite a large
         // document, seconds on the CPU path, #1773), a new or deleted layer's bounds (a

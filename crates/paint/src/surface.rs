@@ -188,6 +188,14 @@ impl Local {
     }
 }
 
+/// How much a surface scales a dab at `local` relative to `anchor_scale`: their ratio, clamped to
+/// `1e-3..=1e3`. `None` when the anchor is not finite and positive or `local` is not a usable
+/// projection. The dab's size ([`surface_dab_shape`]) and the step to the next dab (spacing) both
+/// read this, so a tiny dab never gets a long step and leaves a gap.
+pub(crate) fn surface_scale_ratio(anchor_scale: f32, local: &Local) -> Option<f32> {
+    (anchor_scale.is_finite() && anchor_scale > 0.0 && local.is_valid()).then(|| (local.scale / anchor_scale).clamp(1e-3, 1e3))
+}
+
 /// A dab's `(radius, proj_angle, proj_scale)` on a plane.
 ///
 /// `base_radius` is the radius the dab would have off the plane (size and dynamics applied);
@@ -196,10 +204,7 @@ impl Local {
 /// first dab itself, which then keeps `base_radius`). A dab grows and shrinks with the surface's
 /// scale relative to it. The brush cursor uses this too, so it shows the dab at that point.
 pub fn surface_dab_shape(base_radius: f32, anchor_scale: Option<f32>, local: &Local) -> (f32, f32, f32) {
-    let ratio = match anchor_scale {
-        Some(a) if a.is_finite() && a > 0.0 && local.is_valid() => (local.scale / a).clamp(1e-3, 1e3),
-        _ => 1.0,
-    };
+    let ratio = anchor_scale.and_then(|a| surface_scale_ratio(a, local)).unwrap_or(1.0);
     let radius = (base_radius * ratio).max(0.5);
     let angle = if local.squash_angle.is_finite() { local.squash_angle } else { 0.0 };
     let squash = if local.squash.is_finite() { local.squash.clamp(0.05, 1.0) } else { 1.0 };

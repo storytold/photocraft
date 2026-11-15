@@ -832,6 +832,10 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     // The planes saved with the document (a previous Vanishing Point run), so the dialog reopens
     // on them. Hostile or stale entries (non-finite, not convex) are skipped.
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
+    // Saved for this canvas (or for an unknown size). The planes need that and a non-empty list
+    // ([`PerspectivePlanes::valid_for`]); the focal length, which can be saved with no planes at
+    // all (`perspective.setPlanes`), needs only the size to match.
+    let size_matches = st.doc.perspective.size.is_none_or(|s| s == [st.doc.size.width, st.doc.size.height]);
     let fresh = st.doc.perspective.valid_for(st.doc.size.width, st.doc.size.height);
     let saved: Vec<VpPlane> = st
         .doc
@@ -862,7 +866,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         layer,
         canvas,
         planes: saved.clone(),
-        focal: st.doc.perspective.focal.filter(|f| fresh && f.is_finite() && *f > 0.0),
+        focal: st.doc.perspective.focal.filter(|f| size_matches && f.is_finite() && *f > 0.0),
         torn: saved_torn.clone(),
         tool: if saved.is_empty() { VpTool::CreatePlane } else { VpTool::EditPlane },
         pending: Vec::new(),

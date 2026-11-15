@@ -307,6 +307,8 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
     // Paste sources resolved up front (layer pixels or the clipboard).
     type Shade = Option<(std::sync::Arc<photocraft_algo::surface::ShadingField>, f32)>;
     let mut pastes: Vec<(usize, Surface, Rect, [f64; 2], f64, Shade)> = Vec::new();
+    let mut flat: Option<Surface> = None;
+    let mut fields: Vec<(u32, std::sync::Arc<photocraft_algo::surface::ShadingField>)> = Vec::new();
     for (k, item) in p.get("paste").and_then(Value::as_array).cloned().unwrap_or_default().iter().enumerate() {
         let plane = item.get("plane").and_then(Value::as_u64).unwrap_or(0) as usize;
         if plane >= sc.planes.len() {
@@ -336,10 +338,21 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
                 .filter(|d| (1.0..=512.0).contains(d))
                 .ok_or_else(|| bad(format!("paste {k}: `shadeDetail` must be a number from 1 to 512 pixels")))? as f32,
         };
+        // Pastes with the same `shadeDetail` share one field; the photo is flattened once, and only
+        // if some paste is shaded.
         let field = if amount > 0.0 {
-            Some(std::sync::Arc::new(
-                crate::brush_cmds::surface_wire::field_from_surface(&visible_image(&st.doc), canvas, VP, detail).map_err(|e| bad(format!("paste {k}: {e}")))?,
-            ))
+            let key = detail.to_bits();
+            match fields.iter().find(|(d, _)| *d == key) {
+                Some((_, f)) => Some(f.clone()),
+                None => {
+                    let photo = flat.get_or_insert_with(|| visible_image(&st.doc));
+                    let f = std::sync::Arc::new(
+                        crate::brush_cmds::surface_wire::field_from_surface(photo, canvas, VP, detail).map_err(|e| bad(format!("paste {k}: {e}")))?,
+                    );
+                    fields.push((key, f.clone()));
+                    Some(f)
+                }
+            }
         } else {
             None
         };
