@@ -95,6 +95,11 @@ pub struct CameraRawDialog {
     /// A text field of the dialog had the keyboard at the end of the last frame (egui takes its
     /// focus away at the start of a frame whose input has Esc, before the dialog reads the keys).
     pub(crate) typing: bool,
+    /// The settings as the dialog first showed them: Cancel asks before throwing away changes
+    /// from these ([`controls::has_changes`]).
+    pub(crate) opened: Option<controls::Snapshot>,
+    /// Cancel asked "Discard changes?" and waits for the answer.
+    pub(crate) confirm_discard: bool,
     pub(crate) float: bool,
     tex: Option<TextureHandle>,
     before_tex: Option<TextureHandle>,
@@ -188,6 +193,7 @@ impl CameraRawDialog {
         result["maskComponent"] = json!(self.local.component);
         result["maskDraw"] = json!(format!("{:?}", self.local.draw).to_lowercase());
         result["maskOverlay"] = json!(self.local.overlay);
+        result["discardPrompt"] = json!(self.confirm_discard);
         // the Hand or Zoom has the preview, the local tool waiting until it is picked again
         result["toolPaused"] = json!(self.local.paused);
         result["maskOverlayShown"] = json!(self.local.overlay_tex.as_ref().map(|(_, id)| *id));

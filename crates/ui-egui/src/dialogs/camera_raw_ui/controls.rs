@@ -393,6 +393,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
     let builder = crate::os_window::builder().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
     let mut close = false;
+    let changed = has_changes(app);
     // Keys that reach the main window while the dialog is open are the dialog's: a native menu's
     // key equivalent comes back as a key press there (AppKit takes it before the dialog's window
     // sees it; `native_menu::NativeMenu::raw_input`), and so does the control channel's `ui.key`
@@ -402,6 +403,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     ctx.show_viewport_immediate(window, builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             close = true;
+            // closing the window is Cancel: with changes it asks first, the window staying
+            if changed {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
         }
         if !forwarded.is_empty() {
             ui.ctx().input_mut(|i| i.events.extend(forwarded.iter().cloned()));
@@ -409,7 +414,68 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
     });
     if close && app.camera_raw.is_some() {
+        request_cancel(app);
+    }
+}
+
+/// Whether Cancel would throw anything away: the shown raw's settings (masks, spots and red eyes
+/// among them) changed since the dialog first showed them, or another raw of the filmstrip was
+/// edited.
+pub(super) fn has_changes(app: &PhotocraftApp) -> bool {
+    let Some(d) = app.camera_raw.as_ref() else { return false };
+    let shown = d.opened.as_ref().is_some_and(|o| *o != snapshot(d));
+    let held = app.raw_shelf.iter().any(|h| h.kept.as_ref().is_some_and(|(now, from)| now != from));
+    shown || held
+}
+
+/// Cancel (its button, Esc, closing the window): at once when nothing changed, else after
+/// "Discard changes to …?" (Keep Editing is the default).
+pub(super) fn request_cancel(app: &mut PhotocraftApp) {
+    if has_changes(app) {
+        if let Some(d) = app.camera_raw.as_mut() {
+            d.confirm_discard = true;
+        }
+    } else {
         cancel(app);
+    }
+}
+
+/// The "Discard changes?" prompt over the dialog, while Cancel waits for it: Discard cancels, Keep
+/// Editing (the default: Enter, and Esc) goes back to the dialog with everything as it was.
+fn discard_prompt(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    use crate::widgets::{ButtonRole, DialogButton};
+    let Some(d) = app.camera_raw.as_ref().filter(|d| d.confirm_discard) else { return };
+    let tr = |s| crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", s);
+    let message = crate::i18n::fmt(tr("Discard changes to “{name}”?"), &[("name", &d.layer_name)]);
+    let (discard, keep) = (tr("Discard"), tr("Keep Editing"));
+    let row = [DialogButton::new(ButtonRole::Alternate, discard, 84.0), DialogButton::new(ButtonRole::Default, keep, 110.0).focus(true)];
+    let mut answer = None;
+    let modal = egui::Modal::new(egui::Id::unique("camera-raw-discard")).show(ctx, |ui| {
+        ui.set_max_width(400.0);
+        ui.label(egui::RichText::new(tr("Discard changes?")).font(crate::theme::semibold(15.0)));
+        ui.add_space(4.0);
+        widgets::hairline(ui);
+        ui.add_space(8.0);
+        ui.label(message);
+        ui.add_space(16.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            answer = widgets::dialog_buttons(ui, &row);
+        });
+    });
+    // Esc (the modal closing) and Enter keep editing, unless Tab put the focus on Discard: that
+    // button took the Enter as its click
+    if modal.should_close() || answer.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+        answer = Some(ButtonRole::Default);
+    }
+    match answer {
+        Some(ButtonRole::Alternate) => cancel(app),
+        Some(_) => {
+            if let Some(d) = app.camera_raw.as_mut() {
+                d.confirm_discard = false;
+            }
+        }
+        None => {}
     }
 }
 
@@ -646,6 +712,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let pointer = ctx.input(|i| i.pointer.primary_down());
         // Edits made elsewhere (the guides, a sidecar) reach the develop settings first.
         d.sync_develop();
+        // what Cancel would throw away is measured from here: the dialog as it first shows
+        if d.opened.is_none() {
+            d.opened = Some(snapshot(d));
+        }
         if pointer && d.edit_origin.is_none() {
             d.edit_origin = Some(snapshot(d));
         }
@@ -966,13 +1036,14 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             ctx.request_repaint();
         }
     }
+    discard_prompt(app, ctx);
     match action {
         Some("ok") => {
             if let Err(e) = commit(app) {
                 app.ui.status = e;
             }
         }
-        Some("cancel") => cancel(app),
+        Some("cancel") => request_cancel(app),
         Some("done") => {
             super::filmstrip::done(app);
         }

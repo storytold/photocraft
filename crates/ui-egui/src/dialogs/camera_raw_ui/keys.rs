@@ -35,7 +35,8 @@ pub(super) struct View<'a> {
 /// before / after, clipping, the sampler, Esc) and Guided Upright's (⇧T and Delete); the develop
 /// view (a raw the shared engine develops) has them all.
 pub(super) fn handle(d: &mut CameraRawDialog, view: View<'_>, ctx: &egui::Context) -> Outcome {
-    if ctx.text_edit_focused() {
+    // (nor while Cancel's "Discard changes?" waits: its own keys answer it)
+    if ctx.text_edit_focused() || d.confirm_discard {
         return Outcome::default();
     }
     let develop = d.develop.is_some();

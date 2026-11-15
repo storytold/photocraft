@@ -258,6 +258,8 @@ pub(super) fn open_pixels(
         guides: Default::default(),
         main_focused: false,
         typing: false,
+        opened: None,
+        confirm_discard: false,
     };
     d.render(ctx);
     app.camera_raw = Some(d);
