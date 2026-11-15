@@ -3,14 +3,18 @@
 //! Target Mode section whose Mode list holds the same eight modes (#13678).
 //!
 //! The checkboxes are one custom row of the command's form: `from` is the list of ticked source
-//! ids and `to` the target id, so OK, Reset and `ui.dialog.set` work as for every form.
+//! ids and `to` the target id, so OK, Reset and `ui.dialog.set` work as for every form. With Bitmap, Duotone or Indexed
+//! Color as the target, OK opens that mode's own dialog first, as Photoshop does (#13678).
 
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Props as _, Show as _};
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
+use photocraft_color::ColorMode;
 use serde_json::{Value, json};
+
+use crate::PhotocraftApp;
 
 pub(crate) const COMMAND: &str = "file.automate.conditionalModeChange";
 
@@ -91,6 +95,82 @@ fn sources_row(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut craft::ui::
         fields.set("from", FieldValue::Json(json!(ticked)));
     }
     response
+}
+
+/// The captured value of a target mode's dialog opened from this one: `{"conditionalModeChange": {from, to}}`, the
+/// values its OK passes on.
+const PENDING: &str = "conditionalModeChange";
+
+/// The targets whose own dialog (as from Image › Mode) asks for the options first (#13678).
+fn target_dialog(to: &str) -> Option<&'static str> {
+    match to {
+        "bitmap" => Some("image.mode.bitmap"),
+        "duotone" => Some("image.mode.duotone"),
+        "indexed" => Some("image.mode.indexedColor"),
+        _ => None,
+    }
+}
+
+fn mode_id(m: ColorMode) -> &'static str {
+    match m {
+        ColorMode::Bitmap => "bitmap",
+        ColorMode::Grayscale => "grayscale",
+        ColorMode::Duotone => "duotone",
+        ColorMode::Indexed => "indexed",
+        ColorMode::Rgb => "rgb",
+        ColorMode::Cmyk => "cmyk",
+        ColorMode::Lab => "lab",
+        ColorMode::Multichannel => "multichannel",
+    }
+}
+
+/// The `ParamFamily::run` of the dialog: with Bitmap, Duotone or Indexed Color as the target of a document the command
+/// converts, that mode's own dialog opens instead and nothing converts yet; otherwise OK runs the command.
+pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
+    if !open_target_dialog(app, &result) {
+        crate::filter_dialog::run(app, ctx, result);
+    }
+}
+
+/// Opens the target mode's dialog for the confirmed `result`, when its target has one and the document converts.
+fn open_target_dialog(app: &mut PhotocraftApp, result: &ParamResult) -> bool {
+    let to = norm(result.fields.text("to").unwrap_or("rgb"));
+    let from = from_value(&result.fields);
+    let (Some(command), Some(cur)) = (target_dialog(&to), app.session.active().map(|st| mode_id(st.doc.mode))) else { return false };
+    if cur == to || !ticked(&from, cur) {
+        return false;
+    }
+    let Ok(id) = crate::filter_dialog::open(app, command) else { return false };
+    let from = if from.is_null() { json!("any") } else { from };
+    app.framework.captured.insert(command.to_owned(), json!({PENDING: {"from": from, "to": to}}));
+    // A playing action continues after this dialog's OK.
+    crate::actions::hand_over(app, result.id, id);
+    true
+}
+
+/// Whether `captured` is that of a target mode's dialog opened from this one: its preview would run the mode's command
+/// on the document not converted yet (Bitmap and Duotone need Grayscale first), so it shows none.
+pub(crate) fn is_pending(captured: &Value) -> bool {
+    captured.get(PENDING).is_some()
+}
+
+/// Whether the dialog `key` can be a target mode's dialog opened from this one.
+pub(crate) fn owns_target(key: &str) -> bool {
+    ["bitmap", "duotone", "indexed"].iter().any(|to| target_dialog(to) == Some(key))
+}
+
+/// The `ParamFamily::run` of the target modes' dialogs: one opened from this dialog runs the command with its options;
+/// one opened from Image › Mode runs its own command.
+pub(crate) fn run_target(app: &mut PhotocraftApp, ctx: &egui::Context, mut result: ParamResult) {
+    let Some(Value::Object(pending)) = crate::dialogs::params::captured(app, &result.key).get(PENDING).cloned() else {
+        return crate::filter_dialog::run(app, ctx, result);
+    };
+    for (key, value) in pending {
+        result.fields.set(key, FieldValue::Json(value));
+    }
+    if let Err(error) = crate::filter_dialog::run_command(app, ctx, COMMAND, result) {
+        crate::notices::error(app, error);
+    }
 }
 
 #[cfg(test)]

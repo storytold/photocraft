@@ -28,9 +28,9 @@ pub(crate) mod params {
     use serde_json::Value;
 
     use super::{
-        PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
-        equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
-        smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
+        PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, conditional_mode_change_dialog,
+        count_group_name_ui, duplicate_layer_ui, equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui,
+        new_group_ui, new_layer_ui, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
 
@@ -103,6 +103,10 @@ pub(crate) mod params {
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
         },
+        ParamFamily {
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(|key| key == conditional_mode_change_dialog::COMMAND, conditional_mode_change_dialog::run)
+        },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
@@ -112,6 +116,11 @@ pub(crate) mod params {
         crate::actions::menu_item::FAMILY,
         crate::smart_svg_ui::family(),
         ParamFamily { check: Some(crate::workspace_ui::check_param), ..ParamFamily::new(crate::workspace_ui::owns_param, crate::workspace_ui::run_param) },
+        ParamFamily {
+            check: Some(filter_dialog::check),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(conditional_mode_change_dialog::owns_target, conditional_mode_change_dialog::run_target)
+        },
         ParamFamily { check: Some(filter_dialog::check), cancel: Some(filter_dialog::cancel), ..ParamFamily::new(filter_dialog::owns, filter_dialog::run) },
     ];
 
