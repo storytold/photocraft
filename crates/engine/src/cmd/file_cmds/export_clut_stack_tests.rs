@@ -176,3 +176,58 @@ fn small_and_large_canvases_never_panic() {
     let e = entries(&mut s);
     assert!(near(at(&e, 0, 0, 0), [1.0; 3]), "only the lattice rows are rendered");
 }
+
+/// CodeRabbit on #15045: the column is computed in 64 bits (`c * w` overflows a 32-bit `usize`: with
+/// 129 points and a 300000 px canvas the last column's product is 4,992,000,000).
+#[test]
+fn a_wide_canvas_reads_the_right_column() {
+    assert_eq!(lattice_pos(129, 300_000, 300_000, 16_640, 128), (299_981, 297_674));
+    assert_eq!(lattice_pos(33, 200, 150, 0, 0), (0, 0));
+    assert_eq!(lattice_pos(33, 200, 150, 1088, 32), (199, 145));
+}
+
+/// CodeRabbit on #15045: the work limit comes from counts alone, so a 1 x 1 canvas at 129 points is
+/// refused without a pass per entry (2146689 of them) being allocated.
+#[test]
+fn the_work_limit_is_known_before_any_pass_is_built() {
+    assert!(stack_render_rows(129, 1, 1) > MAX_STACK_RENDERS, "2146689 entries share one pixel");
+    assert_eq!(stack_render_rows(33, 1, 1), 33 * 33 * 33);
+    assert!(stack_render_rows(33, 12_000, 9_000) <= MAX_STACK_RENDERS);
+}
+
+/// CodeRabbit on #15045: no render's lattice holds more than 64 tiles, however large the canvas (35937
+/// samples in tiles of their own would be 35 GiB), and every entry is still in exactly one chunk.
+#[test]
+fn a_huge_canvas_is_rendered_in_bounded_chunks() {
+    let (n, w, h) = (33usize, 300_000usize, 300_000usize);
+    let mut pass = Vec::new();
+    for g in 0..n {
+        for c in 0..n * n {
+            pass.push((c, g, lattice_pos(n, w, h, c, g)));
+        }
+    }
+    let total = pass.len();
+    let chunks = split_by_tiles(vec![pass]);
+    assert_eq!(chunks.iter().map(Vec::len).sum::<usize>(), total, "no entry lost or repeated");
+    let tile = photocraft_geom::TILE_SIZE as usize;
+    for chunk in &chunks {
+        let tiles: std::collections::HashSet<_> = chunk.iter().map(|e| (e.2.0 / tile, e.2.1 / tile)).collect();
+        assert!(tiles.len() <= MAX_LATTICE_TILES, "{} tiles", tiles.len());
+    }
+    assert!(chunks.len() > 100, "{} chunks", chunks.len());
+}
+
+/// The bake itself on a canvas that needed 35 GiB of lattice tiles: it finishes and is still the
+/// inverse, with only chunked renders.
+#[test]
+fn a_huge_canvas_still_bakes_the_stack() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200_000, "height": 150_000})).unwrap();
+    s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+    // The default 33 points: 35937 entries, each in a tile of its own at this size.
+    let cube = s.execute("file.export.colorLookupTables", json!({"size": 33})).unwrap();
+    let e = parse(cube["cube"].as_str().unwrap());
+    assert_eq!(e.len(), 33 * 33 * 33);
+    assert!(near(e[0], [1.0; 3]) && near(e[e.len() - 1], [0.0; 3]), "the inverse at both corners");
+    assert!(near(e[33 * 33 * 16 + 33 * 16 + 16], [0.5; 3]), "and the middle");
+}

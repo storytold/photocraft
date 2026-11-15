@@ -190,9 +190,65 @@ fn bake_cube_layers(size: usize, title: &str, layers: &[&Layer], depth: photocra
 /// per lattice entry sharing a pixel, and the bake refuses rather than run for minutes.
 const MAX_STACK_RENDERS: usize = 1 << 16;
 
+/// Most 256 × 256 tiles one render's lattice surface may hold (64 MiB as F32 RGBA).
+const MAX_LATTICE_TILES: usize = 64;
+
 /// A lattice entry in [`bake_cube_stack`]: its lattice column (`b·n + r`), row (`g`) and the
 /// canvas pixel it is laid on.
 type LatticeEntry = (usize, usize, (usize, usize));
+
+/// The canvas pixel lattice entry (`c`, `g`) is laid on, for an `n`-point table on a `w` × `h` canvas.
+/// 64-bit products: `c * w` overflows `usize` on a 32-bit target (wasm32) for a wide canvas and would
+/// read the wrong pixel. The quotients are below `w` and `h`, so they fit back.
+fn lattice_pos(n: usize, w: usize, h: usize, c: usize, g: usize) -> (usize, usize) {
+    let cols = (n * n) as u64;
+    ((c as u64 * w as u64 / cols) as usize, (g as u64 * h as u64 / n as u64) as usize)
+}
+
+/// How many renders a whole-stack bake needs: a pass renders one entry per canvas pixel, so a pixel
+/// shared by `k` entries is in `k` passes, and a row is rendered once per pass that reaches it, the
+/// most any of its pixels share. Counted from the entries per pixel alone, so a request over the
+/// limit costs no pass allocation.
+fn stack_render_rows(n: usize, w: usize, h: usize) -> usize {
+    let mut shared: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+    for g in 0..n {
+        for c in 0..n * n {
+            *shared.entry(lattice_pos(n, w, h, c, g)).or_insert(0) += 1;
+        }
+    }
+    let mut per_row: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (&(_, y), &k) in &shared {
+        let m = per_row.entry(y).or_insert(0);
+        *m = (*m).max(k);
+    }
+    per_row.values().sum()
+}
+
+/// A sample written into the lattice surface allocates its whole tile (1 MiB as F32 RGBA), so a pass
+/// whose entries lie in many tiles of a huge canvas (35937 samples at 33 points, one tile each, is 35
+/// GiB) is cut into chunks of at most [`MAX_LATTICE_TILES`] tiles, each rendered on its own. Entries
+/// are in row order, so a chunk is a run of one row.
+fn split_by_tiles(passes: Vec<Vec<LatticeEntry>>) -> Vec<Vec<LatticeEntry>> {
+    let tile = photocraft_geom::TILE_SIZE as usize;
+    let mut chunks: Vec<Vec<LatticeEntry>> = Vec::new();
+    for pass in passes {
+        let mut tiles = std::collections::HashSet::new();
+        let mut current: Vec<LatticeEntry> = Vec::new();
+        for e in pass {
+            let t = (e.2.0 / tile, e.2.1 / tile);
+            if !tiles.contains(&t) && tiles.len() >= MAX_LATTICE_TILES {
+                chunks.push(std::mem::take(&mut current));
+                tiles.clear();
+            }
+            tiles.insert(t);
+            current.push(e);
+        }
+        if !current.is_empty() {
+            chunks.push(current);
+        }
+    }
+    chunks
+}
 
 /// The visible layers above the Background that a whole-stack table bakes (#13742).
 fn stack_layers(doc: &Document) -> Vec<&Layer> {
@@ -214,7 +270,13 @@ fn bake_cube_stack(size: usize, title: &str, doc: &Document) -> Result<String> {
         return Err(EngineError::BadParams { cmd: CMD.into(), msg: "the canvas is empty".into() });
     }
     let cols = n * n;
-    let at = |c: usize, g: usize| (c * w / cols, g * h / n);
+    let at = |c: usize, g: usize| lattice_pos(n, w, h, c, g);
+    let too_many =
+        || EngineError::BadParams { cmd: CMD.into(), msg: format!("the canvas is too small for a {n}-point table; use fewer grid points or a larger canvas") };
+    // The work limit is checked from the entries-per-pixel counts, before any pass is allocated.
+    if stack_render_rows(n, w, h) > MAX_STACK_RENDERS {
+        return Err(too_many());
+    }
     // Entries sharing a canvas pixel go to successive passes.
     let mut seen = std::collections::HashMap::new();
     let mut passes: Vec<Vec<LatticeEntry>> = Vec::new();
@@ -229,12 +291,10 @@ fn bake_cube_stack(size: usize, title: &str, doc: &Document) -> Result<String> {
             *k += 1;
         }
     }
+    let passes = split_by_tiles(passes);
     let rows: usize = passes.iter().map(|p| p.iter().map(|e| e.2.1).collect::<std::collections::BTreeSet<_>>().len()).sum();
     if rows > MAX_STACK_RENDERS {
-        return Err(EngineError::BadParams {
-            cmd: CMD.into(),
-            msg: format!("the canvas is too small for a {n}-point table; use fewer grid points or a larger canvas"),
-        });
+        return Err(too_many());
     }
     let step = 1.0 / (n - 1) as f32;
     let colour = |c: usize, g: usize| [(c % n) as f32 * step, g as f32 * step, (c / n) as f32 * step];
