@@ -201,6 +201,12 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         });
         ui.end_row();
         let position_label = ui.label(tl!("Position"));
+        // The dialog opens on Position, so the field takes the keyboard before it is drawn and
+        // selects its text as it gains it (#15055).
+        if crate::widgets::take_first_field(ui) {
+            let id = ui.next_auto_id();
+            ui.memory_mut(|m| m.request_focus(id));
+        }
         let response = ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0)).labelled_by(position_label.id);
         if ui.is_enabled() {
             crate::field_tab::register(ui.ctx(), response.id);
@@ -359,3 +365,6 @@ mod arithmetic_tests {
         assert_eq!(unit_on_first_number("6 / 2 / 3 - 1", Unit::Centimeters), "6 cm / 2 / 3 - 1");
     }
 }
+
+#[cfg(test)]
+mod focus_tests;

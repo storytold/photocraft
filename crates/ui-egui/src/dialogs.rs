@@ -366,7 +366,8 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
             first_field_focused(ui, id, |ui| crate::canvas_tool_menu::make_selection_body(app, ui, fields))
         }
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
-        _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
+        // New Guide opens on Position, selected (#15055).
+        _ if crate::new_guide_ui::owns(fields) => first_field_focused(ui, id, |ui| crate::new_guide_ui::body(ui, fields)),
         _ if crate::equalize_ui::owns(fields) => crate::equalize_ui::body(ui, fields),
         _ if fields.contains_key("__form") => {
             if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {

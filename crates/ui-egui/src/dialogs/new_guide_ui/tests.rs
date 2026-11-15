@@ -227,7 +227,7 @@ fn focusing_and_recolouring_preserve_the_exact_guide_position() {
 
 #[test]
 fn retyping_the_rounded_readout_is_an_intentional_position_edit() {
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::Harness;
 
     let (mut app, _) = app("pixels");
     app.run(COMMAND, json!({"orientation": "vertical", "position": 12.5})).unwrap();
@@ -236,11 +236,10 @@ fn retyping_the_rounded_readout_is_an_intentional_position_edit() {
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     let d = open_edit(h.state_mut()).unwrap();
     h.run_steps(3);
-    h.get_by_label("Position").click();
-    h.run_steps(3);
+    // The dialog opens on Position with the readout selected (#15055).
     h.event(egui::Event::Text("20 px".into()));
     h.run_steps(3);
-    assert_eq!(h.state_mut().ui.dialog_mut(d).unwrap().fields["position"], "20 px", "click focus selects all");
+    assert_eq!(h.state_mut().ui.dialog_mut(d).unwrap().fields["position"], "20 px", "the readout opens selected");
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("13 px".into()));
     h.run_steps(3);

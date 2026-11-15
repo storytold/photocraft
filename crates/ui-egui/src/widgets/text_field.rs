@@ -138,3 +138,9 @@ pub fn focus_first_field(ctx: &egui::Context, on: bool) {
         }
     });
 }
+
+/// Whether the text field drawn next is the one [`focus_first_field`] asked for, as a number
+/// field would be (New Guide's Position, which takes units and arithmetic). Takes the request.
+pub fn take_first_field(ui: &Ui) -> bool {
+    ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false)
+}
