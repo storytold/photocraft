@@ -53,7 +53,7 @@ fn the_anchor_tools_have_no_letter() {
 }
 
 #[test]
-fn add_on_a_straight_segment_inserts_a_corner_in_one_step() {
+fn add_on_a_straight_segment_inserts_a_smooth_anchor_in_one_step() {
     let mut app = app(Tool::AddAnchorPoint);
     with_path(&mut app);
     let (before, n) = (work(&app), steps(&app));
@@ -61,7 +61,11 @@ fn add_on_a_straight_segment_inserts_a_corner_in_one_step() {
     let p = work(&app);
     assert_eq!(p.subpaths[0].knots.len(), 5);
     let k = p.subpaths[0].knots[3];
-    assert!(!k.smooth && (k.anchor.y - 120.0).abs() < 1e-9 && (k.anchor.x - 80.0).abs() < 1.0, "a corner on the bottom edge: {k:?}");
+    assert!(k.smooth && (k.anchor.y - 120.0).abs() < 1e-9 && (k.anchor.x - 80.0).abs() < 1.0, "a smooth anchor on the bottom edge: {k:?}");
+    assert!(
+        (k.in_ctrl.y - 120.0).abs() < 1e-9 && (k.out_ctrl.y - 120.0).abs() < 1e-9 && k.in_ctrl.x != k.anchor.x && k.out_ctrl.x != k.anchor.x,
+        "with handles along the edge: {k:?}"
+    );
     assert_eq!(steps(&app), n + 1);
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
     assert!(app.session.undo());
@@ -144,7 +148,13 @@ fn shape_layer_paths_are_edited_and_the_added_anchor_replaces_the_selection() {
 #[test]
 fn the_cursor_shows_plus_or_minus() {
     use crate::tool_feedback::{Badge, badge};
-    let app = app(Tool::AddAnchorPoint);
+    let mut app = app(Tool::AddAnchorPoint);
+    assert_eq!(badge(&app, Tool::AddAnchorPoint, Modifiers::NONE), None, "no path targeted, no segment under the pointer (#12729)");
+    with_path(&mut app);
+    app.ui.selected_path = Some("work".into());
+    app.hover_doc = Some([80.0, 80.0]);
+    assert_eq!(badge(&app, Tool::AddAnchorPoint, Modifiers::NONE), None, "off the path's segments");
+    app.hover_doc = Some([80.0, 120.0]);
     assert_eq!(badge(&app, Tool::AddAnchorPoint, Modifiers::NONE), Some(Badge::Add));
     assert_eq!(badge(&app, Tool::AddAnchorPoint, Modifiers::ALT), Some(Badge::Subtract));
     assert_eq!(badge(&app, Tool::DeleteAnchorPoint, Modifiers::NONE), Some(Badge::Subtract));

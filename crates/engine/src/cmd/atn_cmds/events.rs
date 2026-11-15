@@ -856,10 +856,13 @@ pub(super) const EVENTS: &[Event] = &[
             "image.calculations",
             "type.convertToShape",
             "type.createWorkPath",
+            super::steps_frame_section::COMMAND,
             "layer.new.layer",
             "layer.layerStyle.createLayer",
             "layer.new.group",
             "layer.groupLayers",
+            super::steps_artboard_section::NEW,
+            super::steps_artboard_section::FROM_LAYERS,
             "layer.duplicate",
             "layer.new.layerViaCopy",
             "layer.new.layerViaCut",
@@ -1205,6 +1208,15 @@ pub(super) const EVENTS: &[Event] = &[
         from: super::steps_batch::batch_from,
         to: super::steps_batch::batch_to,
     },
+    // File › Automate › Fit Image: the script event recorded after the Image Size it runs (#10723).
+    Event {
+        code: "",
+        name: super::steps_automate::FIT_IMAGE_EVENT,
+        label: "Fit Image",
+        ids: &[super::steps_automate::FIT_IMAGE],
+        from: super::steps_automate::fit_image_from,
+        to: super::steps_automate::fit_image_to,
+    },
     // Create Droplet (#10710): Photoshop has no string ID for it.
     Event {
         code: "CrtD",
@@ -1213,6 +1225,16 @@ pub(super) const EVENTS: &[Event] = &[
         ids: &["file.automate.createDroplet"],
         from: super::steps_droplet::droplet_from,
         to: super::steps_droplet::droplet_to,
+    },
+    // File › Automate › Conditional Mode Change: the script event recorded after the Convert Mode
+    // it runs (#10723).
+    Event {
+        code: "",
+        name: super::steps_mode_change::MODE_CHANGE_EVENT,
+        label: "Conditional Mode Change",
+        ids: &[super::steps_mode_change::MODE_CHANGE],
+        from: super::steps_mode_change::mode_change_from,
+        to: super::steps_mode_change::mode_change_to,
     },
     Event { code: "", name: "applyComp", label: "Apply Layer Comp", ids: &["layerComp.apply"], from: apply_comp_from, to: apply_comp_to },
     Event { code: "Stop", name: "stop", label: "Stop", ids: &[STOP_MESSAGE], from: stop_from, to: stop_to },

@@ -598,7 +598,7 @@ fn preferences_interface_search_hides_rows_and_skips_empty_groups() {
     }
 }
 
-fn app_with_store() -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {
+pub(super) fn app_with_store() -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {
     app_with_saved(None)
 }
 
@@ -626,6 +626,152 @@ fn app_on(store: &Arc<Mutex<Option<String>>>, fail: Arc<std::sync::atomic::Atomi
 
 fn stored(store: &Arc<Mutex<Option<String>>>) -> Value {
     serde_json::from_str(store.lock().unwrap().as_deref().unwrap_or("null")).unwrap()
+}
+
+#[test]
+fn saving_preferences_waits_for_the_actions_write_only_for_its_shortcuts() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let old = "actions.playById:00112233445566778899aabbccddeeff";
+    let new = "actions.playById:ffeeddccbbaa99887766554433221100";
+    let (mut app, store) = app_with_saved(Some(json!({"shortcuts": {(old): "F2"}, "alternateShortcuts": {(old): ["F3"]}}).to_string()));
+    let pending = Arc::new(AtomicBool::new(false));
+    let observed = pending.clone();
+    app.services.actions_write_pending = Some(Box::new(move || observed.load(Ordering::Relaxed)));
+    let ctx = egui::Context::default();
+    tick(&mut app, &ctx);
+
+    pending.store(true, Ordering::Relaxed);
+    app.session.edit_prefs(|prefs| {
+        prefs.shortcuts.remove(old);
+        prefs.shortcuts.insert(new.into(), "F2".into());
+        prefs.alternate_shortcuts.remove(old);
+        prefs.file_handling.recent_file_count = 12;
+    });
+    tick(&mut app, &ctx);
+    let before_commit = stored(&store);
+    assert_eq!(before_commit["fileHandling"]["recentFileCount"], 12);
+    assert_eq!(before_commit["shortcuts"][old], "F2");
+    assert_eq!(before_commit["alternateShortcuts"][old], json!(["F3"]));
+    assert!(before_commit["shortcuts"].get(new).is_none());
+
+    pending.store(false, Ordering::Relaxed);
+    tick(&mut app, &ctx);
+    let after_commit = stored(&store);
+    assert!(after_commit["shortcuts"].get(old).is_none());
+    assert!(after_commit["alternateShortcuts"].get(old).is_none());
+    assert_eq!(after_commit["shortcuts"][new], "F2");
+}
+
+#[test]
+fn desktop_shortcuts_wait_for_the_actions_definition_write() {
+    use photocraft_engine::actions_cmds;
+    use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct RetriableActionsWrite {
+        store: MemBackend,
+        reject: Arc<AtomicBool>,
+    }
+
+    impl PresetBackend for RetriableActionsWrite {
+        fn list(&self) -> Result<Vec<(String, u64)>, String> {
+            self.store.list()
+        }
+
+        fn read(&self, name: &str, max: u64) -> Result<Vec<u8>, String> {
+            self.store.read(name, max)
+        }
+
+        fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+            if name == ACTIONS_FILE && self.reject.load(Ordering::Relaxed) {
+                return Err("injected Actions write rejection".into());
+            }
+            self.store.write(name, bytes)
+        }
+
+        fn remove(&self, name: &str) -> Result<(), String> {
+            self.store.remove(name)
+        }
+    }
+
+    let old_id = "00112233445566778899aabbccddeeff";
+    let old = actions_cmds::occurrence_key(old_id);
+    let original = json!({"version":1, "actions":[{"name":"Saved", "action_id":old_id}]});
+    let ctx = egui::Context::default();
+    for attach in [true, false] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (mut app, prefs) = app_with_saved(Some(json!({"shortcuts":{(&old):"F4"}, "alternateShortcuts":{(&old):["F4","F8"]}}).to_string()));
+        app.services.preset_store = Some(rx);
+        app.run("actions.record", json!({"name":"Early"})).unwrap();
+        app.run("actions.stop", json!({})).unwrap();
+        crate::actions::assign_shortcut(&mut app, 0, "F4").unwrap();
+        let new_id = app.session.actions.list[0].action_id.clone().unwrap();
+        let new = actions_cmds::occurrence_key(&new_id);
+        let assert_held = |ordinary| {
+            let saved = stored(&prefs);
+            assert_eq!(saved["fileHandling"]["recentFileCount"], ordinary);
+            assert_eq!(saved["shortcuts"][&old], "F4");
+            assert_eq!(saved["alternateShortcuts"][&old], json!(["F4", "F8"]));
+            assert!(saved["shortcuts"].get(&new).is_none());
+        };
+
+        app.session.edit_prefs(|p| p.file_handling.recent_file_count = 12);
+        save_preferences(&mut app).unwrap();
+        assert_held(12);
+        app.session.edit_prefs(|p| p.file_handling.recent_file_count = 13);
+        tick(&mut app, &ctx);
+        assert_held(13);
+
+        let definitions = MemBackend::default();
+        definitions.write(ACTIONS_FILE, original.to_string().as_bytes()).unwrap();
+        let reject = Arc::new(AtomicBool::new(true));
+        if attach {
+            tx.send(open(Box::new(RetriableActionsWrite { store: definitions.clone(), reject: reject.clone() }))).unwrap();
+        }
+        drop(tx);
+        tick(&mut app, &ctx);
+        assert!(app.services.preset_store.is_none());
+        assert_eq!(app.session.preset_store.is_some(), attach);
+        app.session.edit_prefs(|p| p.file_handling.recent_file_count = 14);
+        save_preferences(&mut app).unwrap();
+        assert_held(14);
+        assert_eq!(serde_json::from_slice::<Value>(&definitions.read(ACTIONS_FILE, 4096).unwrap()).unwrap(), original);
+
+        if attach {
+            reject.store(false, Ordering::Relaxed);
+            // A normal command retries the failed Actions write before preferences are saved.
+            app.run("file.new", json!({"width":2,"height":2})).unwrap();
+            save_preferences(&mut app).unwrap();
+            let durable = serde_json::from_slice::<Value>(&definitions.read(ACTIONS_FILE, 4096).unwrap()).unwrap();
+            assert_eq!(durable["actions"][0]["action_id"], new_id);
+            let saved = stored(&prefs);
+            assert_eq!(saved["shortcuts"][&new], "F4");
+            assert_ne!(saved["shortcuts"][&old], "F4");
+            assert_eq!(saved["alternateShortcuts"][&old], json!(["F8"]));
+            assert_eq!(saved["fileHandling"]["recentFileCount"], 14);
+        } else {
+            app.run("actions.record", json!({"name":"After disconnect"})).unwrap();
+            app.run("actions.stop", json!({})).unwrap();
+            crate::actions::assign_shortcut(&mut app, 1, "F8").unwrap();
+            let late_id = app.session.actions.list[1].action_id.clone().unwrap();
+            let late = actions_cmds::occurrence_key(&late_id);
+            save_preferences(&mut app).unwrap();
+            assert_held(14);
+            assert!(stored(&prefs)["shortcuts"].get(&late).is_none());
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            tx.send(open(Box::new(definitions.clone()))).unwrap();
+            app.services.preset_store = Some(rx);
+            tick(&mut app, &ctx);
+            let durable = serde_json::from_slice::<Value>(&definitions.read(ACTIONS_FILE, 4096).unwrap()).unwrap();
+            assert_eq!(durable["actions"][1]["action_id"], late_id);
+            let saved = stored(&prefs);
+            assert_eq!(saved["shortcuts"][&new], "F4");
+            assert_eq!(saved["shortcuts"][&late], "F8");
+            assert!(saved["alternateShortcuts"][&old].as_array().is_none_or(Vec::is_empty));
+        }
+    }
 }
 
 #[test]
@@ -1375,23 +1521,24 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     app.session.tools.brush_changed();
     crate::last_brush::persist(&mut app, &ctx);
     crate::tool_memory::persist(&mut app, &ctx);
-    // The Brush's tip becomes a big sampled one, then the Eraser takes over that brush.
+    // The Brush's tip becomes a big sampled one, then the Blur tool takes over that brush (the Eraser has its own
+    // starting tip since #11936).
     app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0));
     app.session.tools.brush_changed();
-    app.ui.tool = Tool::Eraser;
+    app.ui.tool = Tool::Blur;
     crate::paint_mouse::sync_tool_brush(&mut app);
     crate::last_brush::persist(&mut app, &ctx);
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
     let saved = stored(&store);
     assert_eq!(saved["lastBrush"]["brush"]["size"], json!(77.0), "the big tip is not remembered yet");
-    assert_ne!(saved["toolBrushes"]["owner"], json!("Eraser"), "{saved}");
+    assert_ne!(saved["toolBrushes"]["owner"], json!("Blur"), "{saved}");
     let (mut app2, _) = app_with_saved(store.lock().unwrap().clone());
     tick(&mut app2, &ctx);
     assert_eq!(app2.ui.brush_tool, Tool::Brush, "the 77 px brush is the Brush's");
     assert_eq!(app2.session.tools.brush.size, 77.0);
 
-    // Once the Eraser's brush is saved, the Eraser owns it in the preferences too.
+    // Once the Blur tool's brush is saved, the Blur tool owns it in the preferences too.
     app.session.tools.brush.tip = TipShape::Round;
     app.session.tools.brush.size = 33.0;
     app.session.tools.brush_changed();
@@ -1399,7 +1546,7 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
     let saved = stored(&store);
-    assert_eq!(saved["toolBrushes"]["owner"], json!("Eraser"), "{saved}");
+    assert_eq!(saved["toolBrushes"]["owner"], json!("Blur"), "{saved}");
     assert_eq!(saved["lastBrush"]["brush"]["size"], json!(33.0));
 }
 
@@ -1582,10 +1729,13 @@ fn unimplemented_preferences_are_hidden_from_the_dialog() {
     assert!(has_visible_fields(&values, "fileHandling"));
     assert!(has_visible_fields(&values, "scratchDisks"));
     assert!(!prefs::is_hidden("scratchDisks.disks"));
-    // Allow Agent Control and Control Port are read at launch (apps/photocraft main.rs).
+    // MCP: the agent connection and its folders apply at once (`agents.rs`).
     assert!(has_visible_fields(&values, "integrations"));
     assert!(!prefs::is_hidden("integrations.allowAgentControl"));
     assert!(!prefs::is_hidden("integrations.controlPort"));
+    assert!(!prefs::is_hidden("integrations.readRoot"));
+    assert!(!prefs::is_hidden("integrations.writeRoot"));
+    assert!(!prefs::is_hidden("integrations.connectAgents"));
     // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
     assert!(has_visible_fields(&values, "type"));
     assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
@@ -1830,18 +1980,13 @@ fn rendering_mode_explains_next_launch() {
     assert!(h.query_by_label("Applies at next launch.").is_none());
 }
 
-/// #4097: Allow Agent Control and Control Port are read when the app starts, and say so.
+/// Integrations' rows apply at once, so none of them says "Applies at next launch." (it did
+/// before the agent connection followed the preferences live).
 #[test]
-fn integrations_explain_next_launch() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let obj = json!({"allowAgentControl": true, "controlPort": 0}).as_object().unwrap().clone();
-    let mut h = Harness::new_ui_state(
-        |ui, obj: &mut Map<String, Value>| section_fields(ui, "integrations", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""),
-        obj,
-    );
-    h.run_steps(4);
-    h.get_by_label("Allow agent control");
-    assert_eq!(h.query_all_by_label("Applies at next launch.").count(), 2, "one notice under each row");
+fn integrations_apply_without_a_restart() {
+    for key in ["allowAgentControl", "connectAgents", "controlPort", "readRoot", "writeRoot", "whenAppClosed"] {
+        assert!(!graphics::read_at_launch(&format!("integrations.{key}")), "{key}");
+    }
 }
 
 #[test]
