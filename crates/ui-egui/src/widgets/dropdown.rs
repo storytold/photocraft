@@ -42,6 +42,21 @@ pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str,
     (!chosen.is_empty(), hovered)
 }
 
+/// [`dropdown`] whose open list draws a line above each option (but the first) that `starts_group`,
+/// as [`dropdown_wheel_grouped`] does, without the wheel stepping its value: the Layer Style effect
+/// pages' Blend Mode lists (#14941).
+pub fn dropdown_grouped<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    starts_group: impl Fn(&T) -> bool,
+) -> bool {
+    !dropdown_with(ui, id, name, current, options, width, false, true, &starts_group, &|_| true).0.is_empty()
+}
+
 /// [`dropdown_hovered`] whose value also steps with the wheel over its button or open list: down
 /// picks the next option, up the previous one, one per notch (Shift too), stopping at the ends
 /// (Photoshop's Layers panel blend modes, #1747), for a wheel gesture that starts over either

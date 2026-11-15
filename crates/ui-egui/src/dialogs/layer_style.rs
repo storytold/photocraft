@@ -25,6 +25,8 @@ use crate::{PhotocraftApp, widgets};
 mod bevel_modes_tests;
 pub(crate) mod color_picker;
 mod contour;
+#[cfg(test)]
+mod effect_blend_separators_tests;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
@@ -1676,7 +1678,10 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                     widgets::row_label(ui, label, LABEL_W);
                     let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or("Normal").to_string();
                     let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
-                    if widgets::dropdown(ui, &format!("fx-blend-{selected}-{key}"), tl!(&label), &mut cur, &opts, 150.0) {
+                    // The mode families are parted by lines, as on the Layers panel (#14941).
+                    let starts_group =
+                        |l: &String| photocraft_color::BlendMode::LAYER_MODES.iter().any(|m| m.label() == l && crate::panels::starts_blend_group(*m));
+                    if widgets::dropdown_grouped(ui, &format!("fx-blend-{selected}-{key}"), tl!(&label), &mut cur, &opts, 150.0, starts_group) {
                         let value = json!(cur);
                         disp[key] = value.clone();
                         set_param(f, selected, key, value);
