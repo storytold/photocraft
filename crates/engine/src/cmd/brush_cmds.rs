@@ -1093,6 +1093,9 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     // multiply is checked too: on a 32-bit target (wasm32) it can overflow where the rest of
     // this command is already fallible.
     let len = w.checked_mul(h).ok_or_else(|| crate::allocation::error("defining a brush from the selection", "requested size overflowed"))?;
+    // Sparse canvases can span huge areas: cap both live dense buffers before reserving either.
+    let mask_bytes = sel.map_or(0, |sel| (sel.channels() as u64).saturating_mul(4));
+    crate::allocation::check_dense(area, 4u64.saturating_add(mask_bytes), "defining a brush from the selection")?;
     let mut v = crate::allocation::filled(len, 0.0, "defining a brush from the selection")?;
     let sc = sel.map_or(1, |sel| sel.channels());
     // A selection mask, when present, is a second buffer of the same size; it must fail gracefully too
