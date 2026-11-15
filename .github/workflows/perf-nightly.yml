@@ -1,13 +1,14 @@
 name: Perf (nightly)
 
-# The performance scorecard (#221): `cargo xtask perf` on a fixed macOS runner (Apple silicon,
-# Metal), every night and on demand. It never runs on pull requests, so it can't block one.
+# The performance scorecard (#221): GPU scenarios run on a fixed macOS runner (Apple silicon,
+# Metal); the large PSD/PSB import benchmark runs on a high-memory Linux runner. It never runs on
+# pull requests, so it can't block one.
 # It fails when an enforced budget in perf/budgets.toml breaks or a scenario's p50 regresses
 # more than 15 % against perf/baseline.json from the same machine class (other classes are
 # never compared; a baseline built from several runs is judged against its highest p50). The
-# table goes to the job summary; results.json is uploaded as the `perf-results` artifact.
+# tables go to their job summaries; each job uploads its own results artifact.
 #
-# To give this runner class its own baseline: download the `perf-results` artifact of the last
+# To give the macOS runner class its own baseline: download the `perf-results` artifact of the last
 # five or more nightly runs (`gh run download <run id> -n perf-results -D runs/<run id>`), run
 # `cargo xtask perf --update-baseline --from runs/<id>/results.json ... --allow-contended` (this
 # runner is never idle) and commit perf/baseline.json and docs/scorecard.md in a PR.
@@ -67,6 +68,8 @@ jobs:
         run: |
           args=()
           if [ "$QUICK" = "true" ]; then args+=(--quick); fi
+          # A 2 GB PSD and 4.4 GB PSB need about 30 GB of RAM; run them on the high-memory job.
+          args+=(--skip-bench large_file_bench)
           # This runner is never idle: a baseline from it is recorded labelled as contended.
           if [ "$UPDATE" = "true" ]; then args+=(--update-baseline --allow-contended); fi
           cargo xtask perf "${args[@]}"
@@ -97,5 +100,61 @@ jobs:
         with:
           name: perf-baseline
           path: perf/baseline.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  large-file:
+    if: ${{ !inputs.quick }}
+    name: large PSD/PSB import (high memory)
+    # The 30 GB PSB import cannot fit on GitHub's 7 GB macos-15 runner.
+    runs-on: depot-ubuntu-24.04-16
+    timeout-minutes: 180
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check out craft-i18n
+        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
+
+      - name: Install Linux build dependencies
+        uses: storytold/craft-common-actions/actions/install-apt-packages@main
+        with:
+          packages: >-
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+            libgtk-3-dev mesa-vulkan-drivers libvulkan1
+
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+        with:
+          key: perf-large-file
+
+      - name: Run large-file benchmark
+        run: cargo xtask perf --bench large_file_bench
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f target/perf/summary.md ]; then
+            cat target/perf/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No large-file perf summary: the run failed before writing one (see the log)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-large-file-results
+          path: |
+            target/perf/*.json
+            target/perf/summary.md
           if-no-files-found: warn
           retention-days: 30

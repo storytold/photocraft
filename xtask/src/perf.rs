@@ -2,7 +2,7 @@
 //! by scenario id, and check it against `perf/budgets.toml` and `perf/baseline.json` (#221).
 //!
 //! ```text
-//! cargo xtask perf [--quick] [--update-baseline [--allow-contended]] [--threshold PCT] [--bench NAME]... [--skip-build] [--reuse]
+//! cargo xtask perf [--quick] [--update-baseline [--allow-contended]] [--threshold PCT] [--bench NAME]... [--skip-bench NAME]... [--skip-build] [--reuse]
 //! cargo xtask perf --update-baseline --from results.json [--from results.json]... [--allow-contended]
 //! ```
 //!
@@ -809,6 +809,7 @@ struct Opts {
     update_baseline: bool,
     threshold: Option<f64>,
     benches: Vec<String>,
+    skip_benches: Vec<String>,
     skip_build: bool,
     reuse: bool,
     /// `--update-baseline --from`: build the baseline from these saved `results.json` files.
@@ -822,6 +823,7 @@ fn parse_opts(rest: &[&str]) -> Result<Opts, String> {
         update_baseline: false,
         threshold: None,
         benches: Vec::new(),
+        skip_benches: Vec::new(),
         skip_build: false,
         reuse: false,
         from: Vec::new(),
@@ -842,6 +844,7 @@ fn parse_opts(rest: &[&str]) -> Result<Opts, String> {
                 o.threshold = Some(v);
             }
             "--bench" => o.benches.push(it.next().ok_or("--bench needs a name")?.to_string()),
+            "--skip-bench" => o.skip_benches.push(it.next().ok_or("--skip-bench needs a name")?.to_string()),
             "--from" => o.from.push(PathBuf::from(it.next().ok_or("--from needs a results.json path")?)),
             "--allow-contended" => o.allow_contended = true,
             other => return Err(format!("perf: unknown option `{other}`")),
@@ -874,6 +877,11 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
             return Err(format!("perf: unknown bench `{name}` (see {BUDGETS})"));
         }
     }
+    for name in &o.skip_benches {
+        if !budgets.bench.iter().any(|b| &b.name == name) {
+            return Err(format!("perf: unknown bench `{name}` (see {BUDGETS})"));
+        }
+    }
     let baseline_value: Option<Value> = std::fs::read_to_string(root.join(BASELINE)).ok().and_then(|t| serde_json::from_str(&t).ok());
     if !o.from.is_empty() {
         return baseline_from_files(root, &budgets, baseline_value.as_ref(), &o);
@@ -887,6 +895,10 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     let mut plan: Vec<(&BenchSpec, Vec<String>)> = Vec::new();
     let mut skipped: Vec<(String, String)> = Vec::new();
     for b in &budgets.bench {
+        if o.skip_benches.contains(&b.name) {
+            skipped.push((b.name.clone(), "excluded by --skip-bench".into()));
+            continue;
+        }
         if !o.benches.is_empty() && !o.benches.contains(&b.name) {
             continue;
         }
@@ -1590,6 +1602,9 @@ row = "r99"
         assert!(o.quick && o.reuse && o.skip_build);
         assert_eq!(o.threshold, Some(20.0));
         assert_eq!(o.benches, ["a"]);
+        let o = parse_opts(&["--skip-bench", "large_file_bench"]).unwrap();
+        assert_eq!(o.skip_benches, ["large_file_bench"]);
+        assert!(parse_opts(&["--skip-bench"]).is_err());
         assert!(!o.allow_contended && o.from.is_empty());
         let o = parse_opts(&["--update-baseline", "--from", "a.json", "--from", "b.json", "--allow-contended"]).unwrap();
         assert!(o.update_baseline && o.allow_contended);
