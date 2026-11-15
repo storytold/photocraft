@@ -25,6 +25,8 @@ use crate::{PhotocraftApp, widgets};
 mod bevel_modes_tests;
 pub(crate) mod color_picker;
 mod contour;
+#[cfg(test)]
+mod drop_shadow_max_ten_tests;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
@@ -467,9 +469,22 @@ fn next_id(f: &Map<String, Value>) -> String {
     format!("fx{next}")
 }
 
+/// The most Drop Shadows the dialog adds to a layer, as in Photoshop (#14891). A file that
+/// already has more keeps them all; only adding stops.
+const MAX_DROP_SHADOWS: usize = 10;
+
+/// Whether the dialog may add another instance of `kind`.
+fn can_add(f: &Map<String, Value>, kind: &str) -> bool {
+    kind != "dropShadow" || effects_of(f).iter().filter(|e| e.get("kind").and_then(Value::as_str) == Some(kind)).count() < MAX_DROP_SHADOWS
+}
+
 /// Adds an instance of `kind`, right after the last one of its kind (the list,
 /// and so the rendered stack, keeps the layer's effect order), and selects it.
+/// Adds nothing once the kind is at its limit ([`can_add`]).
 fn add_instance(f: &mut Map<String, Value>, kind: &str) {
+    if !can_add(f, kind) {
+        return;
+    }
     let light = f.get("pendingGlobalLight").or_else(|| f.get("globalLight")).and_then(Value::as_f64).unwrap_or(120.0) as f32;
     let id = next_id(f);
     let user = f.get(USER_DEFAULTS).and_then(|d| d.get(kind));
@@ -1437,6 +1452,7 @@ fn effect_list(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
             continue;
         }
         let count = ids.len();
+        let addable = can_add(f, kind);
         for id in &ids {
             let Some(e) = entry(f, id) else { continue };
             let kind_label = KINDS.iter().find(|k| k.0 == kind).map(|k| k.1).unwrap_or(label);
@@ -1460,18 +1476,25 @@ fn effect_list(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
             );
             // + adds another instance; − removes one once there are several.
             if multi(kind) {
-                let btn = |ui: &egui::Ui, at: egui::Pos2, glyph: &str, tag: &str| {
+                // A disabled button (+ at the kind's limit) is drawn greyed and ignores clicks.
+                let btn = |ui: &egui::Ui, at: egui::Pos2, glyph: &str, tag: &str, enabled: bool| {
                     let r = egui::Rect::from_center_size(at, vec2(18.0, 18.0));
-                    let hresp = ui.interact(r, ui.scope_id().with(("fxbtn", tag, id)), Sense::click());
-                    let col = if hresp.hovered() { t.accent } else { t.text_faint };
+                    let hresp = ui.interact(r, ui.scope_id().with(("fxbtn", tag, id)), if enabled { Sense::click() } else { Sense::hover() });
+                    let col = if !enabled {
+                        t.text_faint.gamma_multiply(0.4)
+                    } else if hresp.hovered() {
+                        t.accent
+                    } else {
+                        t.text_faint
+                    };
                     ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, glyph, egui::FontId::proportional(13.0), col);
-                    hresp.clicked()
+                    enabled && hresp.clicked()
                 };
-                if count > 1 && btn(ui, rect.right_center() - vec2(22.0, 0.0), "\u{2212}", "minus") {
+                if count > 1 && btn(ui, rect.right_center() - vec2(22.0, 0.0), "\u{2212}", "minus", true) {
                     remove_instance(f, id);
                     continue;
                 }
-                if btn(ui, rect.right_center() - vec2(8.0, 0.0), "+", "plus") {
+                if btn(ui, rect.right_center() - vec2(8.0, 0.0), "+", "plus", addable) {
                     add_instance(f, kind);
                 }
             }
