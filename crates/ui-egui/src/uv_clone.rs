@@ -7,6 +7,10 @@ use photocraft_uv::{
     preview::{Camera, Materials},
 };
 
+const MAX_OCCLUSION_SAMPLES: usize = 200_000;
+const MAX_SUBDIVISION_DEPTH: u8 = 8;
+const OCCLUSION_CELL_PIXELS: f32 = 3.0;
+
 // Clipping is in screen f32 coordinates. Its boundary vertices can land a few
 // ulps outside the original f64 triangle: evaluate its affine map without an
 // inside-triangle rejection, or neighboring preview triangles acquire holes.
@@ -52,6 +56,7 @@ pub(crate) fn preview(
     }
     let rect = Rect::from_min_max(egui::pos2(patch.x0 as f32, patch.y0 as f32), egui::pos2(patch.x1 as f32, patch.y1 as f32));
     let mut mesh = egui::Mesh::with_texture(texture);
+    let mut sample_budget = MAX_OCCLUSION_SAMPLES;
     for (id, t) in g.triangles.iter().enumerate().filter(|(_, t)| t.material == tri.material) {
         let uv = t.uv.map(|q| [f64::from(q[0]) * dimensions[0], (1.0 - f64::from(q[1])) * dimensions[1]]);
         let points = uv.map(|q| egui::pos2(q[0] as f32, q[1] as f32));
@@ -76,30 +81,115 @@ pub(crate) fn preview(
         if poly.len() < 3 {
             continue;
         }
-        let center = poly.iter().fold(egui::Vec2::ZERO, |a, p| a + p.to_vec2()) / poly.len() as f32;
-        let Some(center_weights) = weights([f64::from(center.x), f64::from(center.y)], uv) else { continue };
-        let position = std::array::from_fn(|j| t.positions.iter().zip(center_weights).map(|(p, w)| f64::from(p[j]) * w).sum());
-        let Some(q) = g.project_normalized(camera, position, size) else { continue };
-        // Discard occluded triangles; the source must not shine through another part of the mesh.
-        if id != hit.triangle && g.hit(scene, camera, maps, q, size).is_none_or(|h| h.triangle != id) {
-            continue;
+        for i in 1..poly.len() - 1 {
+            let triangle = [poly[0], poly[i], poly[i + 1]].map(|p| [f64::from(p.x), f64::from(p.y)]);
+            emit_visible_triangle(
+                triangle,
+                uv,
+                t.positions,
+                id,
+                g,
+                scene,
+                camera,
+                maps,
+                size,
+                viewport,
+                patch,
+                tint,
+                &mut sample_budget,
+                0,
+                &mut mesh,
+            );
+            if sample_budget == 0 {
+                break;
+            }
         }
-        let mut vertices = Vec::new();
-        for p in poly {
-            let Some(w) = weights([f64::from(p.x), f64::from(p.y)], uv) else { continue };
-            let pos = std::array::from_fn(|j| t.positions.iter().zip(w).map(|(p, w)| f64::from(p[j]) * w).sum());
-            let Some(q) = g.project_normalized(camera, pos, size) else { continue };
-            vertices.push(egui::epaint::Vertex {
-                pos: viewport.min + egui::vec2(q[0] as f32 * viewport.width(), q[1] as f32 * viewport.height()),
-                uv: egui::pos2((p.x - patch.x0 as f32) / patch.width() as f32, (p.y - patch.y0 as f32) / patch.height() as f32),
-                color: tint,
-            });
+        if sample_budget == 0 {
+            break;
         }
-        let base = mesh.vertices.len() as u32;
-        for i in 1..vertices.len().saturating_sub(1) {
-            mesh.indices.extend_from_slice(&[base, base + i as u32, base + i as u32 + 1]);
-        }
-        mesh.vertices.extend(vertices);
     }
     painter.add(egui::Shape::mesh(mesh));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_visible_triangle(
+    points: [[f64; 2]; 3],
+    uv: [[f64; 2]; 3],
+    positions: [[f32; 3]; 3],
+    triangle_id: usize,
+    geometry: &Geometry,
+    scene: &Scene,
+    camera: Camera,
+    maps: &Materials<'_>,
+    size: [u32; 2],
+    viewport: Rect,
+    patch: photocraft_geom::Rect,
+    tint: egui::Color32,
+    sample_budget: &mut usize,
+    depth: u8,
+    mesh: &mut egui::Mesh,
+) {
+    if *sample_budget == 0 {
+        return;
+    }
+    let Some(projected) = points.map(|point| project_uv_point(point, uv, positions, geometry, camera, size)).into_iter().collect::<Option<Vec<_>>>()
+    else {
+        return;
+    };
+    let screen: Vec<_> = projected.iter().map(|point| viewport.min + egui::vec2(point[0] as f32 * viewport.width(), point[1] as f32 * viewport.height())).collect();
+    let longest_edge = (0..3)
+        .map(|index| screen[index].distance(screen[(index + 1) % 3]))
+        .fold(0.0f32, f32::max);
+    if longest_edge > OCCLUSION_CELL_PIXELS && depth < MAX_SUBDIVISION_DEPTH {
+        let midpoint = |a: [f64; 2], b: [f64; 2]| [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5];
+        let [a, b, c] = points;
+        let (ab, bc, ca) = (midpoint(a, b), midpoint(b, c), midpoint(c, a));
+        for child in [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]] {
+            emit_visible_triangle(
+                child,
+                uv,
+                positions,
+                triangle_id,
+                geometry,
+                scene,
+                camera,
+                maps,
+                size,
+                viewport,
+                patch,
+                tint,
+                sample_budget,
+                depth + 1,
+                mesh,
+            );
+            if *sample_budget == 0 {
+                return;
+            }
+        }
+        return;
+    }
+
+    *sample_budget -= 1;
+    let center = [points.iter().map(|point| point[0]).sum::<f64>() / 3.0, points.iter().map(|point| point[1]).sum::<f64>() / 3.0];
+    let Some(center_screen) = project_uv_point(center, uv, positions, geometry, camera, size) else { return };
+    // Check every small screen-space cell, including the cursor triangle. A triangle can be
+    // visible at its centroid while much of its UV area is behind another surface.
+    if geometry.hit(scene, camera, maps, center_screen, size).is_none_or(|hit| hit.triangle != triangle_id) {
+        return;
+    }
+    let base = mesh.vertices.len() as u32;
+    for (point, position) in points.into_iter().zip(projected) {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: viewport.min + egui::vec2(position[0] as f32 * viewport.width(), position[1] as f32 * viewport.height()),
+            uv: egui::pos2(((point[0] as f32) - patch.x0 as f32) / patch.width() as f32, ((point[1] as f32) - patch.y0 as f32) / patch.height() as f32),
+            color: tint,
+        });
+    }
+    mesh.indices.extend_from_slice(&[base, base + 1, base + 2]);
+}
+
+fn project_uv_point(point: [f64; 2], uv: [[f64; 2]; 3], positions: [[f32; 3]; 3], geometry: &Geometry, camera: Camera, size: [u32; 2]) -> Option<[f64; 2]> {
+    let barycentric = weights(point, uv)?;
+    let position = std::array::from_fn(|axis| positions.iter().zip(barycentric).map(|(p, weight)| f64::from(p[axis]) * weight).sum());
+    geometry.project_normalized(camera, position, size)
 }

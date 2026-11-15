@@ -52,6 +52,8 @@ pub struct MaskBrushSettings {
 pub struct MaskBrushPreviewRequest<'a> {
     pub owner_key: u64,
     pub size: [u32; 2],
+    /// Paint sublayer whose transient pixels this preview owns.
+    pub paint_layer_index: usize,
     pub stack: &'a Stack,
     pub base_paint: &'a Surface,
     pub settings: MaskBrushSettings,
@@ -123,6 +125,7 @@ pub struct MaskBrushPatch {
 struct MaskBrushPreview {
     owner_key: u64,
     size: [u32; 2],
+    paint_layer_index: usize,
     base: CachedSurface,
     coverage: wgpu::Buffer,
     output: Arc<wgpu::Texture>,
@@ -255,7 +258,7 @@ impl MaskStackRenderer {
     /// preview is separate from the canonical Surface; callers commit the final dirty patches via
     /// the existing CPU command/Undo path, or discard it with `cancel_mask_brush_preview`.
     pub fn begin_round_mask_brush_preview(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, request: MaskBrushPreviewRequest<'_>) -> Result<(), String> {
-        let MaskBrushPreviewRequest { owner_key, size, stack, base_paint, settings } = request;
+        let MaskBrushPreviewRequest { owner_key, size, paint_layer_index, stack, base_paint, settings } = request;
         if size.contains(&0)
             || size.iter().any(|side| *side > device.limits().max_texture_dimension_2d)
             || !rgba8_compatible(base_paint)
@@ -284,7 +287,7 @@ impl MaskStackRenderer {
         let output = Arc::new(rgba16_texture(device, size, "pc_mask_brush_preview"));
         let dummy_shell = rgba32u_texture(device, [1, 1], "pc_mask_brush_dummy_shell");
         let dummy = rgba16_texture(device, [1, 1], "pc_mask_brush_dummy");
-        let preview = MaskBrushPreview { owner_key, size, base, coverage, output, dummy_shell, dummy, settings, dirty: Vec::new(), stroke_dirty: Vec::new() };
+        let preview = MaskBrushPreview { owner_key, size, paint_layer_index, base, coverage, output, dummy_shell, dummy, settings, dirty: Vec::new(), stroke_dirty: Vec::new() };
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_mask_brush_begin") });
         encoder.clear_buffer(&preview.coverage, 0, None);
         let base_view = preview.base.texture.create_view(&Default::default());
@@ -644,7 +647,10 @@ impl MaskStackRenderer {
         let MaskBrushStackRenderRequest { stack, size, shell_ids, shell_key, paint_layer_index, dirty_regions, target } = request;
         let (owner_key, output) = {
             let preview = self.brush_preview.as_ref().ok_or("No active GPU mask brush preview")?;
-            if preview.size != size || stack.layers.get(paint_layer_index).is_none_or(|layer| !matches!(&layer.kind, EffectKind::Paint)) {
+            if preview.size != size
+                || preview.paint_layer_index != paint_layer_index
+                || stack.layers.get(paint_layer_index).is_none_or(|layer| !matches!(&layer.kind, EffectKind::Paint))
+            {
                 return Err("GPU mask brush preview does not match this stack/layer".into());
             }
             (preview.owner_key, Arc::clone(&preview.output))

@@ -205,7 +205,7 @@ impl Compositor {
                 self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats)?;
             }
         }
-        let fr = self.frame_res(device, queue, canvas, &plan, &mut stats);
+        let fr = self.frame_res(device, queue, canvas, &plan, &mut stats)?;
 
         // Page cells; every other frame in reverse, so a repeated full refresh of a document
         // larger than the budget starts with the pages still resident.
@@ -465,7 +465,7 @@ impl Compositor {
     }
 
     /// Per-frame resources of `plan`: the tile area of each pass's surfaces, its LUT and pattern.
-    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>, stats: &mut Stats) -> FrameRes {
+    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>, stats: &mut Stats) -> Result<FrameRes, Unsupported> {
         let grid = tile_grid(canvas);
         let area = |s: &Surface| s.tile_bounds().intersect(&grid);
         let areas = plan
@@ -485,9 +485,9 @@ impl Compositor {
             })
             .collect();
         let luts = plan.passes.iter().map(|p| p.lut.as_ref().map(|rows| lut_texture(device, queue, rows))).collect();
-        let patterns = plan.passes.iter().map(|p| p.pattern.map(|pat| self.pattern_view(device, queue, pat))).collect();
+        let patterns = plan.passes.iter().map(|p| p.pattern.map(|pat| self.pattern_view(device, queue, pat)).transpose()).collect::<Result<_, _>>()?;
         let mask_fills = plan.passes.iter().map(|p| p.mask_fill.as_ref().map(|fill| self.mask_fill_view(device, queue, fill, stats))).collect();
-        FrameRes { areas, luts, patterns, mask_fills }
+        Ok(FrameRes { areas, luts, patterns, mask_fills })
     }
 
     fn mask_fill_view(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, fill: &plan::MaskFillUse<'_>, stats: &mut Stats) -> wgpu::TextureView {

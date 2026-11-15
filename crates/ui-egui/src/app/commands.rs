@@ -6,6 +6,7 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         #[cfg(feature = "uv-workbench")]
         if matches!(id, "uv.model.import" | "uv.project.load") {
             if std::mem::take(&mut self.uv_cache.project.approved_replace) {
@@ -118,6 +119,11 @@ impl PhotocraftApp {
         #[cfg(feature = "uv-workbench")]
         if result.is_ok() && matches!(id, "uv.model.import" | "uv.model.reimport" | "uv.project.load") {
             crate::uv_ui::clear_polygon_selection(self);
+        }
+        if id == "select.findLayers"
+            && let Ok(reply) = &result
+        {
+            crate::layer_filter_ui::find::apply(self, reply);
         }
         result
     }

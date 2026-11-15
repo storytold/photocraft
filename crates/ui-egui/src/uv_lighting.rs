@@ -37,9 +37,9 @@ pub(crate) fn gpu_color_encoding(doc: &photocraft_doc::Document, channel: Channe
     }
     let profile = photocraft_engine::color_cmds::composite_profile(doc);
     let hash = profile.content_hash();
-    if hash == photocraft_cms::Builtin::Srgb.profile().content_hash() {
+    if hash == craft_cms::Builtin::Srgb.profile().content_hash() {
         Some(true)
-    } else if hash == photocraft_cms::Builtin::LinearSrgb.profile().content_hash() {
+    } else if hash == craft_cms::Builtin::LinearSrgb.profile().content_hash() {
         Some(false)
     } else {
         None
@@ -69,11 +69,11 @@ pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut Surfa
     let mut skipped = Vec::new();
     maps.budget_status = None;
     let monitor = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok()).map(|d| d.monitor.clone());
-    let monitor = monitor.as_deref().unwrap_or(photocraft_cms::Builtin::Srgb.profile());
+    let monitor = monitor.as_deref().unwrap_or(craft_cms::Builtin::Srgb.profile());
     let hash = monitor.content_hash();
     if maps.output.as_ref().is_none_or(|(key, _)| *key != hash) {
         let mut lut = identity_lut();
-        let transform = photocraft_cms::transform::cached(photocraft_cms::Builtin::Srgb.profile(), monitor, Default::default()).map_err(|e| e.to_string())?;
+        let transform = craft_cms::transform::cached(craft_cms::Builtin::Srgb.profile(), monitor, Default::default()).map_err(|e| e.to_string())?;
         let source = lut.rgba.as_flattened().to_vec();
         transform.convert_f32(&source, 4, lut.rgba.as_flattened_mut(), 4, true);
         maps.output = Some((hash, lut));
@@ -176,7 +176,7 @@ pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut Surfa
                     .get(material)
                     .and_then(Option::as_ref)
                     .filter(|old| old.key.0 == map_key.0 && old.key.3 == map_key.3 && old.doc.size == doc.size);
-                let last_damage = app.session.documents().get(index).and_then(|st| st.last_damage);
+                let last_damage = app.session.documents().get(index).map_or((0, None), |st| (st.damage_from(), st.last_damage));
                 let damage = previous.and_then(|old| crate::canvas::damage_since(app, index, (old.key.1, old.key.2), (revision, live), 0, last_damage));
                 let previous_key = damage.as_ref().and_then(|_| previous.map(|old| old.key));
                 GpuMapRequest { doc: doc.clone(), key: map_key, linear_srgb, previous_key, damage }
@@ -207,7 +207,7 @@ pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut Surfa
                     .and_then(Option::as_ref)
                     .is_some_and(|im| im.width == doc.size.width as usize && im.height == doc.size.height as usize)
             {
-                crate::canvas::damage_since(app, index, (old.1, old.2), (revision, live), 0, app.session.documents().get(index).and_then(|st| st.last_damage))
+                crate::canvas::damage_since(app, index, (old.1, old.2), (revision, live), 0, app.session.documents().get(index).map_or((0, None), |st| (st.damage_from(), st.last_damage)))
             } else {
                 None
             };
@@ -221,7 +221,7 @@ pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut Surfa
                 let rect = buffer.rect;
                 let rgba = if colored {
                     let profile = photocraft_engine::color_cmds::composite_profile(&doc);
-                    let transform = photocraft_cms::transform::cached(&profile, photocraft_cms::Builtin::LinearSrgb.profile(), Default::default())
+                    let transform = craft_cms::transform::cached(&profile, craft_cms::Builtin::LinearSrgb.profile(), Default::default())
                         .map_err(|e| e.to_string())?;
                     let mut dst = vec![[0.0; 4]; buffer.px.len()];
                     transform.convert_f32(buffer.px.as_flattened(), 4, dst.as_flattened_mut(), 4, true);

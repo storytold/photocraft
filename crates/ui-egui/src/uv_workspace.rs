@@ -619,7 +619,19 @@ pub(crate) fn floating(app: &mut PhotocraftApp, ctx: &egui::Context) {
 pub(crate) fn sync_workspace(app: &mut PhotocraftApp) -> Result<(), String> {
     let active = app.ui.workspace == "3D";
     if app.session.uv_workspace.active == active {
+        app.uv_cache.synced_workspace.clone_from(&app.ui.workspace);
         return Ok(());
+    }
+    if crate::transform_tool::committing(app).is_some() {
+        let error = "Wait for the active transform to finish before switching workspaces";
+        if !app.uv_cache.synced_workspace.is_empty() {
+            app.ui.workspace.clone_from(&app.uv_cache.synced_workspace);
+        } else {
+            app.ui.workspace = if app.session.uv_workspace.active { "3D" } else { "Essentials" }.into();
+        }
+        app.ui.status = error.into();
+        app.ui.status_error = true;
+        return Err(error.into());
     }
     uv_ui::finish_paint(app)?;
     // Commit a valid transient edit before changing banks. app.run handles stale revisions
@@ -629,6 +641,15 @@ pub(crate) fn sync_workspace(app: &mut PhotocraftApp) -> Result<(), String> {
             app.ui.status = error.clone();
             app.ui.status_error = true;
         })?;
+    }
+    if let Some([x, y, _]) = app.drag.as_ref().and_then(|d| d.points.last()).copied() {
+        crate::canvas::tool_event(app, crate::canvas::ToolEvent::Up { x, y }, egui::Modifiers::NONE);
+    }
+    if app.ui.transform.is_some() {
+        crate::transform_tool::commit(app);
+        if app.ui.transform.is_some() || crate::transform_tool::committing(app).is_some() {
+            return Err("Finish or cancel the transform before switching workspaces".into());
+        }
     }
     if !active {
         // A built-in preset is free to replace its own panels and dock. Remember the UV panel's
@@ -647,12 +668,6 @@ pub(crate) fn sync_workspace(app: &mut PhotocraftApp) -> Result<(), String> {
     }
     app.ui.brush_picker = None;
     app.ui.uv_workbench.picker_3d = false;
-    if let Some([x, y, _]) = app.drag.as_ref().and_then(|d| d.points.last()).copied() {
-        crate::canvas::tool_event(app, crate::canvas::ToolEvent::Up { x, y }, egui::Modifiers::NONE);
-    }
-    if app.ui.transform.is_some() {
-        crate::transform_tool::commit(app);
-    }
     if !active {
         app.uv_cache.project.parked_view = Some(crate::uv_project::snapshot(app));
     }
@@ -673,6 +688,7 @@ pub(crate) fn sync_workspace(app: &mut PhotocraftApp) -> Result<(), String> {
     app.uv_cache.viewport = None;
     app.uv_cache.viewport_id = None;
     app.uv_cache.workspace_views.retain(|id, _| app.session.documents().iter().chain(app.session.uv_workspace.parked()).any(|st| st.doc.id == *id));
+    app.uv_cache.synced_workspace.clone_from(&app.ui.workspace);
     Ok(())
 }
 

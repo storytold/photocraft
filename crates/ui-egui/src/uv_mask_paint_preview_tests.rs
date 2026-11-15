@@ -439,7 +439,7 @@ fn gray_fill_preview_skips_full_cpu_worker_for_both_mask_target_forms() {
     let started = std::time::Instant::now();
     let deadline = started + std::time::Duration::from_secs(2);
     let proxy = loop {
-        let _ = crate::channel_view::ensure(&mut app, &ui_ctx, 0);
+        let _ = crate::channel_view::ensure(&mut app, &ui_ctx, 0, None);
         if let Some(proxy) = super::sampled_fill_proxy(&app, 0)
             && proxy.key == super::current_fill_key(&app, 0).unwrap()
         {
@@ -449,7 +449,7 @@ fn gray_fill_preview_skips_full_cpu_worker_for_both_mask_target_forms() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     };
     assert!(proxy.size[0] <= 256 && proxy.size[1] <= 256);
-    assert!(crate::channel_view::ensure(&mut app, &ui_ctx, 0).is_some());
+    assert!(crate::channel_view::ensure(&mut app, &ui_ctx, 0, None).is_some());
     let doc = app.session.active().unwrap().doc.clone();
     let cache = app.channel_views.get(&doc.id.0).unwrap();
     assert_eq!(cache.preview_key, proxy.key, "the texture key matches the sampled transform");
@@ -475,7 +475,7 @@ fn gray_fill_preview_skips_full_cpu_worker_for_both_mask_target_forms() {
         Some(photocraft_engine::mask_view_cmds::LayerMaskView { layer, filter: false, mode: photocraft_engine::mask_view_cmds::MaskViewMode::Gray });
     assert!(super::current_fill_gray_mask(&app, 0), "the explicit mask-view selection is also opaque Gray");
     assert!(super::display_doc(&mut app, 0).is_some());
-    assert!(crate::channel_view::ensure(&mut app, &ui_ctx, 0).is_some());
+    assert!(crate::channel_view::ensure(&mut app, &ui_ctx, 0, None).is_some());
 }
 
 #[test]

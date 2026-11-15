@@ -92,6 +92,7 @@ pub(crate) fn overlay(
     };
     let mut view = st.channel_view.clone();
     if view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask
+        && view.layer_mask.is_none()
         && let Some(layer) = st.active_layer.filter(|id| doc.layer(*id).is_some_and(|layer| layer.mask.is_some()))
     {
         view.layer_mask =

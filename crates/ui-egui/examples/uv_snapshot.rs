@@ -70,6 +70,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..12 {
         harness.step();
     }
+    if !harness.state().uv_gpu_active() {
+        return Err(format!("3D GPU fallback during normals snapshot: {}", harness.state().ui.uv_workbench.status).into());
+    }
     let normals = std::path::Path::new(&out).with_file_name("uv-normals-3d.png");
     harness.render()?.save(&normals)?;
     println!("Saved {}", normals.display());

@@ -154,6 +154,44 @@ fn half_roundtrip() {
     }
 }
 
+/// #9173: no two pipeline build jobs share a shader, so no FXC blob is shared across threads.
+#[test]
+fn build_jobs_share_no_shader() {
+    use super::consts::{MAP16, MAP32};
+    use super::kit::{build_jobs, vertex_shader};
+    let jobs = build_jobs(wgpu::TextureFormat::Rgba32Float);
+    let mut seen = std::collections::HashSet::new();
+    for job in &jobs {
+        let fragments: std::collections::HashSet<_> = job.keys.iter().filter_map(|k| k.0.entry()).collect();
+        for f in fragments {
+            assert!(seen.insert(f.to_string()), "fragment shader {f} is built by two jobs");
+        }
+        assert!(seen.insert(job.vertex.clone()), "vertex entry {} is shared", job.vertex);
+    }
+    // Every drawn pipeline is still built, in the same formats.
+    let keys: Vec<_> = jobs.iter().flat_map(|job| job.keys.iter().copied()).collect();
+    let plain = Kernel::DRAWN.iter().filter(|k| !k.is_map()).count();
+    assert_eq!(keys.len(), plain + 2 * (Kernel::DRAWN.len() - plain));
+    for k in Kernel::DRAWN {
+        let formats: Vec<_> = keys.iter().filter(|key| key.0 == k).map(|key| key.1).collect();
+        let want = if k.is_map() { vec![MAP32, MAP16] } else { vec![wgpu::TextureFormat::Rgba32Float] };
+        assert_eq!(formats, want, "{k:?}");
+    }
+    // The vertex module validates and has every job's entry point.
+    let src = vertex_shader(&jobs);
+    let module = wgpu::naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+    wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    for job in &jobs {
+        assert!(module.entry_points.iter().any(|ep| ep.name == job.vertex && ep.stage == wgpu::naga::ShaderStage::Vertex), "missing {}", job.vertex);
+    }
+    // The fragment module has no vertex stage, so the build can't fall back to one shared `vs`.
+    let compose = wgpu::naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
+    let shared: Vec<_> = compose.entry_points.iter().filter(|ep| ep.stage == wgpu::naga::ShaderStage::Vertex).map(|ep| ep.name.as_str()).collect();
+    assert!(shared.is_empty(), "compose.wgsl has a vertex entry point every job would share: {shared:?}");
+}
+
 #[test]
 fn shader_validates() {
     let module = wgpu::naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
@@ -343,11 +381,12 @@ fn sixteen_and_thirty_two_bit_fast_paths_match_the_general_one() {
 /// the built-in CMYK profile and with a document's own (which the worker threads enter).
 #[test]
 fn colour_managed_tiles_match_the_per_pixel_conversion() {
-    use photocraft_cms::synth::{CmykParams, cmyk_profile};
+    use craft_cms::synth::{CmykParams, cmyk_profile};
     use photocraft_color::ColorMode;
     use photocraft_color::convert::{CmykSpace, with_cmyk_space};
     let icc = Arc::new(
         cmyk_profile(&CmykParams { description: "GPU test CMYK".into(), tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() })
+            .unwrap()
             .to_bytes(),
     );
     let own = CmykSpace::for_profile(Some(&icc));
@@ -417,4 +456,10 @@ fn mask_fill_source_memory_is_bounded_before_upload() {
     for size in [[0, 1], [1, 0], [8193, 8192], [8192, 8193], [u32::MAX, 1]] {
         assert!(setup::mask_fill_source_bytes(size, 16_384).is_err(), "{size:?}");
     }
+}
+
+#[test]
+fn shader_fingerprint_is_fnv1a_of_embedded_source() {
+    assert_eq!(super::fnv1a(b"hello"), 0xa430_d846_80aa_bd0b);
+    assert_eq!(super::shader_fingerprint(), super::fnv1a(super::SHADER.as_bytes()));
 }

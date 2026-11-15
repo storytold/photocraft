@@ -28,6 +28,7 @@ struct FillMaskJob {
     token: u64,
     canvas: photocraft_geom::Rect,
     size: [u32; 2],
+    shell_ids: Option<Arc<Vec<u32>>>,
     stack: Stack,
 }
 
@@ -481,6 +482,19 @@ pub(crate) fn fill_mask_proxy_at(app: &mut PhotocraftApp, idx: usize, now: Insta
         let largest = canvas.width().max(canvas.height()).max(1);
         let scale = largest.div_ceil(FILL_PROXY_MAX_SIDE).max(1);
         let size = [canvas.width().div_ceil(scale).max(1), canvas.height().div_ceil(scale).max(1)];
+        let shell_ids = stack
+            .layers
+            .iter()
+            .any(|layer| layer.visible && layer.opacity > 0.0 && matches!(layer.kind, photocraft_doc::mask_paint::EffectKind::Blur { .. }))
+            .then(|| {
+                let materials: Vec<_> = photocraft_uv::preview::Channel::MAPS
+                    .into_iter()
+                    .flat_map(|channel| app.session.uv.map_bindings(channel).iter().enumerate())
+                    .filter_map(|(material, binding)| (*binding == Some(doc.id)).then_some(material))
+                    .collect();
+                app.session.uv.mask_shell_ids(doc.size.width, doc.size.height, &materials, [0, 0])
+            })
+            .flatten();
         worker.submit(FillMaskJob {
             generation: preview.generation,
             doc: doc.id,
@@ -491,6 +505,7 @@ pub(crate) fn fill_mask_proxy_at(app: &mut PhotocraftApp, idx: usize, now: Insta
             token: 0,
             canvas,
             size,
+            shell_ids,
             stack,
         });
     }
@@ -532,7 +547,15 @@ fn sample_fill_mask(job: FillMaskJob, cancel_epoch: &AtomicU64) -> Option<FillMa
     // the bounded 256² proxy would repeat tens of millions of taps. The compose API scales the
     // blur kernel to the proxy grid, which is sufficient for this deliberately low-resolution
     // transient preview.
-    let values = photocraft_compose::mask_paint::sample_stack_resampled(&job.stack, job.canvas, job.size)?;
+    let values = if let Some(shell_ids) = job
+        .shell_ids
+        .as_deref()
+        .and_then(|ids| photocraft_compose::mask_paint::ShellIdMap::new(job.canvas, ids))
+    {
+        photocraft_compose::mask_paint::sample_stack_resampled_with_shell_ids(&job.stack, job.canvas, job.size, shell_ids)?
+    } else {
+        photocraft_compose::mask_paint::sample_stack_resampled(&job.stack, job.canvas, job.size)?
+    };
     if cancel_epoch.load(Ordering::Relaxed) != job.token {
         return None;
     }
@@ -564,6 +587,7 @@ mod fill_worker_tests {
             token,
             canvas: photocraft_geom::Rect::new(0, 0, 1, 1),
             size: [1, 1],
+            shell_ids: None,
             stack: Stack { base: photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8), layers: Vec::new(), active: 0 },
         }
     }

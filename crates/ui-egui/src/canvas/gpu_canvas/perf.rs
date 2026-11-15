@@ -3,6 +3,20 @@ use super::setup::Refresh;
 use super::texels::LayerFit;
 use super::wgpu;
 
+const MAX_REFRESH_EVENTS: usize = 256;
+
+/// A distinct canvas refresh retained briefly for automation-side profiling.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshEvent {
+    pub refresh_seq: u64,
+    pub last_refresh: &'static str,
+    pub last_refresh_px: u64,
+    pub gpu_upload_bytes: u64,
+    pub gpu_passes: u64,
+    pub gpu_fallback: Option<String>,
+}
+
 /// Milliseconds since the process (or page) started, from a monotonic clock.
 ///
 /// `web_time::Instant` is `std::time::Instant` natively and `performance.now()` on wasm, so frame
@@ -26,12 +40,17 @@ pub struct Perf {
     /// path the cost of *encoding and submitting* the composite — not of running it, which is
     /// `gpu_ms`.
     pub composite_ms: f64,
+    /// Time spent on a failed GPU composite attempt before CPU fallback.
+    pub gpu_attempt_ms: f64,
     /// Last canvas refresh: conversion + upload (ms).
     pub upload_ms: f64,
     /// Last canvas refresh kind: "full", "rect" or "none".
     pub last_refresh: &'static str,
     /// Pixels in the last refresh.
     pub last_refresh_px: u64,
+    /// Monotonic sequence and bounded recent history of canvas refreshes.
+    pub refresh_seq: u64,
+    pub refresh_events: std::collections::VecDeque<RefreshEvent>,
     /// Whether the GPU canvas path is active.
     pub gpu: bool,
     /// Layer tiles uploaded by the last GPU composite.
@@ -225,6 +244,21 @@ impl Perf {
         self.last_refresh_px = px;
         self.composite_ms = composite_ms;
         self.upload_ms = upload_ms;
+        self.refresh_seq = self.refresh_seq.wrapping_add(1);
+        self.refresh_events.push_back(RefreshEvent {
+            refresh_seq: self.refresh_seq,
+            last_refresh: kind,
+            last_refresh_px: px,
+            gpu_upload_bytes: self.gpu_upload_bytes,
+            gpu_passes: self.gpu_passes,
+            gpu_fallback: self.gpu_fallback.clone(),
+        });
+        while self.refresh_events.len() > MAX_REFRESH_EVENTS {
+            self.refresh_events.pop_front();
+        }
+        // A refresh that didn't come through `record_refresh` or `record_gpu_attempt` had no failed
+        // GPU attempt: the last one's time would be read as this refresh's.
+        self.gpu_attempt_ms = 0.0;
         if !kind.starts_with("gpu") {
             self.gpu_uploads = 0;
             self.gpu_upload_bytes = 0;
@@ -244,9 +278,21 @@ impl Perf {
         self.gpu_upload_bytes = r.gpu_upload_bytes;
         self.gpu_passes = r.gpu_passes;
         self.gpu_chunks = r.gpu_chunks;
+        if let Some(event) = self.refresh_events.back_mut() {
+            event.gpu_upload_bytes = self.gpu_upload_bytes;
+            event.gpu_passes = self.gpu_passes;
+        }
+        self.record_gpu_attempt(r.gpu_attempt_ms);
         if let Some(t) = r.gpu {
             self.record_gpu(t);
         }
+    }
+
+    /// Record the time a failed GPU composite attempt took before the CPU did the refresh just
+    /// recorded, apart from that refresh's own CPU time.
+    pub fn record_gpu_attempt(&mut self, ms: f64) {
+        self.gpu_attempt_ms = ms;
+        self.stage.composite_ms += ms;
     }
 
     /// Record a GPU composite measurement that came back (see [`photocraft_gpu::GpuTiming`]).
@@ -264,5 +310,25 @@ impl Perf {
             self.ui_max_ms = ms;
             self.max_decay = 0.0;
         }
+    }
+}
+
+#[cfg(test)]
+mod refresh_event_tests {
+    use super::*;
+
+    #[test]
+    fn identical_refreshes_keep_distinct_sequence_numbers_in_bounded_history() {
+        let mut perf = Perf::default();
+        perf.record("rect", 128, 1.0, 0.25);
+        perf.record("rect", 128, 1.0, 0.25);
+        assert_eq!(perf.refresh_events.iter().map(|event| event.refresh_seq).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(perf.refresh_events[0].last_refresh_px, perf.refresh_events[1].last_refresh_px);
+        for _ in 0..MAX_REFRESH_EVENTS {
+            perf.record("rect", 128, 1.0, 0.25);
+        }
+        assert_eq!(perf.refresh_events.len(), MAX_REFRESH_EVENTS);
+        assert_eq!(perf.refresh_events.front().map(|event| event.refresh_seq), Some(3));
+        assert_eq!(perf.refresh_events.back().map(|event| event.refresh_seq), Some(2 + MAX_REFRESH_EVENTS as u64));
     }
 }

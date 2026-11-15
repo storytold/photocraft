@@ -89,8 +89,9 @@ def percentile(values: list[float], p: float) -> float:
     return ordered[round((len(ordered) - 1) * p)]
 
 
-def make_stroke(control: Control, x: int, y: int, moves: int, previous: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def make_stroke(control: Control, x: int, y: int, moves: int, previous: Any, after_refresh_seq: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     refreshes = []
+    last_refresh_seq = after_refresh_seq
     control.request("ui.pointer", {"events": [{"kind": "down", "x": x, "y": y, "pressure": 0.85}]})
     for step in range(1, moves + 1):
         control.request("ui.pointer", {"events": [{"kind": "move", "x": x + step * 3, "y": y + (step % 4), "pressure": 0.85}]})
@@ -98,8 +99,19 @@ def make_stroke(control: Control, x: int, y: int, moves: int, previous: Any) -> 
         # the real live-stroke, canvas refresh, and release/commit path.
         time.sleep(1 / 60)
         timings = control.inspect().get("perf", {}).get("timings", {})
-        if timings.get("lastRefreshPx", 0) > 0:
-            refreshes.append({key: timings.get(key) for key in ("lastRefresh", "lastRefreshPx", "gpuUploadBytes", "gpuPasses", "gpuFallback")})
+        current_refresh_seq = int(timings.get("refreshSeq", last_refresh_seq))
+        events = [event for event in timings.get("refreshEvents", []) if int(event.get("refreshSeq", 0)) > last_refresh_seq]
+        events.sort(key=lambda event: int(event["refreshSeq"]))
+        expected = current_refresh_seq - last_refresh_seq
+        if expected > len(events) or (events and int(events[-1]["refreshSeq"]) != current_refresh_seq):
+            raise RuntimeError("canvas refresh event history overflowed while profiling a stroke")
+        for event in events:
+            event_seq = int(event["refreshSeq"])
+            if event_seq != last_refresh_seq + 1:
+                raise RuntimeError("canvas refresh event sequence has a gap while profiling a stroke")
+            last_refresh_seq = event_seq
+            if event.get("lastRefreshPx", 0) > 0:
+                refreshes.append({key: event.get(key) for key in ("lastRefresh", "lastRefreshPx", "gpuUploadBytes", "gpuPasses", "gpuFallback")})
     control.request("ui.pointer", {"events": [{"kind": "up", "x": x + moves * 3, "y": y + (moves % 4), "pressure": 0.85}]})
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
@@ -158,8 +170,10 @@ def run_case(control: Control, layer: int, kind: str, runs: int, moves: int, war
         # Keep each gesture in a new 48 px band; the 24 MP document stays otherwise sparse.
         y = 300 + (index * 48) % 3000
         x = 500 + (index % 10) * 350
-        prior = control.inspect().get("perf", {}).get("strokeTrace")
-        snapshot, current_refreshes = make_stroke(control, x, y, moves, prior)
+        before = control.inspect().get("perf", {})
+        prior = before.get("strokeTrace")
+        after_refresh_seq = int(before.get("timings", {}).get("refreshSeq", 0))
+        snapshot, current_refreshes = make_stroke(control, x, y, moves, prior, after_refresh_seq)
         snapshots.append(snapshot)
         refreshes.append(current_refreshes)
     return summarize(kind, snapshots, refreshes, warmup)

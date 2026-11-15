@@ -120,9 +120,9 @@ pub(crate) fn ensure_texture_in_view(
     view: Option<InView>,
 ) -> Option<CpuTextures> {
     let output = display;
-    let (revision, id) = {
+    let (revision, last_damage, id) = {
         let st = app.session.documents().get(idx)?;
-        (st.revision, st.doc.id)
+        (st.revision, (st.damage_from(), st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) })), st.doc.id)
     };
     let (mut doc, mut preview_key) = display_doc(app, idx);
     // A filter dialog's live preview: the GPU canvas draws it from its own texture, but this CPU
@@ -152,7 +152,7 @@ pub(crate) fn ensure_texture_in_view(
     }
     let (display, display_key) = canvas_display(app, &doc, output);
     let seen = app.canvases.get(&cache_key(id, output)).map(|c| (c.tex_revision, c.tex_preview_key));
-    let damage = seen.and_then(|seen| cpu_damage_since(app, idx, seen, (revision, preview_key), display_key)).filter(|_| !reduced);
+    let damage = seen.and_then(|seen| damage_since(app, idx, seen, (revision, preview_key), display_key, last_damage)).filter(|_| !reduced);
     // The detail texture can lag the whole-document one (made or moved later): its own damage.
     let detail_seen = view.and_then(|v| {
         let c = app.canvases.get(&cache_key(id, output))?;
@@ -160,7 +160,7 @@ pub(crate) fn ensure_texture_in_view(
     });
     let detail_damage = match detail_seen {
         Some(s) if Some(s) == seen => damage,
-        Some(s) => cpu_damage_since(app, idx, s, (revision, preview_key), display_key),
+        Some(s) => damage_since(app, idx, s, (revision, preview_key), display_key, last_damage),
         None => None,
     };
     let preview_key = preview_key ^ display_key;
@@ -317,9 +317,17 @@ fn render_detail(
 }
 
 /// What changed since a canvas cache showed (`revision`, `preview key`) `seen`, when only a
-/// rectangle did: the last edit's damage, or the live stroke's dabs since then. Cached keys have
-/// the colour display's key folded in (`^ display_key`); `now`'s is still raw.
-pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u64), display_key: u64, last_damage: Option<DRect>) -> Option<DRect> {
+/// rectangle did: the document's damage since revision `damage_from` (one revision, or a whole
+/// command's span: [`photocraft_engine::DocState::damage_from`]), or the live stroke's dabs since
+/// then. Cached keys have the colour display's key folded in (`^ display_key`); `now`'s is still raw.
+pub(crate) fn damage_since(
+    app: &PhotocraftApp,
+    idx: usize,
+    seen: (u64, u64),
+    now: (u64, u64),
+    display_key: u64,
+    (damage_from, last_damage): (u64, Option<DRect>),
+) -> Option<DRect> {
     // A brush stroke committed with the pixels its live preview already showed: only the steps
     // this cache hadn't shown yet (usually nothing), not the stroke's whole bounding box.
     if seen.0 + 1 == now.0
@@ -336,12 +344,22 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
         };
         return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }
-    if seen.1 == now.1 ^ display_key && seen.0 + 1 == now.0 {
-        return last_damage.map(|r| app.session.documents().get(idx).map_or(r, |st| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) }));
+    // `seen` is within the span the document's damage covers.
+    let in_span = seen.0 >= damage_from && seen.0 < now.0;
+    if seen.1 == now.1 ^ display_key && in_span {
+        return last_damage;
+    }
+    // Opening, canceling or committing a Free Transform box: the moving layer and the layers
+    // drawn over the box, not the whole document (a gigapixel canvas took over a second).
+    if let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::transform_tool::damage(app, st.doc.id, (seen.0, seen.1 ^ display_key), now, last_damage)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }
     if seen.0 == now.0
         && let Some(st) = app.session.documents().get(idx)
         && let Some(r) = crate::type_transform::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
+            .or_else(|| crate::type_path_placement::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1))
     {
         return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }
@@ -360,9 +378,9 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
     {
         return Some(r);
     }
-    // Between a Move drag's offsets: where the moving layers were and are (Auto-Select's pick
-    // at the press changes no pixels).
-    if (seen.0 == now.0 || (seen.0 + 1 == now.0 && last_damage.is_some_and(|r| r.is_empty())))
+    // Between a Move drag's offsets: where the moving layers were and are. Revisions that changed
+    // no pixels since `seen` (Auto-Select's pick at the press) count as the same document.
+    if (seen.0 == now.0 || (in_span && last_damage.is_some_and(|r| r.is_empty())))
         && let Some(st) = app.session.documents().get(idx)
         && let Some(r) = crate::move_ui::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
     {
@@ -403,16 +421,16 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
     {
         return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }
+    // Between a dragged paragraph box's renders (and the document): the layer's old/new ink bounds.
+    if seen.0 == now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::type_box_preview::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    }
     let l = live_stroke(app, idx).filter(|l| seen.0 == now.0 && l.display_key() == now.1)?;
     let r = l.since(seen.1 ^ display_key)?;
-    Some(if r.is_empty() { r } else { r.inflate(effect_reach(&l.stroke.doc().layers)) })
-}
-
-/// CPU canvas textures pass the journal's raw damage. `damage_since` applies effect margins once
-/// for both the main texture and its detail texture.
-pub(crate) fn cpu_damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u64), display_key: u64) -> Option<DRect> {
-    let last_damage = app.session.documents().get(idx).and_then(|state| state.last_damage);
-    damage_since(app, idx, seen, now, display_key, last_damage)
+    Some(if r.is_empty() { r } else { r.inflate(effect_reach(&l.doc().layers)) })
 }
 
 /// Document `doc`'s canvas caches showed a preview that the edit just committed reproduces
@@ -430,7 +448,7 @@ pub(crate) fn shown_as_document(app: &mut PhotocraftApp, doc: photocraft_doc::Do
     let outputs: Vec<u32> = app.canvases.keys().filter(|k| k.0 == doc).map(|k| k.1).collect();
     for out in outputs {
         let (display, key) = canvas_display(app, &d, (out != 0 && out != GPU_OUTPUT).then_some(out));
-        let gpu_key = texture_key(display.as_deref());
+        let gpu_key = texture_key(display.as_deref(), &doc);
         let Some(c) = app.canvases.get_mut(&(doc, out)) else { continue };
         if was_preview(c.preview_key ^ gpu_key) {
             c.preview_key = gpu_key;
@@ -442,13 +460,13 @@ pub(crate) fn shown_as_document(app: &mut PhotocraftApp, doc: photocraft_doc::Do
 }
 
 /// How far beyond an edit's damage rect the composite can change: layer effects (shadows, glows,
-/// strokes, …), editable mask-stack Blur, and effects on the groups around it reach that far.
+/// strokes, …) on the edited layer and on the groups around it reach that far.
 pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
     layers
         .iter()
         .filter(|l| l.visible)
         .map(|l| {
-            let layer_effect_reach = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
+            let own = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
             let mask_blur_reach = l
                 .mask
                 .as_ref()
@@ -470,7 +488,7 @@ pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
                 LayerContent::Group(g) => effect_reach(&g.children),
                 _ => 0,
             };
-            layer_effect_reach + mask_blur_reach + inner
+            own + mask_blur_reach + inner
         })
         .max()
         .unwrap_or(0)
@@ -481,11 +499,13 @@ pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
 /// Returns false if there is no GPU canvas.
 pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, visible: DRect) -> bool {
     let Some(gpu) = app.gpu.clone() else { return false };
-    let Some((revision, last_damage, id)) = app.session.documents().get(idx).map(|st| (st.revision, st.last_damage, st.doc.id)) else {
+    let Some((revision, last_damage, id)) =
+        app.session.documents().get(idx).map(|st| {
+            (st.revision, (st.damage_from(), st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) })), st.doc.id)
+        })
+    else {
         return false;
     };
-    // Spatial Fill's GPU planner consumes effect params directly. Give it the live immutable
-    // snapshot while CPU fallback paths keep using display_doc's matching materialized key.
     #[cfg(feature = "uv-workbench")]
     let (doc, raw_key) = crate::uv_mask_paint_preview::gpu_display_doc(app, idx).unwrap_or_else(|| display_doc(app, idx));
     #[cfg(not(feature = "uv-workbench"))]
@@ -495,7 +515,7 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     // viewport. Refresh the affected document region while Pattern Preview is enabled.
     let blend_visible = if app.ui.view.pattern_preview { doc.bounds() } else { visible };
     // The texture is shared by every display: only what it stores counts, not the monitor.
-    let display_key = texture_key(display.as_deref());
+    let display_key = texture_key(display.as_deref(), &doc);
     let seen = app.canvases.get(&(id, GPU_OUTPUT)).map(|c| (c.revision, c.preview_key));
     let damage_start = crate::gpu_canvas::now_ms();
     let mut damage = seen.and_then(|seen| damage_since(app, idx, seen, (revision, raw_key), display_key, last_damage));
@@ -602,7 +622,7 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     if r.kind == crate::gpu_canvas::REFRESH_DEFERRED {
         // Composited off the UI thread, the visible part first (#4024).
         let region = if partial { damage.unwrap_or(doc.bounds()) } else { doc.bounds() };
-        crate::background_redraw::start(app, ctx, &gpu, doc.clone(), display.clone(), visible, region, r.fallback.clone());
+        crate::background_redraw::start(app, ctx, &gpu, doc.clone(), display.clone(), visible, region, r.fallback.clone(), r.gpu_attempt_ms);
     } else if partial {
         // The edit drew its damage; blocks of a running redraw still to come follow the edit.
         crate::background_redraw::restart(app, ctx, &gpu, doc.clone(), display.clone(), visible);
@@ -664,7 +684,7 @@ fn budget_allowance(app: &PhotocraftApp) -> (u64, u64) {
 
 /// The document pixels a view shows, with a margin for filtering. Uses all four canvas corners
 /// so a rotated camera still covers the visible tiles.
-pub(super) fn visible_doc_rect(xf: &ViewXform) -> DRect {
+pub(crate) fn visible_doc_rect(xf: &ViewXform) -> DRect {
     let r = xf.rect;
     let docs = [xf.to_doc(r.min), xf.to_doc(pos2(r.max.x, r.min.y)), xf.to_doc(r.max), xf.to_doc(pos2(r.min.x, r.max.y))];
     let mut x0 = docs[0][0];

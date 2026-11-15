@@ -1149,6 +1149,15 @@ fn zeroed_f32_buffer(length: usize) -> Option<Vec<f32>> {
 /// Compose a mask stack into a small preview grid. Spatial Blur radii are scaled to the
 /// preview resolution so callers never perform a full-resolution convolution for each sample.
 pub fn sample_stack_resampled(stack: &Stack, region: Rect, size: [u32; 2]) -> Option<Vec<f32>> {
+    sample_stack_resampled_inner(stack, region, size, None)
+}
+
+/// Compose a small preview grid while applying the same UV shell isolation as a committed Blur.
+pub fn sample_stack_resampled_with_shell_ids(stack: &Stack, region: Rect, size: [u32; 2], shell_ids: ShellIdMap<'_>) -> Option<Vec<f32>> {
+    sample_stack_resampled_inner(stack, region, size, Some(shell_ids))
+}
+
+fn sample_stack_resampled_inner(stack: &Stack, region: Rect, size: [u32; 2], shell_ids: Option<ShellIdMap<'_>>) -> Option<Vec<f32>> {
     if region.is_empty() || size[0] == 0 || size[1] == 0 || size[0] > 256 || size[1] > 256 {
         return None;
     }
@@ -1179,15 +1188,21 @@ pub fn sample_stack_resampled(stack: &Stack, region: Rect, size: [u32; 2]) -> Op
     let count = padded_width.checked_mul(padded_height)?;
     // Keep temporary Gaussian buffers bounded. Returning None lets the caller skip
     // an unsupported extreme preview rather than silently drawing a clipped Blur.
-    if count > MAX_MASK_REGION_PIXELS / 3 {
+    if count > MAX_MASK_REGION_PIXELS / if shell_ids.is_some() { 4 } else { 3 } {
         return None;
     }
     let sample_x = |x: usize| region.x0.saturating_add(((x as f32 - padding as f32 + 0.5) * sx).floor() as i32);
     let sample_y = |y: usize| region.y0.saturating_add(((y as f32 - padding as f32 + 0.5) * sy).floor() as i32);
     let mut values = vec![0.0; count];
+    let mut proxy_shell_ids = shell_ids.map(|_| vec![0; count]);
     for y in 0..padded_height {
         for x in 0..padded_width {
-            values[y * padded_width + x] = stack.base.sample_channel(sample_x(x), sample_y(y), 0);
+            let (source_x, source_y) = (sample_x(x), sample_y(y));
+            let index = y * padded_width + x;
+            values[index] = stack.base.sample_channel(source_x, source_y, 0);
+            if let (Some(source), Some(destination)) = (shell_ids, proxy_shell_ids.as_mut()) {
+                destination[index] = source.id_at(source_x, source_y);
+            }
         }
     }
     let mut blur_index = 0;
@@ -1229,9 +1244,14 @@ pub fn sample_stack_resampled(stack: &Stack, region: Rect, size: [u32; 2]) -> Op
             EffectKind::Blur { .. } => {
                 let scaled = u8::try_from(*blur_radii.get(blur_index)?).ok()?;
                 blur_index += 1;
-                if scaled > 0
-                    && let Some(blurred) = gaussian_blur_grid(&values, padded_width, padded_height, scaled)
-                {
+                let blurred = if scaled == 0 {
+                    None
+                } else if let Some(shell_ids) = proxy_shell_ids.as_deref() {
+                    gaussian_blur_grid_with_shell_ids(&values, padded_width, padded_height, scaled, shell_ids)
+                } else {
+                    gaussian_blur_grid(&values, padded_width, padded_height, scaled)
+                };
+                if let Some(blurred) = blurred {
                     for (value, blur) in values.iter_mut().zip(blurred) {
                         *value = blend_coverage(layer.blend, *value, blur, layer.opacity);
                     }
@@ -1245,6 +1265,88 @@ pub fn sample_stack_resampled(stack: &Stack, region: Rect, size: [u32; 2]) -> Op
         let source_start = (y + padding) * padded_width + padding;
         let target_start = y * width;
         output[target_start..target_start + width].copy_from_slice(&values[source_start..source_start + width]);
+    }
+    Some(output)
+}
+
+fn gaussian_blur_grid_with_shell_ids(input: &[f32], width: usize, height: usize, radius: u8, shell_ids: &[u32]) -> Option<Vec<f32>> {
+    if width.checked_mul(height)? != input.len() || shell_ids.len() != input.len() {
+        return None;
+    }
+    let r = usize::from(radius);
+    if r == 0 {
+        return Some(input.to_vec());
+    }
+    let sigma = (f32::from(radius) / 3.0).max(0.5);
+    let mut kernel = Vec::new();
+    kernel.try_reserve_exact(r.checked_mul(2)?.checked_add(1)?).ok()?;
+    let mut total = 0.0f32;
+    for offset in -(r as isize)..=(r as isize) {
+        let weight = (-0.5 * (offset as f32 / sigma).powi(2)).exp();
+        kernel.push(weight);
+        total += weight;
+    }
+    if !total.is_finite() || total <= 0.0 {
+        return None;
+    }
+    for weight in &mut kernel {
+        *weight /= total;
+    }
+
+    // Keep both normalized in-shell samples and unnormalized outward contributions. This
+    // mirrors the document compositor: neighboring shells never feed one another, while shell
+    // coverage may still fade into the UV background outside the islands.
+    let mut horizontal_values = zeroed_f32_buffer(input.len())?;
+    let mut horizontal_weights = zeroed_f32_buffer(input.len())?;
+    let mut horizontal_outward = zeroed_f32_buffer(input.len())?;
+    for y in 0..height {
+        for x in 0..width {
+            let index = y * width + x;
+            let output_shell = shell_ids[index];
+            for (kernel_index, weight) in kernel.iter().copied().enumerate() {
+                let offset = kernel_index as isize - r as isize;
+                let source_x = (x as isize + offset).clamp(0, width.saturating_sub(1) as isize) as usize;
+                let source_index = y * width + source_x;
+                let source_shell = shell_ids[source_index];
+                let value = input[source_index];
+                if source_shell > 0 {
+                    horizontal_outward[index] += value * weight;
+                }
+                if output_shell == 0 {
+                } else if source_shell == output_shell {
+                    horizontal_values[index] += value * weight;
+                    horizontal_weights[index] += weight;
+                }
+            }
+        }
+    }
+
+    let mut output = zeroed_f32_buffer(input.len())?;
+    for y in 0..height {
+        for x in 0..width {
+            let index = y * width + x;
+            let output_shell = shell_ids[index];
+            let mut value = 0.0f32;
+            let mut support = 0.0f32;
+            for (kernel_index, weight) in kernel.iter().copied().enumerate() {
+                let offset = kernel_index as isize - r as isize;
+                let source_y = (y as isize + offset).clamp(0, height.saturating_sub(1) as isize) as usize;
+                let source_index = source_y * width + x;
+                if output_shell == 0 {
+                    value += horizontal_outward[source_index] * weight;
+                } else if shell_ids[source_index] == output_shell {
+                    value += horizontal_values[source_index] * weight;
+                    support += horizontal_weights[source_index] * weight;
+                }
+            }
+            output[index] = if output_shell == 0 {
+                value
+            } else if support > 0.0 {
+                value / support
+            } else {
+                0.0
+            };
+        }
     }
     Some(output)
 }
@@ -1870,6 +1972,27 @@ mod tests {
         let shell_source = compose_stack_region_with_shell_ids(&make_stack(3), 2, canvas, shell_ids).unwrap();
         assert!(at(&shell_source, 4, 1) > 0.0, "occupied shell values can blur outward to off-shell pixels");
         assert_eq!(at(&shell_source, 5, 1), 0.0, "shell 1 values cannot bleed into adjacent shell 2");
+    }
+
+    #[test]
+    fn resampled_fill_preview_keeps_blur_inside_uv_shells() {
+        let canvas = Rect::new(0, 0, 9, 3);
+        let mut ids = vec![0u32; 9 * 3];
+        for y in 0..3usize {
+            ids[y * 9 + 1..=y * 9 + 3].fill(1);
+            ids[y * 9 + 5..=y * 9 + 7].fill(2);
+        }
+        let shell_ids = ShellIdMap::new(canvas, &ids).unwrap();
+        let mut source = Surface::with_default(PixelFormat::RGBA8, &[0.0; 4]);
+        source.write_region(Rect::new(3, 1, 4, 2), &[1.0, 1.0, 1.0, 1.0]);
+        let mut paint = layer(EffectKind::Paint, 1.0);
+        paint.surface = source;
+        let stack =
+            Stack { base: Surface::with_default(PixelFormat::GRAY8, &[0.0]), layers: vec![paint, layer(EffectKind::Blur { radius: 2 }, 1.0)], active: 0 };
+        let sampled = sample_stack_resampled_with_shell_ids(&stack, canvas, [9, 3], shell_ids).unwrap();
+        let at = |x: usize, y: usize| sampled[y * 9 + x];
+        assert!(at(4, 1) > 0.0, "blur can fade outward into the atlas background");
+        assert_eq!(at(5, 1), 0.0, "shell 1 must not blur into neighboring shell 2 in the Fill preview");
     }
 
     #[test]

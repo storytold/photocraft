@@ -96,63 +96,37 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
                 uvs.push([*u, *v]);
             }
             "mtllib" => {
-                let path = parts.collect::<Vec<_>>().join(" ");
+                let path = line.strip_prefix(kind).unwrap_or("").trim().trim_matches('"').to_owned();
                 if !loaded_mtl_paths.insert(path.clone()) {
                     continue;
                 }
                 match resolve(&path) {
-                    Ok(bytes) => {
-                        if bytes.len() as u64 > MAX_FILE_BYTES {
-                            return Err(Error("Material library exceeds 256 MiB".into()));
-                        }
-                        check_mtl_material_budget(&bytes)?;
-                        let (materials, _) = tobj::load_mtl_buf(&mut std::io::BufReader::new(bytes.as_slice())).map_err(|e| Error(e.to_string()))?;
-                        for m in materials {
-                            if m.normal_texture.is_some() {
-                                scene.warnings.push(format!("{}: MTL bump/height map is not a tangent-space normal map; assign a normal map manually", m.name));
-                            }
-                            let c = m.diffuse.unwrap_or([1.0; 3]);
-                            let texture = m.diffuse_texture.map(|s| Path::new(&path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned());
-                            let index = if let Some(index) = material_names.get(&m.name).copied() {
-                                index
-                            } else {
-                                if scene.materials.len() >= MAX_MATERIALS {
-                                    return Err(Error(format!("Model exceeds the {MAX_MATERIALS}-material import limit")));
+                    Ok(bytes) => load_mtl(&path, &bytes, &mut scene, &mut material_names)?,
+                    Err(whole_error) => {
+                        // OBJ allows more than one library after `mtllib`. Some exporters emit
+                        // one filename per token, while filenames containing spaces need the
+                        // complete remainder. Prefer the complete path above, then try tokens.
+                        let candidates: Vec<_> = path.split_whitespace().map(|name| name.trim_matches('"')).filter(|name| !name.is_empty()).collect();
+                        let mut loaded_any = false;
+                        if candidates.len() > 1 {
+                            for candidate in candidates {
+                                let candidate = candidate.to_owned();
+                                if !loaded_mtl_paths.insert(candidate.clone()) {
+                                    continue;
                                 }
-                                let index = scene.materials.len();
-                                material_names.insert(m.name.clone(), index);
-                                scene.materials.push(Material::default());
-                                index
-                            };
-                            let material = Material {
-                                name: m.name,
-                                color: [c[0], c[1], c[2], m.dissolve.unwrap_or(1.0)],
-                                base_color: texture,
-                                embedded: None,
-                                normal_map: m
-                                    .unknown_param
-                                    .get("norm")
-                                    .map(|s| Path::new(&path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned()),
-                                embedded_normal: None,
-                                maps: [
-                                    (crate::preview::Channel::Emissive, "map_Ke"),
-                                    (crate::preview::Channel::Metallic, "map_Pm"),
-                                    (crate::preview::Channel::Roughness, "map_Pr"),
-                                ]
-                                .into_iter()
-                                .filter_map(|(kind, key)| {
-                                    m.unknown_param
-                                        .get(key)
-                                        .map(|s| (kind, Path::new(&path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned()))
-                                })
-                                .collect(),
-                            };
-                            if let Some(slot) = scene.materials.get_mut(index) {
-                                *slot = material;
+                                match resolve(&candidate) {
+                                    Ok(bytes) => {
+                                        load_mtl(&candidate, &bytes, &mut scene, &mut material_names)?;
+                                        loaded_any = true;
+                                    }
+                                    Err(error) => scene.warnings.push(format!("MTL {candidate}: {error}; assign textures manually")),
+                                }
                             }
+                        }
+                        if !loaded_any {
+                            scene.warnings.push(format!("MTL {path}: {whole_error}; assign textures manually"));
                         }
                     }
-                    Err(e) => scene.warnings.push(format!("MTL {path}: {e}; assign textures manually")),
                 }
             }
             "usemtl" => {
@@ -194,6 +168,54 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
         }
     }
     Ok(scene)
+}
+
+fn load_mtl(path: &str, bytes: &[u8], scene: &mut Scene, material_names: &mut BTreeMap<String, usize>) -> Result<()> {
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(Error("Material library exceeds 256 MiB".into()));
+    }
+    check_mtl_material_budget(bytes)?;
+    let (materials, _) = tobj::load_mtl_buf(&mut std::io::BufReader::new(bytes)).map_err(|e| Error(e.to_string()))?;
+    for m in materials {
+        if m.normal_texture.is_some() {
+            scene.warnings.push(format!("{}: MTL bump/height map is not a tangent-space normal map; assign a normal map manually", m.name));
+        }
+        let c = m.diffuse.unwrap_or([1.0; 3]);
+        let texture = m.diffuse_texture.map(|s| Path::new(path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned());
+        let index = if let Some(index) = material_names.get(&m.name).copied() {
+            index
+        } else {
+            if scene.materials.len() >= MAX_MATERIALS {
+                return Err(Error(format!("Model exceeds the {MAX_MATERIALS}-material import limit")));
+            }
+            let index = scene.materials.len();
+            material_names.insert(m.name.clone(), index);
+            scene.materials.push(Material::default());
+            index
+        };
+        let material = Material {
+            name: m.name,
+            color: [c[0], c[1], c[2], m.dissolve.unwrap_or(1.0)],
+            base_color: texture,
+            embedded: None,
+            normal_map: m.unknown_param.get("norm").map(|s| Path::new(path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned()),
+            embedded_normal: None,
+            maps: [
+                (crate::preview::Channel::Emissive, "map_Ke"),
+                (crate::preview::Channel::Metallic, "map_Pm"),
+                (crate::preview::Channel::Roughness, "map_Pr"),
+            ]
+            .into_iter()
+            .filter_map(|(kind, key)| {
+                m.unknown_param.get(key).map(|s| (kind, Path::new(path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned()))
+            })
+            .collect(),
+        };
+        if let Some(slot) = scene.materials.get_mut(index) {
+            *slot = material;
+        }
+    }
+    Ok(())
 }
 
 fn check_mtl_material_budget(bytes: &[u8]) -> Result<()> {
@@ -343,6 +365,19 @@ mod tests {
         });
         assert!(result.is_ok());
         assert_eq!(resolve_calls, 1);
+    }
+
+    #[test]
+    fn mtllib_falls_back_to_each_name_when_the_combined_path_is_missing() {
+        let source = b"mtllib first.mtl second.mtl\n";
+        let result = obj(source, &mut |path| match path {
+            "first.mtl" => Ok(b"newmtl first\n".to_vec()),
+            "second.mtl" => Ok(b"newmtl second\n".to_vec()),
+            _ => Err(Error("not found".into())),
+        })
+        .unwrap();
+        assert!(result.materials.iter().any(|material| material.name == "first"));
+        assert!(result.materials.iter().any(|material| material.name == "second"));
     }
 
     #[test]

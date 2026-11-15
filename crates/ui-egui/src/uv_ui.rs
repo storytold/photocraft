@@ -244,6 +244,7 @@ pub(crate) struct Cache {
     pub(crate) project: crate::uv_project::Ui,
     pub(crate) workspace_views: std::collections::HashMap<photocraft_doc::DocId, crate::state::View>,
     pub(crate) parked_dock: Option<ParkedDock>,
+    pub(crate) synced_workspace: String,
     masked: std::collections::BTreeSet<usize>,
     pub(crate) lighting: crate::uv_lighting::Cache,
     geometry: Option<(std::sync::Arc<photocraft_uv::Scene>, std::sync::Arc<photocraft_uv::prepared::Geometry>)>,
@@ -811,7 +812,7 @@ fn refresh_with_lighting(app: &mut PhotocraftApp, ctx: &egui::Context, cache: &m
                 (old.1, old.2 ^ display.key),
                 (revision, preview_key),
                 display.key,
-                app.session.documents().get(index).and_then(|st| st.last_damage),
+                app.session.documents().get(index).map_or((0, None), |st| (st.damage_from(), st.last_damage)),
             )
         } else {
             None
@@ -917,7 +918,7 @@ fn refresh_with_lighting(app: &mut PhotocraftApp, ctx: &egui::Context, cache: &m
                     (old.1, old.2),
                     (revision, preview_key),
                     0,
-                    app.session.documents().get(index).and_then(|st| st.last_damage),
+                    app.session.documents().get(index).map_or((0, None), |st| (st.damage_from(), st.last_damage)),
                 )
             } else {
                 None
@@ -2130,7 +2131,7 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     app.ui.uv_workbench = state;
     app.uv_cache = cache;
     if mode_menu && let Some(p) = response.interact_pointer_pos() {
-        crate::brush_mode_menu::open(app, ui.ctx(), [p.x, p.y]);
+        crate::brush_mode_menu::open(app, ui.ctx(), [p.x, p.y], ui.input(|input| input.modifiers));
     } else if picker && let Some(p) = response.interact_pointer_pos() {
         crate::brush_picker::open(&mut app.ui, ui.ctx(), [p.x, p.y]);
         app.ui.uv_workbench.picker_3d = true;
@@ -4490,7 +4491,7 @@ mod tests {
         let mut uv = Cache { display_channel: Channel::Material, ..Default::default() };
         refresh_with_lighting(&mut app, &ctx, &mut uv, photocraft_uv::lighting::Settings::default()).unwrap();
         assert!(uv.masked.contains(&material), "the fixture must route its bound document through the UV mask display");
-        assert!(crate::channel_view::ensure(&mut app, &ctx, index).is_some());
+        assert!(crate::channel_view::ensure(&mut app, &ctx, index, None).is_some());
 
         let first_bounds = [8, 8, 48, 48];
         crate::uv_mask_paint_preview::set_fill(&mut app, layer, 0, first_bounds, 0.0);
@@ -4507,7 +4508,7 @@ mod tests {
             assert!(Instant::now() < deadline, "Fill proxy becomes ready off-thread");
             std::thread::sleep(Duration::from_millis(1));
         };
-        crate::channel_view::ensure(&mut app, &ctx, index).unwrap();
+        crate::channel_view::ensure(&mut app, &ctx, index, None).unwrap();
         refresh_with_lighting(&mut app, &ctx, &mut uv, photocraft_uv::lighting::Settings::default()).unwrap();
         let doc_id = app.session.active().unwrap().doc.id.0;
         let two_d_key = app.channel_views.get(&doc_id).unwrap().preview_key;
@@ -4523,7 +4524,7 @@ mod tests {
         assert_eq!(still_shown.unwrap().key, proxy.key, "the display sample is intentionally throttled");
         assert_eq!(crate::uv_mask_paint_preview::fill_transform(&app, layer, 0, first_bounds, 0.0), (latest_bounds, 23.0));
         assert_eq!(crate::uv_mask_paint_preview::pending(&app).unwrap().bounds, Some(latest_bounds));
-        crate::channel_view::ensure(&mut app, &ctx, index).unwrap();
+        crate::channel_view::ensure(&mut app, &ctx, index, None).unwrap();
         refresh_with_lighting(&mut app, &ctx, &mut uv, photocraft_uv::lighting::Settings::default()).unwrap();
         assert_eq!(app.channel_views.get(&doc_id).unwrap().preview_key, two_d_key);
         assert_eq!(uv.keys[material].2, three_d_key, "neither view claims the unsampled parameters");

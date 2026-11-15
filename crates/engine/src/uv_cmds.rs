@@ -352,7 +352,8 @@ impl MaskCacheContext {
 impl UvState {
     const MAX_CACHED_MASK_SHELL_PIXELS: usize = 32 * 1024 * 1024;
 
-    pub(crate) fn mask_shell_ids(&self, width: u32, height: u32, materials: &[usize], tile: [i32; 2]) -> Option<Arc<Vec<u32>>> {
+    /// Return the cached shell ownership map used by shell-aware UV mask previews and strokes.
+    pub fn mask_shell_ids(&self, width: u32, height: u32, materials: &[usize], tile: [i32; 2]) -> Option<Arc<Vec<u32>>> {
         if materials.is_empty() || width == 0 || height == 0 {
             return None;
         }

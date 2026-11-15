@@ -34,6 +34,7 @@ pub fn check(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if fault.is_out_of_memory() && app.gpu_oom_retries < OOM_AUTO_RETRIES && can_retry_now(app) {
             app.gpu_oom_retries += 1;
             if retry_now(app) {
+                app.retry_compositor(ctx);
                 log::warn!("{fault}; rebuilt the GPU canvas (automatic retry {} of {OOM_AUTO_RETRIES})", app.gpu_oom_retries);
                 app.ui.gpu_fallback_notice = None;
             }
@@ -131,6 +132,10 @@ fn save_for_recovery(app: &mut PhotocraftApp) -> Result<(), String> {
                 }
             }
         }
+    }
+    #[cfg(feature = "uv-workbench")]
+    if crate::uv_project::dirty(app) {
+        failed.push((0, "unsaved 3D project changes aren't included in document recovery".into()));
     }
 
     let jobs: Vec<_> = recovery_documents(app).into_iter().filter(|d| d.is_dirty()).map(|d| (d.doc.clone(), d.revision, d.path.clone())).collect();
@@ -321,10 +326,12 @@ pub fn show_fallback(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             });
         });
-    if let Some(retry) = choice
-        && let Err(error) = choose_recovery(app, retry)
-    {
-        crate::notices::error(app, error);
+    if let Some(retry) = choice {
+        match choose_recovery(app, retry) {
+            Ok(()) if retry => app.retry_compositor(ctx),
+            Ok(()) => (),
+            Err(error) => crate::notices::error(app, error),
+        }
     }
 }
 
@@ -475,8 +482,23 @@ mod tests {
         assert_eq!(after, revisions, "recovery autosave must not alter documents or history");
     }
 
+    #[cfg(feature = "uv-workbench")]
+    #[test]
+    fn recovery_keeps_window_open_for_unsaved_uv_project_state() {
+        let mut session = photocraft_engine::Session::new();
+        session.uv.scene = Some(std::sync::Arc::new(photocraft_uv::Scene::default()));
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+
+        let error = save_for_recovery(&mut app).unwrap_err();
+
+        assert!(error.contains("unsaved 3D project changes"), "{error}");
+    }
+
     #[test]
     fn system_info_copy_and_api_stay_english_in_czech_ui() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.perf.gpu_info.adapter = "Test GPU".into();
         app.perf.gpu_info.preference = "auto".into();
@@ -498,6 +520,9 @@ mod tests {
 
     #[test]
     fn system_info_translates_empty_and_stored_auto_only_for_display() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         // Hardware names are opaque even when they happen to match a lookup key.
         app.perf.gpu_info.adapter = "auto".into();

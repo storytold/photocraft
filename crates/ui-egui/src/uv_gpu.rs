@@ -590,7 +590,7 @@ impl Renderer {
             if let Err(error) = self.mask_stack_renderer.begin_round_mask_brush_preview(
                 &self.rs.device,
                 &self.rs.queue,
-                photocraft_gpu::MaskBrushPreviewRequest { owner_key: source.owner_key, size, stack, base_paint: base, settings: *settings },
+                photocraft_gpu::MaskBrushPreviewRequest { owner_key: source.owner_key, size, paint_layer_index: stack.active, stack, base_paint: base, settings: *settings },
             ) {
                 log::warn!("Could not start GPU Gray mask brush preview; using CPU stroke path: {error}");
                 Self::fail_gray_mask_brush_input(input, error);

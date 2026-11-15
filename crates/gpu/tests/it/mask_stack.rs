@@ -171,6 +171,7 @@ fn gpu_round_dab_preview_and_release_patches_match_cpu_stroke() {
             MaskBrushPreviewRequest {
                 owner_key: 991,
                 size,
+                paint_layer_index: stack.active,
                 stack: &stack,
                 base_paint: &base,
                 settings: MaskBrushSettings { hardness: brush.hardness, stroke_opacity: brush.opacity, color: brush.color },
@@ -265,6 +266,7 @@ fn gpu_brush_preview_recomposes_downstream_blur_and_matches_full_stack() {
             MaskBrushPreviewRequest {
                 owner_key: 818,
                 size,
+                paint_layer_index: stack.active,
                 stack: &stack,
                 base_paint: &base,
                 settings: MaskBrushSettings { hardness: 0.7, stroke_opacity: 0.8, color: [1.0, 1.0, 1.0, 1.0] },

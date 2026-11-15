@@ -8,7 +8,10 @@ use std::{
 
 const MAX_OCCUPANCY_PIXELS: usize = 16_384 * 16_384;
 const MAX_SHELL_ID_PIXELS: usize = 64 * 1024 * 1024;
-const MAX_PADDING_CANDIDATES: usize = 16 * 1024 * 1024;
+const MAX_PADDING_EDGE_ROWS: usize = 16 * 1024 * 1024;
+const MAX_PADDING_ROW_SPANS: usize = 4 * 1024 * 1024;
+const MAX_PADDING_UNION_PIXELS: usize = 16 * 1024 * 1024;
+const MAX_PADDING_WORK_PIXELS: usize = 64 * 1024 * 1024;
 const MAX_NON_MANIFOLD_NEIGHBOR_ENTRIES: usize = 1_000_000;
 const MAX_UV_RASTER_CANDIDATES: usize = 64 * 1024 * 1024;
 
@@ -335,7 +338,14 @@ impl Topology {
         let point = |uv: [f64; 2]| [(uv[0] - f64::from(tile[0])) * w as f64, (1.0 - (uv[1] - f64::from(tile[1]))) * h as f64];
         let mut result = PaddingMask::default();
         let radius = *padding + std::f64::consts::FRAC_1_SQRT_2;
-        let mut candidates = 0usize;
+        // Union capsule spans by row before visiting texels. Summing each capsule's area
+        // double-counts overlaps and rejects common large padding settings even when the
+        // resulting apron is small. Bound both the edge/row walk and retained span count.
+        let mut spans_by_row = Vec::new();
+        spans_by_row.try_reserve_exact(h).map_err(|_| Error("Could not allocate UV padding row spans".into()))?;
+        spans_by_row.resize_with(h, Vec::new);
+        let mut edge_rows = 0usize;
+        let mut span_count = 0usize;
         for edge in self.boundaries.iter().filter(|edge| edge.shell == shell_id) {
             let pts = edge.uv.map(point);
             if pts.iter().flatten().any(|value| !value.is_finite()) {
@@ -344,18 +354,65 @@ impl Topology {
             let y0 = (pts[0][1].min(pts[1][1]) - radius - 0.5).ceil().clamp(0.0, h as f64) as i32;
             let y1 = (pts[0][1].max(pts[1][1]) + radius - 0.5).floor().clamp(-1.0, h as f64 - 1.0) as i32;
             for y in y0..=y1 {
+                edge_rows = edge_rows.checked_add(1).ok_or_else(|| Error("UV shell padding edge-row budget overflow".into()))?;
+                if edge_rows > MAX_PADDING_EDGE_ROWS {
+                    return Err(Error("UV shell padding exceeds the 16M edge-row work budget".into()));
+                }
                 let Some((left, right)) = capsule_row_span(pts, f64::from(y) + 0.5, radius) else { continue };
                 let x0 = (left - 0.5).ceil().clamp(0.0, w as f64) as i32;
                 let x1 = ((right - 0.5).floor() + 1.0).clamp(0.0, w as f64) as i32;
-                let row_candidates = usize::try_from(x1.saturating_sub(x0)).unwrap_or(0);
-                candidates = candidates.checked_add(row_candidates).ok_or_else(|| Error("UV shell padding candidate budget overflow".into()))?;
-                if candidates > MAX_PADDING_CANDIDATES {
-                    return Err(Error("UV shell padding exceeds the 16M candidate budget".into()));
-                }
-                for x in x0..x1 {
-                    if !occupancy.contains(x, y) {
-                        result.insert(x, y);
+                if x0 < x1 {
+                    span_count = span_count.checked_add(1).ok_or_else(|| Error("UV shell padding span budget overflow".into()))?;
+                    if span_count > MAX_PADDING_ROW_SPANS {
+                        return Err(Error("UV shell padding exceeds the 4M row-span memory budget".into()));
                     }
+                    let row = spans_by_row.get_mut(y as usize).ok_or_else(|| Error("UV shell padding row is out of bounds".into()))?;
+                    row.try_reserve(1).map_err(|_| Error("Could not allocate UV padding row spans".into()))?;
+                    row.push((x0, x1));
+                }
+            }
+        }
+        let mut work_pixels = 0usize;
+        let mut output_pixels = 0usize;
+        for (y, spans) in spans_by_row.iter_mut().enumerate() {
+            if spans.is_empty() {
+                continue;
+            }
+            spans.sort_unstable_by_key(|(start, end)| (*start, *end));
+            let mut merged_start = spans[0].0;
+            let mut merged_end = spans[0].1;
+            for &(start, end) in &spans[1..] {
+                if start <= merged_end {
+                    merged_end = merged_end.max(end);
+                    continue;
+                }
+                for x in merged_start..merged_end {
+                    work_pixels = work_pixels.checked_add(1).ok_or_else(|| Error("UV shell padding work budget overflow".into()))?;
+                    if work_pixels > MAX_PADDING_WORK_PIXELS {
+                        return Err(Error("UV shell padding exceeds the 64M pixel-work budget".into()));
+                    }
+                    if !occupancy.contains(x, y as i32) {
+                        output_pixels = output_pixels.checked_add(1).ok_or_else(|| Error("UV shell padding output budget overflow".into()))?;
+                        if output_pixels > MAX_PADDING_UNION_PIXELS {
+                            return Err(Error("UV shell padding exceeds the 16M output-pixel budget".into()));
+                        }
+                        result.insert(x, y as i32);
+                    }
+                }
+                merged_start = start;
+                merged_end = end;
+            }
+            for x in merged_start..merged_end {
+                work_pixels = work_pixels.checked_add(1).ok_or_else(|| Error("UV shell padding work budget overflow".into()))?;
+                if work_pixels > MAX_PADDING_WORK_PIXELS {
+                    return Err(Error("UV shell padding exceeds the 64M pixel-work budget".into()));
+                }
+                if !occupancy.contains(x, y as i32) {
+                    output_pixels = output_pixels.checked_add(1).ok_or_else(|| Error("UV shell padding output budget overflow".into()))?;
+                    if output_pixels > MAX_PADDING_UNION_PIXELS {
+                        return Err(Error("UV shell padding exceeds the 16M output-pixel budget".into()));
+                    }
+                    result.insert(x, y as i32);
                 }
             }
         }
@@ -620,7 +677,34 @@ mod capsule_scanline_tests {
             .map(|(left, right)| ((right - 0.5).floor() - (left - 0.5).ceil() + 1.0).max(0.0) as usize)
             .sum();
         assert!(candidates < 200_000, "scanline candidate count was {candidates}");
-        assert!(candidates < MAX_PADDING_CANDIDATES);
+        assert!(candidates < MAX_PADDING_UNION_PIXELS);
+    }
+
+    #[test]
+    fn large_overlapping_padding_spans_are_unioned_before_texel_work_is_counted() {
+        let (width, height) = (4096, 4096);
+        let edge = Boundary { shell: 0, uv: [[0.1, 0.5], [0.9, 0.5]], shared: false };
+        let topology = Topology {
+            shells: vec![Shell { material: 0, triangles: Vec::new(), neighbors: BTreeSet::new() }],
+            boundaries: vec![edge; 5],
+            ..Default::default()
+        };
+        let occupancy = OccupancyMask { width, height, material: 0, tile: [0, 0], bits: vec![0xff; (width as usize * height as usize).div_ceil(8)] };
+        let options = MaskOptions {
+            width,
+            height,
+            material: 0,
+            tile: [0, 0],
+            selected: BTreeSet::new(),
+            guard: 0.0,
+            horizontal: 0.0,
+            vertical: 0.0,
+            feather: 0.0,
+            open_borders: false,
+            padding: 1024.0,
+        };
+        let result = topology.outward_padding_mask(&options, 0, &occupancy).expect("overlapping capsules stay within the union budget");
+        assert!(result.tiles.is_empty(), "the fully occupied atlas has no outward apron texels");
     }
 }
 
