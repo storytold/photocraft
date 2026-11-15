@@ -702,7 +702,6 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
     {
         view.layer_mask = Some(photocraft_engine::mask_view_cmds::LayerMaskView { layer, filter: false, mode: MaskViewMode::Gray });
     }
-    let (revision, last_damage) = (st.revision, st.last_damage);
     let source_document = std::sync::Arc::downgrade(&st.doc);
     let (revision, last_damage) = (st.revision, (st.damage_from(), st.last_damage));
     let content = revision.wrapping_sub(st.view_revision);
@@ -774,7 +773,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
     if raw_fill_active && fill_proxy.is_none() {
         // Never build a full-size channel composite on the pointer thread. Keep the prior
         // canonical texture (if one exists) until the sampler publishes its first small result.
-        return app.channel_views.get(&id).filter(|c| c.key == key && c.revision == revision).map(|c| c.tex.id());
+        return app.channel_views.get(&id).filter(|c| c.key == key && c.revision == revision).and_then(|c| c.tex.as_ref().map(|tex| tex.id()));
     }
     #[cfg(feature = "uv-workbench")]
     let fill_proxy_active = fill_proxy.is_some();

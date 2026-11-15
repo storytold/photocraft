@@ -622,7 +622,7 @@ pub(crate) fn sync_workspace(app: &mut PhotocraftApp) -> Result<(), String> {
         app.uv_cache.synced_workspace.clone_from(&app.ui.workspace);
         return Ok(());
     }
-    if crate::transform_tool::committing(app).is_some() {
+    if app.transform_preparing.is_some() || crate::transform_tool::committing(app).is_some() {
         let error = "Wait for the active transform to finish before switching workspaces";
         if !app.uv_cache.synced_workspace.is_empty() {
             app.ui.workspace.clone_from(&app.uv_cache.synced_workspace);

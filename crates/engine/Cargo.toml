@@ -17,6 +17,8 @@ photocraft-uv = { workspace = true, optional = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 craft-cms = { workspace = true }
+# PCTIP codec from craft-libs#1564; isolated pin until the shared revision is adopted workspace-wide.
+craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "3e970577b9bb446967c2003ec8ecaf4f28b0768c" }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-ops = { workspace = true }
@@ -43,6 +45,7 @@ imagesize = "0.13"
 same-file = "1"
 photocraft-formats = { workspace = true }
 flate2 = { workspace = true }
+getrandom = { workspace = true, features = ["wasm_js"] }
 craft-print = { workspace = true }
 
 # Release tags use the same semantic versions as Cargo.

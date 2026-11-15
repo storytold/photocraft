@@ -75,7 +75,7 @@ pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut Surfa
         let mut lut = identity_lut();
         let transform = craft_cms::transform::cached(craft_cms::Builtin::Srgb.profile(), monitor, Default::default()).map_err(|e| e.to_string())?;
         let source = lut.rgba.as_flattened().to_vec();
-        transform.convert_f32(&source, 4, lut.rgba.as_flattened_mut(), 4, true);
+        transform.convert_f32(&source, 4, lut.rgba.as_flattened_mut(), 4, true).map_err(|e| e.to_string())?;
         maps.output = Some((hash, lut));
     }
     let opacity_bindings = app.session.uv.map_bindings(Channel::Opacity).to_vec();
@@ -207,7 +207,14 @@ pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut Surfa
                     .and_then(Option::as_ref)
                     .is_some_and(|im| im.width == doc.size.width as usize && im.height == doc.size.height as usize)
             {
-                crate::canvas::damage_since(app, index, (old.1, old.2), (revision, live), 0, app.session.documents().get(index).map_or((0, None), |st| (st.damage_from(), st.last_damage)))
+                crate::canvas::damage_since(
+                    app,
+                    index,
+                    (old.1, old.2),
+                    (revision, live),
+                    0,
+                    app.session.documents().get(index).map_or((0, None), |st| (st.damage_from(), st.last_damage)),
+                )
             } else {
                 None
             };
@@ -221,10 +228,10 @@ pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut Surfa
                 let rect = buffer.rect;
                 let rgba = if colored {
                     let profile = photocraft_engine::color_cmds::composite_profile(&doc);
-                    let transform = craft_cms::transform::cached(&profile, craft_cms::Builtin::LinearSrgb.profile(), Default::default())
-                        .map_err(|e| e.to_string())?;
+                    let transform =
+                        craft_cms::transform::cached(&profile, craft_cms::Builtin::LinearSrgb.profile(), Default::default()).map_err(|e| e.to_string())?;
                     let mut dst = vec![[0.0; 4]; buffer.px.len()];
-                    transform.convert_f32(buffer.px.as_flattened(), 4, dst.as_flattened_mut(), 4, true);
+                    transform.convert_f32(buffer.px.as_flattened(), 4, dst.as_flattened_mut(), 4, true).map_err(|e| e.to_string())?;
                     dst
                 } else {
                     buffer.into_px()

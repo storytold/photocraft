@@ -326,8 +326,9 @@ pub(crate) fn damage_since(
     seen: (u64, u64),
     now: (u64, u64),
     display_key: u64,
-    (damage_from, last_damage): (u64, Option<DRect>),
+    damage_span: impl IntoDamageSpan,
 ) -> Option<DRect> {
+    let (damage_from, last_damage) = damage_span.into_damage_span(seen.0);
     // A brush stroke committed with the pixels its live preview already showed: only the steps
     // this cache hadn't shown yet (usually nothing), not the stroke's whole bounding box.
     if seen.0 + 1 == now.0
@@ -433,6 +434,30 @@ pub(crate) fn damage_since(
     Some(if r.is_empty() { r } else { r.inflate(effect_reach(&l.doc().layers)) })
 }
 
+pub(crate) trait IntoDamageSpan {
+    fn into_damage_span(self, seen_revision: u64) -> (u64, Option<DRect>);
+}
+
+impl IntoDamageSpan for (u64, Option<DRect>) {
+    fn into_damage_span(self, _seen_revision: u64) -> (u64, Option<DRect>) {
+        self
+    }
+}
+
+// UV preview callers that only have the latest damage use the older, one-revision contract.
+impl IntoDamageSpan for Option<DRect> {
+    fn into_damage_span(self, seen_revision: u64) -> (u64, Option<DRect>) {
+        (seen_revision, self)
+    }
+}
+
+/// CPU-canvas damage for a document, with the engine's journal span and effect margins.
+pub(crate) fn cpu_damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u64), display_key: u64) -> Option<DRect> {
+    let st = app.session.documents().get(idx)?;
+    let last_damage = st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    damage_since(app, idx, seen, now, display_key, (st.damage_from(), last_damage))
+}
+
 /// Document `doc`'s canvas caches showed a preview that the edit just committed reproduces
 /// (`was_preview` tells its keys): count it as the document itself, so the commit's damage rect
 /// refreshes only that area instead of everything.
@@ -448,7 +473,7 @@ pub(crate) fn shown_as_document(app: &mut PhotocraftApp, doc: photocraft_doc::Do
     let outputs: Vec<u32> = app.canvases.keys().filter(|k| k.0 == doc).map(|k| k.1).collect();
     for out in outputs {
         let (display, key) = canvas_display(app, &d, (out != 0 && out != GPU_OUTPUT).then_some(out));
-        let gpu_key = texture_key(display.as_deref(), &doc);
+        let gpu_key = texture_key(display.as_deref(), &d);
         let Some(c) = app.canvases.get_mut(&(doc, out)) else { continue };
         if was_preview(c.preview_key ^ gpu_key) {
             c.preview_key = gpu_key;

@@ -153,12 +153,11 @@ fn update(app: &mut PhotocraftApp, r: Resize, x: f64, y: f64) {
             _ => ((x - r.anchor[0]) * if app.ui.view.flip_horizontal { -1.0 } else { 1.0 }, y - r.anchor[1], app.point_zoom()),
         }
     };
-    let (size, v) = resized(r.start, dx, if r.size_only { 0.0 } else { dy }, zoom);
     // "Vary Round Brush Hardness on HUD" (Preferences ▸ Tools, on by default): off, the vertical
     // movement takes the opacity instead of the hardness, as in Photoshop, at its own rate.
     let vary = app.session.prefs().tools.vary_round_brush_hardness_on_hud;
     let dy = if vary { dy } else { dy * f64::from(HARDNESS_TRAVEL / OPACITY_TRAVEL) };
-    let (size, v) = resized(r.start, dx, dy, zoom);
+    let (size, v) = resized(r.start, dx, if r.size_only { 0.0 } else { dy }, zoom);
     let b = &app.session.tools.brush;
     if b.size == size && (r.size_only || if vary { b.hardness == v } else { b.opacity == v }) {
         return;

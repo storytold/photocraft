@@ -90,7 +90,7 @@ fn replaced_document_invalidates_channel_composite_when_content_revision_is_unch
     app.sync_views();
     let ctx = egui::Context::default();
     app.run("channel.setVisible", json!({"channel": "red", "visible": false})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert!(ensure(&mut app, &ctx, 0, None).is_some());
     let id = app.session.active().unwrap().doc.id.0;
     let original_content = app.channel_views.get(&id).unwrap().source.as_ref().unwrap().content;
     let original_sample = app.channel_views.get(&id).unwrap().source.as_ref().unwrap().pixels[0];
@@ -102,7 +102,7 @@ fn replaced_document_invalidates_channel_composite_when_content_revision_is_unch
     state.view_revision += 1;
 
     assert_eq!(state.revision.wrapping_sub(state.view_revision), original_content);
-    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert!(ensure(&mut app, &ctx, 0, None).is_some());
     let refreshed_sample = app.channel_views.get(&id).unwrap().source.as_ref().map(|source| source.pixels[0]);
     assert!(refreshed_sample.is_none_or(|sample| sample != original_sample), "a replaced document must invalidate or recompute its stale composite");
 }
@@ -139,12 +139,12 @@ fn real_uv_reimport_invalidates_channel_composite_after_bound_mask_cache_refresh
     app.sync_views();
     let idx = app.session.documents().iter().position(|document| document.doc.id == doc_id).unwrap();
     let ctx = egui::Context::default();
-    assert!(ensure(&mut app, &ctx, idx).is_some());
+    assert!(ensure(&mut app, &ctx, idx, None).is_some());
     let id = doc_id.0;
     let old_sample = app.channel_views.get(&id).unwrap().source.as_ref().unwrap().pixels[0];
 
     app.run("uv.model.reimport", json!({})).unwrap();
-    assert!(ensure(&mut app, &ctx, idx).is_some());
+    assert!(ensure(&mut app, &ctx, idx, None).is_some());
     let state = app.session.documents().get(idx).unwrap();
     let source = app.channel_views.get(&id).unwrap().source.as_ref().unwrap();
     assert_ne!(source.pixels[0], old_sample, "the reimported mask pixels must replace the cached composite");
@@ -157,7 +157,7 @@ fn real_uv_reimport_invalidates_channel_composite_after_bound_mask_cache_refresh
         1,
         Look::default(),
         state.active_layer,
-        CompositeSource { cached: Some(&source.pixels), fresh: &mut unused },
+        CompositeSource { cached: Some(&source.pixels), fresh: &mut unused, screen: &Screen::default() },
     )
     .unwrap();
     assert_eq!(actual, expected, "the partial-channel preview must use the reimported document pixels");

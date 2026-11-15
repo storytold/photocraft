@@ -103,26 +103,25 @@ use paint::{
 use selection::selection_shown_offset;
 pub use selection::{SelCursor, selection_cursor};
 pub(crate) use selection::{floating_outline, selection_drag_delta};
-#[cfg(test)]
 pub(crate) use start_screen::start_screen_drop_hint;
 #[cfg(feature = "uv-workbench")]
 pub(crate) use strokes::break_live_stroke_path;
 #[cfg(feature = "uv-workbench")]
 pub(crate) use strokes::break_native_uv_mask_segment;
 #[cfg(feature = "uv-workbench")]
-pub(crate) use strokes::clone_preview_texture;
+pub(crate) use strokes::feed_live_stroke;
+#[cfg(not(feature = "uv-workbench"))]
+use strokes::feed_live_stroke;
 pub(crate) use strokes::multiple_color_target;
-pub use strokes::paint_target;
 pub use strokes::paint_target;
 #[cfg(feature = "uv-workbench")]
 pub(crate) use strokes::remove_native_mask_gpu_renderer;
+#[cfg(any(feature = "uv-workbench", test))]
+pub(crate) use strokes::clone_preview_texture;
 pub(crate) use strokes::{
-    ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, feed_live_stroke, freehand_tool, live_stroke_busy, multiple_color_target,
-    spread_ms, strokes_live, unsmoothed_line,
+    ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live, unsmoothed_line,
 };
-use strokes::{
-    HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, live_stroke_busy, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure,
-};
+use strokes::{HOLD_REPEAT_MS, draw_clone_preview, live_stroke_busy, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure};
 #[cfg(test)]
 pub(crate) use strokes::{SPOT_HEALING_TRAIL, live_retouch_points};
 #[cfg(feature = "uv-workbench")]
@@ -2615,6 +2614,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         d.reposition = reposition;
         drawing = true;
     }
+    // A frame being drawn with the Frame tool moves while Space is held (#13867).
+    drawing |= crate::frame_tool::set_space(app, reposition);
     // In the UV workspace Ctrl+right is normalized to the brush-size gesture on the 2D canvas.
     // Command would otherwise take over the brush as the temporary Move tool before that gesture
     // reaches `paint_mouse`; keep the brush tool for the gesture's entire lifetime.

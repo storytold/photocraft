@@ -1704,8 +1704,8 @@ mod tests {
             refresh(&mut optimized, None);
             refresh(&mut oracle, Some(TileCoord::new(0, 0).rect()));
             assert_eq!(
-                optimized.surface.tile(TileCoord::new(0, 0)).map(|t| t.bytes()),
-                oracle.surface.tile(TileCoord::new(0, 0)).map(|t| t.bytes()),
+                optimized.surface.tile(TileCoord::new(0, 0)).map(|t| t.bytes().to_vec()),
+                oracle.surface.tile(TileCoord::new(0, 0)).map(|t| t.bytes().to_vec()),
                 "sample {sample:?}"
             );
         }
@@ -1745,7 +1745,11 @@ mod tests {
         refresh(&mut oracle, Some(TileCoord::new(1, 0).rect()));
         assert_eq!(optimized.surface.default_pixel(), oracle.surface.default_pixel());
         for coord in [TileCoord::new(-1, 0), TileCoord::new(1, 0)] {
-            assert_eq!(optimized.surface.tile(coord).map(|tile| tile.bytes()), oracle.surface.tile(coord).map(|tile| tile.bytes()), "tile {coord:?}");
+            assert_eq!(
+                optimized.surface.tile(coord).map(|tile| tile.bytes().to_vec()),
+                oracle.surface.tile(coord).map(|tile| tile.bytes().to_vec()),
+                "tile {coord:?}"
+            );
         }
     }
 

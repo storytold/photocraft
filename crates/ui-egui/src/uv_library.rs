@@ -22,7 +22,7 @@ fn place(app: &mut PhotocraftApp, id: u64) {
     if app.ui.transform.is_some() {
         crate::transform_tool::commit(app);
     }
-    if app.ui.transform.is_some() || crate::transform_tool::committing(app).is_some() {
+    if app.ui.transform.is_some() || app.transform_preparing.is_some() || crate::transform_tool::committing(app).is_some() {
         app.ui.uv_workbench.status = "Apply or cancel the transform before placing a library image.".into();
         return;
     }
