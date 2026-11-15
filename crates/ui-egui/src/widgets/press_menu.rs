@@ -90,6 +90,41 @@ pub fn above_parent(ctx: &egui::Context, parent: egui::LayerId, child: egui::Lay
     }
 }
 
+/// A popover that `button` toggles and that holds dropdowns. egui keeps one open popup per window,
+/// so a popover opened as egui's popup (`Popup::from_toggle_button_response`) closed the moment one
+/// of its dropdowns opened its list. This one keeps its open state itself (per `button`), so its
+/// dropdowns open over it. A dropdown's open list is a layer of its own (kept above the popover with
+/// [`above_parent`]), which egui counts as outside the popover: a click on one of its rows is
+/// ignored here, so the row is chosen and the popover stays. A click on `button` toggles it; a
+/// click anywhere else, or Esc, closes it.
+pub fn show_popover<R>(button: &Response, content: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let ctx = button.ctx.clone();
+    let id = Popup::default_response_id(button);
+    let open_key = id.with("popover-open");
+    // The lists the popover's dropdowns had open last frame: egui links a list to the popover only
+    // while the list is drawn (inside `content`, after the close is decided) and forgets the link
+    // at the end of each frame, so the popover remembers them itself.
+    let lists_key = id.with("popover-lists");
+    let mut open = ctx.data(|d| d.get_temp::<bool>(open_key)).unwrap_or(false);
+    if button.clicked() {
+        open = !open;
+    }
+    let lists: Vec<egui::LayerId> = ctx.data(|d| d.get_temp(lists_key)).unwrap_or_default();
+    let under = ctx.input(|i| i.pointer.interact_pos()).and_then(|pos| ctx.layer_id_at(pos));
+    let close = if under.is_some_and(|layer| lists.contains(&layer)) { PopupCloseBehavior::IgnoreClicks } else { PopupCloseBehavior::CloseOnClickOutside };
+    let shown = Popup::from_response(button).id(id).open_bool(&mut open).close_behavior(close).show(|ui| {
+        let inner = content(ui);
+        let lists: Vec<egui::LayerId> = ui.ctx().memory(|m| m.areas().child_layers(ui.layer_id()).collect());
+        ui.ctx().data_mut(|d| d.insert_temp(lists_key, lists));
+        inner
+    });
+    if !open {
+        ctx.data_mut(|d| d.remove::<Vec<egui::LayerId>>(lists_key));
+    }
+    ctx.data_mut(|d| d.insert_temp(open_key, open));
+    shown.map(|r| r.inner)
+}
+
 /// [`above_parent`] for an open popup's `Ui`.
 pub fn above_parent_ui(parent: egui::LayerId, popup_ui: &egui::Ui) {
     above_parent(popup_ui.ctx(), parent, popup_ui.layer_id());

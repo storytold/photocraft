@@ -165,3 +165,28 @@ fn estimate_depth_without_a_document_says_so() {
     assert!(app.ui.status_error, "{}", app.ui.status);
     assert!(crate::dialogs::depth_ui::inspect(&app).is_null());
 }
+
+/// The popover's dropdown opens a list of its own: picking a row sets the option and leaves the
+/// popover open (a click on the list used to count as a click outside and close it first), and a
+/// click elsewhere still closes it.
+#[test]
+fn a_dropdown_in_the_popover_picks_its_row_and_keeps_the_popover_open() {
+    use photocraft_paint::surface::SampleMode;
+    let mut h = open_popover(app(Tool::Brush));
+    checkbox(&h, "Surface Color").click();
+    h.run_steps(3);
+    let sample = h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().label().is_some_and(|l| l.contains("Sample"))).expect("the Sample dropdown");
+    sample.click();
+    h.run_steps(4);
+    h.get_by_label("Current Layer").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.tools.brush.surface.sample, SampleMode::CurrentLayer);
+    assert!(h.query_by_label("Surface Color").is_some(), "the popover stayed open");
+    // A click outside the popover and its list still closes it.
+    h.hover_at(egui::pos2(1700.0, 900.0));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: egui::pos2(1700.0, 900.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: egui::pos2(1700.0, 900.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(4);
+    assert!(h.query_by_label("Surface Color").is_none(), "a click elsewhere closes the popover");
+}
