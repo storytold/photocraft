@@ -140,3 +140,28 @@ fn choosing_gif_hides_its_controls_suggests_a_gif_name_and_is_remembered() {
     let id = open(h.state_mut()).unwrap();
     assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["format"], "gif", "GIF remembered");
 }
+
+/// CodeRabbit on #15021: Save Preset takes GIF. The dialog sends `format: "gif"`, and the preset
+/// comes back from the engine as it was saved.
+#[test]
+fn a_gif_preset_round_trips() {
+    let mut s = photocraft_engine::Session::new();
+    let settings = json!({
+        "format": "gif", "quality": 80, "lossless": false, "transparency": true, "scale": 100, "width": 200, "height": 150,
+        "lockAspect": true, "sizing": "scale", "metadata": "none", "profile": "srgb", "embedProfile": false, "tgaBits": "auto", "resample": "bicubicAutomatic"
+    });
+    s.execute("file.export.presets.save", json!({"name": "Web GIF", "settings": settings})).unwrap();
+    let got = s.execute("file.export.presets.get", json!({"name": "web gif"})).unwrap();
+    assert_eq!(got["preset"]["settings"]["format"], "gif", "{got}");
+    let listed = s.execute("file.export.presets.list", json!({})).unwrap();
+    assert!(listed.to_string().contains("Web GIF"), "{listed}");
+}
+
+/// CodeRabbit on #15021: a canvas past the render limit comes back empty from `flatten`; matting it
+/// is an error, not a length assertion in `write_region`.
+#[test]
+fn a_canvas_past_the_render_limit_is_an_error_not_a_panic() {
+    let mut doc = Document::with_background("Big", Size::new(40_000, 40_000), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    assert!(matte_partial_alpha(&mut doc).is_err());
+    assert_eq!(doc.layers.len(), 1, "the document is untouched");
+}
