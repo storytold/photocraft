@@ -1307,11 +1307,7 @@ fn lens_job_scenarios(b: &mut Bench, sz: &Sizes) {
     let floor = json!([{"corners": [[fw * 0.3, fh * 0.3], [fw * 0.7, fh * 0.3], [fw * 0.9, fh * 0.9], [fw * 0.1, fh * 0.9]]}]);
     let rows: [(&str, &str, Value); 4] = [
         ("Lens Correction 24 MP: longest UI-thread step", "filter.lensCorrection", json!({"distortion": -40, "vignetteAmount": -50})),
-        (
-            "Adaptive Wide Angle 24 MP: longest UI-thread step",
-            "filter.adaptiveWideAngle",
-            json!({"model": "fisheye", "focalLength": 10, "constraints": line}),
-        ),
+        ("Adaptive Wide Angle 24 MP: longest UI-thread step", "filter.adaptiveWideAngle", json!({"model": "fisheye", "focalLength": 10, "constraints": line})),
         ("RAW Develop Filter 24 MP: longest UI-thread step", "filter.cameraRaw", json!({"exposure": 1.0, "vibrance": 30, "clarity": 20})),
         // A full-canvas red layer pasted onto a floor plane receding to the top, as the Vanishing
         // Point dialog pastes the clipboard: it covers the canvas's middle (the paste spans

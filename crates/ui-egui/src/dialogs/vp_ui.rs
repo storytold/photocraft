@@ -898,8 +898,7 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEve
     if matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) {
         return;
     }
-    let back = app.distort.vanishing.is_none()
-        && app.session.active().is_some_and(|st| st.doc.id == session.document && st.doc.layer(session.layer).is_some());
+    let back = app.distort.vanishing.is_none() && app.session.active().is_some_and(|st| st.doc.id == session.document && st.doc.layer(session.layer).is_some());
     if back {
         app.distort.vanishing = Some(session);
     }
