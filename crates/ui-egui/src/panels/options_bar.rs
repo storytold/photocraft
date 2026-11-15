@@ -598,6 +598,10 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             }
             widgets::checkbox(ui, &mut app.ui.tool_options.gradient_reverse, tl!("Reverse"));
             widgets::checkbox(ui, &mut app.ui.tool_options.gradient_dither, tl!("Dither"));
+            // Classic gradient only: Transparency, between Dither and Method (#12009).
+            if app.ui.tool_options.gradient_classic {
+                widgets::checkbox(ui, &mut app.ui.tool_options.gradient_transparency, tl!("Transparency")).on_hover_text(tl!("Toggle gradient transparency"));
+            }
             // Method: the interpolation, in both modes, Smooth by default (#12004).
             opt_label(ui, tl!("Method:"));
             let methods: Vec<(String, &str)> =

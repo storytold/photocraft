@@ -156,6 +156,10 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
             gradients::apply_opacity(cs, &gradients::transparency_param(p, "paint.gradient")?.unwrap_or_default())
         }
     };
+    // Transparency off (`useTransparency: false`, the options bar's checkbox, #12009): the gradient's
+    // opacity stops are ignored and every colour is opaque. A non-bool value keeps the default, on.
+    let use_transparency = b(p, "useTransparency", true);
+    let stops: Vec<(f32, [f32; 4])> = if use_transparency { stops } else { stops.into_iter().map(|(t, c)| (t, [c[0], c[1], c[2], 1.0])).collect() };
     // Photoshop's interpolation (`method`, with `smoothness` 0..=100, default 100) baked into dense
     // stops, as for Gradient Overlay: Photoshop 27.11's Classic black → white is 0.037 at t = 1/16
     // where straight stops give 0.0625.
@@ -166,7 +170,8 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
             // the method, the opacity by Smooth's measured transparency curve (#12010). Merged
             // stops would take the nearest stop's alpha. The other methods and Smoothness values
             // were not measured in the Gradient tool and keep the merged stops.
-            let split = if m == photocraft_io::GradientMethod::Smooth && smoothness >= 1.0 { split_stops(s, p, fg)? } else { None };
+            // With transparency off there is no opacity curve to bake apart.
+            let split = if use_transparency && m == photocraft_io::GradientMethod::Smooth && smoothness >= 1.0 { split_stops(s, p, fg)? } else { None };
             match split {
                 Some(split) => smooth_split_stops(split),
                 None => {
@@ -275,7 +280,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Gradient",
             menu: &[],
             shortcut: None,
-            params: r##"{"from":[x,y],"to":[x,y],"style":"linear|radial|angle|reflected|diamond"="linear","colors":["#rrggbb",…]? (evenly spaced),"gradient":preset name?,"stops":[[t,"#rrggbb"|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]? (default: the current gradient, see gradient.presets.select),"method":"classic|perceptual|linear|smooth|stripes"? (Photoshop's interpolation; stripes: each stop's colour up to the next; omitted: straight stops),"smoothness":0..100=100,"reverse":bool=false,"dither":bool=true,"opacity":1..100=100,"mode":"normal|multiply|…"="normal","target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            params: r##"{"from":[x,y],"to":[x,y],"style":"linear|radial|angle|reflected|diamond"="linear","colors":["#rrggbb",…]? (evenly spaced),"gradient":preset name?,"stops":[[t,"#rrggbb"|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]? (default: the current gradient, see gradient.presets.select),"method":"classic|perceptual|linear|smooth|stripes"? (Photoshop's interpolation; stripes: each stop's colour up to the next; omitted: straight stops),"smoothness":0..100=100,"useTransparency":bool=true (false: the opacity stops are ignored, every colour opaque),"reverse":bool=false,"dither":bool=true,"opacity":1..100=100,"mode":"normal|multiply|…"="normal","target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             enabled: crate::commands::has_paintable,
             run: gradient,
             journal: true,
@@ -285,6 +290,10 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "gradient_transparency_toggle_tests.rs"]
+mod gradient_transparency_toggle_tests;
 
 #[cfg(test)]
 mod bucket_no_op_history_tests;

@@ -35,6 +35,9 @@ pub struct ToolOptions {
     /// `paint.gradient` takes it. Smooth by default and after Reset Tool.
     #[serde(default = "default_gradient_method")]
     pub gradient_method: String,
+    /// Classic gradient › Transparency (#12009): the gradient's opacity stops apply. On by default
+    /// and after Reset Tool.
+    pub gradient_transparency: bool,
     pub fill_opacity: f32,
     /// Paint Bucket fill source: false = Foreground colour, true = Pattern (Patterns panel selection).
     pub bucket_fill_pattern: bool,
@@ -494,6 +497,7 @@ impl Default for ToolOptions {
             gradient_classic: false,
             gradient_blend_mode: photocraft_color::BlendMode::Normal,
             gradient_method: default_gradient_method(),
+            gradient_transparency: true,
             fill_opacity: 100.0,
             bucket_fill_pattern: false,
             bucket_blend_mode: photocraft_color::BlendMode::Normal,
