@@ -133,6 +133,11 @@ const BOTH_WAYS_TWIST_TOL: f64 = 2.0;
 /// whose columns ask for this much (moved control points: 1.12 stays in its row, 1.55 and up
 /// carry to all four cells).
 const FIRST_LEVEL_SPREAD_FV: f64 = 1.5;
+/// A one-patch full mesh measures a cell's side rows also by their first inner control point's
+/// drift along the chord, at this weight: the reference cuts the cell left of a control point
+/// moved across (its rows' first point lags) but not the one right of it, where the second point
+/// lags as much (moved-point probes and their mirror images; 0.7 to 0.75 fit both).
+const FIRST_POINT_ROW_WEIGHT: f64 = 0.75;
 /// The twist of a tall envelope's square cell (its whole net) past which it splits across as well:
 /// sideways Fish and Wave at ±50 match with 2.0 and lose most of their cells' agreement at 1.2.
 const TALL_SQUARE_TWIST_TOL: f64 = 2.0;
@@ -362,6 +367,13 @@ fn segment(mut c: Vec<P>, t0: f64, t1: f64) -> Vec<P> {
 /// [`BEFORE_TOL`] or [`AFTER_TOL`] ([`SHALLOW_BEFORE_TOL`] or [`SHALLOW_AFTER_TOL`] where the
 /// segment turns back only a little), and is left out of the mean along the chord.
 fn need(c: &[P]) -> f64 {
+    need_weighing_first(c, 0.0)
+}
+
+/// [`need`], with the first inner control point's own drift along the chord, counted
+/// `first_weight` times, standing for the mean drift where it is larger (the rows of a one-patch full mesh, see
+/// [`FIRST_POINT_ROW_WEIGHT`]).
+fn need_weighing_first(c: &[P], first_weight: f64) -> f64 {
     let n = c.len().saturating_sub(1);
     let (Some(&a), Some(&b)) = (c.first(), c.last()) else { return 0.0 };
     if n < 2 {
@@ -380,7 +392,7 @@ fn need(c: &[P]) -> f64 {
     let v = if len > 0.0 {
         let (tx, ty) = (ch[0] / len, ch[1] / len);
         let mut far = 0.0f64;
-        let (mut sum, mut inside) = (0.0f64, 0usize);
+        let (mut sum, mut inside, mut first_drift) = (0.0f64, 0usize, 0.0f64);
         // How far the inner control points reach before the chord's start and past its end.
         let along_of = |p: &P| ((p[0] - a[0]) * tx + (p[1] - a[1]) * ty) / len;
         let first = (1..n).filter_map(|k| c.get(k)).map(along_of).fold(f64::INFINITY, f64::min);
@@ -404,11 +416,16 @@ fn need(c: &[P]) -> f64 {
             } else if along > 1.0 {
                 far = far.max(side.hypot((along - 1.0) * len) / after_tol);
             } else if along >= 0.0 {
-                sum += (along - k as f64 / n as f64) * len;
+                let drift = (along - k as f64 / n as f64) * len;
+                if k == 1 {
+                    first_drift = drift.abs();
+                }
+                sum += drift;
                 inside += 1;
             }
         }
         let tang = if inside > 0 { (sum / inside as f64).abs() } else { 0.0 };
+        let tang = tang.max(first_weight * first_drift);
         far.max(tang / TANG_TOL)
     } else {
         d.iter().map(|x| x[0].hypot(x[1])).fold(0.0, f64::max) / PERP_TOL
@@ -752,6 +769,28 @@ fn spread_down_in_row(level_cells: &[Cell], decisions: &mut [(bool, bool)], from
     }
 }
 
+/// How much a cell's rows and columns ask to be split (across, down), `sub` giving the cell's own
+/// control net when a rule needs it.
+fn cell_needs<'a>(net: &Net, c: Cell, rules: &Rules, sub: impl Fn() -> &'a Net) -> (f64, f64) {
+    let [u0, u1, v0, v1] = c;
+    let full_one = rules.force_down && !rules.twist_spreads;
+    // A quilt's patch measures its cells' rows by all the rows of their control nets.
+    let fu = if rules.twist_spreads {
+        sub().rows_need()
+    } else {
+        let w = if full_one { FIRST_POINT_ROW_WEIGHT } else { 0.0 };
+        need_weighing_first(&segment(net.row(v0), u0, u1), w).max(need_weighing_first(&segment(net.row(v1), u0, u1), w))
+    };
+    // A whole quilt patch measures its columns by every column of its control net.
+    let fv = if rules.twist_spreads && u1 - u0 > 1.0 - EPS && v1 - v0 > 1.0 - EPS {
+        net.cols_need()
+    } else {
+        need(&segment(net.col(u0), v0, v1)).max(need(&segment(net.col(u1), v0, v1)))
+    };
+    // A one-patch full mesh also measures its cells by every row and column of their control nets.
+    if full_one { (fu.max(sub().rows_need_by(1.0)), fv.max(sub().cols_need())) } else { (fu, fv) }
+}
+
 /// A one-patch full mesh's cells twisted past [`BOTH_WAYS_TWIST_TOL`] (`measured`, column need
 /// and twist per cell) split both ways.
 fn split_both_ways_past_twist(decisions: &mut [(bool, bool)], measured: &[(f64, f64)]) {
@@ -842,16 +881,7 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             // The cell's own control net, built once when a rule needs it.
             let sub_net = std::cell::OnceCell::new();
             let sub = || sub_net.get_or_init(|| net.sub(c));
-            // A quilt's patch measures its cells' rows by all the rows of their control nets.
-            let fu = if rules.twist_spreads { sub().rows_need() } else { need(&segment(net.row(v0), u0, u1)).max(need(&segment(net.row(v1), u0, u1))) };
-            // A whole quilt patch measures its columns by every column of its control net.
-            let fv = if rules.twist_spreads && u1 - u0 > 1.0 - EPS && v1 - v0 > 1.0 - EPS {
-                net.cols_need()
-            } else {
-                need(&segment(net.col(u0), v0, v1)).max(need(&segment(net.col(u1), v0, v1)))
-            };
-            // A one-patch full mesh also measures its cells by every row and column of their control nets.
-            let (fu, fv) = if full_one { (fu.max(sub().rows_need_by(1.0)), fv.max(sub().cols_need())) } else { (fu, fv) };
+            let (fu, fv) = cell_needs(net, c, rules, sub);
             let (mut across, mut down) = (fu >= 1.0 - EPS, fv >= 1.0 - EPS);
             let mut twist_down = false;
             let (lu, lv) = (u1 - u0, v1 - v0);
@@ -2567,6 +2597,20 @@ mod tests {
         assert!(eighths(&deep), "11 px: cut into eighths down");
         let (shallow, _) = cells(&moved_point_net(1, 1, [0.0, 8.0]), true, &rules);
         assert!(!eighths(&shallow), "8 px: stays a quarter");
+    }
+
+    /// A one-patch full mesh weighs the first inner point of a cell's side rows: with the top-right
+    /// inner point moved 14 px right, the top-left first cell's rows lag at their first inner
+    /// point and it splits across; with the top-left point moved 14 px right, the top-right cell's
+    /// rows lag as much at their second point and it stays whole across.
+    #[test]
+    fn a_full_mesh_weighs_the_first_point_of_its_rows() {
+        let rules = one_patch_rules(&moved_point_net(1, 1, [0.0, 0.0]), true);
+        let narrow = |leaves: &[Cell], u: f64| leaves.iter().any(|c| (c[0] - u).abs() < EPS && c[3] < 0.5 + EPS && c[1] - c[0] < 0.5 - EPS);
+        let (left, _) = cells(&moved_point_net(2, 1, [14.0, 0.0]), true, &rules);
+        assert!(narrow(&left, 0.0), "the cell left of the moved point splits across");
+        let (right, _) = cells(&moved_point_net(1, 1, [14.0, 0.0]), true, &rules);
+        assert!(!narrow(&right, 0.5), "the cell right of it stays whole across");
     }
 
     /// A one-patch full mesh's cell twisted past 2 px splits both ways: with the top-left inner
