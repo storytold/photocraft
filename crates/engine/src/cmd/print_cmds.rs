@@ -1542,6 +1542,9 @@ pub fn active_layer_path(doc: &Document, active: Option<photocraft_doc::LayerId>
 }
 
 #[cfg(test)]
+#[path = "print_cmds/paths_export_file_header_tests.rs"]
+mod paths_export_file_header_tests;
+#[cfg(test)]
 #[path = "print_cmds/paths_export_layer_path_tests.rs"]
 mod paths_export_layer_path_tests;
 
@@ -1556,6 +1559,19 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
 /// by its Paths panel name, and in All Paths (#13774). Coordinates are points (pixels at the
 /// document resolution), y up.
 pub fn paths_to_ai_for(doc: &Document, which: &str, active: Option<photocraft_doc::LayerId>) -> Result<(String, usize)> {
+    paths_to_ai_titled(doc, which, active, None)
+}
+
+/// A box value in points: a whole number without decimals, else 4 decimals (#13779).
+fn ai_points(v: f64) -> String {
+    if (v - v.round()).abs() < 1e-9 { format!("{}", v.round() as i64) } else { format!("{v:.4}") }
+}
+
+/// [`paths_to_ai_for`] with the `%%Title:` of the written file: `title` is its name with
+/// extension, or `None` for the document's name (the text returned without a file). The file
+/// follows the reference application's layout (#13779): its comments, prolog, setup and
+/// graphics state, the path blocks after `%%Note:`, CR line endings and no break after `%%EOF`.
+pub fn paths_to_ai_titled(doc: &Document, which: &str, active: Option<photocraft_doc::LayerId>, title: Option<&str>) -> Result<(String, usize)> {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let k = 72.0 / dpi;
     let (w, h) = (f64::from(doc.size.width) * k, f64::from(doc.size.height) * k);
@@ -1585,14 +1601,15 @@ pub fn paths_to_ai_for(doc: &Document, which: &str, active: Option<photocraft_do
         }
     }
     let mut s = String::new();
-    s.push_str("%!PS-Adobe-2.0 EPSF-1.2\n%%Creator: PhotoCraft\n");
-    s.push_str(&format!("%%Title: ({})\n", ps_comment_text(&doc.name).replace([')', '('], "_")));
-    s.push_str(&format!(
-        "%%BoundingBox: 0 0 {} {}\n%%HiResBoundingBox: 0 0 {w:.4} {h:.4}\n%AI3_Cropmarks: 0 0 {w:.4} {h:.4}\n",
-        w.ceil() as i64,
-        h.ceil() as i64
-    ));
-    s.push_str("%%DocumentProcessColors: Black\n%%EndComments\n%%EndProlog\n%%BeginSetup\n%%EndSetup\n");
+    s.push_str("%!PS-Adobe-2.0\n%%Creator: PhotoCraft\n");
+    s.push_str(&format!("%%Title: ({})\n", ps_comment_text(title.unwrap_or(&doc.name)).replace([')', '(', '\\'], "_")));
+    s.push_str("%%DocumentNeededResources: procset Adobe_packedarray 2.0 0\n%%+ procset Adobe_IllustratorA_AI3 1.0 1\n%%ColorUsage: Black&White\n");
+    let (hw, hh) = (ai_points(w), ai_points(h));
+    s.push_str(&format!("%%BoundingBox: 0 0 {} {}\n%%HiResBoundingBox: 0 0 {hw} {hh}\n%AI3_Cropmarks: 0 0 {hw} {hh}\n", w.ceil() as i64, h.ceil() as i64));
+    s.push_str("%%DocumentPreview: None\n%%EndComments\n");
+    s.push_str("%%BeginProlog\n%%IncludeResource: procset Adobe_packedarray 2.0 0\nAdobe_packedarray /initialize get exec\n%%IncludeResource: procset Adobe_IllustratorA_AI3 1.0 1\n%%EndProlog\n");
+    s.push_str("%%BeginSetup\nAdobe_IllustratorA_AI3 /initialize get exec\nn\n%%EndSetup\n");
+    s.push_str("0.0 0.0 0.0 1.0 k\n0 i 0 J 0 j 1 w 4 M []0 d\n%%Note:\n");
     let pt = |x: f64, y: f64| (x * k, h - y * k);
     let mut n = 0;
     for path in &chosen {
@@ -1637,15 +1654,19 @@ pub fn paths_to_ai_for(doc: &Document, which: &str, active: Option<photocraft_do
         }
         s.push_str("%Adobe_Photoshop_Path_End\n");
     }
-    s.push_str("%%PageTrailer\n%%Trailer\n%%EOF\n");
-    Ok((s, n))
+    s.push_str("%%Trailer\n%%EOF");
+    // CR line endings only, as the reference application writes them.
+    Ok((s.replace('\n', "\r"), n))
 }
 
 fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.pathsToIllustrator";
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let which = p.get("paths").and_then(Value::as_str).unwrap_or("all");
-    let (text, n) = paths_to_ai_for(&d.doc, which, d.active_layer)?;
+    let out = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
+    // The written file's name is its title; the text returned without a file keeps the document's.
+    let title = out.map(|path| std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path));
+    let (text, n) = paths_to_ai_titled(&d.doc, which, d.active_layer, title)?;
     // Document Bounds writes the frame alone (#13771); any other choice must match a path.
     if n == 0 && which != "documentBounds" {
         return Err(bad(cmd, format!("no paths match `{which}`")));

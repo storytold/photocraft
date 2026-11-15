@@ -29,7 +29,7 @@ fn session(work: bool) -> Session {
 
 fn export(s: &mut Session, which: &str) -> std::result::Result<(String, u64), String> {
     let r = s.execute("file.export.pathsToIllustrator", json!({"paths": which})).map_err(|e| e.to_string())?;
-    Ok((r["ai"].as_str().unwrap().to_string(), r["paths"].as_u64().unwrap()))
+    Ok((r["ai"].as_str().unwrap().replace('\r', "\n"), r["paths"].as_u64().unwrap()))
 }
 
 /// The x of each path block's first `m` (moveto), in file order.

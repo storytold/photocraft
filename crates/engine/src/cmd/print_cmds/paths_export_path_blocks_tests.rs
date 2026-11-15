@@ -46,10 +46,15 @@ fn doc_with(paths: Vec<(&str, Vec<Subpath>)>) -> Document {
     (*s.active().unwrap().doc).clone()
 }
 
-/// The text after the file's setup section: just the path blocks and the trailer.
+/// The file with LF line endings, as these checks were written (the file has CR ones, #13779).
+fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
+    super::paths_to_ai(doc, which).map(|(ai, n)| (ai.replace('\r', "\n"), n))
+}
+
+/// The text between `%%Note:` and the trailer: just the path blocks (#13779's layout).
 fn body(ai: &str) -> &str {
-    let from = ai.find("%%EndSetup\n").map(|i| i + "%%EndSetup\n".len()).unwrap();
-    &ai[from..ai.find("%%PageTrailer").unwrap()]
+    let from = ai.find("%%Note:\n").map(|i| i + "%%Note:\n".len()).unwrap();
+    &ai[from..ai.find("%%Trailer").unwrap()]
 }
 
 fn rect_a() -> (&'static str, Vec<Subpath>) {

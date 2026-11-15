@@ -51,5 +51,5 @@ fn ok_with_document_bounds_exports_the_frame() {
     let (_, paths) = open(&mut app);
     let r = app.run(COMMAND, json!({"paths": paths})).unwrap();
     assert_eq!(r["paths"], 0);
-    assert!(r["ai"].as_str().unwrap().contains("%%BoundingBox: 0 0 300 200\n"));
+    assert!(r["ai"].as_str().unwrap().contains("%%BoundingBox: 0 0 300 200\r"), "CR line endings (#13779)");
 }

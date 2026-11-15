@@ -650,8 +650,9 @@ fn paths_export_as_illustrator_postscript() {
     })
     .unwrap();
     let r = s.execute("file.export.pathsToIllustrator", json!({})).unwrap();
-    let ai = r["ai"].as_str().unwrap();
-    assert!(ai.starts_with("%!PS-Adobe-2.0 EPSF-1.2"));
+    // LF line endings for these checks; the file has CR ones (#13779).
+    let ai = &r["ai"].as_str().unwrap().replace('\r', "\n");
+    assert!(ai.starts_with("%!PS-Adobe-2.0\n"));
     assert!(ai.contains("%%BoundingBox: 0 0 300 150"));
     assert!(ai.contains("1 XR\n10.0000 140.0000 m\n100.0000 140.0000 L\n"), "{ai}");
     assert!(ai.contains("\nn\n*U\n") && ai.contains("\nN\n*U\n"));
