@@ -11,10 +11,14 @@ fn shortcut_set_delete_requires_confirmation() {
     set_field(&mut h, id, "overrides", json!({"edit.copy": "F8", "actions.play:Sepia": "F6"}));
     set_field(&mut h, id, "alternates", json!({"edit.copy": ["F7"]}));
     let sets = field(&h, id, "sets");
+    set_field(&mut h, id, "selected", json!("edit.copy"));
+    set_field(&mut h, id, "capture", json!(true));
 
     click(&mut h, "Delete");
     assert_eq!(field(&h, id, "sets"), sets);
     assert!(h.query_all(egui_kittest::kittest::by().label("Are you sure you want to delete Retouch?").include_labels()).next().is_some());
+    h.key_press(egui::Key::F10);
+    h.run_steps(3);
     click(&mut h, "No");
     assert_eq!(field(&h, id, "activeSet"), "Retouch");
     assert_eq!(field(&h, id, "sets"), sets);
@@ -22,6 +26,15 @@ fn shortcut_set_delete_requires_confirmation() {
 
     for key in [egui::Key::Escape, egui::Key::Enter] {
         click(&mut h, "Delete");
+        let no = h.get_by_role_and_label(egui::accesskit::Role::Button, "No");
+        assert!(no.is_focused());
+        if key == egui::Key::Enter {
+            let yes = h.get_by_role_and_label(egui::accesskit::Role::Button, "Yes");
+            let backwards = yes.rect().left() < no.rect().left();
+            h.key_press_modifiers(if backwards { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE }, egui::Key::Tab);
+            h.run_steps(3);
+            assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Yes").is_focused());
+        }
         h.key_press(key);
         h.run_steps(3);
         assert!(field(&h, id, "__deleteShortcutSet").is_null());

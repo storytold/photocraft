@@ -231,7 +231,9 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     let items = shortcut_items(app);
     // The Set row, then the search (the Menus tab searches too).
     if tab == 0 {
-        set_row(app, ui, f, &mut overrides, &mut alt_overrides, &items, &mut message, &mut message_warning);
+        if set_row(app, ui, f, &mut overrides, &mut alt_overrides, &items, &mut message, &mut message_warning) {
+            capture = false;
+        }
         ui.add_space(4.0);
     }
     let mut filter = f.get("filter").and_then(Value::as_str).unwrap_or("").to_string();
@@ -593,7 +595,7 @@ fn set_row(
     items: &[(String, String, Vec<String>, Option<String>)],
     message: &mut String,
     warning: &mut bool,
-) {
+) -> bool {
     use photocraft_engine::shortcut_sets::{self, ShortcutSet};
     let mut sets: BTreeMap<String, ShortcutSet> = f.get("sets").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     let mut active = f.get("activeSet").and_then(Value::as_str).unwrap_or("").to_string();
@@ -616,6 +618,7 @@ fn set_row(
     let mut switch_after_save: Option<String> = f.get("switchAfterSave").and_then(Value::as_str).map(str::to_string);
     let set_label = if active.is_empty() { defaults.clone() } else { active.clone() };
     let mut delete_set = f.get("__deleteShortcutSet").and_then(Value::as_str).filter(|name| !name.is_empty() && *name == active).map(str::to_owned);
+    let opening_delete = delete_set.is_none();
     let mut export = false;
     let mut summarize = false;
     ui.horizontal(|ui| {
@@ -657,8 +660,9 @@ fn set_row(
         export = ui.button(tl!("Export…")).on_hover_text(tl!("Save these shortcuts as a .kys file")).clicked();
         summarize = ui.button(tl!("Summarize…")).on_hover_text(tl!("Save a list of these shortcuts as a web page")).clicked();
     });
+    let deleting = delete_set.is_some();
     if let Some(name) = &delete_set
-        && let Some(confirm) = confirm_delete_set(ui, name)
+        && let Some(confirm) = confirm_delete_set(ui, name, opening_delete)
     {
         if confirm {
             sets.remove(name);
@@ -772,30 +776,30 @@ fn set_row(
     f.insert("newSetName".into(), new_name.map_or(Value::Null, Value::String));
     f.insert("switchTo".into(), switch_to.map_or(Value::Null, Value::String));
     f.insert("switchAfterSave".into(), switch_after_save.map_or(Value::Null, Value::String));
+    deleting
 }
 
-fn confirm_delete_set(ui: &egui::Ui, name: &str) -> Option<bool> {
+fn confirm_delete_set(ui: &egui::Ui, name: &str, opening: bool) -> Option<bool> {
     use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
 
     let ctx = ui.ctx();
-    let prompt = egui::Modal::new(ui.scope_id().with("delete-shortcut-set")).show(ctx, |ui| {
-        ui.set_max_width(360.0);
-        ui.label(crate::i18n::fmt(tl!("Are you sure you want to delete {set}?"), &[("set", name)]));
-        ui.add_space(8.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("No"), 84.0), DialogButton::new(ButtonRole::Alternate, tl!("Yes"), 84.0)])
-                .map(|role| role == ButtonRole::Alternate)
-        })
-        .inner
-    });
-    // Consume the keys here so they cannot close or submit the Keyboard Shortcuts dialog.
-    let close = prompt.should_close();
+    // Consume dismissal keys before a focused button or the parent dialog can use them.
     let dismiss = ctx.input_mut(|i| {
         let enter = i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
         let escape = i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
         enter || escape
     });
-    prompt.inner.or((close || dismiss).then_some(false))
+    let prompt = egui::Modal::new(ui.scope_id().with("delete-shortcut-set")).show(ctx, |ui| {
+        ui.set_max_width(360.0);
+        ui.label(crate::i18n::fmt(tl!("Are you sure you want to delete {set}?"), &[("set", name)]));
+        ui.add_space(8.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("No"), 84.0).focus(opening), DialogButton::new(ButtonRole::Alternate, tl!("Yes"), 84.0)])
+                .map(|role| role == ButtonRole::Alternate)
+        })
+        .inner
+    });
+    if dismiss || prompt.should_close() { Some(false) } else { prompt.inner }
 }
 
 /// The reference application's question when another set is chosen over unsaved edits (#14326).

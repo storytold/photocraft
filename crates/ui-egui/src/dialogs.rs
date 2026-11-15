@@ -663,7 +663,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             modal = modal.frame(egui::Frame::popup(&ctx.global_style()).inner_margin(16));
         }
         // Tab / ⇧Tab walk the topmost dialog's text fields, not every widget (field_tab.rs).
-        let tab = if top == Some(d.id) && !egui::Popup::is_any_open(ctx) { crate::field_tab::take_step(ctx) } else { 0 };
+        let deleting_shortcut_set = fields.get("__deleteShortcutSet").is_some_and(Value::is_string);
+        let tab = if interactive && !deleting_shortcut_set && !egui::Popup::is_any_open(ctx) { crate::field_tab::take_step(ctx) } else { 0 };
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
         let web = fields.contains_key("__web");
         let web_popup_open = web && egui::Popup::is_any_open(ctx);
