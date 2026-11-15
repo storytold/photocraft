@@ -127,5 +127,6 @@ fn the_other_tools_keep_their_menus() {
     app.ui.tool = Tool::RectMarquee;
     right_click(&mut app, &ctx, 50.0, 40.0);
     assert_ne!(listed(&mut app, &ctx), WANT, "the marquee keeps its selection menu");
-    assert!(!applies(Tool::Note), "a tool without a canvas menu still gets none");
+    // The Note tool has its notes menu now (#11789).
+    assert!(!applies(Tool::Ruler), "a tool without a canvas menu still gets none");
 }
