@@ -710,7 +710,12 @@ fn action_folder_preferences_prune_after_attach_and_confirmed_removal() {
         action.set = Some(set.into());
         action
     };
-    let file = ActionsFile { version: 1, actions: vec![in_set("Move me", "Move.Set"), in_set("Delete me", "Delete.Set")] };
+    let file = ActionsFile {
+        version: 1,
+        actions: vec![in_set("Move me", "Move.Set"), in_set("Delete me", "Delete.Set")],
+        sets: Vec::new(),
+        set_rows: Vec::new(),
+    };
     mem.files.lock().unwrap().insert(ACTIONS_FILE.into(), serde_json::to_vec(&file).unwrap());
     let mut s = Session::new();
     s.load_prefs_json(&json!({"collapsedActionSets": {"Move.Set": true, "Delete.Set": true, "Empty.Set": true, "Gone.Set": true}}).to_string()).unwrap();
