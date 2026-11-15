@@ -294,10 +294,12 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui:
             ui.vertical(|ui| {
                 ui.set_width((width - button_width - 22.0).max(155.0));
                 let find = field(ui, tl!("Find What:"), &mut fields.find, matches!(focus, Some(FocusField::Find)));
-                let _replace = field(ui, tl!("Change To:"), &mut fields.replace, matches!(focus, Some(FocusField::Replace)));
+                let replace = field(ui, tl!("Change To:"), &mut fields.replace, matches!(focus, Some(FocusField::Replace)));
                 focused = !ui.is_sizing_pass();
                 if find.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !fields.find.is_empty() {
                     action = Some(Action::Find);
+                } else if replace.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    action = Some(Action::Done);
                 }
                 ui.add_space(8.0);
                 ui.horizontal_top(|ui| {

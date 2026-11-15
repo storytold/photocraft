@@ -91,3 +91,44 @@ fn window_cursor_is_independent_of_headless_searches_and_bound_to_its_document()
     assert_eq!(app.session.active().unwrap().doc.id, other);
     assert!(app.session.documents()[0].doc.layer(LayerId(layer)).is_some());
 }
+
+#[test]
+fn modeless_window_focus_enter_tab_and_escape() {
+    use egui::{Event, Key, vec2};
+
+    let mut app = app();
+    type_layer(&mut app, "cat dog");
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("selected on open")).unwrap();
+    set_field(&mut app, "replace", json!("old")).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(960.0, 660.0)).build_ui_state(
+        |ui, app| {
+            escape(app, ui.ctx());
+            super::show(app, ui.ctx());
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(5);
+    h.event(Event::Text("cat".into()));
+    h.run_steps(2);
+    assert_eq!(inspect(h.state()).unwrap()["fields"]["find"], "cat");
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
+    h.event(Event::Text("before find".into()));
+    h.run_steps(2);
+    assert_eq!(inspect(h.state()).unwrap()["fields"]["replace"], "before find");
+    open(h.state_mut()).unwrap();
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(inspect(h.state()).unwrap()["hasMatch"], true);
+    h.event(Event::Text("after find".into()));
+    h.run_steps(2);
+    assert_eq!(inspect(h.state()).unwrap()["fields"]["replace"], "after find");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(inspect(h.state()).is_none());
+    assert!(h.state().ui.text_edit.is_none());
+}
