@@ -160,3 +160,22 @@ fn reset_and_restart_use_the_user_default() {
     let again = open(h.state_mut(), Some("satin")).unwrap();
     assert_eq!(params(h.state_mut(), again)["size"].as_f64(), Some(15.0));
 }
+
+#[test]
+fn confirming_a_style_preset_remembers_its_satin_from_the_styles_page() {
+    let mut app = test_app();
+    let first = open(&mut app, Some("satin")).unwrap();
+    set(&mut app, first, "size", json!(15));
+    crate::dialogs::confirm(&mut app, first).unwrap();
+    app.run("style.presets.new", json!({"name": "Large Satin", "effects": [["satin", {"size": 40}]]})).unwrap();
+
+    let dialog = open(&mut app, Some(STYLES_PAGE)).unwrap();
+    let mut f = fields(&mut app, dialog).clone();
+    apply_style_preset(&app, &mut f, "Large Satin");
+    *fields(&mut app, dialog) = f;
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+
+    new_document(&mut app);
+    let next = open(&mut app, Some("satin")).unwrap();
+    assert_eq!(params(&mut app, next)["size"].as_f64(), Some(40.0));
+}

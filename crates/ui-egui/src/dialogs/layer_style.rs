@@ -651,6 +651,9 @@ fn fields_with_defaults(
         }));
     }
     f.insert("effects".into(), Value::Array(effects));
+    let opening_satins: Vec<_> = layer.effects.items.iter().filter(|e| matches!(e, Effect::Satin(_)))
+        .map(|e| values_of(e, 0.0)).collect();
+    f.insert("__openingSatins".into(), json!(opening_satins));
     let selected = match select {
         None => effects_of(&f).first().and_then(|e| e.get("id").and_then(Value::as_str)).map(str::to_string).unwrap_or_else(|| "dropShadow".into()),
         Some(STYLES_PAGE) => STYLES_PAGE.to_string(),
@@ -737,16 +740,16 @@ fn confirmed_satin(app: &PhotocraftApp, f: &Map<String, Value>) -> Option<Value>
     let id = photocraft_doc::LayerId(f.get("layer")?.as_u64()?);
     let effects = &app.session.active()?.doc.layer(id)?.effects.items;
     let entries = effects_of(f).iter().filter(|e| e.get("kind").and_then(Value::as_str).is_some() && e.get("id").and_then(Value::as_str).is_some());
+    let opening = f.get("__openingSatins").and_then(Value::as_array);
     entries
         .zip(effects)
-        .filter(|(_, fx)| matches!(fx, Effect::Satin(s) if s.common.enabled))
-        .filter_map(|(entry, fx)| {
+        .filter(|(_, fx)| matches!(fx, Effect::Satin(_)))
+        .enumerate()
+        .filter(|(_, (_, fx))| fx.enabled())
+        .filter_map(|(index, (entry, fx))| {
             let selected = entry.get("id") == f.get("selected");
             let params = values_of(fx, 0.0);
-            let unchanged = entry
-                .get("fx")
-                .and_then(|snapshot| serde_json::from_value::<Effect>(snapshot.clone()).ok())
-                .is_some_and(|before| values_of(&before, 0.0) == params);
+            let unchanged = opening.and_then(|satins| satins.get(index)) == Some(&params);
             (selected || !unchanged).then_some((selected, params))
         })
         .max_by_key(|(selected, _)| *selected)
