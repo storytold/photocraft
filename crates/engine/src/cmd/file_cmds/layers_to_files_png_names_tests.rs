@@ -3,13 +3,6 @@
 
 use super::*;
 
-fn tmp(name: &str) -> String {
-    let d = std::env::temp_dir().join(format!("photocraft-l2f-png-names-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d.to_string_lossy().into_owned()
-}
-
 /// Background, `Blue Half`, and a hidden layer `Hid den` on top.
 fn session() -> Session {
     let mut s = Session::new();
@@ -20,10 +13,12 @@ fn session() -> Session {
     s
 }
 
-fn export(test: &str, format: &str) -> serde_json::Value {
-    let dir = tmp(&format!("{test}-{format}"));
+/// Runs Layers to Files into a fresh temporary folder, removed with its files once the export is
+/// done (also when an assertion or the command fails); only the file names are kept.
+fn export(format: &str) -> serde_json::Value {
+    let dir = tempfile::tempdir().unwrap();
     let mut s = session();
-    s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "p 1", "format": format})).unwrap()
+    s.execute("file.export.layersToFiles", json!({"dir": dir.path().to_string_lossy(), "prefix": "p 1", "format": format})).unwrap()
 }
 
 fn file_names(result: &serde_json::Value) -> Vec<String> {
@@ -32,14 +27,14 @@ fn file_names(result: &serde_json::Value) -> Vec<String> {
 
 #[test]
 fn png_names_use_dashes_for_spaces() {
-    let result = export("dashes", "png");
+    let result = export("png");
     assert_eq!(file_names(&result), vec!["p-1_0001_Blue-Half.png".to_string(), "p-1_0002_Background.png".to_string()]);
 }
 
 #[test]
 fn other_formats_keep_spaces() {
     for format in ["psd", "jpg", "tif"] {
-        let result = export("keep", format);
+        let result = export(format);
         assert_eq!(file_names(&result), vec![format!("p 1_0001_Blue Half.{format}"), format!("p 1_0002_Background.{format}")], "{format}");
     }
 }
@@ -47,7 +42,7 @@ fn other_formats_keep_spaces() {
 #[test]
 fn skipped_layers_keep_the_original_name() {
     for format in ["png", "psd"] {
-        let result = export("skipped", format);
+        let result = export(format);
         let skipped = result["skipped"].as_array().unwrap();
         assert_eq!(skipped.len(), 1, "{format}");
         assert_eq!(skipped[0]["name"], json!("Hid den"), "{format}");
