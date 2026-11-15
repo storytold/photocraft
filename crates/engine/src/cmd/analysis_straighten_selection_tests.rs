@@ -104,3 +104,32 @@ fn an_elliptical_or_feathered_selection_keeps_turning_only_its_pixels() {
         assert!(layer(&s, l) != layer(&plain, pl), "{kind}: not the whole-layer turn a plain rectangle gets");
     }
 }
+
+/// CodeRabbit on #14986: a floating-point selection (the XCF importer makes F32 ones) can hold 0.9995,
+/// which is not fully selected: only a plain rectangle of exactly 1.0 gets the whole-layer turn. The old
+/// 0.999 threshold took this one for a plain rectangle.
+#[test]
+fn an_f32_selection_with_a_barely_partial_pixel_is_not_a_plain_rectangle() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    let f32_selection = |edge: f32| {
+        let mut sel = photocraft_raster::Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+        sel.fill_rect(Rect::new(150, 150, 200, 200), &[1.0]);
+        sel.write_pixel(150, 150, &[edge]);
+        sel
+    };
+    let turned = |edge: f32| {
+        let (mut s, l) = session();
+        s.edit("selection", |doc, _| {
+            doc.selection = Some(f32_selection(edge));
+            Ok(())
+        })
+        .unwrap();
+        s.execute(CMD, json!({})).unwrap();
+        layer(&s, l)
+    };
+    let (mut plain, pl) = session();
+    plain.execute(CMD, json!({})).unwrap();
+    let whole = layer(&plain, pl);
+    assert!(turned(1.0) == whole, "exactly 1.0 everywhere is a plain rectangle: the whole layer turns");
+    assert!(turned(0.9995) != whole, "0.9995 is not: only the selected pixels turn");
+}
