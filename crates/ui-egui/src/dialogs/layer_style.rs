@@ -28,6 +28,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod stroke_max_ten_tests;
 
 #[derive(Clone, Copy)]
 enum P {
@@ -73,6 +75,15 @@ const USER_DEFAULTS: &str = "userDefaults";
 
 fn multi(kind: &str) -> bool {
     MULTI.contains(&kind)
+}
+
+/// Photoshop caps a layer at ten strokes; the dialog's "+" greys out there but a
+/// file holding more still opens and applies with all of them.
+const STROKE_LIMIT: usize = 10;
+
+/// Whether `kind` refuses another instance: only strokes are capped, at [`STROKE_LIMIT`].
+fn at_limit(f: &Map<String, Value>, kind: &str) -> bool {
+    kind == "stroke" && ids_of(f, kind).len() >= STROKE_LIMIT
 }
 
 fn kind_of(e: &Effect) -> &'static str {
@@ -470,6 +481,9 @@ fn next_id(f: &Map<String, Value>) -> String {
 /// Adds an instance of `kind`, right after the last one of its kind (the list,
 /// and so the rendered stack, keeps the layer's effect order), and selects it.
 fn add_instance(f: &mut Map<String, Value>, kind: &str) {
+    if at_limit(f, kind) {
+        return;
+    }
     let light = f.get("pendingGlobalLight").or_else(|| f.get("globalLight")).and_then(Value::as_f64).unwrap_or(120.0) as f32;
     let id = next_id(f);
     let user = f.get(USER_DEFAULTS).and_then(|d| d.get(kind));
@@ -1471,7 +1485,14 @@ fn effect_list(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
                     remove_instance(f, id);
                     continue;
                 }
-                if btn(ui, rect.right_center() - vec2(8.0, 0.0), "+", "plus") {
+                if at_limit(f, kind) {
+                    // At the stroke cap the "+" stays but greyed: the faint colour even on
+                    // hover, and a click adds nothing (add_instance refuses as well).
+                    let r = egui::Rect::from_center_size(rect.right_center() - vec2(8.0, 0.0), vec2(18.0, 18.0));
+                    let hresp = ui.interact(r, ui.scope_id().with(("fxbtn", "plus", id)), Sense::click());
+                    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(13.0), t.text_faint);
+                    let _ = hresp.clicked();
+                } else if btn(ui, rect.right_center() - vec2(8.0, 0.0), "+", "plus") {
                     add_instance(f, kind);
                 }
             }
