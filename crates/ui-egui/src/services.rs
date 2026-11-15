@@ -147,9 +147,10 @@ pub struct ExportSettings {
     /// Read and embed the files linked smart objects name ([`photocraft_io::ExportOptions::read_linked_files`]).
     /// Off for automation saves, which are granted only their target.
     pub read_linked_files: bool,
-    /// A flat export of a single layer (Layer › Export As and Quick Export as PNG): always keep the
-    /// alpha channel, and store the pixels nothing painted as white with a zero alpha (#14816).
-    /// Off for whole-document exports, which keep their RGB file for an opaque composite.
+    /// A flat export of a single layer (Layer › Export As and Quick Export as PNG, #14816): always
+    /// keep the alpha channel. The layer document these exports build already stores the area it
+    /// never painted as white with a zero alpha, from the layer's own geometry (#14990). Off for
+    /// whole-document exports, which keep their RGB file for an opaque composite.
     pub layer_alpha: bool,
 }
 

@@ -140,30 +140,75 @@ fn a_groups_empty_corner_is_stored_as_white_with_alpha_zero() {
     assert_eq!(px(&data, w, 4, 50, 45), vec![0, 255, 255, 255]);
 }
 
-/// The exception the item measured, as far as our flat composite can tell: a clear pixel an effect
-/// reaches keeps the colour it painted, and only a clear pixel with no coverage next to it - a
-/// corner of the exported bounds - becomes the white of an empty area.
+/// #14990: the group's empty area is white right up to its children - the one-pixel ring next to a
+/// child's pixels is empty area too, not something the child painted.
 #[test]
-fn a_stroked_layers_effect_edge_keeps_the_effects_colour() {
+fn a_groups_empty_area_is_white_up_to_the_children() {
+    let (mut app, written, _open) = app(70, 60);
+    painted(&mut app, "Yellow", "#ffff00", Some((0, 0, 40, 40)));
+    painted(&mut app, "Cyan", "#00ffff", Some((30, 30, 40, 30)));
+    app.run("select.allLayers", json!({})).unwrap();
+    app.run("layer.new.groupFromLayers", json!({"name": "Pair"})).unwrap();
+    let group = active(&app);
+    let (w, h, _layout, data) = png(&export_as(&mut app, &written, &fields(Some(group))));
+    assert_eq!((w, h), (70, 60));
+    // One row above the cyan layer's top edge, and one pixel right of the yellow layer's edge:
+    // empty area both, next to a child's coverage.
+    assert_eq!(px(&data, w, 4, 45, 29), vec![255, 255, 255, 0], "the ring above the cyan child");
+    assert_eq!(px(&data, w, 4, 45, 30), vec![0, 255, 255, 255], "one row down, the cyan child paints");
+    assert_eq!(px(&data, w, 4, 40, 20), vec![255, 255, 255, 0], "the ring right of the yellow child");
+    assert_eq!(px(&data, w, 4, 39, 20), vec![255, 255, 0, 255], "one pixel left, the yellow child paints");
+}
+
+/// #14990: an outside stroke's own colour survives in its clear corner: the leaf's painted box grown
+/// by the effect's margin is where the effect painted, and the group's bounds are that box.
+#[test]
+fn a_group_of_a_stroked_layer_keeps_the_effects_corner() {
+    let (mut app, written, _open) = app(60, 60);
+    let layer = painted(&mut app, "Square", "#000000", Some((16, 16, 24, 24)));
+    app.run("layer.layerStyle.stroke", json!({"layer": layer, "size": 5, "position": "outside", "color": "#000000"})).unwrap();
+    app.run("select.allLayers", json!({})).unwrap();
+    app.run("layer.new.groupFromLayers", json!({"name": "Framed"})).unwrap();
+    let group = active(&app);
+    let (w, h, layout, data) = png(&export_as(&mut app, &written, &fields(Some(group))));
+    assert_eq!((w, h), (34, 34), "the leaf's 24 x 24 plus 5 px of stroke on each side");
+    assert_eq!(layout, ChannelLayout::Rgba);
+    assert_eq!(px(&data, w, 4, 0, 0), vec![0, 0, 0, 0], "the corner the stroke reaches keeps its black");
+    assert!(
+        clear_pixels(&data, w, h).iter().all(|p| px(&data, w, 4, p.0, p.1) == vec![0, 0, 0, 0]),
+        "everything inside the grown box keeps the effect's colour"
+    );
+}
+
+/// #14990: the same corner on a plain pixel layer, a kind the reference application did not measure
+/// for clear pixels: it keeps today's 0,0,0,0.
+#[test]
+fn a_stroked_pixel_layer_keeps_its_clear_pixels_as_they_are() {
     let (mut app, written, _open) = app(60, 60);
     let layer = painted(&mut app, "Square", "#000000", Some((16, 16, 24, 24)));
     app.run("layer.layerStyle.stroke", json!({"layer": layer, "size": 5, "position": "outside", "color": "#000000"})).unwrap();
     let (w, h, layout, data) = png(&export_as(&mut app, &written, &fields(Some(layer))));
-    assert_eq!((w, h), (34, 34), "the layer's 24 x 24 plus 5 px of stroke on each side");
+    assert_eq!((w, h), (34, 34));
     assert_eq!(layout, ChannelLayout::Rgba);
-    let clear = clear_pixels(&data, w, h);
-    assert!(!clear.is_empty(), "the stroke's bounds hold fully clear pixels");
-    let touches = |p: &(u32, u32)| {
-        let (x, y) = (p.0 as i32, p.1 as i32);
-        [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
-            .into_iter()
-            .any(|(nx, ny)| (0..w as i32).contains(&nx) && (0..h as i32).contains(&ny) && px(&data, w, 4, nx as u32, ny as u32)[3] > 0)
-    };
-    let edge = *clear.iter().find(|p| touches(p)).expect("a clear pixel next to the stroke's coverage");
-    assert_eq!(px(&data, w, 4, edge.0, edge.1), vec![0, 0, 0, 0], "the stroke's own edge keeps its black");
-    for p in clear.iter().filter(|p| !touches(p)) {
-        assert_eq!(px(&data, w, 4, p.0, p.1), vec![255, 255, 255, 0], "clear pixel {p:?} has no coverage next to it");
-    }
+    assert_eq!(px(&data, w, 4, 0, 0), vec![0, 0, 0, 0]);
+    assert!(clear_pixels(&data, w, h).iter().all(|p| px(&data, w, 4, p.0, p.1) == vec![0, 0, 0, 0]), "an unmeasured kind is left alone");
+}
+
+/// #14990: a plain pixel layer with a clear area inside its bounds is unmeasured too, so its clear
+/// pixels stay as they are instead of turning white.
+#[test]
+fn an_unmeasured_layer_kind_keeps_its_clear_pixels() {
+    let (mut app, written, _open) = app(60, 40);
+    app.run("layer.new.layer", json!({"name": "Bars"})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 40})).unwrap();
+    app.run("select.rect", json!({"x": 30, "y": 0, "width": 10, "height": 40, "mode": "add"})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    let layer = active(&app);
+    let (w, h, _layout, data) = png(&export_as(&mut app, &written, &fields(Some(layer))));
+    assert_eq!((w, h), (40, 40), "the layer's bounds are its two bars' union");
+    assert_eq!(px(&data, w, 4, 20, 20), vec![0, 0, 0, 0], "the gap between the bars keeps today's colour");
+    assert_eq!(px(&data, w, 4, 5, 20), vec![255, 0, 0, 255], "and the bars themselves are as they were");
 }
 
 #[test]

@@ -939,10 +939,10 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     alone.blend = if alone.is_group() { BlendMode::PassThrough } else { BlendMode::Normal };
     alone.clipped = false;
     let mut tmp = doc.clone();
-    tmp.layers = vec![alone];
+    tmp.layers = vec![alone.clone()];
     tmp.selection = None;
     let area = doc.bounds();
-    let buf = photocraft_compose::render(&tmp, area);
+    let mut buf = photocraft_compose::render(&tmp, area);
     let w = area.width() as usize;
     let mut b = Rect::EMPTY;
     for (i, q) in buf.px.iter().enumerate() {
@@ -953,6 +953,15 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     }
     if b.is_empty() {
         return Err(other("the layer is empty"));
+    }
+    // #14990: the area a group's children never painted is empty, and the reference application
+    // stores it as 255,255,255,0 - all of it, including the pixels right against a child's edge,
+    // which no rule read from the flattened pixels can tell apart from a pixel an effect reached.
+    // Inside a leaf's own pixels, grown by the margin its effects reach, the colour that was painted
+    // stays: that is what keeps the fully clear outer corner of a 5 px outside stroke its black
+    // (#14816). Only groups were measured, so other layer kinds keep the colours they have.
+    if alone.is_group() {
+        never_painted_to_white(&mut buf.px, w, area, b, &alone);
     }
     let fmt = doc.pixel_format();
     let mut out = Document::new(l.name.clone(), photocraft_doc::Size::new(b.width(), b.height()), doc.mode, doc.depth);
@@ -969,6 +978,35 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     surf.write_region(Rect::from_xywh(0, 0, b.width(), b.height()), &rows);
     out.layers.push(Layer::new(l.name.clone(), LayerContent::Raster(surf)));
     Ok(out)
+}
+
+/// The boxes a group's leaves paint, each grown by the margin its own effects reach: inside one of
+/// them a transparent pixel is a hole in the layer or an effect's edge, and keeps the colour written
+/// there. Pixels of the exported bounds outside every box were never painted by anything, and are
+/// stored white with a zero alpha (#14990).
+fn never_painted_to_white(px: &mut [[f32; 4]], w: usize, area: Rect, b: Rect, group: &Layer) {
+    let mut reach: Vec<Rect> = Vec::new();
+    let mut stack: Vec<&Layer> = group.children().map_or(Vec::new(), |kids| kids.iter().filter(|k| k.visible).collect());
+    while let Some(l) = stack.pop() {
+        if let Some(kids) = l.children() {
+            stack.extend(kids.iter().filter(|k| k.visible));
+        }
+        let own = photocraft_compose::layer_bounds(l, area);
+        if own.is_empty() {
+            continue;
+        }
+        let margin = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
+        reach.push(own.inflate(margin));
+    }
+    for y in b.y0..b.y1 {
+        for x in b.x0..b.x1 {
+            let Some(q) = px.get_mut((y - area.y0) as usize * w + (x - area.x0) as usize) else { continue };
+            if q[3] > 0.0 || reach.iter().any(|r| r.contains(x, y)) {
+                continue;
+            }
+            *q = [1.0, 1.0, 1.0, 0.0];
+        }
+    }
 }
 
 fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result<Value> {

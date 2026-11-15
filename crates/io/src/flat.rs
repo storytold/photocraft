@@ -1333,78 +1333,15 @@ pub fn document_to_image_with_renderer(doc: &Document, warnings: &mut Vec<String
 const NATIVE_COPY_CPU_NOTICE: &str =
     "custom renderer unsupported: a single-layer export copies the document's own pixels with the CPU path; falling back to CPU";
 
-/// Whether an export keeps the document's alpha channel and clears the pixels nothing painted to
-/// white (#14816): the layer export paths ask for it, and it is applied only where the reference
-/// application was measured — an RGB document at 8 bits. Grayscale and CMYK documents and 16- and
-/// 32-bit depths are cases that item leaves unmeasured, so they keep today's behaviour.
+/// Whether an export keeps the document's alpha channel (#14816): the layer export paths ask for
+/// it, and it is applied only where the reference application was measured — an RGB document at 8
+/// bits. Grayscale and CMYK documents and 16- and 32-bit depths are cases that item leaves
+/// unmeasured, so they keep today's behaviour. Which of a layer's clear pixels read as white is
+/// decided where the layer itself is known (#14990: [`photocraft_engine::layer_menu_cmds::layer_document`]
+/// in the engine), not here: the flat pixels carry no provenance for a pixel whose alpha is zero,
+/// so any rule drawn from them alone guesses (#14816 review, #14990).
 fn keep_layer_alpha(asked: bool, doc: &Document) -> bool {
     asked && doc.mode == ColorMode::Rgb && doc.depth == SampleType::U8
-}
-
-/// A row of alpha bytes just outside a band of rows, for [`cleared_to_white`]: the rendered row
-/// when there is one, the edge of the image above the first row or below the last, and an unknown
-/// row where the next band has not been rendered yet.
-#[derive(Clone, Copy)]
-enum RowOutside<'a> {
-    /// The row exists: these are its alpha bytes, one per pixel.
-    Row(&'a [u8]),
-    /// No row there: the image starts or ends.
-    Edge,
-    /// A row exists but has not been rendered (the next band of a streamed export).
-    Unknown,
-}
-
-/// The fully transparent pixels of a layer PNG (#14816): the reference application stores a pixel
-/// nothing painted inside the exported bounds as 255,255,255,0, while a pixel an effect or a brush
-/// antialiased into keeps the colour it was painted with — measured at the outer corner of a 5 px
-/// outside stroke, which exports 0,0,0,0. Those two are told apart by whether the clear pixel
-/// touches one the layer paints, so a clear pixel with a painted neighbour is left as it is and the
-/// rest of the clear pixels turn white. `band` is `rows` rows of `w` pixels of `channels` 8-bit
-/// samples with the alpha last; an [`RowOutside::Unknown`] row below counts as painted, so a band
-/// boundary never clears a pixel the layer might have touched.
-fn cleared_to_white(band: &mut [u8], w: usize, rows: usize, channels: usize, above: RowOutside<'_>, below: RowOutside<'_>) {
-    if channels < 2 || w * rows * channels != band.len() {
-        return;
-    }
-    let alpha = channels - 1;
-    // The alpha bytes on their own: deciding which pixels are clear reads the same bytes that
-    // turning the cleared ones white writes next to.
-    let seen: Vec<u8> = band.chunks_exact(channels).map(|p| p[alpha]).collect();
-    let painted = |x: usize, y: i32| -> bool {
-        if y < 0 {
-            match above {
-                RowOutside::Row(row) => row.get(x).is_some_and(|a| *a > 0),
-                RowOutside::Edge => false,
-                RowOutside::Unknown => true,
-            }
-        } else if y as usize >= rows {
-            match below {
-                RowOutside::Row(row) => row.get(x).is_some_and(|a| *a > 0),
-                RowOutside::Edge => false,
-                RowOutside::Unknown => true,
-            }
-        } else {
-            seen[y as usize * w + x] > 0
-        }
-    };
-    for y in 0..rows {
-        for x in 0..w {
-            if seen[y * w + x] > 0 {
-                continue;
-            }
-            let (y, at) = (y as i32, (y * w + x) * channels);
-            if (x > 0 && painted(x - 1, y)) || (x + 1 < w && painted(x + 1, y)) || painted(x, y - 1) || painted(x, y + 1) {
-                continue;
-            }
-            band[at..at + alpha].fill(255);
-        }
-    }
-}
-
-/// The alpha bytes of a band's last row, to give the band above it its neighbour row (#14816).
-fn last_row_alpha(band: &[u8], w: usize, rows: usize, channels: usize) -> Vec<u8> {
-    let start = rows.saturating_sub(1) * w * channels;
-    band.get(start..).unwrap_or_default().chunks_exact(channels).map(|p| p[channels - 1]).collect()
 }
 
 fn document_to_image_for_with_renderer(
@@ -1438,9 +1375,6 @@ fn document_to_image_for_with_renderer(
     if src.native.is_none() && opaque && !keep {
         drop_alpha(&mut data, layout.color_channels() * bytes, bytes);
         layout = src.layout(false);
-    }
-    if keep {
-        cleared_to_white(&mut data, w as usize, h as usize, layout.channels(), RowOutside::Edge, RowOutside::Edge);
     }
     Ok(Image::from_raw(w, h, layout, src.sample, data)?.with_icc(src.icc.clone()).with_meta(src.meta()))
 }
@@ -1982,8 +1916,8 @@ fn streams_png(doc: &Document) -> bool {
 /// smaller document, with these differences: Interlaced is turned off (Adam7 needs the whole
 /// image), and a composite whose bottom layer isn't an opaque pixel layer keeps its alpha even
 /// when every pixel turns out opaque (that is only known once the last row is written). A layer
-/// export (`opts.layer_alpha`, #14816) keeps its alpha either way and clears its untouched pixels
-/// to white, one band at a time.
+/// export (`opts.layer_alpha`, #14816) keeps its alpha either way, and both paths write the same
+/// pixels for the same document (#14990).
 ///
 /// `rows`: rows per band, 0 to size them to the document.
 #[cfg(test)]
@@ -2134,24 +2068,12 @@ fn stream_png_with_renderer(
     let mut bytes = Vec::new();
     let mut png = codecs::PngRows::new(&mut bytes, &first, h, &encode)?;
     let (mut done, mut translucent) = (0u64, false);
-    let keep = keep_layer_alpha(opts.layer_alpha, doc);
-    let channels = src.layout(alpha).channels();
-    // The alpha bytes of the last row written, the row above the next band.
-    let mut above_row: Vec<u8> = Vec::new();
-    let streamed = src.bands(alpha, ctl, renderer, |rows, mut data, see_through| {
+    let streamed = src.bands(alpha, ctl, renderer, |rows, data, see_through| {
         if see_through && !alpha {
             translucent = true;
             return Err(IoError::Cancelled);
         }
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        // A layer PNG (#14816): the clear pixels nothing painted become white. The band below has
-        // not been rendered when this one is written, so a clear pixel on the last row of a band
-        // keeps its colour rather than risk clearing one the layer touched.
-        if keep && alpha {
-            let above = if above_row.is_empty() { RowOutside::Edge } else { RowOutside::Row(&above_row) };
-            cleared_to_white(&mut data, w as usize, rows as usize, channels, above, RowOutside::Unknown);
-            above_row = last_row_alpha(&data, w as usize, rows as usize, channels);
-        }
         let mut band_warnings = Vec::new();
         let band = prepare_flat(Image::from_raw(w, rows, src.layout(alpha), src.sample, data)?.with_icc(src.icc.clone()), format, &mut band_warnings)?;
         note(&band)?;
@@ -2765,6 +2687,29 @@ mod streamed_png_tests {
         }
         let r = same_as_whole(&hdr, 37, &ExportOptions::default());
         assert!(r.warnings.iter().any(|w| w.contains("clip")), "{:?}", r.warnings);
+    }
+
+    /// A layer export (#14816) keeps an opaque layer's alpha in both PNG paths, and the streamed
+    /// bands store exactly the pixels the whole-image path does (#14990) - including the white with
+    /// a zero alpha the engine stores for the area a group's children never painted.
+    #[test]
+    fn a_layer_export_streams_the_same_pixels_as_it_buffers() {
+        let opts = ExportOptions { layer_alpha: true, ..Default::default() };
+        let mut opaque = Document::new("opaque layer", Size::new(60, 40), ColorMode::Rgb, SampleType::U8);
+        opaque.layers = vec![layer(&opaque, &[(opaque.bounds(), &[0.1, 0.6, 0.9, 1.0])])];
+        let mut cleared = Document::new("group layer", Size::new(60, 40), ColorMode::Rgb, SampleType::U8);
+        cleared.layers = vec![layer(&cleared, &[(Rect::new(0, 0, 20, 40), &[1.0, 1.0, 0.0, 1.0]), (Rect::new(20, 0, 60, 40), &[1.0, 1.0, 1.0, 0.0])])];
+        for doc in [&opaque, &cleared] {
+            for rows in [1, 7, 40] {
+                let r = same_as_whole(doc, rows, &opts);
+                assert_eq!(decoded(&r.bytes).layout(), ChannelLayout::Rgba, "{}: written {rows} rows at a time", doc.name);
+            }
+        }
+        let img = decoded(&export_png_streamed(&cleared, &opts, &Interrupt::NONE, 7).unwrap().bytes);
+        let n = img.layout().channels();
+        let at = |x: usize, y: usize| (y * 60 + x) * n;
+        assert_eq!(&img.data()[at(30, 3)..at(30, 3) + n], [255, 255, 255, 0], "the empty area stays white in the streamed file");
+        assert_eq!(&img.data()[at(5, 3)..at(5, 3) + n], [255, 255, 0, 255], "and the child's own pixels are as they were");
     }
 
     /// Without an opaque bottom layer the composite keeps its alpha, even when every pixel is
