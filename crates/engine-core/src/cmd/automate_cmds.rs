@@ -583,10 +583,10 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
         // Thumbnails go into the profile the sheet is read in: an RGB sheet's own, otherwise the
         // working profile Image › Mode converts to (#13703).
         let to = match crate::color_cmds::mode_space(fmt.mode) {
-            photocraft_cms::ColorSpace::Rgb => crate::color_cmds::document_profile(sheet),
+            craft_cms::ColorSpace::Rgb => crate::color_cmds::document_profile(sheet),
             _ => s.color.working(fmt.mode),
         };
-        let opts = photocraft_cms::TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() };
+        let opts = craft_cms::TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() };
         for (k, path) in chunk.iter().enumerate() {
             let k = k as u32;
             let (c, r) = if across { (k % cols, k / cols) } else { (k / rows, k % rows) };
@@ -624,10 +624,10 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
                 let ox = (x0 + (cell_w - tw) / 2.0).round() as i32;
                 let oy = (y0 + (box_h - th) / 2.0).round() as i32;
                 let n = fmt.channels();
-                let convert = |from: &photocraft_cms::Profile| -> Result<Vec<f32>> {
-                    let t = photocraft_cms::cached(from, &to, opts).map_err(|e| EngineError::Other(format!("colour management: {e}")))?;
+                let convert = |from: &craft_cms::Profile| -> Result<Vec<f32>> {
+                    let t = craft_cms::cached(from, &to, opts).map_err(crate::color_cmds::cms_err)?;
                     let mut data = vec![0.0f32; buf.px.len() * n];
-                    t.convert_f32(buf.px.as_flattened(), 4, &mut data, n, true);
+                    t.convert_f32(buf.px.as_flattened(), 4, &mut data, n, true).map_err(crate::color_cmds::cms_err)?;
                     Ok(data)
                 };
                 let data = convert(&crate::color_cmds::composite_profile(d)).or_else(|_| convert(&builtin))?;
