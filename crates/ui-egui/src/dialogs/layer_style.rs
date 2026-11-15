@@ -736,11 +736,12 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 fn confirmed_satin(app: &PhotocraftApp, f: &Map<String, Value>) -> Option<Value> {
     let id = photocraft_doc::LayerId(f.get("layer")?.as_u64()?);
     let effects = &app.session.active()?.doc.layer(id)?.effects.items;
-    submitted_effects(f)
+    let entries = effects_of(f).iter().filter(|e| e.get("kind").and_then(Value::as_str).is_some() && e.get("id").and_then(Value::as_str).is_some());
+    entries
         .zip(effects)
         .filter(|(_, fx)| matches!(fx, Effect::Satin(s) if s.common.enabled))
-        .filter_map(|((_, id, entry), fx)| {
-            let selected = f.get("selected").and_then(Value::as_str) == Some(id);
+        .filter_map(|(entry, fx)| {
+            let selected = entry.get("id") == f.get("selected");
             let params = values_of(fx, 0.0);
             let unchanged = entry
                 .get("fx")
@@ -826,11 +827,6 @@ fn find_light_angle(f: &Map<String, Value>, initial_light_angle: Option<f64>) ->
     light_angle
 }
 
-/// Well-formed entries in the order they are submitted to the engine.
-fn submitted_effects(f: &Map<String, Value>) -> impl Iterator<Item = (&str, &str, &Value)> {
-    effects_of(f).iter().filter_map(|e| Some((e.get("kind")?.as_str()?, e.get("id")?.as_str()?, e)))
-}
-
 /// Runs the dialog's commands through `run`: blending options, then the whole
 /// effect list in one `layer.layerStyle.replace` (instances keep their order;
 /// their snapshots carry what the dialog doesn't model).
@@ -847,7 +843,8 @@ fn apply(f: &Map<String, Value>, mut run: impl FnMut(&str, Value) -> Result<Valu
         run("layer.layerStyle.blendingOptions", p)?;
     }
     let mut entries = Vec::new();
-    for (kind, _, e) in submitted_effects(f) {
+    for e in effects_of(f) {
+        let (Some(kind), Some(_)) = (e.get("kind").and_then(Value::as_str), e.get("id").and_then(Value::as_str)) else { continue };
         let on = e.get("on").and_then(Value::as_bool).unwrap_or(true);
         let mut params = e.get("params").cloned().unwrap_or_else(|| json!({}));
         params["enabled"] = json!(on);

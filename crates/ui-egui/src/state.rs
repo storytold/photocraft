@@ -506,7 +506,7 @@ pub struct UiState {
     pub dialogs: Vec<Dialog>,
     /// Effect settings last confirmed in Layer Style during this launch, by effect kind.
     #[serde(skip)]
-    pub(crate) last_layer_style_params: serde_json::Map<String, serde_json::Value>,
+    pub last_layer_style_params: serde_json::Map<String, serde_json::Value>,
     pub windows: Vec<DocWindow>,
     pub theme: crate::theme::ThemeKind,
     pub workspace: String,
