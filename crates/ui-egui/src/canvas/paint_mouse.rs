@@ -67,7 +67,10 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             // The Spot Healing Brush starts with the measured tip (#12560); the rest of its brush
             // wasn't measured, so it is the current brush as for the other tools.
             if tool == Tool::SpotHealing {
-                (b.size, b.hardness, b.spacing) = HEALING_BRUSH_TIP;
+                let (size, hardness, spacing) = HEALING_BRUSH_TIP;
+                // A carried Dual Brush keeps its ratio to the tip, as any resize does.
+                b.resize_with_dual_brush(size);
+                (b.hardness, b.spacing, b.spacing_enabled) = (hardness, spacing, true);
                 (b.angle, b.roundness) = (0.0, 1.0);
                 b.tip = photocraft_engine::paint::TipShape::Round;
             }
@@ -122,8 +125,8 @@ const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
-/// [`BRUSH_TOOL_TIP`], the Eraser's [`ERASER_TOOL_TIP`] with no smoothing, the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
-/// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
+/// [`BRUSH_TOOL_TIP`], the Eraser's [`ERASER_TOOL_TIP`] with no smoothing, the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing and Spot Healing
+/// Brushes' [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
 /// [`CLONE_STAMP_TIP`] with no smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
 /// tool's [`SMUDGE_TOOL_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools keep the
 /// default tip.

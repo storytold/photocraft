@@ -30,7 +30,6 @@ fn pick(app: &mut PhotocraftApp, tool: Tool) {
     app.sync_views();
 }
 
-/// Size, hardness, spacing, angle and roundness of the live brush, as `brush.get` reports them.
 fn tip(app: &mut PhotocraftApp) -> [f64; 5] {
     let b = app.run("brush.get", json!({})).unwrap();
     ["size", "hardness", "spacing", "angle", "roundness"].map(|k| (b[k].as_f64().unwrap() * 1e4).round() / 1e4)
@@ -89,16 +88,22 @@ fn a_first_use_starts_with_the_tip_and_then_keeps_its_own() {
 
 #[test]
 fn a_first_use_keeps_the_current_brushs_other_settings() {
-    // Only the tip was measured; opacity, flow and the rest still come from the current brush on a
-    // first use, as before.
+    // Only the tip was measured. Settings that shape the heal stay the current brush's, as before:
+    // Pressure for Size and a Dual Brush, which keeps its ratio to the tip.
     let mut app = app();
     pick(&mut app, Tool::Pencil);
     scramble(&mut app);
-    (app.session.tools.brush.opacity, app.session.tools.brush.flow) = (0.4, 0.6);
+    let b = &mut app.session.tools.brush;
+    b.pressure_size = true;
+    (b.dual_brush.enabled, b.dual_brush.size) = (true, 114.0);
+    b.spacing_enabled = false;
     pick(&mut app, Tool::SpotHealing);
     assert_eq!(tip(&mut app), SPOT_HEALING_TIP);
     let b = &app.session.tools.brush;
-    assert_eq!((b.opacity, b.flow), (0.4, 0.6));
+    assert!(b.pressure_size, "Pressure for Size kept");
+    assert!((b.dual_brush.size - 38.0).abs() < 1e-3, "dual brush 114 px at 57 px scales to 38 px at 19 px: {}", b.dual_brush.size);
+    // The measured 25 % spacing only takes effect with Spacing on.
+    assert!(b.spacing_enabled);
 }
 
 #[test]
