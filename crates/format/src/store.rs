@@ -1702,6 +1702,28 @@ fn reused_compressor_matches_compress_to_vec_and_round_trips() {
 
 #[cfg(test)]
 #[test]
+/// A smaller object's encoding cannot depend on which larger object a worker handled first.
+fn small_blob_compression_is_independent_of_previous_object_size() {
+    let prefix = Object::Blob(Arc::new(vec![7; 8192]));
+    let mut state = 0u32;
+    let bytes: Vec<u8> = (0..652)
+        .map(|i| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if i % 4 < 2 { 0 } else { (state >> 24) as u8 % 16 }
+        })
+        .collect();
+    let expected = ruzstd::encoding::compress_to_vec(bytes.as_slice(), ruzstd::encoding::CompressionLevel::Fastest);
+    let blob = Object::Blob(Arc::new(bytes.clone()));
+    let mut compressor = ObjectEncoder::new();
+    compressor.object(&prefix);
+    let after_larger = compressor.object(&blob);
+    assert_eq!(decompress(&after_larger, bytes.len(), "test").unwrap(), bytes);
+    assert_eq!(after_larger, expected, "compression must not depend on worker history");
+    assert_eq!(compressor.object(&blob), expected, "the next save keeps the same bytes");
+}
+
+#[cfg(test)]
+#[test]
 fn an_incompressible_blob_at_its_limit_still_loads() {
     struct One(String, Vec<u8>);
     impl ByteSource for One {
