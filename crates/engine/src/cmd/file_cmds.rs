@@ -45,7 +45,7 @@ pub(crate) use batch_run::{batch_action, batch_inputs, batch_keeps_step, batch_s
 pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with};
 use export::{color_lookup_tables, layers_to_files, push_unique};
 use info::file_info;
-pub use info::{CAMERA_FIELDS, camera_data, read_file_info, write_file_info};
+pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
@@ -55,8 +55,7 @@ use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub use open_as_smart_object::admit_as_smart_object;
 use open_as_smart_object::open_as_smart_object;
 use paths::is_file;
-#[cfg(test)]
-use paths::openable_name;
+pub(crate) use paths::openable_name;
 pub use paths::{
     extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination, same_file, saves_in_place,
     template_name, untitled_name,
@@ -242,6 +241,24 @@ fn clear_canvas_guides(s: &mut Session) -> Result<Value> {
 
 /// Register File-menu commands with their parameter contracts and enablement predicates.
 /// Filesystem operations are native-only; document operations remain available on the web.
+/// Where Fit Image's last values are kept: the preferences' `dialogs` map, by command id.
+pub const FIT_IMAGE: &str = "file.automate.fitImage";
+
+/// Keep the width, height and Don't Enlarge a Fit Image ran with, with or without its dialog,
+/// for the next opening of the dialog (#13853), as the reference application does.
+fn remember_fit_image(s: &mut Session, p: &Value) {
+    let mut kept = serde_json::Map::new();
+    for key in ["width", "height"] {
+        if let Some(v) = p.get(key).and_then(Value::as_f64).filter(|v| v.is_finite() && (1.0..=300_000.0).contains(v)) {
+            kept.insert(key.into(), json!(v.round() as u64));
+        }
+    }
+    kept.insert("dontEnlarge".into(), json!(p.get("dontEnlarge").and_then(Value::as_bool).unwrap_or(false)));
+    if s.prefs().dialogs.get(FIT_IMAGE) != Some(&Value::Object(kept.clone())) {
+        s.prefs.edit(|prefs| prefs.dialogs.insert(FIT_IMAGE.into(), Value::Object(kept)));
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {
@@ -352,7 +369,11 @@ pub fn specs() -> Vec<CommandSpec> {
             None,
             r##"{"width":px,"height":px,"dontEnlarge":bool=false,"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos"="bicubic"}"##,
             has_doc,
-            fit_image
+            |s, p| {
+                let r = fit_image(s, p)?;
+                remember_fit_image(s, p);
+                Ok(r)
+            }
         ),
         spec!(
             "file.automate.conditionalModeChange",
@@ -377,7 +398,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Image Processor…",
             &["File", "Scripts"],
             None,
-            r##"{"source":"folder|current|open"="folder" (current processes a copy of the active document; open processes copies of all open documents, including unsaved edits; originals and history stay unchanged),"input":folder|[paths]? (required for folder source),"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"jpg|png|psd|tiff|…"="jpg","quality":0..12=8,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it),"width":px?,"height":px? (fit, never enlarge),"convertToSrgb":bool=false} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
+            r##"{"source":"folder|current|open"="folder" (current processes a copy of the active document; open processes copies of all open documents, including unsaved edits; originals and history stay unchanged),"input":folder|[paths]? (required for folder source),"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"jpg|png|psd|tiff|…"="jpg","quality":0..12=8,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it),"width":px?,"height":px? (fit, never enlarge),"convertToSrgb":bool=false,"jpeg":{enabled?:bool=true,quality?:1..12=5,convertToSrgb?:bool=false,resize?:bool=false,width?:1..30000=1,height?:1..30000=1}|false?,"psd":{enabled?:bool=true,maximizeCompatibility?:bool=true,resize?:bool=false,width?:1..30000=1,height?:1..30000=1}|false?,"tiff":{enabled?:bool=true,lzw?:bool=false,resize?:bool=false,width?:1..30000=1,height?:1..30000=1}|false?} → {files, errors} (without format, supplying jpeg/psd/tiff selects per-format mode; omitted, null, false or disabled sections are skipped; at least one must be enabled. Errors in per-format mode identify the format.)"##,
             native,
             image_processor
         ),
@@ -437,12 +458,20 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests;
 
 #[cfg(test)]
+#[path = "file_cmds/export_clut_cube_header_tests.rs"]
+mod export_clut_cube_header_tests;
+
+#[cfg(test)]
 #[path = "file_cmds/place_job_tests.rs"]
 mod place_job_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/open_as_smart_object_tests.rs"]
 mod open_as_smart_object_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/open_as_error_name_tests.rs"]
+mod open_as_error_name_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {
@@ -464,8 +493,8 @@ mod aces_exr_tests {
         .unwrap();
         let bytes = photocraft_codecs::encode(&image, photocraft_codecs::Format::OpenExr, &photocraft_codecs::EncodeOptions::default()).unwrap();
 
-        let linear = photocraft_cms::Builtin::LinearSrgb.profile().to_bytes();
-        let aces = photocraft_cms::Builtin::AcesCg.profile().to_bytes();
+        let linear = craft_cms::Builtin::LinearSrgb.profile().to_bytes();
+        let aces = craft_cms::Builtin::AcesCg.profile().to_bytes();
 
         // Off (the default): io's linear-sRGB tagging stays.
         let mut s = Session::new();
@@ -489,8 +518,8 @@ mod aces_exr_tests {
         let image = photocraft_codecs::Image::from_f32(4, 4, photocraft_codecs::ChannelLayout::Rgb, &[0.5; 48]).unwrap();
         let bytes =
             std::sync::Arc::new(photocraft_codecs::encode(&image, photocraft_codecs::Format::OpenExr, &photocraft_codecs::EncodeOptions::default()).unwrap());
-        let linear = photocraft_cms::Builtin::LinearSrgb.profile().to_bytes();
-        let aces = photocraft_cms::Builtin::AcesCg.profile().to_bytes();
+        let linear = craft_cms::Builtin::LinearSrgb.profile().to_bytes();
+        let aces = craft_cms::Builtin::AcesCg.profile().to_bytes();
         for (on, want) in [(false, &linear), (true, &aces)] {
             let mut s = Session::new();
             s.prefs.edit(|p| p.file_handling.exr_aces_cg = on);
