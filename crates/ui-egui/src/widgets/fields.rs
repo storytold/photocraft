@@ -160,6 +160,25 @@ pub(super) struct FieldOpts {
     pub(super) blank_when_zero: bool,
     /// Keep the trailing zeros of `decimals` (`50.0`), where every other field drops them.
     pub(super) keep_zeros: bool,
+    /// Prefix values at one and above with `+` (`+1`, `+1.23`), as the reference shows the
+    /// Exposure rows (#14639). Values below one, zero and negatives read as today.
+    pub(super) plus_above_one: bool,
+}
+
+/// The text a [`value_field_in`] shows for `v`: [`fmt_num_prec`] / [`fmt_num_fixed`] at
+/// `decimals` places, else [`fmt_num2`] on a fine range and [`fmt_num`]; with `plus_above_one`
+/// a value at one and above gains a leading `+`. Blank and zero handling match `number_edit`.
+pub(crate) fn format_field_text(v: f64, decimals: Option<u32>, fine: bool, keep_zeros: bool, blank_when_zero: bool, plus_above_one: bool) -> String {
+    if blank_when_zero && v == 0.0 {
+        return String::new();
+    }
+    let text = match decimals {
+        Some(d) if keep_zeros => fmt_num_fixed(v, d),
+        Some(d) => fmt_num_prec(v, d),
+        None if fine => fmt_num2(v),
+        None => fmt_num(v),
+    };
+    if plus_above_one && v >= 1.0 { format!("+{text}") } else { text }
 }
 
 /// Arrow-key and drag step for a value field: [`FieldOpts::step_from_decimals`] uses `decimals`;
@@ -515,7 +534,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     opts: FieldOpts,
 ) -> Response {
-    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, keep_zeros, .. } = opts;
+    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, keep_zeros, plus_above_one, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -531,15 +550,7 @@ fn number_edit(
     // A zoom field shows its number with the system's decimal separator (`12,5` on a German
     // Windows), as Photoshop does, so the text it shows is one that can be typed.
     let format = move |v: f64| {
-        if blank_when_zero && v == 0.0 {
-            return String::new();
-        }
-        let text = match decimals {
-            Some(d) if keep_zeros => fmt_num_fixed(v, d),
-            Some(d) => fmt_num_prec(v, d),
-            None if fine => fmt_num2(v),
-            None => fmt_num(v),
-        };
+        let text = format_field_text(v, decimals, fine, keep_zeros, blank_when_zero, plus_above_one);
         if hold_typed { crate::zoom_field::localize(text) } else { text }
     };
     let guard = if hold_typed {
