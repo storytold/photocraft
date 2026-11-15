@@ -89,7 +89,13 @@ pub(super) fn store_sidecar(app: &mut PhotocraftApp, raw: &RawOpen, params: &Cam
         _ => {}
     }
     // The crop it opened with stays in the file, though the dialog has no control for it.
-    let bytes = photocraft_io::camera_raw_xmp::save_with_crop(params, raw.crop).into_bytes();
+    let bytes = match photocraft_io::camera_raw_xmp::save_with_crop(params, raw.crop) {
+        Ok(text) => text.into_bytes(),
+        Err(e) => {
+            crate::notices::error(app, crate::i18n::fmt(tl!("Could not write {name}: {error}"), &[("name", &name), ("error", &e)]));
+            return Stored::Failed;
+        }
+    };
     let Some(write) = app.services.write.as_mut() else { return Stored::Skipped };
     if let Err(e) = write(&sidecar, &bytes) {
         crate::notices::error(app, crate::i18n::fmt(tl!("Could not write {name}: {error}"), &[("name", &name), ("error", &e)]));
@@ -131,7 +137,7 @@ fn existing_sidecar_is_ours(_: &str) -> Option<bool> {
 /// Save Settings…: the dialog's settings as a Camera Raw `.xmp` settings file.
 pub(super) fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
     let d = app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
-    let bytes = photocraft_io::camera_raw_xmp::save(&d.params).into_bytes();
+    let bytes = photocraft_io::camera_raw_xmp::save(&d.params)?.into_bytes();
     app.pick_save("RAW Develop Settings.xmp", move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;

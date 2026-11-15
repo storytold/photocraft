@@ -95,6 +95,26 @@ fn warnings(image: &craft_raw::RawImage) -> Vec<String> {
     out
 }
 
+/// The profile's hue / saturation maps, each at its calibration illuminant's temperature, and
+/// its look table, from the tables craft-raw read.
+fn profile(color: &craft_raw::ColorData) -> crate::profile::Profile {
+    let map = |t: &craft_raw::profile::HsvTable| {
+        let dims = [t.hue_divisions, t.sat_divisions, t.val_divisions].map(|d| u32::try_from(d).unwrap_or(u32::MAX));
+        let data: Vec<f64> = t.data.iter().flatten().map(|&v| f64::from(v)).collect();
+        crate::profile::HsvMap::new(&dims, &data, u32::from(t.srgb_value))
+    };
+    let mut hue_sat: Vec<(f64, crate::profile::HsvMap)> = (0..2)
+        .filter_map(|i| {
+            let m = map(color.profile.hue_sat_map.get(i)?.as_ref()?)?;
+            let default_t = if i == 0 { 2856.0 } else { 6504.0 };
+            let ill = color.illuminant.get(i).copied().map(u32::from);
+            Some((ill.and_then(illuminant_temperature).unwrap_or(default_t), m))
+        })
+        .collect();
+    hue_sat.sort_by(|a, b| a.0.total_cmp(&b.0));
+    crate::profile::Profile { hue_sat, look_table: color.profile.look_table.as_ref().and_then(map) }
+}
+
 /// Convert a validated craft-raw image into the app's neutral processing model.
 pub(crate) fn adapt(image: craft_raw::RawImage) -> Sensor {
     let gain_maps = gain_maps(&image);
@@ -128,8 +148,13 @@ pub(crate) fn adapt(image: craft_raw::RawImage) -> Sensor {
         analog_balance: image.color.analog_balance,
         as_shot_neutral: image.color.as_shot_neutral,
         as_shot_white_xy: image.color.as_shot_white_xy,
+        profile: profile(&image.color),
     };
-    let tone_curve = image.color.profile.tone_curve.map_or_else(Vec::new, |c| c.points);
+    // ProfileToneCurve, sampled through the cubic spline the DNG specification interpolates it with.
+    let tone_curve = image.color.profile.tone_curve.as_ref().map_or_else(Vec::new, |c| {
+        let flat: Vec<f64> = c.points.iter().flatten().map(|&v| f64::from(v)).collect();
+        crate::profile::tone_curve(&flat).unwrap_or_else(|| c.points.clone())
+    });
     let (data, float_data) = match image.data {
         craft_raw::RawData::U16(v) => (v, None),
         craft_raw::RawData::F32(v) => (Vec::new(), Some(v)),

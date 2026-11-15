@@ -51,7 +51,9 @@ pub(super) fn apply_raw_conversions(app: &mut PhotocraftApp, index: usize, d: &p
 /// `area` of `surf` averaged over `k`×`k` blocks, row-major (`ceil(w/k)` × `ceil(h/k)`). A block
 /// past the last row repeats that row, as a clamped edge; each source row is still read once,
 /// weighted by the block rows it stands for (a one-row domain read the same row `k` times, which
-/// is quadratic in its width).
+/// is quadratic in its width). Colour is averaged weighted by alpha (premultiplied), so the
+/// colour hidden under transparent pixels doesn't tint a partly covered block; a fully
+/// transparent block keeps the plain average and stays transparent.
 fn box_average(surf: &photocraft_raster::Surface, area: Rect, k: usize) -> Vec<[f32; 4]> {
     let (w, h) = (area.width() as usize, area.height() as usize);
     let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
@@ -59,21 +61,28 @@ fn box_average(surf: &photocraft_raster::Surface, area: Rect, k: usize) -> Vec<[
     let mut row = vec![[0.0f32; 4]; w];
     for py in 0..ph {
         // f64: a weighted f32 sample near f32::MAX would overflow to infinity.
-        let mut acc = vec![[0.0f64; 5]; pw];
+        // Per block: plain colour sums, alpha sum, weight, alpha-weighted colour sums, cover sum.
+        let mut acc = vec![[0.0f64; 9]; pw];
         for sy in py * k..((py + 1) * k).min(h) {
             let weight = if sy == h - 1 { ((py + 1) * k - sy) as f64 } else { 1.0 };
             let y = area.y0 + sy as i32;
             surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
             for (x, q) in row.iter().enumerate() {
-                let a = &mut acc[x / k];
+                let Some(a) = acc.get_mut(x / k) else { continue };
+                let cover = if q[3].is_finite() { f64::from(q[3].clamp(0.0, 1.0)) } else { 0.0 } * weight;
                 for c in 0..4 {
                     a[c] += f64::from(q[c]) * weight;
                 }
+                for c in 0..3 {
+                    a[5 + c] += f64::from(q[c]) * cover;
+                }
                 a[4] += weight;
+                a[8] += cover;
             }
         }
         for (x, a) in acc.iter().enumerate() {
-            proxy[py * pw + x] = [0, 1, 2, 3].map(|c| (a[c] / a[4]) as f32);
+            let colour = |c: usize| if a[8] > 0.0 { a[5 + c] / a[8] } else { a[c] / a[4] };
+            proxy[py * pw + x] = [colour(0) as f32, colour(1) as f32, colour(2) as f32, (a[3] / a[4]) as f32];
         }
     }
     proxy
@@ -94,6 +103,19 @@ pub(super) fn preview_area(canvas: Rect, surf: &photocraft_raster::Surface) -> R
         return Err("RAW Develop preview bounds are too large".into());
     }
     Ok((area, w, h))
+}
+
+/// The canvas's blocks in the proxy of `area` (blocks of `k` pixels, `pw` × `ph`) as
+/// `[x0, y0, x1, y1]`, or `None` when the canvas is the whole proxy. Geometry develops only these,
+/// as the committed filter develops only the canvas.
+pub(super) fn canvas_in_proxy(canvas: Rect, area: Rect, k: usize, pw: usize, ph: usize) -> Option<[usize; 4]> {
+    let k = u64::try_from(k.max(1)).ok()?;
+    // Offsets into `area`, which holds the canvas: never negative.
+    let off = |c: i32, a: i32| u64::try_from(i64::from(c) - i64::from(a)).unwrap_or(0);
+    let lo = |c: i32, a: i32| usize::try_from(off(c, a) / k).ok();
+    let hi = |c: i32, a: i32, max: usize| usize::try_from(off(c, a).div_ceil(k)).ok().map(|v| v.min(max));
+    let f = [lo(canvas.x0, area.x0)?, lo(canvas.y0, area.y0)?, hi(canvas.x1, area.x0, pw)?, hi(canvas.y1, area.y0, ph)?];
+    (f[0] < f[2] && f[1] < f[3] && f != [0, 0, pw, ph]).then_some(f)
 }
 
 /// `area` of `surf` (`w`×`h`) box-averaged down to at most [`PROXY_SIDE`] pixels on its long side:
@@ -120,6 +142,10 @@ pub(super) fn open_pixels(
     let mut params = params;
     if params.encoding_gamma == 0.0 {
         params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
+    }
+    // The preview develops in the document's primaries, as the command does.
+    if params.document_primaries.is_none() {
+        params.document_primaries = photocraft_engine::lens_cmds::document_primaries(&st.doc);
     }
     let (area, w, h) = preview_area(canvas, &surf)?;
     let (proxy, pw, ph, k) = box_proxy(&surf, area, w, h);
@@ -153,6 +179,7 @@ pub(super) fn open_pixels(
         app.ui.camera_raw_scope.selected_region = false;
     }
     let float = surf.format().sample == photocraft_color::SampleType::F32;
+    let opaque = !surf.format().alpha || st.doc.is_background(layer);
     // Builds the GPU pass the first time any Camera Raw dialog opens.
     let gpu = crate::camera_raw_gpu::for_app(app);
     let mut d = CameraRawDialog {
@@ -186,7 +213,11 @@ pub(super) fn open_pixels(
                 Coverage::Mask(mask) => crate::camera_raw_detail_ui::Coverage::Mask(mask),
                 Coverage::None => crate::camera_raw_detail_ui::Coverage::None,
             },
-        ),
+        )
+        .with_canvas(canvas)
+        .with_opaque(opaque),
+        canvas_frame: canvas_in_proxy(canvas, area, k, pw, ph),
+        opaque,
         display,
         viewport: None,
         float,
@@ -210,6 +241,7 @@ pub(super) fn open_pixels(
         undo: Vec::new(),
         redo: Vec::new(),
         edit_origin: None,
+        upright_done: Default::default(),
         main_focused: false,
     };
     d.render(ctx);
@@ -261,6 +293,20 @@ mod box_average_tests {
                 assert!(g.iter().zip(w).all(|(a, b)| (a - b).abs() < 1e-5), "{area:?} k={k}: {g:?} vs {w:?}");
             }
         }
+    }
+
+    /// A block half opaque red and half transparent blue averages to red at half alpha: the
+    /// hidden colour doesn't tint it. A fully transparent block stays transparent.
+    #[test]
+    fn colour_is_averaged_by_alpha() {
+        let mut surf = Surface::new(PixelFormat::RGBA32F);
+        surf.fill_rect(Rect::new(0, 0, 1, 2), &[1.0, 0.0, 0.0, 1.0]);
+        surf.fill_rect(Rect::new(1, 0, 2, 2), &[0.0, 0.0, 1.0, 0.0]);
+        surf.fill_rect(Rect::new(2, 0, 4, 2), &[0.2, 0.6, 0.4, 0.0]);
+        let got = box_average(&surf, Rect::new(0, 0, 4, 2), 2);
+        assert_eq!(got.len(), 2);
+        assert!(got[0].iter().zip([1.0, 0.0, 0.0, 0.5]).all(|(a, b)| (a - b).abs() < 1e-6), "{:?}", got[0]);
+        assert!(got[1].iter().zip([0.2, 0.6, 0.4, 0.0]).all(|(a, b)| (a - b).abs() < 1e-6), "{:?}", got[1]);
     }
 
     /// Samples near f32::MAX stay finite: the weighted sums are held in f64.

@@ -72,7 +72,7 @@ camera colour tables were copied.
 
 | Format | Status |
 |---|---|
-| DNG | Uncompressed (8–16 bit, packed or not), Deflate (compression 8, predictors 1 and 2), lossless JPEG, lossy JPEG (DNG 1.4 compression 34892: 8-bit baseline JPEG tiles or strips, gray for CFA, YCbCr-coded RGB for LinearRaw; decoded by `zune-jpeg`, the stored 8-bit values then go through the same LinearizationTable / BlackLevel / WhiteLevel as every other depth) and JPEG XL (DNG 1.7, e.g. Samsung Expert RAW; decoded by `jxl-oxide`; not in wasm32 builds, where it is `Unsupported`); strips and tiles; CFA (Bayer) and LinearRaw (three-sample colour, or one-sample monochrome such as Leica Monochrom and film-scanner DNGs, developed as neutral grey with no white balance or colour matrix); LinearizationTable, BlackLevel (+ repeat, DeltaH/V), WhiteLevel, ActiveArea, DefaultCrop, ColorMatrix1/2, CameraCalibration, ForwardMatrix, AnalogBalance, AsShotNeutral / AsShotWhiteXY, BaselineExposure, Orientation, floating-point JPEG XL raw data (DNG 1.7 lossy LinearRaw, as Adobe DNG Converter writes it; scaled by the highest WhiteLevel), OpcodeList2 GainMap (lens shading) and MapPolynomial |
+| DNG | Uncompressed (8–16 bit, packed or not), Deflate (compression 8, predictors 1 and 2), lossless JPEG, lossy JPEG (DNG 1.4 compression 34892: 8-bit baseline JPEG tiles or strips, gray for CFA, YCbCr-coded RGB for LinearRaw; decoded by `zune-jpeg`, the stored 8-bit values then go through the same LinearizationTable / BlackLevel / WhiteLevel as every other depth) and JPEG XL (DNG 1.7, e.g. Samsung Expert RAW; decoded by `jxl-oxide`; not in wasm32 builds, where it is `Unsupported`); strips and tiles; CFA (Bayer) and LinearRaw (three-sample colour, or one-sample monochrome such as Leica Monochrom and film-scanner DNGs, developed as neutral grey with no white balance or colour matrix); LinearizationTable, BlackLevel (+ repeat, DeltaH/V), WhiteLevel, ActiveArea, DefaultCrop, ColorMatrix1/2, CameraCalibration, ForwardMatrix, the camera profile's ProfileToneCurve, ProfileHueSatMapData1/2 (interpolated by the white's temperature) and ProfileLookTableData with their encodings, AnalogBalance, AsShotNeutral / AsShotWhiteXY, BaselineExposure, Orientation, floating-point JPEG XL raw data (DNG 1.7 lossy LinearRaw, as Adobe DNG Converter writes it; scaled by the highest WhiteLevel), OpcodeList2 GainMap (lens shading) and MapPolynomial |
 | DNG (floating point other than JPEG XL; opcodes other than OpcodeList2 GainMap and MapPolynomial; ProfileGainTableMap) | Unsupported / not applied (reported) |
 | CR2 | Lossless JPEG with slices, borders and as-shot white balance from the maker note, black measured on the masked border. CR2 has no CFA tag and the row phase varies by model, so it is measured from the data (the green diagonal), with a Canon model-ID table as the fallback (see `src/cr2.rs`) |
 | CR2 sRAW / mRAW (subsampled YCbCr) | Decoded to camera RGB and developed like LinearRaw: Canon's subsampled lossless JPEG (Y 2×2 or 2×1), BT.601 inverse, bilinear chroma, the per-shot sRAW gains from ColorData (version 15: EOS 6D Mark II, 77D, 200D, 800D; other bodies warn and rely on the fitted camera look). See `src/sraw.rs` |
@@ -104,8 +104,9 @@ lossy-after-split strips are decoded (see the NEF row above). Four pinned CC0 Z6
    (X-Trans) always use the edge-directed generic method (`demosaic_cfa`).
 4. Camera → XYZ (D50) per the DNG specification (ColorMatrix interpolated by the white's
    correlated colour temperature, or ForwardMatrix), or a camera look fitted to the embedded JPEG,
-   → linear ProPhoto; exposure (BaselineExposure + user EV); the look's tone curve; gamma 1.8;
-   16 bits.
+   → linear ProPhoto; the DNG profile's hue / saturation map; exposure (BaselineExposure + user
+   EV); the profile's look table; the look's tone curve (or the DNG ProfileToneCurve, on linear
+   values); gamma 1.8; 16 bits.
 5. Orientation.
 
 Development validates public sensor/crop/CFA metadata before allocation. The working-memory
