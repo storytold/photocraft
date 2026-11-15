@@ -26,16 +26,23 @@ fn svg_diagnostic_keeps_short_input_and_byte_length() {
     for source in ["", "<svg/>\n", "<svg><!-- é界🙂 --></svg>", "\r\n\0"] {
         assert_eq!(svg_input_diagnostic(source), format!("SVG input ({} bytes): {source:?}", source.len()));
     }
+    for count in [255, 256] {
+        let source = "界".repeat(count);
+        assert_eq!(svg_input_diagnostic(&source), format!("SVG input ({} bytes): {source:?}", source.len()));
+    }
 }
 
 #[test]
 fn svg_diagnostic_bounds_large_ascii_utf8_and_control_inputs() {
-    for prefix in ["A".repeat(256), format!("{}🙂", "界".repeat(255)), "\0".repeat(256)] {
-        let source = format!("{prefix}{}", "DO_NOT_DUMP_TAIL".repeat(128_000));
-        let diagnostic = svg_input_diagnostic(&source);
-        assert_eq!(diagnostic, format!("SVG input ({} bytes): {prefix:?} [truncated]", source.len()));
-        assert!(diagnostic.len() < 4096, "{} diagnostic bytes", diagnostic.len());
-        assert!(!diagnostic.contains("DO_NOT_DUMP_TAIL"));
+    for prefix in ["A".repeat(256), format!("{}🙂", "界".repeat(255)), "\0".repeat(256), "\u{10ffff}".repeat(256)] {
+        for tail in ["Z".to_owned(), "DO_NOT_DUMP_TAIL".repeat(128_000)] {
+            let source = format!("{prefix}{tail}");
+            let diagnostic = svg_input_diagnostic(&source);
+            // Check the size before assert_eq! so a regressed cap cannot dump the whole fixture.
+            assert!(diagnostic.len() < 4096, "{} diagnostic bytes", diagnostic.len());
+            assert_eq!(diagnostic, format!("SVG input ({} bytes): {prefix:?} [truncated]", source.len()));
+            assert!(!diagnostic.contains("DO_NOT_DUMP_TAIL"));
+        }
     }
 }
 
@@ -54,7 +61,6 @@ fn failed_svg_import_keeps_the_error_and_fixture_context() {
     assert!(message.starts_with(&format!("{error}\n")), "{message}");
     assert!(message.contains(&svg_input_diagnostic(source)), "{message}");
 }
-
 fn px(doc: &photocraft_doc::Document, x: i32, y: i32) -> [f32; 4] {
     photocraft_compose::flatten(doc).get(x, y)
 }
