@@ -630,7 +630,7 @@ fn hdr_toning(s: &mut Session, p: &Value) -> Result<Value> {
     let h = HdrToning {
         radius: num(p, "radius", d.radius).clamp(1.0, 500.0),
         strength: num(p, "strength", d.strength).clamp(0.1, 4.0),
-        gamma: num(p, "gamma", d.gamma).clamp(0.1, 2.0),
+        gamma: num(p, "gamma", d.gamma).clamp(0.01, 9.99),
         exposure: num(p, "exposure", d.exposure).clamp(-5.0, 5.0),
         detail: num(p, "detail", d.detail).clamp(-100.0, 300.0),
         shadow: num(p, "shadow", d.shadow).clamp(-100.0, 100.0),
@@ -700,7 +700,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.adjustments.hdrToning",
             "HDR Toning…",
             ["Image", "Adjustments"],
-            r##"{"radius":1..500=30,"strength":0.1..4=0.5,"gamma":0.1..2=1,"exposure":-5..5=0,"detail":-100..300=30,"shadow":-100..100=0,"highlight":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=20,"curve":[[in,out],…] 0..255} (flattens the image)"##,
+            r##"{"radius":1..500=7.68,"strength":0.1..4=0.5296,"gamma":0.01..9.99=1,"exposure":-5..5=0,"detail":-100..300=30,"shadow":-100..100=0,"highlight":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=20,"curve":[[in,out],…] 0..255} (flattens the image)"##,
             has_doc,
             hdr_toning
         ),
@@ -853,3 +853,6 @@ fn black_white_auto(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hdr_toning_defaults_tests;

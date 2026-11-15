@@ -795,6 +795,76 @@ fn global_light_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, 
     }
 }
 
+const HDR_TONING_COMMAND: &str = "image.adjustments.hdrToning";
+const HDR_TONING_WHOLE: [&str; 6] = ["radius", "detail", "shadow", "highlight", "vibrance", "saturation"];
+
+fn hdr_toning_alert(places: usize, lo: f32, hi: f32) -> String {
+    let (a, b) = (crate::canvas::zoom_field::localize(format!("{lo:.places$}")), crate::canvas::zoom_field::localize(format!("{hi:.places$}")));
+    let template = if places == 0 {
+        tl!("An integer between {min} and {max} is required. Closest value inserted.")
+    } else {
+        tl!("A number between {min} and {max} is required. Closest value inserted.")
+    };
+    crate::i18n::fmt(template, &[("min", a.as_str()), ("max", b.as_str())])
+}
+
+/// HDR Toning's row for `key` (#14720): whole numbers in Radius, Detail, Shadow, Highlight,
+/// Vibrance and Saturation and two decimals in the rest, with the reference application's alert
+/// for a typed value past the range. The opened value (the factory Radius 7.68) is kept until the
+/// user enters a different number, clamped into the range.
+fn hdr_toning_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, src: Option<f64>, range: std::ops::RangeInclusive<f32>, default: f32) {
+    let mut v = src.map_or(default, |x| x as f32);
+    let t = Tokens::get(ui.ctx());
+    let places = if HDR_TONING_WHOLE.contains(&key) { 0 } else { 2 };
+    let unit = if is_pixel_param_of(HDR_TONING_COMMAND, key) { "px" } else { "" };
+    let name = label(key);
+    let (lo, hi) = (*range.start(), *range.end());
+    let (caption, (field, alert)) = ui
+        .horizontal(|ui| {
+            let l = ui.label(egui::RichText::new(&name).color(t.text_dim));
+            crate::widgets::scrub_label_within(ui, &l, f32::INFINITY);
+            let field = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                crate::widgets::value_field_alerting_exact(ui, &name, &mut v, range.clone(), unit, 74.0, places as u32)
+            });
+            (l.id, field.inner)
+        })
+        .inner;
+    // Log or linear as the generic row picks for the range: Gamma's 0.01..9.99 is log.
+    let mut slid = v;
+    let slider = if uses_logarithmic_slider(lo, hi) {
+        let mut lv = slid.clamp(lo, hi).ln();
+        let r = crate::widgets::slider(ui, &mut lv, lo.ln()..=hi.ln(), None);
+        slid = lv.exp();
+        r
+    } else {
+        crate::widgets::slider(ui, &mut slid, range, None)
+    };
+    slider.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(slid), &name));
+    let slider = slider.labelled_by(caption);
+    let reset = crate::widgets::second_click(ui, &slider);
+    ui.add_space(4.0);
+    if alert {
+        f.insert("__rangeAlert".into(), json!(hdr_toning_alert(places, lo, hi)));
+    }
+    let scale = 10f64.powi(places as i32);
+    // An entered limit such as 9.99 is past f64::from(9.99f32): the clamp keeps it inside the
+    // spec's f32 range, which `remember` checks.
+    // `+ 0.0` turns a -0.0 (Exposure -0.004) into 0.
+    let entered = |x: f32| ((f64::from(x) * scale).round() / scale).clamp(f64::from(lo), f64::from(hi)) + 0.0;
+    // The factory value opens as its widened f32 (7.679999828…): send it as the spec gives it.
+    let spec = |x: f64| if x as f32 == default { (x * 1e4).round() / 1e4 } else { x };
+    let w = if reset {
+        spec(f64::from(default))
+    } else if slider.changed() {
+        entered(slid)
+    } else if field.changed() || alert {
+        entered(v)
+    } else {
+        spec(src.map_or(f64::from(default), |x| x.clamp(f64::from(lo), f64::from(hi))))
+    };
+    f.insert(key.to_string(), json!(w));
+}
+
 /// Proof Setup reflects the active document's current proofing condition, never remembered values.
 fn proof_setup_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     let Some(st) = app.session.active() else { return };
@@ -1253,6 +1323,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 if cmd == "layer.layerStyle.globalLight" {
                     global_light_field(ui, f, &p.key, &mut v, min..=max);
                     f.insert(p.key, json!(v.round()));
+                    continue;
+                }
+                if cmd == HDR_TONING_COMMAND {
+                    hdr_toning_row(ui, f, &p.key, src, min..=max, default);
                     continue;
                 }
                 // Replace Color's Range only applies with Localized Color Clusters on, as in Photoshop.
@@ -1846,6 +1920,9 @@ impl FilterPreviewKey {
 
 #[cfg(test)]
 mod global_light_angle_range_tests;
+
+#[cfg(test)]
+mod hdr_toning_range_tests;
 #[cfg(test)]
 mod tests;
 
