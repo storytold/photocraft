@@ -28,6 +28,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod satin_last_values_tests;
 
 #[derive(Clone, Copy)]
 enum P {
@@ -70,6 +72,8 @@ const MULTI: &[&str] = &["stroke", "dropShadow", "innerShadow", "colorOverlay", 
 
 /// Field holding the user defaults (Make Default) that new instances start from.
 const USER_DEFAULTS: &str = "userDefaults";
+/// Settings last confirmed with OK in this launch, kept apart from Make Default.
+const LAST_PARAMS: &str = "lastEffectParams";
 
 fn multi(kind: &str) -> bool {
     MULTI.contains(&kind)
@@ -87,11 +91,10 @@ fn defaults(kind: &str) -> Value {
     p
 }
 
-/// Params for a new instance: the user default saved by Make Default over the factory
-/// defaults (#9477), with the shared light angle filled in.
-fn fresh_params(kind: &str, light: f32, user: Option<&Value>) -> Value {
+/// Apply last-used or saved defaults over the factory values, then fill in the shared light angle.
+fn fresh_params(kind: &str, light: f32, overrides: Option<&Value>) -> Value {
     let mut p = defaults(kind);
-    if let (Some(o), Some(u)) = (p.as_object_mut(), user.and_then(Value::as_object)) {
+    if let (Some(o), Some(u)) = (p.as_object_mut(), overrides.and_then(Value::as_object)) {
         for (k, v) in u {
             o.insert(k.clone(), v.clone());
         }
@@ -472,8 +475,8 @@ fn next_id(f: &Map<String, Value>) -> String {
 fn add_instance(f: &mut Map<String, Value>, kind: &str) {
     let light = f.get("pendingGlobalLight").or_else(|| f.get("globalLight")).and_then(Value::as_f64).unwrap_or(120.0) as f32;
     let id = next_id(f);
-    let user = f.get(USER_DEFAULTS).and_then(|d| d.get(kind));
-    let new = json!({"id": id, "kind": kind, "on": true, "params": fresh_params(kind, light, user)});
+    let starting_params = f.get(LAST_PARAMS).and_then(|d| d.get(kind)).or_else(|| f.get(USER_DEFAULTS).and_then(|d| d.get(kind)));
+    let new = json!({"id": id, "kind": kind, "on": true, "params": fresh_params(kind, light, starting_params)});
     if let Some(a) = f.get_mut("effects").and_then(Value::as_array_mut) {
         let pos = a.iter().rposition(|e| e.get("kind").and_then(Value::as_str) == Some(kind)).map_or(a.len(), |i| i + 1);
         a.insert(pos, new);
@@ -618,8 +621,21 @@ pub fn initial_fields(layer: &Layer, select: Option<&str>, light: f32) -> Map<St
 
 /// The dialog's fields, with the user defaults (`kind` → params) new instances start from.
 pub fn initial_fields_with(layer: &Layer, select: Option<&str>, light: f32, user_defaults: Map<String, Value>) -> Map<String, Value> {
+    fields_with_defaults(layer, select, light, user_defaults, &Map::new())
+}
+
+fn fields_with_defaults(
+    layer: &Layer,
+    select: Option<&str>,
+    light: f32,
+    user_defaults: Map<String, Value>,
+    last_params: &Map<String, Value>,
+) -> Map<String, Value> {
     let mut f = Map::new();
     f.insert(USER_DEFAULTS.into(), Value::Object(user_defaults));
+    if !last_params.is_empty() {
+        f.insert(LAST_PARAMS.into(), Value::Object(last_params.clone()));
+    }
     f.insert("layer".into(), json!(layer.id.0));
     f.insert("globalLight".into(), json!(light));
     f.insert("preview".into(), json!(true));
@@ -676,7 +692,7 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<u64> {
     let light = st.doc.global_light.angle;
     let mode = st.doc.mode;
     let user = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let mut f = initial_fields_with(&layer, select, light, user);
+    let mut f = fields_with_defaults(&layer, select, light, user, &app.ui.last_layer_style_params);
     // Channels and Blend If list the document's own colour channels.
     set_blending_fields(&mut f, &layer, mode);
     f.insert("__document".into(), json!(st.doc.id));
@@ -709,7 +725,31 @@ pub fn pattern_list(app: &PhotocraftApp) -> Value {
 
 /// Apply the dialog: replace the layer's effects with the dialog's instances.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    apply(f, |id, p| app.run(id, p))
+    let result = apply(f, |id, p| app.run(id, p))?;
+    if let Some(params) = confirmed_satin(app, f) {
+        app.ui.last_layer_style_params.insert("satin".into(), params);
+    }
+    Ok(result)
+}
+
+/// Use the applied values, so rejected edits and untouched Satins on other pages cannot seed a new one.
+fn confirmed_satin(app: &PhotocraftApp, f: &Map<String, Value>) -> Option<Value> {
+    let id = photocraft_doc::LayerId(f.get("layer")?.as_u64()?);
+    let effects = &app.session.active()?.doc.layer(id)?.effects.items;
+    submitted_effects(f)
+        .zip(effects)
+        .filter(|(_, fx)| matches!(fx, Effect::Satin(s) if s.common.enabled))
+        .filter_map(|((_, id, entry), fx)| {
+            let selected = f.get("selected").and_then(Value::as_str) == Some(id);
+            let params = values_of(fx, 0.0);
+            let unchanged = entry
+                .get("fx")
+                .and_then(|snapshot| serde_json::from_value::<Effect>(snapshot.clone()).ok())
+                .is_some_and(|before| values_of(&before, 0.0) == params);
+            (selected || !unchanged).then_some((selected, params))
+        })
+        .max_by_key(|(selected, _)| *selected)
+        .map(|(_, params)| params)
 }
 
 /// Every parameter group is edited as an object. Validate before preview or confirmation so
@@ -786,6 +826,11 @@ fn find_light_angle(f: &Map<String, Value>, initial_light_angle: Option<f64>) ->
     light_angle
 }
 
+/// Well-formed entries in the order they are submitted to the engine.
+fn submitted_effects(f: &Map<String, Value>) -> impl Iterator<Item = (&str, &str, &Value)> {
+    effects_of(f).iter().filter_map(|e| Some((e.get("kind")?.as_str()?, e.get("id")?.as_str()?, e)))
+}
+
 /// Runs the dialog's commands through `run`: blending options, then the whole
 /// effect list in one `layer.layerStyle.replace` (instances keep their order;
 /// their snapshots carry what the dialog doesn't model).
@@ -802,8 +847,7 @@ fn apply(f: &Map<String, Value>, mut run: impl FnMut(&str, Value) -> Result<Valu
         run("layer.layerStyle.blendingOptions", p)?;
     }
     let mut entries = Vec::new();
-    for e in effects_of(f) {
-        let (Some(kind), Some(_)) = (e.get("kind").and_then(Value::as_str), e.get("id").and_then(Value::as_str)) else { continue };
+    for (kind, _, e) in submitted_effects(f) {
         let on = e.get("on").and_then(Value::as_bool).unwrap_or(true);
         let mut params = e.get("params").cloned().unwrap_or_else(|| json!({}));
         params["enabled"] = json!(on);

@@ -504,6 +504,9 @@ pub struct UiState {
     /// Views per open document (index-aligned with the session's documents).
     pub views: Vec<View>,
     pub dialogs: Vec<Dialog>,
+    /// Effect settings last confirmed in Layer Style during this launch, by effect kind.
+    #[serde(skip)]
+    pub(crate) last_layer_style_params: serde_json::Map<String, serde_json::Value>,
     pub windows: Vec<DocWindow>,
     pub theme: crate::theme::ThemeKind,
     pub workspace: String,
@@ -694,6 +697,7 @@ impl Default for UiState {
             panels: Panels::default(),
             views: Vec::new(),
             dialogs: Vec::new(),
+            last_layer_style_params: Default::default(),
             windows: Vec::new(),
             theme: crate::theme::ThemeKind::ProMedium,
             workspace: "Essentials".into(),
