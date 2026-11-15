@@ -42,6 +42,25 @@ fn a_corner_keeps_both_arcs_depth_in_pixels() {
     assert_eq!(v[6], 0.9, "the wrap stays");
 }
 
+/// CodeRabbit on #15020: pixels are kept only while the depth fits the half axis. A corner dragged
+/// 200 px in on a 400 px cylinder leaves a 100 px half axis; the lower arc (0.6975 of 200 px =
+/// 139.5 px) would need 1.395 and stops at the half axis, 100 px, as the Bend and Bottom handles
+/// do. The reference was measured only with arcs inside the half axis.
+#[test]
+fn a_corner_keeps_pixel_depth_only_up_to_the_half_axis() {
+    let v0 = [200.0, 450.0, 600.0, 150.0, 0.5, 0.6975, 0.9];
+    let v = cylinder_dragged(v0, CylinderHandle::Corner(1), [-200.0, 0.0]);
+    assert_eq!([v[0], v[2]], [200.0, 400.0], "half axis 100 px");
+    assert_eq!(v[5], 1.0, "the lower arc stops at the half axis (100 px), not 1.395: {v:?}");
+    assert!(close(v[4], 1.0, 1e-9), "the upper arc (100 px of 200) reaches exactly the half axis: {v:?}");
+    // A shrink that still fits keeps the pixels: 60 px in leaves a 170 px half axis.
+    let w = cylinder_dragged(v0, CylinderHandle::Corner(1), [-60.0, 0.0]);
+    assert!(close(w[5] * 170.0, 0.6975 * 200.0, 1e-9) && close(w[4] * 170.0, 0.5 * 200.0, 1e-9), "{w:?}");
+    // A depth a file put past the half axis is kept as it was, not pulled in.
+    let past = cylinder_dragged([200.0, 450.0, 600.0, 150.0, 1.4, 0.5, 0.9], CylinderHandle::Corner(1), [-20.0, 0.0]);
+    assert!(close(past[4], 1.4, 1e-9), "its own reach: {past:?}");
+}
+
 #[test]
 fn a_drag_inside_moves_the_whole_cylinder_with_its_values() {
     let v0 = cylinder_values(&cylinder_default(BOX).unwrap()).unwrap();

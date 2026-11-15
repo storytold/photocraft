@@ -10,7 +10,9 @@
 //! as compared on #9798. The wrapped picture is outlined and cut into a 3 × 2 grid: two
 //! horizontal curves and the vertical centre line, which the bend and wrap handles work from.
 //! Squares at the top-right and the bottom-left corner each move their silhouette and edge
-//! (the opposite corner stays put), and both arcs keep their depth in pixels (#12513). The handle
+//! (the opposite corner stays put), and both arcs keep their depth in pixels (#12513) as long as it
+//! fits the half axis: an arc is never dragged deeper than that (the reference was measured only
+//! inside it), so a corner pulled far in stops the arcs at the half axis. The handle
 //! in the middle of the upper arc sets the bend of both arcs (and so its own height); the one in
 //! the middle of the lower arc sets the lower arc's depth alone (#12513). The handle at the centre of the grid slides to the right, stretching the
 //! middle of the picture and squeezing its sides further round the back (the wrap). A drag
@@ -175,7 +177,9 @@ pub(super) fn cylinder_dragged(v0: [f64; 7], handle: CylinderHandle, d: [f64; 2]
         }
     }
     // A corner keeps both arcs' depth in document pixels (#12513): in half-axis units each depth
-    // grows as the half axis shrinks (200 → 189.75 px takes 0.5 to 0.527).
+    // grows as the half axis shrinks (200 → 189.75 px takes 0.5 to 0.527). Only up to the half axis
+    // ([`DEPTH_LIMIT`]), as for the other handles: a cylinder shrunk to half its width stops its
+    // arcs at 1.0 rather than keeping their pixels (not measured past that).
     if matches!(handle, CylinderHandle::Corner(_)) {
         let a1 = ((v[2] - v[0]) / 2.0).max(MIN_SIDE / 2.0);
         let k = a / a1;
