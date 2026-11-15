@@ -1,11 +1,11 @@
-//! Render: Clouds, Difference Clouds, Fibers, Lens Flare, Lighting Effects.
+//! Render: Clouds, Difference Clouds, Fibers, Lighting Effects (Lens Flare: `lens_flare.rs`).
 
 use photocraft_geom::Rect;
 
 use crate::fxutil::{MAXC, luma, rgba, set_rgba, smoothstep, xy};
 use crate::image::Image;
 use crate::noise::hash01;
-use crate::{Ctx, LensType, Light, LightKind, TextureChannel};
+use crate::{Ctx, Light, LightKind, TextureChannel};
 
 /// Smooth value noise in [0, 1).
 fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
@@ -42,9 +42,17 @@ fn clouds_value(x: f32, y: f32, base: f32, seed: u32) -> f32 {
         amp *= 0.5;
         freq *= 2.0;
     }
-    // Stretch the bell-shaped sum so the clouds use the full foreground→background range.
-    ((sum / norm - 0.5) * 2.2 + 0.5).clamp(0.0, 1.0)
+    // Stretch the bell-shaped sum around mid-grey so the clouds use most of the
+    // foreground→background range. A straight stretch clamped at 0 and 1 flattened its tails
+    // into pure foreground and background (#9959); this S-curve, x/√(1+x²) scaled so it meets
+    // 0 and 1 only where the sum does (at ±h it is ±h/CLOUD_CONTRAST), compresses them instead.
+    let h = (CLOUD_CONTRAST * CLOUD_CONTRAST - 1.0).sqrt();
+    let d = (sum / norm - 0.5) * 2.0 * h;
+    (0.5 + 0.5 * CLOUD_CONTRAST / h * d / (1.0 + d * d).sqrt()).clamp(0.0, 1.0)
 }
+
+/// The clouds' contrast at mid-grey: the slope of the octave sum's stretch there.
+const CLOUD_CONTRAST: f32 = 2.2;
 
 /// Clouds between the foreground and background colours; Difference Clouds subtracts them from
 /// the pixels (alpha kept). The cloud size is a quarter of the bounds' longer side, and the
@@ -101,107 +109,6 @@ pub(crate) fn fibers(src: &Image, out: Rect, ctx: &Ctx, variance: f32, strength:
         let grain = value_noise(xf * 0.9, yf * fy * 0.25, seed ^ 0x5bd1) - 0.5;
         let t = ((sum / norm - 0.5) * (1.6 + var / 40.0) + 0.5 + grain * 0.25).clamp(0.0, 1.0);
         let c = [fg[0] + (bg[0] - fg[0]) * t, fg[1] + (bg[1] - fg[1]) * t, fg[2] + (bg[2] - fg[2]) * t, 1.0];
-        set_rgba(ctx, px, c);
-    }
-    res
-}
-
-/// One lens-flare ghost: position along the flare→centre axis, radius and tint.
-struct Ghost {
-    t: f32,
-    r: f32,
-    tint: [f32; 3],
-    k: f32,
-}
-
-/// Lens Flare: an additive (screen) glow, rays, halo ring and ghost discs
-/// along the line through the image centre. Lens types vary the elements.
-pub(crate) fn lens_flare(src: &Image, out: Rect, ctx: &Ctx, brightness: f32, centre: (f32, f32), lens: LensType) -> Vec<f32> {
-    let n = src.ch;
-    let b = ctx.bounds;
-    let (bw, bh) = (b.width() as f32, b.height() as f32);
-    let diag = bw.hypot(bh).max(1.0);
-    let (cx, cy) = (b.x0 as f32 + centre.0 * bw, b.y0 as f32 + centre.1 * bh);
-    let (mx, my) = (b.x0 as f32 + bw / 2.0, b.y0 as f32 + bh / 2.0);
-    let bright = brightness.clamp(10.0, 300.0) / 100.0;
-    let s = diag / 1000.0;
-    let (core, glow, ring_r, ring_w, rays, streak) = match lens {
-        LensType::Zoom => (14.0, 90.0, 0.0, 0.0, 0.5, 0.0),
-        LensType::Prime35 => (12.0, 70.0, 90.0, 6.0, 0.3, 0.0),
-        LensType::Prime105 => (22.0, 130.0, 0.0, 0.0, 0.8, 0.0),
-        LensType::MoviePrime => (10.0, 60.0, 0.0, 0.0, 0.2, 1.0),
-    };
-    let ghosts: Vec<Ghost> = match lens {
-        LensType::Zoom => vec![
-            Ghost { t: 0.35, r: 10.0, tint: [0.6, 0.8, 1.0], k: 0.18 },
-            Ghost { t: 0.6, r: 26.0, tint: [0.5, 1.0, 0.6], k: 0.10 },
-            Ghost { t: 0.85, r: 6.0, tint: [1.0, 0.7, 0.4], k: 0.25 },
-            Ghost { t: 1.25, r: 40.0, tint: [0.7, 0.5, 1.0], k: 0.08 },
-            Ghost { t: 1.5, r: 16.0, tint: [1.0, 0.6, 0.5], k: 0.15 },
-            Ghost { t: 1.9, r: 70.0, tint: [0.5, 0.7, 1.0], k: 0.06 },
-        ],
-        LensType::Prime35 => vec![Ghost { t: 0.7, r: 18.0, tint: [0.6, 1.0, 0.7], k: 0.12 }, Ghost { t: 1.4, r: 30.0, tint: [1.0, 0.7, 0.5], k: 0.09 }],
-        LensType::Prime105 => vec![Ghost { t: 0.5, r: 14.0, tint: [1.0, 0.8, 0.5], k: 0.12 }, Ghost { t: 1.6, r: 50.0, tint: [0.6, 0.7, 1.0], k: 0.07 }],
-        LensType::MoviePrime => vec![
-            Ghost { t: 0.4, r: 8.0, tint: [0.5, 0.7, 1.0], k: 0.2 },
-            Ghost { t: 1.0, r: 20.0, tint: [0.4, 0.6, 1.0], k: 0.12 },
-            Ghost { t: 1.6, r: 12.0, tint: [0.5, 0.8, 1.0], k: 0.16 },
-        ],
-    };
-    let mut res = src.crop(out);
-    for (i, px) in res.chunks_exact_mut(n).enumerate() {
-        let (x, y) = xy(out, i);
-        let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-        let (dx, dy) = (fx - cx, fy - cy);
-        let d = (dx * dx + dy * dy).sqrt();
-        let mut f = [0.0f32; 3];
-        // Hot core and wide glow (warm white).
-        let g = (-(d / (core * s)).powi(2)).exp() + 0.35 * (-d / (glow * s)).exp();
-        for (k, w) in [1.0, 0.95, 0.85].iter().enumerate() {
-            f[k] += g * w;
-        }
-        // Rays: angular modulation decaying with distance.
-        if rays > 0.0 {
-            let th = dy.atan2(dx);
-            let m = ((th * 12.0).sin() * 0.5 + 0.5).powi(8) + ((th * 7.0 + 1.3).sin() * 0.5 + 0.5).powi(12) * 0.6;
-            let rr = rays * m * (-d / (glow * 1.6 * s)).exp();
-            for v in f.iter_mut() {
-                *v += rr * 0.6;
-            }
-        }
-        // Anamorphic horizontal streak (movie prime).
-        if streak > 0.0 {
-            let st = (-(dy.abs() / (2.5 * s))).exp() * (-(dx.abs() / (450.0 * s))).exp();
-            f[0] += st * 0.5;
-            f[1] += st * 0.7;
-            f[2] += st;
-        }
-        // Halo ring with a slight chromatic spread.
-        if ring_r > 0.0 {
-            for (k, off) in [1.04f32, 1.0, 0.96].iter().enumerate() {
-                let rd = (d - ring_r * s * off) / (ring_w * s);
-                f[k] += 0.18 * (-rd * rd).exp();
-            }
-        }
-        // Ghosts along the axis through the centre.
-        for gh in &ghosts {
-            let (gx, gy) = (cx + (mx - cx) * gh.t * 2.0, cy + (my - cy) * gh.t * 2.0);
-            let gd = ((fx - gx).powi(2) + (fy - gy).powi(2)).sqrt() / (gh.r * s);
-            if gd < 1.2 {
-                // Soft-edged disc, slightly brighter at the rim.
-                let e = smoothstep(1.0, 0.85, gd) * (0.6 + 0.4 * gd);
-                for (fk, t) in f.iter_mut().zip(gh.tint) {
-                    *fk += e * gh.k * t;
-                }
-            }
-        }
-        let mut c = rgba(ctx, px);
-        for k in 0..3 {
-            let a = (f[k] * bright).max(0.0);
-            // Screen (c + a·(1 − c)) keeps display-referred values below white; a 32-bit
-            // value already above white is left as is rather than pulled down towards it.
-            c[k] += a.min(1.0) * (1.0 - c[k]).max(0.0);
-        }
         set_rgba(ctx, px, c);
     }
     res
@@ -328,4 +235,102 @@ pub(crate) fn lighting(src: &Image, out: Rect, ctx: &Ctx, spec: &LightingSpec) -
         set_rgba(ctx, px, c);
     }
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{FilterParams, apply, output_area};
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    const WHITE: [f32; 4] = [1.0; 4];
+
+    /// Clouds (or Difference Clouds over `under`) on a `w`×`h` canvas, as the stored pixels.
+    fn render(fmt: PixelFormat, w: i32, h: i32, seed: u32, colours: ([f32; 4], [f32; 4]), under: Option<&[f32]>) -> Vec<f32> {
+        let r = Rect::new(0, 0, w, h);
+        let mut s = Surface::new(fmt);
+        if let Some(px) = under {
+            s.fill_rect(r, px);
+        }
+        let p = FilterParams::Clouds { seed, difference: under.is_some(), foreground: colours.0, background: colours.1 };
+        apply(&s, &p, output_area(&p, s.content_bounds(), r, None), r, None).read_region(r)
+    }
+
+    fn top_level(depth: SampleType) -> f32 {
+        if depth == SampleType::U8 { 255.0 } else { 65535.0 }
+    }
+
+    /// Clouds' histogram is a bell around mid-grey that spans most of the levels without piling
+    /// up at either end: a straight stretch clamped at 0 and 1 put 1–4 % of a 512×512 render on
+    /// each end (#9959).
+    #[test]
+    fn clouds_span_the_levels_without_clipping() {
+        for depth in [SampleType::U8, SampleType::U16] {
+            let top = top_level(depth);
+            for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+                let fmt = PixelFormat::new(mode, depth, true);
+                for (w, h) in [(512, 512), (900, 240), (2400, 1200)] {
+                    for seed in [0, 3, 7, 18916] {
+                        let px = render(fmt, w, h, seed, (BLACK, WHITE), None);
+                        let v: Vec<f32> = px.chunks_exact(fmt.channels()).map(|p| p[0]).collect();
+                        let n = v.len() as f32;
+                        let at = |level: f32| v.iter().filter(|&&t| (t * top).round() == level).count() as f32 / n;
+                        let case = format!("{mode:?} {depth:?} {w}×{h} seed {seed}");
+                        assert!(at(0.0) < 1e-4 && at(top) < 1e-4, "{case}: clipped {} black, {} white", at(0.0), at(top));
+                        let (lo, hi) = v.iter().fold((1.0f32, 0.0f32), |(a, b), &t| (a.min(t), b.max(t)));
+                        assert!(hi - lo > 0.7, "{case}: spans only {lo}..{hi}");
+                        // Only a few big cells on a long, thin canvas, so its mean wanders more.
+                        let mean = v.iter().sum::<f32>() / n;
+                        assert!((0.35..0.65).contains(&mean), "{case}: mean {mean}");
+                        // A flat histogram would put a quarter of the pixels in the outer eighths.
+                        let outer = v.iter().filter(|t| !(0.125..0.875).contains(*t)).count() as f32 / n;
+                        assert!(outer < 0.12, "{case}: {outer} in the outer eighths");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Clouds blend between any two colours without reaching either: no channel sits on the
+    /// foreground's or background's level, and every channel stays between them.
+    #[test]
+    fn clouds_stay_strictly_between_any_two_colours() {
+        let (fg, bg) = ([0.85, 0.2, 0.1, 1.0], [0.1, 0.55, 0.9, 1.0]);
+        for depth in [SampleType::U8, SampleType::U16] {
+            let top = top_level(depth);
+            let fmt = PixelFormat::new(ColorMode::Rgb, depth, true);
+            for seed in [3, 18916] {
+                let data = render(fmt, 512, 512, seed, (fg, bg), None);
+                let px = data.as_chunks::<4>().0;
+                let n = px.len() as f32;
+                for k in 0..3 {
+                    let ends = [(fg[k] * top).round(), (bg[k] * top).round()];
+                    let on_end = px.iter().filter(|p| ends.contains(&(p[k] * top).round())).count() as f32 / n;
+                    assert!(on_end < 1e-4, "{depth:?} seed {seed} channel {k}: {on_end} on a colour's level");
+                    let (lo, hi) = (fg[k].min(bg[k]) - 0.5 / top, fg[k].max(bg[k]) + 0.5 / top);
+                    assert!(px.iter().all(|p| (lo..=hi).contains(&p[k])), "{depth:?} seed {seed} channel {k} left the colours");
+                }
+            }
+        }
+    }
+
+    /// Difference Clouds shares the clouds: over white with black and white they are the clouds
+    /// inverted, so they don't clip either.
+    #[test]
+    fn difference_clouds_over_white_are_the_clouds_inverted() {
+        for depth in [SampleType::U8, SampleType::U16] {
+            let top = top_level(depth);
+            let fmt = PixelFormat::new(ColorMode::Rgb, depth, true);
+            let clouds = render(fmt, 300, 200, 5, (BLACK, WHITE), None);
+            let diff = render(fmt, 300, 200, 5, (BLACK, WHITE), Some(&WHITE));
+            let (clouds, diff) = (clouds.as_chunks::<4>().0, diff.as_chunks::<4>().0);
+            for (c, d) in clouds.iter().zip(diff) {
+                assert!((c[0] + d[0] - 1.0).abs() <= 1.0 / top, "{depth:?}: {} + {} ≠ 1", c[0], d[0]);
+                assert_eq!(d[3], 1.0);
+            }
+            assert!(diff.iter().all(|p| (p[0] * top).round() != 0.0 && (p[0] * top).round() != top), "{depth:?}: clipped");
+        }
+    }
 }

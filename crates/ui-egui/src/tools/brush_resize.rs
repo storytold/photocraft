@@ -19,8 +19,12 @@ use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
 use crate::state::Tool;
 
-/// Screen points of vertical drag that take the hardness from 0 % to 100 %.
-pub const HARDNESS_TRAVEL: f32 = 200.0;
+/// Screen points of vertical drag that take the hardness from 0 % to 100 %: Photoshop's rate,
+/// where 50 points down from 0 % give 13 % (#11891).
+pub const HARDNESS_TRAVEL: f32 = 385.0;
+/// Screen points of vertical drag that take the opacity from 0 % to 100 % when "Vary Round Brush
+/// Hardness on HUD" is off: the rate it had before the hardness rate was measured (#11891).
+pub const OPACITY_TRAVEL: f32 = 200.0;
 /// The brush size range (`tools.setBrush` accepts the same).
 const SIZE: std::ops::RangeInclusive<f32> = 1.0..=MAX_BRUSH_SIZE;
 
@@ -49,9 +53,10 @@ pub fn is_gesture(mods: egui::Modifiers) -> bool {
 }
 
 /// Alt (Option) with the right button: Photoshop's Windows gesture (#297). The left button with
-/// Alt alone stays the painting tools' eyedropper.
+/// Alt alone stays the painting tools' eyedropper. Shift+Alt+right is Photoshop's HUD Color
+/// Picker (#6098), so Shift disqualifies the resize gesture.
 pub fn is_right_gesture(mods: egui::Modifiers) -> bool {
-    mods.alt
+    mods.alt && !mods.shift
 }
 
 /// The diameter and hardness a drag from `start` by (`dx`, `dy`) document pixels gives at `zoom`.
@@ -121,10 +126,11 @@ fn update(app: &mut PhotocraftApp, r: Resize, x: f64, y: f64) {
         // No view: document axes, mirrored by View › Flip Horizontal.
         _ => ((x - r.anchor[0]) * if app.ui.view.flip_horizontal { -1.0 } else { 1.0 }, y - r.anchor[1], app.point_zoom()),
     };
-    let (size, v) = resized(r.start, dx, dy, zoom);
     // "Vary Round Brush Hardness on HUD" (Preferences ▸ Tools, on by default): off, the vertical
-    // movement takes the opacity instead of the hardness, as in Photoshop.
+    // movement takes the opacity instead of the hardness, as in Photoshop, at its own rate.
     let vary = app.session.prefs().tools.vary_round_brush_hardness_on_hud;
+    let dy = if vary { dy } else { dy * f64::from(HARDNESS_TRAVEL / OPACITY_TRAVEL) };
+    let (size, v) = resized(r.start, dx, dy, zoom);
     let b = &app.session.tools.brush;
     if b.size == size && if vary { b.hardness == v } else { b.opacity == v } {
         return;
@@ -150,13 +156,20 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) -> boo
     // Photoshop hides the pointer while the circle stays put.
     painter.ctx().set_cursor_icon(egui::CursorIcon::None);
     let at = painter.ctx().pointer_latest_pos().unwrap_or(c);
-    let (label, value) = if app.session.prefs().tools.vary_round_brush_hardness_on_hud {
-        (tl!("Hardness:"), format!("{}%", (b.hardness * 100.0).round() as i64))
-    } else {
-        (tl!("Opacity:"), format!("{}%", (b.opacity * 100.0).round() as i64))
-    };
-    crate::canvas::draw_readout(painter.ctx(), "brush-resize-readout", at, [tl!("Diameter:"), label], [format!("{} px", b.size.round() as i64), value]);
+    let percent = |v: f32| format!("{}%", (v * 100.0).round() as i64);
+    let labels = [readout_label(tl!("Diameter:")), readout_label(tl!("Hardness:")), readout_label(tl!("Opacity:"))];
+    let values = [format!("{} px", b.size.round() as i64), percent(b.hardness), percent(b.opacity)];
+    crate::canvas::draw_readout(painter.ctx(), "brush-resize-readout", at, labels.each_ref().map(String::as_str), values);
     true
+}
+
+/// A readout label as Photoshop's HUD shows it, with a space before the colon ("Diameter :",
+/// #11891). A translation that already has one keeps it.
+pub(crate) fn readout_label(label: &str) -> String {
+    match label.strip_suffix(':') {
+        Some(head) if !head.ends_with(char::is_whitespace) => format!("{head} :"),
+        _ => label.to_owned(),
+    }
 }
 
 /// The tip preview's tint: Preferences ▸ Cursors ▸ Brush Preview colour (red by default, as in
@@ -166,6 +179,37 @@ fn preview_tint(app: &PhotocraftApp) -> Color32 {
     crate::color_picker_ui::parse_hex(&app.session.prefs().cursors.brush_preview_color).map_or(Color32::from_rgba_unmultiplied(255, 0, 0, alpha), |c| {
         Color32::from_rgba_unmultiplied((c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8, alpha)
     })
+}
+
+/// Liquify density preview, kept separate from the paint engine's hardness falloff.
+/// A round tip of `radius` screen points: solid out to `hardness` of the radius, fading to clear
+/// at the edge. One mesh (two rings and a centre), so its cost doesn't grow with the brush.
+pub(crate) fn liquify_tip_preview(painter: &egui::Painter, c: Pos2, radius: f32, hardness: f32, color: Color32) {
+    let clip = painter.clip_rect();
+    if !clip.expand(radius).contains(c) {
+        return;
+    }
+    // Enough segments for a smooth edge at any size, capped so huge brushes stay cheap.
+    let n = ((radius * 0.5) as usize).clamp(24, 160);
+    let inner = radius * hardness.clamp(0.0, 1.0);
+    let clear = Color32::TRANSPARENT;
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(c, color);
+    for k in 0..n {
+        let a = k as f32 / n as f32 * std::f32::consts::TAU;
+        let d = vec2(a.cos(), a.sin());
+        mesh.colored_vertex(c + d * inner, color);
+        mesh.colored_vertex(c + d * radius, clear);
+    }
+    let n = n as u32;
+    for k in 0..n {
+        let (i0, o0) = (1 + 2 * k, 2 + 2 * k);
+        let (i1, o1) = (1 + 2 * ((k + 1) % n), 2 + 2 * ((k + 1) % n));
+        mesh.add_triangle(0, i0, i1);
+        mesh.add_triangle(i0, o0, o1);
+        mesh.add_triangle(i0, o1, i1);
+    }
+    painter.add(mesh);
 }
 
 /// The round tip as the brush engine paints it: `radius` document pixels at `zoom` screen points

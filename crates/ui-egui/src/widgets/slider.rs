@@ -1,6 +1,7 @@
-use super::fields::{FieldOpts, value_field_in};
+use super::fields::{FieldOpts, VALUE_FIELD_H, value_field_in};
 use super::panel::surface;
 use super::scrub::scrub_label_within;
+use super::text_field::TEXT_FIELD_H;
 use super::{Color32, Pos2, Rect, Response, Sense, Stroke, Tokens, Ui, Vec2, pos2, vec2};
 
 /// Thin-track slider with a round knob. `gradient` paints the track (e.g. hue spectrum).
@@ -49,33 +50,19 @@ pub(crate) fn curve_fraction(v: f32, lo: f32, hi: f32, curve: Option<f32>) -> f3
     }
 }
 
-/// Wheel notches this frame while the pointer is over `resp` (Shift ×10). Wheel lines add up in
-/// egui memory until they make whole notches (high-resolution wheels report fractions of one);
-/// smooth (point) deltas count `line_scroll_speed` points per notch, like the canvas wheel.
+/// Wheel notches this frame while the pointer is over `resp` (Shift ×10), of a gesture that
+/// started over it: a panel being scrolled past the slider keeps scrolling (#11353).
 fn wheel_notches(ui: &Ui, resp: &Response) -> f32 {
-    wheel_notches_of(ui, resp.id, resp.hovered(), 10.0)
-}
-
-/// [`wheel_notches`] of widget `id` while `hovered`, a notch with Shift counting `shift_notches`.
-pub(crate) fn wheel_notches_of(ui: &Ui, id: egui::Id, hovered: bool, shift_notches: f32) -> f32 {
-    if !hovered {
-        return 0.0;
-    }
-    let wheel: Vec<(egui::MouseWheelUnit, Vec2, bool)> = ui.input(|i| {
-        i.events
-            .iter()
-            .filter_map(|e| match e {
-                egui::Event::MouseWheel { unit, delta, modifiers, .. } => Some((*unit, *delta, modifiers.shift)),
-                _ => None,
-            })
-            .collect()
-    });
-    count_notches(ui, id.with("wheel-acc"), &wheel, shift_notches)
+    crate::field_wheel::hover_notches(ui, resp.id, resp.rect, 10.0)
 }
 
 /// Whole notches in `wheel` (unit, delta, Shift held), a notch with Shift counting
-/// `shift_notches`; fractions carry over in egui memory under `acc_id`.
+/// `shift_notches`. Wheel lines add up in egui memory under `acc_id` until they make whole
+/// notches (high-resolution wheels report fractions of one), each window's apart: a fraction
+/// doesn't follow a panel floated into a window of its own (#11353). Smooth (point) deltas count
+/// `line_scroll_speed` points per notch, like the canvas wheel.
 pub(crate) fn count_notches(ui: &Ui, acc_id: egui::Id, wheel: &[(egui::MouseWheelUnit, Vec2, bool)], shift_notches: f32) -> f32 {
+    let acc_id = acc_id.with(ui.ctx().viewport_id());
     let mut acc: f32 = ui.data(|d| d.get_temp(acc_id)).unwrap_or(0.0);
     let per_line = ui.ctx().options(|o| o.input_options.line_scroll_speed);
     let per_line = if per_line.is_finite() && per_line > 0.0 { per_line } else { 40.0 };
@@ -142,7 +129,7 @@ pub fn second_click(ui: &Ui, resp: &Response) -> bool {
 fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, g: RowGestures) -> Response {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().max(60.0);
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, TEXT_FIELD_H), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
     let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 14.0, if gradient.is_some() { 5.0 } else { 3.0 }));
     if let Some(p) = resp.interact_pointer_pos()
@@ -285,5 +272,48 @@ pub fn slider_row_prec(
         r.flags |= v.flags & (Flags::DRAG_STARTED | Flags::DRAGGED | Flags::DRAG_STOPPED);
     }
     ui.add_space(4.0);
+    r
+}
+
+/// A dialog row's label, right-aligned in a column `width` wide, so the controls after it line up
+/// (Photoshop's label column in Layer Style). A label too long for it, as some translations are,
+/// is cut short and shows in full on hover.
+pub fn row_label(ui: &mut Ui, label: &str, width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    ui.allocate_ui_with_layout(vec2(width, VALUE_FIELD_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.set_min_width(width);
+        ui.add(egui::Label::new(egui::RichText::new(tl!(label)).color(t.text_dim)).truncate())
+    })
+    .inner
+}
+
+/// [`slider_row`] on one line, as Photoshop lays out Layer Style: the label in a `label_w` column
+/// ([`row_label`]), the slider, then the value field. The label still scrubs the field.
+pub fn slider_line(ui: &mut Ui, label: &str, label_w: f32, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str) -> Response {
+    const FIELD_W: f32 = 64.0;
+    let mut field = None;
+    let s = ui
+        .horizontal(|ui| {
+            let l = row_label(ui, label, label_w);
+            scrub_label_within(ui, &l, f32::INFINITY);
+            let w = (ui.available_width() - FIELD_W - ui.spacing().item_spacing.x).max(60.0);
+            let s = ui
+                .allocate_ui_with_layout(vec2(w, VALUE_FIELD_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    slider_with(ui, value, range.clone(), None, RowGestures::default())
+                })
+                .inner;
+            field = Some(value_field_in(ui, value, range.clone(), suffix, FIELD_W, 0.0, FieldOpts::default(), Some(label)).0);
+            s
+        })
+        .inner;
+    let mut r = s.clone();
+    if let Some(v) = field {
+        if v.changed() {
+            r.mark_changed();
+        }
+        // A scrub of the field or its label is one drag, like the slider's, for history.
+        use egui::response::Flags;
+        r.flags |= v.flags & (Flags::DRAG_STARTED | Flags::DRAGGED | Flags::DRAG_STOPPED);
+    }
     r
 }

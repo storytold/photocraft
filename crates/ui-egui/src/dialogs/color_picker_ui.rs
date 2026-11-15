@@ -4,6 +4,8 @@
 //! floats so hue survives greys), so `ui.dialog.set` drives it; OK runs `tools.setColors`.
 //! While it is the top dialog the image is its eyedropper, as in Photoshop: the pointer over the
 //! canvas is a pipette, and a click or drag there samples into the new colour ([`sample_at`]).
+//! A picker for another dialog's colour field or the Crop shield shows its colour there before
+//! OK, and Cancel puts it back ([`live_preview`]).
 
 use egui::{Color32, Mesh, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_color::convert::{hsb_to_rgb, rgb_to_hsb};
@@ -145,9 +147,24 @@ pub fn open(app: &mut PhotocraftApp, target: &str) -> u64 {
     let mut fields = fields_with_web(app, target, label, rgb);
     // A colour that was picked as CMYK shows the inks it was picked as, not what its sRGB stand-in converts to (#4196).
     if let Some(cmyk) = app.session.tools.picked_cmyk(rgb) {
-        fields.insert("__cmyk".into(), json!(cmyk));
+        seed_cmyk(&mut fields, cmyk);
     }
     app.ui.open_dialog(DialogKind::Command, fields)
+}
+
+/// Open picker `f` showing the inks its opening colour was picked as (#4196, #8568). Current and
+/// Reset restore them with the colour, so OK after either keeps them rather than inks recomputed
+/// from the colour's sRGB stand-in.
+pub(crate) fn seed_cmyk(f: &mut Map<String, Value>, cmyk: [f32; 4]) {
+    f.insert("__cmyk".into(), json!(cmyk));
+    f.insert("__origCmyk".into(), json!(cmyk));
+}
+
+/// Current (the swatch) and Reset: the colour from when the picker opened, with its inks.
+fn restore_original(f: &mut Map<String, Value>) {
+    let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or([0.0; 3]);
+    let keep = kept::<4>(f, "__origCmyk", orig, photocraft_color::convert::cmyk_to_rgb).map_or(Keep::Nothing, Keep::Cmyk);
+    set_rgb(f, orig, keep);
 }
 
 /// Shared initial state for every target; the picker layout is independent of its destination.
@@ -182,22 +199,35 @@ pub fn open_for_command(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], com
     let mut f = fields_with_web(app, "command", label, rgb);
     f.insert("__command".into(), json!(command));
     f.insert("__params".into(), params);
+    // The document the picker was opened on: its live canvas preview never shows on another
+    // (`color_picker_preview`).
+    if let Some(st) = app.session.active() {
+        f.insert("__document".into(), json!(st.doc.id.0));
+    }
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
-/// Open the picker on `rgb` for a colour field of another dialog (e.g. Edit › Fill's Color…): OK
-/// writes `"#rrggbb"` into `field` of dialog `dialog`, which stays open; Cancel leaves it alone.
+/// Open the picker on `rgb` for a colour field of another dialog (e.g. Edit › Fill's Color…): the
+/// field shows the picked colour while the picker is open ([`live_preview`]); OK writes
+/// `"#rrggbb"` into `field` of dialog `dialog`, which stays open; Cancel puts it back as it was.
 pub fn open_for_field(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], dialog: u64, field: &str) -> u64 {
     let mut f = fields_with_web(app, "field", label, rgb);
     f.insert("__dialog".into(), json!(dialog));
     f.insert("__field".into(), json!(field));
-    app.ui.open_dialog(DialogKind::Command, f)
+    let id = app.ui.open_dialog(DialogKind::Command, f);
+    live_preview::begin_field(app, id, dialog, field);
+    id
 }
 
 /// Open the picker on `rgb` for a colour the shell keeps itself (e.g. the Crop shield's custom
-/// colour): OK hands `"#rrggbb"` to `target`'s setter in [`confirm`]; Cancel leaves it alone.
+/// colour): OK hands `"#rrggbb"` to `target`'s setter in [`confirm`]; Cancel leaves it alone. The
+/// Crop shield shows the picked colour while the picker is open ([`live_preview`]).
 pub fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str, rgb: [f32; 3]) -> u64 {
-    app.ui.open_dialog(DialogKind::Command, fields_with_web(app, target, label, rgb))
+    let id = app.ui.open_dialog(DialogKind::Command, fields_with_web(app, target, label, rgb));
+    if target == "cropShield" {
+        live_preview::begin_crop_shield(app, id);
+    }
+    id
 }
 
 /// Set by a dialog body (to the picker's title) to open the Color Picker on its `color` field.
@@ -219,6 +249,11 @@ pub fn request_field(f: &mut Map<String, Value>, field: &str, title: &str) {
 /// The picker's title for the colour called `name`: "Color Picker (Vine Color)".
 pub fn title_for(name: &str) -> String {
     crate::i18n::fmt(tl!("Color Picker ({name})"), &[("name", name)])
+}
+
+/// Prefer a complete catalogued title; some locales only provide the named-colour template.
+pub(crate) fn fixed_title(label: &str, name: &str) -> String {
+    if crate::i18n::has(crate::i18n::current(), label) { tl!(label).to_string() } else { title_for(tl!(name)) }
 }
 
 /// The `"#rrggbb"` at `field` of `f` (a key or a JSON pointer).
@@ -251,6 +286,10 @@ fn set_field(f: &mut Map<String, Value>, field: &str, value: Value) -> Result<()
 
 /// Opens the Color Picker dialog `id`'s body asked for ([`request`], [`request_field`]), on its
 /// colour: OK sets that field of the dialog (not the foreground), Cancel leaves it as it was.
+///
+/// A dialog can provide `__pickColorDefault` when its field is a non-colour choice that has not
+/// yet been replaced by the picked colour. The temporary default seeds the picker without
+/// changing the parent field; it is removed before the picker opens.
 pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
     let Some(d) = app.ui.dialog_mut(id) else { return };
     let (title, field) = match d.fields.remove(REQUEST) {
@@ -262,7 +301,11 @@ pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
         }
         _ => return,
     };
-    let rgb = field_value(&d.fields, &field).and_then(parse_hex).unwrap_or([0.0; 3]);
+    let rgb = field_value(&d.fields, &field)
+        .and_then(parse_hex)
+        .or_else(|| d.fields.get("__pickColorDefault").and_then(Value::as_str).and_then(parse_hex))
+        .unwrap_or([0.0; 3]);
+    d.fields.remove("__pickColorDefault");
     open_for_field(app, &title, rgb, id, &field);
 }
 
@@ -275,8 +318,7 @@ pub fn reset(f: &mut Map<String, Value>) {
     if !owns(f) {
         return;
     }
-    let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or([0.0; 3]);
-    set_rgb(f, orig, Keep::Nothing);
+    restore_original(f);
 }
 
 /// The Color Picker, when it is the top dialog (another dialog opened over it takes the input).
@@ -412,6 +454,13 @@ fn flat_grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) ->
 /// Room for both component columns, including units, without overflowing the title's width; with
 /// the frame and title the window fits Photoshop's (about 534 x 376 points).
 pub(crate) const CONTENT_WIDTH: f32 = 488.0;
+/// Translated action labels can be substantially wider than their English equivalents.
+pub(crate) fn content_width(ui: &egui::Ui) -> f32 {
+    let labels = ["OK", "Cancel", "Add to Swatches"];
+    let english = crate::i18n::with_language(crate::i18n::Lang::EN, || widgets::button_width(ui, &labels));
+    let translated = widgets::button_width(ui, &labels.map(crate::i18n::t));
+    CONTENT_WIDTH + (translated - english).max(0.0)
+}
 /// Side of the colour field (Photoshop's is about 256 points).
 const FIELD: f32 = 200.0;
 /// Width of the component fields.
@@ -419,7 +468,7 @@ const VALUE_W: f32 = 42.0;
 
 /// Draw the picker and its top-right actions. `Some(true)` confirms, `Some(false)` cancels.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
-    ui.set_width(CONTENT_WIDTH);
+    ui.set_width(content_width(ui));
     ui.spacing_mut().item_spacing.y = 4.0;
     let mut outcome = None;
     ui.horizontal_top(|ui| {
@@ -487,7 +536,8 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.painter().add(mesh(field, &|x, y| field_color(&mode, fz, x, y)));
     ui.painter().rect_stroke(field, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     let marker = pos2(field.left() + fx * field.width(), field.top() + fy * field.height());
-    ui.painter().circle_stroke(marker, 5.0, Stroke::new(1.5, if hsv[2] > 0.6 && hsv[1] < 0.4 { Color32::BLACK } else { Color32::WHITE }));
+    // Clipped to the field: at the extremes the marker sits on the edge (#8968).
+    ui.painter().with_clip_rect(field).circle_stroke(marker, 5.0, Stroke::new(1.5, if hsv[2] > 0.6 && hsv[1] < 0.4 { Color32::BLACK } else { Color32::WHITE }));
     // Photoshop updates the colour on the press itself, not only when the button is released
     // (#6937): `is_pointer_button_down_on` is true from the press frame onwards (it covers
     // dragging too), while `clicked` fires on release and `dragged` only after a move.
@@ -544,15 +594,15 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     p.rect_filled(cur, 0.0, c32(orig));
     p.rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     let click_cur = ui.interact(cur, ui.scope_id().with("cp-current"), Sense::click());
-    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
-    if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
-        set_rgb(f, orig, Keep::Nothing);
+    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Click to restore the current color")));
+    if click_cur.on_hover_text(tl!("Click to restore the current color")).clicked() {
+        restore_original(f);
     }
     // Photoshop's warnings beside the swatch, each over a chip of the nearest colour that passes
     // (a click takes it): out of gamut for printing on top, not a web colour below.
     let x = sw.right() + 8.0;
-    let gamut = tl!("Out of gamut for printing: click for the nearest printable colour");
-    let web = tl!("Not a web colour: click for the nearest web colour");
+    let gamut = tl!("Out of gamut for printing: click for the nearest printable color");
+    let web = tl!("Not a web color: click for the nearest web color");
     for (slot, warning, tip) in [(0.0, out_of_gamut(rgb), gamut), (34.0, not_web_safe(rgb), web)] {
         let Some(near) = warning else { continue };
         let icon = Rect::from_min_size(pos2(x, sw.top() + 2.0 + slot), vec2(13.0, 13.0));
@@ -758,8 +808,164 @@ pub fn take_add_swatch(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
     }
 }
 
-/// OK: set the foreground or background colour.
+/// Whether a Color Picker dialog is open: a workspace under it (Content-Aware Fill, Select and
+/// Mask) leaves the keys to the picker, as it did for the swatch popups the picker replaced.
+pub fn any_open(app: &PhotocraftApp) -> bool {
+    app.ui.dialogs.iter().any(|d| owns(&d.fields))
+}
+
+/// A colour swatch widget asked for the Color Picker on its colour ([`request_for_widget`]).
+#[derive(Clone)]
+struct WidgetRequest {
+    widget: u64,
+    title: String,
+    rgb: [f32; 3],
+}
+
+fn widget_requests() -> egui::Id {
+    egui::Id::unique("color-picker-widget-requests")
+}
+
+fn widget_results() -> egui::Id {
+    egui::Id::unique("color-picker-widget-results")
+}
+
+fn widget_events() -> egui::Id {
+    egui::Id::unique("color-picker-widget-events")
+}
+
+fn widget_open() -> egui::Id {
+    egui::Id::unique("color-picker-widget-open")
+}
+
+/// What a swatch's open Color Picker did since the last frame ([`take_widget_event`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WidgetEvent {
+    /// The picker shows this colour now: preview it on the swatch.
+    Preview([f32; 3]),
+    /// The picker closed without a new colour (Cancel, Esc, the close box, OK unchanged): go back
+    /// to the colour the swatch had when it opened the picker.
+    Restore,
+}
+
+/// A colour swatch (`widgets::color_edit_button*`) was clicked: open the Color Picker titled
+/// `title` on `rgb` next frame ([`widget_tick`], which has the app). OK hands the colour back to the
+/// swatch through [`take_widget_color`]; Cancel leaves it alone.
+pub fn request_for_widget(ctx: &egui::Context, widget: egui::Id, title: &str, rgb: [f32; 3]) {
+    let rgb = rgb.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 });
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<WidgetRequest>>(widget_requests()).push(WidgetRequest { widget: widget.value(), title: title.to_string(), rgb })
+    });
+    ctx.request_repaint();
+}
+
+/// The colour the Color Picker of swatch `widget` returned with OK, once.
+pub fn take_widget_color(ctx: &egui::Context, widget: egui::Id) -> Option<[f32; 3]> {
+    ctx.data_mut(|d| {
+        let results = d.get_temp_mut_or_default::<Vec<(u64, [f32; 3])>>(widget_results());
+        let i = results.iter().position(|(w, _)| *w == widget.value())?;
+        Some(results.remove(i).1)
+    })
+}
+
+/// What the Color Picker of swatch `widget` did since the last frame, once: the colour it shows
+/// now while it is open, or that it closed without a new colour.
+pub fn take_widget_event(ctx: &egui::Context, widget: egui::Id) -> Option<WidgetEvent> {
+    ctx.data_mut(|d| {
+        let events = d.get_temp_mut_or_default::<Vec<(u64, WidgetEvent)>>(widget_events());
+        let i = events.iter().position(|(w, _)| *w == widget.value())?;
+        Some(events.remove(i).1)
+    })
+}
+
+/// Whether swatch `widget`'s Color Picker is open (as of this frame's [`widget_tick`]): its
+/// colour changes are previews, and only the colour OK hands back is final.
+pub fn widget_picker_open(ctx: &egui::Context, widget: egui::Id) -> bool {
+    ctx.data(|d| d.get_temp::<Vec<u64>>(widget_open()).is_some_and(|open| open.contains(&widget.value())))
+}
+
+/// Each frame, before the panels: hand colours confirmed last frame to their swatches, preview
+/// the colour an open picker shows on its swatch (as Photoshop's dialogs do while you pick), tell
+/// a swatch whose picker closed without a new colour to restore its own, and open the Color
+/// Picker a swatch asked for.
+pub fn widget_tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let done = std::mem::take(&mut app.widget_colors);
+    let mut events: Vec<(u64, WidgetEvent)> = Vec::new();
+    let mut open_now: Vec<u64> = Vec::new();
+    for d in app.ui.dialogs.iter_mut() {
+        if d.fields.get("__colorPicker").and_then(Value::as_str) != Some("widget") {
+            continue;
+        }
+        let Some(widget) = d.fields.get("__widget").and_then(Value::as_u64) else { continue };
+        open_now.push(widget);
+        let shown = d.fields.get("__widgetShown").or_else(|| d.fields.get("__orig")).cloned();
+        let Some(color) = d.fields.get("color").cloned() else { continue };
+        if Some(&color) != shown.as_ref()
+            && let Some(rgb) = color.as_str().and_then(parse_hex)
+        {
+            events.push((widget, WidgetEvent::Preview(rgb)));
+            d.fields.insert("__widgetShown".into(), color);
+        }
+    }
+    let was_open = ctx.data(|d| d.get_temp::<Vec<u64>>(widget_open())).unwrap_or_default();
+    for w in was_open {
+        if !open_now.contains(&w) && !done.iter().any(|(x, _)| *x == w) {
+            events.push((w, WidgetEvent::Restore));
+        }
+    }
+    let changed = !events.is_empty();
+    ctx.data_mut(|d| {
+        d.insert_temp(widget_open(), open_now);
+        if changed {
+            let all = d.get_temp_mut_or_default::<Vec<(u64, WidgetEvent)>>(widget_events());
+            // Only the newest event per swatch counts; a swatch that is gone never takes its own.
+            all.retain(|(w, _)| !events.iter().any(|(x, _)| x == w));
+            all.extend(events);
+            let excess = all.len().saturating_sub(16);
+            all.drain(..excess);
+        }
+    });
+    if changed {
+        ctx.request_repaint();
+    }
+    if !done.is_empty() {
+        ctx.data_mut(|d| {
+            // A preview not yet taken is replaced by the final colour.
+            d.get_temp_mut_or_default::<Vec<(u64, WidgetEvent)>>(widget_events()).retain(|(w, _)| !done.iter().any(|(x, _)| x == w));
+            let results = d.get_temp_mut_or_default::<Vec<(u64, [f32; 3])>>(widget_results());
+            // A swatch that is gone never takes its colour: keep only the newest one per swatch.
+            results.retain(|(w, _)| !done.iter().any(|(x, _)| x == w));
+            results.extend(done);
+            let excess = results.len().saturating_sub(16);
+            results.drain(..excess);
+        });
+        ctx.request_repaint();
+    }
+    let requests = ctx.data_mut(|d| {
+        let r = d.get_temp::<Vec<WidgetRequest>>(widget_requests());
+        d.remove::<Vec<WidgetRequest>>(widget_requests());
+        r
+    });
+    // One picker per click; a second click before it opened asks for the same thing.
+    if let Some(r) = requests.and_then(|r| r.into_iter().last()) {
+        let mut f = fields_with_web(app, "widget", &r.title, r.rgb);
+        f.insert("__widget".into(), json!(r.widget));
+        app.ui.open_dialog(DialogKind::Command, f);
+    }
+}
+
+/// OK: apply the colour to what the picker was opened for, and add it to the Recently Used
+/// Colors, as Photoshop does for a colour picked in the Color Picker.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    let r = confirm_target(app, f)?;
+    if let Some(rgb) = f.get("color").and_then(Value::as_str).and_then(parse_hex) {
+        crate::paint_picker::remember(app, rgb);
+    }
+    Ok(r)
+}
+
+/// OK: set the foreground or background colour, or whatever else the picker was opened for.
+fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     if crate::type_panels_ui::color_picker::owns(f) {
         return crate::type_panels_ui::color_picker::confirm(app, f);
     }
@@ -778,9 +984,15 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let target = f.get("__colorPicker").and_then(Value::as_str).unwrap_or("foreground");
     let color = f.get("color").and_then(Value::as_str).unwrap_or("#000000");
     if let Some(cmd) = f.get("__command").and_then(Value::as_str) {
+        let shown = crate::color_picker_preview::shown_for(app, f);
         let mut p = f.get("__params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
         p["color"] = json!(color);
-        return app.run(cmd, p);
+        let r = app.run(cmd, p)?;
+        // The canvas already shows this edit (the live preview): refresh only what it changed.
+        if let Some((doc, key)) = shown {
+            crate::canvas::shown_as_document(app, doc, |k| k == key);
+        }
+        return Ok(r);
     }
     if target == "field" {
         let (Some(dialog), Some(field)) = (f.get("__dialog").and_then(Value::as_u64), f.get("__field").and_then(Value::as_str)) else {
@@ -790,9 +1002,22 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         set_field(&mut d.fields, field, json!(color))?;
         return Ok(json!({ "color": color }));
     }
+    if target == "widget" {
+        let widget = f.get("__widget").and_then(Value::as_u64).ok_or("the Color Picker has no swatch to set")?;
+        let rgb = parse_hex(color).ok_or("not a colour")?;
+        // OK on the colour it opened with leaves the swatch's own (possibly finer) value alone.
+        if f.get("color") != f.get("__orig") {
+            app.widget_colors.push((widget, rgb));
+        }
+        return Ok(json!({ "color": color }));
+    }
     if target == "cropShield" {
         crate::crop_shield::set_custom_color(app, color)?;
         return Ok(json!({ "color": color }));
+    }
+    // The Artboard tool's custom background for the boards it draws (#11385).
+    if target == "artboardBackground" {
+        return crate::artboard_tool::bar::set_custom_background_from_picker(app, color, f.get("color") == f.get("__orig"));
     }
     // The Note tool's colour for new notes (#2144).
     if target == "noteColor" {
@@ -814,6 +1039,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     }
     Ok(r)
 }
+
+pub(crate) mod live_preview;
 
 #[cfg(test)]
 mod tests;

@@ -109,7 +109,9 @@ fn switching_layer_kinds_keeps_the_layers_panel_still() {
 /// A group height dragged in the dock is part of the UI state and the remembered layout.
 #[test]
 fn dragging_the_splitter_resizes_and_survives_a_ui_state_round_trip() {
-    let (app, _, _) = app_with_layers();
+    let (mut app, _, _) = app_with_layers();
+    // CodeRabbit on #9606: the Color panel's options ride the same frames and preferences.
+    app.ui.color_panel.mode = crate::state::ColorPanelMode::HsbSliders;
     let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
     let props = rect_of(&h, Group::Properties);
     let color = rect_of(&h, Group::Color);
@@ -137,6 +139,8 @@ fn dragging_the_splitter_resizes_and_survives_a_ui_state_round_trip() {
     restore(&mut app3);
     assert!(app3.ui.docking.is_some());
     assert_eq!(app3.ui.docking.as_ref().map(|w| &w.layout), h.state().ui.docking.as_ref().map(|w| &w.layout));
+    crate::color_panel_ui::restore(&mut app3);
+    assert_eq!(app3.ui.color_panel.mode, crate::state::ColorPanelMode::HsbSliders, "the Color panel's mode too");
     // …unless Remember Workspace Changes is off.
     let mut s3 = photocraft_engine::Session::new();
     s3.load_prefs_json(&prefs).unwrap();
@@ -833,6 +837,35 @@ fn an_unreadable_docking_layout_is_dropped_and_the_rest_applies() {
     apply(&mut app, &saved);
     assert!(app.ui.docking.is_none(), "the unreadable docking value is dropped");
     assert!(app.ui.timeline.open, "the rest of the layout still applies");
+}
+
+/// `toolbar_side` belongs to the workspace when the layout saved one; a layout saved before the
+/// toolbar could move, or with an unreadable side, keeps the current side instead of `Start`.
+#[test]
+fn applying_a_workspace_keeps_the_toolbar_side_unless_it_saved_one() {
+    use crate::state::ToolbarSide;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let saved = snapshot(&app);
+    let cases = [
+        (None, ToolbarSide::Right),
+        (Some(json!("sideways")), ToolbarSide::Right),
+        (Some(json!("left")), ToolbarSide::Left),
+        (Some(json!("start")), ToolbarSide::Start),
+    ];
+    for (side, expected) in cases {
+        app.ui.panels.toolbar_side = ToolbarSide::Right;
+        app.ui.panels.brush_settings = false;
+        let mut saved = saved.clone();
+        let panels = saved["panels"].as_object_mut().unwrap();
+        panels.insert("brush_settings".into(), json!(true));
+        match &side {
+            Some(side) => panels.insert("toolbar_side".into(), side.clone()),
+            None => panels.remove("toolbar_side"),
+        };
+        apply(&mut app, &saved);
+        assert_eq!(app.ui.panels.toolbar_side, expected, "{side:?}");
+        assert!(app.ui.panels.brush_settings, "the rest of the saved panels still apply: {side:?}");
+    }
 }
 
 /// Layers panel options live in the preferences on their own (like Photoshop's Panel Options),

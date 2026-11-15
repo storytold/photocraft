@@ -266,7 +266,13 @@ pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
         ui.close();
     }
     // New Group… and New Group from Layers… open the New Group dialog, like their Layer › New twins.
-    for (label, id) in [(tl!("New Group…"), crate::new_group_ui::NEW_GROUP), (tl!("New Group from Layers…"), crate::new_group_ui::FROM_LAYERS)] {
+    // Duplicate Layer… between them opens the Duplicate Layer dialog, like Layer › Duplicate
+    // Layer…, and reads Duplicate Layers… with several layers selected (#14615).
+    let multi = app.session.active().is_some_and(|st| st.selected_layers().len() > 1);
+    let duplicate = if multi { tl!("Duplicate Layers…") } else { tl!("Duplicate Layer…") };
+    for (label, id) in
+        [(tl!("New Group…"), crate::new_group_ui::NEW_GROUP), (duplicate, "layer.duplicate"), (tl!("New Group from Layers…"), crate::new_group_ui::FROM_LAYERS)]
+    {
         if ui.add_enabled(crate::menus::is_enabled(app, id), egui::Button::new(label)).clicked() {
             let ctx = ui.ctx().clone();
             if let Err(e) = crate::menus::invoke(app, &ctx, id, json!({})) {
@@ -277,21 +283,25 @@ pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
         }
     }
     ui.separator();
-    run_menu_command(app, ui, tl!("Flatten Image"), "layer.flattenImage");
+    run_menu_command(app, ui, tl!("Flatten Image"), "layer.flattenImage", Some(json!({})));
     ui.separator();
-    if ui.add_enabled(app.session.is_enabled("layer.lockLayers"), egui::Button::new(tl!("Lock Layers…"))).clicked() {
+    let mut lock_layers = egui::Button::new(tl!("Lock Layers…"));
+    if let Some(key) = crate::shortcuts::shortcut_label(app, "layer.lockLayers") {
+        lock_layers = lock_layers.shortcut_text(key);
+    }
+    if ui.add_enabled(app.session.is_enabled("layer.lockLayers"), lock_layers).clicked() {
         app.ui.layers_panel_dialog = Some(LayersPanelDialog::LockLayers { transparency: false, pixels: false, position: false, artboard: false, all: true });
         ui.close();
     }
-    run_menu_command(app, ui, tl!("Rename Layer…"), "layer.renameLayer");
+    run_menu_command(app, ui, tl!("Rename Layer…"), "layer.renameLayer", Some(json!({})));
     let any_hidden = app.session.active().is_some_and(|st| st.selected_layers().iter().any(|id| st.doc.layer(*id).is_some_and(|l| !l.visible)));
     if any_hidden {
-        run_menu_command(app, ui, tl!("Show Layers"), "layer.showLayers");
+        run_menu_command(app, ui, tl!("Show Layers"), "layer.showLayers", Some(json!({})));
     } else {
-        run_menu_command(app, ui, tl!("Hide Layers"), "layer.hideLayers");
+        run_menu_command(app, ui, tl!("Hide Layers"), "layer.hideLayers", Some(json!({})));
     }
     ui.separator();
-    run_menu_command(app, ui, tl!("New Artboard…"), "layer.new.artboard");
+    run_menu_command(app, ui, tl!("New Artboard…"), "layer.new.artboard", Some(json!({})));
     ui.separator();
     ui.menu_button(tl!("Filter Options"), |ui| {
         let mut show = app.ui.layers_panel_options.show_filters;
@@ -481,3 +491,7 @@ mod rename_tests;
 
 #[cfg(test)]
 mod edit_tests;
+
+#[cfg(test)]
+#[path = "layers_menu_duplicate_tests.rs"]
+mod layers_menu_duplicate_tests;

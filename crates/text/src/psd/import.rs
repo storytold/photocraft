@@ -140,8 +140,8 @@ fn layer_frame<'a>(layer: &TextLayer, tysh: &[u8], txt2: &'a E, named: bool) -> 
 
 /// Puts `layer` on its path when its `Txt2` frame is type on a path (#7962): Photoshop keeps the
 /// path only there, and EngineData describes the layer as a text box the size of the path's
-/// bounds. The path is read into the `TySh` text space, the type starting where Photoshop starts
-/// it (see `psd_path`). `Ok(true)` when the layer is now path text, `Ok(false)` when its frame is
+/// bounds. The path is read into the `TySh` text space with the type's range on it (see
+/// `psd_path`). `Ok(true)` when the layer is now path text, `Ok(false)` when its frame is
 /// no path (or `Txt2` holds another text for it), `Err` with the reason when the path can't be
 /// read: the layer then stays the box or point text EngineData describes.
 pub fn apply_txt2_path(layer: &mut TextLayer, tysh: &[u8], txt2: &E) -> Result<bool, String> {
@@ -149,8 +149,7 @@ pub fn apply_txt2_path(layer: &mut TextLayer, tysh: &[u8], txt2: &E) -> Result<b
     if crate::psd_path::frame_kind(frame) != crate::psd_path::PATH_FRAME {
         return Ok(false);
     }
-    let path = crate::psd_path::read(frame)?;
-    layer.shape = TextShape::Path { path, start: 0.0, flip: false };
+    layer.shape = crate::psd_path::read_shape(frame)?;
     Ok(true)
 }
 
@@ -503,15 +502,18 @@ fn apply_engine_data(layer: &mut TextLayer, e: &E, txt: Option<&str>, k: f32) {
         .map(|a| a.iter().filter_map(|x| x.get("StyleSheet")).take(max_sruns).collect())
         .unwrap_or_default();
     // The paragraph run each character run starts in (UTF-16 offsets).
+    // Each paragraph run's end, once: a scan from the first paragraph for every character run was
+    // quadratic in the file's run counts. A negative or NaN length ends nothing (it never did).
+    let para_ends: Vec<f64> = plens16
+        .iter()
+        .scan(0.0, |end, n| {
+            *end += n.max(0.0);
+            Some(*end)
+        })
+        .collect();
     let para_of = |at: f64| -> Option<usize> {
-        let mut end = 0.0;
-        for (i, n) in plens16.iter().enumerate() {
-            end += n;
-            if at < end {
-                return Some(i);
-            }
-        }
-        plens16.len().checked_sub(1)
+        let i = para_ends.partition_point(|&end| end <= at);
+        if i < para_ends.len() { Some(i) } else { plens16.len().checked_sub(1) }
     };
     let mut at16 = 0.0;
     let bases: Vec<[Option<&E>; 3]> = ssheets
@@ -603,6 +605,9 @@ pub(crate) fn char_style(base: &[Option<&E>], d: &E, fonts: &[String], k: f32) -
         Some(2) => FontBaseline::Subscript,
         _ => FontBaseline::Normal,
     };
+    // Vertical type's roman text: 2 rotated along the column, 1 upright (#9470). A run without
+    // its own value takes the style sheet's, which Photoshop writes as 2.
+    s.rotate_roman = g("BaselineDirection").and_then(E::as_i64) == Some(2);
     if let Some(c) = g("FillColor") {
         // Positions matter (alpha, then the channels): a non-finite entry voids the colour.
         let v: Vec<f64> = c.get("Values").and_then(E::as_array).map(|a| a.iter().filter_map(E::as_f64).collect()).unwrap_or_default();

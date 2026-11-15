@@ -174,56 +174,37 @@ impl<'de> Deserialize<'de> for GrayTile {
     }
 }
 
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/// Base64 with the standard alphabet; decoding takes padded or unpadded input.
+const B64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new().with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+);
 
 /// Standard base64 with padding (the tile serde form; commands taking file bytes).
 pub fn b64_encode(b: &[u8]) -> String {
-    let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
-    for c in b.chunks(3) {
-        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
-        out.push(B64[(n >> 18) as usize & 63] as char);
-        out.push(B64[(n >> 12) as usize & 63] as char);
-        out.push(if c.len() > 1 { B64[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if c.len() > 2 { B64[n as usize & 63] as char } else { '=' });
-    }
-    out
+    base64::Engine::encode(&B64, b)
 }
 
-/// Decode standard base64 (whitespace ignored); `None` on invalid input.
+/// Decode standard base64, padded or not (whitespace ignored); `None` on invalid input.
 pub fn b64_decode(s: &str) -> Option<Vec<u8>> {
-    let val = |c: u8| -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        } as u32)
-    };
     let s: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
-    if !s.len().is_multiple_of(4) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(s.len() / 4 * 3);
-    for c in s.chunks(4) {
-        let pad = c.iter().rev().take_while(|&&x| x == b'=').count();
-        let mut n = 0u32;
-        for (i, &x) in c.iter().enumerate() {
-            n = (n << 6) | if i >= 4 - pad { 0 } else { val(x)? };
-        }
-        out.push((n >> 16) as u8);
-        if pad < 2 {
-            out.push((n >> 8) as u8);
-        }
-        if pad < 1 {
-            out.push(n as u8);
-        }
-    }
-    Some(out)
+    base64::Engine::decode(&B64, s).ok()
 }
 
 // ---------- sampling ----------
+
+/// `x.floor()` without the libm call the baseline x86-64 build makes for it (it has no rounding
+/// instruction), for the per-pixel tip samples: the same value for every `x` (NaN and values
+/// beyond `i32` take `floor` itself).
+#[inline(always)]
+pub(crate) fn fast_floor(x: f32) -> f32 {
+    if x.abs() < 2_000_000_000.0 {
+        let t = x as i32 as f32;
+        if t > x { t - 1.0 } else { t }
+    } else {
+        x.floor()
+    }
+}
 
 /// A float mip pyramid of a [`GrayTile`] for sampling at any scale without aliasing.
 #[derive(Clone, Debug)]
@@ -273,14 +254,22 @@ impl Mips {
     }
 
     /// Bilinear sample at normalised `u, v` in 0..1 (outside = 0).
-    #[inline]
+    #[inline(always)]
     pub fn sample_clamped(&self, level: usize, u: f32, v: f32) -> f32 {
         let (w, h, d) = &self.levels[level];
         let fx = u * *w as f32 - 0.5;
         let fy = v * *h as f32 - 0.5;
-        let (x0, y0) = (fx.floor(), fy.floor());
+        let (x0, y0) = (fast_floor(fx), fast_floor(fy));
         let (tx, ty) = (fx - x0, fy - y0);
         let (x0, y0) = (x0 as i64, y0 as i64);
+        // Inside the tip (most of a big dab's samples): no edge checks, the same arithmetic.
+        if x0 >= 0 && y0 >= 0 && x0 + 1 < *w as i64 && y0 + 1 < *h as i64 {
+            let i = y0 as usize * w + x0 as usize;
+            let (p00, p10, p01, p11) = (d[i], d[i + 1], d[i + w], d[i + w + 1]);
+            let a = p00 + (p10 - p00) * tx;
+            let b = p01 + (p11 - p01) * tx;
+            return a + (b - a) * ty;
+        }
         let get = |x: i64, y: i64| if x < 0 || y < 0 || x >= *w as i64 || y >= *h as i64 { 0.0 } else { d[y as usize * w + x as usize] };
         let a = get(x0, y0) + (get(x0 + 1, y0) - get(x0, y0)) * tx;
         let b = get(x0, y0 + 1) + (get(x0 + 1, y0 + 1) - get(x0, y0 + 1)) * tx;
@@ -299,15 +288,105 @@ pub struct PatternImage {
 impl PatternImage {
     #[inline]
     pub fn sample_wrap(&self, x: f32, y: f32) -> f32 {
-        let xi = (x.floor() as i64).rem_euclid(self.width as i64) as usize;
-        let yi = (y.floor() as i64).rem_euclid(self.height as i64) as usize;
+        let xi = (fast_floor(x) as i64).rem_euclid(self.width as i64) as usize;
+        let yi = (fast_floor(y) as i64).rem_euclid(self.height as i64) as usize;
         self.data[yi * self.width + xi]
+    }
+
+    /// Bilinear sample of the four texels at (`x0`, `y0`) and their right/lower neighbours, all
+    /// wrapped; `x0`, `y0` are already floored. Same values as four [`sample_wrap`](Self::sample_wrap)
+    /// calls, with the wrap done once per axis instead of once per texel.
+    #[inline]
+    pub fn sample_bilinear_wrap(&self, x0: f32, y0: f32, tx: f32, ty: f32) -> f32 {
+        // Past 2^24 `x0 + 1.0` rounds back to `x0`, so the neighbour is not `x0 + 1` any more.
+        const EXACT: f32 = 16_777_216.0;
+        // `rem_euclid` below is on `i32`, so a side past `i32::MAX` takes the `i64` path, like the coordinates past 2^24.
+        if !(x0.abs() < EXACT && y0.abs() < EXACT) || self.width.max(self.height) > i32::MAX as usize {
+            let a = self.sample_wrap(x0, y0) + (self.sample_wrap(x0 + 1.0, y0) - self.sample_wrap(x0, y0)) * tx;
+            let b = self.sample_wrap(x0, y0 + 1.0) + (self.sample_wrap(x0 + 1.0, y0 + 1.0) - self.sample_wrap(x0, y0 + 1.0)) * tx;
+            return a + (b - a) * ty;
+        }
+        let (w, h) = (self.width, self.height);
+        let xa = (x0 as i32).rem_euclid(w as i32) as usize;
+        let ya = (y0 as i32).rem_euclid(h as i32) as usize;
+        let xb = if xa + 1 == w { 0 } else { xa + 1 };
+        let yb = if ya + 1 == h { 0 } else { ya + 1 };
+        let (ra, rb) = (ya * w, yb * w);
+        let (p00, p10, p01, p11) = (self.data[ra + xa], self.data[ra + xb], self.data[rb + xa], self.data[rb + xb]);
+        let a = p00 + (p10 - p00) * tx;
+        let b = p01 + (p11 - p01) * tx;
+        a + (b - a) * ty
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fast_floor_matches_floor() {
+        let edges = [-3.0f32, -2.5, -1.0, -0.5, -0.0, 0.0, 0.5, 1.0, 1e9, -1e9, 1_999_999_999.0, 2.5e9, -2.5e9, f32::MAX, f32::MIN];
+        let fractions = (-4000..4000).map(|i| i as f32 * 0.37);
+        for x in edges.into_iter().chain(fractions) {
+            assert_eq!(fast_floor(x), x.floor(), "{x}");
+        }
+        assert!(fast_floor(f32::NAN).is_nan());
+    }
+
+    fn old_bilinear(p: &PatternImage, x0: f32, y0: f32, tx: f32, ty: f32) -> f32 {
+        let a = p.sample_wrap(x0, y0) + (p.sample_wrap(x0 + 1.0, y0) - p.sample_wrap(x0, y0)) * tx;
+        let b = p.sample_wrap(x0, y0 + 1.0) + (p.sample_wrap(x0 + 1.0, y0 + 1.0) - p.sample_wrap(x0, y0 + 1.0)) * tx;
+        a + (b - a) * ty
+    }
+
+    /// The wrapped bilinear sampler returns the same bits as four `sample_wrap` calls: odd and
+    /// non-square sizes, negative and huge coordinates, the wrap seam, NaN.
+    #[test]
+    fn bilinear_wrap_is_bit_identical_to_four_sample_wraps() {
+        for (w, h) in [(1usize, 1usize), (1, 7), (5, 1), (7, 5), (128, 128), (1024, 3)] {
+            let data = (0..w * h).map(|i| ((i as u32).wrapping_mul(2_654_435_761) >> 8) as f32 / 16_777_216.0).collect();
+            let p = PatternImage { width: w, height: h, data };
+            let mut coords =
+                vec![0.0f32, -1.0, -(w as f32), w as f32 - 1.0, w as f32, 16_777_215.0, 16_777_216.0, -16_777_216.0, 3.0e9, -3.0e9, f32::NAN, f32::INFINITY];
+            coords.extend((-300..300).map(|i| i as f32 * 1.0));
+            for &x0 in &coords {
+                for &y0 in coords.iter().filter(|y| !y.is_finite() || y.abs() > 20.0 || **y % 7.0 == 0.0) {
+                    for (tx, ty) in [(0.0, 0.0), (0.25, 0.75), (0.999, 0.5)] {
+                        let (new, old) = (p.sample_bilinear_wrap(x0, y0, tx, ty), old_bilinear(&p, x0, y0, tx, ty));
+                        assert_eq!(new.to_bits(), old.to_bits(), "{w}x{h} at ({x0}, {y0})");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Manual timing: `cargo test -p photocraft-paint --release bilinear_wrap_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bilinear_wrap_timing() {
+        let p = PatternImage { width: 128, height: 128, data: (0..128 * 128).map(|i| (i % 251) as f32 / 251.0).collect() };
+        let n = 4_000_000;
+        for round in 0..3 {
+            let t = std::time::Instant::now();
+            let mut s = 0.0f32;
+            for i in 0..n {
+                let (fx, fy) = ((i % 2000) as f32 * 1.25 - 40.5, (i / 2000) as f32 * 1.25 - 40.5);
+                s += old_bilinear(&p, fx.floor(), fy.floor(), fx.fract(), fy.fract());
+            }
+            let old = t.elapsed();
+            let t = std::time::Instant::now();
+            let mut s2 = 0.0f32;
+            for i in 0..n {
+                let (fx, fy) = ((i % 2000) as f32 * 1.25 - 40.5, (i / 2000) as f32 * 1.25 - 40.5);
+                s2 += p.sample_bilinear_wrap(fx.floor(), fy.floor(), fx.fract(), fy.fract());
+            }
+            println!(
+                "round {round}: old {:.2} ns/px, new {:.2} ns/px ({s} {s2})",
+                old.as_secs_f64() * 1e9 / n as f64,
+                t.elapsed().as_secs_f64() * 1e9 / n as f64
+            );
+        }
+    }
 
     /// Cloning a tile (and the brush settings holding it, on every pointer event of a stroke)
     /// shares its samples instead of copying them (#4534).
@@ -329,6 +408,18 @@ mod tests {
             let b: Vec<u8> = (0..n).map(|i| (i * 37 + 5) as u8).collect();
             assert_eq!(b64_decode(&b64_encode(&b)).unwrap(), b);
         }
+    }
+
+    #[test]
+    fn base64_rejects_bad_padding_and_takes_unpadded() {
+        assert_eq!(b64_decode("aGk=").as_deref(), Some(&b"hi"[..]));
+        assert_eq!(b64_decode("aGk").as_deref(), Some(&b"hi"[..]));
+        assert_eq!(b64_decode(" aG\nk= ").as_deref(), Some(&b"hi"[..]));
+        assert_eq!(b64_decode("").as_deref(), Some(&b""[..]));
+        assert_eq!(b64_decode("===="), None);
+        assert_eq!(b64_decode("QQ==QUJD"), None);
+        assert_eq!(b64_decode("a"), None);
+        assert_eq!(b64_decode("a$=="), None);
     }
 
     #[test]

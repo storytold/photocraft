@@ -280,6 +280,37 @@ fn underlined_text_marks_the_mnemonic_once_and_keeps_the_prefix() {
     out.textures_delta.clear();
 }
 
+/// Access keys preserve visible spelling and underline only the locale-correct I pair.
+#[test]
+fn azerbaijani_and_turkish_mnemonics_keep_the_two_i_pairs_distinct() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
+    for code in ["az", "tr"] {
+        let lang = crate::i18n::Lang::from_code(code).unwrap();
+        crate::i18n::with_language(lang, || {
+            assert_eq!(crate::menu_keys::assign(&["ix", "ı"], &[Some('I'), Some('I')]), [Some('X'), Some('I')]);
+            assert_eq!(crate::menu_keys::localized(&["i".into()], &["Image"], &[Some('I')]), (vec!["i(I)".into()], vec![Some('I')]));
+            let ctx = egui::Context::default();
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                for text in [crate::menu_keys::mnemonic_text(ui, "", "İıi", Some('I'), None), crate::menu_keys::menu_row_text(ui, false, "İıi", Some('I'))]
+                {
+                    let egui::WidgetText::LayoutJob(job) = text else { panic!("an access key makes a layout job") };
+                    assert!(job.text.ends_with("İıi"), "visible text is retained verbatim");
+                    let underlined: Vec<&str> = job
+                        .sections
+                        .iter()
+                        .filter(|s| s.format.underline != egui::Stroke::NONE)
+                        .map(|s| &job.text[s.byte_range.start.0..s.byte_range.end.0])
+                        .collect();
+                    assert_eq!(underlined, ["ı"]);
+                }
+            });
+            out.textures_delta.clear();
+        });
+    }
+}
+
 /// The whole app: with the bar focused a letter opens a menu instead of picking a tool, and the
 /// arrows don't nudge the layer.
 #[test]
@@ -358,6 +389,114 @@ fn a_command_shortcut_leaves_the_bar_and_runs() {
     assert_eq!(Keys::current(&h.ctx).focus, None, "and takes the keyboard off the bar");
     assert!(!crate::menu_keys::is_focused(&h.ctx));
     assert!(!is_open(&h.ctx), "no menu opened");
+}
+
+/// A command shortcut pressed with a menu open closes the menu and runs, as with Photoshop's
+/// menus (#9065); the open menu's own keys (letters, arrows, Esc) still drive it.
+#[test]
+fn a_command_shortcut_closes_an_open_menu_and_runs() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        |ui, app| {
+            crate::shortcuts::handle(app, ui.ctx());
+            crate::menus::menu_bar(app, ui);
+        },
+        app(),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert!(is_open(&h.ctx) && h.query_by_label_contains("Undo").is_some(), "Edit is open");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "⌘D deselects with the menu open");
+    assert!(!is_open(&h.ctx), "and closes the menu");
+    assert!(h.query_by_label_contains("Undo").is_none(), "Edit's rows are gone");
+}
+
+/// #9314 review: Help opens with its search field focused, and a command shortcut that isn't a
+/// text-editing key (⌘D) still closes the menu and runs; ⌘A stays the field's and keeps it open.
+#[test]
+fn a_command_shortcut_runs_from_the_help_search_field() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = app();
+        app.services.native_menu = None;
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().run("select.deselect", json!({})).unwrap();
+    h.get_by_label("Help").click();
+    h.run_steps(4);
+    let field = egui::Id::unique("help-menu-search").with("field");
+    assert!(is_open(&h.ctx) && h.ctx.memory(|m| m.focused()) == Some(field), "Help is open with its field focused");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(3);
+    assert!(is_open(&h.ctx), "⌘A edits the field and keeps Help open");
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "⌘A didn't select the canvas");
+    // macOS's Control (not ⌘) editing keys, which egui gives the field: Ctrl+W deletes a word.
+    let control = egui::Modifiers { ctrl: true, ..Default::default() };
+    for k in [egui::Key::W, egui::Key::H, egui::Key::K, egui::Key::U, egui::Key::E] {
+        h.key_press_modifiers(control, k);
+        h.run_steps(3);
+        assert!(is_open(&h.ctx), "Control+{k:?} edits the field and keeps Help open");
+    }
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+    h.run_steps(3);
+    assert!(!is_open(&h.ctx), "⌘D closes Help");
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "and deselects");
+}
+
+/// #9314 review: an Alt-modified letter (⌘⌥C, Canvas Size) isn't one of the field's editing
+/// keys, as [`crate::shortcut_dispatch::Focus::allows`] has it, so it closes Help and runs.
+#[test]
+fn an_alt_modified_letter_shortcut_runs_from_the_help_search_field() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = app();
+        app.services.native_menu = None;
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Help").click();
+    h.run_steps(4);
+    let field = egui::Id::unique("help-menu-search").with("field");
+    assert!(is_open(&h.ctx) && h.ctx.memory(|m| m.focused()) == Some(field), "Help is open with its field focused");
+    assert!(h.state().ui.dialogs.is_empty());
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::C);
+    h.run_steps(3);
+    assert!(!is_open(&h.ctx), "⌘⌥C closes Help");
+    assert!(!h.state().ui.dialogs.is_empty(), "and opens Canvas Size");
+}
+
+/// #9314 review: ⌘Z and ⌘C are the Help search field's own editing keys (undo, copy): they stay
+/// with the field, keeping Help open, instead of closing it and undoing or copying in the
+/// document.
+#[test]
+fn undo_and_copy_shortcuts_stay_with_the_help_search_field() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = app();
+        app.services.native_menu = None;
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    h.get_by_label("Help").click();
+    h.run_steps(4);
+    let field = egui::Id::unique("help-menu-search").with("field");
+    assert!(is_open(&h.ctx) && h.ctx.memory(|m| m.focused()) == Some(field), "Help is open with its field focused");
+    for k in [egui::Key::Z, egui::Key::C] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, k);
+        h.run_steps(3);
+        assert!(is_open(&h.ctx) && h.ctx.memory(|m| m.focused()) == Some(field), "⌘{k:?} stays with the field and keeps Help open");
+    }
+    let st = h.state().session.active().unwrap();
+    assert!(st.doc.selection.is_some() && st.history.past_len() == steps, "⌘Z didn't undo Select All");
 }
 
 /// Checked, unchecked and plain rows (and submenu headers) start their label at the same x, in
@@ -503,4 +642,113 @@ fn alt_held_during_a_drag_is_no_tap() {
     btn(&mut h, egui::PointerButton::Primary, false);
     alt_tap(&mut h);
     assert!(Keys::current(&h.ctx).focus.is_some(), "a lone tap still focuses the bar");
+}
+
+/// Typing a zoom: Alt only asks for the system alert. The bar does not take the keyboard, and the
+/// field keeps its focus and its text.
+#[test]
+fn alt_in_a_zoom_field_only_alerts() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        |ui, (app, pct): &mut (PhotocraftApp, f32)| {
+            crate::menus::menu_bar(app, ui);
+            crate::widgets::compact_wrapping_value_field(ui, pct, 0.0..=12800.0, "%", egui::vec2(90.0, 20.0)).accessible_name("Zoom");
+        },
+        (app(), 100.0),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::SpinButton).click();
+    h.run_steps(2);
+    for c in "200".chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run_steps(2);
+    }
+    h.key_down(egui::Key::AltLeft);
+    h.run_steps(2);
+    h.key_up(egui::Key::AltLeft);
+    h.run_steps(3);
+    assert_eq!(Keys::current(&h.ctx).focus, None, "Alt does not put the keyboard on the bar");
+    assert!(crate::zoom_field::alert_pending(&h.ctx), "it asks for the alert instead");
+    assert_eq!(h.state().1, 100.0, "and the zoom stays");
+    assert!(h.get_by_role(egui::accesskit::Role::SpinButton).is_focused(), "the field keeps the keyboard");
+    // The text was not selected by Alt: this adds to 200 instead of replacing it.
+    h.event(egui::Event::Text("3".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().1, 2003.0, "typing went on in the same text");
+}
+
+/// The menu bar and a zoom field, with `zoom_field::tick` as the app runs it. `beep` stands in for
+/// the platform's alert.
+fn bar_and_zoom_field(beep: fn()) -> Harness<'static, (PhotocraftApp, f32)> {
+    let mut app = app();
+    app.services.beep = Some(beep);
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        |ui, (app, pct): &mut (PhotocraftApp, f32)| {
+            crate::zoom_field::tick(app, &ui.ctx().clone());
+            crate::menus::menu_bar(app, ui);
+            crate::widgets::compact_wrapping_value_field(ui, pct, 0.0..=12800.0, "%", egui::vec2(90.0, 20.0)).accessible_name("Zoom");
+        },
+        (app, 100.0),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::SpinButton).click();
+    h.run_steps(2);
+    for c in "300".chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run_steps(2);
+    }
+    h
+}
+
+/// A letter as the platform sends it: the key, and the text it types.
+fn letter(h: &mut Harness<'static, (PhotocraftApp, f32)>, c: char) {
+    let key = egui::Key::from_name(&c.to_string()).unwrap();
+    h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::Text(c.to_lowercase().to_string()));
+    h.event(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(6);
+}
+
+/// A zoom field keeps the keyboard, and what was typed, through a click on a menu title. The menu
+/// that click opened still takes its keys: → moves to the next menu and a letter runs its row,
+/// without the letter also reaching the field.
+#[test]
+fn a_menu_opened_while_typing_a_zoom_takes_its_keys() {
+    static BEEPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let mut h = bar_and_zoom_field(|| {
+        BEEPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    h.get_by_label("Filter").click();
+    h.run_steps(4);
+    assert!(is_open(&h.ctx), "the click opened Filter");
+    assert!(crate::zoom_field::is_focused(&h.ctx), "the zoom field kept the keyboard");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(5);
+    assert!(h.query_by_label_contains("Zoom In").is_some(), "→ moved to View");
+    let row = Nav::current(&h.ctx).rows.first().and_then(|l| l.iter().find(|r| r.command.as_deref() == Some("view.zoomIn")).cloned());
+    let c = row.and_then(|r| r.mnemonic).expect("Zoom In has a mnemonic");
+    let zoom = h.state().0.ui.views[0].zoom;
+    letter(&mut h, c);
+    assert!(h.state().0.ui.views[0].zoom > zoom, "its letter ran Zoom In ({c})");
+    assert_eq!(BEEPS.load(std::sync::atomic::Ordering::SeqCst), 0, "and did not reach the zoom field, which would alert");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().1, 300.0, "the field still holds the typed 300, nothing more");
+}
+
+/// Help has a text field of its own: while a zoom is typed, its letters stay typing, never run
+/// Help's rows (#5996: S for System Info).
+#[test]
+fn help_letters_stay_typing_while_a_zoom_is_typed() {
+    let mut h = bar_and_zoom_field(|| {});
+    h.get_by_label("Help").click();
+    h.run_steps(4);
+    assert!(is_open(&h.ctx), "the click opened Help");
+    let rows = Nav::current(&h.ctx).rows.first().cloned().unwrap_or_default();
+    let c = rows.iter().find(|r| r.enabled && r.mnemonic.is_some()).and_then(|r| r.mnemonic).expect("a Help row with a mnemonic");
+    letter(&mut h, c);
+    assert!(is_open(&h.ctx), "{c} ran no row: Help stays open");
 }

@@ -10,8 +10,8 @@
 //! into text space: a line becomes a column running top to bottom, and successive columns advance
 //! right to left. Within a column, CJK characters stay upright (centred on the column, placed with
 //! the font's vertical metrics: `VORG`, `vhea`/`vmtx`, else the ideographic em box) and use the
-//! font's vertical alternates (`vert`) for punctuation, brackets and the long-vowel mark; other
-//! text (Latin, digits) runs rotated 90° clockwise, Photoshop's default. Lines, clusters, carets
+//! font's vertical alternates (`vert`) for punctuation, brackets and the long-vowel mark. Roman
+//! letters stand upright one per em unless the run sets `rotate_roman`. Lines, clusters, carets
 //! and hit tests stay in line space; [`TextLayout::to_text`] / [`TextLayout::to_line`] convert.
 
 use std::borrow::Cow;
@@ -94,6 +94,8 @@ pub struct PlacedGlyph {
     pub style: u32,
     /// Orientation of the outline (vertical type).
     pub orient: GlyphOrient,
+    /// Optional line-space glyph center before rotation into text space.
+    pub line_center: Option<f32>,
 }
 
 /// Underline/strikethrough rectangle (text space px).
@@ -137,6 +139,8 @@ pub struct ClusterInfo {
 pub struct TextLayout {
     pub faces: Vec<GlyphFace>,
     pub glyphs: Vec<PlacedGlyph>,
+    /// Layer-text byte range represented by each glyph, in the same order as `glyphs`.
+    pub glyph_ranges: Vec<Range<usize>>,
     pub decorations: Vec<DecorationRect>,
     pub lines: Vec<LineInfo>,
     pub clusters: Vec<ClusterInfo>,
@@ -175,6 +179,17 @@ impl TextLayout {
                 Some(a) => [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])],
             })
         })
+    }
+
+    /// Whether boxed text doesn't all fit its shape: a box's layout drops the lines that
+    /// overflow (`layout` breaks out of the line loop), so any character the laid-out lines
+    /// don't cover — the last line's range ends short of the whole text — points at dropped
+    /// content. Text that fits completely covers its end: paragraph breaks are inside their
+    /// lines, and a trailing empty paragraph that fits gains its own (empty) line. Empty text
+    /// has nothing to drop. Callers gate this on the shape being a box; point text has no box
+    /// to overflow.
+    pub fn overflows(&self, text: &str) -> bool {
+        !text.is_empty() && self.lines.last().is_none_or(|ln| ln.range.end < text.len())
     }
 
     /// Byte offset of the caret nearest to a text-space point.
@@ -272,6 +287,7 @@ impl Layouter {
         Self { lcx: LayoutContext::new(), optical: crate::optical::Cache::default() }
     }
 
+    /// Lays out text runs into positioned glyphs, shaped lines, and decoration rectangles at target DPI.
     pub fn layout(&mut self, fonts: &mut FontDb, t: &TextLayer, dpi: f32) -> TextLayout {
         let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
         let runs = t.char_runs();
@@ -306,6 +322,7 @@ impl Layouter {
             // Box and area text wrap, align within their lines and hide what doesn't fit.
             wraps: is_box || area.is_some(),
             box_rect,
+            path_range: crate::warp::path_range_length(&t.shape).map(|n| n.min(f32::MAX as f64) as f32),
             area,
         };
         let mut flow = Flow::default();
@@ -313,7 +330,7 @@ impl Layouter {
             if flow.stop {
                 break;
             }
-            let ps = paras[para_starts.iter().rposition(|&s| s <= prange.start).unwrap_or(0)].style.clone();
+            let ps = paras[run_index_at(&para_starts, prange.start)].style.clone();
             self.layout_paragraph(fonts, &mut out, &mut flow, Para::new(&env, fonts, pi, prange, ps));
         }
         out.styles = styles;
@@ -364,6 +381,9 @@ struct Env<'a> {
     /// Box and area text wrap, align within their lines and hide what doesn't fit.
     wraps: bool,
     box_rect: (f32, f32, f32, f32),
+    /// Available explicit path span in text-space pixels, capped by the curve's capacity.
+    /// `None` keeps legacy alignment around the start anchor (an alignment span of zero).
+    path_range: Option<f32>,
     area: Option<crate::area::AreaShape>,
 }
 

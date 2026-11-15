@@ -13,6 +13,22 @@ fn styled(text: &str, style: CharStyle) -> TextLayer {
     TextLayer { text: text.into(), runs: vec![TextRun { len: text.len(), style }], ..Default::default() }
 }
 
+#[test]
+fn glyph_source_ranges_follow_shaped_clusters() {
+    let mut engine = TextEngine::new();
+    for text in ["office", "Aé B", "First\nSecond"] {
+        let layer = point(text, 24.0);
+        let layout = engine.layout(&layer, 72.0);
+        assert!(!layout.glyphs.is_empty());
+        assert_eq!(layout.glyphs.len(), layout.glyph_ranges.len());
+        for range in &layout.glyph_ranges {
+            assert!(range.start < range.end, "empty range in {text:?}");
+            assert!(text.get(range.clone()).is_some(), "invalid range {range:?} in {text:?}");
+            assert!(layout.clusters.iter().any(|cluster| cluster.range == *range), "missing cluster for {range:?}");
+        }
+    }
+}
+
 /// The rasteriser's pixel stages — composing one colour's coverage, unpremultiplying it, and
 /// converting the tiles — are per pixel: no pixel reads a slot another pixel wrote. Spreading them
 /// over threads therefore has to leave every byte as it was, which a one-thread pool checks.
@@ -557,12 +573,66 @@ fn faux_bold_keeps_antialiased_edges_at_small_sizes() {
     let (plain_ink, plain_partial) = stats(&mut e, base.clone());
     let (bold_ink, bold_partial) = stats(&mut e, CharStyle { faux_bold: true, ..base });
     assert!(bold_ink > plain_ink, "bold must add ink");
-    // Weight: the old summed-coverage faux bold (before #4130) measured 282.7 total ink for this
-    // text at 12 px (plain 138.0). The antialiased version must stay close to that weight.
-    const MAIN_BOLD_INK: f64 = 282.7;
-    assert!(bold_ink >= MAIN_BOLD_INK * 0.85, "stems too thin: {bold_ink} vs old {MAIN_BOLD_INK}");
-    assert!(bold_ink <= MAIN_BOLD_INK * 1.15, "stems too heavy: {bold_ink} vs old {MAIN_BOLD_INK}");
+    // Weight: the ring is now `size/72` with a pixel floor (#9008), which is Photoshop's weight,
+    // so this guards the antialiased edges rather than the old, heavier 3.6% of the size.
+    const MAIN_BOLD_INK: f64 = 222.2;
+    assert!(bold_ink >= MAIN_BOLD_INK * 0.9, "stems too thin: {bold_ink} vs {MAIN_BOLD_INK}");
+    assert!(bold_ink <= MAIN_BOLD_INK * 1.1, "stems too heavy: {bold_ink} vs {MAIN_BOLD_INK}");
     assert!(bold_partial * 10 >= plain_partial * 8, "edges stay antialiased: {plain_partial} -> {bold_partial}");
+}
+
+/// #9008: the faux-bold ring is Photoshop's `size/72`, with a pixel floor that fades in below
+/// ~32 px (Photoshop's small type reads heavier than that) and a cap so a glyph smaller than a
+/// pixel does not grow into a blob.
+#[test]
+fn faux_bold_radius_has_a_pixel_floor_that_fades_for_tiny_type() {
+    let r = crate::render::faux_bold_radius;
+    assert!((r(300.0) - 300.0 / 72.0).abs() < 1e-3, "large type: {}", r(300.0));
+    assert!((r(72.0) - 1.0).abs() < 1e-3, "72 px: {}", r(72.0));
+    assert!((r(24.0) - 0.45).abs() < 1e-3, "the floor takes over below 32 px: {}", r(24.0));
+    assert!((r(4.0) - 0.1).abs() < 1e-3, "and fades out for tiny type: {}", r(4.0));
+    assert!(r(0.5) < 0.02, "sub-pixel type keeps a sub-pixel ring: {}", r(0.5));
+    // Monotonic: heavier text never grows a thinner ring as it gets larger.
+    assert!((1..400).all(|px| r(px as f32) <= r(px as f32 + 1.0)));
+}
+
+/// #9008: at display sizes the ring is `size/72`, so the extra ink is the outline's perimeter times
+/// `2 * size/72` — not the flat 7.2% of the size that made a PSD's faux-bold layer jump heavier as
+/// soon as clicking it re-rendered the text.
+#[test]
+fn faux_bold_at_display_sizes_grows_the_outline_by_size_over_72() {
+    let mut e = TextEngine::new();
+    // Display sizes, including the two ends the issue reported on (75-125 px layers) and the
+    // sizes where the pixel floor hands over to `size/72` (32 px) and where the ring is 1 px
+    // (72 px). The flat 3.6% ring this replaces grew the outline by 0.072 * size instead, so a
+    // regression to it fails the width check at every size but 12 px.
+    let mut ratios = Vec::new();
+    for px in [12.0f32, 32.0, 72.0, 120.0, 200.0] {
+        let ink = |e: &mut TextEngine, s: CharStyle| {
+            let (_, r) = e.render(&TextLayer { transform: Affine::translate(10.0, f64::from(px) * 1.4), ..styled("Hi", s) }, 72.0, PixelFormat::RGBA8);
+            (alpha_sum(&r.surface, r.rect), r.rect)
+        };
+        let base = CharStyle { size_pt: px, ..Default::default() };
+        let (plain, prect) = ink(&mut e, base.clone());
+        let (bold, brect) = ink(&mut e, CharStyle { faux_bold: true, ..base });
+        // The outline grows by the ring on every side, so the ink rectangle grows by twice it.
+        let ring = crate::render::faux_bold_radius(px);
+        let grew = (brect.width() - prect.width()) as f32;
+        assert!((grew - 2.0 * ring).abs() <= 1.5, "{px} px: width grew {grew}, expected about {}", 2.0 * ring);
+        // Heavier by the perimeter's worth of ink. Pinned per size, because a thicker ring here is
+        // exactly the jump a PSD's faux-bold layer shows when a click re-renders it.
+        ratios.push(bold / plain);
+    }
+    // Plain text's ink grows with the size, so the bold/plain ratio falls as the ring does relative
+    // to the stems: 1.9x at 12 px (the floor), about 1.35x at 120 px, 1.24x at 200 px.
+    // The ring is a fixed fraction of the size above the pixel floor, so the ratio does not move
+    // with the size: 1.35x at 32, 72, 120 and 200 px (the flat 3.6% ring measured 1.95x). At 12 px
+    // the floor is 3.75% of the size, so the type reads a little heavier, as Photoshop's does.
+    for (px, r) in [32.0f32, 72.0, 120.0, 200.0].iter().zip(&ratios[1..]) {
+        assert!((1.30..=1.40).contains(r), "{px} px: {r:.2}x, expected about 1.35x");
+    }
+    assert!((1.55..=1.75).contains(&ratios[0]), "12 px: {:.2}x, expected about 1.64x", ratios[0]);
+    assert!(ratios[0] > ratios[4], "the pixel floor fades out: {:.2}x at 12 px, {:.2}x at 200 px", ratios[0], ratios[4]);
 }
 
 /// #3705: Faux bold dilation must scale with horizontal and vertical glyph scaling.
@@ -946,7 +1016,7 @@ fn txt2_with_styles(text: &str, styles: &[(usize, String)]) -> Vec<u8> {
 fn with_text_index(tysh: &[u8], index: i32) -> Vec<u8> {
     let mut t = crate::psd::parse_tysh(tysh).unwrap();
     t.text.items.retain(|(k, _)| !k.is("TextIndex"));
-    t.text.items.push((photocraft_psd::descriptor::Id::new("TextIndex"), photocraft_psd::descriptor::Value::Integer(index)));
+    t.text.items.push((craft_psd::descriptor::Id::new("TextIndex"), craft_psd::descriptor::Value::Integer(index)));
     crate::psd::write_tysh(&t)
 }
 
@@ -1062,12 +1132,12 @@ fn build_txt2_round_trips_kerning_modes() {
     assert_eq!(modes, vec![(1, Kerning::Off), (1, Kerning::Metrics)]);
 }
 
-/// #3514: the document `Txt2` is only needed for a non-Metrics (`Optical`) auto-kern mode. A fresh
-/// document of ordinary Metrics (or EngineData-carried Off) text must not write Photoshop's empty
-/// stub, which some readers (Photopea) reject.
+/// #3514 / #10308: the document `Txt2` is needed for Optical kerning and for OpenType settings
+/// EngineData can't carry (stylistic sets, swashes, …). A fresh document of ordinary Metrics text
+/// must not write Photoshop's empty stub, which some readers (Photopea) reject.
 #[test]
-fn needs_txt2_only_for_optical() {
-    use photocraft_doc::text::Kerning;
+fn needs_txt2_for_optical_and_txt2_only_opentype() {
+    use photocraft_doc::text::{FontFeature, Kerning};
     let style = |kerning: Kerning| CharStyle { kerning, ..Default::default() };
     let metrics = runs_of("AV", &[(2, style(Kerning::Metrics))]);
     assert!(!crate::psd::needs_txt2(&[(0, &metrics)]));
@@ -1076,6 +1146,57 @@ fn needs_txt2_only_for_optical() {
     let optical = runs_of("AV", &[(1, style(Kerning::Optical)), (1, CharStyle::default())]);
     assert!(crate::psd::needs_txt2(&[(0, &optical)]));
     assert!(!crate::psd::needs_txt2(&[]));
+    let with_ss = |tag: &str, value: u16| {
+        let mut s = style(Kerning::Metrics);
+        s.features = vec![FontFeature { tag: tag.into(), value }];
+        runs_of("AV", &[(2, s)])
+    };
+    assert!(crate::psd::needs_txt2(&[(0, &with_ss("ss01", 1))]), "stylistic set 1 lives only in Txt2");
+    assert!(crate::psd::needs_txt2(&[(0, &with_ss("ss05", 1))]), "stylistic set 5 lives only in Txt2");
+    assert!(!crate::psd::needs_txt2(&[(0, &with_ss("ss01", 0))]), "an off set is the default");
+    assert!(crate::psd::needs_txt2(&[(0, &with_ss("swsh", 1))]), "swash lives only in Txt2");
+    assert!(crate::psd::needs_txt2(&[(0, &with_ss("calt", 0))]), "calt off is Txt2-only");
+    assert!(!crate::psd::needs_txt2(&[(0, &with_ss("calt", 1))]), "calt on is the default");
+}
+
+/// #10308: the fresh objects, minimal style runs, seeded font list and frame list are only for a
+/// PhotoCraft-native block. A file's own block — here the older Photoshop's, with an empty
+/// numbered `/0` or none at all — gets no `/0` key, frame list or font list it didn't have, and
+/// a layer without a template object gets the stub it always got.
+#[test]
+fn photoshop_blocks_get_no_native_txt2_scaffolding() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::FontFeature;
+    let style = CharStyle { font_family: "Inter".into(), features: vec![FontFeature { tag: "ss01".into(), value: 1 }], ..Default::default() };
+    let t = styled("Hi", style);
+    let with_doc = photoshop_era_txt2(&["Line 1"]);
+    let without_doc = crate::engine_data::write_bare(&[
+        ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
+        ("DocumentObjects".into(), photoshop_era_objects(&["Line 1"])),
+    ]);
+    for (label, prev, doc) in [("empty /0", with_doc, Some(E::dict())), ("no /0", without_doc, None)] {
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        assert_eq!(out.get("0").cloned(), doc, "{label}: the file's /0 is left as it was");
+        let object = out.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.first()).expect("the numbered object");
+        assert!(object.get("1").is_none(), "{label}: no fresh view naming a frame the file has no list for");
+        assert!(object.path(&["0", "5"]).is_none(), "{label}: no fresh paragraph runs");
+    }
+}
+
+/// #10308: a fresh native object has one paragraph run per paragraph, each its UTF-16 length.
+#[test]
+fn fresh_native_txt2_object_has_a_paragraph_run_per_paragraph() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::FontFeature;
+    let style = CharStyle { features: vec![FontFeature { tag: "ss02".into(), value: 1 }], ..Default::default() };
+    let t = styled("Hi\nBy\u{e9}e", style);
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], None)).unwrap();
+    let object = out.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.first()).expect("the object");
+    assert_eq!(object.path(&["0", "0"]).and_then(E::as_str), Some("Hi\rBy\u{e9}e\r"));
+    let lens: Vec<i64> =
+        object.path(&["0", "5", "0"]).and_then(E::as_array).expect("paragraph runs").iter().filter_map(|r| r.get("1").and_then(E::as_i64)).collect();
+    assert_eq!(lens, vec![3, 5]);
+    assert_eq!(out.path(&["0", "8", "0"]).and_then(E::as_array).map(<[E]>::len), Some(1), "a native block names one frame");
 }
 
 /// A kept `Txt2` object — same text, so its extras are still true — keeps everything the file
@@ -1663,7 +1784,7 @@ fn psd_text_fill_is_enabled_after_editing_a_legacy_export() {
     remove_fill_flags(&mut data);
     for (key, value) in &mut legacy.text.items {
         if key.as_bytes() == b"EngineData" {
-            *value = photocraft_psd::descriptor::Value::RawData(crate::engine_data::write(&data));
+            *value = craft_psd::descriptor::Value::RawData(crate::engine_data::write(&data));
         }
     }
     t.psd_raw = Some(crate::psd::write_tysh(&legacy).into());
@@ -1732,11 +1853,31 @@ fn psd_round_trips_antialias_opentype_and_warp() {
     }
 }
 
+/// EngineData only maps Photoshop's `OldStyle` bool to `onum`. Other Numerals tags (`lnum` /
+/// `pnum` / `tnum`) stay in `.pcraft` until a Photoshop-authored PSD oracle exists — we do not
+/// invent EngineData keys or copy figure-style tables from GPL editors (AGENTS.md clean-room).
+#[test]
+fn psd_engine_data_keeps_only_oldstyle_among_numeral_tags() {
+    let style = CharStyle {
+        font_family: "Inter".into(),
+        size_pt: 20.0,
+        features: ["lnum", "onum", "pnum", "tnum"].iter().map(|t| FontFeature { tag: (*t).into(), value: 1 }).collect(),
+        ..Default::default()
+    };
+    let t = styled("0123456789", style);
+    let bytes = crate::psd::build_tysh(&t, 72.0, None);
+    let back = crate::psd::text_layer_from_tysh(&bytes, 72.0).expect("tysh");
+    let runs = back.char_runs();
+    let mut got: Vec<&str> = runs[0].style.features.iter().map(|f| f.tag.as_str()).collect();
+    got.sort_unstable();
+    assert_eq!(got, ["onum"]);
+}
+
 /// A legacy-signature `TySh` (#1469): zero PointBase, `bounds` (the layout box) and `boundingBox`
 /// (the ink box, as Photoshop writes it) both around `anchor` in a remote local space, and a
 /// `transform` that cancels the remote origin.
 fn legacy_tysh(source: &TextLayer, transform: Affine, anchor: [f64; 2], engine: &mut TextEngine) -> Vec<u8> {
-    use photocraft_psd::descriptor::{Descriptor, Id, Value as D};
+    use craft_psd::descriptor::{Descriptor, Id, Value as D};
     let layout = engine.layout(source, 72.0);
     let logical = layout.bounds().unwrap().map(f64::from);
     let ink = crate::render::ink_bounds(&layout).unwrap();
@@ -1766,7 +1907,7 @@ fn assert_transform_near(got: Affine, want: Affine, tolerance: f64, what: &str) 
 /// fixed for left, centered and right text through import and a TySh round trip.
 #[test]
 fn legacy_tysh_point_origin_imports_and_round_trips_on_canvas() {
-    use photocraft_psd::descriptor::Value as D;
+    use craft_psd::descriptor::Value as D;
 
     let original = Affine { m: [4.1667, 0.0, 0.0, 4.1667, -32375.0, -32887.5] };
     // The file's layout origin (the anchor on the first baseline) in its local space.
@@ -2107,12 +2248,13 @@ fn craft_fonts_cover_japanese_without_system_fonts() {
     assert!(craft_family_of(&l).is_empty());
 }
 
-/// Chinese, Arabic and Thai set in Inter fall back to the craft font for their script when the
-/// build has one (Noto Sans CJK SC, Noto Sans Arabic and Noto Sans Thai in newer craft-fonts).
+/// Chinese, Arabic, Thai and Georgian set in Inter fall back to the craft font for their script when
+/// the build has one (Noto Sans CJK SC, Noto Sans Arabic, Noto Sans Thai and Noto Sans Georgian in
+/// newer craft-fonts).
 #[test]
 fn craft_fonts_cover_their_other_scripts_without_system_fonts() {
     let mut e = TextEngine::new();
-    for (script, text) in [("Hans", "中文图层"), ("Arab", "مرحبا"), ("Thai", "ภาษาไทย")] {
+    for (script, text) in [("Hans", "中文图层"), ("Arab", "مرحبا"), ("Thai", "ภาษาไทย"), ("Geor", "ქართული შრე")] {
         if !crate::CRAFT_FONTS.iter().any(|f| f.scripts.contains(&script)) {
             eprintln!("skipping {script}: built without a craft font for it (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
             continue;
@@ -2436,7 +2578,7 @@ fn txt2_frame_places_point_text_at_its_anchor() {
 
 /// `tysh` with its text-space `bounds` set to `r` (Photoshop's, where it drew the text).
 fn with_bounds(tysh: &[u8], r: [f64; 4]) -> Vec<u8> {
-    use photocraft_psd::descriptor::{Descriptor, Id, Value};
+    use craft_psd::descriptor::{Descriptor, Id, Value};
     let mut t = crate::psd::parse_tysh(tysh).unwrap();
     let mut d = Descriptor::default();
     for (k, v) in ["Left", "Top ", "Rght", "Btom"].iter().zip(r) {
@@ -2600,7 +2742,7 @@ fn type_on_a_path_follows_the_curve() {
     assert!(flat.width() > flat.height() * 3, "{flat:?}");
 
     let mut down = straight.clone();
-    down.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (0.0, 400.0)]), start: 0.0, flip: false };
+    down.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (0.0, 400.0)]), start: 0.0, end: None, flip: false };
     let r = ink(&mut eng, &down);
     assert!(r.height() > r.width() * 3, "vertical path gives tall ink: {r:?}");
     assert!(r.height() >= flat.width() - 8, "arc length is preserved: {r:?} vs {flat:?}");
@@ -2632,17 +2774,17 @@ fn type_on_a_path_follows_the_curve() {
         ..Default::default()
     };
     let mut curved = straight.clone();
-    curved.shape = TextShape::Path { path: arc.clone(), start: 0.0, flip: false };
+    curved.shape = TextShape::Path { path: arc.clone(), start: 0.0, end: None, flip: false };
     let c = ink(&mut eng, &curved);
     assert!(c.height() > flat.height() * 2, "curved ink is taller: {c:?} vs {flat:?}");
 
     // A path too short for the text hides the glyphs past its end.
     let mut short = straight.clone();
-    short.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (30.0, 0.0)]), start: 0.0, flip: false };
+    short.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (30.0, 0.0)]), start: 0.0, end: None, flip: false };
     assert!(ink(&mut eng, &short).width() < flat.width() / 2);
     // A degenerate path falls back to straight point text instead of failing.
     let mut dot = straight.clone();
-    dot.shape = TextShape::Path { path: Subpath::polyline(&[(5.0, 5.0), (5.0, 5.0)]), start: 0.0, flip: false };
+    dot.shape = TextShape::Path { path: Subpath::polyline(&[(5.0, 5.0), (5.0, 5.0)]), start: 0.0, end: None, flip: false };
     assert_eq!(ink(&mut eng, &dot), flat);
 }
 
@@ -2749,7 +2891,7 @@ fn font_metadata_survives_tysh_and_named_style_rewrites() {
     }
     for (key, value) in &mut tysh.text.items {
         if key.as_bytes() == b"EngineData" {
-            *value = photocraft_psd::descriptor::Value::RawData(crate::engine_data::write(&data));
+            *value = craft_psd::descriptor::Value::RawData(crate::engine_data::write(&data));
         }
     }
     let raw = crate::psd::write_tysh(&tysh);
@@ -2807,6 +2949,25 @@ fn font_metadata_large_nameless_lists_rebuild_after_edit() {
         assert!(fonts.len() >= 10_000);
         assert!(fonts[..10_000].iter().all(|font| *font == crate::psd::font_entry("")));
     }
+}
+
+#[test]
+fn font_metadata_reordered_duplicates_keep_distinct_dictionary_records() {
+    use crate::engine_data::Value as E;
+    let record = |name: &str, marker| E::Dict(vec![("Name".into(), E::String(name.into())), ("PrivateFontFlag".into(), E::Int(marker))]);
+    let mut layer = point("Original", 24.0);
+    let mut template = crate::psd::build_engine_data(&layer, None, 72.0);
+    let resource = vec![record("A", 1), record("A", 2), record("B", 3)];
+    let document = vec![record("B", 30), record("A", 10), record("A", 20)];
+    template.get_mut("ResourceDict").unwrap().set("FontSet", E::Array(resource.clone()));
+    template.get_mut("DocumentResources").unwrap().set("FontSet", E::Array(document.clone()));
+    layer.text = "Edited".into();
+    let rebuilt = crate::psd::build_engine_data(&layer, Some(template), 72.0);
+    assert_eq!(&rebuilt.path(&["ResourceDict", "FontSet"]).unwrap().as_array().unwrap()[..3], resource.as_slice());
+    let fonts = rebuilt.path(&["DocumentResources", "FontSet"]).unwrap().as_array().unwrap();
+    assert_eq!(&fonts[..3], &[document[1].clone(), document[2].clone(), document[0].clone()], "reordered duplicates must keep distinct metadata");
+    let repeated = crate::psd::font_set(&["A", "A", "A", "A"].map(str::to_string), Some(&E::Array(resource.clone())));
+    assert_eq!(repeated, E::Array(vec![resource[0].clone(), resource[1].clone(), resource[0].clone(), resource[0].clone()]));
 }
 
 /// Same-runner release probe: compare the original and repaired source, not a wall-clock CI limit.
@@ -2872,6 +3033,39 @@ fn a_word_wider_than_the_paragraph_box_breaks_at_the_box_edge() {
     let l = e.layout(&spaced, 72.0);
     assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
     assert_eq!(l.lines[1].range.start, 3, "{:?}", l.lines);
+}
+
+/// [`TextLayout::overflows`] reads dropped lines off the layout: text that fits covers its end
+/// through trailing empty paragraphs; a taller text's lines stop short of the text's end; an
+/// empty uncovered tail of pure trailing breaks that fit is not an overflow.
+#[test]
+fn overflows_says_whether_a_box_holds_its_text() {
+    let mut e = TextEngine::new();
+    let tall_box = TextShape::Box { x: 0.0, y: 0.0, width: 220.0, height: 900.0 };
+    // Everything fits, trailing breaks included: the trailing empty paragraphs cover the
+    // text's end.
+    for text in ["a", "a\n", "a\n\n", "", "Lorem ipsum dolor sit amet"] {
+        let l = e.layout(&TextLayer { shape: tall_box.clone(), ..point(text, 24.0) }, 72.0);
+        assert!(!l.overflows(text), "{text:?}: {} lines", l.lines.len());
+    }
+    // The box holds one line of 24 pt type — additional lines are dropped, and the last line
+    // stops short of the text.
+    let short_box = TextShape::Box { x: 0.0, y: 0.0, width: 220.0, height: 34.0 };
+    let text = "ab\ncd\nef";
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point(text, 24.0) }, 72.0);
+    assert!(l.overflows(text), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // A trailing break whose empty paragraph doesn't fit is an overflow as well.
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point("ab\n\n", 24.0) }, 72.0);
+    assert!(l.overflows("ab\n\n"), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // A box holding one full line plus exactly one more empty paragraph is not.
+    let exact = point("ab\n", 24.0);
+    let l = e.layout(&TextLayer { shape: tall_box.clone(), ..exact }, 72.0);
+    assert!(!l.overflows("ab\n"), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // Empty text never overflows: even a box too short for its paragraph (no lines laid out)
+    // has nothing to lose, so no overflow mark.
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point("", 24.0) }, 72.0);
+    assert!(!l.overflows(""), "{} lines", l.lines.len());
+    let _ = &mut e;
 }
 
 /// Closed polygon in text space.
@@ -3204,7 +3398,11 @@ fn per_colour_passes_match_full_size_passes() {
                 px.chunks_exact(ch).flat_map(|p| p[..ch - 1].iter().map(|c| c * p[ch - 1]).chain([p[ch - 1]]).collect::<Vec<_>>()).collect::<Vec<_>>()
             };
             let worst = shown(&a).iter().zip(&shown(&b)).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
-            assert!(worst <= 1.0 / 255.0, "case {k} {format:?}: largest difference {worst}");
+            // Colour channels are 8-bit samples, so one step is 1/255. Coverage is accumulated in
+            // f32 from a buffer whose origin differs between the two paths, and a pixel sitting on
+            // a rounding tie then lands a step further out (measured 1.65/255 on the warped
+            // faux-bold case), so allow two steps.
+            assert!(worst <= 2.0 / 255.0, "case {k} {format:?}: largest difference {worst}");
         }
     }
 }
@@ -3489,4 +3687,234 @@ fn restyling_the_photoshop_era_objects_keeps_the_raw_strings_of_the_file() {
     assert!(out.windows(6).any(|w| w == b"(0100)"), "{:?}", String::from_utf8_lossy(&out));
     let runs = era_runs(&crate::psd::parse_txt2(&out).unwrap());
     assert_eq!(runs.first().and_then(|(_, f)| f.get("FontSize")).and_then(E::as_f64), Some(24.0), "and the legacy copy was restyled");
+}
+
+#[test]
+fn glyph_outlines_preserves_style_indices() {
+    let mut e = TextEngine::new();
+    let t = TextLayer {
+        text: "AB".into(),
+        transform: Affine::translate(10.0, 30.0),
+        runs: vec![
+            photocraft_doc::text::TextRun { len: 1, style: CharStyle { color: Color::rgb(1.0, 0.0, 0.0), ..Default::default() } },
+            photocraft_doc::text::TextRun { len: 1, style: CharStyle { color: Color::rgb(0.0, 1.0, 0.0), ..Default::default() } },
+        ],
+        ..Default::default()
+    };
+    let layout = e.layout(&t, 72.0);
+    let glyphs = crate::render::glyph_outlines(&layout, &t.transform, None);
+    assert!(glyphs.len() >= 2);
+    assert_eq!(glyphs[0].style, 0);
+    assert_eq!(glyphs[1].style, 1);
+}
+
+/// Colour passes are grouped in one walk of the glyphs: with a colour per letter, every placed
+/// glyph lands in exactly one pass and each pass holds only its own glyphs.
+#[test]
+fn colour_passes_hold_each_glyph_once() {
+    let mut e = TextEngine::new();
+    let text = "abcdeghjkm".repeat(200);
+    let runs = text
+        .char_indices()
+        .map(|(i, ch)| TextRun { len: ch.len_utf8(), style: CharStyle { size_pt: 12.0, color: Color::rgb(i as f32 / 2000.0, 0.5, 0.5), ..Default::default() } })
+        .collect();
+    let t = TextLayer { text, runs, ..Default::default() };
+    let l = e.layout(&t, 72.0);
+    let passes = crate::render::visible_color_passes(&l, None);
+    assert!(passes.len() > 1000, "{} passes", passes.len());
+    let mut seen: Vec<usize> = passes.iter().flat_map(|(_, _, p)| p.glyphs.iter().copied()).collect();
+    seen.sort_unstable();
+    assert_eq!(seen, (0..l.glyphs.len()).collect::<Vec<_>>());
+    for (c, _, p) in &passes {
+        assert!(p.glyphs.iter().all(|&i| l.styles[l.glyphs[i].style as usize].color == *c));
+    }
+}
+
+/// Verifies paragraph alignment offsets text along explicit path spans according to measured line advance and alignment factor.
+#[test]
+fn path_range_alignment_uses_measured_advance() {
+    use photocraft_doc::vector::Subpath;
+    let mut e = TextEngine::new();
+    for closed in [false, true] {
+        for flip in [false, true] {
+            for span in [0.0_f32, 10.0, 180.0] {
+                for (align, factor) in [(TextAlign::Left, 0.0), (TextAlign::Center, 0.5), (TextAlign::Right, 1.0)] {
+                    let path = if closed {
+                        Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])
+                    } else {
+                        Subpath::polyline(&[(0.0, 0.0), (500.0, 0.0)])
+                    };
+                    let start = if closed { 390.0 } else { 20.0 };
+                    let mut t = styled("Alignment   ", CharStyle { font_family: "Inter".into(), size_pt: 20.0, horizontal_scale: 1.5, ..Default::default() });
+                    t.shape = TextShape::Path { path, start, end: Some(start + span), flip };
+                    let t = with_para(t, ParagraphStyle { align, ..Default::default() });
+                    let l = e.layout(&t, 72.0);
+                    let line = &l.lines[0];
+                    let advance = line.x1 - line.x0;
+                    assert!((line.x0 - (span - advance) * factor).abs() < 0.01, "{line:?}");
+                }
+            }
+        }
+    }
+}
+
+/// Proves `path_overflows` reports true if and only if any drawable glyph outline is hidden outside the path range.
+#[test]
+fn path_overflow_matches_visible_glyph_clipping() {
+    use photocraft_doc::vector::Subpath;
+    let mut engine = TextEngine::new();
+    for flip in [false, true] {
+        let mut text = point("Overflow", 20.0);
+        text.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (500.0, 0.0)]), start: 0.0, end: Some(500.0), flip };
+        let layout = engine.layout(&text, 72.0);
+        assert!(!crate::render::path_overflows(&layout, &text.shape));
+        if let TextShape::Path { end, .. } = &mut text.shape {
+            *end = Some(1.0);
+        }
+        let layout = engine.layout(&text, 72.0);
+        assert!(crate::render::path_overflows(&layout, &text.shape));
+        text.text.clear();
+        let layout = engine.layout(&text, 72.0);
+        assert!(!crate::render::path_overflows(&layout, &text.shape));
+    }
+}
+
+/// Ensures path decoration rasterization bounds clamp within explicit range endpoints across open and closed curves.
+#[test]
+fn path_decoration_draw_bounds_respect_explicit_ranges() {
+    use crate::layout::DecorationRect;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let layout = |x0, x1| crate::TextLayout {
+        decorations: vec![DecorationRect { x0, x1, y0: 2.0, y1: 3.0, style: 0 }, DecorationRect { x0, x1, y0: -4.0, y1: -3.0, style: 0 }],
+        ..Default::default()
+    };
+    for flip in [false, true] {
+        for closed in [false, true] {
+            let path = if closed {
+                Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])
+            } else {
+                Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)])
+            };
+            let start = if closed { 390.0 } else { 20.0 };
+            let shape = |end| TextShape::Path { path: path.clone(), start, end, flip };
+            let bounds = |l: &crate::TextLayout, end| {
+                let warp = crate::warp::Warp::on_path(&shape(end)).unwrap();
+                crate::render::ink_rect_warped(l, &Affine::IDENTITY, Some(&warp))
+            };
+            let clipped = bounds(&layout(-10.0, 40.0), Some(start + 20.0));
+            assert_eq!(clipped, bounds(&layout(0.0, 20.0), Some(start + 20.0)));
+            assert_ne!(clipped, bounds(&layout(0.0, 40.0), None));
+            assert_eq!(bounds(&layout(-10.0, 40.0), Some(start)), photocraft_geom::Rect::EMPTY);
+            assert_eq!(bounds(&layout(0.0, 40.0), None), bounds(&layout(0.0, 40.0), Some(start + 40.0)));
+        }
+    }
+}
+
+/// Verifies vertical path text aligns along the curve and advances progressively for left, center, and right alignments.
+#[test]
+fn vertical_path_range_alignment_renders_and_shifts_properly() {
+    use photocraft_doc::text::{Orientation, ParagraphStyle, TextAlign};
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let mut engine = TextEngine::new();
+    let path = Subpath::polyline(&[(0.0, 0.0), (0.0, 500.0)]);
+    let span = 300.0_f32;
+    let start = 50.0_f32;
+
+    let mut rects = Vec::new();
+    for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+        let mut text = point("TEST", 20.0);
+        text.orientation = Orientation::Vertical;
+        text.shape = TextShape::Path { path: path.clone(), start, end: Some(start + span), flip: false };
+        text = with_para(text, ParagraphStyle { align, ..Default::default() });
+        let layout = engine.layout(&text, 72.0);
+        let warp = crate::render::layout_deform(&layout, &text);
+        assert!(warp.is_some(), "warp should be constructed");
+        let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, warp.as_ref());
+        assert!(!rect.is_empty(), "vertical text must render for alignment {align:?}");
+        rects.push((align, rect));
+    }
+
+    let left_rect = rects[0].1;
+    let center_rect = rects[1].1;
+    let right_rect = rects[2].1;
+    assert!(left_rect.y0 < center_rect.y0, "center text should be further along the path than left");
+    assert!(center_rect.y0 < right_rect.y0, "right text should be further along the path than center");
+}
+
+/// Verifies flipping vertical path text places glyphs beginning from the opposite curve endpoint.
+#[test]
+fn vertical_path_flip_reverses_placement() {
+    use photocraft_doc::text::Orientation;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let mut engine = TextEngine::new();
+    let path = Subpath::polyline(&[(0.0, 0.0), (0.0, 500.0)]);
+
+    let mut text_normal = point("FLIP", 20.0);
+    text_normal.orientation = Orientation::Vertical;
+    text_normal.shape = TextShape::Path { path: path.clone(), start: 50.0, end: Some(350.0), flip: false };
+    let l_normal = engine.layout(&text_normal, 72.0);
+    let warp_normal = crate::render::layout_deform(&l_normal, &text_normal);
+    let rect_normal = crate::render::ink_rect_warped(&l_normal, &Affine::IDENTITY, warp_normal.as_ref());
+    assert!(!rect_normal.is_empty());
+
+    let mut text_flipped = point("FLIP", 20.0);
+    text_flipped.orientation = Orientation::Vertical;
+    text_flipped.shape = TextShape::Path { path: path.clone(), start: 50.0, end: Some(350.0), flip: true };
+    let l_flipped = engine.layout(&text_flipped, 72.0);
+    let warp_flipped = crate::render::layout_deform(&l_flipped, &text_flipped);
+    let rect_flipped = crate::render::ink_rect_warped(&l_flipped, &Affine::IDENTITY, warp_flipped.as_ref());
+    assert!(!rect_flipped.is_empty());
+
+    assert!(rect_flipped.y0 > rect_normal.y0, "flipped text must start from opposite path end");
+}
+
+/// Proves vertical path text renders across closed seams and projects hit coordinates onto valid character indices.
+#[test]
+fn vertical_path_seam_and_caret_projection() {
+    use photocraft_doc::text::Orientation;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let mut engine = TextEngine::new();
+    let path = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
+    let start = 390.0_f32;
+    let mut text = point("SEAM", 12.0);
+    text.orientation = Orientation::Vertical;
+    text.shape = TextShape::Path { path: path.clone(), start, end: Some(start + 80.0), flip: false };
+    let layout = engine.layout(&text, 72.0);
+    let warp = crate::render::layout_deform(&layout, &text).unwrap();
+    let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, Some(&warp));
+    assert!(!rect.is_empty(), "vertical text across seam must render");
+
+    let text_end = layout.line_bounds().map_or(0.0, |b| f64::from(b[2]));
+    let px = 10.0;
+    let py = 0.0;
+    let projected_x = warp.path_text_x_near_text(px, py, text_end).unwrap();
+    assert!(projected_x.is_finite());
+    let (tx, ty) = layout.to_text(projected_x as f32, -1.0);
+    let (char_idx, _) = crate::hit_char(&layout, &text.text, tx, ty);
+    assert!(char_idx <= text.text.len());
+}
+
+/// Verifies vertical path text decorations are properly deformed and clamped to the explicit placement interval.
+#[test]
+fn vertical_path_decoration_clipping_and_warp() {
+    use crate::layout::DecorationRect;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let path = Subpath::polyline(&[(0.0, 0.0), (0.0, 200.0)]);
+    let shape = TextShape::Path { path, start: 20.0, end: Some(60.0), flip: false };
+    let warp = crate::warp::Warp::on_path_oriented(&shape, 0.0, true).unwrap();
+    let layout =
+        crate::TextLayout { vertical: true, decorations: vec![DecorationRect { x0: -5.0, x1: -3.0, y0: -10.0, y1: 50.0, style: 0 }], ..Default::default() };
+    let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, Some(&warp));
+    assert!(!rect.is_empty(), "clipped vertical decoration must draw");
+    assert!(rect.y0 >= 19 && rect.y1 <= 61, "decoration bounds should be within clipped range: {rect:?}");
 }

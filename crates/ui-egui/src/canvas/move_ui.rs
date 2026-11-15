@@ -36,9 +36,19 @@ pub(crate) fn moves_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> boo
 /// time, or with `copy` (⌥) floats a duplicate and leaves them; `copy` on a piece already floating
 /// drops it where it is and floats a copy of it. False when it failed (reported in the status bar).
 pub(crate) fn float_selected(app: &mut PhotocraftApp, copy: bool, dx: f64, dy: f64) -> bool {
+    float_selected_as(app, copy, dx, dy, None)
+}
+
+/// The start of a Move-tool drag of the selected pixels. An ⌥-drag copy is one "Duplicate" step,
+/// as in Photoshop (#11383); a plain drag is "Move".
+pub(crate) fn float_selected_for_drag(app: &mut PhotocraftApp, copy: bool) -> bool {
+    float_selected_as(app, copy, 0.0, 0.0, copy.then(|| tl!("Duplicate")))
+}
+
+fn float_selected_as(app: &mut PhotocraftApp, copy: bool, dx: f64, dy: f64, step_name: Option<&str>) -> bool {
     let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
     let dropped = if copy && floating { app.run("select.drop", json!({})) } else { Ok(json!(null)) };
-    match dropped.and_then(|_| app.run("select.float", json!({"dx": dx, "dy": dy, "copy": copy}))) {
+    match dropped.and_then(|_| app.run("select.float", json!({"dx": dx, "dy": dy, "copy": copy, "stepName": step_name}))) {
         Ok(_) => {
             crate::snap_ui::follow_cut(app);
             true
@@ -51,8 +61,85 @@ pub(crate) fn float_selected(app: &mut PhotocraftApp, copy: bool, dx: f64, dy: f
     }
 }
 
+/// Most pixel memory the layers of a live Move drag may hold. Every frame of the drag shifts
+/// copies of them by a pixel offset that is rarely a whole tile, so a multi-gigabyte layer would
+/// copy gigabytes per pointer event on the UI thread and could run the machine out of memory
+/// (#6114, #6163). Past it the drag shows the outline and arrow, as with Preferences › Interface ›
+/// Show bounding box when dragging layer, and the release moves the layers once.
+const LIVE_LIMIT: u64 = 512 << 20;
+
+/// Pixel memory a shift of `s` by a pixel offset that isn't a whole tile writes, as
+/// `Surface::translated` builds it: each target tile reads a 2 × 2 block of source tiles (one for
+/// every block holding a stored tile, so isolated tiles each straddle four), and a block inside the
+/// content whose four tiles are all stored is built once per distinct set of tiles. The inside of
+/// a solid fill (one shared tile, `fill_rect`, PSD import) therefore costs one tile however large
+/// it is; only its edge is written. Counts tile identities, never pixels: cheap at drag start.
+fn shift_bytes(s: &photocraft_raster::Surface) -> u64 {
+    let b = photocraft_compose::bounds::content_bounds(s);
+    if b.is_empty() {
+        return 0;
+    }
+    let stored: std::collections::HashMap<(i32, i32), usize> =
+        s.tiles().filter(|(c, _)| !c.rect().intersect(&b).is_empty()).map(|(c, t)| ((c.tx, c.ty), Arc::as_ptr(t) as usize)).collect();
+    let blocks: std::collections::HashSet<(i32, i32)> =
+        stored.keys().flat_map(|&(x, y)| [(x.saturating_sub(1), y.saturating_sub(1)), (x, y.saturating_sub(1)), (x.saturating_sub(1), y), (x, y)]).collect();
+    let mut built = std::collections::HashSet::new();
+    let mut written = 0u64;
+    for (x, y) in blocks {
+        let (x1, y1) = (x.saturating_add(1), y.saturating_add(1));
+        let corners = [(x, y), (x1, y), (x, y1), (x1, y1)].map(|c| stored.get(&c).copied());
+        let inside = b.contains_rect(&photocraft_geom::TileCoord::new(x, y).rect().union(&photocraft_geom::TileCoord::new(x1, y1).rect()));
+        let shared = match corners {
+            [Some(p0), Some(p1), Some(p2), Some(p3)] if inside => !built.insert([p0, p1, p2, p3]),
+            _ => false,
+        };
+        if !shared {
+            written += 1;
+        }
+    }
+    // Blocks are not trimmed to the moved content; the targets `translated` builds are, so they
+    // never exceed the tiles the content can reach either.
+    let t = photocraft_geom::TILE_SIZE as u64;
+    let reach = (u64::from(b.width()).div_ceil(t) + 1).saturating_mul(u64::from(b.height()).div_ceil(t) + 1);
+    written.min(reach).saturating_mul(t * t).saturating_mul(s.format().bytes_per_pixel() as u64)
+}
+
+/// Whether the pixel memory a live drag frame writes for the move targets `ids` of `doc` exceeds
+/// `limit`, counting what `moved_target` shifts: a target whose unlinked mask is dragged alone
+/// (`mask_target`) copies that mask only and its descendants stay put; any other target shifts its
+/// content and linked mask (and a smart object's filter mask), and every layer inside it likewise (a group's contents move whole).
+fn exceeds(doc: &Document, ids: &[LayerId], limit: u64, mask_target: bool) -> bool {
+    let mut total = 0u64;
+    for id in ids {
+        let Some(root) = doc.layer(*id) else { continue };
+        let moving = if mask_target && photocraft_engine::layer_multi_cmds::moves_mask_alone(root) {
+            total = total.saturating_add(root.mask.as_ref().map_or(0, |m| shift_bytes(&m.surface)));
+            Vec::new()
+        } else {
+            with_descendants(doc, &[*id])
+        };
+        for l in moving.iter().filter_map(|d| doc.layer(*d)) {
+            let content = l.surface().map_or(0, shift_bytes);
+            let mask = l.mask.as_ref().filter(|m| m.linked).map_or(0, |m| shift_bytes(&m.surface));
+            // `shift_smart` shifts a smart object's filter mask too, linked or not.
+            let filter_mask = match &l.content {
+                photocraft_doc::LayerContent::Smart(sm) => sm.filter_mask.as_ref().map_or(0, |m| shift_bytes(&m.surface)),
+                _ => 0,
+            };
+            total = total.saturating_add(content).saturating_add(mask).saturating_add(filter_mask);
+        }
+        if total > limit {
+            return true;
+        }
+    }
+    false
+}
+
 /// Preview keys of move drags: `BASE + n`, one per offset shown (see `canvas::display_doc`).
+/// [`PATTERN_BIT`] marks a wrapped preview so a mid-drag Pattern Preview toggle cannot reuse
+/// the other mode's cached pixels (`is_preview_key` still holds: `BASE + bit + n < BASE << 1`).
 const BASE: u64 = 1 << 39;
+const PATTERN_BIT: u64 = 1 << 20;
 
 pub(crate) struct MovePreview {
     doc: DocId,
@@ -65,29 +152,50 @@ pub(crate) struct MovePreview {
     /// than the canvas brings its pixels from beyond the edge into view (`None` = anything).
     bounds: Option<Rect>,
     canvas: Rect,
-    /// Offsets shown so far, by preview key (`BASE + index`).
+    /// Offsets shown so far, by preview key (`BASE + index`, with [`PATTERN_BIT`] when wrapping).
     offsets: Vec<(i32, i32)>,
     /// The document at the latest offset.
     shown: Option<Arc<Document>>,
     /// Shows a floating selection (`select.float`): offsets are the piece's, from where it was cut.
     floating: bool,
+    /// The moving layers hold more pixels than [`LIVE_LIMIT`]: they aren't copied for every frame
+    /// of the drag, which shows its outline and arrow alone (#6114, #6163).
+    too_big: bool,
+    /// View › Pattern Preview: pixels wrap, so a partial damage rect would leave the far edge stale.
+    pattern: bool,
 }
 
 impl MovePreview {
     fn key(&self) -> u64 {
-        BASE + self.offsets.len() as u64
+        BASE + self.offsets.len() as u64 + if self.pattern { PATTERN_BIT } else { 0 }
     }
     fn offset_of(&self, key: u64) -> Option<(i32, i32)> {
         if key == 0 {
             return Some((0, 0));
         }
-        let i = usize::try_from(key.checked_sub(BASE + 1)?).ok()?;
+        if (key & PATTERN_BIT != 0) != self.pattern {
+            return None;
+        }
+        let i = usize::try_from((key & !PATTERN_BIT).checked_sub(BASE + 1)?).ok()?;
         self.offsets.get(i).copied()
     }
     fn area(&self, d: (i32, i32)) -> Option<Rect> {
+        if self.pattern {
+            return Some(self.canvas);
+        }
         let b = self.bounds?;
         Some(if b.is_empty() { b } else { b.translate(d.0, d.1).inflate(1).intersect(&self.canvas) })
     }
+}
+
+/// `layer.translate` params, plus `"wrap": true` while View › Pattern Preview is on.
+pub(crate) fn pattern_wrap(app: &PhotocraftApp, mut args: serde_json::Value) -> serde_json::Value {
+    if app.ui.view.pattern_preview
+        && let Some(obj) = args.as_object_mut()
+    {
+        obj.insert("wrap".into(), json!(true));
+    }
+    args
 }
 
 /// The whole-pixel offset of the current Move drag on document `idx`, if one is under way.
@@ -129,6 +237,12 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     let mask_target = app.layer_mask_targeted();
     let st = app.session.documents().get(idx)?;
     let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.clone());
+    let pattern = app.ui.view.pattern_preview;
+    // A toggle of Pattern Preview mid-drag drops the old keys; `damage` is then `None` and the
+    // canvas recomposites, so preview pixels and the release share the live mode.
+    if app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision && p.pattern != pattern) {
+        app.move_preview = None;
+    }
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
     if !fresh {
         let ids = photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers());
@@ -136,19 +250,27 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
             return None;
         }
         let all = Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2);
+        // The context-free bound: it moves with the layer. `change_bounds_in` is an in-place bound
+        // (the layers beneath an adjustment, or a clip base, stay put), so it can't be translated.
         let bounds = ids.iter().try_fold(Rect::EMPTY, |acc, id| Some(acc.union(&photocraft_compose::change_bounds(doc.layer(*id)?, all)?)));
         let canvas = doc.bounds();
         let moving = with_descendants(&doc, &ids);
+        let too_big = exceeds(&doc, &ids, LIVE_LIMIT, mask_target);
         let bounds = bounds.map(|b| moving.iter().filter_map(|id| shape_reach(doc.layer(*id)?, canvas)).fold(b, |acc, r| acc.union(&r)));
-        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false });
+        app.move_preview =
+            Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false, too_big, pattern });
     }
     let p = app.move_preview.as_mut()?;
+    if p.too_big {
+        return None;
+    }
     if offset == (0, 0) && p.offsets.is_empty() {
         return None;
     }
     if p.offsets.last() != Some(&offset) {
         let t0 = crate::gpu_canvas::now_ms();
-        match photocraft_engine::layer_multi_cmds::moved_target(&doc, &p.ids, offset.0, offset.1, mask_target) {
+        let wrap = app.ui.view.pattern_preview.then_some(doc.bounds());
+        match photocraft_engine::layer_multi_cmds::moved_wrapping(&doc, &p.ids, offset.0, offset.1, mask_target, wrap) {
             Ok(d) => {
                 // Duotone documents display through their inks.
                 let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
@@ -176,7 +298,7 @@ fn shape_reach(l: &photocraft_doc::Layer, canvas: Rect) -> Option<Rect> {
 }
 
 /// `ids` and every layer inside them (groups move their contents).
-fn with_descendants(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
+pub(crate) fn with_descendants(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
     let walk = doc.walk();
     let roots: Vec<_> = walk.iter().filter(|(_, _, l)| ids.contains(&l.id)).map(|(p, _, _)| p.as_slice()).collect();
     walk.iter().filter(|(p, _, _)| roots.iter().any(|r| p.starts_with(r))).map(|(_, _, l)| l.id).collect()
@@ -223,6 +345,8 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
             offsets: Vec::new(),
             shown: None,
             floating: true,
+            too_big: false,
+            pattern: false,
         });
     }
     if offset == (0, 0) && app.move_preview.as_ref().is_none_or(|p| p.offsets.is_empty()) {
@@ -284,16 +408,23 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     // Within the range the preview and the ΔX/ΔY readout show (`drag_offset`), so the release
     // commits the offset they showed even at the lowest zoom of a huge document.
     let (dx, dy) = (dx.clamp(-1e7, 1e7), dy.clamp(-1e7, 1e7));
-    // Only when the canvas shows this very offset (else it recomposites everything once).
+    // The raw drag, including a whole number of canvases. `layer.translate` drops that only
+    // when every target is raster samples folding back onto themselves.
     let at = (dx as i32, dy as i32);
-    let shown = app.move_preview.take().filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at));
+    let pattern = app.ui.view.pattern_preview;
+    let shown = app.move_preview.take().filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at) && p.pattern == pattern);
     if dx == 0.0 && dy == 0.0 {
         return;
     }
-    if app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app)})).is_err() {
+    // `nest`: a layer dropped on another artboard joins it (Photoshop's auto-nesting).
+    let Ok(result) =
+        app.run("layer.translate", pattern_wrap(app, json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": app.ui.artboard_tool.auto_nest})))
+    else {
         return;
-    }
-    let Some(p) = shown else { return };
+    };
+    // A layer that changed board is clipped by its new board, not the old one the preview showed,
+    // so the canvas recomposites instead of keeping the preview.
+    let Some(p) = shown.filter(|_| result.get("nested").is_none()) else { return };
     crate::canvas::shown_as_document(app, p.doc, is_preview_key);
 }
 

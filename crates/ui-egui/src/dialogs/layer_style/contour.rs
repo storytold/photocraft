@@ -102,10 +102,11 @@ pub(super) fn row(
 ) {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
+        // In the page's label column, empty for Bevel & Emboss's Contour (its check box is above).
         if label.is_empty() {
-            ui.add_space(16.0);
+            ui.allocate_exact_size(vec2(super::LABEL_W, 1.0), Sense::hover());
         } else {
-            ui.label(RichText::new(tl!(label)).color(t.text_dim));
+            crate::widgets::row_label(ui, label, super::LABEL_W);
         }
         let c = contour_of(disp.get(key));
         let (r, thumb) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
@@ -126,6 +127,10 @@ pub(super) fn row(
         let mut open = was;
         if arrow.clicked() {
             open = !open;
+        }
+        // A command shortcut closes it, as it does egui's own popups (#9065).
+        if open && crate::menu_keys::popups_closed(ui.ctx()) {
+            open = false;
         }
         let mut chosen: Option<&str> = None;
         let mut chosen_user: Option<Value> = None;
@@ -190,6 +195,9 @@ pub(super) fn row(
                 act = Some(Act::Save);
             }
         });
+        if open {
+            crate::menu_keys::own_popup_shown(ui.ctx());
+        }
         if let Some(name) = delete {
             let r = app.run("layer.layerStyle.contours.delete", json!({"name": name}));
             report(app, r);

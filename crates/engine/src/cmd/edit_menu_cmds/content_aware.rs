@@ -383,8 +383,8 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
     use photocraft_algo::content_aware::fill_owned;
     // The workspace names the layer it opened on: after an Apply to a new layer that one is
     // active, but the fill still samples the original.
-    let id = match p.get("layer").and_then(Value::as_u64) {
-        Some(l) => pixel_layer_id(s, LayerId(l)),
+    let id = match crate::commands::explicit_layer(s, p)? {
+        Some(layer) => pixel_layer_id(s, layer),
         None => pixel_layer(s),
     }
     .map_err(EngineError::Other)?;
@@ -491,7 +491,8 @@ fn apply_content_aware_fill(s: &mut Session, label: &str, id: LayerId, output: &
     let layer = s.edit(label, |doc, active| {
         let target = match output {
             "new" => {
-                let mut l = Layer::raster(doc.next_layer_name("Content-Aware Fill"), PixelFormat { alpha: true, ..fmt });
+                let source_name = doc.layer(id).ok_or(EngineError::NoLayer(id))?.name.clone();
+                let mut l = Layer::raster(doc.copy_name(&source_name), PixelFormat { alpha: true, ..fmt });
                 let mut px = vec![0.0f32; w * h * n.max(1)];
                 let lf = l.surface().map(|s| s.format()).unwrap_or(fmt);
                 let ln = lf.channels();

@@ -31,8 +31,8 @@ pub use color::{
 use tone::LUT_SIZE;
 pub(crate) use tone::apply_tone;
 pub use tone::{
-    TONE_SLOPE_SPAN, contour_curve_lut, curve_lut, curve_lut_mode, curve_map_lut, float_tone_extrapolates, float_tone_identity, levels, levels_float,
-    levels_gamma, levels_q, modern_brightness, modern_contrast, modern_lut, posterize, posterize_in, tone_luts, tone_luts_depth, tone_luts_q,
+    TONE_SLOPE_SPAN, contour_curve_lut, curve_lut, curve_lut_mode, curve_map_lut, curve_samples, float_tone_extrapolates, float_tone_identity, levels,
+    levels_float, levels_gamma, levels_q, modern_brightness, modern_contrast, modern_lut, posterize, posterize_in, tone_luts, tone_luts_depth, tone_luts_q,
 };
 use tone::{lut, map_rgb};
 
@@ -246,7 +246,7 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 }
             })
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
+        Adjustment::GradientMap { stops, reverse, dither, .. } => {
             let (w, x0, y0) = (buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
             for (i, p) in buf.px.iter_mut().enumerate() {
                 if p[3] <= 0.0 {

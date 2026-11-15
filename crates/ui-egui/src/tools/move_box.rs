@@ -16,12 +16,18 @@ pub(crate) struct LayerBox {
     end: [f64; 2],
     /// ⇧ at the press: add to the layer selection.
     add: bool,
+    /// The actual Move tool skips Position locks. Temporary Move keeps ordinary rectangle picks.
+    move_auto_select: bool,
+    /// An empty plain marquee from a locked-only hit clears the selection.
+    clear_on_empty: bool,
 }
 
-/// A Move-tool press that Auto-Select found nothing under: start the marquee at `p`. The press
-/// started a Move gesture's snapping and ⇧/⌥ handling, which a marquee has none of.
-pub(crate) fn begin(app: &mut PhotocraftApp, p: [f64; 2], add: bool) {
-    app.layer_box = Some(LayerBox { start: p, end: p, add });
+/// Start the marquee at `p` after an empty or locked-only hit. With `move_auto_select`, the
+/// real Move tool skips effective Position as well as All locks. Set `clear_on_empty` for its
+/// locked-only press so an empty replacement marquee clears the selection.
+/// Temporary Move keeps ordinary lock filtering. Marquees clear the press's snapping and ⇧/⌥ state.
+pub(crate) fn begin(app: &mut PhotocraftApp, p: [f64; 2], add: bool, move_auto_select: bool, clear_on_empty: bool) {
+    app.layer_box = Some(LayerBox { start: p, end: p, add, move_auto_select, clear_on_empty });
     app.prefs_rt.snap = None;
     app.prefs_rt.snap_lines.clear();
     app.move_mods = Default::default();
@@ -69,7 +75,10 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
             }
             let target = app.ui.tool_options.move_target.clone();
             let mode = if b.add { "add" } else { "replace" };
-            let p = json!({"x": b.start[0], "y": b.start[1], "width": w, "height": h, "target": target, "mode": mode});
+            let p = json!({
+                "x": b.start[0], "y": b.start[1], "width": w, "height": h, "target": target, "mode": mode,
+                "moveAutoSelect": b.move_auto_select, "clearOnEmpty": b.clear_on_empty,
+            });
             if let Err(e) = app.run("layer.selectInRect", p) {
                 app.ui.status = e;
                 app.ui.status_error = true;
@@ -82,8 +91,7 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
 /// The marquee as marching ants.
 pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(b) = app.layer_box else { return };
-    let r = egui::Rect::from_two_pos(xf.to_screen(b.start[0] as f32, b.start[1] as f32), xf.to_screen(b.end[0] as f32, b.end[1] as f32));
-    crate::tool_feedback::draw_ants(painter, &[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true);
+    crate::tool_feedback::draw_ants(painter, &crate::canvas::doc_box_corners(xf, b.start, b.end), true);
 }
 
 #[cfg(test)]
@@ -152,6 +160,31 @@ mod tests {
         let st = app.session.active().unwrap();
         assert!(st.selected_layers().is_empty() && st.active_layer.is_none());
         assert!(app.layer_box.is_none());
+    }
+
+    /// #10665: a fill layer, or pixels hanging past the canvas edge, aren't drawn on the
+    /// pasteboard, so a click there still clears the layer selection rather than picking them.
+    #[test]
+    fn pasteboard_click_deselects_over_fill_layers_and_off_canvas_pixels() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64, "background": "transparent"})).unwrap();
+        app.run("layer.newFillLayer.solidColor", json!({"color": "#00ff00"})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let off = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("paint past the edge", |doc, _| {
+                doc.layer_mut(off).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(-20, 0, 10, 64), &[1.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_auto_select = true;
+        tool_event(&mut app, ToolEvent::Down { x: -10.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: -10.0, y: 30.0 }, egui::Modifiers::NONE);
+        let st = app.session.active().unwrap();
+        assert!(st.selected_layers().is_empty() && st.active_layer.is_none(), "selected {:?}", st.selected_layers());
+        assert_eq!(st.doc.layer(off).unwrap().surface().unwrap().content_bounds().x0, -20, "nothing moved");
     }
 
     /// #4058: a drag that starts on the locked Background draws the layer marquee. It does not
