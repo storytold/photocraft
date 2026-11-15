@@ -9,7 +9,7 @@ use super::*;
 use crate::canvas::{ToolEvent, tool_event};
 
 /// A 64 × 64 document with a painted layer active, black foreground, `tool`.
-pub(super) fn app(tool: Tool) -> PhotocraftApp {
+pub(in crate::tools) fn app(tool: Tool) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -24,22 +24,22 @@ pub(super) fn active(app: &PhotocraftApp) -> u64 {
     app.session.active().unwrap().active_layer.unwrap().0
 }
 
-pub(super) fn steps(app: &PhotocraftApp) -> usize {
+pub(in crate::tools) fn steps(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.past_len()
 }
 
 /// A press, a short drag and the release with the active tool.
-pub(super) fn stroke(app: &mut PhotocraftApp) {
+pub(in crate::tools) fn stroke(app: &mut PhotocraftApp) {
     tool_event(app, ToolEvent::Down { x: 20.0, y: 32.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(app, ToolEvent::Move { x: 44.0, y: 32.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(app, ToolEvent::Up { x: 44.0, y: 32.0 }, Modifiers::NONE);
 }
 
-pub(super) fn alerts(app: &PhotocraftApp) -> Vec<String> {
+pub(in crate::tools) fn alerts(app: &PhotocraftApp) -> Vec<String> {
     app.ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message").and_then(Value::as_str).map(str::to_string)).collect()
 }
 
-pub(super) fn refused(app: &mut PhotocraftApp, want: &str) {
+pub(in crate::tools) fn refused(app: &mut PhotocraftApp, want: &str) {
     let before = steps(app);
     stroke(app);
     assert_eq!(alerts(app), [want], "the alert, once");

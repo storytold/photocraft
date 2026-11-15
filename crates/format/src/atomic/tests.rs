@@ -496,6 +496,43 @@ fn writes_through_a_symlink() {
     assert_eq!(std::fs::read(&real).unwrap(), b"new");
 }
 
+#[cfg(unix)]
+#[test]
+fn no_follow_replaces_a_symlink_and_leaves_its_target() {
+    let d = TempDir::new("nofollow");
+    let real = d.0.join("real.psd");
+    let link = d.0.join("link.psd");
+    std::fs::write(&real, ORIGINAL).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    crate::atomic::atomic_write_no_follow(&link, b"new").unwrap();
+    assert!(!std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&link).unwrap(), b"new");
+    assert_eq!(std::fs::read(&real).unwrap(), ORIGINAL);
+}
+
+/// Replacing a link that points at a FIFO with no writer must not open the FIFO to copy its attributes.
+#[cfg(unix)]
+#[test]
+fn no_follow_never_opens_the_target_of_a_replaced_link() {
+    let d = TempDir::new("nofollow-fifo");
+    let fifo = d.0.join("pipe");
+    let link = d.0.join("link.psd");
+    let Ok(made) = std::process::Command::new("mkfifo").arg(&fifo).status() else { return };
+    if !made.success() {
+        return;
+    }
+    std::os::unix::fs::symlink(&fifo, &link).unwrap();
+    // Run apart, so a regression fails the test instead of hanging it.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = link.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::atomic::atomic_write_no_follow(&path, b"new"));
+    });
+    let r = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("the write does not block on the FIFO");
+    r.unwrap();
+    assert_eq!(std::fs::read(&link).unwrap(), b"new");
+}
+
 /// #6605: saving onto a dangling symlink writes through to its target instead of replacing the
 /// link with a regular file, even when a folder on the way to the target doesn't exist yet.
 #[cfg(unix)]
