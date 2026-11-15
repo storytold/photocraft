@@ -46,6 +46,122 @@ pub(crate) struct DetailPreview {
     overlay_texture: Option<TextureHandle>,
     overlay_key: Option<OverlayKey>,
     pub(crate) ready: bool,
+    /// How many full-resolution frames have come in (the control channel's `detailRevision`).
+    pub(crate) refined: u64,
+    /// A control is being dragged: the shared engine's renders are drafts until it is let go.
+    pub(crate) interactive: bool,
+    /// The proxy's develop of newer settings is still running: no draft is started meanwhile.
+    pub(crate) proxy_busy: bool,
+    /// The shared engine's render of what the preview shows ([`Self::develop`]): the visible part
+    /// of the frame at the screen's resolution, not the whole frame at the raw's.
+    windowed: Option<Windowed>,
+    win_pending: Option<(u64, ViewWindow, Receiver<WindowedResult>)>,
+    win_failed: Option<(u64, ViewWindow)>,
+    win_texture: Option<TextureHandle>,
+    win_key: Option<(u64, ViewWindow, bool, u64)>,
+    win_overlay_key: Option<(u64, ViewWindow, bool, crate::camera_raw_scope_ui::ClippingMode, crate::theme::ThemeKind)>,
+    /// Where the shown windowed render is on screen.
+    win_shown: Option<Rect>,
+}
+
+use photocraft_io::raw_develop::ViewWindow;
+
+/// A windowed render by the shared engine: `view` of the settings of preview revision
+/// `revision`, a draft or not; `px` is `view.w × view.h`, row by row.
+struct Windowed {
+    revision: u64,
+    view: ViewWindow,
+    draft: bool,
+    px: Arc<Vec<[f32; 4]>>,
+    /// `px` as the display shows it (converted on the worker, not the UI thread), until its
+    /// texture is made, and the display it was converted for.
+    image: Option<ColorImage>,
+    display_key: u64,
+    ms: f64,
+}
+
+type WindowedResult = Result<Windowed, String>;
+
+/// The most pixels a windowed render may have (the texture it becomes).
+const MAX_WINDOW_PIXELS: usize = 16_777_216;
+/// Extra frame pixels rendered round the visible part (spatial stages read their neighbours; a
+/// small pan doesn't need a new render), and the grid a window snaps to (a pan of a few points
+/// keeps the window).
+const WINDOW_MARGIN: usize = 48;
+const WINDOW_GRID: usize = 64;
+
+/// The frame size the preview shows `area` at, and the part of it on screen (`shown`), with the
+/// window rendered for it (`shown` grown by [`WINDOW_MARGIN`] and snapped out to [`WINDOW_GRID`]).
+/// `image` is where the whole image is drawn, `clip` what of the screen is the preview's, `ppp`
+/// pixels per point. The frame is at most the area's size (from 100 % up, its pixels are enlarged
+/// on screen). `None` when nothing is visible or the window would be too large.
+pub(crate) fn view_window(image: Rect, clip: Rect, area: PixelRect, ppp: f32) -> Option<(ViewWindow, ViewWindow)> {
+    let visible = image.intersect(clip);
+    if !image.is_finite() || image.width() <= 0.0 || image.height() <= 0.0 || !visible.is_positive() || area.is_empty() || !(ppp.is_finite() && ppp > 0.0) {
+        return None;
+    }
+    let (aw, ah) = (area.width() as usize, area.height() as usize);
+    let scale = (image.width() * ppp / aw as f32).min(1.0);
+    let vw = ((aw as f32 * scale).round() as usize).clamp(1, aw);
+    let vh = ((ah as f32 * scale).round() as usize).clamp(1, ah);
+    let (kx, ky) = (vw as f32 / image.width(), vh as f32 / image.height());
+    let x0 = (((visible.min.x - image.min.x) * kx).floor().max(0.0) as usize).min(vw - 1);
+    let y0 = (((visible.min.y - image.min.y) * ky).floor().max(0.0) as usize).min(vh - 1);
+    let x1 = (((visible.max.x - image.min.x) * kx).ceil().max(0.0) as usize).clamp(x0 + 1, vw);
+    let y1 = (((visible.max.y - image.min.y) * ky).ceil().max(0.0) as usize).clamp(y0 + 1, vh);
+    let shown = ViewWindow { size: (vw, vh), x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    let snap_lo = |v: usize| v.saturating_sub(WINDOW_MARGIN) / WINDOW_GRID * WINDOW_GRID;
+    let snap_hi = |v: usize, max: usize| (v.saturating_add(WINDOW_MARGIN).div_ceil(WINDOW_GRID) * WINDOW_GRID).min(max);
+    let (rx0, ry0, rx1, ry1) = (snap_lo(x0), snap_lo(y0), snap_hi(x1, vw), snap_hi(y1, vh));
+    let render = ViewWindow { size: (vw, vh), x: rx0, y: ry0, w: rx1 - rx0, h: ry1 - ry0 };
+    (render.w.saturating_mul(render.h) <= MAX_WINDOW_PIXELS).then_some((shown, render))
+}
+
+/// A windowed render's pixels `px` (`view.w × view.h`) as `display` shows them.
+fn window_image(px: &[[f32; 4]], view: ViewWindow, display: &photocraft_engine::display_color::CanvasDisplay) -> ColorImage {
+    let vw = view.w;
+    display_image(PixelRect::new(0, 0, view.w as i32, view.h as i32), display, |r, out| {
+        let start = (r.y0.max(0) as usize).saturating_mul(vw);
+        if let Some(src) = px.get(start..start.saturating_add(out.len())) {
+            out.copy_from_slice(src);
+        }
+    })
+}
+
+/// Where `view` of a frame drawn at `image` is on screen.
+fn view_rect(image: Rect, view: ViewWindow) -> Rect {
+    let (vw, vh) = (view.size.0.max(1) as f32, view.size.1.max(1) as f32);
+    let k = image.size() / vec2(vw, vh);
+    Rect::from_min_size(image.min + vec2(view.x as f32, view.y as f32) * k, vec2(view.w as f32, view.h as f32) * k)
+}
+
+/// The colour the clipping `mode` shows a pixel `p` in (transparent: not marked).
+fn clipping_color(p: [f32; 4], mode: crate::camera_raw_scope_ui::ClippingMode, t: &crate::theme::Tokens) -> Color32 {
+    use crate::camera_raw_scope_ui::ClippingMode;
+    if p[3] <= 0.0 || !p.iter().all(|v| v.is_finite()) {
+        return Color32::TRANSPARENT;
+    }
+    let (lo, hi) = photocraft_algo::histogram::clipping(p);
+    match mode {
+        ClippingMode::ShadowChannels => t.histogram_color(7 ^ lo),
+        ClippingMode::HighlightChannels => {
+            if hi == 0 {
+                t.histogram_background()
+            } else {
+                t.histogram_color(hi)
+            }
+        }
+        ClippingMode::Warnings(w) => {
+            if w & 2 != 0 && hi != 0 {
+                t.histogram_color(1)
+            } else if w & 1 != 0 && lo != 0 {
+                t.histogram_color(4)
+            } else {
+                Color32::TRANSPARENT
+            }
+        }
+        ClippingMode::None => Color32::TRANSPARENT,
+    }
 }
 
 impl Drop for DetailPreview {
@@ -74,6 +190,16 @@ impl DetailPreview {
             overlay_texture: None,
             overlay_key: None,
             ready: false,
+            refined: 0,
+            interactive: false,
+            proxy_busy: false,
+            windowed: None,
+            win_pending: None,
+            win_failed: None,
+            win_texture: None,
+            win_key: None,
+            win_overlay_key: None,
+            win_shown: None,
         }
     }
 
@@ -86,7 +212,178 @@ impl DetailPreview {
     }
 
     pub(crate) fn pending(&self) -> bool {
-        self.pending.is_some()
+        self.pending.is_some() || self.win_pending.is_some()
+    }
+
+    /// How long the last windowed render took, in ms (0 before one).
+    pub(crate) fn window_ms(&self) -> f64 {
+        self.windowed.as_ref().map_or(0.0, |w| w.ms)
+    }
+
+    /// Takes in a finished windowed render.
+    fn poll_windowed(&mut self, revision: u64) {
+        let Some((requested, view, rx)) = &self.win_pending else { return };
+        let (requested, view) = (*requested, *view);
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("RAW Develop detail preview worker stopped".into()),
+        };
+        self.win_pending = None;
+        match result {
+            Ok(w) => {
+                if w.revision == revision {
+                    self.refined = self.refined.saturating_add(1);
+                    self.error = None;
+                }
+                self.windowed = Some(w);
+            }
+            Err(e) => {
+                if requested == revision {
+                    self.error = Some(e);
+                }
+                self.win_failed = Some((requested, view));
+            }
+        }
+    }
+
+    /// Starts the shared engine's render of `view` for `revision` on a worker (a draft when
+    /// `draft`), unless one is running: the newest settings go next, when it is done.
+    fn request_windowed(
+        &mut self,
+        ctx: &Context,
+        revision: u64,
+        view: ViewWindow,
+        draft: bool,
+        display: &Arc<photocraft_engine::display_color::CanvasDisplay>,
+    ) {
+        if self.win_pending.is_some() || self.win_failed == Some((revision, view)) {
+            return;
+        }
+        let (Some(engine), Some((settings, _))) = (self.develop.clone(), self.settings.as_ref()) else { return };
+        let settings = settings.clone();
+        let cancel = self.cancel.clone();
+        let ctx = ctx.clone();
+        let display = display.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<WindowedResult>();
+        let quality = if draft { photocraft_io::raw_develop::Quality::Draft } else { photocraft_io::raw_develop::Quality::Full };
+        let work = move || {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            let t0 = crate::gpu_canvas::now_ms();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.develop_view(&settings, view, quality)))
+                .map_err(|_| "RAW Develop detail preview failed; the proxy remains available".to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()))
+                .map(|px| {
+                    let image = window_image(&px, view, &display);
+                    Windowed { revision, view, draft, px: Arc::new(px), image: Some(image), display_key: display.key, ms: crate::gpu_canvas::now_ms() - t0 }
+                });
+            if !cancel.load(Ordering::Relaxed) {
+                let _ = tx.send(result);
+                ctx.request_repaint();
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            static WORKER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            match std::thread::Builder::new().name("camera-raw-view".into()).spawn(move || {
+                let _guard = WORKER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                work();
+            }) {
+                Ok(_) => self.win_pending = Some((revision, view, rx)),
+                Err(e) => {
+                    self.error = Some(format!("Cannot start RAW Develop preview: {e}"));
+                    self.win_failed = Some((revision, view));
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            drop(work);
+            drop(rx);
+            self.error = Some("Full-resolution filtered preview requires a native RAW Develop worker; the web preview keeps the proxy".into());
+            self.win_failed = Some((revision, view));
+        }
+    }
+
+    /// The shared engine's preview of the current settings over `image` (a raw it develops):
+    /// the visible part at the screen's resolution, rendered on a worker, drafts while a control
+    /// is dragged, the proxy showing until the current settings' render is in. Says whether it
+    /// drew.
+    fn paint_windowed(&mut self, ui: &egui::Ui, image: Rect, revision: u64, display: &Arc<photocraft_engine::display_color::CanvasDisplay>) -> bool {
+        self.win_shown = None;
+        self.poll_windowed(revision);
+        let ppp = ui.ctx().pixels_per_point();
+        let Some((shown, render)) = view_window(image, ui.clip_rect(), self.area, ppp) else { return false };
+        let draft = self.interactive;
+        let fits = |w: &Windowed| w.view.covers(&shown);
+        let current = self.windowed.as_ref().is_some_and(|w| w.revision == revision && fits(w) && (!w.draft || draft));
+        // (while a control is dragged, a draft only once the proxy has caught up: the drag paused)
+        if !current && !(draft && self.proxy_busy) {
+            self.request_windowed(ui.ctx(), revision, render, draft, display);
+            self.poll_windowed(revision);
+        }
+        // a render of older settings would hide the proxy's of the current ones; one of the
+        // current settings shows while a pan or zoom waits for its own (the proxy round it)
+        let Some(w) = self.windowed.as_mut().filter(|w| w.revision == revision) else { return false };
+        let key = (w.revision, w.view, w.draft, display.key);
+        if self.win_key != Some(key) {
+            let color = match w.image.take().filter(|_| w.display_key == display.key) {
+                Some(color) => color,
+                // (the display changed since: converted again here)
+                None => window_image(&w.px, w.view, display),
+            };
+            // from 100 % up the frame's pixels are enlarged: crisp, as the canvas shows them
+            let enlarged = image.width() * ppp > w.view.size.0 as f32 + 0.5;
+            let options =
+                if enlarged { TextureOptions { magnification: egui::TextureFilter::Nearest, ..TextureOptions::LINEAR } } else { TextureOptions::LINEAR };
+            match &mut self.win_texture {
+                Some(t) => t.set(color, options),
+                None => self.win_texture = Some(ui.ctx().load_texture("cr-view-preview", color, options)),
+            }
+            self.win_key = Some(key);
+        }
+        let screen = view_rect(image, w.view);
+        if let Some(texture) = &self.win_texture {
+            ui.painter().image(texture.id(), screen, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        self.win_shown = Some(screen);
+        self.ready = fits(w) && !w.draft;
+        true
+    }
+
+    /// The windowed render's pixel at `p` (0..1 across the image), when it is of `revision`.
+    fn windowed_sample(&self, p: [f32; 2], revision: u64) -> Option<[f32; 4]> {
+        let w = self.windowed.as_ref().filter(|w| w.revision == revision)?;
+        let (vw, vh) = (w.view.size.0 as f32, w.view.size.1 as f32);
+        let (x, y) = ((p[0] * vw) as usize, (p[1] * vh) as usize);
+        let (x, y) = (x.checked_sub(w.view.x)?, y.checked_sub(w.view.y)?);
+        if x >= w.view.w || y >= w.view.h {
+            return None;
+        }
+        w.px.get(y * w.view.w + x).copied()
+    }
+
+    /// The clipping overlay over the shown windowed render.
+    fn windowed_overlay(&mut self, ui: &egui::Ui, mode: crate::camera_raw_scope_ui::ClippingMode) -> bool {
+        let (Some(screen), Some(w)) = (self.win_shown, self.windowed.as_ref()) else { return false };
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let key = (w.revision, w.view, w.draft, mode, t.kind);
+        if self.win_overlay_key != Some(key) {
+            let pixels: Vec<Color32> = w.px.iter().map(|p| clipping_color(*p, mode, &t)).collect();
+            let color = ColorImage::new([w.view.w, w.view.h], pixels);
+            match &mut self.overlay_texture {
+                Some(t) => t.set(color, TextureOptions::NEAREST),
+                None => self.overlay_texture = Some(ui.ctx().load_texture("cr-detail-clipping", color, TextureOptions::NEAREST)),
+            }
+            self.win_overlay_key = Some(key);
+            self.overlay_key = None;
+        }
+        if let Some(texture) = &self.overlay_texture {
+            ui.painter().image(texture.id(), screen, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        true
     }
 
     fn poll(&mut self, revision: u64) {
@@ -103,6 +400,7 @@ impl DetailPreview {
                 self.result = Some((r, surface));
                 self.crop = None;
                 self.error = None;
+                self.refined = self.refined.saturating_add(1);
             }
             Ok(_) => {} // A parameter changed while the worker was developing this revision.
             Err(e) => {
@@ -195,15 +493,20 @@ impl DetailPreview {
         before: bool,
         params: &CameraRaw,
         needed: bool,
-        display: &photocraft_engine::display_color::CanvasDisplay,
+        display: &Arc<photocraft_engine::display_color::CanvasDisplay>,
     ) -> bool {
         self.ready = false;
+        self.win_shown = None;
         self.poll(revision);
         if !needed {
             return false;
         }
-        let Some(crop) = visible_pixels(image, ui.clip_rect(), self.area, ui.input(|i| i.max_texture_side)) else { return false };
         let original = before || self.unedited(params);
+        // a raw the shared engine develops: only what is on screen, at the screen's resolution
+        if !original && self.develop.is_some() && self.settings.is_some() {
+            return self.paint_windowed(ui, image, revision, display);
+        }
+        let Some(crop) = visible_pixels(image, ui.clip_rect(), self.area, ui.input(|i| i.max_texture_side)) else { return false };
         if !original {
             self.request(ui.ctx(), revision, params);
             self.poll(revision);
@@ -242,6 +545,9 @@ impl DetailPreview {
         if !self.ready || !p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) {
             return None;
         }
+        if self.win_shown.is_some() {
+            return self.windowed_sample(p, revision);
+        }
         let source = if before || self.unedited(params) {
             &self.source
         } else if let Some((r, source)) = &self.result
@@ -260,6 +566,9 @@ impl DetailPreview {
         use crate::camera_raw_scope_ui::ClippingMode;
         if !self.ready {
             return false;
+        }
+        if self.win_shown.is_some() {
+            return self.windowed_overlay(ui, mode);
         }
         let Some((r, original, crop, _display_key)) = self.crop else { return false };
         let t = crate::theme::Tokens::get(ui.ctx());
@@ -689,6 +998,37 @@ mod tests {
         let display = color.canvas_display(&doc).unwrap();
         let image = crop_image(&source, area, &display);
         assert!(image.pixels[0].r() > 130, "linear 0.25 should be shown as encoded sRGB");
+    }
+
+    /// The shared engine renders what the preview shows at the screen's resolution: at fit the
+    /// frame at the size it is drawn (not the raw's), zoomed in only the visible part, from 100 %
+    /// up at the raw's size; the window has a margin and snaps to a grid, so a small pan keeps it.
+    #[test]
+    fn the_engine_renders_only_the_visible_part_at_screen_resolution() {
+        let area = PixelRect::new(0, 0, 5184, 3456);
+        let clip = Rect::from_min_size(pos2(16.0, 16.0), vec2(1200.0, 800.0));
+        // fit at 2 pixels per point: 1200 × 800 points is 2400 × 1600 pixels, all of it shown
+        let (shown, render) = view_window(clip, clip, area, 2.0).unwrap();
+        assert_eq!(shown, ViewWindow { size: (2400, 1600), x: 0, y: 0, w: 2400, h: 1600 });
+        assert_eq!(render, shown, "the margin stops at the frame's edge");
+        // 136 %: the raw's size, a window of the visible part
+        let image = Rect::from_min_size(pos2(16.0 - 1500.0, 16.0 - 900.0), vec2(5184.0, 3456.0) * 1.36 / 2.0);
+        let (shown, render) = view_window(image, clip, area, 2.0).unwrap();
+        assert_eq!(shown.size, (5184, 3456));
+        let k = 2.0 / 1.36;
+        assert!((shown.x as f32 - 1500.0 * k).abs() <= 1.0 && (shown.w as f32 - 1200.0 * k).abs() <= 2.0, "{shown:?}");
+        assert!(render.covers(&shown) && render.x % WINDOW_GRID == 0 && render.y % WINDOW_GRID == 0, "{render:?}");
+        assert!(render.w * render.h < 5184 * 3456 / 4, "a fraction of the frame: {render:?}");
+        // a small pan stays inside the rendered window
+        let (panned, _) = view_window(image.translate(vec2(-10.0, 6.0)), clip, area, 2.0).unwrap();
+        assert!(render.covers(&panned), "{render:?} {panned:?}");
+        // drawn where the image is
+        let r = view_rect(image, shown);
+        assert!((r.left() - clip.left()).abs() < 1.0 && (r.top() - clip.top()).abs() < 1.0, "{r:?}");
+        // nothing visible, nothing sensible
+        assert!(view_window(image.translate(vec2(-9000.0, 0.0)), clip, area, 2.0).is_none());
+        assert!(view_window(clip, clip, area, f32::NAN).is_none());
+        assert!(view_window(Rect::NOTHING, clip, area, 2.0).is_none());
     }
 
     #[test]

@@ -15,9 +15,11 @@
 
 use std::sync::{Arc, OnceLock};
 
+/// How fine a render is: [`Quality::Draft`] while a control is dragged.
+pub use craft_develop::Quality;
 use craft_develop::load::{LoadOptions, Loaded, load_raw};
 use craft_develop::raster::Rgb32f;
-use craft_develop::{DeepSamples, OutputDepth, OutputSpace, Quality, RenderRequest, SourceInfo, StageCache, render_cached};
+use craft_develop::{DeepSamples, OutputDepth, OutputSpace, RenderRequest, SourceInfo, StageCache, render_cached};
 use craft_develop_model::DevelopSettings;
 use photocraft_algo::camera_raw::CameraRaw;
 use photocraft_codecs::{self as codecs, ChannelLayout, Image};
@@ -82,8 +84,20 @@ fn load(bytes: &[u8], max_edge: usize) -> Result<Loaded, IoError> {
 
 /// `s` rendered from `src` at exactly `w`×`h` (16-bit ProPhoto), as interleaved RGB.
 fn render_rgb16(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, (w, h): (usize, usize), cache: &StageCache) -> Result<Vec<u16>, IoError> {
+    render_rgb16_at(src, info, s, (w, h), cache, Quality::Full)
+}
+
+/// [`render_rgb16`] at `quality`.
+fn render_rgb16_at(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    (w, h): (usize, usize),
+    cache: &StageCache,
+    quality: Quality,
+) -> Result<Vec<u16>, IoError> {
     craft_develop::check_output_size(w, h).map_err(engine_error)?;
-    let req = RenderRequest { space: OutputSpace::ProPhoto, depth: OutputDepth::U16, quality: Quality::Full, ..RenderRequest::exact(w, h) };
+    let req = RenderRequest { space: OutputSpace::ProPhoto, depth: OutputDepth::U16, quality, ..RenderRequest::exact(w, h) };
     let out = render_cached(src, info, s, &req, cache);
     let deep = out.deep.ok_or_else(|| engine_error("the render has no 16-bit result"))?;
     if (deep.width, deep.height) != (w, h) {
@@ -92,6 +106,25 @@ fn render_rgb16(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, (w, h
     match deep.samples {
         DeepSamples::U16(v) if v.len() == w * h * 3 => Ok(v),
         _ => Err(engine_error("the render's samples are not 16-bit RGB of its size")),
+    }
+}
+
+/// A part of a render that a zoomed or fitted preview shows ([`DevelopSource::develop_view`]): the
+/// whole frame rendered at `size` (its pixels, as [`RenderRequest::exact`] takes it), of which only
+/// the window `x, y, w, h` is rendered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ViewWindow {
+    pub size: (usize, usize),
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
+impl ViewWindow {
+    /// Whether this window holds all of `other` (of the same frame size).
+    pub fn covers(&self, other: &ViewWindow) -> bool {
+        self.size == other.size && self.x <= other.x && self.y <= other.y && self.x + self.w >= other.x + other.w && self.y + self.h >= other.y + other.h
     }
 }
 
@@ -182,7 +215,12 @@ impl DevelopSource {
 
     /// Develop settings `s` rendered from the proxy at exactly `w`×`h` ([`Self::develop_proxy`]).
     pub fn develop_proxy_with(&self, s: &DevelopSettings, w: usize, h: usize) -> Result<Vec<[f32; 4]>, IoError> {
-        render_rgb16(&self.proxy, &self.info, s, (w, h), &self.proxy_cache).map(|rgb| rgba(&rgb))
+        self.develop_proxy_at(s, w, h, Quality::Full)
+    }
+
+    /// [`Self::develop_proxy_with`] at `quality` ([`Quality::Draft`] while a control is dragged).
+    pub fn develop_proxy_at(&self, s: &DevelopSettings, w: usize, h: usize, quality: Quality) -> Result<Vec<[f32; 4]>, IoError> {
+        render_rgb16_at(&self.proxy, &self.info, s, (w, h), &self.proxy_cache, quality).map(|rgb| rgba(&rgb))
     }
 
     /// The alpha of mask `id` of `s` (0..255 per pixel, row by row) where the proxy renders at
@@ -230,6 +268,34 @@ impl DevelopSource {
         let full = self.full.get_or_init(|| load(&self.bytes, usize::MAX).map(|l| (Arc::new(l.image), l.info)).map_err(|e| e.to_string()));
         let (src, info) = full.as_ref().map_err(engine_error)?;
         render_rgb16(src, info, s, (w, h), &self.full_cache).map(|rgb| rgba(&rgb))
+    }
+}
+
+impl DevelopSource {
+    /// Develop settings `s` rendered from the whole frame as `view` says: the frame at
+    /// `view.size`, only its window rendered (a preview shows no more), at `quality` (a drag's
+    /// [`Quality::Draft`]). The stages before the per-pixel finish are kept between renders of the
+    /// same window and size, so a tone slider redoes only the finish. Straight RGBA in the
+    /// document's encoding, `view.w × view.h`, row by row.
+    pub fn develop_view(&self, s: &DevelopSettings, view: ViewWindow, quality: Quality) -> Result<Vec<[f32; 4]>, IoError> {
+        let (w, h) = view.size;
+        craft_develop::check_output_size(w, h).map_err(engine_error)?;
+        if view.w == 0 || view.h == 0 || view.x.saturating_add(view.w) > w || view.y.saturating_add(view.h) > h {
+            return Err(engine_error(format!("the window {view:?} is not inside the {w}×{h} frame")));
+        }
+        let full = self.full.get_or_init(|| load(&self.bytes, usize::MAX).map(|l| (Arc::new(l.image), l.info)).map_err(|e| e.to_string()));
+        let (src, info) = full.as_ref().map_err(engine_error)?;
+        let window = Some(craft_develop::PixelWindow { x: view.x, y: view.y, w: view.w, h: view.h });
+        let req = RenderRequest { space: OutputSpace::ProPhoto, depth: OutputDepth::U16, quality, window, ..RenderRequest::exact(w, h) };
+        let out = render_cached(src, info, s, &req, &self.full_cache);
+        let deep = out.deep.ok_or_else(|| engine_error("the render has no 16-bit result"))?;
+        if (deep.width, deep.height) != (view.w, view.h) {
+            return Err(engine_error(format!("rendered {}×{}, not the {}×{} window asked for", deep.width, deep.height, view.w, view.h)));
+        }
+        match deep.samples {
+            DeepSamples::U16(v) if v.len() == view.w * view.h * 3 => Ok(rgba(&v)),
+            _ => Err(engine_error("the render's samples are not 16-bit RGB of its size")),
+        }
     }
 }
 
@@ -449,6 +515,28 @@ mod tests {
         let avg = |x: usize, y: usize| (at(2 * x, 2 * y) + at(2 * x + 1, 2 * y) + at(2 * x, 2 * y + 1) + at(2 * x + 1, 2 * y + 1)) / 4.0;
         let err = (0..32).flat_map(|y| (0..48).map(move |x| (x, y))).map(|(x, y)| (avg(x, y) - proxy[y * 48 + x][1]).abs()).sum::<f32>() / (48.0 * 32.0);
         assert!(err < 0.03, "mean difference {err}");
+    }
+
+    /// A preview's window of the whole frame is that part of the whole frame's render (at the
+    /// raw's size and at a smaller one), and a window outside the frame is an error.
+    #[test]
+    fn a_window_of_the_frame_is_that_part_of_the_whole_render() {
+        let source = DevelopSource::new(Arc::new(dng()), 48, 96).unwrap();
+        let s = source.settings(&CameraRaw { exposure: 0.4, ..Default::default() });
+        for (w, h) in [(96, 64), (72, 48)] {
+            let whole = source.develop_view(&s, ViewWindow { size: (w, h), x: 0, y: 0, w, h }, Quality::Full).unwrap();
+            assert_eq!(whole, source.develop_full_with(&s, w, h).unwrap(), "{w}×{h}");
+            let win = ViewWindow { size: (w, h), x: 16, y: 8, w: 40, h: 24 };
+            let part = source.develop_view(&s, win, Quality::Full).unwrap();
+            assert_eq!(part.len(), 40 * 24);
+            let err = (0..24)
+                .flat_map(|y| (0..40).map(move |x| (x, y)))
+                .map(|(x, y)| (part[y * 40 + x][1] - whole[(y + 8) * w + x + 16][1]).abs())
+                .fold(0.0f32, f32::max);
+            assert!(err < 0.01, "{w}×{h}: the window differs from the whole render by {err}");
+        }
+        assert!(source.develop_view(&s, ViewWindow { size: (96, 64), x: 90, y: 0, w: 20, h: 10 }, Quality::Full).is_err());
+        assert!(source.develop_view(&s, ViewWindow { size: (96, 64), x: 0, y: 0, w: 0, h: 10 }, Quality::Draft).is_err());
     }
 
     #[test]

@@ -140,8 +140,18 @@ pub struct CameraRawDialog {
     pub(crate) keymap: keymap::Keymap,
     /// The local tools' selection and settings (masks, spots, red eyes).
     pub(crate) local: local::LocalTools,
-    /// The proxy develop running on a worker ([`Self::request_render`]).
+    /// The proxy develop running on a worker ([`Self::request_render`]), and since when the
+    /// settings it develops were waiting to be shown (`now_ms`).
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
+    pending_since: f64,
+    /// Since when the settings have changed without a develop of them started (`now_ms`).
+    dirty_since: Option<f64>,
+    /// How long the shown frame's settings waited from their change to being shown, in ms.
+    pub(crate) preview_age_ms: f64,
+    /// A control is being dragged this frame: the proxy develops drafts.
+    pub(crate) interactive: bool,
+    /// The shown frame is a draft: once the drag ends, the same settings develop in full.
+    shown_draft: bool,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
     preview_error: Option<(String, u64)>,
     /// The GPU develop, when the app may use one.
@@ -205,6 +215,10 @@ impl CameraRawDialog {
         result["sourceSize"] = json!([self.full_w, self.full_h]);
         result["guidedUprightTool"] = json!({"active": self.guides.active, "selected": self.guides.selected});
         result["previewPending"] = json!(self.render_pending());
+        result["previewAgeMs"] = json!(self.preview_age_ms);
+        result["previewDraft"] = json!(self.shown_draft);
+        result["detailMs"] = json!(self.detail.window_ms());
+        result["detailRevision"] = json!(self.detail.refined);
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
         result["detailPending"] = json!(self.detail.pending());
         result["detailError"] = json!(self.detail.error);
@@ -287,6 +301,7 @@ impl CameraRawDialog {
         self.sync_develop();
         // A render still running on the worker has older settings than this one.
         self.pending = None;
+        self.pending_since = self.dirty_since.take().unwrap_or_else(crate::gpu_canvas::now_ms);
         let frame = self.proxy_job().run();
         self.publish(ctx, frame);
         self.dirty = false;
@@ -309,6 +324,7 @@ impl CameraRawDialog {
             gpu: self.gpu.clone(),
             source_key: self.source_key,
             overlay: self.overlay_mask(),
+            draft: self.interactive,
         }
     }
 
@@ -334,6 +350,7 @@ impl CameraRawDialog {
     }
 
     fn publish(&mut self, ctx: &egui::Context, frame: ProxyFrame) {
+        let frame_draft = frame.draft;
         match &mut self.tex {
             Some(t) => t.set(frame.image, egui::TextureOptions::LINEAR),
             None => self.tex = Some(ctx.load_texture("camera-raw-after", frame.image, egui::TextureOptions::LINEAR)),
@@ -370,6 +387,8 @@ impl CameraRawDialog {
         self.develop_ms = frame.develop_ms;
         self.develop_backend = frame.backend;
         self.preview_revision = self.preview_revision.saturating_add(1);
+        self.preview_age_ms = crate::gpu_canvas::now_ms() - self.pending_since;
+        self.shown_draft = frame_draft;
     }
 
     /// Starts developing the proxy with the current settings on a worker, unless one is already
@@ -378,6 +397,13 @@ impl CameraRawDialog {
     /// Shadows or Highlights set (#5964); the preview shows the latest finished frame.
     fn request_render(&mut self, ctx: &egui::Context) {
         self.sync_develop();
+        // the drag that drafted the shown frame is over: the same settings in full
+        if !self.interactive && self.shown_draft && self.pending.is_none() {
+            self.dirty = true;
+        }
+        if self.dirty && self.dirty_since.is_none() {
+            self.dirty_since = Some(crate::gpu_canvas::now_ms());
+        }
         if !self.dirty || self.pending.is_some() {
             return;
         }
@@ -396,6 +422,7 @@ impl CameraRawDialog {
             match spawned {
                 Ok(_) => {
                     self.pending = Some(rx);
+                    self.pending_since = self.dirty_since.take().unwrap_or_else(crate::gpu_canvas::now_ms);
                     self.dirty = false;
                 }
                 // No thread to spare: develop here rather than show stale settings.

@@ -26,6 +26,8 @@ pub(super) struct ProxyJob {
     pub(super) source_key: u64,
     /// The mask whose alpha the overlay shows ([`ProxyFrame::mask_alpha`]), if it is shown.
     pub(super) overlay: Option<u32>,
+    /// A control is being dragged: the shared engine renders a draft.
+    pub(super) draft: bool,
 }
 
 /// A developed proxy, ready to show.
@@ -42,6 +44,8 @@ pub(super) struct ProxyFrame {
     pub(super) view_map: Option<photocraft_io::raw_develop::ViewMap>,
     /// The alpha of the overlay's mask over the frame ([`ProxyJob::overlay`]).
     pub(super) mask_alpha: Option<Vec<u8>>,
+    /// The shared engine rendered a draft ([`ProxyJob::draft`]).
+    pub(super) draft: bool,
 }
 
 impl ProxyJob {
@@ -51,10 +55,12 @@ impl ProxyJob {
         let develop_start = crate::gpu_canvas::now_ms();
         // The shared engine renders the whole develop at the proxy's size; if it fails, the proxy
         // is adjusted as for any layer.
+        let quality = if self.draft { photocraft_io::raw_develop::Quality::Draft } else { photocraft_io::raw_develop::Quality::Full };
         let developed = self.develop.as_ref().and_then(|d| match &self.settings {
-            Some(s) => d.develop_proxy_with(s, pw, ph).ok(),
+            Some(s) => d.develop_proxy_at(s, pw, ph, quality).ok(),
             None => d.develop_proxy(&self.params, pw, ph).ok(),
         });
+        let draft = self.draft && developed.is_some() && self.settings.is_some();
         let (px, backend) = match developed {
             Some(px) => (px, "craft-develop"),
             None => self.develop_classic(),
@@ -69,6 +75,7 @@ impl ProxyJob {
         let mut frame = self.finish(px, backend, t0, develop_ms);
         frame.view_map = view_map;
         frame.mask_alpha = mask_alpha;
+        frame.draft = draft;
         frame
     }
 
@@ -144,6 +151,7 @@ impl ProxyJob {
             backend,
             view_map: None,
             mask_alpha: None,
+            draft: false,
         }
     }
 }

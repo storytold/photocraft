@@ -766,6 +766,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         d.curve_rect = None;
         d.scope.vectorscope_rect = None;
+        d.interactive = pointer;
         if let Err(e) = d.poll_render(ctx) {
             d.preview_error = Some((e.clone(), d.preview_revision));
             app.ui.status = e;
@@ -843,6 +844,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             let raw_tone = d.raw_source.is_none() && d.raw_curve.is_some() && !raw_stage(&d.params).is_neutral();
             let detail_needed = !raw_tone && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32);
             d.detail.settings = d.develop.as_ref().map(|e| (e.settings.clone(), !e.edited(&e.settings)));
+            // a control being dragged: drafts, and none while the proxy is still catching up
+            d.detail.interactive = pointer;
+            d.detail.proxy_busy = d.render_pending() || d.dirty;
             d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed, &d.display);
             if d.detail.pending() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
