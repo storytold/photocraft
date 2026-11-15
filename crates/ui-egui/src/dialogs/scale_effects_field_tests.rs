@@ -208,3 +208,42 @@ fn a_held_enter_does_not_close_the_alert_or_press_ok() {
     assert!(!h.state().1, "nor reach the dialog's OK");
     assert_eq!(scale(&h), 1000.0);
 }
+
+fn key(key: egui::Key, pressed: bool, repeat: bool, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key { key, physical_key: None, pressed, repeat, modifiers }
+}
+
+#[test]
+fn a_key_held_past_the_alerts_close_does_not_reach_the_dialog() {
+    for k in [egui::Key::Enter, egui::Key::Escape] {
+        let mut h = harness(scale_fields());
+        type_into(&mut h, "Scale", "1001", egui::Key::Tab);
+        assert!(alert_up(&h));
+        // The key goes down (it closes the alert) and stays down: its repeats follow.
+        h.event(key(k, true, false, egui::Modifiers::NONE));
+        h.run_steps(2);
+        assert!(!alert_up(&h), "{k:?} closes the alert");
+        for _ in 0..3 {
+            h.event(key(k, true, true, egui::Modifiers::NONE));
+            h.run_steps(2);
+        }
+        assert!(!h.state().1 && !h.state().2, "{k:?} repeats after the close reach neither OK nor Cancel");
+        // Once released, the key is the dialog's again.
+        h.event(key(k, false, false, egui::Modifiers::NONE));
+        h.run_steps(1);
+        h.event(key(k, true, false, egui::Modifiers::NONE));
+        h.run_steps(2);
+        assert!(h.state().1 || h.state().2, "a new {k:?} press reaches the dialog");
+    }
+}
+
+#[test]
+fn shift_enter_with_the_alert_up_closes_the_alert_only() {
+    let mut h = harness(scale_fields());
+    type_into(&mut h, "Scale", "1001", egui::Key::Tab);
+    assert!(alert_up(&h));
+    h.event(key(egui::Key::Enter, true, false, egui::Modifiers::SHIFT));
+    h.run_steps(2);
+    assert!(!alert_up(&h), "Shift+Enter closes the alert");
+    assert!(!h.state().1, "and does not press the dialog's OK");
+}

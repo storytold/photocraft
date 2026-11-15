@@ -367,7 +367,7 @@ fn stepped_id(field: egui::Id) -> egui::Id {
 }
 
 /// Whether the value field `field` was stepped this pass by an arrow key or a wheel notch.
-fn stepped_this_pass(ctx: &egui::Context, field: egui::Id) -> bool {
+pub(crate) fn stepped_this_pass(ctx: &egui::Context, field: egui::Id) -> bool {
     let pass = ctx.cumulative_pass_nr();
     ctx.data(|d| d.get_temp::<u64>(stepped_id(field))) == Some(pass)
 }

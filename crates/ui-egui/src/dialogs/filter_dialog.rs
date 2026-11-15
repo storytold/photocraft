@@ -1242,7 +1242,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 // 32.1199989 and OK sends that to the command (#13067). A value the user typed or
                 // dragged this frame is the widget's f32, so it rounds from that.
                 let w = match (wide_decimals, src) {
-                    _ if scale_effects => json!(if v.is_finite() { v.round().clamp(min, max) as i64 } else { min as i64 }),
+                    _ if scale_effects => json!(if v.is_finite() { v.round() as i64 } else { min as i64 }),
                     (true, Some(rounded)) if !edited => json!(rounded),
                     (true, _) => json!(round64(f64::from(v))),
                     (false, _) => json!((v * scale).round() / scale),
@@ -1804,29 +1804,21 @@ const SCALE_ALERT_TEXT: &str = "An integer between 1 and 1000 is required. Close
 /// the typed text. An arrow-key or wheel step stops at the ends and says nothing.
 fn scale_effects_field(ui: &mut egui::Ui, name: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>) -> bool {
     let (lo, hi) = (*range.start(), *range.end());
-    let fit = |x: f32| if x.is_finite() { x.round().clamp(lo, hi) } else { lo };
+    let fit = |x: f32| if x.is_finite() { x.round().max(lo).min(hi) } else { lo };
     *v = fit(*v);
     let mem = ui.make_persistent_id("scale-effects-field");
-    let (field_id, draft_id, wrong_id, rect_id) = (mem.with("field"), mem.with("draft"), mem.with("wrong"), mem.with("rect"));
+    let (field_id, draft_id, wrong_id) = (mem.with("field"), mem.with("draft"), mem.with("wrong"));
     // The field's id is known once it is drawn: last frame's.
     let focused = ui.data(|d| d.get_temp::<egui::Id>(field_id)).is_some_and(|id| ui.memory(|m| m.has_focus(id)));
-    let rect = ui.data(|d| d.get_temp::<egui::Rect>(rect_id));
-    let stepped = ui.input_mut(|i| {
-        if focused {
+    if focused {
+        ui.input_mut(|i| {
             for e in &mut i.events {
                 if let egui::Event::Text(text) = e {
                     text.retain(|c| c != '.');
                 }
             }
-        }
-        // Only this field's own steps count: arrows while it has the keyboard, the wheel over it.
-        let hover = i.pointer.hover_pos().zip(rect).is_some_and(|(p, r)| r.contains(p));
-        i.events.iter().any(|e| match e {
-            egui::Event::Key { key: egui::Key::ArrowUp | egui::Key::ArrowDown, pressed: true, .. } => focused,
-            egui::Event::MouseWheel { .. } => hover,
-            _ => false,
-        })
-    });
+        });
+    }
     // Esc gives the entry up with no message (as the zoom field does).
     let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
     // What was typed, while the field still has the keyboard and nothing else changed the value.
@@ -1834,10 +1826,9 @@ fn scale_effects_field(ui: &mut egui::Ui, name: &str, v: &mut f32, range: std::o
     let mut typed = draft.map_or(*v, |(typed, _)| typed);
     // The field's own range is wide, so the typed value reaches here unclamped.
     let r = crate::widgets::value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, "", 74.0);
-    ui.data_mut(|d| {
-        d.insert_temp(field_id, r.id);
-        d.insert_temp(rect_id, r.rect);
-    });
+    ui.data_mut(|d| d.insert_temp(field_id, r.id));
+    // Only a step the field itself took (arrow or wheel notch) is no typed value, as in the other whole fields.
+    let stepped = crate::widgets::stepped_this_pass(ui.ctx(), r.id);
     if r.gained_focus() {
         ui.data_mut(|d| d.remove_temp::<bool>(wrong_id));
     }
@@ -1858,25 +1849,68 @@ fn scale_effects_field(ui: &mut egui::Ui, name: &str, v: &mut f32, range: std::o
     wrong && !esc
 }
 
+/// Bits of [`scale_effects_alert`]'s held-key memory.
+const HELD_ENTER: u8 = 1;
+const HELD_ESC: u8 = 2;
+
 /// The Scale field's alert, titled as the reference titles it, over the dialog: raised when
 /// `raised`, and up until OK, Enter or Esc closes it. The dialog stays open.
 fn scale_effects_alert(ui: &egui::Ui, f: &mut Map<String, Value>, raised: bool) {
     let ctx = ui.ctx().clone();
     // Scoped to this dialog: its ui id, not a global one.
     let seen_id = ui.make_persistent_id(SCALE_ALERT);
+    // Enter and Esc held down: the bits of the keys whose repeats are nobody's (not the alert's OK, not
+    // the dialog's) until the key is released, even after the alert has closed.
+    let hold_id = seen_id.with("hold");
+    let mut hold = ctx.data(|d| d.get_temp::<u8>(hold_id)).unwrap_or(0);
     if raised {
         f.insert(SCALE_ALERT.into(), json!(true));
         // The Enter that left the field raises the alert: it must not press the dialog's OK too.
-        ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            hold |= HELD_ENTER;
+        }
         ctx.data_mut(|d| d.remove_temp::<bool>(seen_id));
     }
-    if f.get(SCALE_ALERT).and_then(Value::as_bool) != Some(true) {
+    let up = f.get(SCALE_ALERT).and_then(Value::as_bool) == Some(true);
+    if !up && hold == 0 {
         return;
     }
-    // A held key's repeats are nobody's: not the alert's OK button, not the dialog's.
+    // One rule for Enter and Esc, as `consume_key` had it: Shift or Alt do not change them. While the
+    // alert is up every press is the alert's (the dialog's OK must not see it) and only a fresh one
+    // closes it; a held key's repeats close nothing and reach nobody.
+    let mut fresh = false;
     ctx.input_mut(|i| {
-        i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Enter | egui::Key::Escape, pressed: true, repeat: true, .. }));
+        i.events.retain(|e| {
+            let egui::Event::Key { key: key @ (egui::Key::Enter | egui::Key::Escape), pressed, repeat, modifiers, .. } = e else { return true };
+            if modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+                return true;
+            }
+            let bit = if *key == egui::Key::Enter { HELD_ENTER } else { HELD_ESC };
+            if !*pressed {
+                hold &= !bit;
+                true
+            } else if *repeat {
+                !(up || hold & bit != 0)
+            } else if up {
+                fresh = true;
+                hold |= bit;
+                false
+            } else {
+                hold &= !bit;
+                true
+            }
+        });
     });
+    ctx.data_mut(|d| {
+        if hold == 0 {
+            d.remove_temp::<u8>(hold_id);
+        } else {
+            d.insert_temp(hold_id, hold);
+        }
+    });
+    if !up {
+        return;
+    }
     let seen = ctx.data(|d| d.get_temp::<bool>(seen_id)).unwrap_or(false);
     ctx.data_mut(|d| d.insert_temp(seen_id, true));
     let t = Tokens::get(&ctx);
@@ -1891,22 +1925,7 @@ fn scale_effects_alert(ui: &egui::Ui, f: &mut Map<String, Value>, raised: bool) 
         let ok = crate::widgets::DialogButton::new(crate::widgets::ButtonRole::Default, tl!("OK"), 84.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| crate::widgets::dialog_buttons(ui, &[ok]).is_some()).inner
     });
-    // Enter and Esc are the alert's while it is up, not the dialog's; the Enter that raised it
-    // does not close it again at once.
-    // Every press is consumed (the dialog's OK must not see it), but only a fresh one closes the
-    // alert: a held key's repeats do not.
-    let keys = ctx.input_mut(|i| {
-        let mut fresh = false;
-        i.events.retain(|e| match e {
-            egui::Event::Key { key: egui::Key::Enter | egui::Key::Escape, pressed: true, repeat, modifiers, .. } if modifiers.is_none() => {
-                fresh |= !*repeat;
-                false
-            }
-            _ => true,
-        });
-        fresh
-    });
-    if modal.inner || (seen && keys) {
+    if modal.inner || (seen && fresh) {
         f.remove(SCALE_ALERT);
         ctx.data_mut(|d| d.remove_temp::<bool>(seen_id));
     }

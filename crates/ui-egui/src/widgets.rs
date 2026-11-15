@@ -50,6 +50,7 @@ pub use dropdown::{
     dropdown_with_tooltips, menu_scroll, swatch_popup,
 };
 pub(crate) use fields::compact_wrapping_value_field;
+pub(crate) use fields::stepped_this_pass;
 #[cfg(test)]
 use fields::{FieldOpts, NUMERIC_INPUT_LIMIT, value_field_in};
 pub use fields::{
