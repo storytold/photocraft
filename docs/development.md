@@ -410,15 +410,15 @@ A typical agent loop (place inputs under a configured read root and outputs unde
 
 ## Colour management
 
-`crates/cms` is our own pure-Rust ICC engine (v2/v4 parsing, matrix/TRC and LUT profiles, all four
+`craft-cms` ([storytold/craft-libs](https://github.com/storytold/craft-libs/tree/main/crates/cms)) is our own pure-Rust ICC engine (v2/v4 parsing, matrix/TRC and LUT profiles, all four
 intents, black point compensation). It ships CC0 built-in profiles, including a synthetic
-"PhotoCraft Coated CMYK", because Adobe's CMYK profiles are proprietary (see `crates/cms/README.md`).
+"PhotoCraft Coated CMYK", because Adobe's CMYK profiles are proprietary (see its README).
 
 - Documents carry an optional embedded ICC profile (`Document::icc_profile`); `edit.assignProfile`
   and `edit.convertToProfile` change it. Mode changes (`image.mode.*`) convert through cms.
 - **Proof Colors** (⌘Y), **Proof Setup** and **Gamut Warning** (⇧⌘Y) bake a 3D LUT
   (`cms::Lut3d`) that the canvas shader applies; the document pixels never change.
-- Convert colours with `photocraft_cms::transform::cached(src, dst, opts)`: transforms are cached
+- Convert colours with `craft_cms::transform::cached(src, dst, opts)`: transforms are cached
   process-wide and integer buffers use precomputed tables or a device link.
 
 ## Menu parity
@@ -783,6 +783,13 @@ recorded) when adding an event to the table:
 cargo run -p craft-psd --example atn_dump -- "Default Actions.atn"
 cargo run -p craft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
 ```
+
+The Classic Actions panel asks before clearing, resetting, or replacing the library. Reset
+offers OK, Cancel, and Append for PhotoCraft Basics. Replace validates the entire ATN archive
+before it removes existing sets. The latest library change can be undone through Edit › Undo
+without changing document History. Command callers use `confirm: true` with `actions.clearAll`,
+`actions.reset` (mode `append` or `replace`), or `actions.replace`, then `actions.undoLibrary`
+to undo. Use `actions.load` for a same-set import.
 
 The real-file oracles are `corpus/atn/` (16 sets from seven public repositories, see *Test
 corpora*): `craft-psd`'s corpus test parses every file and rewrites it byte for byte;

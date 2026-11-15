@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use photocraft_cms::{ColorSpace, TransformOptions};
+use craft_cms::{ColorSpace, TransformOptions};
 use photocraft_color::ColorMode;
 use photocraft_doc::Document;
 use photocraft_engine::color_cmds::ColorSettings;
@@ -469,6 +469,9 @@ fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<S
     if command == "edit.assignProfile" {
         assign_profile_defaults(app, fields);
     }
+    if command == super::fade_modes::COMMAND {
+        super::fade_modes::defaults(app, fields);
+    }
     if command == crate::bitmap_dialog::COMMAND {
         crate::bitmap_dialog::defaults(app, fields);
     }
@@ -729,6 +732,69 @@ fn global_light_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     fields.insert("altitude".into(), json!(st.doc.global_light.altitude));
 }
 
+fn filter_whole_int_input(ui: &egui::Ui, field_id: Option<egui::Id>) {
+    let Some(id) = field_id.filter(|id| ui.memory(|m| m.has_focus(*id))) else { return };
+    let at_start = egui::TextEdit::load_state(ui.ctx(), id)
+        .and_then(|s| s.cursor.char_range())
+        .is_none_or(|r| r.primary.index.min(r.secondary.index) == egui::text::CharIndex(0));
+    let clean = |s: &str| -> String {
+        let mut out = String::with_capacity(s.len());
+        for ch in s.chars() {
+            if ch.is_ascii_digit() || (ch == '-' && at_start && out.is_empty()) {
+                out.push(ch);
+            }
+        }
+        out
+    };
+    ui.input_mut(|i| {
+        i.events.retain_mut(|ev| match ev {
+            egui::Event::Text(text) | egui::Event::Paste(text) => {
+                *text = clean(text);
+                !text.is_empty()
+            }
+            _ => true,
+        });
+    });
+}
+
+fn global_light_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>) {
+    let t = Tokens::get(ui.ctx());
+    let slot_id = ui.make_persistent_id(("global-light-field", key));
+    let last_id = ui.ctx().data(|d| d.get_temp::<egui::Id>(slot_id));
+    filter_whole_int_input(ui, last_id);
+    let (field_id, alert) = if key == "angle" {
+        let (resp, out_of_range) = crate::widgets::angle_dial_row_whole_alerting(ui, "Angle", value, range);
+        ui.add_space(4.0);
+        (resp.id, out_of_range)
+    } else {
+        let name = tl!("Altitude");
+        let mut out_of_range = false;
+        let r = ui
+            .horizontal(|ui| {
+                ui.label(egui::RichText::new(name).color(t.text_dim));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (resp, o) = crate::widgets::value_field_whole_alerting(ui, name, value, range.clone(), "", 74.0);
+                    out_of_range = o;
+                    resp.id
+                })
+                .inner
+            })
+            .inner;
+        crate::widgets::slider(ui, value, range, None);
+        ui.add_space(4.0);
+        (r, out_of_range)
+    };
+    ui.ctx().data_mut(|d| d.insert_temp(slot_id, field_id));
+    if alert {
+        let msg = if key == "angle" {
+            "An integer between -360 and 360 is required. Closest value inserted."
+        } else {
+            "An integer between 0 and 90 is required. Closest value inserted."
+        };
+        f.insert("__rangeAlert".into(), json!(tl!(msg)));
+    }
+}
+
 /// Proof Setup reflects the active document's current proofing condition, never remembered values.
 fn proof_setup_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     let Some(st) = app.session.active() else { return };
@@ -853,7 +919,7 @@ const PROFILE_DIALOGS: &[&str] = &["edit.assignProfile", "edit.convertToProfile"
 /// working spaces those of that space, as Photoshop lists them (#6323). An RGB working space is a
 /// display or colour-space profile, not a scanner's or a printer's.
 fn installed_filter(cmd: &str, key: &str) -> Option<fn(&InstalledProfile) -> bool> {
-    use photocraft_cms::{ColorSpace, ProfileClass};
+    use craft_cms::{ColorSpace, ProfileClass};
     match (cmd, key) {
         (c, "profile") if PROFILE_DIALOGS.contains(&c) => Some(|_| true),
         ("edit.colorSettings", "workingRgb") => {
@@ -1045,9 +1111,9 @@ fn indexed_matte_document_color(app: &PhotocraftApp, doc: &Document, color: [f32
     };
     let source = app.session.color.working(ColorMode::Rgb);
     let options = TransformOptions { intent: app.session.color.settings.intent(), bpc: app.session.color.settings.bpc, ..Default::default() };
-    let transform = photocraft_cms::transform::cached(&source, &destination, options).map_err(|e| e.to_string())?;
+    let transform = craft_cms::transform::cached(&source, &destination, options).map_err(|e| e.to_string())?;
     let mut output = [0.0; 16];
-    transform.eval(&color[..3], &mut output);
+    transform.eval(&color[..3], &mut output).map_err(|e| e.to_string())?;
     let rgb = if destination.color_space == ColorSpace::Gray { [output[0]; 3] } else { [output[0], output[1], output[2]] };
     if rgb.iter().any(|v| !v.is_finite()) {
         return Err("cannot convert matte colour to finite document samples".into());
@@ -1153,6 +1219,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             indexed_matte_row(ui, f);
             continue;
         }
+        if cmd == super::fade_modes::COMMAND && p.key == "mode" {
+            super::fade_modes::row(ui, f, &label(&p.key));
+            continue;
+        }
         if zoom_center::owns(&cmd, f) && matches!(p.key.as_str(), "centerX" | "centerY") {
             if p.key == "centerX" {
                 zoom_center::row(ui, f);
@@ -1178,6 +1248,11 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     let mut count = v.round().clamp(2.0, 256.0) as u32;
                     crate::widgets::color_count_row(ui, &label(&p.key), &mut count);
                     f.insert(p.key, json!(count));
+                    continue;
+                }
+                if cmd == "layer.layerStyle.globalLight" {
+                    global_light_field(ui, f, &p.key, &mut v, min..=max);
+                    f.insert(p.key, json!(v.round()));
                     continue;
                 }
                 // Replace Color's Range only applies with Localized Color Clusters on, as in Photoshop.
@@ -1769,6 +1844,8 @@ impl FilterPreviewKey {
     }
 }
 
+#[cfg(test)]
+mod global_light_angle_range_tests;
 #[cfg(test)]
 mod tests;
 
