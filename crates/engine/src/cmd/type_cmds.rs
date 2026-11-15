@@ -822,10 +822,11 @@ fn shown_style_params<'a>(t: &TextLayer, p: &'a Value) -> Result<std::borrow::Co
 pub(crate) fn is_auto_named(l: &Layer, typed: Option<&str>) -> bool {
     let LayerContent::Text(t) = &l.content else { return false };
     let auto = layer_name(&t.text);
-    // Duplicate Layer names a copy of "Title copy" "Title copy 2", not "Title copy copy".
-    l.name == auto
-        || l.name == previous_layer_name(&t.text)
-        || (typed != Some(l.name.as_str()) && copy_root(&l.name).is_some_and(|root| root == copy_root(&auto).unwrap_or(&auto)))
+    let previous = previous_layer_name(&t.text);
+    // Duplicate Layer names a copy of "Title copy" "Title copy 2", not "Title copy copy". A saved copy of a
+    // name the previous rule gave counts too (#12047).
+    let is_copy_of = |root: &str| copy_root(&l.name).is_some_and(|r| r == copy_root(root).unwrap_or(root));
+    l.name == auto || l.name == previous || (typed != Some(l.name.as_str()) && (is_copy_of(&auto) || is_copy_of(&previous)))
 }
 
 /// The name the user last gave layer `id` in the active document, if any (see

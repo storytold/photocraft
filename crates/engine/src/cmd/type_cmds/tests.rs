@@ -474,6 +474,35 @@ fn a_name_the_previous_rule_gave_still_follows_the_text() {
     assert!(!is_auto_named(s.active().unwrap().doc.layer(LayerId(mine)).unwrap(), None));
 }
 
+/// #12047: a saved Duplicate Layer copy of a layer the previous rule named ("Hello copy",
+/// "Hello copy 2" for the text "Hello\nworld") came from its text too, so it follows the text
+/// like the layer itself; a copy name the user typed stays theirs.
+#[test]
+fn a_saved_copy_of_a_previous_rule_name_still_follows_the_text() {
+    let mut s = session();
+    let mut copies = Vec::new();
+    for (y, name) in [(0, "Hello copy"), (40, "Hello copy 2")] {
+        let id = s.execute("type.create", json!({"x": 0, "y": y, "text": "Hello\nworld"})).unwrap()["layer"].as_u64().unwrap();
+        // As a document saved before the rule changed has them.
+        s.execute("layer.renameLayer", json!({"layer": id, "name": name})).unwrap();
+        let l = s.active().unwrap().doc.layer(LayerId(id)).unwrap();
+        assert!(is_auto_named(l, None), "{name} was named from its text");
+        assert!(!is_auto_named(l, Some(name)), "{name} typed by the user stays theirs");
+        copies.push(id);
+    }
+    // A reopened document has no record of typed names: only the names decide.
+    if let Some(d) = s.active_mut() {
+        d.typed_names.clear();
+    }
+    s.execute("type.edit", json!({"layer": copies[0], "text": "Bye"})).unwrap();
+    assert_eq!(layer_name_of(&s, copies[0]), "Bye");
+    s.execute("type.edit", json!({"layer": copies[1], "text": "Bye"})).unwrap();
+    assert_eq!(layer_name_of(&s, copies[1]), "Bye");
+    // A copy of some other root is the user's.
+    let other = s.execute("type.create", json!({"x": 0, "y": 80, "text": "Hello\nworld"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.renameLayer", json!({"layer": other, "name": "Hell copy"})).unwrap();
+    assert!(!is_auto_named(s.active().unwrap().doc.layer(LayerId(other)).unwrap(), None));
+}
 /// #12047: `is_auto_named` still recognises the names the new rule gives, including a
 /// Duplicate Layer copy of one, so those layers keep following their text; a name the user gave
 /// is theirs. The Type tool's generic "Layer N" name is not an automatic one: it stands while the
