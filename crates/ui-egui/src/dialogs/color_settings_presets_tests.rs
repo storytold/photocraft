@@ -168,3 +168,23 @@ fn ok_stores_the_setup_and_cancel_discards_it() {
     assert_eq!(app.session.color.settings.preset, CUSTOM_SETTINGS);
     assert!(!app.session.color.settings.dither);
 }
+
+#[test]
+fn a_setup_set_by_script_loads_before_the_next_draw() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let expected = preset_setup(&ColorSettings::default(), "Europe Prepress 3", "srgb").unwrap();
+    // Confirmed with no draw at all, and after one draw.
+    for frames in [0, 1] {
+        app.session.color.settings = ColorSettings::default();
+        let id = open_dialog(&mut app, &ctx);
+        show(&mut app, &ctx, frames);
+        dialog_set(&mut app, &ctx, id, "preset", json!("Europe Prepress 3"));
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        let c = &app.session.color.settings;
+        assert_eq!(c.preset, "Europe Prepress 3", "{frames} frames");
+        assert_eq!((&c.working_rgb, &c.working_cmyk), (&expected.working_rgb, &expected.working_cmyk), "{frames} frames");
+        assert_eq!((c.ask_on_mismatch, c.ask_on_paste, c.ask_on_missing), (true, true, true), "{frames} frames");
+    }
+}

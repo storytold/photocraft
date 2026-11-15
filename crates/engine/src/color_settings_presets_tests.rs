@@ -169,7 +169,7 @@ fn a_bad_preset_is_an_error_and_changes_nothing() {
     let mut s = Session::new();
     s.execute(CMD, json!({"preset": "North America General Purpose 2"})).unwrap();
     let before = s.color.settings.clone();
-    for bad in [json!("Europe"), json!(""), json!("custom"), json!(3), json!(true), json!(["Monitor Color"]), json!({"name": "Monitor Color"})] {
+    for bad in [json!(null), json!("Europe"), json!(""), json!("custom"), json!(3), json!(true), json!(["Monitor Color"]), json!({"name": "Monitor Color"})] {
         let e = s.execute(CMD, json!({"preset": bad.clone(), "bpc": false})).unwrap_err();
         assert!(matches!(e, EngineError::BadParams { .. }), "{bad}: {e}");
         assert_eq!(s.color.settings, before, "{bad}");

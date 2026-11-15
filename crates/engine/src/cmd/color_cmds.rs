@@ -1403,7 +1403,7 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
     // Settings menu (#14229): a named setup loads its values; the params below then change
     // them, and the name stays only while they still match the setup.
     let preset = match p.get("preset") {
-        None | Some(Value::Null) => None,
+        None => None,
         Some(Value::String(name)) if is_settings_preset(name) => Some(name.as_str()),
         Some(v) => {
             return Err(EngineError::BadParams {

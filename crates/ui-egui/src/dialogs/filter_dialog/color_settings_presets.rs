@@ -3,6 +3,7 @@
 //! any control afterwards shows "Custom" at once. OK sends the menu's entry as `preset`.
 
 use egui::Ui;
+use photocraft_engine::Session;
 use photocraft_engine::color_cmds::{COLOR_SETTINGS_PRESETS, CUSTOM_SETTINGS, ColorSettings, is_settings_preset, preset_setup};
 use serde_json::{Map, Value, json};
 
@@ -71,16 +72,7 @@ pub(super) fn sync(ctx: &egui::Context, f: &mut Map<String, Value>) {
         return;
     };
     if shown != applied {
-        let monitor_rgb = f.get(MONITOR_RGB).and_then(Value::as_str).unwrap_or("srgb").to_string();
-        if let Some(Value::Object(setup)) = preset_setup(&ColorSettings::default(), &shown, &monitor_rgb).and_then(|c| serde_json::to_value(c).ok()) {
-            for (k, v) in setup {
-                if is_tracked(&k) && !KEPT.contains(&k.as_str()) {
-                    f.insert(k, v);
-                }
-            }
-        }
-        f.insert(APPLIED.into(), json!(shown));
-        f.insert(BASE.into(), Value::Object(tracked(f)));
+        load(f, &shown);
         ctx.request_repaint();
         return;
     }
@@ -107,6 +99,35 @@ pub(super) fn sync(ctx: &egui::Context, f: &mut Map<String, Value>) {
         f.insert(APPLIED.into(), json!(CUSTOM_SETTINGS));
         ctx.request_repaint();
     }
+}
+
+/// `ui.dialog.set` picking an entry loads its setup at once, as the next draw would: a confirm
+/// before that draw then sends the setup's values with its name, not the old values.
+pub(crate) fn after_dialog_set(session: &Session, f: &mut Map<String, Value>, field: &str) {
+    if f.get("__command").and_then(Value::as_str) != Some(COMMAND) || field != KEY {
+        return;
+    }
+    let monitor = f.get("monitorProfile").and_then(Value::as_str).unwrap_or("auto");
+    let rgb = session.color.monitor_rgb_for(monitor);
+    f.insert(MONITOR_RGB.into(), Value::String(rgb));
+    let shown = current(f);
+    if f.get(APPLIED).and_then(Value::as_str) != Some(shown.as_str()) {
+        load(f, &shown);
+    }
+}
+
+/// Loads the named setup into the controls (but the [`KEPT`] ones) and makes it the one they show.
+fn load(f: &mut Map<String, Value>, name: &str) {
+    let monitor_rgb = f.get(MONITOR_RGB).and_then(Value::as_str).unwrap_or("srgb").to_string();
+    if let Some(Value::Object(setup)) = preset_setup(&ColorSettings::default(), name, &monitor_rgb).and_then(|c| serde_json::to_value(c).ok()) {
+        for (k, v) in setup {
+            if is_tracked(&k) && !KEPT.contains(&k.as_str()) {
+                f.insert(k, v);
+            }
+        }
+    }
+    f.insert(APPLIED.into(), json!(name));
+    f.insert(BASE.into(), Value::Object(tracked(f)));
 }
 
 /// Keys whose change makes the values Custom: the params but the menu and the monitor profile.

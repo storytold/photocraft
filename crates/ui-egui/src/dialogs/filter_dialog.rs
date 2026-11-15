@@ -20,7 +20,7 @@ mod color_settings_presets;
 mod zoom_center;
 
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
-pub(crate) use color_settings_presets::MONITOR_RGB as COLOR_SETTINGS_MONITOR_RGB;
+pub(crate) use color_settings_presets::{MONITOR_RGB as COLOR_SETTINGS_MONITOR_RGB, after_dialog_set as color_settings_after_dialog_set};
 pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
 
 #[derive(Clone, Debug, PartialEq)]
