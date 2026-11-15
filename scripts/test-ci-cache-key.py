@@ -85,13 +85,13 @@ def cache_inputs(text):
 
 
 def environment_pairs(lines, indent):
-    """Literal environment keys at one mapping level; continuation lines are not new variables."""
+    """Literal single-line environment mapping; unsupported value forms fail closed."""
     pairs = {}
     for line in lines:
         if not line.strip() or line.lstrip().startswith('#'):
             continue
         if len(line) - len(line.lstrip(' ')) > indent:
-            continue
+            raise AssertionError(f'unsupported continuation line in environment block: {line!r}')
         field = re.fullmatch(r' {' + str(indent) + r'}([A-Za-z_][A-Za-z0-9_]*):[ \t]*(.*?)[ \t]*', line)
         if field is None or field[1] in pairs:
             raise AssertionError(f'unsupported or duplicate environment key: {line!r}')
@@ -99,30 +99,37 @@ def environment_pairs(lines, indent):
     return pairs
 
 
+def environment_block(text, indent):
+    """Locate a literal env mapping; comments are not boundaries and EOF needs no newline."""
+    lines = text.splitlines()
+    prefix = ' ' * indent + 'env:'
+    starts = [i for i, line in enumerate(lines) if line.startswith(prefix)]
+    if not starts:
+        return None
+    if len(starts) != 1 or re.fullmatch(' ' * indent + r'env:[ \t]*(?:#.*)?', lines[starts[0]]) is None:
+        raise AssertionError('environment must be one literal mapping')
+    block = []
+    for line in lines[starts[0] + 1:]:
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        if len(line) - len(line.lstrip(' ')) <= indent:
+            break
+        block.append(line)
+    return block
+
+
 def workflow_environment(workflow=None):
-    """Read through comment/blank lines, stopping at the next column-zero YAML key."""
-    text = WORKFLOW if workflow is None else workflow
-    block = re.search(r'^env:\n((?:(?:[ ].*|#.*)?\n)+)', text, re.M)
+    """Read the workflow mapping through comments, blank lines and its last physical line."""
+    block = environment_block(WORKFLOW if workflow is None else workflow, 0)
     if block is None:
         raise AssertionError('no workflow-level env block')
-    return environment_pairs(block.group(1).splitlines(), 2)
+    return environment_pairs(block, 2)
 
 
 def job_environment(job_text):
-    """The job's `env:` block, as KEY: value pairs (comments and blank lines skipped)."""
-    lines = job_text.splitlines()
-    try:
-        start = lines.index('    env:')
-    except ValueError:
-        return {}
-    block = []
-    for line in lines[start + 1:]:
-        if not line.strip() or line.lstrip().startswith('#'):
-            continue
-        if len(line) - len(line.lstrip(' ')) <= 4:
-            break
-        block.append(line)
-    return environment_pairs(block, 6)
+    """Read this job's literal env mapping, if present."""
+    block = environment_block(job_text, 4)
+    return environment_pairs(block, 6) if block is not None else {}
 
 
 def hashed(environment):
@@ -243,6 +250,25 @@ class EnvironmentReaderTests(unittest.TestCase):
                 '      EMPTY:\n      RUSTFLAGS: -Dwarnings\n    steps:\n      - run: true\n')
         self.assertEqual(job_environment(text),
                          {'CARGO_INCREMENTAL': '0', 'EMPTY': '', 'RUSTFLAGS': '-Dwarnings'})
+
+    def test_environment_continuations_fail_closed(self):
+        for reader, text in (
+            (workflow_environment, 'env:\n  RUSTFLAGS:\n    -Dwarnings\n'),
+            (job_environment, '    env:\n      RUSTFLAGS:\n        -Dwarnings\n'),
+        ):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(AssertionError, 'continuation'):
+                    reader(text)
+
+    def test_environment_eof_needs_no_trailing_newline(self):
+        self.assertEqual(workflow_environment('env:\n  RUSTFLAGS: -Dwarnings'), {'RUSTFLAGS': '-Dwarnings'})
+        self.assertEqual(job_environment('    env:\n      RUSTFLAGS: -Dwarnings'), {'RUSTFLAGS': '-Dwarnings'})
+
+    def test_nonliteral_environment_headers_fail_closed(self):
+        for reader, text in ((workflow_environment, 'env: *shared\n'), (job_environment, '    env: *shared\n')):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(AssertionError, 'literal mapping'):
+                    reader(text)
 
     def test_unsupported_or_duplicate_environment_keys_fail_closed(self):
         for body in ("  'RUSTFLAGS': -Dwarnings\n", '  RUSTFLAGS: a\n  RUSTFLAGS: b\n'):
