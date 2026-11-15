@@ -734,6 +734,7 @@ fn clipboard_answer(cb: &mut arboard::Clipboard, request: Request) -> Answer {
 /// last arboard handle dropped hands what the app copied to a clipboard manager, and a text read
 /// tries six formats and waits up to 4 s for each, so the wait is 25 s. On the compositor's
 /// data-control protocol, where a read may never end and nothing is handed over, there is no wait.
+/// On the BSDs, where PhotoCraft can't tell which of the two arboard opened, the wait is 25 s.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn clipboard_reads_finish() -> std::time::Duration {
     // arboard 3.7 opens data-control where `WAYLAND_DISPLAY` is set and wl-clipboard-rs finds the
@@ -741,7 +742,7 @@ fn clipboard_reads_finish() -> std::time::Duration {
     #[cfg(target_os = "linux")]
     let data_control = std::env::var_os("WAYLAND_DISPLAY").is_some() && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok();
     #[cfg(not(target_os = "linux"))]
-    let data_control = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let data_control = false;
     if data_control { std::time::Duration::ZERO } else { std::time::Duration::from_secs(25) }
 }
 
