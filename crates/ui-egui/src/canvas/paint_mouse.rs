@@ -61,6 +61,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
         // the outgoing opacity.
         None if tool == Tool::Pencil => BrushSettings { opacity: current.opacity, ..fresh_brush(tool, &current) },
+        // The Eraser starts with its Reset Tool tip and no smoothing (#11936), keeping the outgoing
+        // opacity and flow as before (a first use's are not measured).
+        None if tool == Tool::Eraser => BrushSettings { opacity: current.opacity, flow: current.flow, ..fresh_brush(tool, &current) },
         None => {
             let fresh = BrushSettings::default();
             let (opacity, flow) = match tool {
@@ -97,6 +100,9 @@ fn session_fields(current: &BrushSettings, brush: &BrushSettings) -> BrushSettin
 /// The Brush tool's tip after Reset Tool, as the reference measures it (#11810): size, hardness
 /// and spacing of a 13 px soft round at 25 % spacing.
 const BRUSH_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+/// The Eraser's tip after Reset Tool (#11936): a 13 px hard round at 25 % spacing, with no
+/// smoothing.
+const ERASER_TOOL_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
 /// The Background Eraser's tip after Reset Tool (#11911): a 13 px hard round at 25 % spacing.
 const BACKGROUND_ERASER_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
 /// The Healing Brush's tip after Reset Tool (#12099): a 19 px hard round at 25 % spacing.
@@ -117,15 +123,20 @@ const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
-/// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
-/// [`HEALING_BRUSH_TIP`], and the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`]. Clone Stamp
-/// and History Brush use [`CLONE_STAMP_AND_HISTORY_BRUSH_TIP`] with no smoothing. The Remove tool
-/// uses [`REMOVE_TOOL_SIZE`] with the default hardness and spacing. Smudge uses [`SMUDGE_TOOL_TIP`],
-/// and Pencil uses [`PENCIL_TOOL_TIP`].
+/// [`BRUSH_TOOL_TIP`]. Eraser uses [`ERASER_TOOL_TIP`] with no smoothing, Background Eraser
+/// uses [`BACKGROUND_ERASER_TIP`], Healing Brush uses [`HEALING_BRUSH_TIP`], and Burn, Dodge and
+/// Sponge use [`TONING_TOOL_TIP`]. Clone Stamp and History Brush use
+/// [`CLONE_STAMP_AND_HISTORY_BRUSH_TIP`] with no smoothing. Remove uses [`REMOVE_TOOL_SIZE`]
+/// with the default hardness and spacing. Smudge uses [`SMUDGE_TOOL_TIP`], and Pencil uses
+/// [`PENCIL_TOOL_TIP`].
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
         Tool::Brush => (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP,
+        Tool::Eraser => {
+            (brush.size, brush.hardness, brush.spacing) = ERASER_TOOL_TIP;
+            brush.smoothing.amount = 0.0;
+        }
         Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
         Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
         Tool::Pencil => (brush.size, brush.hardness, brush.spacing) = PENCIL_TOOL_TIP,
@@ -451,6 +462,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool, 
         && !crate::color_hud::is_open(&app.ui)
         && right_click_picker(tool)
         && let Some(p) = right_at
+        && !crate::retouch_ui::remove_pending_live(app)
     {
         crate::brush_picker::open(&mut app.ui, &response.ctx, [p.x, p.y]);
     }
@@ -503,7 +515,8 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: boo
         app.secondary_erase = down;
         return true;
     }
-    if down && right_click_picker(tool) {
+    // Waiting Remove strokes take no right-click: nothing opens over their tint (#12551).
+    if down && right_click_picker(tool) && !crate::retouch_ui::remove_pending_live(app) {
         crate::brush_picker::open(&mut app.ui, ctx, at);
     }
     false
@@ -600,3 +613,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../pencil_reset_defaults_tests.rs"]
 mod pencil_reset_defaults_tests;
+
+#[cfg(test)]
+#[path = "remove_right_click_tests.rs"]
+mod remove_right_click_tests;
