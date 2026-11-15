@@ -353,8 +353,9 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         SnapTargets::default()
     };
     // Windows Ctrl both starts a straighten line and is held while it is drawn: the override then
-    // covers the press too, or the line's start would snap and its end not.
-    let disabled = straightens && override_held(mods);
+    // covers the press too, or the line's start would snap and its end not. The Frame tool has no
+    // use for Ctrl at the press either, so a frame drawn with Ctrl held never snaps its first corner.
+    let disabled = (straightens || frame_press) && override_held(mods);
     app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled, frame: frame_press });
 }
 
@@ -413,6 +414,8 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2
         return p;
     }
     let (out, lines) = match &snap.gesture {
+        // A Shift-drawn frame ends where the squared drag does, not where the pointer is (#13865).
+        Gesture::Point if snap.frame && mods.shift => square_corner(&snap.targets, snap.start, p, tol),
         Gesture::Point => crop_handle(app, p, mods, &snap.targets, tol).unwrap_or_else(|| snap.targets.snap_point(p, tol)),
         Gesture::TransformCorner { point, .. } if corner_distorts(app, &snap.gesture, mods) => {
             let proposed = [point[0] + p[0] - snap.start[0], point[1] + p[1] - snap.start[1]];
@@ -424,12 +427,30 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2
         // Handled above.
         Gesture::Pivot { .. } => (p, Vec::new()),
         Gesture::Move { rect } | Gesture::TransformMove { rect } | Gesture::SelectionMove { rect } | Gesture::DrawMove { rect } => {
-            let d = [p[0] - snap.start[0], p[1] - snap.start[1]];
+            let mut d = [p[0] - snap.start[0], p[1] - snap.start[1]];
+            // A frame moved with Shift goes along one axis, the one the raw drag is longer on (the
+            // Frame tool's own rule): snap that axis only, and hand back a pointer that stays on it,
+            // so the tool sees the same axis once the pointer is corrected.
+            let horizontal = (snap.frame && mods.shift && matches!(snap.gesture, Gesture::Move { .. })).then(|| d[0].abs() > d[1].abs());
+            match horizontal {
+                Some(true) => d[1] = 0.0,
+                Some(false) => d[0] = 0.0,
+                None => {}
+            }
             let moved = [rect[0] + d[0], rect[1] + d[1], rect[2] + d[0], rect[3] + d[1]];
             let set = if snap.targets.is_empty() { &snap.smart } else { &snap.targets };
-            let (adj, lines) =
+            let (adj, mut lines) =
                 if snap.frame && matches!(snap.gesture, Gesture::Move { .. }) { set.snap_rect_edges(moved, tol) } else { set.snap_rect(moved, tol) };
-            ([p[0] + adj[0], p[1] + adj[1]], lines)
+            match horizontal {
+                Some(horizontal) => {
+                    lines.retain(|l| l.vertical == horizontal);
+                    let along = if horizontal { 0 } else { 1 };
+                    let mut q = snap.start;
+                    q[along] = p[along] + adj[along];
+                    (q, lines)
+                }
+                None => ([p[0] + adj[0], p[1] + adj[1]], lines),
+            }
         }
         Gesture::CropImage => {
             // Smart guides still snap when nothing in View › Snap To is within reach: the
@@ -440,6 +461,26 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2
     };
     app.prefs_rt.snap_lines = lines;
     out
+}
+
+/// Snap the end of a Shift-drawn frame: Shift squares the drag from its shorter side, so the frame's
+/// corner is at the squared end, and that corner is what snaps. The corner slides along the drag's
+/// diagonal, so one axis decides, the nearer snap; only that alignment is shown, since the other
+/// edge of the frame does not reach its target. Returns the pointer that squares to the snapped corner.
+fn square_corner(targets: &SnapTargets, start: [f64; 2], p: [f64; 2], tol: f64) -> ([f64; 2], Vec<SnapLine>) {
+    let (dx, dy) = (p[0] - start[0], p[1] - start[1]);
+    let side = dx.abs().min(dy.abs());
+    let (sx, sy) = (if dx < 0.0 { -1.0 } else { 1.0 }, if dy < 0.0 { -1.0 } else { 1.0 });
+    let corner = [start[0] + sx * side, start[1] + sy * side];
+    let (snapped, lines) = targets.snap_point(corner, tol);
+    let (ax, ay) = (snapped[0] - corner[0], snapped[1] - corner[1]);
+    let by_x = ax != 0.0 && (ay == 0.0 || ax.abs() <= ay.abs());
+    if !by_x && ay == 0.0 {
+        return (p, Vec::new());
+    }
+    let side = (side + if by_x { ax * sx } else { ay * sy }).max(0.0);
+    let lines = lines.into_iter().filter(|l| l.vertical == by_x).collect();
+    ([start[0] + sx * side, start[1] + sy * side], lines)
 }
 
 /// A corner stopped by the transform's convexity constraint is not aligned to the proposed
