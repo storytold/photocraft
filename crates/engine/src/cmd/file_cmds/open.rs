@@ -200,7 +200,7 @@ pub fn open_bytes_as_with_options(
     let (r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
-        let r = photocraft_io::import_with_options(&decode_name, bytes, &opts).map_err(|e| match as_ext {
+        let r = photocraft_io::import_with_options_as(&decode_name, bytes, as_ext, &opts).map_err(|e| match as_ext {
             Some(ext) => crate::error::io_open_as_error(&file_name(name), ext, e),
             None => crate::error::io_open_error(&decode_name, e),
         })?;
@@ -271,13 +271,6 @@ pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::BadParams { cmd: "file.openAs".into(), msg: format!("\"as\" names no format PhotoCraft reads: {ext:?}") });
     }
     let bytes = read_file(&path)?;
-    if let Some(ext) = as_ext {
-        let requested = photocraft_formats::from_extension(ext);
-        let detected = photocraft_formats::detect(&path, &bytes);
-        if requested.is_some() && detected.is_some() && requested != detected {
-            return Err(EngineError::Other(format!("{path}: contents do not match the requested {ext} format")));
-        }
-    }
     let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?;
     remember_batch_open(s);
     Ok(result)

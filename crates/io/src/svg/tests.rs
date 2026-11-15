@@ -46,7 +46,7 @@ fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() 
     parse_image_bounded_with(invalid.as_bytes(), budget.clone(), MAX_XML_DEPTH, inter_only, false).unwrap();
     assert!(budget.lock().unwrap().error.is_none(), "ordinary invalid images are still omitted");
     let svg = image_svg("<text>x</text>");
-    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), 1, panic_fonts, false).unwrap_err();
+    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), 2, panic_fonts, false).unwrap_err();
     assert!(error.to_string().contains("bounded SVG worker failed"));
     assert_eq!(budget.lock().unwrap().error.as_deref(), Some(error.to_string().as_str()));
 }
@@ -1045,7 +1045,14 @@ fn the_deepest_chain_of_embedded_svg_images_fits_a_small_stack() {
             for levels in 1..=MAX_EMBEDDED_SVG_DEPTH + 1 {
                 match rasterize_bounded(chain(levels).as_bytes(), 1.0, MAX_RASTER_PIXELS) {
                     Ok(buf) => {
-                        assert!(buf.px[4 * 8 + 4][3] > 0.99, "{levels} levels: the innermost rect draws through every level");
+                        let drawn = buf.px[4 * 8 + 4][3] > 0.99;
+                        if levels > MAX_EMBEDDED_SVG_DEPTH {
+                            // A chain past the limit is left out rather than rejected; it must not
+                            // still draw its innermost image through the exhausted depth budget.
+                            assert!(!drawn, "{levels} levels: the too-deep image is left out");
+                            break;
+                        }
+                        assert!(drawn, "{levels} levels: the innermost rect draws through every level");
                         accepted = levels;
                     }
                     Err(_) => assert!(accepted > 0, "a one-level chain renders"),
@@ -1336,8 +1343,16 @@ fn nested_shared_patterns_add_up_their_depth() {
     let body: String = (0..k).rev().map(|i| format!("<rect width=\"10\" height=\"10\" fill=\"url(#D{i})\"/>")).collect();
     let svg = format!("<svg {NS} width=\"100\" height=\"100\"><defs>{defs}</defs>{body}</svg>");
     // 9,500 nested groups: usvg's conversion overflows the 2 MiB test-thread stack on Windows.
-    let err = std::thread::Builder::new().stack_size(64 << 20).spawn(move || check_only(&svg, 100, 100).unwrap_err()).unwrap().join().unwrap();
-    assert!(err.message.contains("layers"), "{err:?}");
+    let msg = std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(move || match parse(svg.as_bytes()) {
+            Err(e) => e.to_string(),
+            Ok(p) => limits::check(p.tree.root().children(), tiny_skia::Transform::identity(), 100, 100, 0).unwrap_err().message,
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(msg.contains("layers"), "{msg}");
 }
 
 /// usvg makes the layer the union of a group's filter regions and every unary primitive on it keeps
