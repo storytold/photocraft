@@ -21,9 +21,9 @@ fn set_zoom(app: &mut PhotocraftApp, zoom: f32) {
 }
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
-    pointer(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 });
-    pointer(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 });
-    pointer(app, ToolEvent::Up { x: to[0], y: to[1] });
+    pointer(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(app, ToolEvent::Up { x: to[0], y: to[1] }, egui::Modifiers::NONE);
 }
 
 fn click(app: &mut PhotocraftApp, p: [f64; 2]) {
@@ -88,10 +88,10 @@ fn far_presses_and_no_document_never_panic() {
 #[test]
 fn the_drag_preview_shows_the_snapped_start() {
     let mut app = app(true);
-    pointer(&mut app, ToolEvent::Down { x: -78.0, y: -100.0, pressure: 1.0 });
-    pointer(&mut app, ToolEvent::Move { x: 700.0, y: 450.0, pressure: 1.0 });
+    pointer(&mut app, ToolEvent::Down { x: -78.0, y: -100.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(&mut app, ToolEvent::Move { x: 700.0, y: 450.0, pressure: 1.0 }, egui::Modifiers::NONE);
     assert_eq!(shown_quad(&app), Some([[0.0, 0.0], [700.0, 0.0], [700.0, 450.0], [0.0, 450.0]]), "while dragging");
-    pointer(&mut app, ToolEvent::Up { x: 700.0, y: 450.0 });
+    pointer(&mut app, ToolEvent::Up { x: 700.0, y: 450.0 }, egui::Modifiers::NONE);
     assert_eq!(shown_quad(&app), app.ui.perspective_crop, "after the release");
 }
 
