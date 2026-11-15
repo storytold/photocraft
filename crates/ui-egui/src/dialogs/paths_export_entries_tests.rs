@@ -99,26 +99,6 @@ fn every_entry_has_its_own_value_even_for_awkward_names() {
     assert!(ai("path:layer").contains("150.0000 190.0000 m"), "the row for the path called layer");
 }
 
-/// CodeRabbit on #15051: OK on the dialog sends the chosen saved path as `savedPath`, so with both `all` and
-/// `path:all` saved, the row for `all` exports `all` (not All Paths, not the one called `path:all`).
-#[test]
-fn ok_on_a_saved_path_row_exports_that_path() {
-    let mut app = app();
-    app.run("path.set", json!({"name": "path:all", "path": path(180.0)})).unwrap();
-    let ctx = egui::Context::default();
-    let id = crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
-    for (row, want, not) in [("path:all", "60.0000 190.0000 m", "180.0000 190.0000 m"), ("path:path:all", "180.0000 190.0000 m", "60.0000 190.0000 m")] {
-        let id = if row == "path:all" { id } else { crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap() };
-        let d = app.ui.dialog_mut(id).unwrap();
-        d.fields.insert("paths".into(), json!(row));
-        d.fields.remove("path");
-        let r = crate::dialogs::confirm(&mut app, id).unwrap();
-        let ai = r["ai"].as_str().unwrap_or_default();
-        assert!(ai.contains(want) && !ai.contains(not), "{row}: {ai}");
-        assert_eq!(r["paths"], 1, "{row}");
-    }
-}
-
 /// CodeRabbit on #15056: the Paths panel's selection key is the raw name, so `layer` and `work` can be a
 /// saved path as well as the layer row or the Work Path. The dialog then opens on All Paths instead of
 /// guessing; without such a saved path it opens on the selected row.

@@ -294,6 +294,7 @@ const PATHS_EXPORT: &str = "__pathsExport";
 /// a missing `.ai`, asks before replacing a file and starts where the last export went; Cancel
 /// writes nothing. The web downloads the file under the chosen name.
 fn paths_export_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    const CMD: &str = "file.export.pathsToIllustrator";
     let paths = s(f, "paths", "all");
     let suggested = format!("{}.ai", doc_stem(app));
     // The file dialog answers on a later frame, when another document may be active: the export is
@@ -302,13 +303,13 @@ fn paths_export_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Resu
     app.pick_export(&suggested, move |app, path| {
         app.refocus(doc)?;
         if cfg!(target_arch = "wasm32") {
-            let r = app.run("file.export.pathsToIllustrator", json!({"paths": paths}))?;
+            let r = app.run(CMD, paths_export_params(CMD, json!({"paths": paths})))?;
             let text = r["ai"].as_str().unwrap_or_default().to_string();
             let write = app.services.write.as_mut().ok_or("no writer configured")?;
             write(&path, text.as_bytes())?;
             return Ok(json!({"path": path, "paths": r["paths"]}));
         }
-        app.run("file.export.pathsToIllustrator", json!({"paths": paths, "path": path}))
+        app.run(CMD, paths_export_params(CMD, json!({"paths": paths, "path": path})))
     })
 }
 

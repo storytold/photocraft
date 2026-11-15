@@ -122,3 +122,20 @@ fn the_file_is_the_document_that_asked_even_if_another_is_active_by_then() {
     assert!(text.contains("10.0000 190.0000 m") && !text.contains("200.0000 190.0000 m"), "the first document's paths: {text}");
     assert_eq!(app.session.active().unwrap().doc.id, first, "and it is the active one again");
 }
+
+/// CodeRabbit on #15051: through the save dialog too, the row for a saved path called `all` exports that
+/// path, not All Paths and not the one called `path:all`.
+#[test]
+fn a_saved_path_row_called_all_exports_that_path_through_the_save_dialog() {
+    let dir = scratch("saved-all");
+    let (mut app, open) = app("first", None);
+    app.run("path.set", json!({"name": "all", "path": {"subpaths": [{"closed": true, "knots": [[100.0, 10.0], [160.0, 10.0], [160.0, 40.0]]}]}})).unwrap();
+    let r = invoke(&mut app, &egui::Context::default(), COMMAND, &json!({})).unwrap().unwrap();
+    let id = r["dialog"].as_u64().unwrap();
+    app.ui.dialog_mut(id).unwrap().fields.insert("paths".into(), json!("path:all"));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    answer(&mut app, &open, Some(FileDialogAnswer::SaveTo(dir.join("all.ai").to_string_lossy().into_owned())));
+    let text = std::fs::read_to_string(dir.join("all.ai")).expect("written").replace('\r', "\n");
+    assert!(text.contains("100.0000 190.0000 m") && !text.contains("10.0000 190.0000 m\n"), "only the path called all: {text}");
+}
