@@ -234,6 +234,37 @@ pub fn slider_row_prec(
     g: RowGestures,
     decimals: Option<u32>,
 ) -> Response {
+    slider_row_prec_body(ui, label, value, range, suffix, gradient, g, decimals, false)
+}
+
+/// [`slider_row_prec`] whose field prefixes values at one and above with `+` (`+1`, `+1.23`),
+/// as the reference shows the Exposure rows (#14639). Only those rows opt in.
+#[allow(clippy::too_many_arguments)]
+pub fn slider_row_prec_plus(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    gradient: Option<&[Color32]>,
+    g: RowGestures,
+    decimals: Option<u32>,
+) -> Response {
+    slider_row_prec_body(ui, label, value, range, suffix, gradient, g, decimals, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn slider_row_prec_body(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    gradient: Option<&[Color32]>,
+    g: RowGestures,
+    decimals: Option<u32>,
+    plus_above_one: bool,
+) -> Response {
     let t = Tokens::get(ui.ctx());
     let mut changed_resp = None;
     // The row's caption names both its number (through the scrub link) and its slider.
@@ -252,7 +283,7 @@ pub fn slider_row_prec(
                     suffix,
                     74.0,
                     0.0,
-                    FieldOpts { decimals, step_from_decimals: decimals.is_some(), ..Default::default() },
+                    FieldOpts { decimals, step_from_decimals: decimals.is_some(), plus_above_one, ..Default::default() },
                     None,
                 )
                 .0,

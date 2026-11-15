@@ -22,12 +22,26 @@ pub(crate) fn row_value(x: f32, min: f32, max: f32, decimals: Option<u32>) -> f3
 }
 
 pub(super) fn sliders(ui: &mut egui::Ui, v: &mut Value, rows: &[SliderRow]) -> Edit {
+    sliders_body(ui, v, rows, false)
+}
+
+/// [`sliders`] whose fields prefix values at one and above with `+`, as the reference shows the
+/// Exposure rows (#14639). Only those rows opt in; every other caller keeps today's display.
+pub(super) fn sliders_signed(ui: &mut egui::Ui, v: &mut Value, rows: &[SliderRow]) -> Edit {
+    sliders_body(ui, v, rows, true)
+}
+
+fn sliders_body(ui: &mut egui::Ui, v: &mut Value, rows: &[SliderRow], plus_above_one: bool) -> Edit {
     let mut e = Edit::default();
     for &(key, text, min, max, default, unit, decimals) in rows {
         let mut x = num(v, key, default).clamp(min, max);
         // A double-click on the slider puts it back to its default (Photoshop).
         let gestures = widgets::RowGestures { reset: Some(default), wheel_step: None, ..Default::default() };
-        let r = widgets::slider_row_prec(ui, text, &mut x, min..=max, unit, None, gestures, decimals);
+        let r = if plus_above_one {
+            widgets::slider_row_prec_plus(ui, text, &mut x, min..=max, unit, None, gestures, decimals)
+        } else {
+            widgets::slider_row_prec(ui, text, &mut x, min..=max, unit, None, gestures, decimals)
+        };
         if r.changed() {
             v[key] = json!(row_value(x, min, max, decimals));
         }
