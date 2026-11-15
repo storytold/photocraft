@@ -629,17 +629,20 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         ToolEvent::Down { x, y, .. } => {
             cancel(app);
             let p = [x, y];
+            // What was pressed is decided where the pointer was, not where Snap moved the corner of a new
+            // frame to: a press just off an existing frame must not become an edit of it.
+            let raw = app.prefs_rt.snap.as_ref().map_or(p, |s| s.start);
             let zoom = f64::from(app.point_zoom());
-            let (active, selected_control, content_control) = press_controls(app, p, zoom);
+            let (active, selected_control, content_control) = press_controls(app, raw, zoom);
             let id = selected_control
                 .map(|(id, _)| id)
                 .or_else(|| content_control.then(|| active.as_ref().map(|(id, _, _)| *id)).flatten())
-                .or_else(|| frame_at(app, p));
+                .or_else(|| frame_at(app, raw));
             // A shape lying above an empty frame where the press is: the drag moves the shape, one
             // "Move" step, and the frame stays (#13882).
             if selected_control.is_none()
                 && !content_control
-                && let Some(shape) = id.and_then(|frame| shape_above(app, frame, p))
+                && let Some(shape) = id.and_then(|frame| shape_above(app, frame, raw))
                 && let Some(st) = app.session.active()
             {
                 app.ui.frame_tool.drag = Some(FrameDrag::Content { frame: None, layer: shape, doc: st.doc.id, revision: st.revision, start: p, cur: p });
@@ -657,7 +660,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 }
                 let t = if content_control {
                     Target::Content
-                } else if selected_control.is_some() || on_border(&f, p, zoom) || l.children().is_none_or(|c| c.is_empty()) {
+                } else if selected_control.is_some() || on_border(&f, raw, zoom) || l.children().is_none_or(|c| c.is_empty()) {
                     Target::Frame
                 } else if active.as_ref().is_some_and(|(prev, _, t)| *prev == id && *t == Target::Content) {
                     Target::Content
