@@ -131,3 +131,68 @@ fn a_click_on_an_empty_frame_does_not_move_it() {
     assert_eq!(frames(&app), vec![[140, 100, 190, 130]], "still where it was, 3 px from the layer's edge at 137");
     assert_eq!(app.session.active().unwrap().history.entries(), before, "no Move step");
 }
+
+/// CodeRabbit on #15141: Ctrl held while drawing turns snapping off, from the press on. A press 7 px
+/// from the layer's edge at x 137 keeps its x with Ctrl held through Down, Move and Up, and takes the
+/// edge without Ctrl.
+#[test]
+fn a_ctrl_held_press_does_not_snap_the_start_corner() {
+    let ctrl = egui::Modifiers { ctrl: true, ..Default::default() };
+    let draw = |m: egui::Modifiers| {
+        let mut app = app(true);
+        tool_event(&mut app, ToolEvent::Down { x: 130.0, y: 200.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 170.0, y: 230.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 200.0, y: 250.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 200.0, y: 250.0 }, m);
+        frames(&app)
+    };
+    assert_eq!(draw(egui::Modifiers::NONE), vec![[137, 200, 200, 250]], "without Ctrl the start takes the edge");
+    assert_eq!(draw(ctrl), vec![[130, 200, 200, 250]], "with Ctrl the press stays where it was");
+}
+
+fn shift_drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) -> Vec<(bool, f64)> {
+    let m = egui::Modifiers { shift: true, ..Default::default() };
+    tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, m);
+    tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, m);
+    let mut lines: Vec<(bool, f64)> = app.prefs_rt.snap_lines.iter().map(|l| (l.vertical, l.pos)).collect();
+    lines.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, m);
+    lines
+}
+
+/// CodeRabbit on #15160: with Shift the frame is squared from the drag's shorter side, so the corner that
+/// snaps is the squared one. Drawing from (200, 150) to (134, 100) squares to (150, 100): 13 px from the
+/// layer's edge at x 137, so nothing snaps and no alignment is shown (the pointer's x of 134 used to
+/// show a line the frame did not reach).
+#[test]
+fn a_shift_drawn_frame_snaps_its_squared_corner_not_the_pointer() {
+    let mut app = app(true);
+    let lines = shift_drag(&mut app, [200.0, 150.0], [134.0, 100.0]);
+    assert_eq!(frames(&app), vec![[150, 100, 200, 150]]);
+    assert!(lines.is_empty(), "no alignment for an edge the frame does not reach: {lines:?}");
+}
+
+/// The squared corner does snap when it comes near an edge: dragging to (141, 60) squares to (141, 91),
+/// 1 px from the layer's bottom edge at y 90 and 4 from its right edge at x 137. The nearer snap decides, the
+/// frame stays square, and only the alignment it reaches (y 90) is shown.
+#[test]
+fn a_shift_drawn_frame_keeps_its_square_when_the_corner_snaps() {
+    let mut app = app(true);
+    let lines = shift_drag(&mut app, [200.0, 150.0], [141.0, 60.0]);
+    assert_eq!(frames(&app), vec![[140, 90, 200, 150]]);
+    assert_eq!(lines, vec![(false, 90.0)], "only the y alignment");
+}
+
+/// CodeRabbit on #15160: Shift moves a frame along the axis the raw drag is longer on. A frame at
+/// (140, 100)-(190, 130), pressed at (150, 110) and dragged to (151, 112), goes down by 2: the left edge's
+/// snap onto x 137 must not turn the move into a horizontal one.
+#[test]
+fn a_shift_moved_frame_keeps_the_axis_of_the_raw_drag() {
+    let mut app = app(false);
+    drag(&mut app, [140.0, 100.0], [190.0, 130.0]);
+    assert_eq!(frames(&app), vec![[140, 100, 190, 130]]);
+    app.ui.extras.snap = true;
+    let lines = shift_drag(&mut app, [150.0, 110.0], [151.0, 112.0]);
+    assert_eq!(frames(&app), vec![[140, 102, 190, 132]], "moved down by 2 only");
+    assert!(lines.is_empty(), "no alignment on the axis the frame did not move on: {lines:?}");
+}
