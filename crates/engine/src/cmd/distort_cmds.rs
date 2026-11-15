@@ -71,11 +71,18 @@ pub struct FaceSpec {
     pub sliders: FaceSliders,
 }
 
+/// The most faces one Liquify takes (`faces`). A group photo has a few dozen at most.
+pub const MAX_FACES: usize = 64;
+
 /// Face-Aware Liquify params: `faces`, each `{"face": n?, "landmarks": [[x,y]×5]?, sliders…}`.
 pub fn liquify_faces(cmd: &str, p: &Value) -> Result<Vec<FaceSpec>> {
     let Some(v) = p.get("faces") else { return Ok(Vec::new()) };
     let list = v.as_array().ok_or_else(|| bad(cmd, "`faces` must be a list"))?;
-    let mut out = Vec::with_capacity(list.len().min(64));
+    // Every face runs up to two dozen warps over the field: a script must not ask for thousands.
+    if list.len() > MAX_FACES {
+        return Err(bad(cmd, format!("at most {MAX_FACES} faces (got {})", list.len())));
+    }
+    let mut out = Vec::with_capacity(list.len());
     for (i, f) in list.iter().enumerate() {
         let mut o = f.as_object().cloned().ok_or_else(|| bad(cmd, "each face is an object of sliders"))?;
         let index = match o.remove("face") {
@@ -556,7 +563,7 @@ fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const L: &str = r##"{"strokes":[{"tool":"forwardWarp|reconstruct|smooth|twirlCw|twirlCcw|pucker|bloat|pushLeft|freeze|thaw|lassoMask|reconstructAll","size":px=100,"density":0-100=50,"pressure":0-100=100,"rate":0-100=80,"points":[[x,y,pressure?,ms?]…] (ms: milliseconds since the previous point; a point with it follows the pointer exactly and times the stationary tools in real time, as the dialog records them),"amount":%? (twirlCcw: twirlCw reversed, what an Alt-drag with Twirl Clockwise records; reconstructAll; lassoMask: 1 freezes the polygon in points, 0 thaws it)}…],"meshSize":px? (field resolution, px per node; default 2, or 4 above 4 MP),"faces":[{"face":n? (index of a detected face; default its place in the list),"landmarks":[[x,y]×5]? (eyes, nose, mouth corners, image left first; instead of detecting),"eyeSize","eyeHeight","eyeWidth","eyeTilt": -100..100 or [left,right],"eyeDistance","noseHeight","noseWidth","smile","upperLip","lowerLip","mouthWidth","mouthHeight","forehead","chinHeight","jawline","faceWidth": -100..100=0}…] (Face-Aware Liquify; applied before the strokes),"layer":id?} — strokes replay in order on a fresh field; a selection limits the effect; on a smart object it becomes a smart filter"##;
+    const L: &str = r##"{"strokes":[{"tool":"forwardWarp|reconstruct|smooth|twirlCw|twirlCcw|pucker|bloat|pushLeft|freeze|thaw|lassoMask|reconstructAll","size":px=100,"density":0-100=50,"pressure":0-100=100,"rate":0-100=80,"points":[[x,y,pressure?,ms?]…] (ms: milliseconds since the previous point; a point with it follows the pointer exactly and times the stationary tools in real time, as the dialog records them),"amount":%? (twirlCcw: twirlCw reversed, what an Alt-drag with Twirl Clockwise records; reconstructAll; lassoMask: 1 freezes the polygon in points, 0 thaws it)}…],"meshSize":px? (field resolution, px per node; default 2, or 4 above 4 MP),"faces":[{"face":n? (index of a detected face; default its place in the list),"landmarks":[[x,y]×5]? (eyes, nose, mouth corners, image left first; instead of detecting),"eyeSize","eyeHeight","eyeWidth","eyeTilt": -100..100 or [left,right],"eyeDistance","noseHeight","noseWidth","smile","upperLip","lowerLip","mouthWidth","mouthHeight","forehead","chinHeight","jawline","faceWidth": -100..100=0}…] (Face-Aware Liquify, at most 64; applied before the strokes),"layer":id?} — strokes replay in order on a fresh field; a selection limits the effect; on a smart object it becomes a smart filter"##;
     const P: &str = r##"{"pins":[{"src":[x,y],"dst":[x,y],"rotate":deg?,"depth":n?}…],"mode":"rigid|normal|distort"="normal","density":"fewer|normal|more"="normal","expansion":px=2,"interpolation":"bicubic|bilinear|nearest","layer":id?} — mesh over the opaque region, as-rigid-as-possible; on a smart object it becomes a smart filter"##;
     const Q: &str = r##"{"planes":[{"src":[[x,y]×4],"dst":[[x,y]×4]}…] (corners clockwise from top-left; corners that coincide in src are linked),"straighten":"horizontal|vertical|auto"?,"interpolation":"bicubic|bilinear|nearest","layer":id?}"##;
     vec![

@@ -519,6 +519,13 @@ fn face_aware_liquify_refuses_bad_faces() {
         assert!(s.execute(LIQUIFY, bad.clone()).is_err(), "{bad}");
         unchanged(&s, &bad.to_string());
     }
+    // More faces than the cap: refused before any warp, however neutral they are.
+    let many = vec![json!({"landmarks": lm, "smile": 10}); MAX_FACES + 1];
+    let e = s.execute(LIQUIFY, json!({"faces": many})).unwrap_err();
+    assert!(e.to_string().contains(&format!("at most {MAX_FACES} faces")), "{e}");
+    unchanged(&s, "too many faces");
+    assert!(liquify_faces(LIQUIFY, &json!({"faces": vec![json!({}); 100_000]})).is_err());
+    assert_eq!(liquify_faces(LIQUIFY, &json!({"faces": vec![json!({"landmarks": lm}); MAX_FACES]})).map(|f| f.len()).ok(), Some(MAX_FACES));
     // A face to detect that isn't there.
     let e = s.execute(LIQUIFY, json!({"faces": [{"smile": 10}]})).unwrap_err();
     assert!(e.to_string().contains("no face 0 (found 0)"), "{e}");
