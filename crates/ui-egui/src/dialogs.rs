@@ -1129,6 +1129,10 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
             crate::equalize_ui::validate(app, &d.fields)?;
         }
         crate::filter_dialog::validate_match_color_destination(app, &d.fields)?;
+        // Export As with nothing ticked in its list: the same refusal as the greyed OK button.
+        if !crate::export_dialog::can_confirm(&d.fields) {
+            return Err("Nothing is selected to export: tick an item in the list first".into());
+        }
     }
     // Merge Channels with too few, repeated, closed or changed documents stays open (#11451).
     merge_channels_ui::preflight(app, id)?;

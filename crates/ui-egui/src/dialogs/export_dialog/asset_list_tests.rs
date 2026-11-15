@@ -123,3 +123,38 @@ fn one_ticked_row_follows_the_settings_and_unticking_greys_export() {
     click(&mut h, Role::CheckBox, "Select All");
     assert!(!export_enabled(&h), "Select All off greys Export too");
 }
+
+/// CodeRabbit on #15030: with one Scale All row the asset row (and the preview and estimate) show the
+/// size Export writes: a 2x row on 200 x 150 is 400 x 300. Several rows keep the dialog's own settings.
+#[test]
+fn the_row_shows_the_size_a_single_scale_all_row_writes() {
+    let base = json!({"format": "png", "scale": 100, "width": 200, "height": 150, "sizing": "scale"}).as_object().unwrap().clone();
+    let mut one = base.clone();
+    one.insert("scaleAll".into(), json!([{"size": "2x", "suffix": ""}]));
+    let eff = effective_fields(&one);
+    assert_eq!((n(&eff, "scale", 0.0), n(&eff, "width", 0.0), n(&eff, "height", 0.0)), (200.0, 400.0, 300.0));
+    let mut two = base.clone();
+    two.insert("scaleAll".into(), json!([{"size": "2x", "suffix": ""}, {"size": "0.5x", "suffix": "@0.5x"}]));
+    assert_eq!(effective_fields(&two), two, "several rows: the dialog's own settings");
+
+    let mut h = harness();
+    open_dialog(&mut h);
+    row_text(&mut h, "PNG  200 x 150  ");
+    h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("scaleAll".into(), json!([{"size": "2x", "suffix": ""}]));
+    h.run_steps(6);
+    row_text(&mut h, "PNG  400 x 300  ");
+}
+
+/// CodeRabbit on #15030: a control confirm refuses, as the greyed button does, while nothing is ticked.
+#[test]
+fn a_control_confirm_with_nothing_ticked_is_refused_and_keeps_the_dialog() {
+    let mut h = harness();
+    open_dialog(&mut h);
+    click(&mut h, Role::CheckBox, "Select All");
+    let id = h.state().ui.dialogs.last().unwrap().id;
+    let err = crate::dialogs::confirm_preflight(h.state_mut(), id).unwrap_err();
+    assert!(err.contains("Nothing is selected"), "{err}");
+    assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "the dialog stays open");
+    click(&mut h, Role::CheckBox, "Select All");
+    assert!(crate::dialogs::confirm_preflight(h.state_mut(), id).is_ok(), "ticked again: allowed");
+}

@@ -144,6 +144,16 @@ fn scaled_fields(f: &Map<String, Value>, factor: f64) -> Map<String, Value> {
     out
 }
 
+/// The settings Export writes with: with exactly one Scale All row, the row's size applied to them
+/// (as `confirm` does); with several rows each file has its own size, so the dialog's own settings
+/// stand for the document.
+fn effective_fields(f: &Map<String, Value>) -> Map<String, Value> {
+    match scale_rows(f).as_slice() {
+        [(size, _)] => scaled_fields(f, scale_factor(size)),
+        _ => f.clone(),
+    }
+}
+
 /// A row's suffix as part of a file name: characters a file name can't hold become `_`.
 fn file_suffix(suffix: &str) -> String {
     suffix.chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect()
@@ -1094,23 +1104,26 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         ui.add_space(12.0);
         // Right: preview + estimated size.
         ui.vertical(|ui| {
+            // The preview, the estimate and the asset row show what Export writes: with one Scale All row
+            // that is the row's size, so a 2x row previews and estimates at twice the size.
+            let eff = effective_fields(f);
             let layer = f.get("__layer").and_then(Value::as_u64);
             let key = egui::Id::unique(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
             let sig = format!(
                 "{}{}{}{}{}{}{}{}{}{}{}{}{}",
-                s_fmt(f),
-                n(f, "quality", 85.0),
-                lossless(f),
-                f.get("transparency").map(|v| v.to_string()).unwrap_or_default(),
-                n(f, "scale", 100.0),
-                n(f, "width", 0.0),
-                n(f, "height", 0.0),
-                s(f, "metadata"),
-                s(f, "tgaBits"),
-                s(f, "profile"),
-                f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
-                s(f, "sizing"),
-                s(f, "resample")
+                s_fmt(&eff),
+                n(&eff, "quality", 85.0),
+                lossless(&eff),
+                eff.get("transparency").map(|v| v.to_string()).unwrap_or_default(),
+                n(&eff, "scale", 100.0),
+                n(&eff, "width", 0.0),
+                n(&eff, "height", 0.0),
+                s(&eff, "metadata"),
+                s(&eff, "tgaBits"),
+                s(&eff, "profile"),
+                eff.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
+                s(&eff, "sizing"),
+                s(&eff, "resample")
             );
             let sig = format!("{sig}:{}", source_profile.content_hash());
             let cached: Option<CachedPreview> = ui.data(|d| d.get_temp(key));
@@ -1119,17 +1132,17 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 None => {
                     #[cfg(not(target_arch = "wasm32"))]
                     let result = if background_preview_needed(&doc) {
-                        poll_or_start_preview(ui, key, &sig, doc.clone(), f, source_profile.clone())
+                        poll_or_start_preview(ui, key, &sig, doc.clone(), &eff, source_profile.clone())
                     } else {
                         let source = source_document(app, f).unwrap_or_else(|_| doc.clone());
-                        Some(preview_sync(app, &source, f, &source_profile))
+                        Some(preview_sync(app, &source, &eff, &source_profile))
                     };
                     #[cfg(target_arch = "wasm32")]
                     let result = {
                         let source = source_document(app, f).unwrap_or_else(|_| doc.clone());
-                        Some(preview_sync(app, &source, f, &source_profile))
+                        Some(preview_sync(app, &source, &eff, &source_profile))
                     };
-                    let filter = preview_filter(f);
+                    let filter = preview_filter(&eff);
                     result.map(|result| cache_preview(ui, key, sig.clone(), result, filter))
                 }
             };
@@ -1148,7 +1161,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             }
             ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Outside);
             #[cfg(not(target_arch = "wasm32"))]
-            let exact = poll_or_start_exact_estimate(ui, key, &sig, doc.clone(), f, source_profile.clone()).flatten();
+            let exact = poll_or_start_exact_estimate(ui, key, &sig, doc.clone(), &eff, source_profile.clone()).flatten();
             #[cfg(target_arch = "wasm32")]
             let exact: Option<u64> = None;
             let bytes = exact.or_else(|| preview.as_ref().and_then(|preview| preview.estimate));
@@ -1193,7 +1206,7 @@ fn asset_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &Document, p
         }
         ui.vertical(|ui| {
             ui.label(egui::RichText::new(&name).color(t.text));
-            let (w, h) = export_pixels(f64::from(doc.size.width), f64::from(doc.size.height), f, None).unwrap_or((0.0, 0.0));
+            let (w, h) = export_pixels(f64::from(doc.size.width), f64::from(doc.size.height), &effective_fields(f), None).unwrap_or((0.0, 0.0));
             let est = f.get("__estimate").and_then(Value::as_f64).map_or("—".to_string(), crate::sizing::estimate_text);
             ui.label(egui::RichText::new(format!("{}  {w} x {h}  {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
         });
