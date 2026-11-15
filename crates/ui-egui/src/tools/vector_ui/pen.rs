@@ -464,14 +464,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
         )
     } else if app.ui.tool_options.vector_mode == "shape" {
         let fill = if closed { fill_param(app) } else { Value::Null };
-        let stroke = if closed {
-            stroke_param(app)
-        } else {
-            let mut stroke = app.ui.tool_options.shape_stroke.params();
-            stroke["width"] = json!(app.ui.tool_options.stroke_width.max(1.0));
-            stroke["color"] = json!(app.session.tools.foreground);
-            stroke
-        };
+        let stroke = if closed { stroke_param(app) } else { super::shapes::open_pen_stroke_param(app) };
         let use_aligned_rendering = app.ui.tool_options.use_aligned_rendering;
         app.run(
             "shape.create",
