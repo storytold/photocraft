@@ -1,5 +1,12 @@
 use super::*;
 
+#[test]
+fn corpus_rejects_unknown_arguments_before_fetching() {
+    for args in [vec!["--psd-tool"], vec!["--all", "--psd-tool"], vec!["--psd-tool", "--all"]] {
+        assert_eq!(cmd(&args), Err("corpus: unknown argument `--psd-tool`".into()));
+    }
+}
+
 /// The flags each pinned corpus is fetched with by `fetch_all(local, update)`.
 fn calls(local: bool, update: bool) -> Vec<(&'static str, bool)> {
     let mut seen = Vec::new();
