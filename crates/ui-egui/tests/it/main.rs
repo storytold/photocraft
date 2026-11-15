@@ -11,6 +11,7 @@ mod brush_reset_defaults;
 mod camera_raw_develop_automask;
 mod camera_raw_develop_brush;
 mod camera_raw_develop_cursors;
+mod camera_raw_develop_density;
 mod camera_raw_develop_discard;
 mod camera_raw_develop_keys;
 mod camera_raw_develop_navigation;

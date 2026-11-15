@@ -431,6 +431,8 @@ fn brush_settings(ui: &mut egui::Ui, st: &mut LocalTools) {
             }
         });
     });
+    // (the slider rows' rhythm after the header's buttons)
+    ui.add_space(4.0);
     let b = &mut st.brush;
     let size = spec("brushSize", "Size", (1.0, 100.0, 12.0), 1.0, 0, Track::Plain);
     if let Some(v) = slider(ui, &size, b.size * 400.0, true, tr("Size")).value {

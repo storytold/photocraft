@@ -47,8 +47,9 @@ pub(crate) struct Lc {
 pub(crate) const PANEL_W: f32 = 300.0;
 /// Width of the icon rail at the far right.
 pub(crate) const RAIL_W: f32 = 48.0;
-/// Height of a slider row.
-pub(crate) const SLIDER_ROW_H: f32 = 45.0;
+/// Height of a slider row: the label and value over the track, about 31 points (Lightroom's and
+/// Camera Raw's panels are as dense).
+pub(crate) const SLIDER_ROW_H: f32 = 31.0;
 
 const fn rgb(v: u32) -> Color32 {
     Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)

@@ -133,9 +133,12 @@ pub(crate) fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool,
     let w = ui.available_width();
     let (row, _) = ui.allocate_exact_size(vec2(w, SLIDER_ROW_H), Sense::hover());
     let (pad_l, pad_r) = (24.0, 22.0);
-    let label_rect = Rect::from_min_size(pos2(row.left() + pad_l, row.top() + 4.0), vec2((w - pad_l - pad_r).max(1.0), 18.0));
-    let track = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2((row.right() - pad_r).max(row.left() + pad_l + 1.0), row.top() + 40.0));
-    let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+    // the label row (its text centred 8.5 pt down), then the track 14.5 pt below it; the knob's
+    // ring fits inside the row
+    let label_rect = Rect::from_min_size(pos2(row.left() + pad_l, row.top() + 1.0), vec2((w - pad_l - pad_r).max(1.0), 15.0));
+    let track = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 16.0), pos2((row.right() - pad_r).max(row.left() + pad_l + 1.0), row.top() + 30.0));
+    // (the value is hit a little taller than its text)
+    let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top() - 1.0), label_rect.max + vec2(0.0, 1.0));
     let id = ui.make_persistent_id(("lc-slider", spec.id));
     let g = Slider { spec, value, enabled, id, track };
     let sense = if enabled { Sense::click_and_drag() } else { Sense::hover() };
@@ -322,12 +325,15 @@ fn announce_disclosure(resp: &Response, expanded: bool, label: &str) {
     resp.ctx.accesskit_node_builder(resp.id, |node| node.set_expanded(expanded));
 }
 
+/// Height of a section header (with the slider rows' rhythm).
+pub(crate) const SECTION_H: f32 = 40.0;
+
 /// A section header ("⌄ Light"): click to fold. With `enabled`, an eye (on hover, or always while
 /// the section is off) switches the section; the second value is its new state when clicked.
 pub(crate) fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: Option<bool>) -> (Response, Option<bool>) {
     let t = Lc::get(ui.ctx());
     let w = ui.available_width();
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 52.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, SECTION_H), Sense::click());
     announce_disclosure(&resp, open, title);
     let p = ui.painter();
     if ui.rect_contains_pointer(r) {
@@ -364,8 +370,8 @@ pub(crate) fn title(ui: &mut Ui, text: &str) {
 /// A sub-heading inside a section ("Vignette", "Grain").
 pub(crate) fn sub_title(ui: &mut Ui, text: &str) {
     let t = Lc::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 24.0, r.center().y + 4.0), Align2::LEFT_CENTER, text, t.semibold(13.0), t.text_label);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+    ui.painter().text(pos2(r.left() + 24.0, r.center().y + 3.0), Align2::LEFT_CENTER, text, t.semibold(13.0), t.text_label);
 }
 
 /// The thin line between groups.
@@ -385,7 +391,7 @@ pub(crate) fn padded<R>(ui: &mut Ui, top: i8, bottom: i8, add: impl FnOnce(&mut 
 pub(crate) fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) -> Response {
     let t = Lc::get(ui.ctx());
     let w = ui.available_width();
-    let (outer, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
+    let (outer, _) = ui.allocate_exact_size(vec2(w, 36.0), Sense::hover());
     let r = Rect::from_min_max(pos2(outer.left() + 16.0, outer.top() + 4.0), pos2(outer.right() - 16.0, outer.bottom() - 4.0));
     let resp = ui.interact(r, ui.make_persistent_id(("lc-flyout", id)), Sense::click());
     announce_disclosure(&resp, open, title);
