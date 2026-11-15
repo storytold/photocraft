@@ -31,15 +31,7 @@ pub fn stack_image_with_order(
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
-    let doc = if photocraft_io::svg::is_svg(bytes) {
-        // Stack Mode has no omission-warning channel. Decode complete layers before
-        // computing statistics, rather than caching statistics from a partial drawing.
-        photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)
-            .map(|imported| imported.document)
-            .map_err(|error| other(format!("can't read SVG Stack Mode contents: {error}")))?
-    } else {
-        decode_source_with_order(file_name, bytes, order)?
-    };
+    let doc = decode_source_with_order(file_name, bytes, order)?;
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
         all => all,

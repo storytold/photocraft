@@ -8,6 +8,7 @@ use std::ops::Range;
 use crate::IoError;
 use craft_svg::tree::Limits;
 
+#[cfg(test)]
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 const INVALID_IMAGE: &str = "data:image/png,%00";
@@ -46,28 +47,27 @@ pub(super) fn repair<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>,
     let max_patches = (limits.bytes / std::mem::size_of::<Range<usize>>()).min(usize::try_from(limits.xml_nodes).unwrap_or(usize::MAX));
     let mut patches: Vec<Range<usize>> = Vec::new();
     for node in xml.descendants().filter(|node| node.is_element()) {
-        if !matches!(node.tag_name().namespace(), None | Some(SVG_NS)) || !matches!(node.tag_name().name(), "image" | "feImage") {
+        if !matches!(node.tag_name().name(), "image" | "feImage") {
             continue;
         }
-        // SVG 2 gives unprefixed href precedence over any XLink prefix, even
-        // when the XLink attribute appeared first. Foreign namespaces are inert.
-        let href = node
-            .attributes()
-            .find(|a| a.name() == "href" && a.namespace().is_none())
-            .or_else(|| node.attributes().find(|a| a.name() == "href" && a.namespace() == Some(XLINK_NS)));
-        let Some(href) = href else { continue };
-        if !malformed_data_url(href.value(), &mut work)? {
-            continue;
-        }
-        let range = verified_value_range(text, node.range(), href.range(), href.range_qname(), href.range_value(), href.name())?;
-        if patches.len() == patches.capacity() {
-            if patches.len() >= max_patches {
-                return Err(invalid("SVG data-URL repair metadata exceeds its limit"));
+        // Shared preflight inspects local image names in every namespace and
+        // checks XLink before plain href. Normalize both representations, even
+        // when one is inert or unselected. Only actual resolver callbacks count
+        // omissions, so this does not turn hidden/unused resources into warnings.
+        for href in node.attributes().filter(|a| a.name() == "href" && matches!(a.namespace(), None | Some(XLINK_NS))) {
+            if !malformed_data_url(href.value(), &mut work)? {
+                continue;
             }
-            let capacity = patches.capacity().max(8).saturating_mul(2).min(max_patches);
-            patches.try_reserve_exact(capacity.saturating_sub(patches.len())).map_err(|_| invalid("could not allocate bounded SVG data-URL repairs"))?;
+            let range = verified_value_range(text, node.range(), href.range(), href.range_qname(), href.range_value(), href.name())?;
+            if patches.len() == patches.capacity() {
+                if patches.len() >= max_patches {
+                    return Err(invalid("SVG data-URL repair metadata exceeds its limit"));
+                }
+                let capacity = patches.capacity().max(8).saturating_mul(2).min(max_patches);
+                patches.try_reserve_exact(capacity.saturating_sub(patches.len())).map_err(|_| invalid("could not allocate bounded SVG data-URL repairs"))?;
+            }
+            patches.push(range);
         }
-        patches.push(range);
     }
     if patches.is_empty() {
         return Ok(Cow::Borrowed(text));
@@ -180,15 +180,38 @@ mod tests {
     }
 
     #[test]
-    fn href_precedence_and_foreign_namespaces_match_the_svg_parser() {
+    fn unselected_href_and_foreign_local_image_names_are_normalized_for_shared_preflight() {
         for attrs in ["href='data:image/png,%00' x:href='data:image/png;base64,A'", "x:href='data:image/png;base64,A' href='data:image/png,%00'"] {
             let text = format!("<svg xmlns='{SVG_NS}' xmlns:x='{XLINK_NS}'><image {attrs}/></svg>");
-            assert!(matches!(repair(&text, &limits()).unwrap(), Cow::Borrowed(_)));
+            let repaired = repair(&text, &limits()).unwrap();
+            assert!(matches!(repaired, Cow::Owned(_)));
+            assert_eq!(repaired.matches(INVALID_IMAGE).count(), 2);
+            assert!(!repaired.contains("base64,A"));
         }
         let text = format!(
             "<svg xmlns='{SVG_NS}' xmlns:x='{XLINK_NS}' xmlns:f='urn:foreign'><image x:href='data:image/png,%00' href='data:image/png;base64,A'/><f:image href='data:image/png;base64,A'/><image f:href='data:image/png;base64,A'/></svg>"
         );
-        assert_eq!(repair(&text, &limits()).unwrap().matches(INVALID_IMAGE).count(), 2);
+        let repaired = repair(&text, &limits()).unwrap();
+        assert_eq!(repaired.matches(INVALID_IMAGE).count(), 3);
+        assert!(repaired.contains("f:href='data:image/png;base64,A'"), "foreign href attributes remain inert and unchanged");
+    }
+
+    #[test]
+    fn both_href_forms_on_hidden_unused_and_foreign_resources_do_not_preflight_as_omissions() {
+        for tag in ["image", "feImage"] {
+            let text = format!(
+                "<svg xmlns='{SVG_NS}' xmlns:x='{XLINK_NS}' xmlns:f='urn:foreign'><defs><{tag} id='unused' href='data:image/png;base64,A' x:href='data:image/png;base64,A'/></defs><{tag} display='none' x:href='data:image/png;base64,A' href='data:image/png;base64,A'/><f:{tag} href='data:image/png;base64,A' x:href='data:image/png;base64,A'/></svg>"
+            );
+            let original = text.clone();
+            let repaired = repair(&text, &limits()).unwrap();
+            assert_eq!(text, original, "repair never mutates the original source");
+            assert_eq!(repaired.matches(INVALID_IMAGE).count(), 6);
+            let resolver = craft_svg::tree::ImageResolver::new(limits());
+            resolver.check_document(&repaired).unwrap();
+            let usage = resolver.usage();
+            assert_eq!((usage.invalid_raster_images, usage.invalid_svg_images), (0, 0), "shared whole-document scanning cannot invent omissions before resolution");
+            assert!(matches!(repair(&repaired, &limits()).unwrap(), Cow::Borrowed(_)), "normalization is idempotent");
+        }
     }
 
     #[test]

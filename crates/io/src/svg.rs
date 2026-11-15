@@ -472,6 +472,7 @@ fn parse_with_image_limit(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Databas
     parse_at_depth(depth, false, |isolated| {
         let opt = options_with_isolation(fontdb, MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&image_resolver), Arc::clone(&integrity));
         let text = data_href_validation::repair(text, &tree_limits(MAX_XML_DEPTH, max_image_pixels))?;
+        image_resolver.check_document(&text).map_err(svg_parse_error)?;
         let tree = guarded_parse(|| craft_svg::tree::parse_text(&text, &tree_limits(MAX_XML_DEPTH, max_image_pixels), &opt))?;
         let tree = tree.map_err(svg_parse_error)?;
         // The resolver already rejects each over-budget optional image before decode.
@@ -569,10 +570,11 @@ fn parse_image_bounded_with(
         }
         let resolver = Arc::clone(&budget.lock().unwrap_or_else(PoisonError::into_inner).resolver);
         let integrity = Arc::clone(&budget.lock().unwrap_or_else(PoisonError::into_inner).integrity);
-        let opt = options_with_isolation(fontdb, xml_left, isolated, resolver, integrity);
         let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
         let limits = tree_limits(xml_left, MAX_RASTER_PIXELS);
         let text = data_href_validation::repair(text, &limits)?;
+        resolver.check_document(&text).map_err(svg_parse_error)?;
+        let opt = options_with_isolation(fontdb, xml_left, isolated, resolver, integrity);
         let tree = guarded_parse(|| craft_svg::tree::parse_text(&text, &limits, &opt))?;
         let tree = tree.map_err(svg_parse_error)?;
         let mut counter = budget.lock().unwrap_or_else(PoisonError::into_inner);
@@ -957,12 +959,15 @@ pub fn import_svg_bounded_images(name: &str, bytes: &[u8], max_decoded_pixels: u
     on_svg_stack(|| import_parsed(name, parse_bounded(bytes, max_decoded_pixels)?, MAX_GROUP_DEPTH, None, false))
 }
 
-/// Layered SVG contents for Stack Mode. Preserve the image-only work allowance of
-/// [`import_svg_bounded_images`], but fail if any referenced image was omitted: Stack Mode
-/// has no warning channel and must not cache a silently incomplete set of source layers.
+/// The bounded layered import for callers without an omission-warning channel. Reject missing
+/// embedded images before rendering or caching any layers; keep the same decode and retained-
+/// pixel budgets as [`import_svg_bounded_images`].
 pub fn import_svg_bounded_images_strict(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<ImportResult, IoError> {
     on_svg_stack(|| {
-        let parsed = parse_bounded_work_with(bytes, max_decoded_pixels, true, fonts)?.parsed;
+        let parsed = parse_bounded(bytes, max_decoded_pixels)?;
+        if omitted_image_count(parsed.image_usage) != 0 {
+            return Err(IoError::Svg("embedded images were unreadable or exceeded image limits; cannot import incomplete smart object contents".into()));
+        }
         import_parsed(name, parsed, MAX_GROUP_DEPTH, None, false)
     })
 }

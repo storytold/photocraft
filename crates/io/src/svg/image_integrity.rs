@@ -16,6 +16,7 @@ struct RasterRecord {
 }
 
 pub(super) struct Integrity {
+    pixel_limit: u64,
     pixels_left: u64,
     svg_bytes_left: usize,
     raster: HashMap<usize, RasterRecord>,
@@ -30,6 +31,7 @@ pub(super) struct Integrity {
 impl Integrity {
     pub(super) fn new(pixels: u64) -> Self {
         Self {
+            pixel_limit: pixels.min(MAX_RASTER_PIXELS),
             pixels_left: pixels.min(MAX_RASTER_PIXELS),
             svg_bytes_left: MAX_BOUNDED_SVG_BYTES as usize,
             raster: HashMap::new(),
@@ -46,6 +48,9 @@ impl Integrity {
         if self.fatal {
             return Err(IoError::Svg("embedded image validation metadata exceeds its bounded allowance".into()));
         }
+        // Raster callbacks use the exact rendering backend here, rather than decoding
+        // once generically in the shared resolver and then again for validation.
+        usage.raster_pixels = usage.raster_pixels.max(self.pixel_limit.saturating_sub(self.pixels_left));
         usage.invalid_raster_images = usage.invalid_raster_images.saturating_add(self.invalid_raster);
         usage.invalid_svg_images = usage.invalid_svg_images.saturating_add(self.invalid_svg);
         usage.raster_limit_images = usage.raster_limit_images.saturating_add(self.raster_limits);
@@ -104,7 +109,17 @@ pub(super) fn wrap(base: usvg::ImageHrefResolver<'static>, state: Arc<Mutex<Inte
             if state.lock().unwrap_or_else(PoisonError::into_inner).fatal {
                 return None;
             }
-            let svg = mime == "image/svg+xml" || (mime == "text/plain" && photocraft_codecs::detect(&data).is_none());
+            if let Some(kind) = raster_kind(mime, &data) {
+                let valid = state.lock().unwrap_or_else(PoisonError::into_inner).raster(&kind);
+                return valid.then_some(kind);
+            }
+            let svg = matches!(mime, "image/svg+xml" | "text/plain");
+            if !svg {
+                // A used data URL with an unsupported or mismatched MIME cannot draw.
+                let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                state.invalid_raster = state.invalid_raster.saturating_add(1);
+                return None;
+            }
             let data = if svg {
                 let room = state.lock().unwrap_or_else(PoisonError::into_inner).svg_bytes_left;
                 // Inflate once under the original aggregate allowance, then pass UTF-8
@@ -150,10 +165,34 @@ pub(super) fn wrap(base: usvg::ImageHrefResolver<'static>, state: Arc<Mutex<Inte
             } else {
                 data
             };
-            // The shared resolver bounds dimensions/allocation before full raster decode.
-            let kind = (base.resolve_data)(mime, data, options)?;
-            let valid = state.lock().unwrap_or_else(PoisonError::into_inner).raster(&kind);
-            valid.then_some(kind)
+            // Keep shared SVG nesting/XML accounting. Its nested parsers reuse this
+            // wrapper, so every raster still follows our one exact, bounded decode.
+            (base.resolve_data)(mime, data, options)
         }),
     }
+}
+
+// Preserve the shared resolver's MIME/magic agreement. A forged MIME must not
+// borrow a successful validation belonging to a different rendering decoder.
+fn raster_kind(mime: &str, data: &Arc<Vec<u8>>) -> Option<usvg::ImageKind> {
+    use photocraft_codecs::Format;
+    let format = photocraft_codecs::detect(data)?;
+    let accepted = match mime {
+        "image/jpg" | "image/jpeg" => format == Format::Jpeg,
+        "image/png" => format == Format::Png,
+        "image/gif" => format == Format::Gif,
+        "image/webp" => format == Format::WebP,
+        "text/plain" => true,
+        _ => false,
+    };
+    if !accepted {
+        return None;
+    }
+    Some(match format {
+        Format::Png => usvg::ImageKind::PNG(Arc::clone(data)),
+        Format::Jpeg => usvg::ImageKind::JPEG(Arc::clone(data)),
+        Format::Gif => usvg::ImageKind::GIF(Arc::clone(data)),
+        Format::WebP => usvg::ImageKind::WEBP(Arc::clone(data)),
+        _ => return None,
+    })
 }

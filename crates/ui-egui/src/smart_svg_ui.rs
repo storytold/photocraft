@@ -469,11 +469,11 @@ pub(crate) fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 Ok(result) => {
                     if let Some(fingerprint) = result.get("fingerprint").filter(|v| !v.is_null()) {
                         edit.target.fingerprint = fingerprint.clone();
+                        crate::notices::io_result_warnings(app, &result, if native { "Vector" } else { "SVG" });
                     } else {
                         report(app, "The SVG update did not return its fingerprint; syncing stopped".into());
                         continue;
                     }
-                    crate::notices::io_warnings(app, if native { "Vector" } else { "SVG" }, &crate::jobs_ui::warnings_of(&result));
                 }
                 Err(error) => {
                     let stale = error.contains("contents changed") || error.contains("conflicting contents");

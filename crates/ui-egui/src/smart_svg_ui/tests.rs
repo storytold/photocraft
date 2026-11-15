@@ -799,3 +799,15 @@ fn external_svg_save_back_reports_omissions_once_and_keeps_silent_updates_quiet(
         assert_eq!(app.session.active().unwrap().doc, before);
     }
 }
+
+#[test]
+fn svg_save_back_displays_omitted_image_warning() {
+    let (mut app, saves, _) = fixture();
+    open(&mut app);
+    confirm(&mut app).unwrap();
+    let omitted = SVG.replace("</svg>", r#"<image width="2" height="2" href="data:image/png,broken"/></svg>"#);
+    saves.borrow_mut().push_back(Ok(omitted.into_bytes()));
+    poll(&mut app, &egui::Context::default());
+    assert!(app.smart_svg.editing.first().unwrap().saved.is_none());
+    assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line.contains("embedded") && line.contains("omitted"))));
+}
