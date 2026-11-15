@@ -34,10 +34,8 @@ impl Class {
 /// prefix.
 pub const TABLE: &[(&str, Class)] = &[
     ("geom", Class::Layer(0)),
-    ("cms", Class::Layer(0)),
     ("color", Class::Layer(0)),
     ("raster", Class::Layer(0)),
-    ("psd", Class::Standalone),
     ("codecs", Class::Standalone),
     // Optional HEIF/HEIC decoder (heic-rs), used only by `codecs` behind its `heif` feature.
     // IPP client for CUPS printing (pure Rust, no dependencies), used by `engine` on Unix.
@@ -78,7 +76,7 @@ pub const TABLE: &[(&str, Class)] = &[
 /// The L0 foundation is a small chain: `raster` builds on `color` and
 /// `geom`, which the §3 diagram draws on one line. The GPU backend (`gpu`)
 /// reuses the CPU reference (`compose`) for LUTs and parity tests.
-pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["geom", "cms", "color", "raster"], &["compose", "gpu"]];
+pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["geom", "color", "raster"], &["compose", "gpu"]];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));
@@ -303,7 +301,7 @@ mod tests {
 
     #[test]
     fn self_dev_dependency_ignored() {
-        assert!(check(&[c("photocraft-psd", &[("photocraft-psd", Dev, true)])]).is_empty());
+        assert!(check(&[c("photocraft-codecs", &[("photocraft-codecs", Dev, true)])]).is_empty());
     }
 
     #[test]
@@ -314,7 +312,7 @@ mod tests {
 
     #[test]
     fn standalone_crates_have_no_workspace_deps() {
-        for s in ["photocraft-psd", "photocraft-codecs", "photocraft-adobe-assets"] {
+        for s in ["photocraft-codecs", "photocraft-adobe-assets"] {
             let v = check(&[c(s, &[("photocraft-geom", Normal, true)])]);
             assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]), "{s}");
             assert!(check(&[c(s, &[("image", Normal, false)])]).is_empty());
@@ -324,7 +322,7 @@ mod tests {
     #[test]
     fn standalone_crates_have_no_exceptions() {
         // Standalone crates may not use each other, in either direction.
-        for (from, to) in [("photocraft-codecs", "photocraft-psd"), ("photocraft-psd", "photocraft-codecs")] {
+        for (from, to) in [("photocraft-codecs", "photocraft-adobe-assets"), ("photocraft-adobe-assets", "photocraft-codecs")] {
             let v = check(&[c(from, &[(to, Normal, true)])]);
             assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]), "{from} -> {to}");
         }
@@ -335,7 +333,7 @@ mod tests {
 
     #[test]
     fn standalone_is_usable_from_higher_layers() {
-        assert!(check(&[c("photocraft-io", &[("photocraft-psd", Normal, true)])]).is_empty());
+        assert!(check(&[c("photocraft-io", &[("photocraft-codecs", Normal, true)])]).is_empty());
         let v = check(&[c("photocraft-geom", &[("photocraft-codecs", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 0, to: 0, .. }]));
     }

@@ -48,7 +48,7 @@ impl Fixture {
     fn new(kind: Kind) -> Self {
         let (name, stem, bytes) = match kind {
             Kind::Brushes => {
-                use photocraft_psd::abr::{LegacyBrush, LegacyTip, write_v12};
+                use craft_psd::abr::{LegacyBrush, LegacyTip, write_v12};
                 let brush = |diameter| LegacyBrush {
                     name: String::new(),
                     spacing: 25,
@@ -58,7 +58,7 @@ impl Fixture {
                 ("Kit.abr", "Kit", write_v12(2, &[brush(9), brush(17)], true).unwrap())
             }
             Kind::Gradients => {
-                use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
+                use craft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
                 let gradient = |name: &str, rgb| GrdGradient {
                     name: name.into(),
                     stops: vec![

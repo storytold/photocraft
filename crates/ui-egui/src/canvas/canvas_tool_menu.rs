@@ -1,6 +1,6 @@
-//! Canvas context menus for the selection tools, the Pen, the Zoom and Hand tools, an active Free
-//! Transform box, text being edited with a Type tool, committed type under a Type tool, the
-//! pasteboard (outside the image), a guide and a pending crop.
+//! Canvas context menus for the selection tools, the Pen, the Line tool in Shape mode, the Zoom
+//! and Hand tools, an active Free Transform box, text being edited with a Type tool, committed type
+//! under a Type tool, the pasteboard (outside the image), a guide and a pending crop.
 
 use egui::Context;
 use photocraft_doc::{ColorMode, LayerContent};
@@ -8,7 +8,9 @@ use photocraft_engine::prefs::{self, CanvasColor};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::direct_select::PathRef;
 use crate::{PhotocraftApp, state::Tool};
+use photocraft_vector::edit::Hit;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CanvasToolMenu {
@@ -73,6 +75,12 @@ pub struct CanvasToolMenu {
     /// Opened with the Content-Aware Move tool inside the active selection (#12194).
     #[serde(default)]
     pub inside_selection: bool,
+    /// Opened with the Delete Anchor Point or Convert Point tool over an anchor or a segment of the
+    /// targeted path (#12771, #12744): the engine command that entry runs and its params. It heads
+    /// the path menu, above a separator. The third part is the document id and revision it was read
+    /// from: the knot index means something only there, so the entry expires once either moves on.
+    #[serde(default)]
+    pub point: Option<(String, Value, (u64, u64))>,
 }
 
 /// What the notes menu (#11789) was opened on.
@@ -403,6 +411,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         notes: None,
         color: None,
         inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -479,24 +488,38 @@ pub const HAND_MENU: &[Row] = &[
 /// the view itself.
 pub const FILL_SCREEN: &str = "view.fillScreen";
 
+/// A selection menu: the rows every selection menu shares, with `$fills` (the rows between
+/// Transform Selection and Last Filter) in its own order.
+macro_rules! selection_menu {
+    ($($fills:expr),* $(,)?) => {
+        &[
+            Some(("Deselect", "select.deselect")),
+            Some(("Select Inverse", "select.inverse")),
+            Some(("Feather…", "select.modify.feather")),
+            Some(("Select and Mask…", "select.selectAndMask")),
+            None,
+            Some(("Save Selection…", "select.saveSelection")),
+            Some(("Make Work Path…", "select.toWorkPath")),
+            None,
+            Some(("Layer Via Copy", "layer.new.layerViaCopy")),
+            Some(("Layer Via Cut", "layer.new.layerViaCut")),
+            Some(("New Layer…", "layer.new.layer")),
+            None,
+            Some(("Free Transform", "edit.freeTransform")),
+            Some(("Transform Selection", "select.transformSelection")),
+            $($fills,)*
+            None,
+            Some(("Last Filter", "filter.lastFilter")),
+            None,
+            Some(("Fade…", "edit.fade")),
+        ]
+    };
+}
+
 /// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
 /// Fill row has no PhotoCraft command and is left out. Rows stay visible and grey out exactly like
 /// their menu-bar twins.
-pub const SELECTION_MENU: &[Row] = &[
-    Some(("Deselect", "select.deselect")),
-    Some(("Select Inverse", "select.inverse")),
-    Some(("Feather…", "select.modify.feather")),
-    Some(("Select and Mask…", "select.selectAndMask")),
-    None,
-    Some(("Save Selection…", "select.saveSelection")),
-    Some(("Make Work Path…", "select.toWorkPath")),
-    None,
-    Some(("Layer Via Copy", "layer.new.layerViaCopy")),
-    Some(("Layer Via Cut", "layer.new.layerViaCut")),
-    Some(("New Layer…", "layer.new.layer")),
-    None,
-    Some(("Free Transform", "edit.freeTransform")),
-    Some(("Transform Selection", "select.transformSelection")),
+pub const SELECTION_MENU: &[Row] = selection_menu![
     Some(("Distort", "edit.transform.distort")),
     Some(("Perspective", "edit.transform.perspective")),
     None,
@@ -504,10 +527,6 @@ pub const SELECTION_MENU: &[Row] = &[
     Some(("Fill…", "edit.fill")),
     Some(("Stroke…", "edit.stroke")),
     Some(("Content-Aware Fill…", "edit.contentAwareFill")),
-    None,
-    Some(("Last Filter", "filter.lastFilter")),
-    None,
-    Some(("Fade…", "edit.fade")),
 ];
 
 /// The selection tools' context menu with nothing selected: making a selection.
@@ -595,8 +614,43 @@ fn choose_notes(app: &mut PhotocraftApp, ctx: &Context, n: &NotesMenu, command: 
     }
 }
 
+/// Photoshop's generic layer menu, in its order for a pixel layer without a selection: the Count
+/// tool's canvas menu on a marker or off one (#11772), and the Red Eye and Object Selection
+/// (#12866) tools' without a selection. Each row is enabled as the Layers panel menu enables it
+/// for the active layer (`menus::is_enabled`) and runs like the menu item.
+pub const COUNT_MENU: &[Row] = &[
+    Some(("Blending Options…", "layer.layerStyle.blendingOptions")),
+    None,
+    Some(("Duplicate Layer…", "layer.duplicate")),
+    Some(("Delete Layer", "layer.delete")),
+    Some(("Group from Layers…", "layer.new.groupFromLayers")),
+    None,
+    Some(("Convert to Smart Object", "layer.smartObjects.convertToSmartObject")),
+    Some(("Convert to Layers", "layer.smartObjects.convertToLayers")),
+    None,
+    Some(("Rasterize Layer", "layer.rasterize.layer")),
+    Some(("Rasterize Layer Style", "layer.rasterize.layerStyle")),
+    None,
+    Some(("Free Transform", "edit.freeTransform")),
+    None,
+    Some(("Color Range…", "select.colorRange")),
+    Some(("Load Selection…", "select.loadSelection")),
+    Some(("Reselect", "select.reselect")),
+];
+
 /// Right-click with the Content-Aware Move tool inside an active selection (#12194).
 pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
+
+/// The selection menu as measured in the reference application with the Red Eye tool (#12577) and
+/// the Object Selection tool (#12866): no Distort or Perspective, and Delete and Fill Selection
+/// after the fills.
+pub const MEASURED_SELECTION_MENU: &[Row] = selection_menu![
+    None,
+    Some(("Fill…", "edit.fill")),
+    Some(("Stroke…", "edit.stroke")),
+    Some(("Content-Aware Fill…", "edit.contentAwareFill")),
+    Some(("Delete and Fill Selection", "edit.deleteAndFillSelection")),
+];
 
 /// The Eyedropper's copy rows (#11747).
 pub const EYEDROPPER_COPY_HTML: &str = "canvasMenu.eyedropper.copyHtml";
@@ -668,6 +722,78 @@ pub const PEN_MENU: &[Row] = &[
     Some(("Make Symmetry Path", "paint.symmetryFromPath")),
     Some(("Disable Symmetry Path", "paint.symmetryDisable")),
 ];
+
+/// The shape tools' canvas menu in Shape mode (#13249), measured with the Line tool: the Pen's
+/// path rows without Create Vector Mask, Delete Path, Clipping Path… or the Symmetry rows, plus
+/// Blending Options… and the Rasterize rows. `$transform` is the transform row: Free Transform with
+/// no path, which runs the menu bar's, Free Transform Path on a path or shape layer.
+macro_rules! shape_menu {
+    ($transform:expr) => {
+        &[
+            Some(("Define Custom Shape…", "edit.defineCustomShape")),
+            None,
+            Some(("Blending Options…", "layer.layerStyle.blendingOptions")),
+            None,
+            Some(("Make Selection…", "path.toSelection")),
+            Some(("New Guides From Shape", "view.newGuidesFromShape")),
+            Some(("Fill Path…", "path.fill")),
+            Some(("Stroke Path…", "path.stroke")),
+            None,
+            Some(("Rasterize Layer", "layer.rasterize.layer")),
+            Some(("Rasterize Layer Style", "layer.rasterize.layerStyle")),
+            Some(("Rasterize Vector Mask", "layer.rasterize.vectorMask")),
+            None,
+            $transform,
+            None,
+            Some(("Unite Shapes", "layer.combineShapes.unite")),
+            Some(("Subtract Front Shape", "layer.combineShapes.subtractFrontShape")),
+            Some(("Unite Shapes at Overlap", "layer.combineShapes.intersectShapeAreas")),
+            Some(("Subtract Shapes at Overlap", "layer.combineShapes.excludeOverlappingShapes")),
+            None,
+            Some(("Copy Fill", "path.style.copyFill")),
+            Some(("Copy Complete Stroke", "path.style.copyStroke")),
+            None,
+            Some(("Paste Fill", "path.style.pasteFill")),
+            Some(("Paste Complete Stroke", "path.style.pasteStroke")),
+            None,
+            Some(("Isolate Layers", "select.isolateLayers")),
+        ]
+    };
+}
+
+/// [`shape_menu!`] with a path or a shape layer: Free Transform Path, as the Pen's.
+pub const SHAPE_MENU: &[Row] = shape_menu!(Some(("Free Transform Path", "path.transform")));
+
+/// [`shape_menu!`] with no path: Free Transform, the menu bar's, on the active layer.
+pub const SHAPE_MENU_NO_PATH: &[Row] = shape_menu!(Some(("Free Transform", "edit.freeTransform")));
+
+/// The shape menu's rows that act on the layer, not the path: enabled and run as the menu bar's.
+fn shape_layer_row(command: &str) -> bool {
+    matches!(
+        command,
+        "layer.layerStyle.blendingOptions"
+            | "layer.rasterize.layer"
+            | "layer.rasterize.layerStyle"
+            | "layer.rasterize.vectorMask"
+            | "edit.freeTransform"
+            | "view.newGuidesFromShape"
+    )
+}
+
+/// Shape tools whose Shape-mode right-click opens [`SHAPE_MENU`] (#13249). The Ellipse (#13232)
+/// and the other shape tools join here once measured.
+pub fn shape_tool_menu(tool: Tool) -> bool {
+    matches!(tool, Tool::Line)
+}
+
+/// Does a right-click with a shape tool open its menu? Only where measured: Shape mode, over
+/// a pixel or shape layer. Path and Pixels mode, and other layer kinds, keep opening nothing.
+fn shape_menu_measured(app: &PhotocraftApp) -> bool {
+    app.ui.tool_options.shape_mode == "shape"
+        && app.session.active().is_some_and(|st| {
+            st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, LayerContent::Raster(_) | LayerContent::Shape(_)))
+        })
+}
 
 /// The label a row shows, untranslated. The Pen's transform row names what it acts on, as in
 /// Photoshop (#12913): the points of the path being drawn, or nothing when the document has no
@@ -748,8 +874,32 @@ fn cam_allowed(app: &PhotocraftApp) -> bool {
     app.session.active().is_some_and(|s| !matches!(s.doc.mode, ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Multichannel))
 }
 
+/// Is document point `d` on the image and inside the active selection?
+fn selected_at(app: &PhotocraftApp, d: [f64; 2]) -> bool {
+    d.iter().all(|v| v.is_finite())
+        && d[0] >= 0.0
+        && d[1] >= 0.0
+        && app.session.active().is_some_and(|s| {
+            d[0] < f64::from(s.doc.size.width)
+                && d[1] < f64::from(s.doc.size.height)
+                && s.doc.selection.as_ref().is_some_and(|sel| sel.sample_channel(d[0].floor() as i32, d[1].floor() as i32, 0) >= 0.5)
+        })
+}
+
+/// Does a Red Eye right-click at `doc` open a menu (#12577)? Only where the reference application
+/// was measured: an RGB document whose one layer is a pixel layer, with no selection or the pointer
+/// inside it. Elsewhere it keeps opening nothing.
+fn red_eye_measured(app: &PhotocraftApp, doc: Option<[f64; 2]>) -> bool {
+    app.session.active().is_some_and(|s| {
+        s.doc.mode == ColorMode::Rgb
+            && matches!(s.doc.layers.as_slice(), [l] if matches!(l.content, LayerContent::Raster(_)) && l.frame.is_none())
+            && (s.doc.selection.is_none() || doc.is_some_and(|d| selected_at(app, d)))
+    })
+}
+
 /// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the
-/// Content-Aware Move menu, the path menu and the Color Sampler's.
+/// Content-Aware Move menu, the path menu, the Color Sampler's, the Red Eye tool's and the shape
+/// tools' (in Shape mode only: [`open_at`] checks it).
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
@@ -768,10 +918,15 @@ pub fn applies(tool: Tool) -> bool {
             | Tool::ColorSampler
             // The notes menu (#11789).
             | Tool::Note
+            // The layer menu (#11772).
+            | Tool::Count
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
             | Tool::ContentAwareMove
+            // The layer or selection menu, where measured (#12577).
+            | Tool::RedEye
     ) || path_menu(tool)
+        || shape_tool_menu(tool)
 }
 
 /// A Magnetic Lasso border is being drawn on the document in front: a right-click opens no menu
@@ -788,7 +943,54 @@ pub fn magnetic_drawing(app: &PhotocraftApp) -> bool {
 /// Selection and Direct Selection tools, whose Photoshop menu offers the same whole-path actions
 /// for the selected path (#1056).
 pub fn path_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection)
+    matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection) || point_menu(tool)
+}
+
+/// The anchor tools whose path menu also heads with the entry for the point under the right-click
+/// (#12771, #12744). Add Anchor Point (#12710) joins here.
+fn point_menu(tool: Tool) -> bool {
+    matches!(tool, Tool::DeleteAnchorPoint | Tool::ConvertPoint)
+}
+
+/// The anchor or segment of the targeted path under document point `doc`, as the anchor tools hit
+/// it (`direct_select::hit_active`): Delete Anchor Point on an anchor, Add Anchor Point on a
+/// segment, at the clicked point. `None` on empty canvas, a handle, or the Pen draft, which the
+/// engine doesn't edit.
+fn point_at(app: &PhotocraftApp, doc: [f64; 2]) -> Option<(String, Value, (u64, u64))> {
+    let (target, _, hit) = crate::direct_select::hit_active(app, doc)?;
+    let (command, mut params) = match hit {
+        Hit::Anchor([subpath, knot]) => (POINT_DELETE, json!({"subpath": subpath, "knot": knot})),
+        Hit::Segment([subpath, knot], t) => (POINT_ADD, json!({"subpath": subpath, "knot": knot, "t": t})),
+        Hit::Handle(..) => return None,
+    };
+    if target == PathRef::Pen || crate::anchor_tools::ignores(app, &target) {
+        return None;
+    }
+    if let (Some(o), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
+        o.extend(t.clone());
+    }
+    let stamp = app.session.active().map(|st| (st.doc.id.0, st.revision))?;
+    Some((command.to_string(), params, stamp))
+}
+
+const POINT_DELETE: &str = "path.deleteAnchor";
+const POINT_ADD: &str = "path.addAnchor";
+
+/// The label of a menu's top point entry, spelled out so `cargo xtask i18n-coverage` lists it.
+fn point_label(command: &str) -> String {
+    if command == POINT_DELETE { tl!("Delete Anchor Point").to_string() } else { tl!("Add Anchor Point").to_string() }
+}
+
+/// Is `command` the open menu's top point entry?
+fn is_point(menu: &CanvasToolMenu, command: &str) -> bool {
+    menu.point.as_ref().is_some_and(|(c, ..)| c == command)
+}
+
+/// Is the open menu's point entry still about the path as it is? The document and its revision are
+/// the ones the entry was read from; an edit meanwhile (say a control-channel `path.addAnchor`)
+/// shifts the knot indexes, so a stale entry runs nothing.
+fn point_current(app: &PhotocraftApp, menu: &CanvasToolMenu) -> bool {
+    menu.point.as_ref().is_some_and(|(.., stamp)| app.session.active().map(|st| (st.doc.id.0, st.revision)) == Some(*stamp))
 }
 
 /// Tools whose plain canvas right-click offers the view menu.
@@ -822,8 +1024,14 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         type_layer_rows(menu)
     } else if path_menu(menu.tool) {
         PEN_MENU
+    } else if shape_tool_menu(menu.tool) {
+        if menu.has_path { SHAPE_MENU } else { SHAPE_MENU_NO_PATH }
     } else if sampler_menu(menu) {
         SAMPLER_MENU
+    } else if menu.tool == Tool::Count {
+        COUNT_MENU
+    } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection) {
+        if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
     } else if menu.tool == Tool::Eyedropper {
         EYEDROPPER_MENU
     } else if inside_selection(menu) {
@@ -835,7 +1043,9 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
 
 /// Is `command` one of the open menu's rows, and enabled?
 pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
-    (rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command) || is_crop(menu, command)) && entry_enabled(app, menu, command)
+    (is_point(menu, command) && point_current(app, menu))
+        || ((rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command) || is_crop(menu, command))
+            && entry_enabled(app, menu, command))
 }
 
 /// Is `command` the transform box's current mode (checked in the transform menu)?
@@ -1005,6 +1215,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         notes: None,
         color: None,
         inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1087,7 +1298,9 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         transform: false,
         pasteboard: true,
         anchor: None,
-        under: None,
+        // Space's Hand keeps the menu over the selected tool (#11271); a held zoom key's goes with
+        // the key, as before.
+        under: (tool == Tool::Hand && tool != app.ui.tool).then_some(app.ui.tool),
         text: false,
         type_layer: false,
         type_shape: None,
@@ -1099,6 +1312,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         notes: None,
         color: None,
         inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1137,6 +1351,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         notes: None,
         color: None,
         inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1210,8 +1425,20 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if inside_selection(menu) && command == "select.loadSelection" {
         return app.session.active().is_some_and(|st| st.doc.channels.iter().any(|c| c.spot.is_none())) && crate::menus::is_enabled(app, command);
     }
-    if menu.transform || !path_menu(menu.tool) {
+    if menu.transform || !(path_menu(menu.tool) || shape_tool_menu(menu.tool)) {
         return crate::menus::is_enabled(app, command);
+    }
+    if shape_tool_menu(menu.tool) {
+        if !rows(menu).iter().flatten().any(|(_, id)| *id == command) {
+            return false;
+        }
+        // Measured enabled over a pixel layer too, where the menu bar greys it (#13249).
+        if command == "view.newGuidesFromShape" {
+            return app.session.active().is_some();
+        }
+        if shape_layer_row(command) {
+            return crate::menus::is_enabled(app, command);
+        }
     }
     let Some(st) = app.session.active() else { return false };
     let layer = st.active_layer.and_then(|id| st.doc.layer(id));
@@ -1313,23 +1540,20 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         crate::color_hud::release(&mut app.ui);
         return false;
     }
+    if tool == Tool::RedEye && !red_eye_measured(app, doc) {
+        return false;
+    }
+    if shape_tool_menu(tool) && !text && !type_layer && !shape_menu_measured(app) {
+        return false;
+    }
     app.ui.brush_picker = None;
     app.ui.layer_menu = None;
     let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
     let spelling = if text { doc.and_then(|d| spelling_at(app, d)) } else { None };
-    let inside_selection = tool == Tool::ContentAwareMove
-        && doc.is_some_and(|d| {
-            d.iter().all(|v| v.is_finite())
-                && d[0] >= 0.0
-                && d[1] >= 0.0
-                && app.session.active().is_some_and(|s| {
-                    d[0] < f64::from(s.doc.size.width)
-                        && d[1] < f64::from(s.doc.size.height)
-                        && s.doc.selection.as_ref().is_some_and(|sel| sel.sample_channel(d[0].floor() as i32, d[1].floor() as i32, 0) >= 0.5)
-                })
-        });
+    let point = if point_menu(tool) && has_path { doc.filter(|d| d.iter().all(|v| v.is_finite())).and_then(|d| point_at(app, d)) } else { None };
+    let inside_selection = tool == Tool::ContentAwareMove && doc.is_some_and(|d| selected_at(app, d));
     let sampler = if tool == Tool::ColorSampler { doc.and_then(|d| crate::analysis_ui::sampler_at(app, d)) } else { None };
     let sampler_at = sampler.and_then(|i| Some((app.session.active_index()?, *app.session.active()?.color_samplers.get(i)?)));
     // The Eyedropper reads the colour now, under the right-click: all layers, with the Sample
@@ -1356,6 +1580,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         notes: None,
         color,
         inside_selection,
+        point,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1391,6 +1616,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         notes: None,
         color: None,
         inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1435,6 +1661,8 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     }
     let result = if let Some(n) = &menu.notes {
         choose_notes(app, ctx, n, command)
+    } else if is_point(&menu, command) {
+        menu.point.as_ref().map_or(Ok(()), |(id, params, _)| app.run(id, params.clone()).map(|_| ()))
     } else if menu.crop.is_some() {
         choose_crop(app, &menu, command)
     } else if menu.guide {
@@ -1447,7 +1675,8 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
         choose_spelling(app, &menu, command)
     } else if menu.text || menu.type_layer {
         choose_type(app, ctx, command)
-    } else if path_menu(menu.tool) && !menu.transform {
+    } else if !menu.transform && (path_menu(menu.tool) || (shape_tool_menu(menu.tool) && !shape_layer_row(command))) {
+        // The shape menu's path rows run as the Pen's; its layer rows as the menu bar's, below.
         choose_pen(app, ctx, &menu, command)
     } else if sampler_menu(&menu) {
         let (id, params) = engine_call(app, &menu, command);
@@ -1783,6 +2012,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         selected = Some(command);
                     }
                 }
+                if let Some((command, ..)) = &menu.point {
+                    let item = egui::Button::new(point_label(command)).min_size(egui::vec2(200.0, 20.0));
+                    if ui.add_enabled(available(app, &menu, command), item).clicked() {
+                        selected = Some(command.clone());
+                    }
+                    ui.separator();
+                }
                 for row in rows(&menu) {
                     let Some((label, command)) = *row else {
                         ui.separator();
@@ -1791,6 +2027,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                     let text = match row_label(app, &menu, label, command) {
                         // Spelled out so `cargo xtask i18n-coverage` lists the new label.
                         "Free Transform Points" => tl!("Free Transform Points"),
+                        "Rasterize Vector Mask" => tl!("Rasterize Vector Mask"),
                         key => tl!(key),
                     };
                     let item = egui::Button::selectable(mode_checked(app, &menu, command), text).min_size(egui::vec2(200.0, 20.0));
@@ -1827,7 +2064,10 @@ pub fn menu_rect_if_open(app: &PhotocraftApp, ctx: &Context) -> Option<egui::Rec
 #[cfg(test)]
 mod cam_menu_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
+
+#[cfg(test)]
+pub(crate) mod count_tests;
 
 #[cfg(test)]
 mod note_menu_tests;
@@ -1843,3 +2083,15 @@ mod make_selection_dialog_tests;
 
 #[cfg(test)]
 mod type_layer_menu_tests;
+
+#[cfg(test)]
+mod delete_anchor_menu_tests;
+
+#[cfg(test)]
+mod convert_point_menu_tests;
+
+#[cfg(test)]
+mod object_selection_menu_tests;
+
+#[cfg(test)]
+mod line_menu_tests;
