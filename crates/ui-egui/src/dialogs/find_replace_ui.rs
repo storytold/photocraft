@@ -470,16 +470,15 @@ fn show_warning(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui::Re
     let id = egui::Id::unique((CONTROL_ID, "layer-warning"));
     let t = Tokens::get(ctx);
     let mut choice = None;
-    let warning = egui::Modal::new(id).show(ctx, |ui| {
-        ui.set_width(388.0);
+    let frame = egui::Frame::popup(&ctx.global_style()).fill(t.card).inner_margin(egui::Margin::same(14));
+    let warning = egui::Modal::new(id).frame(frame).show(ctx, |ui| {
+        ui.set_width((ctx.content_rect().width() - 40.0).clamp(260.0, 388.0));
         ui.horizontal_top(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
             crate::color_picker_ui::warning_triangle(ui.painter(), rect, t.warning, t.card);
-            ui.label(message);
+            ui.add(egui::Label::new(message).wrap());
         });
         ui.add_space(10.0);
-        widgets::checkbox(ui, &mut pending.dont_show_again, tl!("Don't show again"));
-        ui.add_space(8.0);
         ui.horizontal(|ui| {
             if widgets::primary_button(ui, tl!("Skip"), 82.0).clicked() {
                 choice = Some(WarningChoice::Skip);
@@ -491,6 +490,8 @@ fn show_warning(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui::Re
                 choice = Some(WarningChoice::SkipAll);
             }
         });
+        ui.add_space(8.0);
+        widgets::checkbox(ui, &mut pending.dont_show_again, tl!("Don't show again"));
     });
     if choice.is_none() && warning.is_top_modal && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
         choice = Some(WarningChoice::Skip);
