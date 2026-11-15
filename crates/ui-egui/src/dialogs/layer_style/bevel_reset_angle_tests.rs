@@ -85,3 +85,33 @@ fn reset_to_default_does_not_move_the_documents_light() {
     confirm(app, pending).unwrap();
     assert_eq!(app.session.active().unwrap().doc.global_light.angle, 45.0, "OK keeps the document's Global Light at 45");
 }
+
+/// A saved default with Use Global Light off keeps its own angle through Reset to Default: the
+/// shared light (45 here) is only seeded into a globally lit effect.
+#[test]
+fn reset_to_default_keeps_a_saved_defaults_own_angle_when_global_light_is_off() {
+    let mut app = app_with_doc();
+    let mut saved = app.run("layer.layerStyle.defaultFor", json!({"kind": "bevelEmboss"})).unwrap()["params"].clone();
+    saved["useGlobalLight"] = json!(false);
+    saved["angle"] = json!(77.0);
+    saved["size"] = json!(12);
+    app.run("layer.layerStyle.makeDefault", json!({"kind": "bevelEmboss", "params": saved})).unwrap();
+    app.run("layer.layerStyle.bevelEmboss", json!({})).unwrap();
+    app.run("layer.layerStyle.globalLight", json!({"angle": 45})).unwrap();
+    let fields = {
+        let state = app.session.active().unwrap();
+        let layer = state.doc.layer(state.active_layer.unwrap()).unwrap();
+        let mut f = initial_fields(layer, Some("bevelEmboss"), state.doc.global_light.angle);
+        set_param(&mut f, "fx1", "size", json!(30.0));
+        f
+    };
+    let mut harness = egui_kittest::Harness::builder().with_size(vec2(1000.0, 1200.0)).build_ui_state(draw_page, (app, fields));
+    PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+    harness.run_steps(3);
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Reset to Default").click();
+    harness.run_steps(3);
+    let bevel = &harness.state().1["effects"][0]["params"];
+    assert_eq!(bevel["useGlobalLight"], json!(false), "the saved default's switch is off");
+    assert_eq!(bevel["angle"], json!(77.0), "the saved default's own angle, not the shared light");
+    assert_eq!(bevel["size"], json!(12), "the other fields are the saved default's too");
+}
