@@ -178,7 +178,16 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         s.actions.script_steps = 0;
     }
     s.actions.script_depth += 1;
+    // A script file run while an action records is one "Scripts" step naming the file (#13849):
+    // recording pauses, and the entries its commands journal are dropped, so playback runs the file
+    // once. A script given as text or steps keeps recording the commands it runs (#3057).
+    let paused = p.get("path").and_then(Value::as_str).and_then(|_| s.actions.recording.take());
+    let mark = s.journal.len();
     let results = run_steps(s, &steps);
+    if paused.is_some() {
+        s.journal.truncate(mark);
+        s.actions.recording = paused;
+    }
     s.actions.script_depth -= 1;
     let ok = results.iter().all(|r| r.get("error").is_none());
     Ok(json!({"steps": steps.len(), "ok": ok, "results": results}))
@@ -701,3 +710,7 @@ mod tests;
 #[cfg(test)]
 #[path = "automate_cmds/contact_sheet_subfolders_tests.rs"]
 mod contact_sheet_subfolders_tests;
+
+#[cfg(test)]
+#[path = "automate_cmds/browse_record_step_tests.rs"]
+mod browse_record_step_tests;

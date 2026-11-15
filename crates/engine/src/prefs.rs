@@ -597,6 +597,9 @@ pub struct FileHandling {
     /// A folder whose `.cube`, `.3dl` and `.look` files Color Lookup lists under its built-in
     /// looks (native only, #6558). Empty lists none.
     pub lut_folder: String,
+    /// The folder of the script last picked through File › Scripts › Browse…, where its next
+    /// picker starts (#13848). Empty until the first pick; ignored while the folder is gone.
+    pub scripts_folder: String,
 }
 
 impl FileHandling {
@@ -629,6 +632,7 @@ impl Default for FileHandling {
             recent_file_count: 20,
             recent_files: Vec::new(),
             lut_folder: String::new(),
+            scripts_folder: String::new(),
         }
     }
 }
