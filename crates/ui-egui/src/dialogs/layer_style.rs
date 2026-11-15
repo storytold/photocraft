@@ -1057,22 +1057,36 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
     let (ctx, armed) = (ui.ctx().clone(), ui.scope_id().with("opacity-first-focus"));
     let typed = armed.with("typed");
     let focus = if ui.is_sizing_pass() {
-        ctx.data_mut(|d| d.insert_temp(armed, true));
+        // Arming drops keys held by a dialog that closed before replaying them.
+        ctx.data_mut(|d| {
+            d.insert_temp(armed, true);
+            d.remove_temp::<(Vec<egui::Event>, Option<egui::Id>)>(typed);
+        });
         false
     } else {
         ctx.data_mut(|d| d.remove_temp::<bool>(armed)).unwrap_or(false)
     };
+    // The field selects its text only after reading this frame's keys, so the keyboard input of
+    // the frame it gains the focus waits, in order, for the next one, to replace the number. Enter
+    // and Esc are read after this page, so they act once, then.
+    let mut held = Vec::new();
+    let mut moved = None;
     if focus {
-        // The field selects its text only after reading this frame's keys, so keys typed on
-        // the frame it gains the focus wait for the next one, to replace the number.
-        let held: Vec<egui::Event> = ui.input_mut(|i| {
-            let (held, rest) = std::mem::take(&mut i.events).into_iter().partition(|e| matches!(e, egui::Event::Text(_) | egui::Event::Paste(_)));
+        held = ui.input_mut(|i| {
+            let keyboard =
+                |e: &egui::Event| matches!(e, egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Key { .. } | egui::Event::Copy | egui::Event::Cut);
+            let (held, rest) = std::mem::take(&mut i.events).into_iter().partition(keyboard);
             i.events = rest;
             held
         });
-        ctx.data_mut(|d| d.insert_temp(typed, held));
         widgets::focus_first_field(&ctx, true);
-    } else if let Some(held) = ctx.data_mut(|d| d.remove_temp::<Vec<egui::Event>>(typed)) {
+    } else if let Some((held, Some(opacity))) = ctx.data_mut(|d| d.remove_temp::<(Vec<egui::Event>, Option<egui::Id>)>(typed)) {
+        // A Tab in that frame was taken before this page (field_tab) and has moved the focus on
+        // already: the keys go to Opacity first, then the focus moves on again.
+        moved = ctx.memory(|m| m.focused()).filter(|&f| f != opacity);
+        if moved.is_some() {
+            ctx.memory_mut(|m| m.request_focus(opacity));
+        }
         ui.input_mut(|i| drop(i.events.splice(0..0, held)));
     }
     let mut v = num(p, "opacity", 100.0);
@@ -1081,6 +1095,13 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
     }
     if focus {
         widgets::focus_first_field(&ctx, false);
+        if !held.is_empty() {
+            let opacity = ctx.memory(|m| m.focused());
+            ctx.data_mut(|d| d.insert_temp(typed, (held, opacity)));
+        }
+    }
+    if let Some(next) = moved {
+        crate::field_tab::focus(&ctx, next);
     }
     widgets::hairline(ui);
     widgets::section_label(ui, "Advanced Blending");

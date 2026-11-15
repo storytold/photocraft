@@ -144,3 +144,33 @@ fn double_click_on_a_layers_row_focuses_opacity() {
     h.run_steps(2);
     typing_sets_opacity_then_fill(&mut h);
 }
+
+/// A 5 and a Tab typed in the same frame as the focus arrives keep their order: 5 replaces
+/// Opacity, then Tab moves on to Fill Opacity (not: Tab first, the 5 into Fill).
+#[test]
+fn digit_and_tab_on_the_first_focused_frame_keep_their_order() {
+    let (mut h, _) = harness();
+    open_blending(&mut h);
+    let mut frames = 0;
+    while focused(&h).is_none() && frames < 8 {
+        h.step();
+        frames += 1;
+    }
+    assert!(focused(&h).is_some(), "the focus arrives");
+    let (mut h, _) = harness();
+    open_blending(&mut h);
+    for _ in 1..frames {
+        h.step();
+    }
+    assert!(focused(&h).is_none());
+    // One frame, both keys (`Harness::event` would give each its own frame).
+    let tab = |pressed| Event::Key { key: Key::Tab, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([Event::Text("5".into()), tab(true), tab(false)]);
+    h.step();
+    h.run_steps(3);
+    assert_eq!((blending(&h, "opacity"), blending(&h, "fillOpacity")), (5.0, 100.0), "5 went into Opacity");
+    type_text(&mut h, "30");
+    key(&mut h, Key::Tab);
+    assert_eq!(blending(&h, "fillOpacity"), 30.0, "Tab went on to Fill Opacity, its text selected");
+    assert_eq!(blending(&h, "opacity"), 5.0);
+}
