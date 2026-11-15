@@ -1832,10 +1832,50 @@ pub fn export_flat_with_renderer(
 /// one id per placed document (#647), and the free-form descriptions, which can hold the same
 /// sensitive text.
 fn strip_xmp(meta: &mut codecs::Metadata, opts: &ExportOptions) {
-    if opts.xmp == XmpEmbed::None {
-        meta.xmp = None;
-        meta.text.clear();
+    match opts.xmp {
+        XmpEmbed::All => {}
+        XmpEmbed::None => {
+            meta.xmp = None;
+            meta.text.clear();
+        }
+        XmpEmbed::Contact => {
+            meta.xmp = meta.xmp.as_deref().and_then(contact_xmp);
+            meta.text.clear();
+        }
     }
+}
+
+const XMP_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const XMP_DC: &str = "http://purl.org/dc/elements/1.1/";
+const XMP_RIGHTS: &str = "http://ns.adobe.com/xap/1.0/rights/";
+const XMP_MM: &str = "http://ns.adobe.com/xap/1.0/mm/";
+
+/// What Copyright and Contact Info keeps of a packet, as measured in the reference application.
+const CONTACT_PROPS: [&str; 6] = ["dc:title", "dc:creator", "dc:rights", "xmpRights:WebStatement", "xmpMM:DocumentID", "xmpMM:InstanceID"];
+
+/// The packet [`XmpEmbed::Contact`] writes for the document's `xmp`: [`CONTACT_PROPS`], from
+/// elements or `rdf:Description` attributes, whatever prefixes the packet binds them to, plus an
+/// empty `xmpRights:UsageTerms`. `None` when the packet can't be read or holds none of them.
+fn contact_xmp(xmp: &str) -> Option<String> {
+    let canon = craft_xml::Canonical::new(&[("rdf", XMP_RDF), ("dc", XMP_DC), ("xmpRights", XMP_RIGHTS), ("xmpMM", XMP_MM)]);
+    let root = craft_xml::Options::canonical(&canon).parse(xmp.trim_start_matches('\u{feff}').as_bytes()).ok()?;
+    let descriptions: Vec<&craft_xml::El> = if root.is("rdf:Description") { vec![&root] } else { root.find_all("rdf:Description").collect() };
+    let mut body = String::new();
+    for prop in CONTACT_PROPS {
+        let el = descriptions.iter().find_map(|d| d.child(prop).cloned().or_else(|| d.attr(prop).map(|v| craft_xml::El::new(prop).with_text(v))));
+        if let Some(el) = el {
+            body.push_str("   ");
+            el.write_xml(&mut body);
+            body.push('\n');
+        }
+    }
+    if body.is_empty() {
+        return None;
+    }
+    body.push_str("   <xmpRights:UsageTerms><rdf:Alt><rdf:li xml:lang=\"x-default\"/></rdf:Alt></xmpRights:UsageTerms>\n");
+    Some(format!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"{XMP_RDF}\">\n  <rdf:Description rdf:about=\"\" xmlns:dc=\"{XMP_DC}\" xmlns:xmpRights=\"{XMP_RIGHTS}\" xmlns:xmpMM=\"{XMP_MM}\">\n{body}  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+    ))
 }
 
 /// `img` made storable as `format`: matted over white without alpha support, CMYK converted for a

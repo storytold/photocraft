@@ -58,7 +58,7 @@ fn valid_setting(key: &str, v: &Value) -> bool {
         "width" | "height" => num(1.0, MAX_PX),
         "lossless" | "transparency" | "lockAspect" | "embedProfile" => v.is_boolean(),
         "resample" => v.as_str().is_some_and(|s| export_resample(s).is_ok()),
-        "metadata" => one_of(&["none", "exif", "all"]),
+        "metadata" => one_of(&["none", "copyright", "exif", "all"]),
         "tgaBits" => one_of(&["auto", "24", "32"]),
         "sizing" => one_of(&["scale", "pixels"]),
         "profile" => one_of(&["document", "srgb"]),
@@ -629,6 +629,12 @@ fn tga_bits(f: &Map<String, Value>) -> Option<photocraft_io::TgaBits> {
     s(f, "tgaBits").parse().ok().and_then(photocraft_io::TgaBits::from_bits)
 }
 
+/// Metadata: `none` or `copyright` (Copyright and Contact Info). The dialog's earlier `exif` and
+/// `all`, still in remembered settings, presets and recorded actions, load as Copyright.
+fn metadata_choice(f: &Map<String, Value>) -> &'static str {
+    if matches!(s(f, "metadata").as_str(), "copyright" | "exif" | "all") { "copyright" } else { "none" }
+}
+
 fn settings(f: &Map<String, Value>) -> ExportSettings {
     let fmt = s_fmt(f);
     let quality = n(f, "quality", 85.0).clamp(1.0, 100.0) as u8;
@@ -640,7 +646,8 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         jpeg_chroma_subsampling: fmt == "jpg" && quality <= 50,
         webp_lossless: fmt != "webp" || lossless(f),
         webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
-        xmp_all: metadata == "all",
+        xmp_all: false,
+        xmp_contact: metadata_choice(f) == "copyright",
         tga_bits: if fmt == "tga" { tga_bits(f) } else { None },
         embed_icc: f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
         // Metadata: None drops EXIF and resolution as well as XMP. A missing key keeps them,
@@ -973,8 +980,9 @@ fn apply_preset(f: &mut Map<String, Value>, settings: &photocraft_engine::export
 }
 
 fn preset_settings(f: &Map<String, Value>) -> Value {
-    let metadata = s(f, "metadata");
-    let metadata = if ["none", "exif", "all"].contains(&metadata.as_str()) { metadata } else { "none".into() };
+    // Presets store Copyright and Contact Info as `all`, a value every build's preset list
+    // accepts; it loads back as Copyright.
+    let metadata = if metadata_choice(f) == "copyright" { "all" } else { "none" };
     let bits = s(f, "tgaBits");
     let bits = if ["auto", "24", "32"].contains(&bits.as_str()) { bits } else { "auto".into() };
     let scale = n(f, "scale", 100.0);
@@ -1113,14 +1121,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 crate::widgets::checkbox(ui, &mut tr, tl!("Transparency"));
                 f.insert("transparency".into(), json!(tr));
             }
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!("Metadata")).color(t.text_dim));
-                let mut m = s(f, "metadata");
-                let opts: Vec<(String, &str)> = vec![("none".into(), tl!("None")), ("exif".into(), tl!("EXIF")), ("all".into(), tl!("All"))];
-                if crate::widgets::dropdown(ui, "export-metadata", tl!("Metadata"), &mut m, &opts, 130.0) {
-                    f.insert("metadata".into(), json!(m));
-                }
-            });
+            ui.label(egui::RichText::new(tl!("Metadata")).color(t.text_dim));
+            let mut m = metadata_choice(f);
+            ui.radio_value(&mut m, "none", tl!("None"));
+            ui.radio_value(&mut m, "copyright", tl!("Copyright and Contact Info"));
+            f.insert("metadata".into(), json!(m));
             ui.add_space(8.0);
             ui.label(egui::RichText::new(tl!("Color Space")).font(crate::theme::semibold(12.0)).color(t.text));
             let mut srgb = s(f, "profile") == "srgb";
@@ -1490,6 +1495,8 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     Ok(r)
 }
 
+#[cfg(test)]
+mod metadata_choice_tests;
 #[cfg(test)]
 mod srgb_default_tests;
 #[cfg(test)]

@@ -998,7 +998,8 @@ fn profile_and_metadata_follow_the_existing_exporter() {
     f.insert("metadata".into(), json!("all"));
     f.insert("embedProfile".into(), json!(true));
     let all = settings(&f);
-    assert!(all.xmp_all && all.embed_metadata && all.embed_icc);
+    // The earlier All loads as Copyright and Contact Info (#13729).
+    assert!(!all.xmp_all && all.xmp_contact && all.embed_metadata && all.embed_icc);
 
     let mut doc = Document::with_background(
         "x",
@@ -1025,7 +1026,7 @@ fn profile_and_metadata_follow_the_existing_exporter() {
     f.insert("embedProfile".into(), json!(true));
     let kept = photocraft_io::export(&converted, "out.jpg", &settings(&f).io_options()).unwrap().bytes;
     assert!(kept.windows(b"ICC_PROFILE".len()).any(|w| w == b"ICC_PROFILE"));
-    assert!(kept.windows(b"secret".len()).any(|w| w == b"secret"));
+    assert!(!kept.windows(b"secret".len()).any(|w| w == b"secret"), "no copyright or contact field to keep");
     assert_eq!(doc, before);
 }
 
