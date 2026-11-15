@@ -148,13 +148,22 @@ fn paused_artboards_export_retries_with_its_original_action_permissions() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = Harness::builder().build_eframe(|cc| app(cc, Default::default()));
     let app = h.state_mut();
-    let mut action = Action::new("Export", vec![(EXPORT.into(), json!({"dir": ""})), ("select.all".into(), json!({}))]);
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#804020"})).unwrap();
+    let mut action = Action::new("Export", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1})), ("select.all".into(), json!({}))]);
     action.dialogs.insert(0);
     app.session.actions.list.push(action);
     app.session.authorize = Some(deny_tail);
     let result = crate::actions::play(app, &json!({"action": "Export"})).unwrap();
     app.session.authorize = None;
-    let id = result["paused"]["dialog"].as_u64().unwrap();
+    let paused = result["paused"]["dialog"].as_u64().unwrap_or_else(|| panic!("{result}"));
+    // Use the recorded filter to create a real paused action, then exercise the export
+    // form's continuation on that same document and receiver.
+    let i = app.ui.dialogs.iter().position(|d| d.id == paused).unwrap();
+    let token = app.ui.dialogs.remove(i).fields.remove(crate::actions::RESUME).unwrap();
+    let id = open(&mut h, EXPORT);
+    let app = h.state_mut();
+    app.ui.dialog_mut(id).unwrap().fields.insert(crate::actions::RESUME.into(), token);
 
     let error = crate::dialogs::confirm(app, id).unwrap_err();
     assert_eq!(error, "Choose a destination folder.");
