@@ -424,12 +424,18 @@ pub fn warp_patches_surface(
 /// whole surface's normalised coordinates. `None` when a patch can't be evaluated.
 fn quilt_mesh(at: &dyn Fn(f64, f64) -> [f64; 2], cuts_u: &[f64], cuts_v: &[f64]) -> Option<crate::warp_tess::EnvelopeMesh> {
     let (us, vs) = (cut_list(cuts_u), cut_list(cuts_v));
+    // Whether a list of cuts halves evenly: a power of two of equal parts.
+    let halves = |k: &[f64]| {
+        let n = k.len().saturating_sub(1);
+        n.is_power_of_two() && k.windows(2).all(|w| ((w[1] - w[0]) * n as f64 - 1.0).abs() < 1e-6)
+    };
+    let uneven = !(halves(&us) && halves(&vs));
     let mut all = crate::warp_tess::EnvelopeMesh { uv: Vec::new(), pos: Vec::new(), quads: Vec::new() };
     for v in vs.windows(2) {
         for u in us.windows(2) {
             let (&[ua, ub], &[va, vb]) = (u, v) else { continue };
             let sub = |s: f64, t: f64| at(ua + (ub - ua) * s, va + (vb - va) * t);
-            let seams = crate::warp_tess::Seams { left: ua > 1e-9, right: ub < 1.0 - 1e-9, top: va > 1e-9, bottom: vb < 1.0 - 1e-9 };
+            let seams = crate::warp_tess::Seams { left: ua > 1e-9, right: ub < 1.0 - 1e-9, top: va > 1e-9, bottom: vb < 1.0 - 1e-9, uneven };
             let m = crate::warp_tess::quilt_patch_mesh(&sub, seams)?;
             let base = all.uv.len();
             all.uv.extend(m.uv.iter().map(|p| [ua + (ub - ua) * p[0], va + (vb - va) * p[1]]));
