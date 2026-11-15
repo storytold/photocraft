@@ -510,6 +510,10 @@ fn unescape_rust_string(raw: &str) -> String {
             continue;
         }
         match chars.next() {
+            // Rust normalizes CRLF source lines before removing string continuations.
+            Some(ch) if ch == '\n' || (ch == '\r' && chars.as_str().starts_with('\n')) => {
+                chars = chars.as_str().trim_start_matches(['\t', '\n', '\r', ' ']).chars();
+            }
             Some('n') => out.push('\n'),
             Some('r') => out.push('\r'),
             Some('t') => out.push('\t'),
@@ -682,6 +686,30 @@ mod tests {
         assert!(report.contains("fr: 8 missing\n"));
         for key in &expected {
             assert!(report.contains(&format!("    {}\n", key.source)), "{}", key.source);
+        }
+    }
+
+    #[test]
+    fn continued_literal_keys_match_rust_string_values() {
+        let expected = "Open \
+                        image";
+        assert_eq!(expected, "Open image");
+        for newline in ["\n", "\r\n"] {
+            let source = format!("tl!({newline}    \"Open \\{newline}  \t{newline}    image\"{newline});");
+            assert_eq!(tl_keys(&[(PathBuf::from("ui.rs"), source)]), BTreeSet::from([Key { context: String::new(), source: expected.into() }]));
+        }
+    }
+
+    #[test]
+    fn continuations_preserve_other_newlines_and_non_ascii_whitespace() {
+        for (raw, expected) in [
+            (r"Open \n image", "Open \n image"),
+            ("Open \n    image", "Open \n    image"),
+            ("Open \\\\\n    image", "Open \\\n    image"),
+            ("Open \\\n  \u{a0}image", "Open \u{a0}image"),
+        ] {
+            let source = format!("tl!(\n    \"{raw}\"\n);");
+            assert_eq!(tl_keys(&[(PathBuf::from("ui.rs"), source)]), BTreeSet::from([Key { context: String::new(), source: expected.into() }]), "{raw:?}");
         }
     }
 
