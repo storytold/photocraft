@@ -307,7 +307,11 @@ fn bake_cube_stack(size: usize, title: &str, doc: &Document) -> Result<String> {
         let mut surf = Surface::new(fmt);
         for &(c, g, (x, y)) in pass {
             let rgb = colour(c, g);
-            surf.write_region(Rect::new(x as i32, y as i32, x as i32 + 1, y as i32 + 1), &photocraft_raster::from_rgba(&fmt, [rgb[0], rgb[1], rgb[2], 1.0]));
+            // A tile that cannot be allocated is an error of this export, not an abort.
+            surf.try_write_region(
+                Rect::new(x as i32, y as i32, x as i32 + 1, y as i32 + 1),
+                &photocraft_raster::from_rgba(&fmt, [rgb[0], rgb[1], rgb[2], 1.0]),
+            )?;
         }
         let mut grid = doc.clone();
         grid.selection = None;
