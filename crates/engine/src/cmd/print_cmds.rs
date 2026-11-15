@@ -1531,13 +1531,35 @@ fn ps_comment_text(s: &str) -> String {
     s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
+/// The active layer's path as the Paths panel lists it, last: a shape layer's "<name> Shape
+/// Path", else a layer's "<name> Vector Mask" (#13774). `None` for a layer without either.
+pub fn active_layer_path(doc: &Document, active: Option<photocraft_doc::LayerId>) -> Option<(String, &photocraft_doc::Path)> {
+    let l = doc.layer(active?)?;
+    match &l.content {
+        LayerContent::Shape(sh) => Some((format!("{} Shape Path", l.name), &sh.path)),
+        _ => l.vector_mask.as_ref().map(|v| (format!("{} Vector Mask", l.name), &v.path)),
+    }
+}
+
+#[cfg(test)]
+#[path = "print_cmds/paths_export_layer_path_tests.rs"]
+mod paths_export_layer_path_tests;
+
+/// [`paths_to_ai_for`] without an active layer: saved paths and the Work Path only.
+pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
+    paths_to_ai_for(doc, which, None)
+}
+
 /// The document's paths as an Illustrator 3 PostScript file. `which`: "documentBounds" (the
 /// frame alone, no path: header, bounding box and trailer), "all", "work" or a path name.
-/// Coordinates are points (pixels at the document resolution), y up.
-pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
+/// `active` is the active layer, whose shape path or vector mask is listed after the Work Path,
+/// by its Paths panel name, and in All Paths (#13774). Coordinates are points (pixels at the
+/// document resolution), y up.
+pub fn paths_to_ai_for(doc: &Document, which: &str, active: Option<photocraft_doc::LayerId>) -> Result<(String, usize)> {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let k = 72.0 / dpi;
     let (w, h) = (f64::from(doc.size.width) * k, f64::from(doc.size.height) * k);
+    let layer = active_layer_path(doc, active);
     let mut chosen: Vec<&photocraft_doc::Path> = Vec::new();
     match which {
         "all" => {
@@ -1545,10 +1567,16 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
             if let Some(wp) = &doc.work_path {
                 chosen.push(wp);
             }
+            chosen.extend(layer.as_ref().map(|(_, p)| *p));
         }
         "work" => chosen.extend(doc.work_path.iter()),
         "documentBounds" => {}
-        name => chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| &p.path)),
+        name => {
+            chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| &p.path));
+            if chosen.is_empty() {
+                chosen.extend(layer.as_ref().filter(|(n, _)| n == name).map(|(_, p)| *p));
+            }
+        }
     }
     let mut s = String::new();
     s.push_str("%!PS-Adobe-2.0 EPSF-1.2\n%%Creator: PhotoCraft\n");
@@ -1611,7 +1639,7 @@ fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.pathsToIllustrator";
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let which = p.get("paths").and_then(Value::as_str).unwrap_or("all");
-    let (text, n) = paths_to_ai(&d.doc, which)?;
+    let (text, n) = paths_to_ai_for(&d.doc, which, d.active_layer)?;
     // Document Bounds writes the frame alone (#13771); any other choice must match a path.
     if n == 0 && which != "documentBounds" {
         return Err(bad(cmd, format!("no paths match `{which}`")));

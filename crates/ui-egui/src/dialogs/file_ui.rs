@@ -144,18 +144,23 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         "file.export.pathsToIllustrator" => {
             // Document Bounds comes first; a document without paths offers only it, selected (#13771).
             let mut names = vec!["documentBounds".to_string()];
-            if let Some(d) = app.session.active().filter(|d| d.doc.work_path.is_some() || !d.doc.paths.is_empty()) {
+            // The active layer's shape path or vector mask is the last entry, by its Paths panel
+            // name (#13774).
+            let layer = app.session.active().and_then(|d| photocraft_engine::print_cmds::active_layer_path(&d.doc, d.active_layer).map(|(n, _)| n));
+            if let Some(d) = app.session.active().filter(|d| d.doc.work_path.is_some() || !d.doc.paths.is_empty() || layer.is_some()) {
                 names.push("all".into());
                 if d.doc.work_path.is_some() {
                     names.push("work".into());
                 }
                 names.extend(d.doc.paths.iter().map(|p| p.name.clone()));
+                names.extend(layer.clone());
             }
             let fallback = if names.len() > 1 { "all" } else { "documentBounds" };
-            // Opens on the Paths panel's selected row, as the reference application does (#13777).
-            // A shape layer's path ("layer") is not an entry yet, and a row the document no longer
-            // has falls back to All Paths (Document Bounds without paths).
-            let paths = app.ui.selected_path.as_deref().filter(|s| *s != "layer" && names.iter().any(|n| n == s)).unwrap_or(fallback).to_string();
+            // Opens on the Paths panel's selected row, as the reference application does (#13777):
+            // its layer row is the layer path's entry. A row the document no longer has falls back
+            // to All Paths (Document Bounds without paths).
+            let selected = app.ui.selected_path.as_deref().map(|s| if s == "layer" { layer.as_deref().unwrap_or(s) } else { s });
+            let paths = selected.filter(|s| names.iter().any(|n| n == s)).unwrap_or(fallback).to_string();
             form(app, id, "Export Paths to File", json!({"path": format!("{dir}/{stem}.ai"), "paths": paths}), json!({"paths": names}))
         }
         _ => return None,
