@@ -287,13 +287,24 @@ fn field_unit(f: &Map<String, Value>, key: &str) -> String {
     if shared == COLUMNS.0 { "px".to_string() } else { shared.to_string() }
 }
 
-/// Unit menu beside the Width (`key` "width", which also offers Columns) or Height field.
-fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, id: &str) {
-    let mut unit = field_unit(f, key);
+/// Entries of the Width (`key` "width", which also offers Columns) or Height unit menu. Canvas
+/// Size lists Percent after Picas, as Photoshop does; Image Size lists it second.
+fn unit_options(key: &str, canvas: bool) -> Vec<(String, &'static str)> {
     let mut opts: Vec<(String, &str)> = UNITS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
+    if canvas {
+        let percent = opts.remove(1);
+        opts.push(percent);
+    }
     if key == "width" {
         opts.push((COLUMNS.0.to_string(), COLUMNS.1));
     }
+    opts
+}
+
+/// Unit menu beside the Width or Height field (see [`unit_options`]).
+fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, id: &str, canvas: bool) {
+    let mut unit = field_unit(f, key);
+    let opts = unit_options(key, canvas);
     if crate::widgets::dropdown(ui, id, tl!("Units"), &mut unit, &opts, 110.0) {
         set_unit(f, key, &unit);
     }
@@ -340,14 +351,14 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         label(ui, tl!("Width:"), 90.0);
         let editable = editable(f, "width");
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w")).inner;
-        unit_dropdown(ui, f, "width", "is-unit-w");
+        unit_dropdown(ui, f, "width", "is-unit-w", false);
         c
     });
     let h_row = ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
         let editable = editable(f, "height");
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h")).inner;
-        unit_dropdown(ui, f, "height", "is-unit-h");
+        unit_dropdown(ui, f, "height", "is-unit-h", false);
         c
     });
     let (w_changed, h_changed) = (w_row.inner, h_row.inner);
@@ -483,12 +494,12 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
         dim_field(ui, f, "width", "__origW", "cs-w");
-        unit_dropdown(ui, f, "width", "cs-unit-w");
+        unit_dropdown(ui, f, "width", "cs-unit-w", true);
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
         dim_field(ui, f, "height", "__origH", "cs-h");
-        unit_dropdown(ui, f, "height", "cs-unit-h");
+        unit_dropdown(ui, f, "height", "cs-unit-h", true);
     });
     ui.horizontal(|ui| {
         label(ui, "", 90.0);
@@ -582,3 +593,6 @@ fn anchor_grid(ui: &mut egui::Ui, current: &str, dw: f64, dh: f64) -> Option<&'s
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod canvas_unit_order_tests;
