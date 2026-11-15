@@ -6,17 +6,17 @@ fn take_queued(app: &mut PhotocraftApp) -> Option<RawOpen> {
 }
 
 /// #9550: a Color Mixer Hue track runs through the neighbouring bands' hues (Reds: magenta to
-/// orange, wrapping round), not from grey; Saturation and Luminance keep grey to the colour.
+/// orange, wrapping round), not from grey; Saturation runs grey to the colour, Luminance dark to
+/// light through it.
 #[test]
 fn hue_tracks_run_between_the_neighbouring_bands() {
-    use super::controls::mixer_gradient;
+    use super::edit_panel::mixer_gradient;
     let hue = |d: f32| widgets::hue_color(d);
     assert_eq!(mixer_gradient(0, 0), vec![hue(300.0), hue(0.0), hue(30.0)], "Reds");
     assert_eq!(mixer_gradient(0, 7), vec![hue(270.0), hue(300.0), hue(0.0)], "Magentas");
     assert_eq!(mixer_gradient(0, 3), vec![hue(60.0), hue(120.0), hue(180.0)], "Greens");
-    for tab in [1, 2] {
-        assert_eq!(mixer_gradient(tab, 3), vec![Color32::from_gray(128), hue(120.0)]);
-    }
+    assert_eq!(mixer_gradient(1, 3), vec![Color32::from_gray(128), hue(120.0)], "Saturation: grey to the band");
+    assert_eq!(mixer_gradient(2, 3), vec![Color32::from_gray(24), hue(120.0), Color32::from_gray(232)], "Luminance: dark to light");
 }
 
 #[test]
@@ -426,6 +426,54 @@ fn dialog_drives_the_engine() {
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
     assert_eq!(r["cancelled"], true);
     assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": "x"}}})).unwrap().is_err());
+}
+
+fn grey_dialog() -> (PhotocraftApp, egui::Context) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
+    (app, ctx)
+}
+
+/// `reset` and `set` in one request: `set` applies on top of the reset, not on the old settings.
+#[test]
+fn set_applies_on_top_of_a_reset_in_the_same_request() {
+    let (mut app, ctx) = grey_dialog();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 40}}})).unwrap().unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"reset": "default", "set": {"exposure": 0.5}}})).unwrap().unwrap();
+    let p = &app.camera_raw.as_ref().unwrap().params;
+    assert_eq!((p.contrast, p.exposure), (0.0, 0.5));
+}
+
+/// Replacing a colour channel's point curve (here by undo) drops the curve editor's selected
+/// point, as replacing the master curve does.
+#[test]
+fn undo_of_a_channel_curve_resets_the_curve_gesture() {
+    let (mut app, _ctx) = grey_dialog();
+    let d = app.camera_raw.as_mut().unwrap();
+    super::controls::remember_edit(d);
+    d.params.point_curve_red = vec![[0.0, 0.0], [128.0, 150.0], [255.0, 255.0]];
+    d.curve_state.selected = Some(1);
+    assert!(super::controls::undo_edit(d));
+    assert_eq!(d.curve_state, Default::default());
+}
+
+/// With the panels hidden that hold every edit, the preview paints the source at full
+/// resolution, and the readout samples it there rather than falling back to the proxy.
+#[test]
+fn the_readout_samples_what_the_preview_shows_with_hidden_panels() {
+    let (mut app, _ctx) = grey_dialog();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.exposure = 1.0;
+    d.panels.hidden = ["light"].into();
+    d.detail.ready = true;
+    // A proxy that disagrees with the full-resolution pixels.
+    d.processed = vec![[0.0, 0.0, 0.0, 1.0]; d.pw * d.ph];
+    let readout = d.readout([0.5, 0.5], false).expect("a readout");
+    assert!((readout["values"][0].as_f64().unwrap() - 128.0).abs() < 1.0, "{readout}");
 }
 
 std::thread_local! {
@@ -922,7 +970,7 @@ fn calibration_changes_the_preview_and_round_trips_through_xmp() {
         d.processed.iter().zip(&before).any(|(a, b)| (a[0] - b[0]).abs() > 0.01 || (a[1] - b[1]).abs() > 0.01),
         "the Calibration panel changes the preview"
     );
-    let xmp = photocraft_io::camera_raw_xmp::save(&d.params);
+    let xmp = photocraft_io::camera_raw_xmp::save(&d.params).unwrap();
     assert!(xmp.contains("crs:ShadowTint=\"+100\"") && xmp.contains("crs:RedHue=\"+100\"") && xmp.contains("crs:BlueSaturation=\"-100\""), "{xmp}");
     let mut back = CameraRaw::default();
     photocraft_io::camera_raw_xmp::load(&mut back, xmp.as_bytes()).unwrap();
@@ -1170,7 +1218,7 @@ fn a_sidecar_crop_crops_the_opened_raw() {
     assert_eq!(size(&app), Some((48, 32)));
     // PhotoCraft's own sidecar: a changed setting rewrites it, with the crop it was opened with.
     let crop = photocraft_io::camera_raw_xmp::Crop { top: 0.25, left: 0.125, bottom: 0.75, right: 0.625 };
-    std::fs::write(sidecar_path(&raw_path), photocraft_io::camera_raw_xmp::save_with_crop(&CameraRaw::default(), Some(crop))).unwrap();
+    std::fs::write(sidecar_path(&raw_path), photocraft_io::camera_raw_xmp::save_with_crop(&CameraRaw::default(), Some(crop)).unwrap()).unwrap();
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 15}, "commit": true}})).unwrap().unwrap();
     assert_eq!(size(&app), Some((24, 16)));
@@ -1431,6 +1479,62 @@ fn save_and_load_settings_round_trip_through_xmp_files() {
     assert_eq!(app.camera_raw.as_ref().unwrap().params.clarity, 25.0);
 }
 
+/// A Color Grading wheel puts hue round the rim (red at 3 o'clock, counter-clockwise) and
+/// saturation outwards; picking where the handle is drawn gives the same hue and saturation back.
+#[test]
+fn grading_wheel_handle_and_pick_agree() {
+    use super::edit_panel::{wheel_pick, wheel_point};
+    let c = pos2(100.0, 100.0);
+    assert_eq!(wheel_point(c, 50.0, 0.0, 100.0), pos2(150.0, 100.0), "red at 3 o'clock, on the rim");
+    let up = wheel_point(c, 50.0, 90.0, 50.0);
+    assert!((up.x - 100.0).abs() < 1e-3 && (up.y - 75.0).abs() < 1e-3, "90 degrees is up: {up:?}");
+    for (hue, sat) in [(30.0, 40.0), (200.0, 100.0), (359.0, 5.0)] {
+        let (h, s) = wheel_pick(c, 50.0, wheel_point(c, 50.0, hue, sat));
+        assert!((h - hue).abs() < 0.01 && (s - sat).abs() < 0.01, "{hue}/{sat} -> {h}/{s}");
+    }
+    assert_eq!(wheel_pick(c, 50.0, pos2(400.0, 100.0)).1, 100.0, "past the rim is full saturation");
+    assert_eq!(wheel_point(c, 50.0, f32::NAN, 50.0), c, "a NaN hue stays at the centre");
+    assert_eq!(wheel_pick(c, 0.0, c), (0.0, 0.0), "a zero-size wheel picks neutral");
+}
+
+/// The parametric curve's regions follow the splits: Shadows below the first, Highlights past the last.
+#[test]
+fn parametric_regions_follow_the_splits() {
+    use super::edit_panel::parametric_region;
+    let s = [25.0, 50.0, 75.0];
+    assert_eq!([0.0, 0.24, 0.25, 0.6, 0.75, 1.0].map(|x| parametric_region(x, s)), [0, 0, 1, 2, 3, 3]);
+    assert_eq!(parametric_region(0.5, [10.0, 20.0, 30.0]), 3);
+}
+
+/// Double-clicking a split resets it to its default only as far as its neighbours allow, so the
+/// handles stay ordered.
+#[test]
+fn a_split_reset_stays_between_its_neighbours() {
+    use super::edit_panel::{reset_split, split_bounds};
+    assert!(reset_split(&[10.0, 15.0, 90.0], 0) <= 10.0);
+    assert_eq!(reset_split(&[20.0, 50.0, 80.0], 1), 50.0);
+    assert_eq!(reset_split(&[20.0, 30.0, 40.0], 2), 75.0);
+    assert_eq!(split_bounds(&[20.0, 30.0, 40.0], 1), (25.0, 35.0));
+    // Neighbours closer than the 5-point gap: the split stays between them.
+    let packed = [20.0, 21.0, 22.0];
+    let r = reset_split(&packed, 1);
+    assert!((20.0..=22.0).contains(&r), "{r}");
+    assert_eq!(split_bounds(&packed, 1), (20.0, 22.0));
+    assert!(reset_split(&[3.0, 6.0, 90.0], 0) <= 6.0);
+    assert!(reset_split(&[10.0, 97.0, 99.0], 2) >= 97.0);
+}
+
+/// Camera Raw's decimal places: Exposure two, Radius and Rotate one, the -100 to 100 sliders none.
+#[test]
+fn camera_raw_slider_places() {
+    use super::edit_panel::places;
+    assert_eq!(places("Exposure", -5.0, 5.0), 2);
+    assert_eq!(places("Contrast", -100.0, 100.0), 0);
+    assert_eq!(places("Radius", 0.5, 3.0), 1);
+    assert_eq!(places("Rotate", -10.0, 10.0), 1);
+    assert_eq!(places("Size", 0.1, 25.0), 1);
+}
+
 /// Done keeps the settings in the raw's sidecar and opens nothing,
 /// even with the preference that writes sidecars on Open turned off.
 #[test]
@@ -1486,4 +1590,269 @@ fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     assert_eq!((r["done"].clone(), r["saved"].clone()), (json!(true), json!([])), "{r}");
     assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geometry_previews_the_canvas_blocks_of_the_proxy() {
+    use super::convert::canvas_in_proxy;
+    // A layer 20 px past a 64 × 48 canvas, proxy blocks of 1 and of 3 pixels.
+    assert_eq!(canvas_in_proxy(Rect::new(0, 0, 64, 48), Rect::new(0, 0, 84, 48), 1, 84, 48), Some([0, 0, 64, 48]));
+    assert_eq!(canvas_in_proxy(Rect::new(0, 0, 64, 48), Rect::new(-20, 0, 64, 48), 3, 28, 16), Some([6, 0, 28, 16]));
+    // The canvas is the whole proxy: nothing to frame.
+    assert_eq!(canvas_in_proxy(Rect::new(0, 0, 64, 48), Rect::new(0, 0, 64, 48), 1, 64, 48), None);
+}
+
+/// What Geometry uncovers shows white on the Background, as the filter makes it there, and
+/// transparent on a pixel layer.
+#[test]
+fn geometry_preview_keeps_the_background_opaque() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 48, "background": "black"})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.perspective_rotate = 10.0;
+    d.render(&ctx);
+    let (corner, middle) = (d.processed[0], d.processed[d.ph / 2 * d.pw + d.pw / 2]);
+    assert!(corner[3] > 0.99 && corner[..3].iter().all(|v| *v > 0.99), "{corner:?}");
+    assert!(middle[0] < 0.01, "{middle:?}");
+    // A pixel layer: the corner turns transparent.
+    let (mut app, ctx) = (PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()), egui::Context::default());
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#406080"})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.perspective_rotate = 10.0;
+    d.render(&ctx);
+    assert!(d.processed[0][3] < 0.01, "{:?}", d.processed[0]);
+}
+
+/// Upright in the preview is the correction OK applies: the proxy develops with the analysis of
+/// the full-resolution canvas (what the filter analyses), not of the proxy, whose lines differ.
+#[test]
+fn upright_preview_uses_the_full_canvas_analysis_the_filter_applies() {
+    use photocraft_algo::camera_raw::geometry::{self, Transform, homography};
+    let (w, h) = (2000usize, 1500usize);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": w, "height": h})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    // A window grid photographed with the camera tilted up.
+    let tilted = geometry::manual(&Transform { vertical: -35.0, rotate: 2.0, ..Transform::default() }, w as f64, h as f64);
+    let mut grid: Vec<[f32; 4]> = (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w, i / w);
+            let v = if (x / 150 + y / 150) % 2 == 0 { 0.85 } else { 0.15 };
+            [v, v, v, 1.0]
+        })
+        .collect();
+    geometry::warp(&mut grid, w, h, &tilted, false);
+    let st = app.session.active_mut().unwrap();
+    let id = st.active_layer.unwrap();
+    let Some(photocraft_doc::LayerContent::Raster(s)) = std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).map(|l| &mut l.content) else {
+        panic!("a pixel layer")
+    };
+    let format = s.format();
+    let mut data = Vec::with_capacity(w * h * format.channels());
+    for q in &grid {
+        data.extend(photocraft_raster::from_rgba(&format, *q));
+    }
+    s.write_region(Rect::new(0, 0, w as i32, h as i32), &data);
+    let full = {
+        let mut px = vec![[0.0f32; 4]; w * h];
+        s.read_rgba_into(Rect::new(0, 0, w as i32, h as i32), &mut px);
+        px
+    };
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    assert!(d.pw < w && d.canvas_frame.is_none(), "the proxy is a smaller copy of the canvas");
+    let scale = |m: &[f64; 9], sx: f64, sy: f64| {
+        let (a, b) = ([sx, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 1.0], [1.0 / sx, 0.0, 0.0, 0.0, 1.0 / sy, 0.0, 0.0, 0.0, 1.0]);
+        let mul = |x: &[f64; 9], y: &[f64; 9]| -> [f64; 9] { std::array::from_fn(|i| (0..3).map(|k| x[i / 3 * 3 + k] * y[k * 3 + i % 3]).sum()) };
+        let m = mul(&a, &mul(m, &b));
+        m.map(|v| v / m[8])
+    };
+    let off = |a: &[f64; 9], b: &[f64; 9]| {
+        let pt = |m: &[f64; 9], x: f64, y: f64| {
+            let z = m[6] * x + m[7] * y + m[8];
+            [(m[0] * x + m[1] * y + m[2]) / z, (m[3] * x + m[4] * y + m[5]) / z]
+        };
+        let (pw, ph) = (d.pw as f64, d.ph as f64);
+        [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5), (0.0, 0.0)]
+            .iter()
+            .map(|(u, v)| {
+                let (p, q) = (pt(a, u * pw, v * ph), pt(b, u * pw, v * ph));
+                (p[0] - q[0]).hypot(p[1] - q[1])
+            })
+            .fold(0.0, f64::max)
+    };
+    let mut proxy_own = 0.0f64;
+    for mode in ["auto", "level", "vertical", "full"] {
+        d.params.perspective_upright = mode.into();
+        // What OK applies: the command develops the canvas, analysing it at full resolution.
+        let committed = homography(&full, w, h, &d.params);
+        let (sx, sy) = (d.pw as f64 / w as f64, d.ph as f64 / h as f64);
+        let want = scale(&committed, sx, sy);
+        let p = d.proxy_job().develop_params();
+        let shown = homography(&d.proxy, d.pw, d.ph, &p);
+        assert!(off(&shown, &want) < 1e-3, "{mode}: the preview's correction is {} px off the filter's", off(&shown, &want));
+        proxy_own = proxy_own.max(off(&homography(&d.proxy, d.pw, d.ph, &d.params), &want));
+    }
+    assert!(proxy_own > 1e-2, "analysing the proxy itself picks another correction somewhere ({proxy_own} px)");
+}
+
+/// The proxy mixes the result by the selection as the filter does, by alpha: in the corner
+/// Geometry uncovers, a half selection keeps the layer's colour at half its alpha.
+#[test]
+fn geometry_preview_mixes_the_selection_by_alpha() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#406080"})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    let original = d.proxy[0];
+    d.selection = Some(std::sync::Arc::new(vec![0.5; d.pw * d.ph]));
+    d.params.perspective_rotate = 10.0;
+    d.render(&ctx);
+    let corner = d.processed[0];
+    let want = [original[0], original[1], original[2], original[3] * 0.5];
+    assert!(corner.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5), "{corner:?} != {want:?}");
+}
+
+/// Reset to Open / Default to a different curve drops the curve editor's selected point; a reset
+/// that leaves the curves alone keeps it.
+#[test]
+fn a_reset_to_another_curve_drops_the_selected_point() {
+    let (mut app, _ctx) = grey_dialog();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.point_curve_red = vec![[0.0, 0.0], [128.0, 150.0], [255.0, 255.0]];
+    d.curve_state.selected = Some(1);
+    let same = d.params.clone();
+    super::edit_panel::reset_to(d, same);
+    assert_eq!(d.curve_state.selected, Some(1), "the same curves");
+    let open = d.original.clone();
+    super::edit_panel::reset_to(d, open);
+    assert_eq!(d.curve_state, Default::default());
+}
+
+/// The pointer maps onto the knob's travel (inset by half the knob): a click on the knob where it
+/// stands changes nothing, at the ends too.
+#[test]
+fn a_click_on_the_knob_keeps_its_value() {
+    use super::edit_panel::{knob_fraction, knob_x};
+    let track = ERect::from_min_size(pos2(100.0, 0.0), vec2(200.0, 4.0));
+    for f in [0.0, 0.02, 0.5, 0.97, 1.0] {
+        assert!((knob_fraction(track, knob_x(track, f)) - f).abs() < 1e-5, "{f}");
+    }
+    assert_eq!(knob_fraction(track, track.left()), 0.0);
+    assert_eq!(knob_fraction(track, track.right()), 1.0);
+}
+
+/// An undo in the request that added and selected a mask leaves no selection of a mask that is
+/// gone in the reply.
+#[test]
+fn the_reply_never_names_a_mask_an_undo_removed() {
+    let (mut app, ctx) = grey_dialog();
+    let m = json!({"name": "Mask 1", "components": [{"kind": "sky"}]});
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"masks": [m]}, "masks": {"selected": 0}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"masks": [m, m]}, "masks": {"selected": 1}, "undo": true}})).unwrap().unwrap();
+    assert_eq!(r["params"]["masks"].as_array().map(Vec::len), Some(1));
+    assert_eq!(r["masking"]["selected"], Value::Null, "{}", r["masking"]);
+}
+
+/// Each new dialog starts with Masking closed and nothing selected.
+#[test]
+fn a_new_dialog_starts_without_the_last_masking_state() {
+    let (mut app, ctx) = grey_dialog();
+    let m = json!({"name": "Mask 1", "components": [{"kind": "sky"}]});
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"masks": [m, m, m]}, "masks": {"open": true, "selected": 2}}})).unwrap().unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.5}}})).unwrap().unwrap();
+    assert_eq!((r["masking"]["open"].clone(), r["masking"]["selected"].clone()), (json!(false), Value::Null), "{}", r["masking"]);
+}
+
+/// Save Settings writes what the preview shows: a panel hidden by its eye button saves nothing.
+#[test]
+fn save_settings_leaves_out_hidden_panels() {
+    use crate::file_dialog::FileDialogAnswer;
+    let written: Written = Default::default();
+    let sink = written.clone();
+    let services = crate::Services {
+        file_dialog: Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo("/out/Look.xmp".into()))]).0),
+        write: Some(Box::new(move |p: &str, b: &[u8]| {
+            sink.lock().unwrap().push((p.to_string(), b.to_vec()));
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.75, "clarity": 10}, "panels": {"hidden": ["light"]}}})).unwrap().unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"saveSettings": true}})).unwrap().unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    let w = written.lock().unwrap().clone();
+    assert_eq!(w.len(), 1);
+    let mut back = CameraRaw::default();
+    photocraft_io::camera_raw_xmp::load(&mut back, &w[0].1).unwrap();
+    assert_eq!((back.exposure, back.clarity), (0.0, 10.0));
+}
+
+/// Done saves what the preview shows for every raw of the filmstrip: a panel hidden on one raw
+/// stays hidden when another is shown (the panels are the dialog's), and saves nothing for either.
+#[test]
+fn done_leaves_out_hidden_panels_for_every_raw() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    let dir = std::env::temp_dir().join(format!("photocraft-hidden-done-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let written: Written = Default::default();
+    let sink = written.clone();
+    app.services.write = Some(Box::new(move |p: &str, b: &[u8]| {
+        sink.lock().unwrap().push((p.to_string(), b.to_vec()));
+        Ok(())
+    }));
+    app.open_bytes("one.dng", &dng).unwrap();
+    app.open_bytes("two.dng", &dng).unwrap();
+    let paths: Vec<String> = ["one.cr2", "two.cr2"].iter().map(|n| dir.join(n).to_string_lossy().into_owned()).collect();
+    for (held, path) in app.raw_shelf.iter_mut().zip(&paths) {
+        held.raw.path = Some(path.clone());
+    }
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 30, "clarity": 15}, "panels": {"hidden": ["light"]}}})).unwrap().unwrap();
+    filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
+    assert!(app.camera_raw.as_ref().unwrap().panels.hidden.contains("light"), "the eye stays off");
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 20, "clarity": 5}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().unwrap();
+    assert_eq!(r["done"], true, "{r}");
+    let w = written.lock().unwrap().clone();
+    assert_eq!(w.len(), 2, "{r}");
+    for (path, clarity) in [("one.xmp", 15.0), ("two.xmp", 5.0)] {
+        let (_, bytes) = w.iter().find(|(p, _)| p.ends_with(path)).unwrap();
+        let mut back = CameraRaw::default();
+        photocraft_io::camera_raw_xmp::load(&mut back, bytes).unwrap();
+        assert_eq!((back.contrast, back.clarity), (0.0, clarity), "{path}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Split view shows Before left of its line: a readout there reads the Before pixels, one right
+/// of it the After pixels.
+#[test]
+fn split_view_readouts_read_the_side_they_sample() {
+    let (mut app, ctx) = grey_dialog();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.scope.split = Some(0.5);
+    let red = |d: &CameraRawDialog, x: f32| d.readout([x, 0.5], false).expect("a readout")["values"][0].as_f64().unwrap();
+    assert!((red(d, 0.25) - 128.0).abs() < 1.0, "Before, left of the line");
+    assert!(red(d, 0.75) > 140.0, "After, right of it");
+    d.scope.split = None;
+    assert!(red(d, 0.25) > 140.0, "no Split: After everywhere");
 }

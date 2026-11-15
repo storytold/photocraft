@@ -8,6 +8,7 @@ mod arbitrary_rotation_preview;
 mod background_eraser_reset_tip;
 mod batch_export_options;
 mod brush_reset_defaults;
+mod camera_raw_dialog;
 mod camera_raw_histogram;
 mod camera_raw_localization;
 mod camera_raw_scope;

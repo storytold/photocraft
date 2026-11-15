@@ -697,7 +697,7 @@ fn batch_quiet_raw_applies_prior_settings_and_workflow_without_touching_inputs()
     std::fs::write(&path, &bytes).unwrap();
     let sidecar = join(&dir, "raw.xmp");
     let settings = photocraft_algo::camera_raw::CameraRaw { exposure: 1.0, ..Default::default() };
-    let xmp = photocraft_io::camera_raw_xmp::save(&settings);
+    let xmp = photocraft_io::camera_raw_xmp::save(&settings).unwrap();
     std::fs::write(&sidecar, &xmp).unwrap();
     let mut s = Session::new();
     s.execute("prefs.set", json!({"path":"rawDefaults.resolution","value":240})).unwrap();
@@ -744,7 +744,7 @@ fn batch_quiet_raw_applies_the_sidecar_crop() {
     let bytes = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
     std::fs::write(&path, &bytes).unwrap();
     let crop = photocraft_io::camera_raw_xmp::Crop { top: 0.25, left: 0.125, bottom: 0.75, right: 0.625 };
-    let xmp = photocraft_io::camera_raw_xmp::save_with_crop(&photocraft_algo::camera_raw::CameraRaw::default(), Some(crop));
+    let xmp = photocraft_io::camera_raw_xmp::save_with_crop(&photocraft_algo::camera_raw::CameraRaw::default(), Some(crop)).unwrap();
     std::fs::write(join(&dir, "raw.xmp"), &xmp).unwrap();
     let mut s = Session::new();
     let output = join(&dir, "out");

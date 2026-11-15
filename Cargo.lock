@@ -5678,6 +5678,7 @@ dependencies = [
  "craft-file-formats",
  "craft-image-codecs",
  "craft-kra",
+ "craft-metadata",
  "craft-ora",
  "craft-pdf",
  "craft-pdn",

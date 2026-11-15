@@ -115,6 +115,9 @@ pub(crate) struct ScopeView {
     pub(crate) preview_rect: Option<Rect>,
     pub(crate) rect: Option<Rect>,
     pub(crate) vectorscope_rect: Option<Rect>,
+    /// Split view's line, as a fraction of the image width: Before shows left of it, so
+    /// readouts there read the Before pixels. `None` outside Split.
+    pub(crate) split: Option<f32>,
 }
 
 /// One visible proxy pixel, in the histogram RGB domain and ICC-managed vectorscope domain.
@@ -142,10 +145,13 @@ impl CameraRawDialog {
         }
         let x = ((p[0] * self.pw as f32) as usize).min(self.pw - 1);
         let y = ((p[1] * self.ph as f32) as usize).min(self.ph - 1);
+        // Split view shows Before left of its line: a sample there reads what it shows.
+        let before = self.show_before || self.scope.split.is_some_and(|s| p[0] < s);
+        let pixels: &[[f32; 4]] = if before { &self.proxy } else { &self.processed };
         let q = self
             .detail
-            .sample(p, self.preview_revision, self.show_before, &self.params)
-            .or_else(|| self.pixels().get(y.checked_mul(self.pw)?.checked_add(x)?).copied())?;
+            .sample(p, self.preview_revision, before, &self.effective_params())
+            .or_else(|| pixels.get(y.checked_mul(self.pw)?.checked_add(x)?).copied())?;
         (q[3] > 0.0 && q.iter().all(|v| v.is_finite())).then_some(q)
     }
     pub(crate) fn readout(&self, p: [f32; 2], lab: bool) -> Option<Value> {
@@ -377,6 +383,9 @@ fn context(ui: &mut egui::Ui, has_selection: bool, view: &mut CameraRawScopeStat
     }
 }
 
+/// Height of the RGB readout line under the histogram.
+const READOUT_H: f32 = 18.0;
+
 fn graph(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeState, height: f32) {
     let t = Tokens::get(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(1.0), height), Sense::click_and_drag());
@@ -387,17 +396,14 @@ fn graph(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeSt
     // Camera Raw's scale: the typical columns set it and a shadow or highlight spike runs off the top.
     crate::rgb_histogram::paint_with(ui.painter(), plot, d.histogram(), &t, crate::rgb_histogram::Spikes::Clip);
     let corner = 18.0;
+    // Camera Raw's readout line under the histogram: the hovered pixel's R, G and B.
+    let (line, _) = ui.allocate_exact_size(vec2(rect.width(), READOUT_H), Sense::hover());
     if let Some(sample) = d.hover_sample(false) {
         crate::rgb_histogram::paint_sample(ui.painter(), plot, sample.rgb, &t);
         let [r, g, b] = sample.rgb.map(|x| x * 255.0);
-        let text = format!("R {r:.0}   G {g:.0}   B {b:.0}");
-        let font = crate::theme::mono(11.0);
-        let galley = ui.painter().layout_no_wrap(text, font, t.text);
-        let width = (galley.size().x + 12.0).min((rect.width() - 2.0 * corner - 4.0).max(1.0));
-        let badge = Rect::from_center_size(pos2(rect.center().x, rect.top() + 13.0), vec2(width, 20.0));
-        ui.painter().rect_filled(badge, t.radius_sm, t.card.gamma_multiply(0.65));
-        ui.painter().rect_stroke(badge, t.radius_sm, Stroke::new(0.7, t.field_border.gamma_multiply(0.55)), egui::StrokeKind::Inside);
-        ui.painter().with_clip_rect(badge.shrink(2.0)).galley(badge.center() - galley.size() * 0.5, galley, t.text);
+        let text = format!("R: {r:.0}   G: {g:.0}   B: {b:.0}");
+        let galley = ui.painter().layout_no_wrap(text, egui::FontId::proportional(11.5), t.text_dim);
+        ui.painter().with_clip_rect(line).galley(pos2(line.center().x - galley.size().x * 0.5, line.center().y - galley.size().y * 0.5), galley, t.text_dim);
     }
     let sh = d.histogram().shadows.iter().enumerate().fold(0u8, |m, (c, n)| m | if *n > 0 { 1 << c } else { 0 });
     let hi = d.histogram().highlights.iter().enumerate().fold(0u8, |m, (c, n)| m | if *n > 0 { 1 << c } else { 0 });
@@ -542,7 +548,7 @@ pub(crate) fn floating(ctx: &egui::Context, d: &mut CameraRawDialog, view: &mut 
         window
     };
     let response = window.show(ctx, |ui| {
-        let height = if view.vectorscope { (ui.available_height() * 0.35).clamp(48.0, 150.0) } else { (ui.available_height() - 28.0).max(48.0) };
+        let height = if view.vectorscope { (ui.available_height() * 0.35).clamp(48.0, 150.0) } else { (ui.available_height() - 28.0 - READOUT_H).max(48.0) };
         graph(ui, d, view, height);
         if view.vectorscope {
             vectorscope(ui, d, view, (ui.available_height() - 12.0).max(100.0));

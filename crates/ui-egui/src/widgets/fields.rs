@@ -160,6 +160,34 @@ pub(super) struct FieldOpts {
     pub(super) blank_when_zero: bool,
     /// Keep the trailing zeros of `decimals` (`50.0`), where every other field drops them.
     pub(super) keep_zeros: bool,
+    /// Camera Raw's look ([`camera_raw_value_field`]): proportional digits at the box's left,
+    /// `decimals` places always shown, "+" before a positive value, the system's decimal separator.
+    pub(super) camera_raw: bool,
+}
+
+/// Camera Raw's value box: the number in proportional digits at the box's left, always with
+/// `decimals` places ("0.00" for Exposure, "0" for Contrast), "+" before a positive value
+/// ("+0.35", "+20") and the system's decimal separator, as Camera Raw shows it. Typed text may use
+/// either separator and a leading "+". Arrow keys step by the last shown place.
+pub(crate) fn camera_raw_value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: u32, size: Vec2) -> Response {
+    let opts = FieldOpts { decimals: Some(decimals), step_from_decimals: true, camera_raw: true, ..Default::default() };
+    value_field_box(ui, value, range, "", size, 0.0, opts, None).0
+}
+
+/// [`camera_raw_value_field`]'s text for `v`: fixed places, a "+" on positive values, never "-0".
+pub(crate) fn camera_raw_number(v: f64, decimals: u32) -> String {
+    let d = decimals.min(6) as usize;
+    let text = if v.is_finite() { format!("{v:.d$}") } else { String::from("0") };
+    // "-0.00" (a tiny negative rounded away) reads as zero.
+    let zero = text.trim_start_matches('-').chars().all(|c| c == '0' || c == '.');
+    let text = if zero {
+        text.trim_start_matches('-').to_owned()
+    } else if v > 0.0 {
+        format!("+{text}")
+    } else {
+        text
+    };
+    crate::canvas::zoom_field::localize(text)
 }
 
 /// Arrow-key and drag step for a value field: [`FieldOpts::step_from_decimals`] uses `decimals`;
@@ -205,7 +233,7 @@ fn value_field_box(
     opts: FieldOpts,
     name: Option<&str>,
 ) -> (Response, Rect) {
-    let FieldOpts { decimals, step_from_decimals, units, extent, .. } = opts;
+    let FieldOpts { decimals, step_from_decimals, units, extent, camera_raw, .. } = opts;
     let t = Tokens::get(ui.ctx());
     let (rect, slot) = ui.allocate_exact_size(size, Sense::hover());
     let last_editor = ui.data(|d| d.get_temp::<egui::Id>(slot.id));
@@ -245,7 +273,7 @@ fn value_field_box(
     // Centred: the digits' ink then sits within 0.2 pt of the box's centre, where a 1 pt lift
     // (#1322) put it 0.9 pt high and the focus outline off-centre (#5150). The slot is at least
     // one text row tall, so a slim box's number isn't pushed out of it (#2823).
-    let font = theme::mono(12.0);
+    let font = if camera_raw { egui::FontId::proportional(12.0) } else { theme::mono(12.0) };
     let row_h = ui.painter().layout_no_wrap("0".into(), font.clone(), t.text).size().y;
     let slot_h = (rect.height() - 4.0).max(row_h).min(rect.height() - 2.0);
     let cy = rect.center().y;
@@ -267,6 +295,9 @@ fn value_field_box(
         ui.memory_mut(|m| m.surrender_focus(id));
     }
     let step = step + notches * unit;
+    // Camera Raw's number is only as wide as its text: the rest of the box focuses it on a click.
+    // Registered before the number, which wins where they overlap.
+    let box_click = camera_raw && ui.interact(rect, slot.id.with("box"), Sense::click()).clicked();
     // new_child (not scope_builder): a scope would move the parent cursor back to the child rect.
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
     let mut resp = {
@@ -283,14 +314,25 @@ fn value_field_box(
             // Its horizontal padding would push a long number out of the box's left edge.
             ui.spacing_mut().interact_size.y = field.height();
             ui.spacing_mut().button_padding = Vec2::ZERO;
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
+            if camera_raw {
+                // As wide as its text, so the number starts at the box's left edge (a wider
+                // button would centre it); a click on the rest of the box focuses it (below).
+                ui.spacing_mut().interact_size.x = 0.0;
+            }
+            let outer = if camera_raw { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) };
+            ui.with_layout(outer, |ui| {
+                // Camera Raw's number sits at the box's left; every other field centres it.
+                let layout =
+                    if camera_raw { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::centered_and_justified(ui.layout().main_dir()) };
                 ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, units, opts)).inner
             })
             .inner
         }
     };
     ui.data_mut(|d| d.insert_temp(slot.id, resp.id));
+    if box_click && ui.is_enabled() {
+        ui.memory_mut(|m| m.request_focus(resp.id));
+    }
     // A click on the caption's expanded hit area (outside the editor) is not an edit: keep the
     // number's keyboard focus, but never take it for a field that did not have it.
     if option_click
@@ -349,7 +391,17 @@ fn value_field_box(
                 ui.memory_mut(|m| m.request_focus(resp.id));
             }
             // The text stays selected, as in Photoshop: typing after a step replaces the value.
-            crate::field_tab::select_all(ui.ctx(), resp.id, &if fine { fmt_num2(f64::from(*value)) } else { fmt_num(f64::from(*value)) });
+            crate::field_tab::select_all(
+                ui.ctx(),
+                resp.id,
+                &if camera_raw {
+                    camera_raw_number(f64::from(*value), decimals.unwrap_or(0))
+                } else if fine {
+                    fmt_num2(f64::from(*value))
+                } else {
+                    fmt_num(f64::from(*value))
+                },
+            );
         }
         let pass = ui.ctx().cumulative_pass_nr();
         ui.data_mut(|d| d.insert_temp(stepped_id(resp.id), pass));
@@ -515,7 +567,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     opts: FieldOpts,
 ) -> Response {
-    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, keep_zeros, .. } = opts;
+    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, keep_zeros, camera_raw, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -531,6 +583,9 @@ fn number_edit(
     // A zoom field shows its number with the system's decimal separator (`12,5` on a German
     // Windows), as Photoshop does, so the text it shows is one that can be typed.
     let format = move |v: f64| {
+        if camera_raw {
+            return camera_raw_number(v, decimals.unwrap_or(0));
+        }
         if blank_when_zero && v == 0.0 {
             return String::new();
         }
@@ -606,6 +661,9 @@ fn number_edit(
                             return lead.and_then(|lead| zoom_number(&lead, units));
                         }
                     }
+                } else if camera_raw {
+                    // Shown with the system's separator and a "+", so either reads back.
+                    s.trim().trim_start_matches('+').replace(',', ".")
                 } else {
                     s.to_owned()
                 };
@@ -693,4 +751,22 @@ fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32) -> (f32, f32) {
         ui.memory_mut(|m| m.surrender_focus(id));
     }
     (n, grid)
+}
+
+#[cfg(test)]
+mod camera_raw_number_tests {
+    use super::camera_raw_number;
+    use crate::canvas::zoom_field::localize;
+
+    #[test]
+    fn camera_raw_numbers_keep_their_places_and_sign() {
+        assert_eq!(camera_raw_number(0.0, 2), localize("0.00".into()));
+        assert_eq!(camera_raw_number(0.35, 2), localize("+0.35".into()));
+        assert_eq!(camera_raw_number(-1.5, 2), localize("-1.50".into()));
+        assert_eq!(camera_raw_number(20.0, 0), "+20");
+        assert_eq!(camera_raw_number(-20.4, 0), "-20");
+        assert_eq!(camera_raw_number(-0.001, 2), localize("0.00".into()));
+        assert_eq!(camera_raw_number(1.0, 1), localize("+1.0".into()));
+        assert_eq!(camera_raw_number(f64::NAN, 2), "0");
+    }
 }
