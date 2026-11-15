@@ -117,6 +117,24 @@ fn alt_with_add_anchor_point_deletes_without_bending_the_join() {
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
 }
 
+/// Not measured, so as today (#12766's rules): with ⇧ held at the press, Delete Anchor Point deletes
+/// the anchor and the drag doesn't bend the join, as a ⇧ press on a segment starts no segment drag.
+#[test]
+fn shift_drag_from_the_corner_deletes_without_bending_the_join() {
+    let mut app = app();
+    let (n, shift) = (steps(&app), Modifiers::SHIFT);
+    tool_event(&mut app, ToolEvent::Down { x: 300.0, y: 300.0, pressure: 1.0 }, shift);
+    for at in [[315.0, 290.0], [330.0, 280.0]] {
+        tool_event(&mut app, ToolEvent::Move { x: at[0], y: at[1], pressure: 1.0 }, shift);
+    }
+    tool_event(&mut app, ToolEvent::Up { x: 330.0, y: 280.0 }, shift);
+    let k = knots(&app);
+    assert_eq!(k.len(), 3);
+    assert_eq!((k[0], k[1]), (Knot::corner(100.0, 300.0), Knot::corner(300.0, 500.0)), "the join stays straight: {k:?}");
+    assert_eq!(steps(&app), n + 1);
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
+}
+
 #[test]
 fn a_bend_past_the_coordinate_limit_runs_no_command_and_keeps_the_straight_join() {
     let mut app = app();

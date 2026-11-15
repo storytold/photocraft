@@ -169,7 +169,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         if r == PathRef::Pen {
             edit_pen(app, path, hit, [x, y]);
         } else {
-            apply(app, r, hit, [x, y]);
+            apply(app, r, hit, [x, y], !mods.shift);
         }
         return true;
     }
@@ -186,7 +186,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             } else if tool == Tool::DeleteAnchorPoint && start_segment_drag(app, [x, y], mods) {
                 return true;
             } else {
-                click(app, tool, [x, y]);
+                click(app, tool, [x, y], !mods.shift);
             }
         }
         ToolEvent::Up { x, y } => {
@@ -248,7 +248,7 @@ fn subpath_at(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Vec<[usize; 
     crate::direct_select::active_paths(app).iter().any(|(a, _)| *a == r).then(|| (r, edit::subpath_anchors(&path, s)))
 }
 
-fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
+fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2], bend: bool) {
     let Some((r, path, hit)) = target(app, tool, p) else {
         hide_anchors(app, tool, p);
         return;
@@ -263,7 +263,7 @@ fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
             select_shown(app, r, vec![s], vec![[s, k]]);
             return;
         }
-        if apply(app, r, hit, p) {
+        if apply(app, r, hit, p, bend) {
             // A press that began a join drag (#12766) keeps its drag: only the selection is replaced.
             let join = app.ui.direct_selection.drag.take().zip(app.ui.direct_selection.coalesce.take());
             select_follower(app, r, &path, [s, k]);
@@ -274,7 +274,7 @@ fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
         }
         return;
     }
-    apply(app, r, hit, p);
+    apply(app, r, hit, p, bend);
 }
 
 /// Show the anchors of `subpaths` of `r` only, with `anchors` selected: a view change, no history step.
@@ -335,10 +335,11 @@ fn edit_pen(app: &mut PhotocraftApp, mut path: Path, hit: Hit, p: [f64; 2]) {
 /// one history step.
 /// Whether the engine ran the edit: not at a full History (it records a step and evicts the oldest, so
 /// the step count does not change), nor when a live-shape prompt or an error stopped it.
-fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) -> bool {
+fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2], bend: bool) -> bool {
     // Delete Anchor Point: a drag from the anchor bends the join (#12766), in the deletion's step.
+    // `bend` is false with ⇧ held at the press: not measured, so the press only deletes, as before.
     let deleted = match hit {
-        Hit::Anchor(k) if app.ui.tool == Tool::DeleteAnchorPoint => {
+        Hit::Anchor(k) if bend && app.ui.tool == Tool::DeleteAnchorPoint => {
             let before = crate::direct_select::candidates(app).into_iter().find(|(c, _)| *c == r).map(|(_, path)| path);
             before.and_then(|path| edit::join_knot(&path, k))
         }
