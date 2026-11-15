@@ -36,11 +36,17 @@ pub fn opacity(colour: &[f32], key: &[f32], transparency: f32, opacity_threshold
     for (&p, &c) in colour.iter().zip(key) {
         // Past a key at a channel limit (no room left) no in-range colour reaches `P`: `remap`
         // gives 1 for any distance above the transparency threshold.
+        let d = (p - c).abs();
         let room = if p > c { 1.0 - c } else { c };
-        let ai = remap((p - c).abs(), transparency, opacity_threshold.min(room));
-        if ai.is_finite() {
-            a = a.max(ai);
+        // Checked before `remap`, which would turn an infinite distance into 1: an infinite
+        // sample is ignored, except past a key at that channel's limit, as before #13433.
+        if !d.is_finite() {
+            if d.is_infinite() && room <= 0.0 {
+                a = 1.0;
+            }
+            continue;
         }
+        a = a.max(remap(d, transparency, opacity_threshold.min(room)));
     }
     a.clamp(0.0, 1.0)
 }
@@ -238,6 +244,18 @@ mod tests {
         assert!(out.pixel(0, 0)[3] < 1e-6);
         let p = out.pixel(1, 0);
         assert!(close(p[3], 0.5, 1e-5) && p[..3].iter().all(|v| close(*v, 0.0, 1e-5)), "{p:?}");
+    }
+
+    #[test]
+    fn an_infinite_sample_is_ignored_unless_the_key_is_at_its_limit() {
+        // A mid-range key: the infinite channel is ignored, the others decide.
+        let a = opacity(&[f32::INFINITY, 0.25, 0.5], &[0.5; 3], 0.0, 1.0);
+        assert!(close(a, 0.5, 1e-6), "{a}");
+        let a = opacity(&[f32::NEG_INFINITY, 0.5, 0.5], &[0.5; 3], 0.1, 0.4);
+        assert_eq!(a, 0.0);
+        // Past a key at the channel's limit nothing in range reaches it: fully opaque.
+        assert_eq!(opacity(&[f32::INFINITY, 1.0, 1.0], &[1.0; 3], 0.0, 1.0), 1.0);
+        assert_eq!(opacity(&[f32::NEG_INFINITY, 0.0, 0.0], &[0.0; 3], 0.0, 1.0), 1.0);
     }
 
     #[test]
