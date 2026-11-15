@@ -13,11 +13,11 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use photocraft_algo::Image;
-use photocraft_algo::surface::{DepthGeometry, PlaneSurface, ShadingBuilder, ShadingField};
+use photocraft_algo::surface::{PlaneSurface, ShadingBuilder, ShadingField};
 use photocraft_color::ColorMode;
 use photocraft_doc::{DocId, LayerId};
 use photocraft_geom::{Point, Rect};
-use photocraft_paint::surface::{Footprint, Local, SampleMode, ShadeSource, SurfaceMap, surface_dab_shape};
+use photocraft_paint::surface::{Local, SampleMode, ShadeSource, SurfaceMap, surface_dab_shape};
 use photocraft_paint::{BrushSettings, StrokeRenderer};
 use serde_json::{Value, json};
 
@@ -54,7 +54,7 @@ pub(crate) struct PlaneMap(pub(crate) PlaneSurface);
 
 impl SurfaceMap for PlaneMap {
     fn local(&self, p: Point) -> Option<Local> {
-        self.0.local([p.x, p.y]).map(|(scale, squash_angle, squash)| Local { scale, squash_angle, squash, offset: [0.0; 2] })
+        self.0.local([p.x, p.y]).map(|(scale, squash_angle, squash)| Local { scale, squash_angle, squash })
     }
 
     /// The brush size is the size on the first plane's centre.
@@ -63,157 +63,9 @@ impl SurfaceMap for PlaneMap {
     }
 }
 
-/// Follow Depth: the document's depth channel (white = near) as a surface map. Over a slope the
-/// dab is foreshortened along it, and with `size_by_depth` its size follows the depth (see
-/// `photocraft_algo::surface::DepthGeometry::local`, which this adapts). The brush's radius
-/// (size / 2) sets the scale the slope is measured at. The brush size is the size at the photo's
-/// median depth (its middle distance); without `size_by_depth` the scale is 1 everywhere.
-pub(crate) struct DepthMap {
-    geometry: Arc<DepthGeometry>,
-    radius: f32,
-    relief: f32,
-    size_by_depth: bool,
-}
-
-impl DepthMap {
-    pub(crate) fn new(geometry: Arc<DepthGeometry>, radius: f32, relief: f32, size_by_depth: bool) -> Self {
-        Self { geometry, radius: if radius.is_finite() { radius.max(0.5) } else { 0.5 }, relief, size_by_depth }
-    }
-
-    /// The depth projection at `p`; `None` off the canvas, and where it is flat and unscaled.
-    fn local(&self, p: Point) -> Option<Local> {
-        let (scale, squash_angle, squash) = self.geometry.local(p.x, p.y, self.radius, self.relief, self.size_by_depth)?;
-        if !self.size_by_depth && squash >= 0.9999 {
-            return None;
-        }
-        let local = Local { scale, squash_angle, squash, offset: [0.0; 2] };
-        local.is_valid().then_some(local)
-    }
-
-    /// The outline of a dab of `radius` pixels at `p` bent over the depth (see
-    /// `DepthGeometry::footprint`); `None` at relief 0.
-    fn footprint(&self, p: Point, radius: f32) -> Option<Footprint> {
-        if self.relief <= 0.0 {
-            return None;
-        }
-        self.geometry.footprint(p.x, p.y, radius, self.relief).map(|rays| Footprint { rays })
-    }
-
-    /// The scale the brush size is meant at: the median depth's with `size_by_depth`, else 1.
-    fn reference_scale(&self) -> f32 {
-        if self.size_by_depth { self.geometry.reference_scale() } else { 1.0 }
-    }
-}
-
-/// `scale · (I − (1 − squash) · u uᵀ)` with `u` the direction of `squash_angle`: the matrix that
-/// maps a circle to the dab's ellipse, in y-up axes.
-fn local_matrix(l: &Local) -> [[f64; 2]; 2] {
-    let (sn, cs) = f64::from(l.squash_angle).sin_cos();
-    let (k, sc) = (1.0 - f64::from(l.squash), f64::from(l.scale));
-    [[sc * (1.0 - k * cs * cs), -sc * k * cs * sn], [-sc * k * cs * sn, sc * (1.0 - k * sn * sn)]]
-}
-
-/// Perspective `a` followed by depth `b`: their matrices multiplied and decomposed again, so the
-/// scale is the plane's times the depth's (their references' product anchors it) and the squashes
-/// compose. The offsets add.
-fn combine(a: &Local, b: &Local) -> Option<Local> {
-    let (m, n) = (local_matrix(a), local_matrix(b));
-    let j = [
-        [m[0][0] * n[0][0] + m[0][1] * n[1][0], m[0][0] * n[0][1] + m[0][1] * n[1][1]],
-        [m[1][0] * n[0][0] + m[1][1] * n[1][0], m[1][0] * n[0][1] + m[1][1] * n[1][1]],
-    ];
-    let (s1, s2, phi) = photocraft_algo::surface::svd2(j)?;
-    let minor = (phi + std::f64::consts::FRAC_PI_2).rem_euclid(2.0 * std::f64::consts::PI);
-    let local = Local {
-        scale: s1 as f32,
-        squash_angle: if minor > std::f64::consts::PI { minor - 2.0 * std::f64::consts::PI } else { minor } as f32,
-        squash: (s2 / s1).clamp(0.0, 1.0) as f32,
-        offset: [a.offset[0] + b.offset[0], a.offset[1] + b.offset[1]],
-    };
-    local.is_valid().then_some(local)
-}
-
-/// `f` seen through the plane's foreshortening (its squash and direction; its scale is already in
-/// the footprint's radius): the outline of the circle-like footprint under the plane's matrix
-/// `I − (1 − squash) u uᵀ`, resampled at the footprint's own directions. Each output direction is
-/// mapped back through the inverse matrix, where the footprint is read.
-fn squash_footprint(f: &Footprint, plane: &Local) -> Option<Footprint> {
-    if !plane.squash.is_finite() || !plane.squash_angle.is_finite() {
-        return None;
-    }
-    let squash = plane.squash.clamp(0.05, 1.0);
-    let (sn, cs) = plane.squash_angle.sin_cos();
-    let k = 1.0 / squash - 1.0;
-    let mut rays = f.rays;
-    for (i, ray) in rays.iter_mut().enumerate() {
-        let (dsn, dcs) = (i as f32 * std::f32::consts::TAU / photocraft_paint::surface::FOOTPRINT_RAYS as f32).sin_cos();
-        let along = dcs * cs + dsn * sn;
-        let (ux, uy) = (dcs + k * along * cs, dsn + k * along * sn);
-        // |u| >= 1, so the ray only shortens.
-        *ray = f.radius_at(uy.atan2(ux)) / ux.hypot(uy);
-    }
-    let out = Footprint { rays };
-    out.is_valid().then_some(out)
-}
-
-/// Follow Perspective and Follow Depth together. With a plane map, a dab off every plane is left
-/// alone (depth or not): the stroke is anchored on the plane. On a plane both apply, as in
-/// [`combine`]. Without a plane map the depth scale itself is the size, relative to the median
-/// depth.
-struct CombinedMap {
-    persp: Option<Arc<PlaneMap>>,
-    depth: Option<DepthMap>,
-}
-
-impl SurfaceMap for CombinedMap {
-    fn local(&self, p: Point) -> Option<Local> {
-        let plane = match &self.persp {
-            Some(m) => Some(m.local(p)?),
-            None => None,
-        };
-        let depth = self.depth.as_ref().and_then(|d| d.local(p));
-        match (plane, depth) {
-            (Some(a), Some(b)) => combine(&a, &b).or(Some(a)),
-            (a, b) => a.or(b),
-        }
-    }
-
-    /// With depth, its footprint at the dab's own radius (which already holds the plane's scale),
-    /// foreshortened by the plane's squash when planes are followed too; with planes only, none:
-    /// their ellipse is exact. A footprint replaces the dab's projection in the renderer, so it
-    /// must hold the plane's foreshortening itself.
-    fn footprint(&self, p: Point, radius: f32, _local: &Local) -> Option<Footprint> {
-        let depth = self.depth.as_ref()?;
-        // Where the depth map has no projection (flat and unscaled) the dab stays as it is.
-        depth.local(p)?;
-        let bent = depth.footprint(p, radius)?;
-        match &self.persp {
-            Some(m) => squash_footprint(&bent, &m.local(p)?),
-            None => Some(bent),
-        }
-    }
-
-    /// The product of the plane's and the depth's references (as [`combine`] multiplies the scales).
-    fn reference_scale(&self) -> Option<f32> {
-        let plane = match &self.persp {
-            Some(m) => Some(m.reference_scale()?),
-            None => None,
-        };
-        let depth = self.depth.as_ref().map(DepthMap::reference_scale);
-        match (plane, depth) {
-            (Some(a), Some(b)) => Some(a * b),
-            (a, b) => a.or(b),
-        }
-    }
-}
-
-/// The dab map for the planes and/or depth a stroke follows.
-pub(crate) fn make_map(persp: Option<Arc<PlaneMap>>, depth: Option<DepthMap>) -> Option<Arc<dyn SurfaceMap>> {
-    match (persp, depth) {
-        (None, None) => None,
-        (Some(p), None) => Some(p),
-        (persp, depth) => Some(Arc::new(CombinedMap { persp, depth })),
-    }
+/// The dab map for the planes a stroke follows.
+pub(crate) fn make_map(persp: Option<Arc<PlaneMap>>) -> Option<Arc<dyn SurfaceMap>> {
+    persp.map(|p| p as Arc<dyn SurfaceMap>)
 }
 
 /// What a cached shading field was built for. The document's content is compared apart from this
@@ -273,29 +125,12 @@ pub struct SurfaceCache {
     fields: Mutex<Vec<FieldEntry>>,
     map: Mutex<Option<(MapKey, Arc<PlaneMap>)>>,
     builds: std::sync::atomic::AtomicUsize,
-    depth: Mutex<Option<DepthEntry>>,
-    depth_builds: std::sync::atomic::AtomicUsize,
-}
-
-/// The depth geometry of a channel, with a snapshot of the channel's surface it was built from
-/// (tile handles: an edit of the channel makes the snapshot differ; painting elsewhere does not).
-struct DepthEntry {
-    doc: DocId,
-    name: String,
-    surface: photocraft_raster::Surface,
-    area: Rect,
-    geometry: Arc<DepthGeometry>,
 }
 
 impl SurfaceCache {
     /// How many shading fields this session has built (a cache hit builds none).
     pub fn field_builds(&self) -> usize {
         self.builds.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// How many depth geometries this session has built.
-    pub fn depth_builds(&self) -> usize {
-        self.depth_builds.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -307,12 +142,6 @@ pub(crate) struct Wiring {
 }
 
 impl Wiring {
-    /// The dab map the stroke follows (planes and/or depth), if any.
-    #[cfg(test)]
-    pub(crate) fn map(&self) -> Option<&Arc<dyn SurfaceMap>> {
-        self.map.as_ref()
-    }
-
     /// Does the stroke use any surface effect?
     pub(crate) fn is_active(&self) -> bool {
         self.shade.is_some() || self.map.is_some()
@@ -329,71 +158,19 @@ impl Wiring {
     /// no saved plane for this canvas, or a shading sample that cannot be built.
     pub(crate) fn build(s: &Session, cmd: &str, p: &Value, brush: &BrushSettings, layer: Option<LayerId>) -> Result<Self> {
         let opts = &brush.surface;
-        if brush.erase || !(opts.color || opts.perspective || opts.depth) {
+        if brush.erase || !(opts.color || opts.perspective) {
             return Ok(Self::default());
         }
         opts.validate().map_err(|e| bad(cmd, e))?;
         let mut w = Self::default();
         let persp = if opts.perspective { Some(plane_map(s).ok_or_else(|| bad(cmd, NO_PLANES))?) } else { None };
-        // Depth is geometry, so it follows a mask or channel target too. A missing channel is
-        // an error here (the stroke builds; the cursor only reads).
-        let depth = if opts.depth {
-            let geometry = depth_geometry(s, cmd, &opts.depth_channel)?;
-            Some(DepthMap::new(geometry, (brush.size / 2.0).max(0.5), opts.relief, opts.size_by_depth))
-        } else {
-            None
-        };
-        w.map = make_map(persp, depth);
+        w.map = make_map(persp);
         if opts.color && !is_gray_target(s, p)? {
             let field = shading_field(s, cmd, opts.sample, opts.detail, layer)?;
             w.shade = Some((Arc::new(FieldShade(field)), opts.strength));
         }
         Ok(w)
     }
-}
-
-/// The depth geometry of the active document's alpha channel `name` (the first of that name):
-/// the cached one while the channel's pixels are unchanged, else built (and kept).
-fn depth_geometry(s: &Session, cmd: &str, name: &str) -> Result<Arc<DepthGeometry>> {
-    if let Some(g) = cached_depth(s, name) {
-        return Ok(g);
-    }
-    let st = s.active().ok_or(EngineError::NoDocument)?;
-    let channel = st.doc.channels.iter().find(|c| c.name == name).ok_or_else(|| bad(cmd, format!("no {name} channel: run Image ▸ Estimate Depth")))?;
-    let canvas = st.doc.bounds();
-    check_size(canvas, cmd)?;
-    // The estimator's full-precision plane while the channel is unchanged since the estimate (it
-    // keeps narrow folds the quantised channel loses); else the channel itself.
-    let geometry = if let Some((plane, pw, ph)) = precise_plane(s, st.doc.id, name, &channel.surface) {
-        DepthGeometry::from_plane(canvas, &plane, pw as usize, ph as usize).map_err(|e| bad(cmd, e))?
-    } else {
-        // The channel is grayscale at the document depth; its first channel is the depth.
-        let n = channel.surface.channels().max(1);
-        let data = crate::allocation::read_region(&channel.surface, canvas, "the depth channel")?;
-        let depth: Vec<f32> = if n == 1 { data } else { data.chunks_exact(n).map(|c| c.first().copied().unwrap_or(0.0)).collect() };
-        DepthGeometry::new(canvas, &depth).map_err(|e| bad(cmd, e))?
-    };
-    let geometry = Arc::new(geometry);
-    s.surface_cache.depth_builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    *lock(&s.surface_cache.depth) =
-        Some(DepthEntry { doc: st.doc.id, name: name.to_string(), surface: channel.surface.clone(), area: canvas, geometry: geometry.clone() });
-    Ok(geometry)
-}
-
-/// The full-precision depth plane of channel `name` (row-major `(w, h)` over the document bounds,
-/// possibly at reduced resolution), when the channel is unchanged since the estimate.
-fn precise_plane(s: &Session, doc: DocId, name: &str, surface: &photocraft_raster::Surface) -> Option<(Arc<Vec<f32>>, u32, u32)> {
-    crate::depth_cmds::precise_depth_plane(s, doc, name, surface)
-}
-
-/// The cached depth geometry for channel `name`, if the channel's pixels are the ones it was
-/// built from. Never builds: what the brush cursor reads.
-pub(crate) fn cached_depth(s: &Session, name: &str) -> Option<Arc<DepthGeometry>> {
-    let st = s.active()?;
-    let channel = st.doc.channels.iter().find(|c| c.name == name)?;
-    let cache = lock(&s.surface_cache.depth);
-    let e = cache.as_ref()?;
-    (e.doc == st.doc.id && e.name == name && e.area == st.doc.bounds() && e.surface == channel.surface).then(|| e.geometry.clone())
 }
 
 /// A mask, an alpha channel, Quick Mask or a single colour channel: no colour to shade.
@@ -533,42 +310,23 @@ pub struct CursorShape {
     pub proj_angle: f32,
     /// 0.05..1; 1 is a round outline.
     pub proj_scale: f32,
-    /// Where the outline's centre sits from the pointer, in image pixels (y down); always 0 for
-    /// planes and depth (kept for the cursor drawing).
-    pub offset: [f32; 2],
-    /// The outline of a round computed tip bent over the depth (see [`Footprint`]): 32 distances
-    /// in image pixels at angles `k · 2π / 32` (counter-clockwise, y up). `None`: the ellipse.
-    pub outline: Option<[f32; 32]>,
 }
 
 /// What the brush cursor draws at document point `(x, y)` with a tip of radius `base_radius` while
-/// Follow Perspective and/or Follow Depth is on: the dab a stroke lays down at that point, wherever
-/// it started (sized against the map's reference scale, see [`surface_dab_shape`]), with the
-/// plane's foreshortening and the depth slope's. `None` when neither applies: the options are off,
-/// the document has no planes for this canvas, the point is off every plane (with Follow
-/// Perspective on), or the depth is flat and unscaled there. The cursor then stays a plain round
-/// outline. Follow Depth builds the depth geometry on a cache miss (one read of the channel, kept until
-/// its content changes); without a usable channel the outline stays plain. The shading field is
+/// Follow Perspective is on: the dab a stroke lays down at that point, wherever it started (sized
+/// against the map's reference scale, see [`surface_dab_shape`]), with the plane's foreshortening.
+/// `None` when it does not apply: the option is off, the document has no planes for this canvas, or
+/// the point is off every plane. The cursor then stays a plain round outline. The shading field is
 /// never built here.
 pub fn brush_cursor_shape(s: &mut Session, x: f64, y: f64, base_radius: f32) -> Option<CursorShape> {
-    let opts = s.tools.brush.surface.clone();
-    if !(opts.perspective || opts.depth) {
+    if !s.tools.brush.surface.perspective {
         return None;
     }
-    let persp = if opts.perspective { Some(plane_map(s)?) } else { None };
-    let depth = if opts.depth {
-        // A missing or unusable channel leaves the outline plain; the first hover builds the grid.
-        let geometry = depth_geometry(s, CURSOR_SHAPE, &opts.depth_channel).ok()?;
-        Some(DepthMap::new(geometry, base_radius, opts.relief, opts.size_by_depth))
-    } else {
-        None
-    };
-    let map = make_map(persp, depth)?;
+    let map = plane_map(s)?;
     let local = map.local(Point::new(x, y))?;
     let anchor = map.reference_scale().unwrap_or(local.scale);
     let (radius, proj_angle, proj_scale) = surface_dab_shape(base_radius, Some(anchor), &local);
-    let outline = map.footprint(Point::new(x, y), radius, &local).filter(Footprint::is_valid).map(|f| f.rays);
-    Some(CursorShape { radius, proj_angle, proj_scale, offset: local.offset, outline })
+    Some(CursorShape { radius, proj_angle, proj_scale })
 }
 
 fn cursor_shape(s: &mut Session, p: &Value) -> Result<Value> {
@@ -579,7 +337,7 @@ fn cursor_shape(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y) = (coord("x")?, coord("y")?);
     let base = (s.tools.brush.size / 2.0).max(0.5);
     Ok(match brush_cursor_shape(s, x, y, base) {
-        Some(c) => json!({"onPlane": true, "radius": c.radius, "projAngle": c.proj_angle, "projScale": c.proj_scale, "offset": c.offset, "outline": c.outline}),
+        Some(c) => json!({"onPlane": true, "radius": c.radius, "projAngle": c.proj_angle, "projScale": c.proj_scale}),
         None => json!({"onPlane": false}),
     })
 }
@@ -590,7 +348,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Brush Cursor Shape",
         menu: &[],
         shortcut: None,
-        params: r##"{"x":px,"y":px} → {"onPlane":true,"radius":px,"projAngle":radians (counter-clockwise, y up),"projScale":0.05..1,"offset":[dx,dy] px (y down),"outline":32 distances px at angles k·2π/32 (counter-clockwise, y up) | null} | {"onPlane":false}: the brush cursor's outline at that point while the brush's Surface › Follow Perspective or Follow Depth is on (the dab a stroke lays down at that point)"##,
+        params: r##"{"x":px,"y":px} → {"onPlane":true,"radius":px,"projAngle":radians (counter-clockwise, y up),"projScale":0.05..1} | {"onPlane":false}: the brush cursor's outline at that point while the brush's Surface › Follow Perspective is on (the dab a stroke lays down at that point)"##,
         enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
         run: cursor_shape,
         journal: false,

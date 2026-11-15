@@ -82,16 +82,6 @@ impl Headless {
         }
     }
 
-    /// Lets this session use the person's shared AI settings (`CRAFT_AI_DIR` moves them), so
-    /// `image.estimateDepth` runs where the tool is set up. Off by default: a session never reads
-    /// them unless its frontend asks (the CLI does; tests do not).
-    #[must_use]
-    pub fn with_ai_tools(self) -> Self {
-        // A failure leaves Estimate Depth off with that reason.
-        let _ = self.session.depth.ai.use_standard_host();
-        self
-    }
-
     /// Create an automation session with capability-scoped file access.
     /// Each step of `actions.play` is checked with [`authorize_engine_step`].
     pub fn with_workspace(workspace: AuthorizedWorkspace) -> Self {

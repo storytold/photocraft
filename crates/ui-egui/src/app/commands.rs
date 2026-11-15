@@ -383,8 +383,6 @@ impl PhotocraftApp {
         crate::crop_ui::cancel_stale(self);
         crate::distort_ui::cancel_stale(self);
         crate::perspective_crop_ui::cancel_stale(self);
-        // The Estimate Depth setup window belongs to the document that asked.
-        crate::dialogs::depth_ui::cancel_stale(self);
         // A pen path under construction belongs to the document it was started on too.
         vector_ui::cancel_stale(self);
         let ids: Vec<DocId> = self.session.documents().iter().map(|d| d.doc.id).collect();

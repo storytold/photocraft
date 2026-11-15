@@ -44,9 +44,7 @@ pub use curve::ResponseCurve;
 pub use mip_cache::{mip_cache_bytes, purge_mip_cache};
 pub use mixer::MixerSettings;
 pub use render::{BrushContext, StrokeRenderer, UnionLive, grid_center, grid_square, render_stroke, render_stroke_clipped};
-pub use surface::{
-    FOOTPRINT_RAYS, Footprint as SurfaceFootprint, Local, SampleMode, ShadeSource, SurfaceMap, SurfaceOptions, apply_strength, surface_dab_shape,
-};
+pub use surface::{Local, SampleMode, ShadeSource, SurfaceMap, SurfaceOptions, apply_strength, surface_dab_shape};
 pub use tile::{GrayTile, StoredTile};
 
 /// One input sample. Missing stylus data defaults to "mouse": full pressure, no tilt/rotation.
@@ -113,9 +111,6 @@ pub struct Dab {
     /// Mixer Brush multipliers of Wet and Mix (Transfer › Wetness/Mix Jitter), 1 = as set.
     pub wet: f32,
     pub mix: f32,
-    /// The dab's outline bent over a surface (Follow Depth): a round computed tip is drawn inside
-    /// it and ignores `proj_*`; a sampled tip keeps its ellipse.
-    pub footprint: Option<surface::Footprint>,
 }
 
 impl Dab {
@@ -137,7 +132,6 @@ impl Dab {
             proj_scale: 1.0,
             wet: 1.0,
             mix: 1.0,
-            footprint: None,
         }
     }
 }

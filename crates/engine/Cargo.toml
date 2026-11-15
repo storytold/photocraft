@@ -46,14 +46,6 @@ semver = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tempfile = "3"
-# Estimate Depth runs the shared `estimate-depth` tool (storytold/craft-ai-integrations): the
-# model, its files and their setup live there. The AI crates are native only.
-craft-ai-client = { workspace = true }
-craft-ai-core = { workspace = true }
-# The shared store location (`CRAFT_AI_DIR`), also for the app's own setup windows.
-craft-ai-native = { workspace = true }
-# 8-bit RGB PNG of the picture sent to the tool and the 16-bit gray PNG it returns.
-png = "0.18"
 # `clock`: the local time that names History Options' snapshot on save (#2966); already in the
 # tree through rmcp. The web build has no local clock here and names it "Snapshot N".
 chrono = { workspace = true, features = ["clock"] }

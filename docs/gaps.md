@@ -262,9 +262,7 @@ what an agent can't finish alone.
 
 ### G4. Brush feel
 - **Beyond parity (2026-11-14, storytold/photocraft#14341):** surface-aware brush landed:
-  Surface Color (strength, detail, sample), Estimate Depth (the shared Craft AI tool `estimate-depth`, set up once
-  through Set up AI or the in-app setup, which asks before downloading; Fast and tiled High Quality) into a Depth channel, Follow Depth
-  (slope, size and a surface-traced outline that stops at depth edges), Follow Perspective on
+  Surface Color (strength, detail, sample), Follow Perspective on
   Vanishing Point planes saved with the document, an adaptive cursor and a paste shade for
   Vanishing Point ([details](brush-parity.md#surface-aware-brush-beyond-parity)). Open: same-size
   canvas changes not detected as stale, Mixer Brush and retouch tools not wired, PSD vanishing
@@ -502,7 +500,7 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-14 | minor | G4: surface-aware brush, beyond parity (storytold/photocraft#14341): Surface Color, Estimate Depth, Follow Depth, Follow Perspective, adaptive cursor, Vanishing Point paste shade; light painting open; no estimate changed |
+| 2026-11-14 | minor | G4: surface-aware brush, beyond parity (storytold/photocraft#14341): Surface Color, Follow Perspective, adaptive cursor, Vanishing Point paste shade; light painting open; no estimate changed |
 | 2026-11-08 | minor | G9: Units & Rulers › Column Size takes effect as the Columns width unit of Image Size and Canvas Size (#6214); preferences that do nothing 10 → 8 of 199 |
 | 2026-10-27 | minor | G5: Warp mode edits Photoshop's Cylinder warp (#4112): the Warp menu lists it after the presets, five handles set its silhouettes, edges, ellipse depths and wrap as in the reference (Bend, H and V stay greyed), and a smart object's stored cylinder opens in Warp mode as a cylinder and commits back as one; no estimate changed |
 | 2026-11-07 | minor | G14: Hasselblad 3FR/FFF, the X2D II 100C's uncompressed CFA, decodes; compressed 3FR still opens as the embedded preview |

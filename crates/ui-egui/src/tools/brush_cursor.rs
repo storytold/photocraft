@@ -91,18 +91,17 @@ pub(crate) fn pen_axes(xf: &crate::canvas::ViewXform, brush: &BrushSettings, pen
     [axes[0] * x.x + axes[1] * x.y, axes[0] * y.x + axes[1] * y.y]
 }
 
-/// The dab the surface-aware brush will lay down at `doc`: radius, foreshortening and the offset
-/// of its centre from the pointer, from the engine. `None` when neither Follow Perspective nor
-/// Follow Depth applies, the tool is not the Brush or Pencil, or nothing shapes the dab here (the
-/// cursor then stays as it is).
+/// The dab the surface-aware brush will lay down at `doc`: radius and foreshortening, from the
+/// engine. `None` when Follow Perspective does not apply, the tool is not the Brush or Pencil, or
+/// the point is off every plane (the cursor then stays as it is).
 pub(crate) fn surface_shape(app: &mut crate::PhotocraftApp, tool: crate::Tool, doc: [f64; 2]) -> Option<photocraft_engine::brush_cmds::CursorShape> {
     let o = &app.session.tools.brush.surface;
-    if !matches!(tool, crate::Tool::Brush | crate::Tool::Pencil) || !(o.perspective || o.depth) {
+    if !matches!(tool, crate::Tool::Brush | crate::Tool::Pencil) || !o.perspective {
         return None;
     }
     let base = app.session.tools.brush.size / 2.0;
     photocraft_engine::brush_cmds::brush_cursor_shape(&mut app.session, doc[0], doc[1], base)
-        .filter(|c| c.radius.is_finite() && c.radius > 0.0 && c.proj_angle.is_finite() && c.proj_scale.is_finite() && c.offset.iter().all(|v| v.is_finite()))
+        .filter(|c| c.radius.is_finite() && c.radius > 0.0 && c.proj_angle.is_finite() && c.proj_scale.is_finite())
 }
 
 /// [`surface_shape`] for the cursor under the painting-cursor preference `pref` (only the tip
@@ -136,9 +135,7 @@ pub(crate) fn surface_axes(xf: &crate::canvas::ViewXform, radius: f32, proj_angl
     [axes[0] * x.x + axes[1] * x.y, axes[0] * y.x + axes[1] * y.y]
 }
 
-/// The brush cursor for a dab shaped by the surface (`shape`): the outline at the dab's centre,
-/// and, when that is off the pointer (`p`, , the crosshair at the
-/// pointer joined to it by a thin line.
+/// The brush cursor for a dab shaped by the surface (`shape`): the outline of the dab's ellipse.
 pub(crate) fn surface_cursor(
     painter: &Painter,
     xf: &crate::canvas::ViewXform,
@@ -148,71 +145,10 @@ pub(crate) fn surface_cursor(
     normal: bool,
     centre: bool,
 ) -> CursorIcon {
-    let plain = photocraft_engine::brush_cmds::CursorShape { radius: brush.size / 2.0, proj_angle: 0.0, proj_scale: 1.0, offset: [0.0; 2], outline: None };
+    let plain = photocraft_engine::brush_cmds::CursorShape { radius: brush.size / 2.0, proj_angle: 0.0, proj_scale: 1.0 };
     let shape = shape.unwrap_or(plain);
     let axes = surface_axes(xf, shape.radius, shape.proj_angle, shape.proj_scale);
-    let doc = xf.to_doc(p);
-    let at = xf.to_screen(doc[0] as f32 + shape.offset[0], doc[1] as f32 + shape.offset[1]);
-    if (at - p).length() > 1.0 {
-        crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
-        let t = crate::theme::Tokens::get(painter.ctx());
-        painter.line_segment([p, at], egui::Stroke::new(1.0, t.accent));
-    }
-    // A dab bent over the depth: its own 32-point outline.
-    if let Some(ring) = bent_ring(xf, brush, &shape, normal) {
-        let extent = ring.iter().fold(0.0f32, |m, v| m.max(v.length()));
-        if extent < MIN_RADIUS {
-            return crate::tool_cursor::crosshair(painter, at, 4.0, 0.0);
-        }
-        return crate::tool_cursor::outline(painter, at, vec![ring], centre);
-    }
-    cursor(painter, at, brush, (shape.radius * xf.zoom).max(1.0), axes, normal, centre)
-}
-
-/// The outline of a dab bent over the depth, in screen vectors from its centre: for the tips the
-/// renderer bends (a computed circular one; a sampled or elliptical tip keeps its own outline),
-/// at the contour the Normal Tip preference draws (the 50 % coverage one; Full Size Tip keeps the
-/// whole outline). `None`: draw the dab's ellipse or tip outline instead.
-pub(crate) fn bent_ring(
-    xf: &crate::canvas::ViewXform,
-    brush: &BrushSettings,
-    shape: &photocraft_engine::brush_cmds::CursorShape,
-    normal: bool,
-) -> Option<Vec<Vec2>> {
-    if !photocraft_paint::render::footprint_tip(brush) {
-        return None;
-    }
-    let ring = outline_ring(xf, &shape.outline?)?;
-    Some(scale_ring(ring, brush, shape.radius * xf.zoom, normal))
-}
-
-/// `ring` (a surface outline of a dab of screen radius `radius`) at the contour `normal` asks for:
-/// the 50 % coverage one, as [`cursor`] draws a plain circle, else the full outline.
-pub(crate) fn scale_ring(ring: Vec<Vec2>, brush: &BrushSettings, radius: f32, normal: bool) -> Vec<Vec2> {
-    if !normal || !radius.is_finite() || radius <= 0.0 {
-        return ring;
-    }
-    let k = photocraft_paint::half_coverage_radius(radius, brush.hardness).max(1.0) / radius;
-    ring.into_iter().map(|v| v * k.min(1.0)).collect()
-}
-
-/// The screen vectors (from the dab centre) of the closed polygon through the rays of a surface
-/// outline (`k · 2π / 32`, counter-clockwise, y up in document pixels). `None` for a bad ray.
-pub(crate) fn outline_ring(xf: &crate::canvas::ViewXform, rays: &[f32]) -> Option<Vec<Vec2>> {
-    let n = rays.len();
-    if n < 3 || !rays.iter().all(|r| r.is_finite() && *r > 0.0) {
-        return None;
-    }
-    Some(
-        rays.iter()
-            .enumerate()
-            .map(|(k, r)| {
-                let (sn, cs) = (k as f32 * std::f32::consts::TAU / n as f32).sin_cos();
-                // Document y points down.
-                xf.map_vec(Vec2::new(r * cs, -r * sn))
-            })
-            .collect(),
-    )
+    cursor(painter, p, brush, (shape.radius * xf.zoom).max(1.0), axes, normal, centre)
 }
 
 fn shape_id() -> egui::Id {
@@ -431,44 +367,10 @@ mod tests {
         assert!(close(b[0], Vec2::new(20.0, 0.0)) && close(b[1], Vec2::new(0.0, 10.0)), "{b:?}");
     }
 
-    fn bent_shape() -> photocraft_engine::brush_cmds::CursorShape {
-        photocraft_engine::brush_cmds::CursorShape { radius: 10.0, proj_angle: 0.0, proj_scale: 1.0, offset: [0.0; 2], outline: Some([10.0; 32]) }
-    }
-
-    #[test]
-    fn the_depth_outline_is_for_computed_circular_tips_only() {
-        let xf = view(0.0, false, 1.0);
-        let shape = bent_shape();
-        let round = BrushSettings { size: 20.0, hardness: 0.5, ..Default::default() };
-        assert!(bent_ring(&xf, &round, &shape, false).is_some());
-        // The renderer keeps a sampled bitmap tip and an elliptical tip: so does the cursor.
-        let sampled = BrushSettings { tip: TipShape::Sampled(photocraft_paint::tile::GrayTile::from_fn(2, 2, |_, _| 1.0)), ..round.clone() };
-        assert!(bent_ring(&xf, &sampled, &shape, false).is_none());
-        let flat = BrushSettings { roundness: 0.3, ..round };
-        assert!(bent_ring(&xf, &flat, &shape, false).is_none());
-    }
-
-    #[test]
-    fn the_depth_outline_follows_the_normal_tip_rule() {
-        let xf = view(0.0, false, 1.0);
-        let shape = bent_shape();
-        let soft = BrushSettings { size: 20.0, hardness: 0.0, ..Default::default() };
-        let extent = |r: &[Vec2]| r.iter().fold(0.0f32, |m, v| m.max(v.length()));
-        let full = bent_ring(&xf, &soft, &shape, false).unwrap();
-        let normal = bent_ring(&xf, &soft, &shape, true).unwrap();
-        // Full Size Tip: the whole outline (10 px at zoom 2). Normal Tip: the 50 % contour, as the plain circle.
-        assert!((extent(&full) - 20.0).abs() < 1e-3, "{}", extent(&full));
-        let half = photocraft_paint::half_coverage_radius(20.0, 0.0);
-        assert!((extent(&normal) - half).abs() < 1e-3 && extent(&normal) < extent(&full) * 0.9, "{} vs {half}", extent(&normal));
-        // A hard tip has its half-coverage contour at the edge: nothing changes.
-        let hard = BrushSettings { hardness: 1.0, ..soft };
-        assert!((extent(&bent_ring(&xf, &hard, &shape, true).unwrap()) - 20.0).abs() < 0.5);
-    }
-
     #[test]
     fn surface_shape_is_none_when_follow_perspective_is_off() {
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        assert!(!app.session.tools.brush.surface.perspective && !app.session.tools.brush.surface.depth);
+        assert!(!app.session.tools.brush.surface.perspective);
         assert!(surface_shape(&mut app, crate::Tool::Brush, [10.0, 10.0]).is_none());
     }
 }

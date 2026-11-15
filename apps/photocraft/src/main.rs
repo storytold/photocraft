@@ -592,9 +592,6 @@ fn main() -> eframe::Result {
             #[cfg(not(target_os = "linux"))]
             let session = Session::new();
             PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
-            // Estimate Depth reads the person's shared AI settings (Set up AI); a failure leaves it
-            // off with that reason.
-            let _ = session.depth.ai.use_standard_host();
             let mut app = PhotocraftApp::new(session, services);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
             app.integrated_titlebar = cfg!(target_os = "macos");

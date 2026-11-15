@@ -246,19 +246,12 @@ fn process_outputs<'a>(
     let raw_ppi = s.prefs().raw_defaults.resolution;
     let action_prefs = s.prefs().actions.clone();
     let authorize = s.authorize;
-    #[cfg(not(target_arch = "wasm32"))]
-    let ai = s.depth.ai.shared();
     let mut files = Vec::new();
     let mut errors = Vec::new();
     let mut written = OutputClaims::default();
     let run = |scratch: &mut Session, out: &str| {
         // Nested commands answer to the initiating session's authorization hook.
         scratch.authorize = authorize;
-        // And use its AI layer, so an action that estimates depth works in the copy too.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            scratch.depth.ai = ai.shared();
-        }
         scratch.prefs.edit(|prefs| prefs.actions = action_prefs.clone());
         f(scratch, out).map_err(FileFailure::from)
     };
@@ -305,10 +298,6 @@ pub(super) fn process_document_copies(
         }
         let prepare = |scratch: &mut Session, _: &str| {
             scratch.authorize = s.authorize;
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                scratch.depth.ai = s.depth.ai.shared();
-            }
             scratch.prefs.edit(|prefs| *prefs = s.prefs().clone());
             scratch.add_document(state.doc.as_ref().clone(), state.path.clone());
             // The moved selection belongs to the displayed image; commit it only in the copy.
@@ -921,8 +910,6 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         save.preserve_alpha = true;
     }
     let authorize = s.authorize;
-    #[cfg(not(target_arch = "wasm32"))]
-    let ai = s.depth.ai.shared();
     let raw_ppi = super::open::raw_open_resolution(s);
     let action_prefs = s.prefs().actions.clone();
     let prefs = s.prefs.clone();
@@ -1054,13 +1041,6 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(())
                 };
                 scratch.authorize = authorize;
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    scratch.depth.ai = ai.shared();
-                }
-                // A command inside the action (Estimate Depth waits on a model) stops with this Batch.
-                // Only the cancel is shared: the scratch's progress, commit and Esc state stay its own.
-                scratch.set_inline_job_ctx(Some(ctx.child()));
                 scratch.actions = actions.clone();
                 scratch.actions.playback_steps = carried.get();
                 scratch.actions.script_steps = script_steps.get();
@@ -1612,107 +1592,5 @@ mod action_history_tests {
             assert_eq!(seen[0].name, "Prefix");
             assert_ne!(seen[0].undo_name, "Prefix");
         });
-    }
-}
-
-#[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
-mod shared_ai_tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::*;
-    use crate::actions_cmds::Action;
-    use crate::depth_cmds::ai;
-
-    fn inputs(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-        let image = photocraft_codecs::Image::from_u8(16, 16, photocraft_codecs::ChannelLayout::Rgb, vec![200; 16 * 16 * 3]).unwrap();
-        let bytes = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
-        ["a.png", "b.png"]
-            .iter()
-            .map(|name| {
-                let path = dir.join(name);
-                std::fs::write(&path, &bytes).unwrap();
-                path
-            })
-            .collect()
-    }
-
-    /// A parent with a stand-in estimator that counts its calls.
-    fn parent(calls: &Arc<AtomicUsize>) -> Session {
-        let mut s = Session::new();
-        let calls = calls.clone();
-        s.depth.ai.estimator = Some(Arc::new(move |_, w, h, _| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Ok(ai::encode_gray16(&vec![30000; (w * h) as usize], w, h))
-        }));
-        s
-    }
-
-    /// A Batch cancelled while an input's Estimate Depth waits stops that estimate at once, not
-    /// when the estimator finally answers.
-    #[test]
-    fn cancelling_a_batch_stops_an_estimate_inside_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = inputs(dir.path());
-        let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
-        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        let release_rx = std::sync::Mutex::new(release_rx);
-        let mut s = Session::new();
-        s.depth.ai.estimator = Some(Arc::new(move |_, w, h, _| {
-            let _ = entered_tx.send(());
-            // Held until the test ends; a cancel must not wait for it.
-            let _ = release_rx.lock().unwrap().recv_timeout(std::time::Duration::from_secs(60));
-            Ok(ai::encode_gray16(&vec![30000; (w * h) as usize], w, h))
-        }));
-        let steps = vec![("image.estimateDepth".to_string(), json!({"quality": "fast"}))];
-        let started = s.start("file.automate.batch", json!({"action": "Depth", "steps": steps, "input": paths, "output": dir.path().join("out")})).unwrap();
-        let crate::jobs::Started::Job(job) = started else { panic!("a Batch of two files runs in the background") };
-        entered_rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
-        let cancelled_at = std::time::Instant::now();
-        assert!(s.cancel_job(job));
-        let result = s.wait_job(job);
-        assert!(cancelled_at.elapsed() < std::time::Duration::from_secs(20), "the Batch waited for the estimator: {result:?}");
-        assert!(matches!(result, Err(EngineError::Cancelled)), "{result:?}");
-        let _ = release_tx.send(());
-    }
-
-    /// Batch and droplet copies run an action that estimates depth through the parent's AI layer.
-    #[test]
-    fn batch_and_droplet_copies_use_the_parents_ai_layer() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = inputs(dir.path());
-        let steps = vec![("image.estimateDepth".to_string(), json!({"quality": "fast"}))];
-        for case in ["batch", "droplet", "recorded steps"] {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let mut s = parent(&calls);
-            let output = dir.path().join(case);
-            let result = match case {
-                "batch" => {
-                    let index = s.actions.list.len();
-                    s.actions.list.push(Action::new("Depth", steps.clone()));
-                    s.execute("file.automate.batch", json!({"action": index, "input": paths, "output": output})).unwrap()
-                }
-                "droplet" => {
-                    let path = dir.path().join("depth.pcdroplet");
-                    s.execute("file.automate.createDroplet", json!({"path": path, "name": "Depth", "steps": steps, "output": output, "shim": false})).unwrap();
-                    s.execute("file.automate.runDroplet", json!({"droplet": path, "input": paths})).unwrap()
-                }
-                _ => s.execute("file.automate.batch", json!({"action": "Depth", "steps": steps, "input": paths, "output": output})).unwrap(),
-            };
-            assert!(result["errors"].as_array().unwrap().is_empty(), "{case}: {result}");
-            assert_eq!(result["files"].as_array().unwrap().len(), 2, "{case}: {result}");
-            assert_eq!(calls.load(Ordering::SeqCst), 2, "{case}: each copy estimated once");
-        }
-    }
-
-    /// A parent without an AI layer gives its copies none: they never read a person's settings.
-    #[test]
-    fn copies_of_a_session_without_an_ai_layer_have_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = inputs(dir.path());
-        let mut s = Session::new();
-        let steps = vec![("image.estimateDepth".to_string(), json!({"quality": "fast"}))];
-        let result = s.execute("file.automate.batch", json!({"action": "Depth", "steps": steps, "input": paths, "output": dir.path().join("out")})).unwrap();
-        assert_eq!(result["errors"].as_array().unwrap().len(), 2, "{result}");
     }
 }
