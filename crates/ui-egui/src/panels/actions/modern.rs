@@ -48,7 +48,7 @@ struct Progress {
 
 enum Delete {
     Action(Box<Action>),
-    Group(String, Vec<Action>, u64),
+    Group(super::Folder, Vec<Action>, u64),
 }
 
 /// Include backend drafts and suspended playback so layout/navigation guards cannot bypass hidden owners.
@@ -332,13 +332,13 @@ enum Operation {
     Play(Vec<usize>),
     Duplicate(Value),
     DeleteAction(usize),
-    DeleteGroup(String),
-    Assign(Box<DragAction>, String),
+    DeleteGroup(super::Folder),
+    Assign(Box<DragAction>, super::Folder),
     NewGroup,
 }
 
 /// Resolve a row or group menu choice to an operation the panel can dispatch.
-fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&str>, play: Vec<usize>) -> Option<Operation> {
+fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&super::Folder>, play: Vec<usize>) -> Option<Operation> {
     let mut operation = None;
     if ui.add_enabled(action.is_some(), egui::Button::new(tl!("Edit Action"))).clicked() {
         operation = action.map(Operation::Edit);
@@ -352,14 +352,14 @@ fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&str>, play: 
     let duplicate = if group.is_some() { tl!("Duplicate group") } else { tl!("Duplicate action") };
     if ui.button(duplicate).clicked() {
         operation = Some(Operation::Duplicate(match group {
-            Some(group) => json!({"set":group}),
+            Some(group) => json!({"set":group.name,"setSlot":group.slot}),
             None => json!({"action":action}),
         }));
     }
     let delete = if group.is_some() { tl!("Delete group") } else { tl!("Delete action") };
     if ui.button(delete).clicked() {
         operation = match group {
-            Some(group) => Some(Operation::DeleteGroup(group.into())),
+            Some(group) => Some(Operation::DeleteGroup(group.clone())),
             None => action.map(Operation::DeleteAction),
         };
     }
@@ -421,6 +421,7 @@ fn action_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, action: 
 
 /// Give playback and the owned editor precedence, then dispatch list operations after drawing.
 pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if app.ui.actions.slot_revision != app.session.actions.set_rows_revision { super::library_slots_changed(app); }
     if let Err(error) = attach(app) {
         report(app, Err(error));
     }
@@ -472,33 +473,33 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let list = app.session.actions.list.clone();
     let query = app.ui.actions.search.to_lowercase();
     let matches = |action: &Action| action.name.to_lowercase().contains(&query);
-    let groups = photocraft_engine::actions_edit_cmds::set_names(&app.session);
+    let groups = group_folders(&app.session);
     egui::ScrollArea::vertical().id_salt("modern-actions-list").show(ui, |ui| {
-        for group in groups.iter().filter(|group| group.as_str() != photocraft_engine::atn_cmds::UNGROUPED_SET) {
+        for group in groups.iter().filter(|group| group.slot.is_some() || group.name != photocraft_engine::atn_cmds::UNGROUPED_SET) {
             let members: Vec<_> = list
                 .iter()
                 .enumerate()
-                .filter(|(_, action)| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == group)
+                .filter(|(_, action)| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == group.name && action.set_slot == group.slot)
                 .map(|(index, _)| index)
                 .collect();
             if !query.is_empty() && !members.iter().any(|&index| matches(&list[index])) {
                 continue;
             }
-            let collapsed = app.ui.actions.collapsed_sets.contains(group);
-            let header = ui.horizontal(|ui| {
-                if icons::button(ui, if collapsed { "chevron-right" } else { "chevron-down" }, 20.0, false, group).clicked() {
-                    if collapsed {
-                        app.ui.actions.collapsed_sets.retain(|name| name != group);
-                    } else {
-                        app.ui.actions.collapsed_sets.push(group.clone());
-                    }
+            let collapsed = group.slot.map_or_else(|| app.ui.actions.collapsed_sets.contains(&group.name), |slot| app.ui.actions.collapsed_set_slots.contains(&slot));
+            let header = ui.push_id((&group.name, group.slot), |ui| ui.horizontal(|ui| {
+                if icons::button(ui, if collapsed { "chevron-right" } else { "chevron-down" }, 20.0, false, &group.name).clicked() {
+                    if let Some(slot) = group.slot {
+                        if collapsed { app.ui.actions.collapsed_set_slots.retain(|row| *row != slot); }
+                        else { app.ui.actions.collapsed_set_slots.push(slot); }
+                    } else if collapsed { app.ui.actions.collapsed_sets.retain(|name| name != &group.name); }
+                    else { app.ui.actions.collapsed_sets.push(group.name.clone()); }
                 }
-                ui.strong(group);
+                ui.strong(&group.name);
                 let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
                 egui::Popup::menu(&menu).show(|ui| {
                     operation = context(ui, None, Some(group), members.clone()).or(operation.take());
                 });
-            });
+            }));
             if let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
                 operation = Some(Operation::Assign(Box::new((*drag).clone()), group.clone()));
             }
@@ -516,9 +517,9 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let ungrouped: Vec<_> = list
             .iter()
             .enumerate()
-            .filter(|(_, action)| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == photocraft_engine::atn_cmds::UNGROUPED_SET)
+            .filter(|(_, action)| action.set_slot.is_none() && photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == photocraft_engine::atn_cmds::UNGROUPED_SET)
             .collect();
-        let empty_ungrouped = ungrouped.is_empty() && groups.iter().any(|group| group == photocraft_engine::atn_cmds::UNGROUPED_SET);
+        let empty_ungrouped = ungrouped.is_empty() && groups.iter().any(|group| group.slot.is_none() && group.name == photocraft_engine::atn_cmds::UNGROUPED_SET);
         if !ungrouped.is_empty() || empty_ungrouped {
             ui.separator();
         }
@@ -533,11 +534,11 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.strong(set_label(photocraft_engine::atn_cmds::UNGROUPED_SET));
                 let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
                 egui::Popup::menu(&menu).show(|ui| {
-                    operation = context(ui, None, Some(photocraft_engine::atn_cmds::UNGROUPED_SET), Vec::new()).or(operation.take());
+                    operation = context(ui, None, Some(&super::Folder { name: photocraft_engine::atn_cmds::UNGROUPED_SET.into(), slot: None }), Vec::new()).or(operation.take());
                 });
             });
             if let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
-                operation = Some(Operation::Assign(Box::new((*drag).clone()), photocraft_engine::atn_cmds::UNGROUPED_SET.to_string()));
+                operation = Some(Operation::Assign(Box::new((*drag).clone()), super::Folder { name: photocraft_engine::atn_cmds::UNGROUPED_SET.into(), slot: None }));
             }
         }
         if list.is_empty() {
@@ -552,7 +553,7 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let result = match operation {
             Operation::New => {
                 let set = app.ui.actions.selected_set.clone();
-                open(app, json!({"set":set}))
+                open(app, json!({"set":set,"setSlot":app.ui.actions.selected_set_slot}))
             }
             Operation::Edit(index) => open(app, json!({"action":index})),
             Operation::Play(indices) => play_library(app, &indices),
@@ -563,7 +564,7 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if app.session.actions.list.get(drag.index) != Some(&drag.source) {
                     Err(tl!("The dragged action changed; drag it again").into())
                 } else {
-                    app.run("actions.assignSet", json!({"action":drag.index,"set":group}))
+                    app.run("actions.assignSet", json!({"action":drag.index,"set":group.name,"setSlot":group.slot}))
                 }
             }
             Operation::NewGroup => new_group(app),
@@ -621,12 +622,13 @@ fn start_library(app: &mut PhotocraftApp, indices: &[usize]) -> Result<Value, St
 fn start_library_with_gate(app: &mut PhotocraftApp, indices: &[usize], captured: Option<Gate>) -> Result<Value, String> {
     let gate = super::continuation_gate(captured, effective_gate(app))?;
     let Some((&index, rest)) = indices.split_first() else { return Ok(json!({"ran":0})) };
-    let then = rest
+    let mut then = rest
         .iter()
         .map(|&index| app.session.actions.list.get(index).cloned().ok_or("The selected action no longer exists".to_string()))
         .collect::<Result<Vec<_>, _>>()?;
-    let frame = Frame::library(&app.session, &json!({"action":index}))?;
     let (_, _, owner) = actions_cmds::playback::Owner::library(&mut app.session, &json!({"action":index})).map_err(|error| error.to_string())?;
+    for (snapshot, &row) in then.iter_mut().zip(rest) { *snapshot = app.session.actions.list[row].clone(); }
+    let frame = match Frame::library(&app.session, &json!({"action":index})) { Ok(frame) => frame, Err(error) => { owner.finish(&mut app.session); return Err(error); } };
     queue(app, frame, owner, then, gate)
 }
 
@@ -900,7 +902,7 @@ pub(crate) fn owns_delete(fields: &serde_json::Map<String, Value>) -> bool {
 }
 
 /// Capture the selected definition or group revision and authorization gate before opening its delete question.
-fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<String>) -> Result<Value, String> {
+fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<super::Folder>) -> Result<Value, String> {
     if app.actions_runtime.delete.is_some() {
         return Err("Answer the open delete question first".into());
     }
@@ -909,7 +911,7 @@ fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<Strin
     }
     let (target, message, label) = match group {
         Some(group) => {
-            if !photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(&group) {
+            if !group_exists(&app.session, &group) {
                 return Err("The selected group no longer exists".into());
             }
             let members = app
@@ -917,10 +919,10 @@ fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<Strin
                 .actions
                 .list
                 .iter()
-                .filter(|action| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == group)
+                .filter(|action| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == group.name && action.set_slot == group.slot)
                 .cloned()
                 .collect();
-            let message = crate::i18n::fmt(tl!("Delete the group \"{name}\"?"), &[("name", &group)]);
+            let message = crate::i18n::fmt(tl!("Delete the group \"{name}\"?"), &[("name", &group.name)]);
             (Delete::Group(group, members, app.session.actions.rev), message, "Delete group")
         }
         None => {
@@ -971,13 +973,13 @@ pub(crate) fn delete_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<S
                 .actions
                 .list
                 .iter()
-                .filter(|action| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == group)
+                .filter(|action| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == group.name && action.set_slot == group.slot)
                 .cloned()
                 .collect();
-            if app.session.actions.rev != revision || current != members || !photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(&group) {
+            if app.session.actions.rev != revision || current != members || !group_exists(&app.session, &group) {
                 return Err("The selected group changed; select it again".into());
             }
-            json!({"set":group})
+            json!({"set":group.name,"setSlot":group.slot})
         }
     };
     let gate = deferred_gate(app, gate)?;
@@ -989,6 +991,7 @@ pub(crate) fn delete_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<S
         app.ui.actions.selected = None;
         app.ui.actions.selected_step = None;
         app.ui.actions.selected_set = None;
+        app.ui.actions.selected_set_slot = None;
     }
     result
 }
@@ -1000,3 +1003,13 @@ mod tests;
 #[cfg(test)]
 #[path = "deferred_policy_tests.rs"]
 mod deferred_policy_tests;
+
+
+fn group_folders(session: &photocraft_engine::Session) -> Vec<super::Folder> {
+    let mut names = std::collections::HashSet::new();
+    let mut groups: Vec<_> = session.actions.list.iter().filter(|action| action.set_slot.is_none()).map(|action| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref())).chain(session.actions.sets.iter().map(String::as_str)).filter(|name| names.insert(*name)).map(|name| super::Folder { name: name.into(), slot: None }).collect();
+    if photocraft_engine::actions_edit_cmds::set_names(session).iter().any(|name| name == photocraft_engine::atn_cmds::UNGROUPED_SET) && !groups.iter().any(|group| group.slot.is_none() && group.name == photocraft_engine::atn_cmds::UNGROUPED_SET) { groups.push(super::Folder { name: photocraft_engine::atn_cmds::UNGROUPED_SET.into(), slot: None }); }
+    groups.extend(session.actions.set_rows.iter().enumerate().map(|(slot, name)| super::Folder { name: name.clone(), slot: Some(slot) }));
+    groups
+}
+fn group_exists(session: &photocraft_engine::Session, group: &super::Folder) -> bool { group_folders(session).contains(group) }

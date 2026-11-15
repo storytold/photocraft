@@ -76,10 +76,25 @@ fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<Va
     Ok(Some(Owner { serial, take: s.actions.take, automation: s.authorize.is_some(), destination, preview, call }))
 }
 
+/// Bind the same-caption target before recording its call; shell leases also bind the recorder.
+pub(super) fn prepare_library(s: &mut Session, params: &Value, shell: bool) -> Result<(usize, Action, usize)> {
+    if shell && s.has_jobs() { return Err(bad("actions.play", "finish the running jobs before suspending capture")); }
+    super::flush_recording(s)?;
+    let (row, mut action, from) = super::playback_plan_at(s, params)?;
+    if shell && let Some((_, owner)) = s.actions.recording {
+        let id = super::prepare_action_id(&s.actions.list, owner)?; super::commit_action_id(s, owner, id)?;
+        action = s.actions.list[row].clone();
+    }
+    if s.actions.recording_active() && s.actions.list.iter().filter(|candidate| candidate.name == action.name).take(2).count() > 1 {
+        let id = super::prepare_action_id(&s.actions.list, row)?; super::commit_action_id(s, row, id.clone())?; action.action_id = Some(id);
+    }
+    Ok((row, action, from))
+}
+
 /// Resolve an ordinary named library call and suspend either recording destination once.
 pub fn library(s: &mut Session, params: &Value) -> Result<(Arc<Action>, usize, Option<Owner>)> {
     admit(s, "actions.play")?;
-    let (row, action, from) = super::playback_plan_at(s, params)?;
+    let (row, action, from) = prepare_library(s, params, true)?;
     let target = super::playback_target(s, row).ok_or_else(|| bad("actions.play", "the selected action no longer exists"))?;
     let call = super::recorded_target_for(s, &action, from, &target);
     let owner = suspend(s, None, Some(call), false)?;
@@ -104,7 +119,7 @@ impl Owner {
     /// A frame-spanning library call needs the same lease even without an active recorder.
     pub fn library(s: &mut Session, params: &Value) -> Result<(Arc<Action>, usize, Self)> {
         admit(s, "actions.play")?;
-        let (row, action, from) = super::playback_plan_at(s, params)?;
+        let (row, action, from) = prepare_library(s, params, true)?;
         let target = super::playback_target(s, row).ok_or_else(|| bad("actions.play", "the selected action no longer exists"))?;
         let call = super::recorded_target_for(s, &action, from, &target);
         let owner = suspend(s, None, Some(call), true)?.ok_or_else(|| bad("actions.play", "playback ownership is unavailable"))?;

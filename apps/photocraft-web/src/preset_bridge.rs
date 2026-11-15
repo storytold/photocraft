@@ -5,73 +5,139 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use photocraft_engine::{
     Session,
-    preset_store::{
-        self, ACTIONS_FILE, ActionsMigration, INDEX_FILE, LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES, MAX_GROUP_BYTES, MAX_GROUPS, MAX_INDEX_BYTES,
-        MAX_PATTERNS_BYTES, MAX_PRESETS_PER_GROUP, MAX_STORE_BYTES, MAX_TIP_BYTES, MIGRATED_ACTIONS_FILE, PATTERNS_FILE, PresetBackend,
-    },
+    actions_cmds::{ActionState, is_action_key},
+    preset_store::{self, PresetBackend, *},
 };
+use serde_json::{Value, json};
 
-/// A changed migration tuple must hold Actions without blocking unrelated preset writes.
-#[derive(Clone, Debug)]
-pub enum WriteError {
-    Failed(String),
-    Stale(String),
-}
-impl From<String> for WriteError {
-    fn from(message: String) -> Self {
-        Self::Failed(message)
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActionKeys(BTreeMap<String, String>, BTreeMap<String, Vec<String>>);
+
+impl ActionKeys {
+    pub fn from_preferences(prefs: &photocraft_engine::prefs::Preferences) -> Self {
+        Self(
+            prefs.shortcuts.iter().filter(|(key, _)| is_action_key(key)).map(|(key, value)| (key.clone(), value.clone())).collect(),
+            prefs.alternate_shortcuts.iter().filter(|(key, _)| is_action_key(key)).map(|(key, value)| (key.clone(), value.clone())).collect(),
+        )
     }
-}
-impl From<&str> for WriteError {
-    fn from(message: &str) -> Self {
-        Self::Failed(message.into())
+
+    pub fn from_legacy(prefs: &Value) -> Self {
+        Self(
+            action_entries(prefs, "shortcuts").filter_map(|(key, value)| Some((key.clone(), value.as_str()?.into()))).collect(),
+            action_entries(prefs, "alternateShortcuts").filter_map(|(key, value)| Some((key.clone(), serde_json::from_value(value.clone()).ok()?))).collect(),
+        )
     }
-}
-impl std::fmt::Display for WriteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Failed(message) | Self::Stale(message) => f.write_str(message),
+
+    pub fn encode(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(&(&self.0, &self.1)).map_err(|e| e.to_string())
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, String> {
+        let (primary, alternate) = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let keys = Self(primary, alternate);
+        if !keys.0.keys().chain(keys.1.keys()).all(|key| is_action_key(key)) {
+            return Err("Invalid browser Action shortcuts".into());
         }
+        Ok(keys)
+    }
+
+    pub fn overlay(&self, prefs: &mut Value) -> Result<(), String> {
+        replace_action_keys(prefs, &json!({"shortcuts": self.0, "alternateShortcuts": self.1}))
     }
 }
 
-pub type Files = BTreeMap<String, Option<Arc<[u8]>>>;
-#[derive(Clone)]
+fn action_entries<'a>(prefs: &'a Value, section: &str) -> impl Iterator<Item = (&'a String, &'a Value)> {
+    prefs.get(section).and_then(Value::as_object).into_iter().flatten().filter(|(key, _)| is_action_key(key))
+}
+
+/// Keep the pre-migration Action keys in localStorage while ordinary preferences are saved.
+pub fn replace_action_keys(prefs: &mut Value, source: &Value) -> Result<(), String> {
+    let object = prefs.as_object_mut().ok_or("Invalid browser preferences")?;
+    for section in ["shortcuts", "alternateShortcuts"] {
+        let bindings = object.entry(section).or_insert_with(|| json!({}));
+        let bindings = bindings.as_object_mut().ok_or("Invalid browser shortcut map")?;
+        bindings.retain(|key, _| !is_action_key(key));
+        bindings.extend(action_entries(source, section).map(|(key, value)| (key.clone(), value.clone())));
+    }
+    Ok(())
+}
+
+/// Exact definitions and optional v2 paired keys whose retirement one transaction owns.
+#[derive(Clone, Debug)]
 pub struct Migration {
     pub legacy: Arc<[u8]>,
     pub atn: Arc<[u8]>,
     pub published: bool,
+    pub legacy_pair: Option<(u64, ActionKeys)>,
+    pub keys: ActionKeys,
 }
 impl Migration {
-    /// Called only with bytes read under the writer's single readwrite transaction.
+    /// Byte identity alone is insufficient for a legacy v2 paired record.
+    pub fn validate_pairs(&self, action: &ActionWrite, committed: bool, atn: Option<(u64, Option<ActionKeys>)>, legacy: Option<(u64, ActionKeys)>, backup: Option<(u64, ActionKeys)>) -> Result<(), WriteError> {
+        let matching = if committed {
+            atn == Some((action.revision, Some(action.keys.clone()))) && backup == self.legacy_pair
+        } else {
+            legacy == self.legacy_pair && atn.map_or(action.base == 0, |(revision, keys)| revision == action.base && keys.as_ref().is_none_or(|keys| keys == &self.keys))
+        };
+        if !matching { return Err(WriteError::Stale("Actions migration generation or shortcuts changed; all records retained unchanged. Reopen this tab.".into())); }
+        Ok(())
+    }
     pub fn already_committed(&self, atn: Option<&[u8]>, legacy: Option<&[u8]>, backup: Option<&[u8]>) -> Result<bool, WriteError> {
-        if atn == Some(self.atn.as_ref()) && legacy.is_none() && backup == Some(self.legacy.as_ref()) {
-            return Ok(true);
-        }
-        if legacy == Some(self.legacy.as_ref()) && backup.is_none() && atn == self.published.then_some(self.atn.as_ref()) {
-            return Ok(false);
-        }
+        if atn == Some(self.atn.as_ref()) && legacy.is_none() && backup == Some(self.legacy.as_ref()) { return Ok(true); }
+        if legacy == Some(self.legacy.as_ref()) && backup.is_none() && atn == self.published.then_some(self.atn.as_ref()) { return Ok(false); }
         Err(WriteError::Stale("Actions migration records changed; original, ATN and backup retained unchanged. Reopen this tab before saving Actions.".into()))
     }
 }
+
 #[derive(Clone)]
-pub struct Batch {
-    pub files: Files,
+pub struct ActionWrite {
+    pub base: u64,
+    pub revision: u64,
+    pub definitions: Option<Arc<[u8]>>,
+    pub keys: ActionKeys,
     pub migration: Option<Migration>,
 }
-impl std::ops::Deref for Batch {
-    type Target = Files;
-    fn deref(&self) -> &Files {
-        &self.files
+
+#[derive(Clone)]
+pub enum Batch {
+    Files(BTreeMap<String, Option<Arc<[u8]>>>),
+    Actions(ActionWrite),
+}
+
+#[derive(Clone, Debug)]
+pub enum WriteError {
+    Aborted(String),
+    Stale(String),
+    Uncertain(String),
+    Blocked(String),
+}
+
+impl WriteError {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Aborted(message) | Self::Stale(message) | Self::Uncertain(message) | Self::Blocked(message) => message,
+        }
     }
 }
-impl<'a> IntoIterator for &'a Batch {
-    type Item = (&'a String, &'a Option<Arc<[u8]>>);
-    type IntoIter = std::collections::btree_map::Iter<'a, String, Option<Arc<[u8]>>>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.files.iter()
+
+impl From<&str> for WriteError { fn from(message: &str) -> Self { Self::Aborted(message.into()) } }
+
+impl From<String> for WriteError {
+    fn from(message: String) -> Self {
+        Self::Aborted(message)
     }
 }
+
+pub enum ActionRecovery {
+    Reopen,
+    Preserve,
+}
+
+pub enum SaveWarning {
+    Actions(String, Option<ActionRecovery>),
+    Presets(String),
+}
+
 /// Three sampled images per preset (tip, dual tip, texture), plus group/index/action/pattern records.
 pub const MAX_RECORDS: usize = MAX_GROUPS + MAX_PRESETS_PER_GROUP * 3 + 5;
 
@@ -81,9 +147,17 @@ struct State {
     bytes: u64,
     dirty: BTreeSet<String>,
     writing: bool,
+    unavailable: bool,
+    actions_unsynced: bool,
+    verified_actions_rev: Option<u64>,
+    action_quarantine: Option<String>,
+    action_error: Option<WriteError>,
+    action_revision: u64,
+    legacy_pair: Option<(u64, ActionKeys)>,
     migration: Option<Migration>,
+    committed_keys: ActionKeys,
+    current_keys: ActionKeys,
     error: Option<String>,
-    action_error: Option<String>,
     rejected: BTreeMap<String, String>,
     preserve_tips: bool,
 }
@@ -91,10 +165,12 @@ struct State {
 #[derive(Clone, Default)]
 pub struct Bridge(Arc<Mutex<State>>);
 
-/// Attach the memory-backed library while protecting shared tips if startup found unreadable records.
 pub fn session(backend: Bridge) -> (Session, Vec<String>) {
     let mut session = Session::new();
     let opened = preset_store::open(Box::new(backend.clone()));
+    if opened.store.actions_load_failed() {
+        backend.quarantine_actions("Browser Actions definitions could not be loaded".into());
+    }
     // An unreadable group may reference any tip, including one shared with a good group.
     // Keep all tips until the damaged library can be recovered; unrelated edits still save.
     backend.state().preserve_tips = !opened.warnings.is_empty();
@@ -123,7 +199,6 @@ impl Bridge {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Validate per-record, total-byte and record-count bounds before changing the memory inventory.
     fn insert(s: &mut State, name: &str, bytes: &[u8]) -> Result<(), String> {
         if bytes.len() as u64 > record_limit(name)? {
             return Err(format!("{name}: preset record too large"));
@@ -134,94 +209,161 @@ impl Bridge {
             return Err("browser preset store is full".into());
         }
         s.files.insert(name.to_string(), Arc::from(bytes));
+        if name == ACTIONS_FILE { s.verified_actions_rev = None; }
         s.bytes = size;
         Ok(())
     }
 
-    /// Hydrate a validated startup record without scheduling it as an edit for the browser writer.
     pub fn load(&self, name: &str, bytes: Vec<u8>) -> Result<(), String> {
         Self::insert(&mut self.state(), name, &bytes)
     }
 
-    /// Take one pending batch, keeping the original migration bytes fixed across retries.
-    /// Newer live ATN edits stay dirty until that migration is acknowledged.
-    pub fn begin(&self) -> Option<Batch> {
+    pub fn load_action_keys(&self, revision: u64, keys: ActionKeys) {
         let mut s = self.state();
-        if s.writing || s.error.is_some() || s.dirty.is_empty() {
-            return None;
-        }
-        let actions_held = s.action_error.is_some();
-        let names: Vec<_> = s
-            .dirty
-            .iter()
-            .filter(|name| !actions_held || !matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE))
-            .cloned()
-            .collect();
-        if names.is_empty() {
-            return None;
-        }
-        s.writing = true;
-        let mut files: Files = names
-            .into_iter()
-            .map(|name| {
-                s.dirty.remove(&name);
-                let bytes = s.files.get(&name).cloned();
-                (name, bytes)
-            })
-            .collect();
-        // An unrelated batch cannot borrow a quarantined migration's retirement authority.
-        let migration = if actions_held { None } else { s.migration.clone() };
-        if let Some(migration) = migration.clone() {
-            // Every ambiguous retry has the same exact identity. Newer live edits wait
-            // for this migration's acknowledgement, then get their own ordinary batch.
-            if s.files.get(ACTIONS_FILE).map(AsRef::as_ref) != Some(migration.atn.as_ref()) {
-                s.dirty.insert(ACTIONS_FILE.into());
-            }
-            files.insert(ACTIONS_FILE.into(), Some(migration.atn));
-            files.insert(MIGRATED_ACTIONS_FILE.into(), Some(migration.legacy));
-            files.insert(LEGACY_ACTIONS_FILE.into(), None);
-        }
-        Some(Batch { files, migration })
+        s.action_revision = revision;
+        s.committed_keys = keys.clone();
+        s.current_keys = keys.clone();
+        if revision == 0 && !s.writing { if let Some(migration) = &mut s.migration { migration.keys = keys; } }
     }
 
-    /// Apply a transaction completion result without clearing edits staged while it ran.
-    /// Failure requeues the batch; only success retires the migration identity.
+    pub fn load_legacy_action_keys(&self, revision: u64, keys: ActionKeys) {
+        let mut s = self.state();
+        s.legacy_pair = Some((revision, keys.clone()));
+        if s.action_revision == 0 { s.current_keys = keys.clone(); s.committed_keys = keys; }
+    }
+
+    pub fn committed_action_keys(&self) -> Option<ActionKeys> {
+        let s = self.state();
+        (s.action_quarantine.is_none() && (s.action_revision != 0 || s.legacy_pair.is_some())).then(|| s.committed_keys.clone())
+    }
+
+    pub fn quarantine_actions(&self, error: String) {
+        let mut s = self.state();
+        s.action_quarantine.get_or_insert(error);
+        s.committed_keys = ActionKeys::default();
+        s.current_keys = ActionKeys::default();
+    }
+
+    pub fn stage_action_keys(&self, keys: ActionKeys) {
+        self.state().current_keys = keys;
+    }
+
+    pub fn verify_action_definitions(&self, actions: &ActionState) {
+        let mut s = self.state();
+        if s.verified_actions_rev == Some(actions.rev) { return; }
+        s.actions_unsynced = match s.files.get(ACTIONS_FILE) {
+            Some(bytes) => !photocraft_engine::actions_cmds::matches_library_definition(bytes, actions),
+            None => !(actions.list.is_empty() && actions.sets.is_empty() && actions.set_rows.is_empty()),
+        };
+        if !s.actions_unsynced { s.verified_actions_rev = Some(actions.rev); }
+    }
+
+    pub fn begin(&self) -> Option<Batch> {
+        let mut s = self.state();
+        if s.writing || s.unavailable {
+            return None;
+        }
+        // A stale or unconfirmed Action generation must not hold brush and pattern edits.
+        if s.error.is_none() && s.dirty.iter().any(|name| !matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE)) {
+            let files = s.dirty.iter().filter(|name| !matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE)).map(|name| (name.clone(), s.files.get(name).cloned())).collect();
+            s.dirty.retain(|name| matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE));
+            s.writing = true;
+            return Some(Batch::Files(files));
+        }
+        // A refused definition write must never be paired with newer bindings and old definitions.
+        if s.actions_unsynced
+            || s.action_quarantine.is_some()
+            || s.action_error.is_some()
+            || s.rejected.contains_key(ACTIONS_FILE)
+            || (!s.dirty.contains(ACTIONS_FILE) && s.current_keys == s.committed_keys)
+        {
+            return None;
+        }
+        let Some(revision) = s.action_revision.checked_add(1) else {
+            s.action_error = Some(WriteError::Blocked("Browser Action revision limit reached".into()));
+            return None;
+        };
+        s.dirty.remove(ACTIONS_FILE);
+        s.writing = true;
+        let migration = s.migration.clone();
+        let definitions = migration.as_ref().map(|migration| migration.atn.clone()).or_else(|| s.files.get(ACTIONS_FILE).cloned());
+        let keys = migration.as_ref().map(|migration| migration.keys.clone()).unwrap_or_else(|| s.current_keys.clone());
+        if migration.is_some() {
+            s.dirty.remove(LEGACY_ACTIONS_FILE); s.dirty.remove(MIGRATED_ACTIONS_FILE);
+            if definitions != s.files.get(ACTIONS_FILE).cloned() { s.dirty.insert(ACTIONS_FILE.into()); }
+        }
+        Some(Batch::Actions(ActionWrite { base: s.action_revision, revision, definitions, keys, migration }))
+    }
+
     pub fn finish(&self, batch: Batch, result: Result<(), WriteError>) {
         let mut s = self.state();
         s.writing = false;
-        if let Err(error) = result {
-            // Requeue the whole migration and current bytes, including edits made in flight.
-            s.dirty.extend(batch.files.into_keys());
-            match error {
-                WriteError::Stale(message) => s.action_error = Some(message),
-                WriteError::Failed(message) => s.error = Some(message),
+        match (batch, result) {
+            (Batch::Files(files), Err(error)) => {
+                // Requeue names, never old bytes: edits/deletes made during the write win.
+                s.dirty.extend(files.into_keys());
+                s.error = Some(error.message().into());
             }
-        } else if batch.migration.is_some() {
-            // Only transaction completion retires the pending migration. Any newer ATN edit
-            // remains in dirty and gets its own acknowledged transaction.
-            s.migration = None;
+            (Batch::Actions(_), Err(error)) => {
+                s.dirty.insert(ACTIONS_FILE.into());
+                s.action_error = Some(error);
+            }
+            (Batch::Actions(actions), Ok(())) => {
+                s.action_revision = actions.revision;
+                s.committed_keys = actions.keys;
+                if actions.migration.is_some() { s.migration = None; s.legacy_pair = None; }
+            }
+            (Batch::Files(_), Ok(())) => {}
         }
     }
 
     pub fn unavailable(&self, error: String) {
-        self.state().error = Some(error);
+        let mut s = self.state();
+        s.unavailable = true;
+        s.error = Some(error);
     }
 
-    /// Retry transient storage failures; a stale Actions snapshot requires a fresh startup.
     pub fn retry(&self) {
-        self.state().error = None;
+        let mut s = self.state();
+        if !s.unavailable {
+            s.error = None;
+        }
+        // An abort has no durable effect. Stale and uncertain writes require a fresh read.
+        if matches!(s.action_error.as_ref(), Some(WriteError::Aborted(_))) {
+            s.action_error = None;
+        }
     }
 
-    /// Show a rejected current edit before a transaction error; an older successful batch cannot erase it.
-    pub fn error(&self) -> Option<String> {
+    pub fn error(&self) -> Option<SaveWarning> {
         let s = self.state();
-        s.rejected.values().next().cloned().or_else(|| s.action_error.clone()).or_else(|| s.error.clone())
+        s.rejected
+            .iter()
+            .next()
+            .map(
+                |(name, error)| {
+                    if name == ACTIONS_FILE { SaveWarning::Actions(error.clone(), Some(ActionRecovery::Preserve)) } else { SaveWarning::Presets(error.clone()) }
+                },
+            )
+            .or_else(|| s.error.clone().map(SaveWarning::Presets))
+            .or_else(|| {
+                s.action_error.as_ref().map(|error| {
+                    let recovery = match error {
+                        WriteError::Aborted(_) => None,
+                        WriteError::Stale(_) | WriteError::Uncertain(_) => Some(ActionRecovery::Reopen),
+                        WriteError::Blocked(_) => Some(ActionRecovery::Preserve),
+                    };
+                    SaveWarning::Actions(error.message().to_owned(), recovery)
+                })
+            })
+            .or_else(|| s.action_quarantine.clone().map(|error| SaveWarning::Actions(error, Some(ActionRecovery::Preserve))))
+            .or_else(|| {
+                s.actions_unsynced.then(|| SaveWarning::Actions("Browser Actions definitions could not be staged".into(), Some(ActionRecovery::Preserve)))
+            })
     }
 
-    /// Include in-flight writes, queued edits and rejected replacements in the unsaved indicator.
     pub fn unsaved(&self) -> bool {
         let s = self.state();
-        s.writing || !s.dirty.is_empty() || !s.rejected.is_empty() || s.action_error.is_some()
+        s.writing || s.actions_unsynced || !s.dirty.is_empty() || !s.rejected.is_empty() || s.current_keys != s.committed_keys
     }
 }
 
@@ -230,7 +372,6 @@ impl PresetBackend for Bridge {
         Ok(self.state().files.iter().map(|(k, b)| (k.clone(), b.len() as u64)).collect())
     }
 
-    /// Read the live memory value under the caller's byte ceiling, without waiting for browser storage.
     fn read(&self, name: &str, max: u64) -> Result<Vec<u8>, String> {
         let s = self.state();
         let bytes = s.files.get(name).ok_or_else(|| format!("{name}: not found"))?;
@@ -240,7 +381,6 @@ impl PresetBackend for Bridge {
         Ok(bytes.to_vec())
     }
 
-    /// Validate the exact legacy/ATN/backup tuple and capacity before staging one fixed migration batch.
     fn migrate_actions(&self, legacy: &[u8], atn: &[u8], published: bool) -> Result<ActionsMigration, String> {
         let mut s = self.state();
         let result = (|| -> Result<ActionsMigration, String> {
@@ -267,7 +407,7 @@ impl PresetBackend for Bridge {
             if size > MAX_STORE_BYTES || records > MAX_RECORDS || s.dirty.len() + pending > MAX_RECORDS {
                 return Err("browser preset store is full".into());
             }
-            let migration = Migration { legacy: Arc::from(legacy), atn: Arc::from(atn), published };
+            let migration = Migration { legacy: Arc::from(legacy), atn: Arc::from(atn), published, legacy_pair: s.legacy_pair.clone(), keys: s.current_keys.clone() };
             // One lock, with all validation above mutation. add(), not put(), protects the backup
             // and a first ATN publication in the actual IndexedDB transaction as well.
             s.files.insert(ACTIONS_FILE.into(), migration.atn.clone());
@@ -276,6 +416,8 @@ impl PresetBackend for Bridge {
             s.bytes = size;
             s.dirty.extend([ACTIONS_FILE.into(), LEGACY_ACTIONS_FILE.into(), MIGRATED_ACTIONS_FILE.into()]);
             s.migration = Some(migration);
+            s.actions_unsynced = false;
+            s.verified_actions_rev = None;
             Ok(ActionsMigration::Staged)
         })();
         if let Err(error) = &result {
@@ -286,19 +428,20 @@ impl PresetBackend for Bridge {
         result
     }
 
-    /// Stage a bounded live replacement; only acceptance of that record clears its prior rejection.
     fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-        if matches!(name, LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) {
-            return Err("legacy Actions records are migration-only".into());
-        }
+        if matches!(name, LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) { return Err("legacy Actions records are migration-only".into()); }
         let mut s = self.state();
         if name == ACTIONS_FILE
-            && let Some(error) = s.action_error.clone()
+            && let Some(error) = s.action_quarantine.clone()
         {
             s.rejected.insert(name.into(), error.clone());
             return Err(error);
         }
         if s.files.get(name).is_some_and(|old| old.as_ref() == bytes) {
+            if name == ACTIONS_FILE {
+                s.actions_unsynced = false;
+            s.verified_actions_rev = None;
+            }
             s.rejected.remove(name);
             return Ok(());
         }
@@ -312,21 +455,21 @@ impl PresetBackend for Bridge {
             return Err(e);
         }
         s.dirty.insert(name.to_string());
+        if name == ACTIONS_FILE {
+            s.actions_unsynced = false;
+        }
         // This current replacement resolves only its own omitted edit. Pending transactions
         // still keep unsaved() true; Retry or an older successful batch cannot clear it.
         s.rejected.remove(name);
         Ok(())
     }
 
-    /// Stage ordinary deletions while retaining migration-only records and tips needed by damaged groups.
     fn remove(&self, name: &str) -> Result<(), String> {
-        if matches!(name, LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) {
-            return Err("legacy Actions records are migration-only".into());
-        }
+        if matches!(name, LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) { return Err("legacy Actions records are migration-only".into()); }
         record_limit(name)?;
         let mut s = self.state();
         if name == ACTIONS_FILE
-            && let Some(error) = s.action_error.clone()
+            && let Some(error) = s.action_quarantine.clone()
         {
             s.rejected.insert(name.into(), error.clone());
             return Err(error);
@@ -355,102 +498,153 @@ mod tests {
     use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
     use serde_json::json;
 
-    #[test]
-    fn actions_migration_is_one_staged_batch_and_waits_for_completion() {
-        let bridge = Bridge::default();
-        bridge.load(LEGACY_ACTIONS_FILE, b"exact legacy".to_vec()).unwrap();
-        assert_eq!(bridge.migrate_actions(b"exact legacy", b"complete ATN", false).unwrap(), ActionsMigration::Staged);
-        assert!(bridge.unsaved());
-        let batch = bridge.begin().unwrap();
-        assert!(batch.migration.is_some());
-        assert_eq!(batch.len(), 3);
-        assert!(matches!(batch.get(LEGACY_ACTIONS_FILE), Some(None)));
-        assert_eq!(batch.get(MIGRATED_ACTIONS_FILE).unwrap().as_deref(), Some(&b"exact legacy"[..]));
-        assert!(bridge.begin().is_none());
-        bridge.finish(batch, Ok(()));
-        assert!(!bridge.unsaved());
+    fn action_batch(batch: &Batch) -> &ActionWrite {
+        let Batch::Actions(action) = batch else { panic!("expected an Actions transaction") };
+        action
+    }
+
+    fn file_batch(batch: &Batch) -> &BTreeMap<String, Option<Arc<[u8]>>> {
+        let Batch::Files(files) = batch else { panic!("expected an ordinary preset transaction") };
+        files
     }
 
     #[test]
-    fn actions_migration_abort_retries_fixed_bytes_before_the_latest_atn() {
+    fn action_pair_acknowledges_only_the_completed_snapshot() {
         let bridge = Bridge::default();
-        bridge.load(LEGACY_ACTIONS_FILE, b"legacy".to_vec()).unwrap();
-        bridge.migrate_actions(b"legacy", b"first ATN", false).unwrap();
-        bridge.write(ACTIONS_FILE, b"edited before begin").unwrap();
+        let legacy = ActionKeys::from_legacy(&json!({"shortcuts":{"actions.play:Target":"F6","edit.fill":"F7"}}));
+        let replacement = ActionKeys::default();
+        bridge.load_action_keys(0, legacy.clone());
+        assert!(!bridge.unsaved());
+        bridge.write(ACTIONS_FILE, b"new library").unwrap();
+        bridge.stage_action_keys(replacement.clone());
         let batch = bridge.begin().unwrap();
-        assert_eq!(batch.get(ACTIONS_FILE).unwrap().as_deref(), Some(&b"first ATN"[..]));
-        bridge.write(ACTIONS_FILE, b"edited ATN").unwrap();
-        bridge.finish(batch, Err("transaction aborted".into()));
+        let action = action_batch(&batch);
+        assert_eq!((action.base, action.revision), (0, 1));
+        assert_eq!(action.definitions.as_deref(), Some(&b"new library"[..]));
+        assert_eq!(action.keys, replacement);
         assert!(bridge.unsaved());
-        assert!(bridge.begin().is_none());
+        bridge.finish(batch, Err(WriteError::Aborted("transaction failed".into())));
+        assert!(bridge.unsaved());
+        assert_eq!(bridge.committed_action_keys(), None);
         bridge.retry();
         let batch = bridge.begin().unwrap();
-        assert!(batch.migration.is_some());
-        assert_eq!(batch.len(), 3);
-        assert_eq!(batch.get(ACTIONS_FILE).unwrap().as_deref(), Some(&b"first ATN"[..]));
-        assert_eq!(batch.get(MIGRATED_ACTIONS_FILE).unwrap().as_deref(), Some(&b"legacy"[..]));
+        bridge.write(ACTIONS_FILE, b"newer library").unwrap();
+        bridge.stage_action_keys(legacy.clone());
         bridge.finish(batch, Ok(()));
-        assert!(bridge.unsaved());
-        let next = bridge.begin().unwrap();
-        assert!(next.migration.is_none());
-        assert_eq!(next.len(), 1);
-        assert_eq!(next.get(ACTIONS_FILE).unwrap().as_deref(), Some(&b"edited ATN"[..]));
-        bridge.finish(next, Ok(()));
+        assert_eq!(bridge.committed_action_keys(), Some(replacement));
+        let batch = bridge.begin().unwrap();
+        let action = action_batch(&batch);
+        assert_eq!((action.base, action.revision), (1, 2));
+        assert_eq!(action.definitions.as_deref(), Some(&b"newer library"[..]));
+        assert_eq!(action.keys, legacy);
+        bridge.finish(batch, Ok(()));
         assert!(!bridge.unsaved());
     }
 
     #[test]
-    fn migration_recognizes_only_the_exact_fresh_or_committed_tuple() {
-        for published in [false, true] {
-            let migration = Migration { legacy: Arc::from(&b"legacy"[..]), atn: Arc::from(&b"ATN0"[..]), published };
-            assert!(!migration.already_committed(published.then_some(&b"ATN0"[..]), Some(b"legacy"), None).unwrap());
-            assert!(migration.already_committed(Some(b"ATN0"), None, Some(b"legacy")).unwrap());
-            for (atn, legacy, backup) in [
-                (Some(&b"ATN1"[..]), None, Some(&b"legacy"[..])),
-                (Some(&b"ATN0"[..]), Some(&b"change"[..]), None),
-                (Some(&b"ATN0"[..]), None, Some(&b"change"[..])),
-                (Some(&b"ATN0"[..]), Some(&b"legacy"[..]), Some(&b"legacy"[..])),
-                (None, None, Some(&b"legacy"[..])),
-                (Some(&b""[..]), None, Some(&b"legacy"[..])),
-            ] {
-                assert!(migration.already_committed(atn, legacy, backup).is_err());
-            }
+    fn authoritative_action_keys_clear_stale_legacy_values_only() {
+        let legacy = json!({
+            "shortcuts":{"actions.play:Target":"F6", "edit.fill":"F7"},
+            "alternateShortcuts":{"actions.play:Target":["F3"], "edit.fill":["F8"]},
+            "shortcutSets":{"Mine":{"shortcuts":{"edit.fill":"F5"}}},
+        });
+        let mut prefs = legacy.clone();
+        let cleared = ActionKeys::decode(&ActionKeys::default().encode().unwrap()).unwrap();
+        assert!(ActionKeys::decode(br#"[{"edit.fill":"F6"},{}]"#).is_err());
+        cleared.overlay(&mut prefs).unwrap();
+        assert_eq!(prefs["shortcuts"], json!({"edit.fill":"F7"}));
+        assert_eq!(prefs["alternateShortcuts"], json!({"edit.fill":["F8"]}));
+        assert_eq!(prefs["shortcutSets"], legacy["shortcutSets"]);
+        replace_action_keys(&mut prefs, &legacy).unwrap();
+        assert_eq!(prefs, legacy);
+
+        let mut session = Session::new();
+        session.load_prefs_json(&legacy.to_string()).unwrap();
+        let bridge = Bridge::default();
+        bridge.stage_action_keys(ActionKeys::from_preferences(session.prefs()));
+        let batch = bridge.begin().unwrap();
+        assert_eq!(action_batch(&batch).keys, ActionKeys::from_legacy(&legacy));
+        bridge.finish(batch, Ok(()));
+    }
+
+    #[test]
+    fn unmatched_definitions_cannot_commit_new_keys() {
+        let bridge = Bridge::default();
+        let mut actions = ActionState::default();
+        actions.list.push(photocraft_engine::actions_cmds::Action::new("New action", Vec::new()));
+        bridge.verify_action_definitions(&actions);
+        bridge.stage_action_keys(ActionKeys::from_legacy(&json!({"shortcuts":{"actions.play:New action":"F6"}})));
+        bridge.write("index.json", b"unrelated").unwrap();
+        let batch = bridge.begin().unwrap();
+        assert!(file_batch(&batch).contains_key("index.json"));
+        bridge.finish(batch, Ok(()));
+        assert!(bridge.unsaved());
+        assert!(bridge.begin().is_none());
+    }
+
+    #[test]
+    fn stale_or_uncertain_actions_do_not_block_ordinary_presets() {
+        for error in [WriteError::Stale("stale".into()), WriteError::Uncertain("unknown commit".into())] {
+            let reason = error.message().to_owned();
+            let bridge = Bridge::default();
+            bridge.load_action_keys(5, ActionKeys::default());
+            bridge.write(ACTIONS_FILE, b"local actions").unwrap();
+            bridge.write(INDEX_FILE, b"ordinary index").unwrap();
+            let batch = bridge.begin().unwrap();
+            assert_eq!(file_batch(&batch).len(), 1);
+            bridge.finish(batch, Ok(()));
+            let batch = bridge.begin().unwrap();
+            assert_eq!(action_batch(&batch).base, 5);
+            bridge.write(INDEX_FILE, b"new brush index").unwrap();
+            bridge.write(PATTERNS_FILE, b"new patterns").unwrap();
+            bridge.finish(batch, Err(error));
+            bridge.retry();
+            let batch = bridge.begin().unwrap();
+            assert_eq!(file_batch(&batch)[INDEX_FILE].as_deref(), Some(&b"new brush index"[..]));
+            assert_eq!(file_batch(&batch)[PATTERNS_FILE].as_deref(), Some(&b"new patterns"[..]));
+            bridge.finish(batch, Ok(()));
+            assert!(bridge.unsaved(), "the Action intent is still pending");
+            assert!(bridge.begin().is_none(), "retry must wait for a fresh Action generation");
+            assert!(matches!(bridge.error(), Some(SaveWarning::Actions(message, Some(ActionRecovery::Reopen))) if message == reason));
         }
     }
 
     #[test]
-    fn actions_migration_validates_all_bindings_and_limits_before_mutation() {
+    fn exhausted_action_revisions_warn_to_preserve_actions_without_promising_a_reopen_fix() {
         let bridge = Bridge::default();
-        bridge.load(LEGACY_ACTIONS_FILE, b"legacy".to_vec()).unwrap();
-        let before = bridge.list().unwrap();
-        assert!(bridge.migrate_actions(b"changed", b"ATN", false).is_err());
-        assert_eq!(bridge.list().unwrap(), before);
-        bridge.state().bytes = MAX_STORE_BYTES;
-        assert!(bridge.migrate_actions(b"legacy", b"ATN", false).is_err());
-        assert_eq!(bridge.list().unwrap(), before);
-        bridge.state().bytes = 6;
-        bridge.load(MIGRATED_ACTIONS_FILE, b"other backup".to_vec()).unwrap();
-        assert!(bridge.migrate_actions(b"legacy", b"ATN", false).is_err());
-        assert_eq!(bridge.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), b"other backup");
-        assert_eq!(bridge.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), b"legacy");
-        assert!(bridge.unsaved(), "a rejected migration remains visible until repaired or reloaded");
+        bridge.load_action_keys(u64::MAX, ActionKeys::default());
+        bridge.write(ACTIONS_FILE, b"local actions").unwrap();
+        assert!(bridge.begin().is_none());
+        assert!(matches!(bridge.error(), Some(SaveWarning::Actions(_, Some(ActionRecovery::Preserve)))));
+        bridge.retry();
+        assert!(bridge.begin().is_none());
     }
 
     #[test]
-    fn acknowledged_migration_keeps_an_inflight_newer_edit_pending() {
+    fn malformed_paired_definitions_quarantine_only_actions() {
         let bridge = Bridge::default();
-        bridge.load(LEGACY_ACTIONS_FILE, b"legacy".to_vec()).unwrap();
-        bridge.migrate_actions(b"legacy", b"first ATN", false).unwrap();
+        let (mut seed, _) = session(bridge.clone());
+        import(&mut seed);
+        bridge.finish(bridge.begin().unwrap(), Ok(()));
+        let malformed = b"damaged Action definitions";
+        bridge.load(ACTIONS_FILE, malformed.to_vec()).unwrap();
+        let keys = ActionKeys::from_legacy(&json!({"shortcuts":{"actions.play:Target":"F6"}}));
+        bridge.load_action_keys(2, keys.clone());
+        let (session, warnings) = session(bridge.clone());
+        assert!(!warnings.is_empty());
+        assert!(session.actions.list.is_empty());
+        assert!(session.tools.presets.iter().any(|preset| preset.name == "Browser seam brush"));
+        assert_eq!(bridge.committed_action_keys(), None);
+        assert_eq!(bridge.read(ACTIONS_FILE, 1024).unwrap(), malformed);
+        assert!(bridge.write(ACTIONS_FILE, b"would overwrite damaged data").is_err());
+        assert!(matches!(bridge.error(), Some(SaveWarning::Actions(_, Some(ActionRecovery::Preserve)))));
+        assert!(bridge.remove(ACTIONS_FILE).is_err());
+        bridge.stage_action_keys(keys);
+        bridge.write(INDEX_FILE, b"unrelated index").unwrap();
         let batch = bridge.begin().unwrap();
-        bridge.write(ACTIONS_FILE, b"newer ATN").unwrap();
+        assert_eq!(file_batch(&batch)[INDEX_FILE].as_deref(), Some(&b"unrelated index"[..]));
         bridge.finish(batch, Ok(()));
-        assert!(bridge.unsaved());
-        let next = bridge.begin().unwrap();
-        assert!(next.migration.is_none());
-        assert_eq!(next.len(), 1);
-        assert_eq!(next.get(ACTIONS_FILE).unwrap().as_deref(), Some(&b"newer ATN"[..]));
-        bridge.finish(next, Ok(()));
-        assert!(!bridge.unsaved());
+        assert!(bridge.begin().is_none());
     }
 
     fn import(s: &mut Session) {
@@ -483,13 +677,13 @@ mod tests {
         b.write("index.json", b"one").unwrap();
         b.write("index.json", b"two").unwrap();
         let batch = b.begin().unwrap();
-        assert_eq!(batch.get("index.json").unwrap().as_deref(), Some(&b"two"[..]));
+        assert_eq!(file_batch(&batch).get("index.json").unwrap().as_deref(), Some(&b"two"[..]));
         b.remove("index.json").unwrap();
         assert!(b.begin().is_none());
         assert!(b.unsaved());
         b.finish(batch, Ok(()));
         let batch = b.begin().unwrap();
-        assert!(batch.get("index.json").unwrap().is_none());
+        assert!(file_batch(&batch).get("index.json").unwrap().is_none());
         b.finish(batch, Ok(()));
         assert!(!b.unsaved());
     }
@@ -500,13 +694,13 @@ mod tests {
         b.write("index.json", b"old").unwrap();
         let batch = b.begin().unwrap();
         b.write("index.json", b"new").unwrap();
-        b.finish(batch, Err("QuotaExceededError".into()));
+        b.finish(batch, Err(WriteError::Aborted("QuotaExceededError".into())));
         assert!(b.unsaved());
-        assert!(b.error().unwrap().contains("QuotaExceeded"));
+        assert!(matches!(b.error(), Some(SaveWarning::Presets(message)) if message == "QuotaExceededError"));
         assert!(b.begin().is_none());
         b.retry();
         let batch = b.begin().unwrap();
-        assert_eq!(batch.get("index.json").unwrap().as_deref(), Some(&b"new"[..]));
+        assert_eq!(file_batch(&batch).get("index.json").unwrap().as_deref(), Some(&b"new"[..]));
         b.finish(batch, Ok(()));
         assert!(!b.unsaved());
         assert!(b.error().is_none());
@@ -522,7 +716,7 @@ mod tests {
         s.execute("brush.presets.moveGroup", json!({"group":"Browser samples", "index":0})).unwrap();
         let persisted = b.begin().unwrap();
         let restored = Bridge::default();
-        for (key, value) in &persisted {
+        for (key, value) in file_batch(&persisted) {
             if let Some(bytes) = value {
                 restored.load(key, bytes.to_vec()).unwrap();
             }
@@ -611,7 +805,7 @@ mod tests {
         import(&mut s);
         assert!(s.tools.presets.iter().any(|p| p.name == "Browser seam brush"));
         assert!(b.unsaved());
-        assert!(b.error().unwrap().contains("SecurityError"));
+        assert!(matches!(b.error(), Some(SaveWarning::Presets(message)) if message == "SecurityError"));
         assert!(b.begin().is_none());
     }
     #[test]
@@ -657,4 +851,85 @@ mod tests {
         assert_eq!(loaded.presets.gradients, s.presets.gradients);
         assert!(loaded.presets.gradients.iter().any(|g| g.name == "Browser gradients"));
     }
+    #[test]
+    fn actions_migration_is_one_staged_batch_and_waits_for_completion() {
+        let bridge = Bridge::default();
+        bridge.load(LEGACY_ACTIONS_FILE, b"exact legacy".to_vec()).unwrap();
+        let keys = ActionKeys::from_legacy(&json!({"shortcuts":{"actions.playById:11111111111111111111111111111111":"F6"},"alternateShortcuts":{"actions.play:Target":["F7"]}}));
+        bridge.load_legacy_action_keys(7, keys.clone());
+        assert_eq!(bridge.migrate_actions(b"exact legacy", b"complete ATN", false).unwrap(), ActionsMigration::Staged);
+        let batch = bridge.begin().unwrap(); let action = action_batch(&batch);
+        let migration = action.migration.as_ref().unwrap();
+        assert_eq!(action.definitions.as_deref(), Some(&b"complete ATN"[..]));
+        assert_eq!(action.keys, keys); assert_eq!(migration.legacy_pair, Some((7, keys)));
+        assert_eq!(bridge.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), b"exact legacy");
+        assert!(bridge.begin().is_none()); assert!(bridge.unsaved());
+        bridge.finish(batch, Ok(())); assert!(!bridge.unsaved());
+    }
+
+    #[test]
+    fn actions_migration_abort_retries_fixed_bytes_before_the_latest_atn() {
+        let bridge = Bridge::default(); bridge.load(LEGACY_ACTIONS_FILE, b"legacy".to_vec()).unwrap();
+        bridge.migrate_actions(b"legacy", b"first ATN", false).unwrap();
+        bridge.write(ACTIONS_FILE, b"edited before begin").unwrap();
+        let batch = bridge.begin().unwrap(); assert_eq!(action_batch(&batch).definitions.as_deref(), Some(&b"first ATN"[..]));
+        bridge.write(ACTIONS_FILE, b"edited ATN").unwrap(); bridge.finish(batch, Err(WriteError::Aborted("transaction aborted".into())));
+        assert!(bridge.begin().is_none()); bridge.retry();
+        let batch = bridge.begin().unwrap(); assert!(action_batch(&batch).migration.is_some());
+        assert_eq!(action_batch(&batch).definitions.as_deref(), Some(&b"first ATN"[..]));
+        bridge.finish(batch, Ok(())); assert!(bridge.unsaved());
+        let next = bridge.begin().unwrap(); assert!(action_batch(&next).migration.is_none());
+        assert_eq!(action_batch(&next).definitions.as_deref(), Some(&b"edited ATN"[..]));
+        bridge.finish(next, Ok(())); assert!(!bridge.unsaved());
+    }
+
+    #[test]
+    fn acknowledged_migration_keeps_an_inflight_newer_edit_pending() {
+        let bridge = Bridge::default(); bridge.load(LEGACY_ACTIONS_FILE, b"legacy".to_vec()).unwrap();
+        bridge.migrate_actions(b"legacy", b"first ATN", false).unwrap(); let batch = bridge.begin().unwrap();
+        let newer = ActionKeys::from_legacy(&json!({"shortcuts":{"actions.play:Newer":"F9"}}));
+        bridge.write(ACTIONS_FILE, b"newer ATN").unwrap(); bridge.stage_action_keys(newer.clone());
+        bridge.finish(batch, Ok(())); assert!(bridge.unsaved());
+        let next = bridge.begin().unwrap(); assert!(action_batch(&next).migration.is_none());
+        assert_eq!(action_batch(&next).keys, newer); assert_eq!(action_batch(&next).definitions.as_deref(), Some(&b"newer ATN"[..]));
+        bridge.finish(next, Ok(())); assert!(!bridge.unsaved());
+    }
+
+    #[test]
+    fn migration_recognizes_only_the_exact_fresh_or_committed_tuple() {
+        for published in [false, true] {
+            let migration = Migration { legacy: Arc::from(&b"legacy"[..]), atn: Arc::from(&b"ATN0"[..]), published, legacy_pair: None, keys: ActionKeys::default() };
+            assert!(!migration.already_committed(published.then_some(&b"ATN0"[..]), Some(b"legacy"), None).unwrap());
+            assert!(migration.already_committed(Some(b"ATN0"), None, Some(b"legacy")).unwrap());
+            for (atn, legacy, backup) in [(Some(&b"ATN1"[..]), None, Some(&b"legacy"[..])),(Some(&b"ATN0"[..]),Some(&b"change"[..]),None),(Some(&b"ATN0"[..]),None,Some(&b"change"[..])),(Some(&b"ATN0"[..]),Some(&b"legacy"[..]),Some(&b"legacy"[..])),(None,None,Some(&b"legacy"[..]))] {
+                assert!(migration.already_committed(atn,legacy,backup).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn actions_migration_validates_all_bindings_and_limits_before_mutation() {
+        let bridge = Bridge::default(); bridge.load(LEGACY_ACTIONS_FILE, b"legacy".to_vec()).unwrap(); let before = bridge.list().unwrap();
+        assert!(bridge.migrate_actions(b"changed", b"ATN", false).is_err()); assert_eq!(bridge.list().unwrap(), before);
+        bridge.state().bytes = MAX_STORE_BYTES; assert!(bridge.migrate_actions(b"legacy", b"ATN", false).is_err()); assert_eq!(bridge.list().unwrap(), before);
+        bridge.state().bytes = 6; bridge.load(MIGRATED_ACTIONS_FILE, b"other backup".to_vec()).unwrap();
+        assert!(bridge.migrate_actions(b"legacy", b"ATN", false).is_err());
+        assert_eq!(bridge.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), b"other backup");
+        assert_eq!(bridge.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), b"legacy"); assert!(bridge.unsaved());
+    }
+
+    #[test]
+    fn paired_migration_refuses_key_only_or_revision_only_changes_and_retains_retirement_identity() {
+        let old = ActionKeys::from_legacy(&json!({"shortcuts":{"actions.play:Target":"F6"}}));
+        let changed = ActionKeys::from_legacy(&json!({"shortcuts":{"actions.play:Target":"F7"}}));
+        let migration = Migration { legacy: Arc::from(&b"legacy"[..]), atn: Arc::from(&b"ATN"[..]), published: false, legacy_pair: Some((4, old.clone())), keys: old.clone() };
+        let write = ActionWrite { base: 0, revision: 1, definitions: Some(migration.atn.clone()), keys: old.clone(), migration: Some(migration.clone()) };
+        assert!(migration.validate_pairs(&write, false, None, Some((4, old.clone())), None).is_ok());
+        assert!(migration.validate_pairs(&write, false, None, Some((4, changed.clone())), None).is_err());
+        assert!(migration.validate_pairs(&write, false, None, Some((5, old.clone())), None).is_err());
+        assert!(migration.validate_pairs(&write, true, Some((1, Some(old.clone()))), None, Some((4, old.clone()))).is_ok());
+        assert!(migration.validate_pairs(&write, true, Some((1, Some(changed))), None, Some((4, old.clone()))).is_err());
+        assert!(migration.validate_pairs(&write, true, Some((1, Some(old.clone()))), None, Some((5, old))).is_err());
+    }
+
 }

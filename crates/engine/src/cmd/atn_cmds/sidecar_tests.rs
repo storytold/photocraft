@@ -616,3 +616,26 @@ fn actual_editor_icon_update_preserves_unknown_type_until_an_explicit_default_ch
     assert_eq!(integer(entry, "actionThumbnailTypeKey"), 0);
     assert!(entry.parsed().unwrap().get("actionIconKey").is_none());
 }
+
+
+#[test]
+fn duplicating_one_same_caption_occurrence_keeps_only_its_opaque_metadata() {
+    let original = fixture(&["Same", "Same"], false, "shared archive note");
+    let mut session = Session::new(); session.actions = crate::actions_cmds::library::decode(&original.bytes).unwrap();
+    let first = session.actions.atn_set_rows.iter().find(|row| row.slot == 0).unwrap().source.raw.clone();
+    let second = session.actions.atn_set_rows.iter().find(|row| row.slot == 1).unwrap().source.raw.clone();
+    assert_ne!(first, second);
+    let ids = ["11111111111111111111111111111111", "22222222222222222222222222222222"];
+    for (action, id) in session.actions.list.iter_mut().zip(ids) { action.action_id = Some(id.into()); }
+    session.edit_prefs(|prefs| { prefs.shortcuts.insert(crate::actions_cmds::occurrence_key(ids[1]), "F7".into()); });
+    let result = session.execute("actions.duplicate", json!({"set":"Same","setSlot":1})).unwrap();
+    assert_eq!(result["actions"], 1); assert_eq!(result["setSlot"], 2);
+    assert_eq!(session.actions.set_rows, ["Same", "Same", "Same copy"]);
+    let copied = session.actions.list.iter().find(|action| action.set_slot == Some(2)).unwrap();
+    assert_eq!(copied.description, "Second description"); assert_eq!(copied.action_id, None); assert!(!copied.legacy_shortcut_owner);
+    assert_eq!(session.prefs().shortcuts.get(&crate::actions_cmds::occurrence_key(ids[1])).map(String::as_str), Some("F7"));
+    let bytes = crate::actions_cmds::library::encode(&session.actions, &[]).unwrap();
+    let restored = crate::actions_cmds::library::decode(&bytes).unwrap();
+    assert_eq!(restored.atn_set_rows.iter().find(|row| row.slot == 0).unwrap().source.raw, first);
+    assert_eq!(restored.atn_set_rows.iter().find(|row| row.slot == 2).unwrap().source.raw, second);
+}

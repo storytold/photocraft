@@ -57,6 +57,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Session;
 
+mod actions;
 mod patterns;
 pub use patterns::{Loaded as LoadedPattern, MAX_PATTERN_BYTES, PATTERNS_FILE, PREVIEW_SIDE as PATTERN_PREVIEW_SIDE};
 
@@ -88,17 +89,15 @@ pub const MAX_PATTERNS_BYTES: u64 = 256 << 20;
 /// The whole store never grows beyond this; further groups are skipped with a warning.
 pub const MAX_STORE_BYTES: u64 = 2 << 30;
 /// Largest tip side accepted from disk.
-pub const MAX_TIP_SIDE: u32 = 16384;
+pub const MAX_TIP_SIDE: u32 = craft_pcraft_tip::tip::MAX_SIDE;
 /// Largest tip sample count accepted from disk (64 Mi samples).
-pub const MAX_TIP_SAMPLES: u64 = 1 << 26;
+pub const MAX_TIP_SAMPLES: u64 = craft_pcraft_tip::tip::MAX_SAMPLES;
 /// Most group files loaded.
 pub const MAX_GROUPS: usize = 4096;
 /// Most presets loaded from one group file.
 pub const MAX_PRESETS_PER_GROUP: usize = 50_000;
 
 const GROUP_FORMAT: &str = "photocraft-brush-group";
-const TIP_MAGIC: &[u8; 6] = b"PCTIP1";
-const TIP_HEADER: usize = 6 + 1 + 4 + 4;
 
 /// Native completion, asynchronous staging, and post-publication retirement are distinct states.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -348,34 +347,9 @@ fn tip_hash(t: &GrayTile) -> String {
     h.finalize().to_hex()[..32].to_string()
 }
 
-/// `PCTIP1`, bits (8|16), width, height (u32 LE), then the zlib-deflated samples.
+/// Encode the shared PCTIP1 envelope, preserving lossless 8/16-bit samples.
 pub fn encode_tip(t: &GrayTile) -> Vec<u8> {
-    use std::io::Write;
-    let eight = t.data.iter().all(|v| v % 257 == 0);
-    let mut out = Vec::with_capacity(TIP_HEADER + t.data.len() / 4);
-    out.extend_from_slice(TIP_MAGIC);
-    out.push(if eight { 8 } else { 16 });
-    out.extend_from_slice(&t.width.to_le_bytes());
-    out.extend_from_slice(&t.height.to_le_bytes());
-    // Level 3: zlib-rs level 1 writes static Huffman blocks only, 13-30% bigger than miniz's level 1.
-    let mut z = flate2::write::ZlibEncoder::new(out, flate2::Compression::new(3));
-    let mut buf = Vec::with_capacity(8192);
-    let mut ok = true;
-    for chunk in t.data.chunks(4096) {
-        buf.clear();
-        if eight {
-            buf.extend(chunk.iter().map(|v| (v / 257) as u8));
-        } else {
-            for v in chunk {
-                buf.extend_from_slice(&v.to_le_bytes());
-            }
-        }
-        ok &= z.write_all(&buf).is_ok();
-    }
-    match z.finish() {
-        Ok(v) if ok => v,
-        _ => Vec::new(),
-    }
+    craft_pcraft_tip::tip::encode(t.width, t.height, &t.data)
 }
 
 /// Inverse of [`encode_tip`]; any malformed, truncated or oversized input is an error.
@@ -385,34 +359,8 @@ pub fn decode_tip(bytes: &[u8]) -> Result<GrayTile, String> {
 
 /// [`decode_tip`] refusing (before inflating anything) a bitmap with a side over `max_side`.
 fn decode_tip_max(bytes: &[u8], max_side: u32) -> Result<GrayTile, String> {
-    let head = bytes.get(..TIP_HEADER).ok_or("truncated tip header")?;
-    if &head[..6] != TIP_MAGIC {
-        return Err("not a PhotoCraft tip".into());
-    }
-    let bits = head[6];
-    let u32_at = |i: usize| u32::from_le_bytes([head[i], head[i + 1], head[i + 2], head[i + 3]]);
-    let (w, h) = (u32_at(7), u32_at(11));
-    if w == 0 || h == 0 || w > MAX_TIP_SIDE.min(max_side) || h > MAX_TIP_SIDE.min(max_side) {
-        return Err(format!("bad tip size {w}×{h}"));
-    }
-    let n = u64::from(w) * u64::from(h);
-    if n > MAX_TIP_SAMPLES {
-        return Err(format!("tip too large ({w}×{h})"));
-    }
-    let bytes_per = match bits {
-        8 => 1u64,
-        16 => 2,
-        b => return Err(format!("unsupported tip depth {b}")),
-    };
-    let want = n * bytes_per;
-    let mut raw = Vec::with_capacity(want as usize);
-    flate2::read::ZlibDecoder::new(&bytes[TIP_HEADER..]).take(want + 1).read_to_end(&mut raw).map_err(|e| format!("tip data: {e}"))?;
-    if raw.len() as u64 != want {
-        return Err(format!("tip data has {} bytes, expected {want}", raw.len()));
-    }
-    let data: Vec<u16> =
-        if bits == 8 { raw.iter().map(|&v| u16::from(v) * 257).collect() } else { raw.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect() };
-    Ok(GrayTile { width: w, height: h, data: data.into() })
+    let tip = craft_pcraft_tip::tip::decode_with_max_side(bytes, max_side)?;
+    Ok(GrayTile { width: tip.width, height: tip.height, data: tip.data.into() })
 }
 
 // ------------------------------------------------------------------ group files
@@ -659,9 +607,10 @@ pub struct PresetStore {
     /// Tip hash → file size, for every tip file the store owns.
     tips: HashMap<String, u64>,
     index: Option<IndexFile>,
-    /// [`crate::actions_cmds::ActionState::rev`] last written (or loaded).
+    /// [`crate::actions_cmds::ActionState::rev`] last loaded, written, or skipped.
     actions_rev: u64,
     actions_keys: Vec<(String, String)>,
+    actions_written_rev: Option<u64>,
     /// Authoritative startup ATN headers, reapplied after asynchronous preference hydration.
     actions_headers: HashMap<String, Option<String>>,
     /// An existing library failed to load or migrate; preserve it on disk.
@@ -806,6 +755,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         index: None,
         actions_rev: 0,
         actions_keys: Vec::new(),
+        actions_written_rev: None,
         actions_headers: HashMap::new(),
         actions_skipped,
         patterns: pattern_files,
@@ -873,11 +823,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
 /// Prefer ATN unconditionally. Only absence admits the one-time legacy JSON reader.
 fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> LoadedActions {
     use crate::actions_cmds::{ActionState, library};
-    #[derive(serde::Deserialize)]
-    struct LegacyActionsFile {
-        version: u32,
-        actions: Vec<crate::actions_cmds::Action>,
-    }
+    type LegacyActionsFile = crate::actions_cmds::ActionsFile;
     let fail = |warnings: &mut Vec<String>, name: &str, error: String| {
         warnings.push(format!("actions: {name} skipped: {error}"));
         LoadedActions::Failed
@@ -920,7 +866,9 @@ fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Load
             if file.version != 1 {
                 return fail(warnings, LEGACY_ACTIONS_FILE, format!("unsupported version {}", file.version));
             }
-            let mut state = ActionState { list: file.actions, ..Default::default() };
+            let mut state = ActionState { list: file.actions, sets: file.sets, set_rows: file.set_rows, ..Default::default() };
+            crate::actions_cmds::invalidate_duplicate_ids(&mut state.list);
+            for action in &mut state.list { action.set_slot = action.set_slot.filter(|&slot| action.set.is_some() && state.set_rows.get(slot) == action.set.as_ref()); }
             state.library.legacy = match library::LegacyOrigin::new(&legacy) {
                 Ok(origin) => Some(origin),
                 Err(error) => return fail(warnings, LEGACY_ACTIONS_FILE, error),
@@ -1040,6 +988,11 @@ pub fn open_dir_async(root: std::path::PathBuf) -> std::sync::mpsc::Receiver<Ope
 }
 
 impl PresetStore {
+    /// The existing Actions record could not be read and must be preserved.
+    pub fn actions_load_failed(&self) -> bool {
+        self.actions_skipped
+    }
+
     /// Warnings from writes since the last call (the shell shows them in the status bar).
     pub fn take_warnings(&mut self) -> Vec<String> {
         std::mem::take(&mut self.warnings)
@@ -1281,15 +1234,15 @@ impl PresetStore {
     }
 
     /// Persist the complete library, including physical empty rows and shortcut-only header edits.
-    pub fn sync_actions(&mut self, state: &crate::actions_cmds::ActionState, keys: &[(String, String)]) {
+    pub fn sync_actions(&mut self, state: &crate::actions_cmds::ActionState, keys: &[(String, String)]) -> bool {
         if self.actions_rev == state.rev && self.actions_keys == keys {
-            return;
+            return false;
         }
         if self.actions_skipped {
             self.warnings.push("Couldn't save actions: the existing library could not be safely loaded or migrated, so it was left unchanged".into());
             self.actions_rev = state.rev;
             self.actions_keys = keys.to_vec();
-            return;
+            return false;
         }
         let bytes = match crate::actions_cmds::library::encode(state, keys) {
             Ok(bytes) => bytes,
@@ -1297,7 +1250,7 @@ impl PresetStore {
                 self.warnings.push(format!("Couldn't save actions: {error}"));
                 self.actions_rev = state.rev;
                 self.actions_keys = keys.to_vec();
-                return;
+                return false;
             }
         };
         let total = self.backend.list().and_then(|files| {
@@ -1310,20 +1263,42 @@ impl PresetStore {
             Ok(total) if total <= MAX_STORE_BYTES => {}
             Ok(_) => {
                 self.warnings.push("Couldn't save actions: preset store is full".into());
-                return;
+                return false;
             }
             Err(error) => {
                 self.warnings.push(format!("Couldn't save actions: {error}"));
-                return;
+                return false;
             }
         }
         match self.backend.write(ACTIONS_FILE, &bytes) {
             Ok(()) => {
                 self.actions_rev = state.rev;
                 self.actions_keys = keys.to_vec();
+                self.actions_written_rev = Some(state.rev);
+                return true;
             }
             Err(error) => self.warnings.push(format!("Couldn't save actions: {error}")),
         }
+        false
+    }
+
+    pub(crate) fn commit_action_definitions(&mut self, state: &crate::actions_cmds::ActionState, rev: u64) -> Result<(), String> {
+        let bytes = self.action_bytes(state)?;
+        self.backend.write(ACTIONS_FILE, &bytes).map_err(|error| format!("Couldn't save actions: {error}"))?;
+        self.actions_rev = rev;
+        self.actions_written_rev = Some(rev);
+        Ok(())
+    }
+
+    fn action_bytes(&self, state: &crate::actions_cmds::ActionState) -> Result<Vec<u8>, String> {
+        if self.actions_skipped {
+            return Err(format!("Couldn't save actions: {ACTIONS_FILE} could not be read, so it was left unchanged"));
+        }
+        let bytes = crate::actions_cmds::library::encode(state, &self.actions_keys)?;
+        if bytes.len() as u64 > MAX_ACTIONS_BYTES {
+            return Err(format!("actions: the action list is too large to save ({} MB limit)", MAX_ACTIONS_BYTES >> 20));
+        }
+        Ok(bytes)
     }
 }
 
@@ -1331,7 +1306,7 @@ fn action_shortcuts(prefs: &crate::prefs::Preferences) -> Vec<(String, String)> 
     prefs
         .shortcuts
         .iter()
-        .filter_map(|(key, value)| key.strip_prefix(crate::actions_cmds::PLAY_SHORTCUT_PREFIX).map(|name| (name.to_string(), value.clone())))
+        .filter(|(key, _)| crate::actions_cmds::is_action_key(key)).map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
 
@@ -1351,6 +1326,11 @@ impl Session {
     /// built-in of the same name; presets created before the store finished loading win), hide
     /// deleted built-ins, then sync. Returns the load warnings.
     pub fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
+        self.attach_preset_store_with_action_write(opened).0
+    }
+
+    /// Attach as usual and report whether the merged Actions definitions were written.
+    pub fn attach_preset_store_with_action_write(&mut self, opened: Opened) -> (Vec<String>, bool) {
         let Opened { store, presets, hidden_builtins, order, mut warnings, actions: disk, patterns } = opened;
         let builtins = crate::pattern_cmds::builtin();
         for l in patterns {
@@ -1391,10 +1371,12 @@ impl Session {
         }
         self.preset_store = Some(store);
         let migrating = matches!(disk, LoadedActions::Migrated(_) | LoadedActions::MigrationBlocked(_));
-        if let Some(disk) = disk.into_state() {
+        if let Some(mut disk) = disk.into_state().filter(|_| !std::mem::take(&mut self.actions.replaced_before_attachment)) {
+            if !disk.list.is_empty() || !disk.sets.is_empty() || !disk.set_rows.is_empty() { self.actions.library_undo = None; }
+            actions::pin_disk_targets(self, &mut disk.list, &mut warnings);
             let keys: HashMap<_, _> = crate::actions_cmds::library::function_keys(&disk).into_iter().collect();
-            let names: HashSet<_> = disk.list.iter().map(|action| action.name.clone()).collect();
-            let pristine = self.actions.rev == 0 && self.actions.list.is_empty() && self.actions.sets.is_empty();
+            let names: HashSet<_> = crate::actions_cmds::library::header_commands(&disk).into_iter().map(|(_, command)| command).collect();
+            let pristine = self.actions.rev == 0 && self.actions.list.is_empty() && self.actions.sets.is_empty() && self.actions.set_rows.is_empty();
             crate::actions_cmds::library::attach(&mut self.actions, disk);
             if !migrating {
                 if let Some(store) = self.preset_store.as_mut() {
@@ -1417,7 +1399,7 @@ impl Session {
             }
         }
         self.brush_presets_changed();
-        self.sync_preset_store();
+        let actions_written = self.sync_preset_store_with_action_write();
         // A brush remembered from the previous run (or picked before the store loaded) may be
         // painting with previews; load the full tips now (a missing one keeps its preview).
         let mut brush = std::mem::take(&mut self.tools.brush);
@@ -1426,22 +1408,18 @@ impl Session {
         if let Some(st) = self.preset_store.as_mut() {
             warnings.extend(st.take_warnings());
         }
-        warnings
+        (warnings, actions_written)
     }
 
     /// Reapply authoritative startup ATN headers after loading saved preferences.
     /// Missing, failed and migrated libraries keep preference-owned shortcuts unchanged.
     pub fn reconcile_actions_function_keys(&mut self) {
         let headers = self.preset_store.as_ref().map(|store| store.actions_headers.clone()).unwrap_or_default();
-        for (name, key) in headers {
-            if self.actions.list.iter().filter(|action| action.name == name).count() == 1 {
+        for (command, key) in headers {
+            if crate::actions_cmds::shortcut_row(&self.actions.list, &command).is_some() {
                 self.edit_prefs(|prefs| {
-                    let command = format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX);
-                    if let Some(key) = key {
-                        prefs.shortcuts.insert(command, key);
-                    } else if prefs.shortcuts.get(&command).is_some_and(|key| crate::atn_cmds::parse_function_key(key).is_some()) {
-                        prefs.shortcuts.remove(&command);
-                    }
+                    if let Some(key) = key { prefs.shortcuts.insert(command, key); }
+                    else if prefs.shortcuts.get(&command).is_some_and(|key| crate::atn_cmds::parse_function_key(key).is_some()) { prefs.shortcuts.remove(&command); }
                 });
             }
         }
@@ -1449,6 +1427,15 @@ impl Session {
 
     /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
     pub fn sync_preset_store(&mut self) {
+        self.sync_preset_store_with_action_write();
+    }
+
+    /// Whether this store confirmed a successful definitions write for the current Actions revision.
+    pub fn action_definitions_written(&self) -> bool {
+        self.preset_store.as_ref().is_some_and(|store| store.actions_written_rev == Some(self.actions.rev))
+    }
+
+    fn sync_preset_store_with_action_write(&mut self) -> bool {
         let rev = self.tools.presets_rev;
         let action_keys = action_shortcuts(self.prefs());
         if let Some(st) = self.preset_store.as_mut() {
@@ -1461,9 +1448,11 @@ impl Session {
                     self.tools.brush_changed();
                 }
             }
-            st.sync_actions(&self.actions, &action_keys);
+            let actions_written = st.sync_actions(&self.actions, &action_keys);
             st.sync_patterns(&self.patterns);
+            return actions_written;
         }
+        false
     }
 
     /// Load the stored tips of `b` (a preset's settings picked as the tool's brush, or exported) so

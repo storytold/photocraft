@@ -9,6 +9,9 @@ use craft_psd::{
 use super::{Action, ActionState, color_to_atn};
 use crate::atn_cmds::{self, sidecar};
 
+pub(crate) mod identity_manifest;
+use identity_manifest::{GroupKey, IdentityManifest};
+
 type Result<T> = std::result::Result<T, String>;
 const MAX_BYTES: usize = crate::preset_store::MAX_ACTIONS_BYTES as usize;
 
@@ -16,10 +19,10 @@ const MAX_BYTES: usize = crate::preset_store::MAX_ACTIONS_BYTES as usize;
 /// The metadata carrier consumes one real ATN action even though it is hidden in the panel.
 pub(crate) fn check_action_count<'a>(state: &ActionState, actions: impl IntoIterator<Item = &'a Action>) -> Result<()> {
     let mut count = 0usize;
-    let mut carrier = state.library.sidecar.is_some() || state.library.legacy.is_some() || !state.atn_set_rows.is_empty();
+    let mut carrier = state.library.sidecar.is_some() || state.library.legacy.is_some() || !state.atn_set_rows.is_empty() || !state.sets.is_empty();
     for action in actions {
         count = count.checked_add(1).ok_or("Actions count overflow")?;
-        carrier |= sidecar::action_needs_metadata(action);
+        carrier |= sidecar::action_needs_metadata(action) || action.action_id.is_some() || action.legacy_shortcut_owner || (action.set.is_some() && action.set_slot.is_none());
     }
     if count.checked_add(usize::from(carrier)).is_none_or(|total| total > atn::MAX_TOTAL_ACTIONS) {
         return Err("actions archive leaves no space for the action and its metadata sidecar".into());
@@ -34,6 +37,8 @@ pub(crate) fn definition_copy(state: &ActionState) -> ActionState {
         list: state.list.clone(),
         library: state.library.clone(),
         sets: state.sets.clone(),
+        set_rows: state.set_rows.clone(),
+        set_rows_revision: state.set_rows_revision,
         atn_set_rows: state.atn_set_rows.clone(),
         ..Default::default()
     }
@@ -49,7 +54,7 @@ pub(crate) fn check_definition(state: &ActionState, shortcuts: &std::collections
         .filter(|total| *total <= atn::MAX_TOTAL_ITEMS)
         .ok_or("too many native steps in Actions library")?;
     let keys: Vec<_> =
-        shortcuts.iter().filter_map(|(key, value)| key.strip_prefix(super::PLAY_SHORTCUT_PREFIX).map(|name| (name.to_string(), value.clone()))).collect();
+        shortcuts.iter().filter(|(key, _)| super::is_action_key(key)).map(|(key, value)| (key.clone(), value.clone())).collect();
     encode(state, &keys).map(|_| ())
 }
 
@@ -88,6 +93,7 @@ pub(crate) struct RowOrigin {
     archive: Arc<Archive>,
     set: usize,
     logical_name: String,
+    metadata: Option<Arc<sidecar::SetMetadata>>,
 }
 
 impl RowOrigin {
@@ -162,6 +168,8 @@ impl LegacyOrigin {
 pub struct Library {
     source: Option<Arc<Archive>>,
     pub(crate) rows: Vec<Option<RowOrigin>>,
+    other_rows: Vec<(GroupKey, RowOrigin)>,
+    order: Vec<GroupKey>,
     sidecar: Option<Arc<sidecar::Source>>,
     pub(crate) legacy: Option<LegacyOrigin>,
 }
@@ -179,6 +187,7 @@ impl RowIndex<'_> {
 }
 
 impl Library {
+    pub(crate) fn has_implicit_rows(&self) -> bool { self.other_rows.iter().any(|(key, _)| matches!(key, GroupKey::Implicit(_))) }
     /// Index surviving rows once, retaining both first-name resolution and exact provenance matches.
     pub(crate) fn row_index<'a>(&self, names: &'a [String]) -> RowIndex<'a> {
         let mut index = RowIndex { first: Default::default(), exact: Default::default() };
@@ -191,12 +200,17 @@ impl Library {
         index
     }
     pub(crate) fn row_source(&self, names: &[String], action: &Action) -> Option<RowOrigin> {
-        self.row_index(names).source(action)
+        action.set_slot.and_then(|slot| self.rows.get(slot).cloned().flatten()).or_else(|| action.library_origin.as_ref().map(|origin| origin.row.clone())).or_else(|| self.row_index(names).source(action))
     }
 }
 
 /// A strict complete load; failure returns no partial library and executes no commands.
-pub(crate) fn decode(bytes: &[u8]) -> Result<ActionState> {
+pub(crate) fn decode(bytes: &[u8]) -> Result<ActionState> { decode_inner(bytes, true) }
+
+/// External imports retain raw provenance but never trust local identity metadata.
+pub(crate) fn decode_import(bytes: &[u8]) -> Result<ActionState> { decode_inner(bytes, false) }
+
+fn decode_inner(bytes: &[u8], trusted: bool) -> Result<ActionState> {
     if bytes.len() > MAX_BYTES {
         return Err("Actions library exceeds byte limit".into());
     }
@@ -209,11 +223,16 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<ActionState> {
         .and_then(|range| bytes.get(range));
     let mut metadata = sidecar::decode_library(&parsed.sets, raw_outer)?;
     let legacy = sidecar::legacy_origin(metadata.source.as_deref())?;
+    let identity_bytes = if trusted { sidecar::identity_bytes(metadata.source.as_deref())? } else { None };
+    let physical_rows = parsed.sets.len() - usize::from(metadata.hidden.is_some());
+    let action_count = parsed.sets.iter().enumerate().filter(|(i, _)| Some(*i) != metadata.hidden).map(|(_, set)| set.actions.len()).sum();
+    let manifest = identity_bytes.as_deref().map(|bytes| IdentityManifest::decode(bytes, action_count, physical_rows)).transpose()?;
     let archive = Arc::new(Archive { bytes: bytes.into(), parsed, hidden: metadata.hidden });
     let mut state = ActionState::default();
     state.library.source = Some(archive.clone());
     state.library.sidecar = metadata.source;
     state.library.legacy = legacy;
+    let mut fingerprints = Vec::new();
     let mut total = 0usize;
     let mut set_names = atn_cmds::UniqueNames::new(
         std::iter::once(atn_cmds::UNGROUPED_SET.to_string()).chain(
@@ -228,6 +247,8 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<ActionState> {
         ),
     );
     let literal_ungrouped = set_names.claim(atn_cmds::UNGROUPED_SET);
+    let mut scopes = std::collections::HashMap::new();
+    let mut physical = 0usize;
     for (set, file) in archive.parsed.sets.iter().enumerate().filter(|(index, _)| Some(*index) != archive.hidden) {
         let wire_name = file.name.to_string_lossy();
         let logical_name = if wire_name == atn_cmds::UNGROUPED_SET {
@@ -235,19 +256,35 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<ActionState> {
         } else {
             atn_cmds::logical_set_name((!wire_name.is_empty()).then_some(wire_name.as_str()))
         };
-        let row = RowOrigin { archive: archive.clone(), set, logical_name: logical_name.to_string() };
-        let slot = state.sets.len();
-        state.sets.push(logical_name.to_string());
-        state.library.rows.push(Some(row.clone()));
-        if let Some(source) = metadata.sets.get_mut(set).and_then(Option::take) {
-            state.atn_set_rows.push(sidecar::SetRowMetadata { slot, row: state.sets.last().cloned().ok_or("missing loaded row")?, source });
+        let key = match manifest.as_ref().and_then(|manifest| manifest.groups.get(physical)) {
+            Some(key) => key.clone(),
+            None if wire_name.is_empty() => GroupKey::Implicit(physical),
+            None => GroupKey::Folder(state.set_rows.len()),
+        };
+        let logical_name = manifest.as_ref().and_then(|manifest| manifest.group_name(&key)).unwrap_or(logical_name);
+        let source = metadata.sets.get_mut(set).and_then(Option::take);
+        let row = RowOrigin { archive: archive.clone(), set, logical_name: logical_name.to_string(), metadata: source.clone() };
+        if let GroupKey::Folder(slot) = key {
+            // The manifest may reorder physical records; canonical slots remain independent.
+            if state.set_rows.len() <= slot { state.set_rows.resize(slot + 1, String::new()); state.library.rows.resize(slot + 1, None); }
+            state.set_rows[slot] = logical_name.to_string();
+            state.library.rows[slot] = Some(row.clone());
+            if let Some(source) = source { state.atn_set_rows.push(sidecar::SetRowMetadata { slot, row: logical_name.to_string(), source }); }
+        } else {
+            state.library.other_rows.push((key.clone(), row.clone()));
         }
+        state.library.order.push(key.clone());
+        scopes.insert(wire_name.clone(), logical_name.to_string());
+        physical += 1;
         for (index, original) in file.actions.iter().enumerate() {
             let (mut action, cohorts) = atn_cmds::library_action(file, original, if wire_name.is_empty() { "" } else { logical_name })?;
             total = total.checked_add(action.steps.len()).filter(|count| *count <= atn::MAX_TOTAL_ITEMS).ok_or("too many native steps in Actions library")?;
             if let Some(metadata) = metadata.actions.get_mut(set).and_then(|actions| actions.get_mut(index)).and_then(Option::take) {
-                sidecar::apply(&mut action, metadata);
+                sidecar::apply_local(&mut action, metadata, identity_bytes.is_some())?;
             }
+            action.set_slot = match key { GroupKey::Folder(slot) => Some(slot), _ => None };
+            action.set = match &key { GroupKey::Implicit(_) => None, _ => Some(logical_name.into()) };
+            if manifest.is_some() { fingerprints.push(wire_fingerprint(file, original, &action, row.metadata.as_deref())?); }
             let baseline = Arc::new(action.clone());
             action.library_steps = vec![None; action.steps.len()];
             for (item, cohort) in cohorts.iter().enumerate() {
@@ -259,18 +296,10 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<ActionState> {
             state.list.push(action);
         }
     }
-    let scopes = archive
-        .parsed
-        .sets
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| Some(*index) != archive.hidden)
-        .zip(&state.sets)
-        .map(|((_, file), logical)| (file.name.to_string_lossy(), logical.clone()))
-        .collect();
     for action in &mut state.list {
         sidecar::remap_scopes(action, &scopes);
     }
+    if let Some(manifest) = manifest { manifest.restore(&mut state, &fingerprints)?; }
     Ok(state)
 }
 
@@ -285,9 +314,9 @@ pub(crate) fn bind_import(action: &mut Action, original: &Action) {
 
 /// Attach one imported physical row to its destination slot without replacing an existing sidecar source.
 pub(crate) fn import_row(state: &mut ActionState, imported: &ActionState, index: usize, slot: usize) {
-    state.library.rows.resize(state.sets.len(), None);
+    state.library.rows.resize(state.set_rows.len(), None);
     if let Some(row) = state.library.rows.get_mut(slot) {
-        *row = imported.library.rows.get(index).cloned().flatten();
+        *row = projected_groups(imported).ok().and_then(|groups| groups.get(index).and_then(|(_, _, selection)| selection.raw.clone()));
     }
     if state.library.sidecar.is_none() {
         if imported.library.sidecar.is_some() || state.library.source.is_none() {
@@ -301,7 +330,7 @@ pub(crate) fn import_row(state: &mut ActionState, imported: &ActionState, index:
 /// every disk occurrence and empty row; name collisions do not discard either definition.
 pub(crate) fn attach(live: &mut ActionState, mut disk: ActionState) {
     super::shift_action_calls(&mut disk.list, 0, live.list.len());
-    let offset = live.sets.len();
+    let offset = live.set_rows.len();
     live.library.rows.resize(offset, None);
     live.library.rows.extend(disk.library.rows);
     if disk.library.sidecar.is_some() || live.library.sidecar.is_none() {
@@ -309,31 +338,50 @@ pub(crate) fn attach(live: &mut ActionState, mut disk: ActionState) {
         live.library.sidecar = disk.library.sidecar;
     }
     live.library.legacy = disk.library.legacy;
+    for action in &mut disk.list { if let Some(slot) = action.set_slot.as_mut() { *slot += offset; } }
+    let mut remap = Vec::new();
+    for (key, row) in disk.library.other_rows {
+        let original = key.clone(); let mut key = key;
+        if live.library.other_rows.iter().any(|(existing, _)| existing == &key) {
+            let next = (0..=atn::MAX_SETS).find_map(|serial| {
+                let candidate = match &key { GroupKey::Legacy(name, _) => GroupKey::Legacy(name.clone(), serial), GroupKey::Implicit(_) => GroupKey::Implicit(serial), GroupKey::Folder(_) => return None };
+                (!live.library.other_rows.iter().any(|(existing, _)| existing == &candidate)).then_some(candidate)
+            });
+            if let Some(next) = next { key = next; }
+        }
+        remap.push((original, key.clone())); live.library.other_rows.push((key, row));
+    }
+    disk.library.order = disk.library.order.into_iter().map(|key| remap.iter().find(|(old, _)| old == &key).map(|(_, new)| new.clone()).unwrap_or(key)).collect();
+    live.library.order.extend(disk.library.order.into_iter().map(|key| match key { GroupKey::Folder(slot) => GroupKey::Folder(slot + offset), other => other }));
     live.list.extend(disk.list);
-    live.sets.extend(disk.sets);
+    super::identity::invalidate_duplicate_ids(&mut live.list);
+    live.set_rows.extend(disk.set_rows);
+    for name in disk.sets { if !live.sets.contains(&name) { live.sets.push(name); } }
     live.atn_set_rows.extend(disk.atn_set_rows.into_iter().map(|mut row| {
         row.slot += offset;
         row
     }));
+    live.set_rows_revision = live.set_rows_revision.wrapping_add(1);
     live.rev = live.rev.saturating_add(1).max(1);
 }
 
 /// Unique names can be attached to the existing shortcut preferences; ambiguous headers stay raw.
 pub(crate) fn function_keys(state: &ActionState) -> Vec<(String, String)> {
+    header_commands(state).into_iter().filter_map(|(row, command)| {
+        let action = &state.list[row]; let origin = action.library_origin.as_ref()?;
+        let original = original_action(origin).ok()?;
+        (original.function_key > 0).then(|| (command, atn_cmds::function_key_name(original.function_key, original.shift, original.command)))
+    }).collect()
+}
+
+pub(crate) fn header_commands(state: &ActionState) -> Vec<(usize, String)> {
     let mut counts = std::collections::HashMap::new();
-    for action in &state.list {
-        *counts.entry(action.name.as_str()).or_insert(0usize) += 1;
-    }
-    state
-        .list
-        .iter()
-        .filter(|action| counts.get(action.name.as_str()) == Some(&1))
-        .filter_map(|action| {
-            let origin = action.library_origin.as_ref()?;
-            let header = origin.row.file().ok()?.actions.get(origin.action)?;
-            (header.function_key != 0).then(|| (action.name.clone(), atn_cmds::function_key_name(header.function_key, header.shift, header.command)))
-        })
-        .collect()
+    for action in &state.list { *counts.entry(action.name.as_str()).or_insert(0usize) += 1; }
+    state.list.iter().enumerate().filter_map(|(row, action)| {
+        if let Some(id) = action.action_id.as_deref().filter(|id| super::valid_action_id(id)) { Some((row, super::occurrence_key(id))) }
+        else if counts.get(action.name.as_str()) == Some(&1) { Some((row, format!("{}{}", super::PLAY_SHORTCUT_PREFIX, action.name))) }
+        else { None }
+    }).collect()
 }
 
 struct ItemOrigin {
@@ -363,8 +411,9 @@ fn action_record(action: &Action, set: &str, keys: &[(String, String)], unique_n
         output.name = UnicodeString::new_nul(&action.name);
     }
     output.color = color_to_atn(&action.color).ok_or("invalid Actions library color")?;
-    if unique_name {
-        let key = keys.iter().find(|(name, _)| name == &action.name).map(|(_, key)| key.as_str()).filter(|key| !key.is_empty());
+    if unique_name || action.action_id.as_deref().is_some_and(super::valid_action_id) {
+        let command = action.action_id.as_deref().filter(|id| super::valid_action_id(id)).map(super::occurrence_key).unwrap_or_else(|| format!("{}{}", super::PLAY_SHORTCUT_PREFIX, action.name));
+        let key = keys.iter().find(|(name, _)| name == &command).or_else(|| keys.iter().find(|(name, _)| (unique_name || action.legacy_shortcut_owner) && (name == &action.name || name == &format!("{}{}", super::PLAY_SHORTCUT_PREFIX, action.name)))).map(|(_, key)| key.as_str()).filter(|key| !key.is_empty());
         let previous = original.filter(|old| old.function_key > 0).map(|old| atn_cmds::function_key_name(old.function_key, old.shift, old.command));
         if key != previous.as_deref() {
             let (number, shift, command) = key.and_then(atn_cmds::parse_function_key).unwrap_or((0, false, false));
@@ -446,13 +495,15 @@ fn field(out: &mut Vec<u8>, canonical: &[u8], new: Range<usize>, source: Option<
 /// No second ATN grammar or persisted shadow registry is involved.
 pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<Vec<u8>> {
     let mut text_bytes = 0usize;
-    for text in state.sets.iter().map(String::as_str).chain(state.list.iter().flat_map(|action| [&*action.name, &*action.description, &*action.icon])) {
+    for text in state.sets.iter().chain(&state.set_rows).map(String::as_str).chain(state.list.iter().flat_map(|action| [&*action.name, &*action.description, &*action.icon])) {
         text_bytes = text_bytes
             .checked_add(text.encode_utf16().count().checked_mul(2).ok_or("Actions text length overflow")?)
             .filter(|bytes| *bytes <= MAX_BYTES)
             .ok_or("Actions text exceeds library byte limit")?;
     }
-    let groups = sidecar::library_groups(state)?;
+    let projected = projected_groups(state)?;
+    let group_keys: Vec<_> = projected.iter().map(|(key, _, _)| key.clone()).collect();
+    let groups: Vec<_> = projected.into_iter().map(|(_, name, selection)| (name, selection)).collect();
     let mut wire_names: Vec<String> = groups
         .iter()
         .map(|(name, selection)| match selection.raw.as_ref() {
@@ -497,7 +548,20 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
         .iter()
         .map(|(_, selection)| sidecar::Selection { actions: selection.actions.clone(), source: selection.source.clone(), raw: selection.raw.clone() })
         .collect();
-    let outer = sidecar::append_library(&mut files, &selected, state.library.sidecar.clone(), state.library.legacy.as_ref())?;
+    let wire_actions: Vec<_> = selected.iter().flat_map(|selection| selection.actions.iter().copied()).collect();
+    let same_order = wire_actions.iter().map(|action| std::ptr::from_ref(*action)).eq(state.list.iter().map(std::ptr::from_ref));
+    let mut expected_slot = 0usize;
+    let canonical_rows = group_keys.iter().all(|key| match key { GroupKey::Legacy(_, _) => false, GroupKey::Implicit(_) => true, GroupKey::Folder(slot) => { let correct = *slot == expected_slot; expected_slot += 1; correct } });
+    let needs_identity = group_keys.iter().zip(&wire_names).any(|(key, wire)| matches!(key, GroupKey::Folder(_)) && wire.is_empty()) || !same_order || !canonical_rows || !state.sets.is_empty() || state.list.iter().any(|action| action.action_id.is_some() || action.legacy_shortcut_owner);
+    // An unchanged pre-identity v16 archive remains byte-for-byte intact, including its lack of a carrier.
+    let identities = if needs_identity {
+        let mut fingerprints = Vec::with_capacity(wire_actions.len());
+        for (file, (_, selection)) in files.iter().zip(&groups) {
+            for (record, action) in file.actions.iter().zip(&selection.actions) { fingerprints.push(wire_fingerprint(file, record, action, selection.source.as_deref())?); }
+        }
+        Some(IdentityManifest::capture(state, group_keys, &wire_actions, &fingerprints)?.encode()?)
+    } else { None };
+    let outer = sidecar::append_library(&mut files, &selected, state.library.sidecar.clone(), state.library.legacy.as_ref(), identities.as_deref())?;
     let canonical = atn::write_sets(&files).map_err(|error| error.to_string())?;
     if canonical.len() > MAX_BYTES {
         return Err("Actions library exceeds byte limit".into());
@@ -633,4 +697,117 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
         }
     }
     Ok(out)
+}
+
+/// Project canonical folder identities onto native physical rows without a second definition model.
+pub(crate) fn projected_groups(state: &ActionState) -> Result<Vec<(GroupKey, &str, sidecar::Selection<'_>)>> {
+    let mut origin_ids = std::collections::HashMap::new();
+    for action in &state.list { if let Some(origin) = &action.library_origin { let next = origin_ids.len(); origin_ids.entry(origin.row.key()).or_insert(next); } }
+    let retained_rows: std::collections::HashMap<_, _> = state.library.other_rows.iter().filter_map(|(key, row)| match key { GroupKey::Legacy(name, _) => Some(((row.key(), Some(name.as_str())), key)), GroupKey::Implicit(_) => Some(((row.key(), None), key)), GroupKey::Folder(_) => None }).collect();
+    let action_key = |action: &Action| {
+        if let Some(slot) = action.set_slot { return GroupKey::Folder(slot); }
+        let retained = action.library_origin.as_ref().and_then(|origin| retained_rows.get(&(origin.row.key(), action.set.as_deref().filter(|name| !name.is_empty()))).copied());
+        if let Some(name) = action.set.as_ref().filter(|name| !name.is_empty()) {
+            if let Some(GroupKey::Legacy(previous, serial)) = retained { if previous == name { return GroupKey::Legacy(name.clone(), *serial); } }
+            GroupKey::Legacy(name.clone(), action.library_origin.as_ref().and_then(|origin| origin_ids.get(&origin.row.key())).copied().unwrap_or(atn::MAX_SETS))
+        } else {
+            retained.filter(|key| matches!(key, GroupKey::Implicit(_))).cloned().unwrap_or(GroupKey::Implicit(atn::MAX_SETS))
+        }
+    };
+    let mut keys = state.library.order.clone();
+    for slot in 0..state.set_rows.len() { if !keys.contains(&GroupKey::Folder(slot)) { keys.push(GroupKey::Folder(slot)); } }
+    for name in &state.sets {
+        if !keys.iter().any(|key| matches!(key, GroupKey::Legacy(existing, _) if existing == name)) && !state.list.iter().any(|action| action.set_slot.is_none() && action.set.as_ref() == Some(name)) { keys.push(GroupKey::Legacy(name.clone(), atn::MAX_SETS)); }
+    }
+    let mut seen: std::collections::HashSet<_> = keys.iter().cloned().collect();
+    let mut buckets = std::collections::HashMap::<GroupKey, Vec<&Action>>::new();
+    for action in &state.list { let key = action_key(action); if seen.insert(key.clone()) { keys.push(key.clone()); } buckets.entry(key).or_default().push(action); }
+    let mut out = Vec::new();
+    for key in keys {
+        let (name, mut raw) = match &key {
+            GroupKey::Folder(slot) => { let Some(name) = state.set_rows.get(*slot) else { continue }; (name.as_str(), state.library.rows.get(*slot).cloned().flatten()) }
+            GroupKey::Legacy(name, _) => {
+                let Some(name) = state.sets.iter().chain(state.list.iter().filter(|action| action.set_slot.is_none()).filter_map(|action| action.set.as_ref())).find(|candidate| *candidate == name) else { continue };
+                (name.as_str(), state.library.other_rows.iter().find(|(candidate, _)| candidate == &key).map(|(_, row)| row.clone()))
+            }
+            GroupKey::Implicit(_) => (atn_cmds::UNGROUPED_SET, state.library.other_rows.iter().find(|(candidate, _)| candidate == &key).map(|(_, row)| row.clone())),
+        };
+        let actions = buckets.remove(&key).unwrap_or_default();
+        if raw.is_none() { raw = actions.first().and_then(|action| action.library_origin.as_ref().map(|origin| origin.row.clone())); }
+        if actions.is_empty() && matches!(key, GroupKey::Implicit(_)) && raw.is_none() { continue; }
+        let source = raw.as_ref().and_then(|row| row.metadata.clone()).or_else(|| actions.first().and_then(|action| sidecar::selection(state, action).source));
+        out.push((key, name, sidecar::Selection { actions, source, raw }));
+        if out.len() > atn::MAX_SETS { return Err("too many physical rows in local Actions library".into()); }
+    }
+    Ok(out)
+}
+
+/// Insert exactly one folder occurrence and move every physical carrier with its canonical slot.
+pub(crate) fn insert_folder(state: &mut ActionState, at: usize, name: &str, copy: Option<usize>) {
+    state.library.rows.resize(state.set_rows.len(), None);
+    let origin = copy.and_then(|slot| state.library.rows.get(slot).cloned().flatten());
+    let metadata = copy.and_then(|slot| state.atn_set_rows.iter().find(|entry| entry.slot == slot).map(|entry| entry.source.clone()));
+    for key in &mut state.library.order { if let GroupKey::Folder(slot) = key { if *slot >= at { *slot += 1; } } }
+    for action in &mut state.list { if let Some(slot) = &mut action.set_slot { if *slot >= at { *slot += 1; } } }
+    for row in &mut state.atn_set_rows { if row.slot >= at { row.slot += 1; } }
+    state.set_rows.insert(at, name.into()); state.library.rows.insert(at, origin);
+    let order_at = copy.and_then(|source| { let source = source + usize::from(source >= at); state.library.order.iter().position(|key| *key == GroupKey::Folder(source)).map(|index| index + 1) }).or_else(|| state.library.order.iter().position(|key| matches!(key, GroupKey::Folder(slot) if *slot > at))).unwrap_or(state.library.order.len());
+    state.library.order.insert(order_at, GroupKey::Folder(at));
+    if let Some(source) = metadata { state.atn_set_rows.push(sidecar::SetRowMetadata { slot: at, row: name.into(), source }); }
+    state.set_rows_revision = state.set_rows_revision.wrapping_add(1);
+}
+
+/// A caller supplies the old slot inventory, before changing names or rows.
+pub(crate) fn retain_folders(state: &mut ActionState, keep: &[bool]) {
+    state.library.rows.resize(state.set_rows.len(), None);
+    let mut next = 0usize;
+    let map: Vec<_> = keep.iter().map(|keep| if *keep { let slot = next; next += 1; Some(slot) } else { None }).collect();
+    if next == state.set_rows.len() { return; }
+    let old = std::mem::take(&mut state.set_rows);
+    state.set_rows = old.into_iter().enumerate().filter_map(|(slot, name)| map.get(slot).copied().flatten().map(|_| name)).collect();
+    let old = std::mem::take(&mut state.library.rows);
+    state.library.rows = old.into_iter().enumerate().filter_map(|(slot, row)| map.get(slot).copied().flatten().map(|_| row)).collect();
+    state.library.order.retain_mut(|key| match key { GroupKey::Folder(slot) => match map.get(*slot).copied().flatten() { Some(new) => { *slot = new; true }, None => false }, _ => true });
+    state.atn_set_rows.retain_mut(|entry| match map.get(entry.slot).copied().flatten() { Some(slot) => { entry.slot = slot; true }, None => false });
+    for action in &mut state.list { action.set_slot = action.set_slot.and_then(|slot| map.get(slot).copied().flatten()); }
+    state.set_rows_revision = state.set_rows_revision.wrapping_add(1);
+}
+
+/// Whole portable replacement makes every archive row explicit, without adopting private IDs.
+pub(crate) fn replacement_provenance(imported: &ActionState, names: &[String]) -> Result<(Library, Vec<sidecar::SetRowMetadata>)> {
+    let groups = projected_groups(imported)?;
+    if groups.len() != names.len() { return Err("replacement physical provenance does not match its converted sets".into()); }
+    let mut library = Library { source: imported.library.source.clone(), sidecar: imported.library.sidecar.clone(), ..Default::default() };
+    let mut metadata = Vec::new();
+    for (slot, ((_, _, selection), name)) in groups.into_iter().zip(names).enumerate() {
+        library.rows.push(selection.raw); library.order.push(GroupKey::Folder(slot));
+        if let Some(source) = selection.source { metadata.push(sidecar::SetRowMetadata { slot, row: name.clone(), source }); }
+    }
+    Ok((library, metadata))
+}
+
+/// Caption-only copies retain each empty physical source as a private native occurrence.
+pub(crate) fn copy_legacy_rows(state: &mut ActionState, source: &str, name: &str) {
+    let rows: Vec<_> = state.set_rows.iter().enumerate().filter(|(_, caption)| caption.as_str() == source).filter_map(|(slot, _)| state.library.rows.get(slot).cloned().flatten()).chain(state.library.other_rows.iter().filter(|(key, _)| match key { GroupKey::Legacy(name, _) => name == source, GroupKey::Implicit(_) => source == atn_cmds::UNGROUPED_SET, _ => false }).map(|(_, row)| row.clone())).collect();
+    for (serial, row) in rows.into_iter().enumerate() {
+        let key = GroupKey::Legacy(name.into(), serial);
+        state.library.other_rows.push((key.clone(), row)); state.library.order.push(key);
+    }
+}
+
+
+pub(crate) fn retire_legacy_group(state: &mut ActionState, name: &str) {
+    let keep = |key: &GroupKey| !match key { GroupKey::Legacy(caption, _) => caption == name, GroupKey::Implicit(_) => name == atn_cmds::UNGROUPED_SET, _ => false };
+    state.library.other_rows.retain(|(key, _)| keep(key)); state.library.order.retain(keep);
+}
+
+
+/// Hash the existing canonical ATN projection and exact opaque metadata, never a shadow step codec.
+fn wire_fingerprint(file: &AtnFile, record: &AtnAction, action: &Action, metadata: Option<&sidecar::SetMetadata>) -> Result<String> {
+    let mut singleton = file.clone(); singleton.actions = vec![record.clone()];
+    let record = atn::write(&singleton).map_err(|error| error.to_string())?;
+    let entry = sidecar::identity_entry(action)?; let set = sidecar::identity_set(metadata)?;
+    let mut digest = blake3::Hasher::new();
+    for bytes in [&record, &entry, &set] { digest.update(&(bytes.len() as u64).to_le_bytes()); digest.update(bytes); }
+    Ok(digest.finalize().to_hex().to_string())
 }

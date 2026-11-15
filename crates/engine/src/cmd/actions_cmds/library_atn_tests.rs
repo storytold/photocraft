@@ -50,7 +50,7 @@ fn encode(state: &ActionState) -> Vec<u8> {
 fn untouched_duplicate_physical_records_and_noncanonical_bytes_survive() {
     let bytes = wire();
     let state = library::decode(&bytes).unwrap();
-    assert_eq!(state.sets.len(), 2);
+    assert_eq!(state.set_rows.len(), 2);
     assert_eq!(state.list.len(), 2);
     assert_eq!(state.list[0].name, state.list[1].name);
     assert_eq!(state.list[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
@@ -89,7 +89,7 @@ fn durable_regrouping_keeps_flat_call_targets_and_empty_rows() {
     assert_eq!(restored.list[3].steps[0].1["action"], 1);
     assert_eq!(restored.list[1].name, "Second");
     for name in ["Before", "Between"] {
-        assert_eq!(restored.sets.iter().filter(|row| row.as_str() == name).count(), 1);
+        assert_eq!(restored.set_rows.iter().filter(|row| row.as_str() == name).count(), 1);
     }
 }
 
@@ -106,8 +106,8 @@ fn duplicate_physical_rows_stay_after_all_original_targets() {
     assert_eq!(restored.list.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["First", "Second", "First copy", "Second copy", "Caller"]);
     assert_eq!(restored.list[4].steps[0].1["action"], 1);
     assert_eq!(restored.list[1].name, "Second");
-    assert_eq!(restored.sets.iter().filter(|name| name.as_str() == "Group").count(), 2);
-    assert_eq!(restored.sets.iter().filter(|name| name.as_str() == "Empty").count(), 1);
+    assert_eq!(restored.set_rows.iter().filter(|name| name.as_str() == "Group").count(), 2);
+    assert_eq!(restored.set_rows.iter().filter(|name| name.as_str() == "Empty").count(), 1);
 }
 
 #[test]
@@ -232,7 +232,9 @@ fn literal_ungrouped_rows_remain_distinct_from_the_unnamed_category() {
         .collect();
     let bytes = atn::write_sets(&files).unwrap();
     let state = library::decode(&bytes).unwrap();
-    assert_eq!(state.sets, ["Ungrouped Actions", "Ungrouped Actions 3", "Ungrouped Actions 2"]);
+    assert_eq!(state.set_rows, ["Ungrouped Actions 3", "Ungrouped Actions 2"]);
+    assert!(state.sets.is_empty());
+    assert_eq!(state.list.iter().map(|action| action.set_slot).collect::<Vec<_>>(), [None, Some(0), Some(1)]);
     assert_eq!(state.list[0].set, None);
     assert_eq!(state.list[1].set.as_deref(), Some("Ungrouped Actions 3"));
     assert_eq!(encode(&state), bytes, "logical disambiguation keeps untouched original wire names");
@@ -887,7 +889,7 @@ fn review_interleaved_set_duplication_keeps_main_insertion_order_and_numeric_tar
     }
     assert_eq!(restored.list[1].set.as_deref(), Some("S copy"));
     assert_eq!(restored.list[2].set.as_deref(), Some("S copy"));
-    assert_eq!(restored.sets.iter().filter(|set| set.as_str() == "S").count(), 2, "both original physical rows survive");
+    assert_eq!(restored.set_rows.iter().filter(|set| set.as_str() == "S").count(), 2, "both original physical rows survive");
 }
 
 #[test]

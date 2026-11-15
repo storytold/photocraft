@@ -662,3 +662,16 @@ fn cancelling_a_foreign_dialog_cannot_release_the_delete_owner() {
     assert!(app.actions_runtime.delete.is_none());
     assert_eq!(app.session.actions.list[0].name, "Retain me");
 }
+
+
+#[test]
+fn modern_same_caption_group_question_deletes_only_its_physical_occurrence() {
+    let mut app = app(); app.session.actions.set_rows = vec!["Same".into(), "Same".into()];
+    app.session.actions.list = ["First", "Second"].into_iter().enumerate().map(|(slot, name)| Action { set: Some("Same".into()), set_slot: Some(slot), ..Action::new(name, Vec::new()) }).collect();
+    let groups = group_folders(&app.session); assert_eq!(groups.len(), 2); assert_ne!(groups[0], groups[1]);
+    let id = ask_delete(&mut app, None, Some(groups[1].clone())).unwrap()["dialog"].as_u64().unwrap();
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(app.session.actions.set_rows, ["Same"]);
+    assert_eq!(app.session.actions.list.iter().map(|action| (action.name.as_str(), action.set_slot)).collect::<Vec<_>>(), [("First", Some(0))]);
+    assert!(app.actions_runtime.delete.is_none());
+}

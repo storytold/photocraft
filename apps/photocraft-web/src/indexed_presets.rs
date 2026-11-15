@@ -1,22 +1,24 @@
 //! IndexedDB owns durable bytes; the engine sees only the bounded, Send memory bridge.
 //! Each batch commits tips, groups and index together, and success means transaction completion.
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
-use js_sys::{Array, Function, Promise, Uint8Array};
+use js_sys::{Array, Function, JsString, Promise, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Blob, Event, EventTarget, IdbDatabase, IdbRequest, IdbTransactionMode};
 
-use crate::preset_bridge::{Batch, Bridge, MAX_RECORDS, WriteError, record_limit};
-use photocraft_engine::preset_store::{ACTIONS_FILE, LEGACY_ACTIONS_FILE, MAX_STORE_BYTES, MIGRATED_ACTIONS_FILE};
+use crate::preset_bridge::{ActionKeys, ActionWrite, Batch, Bridge, MAX_RECORDS, WriteError, record_limit};
+
+mod migration;
+use photocraft_engine::preset_store::{ACTIONS_FILE, LEGACY_ACTIONS_FILE, MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES, MAX_STORE_BYTES};
 
 const DATABASE: &str = "photocraft.presets";
 const FILES: &str = "files";
 const TIMEOUT_MS: f64 = 10_000.0;
 
-mod migration;
-
-/// Retain a DOM exception's name and message so storage failures remain actionable to the caller.
 fn js(e: JsValue) -> String {
     if let Some(exception) = e.dyn_ref::<web_sys::DomException>() {
         format!("{}: {}", exception.name(), exception.message())
@@ -32,7 +34,6 @@ impl Listeners {
     fn new() -> Self {
         Self(Vec::new())
     }
-    /// Own each installed callback until its scoped listener collection detaches it.
     fn add(&mut self, target: &EventTarget, name: &'static str, f: impl FnMut(Event) + 'static) -> Result<(), JsValue> {
         let cb = Closure::<dyn FnMut(Event)>::new(f);
         target.add_event_listener_with_callback(name, cb.as_ref().unchecked_ref())?;
@@ -41,7 +42,6 @@ impl Listeners {
     }
 }
 impl Drop for Listeners {
-    /// Detach every owned event listener before releasing its Rust callback, including on timeout.
     fn drop(&mut self) {
         for (target, name, cb) in &self.0 {
             let _ = target.remove_event_listener_with_callback(name, cb.as_ref().unchecked_ref());
@@ -54,7 +54,6 @@ struct Pending {
     _listeners: Listeners,
 }
 
-/// Pair an IDB request promise with owned success/error listeners for the whole pending operation.
 fn request(request: &IdbRequest) -> Pending {
     let mut listeners = Listeners::new();
     let promise = Promise::new(&mut |resolve, reject| {
@@ -104,33 +103,23 @@ async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
     result
 }
 
-/// Open the versioned store within the shared deadline; close late or superseded connections.
 async fn open(deadline: f64) -> Result<IdbDatabase, String> {
     let factory = web_sys::window().ok_or("no window")?.indexed_db().map_err(js)?.ok_or("IndexedDB unavailable")?;
-    let req = factory.open_with_u32(DATABASE, 2).map_err(js)?;
+    // Version 3 excludes both legacy v2 JSON-pair writers and v2 ATN-Blob writers.
+    let req = factory.open_with_u32(DATABASE, 3).map_err(js)?;
     let mut upgrade = Listeners::new();
-    let blocked = Rc::new(Cell::new(false));
-    let noticed = blocked.clone();
-    upgrade.add(&req, "blocked", move |_| noticed.set(true)).map_err(js)?;
     let upgrade_req = req.clone();
     upgrade
         .add(&req, "upgradeneeded", move |_| {
-            if js_sys::Date::now() >= deadline {
-                if let Some(tx) = upgrade_req.transaction() {
-                    let _ = tx.abort();
+            if js_sys::Date::now() >= deadline { if let Some(tx) = upgrade_req.transaction() { let _ = tx.abort(); } return; }
+            let result = (|| -> Result<(), JsValue> {
+                let db = upgrade_req.result()?.dyn_into::<IdbDatabase>()?;
+                let tx = upgrade_req.transaction().ok_or_else(|| JsValue::from_str("No preset database upgrade transaction"))?;
+                if tx.object_store(FILES).is_err() {
+                    db.create_object_store(FILES)?;
                 }
-                return;
-            }
-            // A versionchange transaction excludes version1 tabs that could still write JSON.
-            // Keep the existing store when upgrading; no second persistence schema is added.
-            let result = upgrade_req.result().and_then(|v| v.dyn_into::<IdbDatabase>()).and_then(|db| {
-                if let Some(tx) = upgrade_req.transaction()
-                    && let Ok(store) = tx.object_store(FILES)
-                {
-                    return Ok(store);
-                }
-                db.create_object_store(FILES)
-            });
+                Ok(())
+            })();
             if result.is_err()
                 && let Some(tx) = upgrade_req.transaction()
             {
@@ -140,22 +129,8 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
         .map_err(js)?;
     let pending = request(&req);
     match before(&pending.promise, deadline).await {
-        Ok(value) => {
-            let db: IdbDatabase = value.dyn_into().map_err(|_| "invalid preset database")?;
-            let connection = db.clone();
-            let close = Closure::<dyn FnMut(Event)>::new(move |_| connection.close());
-            db.set_onversionchange(Some(close.as_ref().unchecked_ref()));
-            close.forget(); // Connection lifetime is the page lifetime.
-            Ok(db)
-        }
+        Ok(value) => value.dyn_into().map_err(|_| "invalid preset database".into()),
         Err(e) => {
-            let e = if blocked.get() {
-                format!(
-                    "{e}; browser storage upgrade is blocked by another tab. Close other tabs for this site, then reload this tab to enable saving. Reloading discards session-only brushes."
-                )
-            } else {
-                e
-            };
             // An open request cannot be cancelled (another tab may block its upgrade). Keep
             // its handlers alive and close any late connection; never hydrate a live session.
             wasm_bindgen_futures::spawn_local(async move {
@@ -172,7 +147,6 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
     }
 }
 
-/// Open and hydrate one startup bridge under a single deadline, closing the connection on read failure.
 pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     let deadline = js_sys::Date::now() + TIMEOUT_MS;
     let db = open(deadline).await?;
@@ -186,7 +160,6 @@ pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     }
 }
 
-/// Bound the record inventory before copying Blob bytes, preserving unreadable entries for recovery.
 async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), String> {
     let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readonly).map_err(js)?;
     let req = tx.object_store(FILES).map_err(js)?.open_cursor().map_err(js)?;
@@ -195,6 +168,8 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
     let mut unreadable = Vec::new();
     let mut total = 0u64;
     let mut seen = 0usize;
+    let mut action_records = Vec::new();
+    let mut action_issue = None;
     let mut next = request(&req);
     loop {
         let value = before(&next.promise, deadline).await?;
@@ -209,7 +184,17 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         let key = cursor.key().map_err(js)?;
         // Inspect key length in JS before allocating its Rust String.
         let name = if key.is_string() && js_sys::JsString::from(key.clone()).length() <= 133 { key.as_string().unwrap_or_default() } else { String::new() };
-        let blob = cursor.value().map_err(js)?.dyn_into::<Blob>();
+        let stored = cursor.value().map_err(js)?;
+        if matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) && !stored.is_instance_of::<Blob>() {
+            match paired_actions(&stored) {
+                Ok(record) => action_records.push((name, record)),
+                Err(error) => action_issue = Some(error),
+            }
+            next = request(&req);
+            cursor.continue_().map_err(js)?;
+            continue;
+        }
+        let blob = stored.dyn_into::<Blob>();
         let record = record_limit(&name).and_then(|limit| {
             let blob = blob.map_err(|_| "record is not a Blob".to_string())?;
             if blob.size() > limit as f64 {
@@ -246,95 +231,203 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         bridge.load(&name, Vec::new())?;
     }
     for (name, blob) in records {
-        let buffer = before(&blob.array_buffer(), deadline).await?;
-        bridge.load(&name, Uint8Array::new(&buffer).to_vec())?;
+        let result = before(&blob.array_buffer(), deadline).await.and_then(|buffer| bridge.load(&name, Uint8Array::new(&buffer).to_vec()));
+        if let Err(error) = result {
+            if name != ACTIONS_FILE {
+                return Err(error);
+            }
+            action_issue = Some(error);
+        }
+    }
+    for (name, (revision, definitions, keys)) in action_records {
+        let result = async {
+            // A paired record beyond the remaining definition budget leaves the ordinary presets usable.
+            if total.saturating_add(definitions.as_ref().map_or(0, |blob| blob.size() as u64)) > MAX_STORE_BYTES {
+                return Err("browser preset store exceeds size limit".into());
+            }
+            let buffer = before(&keys.array_buffer(), deadline).await?;
+            let keys = ActionKeys::decode(&Uint8Array::new(&buffer).to_vec())?;
+            if let Some(blob) = definitions {
+                let buffer = before(&blob.array_buffer(), deadline).await?;
+                bridge.load(&name, Uint8Array::new(&buffer).to_vec())?;
+            }
+            if name == ACTIONS_FILE { bridge.load_action_keys(revision, keys); }
+            else if name == LEGACY_ACTIONS_FILE { bridge.load_legacy_action_keys(revision, keys); }
+            Ok::<_, String>(())
+        }
+        .await;
+        if let Err(error) = result {
+            action_issue = Some(error);
+        }
+    }
+    if let Some(error) = action_issue {
+        // A placeholder tells the engine that this file exists and must be left unchanged.
+        // It never enters a write batch, and the unrelated records loaded above remain usable.
+        bridge.load(ACTIONS_FILE, Vec::new())?;
+        warnings.push(format!("Browser Actions were not loaded: {error}"));
+        bridge.quarantine_actions(error);
     }
     Ok((bridge, warnings))
 }
 
-/// Queue only while the transaction is active (creation or an IDB request callback).
-fn queue_batch(store: &web_sys::IdbObjectStore, batch: &Batch, committed: bool) -> Result<(), String> {
-    for (name, bytes) in batch {
-        if committed && matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) {
-            continue;
-        }
-        let key = JsValue::from_str(name);
-        if let Some(bytes) = bytes {
-            if let Some(migration) = &batch.migration
-                && name == ACTIONS_FILE
-                && migration.published
-            {
-                continue;
-            }
-            let blob = Blob::new_with_u8_array_sequence(&Array::of1(&Uint8Array::from(bytes.as_ref()))).map_err(js)?;
-            let exclusive = batch.migration.as_ref().is_some_and(|migration| name == MIGRATED_ACTIONS_FILE || (name == ACTIONS_FILE && !migration.published));
-            if exclusive {
-                store.add_with_key(&blob, &key).map_err(js)?;
-            } else {
-                store.put_with_key(&blob, &key).map_err(js)?;
-            }
-        } else {
-            store.delete(&key).map_err(js)?;
-        }
+/// A v2 Actions record has one generation, optional definition bytes and Action-only preferences.
+fn paired_actions(value: &JsValue) -> Result<(u64, Option<Blob>, Blob), String> {
+    let invalid = "Invalid paired browser Actions record";
+    let row = value.dyn_ref::<Array>().filter(|row| row.length() == 3).ok_or(invalid)?;
+    let revision = row.get(0);
+    let generation = revision.is_string().then(|| JsString::from(revision.clone())).filter(|s| s.length() <= 20).ok_or(invalid)?;
+    let text = generation.as_string().ok_or(invalid)?;
+    let revision = text.parse::<u64>().ok().filter(|r| *r > 0 && r.to_string() == text).ok_or(invalid)?;
+    let bytes = row.get(1);
+    let definitions = if bytes.is_null() { None } else { Some(bytes.dyn_into::<Blob>().map_err(|_| invalid)?) };
+    let keys = row.get(2).dyn_into::<Blob>().map_err(|_| invalid)?;
+    if keys.size() > MAX_ACTIONS_BYTES as f64 || definitions.as_ref().is_some_and(|blob| blob.size() > MAX_ACTIONS_BYTES as f64) {
+        return Err("Paired browser Actions record is too large".into());
     }
-    Ok(())
+    Ok((revision, definitions, keys))
 }
 
-/// Acknowledge only transaction completion; migration comparisons and writes share one bounded transaction.
-/// A closed connection is replaced without rehydrating over newer unsaved bridge edits.
-pub async fn write(db: &std::rc::Rc<std::cell::RefCell<IdbDatabase>>, batch: &Batch) -> Result<(), WriteError> {
-    if let Some(migration) = &batch.migration
-        && (!matches!(batch.get(LEGACY_ACTIONS_FILE), Some(None))
-            || batch.get(MIGRATED_ACTIONS_FILE).and_then(Option::as_ref).is_none_or(|bytes| bytes.as_ref() != migration.legacy.as_ref())
-            || batch.get(ACTIONS_FILE).and_then(Option::as_ref).is_none_or(|bytes| bytes.as_ref() != migration.atn.as_ref()))
-    {
-        return Err("incomplete Actions migration transaction".into());
-    }
-    let deadline = js_sys::Date::now() + TIMEOUT_MS;
-    // A versionchange handler closes the old connection. Retry replaces only that
-    // connection; it must not rehydrate over the live Bridge's newer unsaved bytes.
-    let connection = db.borrow().clone();
-    let tx = match connection.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite) {
-        Ok(tx) => tx,
-        Err(error) if error.dyn_ref::<web_sys::DomException>().is_some_and(|error| error.name() == "InvalidStateError") => {
-            let connection = open(deadline).await?;
-            *db.borrow_mut() = connection.clone();
-            connection.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite).map_err(js)?
-        }
-        Err(error) => return Err(js(error).into()),
-    };
+fn blob(bytes: &[u8]) -> Result<Blob, String> {
+    Blob::new_with_u8_array_sequence(&Array::of1(&Uint8Array::from(bytes))).map_err(js)
+}
+
+pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), WriteError> {
+    let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite).map_err(js)?;
     let store = tx.object_store(FILES).map_err(js)?;
+    let mut compare = Listeners::new();
+    let deadline = js_sys::Date::now() + TIMEOUT_MS;
+    let mut migration_scope = None;
+    let compare_error = Rc::new(RefCell::new(None));
+    let queued = (|| -> Result<(), String> {
+        match batch {
+            Batch::Files(files) => {
+                for (name, bytes) in files {
+                    let key = JsValue::from_str(name);
+                    if let Some(bytes) = bytes {
+                        store.put_with_key(blob(bytes)?.as_ref(), &key).map_err(js)?;
+                    } else {
+                        store.delete(&key).map_err(js)?;
+                    }
+                }
+            }
+            Batch::Actions(action) => {
+                if action.migration.is_some() { migration_scope = Some(migration::start(&tx, &store, action, deadline)?); return Ok(()); }
+                let keys = action.keys.encode()?;
+                if keys.len() as u64 > MAX_ACTIONS_BYTES {
+                    return Err("Browser Action shortcuts are too large to save".into());
+                }
+                let definitions = action.definitions.as_deref().map(blob).transpose()?.map_or(JsValue::NULL, JsValue::from);
+                let keys = blob(&keys)?;
+                let record = Array::of3(&JsValue::from_str(&action.revision.to_string()), &definitions, keys.as_ref());
+                let base = action.base;
+                let key = JsValue::from_str(ACTIONS_FILE);
+                let request = store.get(&key).map_err(js)?;
+                let read = request.clone();
+                let store = store.clone();
+                let tx = tx.clone();
+                let compare_error = compare_error.clone();
+                // Compare and queue synchronously while this isolated readwrite transaction is active.
+                compare
+                    .add(&request, "success", move |_| {
+                        let outcome = (|| -> Result<(), WriteError> {
+                            let current = read.result().map_err(js)?;
+                            let revision = if current.is_undefined() || current.is_instance_of::<Blob>() {
+                                0
+                            } else {
+                                paired_actions(&current).map_err(WriteError::Blocked)?.0
+                            };
+                            if revision != base {
+                                return Err(WriteError::Stale("Actions changed in another tab.".into()));
+                            }
+                            store.put_with_key(&record, &key).map_err(js)?;
+                            Ok(())
+                        })();
+                        if let Err(error) = outcome {
+                            *compare_error.borrow_mut() = Some(error);
+                            let _ = tx.abort();
+                        }
+                    })
+                    .map_err(js)?;
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = queued {
+        return Err(if tx.abort().is_ok() { WriteError::Aborted(error) } else { WriteError::Uncertain(error) });
+    }
     let mut listeners = Listeners::new();
+    let terminal = Rc::new(Cell::new(None));
     let promise = Promise::new(&mut |resolve, reject| {
+        let completed = terminal.clone();
         if let Err(e) = listeners.add(&tx, "complete", move |_| {
+            completed.set(Some(true));
             let _ = resolve.call0(&JsValue::NULL);
         }) {
             let _ = reject.call1(&JsValue::NULL, &e);
         }
-        for event in ["abort", "error"] {
-            let tx = tx.clone();
-            let failed: Function = reject.clone();
-            let target: EventTarget = tx.clone().into();
-            if let Err(e) = listeners.add(&target, event, move |_| {
-                let e = tx.error().map(JsValue::from).unwrap_or_else(|| JsValue::from_str("preset transaction aborted"));
-                let _ = failed.call1(&JsValue::NULL, &e);
-            }) {
-                let _ = reject.call1(&JsValue::NULL, &e);
-            }
+        let aborted = terminal.clone();
+        let tx_for_error = tx.clone();
+        let failed: Function = reject.clone();
+        if let Err(e) = listeners.add(&tx, "abort", move |_| {
+            aborted.set(Some(false));
+            let e = tx_for_error.error().map(JsValue::from).unwrap_or_else(|| JsValue::from_str("preset transaction aborted"));
+            let _ = failed.call1(&JsValue::NULL, &e);
+        }) {
+            let _ = reject.call1(&JsValue::NULL, &e);
         }
     });
-    let queued =
-        if batch.migration.is_some() { migration::start(&tx, &store, batch, deadline).map(Some) } else { queue_batch(&store, batch, false).map(|_| None) };
-    let scope = match queued {
-        Ok(scope) => scope,
-        Err(error) => {
-            let _ = tx.abort();
-            return Err(error.into());
-        }
-    };
-    let result = before(&promise, deadline).await.map(|_| ()).map_err(WriteError::Failed);
-    if result.is_err() {
-        let _ = tx.abort();
+    let outcome = before(&promise, deadline).await;
+    if let Some(error) = migration_scope.as_ref().and_then(migration::Scope::error) { return Err(error); }
+    if let Some(error) = compare_error.take() {
+        // No put was queued on any comparison failure.
+        return Err(error);
     }
-    scope.as_ref().and_then(migration::Scope::error).map_or(result, Err)
+    match terminal.get() {
+        Some(true) => Ok(()),
+        Some(false) => Err(WriteError::Aborted(outcome.err().unwrap_or_else(|| "Preset transaction aborted".into()))),
+        None => {
+            let _ = tx.abort();
+            let error = outcome.err().unwrap_or_else(|| "No preset transaction result".into());
+            let message = format!("Preset commit could not be confirmed: {error}");
+            let message = if matches!(batch, Batch::Actions(_)) { format!("{message}. Reopen the page before saving Actions again.") } else { message };
+            Err(WriteError::Uncertain(message))
+        }
+    }
+}
+
+
+struct ActionRecord {
+    revision: u64,
+    definitions: Option<Vec<u8>>,
+    keys: Option<ActionKeys>,
+}
+impl ActionRecord {
+    fn pair(&self) -> Option<(u64, ActionKeys)> { self.keys.clone().map(|keys| (self.revision, keys)) }
+}
+async fn action_record(value: JsValue, deadline: f64) -> Result<Option<ActionRecord>, WriteError> {
+    if value.is_undefined() { return Ok(None); }
+    let (revision, definitions, keys) = if value.is_instance_of::<Blob>() { (0, Some(value.dyn_into::<Blob>().map_err(js)?), None) }
+    else { let (revision, definitions, keys) = paired_actions(&value).map_err(WriteError::Blocked)?; (revision, definitions, Some(keys)) };
+    let read = async |blob: Blob| -> Result<Vec<u8>, WriteError> {
+        if blob.size() > MAX_ACTIONS_BYTES as f64 { return Err(WriteError::Blocked("Actions migration record exceeds its file limit".into())); }
+        let buffer = before(&blob.array_buffer(), deadline).await?; Ok(Uint8Array::new(&buffer).to_vec())
+    };
+    let definitions = match definitions { Some(blob) => Some(read(blob).await?), None => None };
+    let keys = match keys { Some(blob) => Some(ActionKeys::decode(&read(blob).await?).map_err(WriteError::Blocked)?), None => None };
+    Ok(Some(ActionRecord { revision, definitions, keys }))
+}
+
+/// Called only by an active request callback after every migration tuple was authenticated.
+fn queue_migration(store: &web_sys::IdbObjectStore, action: &ActionWrite, legacy: &JsValue, committed: bool) -> Result<(), WriteError> {
+    if committed { return Ok(()); }
+    let migration = action.migration.as_ref().ok_or("missing Actions migration identity")?;
+    let definitions = action.definitions.as_deref().map(blob).transpose()?.map_or(JsValue::NULL, JsValue::from);
+    let keys = blob(&action.keys.encode()?)?;
+    let record = Array::of3(&JsValue::from_str(&action.revision.to_string()), &definitions, keys.as_ref());
+    // The original v2 paired value (including its key map) is retained, not reconstructed.
+    store.add_with_key(legacy, &JsValue::from_str(MIGRATED_ACTIONS_FILE)).map_err(js)?;
+    if migration.published { store.put_with_key(&record, &JsValue::from_str(ACTIONS_FILE)).map_err(js)?; }
+    else { store.add_with_key(&record, &JsValue::from_str(ACTIONS_FILE)).map_err(js)?; }
+    store.delete(&JsValue::from_str(LEGACY_ACTIONS_FILE)).map_err(js)?;
+    Ok(())
 }

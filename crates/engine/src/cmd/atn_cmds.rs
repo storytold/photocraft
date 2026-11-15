@@ -57,6 +57,7 @@ mod steps_layer_style;
 mod steps_lookup;
 mod steps_make;
 mod steps_measurement;
+mod steps_mode_change;
 mod steps_path;
 mod steps_perspective_warp;
 mod steps_type_path;
@@ -74,7 +75,7 @@ mod tables;
 use adjustments::{levels_from, selective_from};
 pub use convert::{Imported, ImportedSet, Skipped, Unsupported, export, function_key_name, import, import_with_encoding, normalize_import, parse_function_key};
 #[cfg(test)]
-use convert::{MAX_NAME_CHARS, export_item, normalise};
+use convert::{export_item, normalise};
 #[cfg(test)]
 use descriptors::{
     PCT, PT, PX, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_list, get_num, get_obj, get_ref, layer_ref, long,
@@ -141,8 +142,20 @@ fn photoshop_step_run(_: &mut Session, p: &Value) -> Result<Value> {
     Err(EngineError::Other(format!("Photoshop step \"{name}\" ({event}) has no PhotoCraft equivalent yet; switch it off in the Actions panel to skip it")))
 }
 
+pub use files::validate_replacement;
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec {
+            id: "actions.replace",
+            label: "Replace Actions…",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"path":".atn file"?,"data":base64?,"confirm":true,"encoding":label?} → {sets,actions,warnings,unsupported}. Replaces the whole library with the complete ATN archive."#,
+            enabled: crate::actions_edit_cmds::library_change_enabled,
+            run: files::replace,
+            journal: false,
+        },
         CommandSpec {
             id: "actions.load",
             label: "Load Actions…",
@@ -227,7 +240,16 @@ mod frame_section_tests;
 mod recorded_tools_tests;
 
 #[cfg(test)]
+mod mode_change_tests;
+
+#[cfg(test)]
 mod artboard_section_tests;
 
 #[cfg(test)]
 mod fade_step_tests;
+
+#[cfg(test)]
+#[path = "atn_cmds/canvas_size_default_anchor_tests.rs"]
+mod canvas_size_default_anchor_tests;
+
+pub(crate) use convert::MAX_NAME_CHARS;

@@ -242,63 +242,22 @@ pub(crate) fn explicit_icon(action: &mut Action) {
 
 /// Use an empty-row carrier only when both its current slot and displayed row still match.
 pub(super) fn empty_source(state: &ActionState, slot: usize) -> Option<Arc<SetMetadata>> {
-    state.atn_set_rows.iter().find(|entry| entry.slot == slot && state.sets.get(slot) == Some(&entry.row)).map(|entry| entry.source.clone())
+    state.atn_set_rows.iter().find(|entry| entry.slot == slot && state.set_rows.get(slot) == Some(&entry.row)).map(|entry| entry.source.clone())
 }
 
 /// Append one physical row and its optional carrier; provenance starts unset until explicitly bound.
 pub(crate) fn install_row(state: &mut ActionState, name: &str, source: Option<Arc<SetMetadata>>) {
-    let slot = state.sets.len();
-    state.library.rows.resize(slot, None);
-    state.library.rows.push(None);
-    state.sets.push(name.to_string());
-    if let Some(source) = source {
-        state.atn_set_rows.push(SetRowMetadata { slot, row: name.to_string(), source });
-    }
+    let slot = state.set_rows.len();
+    crate::actions_cmds::library::insert_folder(state, slot, name, None);
+    if let Some(source) = source { state.atn_set_rows.push(SetRowMetadata { slot, row: name.into(), source }); }
 }
 
-/// Copy every physical row of one logical folder, retaining empty-set metadata and moving
-/// surviving row carriers with the insertion. Action clones already retain their raw entries.
-pub(crate) fn duplicate_set_rows(state: &mut ActionState, source: &str, name: &str) {
-    let rows: Vec<_> = state.sets.iter().enumerate().filter_map(|(slot, row)| (row == source).then_some(slot)).collect();
-    let at = rows.last().map_or(state.sets.len(), |slot| slot + 1);
-    let mut copied: Vec<_> = rows.iter().map(|&slot| empty_source(state, slot)).collect();
-    if copied.is_empty() {
-        copied.push(group_source(state, source));
-    }
-    let count = copied.len();
-    state.library.rows.resize(state.sets.len(), None);
-    let raw: Vec<_> = if rows.is_empty() { vec![None] } else { rows.iter().map(|&slot| state.library.rows.get(slot).cloned().flatten()).collect() };
-    state.library.rows.splice(at..at, raw);
-    for entry in &mut state.atn_set_rows {
-        if entry.slot >= at {
-            entry.slot = entry.slot.saturating_add(count);
-        }
-    }
-    state.sets.splice(at..at, std::iter::repeat_n(name.to_string(), count));
-    for (offset, source) in copied.into_iter().enumerate() {
-        if let Some(source) = source {
-            state.atn_set_rows.push(SetRowMetadata { slot: at + offset, row: name.to_string(), source });
-        }
-    }
-}
-
-/// Retire selected CURRENT rows and move surviving carriers with their rows.
+/// Remove exactly the selected canonical occurrences and remap every surviving carrier.
 pub(crate) fn retire_sets(state: &mut ActionState, names: &std::collections::HashSet<String>) {
-    let metadata: std::collections::BTreeMap<usize, SetRowMetadata> =
-        std::mem::take(&mut state.atn_set_rows).into_iter().map(|entry| (entry.slot, entry)).collect();
-    let rows = std::mem::take(&mut state.sets);
-    let origins = std::mem::take(&mut state.library.rows);
-    for (old, row) in rows.into_iter().enumerate() {
-        if names.contains(&row) {
-            continue;
-        }
-        let slot = state.sets.len();
-        if let Some(entry) = metadata.get(&old).filter(|entry| entry.row == row) {
-            state.atn_set_rows.push(SetRowMetadata { slot, row: row.clone(), source: entry.source.clone() });
-        }
-        state.library.rows.push(origins.get(old).cloned().flatten());
-        state.sets.push(row);
-    }
+    let keep: Vec<_> = state.set_rows.iter().map(|name| !names.contains(name)).collect();
+    crate::actions_cmds::library::retain_folders(state, &keep);
+    state.sets.retain(|name| !names.contains(name));
+    for name in names { crate::actions_cmds::library::retire_legacy_group(state, name); }
 }
 
 /// Inherit group metadata only when all action and empty-row carriers identify one source set.
@@ -308,7 +267,7 @@ fn group_source(state: &ActionState, name: &str) -> Option<Arc<SetMetadata>> {
         Ok(source) => source,
         Err(_) => return None,
     };
-    for (slot, _) in state.sets.iter().enumerate().filter(|(_, row)| row.as_str() == name) {
+    for (slot, _) in state.set_rows.iter().enumerate().filter(|(_, row)| row.as_str() == name) {
         if let Some(candidate) = empty_source(state, slot) {
             if let Some(current) = &source {
                 if !same_set(current, &candidate) {
@@ -343,7 +302,7 @@ pub(crate) fn assign_set_metadata(state: &mut ActionState, action: usize, target
 pub(crate) fn selection<'a>(state: &ActionState, action: &'a Action) -> Selection<'a> {
     let source =
         action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| group_source(state, super::logical_set_name(action.set.as_deref())));
-    Selection { actions: vec![action], source, raw: state.library.row_source(&state.sets, action) }
+    Selection { actions: vec![action], source, raw: state.library.row_source(&state.set_rows, action) }
 }
 
 /// Translate only caller-owned scope fields; embedded Batch libraries retain their namespace.
@@ -366,10 +325,24 @@ pub(crate) fn remap_scopes(action: &mut Action, names: &std::collections::HashMa
 pub(crate) fn portable_actions(state: &ActionState, groups: &[(String, Selection<'_>)], skip_unsupported: bool) -> Result<Vec<Vec<Action>>> {
     let positions: std::collections::HashMap<_, _> =
         groups.iter().flat_map(|(_, selection)| &selection.actions).enumerate().map(|(index, action)| (std::ptr::from_ref(*action), index)).collect();
+    let target_sets: std::collections::HashMap<_, _> = groups.iter().flat_map(|(name, selection)| selection.actions.iter().map(move |action| (std::ptr::from_ref(*action), name.as_str()))).collect();
     let mut output: Vec<Vec<Action>> = groups.iter().map(|(_, selection)| selection.actions.iter().map(|action| (**action).clone()).collect()).collect();
     let mut result = Ok(());
     for action in output.iter_mut().flatten() {
         crate::actions_cmds::visit_calls(&mut action.steps, &mut |id, params, _| {
+            // Name-only calls resolve in the original library before physical grouping changes order.
+            let branches: &[(&str, &str, &str)] = match id {
+                "actions.play" => &[("action", "set", "actionId")],
+                "actions.conditional" => &[("then", "thenSet", "thenActionId"), ("else", "elseSet", "elseActionId")],
+                _ => &[],
+            };
+            for &(name, scope, identity) in branches {
+                if params.get(identity).is_some() || !params.get(name).is_some_and(serde_json::Value::is_string) { continue; }
+                let target = if id == "actions.play" { Some(params.clone()) } else { crate::actions_cmds::conditional_branch(params, name).ok().flatten() };
+                if let Some(index) = target.as_ref().and_then(|target| crate::actions_cmds::resolve_play_target(&state.list, target, "actions.save").ok()) {
+                    if let Some(group) = target_sets.get(&std::ptr::from_ref(&state.list[index])) { params[scope] = serde_json::json!(group); }
+                }
+            }
             if !matches!(id, "actions.play" | "file.automate.batch" | "file.automate.createDroplet")
                 || !params.get("action").is_some_and(serde_json::Value::is_number)
             {
@@ -392,143 +365,7 @@ pub(crate) fn portable_actions(state: &ActionState, groups: &[(String, Selection
 
 /// Build the portable logical-set selection, preserving its opaque metadata and enforcing archive limits.
 pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<Vec<(&'a str, Selection<'a>)>> {
-    groups_ordered(state, only, false)
-}
-
-/// Durable libraries preserve flat resolution order, including interleaved logical sets.
-pub(crate) fn library_groups(state: &ActionState) -> Result<Vec<(&str, Selection<'_>)>> {
-    groups_ordered(state, None, true)
-}
-
-/// Select rows with their opaque metadata and reject archive-count overflow.
-/// Durable output preserves flat call resolution; portable output groups the chosen logical set.
-fn groups_ordered<'a>(state: &'a ActionState, only: Option<&str>, durable: bool) -> Result<Vec<(&'a str, Selection<'a>)>> {
-    if state.list.len() > atn::MAX_TOTAL_ACTIONS || state.sets.len() > atn::MAX_SETS {
-        return Err("action library exceeds archive limits".into());
-    }
-    let raw_rows = state.library.row_index(&state.sets);
-    let mut seen = std::collections::HashSet::new();
-    let names: Vec<_> = state
-        .list
-        .iter()
-        .map(|action| super::logical_set_name(action.set.as_deref()))
-        .chain(state.sets.iter().map(String::as_str))
-        .filter(|name| only.is_none_or(|only| only == *name) && seen.insert(*name))
-        .collect();
-    let sources: std::collections::HashMap<_, _> = names.iter().map(|&name| (name, group_source(state, name))).collect();
-    let mut out: Vec<(&str, Selection<'a>)> = Vec::new();
-    let ordered: Vec<_> = if durable {
-        state.list.iter().collect()
-    } else {
-        names.iter().flat_map(|name| state.list.iter().filter(move |action| super::logical_set_name(action.set.as_deref()) == *name)).collect()
-    };
-    for action in ordered {
-        let name = super::logical_set_name(action.set.as_deref());
-        let source = action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| sources.get(name).cloned().flatten());
-        let raw = raw_rows.source(action);
-        let existing = out.last_mut().filter(|(previous, selection)| {
-            *previous == name
-                && selection.raw == raw
-                && match (&selection.source, &source) {
-                    (None, None) => true,
-                    (Some(left), Some(right)) => same_set(left, right),
-                    _ => false,
-                }
-        });
-        if let Some((_, selection)) = existing {
-            selection.actions.push(action);
-        } else {
-            if out.len() >= atn::MAX_SETS {
-                return Err("too many sets in actions archive".into());
-            }
-            out.push((name, Selection { actions: vec![action], source, raw }));
-        }
-    }
-    for name in names {
-        for (slot, _) in state.sets.iter().enumerate().filter(|(_, row)| row.as_str() == name) {
-            let raw = state.library.rows.get(slot).cloned().flatten();
-            if let Some(raw) = raw.as_ref()
-                && !out.iter().any(|(current, selection)| *current == name && selection.raw.as_ref() == Some(raw))
-            {
-                if out.len() >= atn::MAX_SETS {
-                    return Err("too many sets in actions archive".into());
-                }
-                out.push((name, Selection { actions: Vec::new(), source: empty_source(state, slot), raw: Some(raw.clone()) }));
-            }
-            if let Some(source) = empty_source(state, slot)
-                && !out.iter().any(|(current, selection)| *current == name && selection.source.as_ref().is_some_and(|existing| same_set(existing, &source)))
-            {
-                if out.len() >= atn::MAX_SETS {
-                    return Err("too many sets in actions archive".into());
-                }
-                out.push((name, Selection { actions: Vec::new(), source: Some(source), raw: state.library.rows.get(slot).cloned().flatten() }));
-            }
-        }
-        if !out.iter().any(|(current, _)| *current == name) {
-            if out.len() >= atn::MAX_SETS {
-                return Err("too many sets in actions archive".into());
-            }
-            out.push((name, Selection { actions: Vec::new(), source: sources.get(name).cloned().flatten(), raw: None }));
-        }
-    }
-    // Restore physical rows only if the relevant order remains unchanged. Durable storage
-    // must preserve the entire flat list because numeric and first-name calls resolve there.
-    let mut slots = std::collections::HashMap::new();
-    for row in &state.atn_set_rows {
-        if state.sets.get(row.slot) == Some(&row.row) {
-            let key = (row.row.as_str(), Arc::as_ptr(&row.source.source), row.source.ordinal);
-            slots.entry(key).and_modify(|slot: &mut usize| *slot = (*slot).min(row.slot)).or_insert(row.slot);
-        }
-    }
-    let raw_slots: std::collections::HashMap<_, _> =
-        state.library.rows.iter().enumerate().filter_map(|(slot, source)| Some(((state.sets.get(slot)?.as_str(), source.as_ref()?.key()), slot))).collect();
-    let mut physical: Vec<_> = (0..out.len()).collect();
-    physical.sort_by_cached_key(|&index| {
-        let (name, selection) = &out[index];
-        selection
-            .raw
-            .as_ref()
-            .and_then(|raw| raw_slots.get(&(*name, raw.key())).copied())
-            .or_else(|| selection.source.as_ref().and_then(|source| slots.get(&(*name, Arc::as_ptr(&source.source), source.ordinal)).copied()))
-            .unwrap_or(usize::MAX)
-    });
-    let preserves_order = if durable {
-        let projected: Vec<_> = physical.iter().flat_map(|&index| out[index].1.actions.iter().map(|action| std::ptr::from_ref(*action))).collect();
-        projected == state.list.iter().map(std::ptr::from_ref).collect::<Vec<_>>()
-    } else {
-        panel_projection(&out, 0..out.len()) == panel_projection(&out, physical.iter().copied())
-    };
-    if !preserves_order {
-        return Ok(out);
-    }
-    Ok(physical
-        .into_iter()
-        .map(|index| {
-            let (name, selection) = &out[index];
-            (*name, Selection { actions: selection.actions.clone(), source: selection.source.clone(), raw: selection.raw.clone() })
-        })
-        .collect())
-}
-
-/// Temporary pointer identities compare panel order without comparing action/descriptor values.
-fn panel_projection<'a>(groups: &[(&'a str, Selection<'a>)], order: impl IntoIterator<Item = usize>) -> Vec<(&'a str, Vec<*const Action>)> {
-    let mut actions = std::collections::HashMap::<&str, Vec<*const Action>>::new();
-    let mut all = Vec::new();
-    let mut nonempty = Vec::new();
-    for index in order {
-        let (name, selection) = &groups[index];
-        let members = actions.entry(*name).or_insert_with(|| {
-            all.push(*name);
-            Vec::new()
-        });
-        if members.is_empty() && !selection.actions.is_empty() {
-            nonempty.push(*name);
-        }
-        members.extend(selection.actions.iter().map(|action| std::ptr::from_ref(*action)));
-    }
-    all.retain(|name| actions.get(name).is_some_and(Vec::is_empty));
-    nonempty.extend(all);
-    nonempty.into_iter().map(|name| (name, actions.remove(name).unwrap_or_default())).collect()
+    Ok(crate::actions_cmds::library::projected_groups(state)?.into_iter().filter(|(_, name, _)| only.is_none_or(|only| only == *name)).map(|(_, name, selection)| (name, selection)).collect())
 }
 
 pub(crate) struct Decoded {
@@ -582,6 +419,17 @@ fn payload(file: &AtnFile) -> Option<&[u8]> {
 
 pub(crate) fn is_wrapper(file: &AtnFile) -> bool {
     payload(file).is_some()
+}
+
+/// Only the trusted local-library loader consumes this field. Portable exports remove it.
+pub(crate) fn identity_bytes(source: Option<&Source>) -> Result<Option<Vec<u8>>> {
+    let Some(source) = source else { return Ok(None) };
+    let root = source.root.parsed()?;
+    let mut fields = root.items.iter().filter(|(id, _)| id.is("photocraftLibraryIdentityV1"));
+    let Some((_, value)) = fields.next() else { return Ok(None) };
+    if fields.next().is_some() { return Err("duplicate local library identity metadata".into()); }
+    let D::RawData(bytes) = value else { return Err("invalid local library identity metadata".into()) };
+    Ok(Some(bytes.clone()))
 }
 
 /// Read at most one typed migration receipt from the retained outer descriptor.
@@ -646,7 +494,7 @@ fn decode_inner(files: &[AtnFile], library: bool, raw_outer: Option<&[u8]>) -> R
         let signature_item = signature_file.actions.first_mut().and_then(|action| action.items.first_mut()).ok_or("missing sidecar signature item")?;
         signature_item.descriptor = Some(Descriptor::from_bytes(&outer_signature).map_err(|error| error.to_string())?);
         let mut signature = atn::write(&signature_file).map_err(|error| error.to_string())?;
-        signature.extend(root.patch(&[("sets", Some(objects(&[])?)), ("photocraftLegacyJsonV1", None), (EMPTY_LIBRARY, None)])?);
+        signature.extend(root.patch(&[("sets", Some(objects(&[])?)), ("photocraftLegacyJsonV1", None), ("photocraftLibraryIdentityV1", None), (EMPTY_LIBRARY, None)])?);
         let source = Arc::new(Source { wrapper: atn::write(file).map_err(|error| error.to_string())?, outer, root, signature });
         result.source = Some(source.clone());
         let mut ordinal = 0usize;
@@ -727,6 +575,22 @@ pub(crate) fn apply(action: &mut Action, metadata: ActionMetadata) {
     action.atn_metadata = Some(metadata);
 }
 
+/// Identity-only local carriers need not manufacture a new opaque action definition.
+/// Drop only an exact canonical entry; original/noncanonical/unknown bytes remain attached.
+pub(crate) fn apply_local(action: &mut Action, metadata: ActionMetadata, identity_carrier: bool) -> Result<()> {
+    if identity_carrier {
+        action.description = metadata.description.clone(); action.icon = metadata.icon.clone(); action.automation = metadata.automation;
+        if entry(action)?.as_slice() == metadata.raw.bytes() { return Ok(()); }
+    }
+    apply(action, metadata); Ok(())
+}
+
+/// Bind a private local identity to opaque metadata without duplicating the definition codec.
+pub(crate) fn identity_entry(action: &Action) -> Result<Vec<u8>> { entry(action) }
+pub(crate) fn identity_set(source: Option<&SetMetadata>) -> Result<Vec<u8>> {
+    match source { Some(source) => source.raw.patch(&[("actions", None)]), None => Ok(Descriptor::new("null").with("setColorIndex", D::Integer(0)).to_bytes()) }
+}
+
 /// Patch only changed description/icon fields; unchanged and unknown metadata retains its original bytes.
 fn entry(action: &Action) -> Result<Vec<u8>> {
     // Bound strings before UnicodeString allocates their UTF16 representation.
@@ -786,7 +650,7 @@ pub(super) fn source_for(actions: &[&Action]) -> Result<Option<Arc<SetMetadata>>
 }
 
 pub(super) fn append(files: &mut Vec<AtnFile>, selected: &[Selection<'_>]) -> Result<()> {
-    append_inner(files, selected, false, None, None).map(|_| ())
+    append_inner(files, selected, false, None, None, None).map(|_| ())
 }
 
 /// Encode the complete library carrier, including an explicit empty marker when needed.
@@ -796,9 +660,10 @@ pub(crate) fn append_library(
     selected: &[Selection<'_>],
     source: Option<Arc<Source>>,
     receipt: Option<&crate::actions_cmds::library::LegacyOrigin>,
+    identities: Option<&[u8]>,
 ) -> Result<Option<Vec<u8>>> {
-    let force = files.is_empty() || receipt.is_some() || source.is_some();
-    append_inner(files, selected, force, source, receipt)
+    let force = files.is_empty() || receipt.is_some() || source.is_some() || identities.is_some();
+    append_inner(files, selected, force, source, receipt, identities)
 }
 
 pub(crate) fn action_needs_metadata(action: &Action) -> bool {
@@ -813,6 +678,7 @@ fn append_inner(
     force: bool,
     source: Option<Arc<Source>>,
     receipt: Option<&crate::actions_cmds::library::LegacyOrigin>,
+    identities: Option<&[u8]>,
 ) -> Result<Option<Vec<u8>>> {
     if files.len() != selected.len() {
         return Err("sidecar export selection mismatch".into());
@@ -885,6 +751,7 @@ fn append_inner(
         // A portable subset is not proof that the complete legacy library was published.
         RawDescriptor::new(&root)?.patch(&[("photocraftLegacyJsonV1", None)])?
     };
+    let root = RawDescriptor::new(&root)?.patch(&[("photocraftLibraryIdentityV1", identities.map(|bytes| value_bytes(D::RawData(bytes.to_vec()))).transpose()?)])?;
     let mut payload = 16u32.to_be_bytes().to_vec();
     extend(&mut payload, &root)?;
     let outer = match &source {

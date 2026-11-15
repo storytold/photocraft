@@ -1,7 +1,7 @@
-use super::descriptors::{desc, get_obj, jstr};
+use super::descriptors::{desc, get_obj, get_ref, jstr};
 use super::events::{event_and_descriptor, event_for};
 use super::fields::Mapped;
-use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, Descriptor, PHOTOSHOP_STEP, UnicodeString, Value, atn, json};
+use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, Descriptor, ReferenceItem, PHOTOSHOP_STEP, UnicodeString, Value, atn, json};
 use crate::actions_cmds::{color_from_atn, color_to_atn};
 
 // ------------------------------------------------------------------ import
@@ -230,10 +230,35 @@ pub(super) fn normalise(v: &mut Value) {
 
 /// Longest action or set name kept (Photoshop's own limit is 255). A file's names are lengths it
 /// chooses, and each is copied into every action and every unsupported-step diagnostic.
-pub(super) const MAX_NAME_CHARS: usize = 1024;
+pub(crate) const MAX_NAME_CHARS: usize = 1024;
 
 pub(super) fn clip_name(s: &str) -> String {
     s.chars().take(MAX_NAME_CHARS).collect()
+}
+
+/// Whole-library replacement resolves these explicit scopes against the archive.
+fn retain_action_scopes(d: &Descriptor, id: &str, params: &mut Value) {
+    let fields: &[(&str, &str)] = match id {
+        "actions.play" => &[("null", "set")],
+        "actions.conditional" => &[("then", "thenSet"), ("else", "elseSet")],
+        _ => return,
+    };
+    for (reference, scope) in fields {
+        if let Some([ReferenceItem::Name { class: action, .. }, set, ..]) = get_ref(d, reference)
+            && action.class_id.is("Actn")
+        {
+            match set {
+                ReferenceItem::Name { class, name } if class.class_id.is("ASet") => {
+                    params[*scope] = json!(clip_name(&name.to_string_lossy()));
+                }
+                // An indexed set is explicit, but its archive occurrence is unknown.
+                ReferenceItem::Index { class, index } if class.class_id.is("ASet") => {
+                    params[*scope] = json!(index);
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// The durable library retains all native bytes; external files accept the recorder's command surface.
@@ -296,6 +321,7 @@ fn convert_action(
                 return Err("too many converted steps in one action".into());
             }
             if !is_native {
+                if let Some(descriptor) = &item.descriptor { retain_action_scopes(descriptor, &s.0, &mut s.1); }
                 normalise(&mut s.1);
             }
             let idx = action.steps.len();
@@ -455,7 +481,9 @@ pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
 
 /// [`import`], reading 8-bit step names in `encoding` (a label such as `"shift_jis"` or
 /// `"gbk"`) instead of working it out. An unknown label fails.
-pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> {
+pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> { import_with_owners(bytes, encoding).map(|(imported, _)| imported) }
+
+fn import_with_owners(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<(Imported, Vec<usize>), String> {
     let files = atn::parse_sets_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
     // A legacy decoder may return a valid prefix with unread bytes; publishing it would lose the tail.
     if bytes.starts_with(&12u32.to_be_bytes()) && files.iter().any(|file| file.warnings.iter().any(|warning| warning.ends_with(" trailing bytes ignored"))) {
@@ -463,6 +491,7 @@ pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result
     }
     let mut metadata = super::sidecar::decode(&files)?;
     let mut out = Imported::default();
+    let mut unsupported_rows = Vec::new();
     let mut total = 0usize;
     let reserved = std::iter::once(super::UNGROUPED_SET.to_string()).chain(
         files
@@ -498,6 +527,7 @@ pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result
         let start = out.actions.len();
         for (at, action) in file.actions.iter().enumerate() {
             let mut converted = convert_action(file, action, &set, &mut out.unsupported, &mut total, None, NativeInput::Portable)?;
+            unsupported_rows.resize(out.unsupported.len(), out.actions.len());
             if let Some(value) = metadata.actions.get_mut(index).and_then(|actions| actions.get_mut(at)).and_then(Option::take) {
                 super::sidecar::apply(&mut converted, value);
             }
@@ -511,7 +541,7 @@ pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result
         let source = metadata.sets.get_mut(index).and_then(Option::take);
         out.sets.push(ImportedSet { name: set, wire_name, actions: start..out.actions.len(), metadata: source });
     }
-    Ok(out)
+    Ok((out, unsupported_rows))
 }
 
 // ------------------------------------------------------------------ export
@@ -653,6 +683,72 @@ pub fn parse_function_key(key: &str) -> Option<(u16, bool, bool)> {
     Some((n, shift, command))
 }
 
+/// Resolve export targets once; repeated calls never scan the selected library again.
+struct ExportTargets<'a> {
+    actions: &'a [&'a Action],
+    ids: std::collections::HashMap<&'a str, Option<usize>>,
+    clipped: std::collections::HashMap<String, usize>,
+    names: std::collections::HashMap<&'a str, Option<usize>>,
+    scopes: std::collections::HashMap<(&'a str, &'a str), Option<usize>>,
+    wire_sets: std::collections::HashMap<*const Action, &'a str>,
+}
+
+impl<'a> ExportTargets<'a> {
+    fn new(actions: &'a [&'a Action], groups: &[(&'a str, super::sidecar::Selection<'a>)]) -> Self {
+        let mut out = Self { actions, ids: Default::default(), clipped: Default::default(), names: Default::default(), scopes: Default::default(), wire_sets: groups.iter().flat_map(|(name, group)| group.actions.iter().map(move |action| (std::ptr::from_ref(*action), *name))).collect() };
+        for (index, action) in actions.iter().enumerate() {
+            if let Some(id) = action.action_id.as_deref() {
+                out.ids.entry(id).and_modify(|row| *row = None).or_insert(Some(index));
+            }
+            *out.clipped.entry(clip_name(action.name.trim_end_matches('\0'))).or_default() += 1;
+            out.names.entry(action.name.as_str()).and_modify(|row| *row = None).or_insert(Some(index));
+            if let Some(set) = action.set.as_deref() {
+                out.scopes.entry((set, action.name.as_str())).and_modify(|row| *row = None).or_insert(Some(index));
+            }
+        }
+        out
+    }
+
+    fn by_id(&self, id: &Value) -> Option<&Action> {
+        let id = id.as_str().filter(|id| crate::actions_cmds::valid_action_id(id))?;
+        let action = self.actions[(*self.ids.get(id)?)?];
+        (self.clipped.get(&clip_name(action.name.trim_end_matches('\0'))) == Some(&1)).then_some(action)
+    }
+
+    fn by_name(&self, name: &str, scope: Option<&str>) -> Option<&Action> {
+        let row = scope.map_or_else(|| self.names.get(name), |scope| self.scopes.get(&(scope, name))).copied().flatten()?;
+        self.actions.get(row).copied()
+    }
+
+    fn internal(&self, name: &str, scope: Option<&str>) -> bool {
+        scope.map_or_else(|| self.names.contains_key(name), |scope| self.scopes.contains_key(&(scope, name)))
+    }
+}
+
+/// ATN uses names for these calls. Only translate an ID when that name identifies
+/// the same exported row; an absent or ambiguous target is an unsupported step.
+fn export_targeted_items(id: &str, params: &Value, set: &str, targets: &ExportTargets<'_>) -> Option<Vec<AtnItem>> {
+    let fields: &[(&str, &str, &str)] = match id {
+        "actions.play" => &[("actionId", "action", "set")],
+        "actions.conditional" => &[("thenActionId", "then", "thenSet"), ("elseActionId", "else", "elseSet")],
+        _ => return export_items(id, params, set),
+    };
+    let mut params = params.clone();
+    for (key, name, scope) in fields {
+        if let Some(value) = params.get(*key) {
+            let action = targets.by_id(value)?;
+            params[*name] = json!(action.name);
+            params[*scope] = json!(targets.wire_sets.get(&std::ptr::from_ref(action)).copied().unwrap_or(set));
+        } else if let Some(target) = params.get(*name).and_then(Value::as_str) {
+            let original_scope = params.get(*scope).filter(|value| !value.is_null()).or_else(|| params.get("set")).and_then(Value::as_str);
+            if targets.internal(target, original_scope) {
+                if let Some(action) = targets.by_name(target, original_scope) { params[*scope] = json!(targets.wire_sets.get(&std::ptr::from_ref(action)).copied().unwrap_or(set)); }
+            }
+        }
+    }
+    export_items(id, &params, set)
+}
+
 /// The `.atn` bytes of `actions` as the set `set`. `function_keys` gives each action's key
 /// (`F1`…`F15`, with `Shift+` and `Cmd+` as [`function_key_name`] writes them). PhotoCraft-only steps
 /// use the reserved native event if portable import permits them, otherwise export fails.
@@ -696,8 +792,10 @@ pub(super) fn export_groups(
     let mut skipped = Vec::new();
     let mut files = Vec::with_capacity(groups.len().min(atn::MAX_SETS));
     let mut written = 0usize;
+    let all_actions: Vec<_> = groups.iter().flat_map(|(_, selection)| selection.actions.iter().copied()).collect();
+    let targets = ExportTargets::new(&all_actions, groups);
     for (set, selection) in groups {
-        files.push(export_set(set, &selection.actions, function_keys, skip_unsupported, &mut skipped, &mut written)?);
+        files.push(export_set(set, &selection.actions, function_keys, skip_unsupported, &mut skipped, &mut written, &targets)?);
     }
     let selected: Vec<_> = groups
         .iter()
@@ -716,20 +814,25 @@ fn export_set(
     skip_unsupported: bool,
     skipped: &mut Vec<Skipped>,
     written: &mut usize,
+    targets: &ExportTargets<'_>,
 ) -> std::result::Result<AtnFile, String> {
     let mut file =
         AtnFile { name: UnicodeString::new_nul(super::wire_set_name(set)), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
     for a in actions {
         let color = color_to_atn(&a.color).ok_or_else(|| format!("action `{}` has an invalid colour", a.name))?;
         let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, color, ..Default::default() };
-        if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| n == &a.name).and_then(|(_, key)| parse_function_key(key)) {
+        if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| a.action_id.as_deref().is_some_and(|id| n == &crate::actions_cmds::occurrence_key(id))).or_else(|| function_keys.iter().find(|(n, _)| (a.legacy_shortcut_owner || targets.clipped.get(&clip_name(a.name.trim_end_matches('\0'))) == Some(&1)) && (n == &a.name || n == &format!("{}{}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX, a.name)))).and_then(|(_, key)| parse_function_key(key)) {
             (out.function_key, out.shift, out.command) = (n, shift, command);
         }
         for (i, (id, params)) in a.steps.iter().enumerate() {
             // Portable export keeps the existing Photoshop mapping contract (including its
             // explicit defaults). The durable library uses the stricter library_items path.
-            let items = match export_items(id, params, set) {
+            let items = match export_targeted_items(id, params, set, targets) {
                 Some(items) => items,
+                None if (id == "actions.play" && params.get("actionId").is_some()) || (id == "actions.conditional" && ["thenActionId", "elseActionId"].iter().any(|key| params.get(*key).is_some())) => {
+                    if skip_unsupported { skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() }); continue; }
+                    return Err(format!("step {} of `{}` has an absent or ambiguous ID-bound target in this portable selection; pass \"skipUnsupported\": true to leave it out", i + 1, a.name));
+                }
                 None if id == PHOTOSHOP_STEP => {
                     if skip_unsupported {
                         skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
@@ -802,4 +905,31 @@ impl UniqueNames {
             }
         }
     }
+}
+
+
+pub(super) struct ReplacementSet {
+    pub imported: Imported,
+    pub keys: Vec<(usize, String)>,
+}
+
+pub(super) fn import_sets(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Vec<(ReplacementSet, Vec<usize>)>, String> {
+    let (mut imported, unsupported_rows) = import_with_owners(bytes, encoding)?;
+    if let Ok(provenance) = crate::actions_cmds::library::decode_import(bytes) { for (action, original) in imported.actions.iter_mut().zip(&provenance.list) { crate::actions_cmds::library::bind_import(action, original); } }
+    let mut out = Vec::with_capacity(imported.sets.len());
+    for set in &imported.sets {
+        let actions = imported.actions[set.actions.clone()].to_vec();
+        let keys = imported.action_keys[set.actions.clone()].iter().enumerate().filter_map(|(i, key)| key.clone().map(|key| (i, key))).collect();
+        let mut unsupported = Vec::new();
+        let mut owners = Vec::new();
+        for (issue, &owner) in imported.unsupported.iter().zip(&unsupported_rows) {
+            if set.actions.contains(&owner) { unsupported.push(issue.clone()); owners.push(owner - set.actions.start); }
+        }
+        let mut part = Imported { set: set.name.clone(), actions, unsupported, warnings: imported.warnings.clone(), encoding: imported.encoding.clone(), ..Default::default() };
+        part.action_keys = imported.action_keys[set.actions.clone()].to_vec();
+        part.function_keys = part.actions.iter().zip(&part.action_keys).filter_map(|(action, key)| key.clone().map(|key| (action.name.clone(), key))).collect();
+        part.sets.push(ImportedSet { name: set.name.clone(), wire_name: set.wire_name.clone(), actions: 0..part.actions.len(), metadata: set.metadata.clone() });
+        out.push((ReplacementSet { imported: part, keys }, owners));
+    }
+    Ok(out)
 }
