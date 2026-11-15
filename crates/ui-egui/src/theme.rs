@@ -818,6 +818,11 @@ impl Tokens {
         self.histogram_bg
     }
 
+    /// Selection Brush coverage, independent of the chrome theme.
+    pub fn selection_brush_overlay(&self, rgb: [f32; 3], opacity: f32) -> Color32 {
+        Color32::from(egui::Rgba::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], opacity / 100.0))
+    }
+
     /// The background behind selected text in a text field (#3789): a subtle shade rather than
     /// egui's default blue. The monochrome Pro themes use a grey so a selection doesn't read as a
     /// second accent; coloured themes keep their own accent. Scoped to text fields by

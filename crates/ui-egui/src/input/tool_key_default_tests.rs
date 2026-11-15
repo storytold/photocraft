@@ -69,7 +69,7 @@ fn shift_w_cycles_in_toolbar_order() {
     let ctx = egui::Context::default();
     app.ui.tool = Tool::ObjectSelection;
 
-    for expected in [Tool::QuickSelection, Tool::MagicWand, Tool::ObjectSelection] {
+    for expected in [Tool::QuickSelection, Tool::MagicWand, Tool::SelectionBrush, Tool::ObjectSelection] {
         press(&mut app, &ctx, Key::W, Modifiers::SHIFT);
         assert_eq!(app.ui.tool, expected);
     }

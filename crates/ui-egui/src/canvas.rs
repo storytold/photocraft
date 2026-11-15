@@ -46,6 +46,7 @@ pub mod scroll_all_windows;
 pub mod scrollbars;
 pub mod select_mask_view;
 mod selection;
+mod selection_brush;
 pub mod snap_ui;
 mod start_screen;
 mod strokes;
@@ -70,7 +71,7 @@ pub(crate) use cursors::{
     alt_picks, alt_samples, color_sampler_cursor, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor,
     precise_other_cursor, sampler_hover_cursor,
 };
-use cursors::{brush_tip_centre, eyedropper_ring, preview_locator_cursor, visible_crosshair};
+use cursors::{brush_outline, eyedropper_ring, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
@@ -272,7 +273,9 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
     // and Mask's refined preview; other documents keep their ants.
     let patch_replaces =
         || refined.is_none() && floated.is_none() && app.session.active_index() == Some(input.idx) && crate::retouch_ui::patch_replaces_selection(app);
-    if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app) && !patch_replaces()) {
+    if let Some(sel) = outlined.filter(|_| {
+        app.ui.tool != Tool::SelectionBrush && app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app) && !patch_replaces()
+    }) {
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it. The step is in
         // device pixels per document pixel (`View::zoom`, not the point zoom), so a 1 px
@@ -549,6 +552,7 @@ fn paint_canvas(
             painter.image(tex, xf.doc_rect(a), uv, Color32::WHITE);
         }
     }
+    selection_brush::paint(app, ctx, painter, &xf, idx);
     // Image › Adjustments › Levels: Alt-drag on the black / white Input slider (levels_clipping.rs).
     // The main canvas only: the display keeps one cache, sized to that view.
     if primary {
@@ -2026,7 +2030,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         }
         // Over a layer it can't paint (Lock All), the Mixer Brush shows a no-entry sign (#11957).
         Tool::MixerBrush if cursors::mixer_target_locked(app) => cursors::no_entry_cursor(painter, p),
-        t if t.is_brushlike() || t == Tool::QuickSelection => {
+        t if crate::paint_mouse::has_brush_picker(t) => {
             // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
             // full size), precise crosshair, or the standard pointer.
             use photocraft_engine::prefs::PaintingCursor;
@@ -2037,7 +2041,6 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             } else {
                 let painting = app.drag.is_some();
                 let brush = &app.session.tools.brush;
-                let full = (brush.size / 2.0 * xf.zoom).max(1.0);
                 match cur.painting {
                     PaintingCursor::Standard => egui::CursorIcon::Default,
                     PaintingCursor::Precise => crate::tool_cursor::crosshair(painter, p, 6.0, 0.0),
@@ -2051,17 +2054,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                         let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
                         pencil_outline_cursor(painter, xf, p, size, block, cur.show_crosshair_in_brush_tip)
                     }
-                    // The Healing Brush's ⌥ (source point): the reference's fixed target at any tip
-                    // size (#12113). Unmeasured cases keep the tip with its centre mark below.
-                    PaintingCursor::NormalTip if tool == Tool::Healing && (alt || app.ui.shell.sticky_alt) => cursors::sample_target_cursor(painter, p),
-                    // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
-                    // traces its outline, turned and flipped with the view; a plain round
-                    // tip keeps the circle.
-                    _ => {
-                        let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
-                        let axes = crate::brush_cursor::pen_axes(xf, brush, app.stylus.sample());
-                        crate::brush_cursor::cursor(painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
-                    }
+                    _ => brush_outline(app, painter, xf, p, tool, alt || app.ui.shell.sticky_alt),
                 }
             }
         }
@@ -2180,7 +2173,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
     let held = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
     let mods = app.drag.as_ref().map_or(held, |d| d.modifiers);
     if let Some(b) = crate::tool_feedback::badge(app, tool, mods) {
-        crate::tool_feedback::draw_badge(painter, p, b, tool == Tool::QuickSelection);
+        crate::tool_feedback::draw_badge(painter, p, b, matches!(tool, Tool::QuickSelection | Tool::SelectionBrush));
     }
     // ⇧ after a stroke: the straight line a click would paint (#257).
     crate::stroke_constraint::draw_line_preview(app, painter, xf, p, tool, held.shift);

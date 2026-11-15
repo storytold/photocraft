@@ -688,6 +688,7 @@ pub(crate) fn freehand_tool(tool: Tool) -> bool {
             | Tool::Patch
             | Tool::ContentAwareMove
             | Tool::QuickSelection
+            | Tool::SelectionBrush
             | Tool::FreeformPen
     )
 }

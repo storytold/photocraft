@@ -112,6 +112,85 @@ fn brush_mode_control_routes_modifiers_and_reports_choices_without_history() {
 }
 
 #[test]
+/// Verify valid settings persist and rejected patches leave both tool and selection unchanged.
+fn selection_brush_settings_are_atomic_persistent_and_independent_of_coverage() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width":100,"height":100})).unwrap();
+    app.run("select.rect", json!({"x":10,"y":10,"width":30,"height":30})).unwrap();
+    let revision = app.session.active().unwrap().revision;
+    let selection = app.session.active().unwrap().doc.selection.as_ref().unwrap().read_region(photocraft_geom::Rect::new(0, 0, 100, 100));
+    assert_eq!(
+        call(&mut app, &ctx, "ui.set", json!({"tool":"SelectionBrush","selectionBrush":{"subtract":true,"overlayColor":[0.0,1.0,0.0],"overlayOpacity":15.0}}))
+            ["ok"],
+        true
+    );
+    assert_eq!(app.session.tools.brush.size, 60.0);
+    assert_eq!(app.session.tools.brush.hardness, 0.7);
+    assert!(app.ui.tool_options.selection_brush.subtract);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(app.session.active().unwrap().doc.selection.as_ref().unwrap().read_region(photocraft_geom::Rect::new(0, 0, 100, 100)), selection);
+    let saved = serde_json::to_string(&app.ui.tool_options).unwrap();
+    let restored: crate::state::ToolOptions = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.selection_brush, app.ui.tool_options.selection_brush);
+    for settings in [json!({"overlayOpacity":101}), json!({"overlayColor":[0.0,-1.0,0.0]}), json!({"subtract":"yes"}), json!({"unknown":true})] {
+        let before = app.ui.tool_options.selection_brush.clone();
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool":"Move","selectionBrush":settings}))["ok"], false);
+        assert_eq!(app.ui.tool, crate::state::Tool::SelectionBrush);
+        assert_eq!(app.ui.tool_options.selection_brush, before);
+    }
+}
+
+#[test]
+/// Saved future fields must not discard known settings, while automation remains strict and atomic.
+fn selection_brush_future_settings_restore_but_unknown_patches_fail() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.prefs.edit(|p| {
+        p.tool_options = json!({"selection_brush":{
+            "subtract":true,"overlayColor":[0.25,0.5,1.0],"overlayOpacity":23.0,"fillClosed":false,"futureSetting":7
+        }})
+    });
+    crate::tool_memory::restore(&mut app);
+    let settings = app.ui.tool_options.selection_brush.clone();
+    assert!(settings.subtract && !settings.fill_closed);
+    assert_eq!(settings.overlay_color, [0.25, 0.5, 1.0]);
+    assert_eq!(settings.overlay_opacity, 23.0);
+    let ctx = egui::Context::default();
+    let tool = app.ui.tool;
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool":"SelectionBrush","selectionBrush":{"futureSetting":7,"subtract":false}}))["ok"], false);
+    assert_eq!(app.ui.tool, tool);
+    assert_eq!(app.ui.tool_options.selection_brush, settings);
+}
+
+#[test]
+/// Verify automation commits the same closed mask regardless of viewport zoom.
+fn selection_brush_closed_mask_is_identical_at_two_hundred_percent_zoom() {
+    let ctx = egui::Context::default();
+    let mut masks = Vec::new();
+    for zoom in [1.0, 2.0] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":200,"height":200})).unwrap();
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool":"SelectionBrush","zoom":zoom,"brushSize":10}))["ok"], true);
+        assert_eq!(
+            call(
+                &mut app,
+                &ctx,
+                "ui.pointer",
+                json!({"events":[
+                    {"kind":"down","x":30,"y":30},{"kind":"move","x":140,"y":30},{"kind":"move","x":140,"y":140},
+                    {"kind":"move","x":30,"y":140},{"kind":"up","x":30,"y":30}
+                ]})
+            )["ok"],
+            true
+        );
+        let s = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+        assert_eq!(s.sample_channel(80, 80, 0), 1.0);
+        masks.push(s.read_region(photocraft_geom::Rect::new(0, 0, 200, 200)));
+    }
+    assert_eq!(masks.first(), masks.last());
+}
+
+#[test]
 fn ui_set_turns_the_stroke_trace_on_and_off_at_runtime() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = egui::Context::default();

@@ -78,6 +78,7 @@ The built-in ICC profiles and the generated LUT looks come from `craft-cms`
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
+| `docs/images/selection-brush-*.png` | Selection Brush before and after a soft closed stroke and Alt subtraction | @hillofsky; AI contributor: OpenAI Codex | Native control-channel screenshots of a synthetic blank canvas; no external artwork | MIT OR Apache-2.0 |
 | `docs/brand/` (all files) | ArtCraft name, wordmark and mark | ArtCraft Team | getartcraft.com | Not open source; trademarks of the ArtCraft Team, [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) |
 | `docs/images/photocraft-*.jpg` | PhotoCraft screenshots | PhotoCraft contributors (UI) | Rendered offscreen with the `snapshot` example | MIT OR Apache-2.0 (UI); the artwork in each is public domain, listed below |
 | `docs/images/embedded-vector-editor-en.png` | Embedded AI/PDF/EPS conversion warning and editor chooser (no artwork) | Don Omondi | Offscreen `smart_svg_ui::tests::capture_embedded_vector_conversion_prompt` with authored bytes and mock services | MIT OR Apache-2.0 |

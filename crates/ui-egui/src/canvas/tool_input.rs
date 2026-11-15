@@ -18,6 +18,10 @@ pub enum ToolEvent {
 /// on. It does not feed the live stroke, so the canvas can push a whole frame's recovered samples
 /// and update the live stroke once (see `canvas_view`).
 fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui::Modifiers) {
+    if app.drag.as_ref().is_some_and(|drag| !drag.selection_brush_valid(app)) {
+        app.drag = None;
+        return;
+    }
     let tool = app.active_tool();
     if tool.is_type() && app.drag.is_none() {
         crate::type_tool::pointer_move(app, x, y, mods);
@@ -685,6 +689,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
             let tool = crate::eraser_ui::drag_tool(app, tool, mods.alt);
             let mut drag = Drag { clear, line: from.is_some(), ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
+            drag.capture_selection_brush_owner(app);
             drag.history_params = crate::retouch_ui::history_params_at_press(app, tool, mods.alt);
             drag.capture_selection_at_press(app);
             drag.document = super::drag::DragDocument::capture(app);
