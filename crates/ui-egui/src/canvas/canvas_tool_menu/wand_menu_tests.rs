@@ -96,7 +96,8 @@ fn grow_and_similar_use_the_wands_tolerance() {
 
 #[test]
 fn the_other_selection_tools_keep_their_menus() {
-    for tool in [Tool::RectMarquee, Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso, Tool::ObjectSelection, Tool::QuickSelection] {
+    // Object Selection has its own measured menus on main (#12866).
+    for tool in [Tool::RectMarquee, Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso, Tool::QuickSelection] {
         for selected in [false, true] {
             let mut app = app();
             if selected {
