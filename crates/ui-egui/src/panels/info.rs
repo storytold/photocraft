@@ -1,4 +1,8 @@
+use photocraft_color::ColorMode;
+use photocraft_engine::sampler_cmds::{ChannelReadout, ProofReadout, ProofSpace, Readouts};
+
 use super::{PhotocraftApp, RichText, Tokens, Value, empty, json, theme, widgets};
+use crate::info_panel_options::Readout;
 
 /// The active document's pixel under the pointer, if the pointer is over the image.
 pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
@@ -8,14 +12,14 @@ pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
 
 /// The colour the Info panel reads at document pixel `(x, y)`, straight RGBA 0..1: averaged over
 /// the Eyedropper's Sample Size over the box it reads at the view zoom, as in Photoshop (#1649,
-/// #11751), and cached per pixel, revision, size and zoom.
+/// #11751), and cached per document activation, pixel, revision, size and zoom.
 pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
-    let rev = app.session.active()?.revision;
+    let st = app.session.active()?;
     let sample_size = app.ui.tool_options.eyedropper_size;
     let zoom = app.current_zoom();
-    let key = (x, y, rev, sample_size, zoom.to_bits());
-    if let Some((k, v)) = app.info_sample
-        && k == key
+    let key = (st.doc.id, app.session.active_generation(), x, y, st.revision, sample_size, zoom.to_bits());
+    if let Some((cached, v)) = app.info_sample
+        && cached == key
     {
         return Some(v);
     }
@@ -32,15 +36,133 @@ pub(crate) fn wh_readout(ur: &photocraft_engine::prefs::UnitsAndRulers, dpi: f64
     [ur.format(wh[0], dpi, extent[0]), ur.format(wh[1], dpi, extent[1])]
 }
 
-/// Photoshop's Info panel: colour under the pointer (RGB and CMYK), position, selection size.
+/// Extra-channel readings under the pointer, keyed by document ID, activation, pixel and revision.
+pub(crate) type PointerChannels = ((photocraft_doc::DocId, u64, i32, i32, u64), std::sync::Arc<Vec<ChannelReadout>>);
+
+/// Every alpha and spot channel's reading at document pixel `(x, y)` (one pixel, as Photoshop
+/// reads a channel), cached per document activation, pixel and revision.
+pub(crate) fn pointer_channels(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> std::sync::Arc<Vec<ChannelReadout>> {
+    let Some(key) = app.session.active().map(|s| (s.doc.id, app.session.active_generation(), x, y, s.revision)) else { return std::sync::Arc::default() };
+    if let Some((k, v)) = &app.info_channels
+        && *k == key
+    {
+        return v.clone();
+    }
+    let v = std::sync::Arc::new(app.session.active().map(|s| photocraft_engine::sampler_cmds::channel_readouts(&s.doc, x, y)).unwrap_or_default());
+    app.info_channels = Some((key, v.clone()));
+    v
+}
+
+/// The sample's values for one readout: the colour readouts, the Proof Color readout and the
+/// extra channels (Multichannel Actual Color); each `None` without a sample.
+#[derive(Clone, Copy, Default)]
+struct Sample<'a> {
+    v: Option<&'a Readouts>,
+    proof: Option<&'a ProofReadout>,
+    read: Option<&'a [ChannelReadout]>,
+}
+
+/// What a document gives every readout, sample or not: its `mode` decides what Actual Color
+/// shows, `channels` are its extra channels (name, is spot) so a Multichannel document keeps its
+/// rows when the pointer is off the canvas, and `proof` is the space Proof Color reads in.
+struct DocInfo<'a> {
+    mode: ColorMode,
+    channels: &'a [(String, bool)],
+    proof: Option<ProofSpace>,
+}
+
+/// The rows of readout `r` as (key, value) pairs for `doc`, "—" without a sample.
+fn readout_rows(doc: &DocInfo, r: Readout, sample: Sample) -> Vec<(String, String)> {
+    let (mode, channels) = (doc.mode, doc.channels);
+    let Sample { v, proof, read } = sample;
+    let dash = || "—".to_string();
+    let n = |f: fn(&Readouts) -> i32| v.map_or_else(dash, |r| f(r).to_string());
+    let pct = |f: fn(&Readouts) -> i32| v.map_or_else(dash, |r| format!("{}%", f(r)));
+    let deg = |f: fn(&Readouts) -> i32| v.map_or_else(dash, |r| format!("{}°", f(r)));
+    let rows = |pairs: Vec<(&str, String)>| pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect::<Vec<_>>();
+    let rgb = || rows(vec![("R:", n(|r| r.rgb[0])), ("G:", n(|r| r.rgb[1])), ("B:", n(|r| r.rgb[2]))]);
+    let cmyk = || rows(vec![("C:", pct(|r| r.cmyk[0])), ("M:", pct(|r| r.cmyk[1])), ("Y:", pct(|r| r.cmyk[2])), ("K:", pct(|r| r.cmyk[3]))]);
+    let lab = || rows(vec![("L:", n(|r| r.lab[0])), ("a:", n(|r| r.lab[1])), ("b:", n(|r| r.lab[2]))]);
+    let gray = || rows(vec![("K:", pct(|r| r.gray))]);
+    // Proof Color: the proof profile's channels, with the proofed values when there is a sample.
+    let proofed = |keys: &[&str], unit: &str| {
+        keys.iter()
+            .enumerate()
+            .map(|(i, k)| (k.to_string(), proof.and_then(|p| p.values.get(i)).map_or_else(dash, |n| format!("{n}{unit}"))))
+            .collect::<Vec<_>>()
+    };
+    // Each extra channel of the kind, in Channels-panel order, with its reading when there is one.
+    let extra = |spot: bool| {
+        channels
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, s))| *s == spot)
+            .map(|(i, (name, _))| (format!("{name}:"), read.and_then(|r| r.get(i)).map_or_else(dash, |c| format!("{}%", c.percent))))
+            .collect::<Vec<_>>()
+    };
+    match r {
+        Readout::ActualColor => match mode {
+            ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => gray(),
+            ColorMode::Cmyk => cmyk(),
+            ColorMode::Lab => lab(),
+            ColorMode::Multichannel => [extra(true), extra(false)].concat(),
+            ColorMode::Rgb | ColorMode::Indexed => rgb(),
+        },
+        Readout::ProofColor => match doc.proof {
+            Some(ProofSpace::Cmyk) => proofed(&["C:", "M:", "Y:", "K:"], "%"),
+            Some(ProofSpace::Rgb) => proofed(&["R:", "G:", "B:"], ""),
+            Some(ProofSpace::Gray) => proofed(&["K:"], "%"),
+            Some(ProofSpace::Lab) => proofed(&["L:", "a:", "b:"], ""),
+            None => Vec::new(),
+        },
+        Readout::Grayscale => gray(),
+        Readout::Rgb => rgb(),
+        Readout::Web => {
+            let hex = |i: usize| v.map_or_else(dash, |r| r.web.get(2 * i..2 * i + 2).unwrap_or("—").to_string());
+            rows(vec![("R:", hex(0)), ("G:", hex(1)), ("B:", hex(2))])
+        }
+        Readout::Hsb => rows(vec![("H:", deg(|r| r.hsb[0])), ("S:", pct(|r| r.hsb[1])), ("B:", pct(|r| r.hsb[2]))]),
+        Readout::Hsl => rows(vec![("H:", deg(|r| r.hsl[0])), ("S:", pct(|r| r.hsl[1])), ("L:", pct(|r| r.hsl[2]))]),
+        Readout::Cmyk => cmyk(),
+        Readout::Lab => lab(),
+        // Photoshop's row keys: Σ for Total Ink, Op for Opacity.
+        Readout::TotalInk => rows(vec![("Σ:", pct(|r| r.total_ink))]),
+        Readout::Opacity => rows(vec![("Op:", pct(|r| r.opacity))]),
+    }
+}
+
+/// A Multichannel document's Actual Color lists its channels by name, so it uses full-width rows,
+/// leaving the value clear of a long name.
+fn wide_readout(mode: ColorMode, r: Readout) -> bool {
+    r == Readout::ActualColor && mode == ColorMode::Multichannel
+}
+
+/// The Color Sampler lines of readout `r` for one point: its rows on one line, except a channel
+/// list, one channel per line.
+fn sampler_lines(doc: &DocInfo, r: Readout, sample: Sample) -> Vec<String> {
+    let rows = readout_rows(doc, r, sample);
+    if wide_readout(doc.mode, r) {
+        rows.into_iter().map(|(k, v)| format!("{k}{v}")).collect()
+    } else if rows.is_empty() {
+        Vec::new()
+    } else {
+        vec![rows.iter().map(|(k, v)| format!("{k}{v}")).collect::<Vec<_>>().join(" ")]
+    }
+}
+
+/// Photoshop's Info panel: the colour under the pointer in the readouts the panel menu picks
+/// (`info_panel_options`), position, selection size, Color Sampler points.
 pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         empty(ui, tl!("No document"));
         return;
     };
-    let (size, origin) = (st.doc.size, st.doc.ruler_origin);
-    let cmyk_space = photocraft_compose::cmyk_space(&st.doc);
+    let (size, origin, mode) = (st.doc.size, st.doc.ruler_origin, st.doc.mode);
+    let channels: Vec<(String, bool)> = st.doc.channels.iter().map(|c| (c.name.clone(), c.spot.is_some())).collect();
+    let shown = app.ui.info_panel.shown();
+    let proof_space = if shown.contains(&Readout::ProofColor) { photocraft_engine::sampler_cmds::proof_space(&app.session.color, &st.doc) } else { None };
+    let doc_info = DocInfo { mode, channels: &channels, proof: proof_space };
     // Positions and sizes in the ruler unit (Preferences › Units & Rulers).
     let units = app.session.prefs().units_and_rulers.clone();
     let dpi = st.doc.resolution_dpi as f64;
@@ -61,28 +183,72 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         None => (None, None),
     };
     let rgba = pos.and_then(|p| pointer_sample(app, p));
+    // The readouts of the sample, through the same conversions as the Color Sampler points
+    // (`sampler_cmds::readouts`), including CMYK for the document's RGB profile, and the extra
+    // channels under the pointer.
+    let pointer = rgba.and_then(|c| app.session.active().map(|s| photocraft_engine::sampler_cmds::readouts(&s.doc, c)));
+    // Proof Color through the document's Proof Setup, only while a readout shows it.
+    let pointer_proof = rgba
+        .filter(|_| proof_space.is_some())
+        .and_then(|c| app.session.active().and_then(|s| photocraft_engine::sampler_cmds::proof_readout(&app.session.color, &s.doc, [c[0], c[1], c[2]])));
+    // The extra channels only feed a Multichannel document's Actual Color.
+    let read = pos.filter(|_| mode == ColorMode::Multichannel && shown.contains(&Readout::ActualColor)).map(|p| pointer_channels(app, p));
     let mono = theme::mono(11.5);
+    // A column row: a short key ("R:", "Ink:") in a fixed slot, then the value.
     let row = |ui: &mut egui::Ui, k: &str, v: String| {
         ui.horizontal(|ui| {
-            ui.add_sized([18.0, 16.0], egui::Label::new(RichText::new(k).color(t.text_dim).size(11.5)));
+            let key = egui::Label::new(RichText::new(k).color(t.text_dim).size(11.5));
+            if k.chars().count() <= 2 {
+                ui.add_sized([18.0, 16.0], key);
+            } else {
+                ui.add(key);
+            }
             ui.label(RichText::new(v).font(mono.clone()).color(t.text));
         });
     };
-    ui.columns(2, |cols| {
-        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-        let dash = || "—".to_string();
-        row(&mut cols[0], "R:", rgba.map_or_else(dash, |c| q(c[0]).to_string()));
-        row(&mut cols[0], "G:", rgba.map_or_else(dash, |c| q(c[1]).to_string()));
-        row(&mut cols[0], "B:", rgba.map_or_else(dash, |c| q(c[2]).to_string()));
-        // Colour-managed CMYK in percent like Photoshop's readout, through the same conversion as
-        // the Color Picker (#8101) and the Color Sampler readout (`sampler_cmds::device_cmyk`).
-        let cmyk =
-            rgba.map(|c| photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2])));
-        for (i, k) in ["C:", "M:", "Y:", "K:"].iter().enumerate() {
-            row(&mut cols[1], k, cmyk.map_or_else(dash, |c| format!("{}%", c[i])));
+    // A full-width row for a channel: the value sits at the right edge, the name takes what is
+    // left and is cut with an ellipsis, so a long spot name never runs under the value.
+    let wide_row = |ui: &mut egui::Ui, k: &str, v: String| {
+        ui.horizontal(|ui| {
+            ui.set_min_height(16.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(v).font(mono.clone()).color(t.text));
+                // The name starts at the left of what is left, not against the value.
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(egui::Label::new(RichText::new(k).color(t.text_dim).size(11.5)).truncate());
+                });
+            });
+        });
+    };
+    // Each readout is a block of rows: the first readout on the left, the second on the right, as
+    // in Photoshop; a Multichannel channel list takes the full width below them.
+    let sample = Sample { v: pointer.as_ref(), proof: pointer_proof.as_ref(), read: read.as_deref().map(Vec::as_slice) };
+    let (narrow, wide): (Vec<_>, Vec<_>) =
+        shown.iter().map(|r| (wide_readout(mode, *r), readout_rows(&doc_info, *r, sample))).filter(|(_, b)| !b.is_empty()).partition(|(wide, _)| !*wide);
+    if !narrow.is_empty() {
+        ui.columns(2, |cols| {
+            for (i, (_, block)) in narrow.iter().enumerate() {
+                let col = &mut cols[i % 2];
+                if i >= 2 {
+                    col.add_space(6.0);
+                }
+                for (k, v) in block {
+                    row(col, k, v.clone());
+                }
+            }
+        });
+    }
+    for (i, (_, block)) in wide.iter().enumerate() {
+        if i > 0 || !narrow.is_empty() {
+            ui.add_space(6.0);
         }
-    });
-    widgets::hairline(ui);
+        for (k, v) in block {
+            wide_row(ui, k, v.clone());
+        }
+    }
+    if !narrow.is_empty() || !wide.is_empty() {
+        widgets::hairline(ui);
+    }
     ui.columns(2, |cols| {
         let dash = || "—".to_string();
         // Measured from the rulers' zero point (#2955).
@@ -99,7 +265,7 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             .size(11.5),
     );
     // Color Sampler points (#1046): each under its number, with its position in the current ruler
-    // unit and the same RGB/CMYK readout as the pointer (one composite pixel each).
+    // unit and the same readouts as the pointer (one composite pixel each).
     let samplers = sampler_readouts(app);
     if !samplers.is_empty() {
         widgets::hairline(ui);
@@ -111,37 +277,54 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let at = s["position"]
                 .as_array()
                 .map_or((0.0, 0.0), |a| (a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)));
-            let num = |v: &Value, i: usize| v.get(i).and_then(Value::as_i64).map_or_else(|| "—".to_string(), |n| n.to_string());
-            let (rgb, cmyk) = (&s["rgb"], &s["cmyk"]);
+            let values: Option<Readouts> = serde_json::from_value(s.clone()).ok();
+            let read: Option<Vec<ChannelReadout>> = serde_json::from_value(s["channels"].clone()).ok();
+            let proof: Option<ProofReadout> = serde_json::from_value(s["proof"].clone()).ok();
+            let sample = Sample { v: values.as_ref(), proof: proof.as_ref(), read: read.as_deref() };
             ui.horizontal(|ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new(format!("#{n}")).color(t.text_dim).size(11.5)));
                 // The point sits on its pixel's centre (#11725); the row names the pixel, as the pointer row does.
                 cell(ui, format!("X: {}  Y: {}", fx(at.0.floor()), fy(at.1.floor())));
             });
-            ui.horizontal(|ui| {
-                ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
-                cell(ui, format!("R:{} G:{} B:{}", num(rgb, 0), num(rgb, 1), num(rgb, 2)));
-            });
-            ui.horizontal(|ui| {
-                ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
-                cell(ui, format!("C:{}% M:{}% Y:{}% K:{}%", num(cmyk, 0), num(cmyk, 1), num(cmyk, 2), num(cmyk, 3)));
-            });
+            for line in shown.iter().flat_map(|r| sampler_lines(&doc_info, *r, sample)) {
+                ui.horizontal(|ui| {
+                    ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
+                    cell(ui, line);
+                });
+            }
         }
     }
 }
 
-/// The Info panel's Color Sampler readouts and the (document, revision, Sample Size) they were
-/// composited for.
-pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64, u32), std::sync::Arc<Vec<Value>>);
+#[cfg(test)]
+mod readout_tests;
+
+#[cfg(test)]
+mod cache_tests;
+
+/// What a document's Color Sampler readouts were composited for: document ID, activation,
+/// revision, Proof Setup (profile, intent, black point compensation) and Sample Size.
+type SamplerKey = (photocraft_doc::DocId, u64, u64, (u64, photocraft_cms::Intent, bool), u32);
+
+/// Color Sampler readouts and the [`SamplerKey`] they were composited for.
+pub(crate) type SamplerReadouts = (SamplerKey, std::sync::Arc<Vec<Value>>);
 
 /// The Color Sampler readouts of the active document, composited once per revision (#4528):
 /// adding, moving or deleting a sampler and every pixel edit bump the revision, so between them
 /// the Info panel reuses them instead of compositing each point through the stack every frame.
-/// They average over the Sample Size shared with the Eyedropper (#11732), which is part of the
-/// key, so changing it re-reads every sampler at once.
+/// Activation also matters: reopened documents can reuse an ID and reach the same revision. A new
+/// View › Proof Setup changes the Proof Color readout without a new revision. They average over
+/// the Sample Size shared with the Eyedropper (#11732), which is part of the key, so changing it
+/// re-reads every sampler at once.
 pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Value>> {
     let size = app.ui.tool_options.eyedropper_size;
-    let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision, size)) else { return std::sync::Arc::default() };
+    let Some(key) = app
+        .session
+        .active()
+        .map(|s| (s.doc.id, app.session.active_generation(), s.revision, photocraft_engine::sampler_cmds::proof_key(&app.session.color, &s.doc), size))
+    else {
+        return std::sync::Arc::default();
+    };
     if let Some((k, v)) = &app.info_samplers
         && *k == key
     {
@@ -152,3 +335,6 @@ pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Va
     app.info_samplers = Some((key, v.clone()));
     v
 }
+
+#[cfg(test)]
+mod opacity_tests;

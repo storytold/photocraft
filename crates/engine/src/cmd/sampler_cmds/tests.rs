@@ -352,3 +352,182 @@ fn document_helpers_are_not_disturbed() {
     assert_eq!(pixel(&d, 3.9, 3.9), Some([3.5, 3.5]));
     assert_eq!(pixel(&d, 4.0, 0.0), None);
 }
+
+/// The readout modes of a sample, pinned to Photoshop 2027's Info panel on flat swatches
+/// (2026-10-28): Grayscale is 100 − Rec.601 luma of the encoded RGB, Opacity the composite alpha.
+#[test]
+fn readouts_match_photoshops_info_panel() {
+    let s = session();
+    let doc = &s.active().unwrap().doc;
+    let gray = |v: f32| readouts(doc, [v, v, v, 1.0]);
+    assert_eq!(gray(0.0).gray, 100);
+    assert_eq!(gray(64.0 / 255.0).gray, 75);
+    assert_eq!(gray(128.0 / 255.0).gray, 50);
+    assert_eq!(gray(192.0 / 255.0).gray, 25);
+    assert_eq!(gray(1.0).gray, 0);
+    let red = readouts(doc, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(red.rgb, [255, 0, 0]);
+    assert_eq!(red.gray, 70, "pure red reads K 70 % in Photoshop");
+    assert_eq!(red.hsb, [0, 100, 100]);
+    assert_eq!(red.hsl, [0, 100, 50]);
+    assert_eq!(red.web, "ff0000");
+    assert_eq!(red.opacity, 100);
+    assert_eq!(red.cmyk, device_cmyk(1.0, 0.0, 0.0));
+    assert_eq!(red.total_ink, red.cmyk.iter().sum::<i32>());
+    assert_eq!(red.lab[0], 54, "L of sRGB red");
+    assert!(red.lab[1] > 70 && red.lab[2] > 60, "a and b of sRGB red: {:?}", red.lab);
+    let green = readouts(doc, [0.0, 1.0, 0.0, 0.5]);
+    assert_eq!((green.hsb[0], green.hsl[0], green.opacity), (120, 120, 50));
+    let mid = gray(0.5);
+    assert_eq!((mid.hsb, mid.hsl), ([0, 0, 50], [0, 0, 50]));
+    // Clamped and NaN-safe, like the RGB readout.
+    let wild = readouts(doc, [2.0, -1.0, f32::NAN, f32::NAN]);
+    assert_eq!((wild.rgb, wild.opacity, wild.web.as_str()), ([255, 0, 0], 0, "ff0000"));
+    assert_eq!(serde_json::to_value(&red).unwrap()["totalInk"], red.total_ink, "camelCase JSON");
+}
+
+/// Reassigning an RGB profile preserves the encoded gray but changes its ink. Both the
+/// shared readout and the pinned sampler must convert through the sample's source profile.
+#[test]
+fn cmyk_readouts_respect_the_composite_profile() {
+    use photocraft_cms::{Builtin, TransformOptions, cached};
+
+    let mut s = session();
+    s.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s.execute("view.colorSamplers.add", json!({"x": 5, "y": 6})).unwrap();
+    let gray = 128.0 / 255.0;
+    let [srgb_ink, linear_ink] = [("srgb", Builtin::Srgb), ("linear-srgb", Builtin::LinearSrgb)].map(|(id, profile)| {
+        s.execute("edit.assignProfile", json!({"profile": id})).unwrap();
+        let mut plates = [0.0; 4];
+        let transform = cached(profile.profile(), Builtin::CoatedCmyk.profile(), TransformOptions::default()).unwrap();
+        transform.eval_fast(&[gray; 3], &mut plates);
+        let expected = plates.map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as i32);
+        let total = expected.iter().sum::<i32>();
+        if id == "srgb" {
+            assert_eq!(expected, device_cmyk(gray, gray, gray), "the existing sRGB conversion is unchanged");
+        }
+
+        let readout = readouts(&s.active().unwrap().doc, [gray, gray, gray, 1.0]);
+        assert_eq!(readout.cmyk, expected, "{id} plates");
+        assert_eq!(readout.total_ink, total, "{id} total ink");
+        let point = &points(&mut s)[0];
+        assert_eq!(point["rgb"], json!([128, 128, 128]), "{id} keeps the same encoded pixel");
+        assert_eq!(point["opacity"], 100);
+        assert_eq!(point["cmyk"], json!(expected), "{id} sampler plates");
+        assert_eq!(point["totalInk"], total, "{id} sampler total ink");
+        total
+    });
+    assert_ne!(srgb_ink, linear_ink, "identical encoded gray has different ink in these profiles");
+}
+
+/// Spot channels read their ink (1 = solid), alpha channels their masked share (white = 0 %), as
+/// Photoshop reads a channel targeted alone; off the canvas there is nothing to read.
+#[test]
+fn channel_readouts_read_ink_and_masked_percent() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Ink Red", "color": "#ff0000"})).unwrap();
+    s.execute("channel.new", json!({"name": "Alpha 1", "fill": "selection"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let inside = channel_readouts(doc, 15, 15);
+    assert_eq!(
+        inside,
+        vec![ChannelReadout { name: "Ink Red".into(), spot: true, percent: 100 }, ChannelReadout { name: "Alpha 1".into(), spot: false, percent: 0 },]
+    );
+    let outside = channel_readouts(doc, 50, 50);
+    assert_eq!(outside.iter().map(|c| c.percent).collect::<Vec<_>>(), vec![0, 100]);
+    assert!(channel_readouts(doc, -1, 5).is_empty());
+    assert!(channel_readouts(doc, 5, 80).is_empty());
+    assert!(channel_readouts(&session().active().unwrap().doc, 5, 5).is_empty(), "no extra channels");
+}
+
+/// `document.sampleChannels` reads the channels at a pixel; bad params are errors, not panics.
+#[test]
+fn sample_channels_command() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 50, "height": 80})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Ink Blue", "color": "#0000ff"})).unwrap();
+    let r = s.execute("document.sampleChannels", json!({"x": 10.7, "y": 3})).unwrap();
+    assert_eq!(r, json!([{"name": "Ink Blue", "spot": true, "percent": 100}]));
+    let r = s.execute("document.sampleChannels", json!({"x": 60, "y": 3})).unwrap();
+    assert_eq!(r[0]["percent"], 0);
+    assert_eq!(s.execute("document.sampleChannels", json!({"x": 500, "y": 3})).unwrap(), json!([]), "off the canvas");
+    for bad in [json!({}), json!({"x": "a", "y": 1}), json!({"x": 1, "y": f64::NAN}), json!({"x": 1e300, "y": 1}), json!({"x": 1})] {
+        assert!(s.execute("document.sampleChannels", bad.clone()).is_err(), "{bad}");
+    }
+    assert!(Session::new().execute("document.sampleChannels", json!({"x": 1, "y": 1})).is_err(), "no document");
+}
+
+/// The sampler list carries every readout and the channels, so the Info panel's readout modes
+/// read the same numbers for a point as for the pointer.
+#[test]
+fn list_reports_every_readout_and_the_channels() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 50, "height": 80})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Ink Red", "color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("view.colorSamplers.add", json!({"x": 5, "y": 6})).unwrap();
+    s.execute("view.colorSamplers.add", json!({"x": 70, "y": 6})).unwrap();
+    let p = points(&mut s);
+    assert_eq!(p[0]["gray"], 70);
+    assert_eq!(p[0]["hsb"], json!([0, 100, 100]));
+    assert_eq!(p[0]["hsl"], json!([0, 100, 50]));
+    assert_eq!(p[0]["web"], "ff0000");
+    assert_eq!(p[0]["opacity"], 100);
+    assert_eq!(p[0]["totalInk"], p[0]["cmyk"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).sum::<i64>());
+    assert_eq!(p[0]["lab"][0], 54);
+    assert_eq!(p[0]["channels"], json!([{"name": "Ink Red", "spot": true, "percent": 100}]));
+    assert_eq!(p[1]["channels"][0]["percent"], 0);
+    assert_eq!(p[0]["proof"]["space"], "cmyk", "Proof Color in the default Working CMYK proof");
+    assert!(p[0].get("totalSpotInk").is_none(), "no readout the reference application lacks");
+}
+
+/// Lab goes through the document's profile: the same red reads more saturated (a larger a*) in
+/// an Adobe RGB document than in an sRGB one, and the sRGB document matches the sRGB maths.
+#[test]
+fn lab_readout_follows_the_document_profile() {
+    let mut s = session();
+    s.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
+    let srgb = readouts(&s.active().unwrap().doc, [1.0, 0.0, 0.0, 1.0]).lab;
+    let maths = photocraft_color::convert::srgb_to_lab([1.0, 0.0, 0.0]).map(|v| v.round() as i32);
+    assert!(
+        (srgb[0] - maths[0]).abs() <= 1 && (srgb[1] - maths[1]).abs() <= 1 && (srgb[2] - maths[2]).abs() <= 1,
+        "sRGB document ≈ sRGB maths: {srgb:?} vs {maths:?}"
+    );
+    s.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    let adobe = readouts(&s.active().unwrap().doc, [1.0, 0.0, 0.0, 1.0]).lab;
+    assert!(adobe[1] > srgb[1] + 5, "Adobe RGB red is more saturated: a* {} vs sRGB {}", adobe[1], srgb[1]);
+    assert_eq!(readouts(&s.active().unwrap().doc, [1.0, 1.0, 1.0, 1.0]).lab, [100, 0, 0], "white is white in any RGB profile");
+    s.execute("view.colorSamplers.add", json!({"x": 1, "y": 1})).unwrap();
+    assert_eq!(points(&mut s)[0]["lab"], json!([100, 0, 0]), "points read the same way");
+}
+
+/// Proof Color reads the sample in View › Proof Setup's profile: CMYK % for the default Working
+/// CMYK proof (the same plates the CMYK readout gives with that profile), RGB 0–255 for an RGB
+/// proof, and the sampler points follow a change of the setup.
+#[test]
+fn proof_color_follows_the_proof_setup() {
+    let mut s = session();
+    let doc = &s.active().unwrap().doc;
+    let red = proof_readout(&s.color, doc, [1.0, 0.0, 0.0]).unwrap();
+    assert_eq!(red.space, ProofSpace::Cmyk);
+    assert_eq!(red.values.len(), 4);
+    let cmyk = readouts(doc, [1.0, 0.0, 0.0, 1.0]).cmyk;
+    for (p, c) in red.values.iter().zip(cmyk) {
+        assert!((p - c).abs() <= 2, "proof {:?} ≈ CMYK readout {cmyk:?}", red.values);
+    }
+    let d = crate::color_cmds::ProofSetup::default();
+    assert_eq!(proof_key(&s.color, doc), (d.profile.content_hash(), d.intent, d.bpc), "the default is ProofSetup's");
+    let white = proof_readout(&s.color, doc, [1.0, 1.0, 1.0]).unwrap();
+    assert_eq!(white.values, vec![0, 0, 0, 0], "paper white is no ink");
+    assert!(proof_readout(&s.color, doc, [f32::NAN, 2.0, -1.0]).is_some(), "NaN and out-of-range samples are clamped");
+    s.execute("view.colorSamplers.add", json!({"x": 1, "y": 1})).unwrap();
+    s.execute("view.proofSetup", json!({"profile": "srgb"})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let rgb = proof_readout(&s.color, doc, [1.0, 0.0, 0.0]).unwrap();
+    assert_eq!((rgb.space, rgb.values), (ProofSpace::Rgb, vec![255, 0, 0]), "an sRGB proof of an sRGB document");
+    assert_eq!(points(&mut s)[0]["proof"]["space"], "rgb", "points read the current setup");
+}
