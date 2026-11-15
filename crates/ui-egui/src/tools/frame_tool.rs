@@ -105,9 +105,10 @@ pub enum FrameDrag {
         mode: EditMode,
     },
     /// A press inside a frame (`frame`) that holds an image: dragged, the image (`layer`) moves
-    /// and the frame stays (#13878); a click selects both, as before.
+    /// and the frame stays (#13878); a click selects both, as before. Without a frame, a shape
+    /// lying above an empty frame under the press (#13882): dragged, the shape moves.
     Content {
-        frame: LayerId,
+        frame: Option<LayerId>,
         layer: LayerId,
         doc: DocId,
         revision: u64,
@@ -319,6 +320,34 @@ fn inside(f: &Frame, p: [f64; 2]) -> bool {
     let (Some(x1), Some(y1)) = (x.checked_add(1), y.checked_add(1)) else { return false };
     photocraft_vector::path_coverage(&f.outline(), Rect::new(x, y, x1, y1)).first().is_some_and(|v| *v > 0.0)
 }
+/// The shape layer drawn above the empty frame `frame` whose fill covers `p` (#13882): visible,
+/// not position-locked, the topmost one. Other kinds of layers above a frame, and frames that hold
+/// an image, weren't measured and keep today's press.
+fn shape_above(app: &PhotocraftApp, frame: LayerId, p: [f64; 2]) -> Option<LayerId> {
+    let st = app.session.active()?;
+    if !st.doc.layer(frame)?.children().is_none_or(<[Layer]>::is_empty) {
+        return None;
+    }
+    let (x, y) = (p[0].floor() as i32, p[1].floor() as i32);
+    let pixel = Rect::new(x, y, x.checked_add(1)?, y.checked_add(1)?);
+    for (path, _, l) in st.doc.walk().into_iter().rev() {
+        if l.id == frame {
+            return None;
+        }
+        let LayerContent::Shape(sh) = &l.content else { continue };
+        let locks = st.doc.effective_locks(l.id);
+        if path_visible(&st.doc, &path)
+            && !(locks.all || locks.position)
+            && sh.fill.is_some()
+            && photocraft_vector::path_coverage(&sh.path, pixel).first().is_some_and(|v| *v > 0.0)
+        {
+            return Some(l.id);
+        }
+    }
+    None
+}
+#[cfg(test)]
+mod hit_order_tests;
 pub(crate) fn frame_at(app: &PhotocraftApp, p: [f64; 2]) -> Option<LayerId> {
     let st = app.session.active()?;
     let zoom = f64::from(app.point_zoom());
@@ -606,6 +635,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 .map(|(id, _)| id)
                 .or_else(|| content_control.then(|| active.as_ref().map(|(id, _, _)| *id)).flatten())
                 .or_else(|| frame_at(app, p));
+            // A shape lying above an empty frame where the press is: the drag moves the shape, one
+            // "Move" step, and the frame stays (#13882).
+            if selected_control.is_none()
+                && !content_control
+                && let Some(shape) = id.and_then(|frame| shape_above(app, frame, p))
+                && let Some(st) = app.session.active()
+            {
+                app.ui.frame_tool.drag = Some(FrameDrag::Content { frame: None, layer: shape, doc: st.doc.id, revision: st.revision, start: p, cur: p });
+                return true;
+            }
             if let Some(id) = id {
                 let Some(st) = app.session.active() else { return true };
                 let Some(l) = st.doc.layer(id) else { return true };
@@ -633,7 +672,8 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                     && let Some(content) = content
                 {
                     let Some(st) = app.session.active() else { return true };
-                    app.ui.frame_tool.drag = Some(FrameDrag::Content { frame: id, layer: content, doc: st.doc.id, revision: st.revision, start: p, cur: p });
+                    app.ui.frame_tool.drag =
+                        Some(FrameDrag::Content { frame: Some(id), layer: content, doc: st.doc.id, revision: st.revision, start: p, cur: p });
                     return true;
                 }
                 if t != Target::Frame {
@@ -717,7 +757,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 FrameDrag::Content { frame, layer, start, .. } => {
                     let (dx, dy) = content_delta(start, [x, y]);
                     if (dx, dy) != (0, 0) {
-                        select(app, frame, Target::Content);
+                        if let Some(frame) = frame {
+                            select(app, frame, Target::Content);
+                        }
                         let r = app.run("layer.translate", json!({"layer": layer.0, "dx": dx, "dy": dy}));
                         report(app, r);
                     }
