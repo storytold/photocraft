@@ -9,7 +9,7 @@ struct View {
     g: vec4<f32>, // gamut warning rgb, 32-bit preview 1 / gamma
     h: vec4<f32>, // cos, sin, center_doc_x, center_doc_y
 };
-struct Tile { r: vec4<f32> }; // x, y, w, h in doc px
+struct Tile { r: vec4<f32>, core: vec4<f32> }; // x, y, w, h in doc px; drawn x0, y0, x1, y1
 
 @group(0) @binding(0) var<uniform> view: View;
 @group(0) @binding(1) var samp: sampler;
@@ -163,6 +163,8 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
     let p = in.pos.xy;
     let scale = view.a.z;
     let d = px_to_doc(p) - view.d.xy;      // document pixel coordinates (within this copy)
+    // A viewport page's apron is only sampled; its neighbour draws those pixels.
+    if (any(d < tile.core.xy) || any(d >= tile.core.zw)) { discard; }
     let size = tile.r.zw;
     let t = d - tile.r.xy;                 // texel coordinates within this tile
     let mode = view.c.x;
@@ -173,11 +175,16 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
     } else if (mode < 1.5) {
         col = textureSampleLevel(tex, samp, t / size, 0.0);
     } else {
-        // Crisp texels with a one-device-pixel anti-aliased edge ("sharp bilinear").
-        let tt = t - 0.5;
+        // Crisp texels with a one-device-pixel anti-aliased edge ("sharp bilinear"), worked out
+        // in stored texels: a reduced viewport page's texel covers several document pixels, so
+        // the edge must not depend on the reduction, only on where and how large it is drawn
+        // (#11122). `per` is texels per document pixel (1 for a full-resolution texture).
+        let texels = vec2<f32>(textureDimensions(tex, 0));
+        let per = texels / size;
+        let tt = t * per - 0.5;
         let i = floor(tt);
-        let f = clamp((tt - i - 0.5) * scale + 0.5, vec2(0.0), vec2(1.0));
-        col = textureSampleLevel(tex, samp, (i + 0.5 + f) / size, 0.0);
+        let f = clamp((tt - i - 0.5) * (scale / per) + 0.5, vec2(0.0), vec2(1.0));
+        col = textureSampleLevel(tex, samp, (i + 0.5 + f) / texels, 0.0);
     }
     if (view.f.w > 0.0 && col.a > 0.0) {
         // View › 32-bit Preview Options: exposure and gamma in linear light on the sRGB-encoded

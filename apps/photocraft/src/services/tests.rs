@@ -4,6 +4,41 @@ use photocraft_format::list_recovery;
 use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
 use serde_json::{Value, json};
 
+/// #6607: a PSD/PSB save streams the file model into the temporary file, which then holds
+/// exactly the exported bytes; a serializer error halfway leaves the old file and no
+/// temporary file behind.
+#[test]
+fn a_psd_save_streams_the_exported_bytes_and_keeps_the_old_file_on_error() {
+    let dir = temp("stream");
+    let mut doc = Document::new("streamed", photocraft_geom::Size::new(64, 48), photocraft_doc::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let fmt = doc.pixel_format();
+    let px: Vec<u8> = (0..64 * 48 * fmt.bytes_per_pixel()).map(|i| (i * 7 % 251) as u8).collect();
+    doc.layers
+        .push(photocraft_doc::Layer::new("A", photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::from_interleaved(fmt, doc.bounds(), &px))));
+    let opts = photocraft_io::ExportOptions::default();
+    for name in ["a.psd", "a.psb"] {
+        let path = dir.join(name);
+        std::fs::write(&path, b"old").unwrap();
+        let want = photocraft_io::export(&doc, name, &opts).unwrap().bytes;
+        let r = photocraft_io::encode_with(&doc, name, &opts, &photocraft_raster::Interrupt::NONE).unwrap();
+        let photocraft_io::Encoded::Psd(mut file) = r.encoded else { panic!("{name}: not streamed") };
+        let seen = std::cell::RefCell::new(Vec::new());
+        write_encoded_atomic(&path, &photocraft_io::Encoded::Psd(file.clone()), &|f| seen.borrow_mut().push(f)).unwrap();
+        assert!(std::fs::read(&path).unwrap() == want, "{name}: the saved file differs from the export");
+        assert_eq!(seen.borrow().last().copied(), Some(1.0), "{name}");
+
+        let info = file.layer_info.as_mut().unwrap();
+        let layer = info.layers[0].clone();
+        info.layers = vec![layer; 32768];
+        let e = write_encoded_atomic(&path, &photocraft_io::Encoded::Psd(file), &|_| {}).unwrap_err();
+        assert!(e.contains("32767") && e.contains("not changed"), "{name}: {e}");
+        assert!(std::fs::read(&path).unwrap() == want, "{name}: a failed save replaced the file");
+        let temps: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).filter(|n| n.to_string_lossy().ends_with(".tmp")).collect();
+        assert!(temps.is_empty(), "{name}: left behind {temps:?}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #6601: a chosen path whose name isn't valid Unicode is reported, never handed on lossily
 /// (Open would fail with "No such file", Save would write a second, renamed file).
 #[test]
@@ -183,7 +218,9 @@ fn open_filters_keep_literal_extensions_on_windows_and_macos() {
 
 #[test]
 fn native_services_provide_update_transport() {
-    assert!(native(None).check_updates.is_some());
+    let services = native(None);
+    assert!(services.check_updates.is_some());
+    assert!(services.last_update.is_some());
 }
 
 #[test]
@@ -912,4 +949,60 @@ fn a_panicking_clipboard_read_is_reported_not_a_crash() {
 
     let mut set = guarded_clipboard_set(|_: u32, _: u32, _: &[u8]| panic!("clipboard writer bug"));
     assert!(set(1, 1, &[0; 4]).unwrap_err().contains("Copy failed"));
+}
+
+/// #8827: what TIFF Options sets in `ExportSettings` reaches the file the app writes: the
+/// compression, Save Transparency and Save Image Pyramid.
+#[test]
+fn tiff_options_reach_the_written_file() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let settings = photocraft_ui_egui::ExportSettings {
+        tiff_compression: photocraft_codecs::TiffCompression::Lzw,
+        tiff_transparency: Some(false),
+        tiff_pyramid: true,
+        ..Default::default()
+    };
+    let bytes = photocraft_io::export(&doc, "t.tif", &export_options(&settings)).unwrap().bytes;
+    let info = photocraft_codecs::tiff_info(&bytes).unwrap();
+    assert_eq!(info.pages.iter().map(|p| (p.width, p.compression)).collect::<Vec<_>>(), [(200, 5), (100, 5), (50, 5)]);
+    assert!(!photocraft_codecs::decode(&bytes).unwrap().layout().has_alpha());
+}
+
+/// PSB is a save type of its own: it shows in the list, and the type gives a typed name its
+/// extension. As an extension of the PSD type it was hidden, and KDE's dialog, which adds the
+/// type's first extension, turned `art.psb` into `art.psb.psd`.
+#[test]
+fn psb_is_its_own_save_type() {
+    let filters = save_filters("Untitled-1.psd");
+    let (psd, psb) = (&filters[0], &filters[1]);
+    // The PSD type takes a typed .psb too, so Windows doesn't add .psd after it.
+    assert_eq!(psd.1, vec!["psd".to_string(), "psb".to_string()], "{psd:?}");
+    assert_eq!(psb.1, vec!["psb".to_string()], "{psb:?}");
+    let big = save_filters("big.psb");
+    assert_eq!((big[0].0.as_str(), big[0].1.clone()), ("PSB Large Document", vec!["psb".to_string()]), "a .psb starts on its own type");
+    let chosen = |f: &(String, Vec<String>)| with_chosen_type(Path::new("/pics/art"), Some("art.psd"), &f.1);
+    assert_eq!(chosen(psd), PathBuf::from("/pics/art.psd"));
+    assert_eq!(chosen(psb), PathBuf::from("/pics/art.psb"));
+    let opened = Some("Untitled-1");
+    assert_eq!(with_chosen_type(Path::new("/pics/art.psb"), opened, &psd.1), PathBuf::from("/pics/art.psb"), "a typed .psb stays");
+    // KDE adds the type's first extension after a typed one of its own: that one is taken back,
+    // also from an `art.psb.psd` typed in full (the dialog's answer is the same string).
+    assert_eq!(with_chosen_type(Path::new("/pics/art.psb.psd"), opened, &psd.1), PathBuf::from("/pics/art.psb"), "KDE's art.psb.psd");
+    // A dot that's part of the name stays (.jpg isn't one of the PSD type's).
+    assert_eq!(with_chosen_type(Path::new("/pics/scan.jpg.psd"), opened, &psd.1), PathBuf::from("/pics/scan.jpg.psd"));
+}
+
+/// The document formats, then the rest by name, so a long list stays easy to search.
+#[test]
+fn save_types_list_the_document_formats_then_the_rest_by_name() {
+    let names: Vec<&str> = SAVE_FILTERS.iter().map(|(name, _)| *name).collect();
+    assert_eq!(names[..3], ["PSD Document", "PSB Large Document", "PhotoCraft"]);
+    let key = |name: &&str| name.to_ascii_lowercase();
+    assert!(names[3..].is_sorted_by_key(key), "{:?}", &names[3..]);
+    let names: Vec<&str> = OPEN_FILTERS.iter().map(|(name, _)| *name).collect();
+    assert_eq!(names[..2], ["Photoshop", "PhotoCraft"]);
+    let formats = names.iter().position(|name| *name == "Brushes").expect("the app's own resources");
+    assert!(names[2..formats].is_sorted_by_key(key), "{:?}", &names[2..formats]);
 }
