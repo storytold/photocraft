@@ -1526,6 +1526,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
             sampler_at: None,
             color: None,
             inside_selection: false,
+            point: None,
             notes: Some(NotesMenu { note, at, note_tool: tool == Tool::Note, document, was }),
         });
         crate::canvas_popup::mark_open(ctx, menu_id());
