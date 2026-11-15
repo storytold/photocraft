@@ -31,6 +31,15 @@ fn check_lock(doc: &Document, id: LayerId) -> Result<()> {
 /// The largest corner radius a frame takes, in pixels (#13875).
 pub const MAX_FRAME_RADIUS: f64 = 150_000.0;
 
+/// A star Polygon frame's unit outline (#13876), as the reference application draws it: `sides`
+/// outer points, the inner ones at `percent` of the polygon's apothem (not of its radius), the
+/// whole star stretched to fill the frame's `w` × `h` box; corners rounded by `radius` px.
+pub fn star_path(sides: u64, percent: f64, radius: f64, w: f64, h: f64) -> Result<Path> {
+    let inner = percent / 100.0 * (std::f64::consts::PI / sides.max(3) as f64).cos();
+    let sized = crate::vector_cmds::shape_path(&json!({"kind": "star", "rect": [0.0, 0.0, w, h], "sides": sides, "starRatio": inner, "cornerRadius": radius}))?;
+    Ok(normalized(&sized)?.0)
+}
+
 fn geometry(p: &Value) -> Result<Frame> {
     let get = |key: &str| crate::commands::int_i32("layer.new.frame", p, key)?.ok_or_else(|| bad(format!("missing `{key}`")));
     let (x, y, w, h) = (get("x")?, get("y")?, get("width")?, get("height")?);
@@ -58,7 +67,16 @@ fn geometry(p: &Value) -> Result<Frame> {
                 _ => "polygon",
             };
             let sides = if shape == "triangle" { 3 } else { sides };
-            if radius > 0.0 && shape != "ellipse" {
+            // A Polygon frame's star ratio in percent (#13876); 100 is the plain polygon.
+            let star = match p.get("starRatio") {
+                None | Some(Value::Null) => 100.0,
+                Some(v) => {
+                    v.as_f64().filter(|r| r.is_finite() && (1.0..=100.0).contains(r)).ok_or_else(|| bad("starRatio must be a number from 1 to 100 (%)"))?
+                }
+            };
+            if shape == "polygon" && star < 100.0 {
+                star_path(sides, star, radius, f64::from(w), f64::from(h))?
+            } else if radius > 0.0 && shape != "ellipse" {
                 // Rounded at the frame's size, then scaled into its unit outline, so the corners
                 // stay circular on a frame that isn't square.
                 let (fw, fh) = (f64::from(w), f64::from(h));
@@ -392,7 +410,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "layer.new.frame",
             "New Frame",
-            r#"{"x":i32,"y":i32,"width":u32,"height":u32,"shape":"rectangle|ellipse|triangle|polygon|custom"="rectangle","sides":3..100=5,"radius":0..150000=0 (px; rounds Rectangle, Triangle and Polygon corners),"path":object?,"stroke":object|null?,"layer":id?,"name":str?} → {layer,frame:[x,y,w,h],shape}"#,
+            r#"{"x":i32,"y":i32,"width":u32,"height":u32,"shape":"rectangle|ellipse|triangle|polygon|custom"="rectangle","sides":3..100=5,"radius":0..150000=0 (px; rounds Rectangle, Triangle and Polygon corners),"starRatio":1..100=100 (%, Polygon: below 100 a star filling the box),"path":object?,"stroke":object|null?,"layer":id?,"name":str?} → {layer,frame:[x,y,w,h],shape}"#,
             has_doc,
             new_frame,
         ),
@@ -423,5 +441,7 @@ pub fn specs() -> Vec<CommandSpec> {
 mod content_name_tests;
 #[cfg(test)]
 mod radius_tests;
+#[cfg(test)]
+mod star_tests;
 #[cfg(test)]
 mod tests;
