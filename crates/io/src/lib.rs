@@ -572,6 +572,12 @@ thread_local! { pub(crate) static COMPRESSED_DETECTOR_CALLS: std::cell::Cell<usi
 /// probed only by our bounded, cancellable transport; before that, use filename policy.
 fn central_format(name: &str, bytes: &[u8]) -> Option<photocraft_formats::Format> {
     let bytes = if import_compression(bytes).is_some() { &[] } else { bytes };
+    invoke_format_detector(name, bytes)
+}
+
+// Keep instrumentation at the actual detector boundary, after routing sanitizes
+// its input, so removing that sanitization makes the regression counter fire.
+fn invoke_format_detector(name: &str, bytes: &[u8]) -> Option<photocraft_formats::Format> {
     #[cfg(test)]
     if import_compression(bytes).is_some() {
         COMPRESSED_DETECTOR_CALLS.with(|calls| calls.set(calls.get() + 1));

@@ -261,55 +261,46 @@ pub(super) fn decode_tile(c: &Cursor<'_>, at: usize, end: usize, compression: Co
 
 /// RLE tile data: one run-length stream per byte position of the pixel, each of `pixels` bytes.
 pub(super) fn rle_decode(input: &[u8], bpp: usize, pixels: usize) -> Result<Vec<u8>> {
-    let mut out = vec![0u8; pixels * bpp];
-    let mut pos = 0usize;
-    let mut plane = Vec::with_capacity(pixels);
+    // XCF tiles contain at most 64x64 pixels, four channels and eight bytes
+    // per sample. This helper also receives direct calls, outside hierarchy's
+    // validated dimensions, so reject hostile sizes before allocating.
+    let expected = pixels.checked_mul(bpp).ok_or_else(|| invalid("RLE tile size overflow"))?;
+    if pixels == 0 || pixels > (super::TILE as usize) * (super::TILE as usize) || !(1..=32).contains(&bpp) {
+        return Err(invalid("RLE tile dimensions or bytes per pixel are out of range"));
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(expected).map_err(|_| invalid("RLE tile allocation failed"))?;
+    out.resize(expected, 0);
+    let mut cursor = Cursor { b: input, pos: 0, wide: false };
     for b in 0..bpp {
-        plane.clear();
-        while plane.len() < pixels {
-            let op = *input.get(pos).ok_or_else(|| invalid("an RLE tile is cut short"))?;
-            pos += 1;
+        let mut written = 0usize;
+        while written < pixels {
+            let op = cursor.take(1)?.first().copied().ok_or_else(|| invalid("an RLE tile is cut short"))?;
             let (run, verbatim) = match op {
                 0..=126 => (usize::from(op) + 1, false),
-                127 => {
-                    let (p, q) = (input.get(pos).copied(), input.get(pos + 1).copied());
-                    pos += 2;
-                    (
-                        usize::from(p.ok_or_else(|| invalid("an RLE tile is cut short"))?) * 256
-                            + usize::from(q.ok_or_else(|| invalid("an RLE tile is cut short"))?),
-                        false,
-                    )
-                }
-                128 => {
-                    let (p, q) = (input.get(pos).copied(), input.get(pos + 1).copied());
-                    pos += 2;
-                    (
-                        usize::from(p.ok_or_else(|| invalid("an RLE tile is cut short"))?) * 256
-                            + usize::from(q.ok_or_else(|| invalid("an RLE tile is cut short"))?),
-                        true,
-                    )
+                127 | 128 => {
+                    let length = cursor.take(2)?;
+                    let high = length.first().copied().ok_or_else(|| invalid("an RLE tile is cut short"))?;
+                    let low = length.get(1).copied().ok_or_else(|| invalid("an RLE tile is cut short"))?;
+                    (usize::from(u16::from_be_bytes([high, low])), op == 128)
                 }
                 _ => (256 - usize::from(op), true),
             };
             if run == 0 {
                 return Err(invalid("an RLE run has zero length"));
             }
-            if plane.len() + run > pixels {
-                return Err(invalid("an RLE run crosses the end of its tile"));
+            let end = written.checked_add(run).filter(|end| *end <= pixels).ok_or_else(|| invalid("an RLE run crosses the end of its tile"))?;
+            let bytes = cursor.take(if verbatim { run } else { 1 })?;
+            for i in written..end {
+                let value = bytes.get(if verbatim { i - written } else { 0 }).copied().ok_or_else(|| invalid("an RLE tile is cut short"))?;
+                let index = i.checked_mul(bpp).and_then(|index| index.checked_add(b)).ok_or_else(|| invalid("RLE destination offset overflow"))?;
+                *out.get_mut(index).ok_or_else(|| invalid("RLE destination is outside its tile"))? = value;
             }
-            if verbatim {
-                let data = input.get(pos..pos + run).ok_or_else(|| invalid("an RLE tile is cut short"))?;
-                pos += run;
-                plane.extend_from_slice(data);
-            } else {
-                let v = *input.get(pos).ok_or_else(|| invalid("an RLE tile is cut short"))?;
-                pos += 1;
-                plane.resize(plane.len() + run, v);
-            }
-        }
-        for (i, v) in plane.iter().enumerate() {
-            out[i * bpp + b] = *v;
+            written = end;
         }
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod rle_review_tests;

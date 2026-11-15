@@ -24,6 +24,8 @@ mod feature_settings_review_tests;
 #[cfg(test)]
 mod literal_profile_review_tests;
 #[cfg(test)]
+mod markup_work_review_tests;
+#[cfg(test)]
 mod review_round2_tests;
 #[cfg(test)]
 mod review_tests;
@@ -1046,6 +1048,7 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
         let mut unscaled_size = base.size_pt;
         let mut size_scale = 1.0;
         let mut spacing_pt = base.tracking * base.size_pt / 1000.;
+        let mut letter_spaced = false;
         let ancestors: Vec<_> = node.ancestors().filter(roxmltree::Node::is_element).collect();
         if ancestors.len() > MAX_DEPTH {
             return Err(invalid("text markup nesting exceeds limit"));
@@ -1091,7 +1094,14 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
             for a in ancestor.attributes() {
                 match a.name() {
                     "font" | "font_desc" => {}
-                    "font_family" | "face" => style.font_family = a.value().into(),
+                    "font_family" | "face" => {
+                        // Charge copies even when an inner span replaces the family:
+                        // retained-run accounting alone cannot bound inherited copy work.
+                        allowance = allowance
+                            .checked_sub(a.value().len())
+                            .ok_or_else(|| crate::IoError::Unsupported("native text runs exceed the bounded formatting allowance".into()))?;
+                        style.font_family = a.value().into();
+                    }
                     "weight" | "font_weight" => {
                         style.weight = match a.value() {
                             "bold" => 700,
@@ -1146,7 +1156,10 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                     // Pango renders both numeric and `pt` rise syntax as device distances.
                     // Font sizes below remain point-valued, unlike these placement distances.
                     "rise" => style.baseline_shift_pt = device_points(f64::from(pango_points(a.value())?), dpi)?,
-                    "letter_spacing" => spacing_pt = device_points(f64::from(pango_points(a.value())?), dpi)?,
+                    "letter_spacing" => {
+                        spacing_pt = device_points(f64::from(pango_points(a.value())?), dpi)?;
+                        letter_spaced = true;
+                    }
                     "font_features" => {
                         for feature in features(a.value())? {
                             if let Some(previous) = style.features.iter_mut().find(|previous| previous.tag == feature.tag) {
@@ -1224,6 +1237,17 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
             style.tracking = spacing_pt * 1000. / style.size_pt;
             if !style.tracking.is_finite() || style.tracking.abs() > 1_000_000. {
                 return Err(invalid("native markup tracking exceeds bounds"));
+            }
+        }
+        if letter_spaced {
+            // Pango disables standard/contextual ligatures for a letter-spacing
+            // attribute, including zero. Resolve this after every inherited feature
+            // request: native explicit features otherwise override the ligature flag.
+            style.ligatures = false;
+            for feature in &mut style.features {
+                if matches!(feature.tag.as_str(), "liga" | "clig") {
+                    feature.value = 0;
+                }
             }
         }
         let bytes = std::mem::size_of::<TextRun>().saturating_add(value.len()).saturating_add(style_allocation(&style));

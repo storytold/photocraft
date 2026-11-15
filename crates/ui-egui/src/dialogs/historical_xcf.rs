@@ -101,9 +101,9 @@ pub(crate) fn answer(app: &mut PhotocraftApp, fields: &serde_json::Map<String, V
         Ok(Started::Done(value)) => {
             let held = app.historical_opens.iter().find(|held| held.id == id).ok_or("historical source is gone")?;
             let (name, path, slot, order) = (held.name.clone(), held.path.clone(), held.slot, held.order);
-            let result = crate::jobs_ui::finish_open(app, &name, path.as_deref(), &value, slot, order);
-            complete(app, id, result.is_ok());
-            result.map(|()| value)
+            let result = crate::jobs_ui::finish_open_with_held(app, &name, path.as_deref(), &value, slot, order);
+            complete(app, id, result.as_ref().ok().copied().flatten());
+            result.map(|_| value)
         }
         Err(error) => {
             if app.session.holds_historical_xcf_open(id) {
@@ -114,7 +114,7 @@ pub(crate) fn answer(app: &mut PhotocraftApp, fields: &serde_json::Map<String, V
                 }
                 crate::open_prompt::advance(app);
             } else {
-                complete(app, id, false);
+                complete(app, id, None);
             }
             Err(error)
         }
@@ -127,13 +127,14 @@ pub(crate) fn for_job(app: &PhotocraftApp, job: JobId) -> Option<u64> {
 
 /// Replace the exact reservation with the just-arrived decoded open before advancing.
 /// The reservation kept `arrive` from admitting later files during inline/background completion.
-pub(crate) fn complete(app: &mut PhotocraftApp, id: u64, decoded: bool) {
+pub(crate) fn complete(app: &mut PhotocraftApp, id: u64, decoded: Option<photocraft_doc::DocId>) {
     let Some(position) = app.prompt_order.iter().position(|kind| *kind == PromptKind::Resuming(id)) else { return };
     app.historical_opens.retain(|held| held.id != id);
     let decoded_index = app.prompt_order.iter().take(position).filter(|kind| **kind == PromptKind::Open).count();
     app.prompt_order.remove(position);
-    // A successful XCF completion appends exactly one decoded entry. Failure appends none.
-    if decoded
+    // Only this completion's decoded document may replace its reservation. Success
+    // without a new held document leaves unrelated queued opens in their original places.
+    if decoded.is_some_and(|document| app.held_opens.back().is_some_and(|held| held.doc.id == document))
         && app.prompt_order.back() == Some(&PromptKind::Open)
         && let Some(held) = app.held_opens.pop_back()
     {

@@ -91,6 +91,72 @@ fn later_document() -> crate::open_prompt::Held {
     }
 }
 
+fn resuming_before_historical_and_decoded(app: &mut PhotocraftApp) -> crate::jobs_ui::OpenTab {
+    for id in [101, 102] {
+        app.historical_opens.push(Historical {
+            id,
+            name: format!("historical-{id}.xcf"),
+            path: None,
+            slot: None,
+            order: None,
+            version: 4,
+            bits: 16,
+            job: (id == 101).then_some(JobId(201)),
+        });
+    }
+    app.held_opens.push_back(later_document());
+    app.prompt_order.extend([PromptKind::Resuming(101), PromptKind::Historical(102), PromptKind::Open]);
+    crate::jobs_ui::OpenTab { job: JobId(201), name: "resumed.xcf".into(), path: None, slot: None, order: None }
+}
+
+#[test]
+fn direct_historical_completion_leaves_next_historical_ahead_of_unrelated_decoded_open() {
+    let mut app = app();
+    app.run("file.new", json!({"width":2,"height":2})).unwrap();
+    let document = app.session.active().unwrap().doc.id;
+    let admission = crate::jobs_ui::finish_open_with_held(&mut app, "resumed.xcf", None, &json!({"docId":document.0,"warnings":[]}), None, None).unwrap();
+    assert_eq!(admission, None, "a direct admission appended no held document");
+    // Completion may only replace its reservation when its admission actually
+    // produced a held document. B's presence is not evidence that A produced one.
+    resuming_before_historical_and_decoded(&mut app);
+    complete(&mut app, 101, admission);
+    assert_eq!(app.prompt_order.iter().copied().collect::<Vec<_>>(), [PromptKind::Historical(102), PromptKind::Open]);
+    assert_eq!(app.held_opens.len(), 1);
+    assert_eq!(app.held_opens[0].name, "later");
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.active().unwrap().doc.id, document);
+    assert_eq!(app.ui.dialogs[0].fields[FIELD], 102);
+}
+
+#[test]
+fn resumed_held_completion_replaces_only_its_own_reservation() {
+    let mut app = app();
+    app.run("file.new", json!({"width":2,"height":2})).unwrap();
+    let document = app.session.active().unwrap().doc.id;
+    let tab = resuming_before_historical_and_decoded(&mut app);
+    // With the reservation present finish_open re-holds this exact admitted
+    // document, and its completion must put A before C while leaving B after C.
+    crate::jobs_ui::finish_open_tab(&mut app, &tab, &json!({"docId":document.0,"warnings":[]})).unwrap();
+    assert_eq!(app.prompt_order.iter().copied().collect::<Vec<_>>(), [PromptKind::Historical(102), PromptKind::Open]);
+    assert_eq!(app.held_opens.len(), 1);
+    assert_eq!(app.held_opens[0].name, "later");
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.active().unwrap().doc.id, document);
+    assert_eq!(app.ui.dialogs[0].fields[FIELD], 102);
+}
+
+#[test]
+fn failed_resumed_completion_does_not_claim_an_unrelated_held_open() {
+    let mut app = app();
+    let tab = resuming_before_historical_and_decoded(&mut app);
+    assert!(crate::jobs_ui::finish_open_tab(&mut app, &tab, &json!({"warnings":[]})).is_err());
+    assert_eq!(app.prompt_order.iter().copied().collect::<Vec<_>>(), [PromptKind::Historical(102), PromptKind::Open]);
+    assert_eq!(app.held_opens.len(), 1);
+    assert_eq!(app.held_opens[0].name, "later");
+    assert!(app.session.documents().is_empty());
+    assert_eq!(app.ui.dialogs[0].fields[FIELD], 102);
+}
+
 #[test]
 fn historical_resume_keeps_its_position_before_later_file_and_profile_prompt() {
     for background in [false, true] {

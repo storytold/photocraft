@@ -6,7 +6,9 @@ use photocraft_raster::Interrupt;
 use super::{IoError, MAGIC, MAX_INFLATED, Result, invalid};
 
 const CHUNK: usize = 32 * 1024;
-const XZ_MEMORY_KIB: u32 = 64 * 1024;
+const XZ_MAX_DICTIONARY_BYTES: u32 = 64 * 1024 * 1024;
+// Include the BOM, 4096 UTF-16 code units, and a possible trailing surrogate.
+const SVG_PROBE_BYTES: usize = 2 + 2 * 4096 + 2;
 
 #[cfg(test)]
 thread_local! { pub(crate) static DECODER_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
@@ -26,6 +28,8 @@ mod bzip;
 
 #[cfg(test)]
 mod gzip_tests;
+#[cfg(test)]
+mod prefix_review_tests;
 #[cfg(test)]
 mod review_tests;
 #[cfg(test)]
@@ -178,7 +182,9 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
     let mut decoder: Box<dyn Read + '_> = match compression {
         "gzip" => Box::new(Gzip::new(&mut input, &gzip_policy)),
         "bzip2" => Box::new(bzip::Reader::new(&mut input)),
-        _ => Box::new(lzma_rust2::XzReader::new_mem_limit(&mut input, true, XZ_MEMORY_KIB)),
+        // The decoder limit includes fixed LZMA2 buffers as well as the dictionary.
+        // Admit the 64 MiB dictionary used by -9/-9e without admitting larger ones.
+        _ => Box::new(lzma_rust2::XzReader::new_mem_limit(&mut input, true, lzma_rust2::lzma2_get_memory_usage(XZ_MAX_DICTIONARY_BYTES))),
     };
     let mut prefix = [0; MAGIC.len()];
     let mut prefix_len = 0usize;
@@ -191,7 +197,7 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
                 ctl.check().map_err(|_| IoError::Cancelled)?;
                 return if declared {
                     Err(invalid(format!("{compression}: {error}")))
-                } else if allow_svg {
+                } else if allow_svg && (declared_svg || svg_signature(prefix.get(..prefix_len).unwrap_or_default())) {
                     Err(IoError::Svg(format!("{compression}: {error}")))
                 } else {
                     Ok(None)
@@ -225,6 +231,9 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
         return Err(oversized());
     }
     output.extend_from_slice(prefix.get(..prefix_len).ok_or_else(|| invalid("invalid transport prefix length"))?);
+    if !is_xcf && !declared_svg && !probe_svg(decoder.as_mut(), &mut output, ctl, limit, &gzip_policy)? {
+        return Ok(None);
+    }
     let mut chunk = [0; CHUNK];
     loop {
         ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -260,35 +269,63 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
         output.truncate(verified);
     }
     if !prefix_only && !input.remaining.is_empty() && is_xcf {
-        let message = format!("unconsumed data after the {compression} stream");
-        return Err(if is_xcf { invalid(message) } else { IoError::Svg(message) });
+        return Err(invalid(format!("unconsumed data after the {compression} stream")));
     }
-    if !is_xcf && !declared_svg {
-        // Sniff already-plain bytes. Decoding only a fixed prefix preserves the shared
-        // sniffer's UTF-8/UTF-16/Latin-1 policy without another gzip reader or large text copy.
-        let little_utf16 = output.starts_with(&[0xff, 0xfe]);
-        let big_utf16 = output.starts_with(&[0xfe, 0xff]);
-        // The shared sniffer reads 4096 UTF-8 bytes. Include the UTF-16 BOM plus
-        // 4096 code units; a cut high surrogate belongs to the uninspected tail,
-        // not to an invalid source. The complete bytes still go to the real parser.
-        let limit = if little_utf16 || big_utf16 { 2 + 2 * 4096 } else { 8192 };
-        let mut head = output.get(..output.len().min(limit)).ok_or_else(|| invalid("invalid SVG signature prefix"))?;
-        if head.len() < output.len() && (little_utf16 || big_utf16) {
-            let last = match head.get(head.len().saturating_sub(2)..) {
-                Some([a, b]) if little_utf16 => u16::from_le_bytes([*a, *b]),
-                Some([a, b]) => u16::from_be_bytes([*a, *b]),
-                _ => 0,
-            };
-            if (0xd800..=0xdbff).contains(&last) {
-                head = head.get(..head.len().saturating_sub(2)).ok_or_else(|| invalid("invalid UTF-16 signature prefix"))?;
-            }
-        }
-        let svg = crate::svg::is_svg(&output) || craft_svg::svgz::decode(head).is_ok_and(|text| crate::svg::is_svg(text.as_bytes()));
-        if !svg {
-            return Ok(None);
-        }
+    if !is_xcf && !declared_svg && !svg_signature(&output) {
+        return Ok(None);
     }
     Ok(Some(DecodedImport { is_xcf, bytes: output }))
+}
+
+/// Unknown gzip bodies need only a bounded signature before filename fallback.
+/// A claimed SVG keeps this decoder, including its existing member/tail policy.
+fn probe_svg(decoder: &mut dyn Read, output: &mut Vec<u8>, ctl: &Interrupt<'_>, limit: usize, policy: &GzipPolicy) -> Result<bool> {
+    let probe_limit = SVG_PROBE_BYTES.min(limit);
+    let mut chunk = [0; SVG_PROBE_BYTES];
+    while output.len() < probe_limit {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let capacity = probe_limit.saturating_sub(output.len());
+        let target = chunk.get_mut(..capacity).ok_or_else(|| invalid("invalid SVG probe capacity"))?;
+        let count = match decoder.read(target) {
+            Ok(count) => count,
+            Err(error) => {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
+                return if svg_signature(output) { Err(IoError::Svg(format!("gzip: {error}"))) } else { Ok(false) };
+            }
+        };
+        if count == 0 {
+            break;
+        }
+        output.extend_from_slice(chunk.get(..count).ok_or_else(|| invalid("invalid SVG probe length"))?);
+    }
+    // A failed later member can roll back tentative bytes. Cancellation must
+    // precede that compatibility fallback and ordinary filename routing.
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    if let Some(verified) = policy.rollback.get() {
+        output.truncate(verified);
+    }
+    Ok(svg_signature(output))
+}
+
+/// Recognizes plain XML using the shared bounded UTF-8/UTF-16/Latin-1 policy.
+fn svg_signature(output: &[u8]) -> bool {
+    let little_utf16 = output.starts_with(&[0xff, 0xfe]);
+    let big_utf16 = output.starts_with(&[0xfe, 0xff]);
+    // A cut high surrogate belongs to the uninspected tail, not to an invalid
+    // source. The complete bytes still go to the real SVG parser after claiming.
+    let limit = if little_utf16 || big_utf16 { 2 + 2 * 4096 } else { 8192 };
+    let mut head = output.get(..output.len().min(limit)).unwrap_or_default();
+    if head.len() < output.len() && (little_utf16 || big_utf16) {
+        let last = match head.get(head.len().saturating_sub(2)..) {
+            Some([a, b]) if little_utf16 => u16::from_le_bytes([*a, *b]),
+            Some([a, b]) => u16::from_be_bytes([*a, *b]),
+            _ => 0,
+        };
+        if (0xd800..=0xdbff).contains(&last) {
+            head = head.get(..head.len().saturating_sub(2)).unwrap_or_default();
+        }
+    }
+    crate::svg::is_svg(output) || craft_svg::svgz::decode(head).is_ok_and(|text| crate::svg::is_svg(text.as_bytes()))
 }
 
 #[cfg(test)]

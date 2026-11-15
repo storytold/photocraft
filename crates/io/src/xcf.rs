@@ -381,14 +381,14 @@ impl<'a> Image<'a> {
         let props = props(&mut c)?;
         let hptr = c.ptr()?;
         let (effect_pointers, effects_limited) = if self.version >= 26 { self.optional_effect_pointers(&mut c, ctl)? } else { (Vec::new(), false) };
-        let saved = (self.base_type, self.precision);
+        let saved_base_type = self.base_type;
         // Channels are always one plain sample per pixel, even in indexed images.
         self.base_type = 0;
         let px = self.hierarchy(hptr, 1, true, ctl).map_err(|error| match error {
             IoError::Cancelled => IoError::Cancelled,
             error => invalid(format!("channel or mask '{name}': {error}")),
         });
-        (self.base_type, self.precision) = saved;
+        self.base_type = saved_base_type;
         let px = px?;
         if (px.width, px.height) != (width, height) {
             return Err(invalid(format!("channel or mask '{name}' hierarchy dimensions differ from the declared {width}x{height}")));

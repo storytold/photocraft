@@ -71,6 +71,20 @@ fn xz(bytes: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn compressed_detector_counter_observes_the_actual_detector_argument() {
+    // This control deliberately crosses the boundary directly. A broken counter
+    // must not make every bounded-routing assertion below pass vacuously.
+    for bytes in wrappers(b"<svg xmlns='http://www.w3.org/2000/svg'/>") {
+        reset_counts();
+        let _ = crate::invoke_format_detector("counter-control.bin", &bytes);
+        assert_eq!(crate::COMPRESSED_DETECTOR_CALLS.get(), 1);
+        reset_counts();
+        let _ = crate::central_format("bounded-route.bin", &bytes);
+        assert_no_compressed_central_detection();
+    }
+}
+
+#[test]
 fn compressed_signatures_are_bounded_and_shared_with_preflight_routing() {
     for (signature, kind) in [(&b"\x1f\x8b"[..], ImportCompression::Gzip), (&b"BZh"[..], ImportCompression::Bzip2), (&b"\xfd7zXZ\0"[..], ImportCompression::Xz)]
     {
