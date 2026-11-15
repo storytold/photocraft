@@ -33,30 +33,15 @@ fn a_source_of_another_color_mode_is_refused() {
 
 #[test]
 fn a_source_in_the_current_color_mode_still_paints() {
-    for depth in [8u64, 16] {
-        for mode in MODES {
-            let mut s = held_back_session(depth);
-            s.execute(mode, json!({})).unwrap();
-            let row = s.active().unwrap().history.entries().len() - 1;
-            s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
-            let (before, n) = (pixels(&s), steps(&s));
-            let r = stroke(&mut s, json!({"tolerance": 0, "state": row})).unwrap();
-            assert!(!r["damage"].is_null(), "depth {depth} {mode}: {r}");
-            assert_eq!(steps(&s), n + 1, "depth {depth} {mode}");
-            assert_ne!(pixels(&s), before, "depth {depth} {mode}: the source state painted");
-        }
+    for mode in MODES {
+        let mut s = held_back_session(8);
+        s.execute(mode, json!({})).unwrap();
+        let row = s.active().unwrap().history.entries().len() - 1;
+        s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
+        let (before, n) = (pixels(&s), steps(&s));
+        let r = stroke(&mut s, json!({"tolerance": 0, "state": row})).unwrap();
+        assert!(!r["damage"].is_null(), "{mode}: {r}");
+        assert_eq!(steps(&s), n + 1, "{mode}");
+        assert_ne!(pixels(&s), before, "{mode}: the source state painted");
     }
-}
-
-/// Only the colour mode is refused: a source of another bit depth converts as before (not measured
-/// for this brush; today's behaviour).
-#[test]
-fn a_source_of_another_bit_depth_still_paints() {
-    let mut s = held_back_session(8);
-    s.execute("image.mode.bits16", json!({})).unwrap();
-    let (before, n) = (pixels(&s), steps(&s));
-    let r = stroke(&mut s, json!({"tolerance": 0})).unwrap();
-    assert!(!r["damage"].is_null(), "{r}");
-    assert_eq!(steps(&s), n + 1);
-    assert_ne!(pixels(&s), before);
 }

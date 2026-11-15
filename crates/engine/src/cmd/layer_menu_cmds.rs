@@ -131,6 +131,17 @@ fn apply_mask(s: &mut Session, p: &Value) -> Result<Value> {
         // displays. LayerMask::values_into accounts for density but not feather (#3044).
         let feathered = {
             let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+            // The pixels are read over their content bounds (distant tiles span the gaps between
+            // them) as native samples, straight RGBA, the mask's coverage and the re-encoded
+            // output; a feathered mask is also rendered over the canvas and those bounds.
+            if let Some(surf) = layer.surface() {
+                let r = surf.content_bounds();
+                let n = surf.channels() as u64;
+                crate::allocation::check_dense(r, n.saturating_mul(8).saturating_add(20), "applying the layer mask")?;
+                if layer.mask.as_ref().is_some_and(|m| m.enabled && photocraft_compose::masks::feather_sigma(m.feather) > 0.0) {
+                    crate::allocation::check_dense(doc.bounds().union(&r), 8, "applying the feathered layer mask")?;
+                }
+            }
             if layer.mask.as_ref().is_some_and(|m| m.enabled && photocraft_compose::masks::feather_sigma(m.feather) > 0.0) {
                 // Do not bake an independent vector mask that remains attached after Apply.
                 let mut mask_only = layer.clone();
@@ -712,9 +723,12 @@ fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) if v.is_finite() && v.abs() <= f64::from(f32::MAX) => Ok(v as f32),
         Some(_) => Err(bad("layer.layerStyle.globalLight", format!("{key} must be a finite number"))),
     };
-    let angle = f32_param("angle", cur.angle)?;
+    let raw_angle = f32_param("angle", cur.angle)?;
     let altitude = f32_param("altitude", cur.altitude)?.clamp(0.0, 90.0);
-    let angle = (angle + 180.0).rem_euclid(360.0) - 180.0;
+    let mut angle = (raw_angle + 180.0).rem_euclid(360.0) - 180.0;
+    if angle == -180.0 && raw_angle > 0.0 {
+        angle = 180.0;
+    }
     s.edit("Global Light", |doc, _| {
         doc.global_light.angle = angle;
         doc.global_light.altitude = altitude;
@@ -921,6 +935,16 @@ fn content_options(s: &mut Session, _: &Value) -> Result<Value> {
 
 /// The layer rendered alone (visible, its blend mode ignored) and trimmed to its pixels, as a
 /// one-layer document — what Export As does for a layer.
+/// The error [`layer_document`] gives for a layer with nothing on the canvas: an empty pixel
+/// layer, an adjustment layer, a layer entirely off the canvas.
+const EMPTY_LAYER: &str = "the layer is empty";
+
+/// Whether `e` is [`layer_document`]'s error for a layer with nothing on the canvas, which a
+/// several-layer export skips (#14806), rather than a real failure.
+pub fn is_empty_layer(e: &EngineError) -> bool {
+    matches!(e, EngineError::Other(msg) if msg == EMPTY_LAYER)
+}
+
 pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let mut alone = l.clone();
@@ -941,7 +965,7 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
         }
     }
     if b.is_empty() {
-        return Err(other("the layer is empty"));
+        return Err(other(EMPTY_LAYER));
     }
     let fmt = doc.pixel_format();
     let mut out = Document::new(l.name.clone(), photocraft_doc::Size::new(b.width(), b.height()), doc.mode, doc.depth);
@@ -1059,7 +1083,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.layerStyle.globalLight",
             "Global Light…",
             ["Layer", "Layer Style"],
-            r##"{"angle":-180..180=120,"altitude":0..90=30}"##,
+            r##"{"angle":-360..360=120,"altitude":0..90=30}"##,
             has_doc,
             global_light
         ),
