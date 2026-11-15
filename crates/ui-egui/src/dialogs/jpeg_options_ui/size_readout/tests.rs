@@ -118,7 +118,17 @@ fn unchanged_settings_are_not_encoded_again() {
     assert_eq!(encodes.load(Ordering::SeqCst), 3);
 
     let edited = Key { revision: 4, ..key };
-    assert_eq!(readout.update(edited, || || None, || {}), Estimate::Pending(None), "an edited document shows no size of the old one");
+    let (ready, wait) = std::sync::mpsc::channel::<()>();
+    let estimate = readout.update(
+        edited,
+        || move || {
+            let _ = wait.recv();
+            None
+        },
+        || {},
+    );
+    ready.send(()).unwrap();
+    assert_eq!(estimate, Estimate::Pending(None), "an edited document shows no size of the old one");
 }
 
 /// Going back to settings already worked out shows their size at once, without encoding again;
