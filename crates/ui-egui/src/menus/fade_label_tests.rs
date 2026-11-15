@@ -48,3 +48,14 @@ fn fade_sits_in_its_own_group() {
     let edit: Vec<&str> = items.iter().filter(|i| i.path.len() == 1 && i.path[0] == "Edit").map(|i| i.label.as_str()).take(7).collect();
     assert_eq!(edit, ["Undo", "Redo", "Toggle Last State", "---", "Fade…", "---", "Cut"], "{edit:?}");
 }
+
+/// CodeRabbit on #15091: the label comes from the engine, so hiding Fade in Edit › Menus (which drops its row
+/// from the menu list) does not turn the right-click menu's Fade back into plain `Fade…`.
+#[test]
+fn a_hidden_menu_row_does_not_change_the_right_click_label() {
+    let mut app = app();
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    app.session.prefs.edit(|p| p.menus.hidden.push("edit.fade".into()));
+    assert!(menu_items(&app).iter().all(|i| i.id != "edit.fade"), "the row is hidden from the menu list");
+    assert_eq!(fade_label(&app), "Fade Invert…");
+}

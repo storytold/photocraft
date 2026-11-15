@@ -152,10 +152,8 @@ pub fn alt_click(id: String, alt: bool) -> String {
 }
 
 /// Edit › Fade's label as the menus show it, translated (#13803): `Fade Invert…` while Fade can
-/// run, `Fade…` when it can't. The selection right-click menu shows the same.
+/// run, `Fade…` when it can't. The selection right-click menu shows the same. Read from the engine,
+/// not from the menu list, so hiding Fade in Edit › Menus does not change the right-click menu.
 pub fn fade_label(app: &crate::PhotocraftApp) -> String {
-    match crate::menus::menu_items(app).into_iter().find(|i| i.id == "edit.fade") {
-        Some(item) => translated_menu_label(crate::i18n::current(), &item),
-        None => tl!("Fade…").to_string(),
-    }
+    super::state::translated_fade_label(crate::i18n::current(), &photocraft_engine::edit_menu_cmds::fade_menu_label(&app.session))
 }

@@ -238,11 +238,17 @@ pub(super) fn translated_menu_label(lang: crate::i18n::Lang, item: &MenuItem) ->
     {
         return crate::i18n::tr_id(lang, &item.id, "Quick Export as PNG").replace("PNG", fmt);
     }
-    // "Fade Invert…": the translated "Fade…" around the step's own history name (#13803).
-    if item.id == "edit.fade"
-        && let Some(step) = item.label.strip_prefix("Fade ").and_then(|l| l.strip_suffix('…'))
-    {
-        return crate::i18n::tr_id(lang, &item.id, "Fade…").replace('…', &format!(" {step}…"));
+    if item.id == "edit.fade" {
+        return translated_fade_label(lang, &item.label);
     }
     crate::i18n::tr_id(lang, &item.id, &item.label).to_string()
+}
+
+/// Edit › Fade's `label` translated: `Fade Invert…` is the translated "Fade…" around the step's own
+/// history name (#13803), plain `Fade…` just the translation.
+pub(super) fn translated_fade_label(lang: crate::i18n::Lang, label: &str) -> String {
+    match label.strip_prefix("Fade ").and_then(|l| l.strip_suffix('…')) {
+        Some(step) => crate::i18n::tr_id(lang, "edit.fade", "Fade…").replace('…', &format!(" {step}…")),
+        None => crate::i18n::tr_id(lang, "edit.fade", label).to_string(),
+    }
 }
