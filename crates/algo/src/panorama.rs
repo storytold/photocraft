@@ -427,20 +427,37 @@ pub fn align_translated_crops(imgs: &[PreparedImage], feats: &[ImageFeatures], m
     for pair in matches {
         let a = imgs.get(pair.a)?;
         let b = imgs.get(pair.b)?;
-        // The most frequent exact corner displacement is more stable than extrapolating a
-        // homography estimated from a narrow overlap. Coordinates from the detector are integers.
+        if pair.pts_a.len() != pair.pts_b.len() {
+            return None;
+        }
         let mut votes = std::collections::BTreeMap::<(i32, i32), usize>::new();
         for (pa, pb) in pair.pts_a.iter().zip(&pair.pts_b) {
             let d = ((pa[0] - pb[0]).round() as i32, (pa[1] - pb[1]).round() as i32);
             *votes.entry(d).or_default() += 1;
         }
         let ((dx, dy), count) = votes.into_iter().max_by_key(|&(_, count)| count)?;
-        if count < 8 || count < pair.pts_a.len().div_ceil(2) || !confirms_translation(a, b, dx, dy) {
+        if count < 8 || count < pair.pts_a.len().div_ceil(2) {
             return None;
         }
-        // Feed only correspondences supporting the same shift to the existing global solver.
-        let (pts_a, pts_b) =
-            pair.pts_a.iter().zip(&pair.pts_b).filter(|(a, b)| a[0] - b[0] == f64::from(dx) && a[1] - b[1] == f64::from(dy)).map(|(&a, &b)| (a, b)).unzip();
+        let supports = |a: &[f64; 2], b: &[f64; 2]| a[0] - b[0] == f64::from(dx) && a[1] - b[1] == f64::from(dy);
+        // One dominant offset can hide a scale change in a narrow overlap. Check the
+        // correspondence support at both ends of each axis before dropping noisy matches.
+        if count != pair.pts_a.len() {
+            let mut by_position: Vec<_> = pair.pts_a.iter().zip(&pair.pts_b).collect();
+            let quarter = by_position.len() / 4;
+            for axis in [0, 1] {
+                by_position.sort_unstable_by(|(_, a), (_, b)| a[axis].total_cmp(&b[axis]));
+                let first = by_position.iter().take(quarter).filter(|(a, b)| supports(a, b)).count();
+                let last = by_position.iter().rev().take(quarter).filter(|(a, b)| supports(a, b)).count();
+                if first <= quarter / 2 || last <= quarter / 2 {
+                    return None;
+                }
+            }
+        }
+        if !confirms_translation(a, b, dx, dy) {
+            return None;
+        }
+        let (pts_a, pts_b) = pair.pts_a.iter().zip(&pair.pts_b).filter(|(a, b)| supports(a, b)).map(|(&a, &b)| (a, b)).unzip();
         translated.push(PairMatch { pts_a, pts_b, ..pair.clone() });
     }
     let a = align(feats, &translated, &AlignOptions { layout: Layout::Reposition, ..opts.clone() })?;

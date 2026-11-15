@@ -46,3 +46,30 @@ fn verified_features_do_not_force_a_shift_when_the_overlap_disagrees() {
     let options = AlignOptions { layout: Layout::Auto, focal: None, reference: None, geometric: false };
     assert!(align_translated_crops(&inputs, &feats, &matches, &options).is_none());
 }
+
+#[test]
+fn a_dominant_integer_offset_does_not_hide_scale_in_a_narrow_overlap() {
+    let (width, height) = (1200, 160);
+    let (shift, scale) = (1100.0, 1.015);
+    let image = |shift: f64, scale: f64| {
+        let pixels = (0..height)
+            .flat_map(|y| {
+                (0..width).map(move |x| {
+                    let x = shift + scale * x as f64;
+                    let y = y as f64;
+                    (0.5 + 0.20 * (x / 13.0 + y / 9.0).sin() + 0.15 * (x / 7.0 - y / 11.0).cos()) as f32
+                })
+            })
+            .collect();
+        (width, height, pixels, None)
+    };
+    let images = [image(0.0, 1.0), image(shift, scale)];
+    assert!(confirms_translation(&images[0], &images[1], shift as i32, 0));
+
+    let pts_b: Vec<_> = (0..16).map(|i| [(if i < 10 { i * 3 } else { 45 + (i - 10) * 10 }) as f64, (i * 47 % height) as f64]).collect();
+    let pts_a = pts_b.iter().map(|&[x, y]| [(shift + scale * x).round(), y]).collect();
+    let pair = PairMatch { a: 0, b: 1, pts_a, pts_b, homography: Homography([scale, 0.0, shift, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]) };
+    let feats = [ImageFeatures { w: width, h: height, ..Default::default() }, ImageFeatures { w: width, h: height, ..Default::default() }];
+    let options = AlignOptions { layout: Layout::Auto, focal: None, reference: None, geometric: false };
+    assert!(align_translated_crops(&images, &feats, &[pair], &options).is_none());
+}
