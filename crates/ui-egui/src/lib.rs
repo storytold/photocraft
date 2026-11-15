@@ -141,6 +141,7 @@ pub(crate) use dialogs::color_picker_preview;
 pub use dialogs::color_picker_ui;
 pub use dialogs::color_range_ui;
 pub use dialogs::color_table_ui;
+pub use dialogs::count_group_name_ui;
 pub use dialogs::credits;
 pub use dialogs::dds_options_ui;
 pub use dialogs::delete_layer_prompt;
@@ -261,11 +262,12 @@ pub(crate) use services::SAVE_OPTIONS_OPEN;
 #[cfg(test)]
 pub(crate) use services::saved_revision_after_write;
 pub use services::{
-    AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
-    CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
-    ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PenScreenFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn,
-    Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    AdoptAutosaveFn, AgentLink, AgentLinkFn, AgentLinkStatus, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationOpenPcraftFn,
+    AutomationReadFn, AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn,
+    ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession,
+    ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox, LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn,
+    OsEventsFn, PenEndFn, PenScreenFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn,
+    Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::bidi_text;
@@ -459,6 +461,8 @@ pub struct PhotocraftApp {
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
+    /// Preferences › AI Integrations: the agent connection's state (see [`Services::agent_link`]).
+    pub agent_link: AgentLinkStatus,
     /// `ui.screenshot` requests: bounded admission, a weak-slot callback per issuance, monotonic
     /// deadlines and a capture-time geometry epoch (see `screenshot.rs`).
     captures: screenshot::Captures,
@@ -582,6 +586,7 @@ pub struct PhotocraftApp {
     /// Action playbacks paused at a step dialog, by the token in that dialog's fields
     /// ([`actions::RESUME`]): what to play next and the automation gate it paused under.
     pub(crate) paused_playbacks: actions::PausedPlaybacks,
+    pub(crate) held_actions_library: Option<actions::library::Held>,
     /// Levels/Curves histogram cache: (document, adjustment layer, revision it is valid for).
     pub(crate) tone_hist: Option<(DocId, photocraft_doc::LayerId, u64, std::sync::Arc<tone::Histograms>)>,
     /// Histogram panel: the document's histogram (`histogram_panel`).
@@ -809,6 +814,8 @@ mod cam_no_pixels_alert_tests;
 #[cfg(test)]
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
+mod menu_automate_groups_tests;
+#[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
 mod pencil_pressure_toggles_tests;
@@ -865,6 +872,8 @@ mod tool_shift_cycle_order_tests;
 #[cfg(test)]
 mod tool_shortcut_tests;
 #[cfg(test)]
+mod toolbar_custom_group_layout_tests;
+#[cfg(test)]
 mod toolbar_group_order_tests;
 #[cfg(test)]
 mod toolbar_more_slot_flyout_tests;
@@ -879,7 +888,11 @@ mod transform_fx_tests;
 
 #[cfg(test)]
 mod transform_commit_click_tests;
+#[cfg(test)]
+mod transform_drag_start_tests;
 
+#[cfg(test)]
+mod artboard_from_group_label_tests;
 #[cfg(test)]
 mod layer_props_ui_tests;
 #[cfg(test)]
@@ -903,6 +916,9 @@ mod transform_relative_position_tests;
 
 #[cfg(test)]
 mod star_tool_tests;
+
+#[cfg(test)]
+mod new_doc_bitmap_mode_tests;
 
 #[cfg(test)]
 mod transform_several_tests;
@@ -981,6 +997,9 @@ mod blend_dropdown_keys_tests;
 mod warp_text_dialog_tests;
 
 #[cfg(test)]
+mod new_doc_web_artboards_tests;
+
+#[cfg(test)]
 mod blend_dropdown_wheel_tests;
 #[cfg(test)]
 mod paths_scroll_tests;
@@ -1027,6 +1046,9 @@ mod view_sync_tests;
 mod stamp_tests;
 
 #[cfg(test)]
+mod new_doc_save_preset_icon_tests;
+
+#[cfg(test)]
 mod alt_click_tests;
 #[cfg(test)]
 mod artboard_first_board_tests;
@@ -1050,6 +1072,9 @@ mod polygon_lasso_tests;
 mod window_frame_tests;
 
 #[cfg(test)]
+mod new_doc_pixel_aspect_tests;
+
+#[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
 mod export_quality_tests;
@@ -1057,6 +1082,8 @@ mod export_quality_tests;
 mod options_hit_area_tests;
 #[cfg(test)]
 mod select_and_mask_button_tests;
+#[cfg(test)]
+mod wand_tolerance_field_tests;
 
 #[cfg(test)]
 mod saved_path_edit_tests;
@@ -1109,3 +1136,6 @@ mod sponge_default_tip_tests;
 
 #[cfg(test)]
 mod red_eye_context_menu_tests;
+
+#[cfg(test)]
+mod clone_stamp_indexed_bar_tests;
