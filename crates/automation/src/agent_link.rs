@@ -12,10 +12,11 @@
 //!
 //! The file holds no secret. A crashed (or, on macOS, quit) app can leave it behind; nothing then
 //! listens on its port ([`probe`]), and the app's next launch replaces it or removes it
-//! ([`remove_stale_connection`]). Until then another program could take that port, so a client
-//! checks that [`Connection::pid`] is still running before it sends the token. That narrows the
-//! gap without closing it (a pid can be reused); `docs/control-protocol.md` says when a client
-//! should not send the token on the strength of this file.
+//! ([`remove_stale_connection`]). Until then another program could take that port. PhotoCraft's
+//! bridge uses challenge authentication: the listener must prove it holds the token before the
+//! client sends its own proof, and the token itself is never sent. The bridge never falls back
+//! to sending the token. [`Connection::pid`] identifies the publisher and distinguishes app
+//! restarts; it is not used to authenticate the listener. See `docs/control-protocol.md`.
 //!
 //! The app starts and stops that server at once when the switch changes. `photocraft-cli mcp`
 //! ([`crate::live`]) reads the connection file on every tool call, so MCP client configurations
