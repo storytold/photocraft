@@ -126,6 +126,13 @@ const ACROSS_TWIST_TOL: f64 = 1.2;
 /// redraws of fish and bulge meshes split their edge columns down from 1.06 px of twist down the
 /// column, where a pulled corner's twist (along its rows) stays under [`ACROSS_TWIST_TOL`].
 const FULL_COLUMN_TWIST_TOL: f64 = 1.0;
+/// The twist along a cell's top edge (its net's first row of quads, document px) past which a
+/// one-patch full mesh's cell that splits across splits down too. Only the top edge counts: with
+/// an inner control point moved 18 px across, the reference application cuts the quarter cell
+/// whose top edge twists 1.125 px into eighths down, but not the mirror cell twisted as much
+/// along its bottom edge; at 14 px (0.875) it cuts neither, and a threshold of 0.9 cuts cells of
+/// one-sided bends the reference keeps whole.
+const FULL_TOP_TWIST_TOL: f64 = 1.0;
 /// A cell of a one-patch full mesh twisted past this splits both ways (probes with one inner
 /// control point moved: cells at 2.25 px split across and down, at 1.75 px only the one way).
 const BOTH_WAYS_TWIST_TOL: f64 = 2.0;
@@ -941,11 +948,13 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
                 across = true;
             }
             // A full mesh's cell split across splits down too where its twist along its v side passes
-            // FULL_COLUMN_TWIST_TOL (the edge columns of fish and bulge meshes).
+            // FULL_COLUMN_TWIST_TOL (the edge columns of fish and bulge meshes), or, in a one-patch
+            // full mesh, where its top edge twists past FULL_TOP_TWIST_TOL.
             if rules.force_down && twisty && across && !down {
                 let sub = sub();
                 let (p00, p01) = (sub.at(0, 0), sub.at(0, sub.nv - 1));
-                if sub.twist_along([p01[0] - p00[0], p01[1] - p00[1]]) > FULL_COLUMN_TWIST_TOL + EPS {
+                if sub.twist_along([p01[0] - p00[0], p01[1] - p00[1]]) > FULL_COLUMN_TWIST_TOL + EPS || (full_one && sub.twist_top() > FULL_TOP_TWIST_TOL + EPS)
+                {
                     down = true;
                 }
             }
@@ -2633,6 +2642,22 @@ mod tests {
         assert!(narrow(&left, 0.0), "the cell left of the moved point splits across");
         let (right, _) = cells(&moved_point_net(1, 1, [14.0, 0.0]), true, &rules);
         assert!(!narrow(&right, 0.5), "the cell right of it stays whole across");
+    }
+
+    /// A one-patch full mesh's cell split across splits down too where its top edge twists past
+    /// 1 px: with an inner control point of the top row moved 18 px across, the top right quarter
+    /// cell (top edge 1.125) is cut into eighths down; moved 14 px (0.875) it stays a quarter tall.
+    /// The mirror cell, twisted as much along its bottom edge, stays whole down.
+    #[test]
+    fn a_full_mesh_cell_split_across_splits_down_past_its_top_edge_twist() {
+        let rules = one_patch_rules(&moved_point_net(1, 1, [0.0, 0.0]), true);
+        let leaf = |leaves: &[Cell], c: Cell| leaves.iter().any(|l| (0..4).all(|k| (l[k] - c[k]).abs() < EPS));
+        let (far, _) = cells(&moved_point_net(2, 1, [18.0, 0.0]), true, &rules);
+        assert!(leaf(&far, [0.75, 0.875, 0.0, 0.125]), "top edge 1.125: cut down");
+        let (near, _) = cells(&moved_point_net(2, 1, [14.0, 0.0]), true, &rules);
+        assert!(leaf(&near, [0.75, 0.875, 0.0, 0.25]), "top edge 0.875: whole down");
+        let (mirror, _) = cells(&moved_point_net(1, 2, [18.0, 0.0]), true, &rules);
+        assert!(leaf(&mirror, [0.0, 0.125, 0.75, 1.0]), "bottom edge 1.125: whole down");
     }
 
     /// A one-patch full mesh's cell twisted past 2 px splits both ways: with the top-left inner
