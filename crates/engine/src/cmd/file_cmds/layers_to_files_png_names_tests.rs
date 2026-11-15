@@ -33,14 +33,14 @@ fn file_names(result: &serde_json::Value) -> Vec<String> {
 #[test]
 fn png_names_use_dashes_for_spaces() {
     let result = export("dashes", "png");
-    assert_eq!(file_names(&result), vec!["p-1_0000_Blue-Half.png".to_string(), "p-1_0001_Background.png".to_string()]);
+    assert_eq!(file_names(&result), vec!["p-1_0001_Blue-Half.png".to_string(), "p-1_0002_Background.png".to_string()]);
 }
 
 #[test]
 fn other_formats_keep_spaces() {
     for format in ["psd", "jpg", "tif"] {
         let result = export("keep", format);
-        assert_eq!(file_names(&result), vec![format!("p 1_0000_Blue Half.{format}"), format!("p 1_0001_Background.{format}")], "{format}");
+        assert_eq!(file_names(&result), vec![format!("p 1_0001_Blue Half.{format}"), format!("p 1_0002_Background.{format}")], "{format}");
     }
 }
 
