@@ -120,3 +120,21 @@ fn a_border_drag_still_moves_the_frame_and_an_empty_frame_still_moves() {
     assert_eq!(frame_box(&app, empty), [410, 45, 510, 125]);
     assert_eq!(entries(&app).last().map(String::as_str), Some("Move"));
 }
+
+/// CodeRabbit on #15172: a press and release one pixel apart at 100 % is a click, not a drag: the image
+/// stays put, no step is added, and both layers stay selected. A drag of 4 px moves it by 4.
+#[test]
+fn a_release_within_the_click_distance_does_not_move_the_image() {
+    let (mut app, frame) = app();
+    app.ui.views[0].zoom = 1.0;
+    let (_, before) = content(&app, frame);
+    let history = entries(&app);
+    drag(&mut app, [100.0, 90.0], [101.0, 90.0]);
+    assert_eq!(content(&app, frame).1, before, "a 1 px release is a click");
+    assert_eq!(entries(&app), history, "no step");
+    drag(&mut app, [100.0, 90.0], [100.0, 92.0]);
+    assert_eq!(content(&app, frame).1, before, "2 px is still a click");
+    drag(&mut app, [100.0, 90.0], [104.0, 90.0]);
+    assert_eq!(content(&app, frame).1, [before[0] + 4, before[1], before[2] + 4, before[3]], "4 px moves it by 4");
+    assert_eq!(entries(&app).len(), history.len() + 1);
+}
