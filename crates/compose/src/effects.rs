@@ -247,3 +247,9 @@ impl FxMaps {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod inner_glow_range_one_tests;
+
+#[cfg(test)]
+mod outer_glow_range_one_tests;
