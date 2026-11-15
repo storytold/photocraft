@@ -317,3 +317,50 @@ fn bands_end_at_the_coordinate_ceiling() {
     assert_eq!((bands[0].y0, bands[0].y1, bands[1].y1), (i32::MAX - 100, i32::MAX - 36, i32::MAX));
     assert_eq!(super::bands(Rect::new(0, 0, 8, 10), 0).len(), 10, "a zero step still makes progress");
 }
+
+/// #14950: the Size 1 Outer Glow program convolves the ¼–½–¼ taps the CPU's `glow_map` applies,
+/// instead of dropping the identity width-1 blur, so both compositors build the same map. A Size 10
+/// outer glow still takes the tent of its size and a Size 1 Inner Glow (#14924, its own ticket)
+/// still takes no blur at all.
+#[test]
+fn size_one_outer_glow_convolves_the_cpus_kernel() {
+    use crate::plan::Kernel;
+    use photocraft_doc::{FxPaint, Glow, GlowSource, GlowTechnique};
+    let light = GlobalLight::default();
+    let softer = |size: f32| Glow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        paint: FxPaint::Color(photocraft_color::Color::BLACK),
+        technique: GlowTechnique::Softer,
+        spread: 0.0,
+        size,
+        contour: Contour::Linear,
+        anti_alias: false,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    };
+    let blurs = |e: &Effect| {
+        program(e, &light, false)
+            .stages
+            .iter()
+            .filter(|st| st.kernel == Kernel::MBlur)
+            .map(|st| (st.radius, st.lut.clone().map(|l| (*l).clone()).unwrap_or_default()))
+            .collect::<Vec<_>>()
+    };
+    let one = blurs(&Effect::OuterGlow(softer(1.0)));
+    assert_eq!(one.len(), 2, "two separable passes over the Size 1 outer glow map");
+    let (r1, w1) = photocraft_compose::effects::size_one_kernel();
+    for (radius, lut) in &one {
+        assert_eq!(*radius, r1, "the Size 1 kernel radius");
+        assert_eq!(lut.as_slice(), w1.as_slice(), "the taps the CPU map applies");
+    }
+    let (r10, w10) = photocraft_compose::effects::tent_kernel(10.0);
+    let ten = blurs(&Effect::OuterGlow(softer(10.0)));
+    assert_eq!(ten.len(), 2, "a Size 10 outer glow still blurs twice");
+    for (radius, lut) in &ten {
+        assert_eq!(*radius, r10);
+        assert_eq!(lut.as_slice(), w10.as_slice(), "Size 10 stays on the tent");
+    }
+    assert!(blurs(&Effect::InnerGlow(softer(1.0))).is_empty(), "a Size 1 inner glow keeps today's program");
+}
