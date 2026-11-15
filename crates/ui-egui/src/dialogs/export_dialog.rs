@@ -506,11 +506,72 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
     if (w - doc.size.width as f64).abs() >= 1.0 || (h - doc.size.height as f64).abs() >= 1.0 {
         session.execute("image.imageSize", json!({"width": w, "height": h, "resample": resample})).map_err(|e| e.to_string())?;
     }
+    if let Some((cw, ch)) = export_canvas(f, w, h) {
+        // Centred, with a transparent extension that a flatten below turns white (JPG, or
+        // Transparency off), as measured in the reference application.
+        let p = json!({"width": cw, "height": ch, "anchor": "center", "extensionColor": "transparent"});
+        session.execute("image.canvasSize", p).map_err(|e| e.to_string())?;
+    }
     let fmt = s_fmt(f);
     if !f.get("transparency").and_then(Value::as_bool).unwrap_or(true) || fmt == "jpg" {
         session.execute("layer.flattenImage", json!({})).map_err(|e| e.to_string())?;
     }
     session.active().map(|d| (*d.doc).clone()).ok_or_else(|| "export failed".into())
+}
+
+/// Largest Canvas Size side, as measured in the reference application.
+const MAX_CANVAS: f64 = 15_000.0;
+
+/// The Canvas Size an export of `w` × `h` pixels gets, or `None` when it is the image size. The
+/// dialog's canvas is in the export's pixels; a reduced preview or a layer of another size gets
+/// the same proportion of its own size.
+fn export_canvas(f: &Map<String, Value>, w: f64, h: f64) -> Option<(f64, f64)> {
+    let (cw, ch) = (f.get("canvasWidth")?.as_f64()?, f.get("canvasHeight")?.as_f64()?);
+    let (iw, ih) = (n(f, "width", w), n(f, "height", h));
+    if ![cw, ch, iw, ih].iter().all(|v| v.is_finite() && *v >= 1.0) {
+        return None;
+    }
+    let side = |c: f64, image: f64, out: f64| (c.clamp(1.0, MAX_CANVAS) / image * out).round().max(1.0);
+    let canvas = (side(cw, iw, w), side(ch, ih, h));
+    (canvas != (w, h)).then_some(canvas)
+}
+
+/// Export As › Canvas Size: Width and Height start at the export's image size (`w` × `h`) and
+/// follow it when Scale or the image size changes. A side over 15000 px is clamped with a
+/// warning; Reset, enabled only while the canvas differs, sets it back to the image size.
+fn canvas_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, w: f64, h: f64) {
+    let t = Tokens::get(ui.ctx());
+    let image = json!([w, h]);
+    if f.get("__canvasFor") != Some(&image) {
+        f.insert("canvasWidth".into(), json!(w));
+        f.insert("canvasHeight".into(), json!(h));
+        f.insert("__canvasFor".into(), image);
+        f.remove("__canvasClamped");
+    }
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(tl!("Canvas Size")).font(crate::theme::semibold(12.0)).color(t.text));
+    for (key, label, name) in [("canvasWidth", tl!("Width"), tl!("Canvas Width")), ("canvasHeight", tl!("Height"), tl!("Canvas Height"))] {
+        let stored = n(f, key, 1.0);
+        let mut v = stored as f32;
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(label).color(t.text_dim));
+            crate::widgets::value_field(ui, &mut v, 1.0..=MAX_PX as f32, "px", 70.0).accessible_name(name);
+        });
+        let typed = f64::from(v).round();
+        if (typed - stored).abs() > 0.01 {
+            f.insert(key.into(), json!(typed.clamp(1.0, MAX_CANVAS)));
+            f.insert("__canvasClamped".into(), json!(typed > MAX_CANVAS));
+        }
+    }
+    if f.get("__canvasClamped").and_then(Value::as_bool).unwrap_or(false) {
+        ui.label(egui::RichText::new(format!("⚠ {}", tl!("Canvas Size is limited to 15000 pixels"))).color(t.warning));
+    }
+    let differs = (n(f, "canvasWidth", w), n(f, "canvasHeight", h)) != (w, h);
+    if ui.add_enabled_ui(differs, |ui| crate::widgets::secondary_button(ui, tl!("Reset"), 70.0)).inner.clicked() {
+        f.insert("canvasWidth".into(), json!(w));
+        f.insert("canvasHeight".into(), json!(h));
+        f.remove("__canvasClamped");
+    }
 }
 
 /// The exported pixel size: each side scaled and rounded on its own, never below 1 px. The
@@ -1141,6 +1202,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 ui.label(egui::RichText::new(tl!("ICO is limited to 256 × 256 pixels")).color(t.warning));
             }
             preset_fields(app, ui, f, bw, bh);
+            canvas_fields(ui, f, n(f, "width", bw), n(f, "height", bh));
         });
         ui.add_space(12.0);
         // Right: preview + estimated size.
@@ -1163,7 +1225,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 s(f, "sizing"),
                 s(f, "resample")
             );
-            let sig = format!("{sig}:{}", source_profile.content_hash());
+            let sig = format!("{sig}:{}:{}x{}", source_profile.content_hash(), n(f, "canvasWidth", 0.0), n(f, "canvasHeight", 0.0));
             let cached: Option<CachedPreview> = ui.data(|d| d.get_temp(key));
             let preview = match cached.filter(|cached| cached.signature == sig) {
                 Some(cached) => Some(cached),
@@ -1495,6 +1557,8 @@ mod srgb_default_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod canvas_size_tests;
 #[cfg(test)]
 mod enter_key_tests;
 
