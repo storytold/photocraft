@@ -3,9 +3,9 @@
 //! Eraser they set the brush's Opacity (⇧: Flow, swapped while airbrush build-up is on; the Pencil has no Flow, so its ⇧
 //! digits set Opacity too, #11967); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
-//! active layer's Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907). Tools whose
-//! number is a strength or exposure are left alone.
-//! ⌥+digit sets the Smoothing of the tools that show it (Brush, Pencil, Eraser; #11892).
+//! active layer's Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907); and with
+//! Magic Eraser its Opacity (#11999). Tools whose number is a strength or exposure are left alone.
+//! ⌥+digit sets Smoothing for tools that show it (Brush, Pencil, Eraser; #11892).
 
 use egui::{Event, Key};
 use serde_json::json;
@@ -30,6 +30,8 @@ enum Target {
     ToolOpacity,
     /// The Background Eraser's Tolerance option.
     BgTolerance,
+    /// The Magic Eraser's Opacity option.
+    MagicEraserOpacity,
     /// The active layer's opacity (⇧: fill).
     Layer,
     None,
@@ -41,8 +43,9 @@ fn target(tool: Tool) -> Target {
         Tool::Pencil => Target::Brush { flow: false },
         Tool::Gradient | Tool::PaintBucket => Target::ToolOpacity,
         Tool::BackgroundEraser => Target::BgTolerance,
-        // Their options-bar number is a strength, exposure or tolerance, not this opacity.
-        t if t.is_brushlike() || t == Tool::MagicEraser => Target::None,
+        Tool::MagicEraser => Target::MagicEraserOpacity,
+        // Other brush-like tools whose number is a strength, exposure or tolerance keep no target.
+        t if t.is_brushlike() => Target::None,
         _ => Target::Layer,
     }
 }
@@ -165,6 +168,8 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
         (Target::ToolOpacity, false) => app.ui.tool_options.fill_opacity = percent,
         // The Tolerance field starts at 1%; `00` (0%) keeps today's value rather than guessing.
         (Target::BgTolerance, false) if percent >= 1.0 => app.ui.tool_options.bg_tolerance = percent,
+        // The field starts at 1%; an unmeasured 00 keeps its current value.
+        (Target::MagicEraserOpacity, _) if percent >= 1.0 => app.ui.tool_options.magic_eraser_opacity = percent,
         (Target::Layer, _) => {
             // The locked Background has no opacity or fill.
             let Some(st) = app.session.active() else { return };

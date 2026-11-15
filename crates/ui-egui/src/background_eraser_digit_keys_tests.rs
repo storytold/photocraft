@@ -98,7 +98,7 @@ fn other_tools_digits_are_unchanged() {
     assert!((layer(&a).0 - 0.3).abs() < 1e-6);
     assert_eq!(tolerance(&a), 50.0);
     // The tools whose number is a strength, exposure or tolerance of their own still ignore the digits.
-    for tool in [Tool::ColorReplacement, Tool::Dodge, Tool::Smudge, Tool::MagicEraser] {
+    for tool in [Tool::ColorReplacement, Tool::Dodge, Tool::Smudge] {
         let mut a = app(tool);
         let before = (a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone());
         press(&mut a, 3, false, 0.0);

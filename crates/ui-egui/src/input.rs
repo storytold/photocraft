@@ -14,3 +14,6 @@ pub mod spring_tools;
 pub mod stylus;
 pub(super) mod tool_shortcuts;
 pub mod touch_twins;
+
+#[cfg(test)]
+mod magic_eraser_digit_keys_tests;
