@@ -140,10 +140,12 @@ pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> 
 /// The reference bounds of smart filter `f`. Render filters work within the smart object, as
 /// Photoshop's do: Lens Flare's centre is a fraction of the object, and Clouds and Fibers fill it
 /// and size their pattern by it. The object is its placed content's bounds (which leaves out
-/// fully transparent edges of the source). The Blur Gallery pins and widths are fractions of the
-/// object's axis-aligned box, so they follow it when it moves or is resized; a rotation is not
-/// mapped onto them (the box keeps no angle), so the pins keep their place in the box. The other
-/// filters use the canvas, as on a layer.
+/// fully transparent edges of the source). The Blur Gallery pins are fractions of that
+/// axis-aligned box and its widths and radii fractions of the box's shorter side (blur amounts stay
+/// in pixels, angles in canvas degrees), so the effect follows a move and an even resize. The box
+/// keeps no placement transform: after a rotation, flip, skew or perspective the pins stay at
+/// their fractions of the new box rather than on the same content. The other filters use the
+/// canvas, as on a layer.
 fn filter_bounds(f: &SmartFilter, placed: &Surface, canvas: Rect) -> Rect {
     match placed.content_bounds() {
         b if works_in_object(f) && !b.is_empty() => b,
