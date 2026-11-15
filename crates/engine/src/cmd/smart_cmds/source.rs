@@ -333,7 +333,19 @@ pub(super) fn vectorcraft_source_image_in(
     // `import_scaled` draws the size it opens at times `scale`, rounded.
     let (open_w, open_h) = photocraft_io::vectorcraft::drawn_size(bytes).map_err(|e| other(format!("can't draw the VectorCraft smart object: {e}")))?;
     let side = |opened: u32| (f64::from(opened) * scale).round().clamp(1.0, f64::from(i32::MAX)) as i32;
-    before_draw(Rect::new(0, 0, side(open_w), side(open_h)))?;
+    let drawn_bounds = Rect::new(0, 0, side(open_w), side(open_h));
+    before_draw(drawn_bounds)?;
+    // The bytes a pixel alive together at the peak of the drawing. While the artboard opens: its
+    // 8-bit raster and the opened 8-bit layer. After, beside the opened layer: the flattened result
+    // (with the 8-bit composite a 32-bit result is converted from), or, when colors are converted,
+    // the flattened 8-bit copy, its 8-bit conversion and the result.
+    let result_bpp = PixelFormat::new(fmt.mode, fmt.sample, true).bytes_per_pixel() as u64;
+    let after = if srgb {
+        4 + result_bpp + if fmt.sample == SampleType::F32 { 4 } else { 0 }
+    } else {
+        4 + 4 + PixelFormat::new(fmt.mode, SampleType::U8, true).bytes_per_pixel() as u64 + result_bpp
+    };
+    crate::transform_cmds::check_draw_budget(drawn_bounds, after.max(8), "VectorCraft smart object")?;
     #[cfg(test)]
     VECTORCRAFT_DRAWS.with(|n| n.set(n.get() + 1));
     let drawn = photocraft_io::vectorcraft::import_scaled(file_name, bytes, scale as f32, &photocraft_raster::Interrupt::NONE)

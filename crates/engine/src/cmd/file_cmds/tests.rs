@@ -2239,6 +2239,21 @@ fn vectorcraft_smart_render_checks_the_drawn_artboard_of_a_stretched_placement()
     assert_eq!(draws(), before, "the artboard was drawn before the refusal");
 }
 
+/// A VectorCraft smart object whose drawn artboard and placed result each fit Memory Usage is
+/// still refused, before drawing, when the buffers alive together while it is drawn do not.
+#[test]
+fn vectorcraft_smart_render_checks_the_memory_held_while_drawing() {
+    let s = session(40, 40, 8);
+    let doc = (*s.active().unwrap().doc).clone();
+    let bytes = Arc::new(vectorcraft_file(2_000, 2_000, "0 0 1"));
+    let smart = SmartObject::new(SmartSource::Embedded { file_name: "Large.vectorcraft".into(), bytes }, Affine::IDENTITY, None);
+    let draws = || crate::smart_cmds::VECTORCRAFT_DRAWS.with(std::cell::Cell::get);
+    let before = draws();
+    let e = crate::smart_cmds::render(&doc, &smart).unwrap_err();
+    assert!(e.to_string().contains("too large to draw"), "{e}");
+    assert_eq!(draws(), before, "the artboard was drawn before the refusal");
+}
+
 /// A warped VectorCraft smart object whose artboard is past Memory Usage is refused before the
 /// artboard is drawn at its own size.
 #[test]

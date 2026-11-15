@@ -404,6 +404,23 @@ fn check_budget_with_limit(src: Rect, h: &Homography, what: &str, format: PixelF
     Ok(())
 }
 
+/// Refuse drawing `area` when holding `bytes_per_px` bytes for each of its pixels at once would
+/// take more memory than the budget, before anything is drawn. `what` names the drawing in the
+/// message.
+pub(crate) fn check_draw_budget(area: Rect, bytes_per_px: u64, what: &str) -> Result<()> {
+    let (w, ht) = (u64::from(area.width()), u64::from(area.height()));
+    let bytes = w.saturating_mul(ht).saturating_mul(bytes_per_px);
+    let budget = active_budget();
+    if bytes > budget {
+        return Err(EngineError::Other(format!(
+            "too large to draw: drawing the {what} at {w} x {ht} px would need {} MB, more than the {} MB Memory Usage allows (Preferences › Performance); the document was not changed",
+            bytes.div_ceil(1 << 20),
+            budget >> 20
+        )));
+    }
+    Ok(())
+}
+
 /// [`check_budget`] for every warp [`transform_layer`] would make of `l` (for a group, of every
 /// layer inside it), so a transform that doesn't fit is refused before any layer is built and a
 /// group that partly fits isn't half-transformed.
