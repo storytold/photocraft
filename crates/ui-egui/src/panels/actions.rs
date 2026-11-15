@@ -1716,10 +1716,19 @@ pub(crate) fn run_step_dialog(app: &mut PhotocraftApp, fields: &serde_json::Map<
         authorize(command, &params)?;
     }
     let gate = continuation_gate(captured, continuation_gate(saved, service)?)?;
+    let retry_history = if command == "file.export.artboardsToFiles" { paused.history.clone() } else { None };
     prepare_history(app, fields)?;
     app.session.authorize = gate;
     let result = app.run(command, params);
     app.session.authorize = saved;
+    // Destination errors reopen the export form. Put its history back on the same paused action.
+    if let Some(history) = retry_history
+        && result.as_ref().is_err_and(|e| crate::dialogs::artboards_destination_error(e))
+    {
+        let history = history.suspend_after_edit(&mut app.session).map_err(|e| e.to_string())?;
+        let paused = app.paused_playbacks.paused.get_mut(&token).ok_or("this dialog doesn't belong to a paused action")?;
+        paused.history = Some(history);
+    }
     result
 }
 

@@ -735,12 +735,12 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
-    let documents = chosen_documents(&d.doc, p)?;
     // Leave other filesystem errors to the existing save path.
     #[cfg(not(target_arch = "wasm32"))]
     if matches!(std::path::Path::new(dir).try_exists(), Ok(false)) {
         return Err(EngineError::Other(format!("Destination does not exist: {dir}")));
     }
+    let documents = chosen_documents(&d.doc, p)?;
     let names: Vec<&str> = documents.iter().map(|one| one.name.as_str()).collect();
     let mut files = Vec::new();
     for (one, name) in documents.iter().zip(artboard_file_stems(&prefix, &names, HYPHENATED_FORMATS.contains(&format.as_str()))) {

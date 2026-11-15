@@ -1029,21 +1029,27 @@ fn report_file_errors(app: &mut PhotocraftApp, d: &Dialog, r: &Value) {
     crate::notices::file_failures(app, &what, &lines);
 }
 
+pub(crate) fn artboards_destination_error(error: &str) -> bool {
+    error == "Choose a destination folder." || error.starts_with("Destination does not exist: ")
+}
+
 /// Show the completion alert, or restore the same form behind a destination error.
-fn artboards_export_alert(app: &mut PhotocraftApp, d: &Dialog, params: &Value, result: &Result<Value, String>) {
+/// Returns whether the form was restored.
+fn artboards_export_alert(app: &mut PhotocraftApp, d: &Dialog, params: &Value, result: &Result<Value, String>) -> bool {
     let message = match result {
         Ok(_) => {
             let dir = params["dir"].as_str().unwrap_or_default();
             let message = format!("{}\n{dir}", tl!("Artboards To Files was successful."));
             app.ui.open_dialog(DialogKind::Error, Fields::from_iter([("__label".into(), json!("Artboards to Files")), ("message".into(), json!(message))]));
-            return;
+            return false;
         }
         Err(e) if e == "Choose a destination folder." => tl!("Choose a destination folder.").to_string(),
-        Err(e) if e.starts_with("Destination does not exist: ") => e.clone(),
-        Err(_) => return,
+        Err(e) if artboards_destination_error(e) => e.clone(),
+        Err(_) => return false,
     };
     app.ui.dialogs.push(d.clone());
     app.ui.open_dialog(DialogKind::Error, Fields::from_iter([("message".into(), json!(message))]));
+    true
 }
 
 /// Confirm a command dialog no specific handler owns: run its `__command` with the dialog's
@@ -1096,9 +1102,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     if let Ok(r) = &result {
         report_file_errors(app, &d, r);
     }
-    if cmd == "file.export.artboardsToFiles" {
-        artboards_export_alert(app, &d, &params, &result);
-    }
+    let restored = cmd == "file.export.artboardsToFiles" && artboards_export_alert(app, &d, &params, &result);
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
     let running =
@@ -1132,7 +1136,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         }
         // A step dialog of a playing action: the action continues after it.
         crate::actions::resume(app, &d.fields)?;
-    } else {
+    } else if !restored {
         crate::actions::abandoned(app, &d.fields);
     }
     result

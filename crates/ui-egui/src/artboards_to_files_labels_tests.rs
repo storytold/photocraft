@@ -136,3 +136,33 @@ fn artboards_to_files_gpu_snapshots() {
     std::fs::create_dir_all(&dir).unwrap();
     export_workflow(Some(&dir));
 }
+
+#[test]
+fn paused_artboards_export_retries_with_its_original_action_permissions() {
+    use photocraft_engine::{EngineError, actions_cmds::Action};
+
+    fn deny_tail(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "select.all" { Err(EngineError::Other("select.all denied".into())) } else { Ok(()) }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = Harness::builder().build_eframe(|cc| app(cc, Default::default()));
+    let app = h.state_mut();
+    let mut action = Action::new("Export", vec![(EXPORT.into(), json!({"dir": ""})), ("select.all".into(), json!({}))]);
+    action.dialogs.insert(0);
+    app.session.actions.list.push(action);
+    app.session.authorize = Some(deny_tail);
+    let result = crate::actions::play(app, &json!({"action": "Export"})).unwrap();
+    app.session.authorize = None;
+    let id = result["paused"]["dialog"].as_u64().unwrap();
+
+    let error = crate::dialogs::confirm(app, id).unwrap_err();
+    assert_eq!(error, "Choose a destination folder.");
+    let alert = app.ui.dialogs.last().unwrap().id;
+    crate::dialogs::confirm(app, alert).unwrap();
+    app.ui.dialog_mut(id).unwrap().fields.insert("dir".into(), json!(dir.path()));
+    let _ = crate::dialogs::confirm(app, id);
+    assert!(dir.path().join("Storyboard.v2Red-Board.png").is_file());
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+    assert!(app.ui.status.contains("select.all denied"), "{}", app.ui.status);
+}
