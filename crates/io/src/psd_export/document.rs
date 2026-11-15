@@ -292,7 +292,7 @@ fn export_supported_document(
     // open a 32-bit file without them (#291).
     let color_mode_data = match duotone_inks {
         Some(raw) => raw,
-        None => photocraft_psd::hdr::color_mode_data_for_depth(header.depth),
+        None => craft_psd::hdr::color_mode_data_for_depth(header.depth),
     };
     let mut file = PsdFile {
         header,
