@@ -126,3 +126,18 @@ fn rgb_at_every_depth_and_a_smart_object_keep_working() {
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     s.execute("image.adjustments.colorLookup", json!({"lut": "warm"})).unwrap();
 }
+
+#[test]
+fn a_targeted_alpha_channel_keeps_todays_behaviour_on_a_hidden_or_empty_layer() {
+    // Not measured, so it must not pick up the layer refusals: the layer is not what is edited.
+    let mut s = session(ColorMode::Rgb);
+    let bg = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.hideLayers", json!({"layer": bg.0})).unwrap();
+    s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+    assert!(s.is_enabled("image.adjustments.colorLookup"), "a hidden layer does not grey a channel edit");
+    s.execute("image.adjustments.colorLookup", json!({"lut": "warm"})).expect("a channel edit on a hidden layer runs");
+    let mut s = session(ColorMode::Rgb);
+    s.execute("layer.new.layer", json!({"name": "empty"})).unwrap();
+    s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+    s.execute("image.adjustments.colorLookup", json!({"lut": "warm"})).expect("a channel edit on an empty layer runs");
+}

@@ -359,6 +359,11 @@ fn color_lookup_target_ok(s: &Session) -> std::result::Result<(), String> {
     ) {
         return Err(COLOR_LOOKUP_UNAVAILABLE.into());
     }
+    // A targeted alpha channel or Quick Mask is not measured: it keeps today's behaviour, which
+    // does not look at the active layer at all.
+    if crate::channel_cmds::edits_channel(s) {
+        return Ok(());
+    }
     let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
     if !l.visible {
         return Err(COLOR_LOOKUP_UNAVAILABLE.into());
@@ -383,6 +388,9 @@ pub(crate) fn color_lookup_applicable(s: &Session, p: &Value) -> std::result::Re
     let d = s.active().ok_or("no document open")?;
     if matches!(d.doc.mode, photocraft_color::ColorMode::Cmyk | photocraft_color::ColorMode::Lab) {
         return Err(COLOR_LOOKUP_UNAVAILABLE.into());
+    }
+    if crate::channel_cmds::edits_channel(s) {
+        return Ok(());
     }
     if let Some(l) = d.active_layer.and_then(|id| d.doc.layer(id))
         && let LayerContent::Raster(surf) = &l.content
