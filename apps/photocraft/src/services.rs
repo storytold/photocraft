@@ -749,7 +749,8 @@ fn clipboard_reads_finish() -> std::time::Duration {
 /// The OS clipboard's arboard handles, opened on first use. On Linux and the BSDs paste reads run
 /// on a worker with a handle of its own ([`clipboard_reads`]): a text or file-list read waits 2 s
 /// at most for the app that copied, a bitmap read 10 s, and while one has no answer later reads
-/// fail at once, until a copy in PhotoCraft replaces the clipboard's contents. Elsewhere reads use
+/// fail at once, until a copy in PhotoCraft replaces the clipboard's contents (with at most
+/// [`clipboard_reads::MAX_RETIRED`] workers left unanswered). Elsewhere reads use
 /// the write handle.
 #[derive(Default)]
 struct OsClipboard {
@@ -762,6 +763,10 @@ struct OsClipboard {
     /// also dropped before `cb`, with the same wait.
     #[cfg(all(unix, not(target_os = "macos")))]
     retired: Vec<clipboard_reads::Loads<Request, Answer>>,
+    /// Set when a copy found `retired` full and left `reads` with its read unanswered: the next
+    /// read tries again to take `reads` out of use.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    forget: bool,
     /// Writes, and on Windows and macOS reads.
     cb: Option<arboard::Clipboard>,
 }
@@ -775,6 +780,13 @@ impl OsClipboard {
         }
     }
 
+    /// Takes the reads out of use when their read is unanswered, after a copy in PhotoCraft
+    /// ([`clipboard_reads::forget_unanswered`]).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn forget_unanswered(&mut self) {
+        self.forget = !clipboard_reads::forget_unanswered(&mut self.reads, &mut self.retired);
+    }
+
     /// `request` read as [`clipboard_answer`] reads it.
     fn read(&mut self, request: Request) -> Answer {
         #[cfg_attr(all(unix, not(target_os = "macos")), allow(unused_variables))]
@@ -784,6 +796,9 @@ impl OsClipboard {
         };
         #[cfg(all(unix, not(target_os = "macos")))]
         {
+            if self.forget {
+                self.forget_unanswered();
+            }
             let reads = match &mut self.reads {
                 Some(reads) => reads,
                 slot => {
@@ -913,10 +928,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                 cb.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(px) }).map_err(|e| e.to_string())?;
                 // A read of what the clipboard held before has no bearing on this copy.
                 #[cfg(all(unix, not(target_os = "macos")))]
-                {
-                    let os = &mut *os;
-                    clipboard_reads::forget_unanswered(&mut os.reads, &mut os.retired);
-                }
+                os.forget_unanswered();
                 Ok(())
             })
         }),

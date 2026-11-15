@@ -173,21 +173,31 @@ impl<R, A> Loads<R, A> {
     }
 }
 
+/// The most workers [`forget_unanswered`] keeps with an unanswered read. Past it, the stalled reads
+/// stay in use and later reads fail with [`BUSY`] until one of them ends.
+pub(super) const MAX_RETIRED: usize = 4;
+
 /// Takes `reads` out of use while a read on it is unanswered, without waiting for that read, so the
 /// next read starts a new worker. The app calls this once its own copy has replaced what the
-/// clipboard held: the unanswered read is of the old contents. Workers whose drop would wait (X11,
-/// [`Loads::spawn`]'s `finish`) go to `retired` until they end, so dropping `retired` before the
-/// app's own handle still leaves that handle the last one. Retired workers that have ended are let
-/// go.
-pub(super) fn forget_unanswered<R, A>(reads: &mut Option<Loads<R, A>>, retired: &mut Vec<Loads<R, A>>) {
+/// clipboard held: the unanswered read is of the old contents. The stalled worker goes to `retired`
+/// until it ends, and dropping `retired` before the app's own handle still leaves that handle the
+/// last one on X11 ([`Loads::spawn`]'s `finish`). Retired workers that have ended are let go; while
+/// [`MAX_RETIRED`] have not, `reads` stays as it is. False when `reads` was kept with its read
+/// unanswered: the app calls this again before its next read, until it is true.
+pub(super) fn forget_unanswered<R, A>(reads: &mut Option<Loads<R, A>>, retired: &mut Vec<Loads<R, A>>) -> bool {
     retired.retain(|loads| !loads.ended());
-    if let Some(mut stalled) = reads.take_if(|reads| reads.waiting())
-        && !stalled.finish.is_zero()
-    {
+    if !reads.as_ref().is_some_and(Loads::waiting) {
+        return true;
+    }
+    if retired.len() >= MAX_RETIRED {
+        return false;
+    }
+    if let Some(mut stalled) = reads.take() {
         // The worker stops once its unanswered read ends.
         drop(stalled.requests.take());
         retired.push(stalled);
     }
+    true
 }
 
 /// The answer that comes on `answer` ([`Loads::ask`]), or why there is none, after `wait` at most.
@@ -319,7 +329,8 @@ mod tests {
         forget_unanswered(&mut reads, &mut retired);
         assert!(retired.is_empty(), "a worker that ended is let go");
 
-        // With no finish, as on data-control, the stalled reads are dropped at once.
+        // With no finish, as on data-control, the stalled reads are kept too, and dropping them
+        // doesn't wait.
         let (release, gate) = mpsc::channel::<()>();
         let mut reads = Some(
             Loads::spawn("test", Duration::ZERO, move |()| {
@@ -329,13 +340,51 @@ mod tests {
         );
         assert!(reads.as_mut().unwrap().get((), Duration::ZERO).is_err(), "the read times out");
         forget_unanswered(&mut reads, &mut retired);
-        assert!(reads.is_none() && retired.is_empty());
+        assert!(reads.is_none() && retired.len() == 1);
+        drop(retired.pop());
         drop(release);
 
         let mut idle = Some(Loads::spawn("test", Duration::ZERO, |()| 1).unwrap());
         assert_eq!(idle.as_mut().unwrap().get((), Duration::from_secs(600)), Ok(1));
         forget_unanswered(&mut idle, &mut Vec::new());
         assert!(idle.is_some(), "reads with every answer in stay");
+    }
+
+    #[test]
+    fn copies_over_unanswered_reads_keep_at_most_max_retired_stalled_workers() {
+        let mut retired = Vec::new();
+        // Declared after `retired`, so a failing assertion releases the reads before they drop.
+        let mut releases = Vec::new();
+        let mut stalled = || {
+            let (release, gate) = mpsc::channel::<()>();
+            releases.push(release);
+            let mut reads = Loads::spawn("test", Duration::ZERO, move |()| {
+                let _ = gate.recv();
+            })
+            .unwrap();
+            assert!(reads.get((), Duration::ZERO).is_err(), "the read times out");
+            Some(reads)
+        };
+        for kept in 1..=MAX_RETIRED {
+            let mut reads = stalled();
+            assert!(forget_unanswered(&mut reads, &mut retired));
+            assert!(reads.is_none(), "copy {kept} takes the stalled reads out of use");
+            assert_eq!(retired.len(), kept);
+        }
+        let mut reads = stalled();
+        assert!(!forget_unanswered(&mut reads, &mut retired), "the app is told to try again");
+        assert!(reads.is_some(), "past the limit the stalled reads stay in use");
+        assert_eq!(reads.as_mut().unwrap().get((), Duration::ZERO), Err(BUSY.to_string()));
+        assert_eq!(retired.len(), MAX_RETIRED);
+        // Once a retired read ends, trying again takes the stalled reads out of use.
+        drop(releases.remove(0));
+        while !retired[0].ended() {
+            std::thread::yield_now();
+        }
+        assert!(forget_unanswered(&mut reads, &mut retired));
+        assert!(reads.is_none());
+        assert_eq!(retired.len(), MAX_RETIRED);
+        releases.clear();
     }
 
     #[test]
