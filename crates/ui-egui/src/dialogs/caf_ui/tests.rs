@@ -473,14 +473,15 @@ fn strokes_past_the_engines_limits_are_refused_at_the_brush() {
     assert!(d["error"].as_str().is_some_and(|e| e.contains("at most")), "{d}");
 }
 
-/// #9514: in every language both Sampling Brush tips name the Alt key and differ.
+/// #9514: the Sampling Brush tips name the two options bar buttons, and differ in every language
+/// (an untranslated label falls back to English).
 #[test]
-fn brush_mode_tips_name_the_alt_key_in_every_language() {
+fn brush_mode_tips_name_the_sampling_area_buttons_in_every_language() {
+    let english = crate::i18n::with_language(crate::i18n::Lang::EN, view::brush_mode_tips);
+    assert_eq!(english, ("Add to sampling area", "Subtract from sampling area"));
     for lang in crate::i18n::Lang::all() {
         let (add, subtract) = crate::i18n::with_language(lang, view::brush_mode_tips);
-        let alt = crate::shortcuts::pretty("Alt");
-        assert!(add.contains(alt.as_str()), "{lang:?}: {add:?}");
-        assert!(subtract.contains(alt.as_str()), "{lang:?}: {subtract:?}");
+        assert!(!add.is_empty() && !subtract.is_empty(), "{lang:?}");
         assert_ne!(add, subtract, "{lang:?}");
     }
 }
