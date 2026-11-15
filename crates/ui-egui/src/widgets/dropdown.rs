@@ -106,6 +106,45 @@ fn dropdown_with<T: PartialEq + Clone>(
     starts_group: &dyn Fn(&T) -> bool,
     enabled: &dyn Fn(&T) -> bool,
 ) -> (Vec<T>, Option<T>) {
+    dropdown_with_icons(ui, id, name, current, options, width, wheel, translate, starts_group, enabled, None)
+}
+
+/// A small icon painted left of an option's name in the open list ([`dropdown_grouped_icons`]).
+pub type OptionIcon<'a, T> = &'a dyn Fn(&T, &egui::Painter, egui::Rect);
+
+/// Width an option icon takes in the open list, with the gap after it.
+const OPTION_ICON: f32 = 14.0;
+
+/// [`dropdown_wheel_grouped`] with an icon left of each option in the open list, as the Warp
+/// style menu has (#12500). Returns true when an option was chosen.
+#[allow(clippy::too_many_arguments)]
+pub fn dropdown_grouped_icons<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    starts_group: impl Fn(&T) -> bool,
+    icon: OptionIcon<'_, T>,
+) -> bool {
+    !dropdown_with_icons(ui, id, name, current, options, width, true, true, &starts_group, &|_| true, Some(icon)).0.is_empty()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dropdown_with_icons<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    wheel: bool,
+    translate: bool,
+    starts_group: &dyn Fn(&T) -> bool,
+    enabled: &dyn Fn(&T) -> bool,
+    icon: Option<OptionIcon<'_, T>>,
+) -> (Vec<T>, Option<T>) {
     let shown = |l: &str| if translate { tl!(l).to_string() } else { l.to_string() };
     let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| shown(l)).unwrap_or_else(|| "—".into());
     let (mut chosen, mut hovered) = (Vec::new(), None);
@@ -120,8 +159,11 @@ fn dropdown_with<T: PartialEq + Clone>(
     // The list opens on the press: press, drag onto an option and release to choose it (#2735).
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
     let texts: Vec<String> = options.iter().map(|(_, l)| shown(l)).collect();
+    // With icons, each name in the open list leaves room for its icon on the left.
+    let pad = if icon.is_some() { "      " } else { "" };
+    let list_texts: Vec<String> = texts.iter().map(|t| format!("{pad}{t}")).collect();
     let response = combo_list(ui, id, label, width, close, |ui| {
-        fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
+        fit_widest_option(ui, list_texts.iter().map(|l| l.as_str()));
         // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
         let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
         let shown = options.iter().position(|(v, _)| v == current);
@@ -144,7 +186,7 @@ fn dropdown_with<T: PartialEq + Clone>(
         // The row nearest the pointer, by its distance to each row.
         let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
         let mut nearest: Option<(f32, &T)> = None;
-        for (i, ((v, _), text)) in options.iter().zip(texts.iter()).enumerate() {
+        for (i, ((v, _), text)) in options.iter().zip(list_texts.iter()).enumerate() {
             if i > 0 && starts_group(v) {
                 list_separator(ui);
             }
@@ -154,6 +196,10 @@ fn dropdown_with<T: PartialEq + Clone>(
             } else {
                 ui.add_enabled(false, egui::Button::selectable(v == current, text.as_str()))
             };
+            if let Some(icon) = icon {
+                let at = egui::Rect::from_center_size(item.rect.left_center() + egui::vec2(6.0 + OPTION_ICON / 2.0, 0.0), egui::vec2(OPTION_ICON, OPTION_ICON));
+                icon(v, ui.painter(), at);
+            }
             if reveal && v == current {
                 item.scroll_to_me(None);
             }
