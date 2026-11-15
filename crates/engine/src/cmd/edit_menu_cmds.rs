@@ -31,6 +31,12 @@ pub struct FadeSource {
     pub before: Option<u64>,
     pub target: FadeTarget,
     pub label: String,
+    /// History id of the faded step's own state: Fade is available again when an Undo of its Fade
+    /// makes it current (#13804).
+    pub op_state: Option<u64>,
+    /// The Fade applied to this step: its history id and the document revision right after it.
+    /// Fading again right after it replaces it (#13804).
+    pub faded: Option<(u64, u64)>,
 }
 
 /// What the faded command changed, and so what Fade blends back.
@@ -106,7 +112,7 @@ pub(crate) fn after_command(s: &mut Session, id: &str, params: &Value) {
     }
     let channel = channel.filter(|target| prev.is_none_or(|prev| !surf_eq(channel_surface(&st.doc, target), channel_surface(prev, target))));
     if let Some(target) = channel {
-        s.edit_state.fade = Some(FadeSource { doc: st.doc.id, revision: st.revision, before, target, label });
+        s.edit_state.fade = Some(FadeSource { doc: st.doc.id, revision: st.revision, before, target, label, op_state: current_state(st), faded: None });
         return;
     }
     let Some(layer) = st.active_layer else { return };
@@ -119,7 +125,7 @@ pub(crate) fn after_command(s: &mut Session, id: &str, params: &Value) {
                 && !surf_eq(now.and_then(|l| l.mask.as_ref().map(|m| &m.surface)), was.and_then(|l| l.mask.as_ref().map(|m| &m.surface)))
         });
     let target = if mask { FadeTarget::Mask(layer) } else { FadeTarget::Pixels(layer) };
-    s.edit_state.fade = Some(FadeSource { doc: st.doc.id, revision: st.revision, before, target, label });
+    s.edit_state.fade = Some(FadeSource { doc: st.doc.id, revision: st.revision, before, target, label, op_state: current_state(st), faded: None });
 }
 
 /// Hiding or showing another layer right after a fadeable step keeps Fade available, as in
@@ -148,6 +154,11 @@ fn keep_after_visibility(s: &mut Session, id: &str, params: &Value) {
     if let Some(f) = s.edit_state.fade.as_mut() {
         f.revision = revision;
     }
+}
+
+/// History id of the document's current state.
+fn current_state(st: &crate::DocState) -> Option<u64> {
+    st.history.row_id(st.history.past_len())
 }
 
 /// Tile identity of a surface (pointer equality of its COW tiles).
