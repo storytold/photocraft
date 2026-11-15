@@ -1,12 +1,17 @@
 //! IndexedDB owns durable bytes; the engine sees only the bounded, Send memory bridge.
 //! Each batch commits tips, groups and index together, and success means transaction completion.
-use js_sys::{Array, Function, Promise, Uint8Array};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
+use js_sys::{Array, Function, JsString, Promise, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Blob, Event, EventTarget, IdbDatabase, IdbRequest, IdbTransactionMode};
 
-use crate::preset_bridge::{Batch, Bridge, MAX_RECORDS, fits_total, record_limit};
-use photocraft_engine::preset_store::MAX_STORE_BYTES;
+use crate::preset_bridge::{ActionKeys, Batch, Bridge, Files, MAX_RECORDS, WriteError, fits_total, record_limit};
+use photocraft_engine::preset_store::{ACTIONS_FILE, MAX_ACTIONS_BYTES, MAX_STORE_BYTES};
 
 const DATABASE: &str = "photocraft.presets";
 pub const FILES: &str = "files";
@@ -96,14 +101,22 @@ pub async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String>
     result
 }
 
-pub async fn open(database: &str, deadline: f64) -> Result<IdbDatabase, String> {
+pub async fn open(database: &str, version: u32, deadline: f64) -> Result<IdbDatabase, String> {
     let factory = web_sys::window().ok_or("no window")?.indexed_db().map_err(js)?.ok_or("IndexedDB unavailable")?;
-    let req = factory.open_with_u32(database, 1).map_err(js)?;
+    // Version 2 excludes old tabs that could still overwrite the paired Actions record with a Blob.
+    let req = factory.open_with_u32(database, version).map_err(js)?;
     let mut upgrade = Listeners::new();
     let upgrade_req = req.clone();
     upgrade
         .add(&req, "upgradeneeded", move |_| {
-            let result = upgrade_req.result().and_then(|v| v.dyn_into::<IdbDatabase>()).and_then(|db| db.create_object_store(FILES));
+            let result = (|| -> Result<(), JsValue> {
+                let db = upgrade_req.result()?.dyn_into::<IdbDatabase>()?;
+                let tx = upgrade_req.transaction().ok_or_else(|| JsValue::from_str("No preset database upgrade transaction"))?;
+                if tx.object_store(FILES).is_err() {
+                    db.create_object_store(FILES)?;
+                }
+                Ok(())
+            })();
             if result.is_err()
                 && let Some(tx) = upgrade_req.transaction()
             {
@@ -133,7 +146,7 @@ pub async fn open(database: &str, deadline: f64) -> Result<IdbDatabase, String> 
 
 pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     let deadline = js_sys::Date::now() + TIMEOUT_MS;
-    let db = open(DATABASE, deadline).await?;
+    let db = open(DATABASE, 2, deadline).await?;
     let result = read(&db, deadline).await;
     match result {
         Ok((bridge, warnings)) => Ok((db, bridge, warnings)),
@@ -152,6 +165,8 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
     let mut unreadable = Vec::new();
     let mut total = 0u64;
     let mut seen = 0usize;
+    let mut action_record = None;
+    let mut action_issue = None;
     let mut next = request(&req);
     loop {
         let value = before(&next.promise, deadline).await?;
@@ -166,7 +181,17 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         let key = cursor.key().map_err(js)?;
         // Inspect key length in JS before allocating its Rust String.
         let name = if key.is_string() && js_sys::JsString::from(key.clone()).length() <= 133 { key.as_string().unwrap_or_default() } else { String::new() };
-        let blob = cursor.value().map_err(js)?.dyn_into::<Blob>();
+        let stored = cursor.value().map_err(js)?;
+        if name == ACTIONS_FILE && !stored.is_instance_of::<Blob>() {
+            match paired_actions(&stored) {
+                Ok(record) => action_record = Some(record),
+                Err(error) => action_issue = Some(error),
+            }
+            next = request(&req);
+            cursor.continue_().map_err(js)?;
+            continue;
+        }
+        let blob = stored.dyn_into::<Blob>();
         let record = record_limit(&name).and_then(|limit| {
             let blob = blob.map_err(|_| "record is not a Blob".to_string())?;
             if blob.size() > limit as f64 {
@@ -203,34 +228,188 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         bridge.load(&name, Vec::new())?;
     }
     for (name, blob) in records {
-        let buffer = before(&blob.array_buffer(), deadline).await?;
-        bridge.load(&name, Uint8Array::new(&buffer).to_vec())?;
+        let result = before(&blob.array_buffer(), deadline).await.and_then(|buffer| bridge.load(&name, Uint8Array::new(&buffer).to_vec()));
+        if let Err(error) = result {
+            if name != ACTIONS_FILE {
+                return Err(error);
+            }
+            action_issue = Some(error);
+        }
+    }
+    if let Some((revision, definitions, keys)) = action_record {
+        let result = async {
+            // A paired record beyond the remaining definition budget leaves the ordinary presets usable.
+            if total.saturating_add(definitions.as_ref().map_or(0, |blob| blob.size() as u64)) > MAX_STORE_BYTES {
+                return Err("browser preset store exceeds size limit".into());
+            }
+            let buffer = before(&keys.array_buffer(), deadline).await?;
+            let keys = ActionKeys::decode(&Uint8Array::new(&buffer).to_vec())?;
+            if let Some(blob) = definitions {
+                let buffer = before(&blob.array_buffer(), deadline).await?;
+                bridge.load(ACTIONS_FILE, Uint8Array::new(&buffer).to_vec())?;
+            }
+            bridge.load_action_keys(revision, keys);
+            Ok::<_, String>(())
+        }
+        .await;
+        if let Err(error) = result {
+            action_issue = Some(error);
+        }
+    }
+    if let Some(error) = action_issue {
+        // A placeholder tells the engine that this file exists and must be left unchanged.
+        // It never enters a write batch, and the unrelated records loaded above remain usable.
+        bridge.load(ACTIONS_FILE, Vec::new())?;
+        warnings.push(format!("Browser Actions were not loaded: {error}"));
+        bridge.quarantine_actions(error);
     }
     Ok((bridge, warnings))
 }
 
-pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), String> {
-    write_capped(db, batch, None).await
+/// A v2 Actions record has one generation, optional definition bytes and Action-only preferences.
+fn paired_actions(value: &JsValue) -> Result<(u64, Option<Blob>, Blob), String> {
+    let invalid = "Invalid paired browser Actions record";
+    let row = value.dyn_ref::<Array>().filter(|row| row.length() == 3).ok_or(invalid)?;
+    let revision = row.get(0);
+    let generation = revision.is_string().then(|| JsString::from(revision.clone())).filter(|s| s.length() <= 20).ok_or(invalid)?;
+    let text = generation.as_string().ok_or(invalid)?;
+    let revision = text.parse::<u64>().ok().filter(|r| *r > 0 && r.to_string() == text).ok_or(invalid)?;
+    let bytes = row.get(1);
+    let definitions = if bytes.is_null() { None } else { Some(bytes.dyn_into::<Blob>().map_err(|_| invalid)?) };
+    let keys = row.get(2).dyn_into::<Blob>().map_err(|_| invalid)?;
+    if keys.size() > MAX_ACTIONS_BYTES as f64 || definitions.as_ref().is_some_and(|blob| blob.size() > MAX_ACTIONS_BYTES as f64) {
+        return Err("Paired browser Actions record is too large".into());
+    }
+    Ok((revision, definitions, keys))
 }
 
-/// [`write`] with a limit on the whole store. With `cap = Some((max, message))`, a batch that
+fn blob(bytes: &[u8]) -> Result<Blob, String> {
+    Blob::new_with_u8_array_sequence(&Array::of1(&Uint8Array::from(bytes))).map_err(js)
+}
+
+pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), WriteError> {
+    let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite).map_err(js)?;
+    let store = tx.object_store(FILES).map_err(js)?;
+    let mut compare = Listeners::new();
+    let compare_error = Rc::new(RefCell::new(None));
+    let queued = (|| -> Result<(), String> {
+        match batch {
+            Batch::Files(files) => {
+                for (name, bytes) in files {
+                    let key = JsValue::from_str(name);
+                    if let Some(bytes) = bytes {
+                        store.put_with_key(blob(bytes)?.as_ref(), &key).map_err(js)?;
+                    } else {
+                        store.delete(&key).map_err(js)?;
+                    }
+                }
+            }
+            Batch::Actions(action) => {
+                let keys = action.keys.encode()?;
+                if keys.len() as u64 > MAX_ACTIONS_BYTES {
+                    return Err("Browser Action shortcuts are too large to save".into());
+                }
+                let definitions = action.definitions.as_deref().map(blob).transpose()?.map_or(JsValue::NULL, JsValue::from);
+                let keys = blob(&keys)?;
+                let record = Array::of3(&JsValue::from_str(&action.revision.to_string()), &definitions, keys.as_ref());
+                let base = action.base;
+                let key = JsValue::from_str(ACTIONS_FILE);
+                let request = store.get(&key).map_err(js)?;
+                let read = request.clone();
+                let store = store.clone();
+                let tx = tx.clone();
+                let compare_error = compare_error.clone();
+                // Compare and queue synchronously while this isolated readwrite transaction is active.
+                compare
+                    .add(&request, "success", move |_| {
+                        let outcome = (|| -> Result<(), WriteError> {
+                            let current = read.result().map_err(js)?;
+                            let revision = if current.is_undefined() || current.is_instance_of::<Blob>() {
+                                0
+                            } else {
+                                paired_actions(&current).map_err(WriteError::Blocked)?.0
+                            };
+                            if revision != base {
+                                return Err(WriteError::Stale("Actions changed in another tab.".into()));
+                            }
+                            store.put_with_key(&record, &key).map_err(js)?;
+                            Ok(())
+                        })();
+                        if let Err(error) = outcome {
+                            *compare_error.borrow_mut() = Some(error);
+                            let _ = tx.abort();
+                        }
+                    })
+                    .map_err(js)?;
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = queued {
+        return Err(if tx.abort().is_ok() { WriteError::Aborted(error) } else { WriteError::Uncertain(error) });
+    }
+    let mut listeners = Listeners::new();
+    let terminal = Rc::new(Cell::new(None));
+    let promise = Promise::new(&mut |resolve, reject| {
+        let completed = terminal.clone();
+        if let Err(e) = listeners.add(&tx, "complete", move |_| {
+            completed.set(Some(true));
+            let _ = resolve.call0(&JsValue::NULL);
+        }) {
+            let _ = reject.call1(&JsValue::NULL, &e);
+        }
+        let aborted = terminal.clone();
+        let tx_for_error = tx.clone();
+        let failed: Function = reject.clone();
+        if let Err(e) = listeners.add(&tx, "abort", move |_| {
+            aborted.set(Some(false));
+            let e = tx_for_error.error().map(JsValue::from).unwrap_or_else(|| JsValue::from_str("preset transaction aborted"));
+            let _ = failed.call1(&JsValue::NULL, &e);
+        }) {
+            let _ = reject.call1(&JsValue::NULL, &e);
+        }
+    });
+    let outcome = before(&promise, js_sys::Date::now() + TIMEOUT_MS).await;
+    if let Some(error) = compare_error.take() {
+        // No put was queued on any comparison failure.
+        return Err(error);
+    }
+    match terminal.get() {
+        Some(true) => Ok(()),
+        Some(false) => Err(WriteError::Aborted(outcome.err().unwrap_or_else(|| "Preset transaction aborted".into()))),
+        None => {
+            let _ = tx.abort();
+            let error = outcome.err().unwrap_or_else(|| "No preset transaction result".into());
+            let message = format!("Preset commit could not be confirmed: {error}");
+            let message = if matches!(batch, Batch::Actions(_)) { format!("{message}. Reopen the page before saving Actions again.") } else { message };
+            Err(WriteError::Uncertain(message))
+        }
+    }
+}
+
+/// Writes plain preset-style records (no Actions pair): the recovery store (#6615) uses this.
+pub async fn write_files(db: &IdbDatabase, files: &Files) -> Result<(), String> {
+    write_capped(db, files, None).await
+}
+
+/// A files write with a limit on the whole store. With `cap = Some((max, message))`, a write that
 /// stores anything first has the transaction read every stored record's size, and is aborted
 /// with `message` if it would take the store past `max` bytes ([`fits_total`]). The check and
 /// the commit are one transaction, so tabs sharing the database cannot each pass a private
 /// check and together exceed the cap.
-pub async fn write_capped(db: &IdbDatabase, batch: &Batch, cap: Option<(u64, &str)>) -> Result<(), String> {
+pub async fn write_capped(db: &IdbDatabase, files: &Files, cap: Option<(u64, &str)>) -> Result<(), String> {
     let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite).map_err(js)?;
     let store = tx.object_store(FILES).map_err(js)?;
     let mut reads = None;
     let queued = (|| -> Result<(), String> {
         // Queued before the writes, so they see the store as it was. Their results arrive before
         // the transaction can commit, and aborting then discards the queued writes.
-        if cap.is_some() && batch.values().any(Option::is_some) {
+        if cap.is_some() && files.values().any(Option::is_some) {
             let keys = store.get_all_keys().map_err(js)?;
             let values = store.get_all().map_err(js)?;
             reads = Some((request(&keys), request(&values)));
         }
-        for (name, bytes) in batch {
+        for (name, bytes) in files {
             let key = JsValue::from_str(name);
             if let Some(bytes) = bytes {
                 let blob = Blob::new_with_u8_array_sequence(&Array::of1(&Uint8Array::from(bytes.as_ref()))).map_err(js)?;
@@ -270,7 +449,7 @@ pub async fn write_capped(db: &IdbDatabase, batch: &Batch, cap: Option<(u64, &st
             let keys = Array::from(&before(&keys.promise, deadline).await?);
             let values = Array::from(&before(&values.promise, deadline).await?);
             let stored = keys.iter().zip(values.iter()).filter_map(|(k, v)| Some((k.as_string()?, v.dyn_ref::<Blob>().map_or(0, |b| b.size() as u64))));
-            Ok::<bool, String>(fits_total(stored, batch, max))
+            Ok::<bool, String>(fits_total(stored, files, max))
         }
         .await;
         if !matches!(verdict, Ok(true)) {

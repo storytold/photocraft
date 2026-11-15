@@ -18,7 +18,7 @@ use photocraft_format::autosave::RecoveryInfo;
 use photocraft_format::{PcraftWriter, SaveOptions};
 use photocraft_ui_egui::Recoverable;
 
-use crate::preset_bridge::Batch;
+use crate::preset_bridge::Files;
 
 /// Largest single snapshot. Bigger documents are not autosaved (with a message) instead of
 /// exhausting the browser's per-origin quota or the tab's memory.
@@ -124,7 +124,7 @@ impl Recovery {
     /// are shown by the UI as "Autosave failed"; nothing is written. The total cap is not
     /// checked here: this tab cannot see what other tabs stored or deleted since launch, so
     /// the only check is the one inside the write transaction (`indexed_presets::write_capped`).
-    pub fn snapshot(&self, doc: &Arc<Document>, revision: u64, path: Option<&str>, saved_at: u64) -> Result<Batch, String> {
+    pub fn snapshot(&self, doc: &Arc<Document>, revision: u64, path: Option<&str>, saved_at: u64) -> Result<Files, String> {
         self.with(|s| {
             let id = doc.id.0;
             let key = s.keys.entry(id).or_insert_with(|| format!("web-{}-{id}", s.session)).clone();
@@ -139,7 +139,7 @@ impl Recovery {
             }
             let info = RecoveryInfo { key: key.clone(), document_name: doc.name.clone(), original_path: path.map(str::to_string), saved_at, revision };
             let info = serde_json::to_vec(&info).map_err(|e| e.to_string())?;
-            let mut batch = Batch::new();
+            let mut batch = Files::new();
             batch.insert(bundle_name(&key), Some(bytes.into()));
             batch.insert(info_name(&key), Some(info.into()));
             Ok(batch)
@@ -164,7 +164,7 @@ impl Recovery {
     }
 
     /// The document was saved or closed: the batch deleting its entry (if it has one).
-    pub fn discard(&self, doc_id: u64) -> Option<Batch> {
+    pub fn discard(&self, doc_id: u64) -> Option<Files> {
         self.with(|s| {
             s.writers.remove(&doc_id);
             let key = s.keys.remove(&doc_id)?;
@@ -174,7 +174,7 @@ impl Recovery {
             }
             s.loaded.remove(&bundle_name(&key));
             s.loaded.remove(&info_name(&key));
-            Some(Batch::from([(bundle_name(&key), None), (info_name(&key), None)]))
+            Some(Files::from([(bundle_name(&key), None), (info_name(&key), None)]))
         })
         .ok()
         .flatten()
@@ -241,7 +241,7 @@ mod tests {
 
     /// Stores a batch like the IndexedDB write does, and hands it to a fresh page load that
     /// owns the writing session (as when its lock was free).
-    fn reload(batch: &Batch) -> Recovery {
+    fn reload(batch: &Files) -> Recovery {
         let next = Recovery::new("next".into());
         for (name, bytes) in batch {
             if let Some(b) = bytes {

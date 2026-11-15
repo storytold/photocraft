@@ -12,7 +12,7 @@ use js_sys::{Function, Object, Promise, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Blob, IdbDatabase, IdbTransactionMode};
 
-use crate::indexed_presets::{FILES, TIMEOUT_MS, before, js, open, request, write, write_capped};
+use crate::indexed_presets::{FILES, TIMEOUT_MS, before, js, open, request, write_capped, write_files};
 use crate::recovery_bridge::{MAX_ENTRIES, MAX_SNAPSHOT_BYTES, Recovery, recover_on_launch, session_of};
 use photocraft_ui_egui::Services;
 
@@ -30,7 +30,7 @@ const SCAN_MS: f64 = 15_000.0;
 /// record is skipped, not fatal.
 pub async fn load() -> Result<(IdbDatabase, Recovery), String> {
     let deadline = js_sys::Date::now() + TIMEOUT_MS;
-    let db = open(DATABASE, deadline).await?;
+    let db = open(DATABASE, 1, deadline).await?;
     let session = format!("{:x}{:x}", js_sys::Date::now() as u64, (js_sys::Math::random() * 4_294_967_296.0) as u64);
     let recovery = Recovery::new(session);
     match read(&db, &recovery, deadline).await {
@@ -171,7 +171,7 @@ pub fn services(db: Option<IdbDatabase>, recovery: Recovery) -> Services {
         discard_autosave: Some(Box::new(move |id| {
             if let (Some(db), Some(batch)) = (db2.clone(), r4.discard(id)) {
                 wasm_bindgen_futures::spawn_local(async move {
-                    if let Err(e) = write(&db, &batch).await {
+                    if let Err(e) = write_files(&db, &batch).await {
                         log::warn!("Could not remove recovery data: {e}");
                     }
                 });
