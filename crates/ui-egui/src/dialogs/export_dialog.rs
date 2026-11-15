@@ -945,9 +945,13 @@ fn resample_label(label: &str) -> &'static str {
         "Bicubic Sharper" => tl!("Bicubic Sharper"),
         "Bilinear" => tl!("Bilinear"),
         "Nearest Neighbor" => tl!("Nearest Neighbor"),
+        "Preserve Details" => tl!("Preserve Details"),
         _ => tl!("Bicubic Automatic"),
     }
 }
+
+#[cfg(test)]
+mod preserve_details_tests;
 
 fn apply_preset(f: &mut Map<String, Value>, settings: &photocraft_engine::export_preset_cmds::ExportPresetSettings, src_w: f64, src_h: f64) {
     f.insert("format".into(), json!(settings.format));
