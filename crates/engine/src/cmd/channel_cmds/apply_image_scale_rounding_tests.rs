@@ -170,3 +170,17 @@ fn half_opacity_keeps_todays_rounding() {
     apply(&mut s, json!({"source": {"document": 1}, "blending": "add", "scale": 2, "offset": 0, "opacity": 50}));
     assert_eq!(levels(&s, RIGHT, 1), [101, 176, 251], "right half at 50 % opacity");
 }
+
+#[test]
+fn an_eight_bit_grayscale_target_keeps_todays_rounding() {
+    // Only RGB is measured (#14490), so another colour mode keeps rounding to the nearest level:
+    // (50 + 255) / 2 = 152.5 lands on 153 in a Grayscale target.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 6, "height": 4, "mode": "grayscale"})).unwrap();
+    s.execute("edit.fill", json!({"color": "#323232"})).unwrap();
+    s.execute("file.new", json!({"width": 6, "height": 4, "mode": "grayscale"})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
+    s.set_active(0);
+    apply(&mut s, json!({"source": {"document": 1}, "blending": "add", "scale": 2, "offset": 0}));
+    assert_eq!(lv8(px(&s, RIGHT, 1)[0]), 153, "Grayscale keeps rounding");
+}
