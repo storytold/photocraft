@@ -7,6 +7,8 @@ use crate::state::DialogKind;
 
 mod bar;
 pub mod enable_rules;
+#[cfg(test)]
+mod fade_label_tests;
 mod invoke;
 mod items;
 pub mod menu_keys;
@@ -28,6 +30,7 @@ pub(crate) use invoke::{invoke_unguarded, panel_alias};
 pub(crate) use items::ItemCache;
 pub use items::{MenuItem, is_live, menu_items};
 pub use render::alt_click;
+pub use render::fade_label;
 #[cfg(test)]
 use render::submenu_enabled;
 #[cfg(test)]

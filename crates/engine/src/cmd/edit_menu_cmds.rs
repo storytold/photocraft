@@ -63,6 +63,16 @@ pub struct EditState {
     pub find_cursor: Option<(LayerId, usize, usize)>,
 }
 
+/// Edit › Fade's menu label, as the reference application shows it (#13803): `Fade <history name
+/// of the step it fades>…` (`Fade Invert…`, `Fade Gaussian Blur…`) while Fade can run, plain
+/// `Fade…` when it can't.
+pub fn fade_menu_label(s: &Session) -> String {
+    match s.edit_state.fade.as_ref().filter(|_| can_fade(s).is_ok()) {
+        Some(f) => format!("Fade {}…", f.label),
+        None => "Fade…".into(),
+    }
+}
+
 /// Commands whose result Edit › Fade can blend back against the previous state.
 fn fadeable(id: &str) -> bool {
     id.starts_with("filter.")
