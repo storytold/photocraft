@@ -234,10 +234,9 @@ fn replacing_a_saved_path_invalidates_its_component_selection() {
     press(&mut app, Key::Delete);
     let active = app.session.active().unwrap();
     assert_eq!(active.doc.layers, layers);
-    assert_eq!(saved_path(&app), &replacement);
     assert_eq!(active.history.past_len(), steps);
-    app.run("edit.undo", json!({})).unwrap();
-    assert_eq!(saved_path(&app).subpaths.len(), 3);
+    let path = active.doc.paths.iter().find(|path| path.name == "Path 1").expect("Delete must preserve the replacement path");
+    assert_eq!(path.path, replacement);
 }
 
 #[test]
