@@ -47,6 +47,8 @@ fn the_readout_is_the_horizontal_and_vertical_offset() {
 #[test]
 fn a_drag_keeps_the_source_moves_a_copy_and_shows_the_offset_until_release() {
     let mut app = app();
+    // Transform On Drop is on by default now: off, the release commits the move at once.
+    app.ui.tool_options.cam_transform_on_drop = false;
     drag_to(&mut app, 150.0, 100.0);
     assert!(step(&mut app, 0.0).is_none() && app.cam_preview.is_none());
     assert!(step(&mut app, DEBOUNCE_MS + 50.0).is_none() && app.cam_preview.is_none(), "resting does not fill the source");
