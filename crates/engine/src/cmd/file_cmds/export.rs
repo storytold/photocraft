@@ -105,6 +105,14 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
 
         // The prefix is optional; only the layer name needs the empty-name fallback.
         let name = format!("{}_{number}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, sanitize(&l.name));
+        // TIFF, BMP and Targa files are flattened on white, as the reference writes them (#13967):
+        // a white fill under the layer, and a TIFF without a transparency channel. PNG and PSD
+        // keep transparency; other modes and 32-bit documents keep today's output (not measured).
+        let mut save = save;
+        if matches!(format.as_str(), "tif" | "tiff" | "bmp" | "tga" | "targa") && one.mode == ColorMode::Rgb && one.depth != photocraft_doc::SampleType::F32 {
+            one.layers.insert(0, Layer::new("Background", LayerContent::Fill(photocraft_doc::Fill::Solid(photocraft_color::Color::WHITE))));
+            save.tiff_transparency = Some(false);
+        }
         let (bytes, _warnings) = encode(&one, &name, save)?;
         write(&name, &bytes)?;
         report.files.push(name);
@@ -346,3 +354,7 @@ mod layers_to_files_prefix_tests;
 #[cfg(test)]
 #[path = "layers_to_files_groups_tests.rs"]
 mod layers_to_files_groups_tests;
+
+#[cfg(test)]
+#[path = "layers_to_files_flatten_tests.rs"]
+mod layers_to_files_flatten_tests;
