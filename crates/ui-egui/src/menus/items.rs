@@ -298,6 +298,9 @@ fn hide_items(items: &mut Vec<MenuItem>, menus: &photocraft_engine::prefs::MenuC
         }
     }
     items.retain(|i| !hides(i));
+    // A submenu's row before its parents', so a submenu with every item hidden (it goes where its
+    // parent ends) lands ahead of the parent's own row, which stays last in the menu.
+    losing.sort_by_key(|p| std::cmp::Reverse(p.len()));
     for path in losing {
         show_all_row(items, path);
     }

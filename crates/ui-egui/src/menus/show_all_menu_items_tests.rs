@@ -196,3 +196,46 @@ fn the_macos_menu_bar_shows_the_menu_in_full_until_another_item_runs() {
     frame(&mut app, Some("view.extras"));
     assert!(!has("edit.fade") && has(&show_all("Edit")), "another item chosen: hidden again");
 }
+
+/// CodeRabbit on #14884: an agent's `menus.showAll` after the native menu has synchronized changes
+/// no input and no state the hash lists, yet the native bar must show the menu in full.
+#[test]
+fn an_agent_choosing_show_all_updates_the_native_menu_without_any_input() {
+    let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut app = app();
+    app.services.native_menu = Some(crate::native_menu::NativeMenu::new(Box::new(Bar { synced: synced.clone(), events: events.clone() })));
+    let ctx = egui::Context::default();
+    let frame = |app: &mut PhotocraftApp| {
+        let mut raw = egui::RawInput::default();
+        if let Some(menu) = app.services.native_menu.as_mut() {
+            menu.raw_input(&mut raw);
+        }
+        crate::native_menu::run(app, &ctx);
+        crate::native_menu::sync(app, &ctx);
+    };
+    let has = |id: &str| synced.borrow().last().is_some_and(|bar| bar.find(id).is_some());
+    frame(&mut app);
+    frame(&mut app);
+    assert!(!has("edit.fade"), "Fade… is hidden");
+    crate::menus::show_all_items(&app, &ctx, &show_all("Edit")).unwrap();
+    frame(&mut app);
+    assert!(has("edit.fade"), "the native menu now shows Edit in full");
+}
+
+/// CodeRabbit on #14884: when every item of a submenu is hidden as well as one of its parent's,
+/// the parent's Show All Menu Items row stays last, after the submenu's.
+#[test]
+fn a_parent_menus_row_comes_after_the_rows_of_its_submenus() {
+    let mut app = app();
+    let mut transform: Vec<String> = menu_items(&app).iter().filter(|i| i.path == ["Edit", "Transform"]).map(|i| i.id.clone()).collect();
+    transform.push("edit.transform.skew".into());
+    assert!(transform.len() > 1);
+    app.session.edit_prefs(|p| p.menus.hidden = [vec!["edit.fade".to_string()], transform].concat());
+    let items = menu_items(&app);
+    let edit = under(&items, "Edit");
+    let (sub, parent) = (edit.iter().position(|id| *id == show_all("Edit › Transform")), edit.iter().position(|id| *id == show_all("Edit")));
+    assert!(sub.is_some() && parent.is_some(), "both rows exist: {edit:?}");
+    assert!(sub < parent, "Transform's row comes before Edit's: {edit:?}");
+    assert_eq!(edit.last().map(String::as_str), Some(show_all("Edit").as_str()), "Edit's row is the last of the menu");
+}

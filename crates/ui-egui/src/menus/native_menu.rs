@@ -704,11 +704,14 @@ pub struct NativeMenu {
     /// AppKit toggled a check item itself: re-sync.
     dirty: bool,
     logged: bool,
+    /// The top-level menu shown in full when the menus were last built (Show All Menu Items, #14333),
+    /// which is no part of the state hash: an agent can choose it with no input at all.
+    full: Option<String>,
 }
 
 impl NativeMenu {
     pub fn new(backend: Box<dyn Backend>) -> NativeMenu {
-        NativeMenu { backend, state: None, clicks: Vec::new(), dirty: true, logged: false }
+        NativeMenu { backend, state: None, clicks: Vec::new(), dirty: true, logged: false, full: None }
     }
 
     /// Before egui sees this frame's input: key equivalents become the key presses they were,
@@ -773,11 +776,11 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
 pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(menu) = app.services.native_menu.as_ref() else { return };
     let state = state_hash(app, had_input(ctx).then_some(app.frame));
-    if menu.state == Some(state) && !menu.dirty {
+    let full: Option<String> = ctx.data(|d| d.get_temp(crate::menus::native_show_all_id()));
+    if menu.state == Some(state) && !menu.dirty && menu.full == full {
         return;
     }
     let lang = crate::i18n::current();
-    let full: Option<String> = ctx.data(|d| d.get_temp(crate::menus::native_show_all_id()));
     let mut items = crate::menus::menu_items_showing(app, full.as_deref());
     // AppKit swallows a key equivalent whose item is disabled: no action, no key-down for the
     // window (#8965). While a Keyboard Shortcuts field waits for keys, every item with a key
@@ -797,6 +800,7 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     menu.backend.sync(&layout.bar);
     menu.state = Some(state);
+    menu.full = full;
     menu.dirty = false;
 }
 
