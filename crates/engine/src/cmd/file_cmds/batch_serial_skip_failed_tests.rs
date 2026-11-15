@@ -65,3 +65,41 @@ fn serial_letters_follow_the_same_counter() {
     let names = run(&input, &output, true, json!([{"component":"letter"}, {"text":"_x"}]));
     assert_eq!(names, ["a_x", "b_x", "c_x", "d_x", "e_x"]);
 }
+
+/// A folder of `files` (PNGs where the name ends in `.png`, text otherwise) run with `naming`.
+fn run_named(label: &str, files: &[&str], in_place: bool, start: u32, naming: &str) -> (Vec<String>, usize) {
+    let dir = tmp(label);
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    for name in files {
+        if name.ends_with(".png") {
+            write_png(&join(&input, name));
+        } else {
+            std::fs::write(join(&input, name), b"not an image").unwrap();
+        }
+    }
+    let output = if in_place { input.clone() } else { join(&dir, "out") };
+    let mut s = Session::new();
+    let p = json!({
+        "input": input, "output": output, "steps": [], "format": "same", "startingSerial": start,
+        "includeNonImages": true, "naming": naming
+    });
+    let result = s.execute("file.automate.batch", p).unwrap();
+    let files = result["files"].as_array().unwrap().iter().map(|f| file_name(f.as_str().unwrap()).to_string()).collect();
+    (files, result["errors"].as_array().unwrap().len())
+}
+
+#[test]
+fn a_refused_input_after_the_last_serial_number_does_not_fail_the_batch() {
+    let (files, errors) = run_named("last-serial", &["a.png", "z"], false, u32::MAX, "{name}_{serial}.png");
+    assert_eq!((files.as_slice(), errors), (["a_4294967295.png".to_string()].as_slice(), 1));
+}
+
+#[test]
+fn a_refused_input_named_like_a_source_does_not_stop_an_in_place_batch() {
+    // `z` takes no number, so its name is `z_003.png`, the next input's own name: nothing is
+    // written to it, so the batch still runs in place.
+    let (files, errors) = run_named("in-place", &["a.png", "b", "c.png", "z", "z_003.png"], true, 1, "{name}_{serial:3}.png");
+    assert_eq!(files, ["a_001.png", "c_002.png", "z_003_003.png"]);
+    assert_eq!(errors, 2);
+}

@@ -477,9 +477,16 @@ fn validate_error_log(policy: &BatchPolicy, inputs: impl IntoIterator<Item = Str
 /// identities once for the whole plan, so aliases and large folder batches stay safe and linear.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn validate_flat_outputs(outputs: &[(String, String)]) -> Result<()> {
+    validate_written_outputs(outputs, &|_| true)
+}
+
+/// [`validate_flat_outputs`] for the outputs at the indices `written` accepts: every input stays a
+/// source, but an input that fails before it is opened writes nothing to its name.
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_written_outputs(outputs: &[(String, String)], written: &dyn Fn(usize) -> bool) -> Result<()> {
     let sources: std::collections::HashMap<_, _> =
         outputs.iter().enumerate().filter_map(|(index, (input, _))| std::fs::canonicalize(input).ok().map(|identity| (identity, index))).collect();
-    for (index, (_, output)) in outputs.iter().enumerate() {
+    for (index, (_, output)) in outputs.iter().enumerate().filter(|(index, _)| written(*index)) {
         let identity = super::paths::destination_identity(std::path::Path::new(output))
             .ok_or_else(|| EngineError::BadParams { cmd: "file.automate.batch".into(), msg: format!("output path cannot be resolved safely: {output}") })?;
         if sources.get(&identity).is_some_and(|&source_index| source_index != index) {
@@ -940,7 +947,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    validate_flat_outputs(&outputs)?;
+    validate_written_outputs(&outputs, &|index| inputs.get(index).is_none_or(counts))?;
     validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), outputs.iter().map(|(_, path)| path.clone()))?;
     let was_playing = nested;
     #[cfg(test)]
