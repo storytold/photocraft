@@ -162,20 +162,49 @@ fn saved_bytes(session: &mut Session, params: serde_json::Value) -> Vec<u8> {
 fn saved(session: &mut Session, params: serde_json::Value) -> Vec<AtnFile> {
     atn::parse_sets(&saved_bytes(session, params)).unwrap()
 }
-fn panel_groups(session: &Session) -> Vec<(String, Vec<String>)> {
-    crate::actions_edit_cmds::set_names(session)
+fn panel_groups(state: &crate::actions_cmds::ActionState) -> Vec<(String, Option<usize>, Vec<String>)> {
+    // Match the Actions panel's Folder identity/order: slotless names first, then each explicit
+    // archive occurrence in physical slot order. Explicit duplicate captions remain distinct.
+    let mut implicit = Vec::new();
+    for action in &state.list {
+        if action.set_slot.is_none() && action.set.is_some() && super::super::logical_set_name(action.set.as_deref()) != super::super::UNGROUPED_SET {
+            let name = super::super::logical_set_name(action.set.as_deref()).to_string();
+            if !implicit.contains(&name) {
+                implicit.push(name);
+            }
+        }
+    }
+    for name in &state.sets {
+        if !implicit.contains(name) {
+            implicit.push(name.clone());
+        }
+    }
+    let mut groups: Vec<_> = implicit
         .into_iter()
         .map(|name| {
-            let actions = session
-                .actions
+            let actions = state
                 .list
                 .iter()
-                .filter(|action| super::super::logical_set_name(action.set.as_deref()) == name)
+                .filter(|action| action.set_slot.is_none() && super::super::logical_set_name(action.set.as_deref()) == name)
                 .map(|action| action.name.clone())
                 .collect();
-            (name, actions)
+            (name, None, actions)
         })
-        .collect()
+        .collect();
+    for (slot, name) in state.set_rows.iter().enumerate() {
+        let actions = state
+            .list
+            .iter()
+            .filter(|action| action.set_slot == Some(slot) && super::super::logical_set_name(action.set.as_deref()) == name)
+            .map(|action| action.name.clone())
+            .collect();
+        groups.push((name.clone(), Some(slot), actions));
+    }
+    groups
+}
+
+fn action_names(actions: &[Action]) -> Vec<String> {
+    actions.iter().map(|action| action.name.clone()).collect()
 }
 fn metadata(files: &[AtnFile]) -> RawDescriptor {
     RawDescriptor::new(payload(files.last().unwrap()).unwrap()).unwrap()
@@ -253,8 +282,8 @@ fn moving_a_later_physical_set_keeps_row_order_and_restores_panel_order_after_re
     let fixture = fixture(&["A", "B", "A"], false, note);
     let mut session = loaded(&fixture.bytes);
     session.execute("actions.move", json!({"action":"Same 3","to":0})).unwrap();
-    let expected: Vec<(String, Vec<String>)> = vec![("A".into(), vec!["Same 3".into(), "Same".into()]), ("B".into(), vec!["Same 2".into()])];
-    assert_eq!(panel_groups(&session), expected);
+    let expected = vec![("A".into(), Some(0), vec!["Same".into()]), ("B".into(), Some(1), vec!["Same 2".into()]), ("A".into(), Some(2), vec!["Same 3".into()])];
+    assert_eq!(panel_groups(&session.actions), expected);
     let bytes = saved_bytes(&mut session, json!({}));
     let files = atn::parse_sets(&bytes).unwrap();
     let original = atn::parse_sets(&fixture.bytes).unwrap();
@@ -272,7 +301,12 @@ fn moving_a_later_physical_set_keeps_row_order_and_restores_panel_order_after_re
     let outer = files[3].actions[0].items[0].descriptor.as_ref().unwrap().to_bytes();
     assert_fields_equal(&outer, &fixture.outer, &["Msge", "Cntn"]);
     assert_fields_equal(metadata(&files).bytes(), fixture.payload.get(4..).unwrap(), &["futureGlobal"]);
-    assert_eq!(panel_groups(&loaded(&bytes)), expected);
+    let external = loaded(&bytes);
+    assert_eq!(panel_groups(&external.actions), expected, "portable import follows its explicit physical rows");
+    let durable = crate::actions_cmds::library::encode(&session.actions, &[]).unwrap();
+    let trusted = crate::actions_cmds::library::decode(&durable).unwrap();
+    assert_eq!(action_names(&trusted.list), ["Same 3", "Same", "Same 2"], "trusted local restore keeps the moved global order");
+    assert_eq!(panel_groups(&trusted), expected);
 }
 
 #[test]
@@ -281,8 +315,8 @@ fn moving_between_actions_keeps_physical_rows_and_restores_global_order_after_re
     let fixture = fixture_rows(&[("A", 2), ("A", 1)], None, note);
     let mut session = loaded(&fixture.bytes);
     session.execute("actions.move", json!({"action":"Same 3","to":1})).unwrap();
-    let expected: Vec<(String, Vec<String>)> = vec![("A".into(), vec!["Same".into(), "Same 3".into(), "Same 2".into()])];
-    assert_eq!(panel_groups(&session), expected);
+    let expected = vec![("A".into(), Some(0), vec!["Same".into(), "Same 2".into()]), ("A".into(), Some(1), vec!["Same 3".into()])];
+    assert_eq!(panel_groups(&session.actions), expected);
     let bytes = saved_bytes(&mut session, json!({}));
     let files = atn::parse_sets(&bytes).unwrap();
     let original = atn::parse_sets(&fixture.bytes).unwrap();
@@ -305,7 +339,12 @@ fn moving_between_actions_keeps_physical_rows_and_restores_global_order_after_re
     let outer = files[2].actions[0].items[0].descriptor.as_ref().unwrap().to_bytes();
     assert_fields_equal(&outer, &fixture.outer, &["Msge", "Cntn"]);
     assert_fields_equal(metadata(&files).bytes(), fixture.payload.get(4..).unwrap(), &["futureGlobal"]);
-    assert_eq!(panel_groups(&loaded(&bytes)), expected);
+    let external = loaded(&bytes);
+    assert_eq!(panel_groups(&external.actions), expected, "untrusted import follows wire rows, not the private identity manifest");
+    let durable = crate::actions_cmds::library::encode(&session.actions, &[]).unwrap();
+    let trusted = crate::actions_cmds::library::decode(&durable).unwrap();
+    assert_eq!(action_names(&trusted.list), ["Same", "Same 3", "Same 2"], "trusted local restore keeps the moved global order");
+    assert_eq!(panel_groups(&trusted), expected);
 }
 
 #[test]
@@ -398,6 +437,32 @@ fn clone_and_rename_keep_action_entry_and_assign_set_rebinds_only_set_metadata()
     assert_eq!(integer(&set_metadata(&files, "New"), "setColorIndex"), 0);
     let whole = saved(&mut session, json!({}));
     assert_eq!(integer(&set_metadata(&whole, "New"), "setColorIndex"), 0);
+
+    // Import and confirmed replacement each bind action provenance and its physical row from
+    // the same decoded archive. Action-only and full exports retain B's set metadata and bytes.
+    let imported = fixture(&["A", "B"], false, "Note\0");
+    for replace in [false, true] {
+        let mut roundtrip = Session::new();
+        let data = photocraft_paint::tile::b64_encode(&imported.bytes);
+        if replace {
+            roundtrip.execute("actions.replace", json!({"data":data,"confirm":true})).unwrap();
+        } else {
+            roundtrip.execute("actions.load", json!({"data":data,"replace":false})).unwrap();
+        }
+        let action_only = saved(&mut roundtrip, json!({"action":"Same 2"}));
+        assert_eq!(integer(&set_metadata(&action_only, "B"), "setColorIndex"), 22);
+        assert_eq!(set_metadata(&action_only, "B").list("actions").unwrap()[0].bytes(), imported.entries[1]);
+        let whole = saved(&mut roundtrip, json!({}));
+        assert_eq!(integer(&set_metadata(&whole, "B"), "setColorIndex"), 22);
+        assert_eq!(set_metadata(&whole, "B").list("actions").unwrap()[0].bytes(), imported.entries[1]);
+        roundtrip.execute("actions.assignSet", json!({"action":"Same 2","set":"New"})).unwrap();
+        let action_only = saved(&mut roundtrip, json!({"action":"Same 2"}));
+        assert_eq!(integer(&set_metadata(&action_only, "New"), "setColorIndex"), 0);
+        assert_eq!(set_metadata(&action_only, "New").list("actions").unwrap()[0].bytes(), imported.entries[1]);
+        let whole = saved(&mut roundtrip, json!({}));
+        assert_eq!(integer(&set_metadata(&whole, "New"), "setColorIndex"), 0);
+        assert_eq!(set_metadata(&whole, "New").list("actions").unwrap()[0].bytes(), imported.entries[1]);
+    }
 }
 
 #[test]
@@ -504,6 +569,7 @@ fn empty_wire_category_and_legacy_none_share_one_group_and_export_empty_name() {
     let old = session.actions.list[0].atn_metadata.clone();
     session.execute("actions.assignSet", json!({"action":0,"set":null})).unwrap();
     assert_eq!(session.actions.list[0].atn_metadata, old);
+    assert_eq!(groups(&session.actions, None).unwrap().len(), 1, "keep the assigned action in its matching empty-wire row");
     let files = saved(&mut session, json!({"set": super::super::UNGROUPED_SET}));
     assert_eq!(files[0].name.to_string_lossy(), "");
     assert_eq!(files[0].actions.len(), 2);
@@ -516,6 +582,13 @@ fn empty_wire_category_and_legacy_none_share_one_group_and_export_empty_name() {
     assert_eq!(portable.len(), 3, "do not choose arbitrarily between two physical empty-name rows");
     assert_eq!(portable.iter().filter(|(_, selection)| selection.raw.is_some()).count(), 2);
     assert_eq!(portable.iter().filter(|(_, selection)| selection.raw.is_none()).count(), 1);
+
+    // Assigned actions from two physical empty-name rows stay unbound as a separate portable
+    // group; the first row's provenance cannot claim the other row's action.
+    let mut ambiguous_assigned = loaded(&fixture(&["", ""], false, "Ambiguous assigned rows\0").bytes);
+    ambiguous_assigned.execute("actions.assignSet", json!({"action":0,"set":null})).unwrap();
+    ambiguous_assigned.execute("actions.assignSet", json!({"action":1,"set":null})).unwrap();
+    assert_eq!(groups(&ambiguous_assigned.actions, None).unwrap().len(), 3);
 
     // A source row whose logical caption was overridden is not the default category, even
     // though its retained raw file still has an empty wire name.
@@ -607,22 +680,34 @@ fn native_group_operations_keep_row_carriers_through_copy_move_delete_and_name_r
     assert!(empty_copy[0].actions.is_empty());
     assert_eq!(integer(&set_metadata(&empty_copy, "Empty copy"), "setColorIndex"), 99);
     session.execute("actions.move", json!({"action":"Same 2","to":0})).unwrap();
-    let expected: Vec<(String, Vec<String>)> = vec![
-        ("B".into(), vec!["Same 2".into()]),
-        ("A".into(), vec!["Same".into()]),
-        ("A copy".into(), vec!["Same copy".into()]),
-        // Empty legacy names are listed before imported physical empty rows.
-        ("Empty copy".into(), vec![]),
-        ("Empty".into(), vec![]),
+    let expected = vec![
+        ("A copy".into(), None, vec!["Same copy".into()]),
+        ("Empty copy".into(), None, vec![]),
+        ("A".into(), Some(0), vec!["Same".into()]),
+        ("B".into(), Some(1), vec!["Same 2".into()]),
+        ("Empty".into(), Some(2), vec![]),
     ];
-    assert_eq!(panel_groups(&session), expected);
+    assert_eq!(panel_groups(&session.actions), expected);
     let bytes = saved_bytes(&mut session, json!({}));
     let moved = atn::parse_sets(&bytes).unwrap();
-    assert_eq!(moved[0].name.to_string_lossy(), "B");
-    assert_eq!(moved.iter().take(moved.len() - 1).map(|file| file.name.to_string_lossy()).collect::<Vec<_>>(), ["B", "A", "A copy", "Empty", "Empty copy"]);
+    assert_eq!(moved.iter().take(moved.len() - 1).map(|file| file.name.to_string_lossy()).collect::<Vec<_>>(), ["A", "B", "Empty", "A copy", "Empty copy"]);
     assert_eq!(integer(&set_metadata(&moved, "B"), "setColorIndex"), 22);
     assert_eq!(set_metadata(&moved, "B").list("actions").unwrap()[0].bytes(), fixture.entries[1]);
-    assert_eq!(panel_groups(&loaded(&bytes)), expected);
+    let external = loaded(&bytes);
+    assert_eq!(
+        panel_groups(&external.actions),
+        [
+            ("A".into(), Some(0), vec!["Same".into()]),
+            ("B".into(), Some(1), vec!["Same 2".into()]),
+            ("Empty".into(), Some(2), vec![]),
+            ("A copy".into(), Some(3), vec!["Same copy".into()]),
+            ("Empty copy".into(), Some(4), vec![]),
+        ]
+    );
+    let durable = crate::actions_cmds::library::encode(&session.actions, &[]).unwrap();
+    let trusted = crate::actions_cmds::library::decode(&durable).unwrap();
+    assert_eq!(action_names(&trusted.list), ["Same 2", "Same", "Same copy"]);
+    assert_eq!(panel_groups(&trusted), expected);
     session.execute("actions.delete", json!({"set":"A"})).unwrap();
     session.execute("actions.delete", json!({"action":"Same copy"})).unwrap();
     let live_empty = saved(&mut session, json!({"set":"A copy"}));

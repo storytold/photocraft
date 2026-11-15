@@ -105,7 +105,14 @@ impl Replacement {
         check_library_size(&list, &[], &rows, COMMAND)?;
         let (library, metadata) = crate::actions_cmds::library::decode_import(bytes)
             .ok()
-            .map(|state| crate::actions_cmds::library::replacement_provenance(&state, &rows))
+            .map(|state| {
+                // Keep action metadata and the installed empty-row carriers in one decoded
+                // source. Independent decodes of identical bytes are not physical identities.
+                for (action, original) in list.iter_mut().zip(&state.list) {
+                    crate::actions_cmds::library::bind_import(action, original);
+                }
+                crate::actions_cmds::library::replacement_provenance(&state, &rows)
+            })
             .transpose()
             .map_err(|error| bad(COMMAND, error))?
             .unwrap_or_default();

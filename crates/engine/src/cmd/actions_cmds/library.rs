@@ -12,6 +12,13 @@ use crate::atn_cmds::{self, sidecar};
 pub(crate) mod identity_manifest;
 use identity_manifest::{GroupKey, IdentityManifest};
 
+impl GroupKey {
+    /// The unbound runtime bucket has no durable physical row of its own.
+    pub(crate) fn is_synthetic_unbound(&self) -> bool {
+        matches!(self, Self::Implicit(serial) if *serial == atn::MAX_SETS)
+    }
+}
+
 type Result<T> = std::result::Result<T, String>;
 const MAX_BYTES: usize = crate::preset_store::MAX_ACTIONS_BYTES as usize;
 
@@ -346,6 +353,13 @@ pub(crate) fn import_row(state: &mut ActionState, imported: &ActionState, index:
     state.library.rows.resize(state.set_rows.len(), None);
     if let Some(row) = state.library.rows.get_mut(slot) {
         *row = projected_groups(imported).ok().and_then(|groups| groups.get(index).and_then(|(_, _, selection)| selection.raw.clone()));
+        // bind_import uses this decoder's action metadata. Keep its installed row carrier
+        // in the same source allocation, so strict physical-set identity remains meaningful.
+        if let Some(source) = row.as_ref().and_then(|row| row.metadata.clone())
+            && let Some(metadata) = state.atn_set_rows.iter_mut().find(|metadata| metadata.slot == slot)
+        {
+            metadata.source = source;
+        }
     }
     if state.library.sidecar.is_none() {
         if imported.library.sidecar.is_some() || state.library.source.is_none() {

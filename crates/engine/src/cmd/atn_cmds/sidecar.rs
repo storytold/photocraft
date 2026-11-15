@@ -406,6 +406,46 @@ pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
         projected.remove(*loose_index);
     }
 
+    // An imported action assigned to the default group can be projected into a synthetic
+    // unbound bucket even though its retained origin is the empty-name physical row. Portable
+    // Actions have no slot identity, so join that bucket only to its unique matching default
+    // row. Equal provenance alone is not enough when several physical copies are present.
+    let synthetic_unbound: Vec<_> = projected
+        .iter()
+        .enumerate()
+        .filter(|(_, (key, _, selection))| key.is_synthetic_unbound() && !selection.actions.is_empty())
+        .map(|(index, _)| index)
+        .collect();
+    if let [synthetic_index] = synthetic_unbound.as_slice()
+        && projected[*synthetic_index].1 == super::UNGROUPED_SET
+        && let Some(origin_key) = projected[*synthetic_index].2.raw.as_ref().map(crate::actions_cmds::library::RowOrigin::key)
+        && projected[*synthetic_index]
+            .2
+            .actions
+            .iter()
+            .all(|action| action.library_origin.is_none() || state.library.row_source(&state.set_rows, action).is_some_and(|row| row.key() == origin_key))
+    {
+        let mut matching_rows = Vec::new();
+        for (index, (_, name, selection)) in projected.iter().enumerate() {
+            if index == *synthetic_index || *name != super::UNGROUPED_SET {
+                continue;
+            }
+            if let Some(raw) = selection.raw.as_ref()
+                && raw.has_empty_wire_name()?
+                && raw.key() == origin_key
+            {
+                matching_rows.push(index);
+            }
+        }
+        if let [destination_index] = matching_rows.as_slice() {
+            let synthetic_actions = std::mem::take(&mut projected[*synthetic_index].2.actions);
+            projected[*destination_index].2.actions.extend(synthetic_actions);
+            let order: std::collections::HashMap<_, _> = state.list.iter().enumerate().map(|(index, action)| (std::ptr::from_ref(action), index)).collect();
+            projected[*destination_index].2.actions.sort_by_key(|action| order.get(&std::ptr::from_ref(*action)).copied().unwrap_or(usize::MAX));
+            projected.remove(*synthetic_index);
+        }
+    }
+
     Ok(projected.into_iter().filter(|(_, name, _)| only.is_none_or(|only| only == *name)).map(|(_, name, selection)| (name, selection)).collect())
 }
 
