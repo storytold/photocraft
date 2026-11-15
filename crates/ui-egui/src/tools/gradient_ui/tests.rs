@@ -852,3 +852,26 @@ fn a_paste_whose_mirrored_clipboard_has_gone_leaves_the_pending_mask_gradient_al
     assert!(refused, "the paste is refused: the mirrored copy is gone");
     assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (Some(pending), revision), "nothing was painted for it");
 }
+
+/// CodeRabbit on #10722: playing an action edits the document through steps the engine runs
+/// itself, so they never pass the commit hook. Without the play itself committing first, `tick`
+/// would find the revision moved and drop the pending gradient unpainted and unannounced.
+#[test]
+fn playing_an_action_paints_the_pending_mask_gradient_first() {
+    let (mut app, layer) = app_on_mask();
+    // An action that edits the document without touching the mask, so what the mask holds
+    // afterwards is the gradient itself rather than the gradient as the action left it.
+    app.run("actions.record", json!({"name": "Select all"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("actions.stop", json!({})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    assert!(mask::pending(&app).is_some(), "a gradient waits on the mask");
+    app.run("actions.play", json!({"action": "Select all"})).unwrap();
+    assert_eq!(mask::pending(&app), None, "the play painted it first");
+    // Painted, not dropped: the mask carries the gradient where the drag ended.
+    assert!(mask_at(&app.session.active().unwrap().doc, layer, 150) < 0.05, "the gradient is in the mask");
+    mask::tick(&mut app);
+    assert_eq!(mask::pending(&app), None, "and tick has nothing left to drop");
+}

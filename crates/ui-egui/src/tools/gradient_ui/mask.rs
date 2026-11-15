@@ -65,6 +65,13 @@ impl MaskGradient {
 /// Zooming and panning keep it.
 const COMMITTING: [&str; 10] = ["file.", "edit.", "image.", "layer.", "select.", "filter.", "channel.", "paint.", "type.", "path."];
 
+/// Playing an action edits the document through its steps, which the engine runs itself — they
+/// never reach this hook, so the gradient has to be painted before the play starts or `tick`
+/// would drop it unpainted once the steps have moved the revision (CodeRabbit on #10722). Named
+/// one by one rather than by an `actions.` prefix: renaming or reordering an action edits nothing
+/// and must not paint. `file.automate.batch` plays actions too and is already covered by `file.`.
+const REPLAYING: [&str; 2] = ["actions.play", "actions.conditional"];
+
 /// Whether the Gradient tool works on a layer mask live: not Classic, the mask targeted, and no
 /// gradient fill layer selected (selecting one targets its mask, and that is edited as a fill).
 pub(crate) fn active(app: &PhotocraftApp) -> bool {
@@ -243,7 +250,8 @@ const STEPPING: [&str; 2] = ["edit.undo", "edit.redo"];
 /// changes nothing: the gradient stays pending. A gradient that can't be painted refuses the
 /// command, with its reason, rather than let it run over a gradient that was lost.
 pub(crate) fn before_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<(), String> {
-    if pending_in_active(app).is_none() || STEPPING.contains(&id) || !COMMITTING.iter().any(|p| id.starts_with(p)) {
+    let edits = COMMITTING.iter().any(|p| id.starts_with(p)) || REPLAYING.contains(&id);
+    if pending_in_active(app).is_none() || STEPPING.contains(&id) || !edits {
         return Ok(());
     }
     // Paste reads the OS clipboard before it runs, and that read can empty an engine clipboard
