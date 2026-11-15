@@ -46,6 +46,10 @@ pub(super) fn humanize(key: &str) -> String {
     if key == "convertToSrgb" {
         return "Convert to sRGB".into();
     }
+    // Export › PNG's option, as the reference application labels it (#13785).
+    if key == "pngSmallerFile" {
+        return "Smaller File (8-bit)".into();
+    }
     // These controls appear only for WebP, so reuse the existing translated labels.
     if key == "webpLossless" {
         return "Lossless".into();
@@ -343,6 +347,7 @@ pub(super) fn export_field_visible(obj: &Map<String, Value>, key: &str) -> bool 
     match key {
         "convertToSrgb" | "metadata" => format != "exr",
         "jpegQuality" => format == "jpg",
+        "pngSmallerFile" => format == "png",
         "webpLossless" => format == "webp",
         "webpQuality" => format == "webp" && obj.get("webpLossless").and_then(Value::as_bool) != Some(true),
         // Remembered for the next export dialog, but not a control on the page (#13783).
@@ -418,7 +423,7 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
 /// match and skips a group left empty.
 fn export_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[String], lang: crate::i18n::Lang, query: &str) {
     const GROUPS: [(&str, &[&str]); 4] = [
-        ("Quick Export Format", &["quickExportFormat", "jpegQuality", "webpLossless", "webpQuality"]),
+        ("Quick Export Format", &["quickExportFormat", "pngSmallerFile", "jpegQuality", "webpLossless", "webpQuality"]),
         ("Quick Export Location", &["quickExportLocation"]),
         ("Quick Export Metadata", &["metadata"]),
         ("Quick Export Color Space", &["convertToSrgb"]),
