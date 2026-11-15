@@ -78,7 +78,7 @@ const WANTS: &[Want] = &[
         white: [16320.0; 3],
         sample_max: (16383, 3326),
     },
-    // The G9's high-resolution mode: a 10480 Ã— 7794 sensor cropped to 10368 Ã— 7776.
+    // The G9's high-resolution mode: a 10480 × 7794 sensor cropped to 10368 × 7776.
     Want {
         file: "P1000475.RW2",
         format: RawFormat::Rw2,
