@@ -865,79 +865,87 @@ fn load_source(app: &mut PhotocraftApp, name: &str, params: Value) -> Result<Val
 /// Load every chosen action file in order, retaining failures and unsupported-step warnings.
 fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
     let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
-    app.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: Some(vec!["atn".into()]) }, |app, answer| {
-        let files: Vec<_> = match answer {
-            FileDialogAnswer::Paths(paths) => paths.into_iter().map(|name| (name, None)).collect(),
-            FileDialogAnswer::Contents(name, bytes) => vec![(name, Some(bytes))],
-            FileDialogAnswer::ContentsMany(files) => files.into_iter().map(|(name, bytes)| (name, Some(bytes))).collect(),
-            _ => return Err("the file dialog gave an unexpected answer".into()),
-        };
-        let count = files.len();
-        if count == 0 {
-            return Err(crate::file_dialog::CANCELLED.into());
-        }
-        let mut loaded = 0usize;
-        // What the panel holds afterwards, per set name: `actions.load` replaces a set of the same
-        // name, so a later file's set takes the earlier one's place (and its counts).
-        let mut sets: Vec<(String, String, usize, usize)> = Vec::new(); // set, file, actions, unsupported
-        let mut replaced = Vec::new();
-        let mut errors = Vec::new();
-        let mut last = Value::Null;
-        for (name, bytes) in files {
-            // Native paths go through the engine's size check before reading the file.
-            let params = match bytes {
-                Some(bytes) => source(&name, &bytes),
-                None => json!({"path": name}),
+    app.ask_file(
+        FileDialogRequest::Open { multiple: true, initial_dir, extensions: Some(vec!["atn".into()]), title: None, filter_name: None },
+        |app, answer| {
+            let files: Vec<_> = match answer {
+                FileDialogAnswer::Paths(paths) => paths.into_iter().map(|name| (name, None)).collect(),
+                FileDialogAnswer::Contents(name, bytes) => vec![(name, Some(bytes))],
+                FileDialogAnswer::ContentsMany(files) => files.into_iter().map(|(name, bytes)| (name, Some(bytes))).collect(),
+                _ => return Err("the file dialog gave an unexpected answer".into()),
             };
-            match load_source(app, &name, params) {
-                Ok(r) => {
-                    loaded += 1;
-                    let shown = crate::file_open::display_name(&name);
-                    let set = r["set"].as_str().unwrap_or_default().to_string();
-                    let n = r["actions"].as_array().map_or(0, Vec::len);
-                    let unsupported = r["unsupported"].as_array().map_or(0, Vec::len);
-                    if let Some(entry) = sets.iter_mut().find(|e| e.0 == set) {
-                        replaced.push(crate::i18n::fmt(
-                            tl!("{set} from {file} replaced the one from {earlier}"),
-                            &[("file", &shown), ("earlier", &entry.1), ("set", &set)],
-                        ));
-                        *entry = (set, shown, n, unsupported);
-                    } else {
-                        sets.push((set, shown, n, unsupported));
-                    }
-                    last = r;
-                }
-                Err(e) => errors.push(format!("{}: {e}", crate::file_open::display_name(&name))),
+            let count = files.len();
+            if count == 0 {
+                return Err(crate::file_dialog::CANCELLED.into());
             }
-        }
-        if count == 1 {
-            return match errors.pop() {
-                Some(e) => Err(e),
-                None => Ok(last),
-            };
-        }
-        let actions = sets.iter().fold(0usize, |sum, e| sum.saturating_add(e.2));
-        let unsupported = sets.iter().fold(0usize, |sum, e| sum.saturating_add(e.3));
-        let lang = crate::i18n::current();
-        let files = crate::i18n::trn(lang, loaded as u64, "{n} action file loaded", "{n} action files loaded");
-        let mut notes = vec![crate::i18n::trn(lang, actions as u64, "{n} action", "{n} actions")];
-        if unsupported > 0 {
-            notes.push(crate::i18n::trn(lang, unsupported as u64, "{n} step has no PhotoCraft equivalent yet", "{n} steps have no PhotoCraft equivalent yet"));
-        }
-        notes.extend(replaced);
-        if !errors.is_empty() {
-            let failed = crate::i18n::trn(lang, errors.len() as u64, "{n} file could not be loaded: {errors}", "{n} files could not be loaded: {errors}");
-            notes.push(crate::i18n::fmt(&failed, &[("errors", &errors.join("; "))]));
-        }
-        let template = "{message} ({note})";
-        let summary = crate::i18n::fmt(tl!(template), &[("message", &files), ("note", &notes.join("; "))]);
-        if !errors.is_empty() {
-            return Err(summary);
-        }
-        app.ui.status = summary;
-        app.ui.status_error = false;
-        Ok(json!({"files": loaded, "actions": actions, "unsupported": unsupported}))
-    })
+            let mut loaded = 0usize;
+            // What the panel holds afterwards, per set name: `actions.load` replaces a set of the same
+            // name, so a later file's set takes the earlier one's place (and its counts).
+            let mut sets: Vec<(String, String, usize, usize)> = Vec::new(); // set, file, actions, unsupported
+            let mut replaced = Vec::new();
+            let mut errors = Vec::new();
+            let mut last = Value::Null;
+            for (name, bytes) in files {
+                // Native paths go through the engine's size check before reading the file.
+                let params = match bytes {
+                    Some(bytes) => source(&name, &bytes),
+                    None => json!({"path": name}),
+                };
+                match load_source(app, &name, params) {
+                    Ok(r) => {
+                        loaded += 1;
+                        let shown = crate::file_open::display_name(&name);
+                        let set = r["set"].as_str().unwrap_or_default().to_string();
+                        let n = r["actions"].as_array().map_or(0, Vec::len);
+                        let unsupported = r["unsupported"].as_array().map_or(0, Vec::len);
+                        if let Some(entry) = sets.iter_mut().find(|e| e.0 == set) {
+                            replaced.push(crate::i18n::fmt(
+                                tl!("{set} from {file} replaced the one from {earlier}"),
+                                &[("file", &shown), ("earlier", &entry.1), ("set", &set)],
+                            ));
+                            *entry = (set, shown, n, unsupported);
+                        } else {
+                            sets.push((set, shown, n, unsupported));
+                        }
+                        last = r;
+                    }
+                    Err(e) => errors.push(format!("{}: {e}", crate::file_open::display_name(&name))),
+                }
+            }
+            if count == 1 {
+                return match errors.pop() {
+                    Some(e) => Err(e),
+                    None => Ok(last),
+                };
+            }
+            let actions = sets.iter().fold(0usize, |sum, e| sum.saturating_add(e.2));
+            let unsupported = sets.iter().fold(0usize, |sum, e| sum.saturating_add(e.3));
+            let lang = crate::i18n::current();
+            let files = crate::i18n::trn(lang, loaded as u64, "{n} action file loaded", "{n} action files loaded");
+            let mut notes = vec![crate::i18n::trn(lang, actions as u64, "{n} action", "{n} actions")];
+            if unsupported > 0 {
+                notes.push(crate::i18n::trn(
+                    lang,
+                    unsupported as u64,
+                    "{n} step has no PhotoCraft equivalent yet",
+                    "{n} steps have no PhotoCraft equivalent yet",
+                ));
+            }
+            notes.extend(replaced);
+            if !errors.is_empty() {
+                let failed = crate::i18n::trn(lang, errors.len() as u64, "{n} file could not be loaded: {errors}", "{n} files could not be loaded: {errors}");
+                notes.push(crate::i18n::fmt(&failed, &[("errors", &errors.join("; "))]));
+            }
+            let template = "{message} ({note})";
+            let summary = crate::i18n::fmt(tl!(template), &[("message", &files), ("note", &notes.join("; "))]);
+            if !errors.is_empty() {
+                return Err(summary);
+            }
+            app.ui.status = summary;
+            app.ui.status_error = false;
+            Ok(json!({"files": loaded, "actions": actions, "unsupported": unsupported}))
+        },
+    )
 }
 
 /// Save Actions…: the selected action's set (every action of it), else the selected set folder,

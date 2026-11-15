@@ -26,7 +26,9 @@ use crate::file_open::display_name;
 pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
     /// scripts, notes, presets). Starts in `initial_dir` (the last-used folder, UI-217-3).
-    Open { multiple: bool, initial_dir: Option<String>, extensions: Option<Vec<String>> },
+    /// `title` names the picker (`None`: the system's own "Open") and `filter_name` names the
+    /// `extensions` filter (`None`: "Supported Files"), as File › Scripts › Browse… does (#13846).
+    Open { multiple: bool, initial_dir: Option<String>, extensions: Option<Vec<String>>, title: Option<String>, filter_name: Option<String> },
     /// Which folder to read from. Starts in `initial_dir` when available.
     Folder { initial_dir: Option<String> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
@@ -270,9 +272,21 @@ impl PhotocraftApp {
         extensions: &[&str],
         then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
+        self.pick_file_bytes_titled(extensions, None, None, then)
+    }
+
+    /// [`Self::pick_file_bytes_filtered`] with the picker's `title` and the filter's name (#13846).
+    pub(crate) fn pick_file_bytes_titled(
+        &mut self,
+        extensions: &[&str],
+        title: Option<&str>,
+        filter_name: Option<&str>,
+        then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
         let extensions = (!extensions.is_empty()).then(|| extensions.iter().map(|s| (*s).to_string()).collect());
-        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions }, move |app, answer| {
+        let (title, filter_name) = (title.map(str::to_owned), filter_name.map(str::to_owned));
+        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions, title, filter_name }, move |app, answer| {
             let (name, bytes) = read_picked(answer)?;
             then(app, name, bytes)
         })
@@ -281,7 +295,7 @@ impl PhotocraftApp {
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, title: None, filter_name: None }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     app.open_paths(&paths);
@@ -300,7 +314,7 @@ impl PhotocraftApp {
     /// reporting each failure as File › Open does.
     pub fn open_dialog_as_smart_object(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, title: None, filter_name: None }, |app, answer| {
             let FileDialogAnswer::Paths(paths) = answer else { return Err(UNEXPECTED.into()) };
             // Each file is a tracked open job like File › Open's, in name order. No `show_if_open`:
             // the file opens as another document even when it is already open.
@@ -492,3 +506,7 @@ pub(crate) fn fake(answers: Vec<Option<FileDialogAnswer>>) -> (FileDialogFn, std
 #[cfg(test)]
 #[path = "file_dialog/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "file_dialog/scripts_browse_title_tests.rs"]
+mod scripts_browse_title_tests;

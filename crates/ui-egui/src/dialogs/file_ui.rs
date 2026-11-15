@@ -126,7 +126,8 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         }
         "file.scripts.statistics" => json!({"dialog": crate::stack_dialog::open_statistics(app)}),
         "file.scripts.browse" => {
-            return Some(app.pick_file_bytes_filtered(SCRIPT_EXTENSIONS, |app, name, bytes| {
+            // The reference picker is titled "Load", its one filter named for scripts (#13846).
+            return Some(app.pick_file_bytes_titled(SCRIPT_EXTENSIONS, Some(tl!("Load")), Some(tl!("Script Files")), |app, name, bytes| {
                 let r = app.run("file.scripts.browse", json!({"name": name, "script": String::from_utf8_lossy(&bytes)}));
                 if r.is_ok() {
                     let template = "Ran script {name}";
