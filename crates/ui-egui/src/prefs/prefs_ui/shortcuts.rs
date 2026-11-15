@@ -372,6 +372,23 @@ pub(super) fn settle_pending(
     }
 }
 
+/// A committed key the command couldn't take (it has as many further keys as it may): there is no
+/// conflict to accept, since the key stays with the commands that hold it, and a warning says why.
+fn refused(message: &mut String, warning: &mut bool, conflict: &mut Option<Value>) {
+    *conflict = None;
+    *message = tl!("This command can't take another shortcut; the key stays where it is.").into();
+    *warning = true;
+}
+
+/// A key the field commits: `assigned` says whether the command took it (see [`refused`]).
+fn commit_pending(message: &mut String, warning: &mut bool, conflict: &mut Option<Value>, assigned: bool, sc: &str) {
+    if assigned {
+        commit_message(message, warning, conflict.as_mut(), sc);
+    } else {
+        refused(message, warning, conflict);
+    }
+}
+
 /// Takes the pressed `key` out of this frame's events whatever modifiers it carries: the mask the
 /// capture inferred can hold a modifier (a Shift released in the same frame) that the event no
 /// longer has, and a key left in the queue would also press the dialog's default button.
@@ -561,9 +578,11 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
         if let Some(sc) = pending.take() {
             let ids = touched(&selected, conflict.as_ref());
             let before = keys_of(&overrides, &alt_overrides, &ids);
-            let _ = assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
-            last_change = Some(change(before, &overrides, &alt_overrides, &ids));
-            commit_message(&mut message, &mut message_warning, conflict.as_mut(), &sc);
+            let assigned = assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
+            if assigned {
+                last_change = Some(change(before, &overrides, &alt_overrides, &ids));
+            }
+            commit_pending(&mut message, &mut message_warning, &mut conflict, assigned, &sc);
         }
         capture = false;
     }
@@ -696,6 +715,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             if ui.add_enabled(has_sel, egui::Button::new(tl!("Use Default"))).clicked() {
                 pending = None;
                 capture = false;
+                conflict = None;
                 overrides.remove(&selected);
                 alt_overrides.remove(&selected);
                 message = tl!("Default restored.").into();
@@ -704,6 +724,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             if ui.add_enabled(has_sel, egui::Button::new(tl!("Delete Shortcut"))).clicked() {
                 pending = None;
                 capture = false;
+                conflict = None;
                 overrides.insert(selected.clone(), String::new());
                 message = tl!("Shortcut removed.").into();
                 message_warning = false;
@@ -711,6 +732,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             if ui.button(tl!("Reset All to Defaults")).clicked() {
                 pending = None;
                 capture = false;
+                conflict = None;
                 overrides.clear();
                 alt_overrides.clear();
                 message = tl!("All shortcuts reset to PhotoCraft defaults.").into();
@@ -735,9 +757,11 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
         if let Some(sc) = pending.take() {
             let ids = touched(row, conflict.as_ref());
             let before = keys_of(&overrides, &alt_overrides, &ids);
-            let _ = assign(&mut overrides, &mut alt_overrides, row, &sc, *alt);
-            last_change = Some(change(before, &overrides, &alt_overrides, &ids));
-            commit_message(&mut message, &mut message_warning, conflict.as_mut(), &sc);
+            let assigned = assign(&mut overrides, &mut alt_overrides, row, &sc, *alt);
+            if assigned {
+                last_change = Some(change(before, &overrides, &alt_overrides, &ids));
+            }
+            commit_pending(&mut message, &mut message_warning, &mut conflict, assigned, &sc);
         }
         if *row != selected {
             capture = reopened;
@@ -766,9 +790,11 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                 if let Some(sc) = pending.take() {
                     let ids = touched(&selected, conflict.as_ref());
                     let before = keys_of(&overrides, &alt_overrides, &ids);
-                    let _ = assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
-                    last_change = Some(change(before, &overrides, &alt_overrides, &ids));
-                    commit_message(&mut message, &mut message_warning, conflict.as_mut(), &sc);
+                    let assigned = assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
+                    if assigned {
+                        last_change = Some(change(before, &overrides, &alt_overrides, &ids));
+                    }
+                    commit_pending(&mut message, &mut message_warning, &mut conflict, assigned, &sc);
                 }
                 capture = false;
             }
