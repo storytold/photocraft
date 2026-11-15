@@ -227,3 +227,15 @@ PhotoCraft renders with wgpu. It uses **WebGPU** when the browser has it and fal
 For example: `<iframe src="https://example.com/photocraft/?webgl" ...>`.
 
 A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+
+## Driving it from the page (`window.photocraft`)
+
+Every PhotoCraft web build puts `window.photocraft` on the page, from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app. `photocraft.request(method, params)` calls any method of the control channel the desktop app serves (`docs/control-protocol.md`), and `execute(command, params)`, `commands()`, `uiInspect(params)` and `screenshot(params)` are shortcuts for the common ones; PhotoCraft has no `document.inspect`, so there is no `docInspect`. Each returns a Promise that resolves with the method's result and rejects with an `Error`; a call the app does not answer within 30 seconds rejects, and the app skips it if it has not started it. At most 64 calls wait for the app at once: a call made while that many wait rejects at once, as busy. A call the app has already started still finishes, so a retry after a timeout can apply a command twice.
+
+```js
+await photocraft.request("ui.set", { brushSize: 24 });
+const ui = await photocraft.uiInspect();                             // the UI state
+const { data } = await photocraft.screenshot();                      // the window as PNG (base64)
+```
+
+The API is installed in every session, once PhotoCraft has loaded its brush presets and started: before then `window.photocraft` is `undefined`, so wait for it before the first call, for example `while (!window.photocraft) await new Promise((r) => setTimeout(r, 50));`. A parent page reaches an embedded PhotoCraft's `window.photocraft` only from a same-origin iframe: a browser gives a cross-origin parent no access to the iframe's globals, so control from another origin needs a message bridge.

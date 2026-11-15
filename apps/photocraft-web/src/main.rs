@@ -5,7 +5,8 @@
 //! from this directory; see `docs/development.md` ("Web build").
 //!
 //! Differences from the desktop app:
-//! - no TCP control server (browsers can't listen on sockets);
+//! - no TCP control server (browsers can't listen on sockets); `window.photocraft` (`api`) drives the
+//!   same control channel from the page instead;
 //! - file pickers return browser file contents asynchronously through `Services::file_dialog`;
 //!   this includes File → Open and commands such as Place Embedded;
 //! - saving/exporting triggers a browser download;
@@ -26,6 +27,9 @@ mod preset_bridge;
 
 #[cfg(target_arch = "wasm32")]
 mod indexed_presets;
+
+#[cfg(target_arch = "wasm32")]
+mod api;
 
 #[cfg(target_arch = "wasm32")]
 mod web;
