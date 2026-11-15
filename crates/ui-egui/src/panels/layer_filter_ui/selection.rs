@@ -20,7 +20,8 @@ pub fn follow(app: &mut PhotocraftApp) {
 /// Control callers need the refusal as well as the panel's next-frame retry.
 pub(crate) fn try_follow(app: &mut PhotocraftApp) -> Result<(), String> {
     let now = Filter::of(app);
-    if super::switch::changed_since_draw(app, &now) && now.active()
+    if super::switch::changed_since_draw(app, &now)
+        && now.active()
         && let Err(error) = deselect_hidden(app)
     {
         super::switch::forget_applied(app);

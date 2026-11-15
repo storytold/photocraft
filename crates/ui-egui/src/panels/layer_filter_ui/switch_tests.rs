@@ -489,11 +489,7 @@ fn a_failed_deselection_is_retried() {
 #[test]
 fn control_patch_reports_a_refused_deselection_and_retries_the_same_filter() {
     fn deny_deselect(id: &str, _: &Value) -> photocraft_engine::Result<()> {
-        if id == "select.deselectLayers" {
-            Err(photocraft_engine::EngineError::Other("deselection refused".into()))
-        } else {
-            Ok(())
-        }
+        if id == "select.deselectLayers" { Err(photocraft_engine::EngineError::Other("deselection refused".into())) } else { Ok(()) }
     }
     let mut app = app();
     app.ui.layers_panel_options.show_filters = false;
