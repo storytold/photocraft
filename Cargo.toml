@@ -46,7 +46,7 @@ photocraft-tablet = { path = "crates/tablet" }
 # external
 # ICC colour management: the shared crate (replaces crates/cms; craft-libs#779).
 craft-cms = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "4c36677fa144f4829fd536076c2381fc9bc5f250" }
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "ac7586ed9f4ed099b042b9e7867e0b468b9fb08c" }
 # HEIC/HEIF: the shared decoder (replaces crates/heif; craft-libs#784).
 craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3", features = ["raster", "write-raster"] }
