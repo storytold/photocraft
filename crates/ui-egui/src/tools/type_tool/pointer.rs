@@ -98,6 +98,10 @@ fn resize_box(app: &mut PhotocraftApp, ed: &TextEdit, r: BoxResize, x: f64, y: f
     }
     // type.edit places the box's top-left at the given document point.
     let o = r.aff.apply(Point::new(f64::from(x0), f64::from(y0)));
+    // Rendered in the background where that is on; the release applies the box.
+    if crate::type_box_preview::want(app, LayerId(ed.layer), [o.x, o.y, f64::from(x1 - x0), f64::from(y1 - y0)]) {
+        return;
+    }
     let _ = app.run("type.edit", json!({"layer": ed.layer, "box": [o.x, o.y, x1 - x0, y1 - y0], "coalesce": ed.session}));
 }
 
@@ -122,6 +126,9 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
             if let (Some(snap), Some(e)) = (snap, app.ui.text_edit.as_mut()) {
                 e.resize = Some(snap);
             }
+            if app.ui.text_edit.as_ref().is_some_and(|e| e.resize.is_some()) {
+                crate::type_box_preview::begin(app, id, ed.session.clone());
+            }
             return true;
         }
         // Photoshop: anywhere inside the paragraph box places the caret, even off the glyphs
@@ -145,12 +152,15 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
         return true; // Photoshop: a click outside commits without starting new text
     }
     app.ui.type_insertion_style = None;
-    // The Type Mask tools always start new text: existing type layers are just pixels to them;
-    // so does a ⇧-click with the Type tool, as in Photoshop, to start new text over old.
-    if app.ui.tool.is_type_mask() || mods.shift {
+    // A ⇧-click starts new text over old, as in Photoshop. A Type Mask click on a text layer's
+    // glyphs edits it as the Type tool does (#12075), unless ⇧ is held or the layer is only partly
+    // locked: neither is measured, so those keep starting a new mask.
+    let hit = hit_layer(app, x, y);
+    let partly_locked = |id| app.session.active().map(|st| st.doc.effective_locks(id)).is_some_and(|l| l.any() && !l.all);
+    if mods.shift || (app.ui.tool.is_type_mask() && hit.is_some_and(partly_locked)) {
         return false;
     }
-    if let Some(id) = hit_layer(app, x, y) {
+    if let Some(id) = hit {
         let _ = app.session.select_layer(id);
         // Lock All (the layer's own or a group's) refuses the edit before it starts, as the engine
         // would refuse the first keystroke; the reference application says so in an alert (#12040).
@@ -176,7 +186,14 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
             resize: None,
             preedit: None,
         });
-        app.ui.text_edit_return_tool = None;
+        // The frame commits an edit that is no mask while a Type Mask tool is in hand: edit with
+        // the Type tool, as Move's double-click does, and give the mask tool back at the end.
+        app.ui.text_edit_return_tool = app.ui.tool.is_type_mask().then_some(app.ui.tool);
+        if app.ui.text_edit_return_tool.is_some() {
+            let vertical =
+                app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
+            app.ui.tool = if vertical { crate::state::Tool::VerticalType } else { crate::state::Tool::Type };
+        }
         return true;
     }
     false
@@ -304,6 +321,7 @@ fn makes_box(app: &PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> bool {
 
 /// Pointer up. `rect` is the dragged box (document px) when no edit session consumed the press.
 pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
+    crate::type_box_preview::flush(app);
     if let Some(e) = app.ui.text_edit.as_mut() {
         e.dragging = false;
         e.resize = None;
@@ -473,3 +491,7 @@ pub fn multi_click(app: &mut PhotocraftApp, egui_count: u32, x: f64, y: f64) {
 #[cfg(test)]
 #[path = "mask_placeholder_tests.rs"]
 mod mask_placeholder_tests;
+
+#[cfg(test)]
+#[path = "mask_click_text_layer_tests.rs"]
+mod mask_click_text_layer_tests;

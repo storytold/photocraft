@@ -71,9 +71,10 @@ fn painting_a_hidden_layer_is_refused_at_the_press() {
         let n = steps(&app);
         tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
         assert!(app.drag.is_none() && app.live_stroke.is_none(), "{tool:?}: no stroke started");
-        // The Brush says so in its alert (#11898), the other tools in the status bar.
+        // The Brush (#11898) and the Classic gradient (#12017) say so in an alert, the other tools
+        // in the status bar.
         let alert = app.ui.dialogs.iter().any(|d| d.fields.get("message").and_then(|m| m.as_str()).is_some_and(|m| m.contains("target layer is hidden")));
-        if tool == Tool::Brush {
+        if matches!(tool, Tool::Brush | Tool::Gradient) {
             assert!(alert, "{tool:?}: {:?}", app.ui.dialogs);
         } else {
             assert!(app.ui.status.contains("target layer is hidden") && app.ui.dialogs.is_empty(), "{tool:?}: {}", app.ui.status);
