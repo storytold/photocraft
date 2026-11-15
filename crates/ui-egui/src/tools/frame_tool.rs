@@ -28,6 +28,8 @@ pub struct FrameToolUi {
     pub ellipse: bool,
     pub shape: String,
     pub sides: u32,
+    /// The corner radius of Rectangle, Triangle and Polygon frames, in pixels (#13875).
+    pub radius: f32,
     pub stroke: Option<photocraft_doc::ShapeStroke>,
     pub target: Target,
     pub selected: Option<u64>,
@@ -65,6 +67,7 @@ impl Default for FrameToolUi {
             ellipse: false,
             shape: "rectangle".into(),
             sides: 5,
+            radius: 0.0,
             stroke: None,
             target: Target::Frame,
             selected: None,
@@ -177,6 +180,9 @@ fn shape_params(app: &PhotocraftApp, r: [i64; 4]) -> Value {
         &app.ui.frame_tool.shape
     };
     let mut p = json!({"x":x,"y":y,"width":x1.saturating_sub(x),"height":y1.saturating_sub(y),"shape":shape,"sides":app.ui.frame_tool.sides.clamp(3,100)});
+    if rounds(shape) && app.ui.frame_tool.radius > 0.0 {
+        p["radius"] = json!(f64::from(app.ui.frame_tool.radius));
+    }
     if shape == "custom" {
         let name = app.ui.presets_ui.shape();
         if let Some(sh) = photocraft_engine::presets::shapes::all_groups(&app.session).iter().flat_map(|g| &g.items).find(|s| s.name == name) {
@@ -202,7 +208,38 @@ fn outline(app: &PhotocraftApp, r: [i64; 4]) -> Option<photocraft_doc::Path> {
         return Some(sh.transform(&Affine { m: [sx, 0.0, 0.0, sy, x as f64 - x0 * sx, y as f64 - y0 * sy] }));
     }
     let [x, y, xe, ye] = r;
-    photocraft_engine::vector_cmds::shape_path(&json!({"kind":match shape{"ellipse"=>"ellipse","triangle"|"polygon"=>"polygon",_=>"rect"},"rect":[x,y,xe-x,ye-y],"sides":if shape=="triangle"{3}else{app.ui.frame_tool.sides.clamp(3,100)}})).ok()
+    // The preview rounds as the frame will (#13875).
+    let radius = p.get("radius").and_then(Value::as_f64).unwrap_or(0.0);
+    photocraft_engine::vector_cmds::shape_path(&json!({"kind":match shape{"ellipse"=>"ellipse","triangle"|"polygon"=>"polygon",_=>"rect"},"rect":[x,y,xe-x,ye-y],"sides":if shape=="triangle"{3}else{app.ui.frame_tool.sides.clamp(3,100)},"radius":radius,"cornerRadius":radius})).ok()
+}
+
+/// The frame shapes with corners to round (#13875): Rectangle, Triangle and Polygon.
+fn rounds(shape: &str) -> bool {
+    matches!(shape, "rectangle" | "triangle" | "polygon")
+}
+
+/// The alert for a corner radius typed past its range, as the reference application words it.
+pub const RADIUS_ALERT: &str = "A value between 0.000 pixel and 150000.000 Pixels is required. Closest value inserted.";
+
+/// The options bar's corner radius field (#13875): a rounded-corner icon and the value, 0–150000
+/// px with decimals, one value for the three shapes that round. Whether a value past the range
+/// was typed.
+fn radius_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (rect, icon) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+    let r = rect.shrink(2.0);
+    let corner: Vec<Pos2> = (0..=8)
+        .map(|i| {
+            let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+            egui::pos2(r.right() - r.width() * a.sin(), r.bottom() - r.height() * a.cos())
+        })
+        .collect();
+    ui.painter().add(egui::Shape::line(corner, Stroke::new(1.5, t.text_dim)));
+    icon.on_hover_text(tl!("Set radius of rounded corners"));
+    let (resp, alert) =
+        crate::widgets::value_field_alerting(ui, tl!("Set radius of rounded corners"), &mut app.ui.frame_tool.radius, 0.0..=150_000.0, "px", 70.0);
+    resp.on_hover_text(tl!("Set radius of rounded corners"));
+    alert
 }
 fn handles(f: &Frame) -> [(Point, i8, i8); 8] {
     [(0., 0., -1, -1), (0.5, 0., 0, -1), (1., 0., 1, -1), (1., 0.5, 1, 0), (1., 1., 1, 1), (0.5, 1., 0, 1), (0., 1., -1, 1), (0., 0.5, -1, 0)]
@@ -854,6 +891,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             app.ui.frame_tool.shape = shape.into();
             app.ui.frame_tool.ellipse = shape == "ellipse";
         }
+    }
+    let shape = if app.ui.frame_tool.ellipse { "ellipse" } else { app.ui.frame_tool.shape.as_str() };
+    if rounds(if shape.is_empty() { "rectangle" } else { shape }) && radius_field(app, ui) {
+        crate::panels::options_bar::range_alert(&mut app.ui, RADIUS_ALERT);
     }
     if app.ui.frame_tool.shape == "polygon" {
         ui.label(tl!("Sides:"));
