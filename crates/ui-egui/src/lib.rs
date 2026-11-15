@@ -1119,3 +1119,6 @@ mod red_eye_context_menu_tests;
 
 #[cfg(test)]
 mod clone_stamp_indexed_bar_tests;
+
+#[cfg(test)]
+mod mixer_digit_keys_tests;
