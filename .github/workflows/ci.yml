@@ -298,9 +298,9 @@ jobs:
       # toolchain action exports out of the key; the gate leg does not set it, and in the recorded run
       # the two keys therefore differed (craft-common-actions#212).
       #
-      # Temporarily pin craft-common-actions#240 for cross-repository CI before it lands.
-      # Keep this PR draft; restore @main here and in the exact-ref test after that dependency merges.
-      - uses: storytold/craft-common-actions/actions/rust-cache@4d6d029582837014919554f99e24a5cd3a961ba5
+      # Share the gate's canonical dependency cache now that craft-common-actions#240 has landed.
+      # Keep the exact-ref guard on the same shared @main contract.
+      - uses: storytold/craft-common-actions/actions/rust-cache@main
         with:
           cache-version: v1
           job: gate
