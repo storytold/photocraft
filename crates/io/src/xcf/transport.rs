@@ -152,6 +152,7 @@ impl<R: BufRead> Read for Gzip<'_, R> {
 }
 
 /// Recognizes supported compressed XCF wrappers and applies the standard inflated-size limit.
+#[cfg(test)]
 pub(crate) fn decode(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<Vec<u8>>> {
     decode_inner(name, bytes, ctl, MAX_INFLATED, false)
 }
