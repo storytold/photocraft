@@ -76,7 +76,7 @@ pub fn start() {
         // Hydrate before constructing an interactive session: a late load must never undo a
         // user deletion/reorder. Storage denial or timeout still opens a usable session.
         let (database, presets, mut preset_warnings) = match crate::indexed_presets::load().await {
-            Ok((db, bridge, warnings)) => (Some(Rc::new(RefCell::new(db))), bridge, warnings),
+            Ok((db, bridge, warnings)) => (Some(db), bridge, warnings),
             Err(e) => {
                 let bridge = crate::preset_bridge::Bridge::default();
                 bridge.unavailable(e);
@@ -366,7 +366,7 @@ struct WebShell {
     /// Read by the `beforeunload` listener ([`guard_unload`]).
     unsaved: Arc<AtomicBool>,
     served: Served,
-    database: Option<Rc<RefCell<web_sys::IdbDatabase>>>,
+    database: Option<web_sys::IdbDatabase>,
     presets: crate::preset_bridge::Bridge,
     actions_revision: u64,
     prefs_revision: Option<u64>,
