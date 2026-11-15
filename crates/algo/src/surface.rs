@@ -27,8 +27,6 @@ const MAX_GRID_CELLS: u64 = 1 << 22;
 pub const MAX_SIGMA: f32 = 4096.0;
 /// Shading factors are clamped to this.
 const MAX_SHADE: f32 = 4.0;
-/// A blurred luma below this counts as this, so shading black never divides by ~0.
-const MIN_REF: f32 = 1e-3;
 
 /// Rec. 709 luma of straight RGB.
 #[inline]
@@ -325,8 +323,9 @@ impl ShadingField {
         if code == NO_LUMA {
             return 1.0;
         }
-        let Some(r) = reference else { return 1.0 };
-        let s = decode_luma(code) / r.max(MIN_REF);
+        // No light around the pixel: there is no variation to show, whatever the pixel's own luma.
+        let Some(r) = reference.filter(|r| r.is_finite() && *r > 0.0) else { return 1.0 };
+        let s = decode_luma(code) / r;
         if s.is_finite() { s.clamp(0.0, MAX_SHADE) } else { 1.0 }
     }
 
@@ -510,6 +509,19 @@ mod tests {
         let mut out = vec![0.0; 70 * 50];
         f.shade_into(Rect::new(0, 0, 70, 50), &mut out);
         assert!(out.iter().all(|s| (s - 1.0).abs() < 1e-3), "{:?}", out.iter().cloned().fold(0.0f32, |m, s| m.max((s - 1.0).abs())));
+    }
+
+    #[test]
+    fn a_constant_dark_sample_has_no_shading() {
+        // Luma 0.0001 (a 16-bit square-root code of about 164) and pure black are both flat: neutral.
+        for v in [1.0e-4_f32, 1.0e-3, 0.0] {
+            let f = field(sample(70, 50, |_, _| [v, v, v, 1.0]), 12.0);
+            let mut out = vec![0.0; 70 * 50];
+            f.shade_into(Rect::new(0, 0, 70, 50), &mut out);
+            let worst = out.iter().fold(0.0f32, |m, s| m.max((s - 1.0).abs()));
+            assert!(worst < 1e-3, "luma {v}: worst deviation from 1 is {worst}");
+            assert!((f.shade_at(10, 10) - 1.0).abs() < 1e-3);
+        }
     }
 
     #[test]

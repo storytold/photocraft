@@ -895,6 +895,11 @@ pub struct Metadata {
 /// reopens on them and a perspective-aware tool can follow them. Plain data: `doc` cannot see the
 /// algorithm crate's plane type. Each plane is four absolute corners in image pixels, clockwise
 /// from the top-left.
+///
+/// A canvas-geometry edit (crop, Canvas Size, Image Size, rotation, flip) carries the saved planes
+/// with the picture: the corners move through the edit's map, `size` becomes the new canvas size
+/// and `focal` scales with it. A size change that comes with no map (a command that resizes the
+/// canvas some other way) resets them. Edits that do not touch the canvas leave them alone.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PerspectivePlanes {
     pub planes: Vec<[[f64; 2]; 4]>,

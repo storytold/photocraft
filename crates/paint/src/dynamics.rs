@@ -11,7 +11,7 @@ use photocraft_geom::Point;
 
 use crate::brush::{BrushSettings, Control, Dynamic, Smoothing};
 use crate::rng::{rand_signed, rand01, stream};
-use crate::surface::{MapHandle, SurfaceMap, surface_dab_shape};
+use crate::surface::{MapHandle, SurfaceMap, surface_dab_shape, surface_scale_ratio};
 use crate::{Dab, StrokePoint};
 
 /// Maximum pulled-string length at 100 % smoothing, in screen pixels.
@@ -589,10 +589,7 @@ fn step_len_scaled(brush: &BrushSettings, p: &StrokePoint, factor: f32) -> f64 {
 /// the scale at the stroke's first on-surface dab, `anchor`): 1 with neither yet, or off the surface.
 fn surface_factor(map: &dyn SurfaceMap, anchor: Option<f32>, p: &StrokePoint) -> f32 {
     let Some(anchor) = map.reference_scale().or(anchor).filter(|a| a.is_finite() && *a > 0.0) else { return 1.0 };
-    match map.local(Point::new(p.x, p.y)) {
-        Some(l) if l.is_valid() => (l.scale / anchor).clamp(0.01, 100.0),
-        _ => 1.0,
-    }
+    map.local(Point::new(p.x, p.y)).and_then(|l| surface_scale_ratio(anchor, &l)).unwrap_or(1.0)
 }
 
 /// Builds the primary dabs of a step (Shape Dynamics, Scattering, Transfer, Color, Texture depth).
@@ -1141,5 +1138,49 @@ mod streaming_tests {
         let brush = BrushSettings { size: 1.0, aliased: true, spacing: 1.0, ..BrushSettings::default() };
         let (dabs, _) = streamed(&brush, &[StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(2.0e6, 3.0, 1.0)], 1000);
         assert_eq!(dabs.len(), 2_000_001);
+    }
+}
+
+#[cfg(test)]
+mod surface_scale_tests {
+    use super::*;
+    use crate::surface::Local;
+
+    /// A plane that is the same everywhere, at `scale` against a reference scale of 1.
+    struct Flat(f32);
+
+    impl SurfaceMap for Flat {
+        fn local(&self, _: Point) -> Option<Local> {
+            Some(Local { scale: self.0, squash_angle: 0.0, squash: 1.0 })
+        }
+        fn reference_scale(&self) -> Option<f32> {
+            Some(1.0)
+        }
+    }
+
+    #[test]
+    fn the_step_follows_the_dab_size_at_the_extreme_ratios() {
+        for scale in [1.0e-3_f32, 1.0e-2, 0.5, 100.0, 1.0e3, 5.0e4] {
+            let brush = BrushSettings { size: 1000.0, spacing: 1.0, ..BrushSettings::default() };
+            // Spacing 100%: the step is the dab's diameter (a step has a floor of half a pixel).
+            let builder = DabBuilder::new(&brush).with_surface(Some(Arc::new(Flat(scale))));
+            let p = StrokePoint::new(10.0, 10.0, 1.0);
+            let local = Flat(scale).local(Point::new(10.0, 10.0)).unwrap();
+            let (radius, ..) = surface_dab_shape(brush.size / 2.0, Some(1.0), &local);
+            let (step, diameter) = (builder.step_len(&p), f64::from(radius * 2.0));
+            assert!((step - diameter).abs() < 1e-3 * step.max(1.0), "scale {scale}: step {step} vs {diameter} px dab");
+        }
+    }
+
+    #[test]
+    fn the_scale_ratio_is_clamped_once_and_rejects_bad_input() {
+        let local = |scale| Local { scale, squash_angle: 0.0, squash: 1.0 };
+        assert_eq!(surface_scale_ratio(1.0, &local(1.0e-6)), Some(1e-3));
+        assert_eq!(surface_scale_ratio(1.0, &local(1.0e6)), Some(1e3));
+        assert_eq!(surface_scale_ratio(2.0, &local(1.0)), Some(0.5));
+        assert_eq!(surface_scale_ratio(0.0, &local(1.0)), None);
+        assert_eq!(surface_scale_ratio(f32::NAN, &local(1.0)), None);
+        assert_eq!(surface_scale_ratio(1.0, &local(f32::NAN)), None);
+        assert_eq!(surface_scale_ratio(1.0, &local(-1.0)), None);
     }
 }

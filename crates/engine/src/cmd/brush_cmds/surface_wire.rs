@@ -95,8 +95,8 @@ struct FieldEntry {
 /// entirely (it is hidden from the sample), so painting on it, like changing the selection or the
 /// history, keeps the field; any edit of another layer, or of the canvas, invalidates it. A target
 /// inside a group is compared with its group, so there a stroke does invalidate (a rebuild per
-/// stroke, as before). All Layers also compares the document's global light (layer
-/// styles read it); other document-wide settings (patterns, the colour profile) are not compared.
+/// stroke, as before). All Layers also compares the document's global light and patterns (layer
+/// styles read both); other document-wide settings (the colour profile) are not compared.
 fn same_sources(a: &photocraft_doc::Document, b: &photocraft_doc::Document, sample: SampleMode, layer: Option<LayerId>) -> bool {
     if a.size != b.size || a.mode != b.mode || a.depth != b.depth {
         return false;
@@ -104,8 +104,9 @@ fn same_sources(a: &photocraft_doc::Document, b: &photocraft_doc::Document, samp
     match sample {
         SampleMode::CurrentLayer => layer.is_some_and(|id| matches!((a.layer(id), b.layer(id)), (Some(x), Some(y)) if x == y)),
         SampleMode::AllLayers => {
-            // Layer styles with Use Global Light read the document's light, so it is part of the composite.
+            // Layer styles read the document's global light and patterns, so they are part of the composite.
             a.global_light == b.global_light
+                && a.patterns == b.patterns
                 && a.layers.len() == b.layers.len()
                 && a.layers.iter().zip(&b.layers).all(|(x, y)| x.id == y.id && (Some(x.id) == layer || x == y))
         }
@@ -165,7 +166,8 @@ impl Wiring {
         let mut w = Self::default();
         let persp = if opts.perspective { Some(plane_map(s).ok_or_else(|| bad(cmd, NO_PLANES))?) } else { None };
         w.map = make_map(persp);
-        if opts.color && !is_gray_target(s, p)? {
+        // Strength 0 shades nothing, so it must not build (or be refused for) a field either.
+        if opts.color && opts.strength > 0.0 && !is_gray_target(s, p)? {
             let field = shading_field(s, cmd, opts.sample, opts.detail, layer)?;
             w.shade = Some((Arc::new(FieldShade(field)), opts.strength));
         }

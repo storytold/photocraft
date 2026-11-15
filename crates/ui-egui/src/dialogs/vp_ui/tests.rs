@@ -456,8 +456,18 @@ fn ok_with_only_planes_saves_them_and_a_canvas_resize_makes_them_stale() {
     assert_eq!(app.distort.vanishing.as_ref().unwrap().planes.len(), 1);
     assert_eq!(commit(&mut app).unwrap()["committed"], false);
     assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
-    // After the canvas changes, the saved planes no longer fit and are not loaded.
+    // A Canvas Size carries the saved planes along with the picture, so they are loaded still.
     app.session.execute("image.canvasSize", json!({"width": 300, "height": 160, "anchor": "topLeft"})).unwrap();
+    app.sync_views();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().planes.len(), 1);
+    // Planes saved for another canvas no longer fit and are not loaded.
+    app.session
+        .edit("stale planes", |doc, _| {
+            doc.perspective.size = Some([999, 999]);
+            Ok(())
+        })
+        .unwrap();
     app.sync_views();
     crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
     assert!(app.distort.vanishing.as_ref().unwrap().planes.is_empty());
@@ -506,6 +516,34 @@ fn the_saved_focal_length_survives_reopening_and_ok() {
     let r = commit(&mut app).unwrap();
     assert_eq!(r["committed"], true, "{r}");
     assert_eq!(app.session.active().unwrap().doc.perspective.focal, Some(500.0));
+}
+
+#[test]
+fn a_focal_length_saved_with_no_planes_survives_reopening_and_a_paste_commit() {
+    let (ctx, mut app) = app_with_layer();
+    copy_red_square(&mut app);
+    app.session.execute("perspective.setPlanes", json!({"planes": [], "focal": 500})).unwrap();
+    assert!(app.session.active().unwrap().doc.perspective.planes.is_empty());
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    let s = app.distort.vanishing.as_ref().unwrap();
+    assert!(s.planes.is_empty());
+    assert_eq!(s.focal, Some(500.0), "no planes does not drop the saved focal length");
+    assert_eq!(s.params()["focalLength"], json!(500.0));
+    // A plane drawn now and pasted onto keeps the focal length with the document.
+    control(&mut app, &json!({"planes": [{"corners": [[70, 60], [170, 60], [220, 150], [20, 150]]}]})).unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().params()["focalLength"], json!(500.0));
+    let r = commit(&mut app).unwrap();
+    assert_eq!(r["committed"], true, "{r}");
+    assert_eq!(app.session.active().unwrap().doc.perspective.focal, Some(500.0));
+    // A focal length saved for another canvas size is still dropped.
+    app.session
+        .edit("other canvas", |doc, _| {
+            doc.perspective = photocraft_doc::PerspectivePlanes { planes: Vec::new(), focal: Some(500.0), size: Some([999, 999]) };
+            Ok(())
+        })
+        .unwrap();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().focal, None);
 }
 
 #[test]
