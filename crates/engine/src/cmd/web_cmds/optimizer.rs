@@ -81,6 +81,32 @@ pub fn web_xmp(doc: &Document, m: WebMetadata) -> Option<String> {
     }
 }
 
+/// Quick Export's XMP (#13788): with Copyright and Contact Info (`contact`) one packet holding the
+/// document's author, copyright notice, title, copyrighted flag and copyright URL, plus an empty
+/// usage-terms entry, as the reference application writes it; keywords and the description stay
+/// out. None writes no packet. Save for Web keeps [`web_xmp`].
+pub fn quick_export_xmp(doc: &Document, contact: bool) -> Option<String> {
+    let xmp = doc.metadata.xmp.as_deref().filter(|_| contact)?;
+    let info = crate::file_cmds::read_file_info(Some(xmp));
+    let mut keep = serde_json::Map::new();
+    for k in ["author", "copyright", "title", "copyrightStatus", "copyrightUrl"] {
+        if let Some(v) = info.get(k).filter(|v| v.as_str().is_some_and(|s| !s.is_empty() && s != "unknown")) {
+            keep.insert(k.into(), v.clone());
+        }
+    }
+    let packet = crate::file_cmds::write_file_info(None, &Value::Object(keep));
+    let terms = "   <xmpRights:UsageTerms><rdf:Alt><rdf:li xml:lang=\"x-default\"/></rdf:Alt></xmpRights:UsageTerms>\n";
+    Some(match packet.rfind("  </rdf:Description>") {
+        Some(at) => format!("{}{terms}{}", &packet[..at], &packet[at..]),
+        // Nothing to keep: the packet with the usage terms alone.
+        None => packet.replacen(
+            " </rdf:RDF>",
+            &format!("  <rdf:Description rdf:about=\"\" xmlns:xmpRights=\"http://ns.adobe.com/xap/1.0/rights/\">\n{terms}  </rdf:Description>\n </rdf:RDF>"),
+            1,
+        ),
+    })
+}
+
 /// The photo's EXIF to embed for the metadata choice: only "All" carries it (#7436).
 pub fn web_exif(doc: &Document, m: WebMetadata) -> Option<&[u8]> {
     doc.metadata.exif.as_deref().map(Vec::as_slice).filter(|_| m == WebMetadata::All)
