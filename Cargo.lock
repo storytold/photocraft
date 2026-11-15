@@ -5581,6 +5581,7 @@ dependencies = [
  "craft-cms",
  "craft-file-formats",
  "craft-image-codecs",
+ "craft-metadata",
  "craft-print",
  "craft-psd",
  "craft-xml",

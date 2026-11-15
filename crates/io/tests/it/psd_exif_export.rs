@@ -80,8 +80,13 @@ fn camera_exif() -> Vec<u8> {
 
 /// Two layers over a 9 × 6, 16-bit canvas, as a developed raw is saved, with the camera's EXIF.
 fn layered_doc() -> photocraft_doc::Document {
+    sized_doc(9, 6)
+}
+
+/// [`layered_doc`] at another size: a portrait canvas tells a swapped width and height apart.
+fn sized_doc(w: u32, h: u32) -> photocraft_doc::Document {
     use photocraft_color::{ColorMode, SampleType};
-    let mut d = photocraft_doc::Document::new("photo", photocraft_geom::Size::new(9, 6), ColorMode::Rgb, SampleType::U16);
+    let mut d = photocraft_doc::Document::new("photo", photocraft_geom::Size::new(w, h), ColorMode::Rgb, SampleType::U16);
     let fmt = d.pixel_format();
     d.layers.push(raster("Background", fmt, d.bounds(), 3, false));
     let mut top = raster("Top", fmt, d.bounds(), 7, true);
@@ -154,6 +159,44 @@ fn the_psd_save_writes_the_documents_size() {
     let tags = dump(exif);
     assert!(tags.contains(&(40962, 9)) && tags.contains(&(40963, 6)), "{tags:?}");
     assert_eq!(photocraft_algo::exif::read(exif).make.as_deref(), Some("Canon"));
+}
+
+/// A portrait 6 × 9 canvas: PixelXDimension is the width (6) and PixelYDimension the height (9), so
+/// a swap of the two fails here where the 9 × 6 landscape tests could not tell.
+#[test]
+fn a_portrait_documents_size_is_not_swapped_in_any_export() {
+    let want = |tags: &[(u16, u32)], what: &str| assert!(tags.contains(&(40962, 6)) && tags.contains(&(40963, 9)), "{what}: {tags:?}");
+    for ext in ["jpg", "png", "tif", "webp", "psd"] {
+        let out = export(&sized_doc(6, 9), &format!("photo.{ext}"), &ExportOptions::default()).unwrap();
+        let doc = import(&format!("photo.{ext}"), &out.bytes).unwrap().document;
+        want(&dump(doc.metadata.exif.as_deref().unwrap_or_else(|| panic!("{ext}: the camera EXIF"))), ext);
+    }
+}
+
+/// The layer-less PSD a Multichannel document saves as (`multichannel_map::layerless_file`).
+#[test]
+fn the_layerless_multichannel_psd_save_writes_the_documents_size() {
+    use photocraft_color::{ColorMode, SampleType};
+    let mut d = photocraft_doc::Document::new("photo", photocraft_geom::Size::new(9, 6), ColorMode::Multichannel, SampleType::U8);
+    d.metadata.exif = Some(std::sync::Arc::new(camera_exif()));
+    let psd = export(&d, "photo.psd", &ExportOptions::default()).unwrap().bytes;
+    let file = craft_psd::PsdFile::from_bytes(&psd).unwrap();
+    assert_eq!(file.header.color_mode, craft_psd::ColorMode::Multichannel);
+    assert!(file.layer_info.as_ref().is_none_or(|l| l.layers.is_empty()), "no layers");
+    let back = import("photo.psd", &psd).unwrap().document;
+    let tags = dump(back.metadata.exif.as_deref().expect("the camera EXIF"));
+    assert!(tags.contains(&(40962, 9)) && tags.contains(&(40963, 6)), "{tags:?}");
+}
+
+/// The layered TIFF carries the EXIF as Photoshop resource 1058, built by the PSD save.
+#[test]
+fn the_layered_tiff_save_writes_the_documents_size() {
+    let opts = ExportOptions { tiff_layers: true, ..ExportOptions::default() };
+    let out = export(&layered_doc(), "photo.tif", &opts).unwrap();
+    let back = import("photo.tif", &out.bytes).unwrap().document;
+    assert!(back.layers.len() >= 2, "the layers were kept");
+    let tags = dump(back.metadata.exif.as_deref().expect("the camera EXIF"));
+    assert!(tags.contains(&(40962, 9)) && tags.contains(&(40963, 6)), "{tags:?}");
 }
 
 /// The tags of IFD0 and the Exif IFD as `(tag, value or offset)`, with `(NEXT, offset)` for a
