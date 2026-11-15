@@ -2761,7 +2761,8 @@ fn layers_to_files_exports_group_children_as_loose_files() {
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": "layers", "naming": "layer"})).unwrap();
     assert_eq!(files(&r), vec![join(&dir, "c.png"), join(&dir, "b.png"), join(&dir, "a.png"), join(&dir, "Background.png")]);
 
-    // A hidden child is skipped with visibleOnly and exported without it.
+    // A hidden child is skipped with visibleOnly and exported without it; it keeps its number,
+    // so the others are numbered as without visibleOnly (#13959).
     s.edit("Hide b", |doc, _| {
         let group = doc.layers.last_mut().ok_or_else(|| EngineError::Other("no group".into()))?;
         let LayerContent::Group(g) = &mut group.content else { return Err(EngineError::Other("not a group".into())) };
@@ -2770,7 +2771,7 @@ fn layers_to_files_exports_group_children_as_loose_files() {
     })
     .unwrap();
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "visible", "groups": "layers"})).unwrap();
-    assert_eq!(files(&r), vec![join(&dir, "visible_0000_c.png"), join(&dir, "visible_0001_a.png"), join(&dir, "visible_0002_Background.png")]);
+    assert_eq!(files(&r), vec![join(&dir, "visible_0000_c.png"), join(&dir, "visible_0002_a.png"), join(&dir, "visible_0003_Background.png")]);
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "all", "groups": "layers", "visibleOnly": false})).unwrap();
     assert_eq!(
         files(&r),
