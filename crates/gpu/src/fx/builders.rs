@@ -19,7 +19,15 @@ impl B {
         let angle = if s.use_global_light { light.angle } else { s.angle };
         let (dx, dy) = offset(angle, s.distance);
         let src = self.shift(In::Shape, dx, dy, if inner { 1.0 } else { 0.0 }, inner);
-        let m = self.spread_blur(src, (s.size, s.spread), inner, dx, dy);
+        // #14933: a Size 1 inner shadow with Choke 0. `blur_kernel(1.0)` is the identity, and the
+        // `× shape` step below would then remove the whole shadow, exactly as on the CPU. Both
+        // compositors expand the inverted shape by the ¼–½–¼ taps instead
+        // (`photocraft_compose::effects::size_one_kernel`, the kernel `shadow_map` applies).
+        let m = if inner && s.size == 1.0 && s.spread == 0.0 {
+            self.conv(src, fx::size_one_kernel())
+        } else {
+            self.spread_blur(src, (s.size, s.spread), inner, dx, dy)
+        };
         self.finish(m, None, false, &s.contour, inner, 0);
         1
     }
