@@ -105,3 +105,20 @@ fn an_existing_file_is_asked_about_and_no_writes_nothing() {
     let _ = app.answer_replace(false);
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me");
 }
+
+/// CodeRabbit on #15067: the save dialog answers on a later frame. A document activated meanwhile does
+/// not take the export: the file holds the paths of the document whose OK was pressed.
+#[test]
+fn the_file_is_the_document_that_asked_even_if_another_is_active_by_then() {
+    let dir = scratch("other-doc");
+    let (mut app, open) = app("first", None);
+    let first = app.session.active().unwrap().doc.id;
+    ok(&mut app);
+    app.run("file.new", json!({"width": 300, "height": 200, "name": "second"})).unwrap();
+    app.run("path.set", json!({"name": "Rect A", "path": {"subpaths": [{"closed": true, "knots": [[200.0, 10.0], [260.0, 10.0], [260.0, 40.0]]}]}})).unwrap();
+    assert_ne!(app.session.active().unwrap().doc.id, first, "another document is active while the picker is open");
+    answer(&mut app, &open, Some(FileDialogAnswer::SaveTo(dir.join("out.ai").to_string_lossy().into_owned())));
+    let text = std::fs::read_to_string(dir.join("out.ai")).expect("written");
+    assert!(text.contains("10.0000 190.0000 m") && !text.contains("200.0000 190.0000 m"), "the first document's paths: {text}");
+    assert_eq!(app.session.active().unwrap().doc.id, first, "and it is the active one again");
+}

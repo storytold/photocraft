@@ -274,7 +274,11 @@ const PATHS_EXPORT: &str = "__pathsExport";
 fn paths_export_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let paths = s(f, "paths", "all");
     let suggested = format!("{}.ai", doc_stem(app));
+    // The file dialog answers on a later frame, when another document may be active: the export is
+    // of the document that asked, as the other deferred exports are.
+    let doc = app.session.active().map(|d| d.doc.id).ok_or("no document")?;
     app.pick_export(&suggested, move |app, path| {
+        app.refocus(doc)?;
         if cfg!(target_arch = "wasm32") {
             let r = app.run("file.export.pathsToIllustrator", json!({"paths": paths}))?;
             let text = r["ai"].as_str().unwrap_or_default().to_string();
