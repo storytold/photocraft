@@ -41,13 +41,11 @@ fn session() -> Session {
 }
 
 fn quick_export(s: &mut Session, ext: &str) -> Vec<u8> {
-    let dir = std::env::temp_dir().join(format!("pc-quick-meta-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("out.{ext}"));
+    // Its own folder per call, removed with the guard, so tests running together never meet.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(format!("out.{ext}"));
     s.execute("file.export.quickExport", json!({"path": path.to_string_lossy()})).unwrap();
-    let bytes = std::fs::read(&path).unwrap();
-    std::fs::remove_file(&path).unwrap();
-    bytes
+    std::fs::read(&path).unwrap()
 }
 
 fn contains(bytes: &[u8], s: &str) -> bool {

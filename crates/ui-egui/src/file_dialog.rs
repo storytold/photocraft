@@ -164,7 +164,8 @@ impl PhotocraftApp {
     pub(crate) fn pick_export_as(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
         let document = self.session.prefs().export.export_as_location == photocraft_engine::prefs::ExportAsLocation::Document;
         let dir = document.then(|| self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| Path::new(p).parent()).map(Path::to_path_buf)).flatten();
-        match dir.filter(|d| !d.as_os_str().is_empty() && Path::new(suggested).parent().is_some_and(|p| p.as_os_str().is_empty())) {
+        // A folder that is gone is not a start: the save dialog would open in a missing folder.
+        match dir.filter(|d| !d.as_os_str().is_empty() && folder_exists(d) && Path::new(suggested).parent().is_some_and(|p| p.as_os_str().is_empty())) {
             Some(dir) => self.pick_save_in(&dir.join(suggested).to_string_lossy(), true, then),
             None => self.pick_export(suggested, then),
         }

@@ -89,7 +89,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export Preferences…",
             &["File", "Export"],
             None,
-            r##"{"quickExportFormat":"png|jpg|gif|webp|exr"?,"quickExportLocation":"ask|sameFolder"?,"jpegQuality":1..100?,"webpLossless":bool?,"webpQuality":1..100?,"metadata":"none|copyright|all"?,"convertToSrgb":bool?,"pngSmallerFile":bool? (PNG: a palette PNG, "Quick Export as PNG-8")} → {values}"##,
+            r##"{"quickExportFormat":"png|jpg|gif|webp|exr"?,"quickExportLocation":"ask|sameFolder"?,"exportAsLocation":"document|last"="last" (where Export As's save dialog starts: the document's folder, or the last export folder),"jpegQuality":1..100?,"webpLossless":bool?,"webpQuality":1..100?,"metadata":"none|copyright|all"?,"convertToSrgb":bool?,"pngSmallerFile":bool? (PNG: a palette PNG, "Quick Export as PNG-8")} → {values}"##,
             |_| Ok(()),
             export_preferences
         ),

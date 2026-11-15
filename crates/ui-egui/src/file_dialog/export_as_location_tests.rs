@@ -13,11 +13,9 @@ use std::{cell::RefCell, rc::Rc};
 
 type Asked = Rc<RefCell<Vec<FileDialogRequest>>>;
 
-fn scratch(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pc-export-as-location-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+/// A scratch folder that is removed, on success and on failure, when the guard drops.
+fn scratch() -> tempfile::TempDir {
+    tempfile::tempdir().unwrap()
 }
 
 /// A document saved at `doc` (or unsaved), with `last` as the last export folder.
@@ -57,24 +55,24 @@ fn the_setting_defaults_to_the_last_location_and_round_trips() {
 
 #[test]
 fn the_document_location_starts_in_the_documents_folder_whatever_was_exported_last() {
-    let (docs, last) = (scratch("docs"), scratch("last"));
-    let (mut app, asked) = app_with(Some(&docs.join("photo.psd")), &last, "document");
-    assert_eq!(export_as_start(&mut app, &asked), docs);
-    let (mut app, asked) = app_with(Some(&docs.join("photo.psd")), &last, "last");
-    assert_eq!(export_as_start(&mut app, &asked), last, "the last location: as today");
+    let (docs, last) = (scratch(), scratch());
+    let (mut app, asked) = app_with(Some(&docs.path().join("photo.psd")), last.path(), "document");
+    assert_eq!(export_as_start(&mut app, &asked), docs.path());
+    let (mut app, asked) = app_with(Some(&docs.path().join("photo.psd")), last.path(), "last");
+    assert_eq!(export_as_start(&mut app, &asked), last.path(), "the last location: as today");
 }
 
 #[test]
 fn an_unsaved_document_and_other_dialogs_keep_todays_start() {
-    let (docs, last) = (scratch("unsaved-docs"), scratch("unsaved-last"));
-    let (mut app, asked) = app_with(None, &last, "document");
-    assert_eq!(export_as_start(&mut app, &asked), last, "unsaved: today's folder");
+    let (docs, last) = (scratch(), scratch());
+    let (mut app, asked) = app_with(None, last.path(), "document");
+    assert_eq!(export_as_start(&mut app, &asked), last.path(), "unsaved: today's folder");
     // Quick Export's save dialog is not Export As: it starts where it always did.
-    let (mut app, asked) = app_with(Some(&docs.join("photo.psd")), &last, "document");
+    let (mut app, asked) = app_with(Some(&docs.path().join("photo.psd")), last.path(), "document");
     crate::export_dialog::quick_export_png(&mut app).unwrap();
     app.poll_file_dialog(&egui::Context::default(), None);
     match asked.borrow().last().expect("a save dialog") {
-        FileDialogRequest::Save { suggested } => assert_eq!(Path::new(suggested).parent().unwrap(), last.as_path()),
+        FileDialogRequest::Save { suggested } => assert_eq!(Path::new(suggested).parent().unwrap(), last.path()),
         other => panic!("{other:?}"),
     }
 }
@@ -95,4 +93,19 @@ fn the_export_page_shows_the_two_radio_buttons() {
     h.get_by_role_and_label(Role::RadioButton, document).click();
     h.run_steps(4);
     assert!(on(&h, document) && !on(&h, last));
+}
+
+/// CodeRabbit on #15086: a document folder that was deleted or moved is not where the save dialog
+/// starts: Export As falls back to the last export folder. (With no last folder the shared start every
+/// export flow has, beside the document, is unchanged: #10192 pins it.)
+#[test]
+fn a_document_folder_that_is_gone_is_not_the_start() {
+    let last = scratch();
+    let gone = {
+        let dir = scratch();
+        dir.path().to_path_buf()
+    };
+    assert!(!gone.exists(), "the folder is gone");
+    let (mut app, asked) = app_with(Some(&gone.join("photo.psd")), last.path(), "document");
+    assert_eq!(export_as_start(&mut app, &asked), last.path(), "the last export folder instead");
 }
