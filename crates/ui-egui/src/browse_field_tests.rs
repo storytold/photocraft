@@ -168,3 +168,41 @@ fn browsing_for_the_pdf_and_cancelling_remembers_no_folder() {
     assert!(h.state().ui.dialogs.is_empty(), "the export was cancelled");
     assert_eq!((h.state().session.prefs().export.last_folder.clone(), h.state().save_dirs.clone()), before);
 }
+
+/// The `.pdf` added to a name typed without an extension can name a file the Save dialog didn't
+/// ask about: the app asks before the field takes it. Cancel keeps the field as it was; Replace
+/// fills it.
+#[test]
+fn browsing_for_the_pdf_asks_before_taking_a_file_its_added_extension_names() {
+    let answered = || Some(FileDialogAnswer::SaveTo("/tmp/exports/boards".into()));
+    let (mut h, _) = harness(vec![answered(), answered()]);
+    h.state_mut().services.file_stamp = Some(Box::new(|path: &str| (path == "/tmp/exports/boards.pdf").then_some(crate::FileStamp { len: 1, modified: None })));
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    h.state_mut().run("layer.new.artboard", json!({"rect": [0, 0, 64, 64]})).unwrap();
+    h.state_mut().sync_views();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.export.artboardsToPdf", json!({})).unwrap();
+    h.run_steps(4);
+    let pdf_path = |h: &Harness<'_, PhotocraftApp>| {
+        let d = h.state().ui.dialogs.iter().find(|d| d.fields.get("__command").and_then(Value::as_str) == Some("file.export.artboardsToPdf"));
+        d.and_then(|d| d.fields.get("path").cloned())
+    };
+    let prompt = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| crate::replace_prompt::owns(&d.fields)).map(|d| d.id);
+    let before = pdf_path(&h);
+
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    let id = prompt(&h).expect("the app asks before the field takes boards.pdf");
+    assert_eq!(pdf_path(&h), before, "nothing is filled in before the answer");
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(4);
+    assert!(prompt(&h).is_none() && !h.state().file_dialog_open());
+    assert_eq!(pdf_path(&h), before, "Cancel keeps the field");
+
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    let id = prompt(&h).expect("asked again");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(4);
+    assert_eq!(pdf_path(&h), Some(json!("/tmp/exports/boards.pdf")), "Replace fills the field");
+}
