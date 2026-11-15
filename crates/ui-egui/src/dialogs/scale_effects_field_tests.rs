@@ -228,12 +228,14 @@ fn a_key_held_past_the_alerts_close_does_not_reach_the_dialog() {
             h.run_steps(2);
         }
         assert!(!h.state().1 && !h.state().2, "{k:?} repeats after the close reach neither OK nor Cancel");
+        assert!(!alert_up(&h), "{k:?}: the dialog stays as it was");
         // Once released, the key is the dialog's again.
         h.event(key(k, false, false, egui::Modifiers::NONE));
         h.run_steps(1);
         h.event(key(k, true, false, egui::Modifiers::NONE));
         h.run_steps(2);
-        assert!(h.state().1 || h.state().2, "a new {k:?} press reaches the dialog");
+        let (enter, esc) = (h.state().1, h.state().2);
+        assert_eq!((enter, esc), (k == egui::Key::Enter, k == egui::Key::Escape), "a new {k:?} press reaches the dialog, and only as {k:?}");
     }
 }
 
@@ -246,4 +248,72 @@ fn shift_enter_with_the_alert_up_closes_the_alert_only() {
     h.run_steps(2);
     assert!(!alert_up(&h), "Shift+Enter closes the alert");
     assert!(!h.state().1, "and does not press the dialog's OK");
+}
+
+#[test]
+fn shift_esc_with_the_alert_up_closes_the_alert_only() {
+    let mut h = harness(scale_fields());
+    type_into(&mut h, "Scale", "1001", egui::Key::Tab);
+    assert!(alert_up(&h));
+    h.event(key(egui::Key::Escape, true, false, egui::Modifiers::SHIFT));
+    h.run_steps(2);
+    assert!(!alert_up(&h), "Shift+Esc closes the alert");
+    assert!(!h.state().2, "and does not cancel the dialog");
+}
+
+#[test]
+fn ctrl_enter_with_the_alert_up_is_left_alone() {
+    // Not pinned by the reference: Ctrl/Cmd+Enter is not the alert's key. As coded, it passes
+    // through to the dialog and the alert stays up. This documents that, it does not endorse it.
+    let mut h = harness(scale_fields());
+    type_into(&mut h, "Scale", "1001", egui::Key::Tab);
+    assert!(alert_up(&h));
+    h.event(key(egui::Key::Enter, true, false, egui::Modifiers::COMMAND));
+    h.run_steps(2);
+    assert!(alert_up(&h), "the alert stays up");
+    assert!(h.state().1, "the dialog sees the Ctrl+Enter");
+}
+
+#[test]
+fn a_held_enter_after_the_alert_closes_does_not_leave_the_focused_field() {
+    let mut h = harness(scale_fields());
+    type_into(&mut h, "Scale", "1001", egui::Key::Tab);
+    h.event(key(egui::Key::Enter, true, false, egui::Modifiers::NONE));
+    h.run_steps(2);
+    assert!(!alert_up(&h));
+    field(&h, "Scale").click();
+    h.run_steps(2);
+    assert!(field(&h, "Scale").is_focused(), "the field has the keyboard");
+    for _ in 0..3 {
+        h.event(key(egui::Key::Enter, true, true, egui::Modifiers::NONE));
+        h.run_steps(2);
+    }
+    assert!(field(&h, "Scale").is_focused(), "the held Enter's repeats do not take the field's focus");
+    assert!(!alert_up(&h) && !h.state().1);
+    assert_eq!(scale(&h), 1000.0);
+}
+
+#[test]
+fn a_release_carrying_ctrl_still_ends_the_hold() {
+    let mut h = harness(scale_fields());
+    type_into(&mut h, "Scale", "1001", egui::Key::Tab);
+    h.event(key(egui::Key::Enter, true, false, egui::Modifiers::NONE));
+    h.run_steps(2);
+    assert!(!alert_up(&h) && !h.state().1);
+    // Ctrl was pressed before the Enter came up: the release carries it.
+    h.event(key(egui::Key::Enter, false, false, egui::Modifiers::COMMAND));
+    h.run_steps(2);
+    h.event(key(egui::Key::Enter, true, true, egui::Modifiers::NONE));
+    h.run_steps(2);
+    assert!(h.state().1, "the key is the dialog's again");
+}
+
+#[test]
+fn a_scale_held_in_range_when_it_is_serialized() {
+    for (stored, want) in [(5000, 1000.0), (0, 1.0)] {
+        let mut fields = scale_fields();
+        fields.insert("scale".into(), json!(stored));
+        let h = harness(fields);
+        assert_eq!(scale(&h), want, "{stored}");
+    }
 }

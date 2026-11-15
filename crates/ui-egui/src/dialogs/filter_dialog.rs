@@ -1151,6 +1151,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if crate::select_mask_view::owns(f) {
         crate::select_mask_view::controls(ui, f);
     }
+    if cmd == SCALE_EFFECTS_FIELD.0 {
+        scale_effects_keys(ui, f);
+    }
     for p in parse_spec(&spec) {
         if cmd == "image.mode.indexedColor" && p.key == "matte" {
             indexed_matte_row(ui, f);
@@ -1242,7 +1245,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 // 32.1199989 and OK sends that to the command (#13067). A value the user typed or
                 // dragged this frame is the widget's f32, so it rounds from that.
                 let w = match (wide_decimals, src) {
-                    _ if scale_effects => json!(if v.is_finite() { v.round() as i64 } else { min as i64 }),
+                    _ if scale_effects => json!(if v.is_finite() { v.max(min).min(max).round() as i64 } else { min as i64 }),
                     (true, Some(rounded)) if !edited => json!(rounded),
                     (true, _) => json!(round64(f64::from(v))),
                     (false, _) => json!((v * scale).round() / scale),
@@ -1849,30 +1852,30 @@ fn scale_effects_field(ui: &mut egui::Ui, name: &str, v: &mut f32, range: std::o
     wrong && !esc
 }
 
-/// Bits of [`scale_effects_alert`]'s held-key memory.
-const HELD_ENTER: u8 = 1;
-const HELD_ESC: u8 = 2;
+/// Enter and Esc as far as they are held down; their repeats are nobody's (not the alert's OK, not
+/// the dialog's) until the key is released, even after the alert has closed.
+#[derive(Clone, Copy, Default)]
+struct Held {
+    enter: bool,
+    esc: bool,
+}
 
-/// The Scale field's alert, titled as the reference titles it, over the dialog: raised when
-/// `raised`, and up until OK, Enter or Esc closes it. The dialog stays open.
-fn scale_effects_alert(ui: &egui::Ui, f: &mut Map<String, Value>, raised: bool) {
+/// Drops the Scale Effects dialog's held-key repeats and the alert's keys from this frame's input. It
+/// must run before anything in the dialog body reads input: the Scale field and the Esc check would
+/// otherwise see a repeat the alert has already claimed. A fresh press while the alert is up is the
+/// alert's and closes it (told to [`scale_effects_alert`] through `fresh`).
+fn scale_effects_keys(ui: &egui::Ui, f: &Map<String, Value>) {
     let ctx = ui.ctx().clone();
-    // Scoped to this dialog: its ui id, not a global one.
     let seen_id = ui.make_persistent_id(SCALE_ALERT);
-    // Enter and Esc held down: the bits of the keys whose repeats are nobody's (not the alert's OK, not
-    // the dialog's) until the key is released, even after the alert has closed.
-    let hold_id = seen_id.with("hold");
-    let mut hold = ctx.data(|d| d.get_temp::<u8>(hold_id)).unwrap_or(0);
-    if raised {
-        f.insert(SCALE_ALERT.into(), json!(true));
-        // The Enter that left the field raises the alert: it must not press the dialog's OK too.
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-            hold |= HELD_ENTER;
-        }
-        ctx.data_mut(|d| d.remove_temp::<bool>(seen_id));
-    }
+    let (hold_id, fresh_id) = (seen_id.with("hold"), seen_id.with("fresh"));
+    let mut held = ctx.data(|d| d.get_temp::<Held>(hold_id)).unwrap_or_default();
+    // A release this frame never showed us (the window lost focus, the dialog was closed) must not
+    // leave the key held for good.
+    held.enter &= ctx.input(|i| i.key_down(egui::Key::Enter));
+    held.esc &= ctx.input(|i| i.key_down(egui::Key::Escape));
     let up = f.get(SCALE_ALERT).and_then(Value::as_bool) == Some(true);
-    if !up && hold == 0 {
+    if !up && !held.enter && !held.esc {
+        ctx.data_mut(|d| d.remove_temp::<Held>(hold_id));
         return;
     }
     // One rule for Enter and Esc, as `consume_key` had it: Shift or Alt do not change them. While the
@@ -1882,35 +1885,65 @@ fn scale_effects_alert(ui: &egui::Ui, f: &mut Map<String, Value>, raised: bool) 
     ctx.input_mut(|i| {
         i.events.retain(|e| {
             let egui::Event::Key { key: key @ (egui::Key::Enter | egui::Key::Escape), pressed, repeat, modifiers, .. } = e else { return true };
+            let is_enter = *key == egui::Key::Enter;
+            let bit = if is_enter { &mut held.enter } else { &mut held.esc };
+            // A release ends the hold whatever modifiers it carries.
+            if !*pressed {
+                *bit = false;
+                return true;
+            }
             if modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
                 return true;
             }
-            let bit = if *key == egui::Key::Enter { HELD_ENTER } else { HELD_ESC };
-            if !*pressed {
-                hold &= !bit;
-                true
-            } else if *repeat {
-                !(up || hold & bit != 0)
+            if *repeat {
+                !(up || *bit)
             } else if up {
                 fresh = true;
-                hold |= bit;
+                *bit = true;
                 false
             } else {
-                hold &= !bit;
+                *bit = false;
                 true
             }
         });
     });
     ctx.data_mut(|d| {
-        if hold == 0 {
-            d.remove_temp::<u8>(hold_id);
+        if held.enter || held.esc {
+            d.insert_temp(hold_id, held);
         } else {
-            d.insert_temp(hold_id, hold);
+            d.remove_temp::<Held>(hold_id);
+        }
+        if fresh {
+            d.insert_temp(fresh_id, true);
         }
     });
-    if !up {
+}
+
+/// The Scale field's alert, titled as the reference titles it, over the dialog: raised when
+/// `raised`, and up until OK, Enter or Esc closes it. The dialog stays open. The keys are handled
+/// before the body by [`scale_effects_keys`].
+fn scale_effects_alert(ui: &egui::Ui, f: &mut Map<String, Value>, raised: bool) {
+    let ctx = ui.ctx().clone();
+    // Scoped to this dialog: its ui id, not a global one.
+    let seen_id = ui.make_persistent_id(SCALE_ALERT);
+    let (hold_id, fresh_id) = (seen_id.with("hold"), seen_id.with("fresh"));
+    if raised {
+        f.insert(SCALE_ALERT.into(), json!(true));
+        // The Enter that left the field raises the alert: it must not press the dialog's OK too, and
+        // its repeats are held back until it is released.
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            ctx.data_mut(|d| {
+                let mut held = d.get_temp::<Held>(hold_id).unwrap_or_default();
+                held.enter = true;
+                d.insert_temp(hold_id, held);
+            });
+        }
+        ctx.data_mut(|d| d.remove_temp::<bool>(seen_id));
+    }
+    if f.get(SCALE_ALERT).and_then(Value::as_bool) != Some(true) {
         return;
     }
+    let fresh = ctx.data_mut(|d| d.remove_temp::<bool>(fresh_id)).unwrap_or(false);
     let seen = ctx.data(|d| d.get_temp::<bool>(seen_id)).unwrap_or(false);
     ctx.data_mut(|d| d.insert_temp(seen_id, true));
     let t = Tokens::get(&ctx);
