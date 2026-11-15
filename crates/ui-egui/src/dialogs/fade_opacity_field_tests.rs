@@ -176,3 +176,20 @@ fn clicking_back_into_the_field_does_not_reread_the_old_text() {
     assert_eq!(opacity(&h, id), json!(60), "gaining the focus changes nothing");
     assert_eq!(alerts(&h), 0);
 }
+
+/// CodeRabbit on #15123: after `0.4` (opacity 4, the number's draft 0.4) the text is replaced by something that is not a
+/// number. The parser keeps the draft 0.4, which must not be read again as an entry (0.4 rounds to 0): opacity stays 4.
+#[test]
+fn replacing_a_fraction_with_text_that_is_not_a_number_keeps_the_value() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "0.4");
+    h.run_steps(2);
+    assert_eq!(opacity(&h, id), json!(4), "0.4 is 4");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Text("not a number".into()));
+    h.run_steps(2);
+    assert_eq!(opacity(&h, id), json!(4), "while typing");
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(4), "once the field is left");
+    assert_eq!(alerts(&h), 0);
+}

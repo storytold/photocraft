@@ -1194,7 +1194,11 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
     if text_changed {
         ui.ctx().data_mut(|d| d.insert_temp(text_id, text.clone()));
     }
-    if (r.changed() || text_changed) && typed.is_finite() {
+    // A text change the number did not follow is an entry only when the text is a number: after `0.4`,
+    // replacing it with `abc` leaves the parser's draft at 0.4, which is not to be read again (0.4 rounds
+    // to 0), so the value stays.
+    let reads_text = text_changed && crate::widgets::typed_text_parses(ui.ctx(), r.id) != Some(false);
+    if (r.changed() || reads_text) && typed.is_finite() {
         // Typed text is read without its dot; a scrub drag, whose fractions come from the drag speed, is
         // only rounded, as every other field's drag is (a drag to 37.5 is 38, not 375).
         let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
