@@ -113,6 +113,7 @@ fn warnings(image: &craft_raw::RawImage) -> Vec<String> {
 
 /// Convert a validated craft-raw image into the app's neutral processing model.
 pub(crate) fn adapt(image: craft_raw::RawImage) -> Sensor {
+    let linearized = image.linearized;
     let gain_maps = gain_maps(&image);
     let polynomials = polynomials(&image);
     let warnings = warnings(&image);
@@ -185,10 +186,11 @@ pub(crate) fn adapt(image: craft_raw::RawImage) -> Sensor {
         warnings,
     };
     crate::cameras::apply(&mut sensor, image.bits);
-    // DNG's declared white can exceed the stored clipping plateau. Other raw
-    // decoders have already chosen their camera-specific or measured levels;
-    // their decoded samples must not be silently rescaled a second time.
-    if sensor.float_data.is_none() && sensor.format == RawFormat::Dng {
+    // DNG's declared white can exceed the real sensor-clipping plateau. Lift
+    // only when a LinearizationTable has not already collapsed distinct stored
+    // samples to one value, which is not evidence that the sensor clipped.
+    // Other raw decoders have already chosen camera-specific or measured levels.
+    if sensor.float_data.is_none() && sensor.format == RawFormat::Dng && !linearized {
         sensor.lift_clipped_samples();
     }
     sensor
@@ -240,6 +242,39 @@ mod tests {
         let dng = adapt(image);
         assert_ne!(dng.data, original, "independent early saturation fixture exercises DNG lifting");
         assert!(dng.data.iter().zip(original).all(|(actual, source)| *actual == source || *actual == 4095));
+    }
+
+    fn dng_with_samples(data: Vec<u16>, linearization: Option<Vec<u16>>) -> craft_raw::RawImage {
+        let mut spec = crate::testgen::DngSpec::cfa(64, 64, data);
+        spec.black = vec![0];
+        spec.white = 4095;
+        spec.linearization = linearization;
+        craft_raw::decode_with(&spec.build(), &Default::default()).unwrap()
+    }
+
+    #[test]
+    fn eager_dng_linearization_is_not_misread_as_a_saturation_plateau() {
+        let mut stored = Vec::with_capacity(64 * 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                stored.push(if y < 48 { 1008 } else { 3008 + ((x + y) % 16) as u16 });
+            }
+        }
+        let mut table: Vec<u16> = (0..=3023).collect();
+        table[3008..].fill(3008);
+        let image = dng_with_samples(stored, Some(table));
+        assert!(image.linearized, "the pinned decoder records eager table application");
+        let expected: Vec<u16> = (0..64 * 64).map(|i| if i / 64 < 48 { 1008 } else { 3008 }).collect();
+        let craft_raw::RawData::U16(decoded) = &image.data else { panic!("integer DNG fixture") };
+        assert_eq!(decoded, &expected, "16 source codes collapse to a non-white linearized plateau");
+        assert_eq!(adapt(image).data, expected, "table-induced plateaus must retain decoded samples");
+
+        let clipped: Vec<u16> = (0..64 * 64).map(|i| if i / 64 < 48 { 1008 } else { 3008 }).collect();
+        let image = dng_with_samples(clipped, None);
+        assert!(!image.linearized, "the real-clipping control has no table");
+        let sensor = adapt(image);
+        assert!(sensor.data[..48 * 64].iter().all(|&sample| sample == 1008));
+        assert!(sensor.data[48 * 64..].iter().all(|&sample| sample == 4095), "unlinearized DNG clipping still lifts to white");
     }
 
     #[test]
