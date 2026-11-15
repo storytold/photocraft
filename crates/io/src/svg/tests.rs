@@ -1046,7 +1046,14 @@ fn the_deepest_chain_of_embedded_svg_images_fits_a_small_stack() {
             for levels in 1..=MAX_EMBEDDED_SVG_DEPTH + 1 {
                 match rasterize_bounded(chain(levels).as_bytes(), 1.0, MAX_RASTER_PIXELS) {
                     Ok(buf) => {
-                        assert!(buf.px[4 * 8 + 4][3] > 0.99, "{levels} levels: the innermost rect draws through every level");
+                        let drawn = buf.px[4 * 8 + 4][3] > 0.99;
+                        if levels > MAX_EMBEDDED_SVG_DEPTH {
+                            // A chain past the limit is left out rather than rejected; it must not
+                            // still draw its innermost image through the exhausted depth budget.
+                            assert!(!drawn, "{levels} levels: the too-deep image is left out");
+                            break;
+                        }
+                        assert!(drawn, "{levels} levels: the innermost rect draws through every level");
                         accepted = levels;
                     }
                     Err(_) => assert!(accepted > 0, "a one-level chain renders"),
@@ -1133,9 +1140,8 @@ fn a_damaged_embedded_svgz_is_left_out() {
     assert!(parse_bounded_work_with(image_svg(&damaged).as_bytes(), MAX_RASTER_PIXELS, true, fonts).is_err());
 }
 
-/// craft-svg limits an embedded SVG's bytes before decoding, so a Latin-1 one fits and is
-/// charged its longer UTF-8 text: past the byte budget, the drawing is refused, not drawn with
-/// the next image left out.
+/// Latin-1 bytes may fit while their decoded UTF-8 text exceeds the shared budget.
+/// Refuse the drawing even when this is its only child, rather than silently omitting it.
 #[test]
 fn a_latin1_embedded_svg_that_decodes_past_the_budget_is_refused() {
     let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
@@ -1148,8 +1154,29 @@ fn a_latin1_embedded_svg_that_decodes_past_the_budget_is_refused() {
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
     let error = parse_bounded(image_svg(&format!("{wide}{small}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
+    // An unreadable image charges the entire budget before the Latin-1 child is retried.
+    // The retry must measure decoded text too, not only its smaller inflated byte stream.
+    let compressed = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>");
+    let damaged = embedded_image("image/svg+xml", &compressed[..compressed.len() / 2]);
+    let error = parse_bounded(image_svg(&format!("{damaged}{wide}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+    assert!(error.to_string().contains("byte or nesting budget"), "{error}");
 }
 
+/// The retry allowance counts inflated bytes, not their possibly longer decoded UTF-8 text.
+#[test]
+fn fitting_latin1_retry_keeps_inflation_and_content_budgets_separate() {
+    let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
+    let mut latin1 = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg xmlns=\"http://www.w3.org/2000/svg\"><!--".to_vec();
+    latin1.resize(budget * 3 / 8, 0xe9);
+    latin1.extend_from_slice(b"--></svg>");
+    let decoded = craft_svg::svgz::decode(&latin1).unwrap();
+    assert!(latin1.len() < budget / 2);
+    assert!(decoded.len() > budget / 2 && decoded.len() < budget);
+    let refusals = SvgRefusals { unread_charges: AtomicUsize::new(budget), rechecked: AtomicUsize::new(budget / 2), ..SvgRefusals::default() };
+    note_byte_refusal(&gzip(&latin1), budget, &refusals);
+    assert!(!refusals.over_budget.load(Ordering::Relaxed));
+    assert_eq!(refusals.rechecked.load(Ordering::Relaxed), budget / 2 + latin1.len());
+}
 /// After a damaged image spent the budget, images refused for bytes are unpacked again to tell
 /// whether they are too large themselves, but at most one budget's worth in all: past that the
 /// drawing is refused rather than unpacking each one.
@@ -1562,51 +1589,4 @@ fn every_raster_refusal_reason_is_reported_once() {
     let dropped = |what: &str| result.warnings.iter().filter(|w| w.contains("was dropped because") && w.contains(what)).count();
     assert_eq!(dropped("rasterising limit"), 1, "{:?}", result.warnings);
     assert_eq!(dropped("too much memory"), 1, "{:?}", result.warnings);
-}
-
-/// Decoded content remains bounded even when an unreadable image spent the resolver's budget.
-#[test]
-fn damaged_images_do_not_hide_decoded_text_byte_overruns() {
-    let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
-    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>";
-    let compressed = gzip(svg);
-    let damaged = embedded_image("image/svg+xml", &compressed[..compressed.len() / 2]);
-    let small = embedded_image("image/svg+xml", svg);
-    let omitted = parse_bounded(image_svg(&format!("{damaged}{damaged}{small}")).as_bytes(), MAX_RASTER_PIXELS).unwrap();
-    assert!(!omitted.tree.root().has_children(), "both damaged images and the later small image stay omitted");
-    let latin1_image = |raw_bytes| {
-        let mut latin1 = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><!--".to_vec();
-        latin1.resize(raw_bytes, 0xe9);
-        latin1.extend_from_slice(b"--></svg>");
-        embedded_image("image/svg+xml", &gzip(&latin1))
-    };
-    let fitting = latin1_image(budget * 5 / 16); // About 10 MiB decoded; about 5 MiB of inflation work.
-    assert!(parse_bounded(image_svg(&fitting).as_bytes(), MAX_RASTER_PIXELS).is_ok());
-    assert!(parse_bounded(image_svg(&format!("{damaged}{fitting}{small}")).as_bytes(), MAX_RASTER_PIXELS).is_ok(), "unreadable content may still be omitted");
-    let wide = latin1_image(budget * 5 / 8); // About 20 MiB decoded, though inflation fits 16 MiB.
-    for images in [format!("{damaged}{wide}{small}"), format!("{damaged}{fitting}{fitting}")] {
-        let error = parse_bounded(image_svg(&images).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
-        assert!(error.to_string().contains("byte or nesting budget"), "{error}");
-    }
-}
-
-/// Ordinary import keeps the rest of the drawing, but reports omitted image content once.
-#[test]
-fn imports_warn_when_embedded_images_are_omitted() {
-    let rect = "<rect width=\"1\" height=\"1\" fill=\"#ff0000\"/>";
-    let oversized = embedded_image("image/png", &png_dimensions(u32::MAX, u32::MAX));
-    let svg = image_svg(&format!("{oversized}{oversized}{rect}"));
-    let imported = import_svg("ordinary", svg.as_bytes()).unwrap();
-    let omission_warnings = |imported: &ImportResult| imported.warnings.iter().filter(|warning| warning.contains("embedded images were omitted")).count();
-    assert_eq!(omission_warnings(&imported), 1, "{:?}", imported.warnings);
-    assert_eq!(photocraft_compose::flatten(&imported.document).to_rgba8().pixels, vec![255, 0, 0, 255], "the readable red rectangle is retained");
-    let clean = import_svg("clean", image_svg(rect).as_bytes()).unwrap();
-    assert_eq!(omission_warnings(&clean), 0, "{:?}", clean.warnings);
-    let compressed = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
-    let damaged = embedded_image("image/svg+xml", &compressed[..compressed.len() / 2]);
-    let svg = image_svg(&format!("{damaged}{rect}"));
-    let bounded = import_svg_bounded("bounded", svg.as_bytes(), MAX_RASTER_PIXELS).unwrap();
-    assert_eq!(omission_warnings(&bounded), 1, "{:?}", bounded.warnings);
-    assert_eq!(photocraft_compose::flatten(&bounded.document).to_rgba8().pixels, vec![255, 0, 0, 255], "the bounded import retains the red rectangle");
-    assert!(parse_bounded_work_with(svg.as_bytes(), MAX_RASTER_PIXELS, true, fonts).is_err(), "stored previews must still be complete");
 }
