@@ -181,7 +181,11 @@ fn scale_effects_playback_matches_native_settings_and_undo_at_each_depth() {
                 assert_eq!(result["ran"], 1);
                 assert!(result.get("failed").is_none(), "{depth}/{percent}: {result}");
                 let after = recorded.active().unwrap().doc.clone();
-                // Grouped playback omits the unchanged 100% scale; per-step mode keeps native rows.
+                // Scale 100% adds no row in either mode (#14991); otherwise grouped playback adds one
+                // row and per-step mode keeps the native rows.
+                if percent == 100.0 {
+                    assert_eq!(edits, 0, "{depth}: a native 100% scale adds no history state");
+                }
                 let playback_edits = if single_state { usize::from(percent != 100.0) } else { edits };
                 assert_eq!(recorded.active().unwrap().history.past_len(), past + playback_edits, "singleState={single_state}, depth={depth}, scale={percent}");
                 equivalent(&recorded, &native);
