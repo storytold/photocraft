@@ -414,7 +414,7 @@ fn edit_transform(f: &Frame, mode: EditMode, start: [f64; 2], p: [f64; 2], mods:
 fn update_preview(app: &mut PhotocraftApp) {
     // A frame's image being dragged shows where it moves, as the Move tool's drag does (#13878).
     if let Some(FrameDrag::Content { layer, doc, revision, start, cur, .. }) = app.ui.frame_tool.drag.as_ref() {
-        let (layer, revision, (dx, dy)) = (*layer, *revision, content_delta(*start, *cur));
+        let (layer, revision, (dx, dy)) = (*layer, *revision, content_delta(*start, *cur, f64::from(app.point_zoom())));
         let shown = app
             .session
             .active()
@@ -715,7 +715,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                     }
                 }
                 FrameDrag::Content { frame, layer, start, .. } => {
-                    let (dx, dy) = content_delta(start, [x, y]);
+                    let (dx, dy) = content_delta(start, [x, y], f64::from(app.point_zoom()));
                     if (dx, dy) != (0, 0) {
                         select(app, frame, Target::Content);
                         let r = app.run("layer.translate", json!({"layer": layer.0, "dx": dx, "dy": dy}));
@@ -730,8 +730,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
 
 #[cfg(test)]
 mod content_drag_tests;
-/// The whole-pixel move of a frame's image dragged from `start` to `at` (#13878).
-fn content_delta(start: [f64; 2], at: [f64; 2]) -> (i32, i32) {
+/// The whole-pixel move of a frame's image dragged from `start` to `at` (#13878). A press and release
+/// within [`CLICK_PX`] screen pixels is a click, which moves nothing (the frame keeps both selected).
+fn content_delta(start: [f64; 2], at: [f64; 2], zoom: f64) -> (i32, i32) {
+    if (at[0] - start[0]).hypot(at[1] - start[1]) * zoom < CLICK_PX {
+        return (0, 0);
+    }
     let d = |a: f64, b: f64| (b - a).round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
     (d(start[0], at[0]), d(start[1], at[1]))
 }
