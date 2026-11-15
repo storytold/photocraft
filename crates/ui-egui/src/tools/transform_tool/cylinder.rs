@@ -10,9 +10,9 @@
 //! as compared on #9798. The wrapped picture is outlined and cut into a 3 × 2 grid: two
 //! horizontal curves and the vertical centre line, which the bend and wrap handles work from.
 //! Squares at the top-right and the bottom-left corner each move their silhouette and edge
-//! (the opposite corner stays put). The handle in the middle of the upper arc sets the bend of
-//! both arcs (and so its own height); the one in the middle of the lower arc sets the lower
-//! edge's height. The handle at the centre of the grid slides to the right, stretching the
+//! (the opposite corner stays put), and both arcs keep their depth in pixels (#12513). The handle
+//! in the middle of the upper arc sets the bend of both arcs (and so its own height); the one in
+//! the middle of the lower arc sets the lower arc's depth alone (#12513). The handle at the centre of the grid slides to the right, stretching the
 //! middle of the picture and squeezing its sides further round the back (the wrap). A drag
 //! anywhere else on the cylinder moves the whole of it. The options bar keeps Bend, H and V
 //! greyed, as for a custom warp, and a cylinder has no splits and no grid menu.
@@ -28,7 +28,8 @@ pub(super) enum CylinderHandle {
     Corner(usize),
     /// The middle of the upper arc: the bend of both arcs follows it up and down.
     Bend,
-    /// The middle of the lower arc: the lower edge follows it up and down (the height).
+    /// The middle of the lower arc: the lower arc's depth follows it up and down; the lower edge
+    /// and corners stay put (#12513).
     Bottom,
     /// The centre of the grid: dragged to the right, it stretches the middle of the picture and
     /// squeezes its sides round the back.
@@ -41,8 +42,9 @@ pub(super) enum CylinderHandle {
 /// a quarter of the width, as the reference starts.
 const DEFAULT_DEPTH: f64 = 0.5;
 
-/// How far the wrap handle starts along its travel from the centre: about 15 %, as the reference.
-const DEFAULT_WRAP_POS: f64 = 0.15;
+/// How far the wrap handle starts along its travel from the centre: 10 %, so a fresh cylinder
+/// stores wrap 0.9, as measured (#12513: on a 400 px box the handle sits 20 px right of centre).
+const DEFAULT_WRAP_POS: f64 = 0.1;
 
 /// The silhouettes never cross, nor do the edges: the moved one stops this far (document px)
 /// short of the other.
@@ -113,8 +115,9 @@ pub(super) fn cylinder_hit(w: &Warp, p: [f64; 2], tol: f64) -> Option<CylinderHa
 }
 
 /// The values after `handle` is dragged by `d` from the press, where they were `v0`. A corner
-/// takes its silhouette and its edge along (the opposite corner stays put); the bend handle sets
-/// both arcs' depth from where it is dragged to; the bottom handle moves the lower edge; the wrap
+/// takes its silhouette and its edge along (the opposite corner stays put) and keeps both arcs'
+/// depth in pixels; the bend handle sets both arcs' depth from where it is dragged to; the bottom
+/// handle sets the lower arc's depth; the wrap
 /// handle follows the pointer along its travel; the surface moves the whole cylinder. The
 /// silhouettes and the edges keep their order, and the depth stays within the half axis.
 pub(super) fn cylinder_dragged(v0: [f64; 7], handle: CylinderHandle, d: [f64; 2]) -> [f64; 7] {
@@ -141,7 +144,9 @@ pub(super) fn cylinder_dragged(v0: [f64; 7], handle: CylinderHandle, d: [f64; 2]
             v[4] = depth_dragged(v0[4], step);
             v[5] = depth_dragged(v0[5], step);
         }
-        CylinderHandle::Bottom => v[1] += d[1],
+        // Only the lower arc's depth, by the drag over the half axis (#12513: +40 px on a 400 px
+        // cylinder takes 0.5 to about 0.7); the lower edge and its corners stay put.
+        CylinderHandle::Bottom => v[5] = depth_dragged(v0[5], d[1] / a),
         CylinderHandle::Wrap => v[6] = wrap_of_pos(pos_of_wrap(v0[6]) + d[0] / a),
         CylinderHandle::Surface => {
             v[0] += d[0];
@@ -167,6 +172,17 @@ pub(super) fn cylinder_dragged(v0: [f64; 7], handle: CylinderHandle, d: [f64; 2]
             v[3] = v[1] - MIN_SIDE;
         } else {
             v[1] = v[3] + MIN_SIDE;
+        }
+    }
+    // A corner keeps both arcs' depth in document pixels (#12513): in half-axis units each depth
+    // grows as the half axis shrinks (200 → 189.75 px takes 0.5 to 0.527).
+    if matches!(handle, CylinderHandle::Corner(_)) {
+        let a1 = ((v[2] - v[0]) / 2.0).max(MIN_SIDE / 2.0);
+        let k = a / a1;
+        for i in [4, 5] {
+            // Within the half axis, or its own reach when a file put it past that.
+            let limit = DEPTH_LIMIT.max(v0[i].abs());
+            v[i] = (v0[i] * k).clamp(-limit, limit);
         }
     }
     v
@@ -218,8 +234,7 @@ pub(super) fn cylinder_cursor(w: &Warp, p: [f64; 2], tol: f64, xf: &ViewXform) -
 }
 
 /// The cylinder's outline, its 3 × 2 grid (two horizontal curves and the centre line) and its
-/// handles: squares at the two corners, circles in the middle of each arc, a diamond for the
-/// wrap; the one being dragged is filled with the lines' colour. `curve(u, v)` traces the mesh
+/// handles, all small squares (#12513); the one being dragged is filled with the lines' colour. `curve(u, v)` traces the mesh
 /// along a fixed `u` or `v`.
 pub(super) fn draw_cylinder(
     painter: &egui::Painter,
@@ -243,20 +258,13 @@ pub(super) fn draw_cylinder(
     for (q, h) in cylinder_handles(&v) {
         let p = scr(q);
         let fill = if dragged == Some(h) { line.color } else { Color32::WHITE };
-        match h {
-            CylinderHandle::Bend | CylinderHandle::Bottom => {
-                painter.circle_filled(p, 3.5, fill);
-                painter.circle_stroke(p, 3.5, line);
-            }
-            CylinderHandle::Wrap => {
-                let pts = vec![p - vec2(0.0, 5.0), p + vec2(5.0, 0.0), p + vec2(0.0, 5.0), p - vec2(5.0, 0.0)];
-                painter.add(egui::Shape::convex_polygon(pts, fill, line));
-            }
-            _ => {
-                let r = egui::Rect::from_center_size(p, vec2(7.0, 7.0));
-                painter.rect_filled(r, 0.0, fill);
-                painter.rect_stroke(r, 0.0, line, egui::StrokeKind::Inside);
-            }
-        }
+        // All five are small squares, as the reference draws them (#12513).
+        let r = egui::Rect::from_center_size(p, vec2(7.0, 7.0));
+        painter.rect_filled(r, 0.0, fill);
+        painter.rect_stroke(r, 0.0, line, egui::StrokeKind::Inside);
     }
 }
+
+#[cfg(test)]
+#[path = "cylinder_handles_tests.rs"]
+mod cylinder_handles_tests;

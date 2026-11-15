@@ -3820,7 +3820,7 @@ fn the_warp_menu_lists_cylinder_after_the_presets_except_on_type() {
 
 /// The cylinder the menu starts with, as the reference starts it: its four corners on the box,
 /// both arcs half the half axis deep (a quarter of the width), so the lower one hangs below the
-/// box, and the wrap handle 15 % along its travel.
+/// box, and the wrap handle 10 % along its travel (wrap 0.9, #12513).
 #[test]
 fn the_warp_menus_cylinder_starts_on_the_box_corners() {
     let b = [8.0, 8.0, 32.0, 32.0];
@@ -3828,9 +3828,9 @@ fn the_warp_menus_cylinder_starts_on_the_box_corners() {
     assert_eq!(w.style, WarpStyle::Cylinder);
     let v = cylinder_values(&w).unwrap();
     assert_eq!(&v[..6], &[8.0, 32.0, 32.0, 8.0, 0.5, 0.5]);
-    assert!((v[6] - 0.85).abs() < 1e-9, "{v:?}");
+    assert!((v[6] - 0.9).abs() < 1e-9, "{v:?}");
     let wrap = cylinder_handles(&v)[4].0;
-    assert!((wrap[0] - (20.0 + 0.15 * 12.0)).abs() < 1e-9, "the wrap handle starts 15 % of the half axis right of the centre: {wrap:?}");
+    assert!((wrap[0] - (20.0 + 0.1 * 12.0)).abs() < 1e-9, "the wrap handle starts 10 % of the half axis right of the centre: {wrap:?}");
     let cb = w.mesh.as_ref().unwrap().control_bounds();
     assert!(cb[0] >= 8.0 - 1e-9 && cb[2] <= 32.0 + 1e-9 && cb[1] >= 8.0 - 1e-9, "{cb:?}");
     assert!(cb[3] > 32.0 + 5.0, "the lower arc's front hangs about 6 px below the box: {cb:?}");
@@ -3873,9 +3873,15 @@ fn cylinder_handles_are_two_corners_the_arcs_and_the_wrap() {
 #[test]
 fn cylinder_drags_set_its_values_and_keep_them_sound() {
     let v = [10.0, 40.0, 60.0, 10.0, 0.3, 0.3, 0.5];
-    // A corner takes its silhouette and its edge along; the opposite corner stays put.
-    assert_eq!(cylinder_dragged(v, CylinderHandle::Corner(1), [2.0, 3.0]), [10.0, 40.0, 62.0, 13.0, 0.3, 0.3, 0.5]);
-    assert_eq!(cylinder_dragged(v, CylinderHandle::Corner(3), [-2.0, 3.0]), [8.0, 43.0, 60.0, 10.0, 0.3, 0.3, 0.5]);
+    // A corner takes its silhouette and its edge along; the opposite corner stays put, and the arcs
+    // keep their depth in pixels (#12513): a half axis of 25 → 26 px takes 0.3 to 0.3 × 25 / 26.
+    let k = 0.3 * 25.0 / 26.0;
+    let d = cylinder_dragged(v, CylinderHandle::Corner(1), [2.0, 3.0]);
+    assert_eq!(d[..4], [10.0, 40.0, 62.0, 13.0]);
+    assert!((d[4] - k).abs() < 1e-9 && (d[5] - k).abs() < 1e-9 && d[6] == 0.5, "{d:?}");
+    let d = cylinder_dragged(v, CylinderHandle::Corner(3), [-2.0, 3.0]);
+    assert_eq!(d[..4], [8.0, 43.0, 60.0, 10.0]);
+    assert!((d[4] - k).abs() < 1e-9 && (d[5] - k).abs() < 1e-9, "{d:?}");
     // The bend handle follows the pointer and bends both arcs: 5 px down on a 25 px half axis
     // is 0.2 deeper.
     let d = cylinder_dragged(v, CylinderHandle::Bend, [0.0, 5.0]);
@@ -3891,8 +3897,10 @@ fn cylinder_drags_set_its_values_and_keep_them_sound() {
     // A move keeps the shape, however narrow the cylinder.
     let narrow = [10.0, 40.0, 10.5, 10.0, 0.3, 0.3, 0.5];
     assert_eq!(cylinder_dragged(narrow, CylinderHandle::Surface, [5.0, 0.0]), [15.0, 40.0, 15.5, 10.0, 0.3, 0.3, 0.5]);
-    // The bottom handle moves the lower edge; the arc keeps its depth.
-    assert_eq!(cylinder_dragged(v, CylinderHandle::Bottom, [7.0, 6.0]), [10.0, 46.0, 60.0, 10.0, 0.3, 0.3, 0.5]);
+    // The bottom handle sets the lower arc's depth alone (#12513): 6 px down on a 25 px half axis.
+    let d = cylinder_dragged(v, CylinderHandle::Bottom, [7.0, 6.0]);
+    assert_eq!([d[0], d[1], d[2], d[3], d[4], d[6]], [10.0, 40.0, 60.0, 10.0, 0.3, 0.5]);
+    assert!((d[5] - (0.3 + 6.0 / 25.0)).abs() < 1e-9, "{d:?}");
     // The wrap handle follows the pointer along the half axis: right stretches the middle (wrap down).
     let d = cylinder_dragged(v, CylinderHandle::Wrap, [6.25, 0.0]);
     assert!((d[6] - 0.25).abs() < 1e-9, "{d:?}");
@@ -3905,7 +3913,8 @@ fn cylinder_drags_set_its_values_and_keep_them_sound() {
     assert_eq!([d[0], d[2], d[1], d[3]], [59.0, 60.0, 11.0, 10.0]);
     let d = cylinder_dragged(v, CylinderHandle::Corner(1), [-80.0, 60.0]);
     assert_eq!([d[0], d[2], d[1], d[3]], [10.0, 11.0, 40.0, 39.0]);
-    assert_eq!(cylinder_dragged(v, CylinderHandle::Bottom, [0.0, -80.0])[1], 11.0);
+    let d = cylinder_dragged(v, CylinderHandle::Bottom, [0.0, -80.0]);
+    assert_eq!((d[1], d[5]), (40.0, -1.0), "the lower edge stays; the depth stops at the half axis");
     // Whatever the drag, the result is a cylinder the geometry accepts.
     for h in [CylinderHandle::Corner(1), CylinderHandle::Corner(3), CylinderHandle::Bend, CylinderHandle::Bottom, CylinderHandle::Wrap, CylinderHandle::Surface]
     {
@@ -3947,7 +3956,8 @@ fn warp_mode_drags_a_cylinders_handles_and_commits_it_as_a_cylinder() {
     warp_pointer(&mut app, ToolEvent::Down { x: wrap[0], y: wrap[1], pressure: 1.0 }, 2.0, mods);
     assert!(matches!(app.transform_preview.as_ref().unwrap().warp_drag, Some(WarpDrag::Cylinder { handle: CylinderHandle::Wrap, .. })));
     warp_pointer(&mut app, ToolEvent::Up { x: wrap[0] + 3.0, y: wrap[1] }, 2.0, mods);
-    assert!((cylinder_of(&app)[6] - 0.6).abs() < 1e-9, "{:?}", cylinder_of(&app));
+    // From the 0.9 a fresh cylinder starts with (#12513), a quarter of the travel less.
+    assert!((cylinder_of(&app)[6] - 0.65).abs() < 1e-9, "{:?}", cylinder_of(&app));
     assert!((cylinder_handles(&cylinder_of(&app))[4].0[0] - (wrap[0] + 3.0)).abs() < 1e-9, "the wrap handle followed the pointer");
     track_steps(&mut app, &ctx);
     // A drag on the surface moves the whole cylinder.
@@ -3967,9 +3977,9 @@ fn warp_mode_drags_a_cylinders_handles_and_commits_it_as_a_cylinder() {
     let _ = intercept(&mut app, "edit.undo");
     assert_eq!(cylinder_of(&app), before, "undo takes back the move");
     let _ = intercept(&mut app, "edit.undo");
-    assert!((cylinder_of(&app)[6] - 0.85).abs() < 1e-9, "undo takes back the wrap: {:?}", cylinder_of(&app));
+    assert!((cylinder_of(&app)[6] - 0.9).abs() < 1e-9, "undo takes back the wrap: {:?}", cylinder_of(&app));
     let _ = intercept(&mut app, "edit.redo");
-    assert!((cylinder_of(&app)[6] - 0.6).abs() < 1e-9, "redo: {:?}", cylinder_of(&app));
+    assert!((cylinder_of(&app)[6] - 0.65).abs() < 1e-9, "redo: {:?}", cylinder_of(&app));
     let v = cylinder_of(&app);
     let steps = app.session.active().unwrap().history.past_len();
     commit(&mut app);
