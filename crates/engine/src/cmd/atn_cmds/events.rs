@@ -856,6 +856,7 @@ pub(super) const EVENTS: &[Event] = &[
             "image.calculations",
             "type.convertToShape",
             "type.createWorkPath",
+            super::steps_frame_section::COMMAND,
             "layer.new.layer",
             "layer.layerStyle.createLayer",
             "layer.new.group",
