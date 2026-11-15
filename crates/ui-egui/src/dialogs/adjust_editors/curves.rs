@@ -1,6 +1,7 @@
+use super::curves_auto::auto_curve;
 use super::{
-    Color32, CurveUi, Edit, EditorCx, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, ToneSpace, Value, adjust_params, auto_levels, curve_edit, json,
-    label, pos2, space_of, tone, vec2, widgets,
+    Color32, CurveUi, Edit, EditorCx, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, ToneSpace, Value, adjust_params, curve_edit, json, label, pos2,
+    space_of, tone, vec2, widgets,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -373,12 +374,12 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let tinted = isolated.is_some_and(|c| c.tint) || (isolated.is_none_or(|c| c.components.is_some()) && ch != 0);
     let key = curve_key(&chan);
     let mut e = curves_mode_row(ui, v, key, cx);
-    // Auto: the shown channel's curve runs from its histogram's black point to its white point,
-    // the same automatic points as Levels' Auto. With the pencil it draws that ramp into the
-    // shown channel's map and stays in pencil mode, so the other channels' drawn maps keep every
-    // level (leaving the pencil would refit them all to points). An empty histogram (a fully
-    // transparent layer) has no such points: Auto changes nothing.
-    let auto_points = auto.then(|| cx.hist.as_ref().filter(|h| h[hist_i].iter().any(|&n| n != 0)).map(|h| auto_levels(&h[hist_i]))).flatten();
+    // Auto: the shown channel's curve becomes the fitted copy of Photoshop's (black stays at (0, 0),
+    // white at about 228 or the image's own, three points lifting the midtones; see curves_auto).
+    // With the pencil it draws that curve into the shown channel's map and stays in pencil mode, so
+    // the other channels' drawn maps keep every level (leaving the pencil would refit them all to
+    // points). An empty histogram (a fully transparent layer) has no such points: Auto changes nothing.
+    let auto_points = auto.then(|| cx.hist.as_ref().filter(|h| h[hist_i].iter().any(|&n| n != 0)).map(|h| auto_curve(&h[hist_i]))).flatten();
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     let mut pts = read_curve(v, key);
     let mut map = read_map(v, key);
@@ -416,15 +417,17 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         changed = interaction.changed;
         e.commit |= interaction.commit;
     }
-    if let Some((lo, hi)) = auto_points {
+    if let Some(curve) = auto_points {
         if pencil {
-            let span = (hi - lo).max(f32::EPSILON);
-            for (x, o) in map.iter_mut().enumerate() {
-                *o = ((x as f32 - lo) / span * 255.0).clamp(0.0, 255.0);
+            // The levels of the same natural spline the point curve would draw.
+            let cp: Vec<photocraft_doc::adjust::CurvePoint> =
+                curve.iter().map(|q| photocraft_doc::adjust::CurvePoint { input: q[0] / 255.0, output: q[1] / 255.0 }).collect();
+            for (o, y) in map.iter_mut().zip(photocraft_compose::adjust::curve_samples::<256>(&cp)) {
+                *o = (y * 255.0).clamp(0.0, 255.0);
             }
             drawn = true;
         } else {
-            pts = vec![[lo, 0.0], [hi, 255.0]];
+            pts = curve;
             changed = true;
         }
         e.commit = true;

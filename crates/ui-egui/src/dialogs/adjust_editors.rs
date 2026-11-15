@@ -25,6 +25,7 @@ use crate::widgets::{self, hue_color};
 
 mod basic;
 mod curves;
+mod curves_auto;
 mod gradient_map;
 mod hue_saturation;
 mod levels;

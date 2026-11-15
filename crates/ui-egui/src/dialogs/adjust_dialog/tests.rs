@@ -418,11 +418,12 @@ fn two_tone() -> PhotocraftApp {
     PhotocraftApp::new(s, crate::Services::default())
 }
 
-/// #9229: Curves has an Auto button beside the channel menu, as Photoshop's does: on a
-/// low-contrast image it stretches the curve from the image's darkest to its lightest level
-/// (the same automatic points as Levels' Auto), as one edit.
+/// #9229, #9237: Curves has an Auto button beside the channel menu, as Photoshop's does. On the
+/// two-tone image (levels 60 and 190, mean 125) it keeps the black point at (0, 0), puts the white end
+/// at 228 (the image does not reach white) and three fitted points between, as one edit; it does not
+/// stretch the image's own range to 0..255 the way Levels' Auto does.
 #[test]
-fn curves_auto_stretches_a_low_contrast_image() {
+fn curves_auto_keeps_black_puts_white_at_228_and_lifts_the_midtones() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), two_tone());
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     open(h.state_mut(), "image.adjustments.curves").unwrap();
@@ -430,13 +431,13 @@ fn curves_auto_stretches_a_low_contrast_image() {
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Auto").click();
     h.run_steps(3);
     let f = &h.state().ui.dialogs[0].fields;
-    assert_eq!(f["points"], json!([[60.0, 0.0], [190.0, 255.0]]), "{f:?}");
+    assert_eq!(f["points"], json!([[0.0, 0.0], [64.0, 57.0], [146.0, 168.0], [187.0, 220.0], [228.0, 255.0]]), "{f:?}");
     assert_ne!(f.get("pencil"), Some(&json!(true)), "a point curve stays a point curve");
 }
 
-/// With the pencil, Auto draws the shown channel's map as the same ramp (60 → 0, 190 → 255) and
-/// stays in pencil mode, so a map drawn on another channel keeps every one of its levels
-/// (CodeRabbit review on curves.rs:381: leaving the pencil refits every channel's map).
+/// With the pencil, Auto draws the shown channel's map as the levels of that same curve and stays in
+/// pencil mode, so a map drawn on another channel keeps every one of its levels (CodeRabbit review
+/// on curves.rs:381: leaving the pencil refits every channel's map).
 #[test]
 fn curves_auto_with_the_pencil_redraws_only_the_shown_channel() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), two_tone());
@@ -454,12 +455,17 @@ fn curves_auto_with_the_pencil_redraws_only_the_shown_channel() {
     let f = &h.state().ui.dialogs[0].fields;
     assert_eq!(f.get("pencil"), Some(&json!(true)), "Auto keeps the pencil: {f:?}");
     assert_eq!(f["red"], json!(red), "the red map is untouched");
-    let ramp: Vec<f64> = (0..256).map(|x| ((f64::from(x) - 60.0) / 130.0 * 255.0).clamp(0.0, 255.0)).collect();
+    // The same five points as the point curve above, through the dialog's own spline.
+    let points = [[0.0f32, 0.0], [64.0, 57.0], [146.0, 168.0], [187.0, 220.0], [228.0, 255.0]];
+    let cp: Vec<photocraft_doc::adjust::CurvePoint> =
+        points.iter().map(|q| photocraft_doc::adjust::CurvePoint { input: q[0] / 255.0, output: q[1] / 255.0 }).collect();
+    let want = photocraft_compose::adjust::curve_samples::<256>(&cp);
     let got: Vec<f64> = f["points"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
     assert_eq!(got.len(), 256);
-    for (x, (g, r)) in got.iter().zip(&ramp).enumerate() {
-        assert!((g - r).abs() < 0.01, "level {x}: {g} vs {r}");
+    for (x, (g, w)) in got.iter().zip(&want).enumerate() {
+        assert!((g - f64::from(*w) * 255.0).abs() < 0.01, "level {x}: {g} vs {}", w * 255.0);
     }
+    assert_eq!((got[0], got[255]), (0.0, 255.0));
 }
 
 /// Clicks `kind`'s Auto on a fully transparent layer, with `key` set to `value` first, and
@@ -514,18 +520,18 @@ fn auto_on_a_flat_image(kind: &str, hex: &str) -> Value {
 }
 
 /// #9237 review: on a flat image (all one level) Curves' Auto gives finite points with distinct
-/// inputs, so the curve never collapses to a vertical line, and the same black and white points
-/// as Levels' Auto, which keeps them at least 2 levels apart.
+/// inputs, so the curve never collapses to a vertical line: black at (0, 0) and the white end at 228,
+/// or at the image's own white (255) when it is white. Levels' Auto keeps its two levels apart.
 #[test]
-fn curves_auto_on_a_flat_image_keeps_a_finite_non_vertical_curve_like_levels() {
-    for (hex, lo, hi) in [("#000000", 0.0, 2.0), ("#808080", 128.0, 130.0), ("#ffffff", 253.0, 255.0)] {
+fn curves_auto_on_a_flat_image_keeps_a_finite_non_vertical_curve() {
+    for (hex, lo, hi, white) in [("#000000", 0.0, 2.0, 228.0), ("#808080", 128.0, 130.0, 228.0), ("#ffffff", 253.0, 255.0, 255.0)] {
         let curves = auto_on_a_flat_image("curves", hex);
         let pts: Vec<[f64; 2]> = serde_json::from_value(curves["points"].clone()).unwrap();
         assert!(pts.iter().flatten().all(|x| x.is_finite()), "{hex}: {pts:?}");
         assert!(pts.windows(2).all(|w| w[1][0] > w[0][0]), "{hex}: the inputs increase, no vertical segment: {pts:?}");
-        assert_eq!(pts, vec![[lo, 0.0], [hi, 255.0]], "{hex}");
+        assert_eq!((pts.first(), pts.last()), (Some(&[0.0, 0.0]), Some(&[white, 255.0])), "{hex}: {pts:?}");
         let levels = auto_on_a_flat_image("levels", hex);
-        assert_eq!((levels["inBlack"].as_f64(), levels["inWhite"].as_f64()), (Some(lo), Some(hi)), "{hex}: Levels' Auto, the same points");
+        assert_eq!((levels["inBlack"].as_f64(), levels["inWhite"].as_f64()), (Some(lo), Some(hi)), "{hex}: Levels' Auto");
     }
 }
 
