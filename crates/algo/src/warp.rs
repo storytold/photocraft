@@ -874,6 +874,19 @@ pub fn warp_mesh_gray(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), 
 /// [`warp_mesh_gray`] with folds stacked as `fold` says: a layer's mask and its selection follow
 /// the layer's pixels, the part on top of a fold included.
 pub fn warp_mesh_gray_with(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), fold: Fold, interp: Interp) -> Surface {
+    gray_mesh(s, f, fold, interp, &Interrupt::NONE)
+}
+
+/// [`warp_mesh_gray_with`], reporting progress per destination tile to `ctl`; `None` once it is
+/// cancelled.
+pub fn warp_mesh_gray_ctl(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), fold: Fold, interp: Interp, ctl: &Interrupt) -> Option<Surface> {
+    let out = gray_mesh(s, f, fold, interp, ctl);
+    (!ctl.cancelled()).then_some(out)
+}
+
+/// The mask warp behind [`warp_mesh_gray_with`] and [`warp_mesh_gray_ctl`]; stops after the mesh,
+/// unflattened, once `ctl` is cancelled.
+fn gray_mesh(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), fold: Fold, interp: Interp, ctl: &Interrupt) -> Surface {
     let default = s.default_pixel().first().copied().unwrap_or(0.0);
     let fmt = s.format();
     let src = s.content_bounds();
@@ -885,7 +898,10 @@ pub fn warp_mesh_gray_with(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sy
     let mut tmp = Surface::new(with_alpha);
     let v = s.read_region(src);
     tmp.write_region(src, &v.iter().flat_map(|g| [*g, 1.0]).collect::<Vec<f32>>());
-    let w = mesh(&tmp, src, f, fold, interp, &Interrupt::NONE);
+    let w = mesh(&tmp, src, f, fold, interp, ctl);
+    if ctl.cancelled() {
+        return out;
+    }
     // Clear the old region and write the warped one separately, as `warp_gray` does: one dense
     // `src ∪ warped` buffer grows with the square of how far a mesh moves the content (#995).
     // `Surface` is tile-sparse, so a distant region costs only its own tiles.
@@ -903,6 +919,18 @@ pub fn warp_mesh_gray_with(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sy
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cancelled `ctl` stops a mask warp: no result, rather than a full warp to throw away.
+    #[test]
+    fn a_cancelled_gray_mesh_warp_returns_nothing() {
+        let mut m = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.0]);
+        m.write_region(Rect::new(0, 0, 8, 8), &[1.0; 64]);
+        let shift = |x: f64, y: f64| (x + 3.0, y);
+        let (yes, no, progress) = (|| true, || false, |_: f32| {});
+        assert!(warp_mesh_gray_ctl(&m, &shift, Fold::Rows, Interp::Bilinear, &Interrupt::new(&yes, &progress)).is_none());
+        let done = warp_mesh_gray_ctl(&m, &shift, Fold::Rows, Interp::Bilinear, &Interrupt::new(&no, &progress)).expect("not cancelled");
+        assert_eq!(done.read_region(done.content_bounds()), warp_mesh_gray(&m, &shift, Interp::Bilinear).read_region(done.content_bounds()));
+    }
 
     /// Edit › Transform › Warp folding the picture over itself (#8927): the layers stack as the
     /// preview draws them, the part dragged furthest on top, and composite, so a transparent part on top
