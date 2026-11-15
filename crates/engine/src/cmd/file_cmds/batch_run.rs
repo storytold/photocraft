@@ -886,7 +886,6 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let previous_namespace = std::mem::replace(&mut s.actions.playback_namespace, actions.playback_namespace);
         let previous_stack = std::mem::replace(&mut s.actions.playback_stack, actions.playback_stack);
         let previous_steps = std::mem::replace(&mut s.actions.playback_steps, actions.playback_steps);
-        let previous_namespace = std::mem::replace(&mut s.actions.playback_namespace, actions.playback_namespace);
         // The nesting depth and shared budget of the levels above travel with the run too.
         let previous_shared = std::mem::replace(&mut s.actions.budget_shared, actions.budget_shared);
         let previous_depth = std::mem::replace(&mut s.actions.batch_depth, actions.batch_depth);

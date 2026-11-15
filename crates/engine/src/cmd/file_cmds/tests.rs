@@ -4641,3 +4641,44 @@ fn public_begin_playback_scopes_registered_actions_but_still_rejects_real_recurs
     assert!(s.actions.playback_stack[0].position.is_none());
     finish_playback(&mut s, recording, &driver, 0);
 }
+
+
+#[test]
+fn embedded_open_document_batch_restores_the_callers_namespace_on_every_exit() {
+    use crate::actions_cmds::{Action, PlaybackTarget};
+    for outcome in ["success", "step_error", "no_document"] {
+        let mut s = Session::new();
+        if outcome != "no_document" {
+            s.execute("file.new", json!({"width":8,"height":8})).unwrap();
+        }
+        let caller = Action::new("Caller", vec![]);
+        s.actions.list.push(caller.clone());
+        s.actions.playback_namespace = 41;
+        s.actions.playback_stack.push(PlaybackTarget::from("Enclosing"));
+        let stack = s.actions.playback_stack.clone();
+        let leaf = if outcome == "step_error" {
+            Action::new("Embedded", vec![("layer.rename".into(), json!({}))])
+        } else {
+            Action::new("Embedded", vec![("layer.new.layer".into(), json!({"name":"embedded leaf"}))])
+        };
+        let result = batch(&mut s, &json!({"source":"open", "steps":[["actions.play", {"action":0}]], "calledActions":[leaf]}));
+        match outcome {
+            "success" => {
+                let result = result.unwrap();
+                assert_eq!(result["errors"], json!([]), "{result}");
+                assert!(doc(&s).layers.iter().any(|layer| layer.name == "embedded leaf"));
+            }
+            "step_error" => {
+                let result = result.unwrap();
+                assert_eq!(result["errors"].as_array().unwrap().len(), 1, "the embedded command must actually fail: {result}");
+            }
+            "no_document" => assert!(matches!(result, Err(EngineError::NoDocument))),
+            _ => unreachable!(),
+        }
+        assert_eq!(s.actions.playback_namespace, 41, "{outcome}: restore the caller, not the embedded namespace");
+        assert_eq!(s.actions.playback_stack, stack);
+        assert_eq!(s.actions.list, [caller]);
+        assert_eq!(s.actions.batch_depth, 0);
+        assert_eq!(s.actions.playing, 0);
+    }
+}

@@ -1244,26 +1244,26 @@ pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize,
 /// playback budget too.
 pub fn begin_playback_from(s: &mut Session, action: &Action, from: usize) -> Result<Option<(usize, usize)>> {
     let target = playback_snapshot_target(s, action);
-    begin_playback_charged(s, action, skipped_steps(action, from), false, target)
+    begin_playback_charged(s, skipped_steps(action, from), false, target)
 }
 
 /// Resume one immutable shell frame without charging its skipped steps a second time.
 /// The shell restores the carried playback counter before resuming; script counters stay live.
 pub fn continue_playback(s: &mut Session, action: &Action) -> Result<Option<(usize, usize)>> {
     let target = playback_snapshot_target(s, action);
-    begin_playback_charged(s, action, 0, true, target)
+    begin_playback_charged(s, 0, true, target)
 }
 
 /// Start a known resolved target without inferring a row from its snapshot.
 pub fn begin_playback_target_from(s: &mut Session, action: &Action, from: usize, target: PlaybackTarget) -> Result<Option<(usize, usize)>> {
-    begin_playback_charged(s, action, skipped_steps(action, from), false, target)
+    begin_playback_charged(s, skipped_steps(action, from), false, target)
 }
 
-pub fn continue_playback_target(s: &mut Session, action: &Action, target: PlaybackTarget) -> Result<Option<(usize, usize)>> {
-    begin_playback_charged(s, action, 0, true, target)
+pub fn continue_playback_target(s: &mut Session, _action: &Action, target: PlaybackTarget) -> Result<Option<(usize, usize)>> {
+    begin_playback_charged(s, 0, true, target)
 }
 
-fn begin_playback_charged(s: &mut Session, action: &Action, skipped: u64, continuing: bool, target: PlaybackTarget) -> Result<Option<(usize, usize)>> {
+fn begin_playback_charged(s: &mut Session, skipped: u64, continuing: bool, target: PlaybackTarget) -> Result<Option<(usize, usize)>> {
     // Draft capture is suspended by its owner or the headless caller before this route.
     if s.actions.editor.as_ref().is_some_and(|draft| draft.recording.is_some()) {
         return Err(bad("actions.play", "stop draft recording before shell playback"));
@@ -1310,7 +1310,7 @@ pub fn begin_playback_at_from(s: &mut Session, row: usize, action: &mut Action, 
         action.action_id = Some(id);
     }
     let target = PlaybackTarget::at(s, row, action);
-    begin_playback_charged(s, action, skipped_steps(action, from), false, target)
+    begin_playback_charged(s, skipped_steps(action, from), false, target)
 }
 
 /// Unwind the playback stack and finish grouping only at the outer boundary, then restore suspended recording.
@@ -1744,11 +1744,6 @@ fn call_keys(id: &str) -> &'static [&'static str] {
     }
 }
 
-/// Named calls and shortcuts resolve to the first matching occurrence.
-fn owns_name(list: &[Action], index: usize) -> bool {
-    list.get(index).is_some_and(|action| list.iter().position(|candidate| candidate.name == action.name) == Some(index))
-}
-
 /// Named callers follow the row they resolved to before the definition is renamed.
 fn rename_call_keys(list: &[Action], index: usize, id: &str, params: &Value) -> &'static [&'static str] {
     match id {
@@ -1789,7 +1784,6 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     let pending = s.actions.recording_cursor().unwrap_or(s.journal.len());
     // A loaded library can hold two actions of one name (in different sets): a call follows the
     // rename only if it resolved to this action before it, so one reaching the other stays put.
-    let follows = owns_name(&s.actions.list, idx);
     let before = s.actions.list.clone();
     let owned_shortcut = shortcut_row(&before, &format!("{PLAY_SHORTCUT_PREFIX}{old}")) == Some(idx);
     let calls = s.actions.list.iter_mut().flat_map(|a| a.steps.iter_mut()).chain(s.journal.iter_mut().skip(pending));
