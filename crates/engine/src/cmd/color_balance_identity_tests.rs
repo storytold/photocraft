@@ -12,6 +12,10 @@ fn session_with_pixels() -> Session {
 #[test]
 fn zero_color_balance_preserves_document_revision_and_redo() {
     let mut s = session_with_pixels();
+    let fade = crate::commands::find("edit.fade").unwrap();
+    assert!((fade.enabled)(&s).is_ok());
+    s.execute(COMMAND, json!({})).unwrap();
+    assert!((fade.enabled)(&s).is_ok());
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("edit.undo", json!({})).unwrap();
     let before = s.active().unwrap();
@@ -19,6 +23,7 @@ fn zero_color_balance_preserves_document_revision_and_redo() {
     let revision = before.revision;
     let history = before.history.past_len();
     assert!(before.history.can_redo());
+    assert!((fade.enabled)(&s).is_err());
 
     for params in [
         json!({}),
@@ -31,6 +36,7 @@ fn zero_color_balance_preserves_document_revision_and_redo() {
         assert_eq!(after.revision, revision);
         assert_eq!(after.history.past_len(), history);
         assert!(after.history.can_redo());
+        assert!((fade.enabled)(&s).is_err());
     }
 }
 
