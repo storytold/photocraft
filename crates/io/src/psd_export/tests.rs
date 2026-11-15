@@ -37,7 +37,7 @@ fn a_background_is_written_without_a_transparency_channel() {
 /// PhotoCraft, and it is written back as one (no transparency channel).
 #[test]
 fn a_flat_bitmap_file_opens_and_saves_as_a_background() {
-    let file = photocraft_psd::testgen::merged_only(Version::Psd, PsdMode::Bitmap, 1, Compression::Raw, 8, 4);
+    let file = craft_psd::testgen::merged_only(Version::Psd, PsdMode::Bitmap, 1, Compression::Raw, 8, 4);
     let doc = crate::import("flat.psd", &file.to_bytes().unwrap()).unwrap().document;
     let bg = &doc.layers[0];
     assert!(bg.name == "Background" && bg.locks.transparency && bg.locks.position, "{:?}", bg.locks);
@@ -236,7 +236,7 @@ fn an_opaque_save_drops_a_kept_merged_transparency_marker() {
 #[test]
 fn unreadable_lr16_warns_on_import_and_is_not_saved_twice() {
     // #2700: a 16-bit file whose Lr16 block claims five layers but holds none.
-    let mut file = photocraft_psd::testgen::merged_only(Version::Psd, PsdMode::Rgb, 16, Compression::Raw, 8, 6);
+    let mut file = craft_psd::testgen::merged_only(Version::Psd, PsdMode::Rgb, 16, Compression::Raw, 8, 6);
     file.global_layer_mask = Some(GlobalLayerMask::default());
     file.global_blocks.push(TaggedBlock::new(*b"Lr16", vec![0, 5, 0, 0]));
     let imported = crate::import("broken.psd", &file.to_bytes().unwrap()).unwrap();
@@ -320,7 +320,7 @@ fn photo_filter_version_3_is_kept_until_edited() {
 fn light_adjustment_is_kept_verbatim_and_warned() {
     // #6542: Photoshop 2026's Light layer is a `brit` block whose `CgEd` descriptor carries
     // more than Brightness/Contrast. Synthetic block: the extra key names are placeholders.
-    use photocraft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
+    use craft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
     let brit = vec![0, 0, 0xff, 0xfe, 0, 127, 0, 0];
     let d = Descriptor::new("null")
         .with("Vrsn", Value::Integer(1))

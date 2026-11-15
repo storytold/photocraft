@@ -40,7 +40,7 @@ fn click_with(anti_alias: bool, flow: f32, hardness: f32) -> Surface {
         color: [0.0, 0.0, 1.0, 1.0],
         ..Default::default()
     };
-    apply_color_replacement(&mut s, &stroke, &rs, None, false);
+    apply_color_replacement(&mut s, &stroke, &rs, None, false).unwrap();
     s
 }
 
