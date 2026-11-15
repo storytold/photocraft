@@ -268,13 +268,14 @@ fn the_download_needs_the_terms_accepted_and_then_the_model_is_used() {
 
 #[test]
 fn the_model_reads_a_cmyk_document_in_its_own_profile() {
-    let profile = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+    let profile = craft_cms::synth::cmyk_profile(&craft_cms::synth::CmykParams {
         description: "Subject Test Uncoated".into(),
         tvi: [0.26, 0.26, 0.26, 0.3],
         grid_a2b: 5,
         grid_b2a: 9,
         ..Default::default()
     })
+    .unwrap()
     .to_bytes();
     for command in ["layer.removeBackground", "select.subject"] {
         let model = LeftHalf::new(ready());
