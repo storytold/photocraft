@@ -160,3 +160,20 @@ fn legacy_format_and_resize_parameters_still_work() {
     let png = reopen(&files[0]).unwrap();
     assert_eq!((png.size.width, png.size.height), (20, 10));
 }
+
+/// CodeRabbit on #14826: a Bitmap document still goes out as an sRGB JPEG. Convert to Profile
+/// refuses Bitmap now, so the run takes it to RGB first, as the single-format run does.
+#[test]
+fn a_bitmap_document_is_written_as_an_srgb_jpeg() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"name": "Line art", "width": 16, "height": 16, "background": "white"})).unwrap();
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    s.execute("image.mode.bitmap", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Bitmap);
+    let result = s.execute(COMMAND, json!({"source": "current", "output": dir.path(), "jpeg": {"convertToSrgb": true}})).unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    let files = paths(&result).unwrap();
+    assert_eq!(files, [dir.path().join("Line art.jpg")]);
+    assert_eq!(reopen(&files[0]).unwrap().mode, ColorMode::Rgb);
+}

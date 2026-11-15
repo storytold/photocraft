@@ -241,6 +241,11 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
                 fit_image(scratch, fit)?;
             }
             if format.srgb {
+                // Convert to Profile refuses a Bitmap document (#14263): it goes to RGB first, as
+                // the single-format run does, and is then converted.
+                if scratch.active().is_some_and(|d| d.doc.mode == ColorMode::Bitmap) {
+                    scratch.execute("image.mode.rgb", json!({}))?;
+                }
                 scratch.execute("edit.convertToProfile", json!({"profile": "srgb", "flatten": true}))?;
             }
             Ok(false)
