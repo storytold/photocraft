@@ -21,7 +21,8 @@ pub struct Request {
 
 impl Request {
     pub fn new(op: u16, id: u32) -> Self {
-        let mut buf = vec![2, 0];
+        // Shared CUPS requests and their replies use IPP 1.1.
+        let mut buf = vec![1, 1];
         buf.extend_from_slice(&op.to_be_bytes());
         buf.extend_from_slice(&id.to_be_bytes());
         buf.push(TAG_OPERATION_GROUP);
@@ -108,4 +109,10 @@ pub fn parse_request(bytes: &[u8]) -> Option<(u16, Vec<Attribute>, Vec<u8>)> {
             attrs.push(Attribute { group, tag, name: String::from_utf8_lossy(name).into_owned(), values: vec![value] });
         }
     }
+}
+
+#[test]
+fn fake_reply_preserves_shared_ipp_version_and_request_id() {
+    let reply = Request::new(0, 0x12345678).end();
+    assert_eq!(&reply[..8], &[1, 1, 0, 0, 0x12, 0x34, 0x56, 0x78]);
 }
