@@ -2735,3 +2735,31 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     shift_right(&mut app, &ctx, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
 }
+
+#[test]
+fn find_replace_dialog_confirm_uses_the_automation_command_policy() {
+    use crate::dialogs::find_replace_ui::{COMMAND, CONTROL_ID};
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.run("type.create", json!({"text": "cat cat", "x": 10, "y": 30})).unwrap();
+    assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id": COMMAND}))["ok"], true);
+    for (field, value) in [("find", "cat"), ("replace", "dog")] {
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": CONTROL_ID, "field": field, "value": value}))["ok"], true);
+    }
+    app.services.automation_command = Some(Box::new(|id, params| {
+        assert_eq!(id, COMMAND);
+        assert_eq!(params["find"], "cat");
+        assert_eq!(params["replace"], "dog");
+        if params["action"] == "find" { Ok(()) } else { Err(format!("{} denied", params["action"])) }
+    }));
+    assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": CONTROL_ID, "choice": "find"}))["ok"], true);
+    let revision = app.session.active().unwrap().revision;
+    for action in ["change", "changeFind", "changeAll"] {
+        let reply = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": CONTROL_ID, "choice": action}));
+        assert_eq!(reply["error"], format!("\"{action}\" denied"), "{reply}");
+        assert_eq!(app.session.active().unwrap().revision, revision);
+    }
+    assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": CONTROL_ID, "choice": "done"}))["ok"], true);
+}

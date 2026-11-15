@@ -119,6 +119,7 @@ struct PendingSearch {
     skips: Skips,
     revision: u64,
     dont_show_again: bool,
+    from_control: bool,
 }
 
 fn warning_pref(reason: BlockedTextLayer) -> &'static str {
@@ -232,7 +233,7 @@ fn update_fields(app: &mut PhotocraftApp, fields: Fields) {
     app.ui.find_replace.fields = fields;
 }
 
-fn apply(app: &mut PhotocraftApp, action: Action, skips: Skips) -> Result<Value, String> {
+fn apply(app: &mut PhotocraftApp, action: Action, skips: Skips, from_control: bool) -> Result<Value, String> {
     if action == Action::Done {
         return close(app);
     }
@@ -253,6 +254,9 @@ fn apply(app: &mut PhotocraftApp, action: Action, skips: Skips) -> Result<Value,
     if !fields.all_layers {
         params["layer"] = json!(window.layer.ok_or("no layer was selected when Find and Replace Text opened")?.0);
     }
+    if from_control && let Some(authorize) = app.services.automation_command.as_ref() {
+        authorize(COMMAND, &params)?;
+    }
     let cursor = window.cursor.clone();
     if matches!(action, Action::Find | Action::ChangeAll) {
         let warning = find_replace_warning(&app.session, &params, cursor.as_ref(), |id, reason| {
@@ -263,14 +267,18 @@ fn apply(app: &mut PhotocraftApp, action: Action, skips: Skips) -> Result<Value,
             let revision = app.session.active().ok_or("no document open")?.revision;
             let reply = json!({"warning": warning_message(&warning)});
             let window = app.ui.find_replace.open.as_mut().ok_or("Find and Replace Text is closed")?;
-            window.pending = Some(PendingSearch { action, warning, skips, revision, dont_show_again: false });
+            let from_control = from_control || app.automation_input;
+            window.pending = Some(PendingSearch { action, warning, skips, revision, dont_show_again: false, from_control });
             return Ok(reply);
         }
     }
-    // The window owns its search position. Commands from actions and control clients have their own.
+    // The dialog has its own search position. A document edit can invalidate an outside match.
+    let document_version = |app: &PhotocraftApp| app.session.active().map(|st| (st.doc.id, st.revision));
+    let before = document_version(app);
     let outside_cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, cursor);
     let result = app.run(COMMAND, params);
-    let cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, outside_cursor);
+    let restore = if document_version(app) == before { outside_cursor } else { None };
+    let cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, restore);
     let reply = result?;
     let mut window = app.ui.find_replace.open.take().ok_or("Find and Replace Text is closed")?;
     if owns_edit(app, &window) {
@@ -285,25 +293,27 @@ fn apply(app: &mut PhotocraftApp, action: Action, skips: Skips) -> Result<Value,
     Ok(reply)
 }
 
-fn answer(app: &mut PhotocraftApp, choice: WarningChoice) -> Result<Value, String> {
+fn answer(app: &mut PhotocraftApp, choice: WarningChoice, from_control: bool) -> Result<Value, String> {
     sync(app);
     let window = app.ui.find_replace.open.as_mut().ok_or("Find and Replace Text is closed")?;
     let mut pending = window.pending.take().ok_or("there is no layer warning")?;
     if choice == WarningChoice::Cancel {
         return Ok(json!({"cancelled": true}));
     }
+    let from_control = from_control || pending.from_control;
     if app.session.active().is_none_or(|st| st.revision != pending.revision) {
-        return apply(app, pending.action, Skips::default());
-    }
-    if pending.dont_show_again {
-        super::dont_show_again::remember(app, warning_pref(pending.warning.reason));
+        return apply(app, pending.action, Skips::default(), from_control);
     }
     match choice {
         WarningChoice::Skip => pending.skips.layers.push(pending.warning.layer),
         WarningChoice::SkipAll => pending.skips.skip_kind(pending.warning.reason),
         WarningChoice::Cancel => {}
     }
-    apply(app, pending.action, pending.skips)
+    let result = apply(app, pending.action, pending.skips, from_control)?;
+    if pending.dont_show_again {
+        super::dont_show_again::remember(app, warning_pref(pending.warning.reason));
+    }
+    Ok(result)
 }
 
 pub(crate) fn warning_open(app: &PhotocraftApp) -> bool {
@@ -347,16 +357,16 @@ pub(crate) fn set_field(app: &mut PhotocraftApp, key: &str, value: Value) -> Res
 pub(crate) fn command(app: &mut PhotocraftApp, action: &str) -> Result<Value, String> {
     let action = match action {
         "done" => Action::Done,
-        "skip" => return answer(app, WarningChoice::Skip),
-        "skipAll" => return answer(app, WarningChoice::SkipAll),
-        "cancelSearch" => return answer(app, WarningChoice::Cancel),
+        "skip" => return answer(app, WarningChoice::Skip, true),
+        "skipAll" => return answer(app, WarningChoice::SkipAll, true),
+        "cancelSearch" => return answer(app, WarningChoice::Cancel, true),
         "find" => Action::Find,
         "change" => Action::Change,
         "changeAll" => Action::ChangeAll,
         "changeFind" => Action::ChangeFind,
         _ => return Err(format!("unknown Find and Replace Text action `{action}`")),
     };
-    apply(app, action, Skips::default())
+    apply(app, action, Skips::default(), true)
 }
 
 fn field(ui: &mut egui::Ui, label: &str, buffer: &mut String, focus: bool) -> egui::Response {
@@ -377,7 +387,7 @@ pub(crate) fn escape(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         if warning_open(app) {
-            let _ = answer(app, WarningChoice::Cancel);
+            let _ = answer(app, WarningChoice::Cancel, false);
         } else {
             let _ = close(app);
         }
@@ -456,7 +466,7 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui:
     }
     update_fields(app, fields);
     if let Some(action) = if open { action } else { Some(Action::Done) }
-        && let Err(error) = apply(app, action, Skips::default())
+        && let Err(error) = apply(app, action, Skips::default(), false)
     {
         app.ui.status = error;
         app.ui.status_error = true;
@@ -497,7 +507,7 @@ fn show_warning(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui::Re
         choice = Some(WarningChoice::Skip);
     }
     if let Some(choice) = choice
-        && let Err(error) = answer(app, choice)
+        && let Err(error) = answer(app, choice, false)
     {
         app.ui.status = error;
         app.ui.status_error = true;

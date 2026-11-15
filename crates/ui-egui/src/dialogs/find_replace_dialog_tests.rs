@@ -246,3 +246,39 @@ fn warning_escape_cancels_the_search_and_enter_uses_skip() {
     assert_eq!(text(h.state(), visible), "dog");
     assert_eq!(text(h.state(), hidden), "cat");
 }
+
+#[test]
+fn dialog_replacement_clears_an_outside_match_at_an_old_offset() {
+    let mut app = app();
+    let layer = type_layer(&mut app, "a a a");
+    for start in [0, 2] {
+        assert_eq!(app.run(COMMAND, json!({"find": "a", "action": "find"})).unwrap()["found"]["start"], start);
+    }
+    let outside = app.session.edit_state.find_cursor.clone();
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("a")).unwrap();
+    set_field(&mut app, "replace", json!("aaa")).unwrap();
+    command(&mut app, "find").unwrap();
+    assert_eq!(app.session.edit_state.find_cursor, outside);
+    command(&mut app, "change").unwrap();
+
+    assert!(app.session.edit_state.find_cursor.is_none());
+    let reply = app.run(COMMAND, json!({"find": "a", "replace": "Z", "action": "change"})).unwrap();
+    assert!(reply["changed"].is_null());
+    assert_eq!(text(&app, layer), "aaa a a");
+}
+
+#[test]
+fn a_warning_keeps_the_control_policy_when_answered_in_the_ui() {
+    let mut app = app();
+    let visible = type_layer(&mut app, "cat");
+    blocked_layer(&mut app, "Hidden", true);
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("cat")).unwrap();
+    set_field(&mut app, "replace", json!("dog")).unwrap();
+    assert!(command(&mut app, "changeAll").unwrap()["warning"].is_string());
+    app.services.automation_command = Some(Box::new(|_, _| Err("replacement denied".into())));
+
+    assert_eq!(answer(&mut app, WarningChoice::Skip, false).unwrap_err(), "replacement denied");
+    assert_eq!(text(&app, visible), "cat");
+}
