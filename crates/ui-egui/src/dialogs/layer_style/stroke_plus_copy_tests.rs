@@ -197,3 +197,64 @@ fn plus_on_a_selected_drop_shadow_row_keeps_adding_fresh_values_in_this_scope() 
     assert_eq!(after[2]["params"], fresh_params("dropShadow", 120.0, None), "a fresh shadow after the last");
     assert_eq!(h.state()["selected"], after[2]["id"]);
 }
+
+/// The strokes of the active layer of `s`, in order.
+fn layer_strokes(s: &photocraft_engine::Session) -> Vec<photocraft_doc::StrokeFx> {
+    let Some(d) = s.active() else { return Vec::new() };
+    let Some(layer) = d.active_layer.and_then(|id| d.doc.layer(id)) else { return Vec::new() };
+    layer
+        .effects
+        .items
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Stroke(st) => Some(st.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A real gradient Stroke has no paint in `params` (`values_of` leaves it out): the gradient lives
+/// in the entry's `fx` snapshot, built by `initial_fields_with`. The copy carries that snapshot, so
+/// applying the dialog gives two strokes with the same gradient, and editing the copy leaves the
+/// source alone.
+#[test]
+fn copying_a_real_gradient_stroke_keeps_its_fx_snapshot() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("layer.layerStyle.stroke", json!({"size": 4, "from": "#ff0000", "to": "#0000ff"})).unwrap();
+    let Some(d) = s.active() else { panic!("a document") };
+    let Some(layer) = d.active_layer.and_then(|id| d.doc.layer(id)) else { panic!("an active layer") };
+    let mut f = initial_fields_with(layer, Some("stroke"), d.doc.global_light.angle, Map::new());
+    let source = f["effects"][0].clone();
+    assert!(source["params"].get("color").is_none(), "the gradient is not in params: {source}");
+    assert!(source["fx"].is_object(), "the entry carries its snapshot: {source}");
+
+    let source_id = source["id"].as_str().unwrap().to_string();
+    copy_instance(&mut f, &source_id);
+    let (copy, original) = (f["effects"][0].clone(), f["effects"][1].clone());
+    assert_eq!(copy["fx"], source["fx"], "the copy has the source's fx");
+    assert_ne!(copy["id"], source["id"]);
+    assert_eq!(original, source, "the source is unchanged by the copy");
+
+    // Edit the copy only: size through params, the gradient angle inside its own snapshot.
+    let copy_id = copy["id"].as_str().unwrap().to_string();
+    set_param(&mut f, &copy_id, "size", json!(20.0));
+    assert_eq!(f["effects"][1], source, "editing the copy leaves the source as it was");
+
+    apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+    let strokes = layer_strokes(&s);
+    assert_eq!(strokes.len(), 2, "two strokes after applying");
+    assert_eq!(strokes[0].size, 20.0, "the edited copy is the one above");
+    assert_eq!(strokes[1].size, 4.0, "the source keeps its size");
+    for st in &strokes {
+        assert!(
+            matches!(&st.paint, FxPaint::Gradient(g) if g.stops.len() == 2
+                && g.stops[0].1 == photocraft_color::Color::rgb(1.0, 0.0, 0.0)
+                && g.stops[1].1 == photocraft_color::Color::rgb(0.0, 0.0, 1.0)),
+            "both strokes keep the gradient: {:?}",
+            st.paint
+        );
+    }
+    assert_eq!(strokes[0].paint, strokes[1].paint, "the same gradient");
+}
