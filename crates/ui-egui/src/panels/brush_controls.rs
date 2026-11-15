@@ -124,7 +124,8 @@ pub(super) fn surface_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mu
     let resp = crate::brush_picker::named(resp, "Surface options");
     let clear_enabled = crate::menus::is_enabled(app, "perspective.clearPlanes");
     let mut clear = false;
-    egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+    // Its Sample dropdown opens a list of its own over it.
+    widgets::press_menu::show_popover(&resp, |ui| {
         ui.set_min_width(200.0);
         let s = &mut b.surface;
         ui.label(egui::RichText::new(tl!("Surface")).strong());
