@@ -14,6 +14,8 @@ import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+# Temporary exact ref for craft-common-actions#240; restore @main with the workflow after it lands.
+CACHE_ACTION = 'storytold/craft-common-actions/actions/rust-cache@4d6d029582837014919554f99e24a5cd3a961ba5'
 WORKFLOW = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 
 GATE_KEY = ('v1-rust-133a530327fd50970e187efbd0c6976d175319b8511aed506db5f52db749b9b0'
@@ -93,7 +95,7 @@ class WithoutHeifJobTests(unittest.TestCase):
         self.text = job('test-without-heif')
 
     def test_restores_the_gate_entry_through_the_shared_action(self):
-        self.assertIn('uses: storytold/craft-common-actions/actions/rust-cache@main', self.text)
+        self.assertIn(f'uses: {CACHE_ACTION}', self.text)
         self.assertIn('job: gate', self.text)
         self.assertIn('align-environment: true', self.text)
 
