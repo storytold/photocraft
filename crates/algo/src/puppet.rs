@@ -1580,9 +1580,8 @@ mod tests {
             *m = m.max(p);
         };
         let never = || false;
-        let got = puppet_warp_with_mask_with(&s, b, &w, Interp::Bilinear, Some(&mask), &Interrupt::new(&never, &progress))
-            .expect("not cancelled")
-            .expect("warps");
+        let got =
+            puppet_warp_with_mask_with(&s, b, &w, Interp::Bilinear, Some(&mask), &Interrupt::new(&never, &progress)).expect("not cancelled").expect("warps");
         let want = puppet_warp_with_mask(&s, b, &w, Interp::Bilinear, Some(&mask)).expect("warps");
         assert_ne!(want.0, s, "the pins move the foot");
         assert_eq!(got, want);
