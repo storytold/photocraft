@@ -96,7 +96,7 @@ fn a_layer_path_alone_works_without_saved_or_work_paths() {
 
 fn export_saved(s: &mut Session, name: &str) -> std::result::Result<(String, u64), String> {
     let r = s.execute("file.export.pathsToIllustrator", json!({"savedPath": name})).map_err(|e| e.to_string())?;
-    Ok((r["ai"].as_str().unwrap().to_string(), r["paths"].as_u64().unwrap()))
+    Ok((r["ai"].as_str().unwrap().replace('\r', "\n"), r["paths"].as_u64().unwrap()))
 }
 
 /// CodeRabbit on #15051: a saved path is chosen by `savedPath`, its exact name, so one called `all` or
