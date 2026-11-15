@@ -30,6 +30,8 @@ fn opened(app: &mut PhotocraftApp, command: &str) -> Map<String, Value> {
 fn ok_with(app: &mut PhotocraftApp, command: &str, field: &str, value: f64) {
     let id = open(app, command).unwrap();
     control(app, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}));
+    let set = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields[field].as_f64();
+    assert_eq!(set, Some(value), "{command}: `{field}` is set before OK");
     control(app, "ui.dialog.confirm", json!({"dialog": id}));
     assert!(app.ui.dialogs.iter().all(|d| d.id != id), "{command}: OK closed the dialog");
 }
