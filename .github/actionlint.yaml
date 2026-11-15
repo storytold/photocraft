@@ -2,3 +2,4 @@
 self-hosted-runner:
   labels:
     - macos-release  # org larger runner (M2 Pro), used by release.yml
+    - depot-ubuntu-24.04-16  # Depot high-memory runner, used by perf-nightly.yml
