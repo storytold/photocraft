@@ -102,6 +102,17 @@ fn a_first_use_keeps_the_current_brushs_other_settings() {
 }
 
 #[test]
+fn a_first_use_after_a_sampled_tip_starts_round() {
+    use photocraft_engine::paint::{GrayTile, TipShape};
+    let mut app = app();
+    pick(&mut app, Tool::Pencil);
+    app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(8, 6, |x, y| ((x + y) % 2) as f32));
+    pick(&mut app, Tool::SpotHealing);
+    assert!(matches!(app.session.tools.brush.tip, TipShape::Round), "a round tip, not the sampled one");
+    assert_eq!(tip(&mut app), SPOT_HEALING_TIP);
+}
+
+#[test]
 fn the_healing_brush_clone_stamp_and_brush_keep_their_reset_tips() {
     let cases = [(Tool::Healing, [19.0, 1.0, 0.25, 0.0, 1.0]), (Tool::CloneStamp, [21.0, 0.0, 0.25, 0.0, 1.0]), (Tool::Brush, [13.0, 0.0, 0.25, 0.0, 1.0])];
     for (tool, expected) in cases {

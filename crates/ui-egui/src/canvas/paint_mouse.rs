@@ -69,6 +69,7 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             if tool == Tool::SpotHealing {
                 (b.size, b.hardness, b.spacing) = HEALING_BRUSH_TIP;
                 (b.angle, b.roundness) = (0.0, 1.0);
+                b.tip = photocraft_engine::paint::TipShape::Round;
             }
             b
         }
