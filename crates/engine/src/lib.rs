@@ -35,6 +35,7 @@ pub mod memory;
 pub mod memory_gate;
 pub mod new_layer;
 mod param_check;
+pub mod param_schema;
 mod pixels;
 pub mod prefs;
 pub mod preset_store;

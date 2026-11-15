@@ -686,6 +686,10 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
 /// an output path or a preview set in the same frame as the confirm still drops it.
 pub(super) fn print_params(f: &Map<String, Value>) -> Value {
     let mut p = params(f);
+    // The ruler unit is the dialog's own display setting; `file.print` takes no `units`.
+    if let Some(o) = p.as_object_mut() {
+        o.remove("units");
+    }
     if (b(f, "dryRun", false) || !s(f, "output", "").is_empty())
         && let Some(o) = p.as_object_mut()
     {

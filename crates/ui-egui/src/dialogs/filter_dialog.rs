@@ -55,94 +55,72 @@ pub struct Param {
     pub kind: Kind,
 }
 
-/// Parse the registry's parameter notation, e.g.
-/// `{"radius":0.1..1000=1,"method":"spin|zoom","monochromatic":bool,"seed":u32=0,"horizontal":px=0}`.
+/// The dialog fields of a registry parameter doc, e.g.
+/// `{"radius":0.1..1000=1,"method":"spin|zoom","monochromatic":bool,"seed":u32=0,"horizontal":px=0}`,
+/// read through the engine's parameter schema (the one reader of the notation, #7598). Only the
+/// command's own object is shown: notes after it (`→ {…}` results, `(per-range … arrays)`) and
+/// objects composed onto it (` + {…}`) are not fields, nor is `layer` or an alternative spelling
+/// of a key (`"layer":id? or "layers":[…]`).
 pub fn parse_spec(spec: &str) -> Vec<Param> {
-    let inner = object_body(spec);
-    let mut out = Vec::new();
-    // Split on commas that start a new `"key":` (not inside strings or brackets).
-    let mut parts: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let mut in_str = false;
-    let mut depth = 0i32;
-    for ch in inner.chars() {
-        if ch == '"' {
-            in_str = !in_str;
-        }
-        if !in_str {
-            match ch {
-                '[' | '{' => depth += 1,
-                ']' | '}' => depth -= 1,
-                _ => {}
-            }
-        }
-        if ch == ',' && !in_str && depth == 0 {
-            parts.push(std::mem::take(&mut cur));
-        } else {
-            cur.push(ch);
-        }
-    }
-    if !cur.trim().is_empty() {
-        parts.push(cur);
-    }
-    for part in parts {
-        let Some((k, v)) = part.split_once(':') else { continue };
-        let key = k.trim().trim_matches('"').to_string();
-        if key.is_empty() || key == "layer" {
-            continue;
-        }
-        let v = v.trim();
-        let kind = if let Some(choices) = v.strip_prefix('"') {
-            let (body, rest) = choices.split_once('"').unwrap_or((choices, ""));
-            let options: Vec<String> = body.split('|').map(str::to_string).collect();
-            let default = if let Some((_, def_part)) = rest.split_once('=') {
-                let trimmed = def_part.trim();
-                let def = if let Some(unquoted) = trimmed.strip_prefix('"') {
-                    unquoted.split('"').next().unwrap_or("")
-                } else if let Some(unquoted) = trimmed.strip_prefix('\'') {
-                    unquoted.split('\'').next().unwrap_or("")
-                } else {
-                    trimmed.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',' || c == '}').next().unwrap_or("")
-                };
-                if !def.is_empty() && options.iter().any(|opt| opt == def) { Some(def.to_string()) } else { None }
-            } else {
-                None
-            };
-            Kind::Choice { options, default }
-        } else if let Some(rest) = v.strip_prefix("bool") {
-            Kind::Bool(rest.trim_start_matches('=').trim() == "true")
-        } else if v == "text" {
-            Kind::Text
-        } else if v == "color" {
-            Kind::Color(None)
-        } else if let Some(default) = v.strip_prefix("color=") {
-            Kind::Color(crate::color_picker_ui::parse_hex(default))
-        } else if v == "doc" {
-            Kind::Document
-        } else if v == "json" || v.starts_with("layer id") || v.starts_with('[') || v.starts_with('{') || v.trim_end_matches('?') == "index|name" {
-            // `index|name`: a reference (an alpha channel…) the dialog sets through another control.
-            Kind::Json
-        } else if let Some(n) = v.strip_prefix("int[").and_then(|r| r.strip_suffix(']')).and_then(|n| n.parse().ok()) {
-            Kind::Grid(n)
-        } else if let Some((range, default)) = v.split_once('=').map(|(a, b)| (a, b.trim())).or(Some((v, ""))) {
-            if let Some((lo, hi)) = range.split_once("..") {
-                let min = leading_number(lo).unwrap_or(0.0);
-                let max = leading_number(hi).unwrap_or(100.0);
-                let default = default.parse().unwrap_or(min);
-                Kind::Range { min, max, default }
-            } else {
-                Kind::Int { default: default.parse().unwrap_or(0) }
-            }
-        } else {
-            continue;
-        };
-        out.push(Param { key, kind });
-    }
-    out
+    let Some(schema) = photocraft_engine::param_schema::Params::parse(spec) else { return Vec::new() };
+    schema
+        .own()
+        .params()
+        .filter(|p| !p.is_alternative() && !p.kinds.is_empty() && p.key() != "layer")
+        .map(|p| Param { key: p.key().to_string(), kind: field_kind(p) })
+        .collect()
 }
 
-/// The number a range bound starts with, ignoring a unit or marker after it: `5000 px?` → 5000,
-/// `1000 %` → 1000. A bound that is not a number at all is `None`.
+/// The field a documented parameter gets. Values the dialog can't edit (references, structured
+/// JSON, unbounded floats, prose) are [`Kind::Json`]: settable through the command, not shown.
+fn field_kind(p: &photocraft_engine::param_schema::Param) -> Kind {
+    use photocraft_engine::param_schema::{DefaultValue, Kind as K, Ty};
+    let default = p.default();
+    let number = |fallback: f32| match default {
+        Some(DefaultValue::Num(n)) => *n as f32,
+        _ => fallback,
+    };
+    // Every quoted alternative is a menu entry (`"pixels"|"mask"|{"channel":i}` lists both).
+    let options: Vec<String> =
+        p.kinds.iter().filter_map(|k| if let K::Choice(o) = k { Some(o) } else { None }).flatten().filter(|o| *o != "…").cloned().collect();
+    if !options.is_empty() {
+        let default = match default {
+            Some(DefaultValue::Str(d) | DefaultValue::Symbol(d)) => Some(d.clone()),
+            Some(DefaultValue::Num(n)) => Some(n.to_string()),
+            _ => None,
+        };
+        return Kind::Choice { default: default.filter(|d| options.contains(d)), options };
+    }
+    match p.kinds.as_slice() {
+        [K::Range { min, max, .. }] => {
+            let max = if max.is_finite() { *max as f32 } else { 100.0 };
+            Kind::Range { min: *min as f32, max, default: number(*min as f32) }
+        }
+        [K::Type { ty: Ty::Bool, word }] if word.starts_with("bool") => Kind::Bool(default == Some(&DefaultValue::Bool(true))),
+        [K::Type { ty: Ty::Text, .. }] => Kind::Text,
+        [K::Type { ty: Ty::Color, .. }] => Kind::Color(match default {
+            Some(DefaultValue::Symbol(hex) | DefaultValue::Str(hex)) => crate::color_picker_ui::parse_hex(hex),
+            _ => None,
+        }),
+        [K::Type { ty: Ty::Doc, .. }] => Kind::Document,
+        [K::Sized { ty: Ty::Int, len, .. }] => Kind::Grid(*len),
+        // Integers, and numbers in a unit (`px=0`).
+        kinds if kinds.iter().all(|k| matches!(k, K::Type { ty: Ty::Int | Ty::U32, .. })) => Kind::Int { default: number(0.0) as i64 },
+        [K::Type { ty: Ty::Number, word }] if word != "number" && !word.starts_with('f') && word != "num" => Kind::Int { default: number(0.0) as i64 },
+        // A choice of numbers (`8|16|32=8`).
+        kinds if kinds.iter().all(|k| matches!(k, K::Number { .. })) => Kind::Int { default: number(0.0) as i64 },
+        // A range whose bound is not a number keeps the old fallback.
+        [K::Free(t)] if t.contains("..") => {
+            let (lo, hi) = t.split_once("..").unwrap_or((t.as_str(), ""));
+            let min = leading_number(lo).unwrap_or(0.0);
+            Kind::Range { min, max: leading_number(hi).unwrap_or(100.0), default: number(min) }
+        }
+        _ => Kind::Json,
+    }
+}
+
+/// The number a range bound starts with, ignoring anything after it: `5000 px?` → 5000.
+/// A bound that is not a number at all is `None`.
 fn leading_number(bound: &str) -> Option<f32> {
     let b = bound.trim();
     if let Ok(v) = b.parse() {
@@ -150,30 +128,6 @@ fn leading_number(bound: &str) -> Option<f32> {
     }
     let end = b.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))).unwrap_or(b.len());
     b.get(..end)?.parse().ok()
-}
-
-/// The inside of the spec's leading `{…}` object. Notes after it, like `→ {…}` results or
-/// `(per-range [c,m,y,k] arrays: …)`, are documentation: read as parameters, their commas split
-/// off junk fields and glued the note onto the last parameter (Selective Color's `"reds":json`
-/// became a number field, and its OK then failed).
-fn object_body(spec: &str) -> &str {
-    let s = spec.trim();
-    let Some(body) = s.strip_prefix('{') else { return s };
-    let (mut depth, mut in_str) = (0i32, false);
-    for (i, ch) in body.char_indices() {
-        match ch {
-            '"' => in_str = !in_str,
-            '[' | '{' if !in_str => depth += 1,
-            ']' | '}' if !in_str => {
-                if depth == 0 {
-                    return body.get(..i).unwrap_or(body);
-                }
-                depth -= 1;
-            }
-            _ => {}
-        }
-    }
-    body.trim_end_matches('}')
 }
 
 /// Parameter keys measured in pixels (scaled for proxy previews).
@@ -201,11 +155,17 @@ fn is_pixel_param(key: &str) -> bool {
 
 /// [`is_pixel_param`] for `key` of `command`. Some commands use those names for relative values:
 /// Tree's and Picture Frame's `size` (a fraction of the canvas, an ornament scale) and Lens
-/// Correction's perspective `horizontal` / `vertical` (-100..100). Scaled by the proxy factor,
+/// Correction's perspective `horizontal` / `vertical` (-100..100), and Lighting Effects' light
+/// `radius` (a fraction of the canvas). Scaled by the proxy factor,
 /// their preview drew a quarter-size tree and a quarter of the perspective (#2063).
 fn is_pixel_param_of(command: &str, key: &str) -> bool {
     is_pixel_param(key)
-        && !matches!((command, key), ("filter.render.tree" | "filter.render.pictureFrame", "size") | ("filter.lensCorrection", "horizontal" | "vertical"))
+        && !matches!(
+            (command, key),
+            ("filter.render.tree" | "filter.render.pictureFrame", "size")
+                | ("filter.lensCorrection", "horizontal" | "vertical")
+                | ("filter.render.lightingEffects", "radius")
+        )
 }
 
 /// Filters whose features have a fixed size in document pixels that no dialog parameter scales:

@@ -182,6 +182,7 @@ fn stale_filter_dialogs_cannot_edit_a_switched_or_changed_target() {
         let id = open(&mut app, layer, 0).unwrap();
         let params = match command {
             "file.new" => json!({"width": 16,"height":16}),
+            "edit.undo" => json!({}),
             "layer.smartFilter.move" => json!({"layer":layer.0,"index":0,"to":1}),
             _ => json!({"layer":layer.0,"index":0}),
         };

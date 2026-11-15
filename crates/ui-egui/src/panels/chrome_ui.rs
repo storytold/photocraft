@@ -538,7 +538,7 @@ mod tests {
         assert!(app.ui.chrome.shows_home(n, true));
         app.run("file.new", json!({"width": 8, "height": 8, "name": "Other"})).unwrap();
         assert!(!app.ui.chrome.shows_home(app.session.documents().len(), true));
-        app.run("file.close", json!({"document": 1, "discard": true})).unwrap();
+        app.run("file.close", json!({"document": 1})).unwrap();
         assert_eq!(app.session.documents().len(), 1);
         assert!(!app.ui.chrome.shows_home(1, true), "Home must stay dismissed after closing the extra tab");
         assert_eq!(app.session.documents()[0].doc.name, "Keep");

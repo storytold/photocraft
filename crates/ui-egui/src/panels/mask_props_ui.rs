@@ -91,8 +91,12 @@ fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: u64, document: u64
         let response = widgets::slider_row_with(ui, label, &mut value, 0.0..=max, unit, None, gestures);
         response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(value), label));
         if response.changed() {
-            let mut params = json!({"document": document, "layer": layer,
-                "coalesce": format!("{prefix}:{document}:{layer}:{field}:{gesture}")});
+            let mut params = json!({"layer": layer, "coalesce": format!("{prefix}:{document}:{layer}:{field}:{gesture}")});
+            // The pixel mask's command refuses a stale dialog by its document; the vector mask's
+            // takes no `document`.
+            if command != "layer.vectorMask.edit" {
+                params["document"] = json!(document);
+            }
             params[field] = json!(value);
             if let Err(error) = app.run(command, params) {
                 app.ui.status = error;
