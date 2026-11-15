@@ -89,11 +89,13 @@ pub struct DialogButton<'a> {
     pub enabled: bool,
     /// Take keyboard focus this frame (see [`DialogButton::focus`]).
     pub focus: bool,
+    /// Tab reaches this button among the dialog's fields (see [`DialogButton::tab`]).
+    pub tab: bool,
 }
 
 impl<'a> DialogButton<'a> {
     pub fn new(role: ButtonRole, label: &'a str, min_width: f32) -> Self {
-        Self { role, label, min_width, enabled: true, focus: false }
+        Self { role, label, min_width, enabled: true, focus: false, tab: false }
     }
 
     pub fn enabled(self, enabled: bool) -> Self {
@@ -104,6 +106,12 @@ impl<'a> DialogButton<'a> {
     /// buttons and Enter or Space presses the focused one.
     pub fn focus(self, focus: bool) -> Self {
         Self { focus, ..self }
+    }
+
+    /// Puts the button in the dialog's Tab order after the fields drawn before it, for buttons
+    /// drawn inside the dialog body (Fit Image's column, #13851); elsewhere it does nothing.
+    pub fn tab(self, tab: bool) -> Self {
+        Self { tab, ..self }
     }
 }
 
@@ -129,6 +137,9 @@ pub fn dialog_buttons(ui: &mut Ui, buttons: &[DialogButton]) -> Option<ButtonRol
                     .inner;
                 if b.focus && b.enabled {
                     r.request_focus();
+                }
+                if b.tab && b.enabled {
+                    crate::field_tab::register(ui.ctx(), r.id);
                 }
                 if r.clicked() {
                     hit = Some(b.role);

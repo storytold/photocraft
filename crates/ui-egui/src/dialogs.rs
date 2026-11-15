@@ -544,10 +544,12 @@ fn button_row(
                 fields.insert("choice".into(), json!("new"));
             }
             hit
-        } else if crate::filter_dialog::buttons_in_column(fields) {
-            // Fade: OK above Cancel (#13815).
-            let ok = dialog_buttons(ui, &[ok]);
-            dialog_buttons(ui, &[cancel]).or(ok)
+        } else if buttons_in_column(fields) {
+            // Fade and Fit Image: OK above Cancel (#13815, #13851). Fit Image's Tab goes on from
+            // its fields to OK and Cancel.
+            let tab = fit_image_range::owns(fields);
+            let ok = dialog_buttons(ui, &[ok.tab(tab)]);
+            dialog_buttons(ui, &[cancel.tab(tab)]).or(ok)
         } else {
             dialog_buttons(ui, &[ok, cancel])
         };
@@ -563,6 +565,12 @@ fn button_row(
         }
     }
     (outcome, apply_requested)
+}
+
+/// Dialogs whose OK and Cancel stand in a column right of their fields: Fade (#13815) and Fit
+/// Image (#13851).
+fn buttons_in_column(fields: &Fields) -> bool {
+    crate::filter_dialog::buttons_in_column(fields) || fit_image_range::owns(fields)
 }
 
 /// The default button's label: what OK means for this dialog.
@@ -735,7 +743,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if image_processor_ui::owns(&fields) {
                 processor_alert = image_processor_ui::body(ui, &mut fields);
             } else if fit_image_range::owns(&fields) {
-                fit_image_alert = fit_image_range::body(ui, &mut fields);
+                // Fit Image: its Constrain Within group on the left, OK and Cancel stacked on the
+                // right (#13851).
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| fit_image_alert = fit_image_range::body(ui, &mut fields));
+                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 8.0;
+                        let (done, _) = button_row(app, ui, &d, &mut fields, id, interactive, web && (web_popup_open || egui::Popup::is_any_open(ui.ctx())));
+                        outcome = done.or(outcome);
+                    });
+                });
             } else if crate::filter_dialog::buttons_in_column(&fields) {
                 // Fade: its fields on the left, OK, Cancel and Preview in a column on the right (#13815).
                 ui.horizontal_top(|ui| {
@@ -786,10 +804,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if d.kind == DialogKind::LayerStyle
                 || crate::guide_layout_ui::owns(&fields)
                 || crate::brush_preset_dialog::owns(&fields)
-                || crate::filter_dialog::buttons_in_column(&fields)
+                || buttons_in_column(&fields)
             {
                 // These dialogs own their right-side actions and validate Enter themselves (Fade's
-                // column is drawn beside its fields, #13815).
+                // and Fit Image's columns are drawn beside their fields, #13815, #13851).
             } else if crate::color_picker_ui::owns(&fields) {
                 if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     outcome = Some(true);
@@ -1380,6 +1398,8 @@ pub mod filter_dialog;
 pub(super) mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod filter_preview_worker;
+#[cfg(test)]
+mod fit_image_layout_tests;
 mod fit_image_range;
 #[cfg(test)]
 mod fit_image_range_tests;

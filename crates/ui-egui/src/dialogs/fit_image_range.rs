@@ -90,34 +90,59 @@ pub(super) fn finish(ui: &mut UiState, interactive: bool, alert: Option<Alert>, 
     outcome
 }
 
+/// The dialog as the reference application lays it out (#13851): Width, Height and Don't Enlarge
+/// in a "Constrain Within" group, each size followed by "pixels". Alt+W and Alt+H go to the sizes;
+/// Tab goes Width, Height, Don't Enlarge, then on to OK and Cancel (drawn after this).
 pub(super) fn body(ui: &mut egui::Ui, fields: &mut Fields) -> Option<Alert> {
-    let mut alert = None;
-    egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-        for key in crate::view_cmds::form_keys(fields) {
-            match key.as_str() {
-                "width" => alert = side(ui, fields, WIDTH, tl!("Width")).or(alert),
-                "height" => alert = side(ui, fields, HEIGHT, tl!("Height")).or(alert),
-                "dontEnlarge" => {
-                    ui.label("");
-                    let mut enabled = fields.get(&key).and_then(Value::as_bool).unwrap_or(false);
-                    ui.checkbox(&mut enabled, tl!("Dont enlarge"));
-                    fields.insert(key, json!(enabled));
-                }
-                _ => continue,
+    let mnemonic = |ui: &mut egui::Ui, key: egui::Key| {
+        ui.input_mut(|i| {
+            let hit = i.consume_key(egui::Modifiers::ALT, key);
+            // The character Alt+key types (on macOS) isn't an entry.
+            if hit {
+                i.events.retain(|e| !matches!(e, egui::Event::Text(_)));
             }
-            ui.end_row();
+            hit
+        })
+    };
+    let (alt_w, alt_h) = (mnemonic(ui, egui::Key::W), mnemonic(ui, egui::Key::H));
+    let mut alert = None;
+    ui.label(tl!("Constrain Within"));
+    // As narrow as the fields (#4673): a tight group around a tight grid.
+    egui::Frame::group(ui.style()).inner_margin(6.0).show(ui, |ui| {
+        let keys = crate::view_cmds::form_keys(fields);
+        let has = |key: &str| keys.iter().any(|f| f == key);
+        egui::Grid::new("form-dialog").num_columns(3).spacing([6.0, 6.0]).show(ui, |ui| {
+            for (key, side_keys, label, jump) in [("width", WIDTH, tl!("Width"), alt_w), ("height", HEIGHT, tl!("Height"), alt_h)] {
+                if has(key) {
+                    alert = side(ui, fields, side_keys, label, jump).or(alert);
+                    ui.end_row();
+                }
+            }
+        });
+        // Under the sizes, outside their columns so its label doesn't widen them.
+        if has("dontEnlarge") {
+            let mut enabled = fields.get("dontEnlarge").and_then(Value::as_bool).unwrap_or(false);
+            crate::field_tab::register(ui.ctx(), ui.next_auto_id());
+            ui.checkbox(&mut enabled, tl!("Don't Enlarge"));
+            fields.insert("dontEnlarge".into(), json!(enabled));
         }
     });
     alert
 }
 
-fn side(ui: &mut egui::Ui, fields: &mut Fields, (key, accepted): (&str, &str), label: &str) -> Option<Alert> {
+/// One size row: "`label`:", its field (named `label`) and "pixels". `jump` (its Alt key) moves
+/// the keyboard to the field with its text selected.
+fn side(ui: &mut egui::Ui, fields: &mut Fields, (key, accepted): (&str, &str), label: &str, jump: bool) -> Option<Alert> {
     let input = fields.get(key).and_then(Value::as_i64);
     let mut value = input.or_else(|| fields.get(accepted).and_then(Value::as_i64)).or_else(|| fields.get("__formOrig")?.get(key)?.as_i64()).unwrap_or(1);
     let alert = Cell::new(None);
     let parsed = Cell::new(false);
-    ui.label(label);
-    crate::field_tab::register(ui.ctx(), ui.next_auto_id());
+    ui.label(format!("{label}:"));
+    let field = ui.next_auto_id();
+    crate::field_tab::register(ui.ctx(), field);
+    if jump {
+        crate::field_tab::focus(ui.ctx(), field);
+    }
     let response = ui
         .add(egui::DragValue::new(&mut value).range(RANGE).clamp_existing_to_range(false).update_while_editing(false).custom_parser(|text| {
             parsed.set(true);
@@ -129,5 +154,6 @@ fn side(ui: &mut egui::Ui, fields: &mut Fields, (key, accepted): (&str, &str), l
         fields.insert(key.into(), json!(value));
         fields.insert(accepted.into(), json!(value));
     }
+    ui.label(tl!("pixels"));
     alert.get()
 }
