@@ -412,3 +412,85 @@ fn copy_overwrite_past_the_tiff_channel_limit_keeps_the_document_unsaved() {
         assert_eq!(app.has_unsaved_work(), extra > photocraft_codecs::MAX_EXTRA_SAMPLES, "{extra} channels");
     }
 }
+
+/// The disk stamp as the platform reports it: length and modification time from the real file.
+fn real_stamps(app: &mut PhotocraftApp) {
+    app.services.file_stamp = Some(Box::new(|path: &str| {
+        let meta = std::fs::metadata(path).ok()?;
+        Some(crate::services::FileStamp { len: meta.len(), modified: meta.modified().ok() })
+    }));
+}
+
+/// A writer that really publishes `bytes` at `path` through `photocraft_format::atomic`, then
+/// reports the folder-flush failure that comes back *after* the rename; with `publish` false it
+/// fails before touching the file.
+fn failing_after_write(publish: bool) -> impl FnMut(&str, &[u8]) -> Result<(), String> {
+    move |path: &str, bytes: &[u8]| {
+        if publish {
+            photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string())?;
+            return Err(format!("{path} was written, but the folder could not be flushed to disk"));
+        }
+        Err(format!("{path}: disk full"))
+    }
+}
+
+/// A failed copy that published its bytes through an alias of the document's own file
+/// (`nested/../own.tif`, a symlink, another case on a case-insensitive volume) still costs the
+/// savepoint: the stamp is read at the bound path, not at the spelling the write was given. The
+/// pre-publication half of the loop is the control that the bound stamp does not over-invalidate.
+/// Expected from source; this is not an executed result until hosted CI runs it.
+#[test]
+fn a_failed_copy_through_an_alias_that_published_keeps_the_document_unsaved() {
+    for command in ["file.saveACopy", crate::export_dialog::COMMAND] {
+        for published in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+            std::fs::create_dir(dir.path().join("nested")).unwrap();
+            let alias = dir.path().join("nested").join("..").join("own.tif").to_string_lossy().into_owned();
+            std::fs::write(&own, b"saved original").unwrap();
+            let mut app = app_at(&own);
+            real_stamps(&mut app);
+            let doc = app.session.active().unwrap().doc.id;
+            app.remember_stamp(doc, &own);
+            app.services.write = Some(Box::new(failing_after_write(published)));
+            let r = app.replay_save(command, &json!({"path": alias, "format": "tif", "tiffLayers": false}));
+            assert!(r.is_err(), "{command}, published={published}: the write reported a failure");
+            assert_eq!(
+                std::fs::read(&own).unwrap() != b"saved original",
+                published,
+                "{command}, published={published}: the bound file is replaced only when the write published"
+            );
+            assert_eq!(app.has_unsaved_work(), published, "{command}, published={published}: only a replaced file costs the savepoint");
+            assert_eq!(app.session.active().unwrap().path.as_deref(), Some(own.as_str()), "{command}: the document keeps its path");
+        }
+    }
+}
+
+/// The same failure through a hard link to the document's own file: the link's entry is what the
+/// rename replaced, the document's own entry keeps its bytes, so it stays clean. This constrains the
+/// semantics (it does not, on its own, kill every `same_file`-based alternative: a post-write
+/// `same_file` check is also false once the rename breaks the link).
+#[test]
+fn a_failed_copy_over_a_hard_link_leaves_the_source_clean() {
+    for command in ["file.saveACopy", crate::export_dialog::COMMAND] {
+        for published in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+            let alias = dir.path().join("alias.tif").to_string_lossy().into_owned();
+            std::fs::write(&own, b"saved original").unwrap();
+            std::fs::hard_link(&own, &alias).unwrap();
+            let mut app = app_at(&own);
+            real_stamps(&mut app);
+            let doc = app.session.active().unwrap().doc.id;
+            app.remember_stamp(doc, &own);
+            app.services.write = Some(Box::new(failing_after_write(published)));
+            let r = app.replay_save(command, &json!({"path": alias, "format": "tif", "tiffLayers": false}));
+            assert!(r.is_err(), "{command}, published={published}: the write reported a failure");
+            assert_eq!(std::fs::read(&own).unwrap(), b"saved original", "{command}, published={published}: the bound file keeps its bytes");
+            if published {
+                assert_ne!(std::fs::read(&alias).unwrap(), b"saved original", "{command}: the link entry is what was replaced");
+            }
+            assert!(!app.has_unsaved_work(), "{command}, published={published}: the document's own file was never touched");
+        }
+    }
+}

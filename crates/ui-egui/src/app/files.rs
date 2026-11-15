@@ -631,15 +631,25 @@ impl PhotocraftApp {
     /// though, and that error comes back with the copy already in place; the disk stamp tells the
     /// two apart, so a save that may have replaced the file never leaves the document looking saved.
     pub(crate) fn invalidate_incomplete_copy(&mut self, doc: DocId, path: &str, written: bool) {
-        if written || self.changed_on_disk(doc, path) {
+        if written || self.bound_file_changed(doc) {
             self.invalidate_savepoint(doc, path);
         }
+    }
+
+    /// Whether `doc`'s bound file changed on disk since this app last saw it, however a write named
+    /// the file. [`Self::changed_on_disk`] compares the spelling, and an alias—`nested/../own.tif`,
+    /// a symlink, another letter case on a case-insensitive volume—is the same entry, so asking at
+    /// the bound path is what tells a published copy from one that failed before the rename. A file
+    /// that is gone, or one never stamped, counts as unchanged, as there.
+    fn bound_file_changed(&self, doc: DocId) -> bool {
+        let Some((own, then)) = self.disk_stamps.get(&doc) else { return false };
+        self.services.file_stamp.as_ref().and_then(|stamp| stamp(own)).is_some_and(|now| now != *then)
     }
 
     /// Whether a write to `path` replaced the file behind one of the documents saved there even
     /// though it reported an error (see [`Self::invalidate_incomplete_copy`]).
     pub(crate) fn published_over(&self, path: &str) -> bool {
-        self.session.savepoints_at(path).iter().any(|doc| self.changed_on_disk(*doc, path))
+        self.session.savepoints_at(path).iter().any(|doc| self.bound_file_changed(*doc))
     }
 
     /// Record this app's write only when it replaced the document's bound file; a copy elsewhere
