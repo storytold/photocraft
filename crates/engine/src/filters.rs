@@ -566,7 +566,10 @@ pub fn specs() -> Vec<CommandSpec> {
 /// such as the Filter Gallery record the layer they ran on, and Last Filter applies to the
 /// current layer, as in Photoshop (#1270).
 pub fn last_filter(s: &Session) -> Option<(String, Value)> {
-    let (id, mut params) = s.journal.iter().rev().find(|(id, _)| params_for(id, &Value::Null).is_some() && id.starts_with("filter.")).cloned()?;
+    // The filter that ran last, kept apart from the journal, which a script file run during recording is cut
+    // from; else the last one the journal holds.
+    let from_journal = || s.journal.iter().rev().find(|(id, _)| params_for(id, &Value::Null).is_some() && id.starts_with("filter.")).cloned();
+    let (id, mut params) = s.last_filter.clone().or_else(from_journal)?;
     if let Value::Object(m) = &mut params {
         m.remove("layer");
         m.remove("target");

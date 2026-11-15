@@ -173,6 +173,11 @@ pub struct ActionState {
     /// Steps run by the current top-level script and everything it calls.
     #[serde(skip)]
     pub script_steps: u64,
+    /// Journal length where a script file run during recording began (#13849): the entries from there
+    /// on are the file's own, dropped when it ends, and never pending steps of the recorded action,
+    /// so a flush its commands cause (`actions.play`, `actions.move`) cannot commit them.
+    #[serde(skip)]
+    pub file_mark: Option<usize>,
     /// Sets made with New Set (`actions.newSet`), or loaded from an `.atn` with no actions, that
     /// hold no action yet: the Actions panel shows them as empty folders. Save Actions… writes one
     /// to an `.atn` as Photoshop does, but the preset store keeps sets through their actions, so
@@ -660,7 +665,9 @@ const RECORDED_WITH_DIALOG: &[&str] = &["edit.checkSpelling"];
 /// Replayable journal entries not yet committed to this action while recording.
 pub fn pending_steps(s: &Session, action: usize) -> impl Iterator<Item = &(String, Value)> {
     let from = s.actions.recording.filter(|(_, i)| *i == action).map_or(s.journal.len(), |(from, _)| from);
-    s.journal.iter().skip(from).filter(|(id, p)| recorded(id, p) && (s.actions.record_tools || !tool_stroke(id)))
+    // Under a script file's run (`file_mark`), only what came before the file is pending.
+    let upto = s.actions.file_mark.map_or(usize::MAX, |mark| mark.saturating_sub(from));
+    s.journal.iter().skip(from).take(upto).filter(|(id, p)| recorded(id, p) && (s.actions.record_tools || !tool_stroke(id)))
 }
 
 /// The point-based painting tools committed by the canvas; fills and gradients remain commands.

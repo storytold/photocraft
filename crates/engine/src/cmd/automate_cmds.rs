@@ -184,8 +184,17 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     // steps keeps recording the commands it runs (#3057).
     let drop_entries = p.get("path").and_then(Value::as_str).is_some() && s.actions.recording.is_some();
     let mark = s.journal.len();
+    // While the file runs, what it journals is not the recording's: a flush its commands cause (an
+    // `actions.play`, or `actions.move` of a recorded step) commits only what was recorded before it,
+    // and the recording index stays live, so a script that moves the recorded action keeps recording
+    // into it. A nested file keeps the outer one's mark (the earlier one).
+    let outer = s.actions.file_mark;
+    if drop_entries {
+        s.actions.file_mark = Some(outer.map_or(mark, |outer| outer.min(mark)));
+    }
     let results = run_steps(s, &steps);
     if drop_entries {
+        s.actions.file_mark = outer;
         s.journal.truncate(mark);
         if let Some((start, _)) = s.actions.recording.as_mut() {
             *start = (*start).min(mark);

@@ -157,3 +157,72 @@ fn repeat_transform_repeats_a_transform_run_by_a_script_file_while_recording() {
     let again = s.execute("edit.transform.again", json!({}));
     assert!(again.is_ok(), "Repeat Transform has the script's transform to repeat: {again:?}");
 }
+
+/// CodeRabbit on #15118: a command in the script file followed by `actions.play` of another action must not
+/// reach the recorded action: the play flushes the recording, which used to commit the file's earlier
+/// command, so the action held it and the Browse step, and playback ran it twice. What the user recorded
+/// before the file stays.
+#[test]
+fn a_command_then_actions_play_in_the_file_stays_one_browse_step() {
+    let mut s = new_doc();
+    s.execute("actions.record", json!({"name": "Inner"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    let (_dir, path) = script_file("layer.new.layer {}\nactions.play {\"action\": \"Inner\"}\n");
+    s.execute("actions.record", json!({"name": "Outer"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    let start = layers(&s);
+    s.execute("file.scripts.browse", json!({"path": path})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(steps(&mut s, "Outer"), json!([["select.all", {}], ["file.scripts.browse", {"path": path}]]), "the user's step, then the file as one step");
+    assert_eq!(layers(&s), start + 2, "the file ran when it was recorded: its layer and Inner's");
+    // Playing the action runs the file once more: two more layers, not four.
+    s.execute("actions.play", json!({"action": "Outer"})).unwrap();
+    assert_eq!(layers(&s), start + 4, "one run of the file, not two");
+}
+
+/// CodeRabbit on #15118: `actions.move` of a recorded step in the file, while the action holds no step but the
+/// file: the file's own command is no step to move. The file is still one Browse step.
+#[test]
+fn a_command_then_a_step_move_in_the_file_stays_one_browse_step() {
+    let mut s = new_doc();
+    let (_dir, path) = script_file("layer.new.layer {}\nactions.move {\"action\": \"Target\", \"step\": 0, \"to\": 0}\n");
+    s.execute("actions.record", json!({"name": "Target"})).unwrap();
+    let run = s.execute("file.scripts.browse", json!({"path": path})).unwrap();
+    assert_eq!(run["results"][0].get("error"), None, "{run}");
+    assert!(run["results"][1].get("error").is_some(), "no recorded step to move: {run}");
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(steps(&mut s, "Target"), json!([["file.scripts.browse", {"path": path}]]), "the file's command was not committed");
+}
+
+/// CodeRabbit on #15118: a script file that runs a command and then moves the recorded action keeps the
+/// recording on that action, and the user's step before the file stays in it.
+#[test]
+fn a_command_then_a_list_move_in_the_file_records_into_the_moved_action() {
+    let mut s = new_doc();
+    s.execute("actions.record", json!({"name": "Keep"})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    let (_dir, path) = script_file("layer.new.layer {}\nactions.move {\"action\": \"Target\", \"to\": 0}\n");
+    s.execute("actions.record", json!({"name": "Target"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("file.scripts.browse", json!({"path": path})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].name, "Target");
+    assert_eq!(steps(&mut s, "Target"), json!([["select.all", {}], ["file.scripts.browse", {"path": path}]]));
+    assert_eq!(steps(&mut s, "Keep"), json!([]));
+}
+
+/// CodeRabbit on #15118: Repeat Last Filter repeats a filter a script file applied during recording, though
+/// the file's journal entries are cut from the recorded action.
+#[test]
+fn repeat_last_filter_repeats_a_filter_run_by_a_script_file_while_recording() {
+    let (_dir, path) = script_file("filter.other.offset {\"horizontal\": 3}\n");
+    let mut s = new_doc();
+    s.execute("actions.record", json!({"name": "Shift"})).unwrap();
+    s.execute("file.scripts.browse", json!({"path": path})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert!(s.journal.iter().all(|(id, _)| id != "filter.other.offset"), "the entry is not in the journal");
+    let last = crate::filters::last_filter(&s);
+    assert_eq!(last, Some(("filter.other.offset".to_owned(), json!({"horizontal": 3}))), "the filter the script ran");
+    assert!(s.execute("filter.lastFilter", json!({})).is_ok());
+}

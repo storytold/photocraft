@@ -1961,6 +1961,10 @@ impl Session {
         if id == "edit.transform" {
             self.last_transform = Some(params.clone());
         }
+        // The same for Repeat Last Filter: the last filter command that ran, whatever the journal keeps.
+        if id.starts_with("filter.") && crate::filters::params_for(id, &Value::Null).is_some() {
+            self.last_filter = Some((id.to_string(), params.clone()));
+        }
         self.sync_preset_store();
         if !journal {
             return;

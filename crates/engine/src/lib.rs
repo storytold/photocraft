@@ -230,6 +230,9 @@ pub struct Session {
     /// Params of the last `edit.transform` that ran, kept apart from the journal (which a script run during
     /// recording is cut from) so Repeat Transform repeats it either way.
     pub(crate) last_transform: Option<Value>,
+    /// The last filter command that ran with its params, kept apart from the journal for the same reason
+    /// (a script file run during recording is cut from it), so Repeat Last Filter repeats it either way.
+    pub(crate) last_filter: Option<(String, Value)>,
     /// Text layer changed by the last journal entry, for folding Type tool keystrokes.
     typed_layer: Option<(photocraft_doc::DocId, LayerId)>,
     /// Coalescing key of the command being executed.
