@@ -28,6 +28,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod stroke_plus_copy_tests;
 
 #[derive(Clone, Copy)]
 enum P {
@@ -479,6 +481,19 @@ fn add_instance(f: &mut Map<String, Value>, kind: &str) {
         a.insert(pos, new);
     }
     f.insert("selected".into(), json!(id));
+}
+
+/// Inserts a copy of the instance `id` (every value, a new id) directly above it, and selects
+/// it: the "+" on a selected Stroke row, as measured in the reference (#15003).
+fn copy_instance(f: &mut Map<String, Value>, id: &str) {
+    let new_id = next_id(f);
+    if let Some(a) = f.get_mut("effects").and_then(Value::as_array_mut) {
+        let Some(pos) = a.iter().position(|e| e.get("id").and_then(Value::as_str) == Some(id)) else { return };
+        let Some(mut copy) = a.get(pos).cloned() else { return };
+        copy["id"] = json!(new_id);
+        a.insert(pos, copy);
+        f.insert("selected".into(), json!(new_id));
+    }
 }
 
 /// Removes an instance; the selection moves to a sibling of the same kind,
@@ -1472,7 +1487,13 @@ fn effect_list(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
                     continue;
                 }
                 if btn(ui, rect.right_center() - vec2(8.0, 0.0), "+", "plus") {
-                    add_instance(f, kind);
+                    // The "+" on the selected Stroke row copies it (#15003); "+" on another row
+                    // wasn't measured and keeps adding fresh values.
+                    if kind == "stroke" && is_sel {
+                        copy_instance(f, id);
+                    } else {
+                        add_instance(f, kind);
+                    }
                 }
             }
             if cresp.clicked() {
