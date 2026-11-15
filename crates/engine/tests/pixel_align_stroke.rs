@@ -163,10 +163,11 @@ fn custom_shape_presets_forward_pixel_alignment_without_changing_preset_geometry
     s.execute("shape.create", json!({"kind":"rect","rect":[10,10,60,60]})).unwrap();
     let preset = s.execute("shape.presets.new", json!({"name":"Pixel Alignment Regression"})).unwrap();
     let mut placed_path = None;
-    for value in [true, false] {
+    for (index, value) in [true, false].into_iter().enumerate() {
         s.execute("shape.presets.place", json!({"preset":preset["name"],"rect":[10,10,60,60],"useAlignedRendering":value,"stroke":{"width":1}})).unwrap();
         assert_eq!(s.execute("shape.info", json!({})).unwrap()["useAlignedRendering"], value);
         let st = s.active().unwrap();
+        assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, format!("{} {}", preset["name"].as_str().unwrap(), index + 1));
         let photocraft_doc::LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("shape") };
         if let Some(expected) = &placed_path {
             assert_eq!(&shape.path, expected, "alignment must not alter placed preset geometry");
