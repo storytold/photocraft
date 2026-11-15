@@ -284,12 +284,14 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 /// The body of a command dialog: the first handler whose marker the fields carry. The prompts and
 /// small editors come first; the rest are in `command_body_more`.
 /// The delete confirmations: a layer from the Layers panel's trash, a note (#11788), or all notes
-/// (#11791).
+/// (#11791); plus the Yes/No prompts that ask before a live shape is rasterized or HDR Toning
+/// flattens the image.
 fn delete_prompt(fields: &Fields) -> bool {
     crate::delete_layer_prompt::owns(fields)
         || crate::analysis_ui::owns_delete_note(fields)
         || crate::analysis_ui::owns_clear_notes(fields)
         || live_shape_prompt::owns(fields)
+        || crate::hdr_flatten_prompt::owns(fields)
 }
 
 fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
@@ -299,6 +301,8 @@ fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
         crate::analysis_ui::delete_note_body(ui, fields);
     } else if live_shape_prompt::owns(fields) {
         live_shape_prompt::body(ui, fields);
+    } else if crate::hdr_flatten_prompt::owns(fields) {
+        crate::hdr_flatten_prompt::body(ui, fields);
     } else {
         crate::delete_layer_prompt::body(ui, fields);
     }
@@ -320,7 +324,6 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::channel_options_ui::owns_new_spot(fields) => crate::channel_options_ui::new_spot_body(ui, fields),
         _ if crate::shape_dialog::owns(fields) => crate::shape_dialog::body(app, ui, fields),
         _ if delete_prompt(fields) => delete_prompt_body(ui, fields),
-        _ if crate::hdr_flatten_prompt::owns(fields) => crate::hdr_flatten_prompt::body(ui, fields),
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
         _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
@@ -1187,7 +1190,6 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::channel_options_ui::owns_new_spot(&d.fields) => crate::channel_options_ui::confirm_new_spot(app, &d.fields),
         _ if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),
         _ if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
-        _ if crate::hdr_flatten_prompt::owns(&d.fields) => crate::hdr_flatten_prompt::confirm(app, &d.fields),
         _ if crate::disk_change_prompt::owns(&d.fields) => crate::disk_change_prompt::confirm(app, &d.fields),
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
         _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
@@ -1215,6 +1217,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
         _ if live_shape_prompt::owns(&d.fields) => live_shape_prompt::confirm(app, &d.fields),
+        _ if crate::hdr_flatten_prompt::owns(&d.fields) => crate::hdr_flatten_prompt::confirm(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
