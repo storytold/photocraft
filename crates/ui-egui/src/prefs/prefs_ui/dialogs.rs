@@ -371,6 +371,11 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             // New assignments first, and the key still pending in the field before the rest: it was
             // pressed last, so it takes the key from a holder edited earlier in the dialog.
             let is_pending = |id: &String, sc: &String, alt: bool| pending.as_ref().is_some_and(|p| p.0 == *id && p.1 == *sc && p.2 == alt);
+            // It is new even when it equals the command's saved key: it was pressed last, so it takes
+            // the key from holders edited earlier in the dialog.
+            for (id, sc, new, is_alt) in &mut todo {
+                *new |= is_pending(id, sc, *is_alt);
+            }
             todo.sort_by_key(|(id, sc, new, is_alt)| (!new, !is_pending(id, sc, *is_alt)));
             let main_of = |ov: &BTreeMap<String, String>, id: &str, def: Option<&str>| -> Option<String> {
                 match ov.get(id) {

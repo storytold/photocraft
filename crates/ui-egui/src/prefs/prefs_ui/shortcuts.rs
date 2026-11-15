@@ -377,8 +377,14 @@ pub(super) fn settle_pending(
         if let Some(list) = alternates.get(command) {
             p.alternate_shortcuts.insert(command.to_string(), list.clone());
         }
+        // The command already has this key as its main one: that is the effective binding, and the
+        // key goes in as the main key (nothing is appended to the further keys).
+        if main.as_deref().and_then(prefs::normalize_shortcut).as_deref() == Some(sc) {
+            overrides.insert(command.to_string(), sc.to_string());
+            return Some((command.to_string(), sc.to_string(), false));
+        }
         let mut keys = p.alternates(command, main.as_deref());
-        if main.as_deref().and_then(prefs::normalize_shortcut).as_deref() != Some(sc) && !keys.iter().any(|k| k == sc) && keys.len() < prefs::MAX_ALTERNATES {
+        if !keys.iter().any(|k| k == sc) && keys.len() < prefs::MAX_ALTERNATES {
             keys.push(sc.to_string());
         }
         alternates.insert(command.to_string(), keys);

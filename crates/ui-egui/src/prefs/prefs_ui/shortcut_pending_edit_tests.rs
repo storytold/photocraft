@@ -353,3 +353,47 @@ fn a_pending_key_wins_over_an_earlier_edit_of_the_same_key_on_ok() {
     assert_eq!(p.shortcuts.get("edit.cut").map(String::as_str), Some(FREE_TEXT), "Cut has the key");
     assert_ne!(p.shortcuts.get("edit.copy").map(String::as_str), Some(FREE_TEXT), "Copy lost it");
 }
+
+/// The dialog opened over Cut already saved with FREE, filtered to the edit.c… commands.
+fn dialog_with_cut_saved_as_free() -> (Harness<'static, PhotocraftApp>, u64) {
+    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
+    });
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"edit.cut": FREE_TEXT}})).unwrap();
+    let ctx = h.ctx.clone();
+    let id = crate::menus::invoke(h.state_mut(), &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    f.insert("selected".into(), json!("edit.cut"));
+    f.insert("filter".into(), json!("edit.c"));
+    h.run_steps(4);
+    (h, id)
+}
+
+/// CodeRabbit on #14838: a pending key that equals the command's saved override is still the key
+/// pressed last: Cut keeps it (main or, through Add Shortcut, as its effective binding) and Copy,
+/// which was given it earlier in the dialog, loses it.
+#[test]
+fn a_pending_key_equal_to_the_saved_override_still_takes_the_key_on_ok() {
+    for further in [false, true] {
+        let (mut h, id) = dialog_with_cut_saved_as_free();
+        click_cell(&mut h, "Cmd+C");
+        press(&mut h, FREE.0, FREE.1);
+        press(&mut h, Key::Enter, Modifiers::NONE);
+        assert_eq!(main_key(&h, id, "edit.copy"), json!(FREE_TEXT), "Copy has the key in the dialog");
+        // Cut's cell shows the same key as Copy's now, so open its field through the dialog's fields:
+        // the main key, or Add Shortcut.
+        let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+        f.insert("selected".into(), json!("edit.cut"));
+        f.insert("capture".into(), json!(true));
+        f.insert("captureAlt".into(), json!(further));
+        h.run_steps(3);
+        press(&mut h, FREE.0, FREE.1);
+        assert_eq!(field(&h, id, super::PENDING), json!(FREE_TEXT));
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        h.run_steps(4);
+        let p = h.state().session.prefs();
+        assert_eq!(p.shortcuts.get("edit.cut").map(String::as_str), Some(FREE_TEXT), "further {further}: Cut keeps the key");
+        assert_ne!(p.shortcuts.get("edit.copy").map(String::as_str), Some(FREE_TEXT), "further {further}: Copy lost it");
+    }
+}
