@@ -23,17 +23,23 @@ pub(crate) fn row_value(x: f32, min: f32, max: f32, decimals: Option<u32>) -> f3
 
 pub(super) fn sliders(ui: &mut egui::Ui, v: &mut Value, rows: &[SliderRow]) -> Edit {
     let mut e = Edit::default();
-    for &(key, text, min, max, default, unit, decimals) in rows {
-        let mut x = num(v, key, default).clamp(min, max);
-        // A double-click on the slider puts it back to its default (Photoshop).
-        let gestures = widgets::RowGestures { reset: Some(default), wheel_step: None, ..Default::default() };
-        let r = widgets::slider_row_prec(ui, text, &mut x, min..=max, unit, None, gestures, decimals);
-        if r.changed() {
-            v[key] = json!(row_value(x, min, max, decimals));
-        }
-        e.add(Edit::of(&r));
+    for &row in rows {
+        e.add(slider(ui, v, row, None));
     }
     e
+}
+
+/// One [`sliders`] row; `pivot` draws its track reversed around that value
+/// ([`widgets::RowGestures::pivot`]).
+pub(super) fn slider(ui: &mut egui::Ui, v: &mut Value, (key, text, min, max, default, unit, decimals): SliderRow, pivot: Option<f32>) -> Edit {
+    let mut x = num(v, key, default).clamp(min, max);
+    // A double-click on the slider puts it back to its default (Photoshop).
+    let gestures = widgets::RowGestures { reset: Some(default), wheel_step: None, pivot, ..Default::default() };
+    let r = widgets::slider_row_prec(ui, text, &mut x, min..=max, unit, None, gestures, decimals);
+    if r.changed() {
+        v[key] = json!(row_value(x, min, max, decimals));
+    }
+    Edit::of(&r)
 }
 
 fn gradient_slider(ui: &mut egui::Ui, text: &str, x: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str, stops: [Color32; 2], dynamic: bool) -> Edit {
