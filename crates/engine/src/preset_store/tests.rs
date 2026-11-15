@@ -296,6 +296,31 @@ fn reordering_presets_and_groups_persists() {
 }
 
 #[test]
+fn a_group_file_with_an_overlong_group_name_is_skipped() {
+    let mem = MemBackend::default();
+    let long = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    let body = format!(r#"{{"format":"{GROUP_FORMAT}","version":1,"group":"{long}","presets":[]}}"#);
+    mem.files.lock().unwrap().insert("long-00000000.pcbrushes".into(), body.into_bytes());
+    let o = open(Box::new(mem));
+    assert!(o.presets.is_empty());
+    assert!(o.warnings.iter().any(|w| w.contains("group name")), "{:?}", o.warnings);
+}
+
+#[test]
+fn a_group_name_over_the_limit_is_not_written() {
+    let dir = TempDir::new("long-group");
+    let (mut s, _) = session(&dir);
+    let long = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    s.tools.presets.push(sampled("Long", &long, tip8(8, 8, 1)));
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let w = s.preset_store.as_mut().unwrap().take_warnings();
+    assert!(w.iter().any(|w| w.contains("group name")), "{w:?}");
+    let (t, _) = session(&dir);
+    assert!(photocraft_paint::presets::find(&t.tools.presets, "Long").is_none());
+}
+
+#[test]
 fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     let dir = TempDir::new("corrupt");
     let (mut s, _) = session(&dir);
@@ -1137,6 +1162,69 @@ fn migration_preserves_duplicate_names_but_refuses_duplicate_ids() {
     assert_eq!(mem.read(LEGACY_PATTERNS_FILE, MAX_PATTERNS_BYTES).unwrap(), old);
 }
 
+#[test]
+fn a_group_that_cannot_be_saved_keeps_the_old_group_file_and_tips() {
+    let dir = TempDir::new("keep-old");
+    let (mut s, _) = session(&dir);
+    s.tools.presets.push(sampled("Keep", "Old", tip8(8, 8, 1)));
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let before = dir.files();
+    assert!(before.iter().any(|f| f.starts_with("tips/")), "{before:?}");
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let after = dir.files();
+    assert!(before.iter().all(|f| after.contains(f)), "{before:?} -> {after:?}");
+    // The names the commands accept (255 characters, multi-byte) are saved.
+    let name = "\u{754c}".repeat(255);
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = name.clone();
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let (t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(photocraft_paint::presets::find(&t.tools.presets, "Keep").map(|p| p.group.clone()), Some(name));
+}
+
+#[test]
+fn a_failed_group_write_changes_nothing_else_until_the_next_sync() {
+    let dir = TempDir::new("fail-fast");
+    let (mut s, _) = session(&dir);
+    s.tools.presets.push(sampled("Keep", "Old", tip8(8, 8, 1)));
+    s.tools.presets.push(sampled("Stay", "Old", tip8(8, 8, 3)));
+    s.tools.presets.push(sampled("Drop", "Gone", tip8(8, 8, 2)));
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    // "Keep" moves to a group that cannot be written, "Drop" is deleted. The group that gains
+    // "Keep" fails first; the source group is not rewritten without it and the other deletion waits.
+    s.tools.presets.retain(|p| p.name != "Drop");
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    assert_ne!(s.preset_store.as_ref().unwrap().synced_rev, Some(s.tools.presets_rev), "the failed write leaves the revision pending");
+    let (t, _) = session(&dir);
+    for name in ["Keep", "Stay", "Drop"] {
+        assert!(photocraft_paint::presets::find(&t.tools.presets, name).is_some(), "{name}: the old files are all still there");
+    }
+    // Once the move can be written, the next sync finishes everything.
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "New".into();
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let (t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(photocraft_paint::presets::find(&t.tools.presets, "Keep").map(|p| p.group.clone()), Some("New".into()));
+    assert!(photocraft_paint::presets::find(&t.tools.presets, "Stay").is_some());
+    assert!(photocraft_paint::presets::find(&t.tools.presets, "Drop").is_none(), "the deferred deletion happened");
+}
+
 /// A symlink planted among the presets must not carry a managed write to its target: the
 /// document writer follows links on purpose, the store confines itself to its directory.
 #[cfg(unix)]
@@ -1153,4 +1241,36 @@ fn a_symlinked_preset_entry_is_refused_not_written_through() {
     assert_eq!(std::fs::read(&outside).unwrap(), b"victim");
     be.write("fresh.json", b"{}").unwrap();
     assert_eq!(be.read("fresh.json", 1024).unwrap(), b"{}");
+}
+
+#[test]
+fn a_failed_group_write_is_warned_once_not_at_every_retry() {
+    let dir = TempDir::new("warn-once");
+    let (mut s, _) = session(&dir);
+    s.tools.presets.push(sampled("Keep", "Old", tip8(8, 8, 1)));
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let _ = s.preset_store.as_mut().unwrap().take_warnings();
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    assert_eq!(s.preset_store.as_mut().unwrap().take_warnings().len(), 1);
+    // Every later command retries the pending write; the same failure is not reported again.
+    s.sync_preset_store();
+    s.sync_preset_store();
+    assert!(s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+    // Once a sync completes, a new failure is reported again.
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "Old".into();
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    for p in s.tools.presets.iter_mut().filter(|p| p.name == "Keep") {
+        p.group = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    }
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    assert_eq!(s.preset_store.as_mut().unwrap().take_warnings().len(), 1);
 }

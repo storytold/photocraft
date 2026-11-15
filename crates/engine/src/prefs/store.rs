@@ -46,6 +46,11 @@ impl InvalidPref {
     }
 }
 
+/// Whole-value readability checks [`read_lenient`] makes per value (each one re-reads everything
+/// laid over so far); past it the remaining keys keep their defaults and are reported invalid.
+/// A real preferences file holds a few hundred keys.
+const LENIENT_CHECKS: usize = 2048;
+
 /// How deep [`read_lenient`] looks for the readable parts of an unreadable value.
 const LENIENT_DEPTH: usize = 32;
 
@@ -62,7 +67,11 @@ where
     }
     let prefix: Vec<String> = prefix.iter().map(|k| (*k).to_string()).collect();
     let mut acc = serde_json::to_value(T::default()).unwrap_or(Value::Null);
-    let fits = |root: &Value| T::deserialize(root).is_ok();
+    let checks = std::cell::Cell::new(0usize);
+    let fits = |root: &Value| {
+        checks.set(checks.get() + 1);
+        checks.get() <= LENIENT_CHECKS && T::deserialize(root).is_ok()
+    };
     match v {
         Value::Object(file) if acc.is_object() && fits(&acc) => {
             lay_over(&mut acc, &mut Vec::new(), file, &fits, &prefix, invalid);

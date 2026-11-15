@@ -233,6 +233,9 @@ pub(super) fn asset_output_path(dir: &str, relative: &str) -> Result<(String, St
     Ok((output.to_string_lossy().into_owned(), reported.to_string_lossy().into_owned()))
 }
 
+/// Most asset files (names x default variants) one Image Assets run may produce.
+const MAX_ASSET_FILES: usize = 4096;
+
 /// Exports every asset named by `doc`'s layers into `dir`. Returns (files, errors).
 ///
 /// Each file is written once per run (#6614): when two layers (or two default variants) name the
@@ -263,6 +266,10 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
         Some(d) if !d.is_empty() => d,
         _ => vec![AssetDefault::default()],
     };
+    // Layer names multiply by the default variants into renders, encodes and writes.
+    if jobs.len().saturating_mul(variants.len()) > MAX_ASSET_FILES {
+        return (Vec::new(), vec![json!({"error": format!("the layer names ask for more than {MAX_ASSET_FILES} asset files in one run")})]);
+    }
     let mut files = Vec::new();
     let mut errors = Vec::new();
     let mut written = std::collections::HashSet::new();

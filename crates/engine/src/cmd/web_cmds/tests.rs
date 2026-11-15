@@ -776,6 +776,18 @@ fn image_assets_are_generated_now_and_on_save() {
     assert_eq!(decode(&files[0]).dimensions(), (128, 80));
 }
 
+#[test]
+fn image_assets_refuse_a_layer_name_that_asks_for_thousands_of_files() {
+    let dir = tmp("asset-flood");
+    let s = session(8);
+    let mut d = (*s.active().unwrap().doc).clone();
+    let id = d.layers[0].id;
+    d.layer_mut(id).unwrap().name = (0..5000).map(|i| format!("a{i}.png")).collect::<Vec<_>>().join(",");
+    let (files, errors) = generate_assets(&d, &dir);
+    assert!(files.is_empty(), "{files:?}");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+}
+
 /// A Save Document script that closes an earlier clean tab (#11121): the asset generation that
 /// follows re-resolves the saved document's identity, so the shifted list neither skips A's
 /// outputs nor exports some other tab's.
