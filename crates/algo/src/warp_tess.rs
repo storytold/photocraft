@@ -683,8 +683,9 @@ fn parent_of(c: &Cell) -> (i64, i64, i64, i64) {
 /// reference's split warps show (left and right cells of a row always agree there, whatever their
 /// own twist): the strip across the whole patch at that height splits when its top row of
 /// control quads twists past [`STRIP_TOP_TWIST_TOL`], when its columns at the patch's sides and
-/// middle or any column of its control net ask for a split, or when the other strip's largest twist, per [`STRIP_WIDTH`] px of the
-/// patch's width, passes [`STRIP_OTHER_TWIST_TOL`]. Their own twist then spreads no further.
+/// middle or any column of its control net ask for a split, or when the other strip's largest
+/// twist, per [`STRIP_WIDTH`] px of the patch's width, passes [`STRIP_OTHER_TWIST_TOL`]. Their
+/// own twist then spreads no further.
 fn strip_down_cuts(net: &Net, level_cells: &[Cell], decisions: &mut [(bool, bool)], twisted: &mut [bool]) {
     let halves = level_cells.len() == 4 && level_cells.iter().all(|c| (c[1] - c[0] - 0.5).abs() < EPS && (c[3] - c[2] - 0.5).abs() < EPS);
     if !halves {
@@ -742,7 +743,7 @@ fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
 /// A cell's twist as `rules` measure it, with the tolerances it must pass to split (alone, and
 /// when the cell already splits across): `(twist, tolerance, tolerance when across)`.
 fn twist_test(sub: &Net, rules: &Rules, whole: bool, full_height: bool, goes_across: bool) -> (f64, f64, f64) {
-    let (p00, p10, p01) = (sub.at(0, 0), sub.at(sub.nu - 1, 0), sub.at(0, sub.nv - 1));
+    let (p00, p10, p01) = (sub.at(0, 0), sub.at(sub.nu.saturating_sub(1), 0), sub.at(0, sub.nv.saturating_sub(1)));
     let (du, dv) = ([p10[0] - p00[0], p10[1] - p00[1]], [p01[0] - p00[0], p01[1] - p00[1]]);
     let first_row = rules.whole_first_row && rules.twist_spreads && whole && !goes_across;
     let tw = match (rules.twist_by_side, goes_across) {
@@ -919,7 +920,7 @@ fn lerp(a: P, b: P, s: f64) -> P {
 }
 
 /// The point of the segment `a`-`b` nearest `p`: a point dropped onto a bigger cell's edge.
-fn onto(a: P, b: P, p: P) -> P {
+pub(crate) fn onto(a: P, b: P, p: P) -> P {
     let d = [b[0] - a[0], b[1] - a[1]];
     let l2 = d[0] * d[0] + d[1] * d[1];
     let s = if l2 > 0.0 { (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };

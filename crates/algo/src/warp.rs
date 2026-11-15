@@ -554,10 +554,7 @@ fn stitch_patches(m: crate::warp_tess::EnvelopeMesh, us: &[f64], vs: &[f64]) -> 
             // Dropped onto the edge from where its own patch put it (the nearest point of the edge),
             // as a point inside a patch is dropped onto a bigger cell's edge.
             if let Some(slot) = pos.get_mut(k) {
-                let d = [pb[0] - pa[0], pb[1] - pa[1]];
-                let l2 = d[0] * d[0] + d[1] * d[1];
-                let w = if l2 > 0.0 { (((slot[0] - pa[0]) * d[0] + (slot[1] - pa[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { (t - from) / (to - from) };
-                *slot = [pa[0] + d[0] * w, pa[1] + d[1] * w];
+                *slot = crate::warp_tess::onto(pa, pb, *slot);
             }
             if let Some(m) = moved.get_mut(k) {
                 *m = true;
