@@ -1,9 +1,9 @@
 //! Photoshop refuses to paint on or move a hidden layer (#571): the painting and retouching
 //! tools, the Paint Bucket, the Gradient and the Move tool stop with "the target layer is hidden"
 //! instead of changing pixels nobody can see. Filters are refused too (Photoshop greys the Filter
-//! menu out), and so are Cut, Copy, Clear and Fill while there is a selection (#10476); without
-//! one, Fill fills the whole hidden layer, as Photoshop does. A layer inside a hidden group is
-//! hidden too. An alpha channel or Quick Mask target has no layer, so it is never refused.
+//! menu out), and so is Fill, with a selection or without one, and Cut and Clear while there is a
+//! selection (#10476). Copy is not: Photoshop copies a hidden layer's pixels, and Paste makes a
+//! visible layer of them. A layer inside a hidden group is hidden too. An alpha channel or Quick Mask target has no layer, so it is never refused.
 
 use photocraft_doc::{Document, LayerId};
 use serde_json::Value;
@@ -13,7 +13,7 @@ use crate::Session;
 /// Photoshop's alert text.
 pub const HIDDEN: &str = "Could not complete your request because the target layer is hidden.";
 
-/// Commands that paint on, or move, the target layer.
+/// Commands that paint on, fill or move the target layer.
 const GATED: &[&str] = &[
     "paint.stroke",
     "paint.pencil",
@@ -36,13 +36,6 @@ const GATED: &[&str] = &[
     "paint.historyBrush",
     "paint.artHistoryBrush",
     "layer.translate",
-];
-
-/// Commands refused on a hidden layer only while there is a selection (#10476).
-const GATED_WITH_SELECTION: &[&str] = &[
-    "edit.cut",
-    "edit.copy",
-    "edit.clear",
     "edit.fill",
     "edit.fillForeground",
     "edit.fillBackground",
@@ -50,6 +43,9 @@ const GATED_WITH_SELECTION: &[&str] = &[
     "edit.fillBackgroundPreserve",
     "edit.fillHistory",
 ];
+
+/// Commands refused on a hidden layer only while there is a selection (#10476).
+const GATED_WITH_SELECTION: &[&str] = &["edit.cut", "edit.clear"];
 
 /// Does command `id` change the target layer's pixels through a filter. Convert for Smart Filters
 /// only wraps the layer, so it is not one.
@@ -94,11 +90,11 @@ fn acts_on_channel(id: &str, params: &Value) -> bool {
     id != "edit.cut" && uses_channel_target(id) && crate::channel_cmds::is_channel_target(params)
 }
 
-/// The layer command `id` acts on, resolved the way the command resolves it. Cut and Copy read a
-/// `"layer"` param only when they work on colour channels; their composite path takes the active
+/// The layer command `id` acts on, resolved the way the command resolves it. Cut reads a
+/// `"layer"` param only when it works on colour channels; its composite path takes the active
 /// layer, so a visible layer named there must not clear the refusal (#10476 review).
 fn layer_of(s: &Session, id: &str, params: &Value) -> Option<LayerId> {
-    if matches!(id, "edit.cut" | "edit.copy") && crate::color_channels::clip_colors(s, params).ok().flatten().is_none() {
+    if id == "edit.cut" && crate::color_channels::clip_colors(s, params).ok().flatten().is_none() {
         return s.active()?.active_layer;
     }
     crate::commands::layer_param(s, params).ok()
@@ -169,8 +165,9 @@ mod tests {
         assert_ne!(pixel(&mut s), json!([1.0, 1.0, 1.0, 1.0]));
     }
 
-    /// #10476: filters are refused and greyed out on a hidden layer; Cut, Copy, Clear and Fill are
-    /// refused while there is a selection, and Fill without one fills the whole hidden layer.
+    /// #10476: filters are refused and greyed out on a hidden layer; Cut and Clear are refused while
+    /// there is a selection, Fill with or without one (davidmann4 on #10476, checked in Photoshop),
+    /// and Copy goes through: Photoshop copies a hidden layer's pixels.
     #[test]
     fn filters_and_selection_edits_on_a_hidden_layer_are_refused() {
         let (mut s, id) = session();
@@ -182,7 +179,6 @@ mod tests {
             ("filter.blur.gaussianBlur", json!({"radius": 2})),
             ("filter.other.minimum", json!({"radius": 1})),
             ("edit.cut", json!({})),
-            ("edit.copy", json!({})),
             ("edit.clear", json!({})),
             ("edit.fill", json!({"color": [1.0, 0.0, 0.0]})),
             ("edit.fillForeground", json!({})),
@@ -194,11 +190,17 @@ mod tests {
         assert!(!s.is_enabled("filter.blur.gaussianBlur"), "the filter is greyed out");
         assert!(s.is_enabled("filter.convertForSmartFilters"), "converting only wraps the layer");
         assert!(s.is_enabled("edit.fill"), "Fill stays in the menu and is refused when it runs");
-        // Without a selection Fill fills the whole hidden layer, as in Photoshop; filters stay refused.
+        // Copy copies the hidden layer's pixels, and Paste makes a visible layer of them.
+        s.execute("edit.copy", json!({})).unwrap();
+        s.execute("edit.paste", json!({})).unwrap();
+        assert_eq!(pixel(&mut s), json!([0.0, 1.0, 0.0, 1.0]), "the pasted layer shows the hidden green");
+        s.execute("edit.undo", json!({})).unwrap();
+        // Without a selection Fill is refused too; the hidden layer keeps its green.
         s.execute("select.deselect", json!({})).unwrap();
-        s.execute("edit.fill", json!({"color": [1.0, 0.0, 0.0]})).unwrap();
+        let e = s.execute("edit.fill", json!({"color": [1.0, 0.0, 0.0]})).unwrap_err().to_string();
+        assert!(e.contains(HIDDEN), "Fill without a selection: {e}");
         s.execute("layer.setProps", json!({"layer": id, "visible": true})).unwrap();
-        assert_eq!(pixel(&mut s), json!([1.0, 0.0, 0.0, 1.0]));
+        assert_eq!(pixel(&mut s), json!([0.0, 1.0, 0.0, 1.0]));
         assert!(s.is_enabled("filter.blur.gaussianBlur"), "shown again, it filters");
     }
 
@@ -243,8 +245,7 @@ mod tests {
 
     /// #10476 review: the exemption follows the target and the layer each command really uses.
     /// Liquify and Lens Correction take their layer from the params and never a channel; Cut cuts
-    /// the layer's pixels whatever is targeted; an explicit mask target beats the Channels panel
-    /// for Copy; and Clear does read a `"layer"` param, so a hidden layer named there is refused
+    /// the layer's pixels whatever is targeted; and Clear does read a `"layer"` param, so a hidden layer named there is refused
     /// even from a visible active layer.
     #[test]
     fn the_exemption_follows_the_target_and_layer_each_command_really_uses() {
@@ -261,8 +262,6 @@ mod tests {
             ("filter.lensCorrection", json!({"target": {"channel": 0}, "scale": 1.0})),
             // Cut copies the channel it is given but clears the layer's own pixels.
             ("edit.cut", json!({"target": {"channel": 0}})),
-            // A mask target wins over the targeted alpha channel: Copy copies the layer's mask.
-            ("edit.copy", json!({"target": "mask"})),
         ] {
             let e = s.execute(cmd, p.clone()).unwrap_err().to_string();
             assert!(e.contains(HIDDEN), "{cmd} {p}: {e}");
@@ -273,9 +272,8 @@ mod tests {
         for cmd in ["filter.adaptiveWideAngle", "filter.cameraRaw", "filter.vanishingPoint"] {
             assert_eq!(super::refusal(&s, cmd, &json!({"target": {"channel": 0}})), Some(HIDDEN), "{cmd}");
         }
-        // Clear and Copy do act on the targeted channel, so they go through.
+        // Clear does act on the targeted channel, so it goes through.
         s.execute("edit.clear", json!({})).unwrap();
-        s.execute("edit.copy", json!({})).unwrap();
         // Clear takes a `"layer"` param, so the hidden layer named there is refused even while a
         // visible layer is active and the composite is targeted.
         let shown = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
@@ -310,7 +308,8 @@ mod tests {
 
     /// #10476 review: the refusal is about the one layer, not the document. With a hidden layer
     /// and a visible one side by side and a selection active, every gated command is refused on
-    /// the hidden one and goes through on the visible one, in the same session.
+    /// the hidden one and goes through on the visible one, in the same session. (Copy is not
+    /// gated: it copies a hidden layer too.)
     #[test]
     fn a_visible_layer_still_takes_every_command_the_hidden_one_refuses() {
         let (mut s, hidden) = session();
@@ -322,7 +321,6 @@ mod tests {
         let cmds = [
             ("filter.blur.gaussianBlur", json!({"radius": 2})),
             ("edit.cut", json!({})),
-            ("edit.copy", json!({})),
             ("edit.clear", json!({})),
             ("edit.fill", json!({"color": [1.0, 0.0, 0.0]})),
         ];
