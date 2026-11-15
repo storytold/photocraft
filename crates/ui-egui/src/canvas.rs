@@ -1936,24 +1936,83 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
 /// The Pencil's cursor (and the Eraser's in Pencil or Block mode): the outline of the whole pixels
 /// its dab fills, on the pixel grid. A round tip is a disc, a square or Block one its square. The
 /// hotspot is drawn as well when `crosshair` asks for it or the outline is too small to see.
-fn pencil_outline_cursor(painter: &egui::Painter, xf: &ViewXform, p: Pos2, size: f32, block: bool, crosshair: bool) -> egui::CursorIcon {
+fn pencil_outline_cursor(painter: &egui::Painter, xf: &ViewXform, p: Pos2, size: f32, block: bool, crosshair: bool, cursor_color: Color32) -> egui::CursorIcon {
     let ppp = painter.ctx().pixels_per_point();
     let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
+    // Keep outline moving smoothly with pointer. No extra half-document-pixel offset.
+    let sq = sq.translate(p - sq.center());
     let px = 1.0 / ppp;
-    let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
-    if !block && pencil_tip_is_round(size) {
-        let r = sq.width() / 2.0;
-        painter.circle_stroke(sq.center(), r + px / 2.0, dark);
-        painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
+    let fringe_color = if cursor_color == Color32::WHITE {
+        Color32::from_rgba_unmultiplied(0x2A, 0x2A, 0x2A, 89)
     } else {
-        painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
-        painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
+        Color32::from_rgba_unmultiplied(0xFF, 0xFD, 0xFF, 89)
+    };
+    let outline_strokes = [
+        Stroke::new(if block { px } else { 3.0 * px }, if block { cursor_color } else { fringe_color }),
+        Stroke::new(px, cursor_color),
+    ];
+    let tip_pixels = size.round().clamp(1.0, 2048.0);
+    let smooth_circle = !block && pencil_tip_is_round(size) && sq.width() * ppp / tip_pixels < 3.0;
+    for edge_stroke in outline_strokes {
+        if smooth_circle {
+            painter.circle_stroke(sq.center(), sq.width() * 0.5, edge_stroke);
+        } else if !block && pencil_tip_is_round(size) {
+            let n = (size.round() as usize).clamp(1, 2048);
+            let cell = sq.width() / n as f32;
+            let radius = n as f32 / 2.0;
+            let filled = |x: isize, y: isize| -> bool {
+                if x < 0 || y < 0 || x >= n as isize || y >= n as isize { return false; }
+                let dx = x as f32 + 0.5 - radius;
+                let dy = y as f32 + 0.5 - radius;
+                dx * dx + dy * dy <= radius * radius
+            };
+            let edge = edge_stroke;
+            for y in 0..n as isize {
+                for x in 0..n as isize {
+                    if !filled(x, y) { continue; }
+                    let x0 = sq.left() + x as f32 * cell;
+                    let y0 = sq.top() + y as f32 * cell;
+                    let x1 = x0 + cell;
+                    let y1 = y0 + cell;
+                    if !filled(x, y - 1) { painter.line_segment([pos2(x0, y0), pos2(x1, y0)], edge); }
+                    if !filled(x, y + 1) { painter.line_segment([pos2(x0, y1), pos2(x1, y1)], edge); }
+                    if !filled(x - 1, y) { painter.line_segment([pos2(x0, y0), pos2(x0, y1)], edge); }
+                    if !filled(x + 1, y) { painter.line_segment([pos2(x1, y0), pos2(x1, y1)], edge); }
+                }
+            }
+        } else {
+            painter.rect_stroke(sq, 0.0, edge_stroke, if block { egui::StrokeKind::Inside } else { egui::StrokeKind::Middle });
+        }
     }
-    // Too small to see where it is: the hotspot as well.
     if crosshair || sq.width() < 6.0 {
-        crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
+        let cx = (p.x * ppp).floor();
+        let cy = (p.y * ppp).floor();
+        painter.rect_filled(Rect::from_min_max(pos2((cx - 3.0) * px, cy * px), pos2((cx + 4.0) * px, (cy + 1.0) * px)), 0.0, cursor_color);
+        painter.rect_filled(Rect::from_min_max(pos2(cx * px, (cy - 3.0) * px), pos2((cx + 1.0) * px, (cy + 4.0) * px)), 0.0, cursor_color);
     }
     egui::CursorIcon::None
+}
+
+fn pencil_adaptive_cursor_color(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, p: Pos2) -> Color32 {
+    let [x, y] = xf.to_doc(p);
+    if !x.is_finite() || !y.is_finite() { return Color32::WHITE; }
+    let pixel = (x.floor() as i64, y.floor() as i64);
+    let document = app.session.active().map(|st| &st.doc as *const _ as usize).unwrap_or(0);
+    let key = egui::Id::new("pencil-adaptive-cursor-pixel");
+    if app.drag.is_none() {
+        if let Some((old_doc, old_pixel, old_color)) = ctx.data(|d| d.get_temp::<(usize, (i64, i64), Color32)>(key)) {
+            if old_doc == document && old_pixel == pixel { return old_color; }
+        }
+    }
+    let color = match cursors::pencil_pixel_color(app, x, y) {
+        Some([r, g, b]) => {
+            let brightness = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            if brightness >= 0.5 { Color32::BLACK } else { Color32::WHITE }
+        }
+        None => Color32::WHITE,
+    };
+    ctx.data_mut(|d| d.insert_temp(key, (document, pixel, color)));
+    color
 }
 
 /// A pen tool's cursor at screen point `p` (document point `doc`): the crosshair for precise Other
@@ -2049,7 +2108,13 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                     _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
                         let block = crate::eraser_ui::block_mode(app, tool);
                         let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
-                        pencil_outline_cursor(painter, xf, p, size, block, cur.show_crosshair_in_brush_tip)
+                        let eraser_pencil = crate::eraser_ui::pencil_mode(app, tool);
+                        let color = if tool == Tool::Pencil || eraser_pencil {
+                            pencil_adaptive_cursor_color(app, painter.ctx(), xf, p)
+                        } else {
+                            Color32::WHITE
+                        };
+                        pencil_outline_cursor(painter, xf, p, size, block, tool == Tool::Pencil || eraser_pencil || cur.show_crosshair_in_brush_tip, color)
                     }
                     // The Healing Brush's ⌥ (source point): the reference's fixed target at any tip
                     // size (#12113). Unmeasured cases keep the tip with its centre mark below.

@@ -450,6 +450,27 @@ pub(crate) fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option
     sample_color(app, x, y, "all")
 }
 
+/// Sample exactly one visible composite document pixel for the Pencil cursor.
+/// Unlike the Eyedropper, this ignores the user-selected sampling radius.
+pub(crate) fn pencil_pixel_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
+    if !(x.is_finite() && y.is_finite()) {
+        return None;
+    }
+
+    let v = app.run("document.sampleColor", json!({
+        "x": x.floor() + 0.5,
+        "y": y.floor() + 0.5,
+        "size": 1,
+        "sampleLayer": "all",
+        "zoom": 1.0
+    })).ok()?;
+
+    match serde_json::from_value::<Vec<f32>>(v).ok()?[..] {
+        [r, g, b, a] if a > 0.0 => Some([r, g, b]),
+        _ => None,
+    }
+}
+
 pub(crate) fn alt_loads_mixer(tool: Tool, mods: egui::Modifiers) -> bool {
     mods.alt && !mods.ctrl && tool == Tool::MixerBrush
 }
