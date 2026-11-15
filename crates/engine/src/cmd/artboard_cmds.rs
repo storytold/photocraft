@@ -631,11 +631,7 @@ fn clear_artboard_guides(s: &mut Session) -> Result<Value> {
 pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>> {
     let Some(l) = doc.layer(id) else { return Ok(None) };
     let Some(r) = l.artboard().map(|a| a.rect) else { return Ok(None) };
-    // A board starting at i32::MIN needs an offset of 2^31 to reach the origin, one past
-    // i32::MAX (#931).
-    let (Some(dx), Some(dy)) = (r.x0.checked_neg(), r.y0.checked_neg()) else {
-        return Err(EngineError::Other(format!("artboard `{}` at ({}, {}) is too far from the origin to export", l.name, r.x0, r.y0)));
-    };
+    let (dx, dy) = artboard_export_offset(l, r)?;
     let mut group = l.clone();
     group.visible = true;
     crate::commands::translate_layer(doc, &mut group, dx, dy);
@@ -657,6 +653,15 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
     one.guides.vertical = shift(&doc.guides.vertical, r.x0, r.width());
     one.guides.horizontal = shift(&doc.guides.horizontal, r.y0, r.height());
     Ok(Some(one))
+}
+
+fn artboard_export_offset(layer: &Layer, r: Rect) -> Result<(i32, i32)> {
+    // A board starting at i32::MIN needs an offset of 2^31 to reach the origin, one past
+    // i32::MAX (#931).
+    let (Some(dx), Some(dy)) = (r.x0.checked_neg(), r.y0.checked_neg()) else {
+        return Err(EngineError::Other(format!("artboard `{}` at ({}, {}) is too far from the origin to export", layer.name, r.x0, r.y0)));
+    };
+    Ok((dx, dy))
 }
 
 /// [`artboard_document`] for each chosen board, all built before any file is written so a
@@ -738,6 +743,14 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     // Leave other filesystem errors to the existing save path.
     #[cfg(not(target_arch = "wasm32"))]
     if matches!(std::path::Path::new(dir).try_exists(), Ok(false)) {
+        // Preserve board validation errors before reporting a missing destination.
+        for id in chosen_artboards(&d.doc, p) {
+            if let Some(layer) = d.doc.layer(id)
+                && let Some(board) = layer.artboard()
+            {
+                artboard_export_offset(layer, board.rect)?;
+            }
+        }
         return Err(EngineError::Other(format!("Destination does not exist: {dir}")));
     }
     let documents = chosen_documents(&d.doc, p)?;
