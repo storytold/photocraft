@@ -138,9 +138,8 @@ fn picking_a_preset_sets_bend_50_and_custom_keeps_its_shape() {
 }
 
 #[test]
-fn the_type_layer_list_is_unchanged() {
+fn the_type_layer_list_has_custom_and_the_presets() {
+    // #12499: Custom (greyed there) and the fifteen presets; no None, no Cylinder.
     let on_type: Vec<WarpStyle> = warp_style_options(true).collect();
-    assert_eq!(on_type.first(), Some(&WarpStyle::None));
-    assert!(!on_type.contains(&WarpStyle::Custom) && !on_type.contains(&WarpStyle::Cylinder));
-    assert_eq!(on_type.len(), 16, "None and the fifteen presets");
+    assert_eq!(on_type, ORDER[..16]);
 }

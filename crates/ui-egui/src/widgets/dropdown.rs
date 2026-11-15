@@ -115,8 +115,8 @@ pub type OptionIcon<'a, T> = &'a dyn Fn(&T, &egui::Painter, egui::Rect);
 /// Width an option icon takes in the open list, with the gap after it.
 const OPTION_ICON: f32 = 14.0;
 
-/// [`dropdown_wheel_grouped`] with an icon left of each option in the open list, as the Warp
-/// style menu has (#12500). Returns true when an option was chosen.
+/// [`dropdown_wheel_grouped_enabled`] with an icon left of each option in the open list, as the
+/// Warp style menu has (#12500). Returns true when an option was chosen.
 #[allow(clippy::too_many_arguments)]
 pub fn dropdown_grouped_icons<T: PartialEq + Clone>(
     ui: &mut Ui,
@@ -126,9 +126,10 @@ pub fn dropdown_grouped_icons<T: PartialEq + Clone>(
     options: &[(T, &str)],
     width: f32,
     starts_group: impl Fn(&T) -> bool,
+    enabled: impl Fn(&T) -> bool,
     icon: OptionIcon<'_, T>,
 ) -> bool {
-    !dropdown_with_icons(ui, id, name, current, options, width, true, true, &starts_group, &|_| true, Some(icon)).0.is_empty()
+    !dropdown_with_icons(ui, id, name, current, options, width, true, true, &starts_group, &enabled, Some(icon)).0.is_empty()
 }
 
 #[allow(clippy::too_many_arguments)]

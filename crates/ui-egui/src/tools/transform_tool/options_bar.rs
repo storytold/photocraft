@@ -475,22 +475,20 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
         anchor_grid_widget(ui, Some(4), true);
     });
     crate::widgets::vline(ui, 22.0);
-    // Split, Grid, then the warp style with its bend fields.
-    ui.add_enabled_ui(!on_type && !cylinder, |ui| warp_mesh_fields(app, ui, w));
+    // Split, Grid, then the warp style with its bend fields. On type the Split buttons are hidden
+    // and Grid is greyed (#12499).
+    ui.add_enabled_ui(!on_type && !cylinder, |ui| warp_mesh_fields(app, ui, w, !on_type));
     crate::widgets::vline(ui, 22.0);
     lbl(ui, tl!("Warp:"));
     // Off type the list starts at Custom with no None (#12500), so a warp opened as None (a saved
     // file, a command) shows as Custom, the untouched grid it is.
-    let mut style = if !on_type && w.style == WarpStyle::None { WarpStyle::Custom } else { w.style };
+    let mut style = if w.style == WarpStyle::None { WarpStyle::Custom } else { w.style };
     let opts: Vec<(WarpStyle, &str)> = warp_style_options(on_type).map(|s| (s, s.label())).collect();
-    let picked = if on_type {
-        crate::widgets::dropdown(ui, "warp-style", tl!("Warp"), &mut style, &opts, 120.0)
-    } else {
-        // The reference's groups: Custom ― Arc… ― Arch… ― Flag… ― Fisheye… ― Cylinder, each with
-        // the icon of its own shape.
-        let groups = |s: &WarpStyle| matches!(s, WarpStyle::Arc | WarpStyle::Arch | WarpStyle::Flag | WarpStyle::Fisheye | WarpStyle::Cylinder);
-        crate::widgets::dropdown_grouped_icons(ui, "warp-style", tl!("Warp"), &mut style, &opts, 120.0, groups, &warp_style_icon)
-    };
+    // The reference's groups: Custom ― Arc… ― Arch… ― Flag… ― Fisheye… ― Cylinder, each with the
+    // icon of its own shape. On type Custom is listed greyed (#12499).
+    let groups = |s: &WarpStyle| matches!(s, WarpStyle::Arc | WarpStyle::Arch | WarpStyle::Flag | WarpStyle::Fisheye | WarpStyle::Cylinder);
+    let enabled = |s: &WarpStyle| !(on_type && *s == WarpStyle::Custom);
+    let picked = crate::widgets::dropdown_grouped_icons(ui, "warp-style", tl!("Warp"), &mut style, &opts, 120.0, groups, enabled, &warp_style_icon);
     if picked && let Some(t) = app.ui.transform.as_mut() {
         let b = t.rect;
         t.warp = Some(match style {
@@ -552,7 +550,9 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
 /// The Warp menu's styles. Off type: Custom, the fifteen presets and Cylinder, with no None
 /// (#12500). On type the list is as before: None and the presets (#3004).
 pub(super) fn warp_style_options(on_type: bool) -> impl Iterator<Item = WarpStyle> {
-    WarpStyle::all().filter(move |s| if on_type { *s != WarpStyle::Custom } else { *s != WarpStyle::None }).chain((!on_type).then_some(WarpStyle::Cylinder))
+    // On type too: Custom (greyed there, #12499) and the presets. Cylinder is measured only off
+    // type, so it stays out of the type list.
+    WarpStyle::all().filter(|s| *s != WarpStyle::None).chain((!on_type).then_some(WarpStyle::Cylinder))
 }
 
 /// A Warp style's icon in the menu (#12500): our own art, drawn from the style's own warp. A 3 × 3
@@ -593,11 +593,19 @@ pub(super) fn warp_style_icon(style: &WarpStyle, p: &egui::Painter, r: egui::Rec
 }
 
 /// The Split icons and the Grid menu of the Warp options bar.
-fn warp_mesh_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
+fn warp_mesh_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp, split: bool) {
     let tk = crate::theme::Tokens::get(ui.ctx());
     let lbl = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
     };
+    if split {
+        split_fields(app, ui, &lbl);
+    }
+    grid_field(app, ui, w, &lbl);
+}
+
+/// The Split label and its three buttons.
+fn split_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, lbl: &dyn Fn(&mut egui::Ui, &str)) {
     lbl(ui, tl!("Split:"));
     let armed = app.transform_preview.as_ref().and_then(|p| p.split_tool);
     for (tool, tip) in [
@@ -616,6 +624,10 @@ fn warp_mesh_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
         }
     }
     crate::widgets::vline(ui, 22.0);
+}
+
+/// The Grid label and its dropdown.
+fn grid_field(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp, lbl: &dyn Fn(&mut egui::Ui, &str)) {
     lbl(ui, tl!("Grid:"));
     let mesh = w.mesh.clone().unwrap_or_else(|| BezierMesh::identity(w.bounds, 1, 1));
     let mut grid = warp_grid_id(&mesh).to_string();

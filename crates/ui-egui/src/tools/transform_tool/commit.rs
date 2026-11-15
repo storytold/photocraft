@@ -73,7 +73,14 @@ pub fn commit(app: &mut PhotocraftApp) {
     let made = t.made;
     let r = if let Some(w) = &t.warp {
         // Type with a Warp Text can be warped back to None; the engine skips an unchanged style.
-        if w.is_identity() && !type_layer {
+        // Type without one opens at Arc 0 (#12499): left so, Enter adds no step.
+        let unwarped_type = type_layer
+            && app
+                .session
+                .active()
+                .and_then(|d| d.doc.layer(LayerId(t.layer)))
+                .is_some_and(|l| matches!(&l.content, LayerContent::Text(tt) if tt.warp.is_none()));
+        if w.is_identity() && (!type_layer || unwarped_type) {
             return;
         }
         app.run("edit.transform.warp", json!({"layer": t.layer, "rect": t.rect, "warp": w, "interpolation": t.interpolation}))
