@@ -24,7 +24,7 @@ fn paint(load: f32, x0: f64, x1: f64, spacing: f32) -> (impl Fn(i32) -> i32, f32
     let mut st = MixerState::default();
     st.load([0.0, 0.0, 0.0, 1.0]);
     let m = MixerSettings { wet: 0.0, load, mix: 0.0, flow: 1.0, ..Default::default() };
-    apply_mixer_stroke(&mut s, None, &stroke(x0, x1, spacing), &m, &mut st, None, false);
+    apply_mixer_stroke(&mut s, None, &stroke(x0, x1, spacing), &m, &mut st, None, false).unwrap();
     (move |x: i32| (s.rgba(x, Y as i32)[3] * 255.0).round() as i32, st.amount)
 }
 
@@ -83,9 +83,9 @@ fn each_stroke_measures_its_own_length() {
     let mut st = MixerState::default();
     st.load([0.0, 0.0, 0.0, 1.0]);
     let m = MixerSettings { wet: 0.0, load: 0.05, mix: 0.0, flow: 1.0, ..Default::default() };
-    apply_mixer_stroke(&mut s, None, &stroke(30.0, 330.0, 0.25), &m, &mut st, None, false);
+    apply_mixer_stroke(&mut s, None, &stroke(30.0, 330.0, 0.25), &m, &mut st, None, false).unwrap();
     assert_eq!(st.amount, 1.0, "300 px of a 570 px supply");
-    apply_mixer_stroke(&mut s, None, &stroke(30.0, 330.0, 0.25), &m, &mut st, None, false);
+    apply_mixer_stroke(&mut s, None, &stroke(30.0, 330.0, 0.25), &m, &mut st, None, false).unwrap();
     assert_eq!(st.amount, 1.0, "the second stroke starts its own 570 px");
 }
 
