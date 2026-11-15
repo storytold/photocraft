@@ -73,18 +73,24 @@ pub(super) fn paths_list(s: &Session) -> Result<Value> {
     }))
 }
 
-/// Only Freeform Pen overrides these shared commands' normal History labels (#12829).
+/// The tools that override these shared commands' normal History labels with their own name:
+/// Freeform Pen (#12829), the Line tool (#13244) and the Triangle tool (#13354).
+const TOOL_HISTORY_NAMES: [&str; 3] = ["Freeform Pen", "Line Tool", "Triangle Tool"];
+
 /// Validate before editing so malformed automation input cannot change the document.
 pub(super) fn pen_history_name<'a>(p: &Value, cmd: &str, default: &'a str) -> Result<&'a str> {
     match p.get("historyName") {
         None | Some(Value::Null) => Ok(default),
-        Some(Value::String(n)) if n == "Freeform Pen" => Ok("Freeform Pen"),
-        Some(_) => Err(bad(cmd, "`historyName` must be \"Freeform Pen\"")),
+        Some(v) => TOOL_HISTORY_NAMES
+            .into_iter()
+            .find(|&n| v.as_str() == Some(n))
+            .ok_or_else(|| bad(cmd, "`historyName` must be \"Freeform Pen\", \"Line Tool\" or \"Triangle Tool\"")),
     }
 }
 
 /// Replaces the Work Path or a saved path, or appends subpaths with the requested operation.
-/// The optional Freeform Pen history label overrides the normal Work Path or Save Path label.
+/// The optional Freeform Pen or Line Tool history label overrides the normal Work Path or Save
+/// Path label.
 pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.set";
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;

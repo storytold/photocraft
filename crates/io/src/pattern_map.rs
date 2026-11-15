@@ -6,10 +6,10 @@
 
 use std::sync::Arc;
 
+use craft_psd::patterns::{PatternBudget, PsdPattern, block_has_user_mask, block_key, mode_channels, parse_pattern_block_with, write_pattern_block};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Pattern};
 use photocraft_geom::Rect;
-use photocraft_psd::patterns::{PatternBudget, PsdPattern, block_has_user_mask, block_key, mode_channels, parse_pattern_block_with, write_pattern_block};
 use photocraft_raster::Surface;
 
 use crate::pixels::{max_sample, psd_depth, sample_for_depth, try_interleave, zero_sample};
@@ -110,7 +110,7 @@ fn pattern_from_psd(p: &PsdPattern, oom: &mut Option<String>) -> Option<Pattern>
     }
     let mut bytes = match try_interleave(&refs, &fill, n, s, &invert) {
         Ok(bytes) => bytes,
-        Err(photocraft_psd::PsdError::OutOfMemory(error)) => {
+        Err(craft_psd::PsdError::OutOfMemory(error)) => {
             *oom = Some(error.to_string());
             return None;
         }
@@ -230,7 +230,7 @@ pub fn try_from_global_blocks(doc: &Document) -> Result<Vec<Pattern>, String> {
     for (_, _, d) in doc.metadata.psd_global_blocks.iter().filter(|(_, k, _)| PATTERN_KEYS.contains(k)) {
         let patterns = match parse_pattern_block_with(d, &mut budget) {
             Ok(patterns) => patterns,
-            Err(photocraft_psd::PsdError::OutOfMemory(error)) => return Err(error.to_string()),
+            Err(craft_psd::PsdError::OutOfMemory(error)) => return Err(error.to_string()),
             Err(_) => continue,
         };
         for p in patterns {
@@ -331,14 +331,14 @@ fn repair_legacy_blocks(raw: &[photocraft_doc::PsdGlobalBlock]) -> Vec<photocraf
 
 /// Reads a `.pat` pattern file.
 pub fn read_pat(bytes: &[u8]) -> Result<Vec<Pattern>, String> {
-    let ps = photocraft_psd::patterns::parse_pat_file(bytes).map_err(|e| format!("not a readable .pat file: {e}"))?;
+    let ps = craft_psd::patterns::parse_pat_file(bytes).map_err(|e| format!("not a readable .pat file: {e}"))?;
     Ok(ps.iter().filter_map(from_psd).collect())
 }
 
 /// Writes patterns as a `.pat` file.
 pub fn write_pat(patterns: &[Pattern]) -> Result<Vec<u8>, String> {
     let patterns = to_psd_patterns(patterns)?;
-    photocraft_psd::patterns::write_pat_file(&patterns).map_err(|e| e.to_string())
+    craft_psd::patterns::write_pat_file(&patterns).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
