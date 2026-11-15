@@ -250,3 +250,45 @@ fn an_auto_mask_strokes_overlay_shows_while_it_is_painted() {
     settle(&mut h);
     assert_eq!(strokes(&masks(&h)[0]).len(), 1);
 }
+
+/// The same Auto Mask stroke over a dark, textured surface on process 8 (each pixel compared with the
+/// one under the dab) and process 9 (compared on a smoothing of the photo): process 9's fill is
+/// solid where 8's follows the texture. `PHOTOCRAFT_LC_SNAPSHOTS` saves both overlays
+/// (`automask-quality-before.png`, `automask-quality-after.png`).
+#[test]
+fn auto_mask_quality_by_process() {
+    let snapshots = std::env::var("PHOTOCRAFT_LC_SNAPSHOTS").ok();
+    let _lock = snapshots.is_some().then(photocraft_testkit::gpu_lock);
+    let mut h = dialog_on(snapshots.is_some(), photocraft_engine::Session::new());
+    assert_eq!(inspect(&h)["develop"]["process"], 9, "new edits take process 9");
+    ui(&mut h, json!({"develop": {"process": 8}}));
+    key(&mut h, Key::K);
+    // a zigzag over the shadow on the perforated panel, lower left (dark, so noisy, and pitted)
+    let r = preview_rect(&h);
+    let pts: Vec<egui::Vec2> = (0..4).flat_map(|row| [vec2(0.12, 0.72 + 0.04 * row as f32), vec2(0.42, 0.72 + 0.04 * row as f32)]).collect();
+    h.event(Event::PointerMoved(r.lerp_inside(pts[0])));
+    h.run_steps(1);
+    button(&mut h, r.lerp_inside(pts[0]), true);
+    h.run_steps(1);
+    for w in pts.windows(2) {
+        for k in 1..=6 {
+            h.event(Event::PointerMoved(r.lerp_inside(w[0] + (w[1] - w[0]) * (k as f32 / 6.0))));
+            h.run_steps(1);
+        }
+    }
+    button(&mut h, r.lerp_inside(pts[pts.len() - 1]), false);
+    settle(&mut h);
+    let painted = strokes(&masks(&h)[0]);
+    assert_eq!(painted.len(), 1);
+    assert_eq!(painted[0]["auto_mask"], true);
+    let save = |h: &mut Harness<'_, PhotocraftApp>, name: &str| {
+        if let Some(dir) = &snapshots {
+            std::fs::create_dir_all(dir).unwrap();
+            h.render().unwrap().save(std::path::Path::new(dir).join(name)).unwrap();
+        }
+    };
+    save(&mut h, "automask-quality-before.png");
+    ui(&mut h, json!({"develop": {"process": 9}}));
+    assert_eq!(strokes(&masks(&h)[0]), painted, "the same stroke");
+    save(&mut h, "automask-quality-after.png");
+}
