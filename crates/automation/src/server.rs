@@ -292,6 +292,71 @@ pub struct RunParams {
     /// with `jobs_list`, stop it with `jobs_cancel`.
     #[serde(default)]
     pub wait: Option<bool>,
+    /// How much of the result to return: `full` (default); `brief`, which keeps the top-level
+    /// numbers, strings and short lists (`layer`, `name`, `bounds`, …) and names the larger
+    /// members it drops (such as a shape's `path`) in `omitted`; or `none`, only success or the
+    /// error. In `command_batch` a step's own `reply` overrides the batch's.
+    #[serde(default)]
+    pub reply: Option<ReplyDetail>,
+}
+
+/// How much of a command's result a `command_run` reply or a `command_batch` step carries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ReplyDetail {
+    #[default]
+    Full,
+    Brief,
+    None,
+}
+
+/// The longest list a `brief` reply keeps: room for a rect, a colour or a few layer ids.
+const BRIEF_MAX_ITEMS: usize = 16;
+
+impl ReplyDetail {
+    /// `result` trimmed to this detail; `None` when the reply carries no result at all.
+    fn apply(self, result: Value) -> Option<Value> {
+        match self {
+            Self::Full => Some(result),
+            Self::Brief => Some(brief_result(result)),
+            Self::None => None,
+        }
+    }
+}
+
+/// A value a `brief` reply keeps whole: a scalar, or a short list of scalars.
+fn is_brief(v: &Value) -> bool {
+    match v {
+        Value::Array(items) => items.len() <= BRIEF_MAX_ITEMS && items.iter().all(|x| !x.is_array() && !x.is_object()),
+        Value::Object(_) => false,
+        _ => true,
+    }
+}
+
+/// The `brief` form of a result. Shape commands echo every path knot with both handles, so a
+/// batch that draws a few shapes can fill the reply budget with geometry the agent just sent.
+/// Dropped members are named, never silently lost; a long top-level list keeps its length.
+fn brief_result(result: Value) -> Value {
+    match result {
+        Value::Object(members) => {
+            let mut kept = serde_json::Map::new();
+            let mut omitted = Vec::new();
+            for (key, v) in members {
+                if is_brief(&v) {
+                    kept.insert(key, v);
+                } else {
+                    omitted.push(Value::String(key));
+                }
+            }
+            if !omitted.is_empty() {
+                kept.insert("omitted".into(), Value::Array(omitted));
+            }
+            Value::Object(kept)
+        }
+        list @ Value::Array(_) if is_brief(&list) => list,
+        Value::Array(items) => json!({"length": items.len(), "omitted": ["items"]}),
+        other => other,
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -313,6 +378,9 @@ pub struct BatchParams {
     /// Stop at the first failing step (default true).
     #[serde(default)]
     pub stop_on_error: Option<bool>,
+    /// `reply` for every step that does not set its own: `full` (default), `brief` or `none`.
+    #[serde(default)]
+    pub reply: Option<ReplyDetail>,
 }
 
 /// One `ui_pointer` event, for the tool schema only: events are forwarded to `ui.pointer` as JSON.
@@ -1057,10 +1125,10 @@ impl PhotocraftMcp {
     #[tool(description = "Run an engine command by id with JSON params (see command_list). Returns the command's JSON result. \
         Long commands (filters, Content-Aware Fill/Scale, Photomerge, brush import) wait to finish unless `wait` is false: \
         then they run as a background job and the result is {job: id} (see jobs_list, jobs_cancel). A waited long \
-        command reports progress, cancelling the request cancels it, and other calls are served meanwhile.")]
+        command reports progress, cancelling the request cancels it, and other calls are served meanwhile. \
+        `reply` brief|none trims a large result (a shape's path) to ids and bounds, or to null.")]
     async fn command_run(&self, Parameters(p): Parameters<RunParams>, context: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
-        let mut waiter = Waiter::new(Some(context));
-        to_result(self.step(p.id, p.params.unwrap_or_else(|| json!({})), p.wait.unwrap_or(true), &mut waiter, (0, 1)).await)
+        self.run(p, Waiter::new(Some(context))).await
     }
 
     #[tool(description = "List background jobs: running ones with progress (0-1), message and elapsed time, then the last few \
@@ -1077,7 +1145,8 @@ impl PhotocraftMcp {
 
     #[tool(description = "Run several engine commands in one call, in order (fewer round trips). Returns {completed, failed, \
         results:[{ok, result|error}]}; stops at the first error unless stop_on_error is false. \
-        Not an atomic transaction: earlier successful steps stay applied (no rollback).")]
+        Not an atomic transaction: earlier successful steps stay applied (no rollback). \
+        `reply` brief|none (for the batch, or per step) keeps step results small.")]
     async fn command_batch(&self, Parameters(p): Parameters<BatchParams>, context: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         self.batch(p, Waiter::new(Some(context))).await
     }
@@ -1167,6 +1236,13 @@ impl PhotocraftMcp {
         to_result(self.step(id, params, wait, &mut Waiter::new(None), (0, 1)).await)
     }
 
+    /// `command_run`: one step, its result trimmed to the requested `reply`.
+    async fn run(&self, p: RunParams, mut waiter: Waiter) -> Result<CallToolResult, McpError> {
+        let detail = p.reply.unwrap_or_default();
+        let result = self.step(p.id, p.params.unwrap_or_else(|| json!({})), p.wait.unwrap_or(true), &mut waiter, (0, 1)).await;
+        to_result(result.map(|value| detail.apply(value).unwrap_or(Value::Null)))
+    }
+
     /// Run one command in either backend; `at` is its place in a batch, for progress.
     async fn step(&self, id: String, params: Value, wait: bool, waiter: &mut Waiter, at: (usize, usize)) -> Result<Value, AutomationError> {
         let none = || Err(AutomationError::Other("internal error: no headless session or app bridge".into()));
@@ -1185,6 +1261,7 @@ impl PhotocraftMcp {
             return Ok(fail(format!("batch contains {} steps; maximum is {MAX_BATCH_STEPS}", p.steps.len())));
         }
         let stop = p.stop_on_error.unwrap_or(true);
+        let batch_reply = p.reply;
         let total = p.steps.len();
         let mut results = Vec::new();
         let mut failed = 0;
@@ -1203,10 +1280,15 @@ impl PhotocraftMcp {
                 results.push(json!({"ok": false, "error": "PhotoCraft restarted (or the session changed) during the batch; this step and the ones after it did not run"}));
                 break;
             }
+            let detail = s.reply.or(batch_reply).unwrap_or_default();
             let response = self.step(s.id, s.params.unwrap_or_else(|| json!({})), s.wait.unwrap_or(true), &mut waiter, (i, total)).await;
             let was_error = response.is_err();
             let result = match response {
-                Ok(value) => json!({"ok": true, "result": value}),
+                // Trimmed before the reply budget is charged, so a brief batch is not cut short.
+                Ok(value) => match detail.apply(value) {
+                    Some(value) => json!({"ok": true, "result": value}),
+                    None => json!({"ok": true}),
+                },
                 Err(error) => {
                     let mut obj = json!({"ok": false, "error": error.to_string()});
                     attach_memory_error_details(&mut obj, &error);
@@ -1418,6 +1500,57 @@ mod tests {
     }
 
     #[test]
+    fn brief_reply_keeps_short_members_and_names_the_rest() {
+        let shape = json!({
+            "layer": 7, "name": "Sky", "kind": "rect", "bounds": [0, 0, 1600, 1000], "fill": "#ff0000", "stroke": null,
+            "live": {"kind": "rect"}, "path": {"subpaths": [{"closed": true, "knots": [[0, 0], [9, 0], [9, 9]]}]},
+            "levels": (0..=BRIEF_MAX_ITEMS).collect::<Vec<_>>()
+        });
+        let brief = ReplyDetail::Brief.apply(shape.clone()).unwrap();
+        for key in ["layer", "name", "kind", "bounds", "fill", "stroke"] {
+            assert_eq!(brief.get(key), shape.get(key), "{key} is kept: {brief}");
+        }
+        let mut omitted: Vec<&str> = brief["omitted"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        omitted.sort_unstable();
+        assert_eq!(omitted, ["levels", "live", "path"], "{brief}");
+        assert_eq!(brief.as_object().unwrap().len(), 7, "nothing else: {brief}");
+        assert_eq!(ReplyDetail::Brief.apply(json!({"layer": 3})), Some(json!({"layer": 3})), "nothing dropped, no `omitted`");
+        assert_eq!(ReplyDetail::Brief.apply(json!([1, 2, 3])), Some(json!([1, 2, 3])));
+        assert_eq!(ReplyDetail::Brief.apply(json!([{"id": "a"}, {"id": "b"}])), Some(json!({"length": 2, "omitted": ["items"]})));
+        assert_eq!(ReplyDetail::Brief.apply(json!("done")), Some(json!("done")));
+        assert_eq!(ReplyDetail::Full.apply(shape.clone()), Some(shape));
+        assert_eq!(ReplyDetail::None.apply(json!({"layer": 3})), None);
+    }
+
+    /// A shape command echoes every knot of the path the agent just sent; `reply` lets a batch
+    /// return only the new layer's id and bounds, or nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_reply_detail_trims_step_results() {
+        let mcp = PhotocraftMcp::headless();
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width": 64, "height": 64}))).await.unwrap().unwrap();
+        let ellipse = |reply| RunParams { id: "shape.create".into(), params: Some(json!({"kind": "ellipse", "rect": [4, 4, 40, 20]})), wait: None, reply };
+        let steps = vec![ellipse(None), ellipse(Some(ReplyDetail::Full)), ellipse(Some(ReplyDetail::None))];
+        let result = mcp.batch(BatchParams { steps, stop_on_error: None, reply: Some(ReplyDetail::Brief) }, Waiter::new(None)).await.unwrap();
+        let reply: Value = serde_json::from_str(&result.content.first().and_then(|c| c.as_text()).unwrap().text).unwrap();
+        assert_eq!((&reply["completed"], &reply["failed"]), (&json!(3), &json!(0)), "{reply}");
+        let (brief, full, none) = (&reply["results"][0], &reply["results"][1], &reply["results"][2]);
+        assert!(brief["result"]["layer"].is_u64() && brief["result"]["bounds"] == json!([4, 4, 40, 20]), "{brief}");
+        assert!(brief["result"].get("path").is_none(), "{brief}");
+        assert!(brief["result"]["omitted"].as_array().is_some_and(|o| o.contains(&json!("path"))), "{brief}");
+        assert!(full["result"]["path"]["subpaths"].is_array(), "a step's own reply wins over the batch's: {full}");
+        assert_eq!(none, &json!({"ok": true}));
+        let layers = |doc: Value| doc["layers"].as_array().map_or(0, Vec::len);
+        let before = layers(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap());
+        assert_eq!(before, 4, "all three steps ran, above the background");
+        let run =
+            RunParams { id: "shape.create".into(), params: Some(json!({"kind": "rect", "rect": [1, 1, 8, 8]})), wait: None, reply: Some(ReplyDetail::None) };
+        let result = mcp.run(run, Waiter::new(None)).await.unwrap();
+        assert_ne!(result.is_error, Some(true));
+        assert_eq!(result.content.first().and_then(|c| c.as_text()).unwrap().text, "null");
+        assert_eq!(layers(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap()), before + 1, "`none` still runs the command");
+    }
+
+    #[test]
     fn mcp_text_checks_the_encoded_tool_envelope() {
         // JSON escaping in the outer text-content envelope also consumes the budget.
         let result = ok_json(&json!("\n".repeat(crate::budgets::MAX_RESPONSE_BYTES / 3)));
@@ -1470,10 +1603,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn mcp_command_batch_stopped_by_the_budget_keeps_its_step_results() {
         let mcp = PhotocraftMcp::headless();
-        let step = |id: &str, params: Value| RunParams { id: id.into(), params: Some(params), wait: None };
+        let step = |id: &str, params: Value| RunParams { id: id.into(), params: Some(params), wait: None, reply: None };
         let mut steps: Vec<RunParams> = (0..MAX_BATCH_STEPS - 1).map(|_| step("command.list", json!({}))).collect();
         steps.push(step("file.new", json!({"width": 8, "height": 8})));
-        let result = mcp.batch(BatchParams { steps, stop_on_error: Some(false) }, Waiter::new(None)).await.unwrap();
+        let result = mcp.batch(BatchParams { steps, stop_on_error: Some(false), reply: None }, Waiter::new(None)).await.unwrap();
         assert_ne!(result.is_error, Some(true), "{:?}", result.content.first().and_then(|c| c.as_text()).map(|t| &t.text[..200.min(t.text.len())]));
         let text = &result.content.first().and_then(|c| c.as_text()).unwrap().text;
         let reply: Value = serde_json::from_str(text).unwrap();
