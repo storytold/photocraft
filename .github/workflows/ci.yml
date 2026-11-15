@@ -108,9 +108,11 @@ jobs:
           FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
           if [ "$EVENT" != pull_request ] || [ "$FULL" = true ]; then
-            echo "windows=true" >> "$GITHUB_OUTPUT"
-            echo "windows_gpu=true" >> "$GITHUB_OUTPUT"
-            echo "web=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "windows=true"
+              echo "windows_gpu=true"
+              echo "web=true"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # The browser build (a fat-LTO wasm build) runs only when something it compiles or

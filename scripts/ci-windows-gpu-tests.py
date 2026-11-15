@@ -74,12 +74,20 @@ def needs_gpu_tests(changed, packages, root):
     return False
 
 
+def changed_files(base, cwd=None):
+    """The files changed between `base` and HEAD. `--no-renames` lists both sides of a move: by
+    default git names only the destination, so moving a file out of photocraft-gpu would look like a
+    change in the package it moved to."""
+    out = subprocess.run(['git', 'diff', '--name-only', '--no-renames', base, 'HEAD'], check=True, capture_output=True, text=True, cwd=cwd)
+    return out.stdout.split()
+
+
 def main(argv):
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 2
     base = argv[1]
-    changed = subprocess.run(['git', 'diff', '--name-only', base, 'HEAD'], check=True, capture_output=True, text=True).stdout.split()
+    changed = changed_files(base)
     meta = json.loads(subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1'], check=True, capture_output=True, text=True).stdout)
     print('true' if needs_gpu_tests(changed, meta['packages'], meta['workspace_root']) else 'false')
     return 0

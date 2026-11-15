@@ -1,5 +1,7 @@
 import importlib.util
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location('gpu_select', Path(__file__).with_name('ci-windows-gpu-tests.py'))
@@ -70,6 +72,25 @@ class Selection(unittest.TestCase):
         packages = [dict(p, manifest_path=p['manifest_path'].replace('/', '\\')) for p in PACKAGES]
         self.assertTrue(select.needs_gpu_tests(['crates/compose/src/blend.rs'], packages, ROOT.replace('/', '\\')))
         self.assertFalse(select.needs_gpu_tests(['crates/ui-egui/src/canvas.rs'], packages, ROOT.replace('/', '\\')))
+
+    def test_a_file_moved_out_of_gpu_counts_for_gpu(self):
+        with tempfile.TemporaryDirectory() as repo:
+            def git(*args):
+                subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', *args], cwd=repo, check=True, capture_output=True)
+            src = Path(repo, 'crates/gpu/tests/fixtures/reference.bin')
+            src.parent.mkdir(parents=True)
+            src.write_bytes(b'reference pixels ' * 64)
+            git('init', '-q')
+            git('add', '-A')
+            git('commit', '-q', '-m', 'base')
+            dst = Path(repo, 'crates/ui-egui/tests/fixtures/reference.bin')
+            dst.parent.mkdir(parents=True)
+            src.rename(dst)
+            git('add', '-A')
+            git('commit', '-q', '-m', 'move')
+            changed = select.changed_files('HEAD~1', cwd=repo)
+        self.assertIn('crates/gpu/tests/fixtures/reference.bin', changed)
+        self.assertTrue(needs(*changed))
 
     def test_a_missing_gpu_package_is_an_error(self):
         with self.assertRaises(ValueError):
