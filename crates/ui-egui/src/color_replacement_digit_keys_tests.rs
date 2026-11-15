@@ -71,3 +71,19 @@ fn modifiers_and_double_zero_preserve_color_replacement_and_layer_state() {
     assert_eq!(a.ui.tool_options.fill_opacity, opacity);
     assert_eq!(a.ui.tool_options.bg_tolerance, bg_tolerance);
 }
+#[test]
+fn digits_do_not_pair_across_tools() {
+    let mut brush_to_color = app(Tool::Brush);
+    press(&mut brush_to_color, 4, false, 0.0);
+    brush_to_color.ui.tool = Tool::ColorReplacement;
+    press(&mut brush_to_color, 5, false, 300.0);
+    assert_eq!(brush_to_color.session.tools.brush.opacity, 0.4);
+    assert_eq!(brush_to_color.ui.tool_options.cr_tolerance, 50.0);
+
+    let mut color_to_brush = app(Tool::ColorReplacement);
+    press(&mut color_to_brush, 4, false, 0.0);
+    color_to_brush.ui.tool = Tool::Brush;
+    press(&mut color_to_brush, 5, false, 300.0);
+    assert_eq!(color_to_brush.ui.tool_options.cr_tolerance, 40.0);
+    assert_eq!(color_to_brush.session.tools.brush.opacity, 0.5);
+}
