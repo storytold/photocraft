@@ -332,6 +332,11 @@ struct EffectPass<'a> {
     sb: Rect,
     /// Linked patterns tile from the effects reference point (else the layer's top-left).
     anchor: (f64, f64),
+    /// A linked Pattern Overlay tiles from the effects reference point, or from the document origin
+    /// when the layer has none (#14960): the measured reference application starts a new overlay's
+    /// grid there, and a layer move records the reference point (see the Move command), so the grid
+    /// follows the layer's moves without ever becoming its corner.
+    overlay_anchor: (f64, f64),
     /// The enabled effects. Multiple instances: the first listed is on top, so paint in reverse.
     items: Vec<&'a Effect>,
 }
@@ -356,6 +361,7 @@ impl<'a> EffectPass<'a> {
             h: big.height() as usize,
             sb,
             anchor: layer.effects.reference.unwrap_or((f64::from(sb.x0), f64::from(sb.y0))),
+            overlay_anchor: layer.effects.reference.unwrap_or((0.0, 0.0)),
             items: layer.effects.items.iter().filter(|e| e.enabled()).collect(),
         }
     }
@@ -453,11 +459,21 @@ impl<'a> EffectPass<'a> {
     /// Paints the interior effects other than strokes and bevels: overlays, satin, inner glow
     /// and inner shadow.
     fn paint_interior(&self, lay: &mut Buffer, shape: &Map) {
-        let (w, h, big, sb, anchor, patterns) = (self.w, self.h, self.big, self.sb, self.anchor, self.patterns);
+        let (w, h, big, sb, anchor, overlay_anchor, patterns) = (self.w, self.h, self.big, self.sb, self.anchor, self.overlay_anchor, self.patterns);
         let full = Map { w, h, v: shape.v.iter().map(|a| if inside(*a) { 1.0 } else { 0.0 }).collect() };
         for (_, e) in self.rev() {
             if let Effect::PatternOverlay { common, name, id, scale, angle, link, phase } = e {
-                paint_pattern(lay, &full, patterns, name, id, Placement::anchored(anchor, *link, *phase, *scale, *angle), big, common.blend, common.opacity);
+                paint_pattern(
+                    lay,
+                    &full,
+                    patterns,
+                    name,
+                    id,
+                    Placement::anchored(overlay_anchor, *link, *phase, *scale, *angle),
+                    big,
+                    common.blend,
+                    common.opacity,
+                );
             }
         }
         for (_, e) in self.rev() {

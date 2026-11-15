@@ -106,6 +106,7 @@ pub(crate) fn move_layers_wrapped(doc: &mut Document, before: &Document, moves: 
         }
         crate::commands::translate_layer_wrapped(before, l, dx, dy, wrap);
         crate::vector_cmds::translate_vectors_wrapped(before, l, dx as f64, dy as f64, wrap);
+        note_move_phase_tree(l, dx, dy, 0);
     }
     Ok(())
 }
@@ -322,6 +323,31 @@ pub fn moved(doc: &Document, ids: &[LayerId], dx: i32, dy: i32) -> Result<Docume
     moved_target(doc, ids, dx, dy, false)
 }
 
+/// #14960: a linked Pattern Overlay with no stored effects reference point tiles from the document
+/// origin, and moving the layer has to carry that grid with it: the compositors only read the
+/// layer's reference point, so the first move of a layer that has none records it, as the sum of the
+/// layer's moves (a stored one shifts in both move paths, and a layer moved back to where it was
+/// gets the document grid again). Only content that moves as a picture gets one: an adjustment or
+/// fill layer has no position, and a move of one changes nothing about it.
+fn note_move_phase(l: &mut Layer, dx: i32, dy: i32) {
+    if l.effects.reference.is_none() && (dx != 0 || dy != 0) && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_)) {
+        l.effects.reference = Some((f64::from(dx), f64::from(dy)));
+    }
+}
+
+/// [`note_move_phase`] over a moved layer and the layers inside it: the commit path shifts the
+/// reference point of every layer of a group it moves, so a linked overlay deeper in the group
+/// needs its phase there too.
+fn note_move_phase_tree(l: &mut Layer, dx: i32, dy: i32, depth: usize) {
+    note_move_phase(l, dx, dy);
+    if depth >= photocraft_doc::MAX_GROUP_DEPTH {
+        return;
+    }
+    if let LayerContent::Group(g) = &mut l.content {
+        g.children.iter_mut().for_each(|c| note_move_phase_tree(c, dx, dy, depth + 1));
+    }
+}
+
 /// [`moved`] for a drag aimed at the layer mask (`mask_target`): unlinked masks move alone.
 pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_target: bool) -> Result<Document> {
     moved_wrapping(doc, ids, dx, dy, mask_target, None)
@@ -368,6 +394,8 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho
     let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
     if let Some(r) = &mut l.effects.reference {
         *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
+    } else {
+        note_move_phase(l, dx, dy);
     }
     let mask_wrap = wrap.filter(|_| wraps_linked_masks(&l.content));
     if let Some(m) = l.mask.as_mut().filter(|m| m.linked) {
@@ -967,5 +995,123 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(json!({"moved": count}))
     } else {
         Ok(Value::Null)
+    }
+}
+
+#[cfg(test)]
+mod style_phase_tests {
+    use super::*;
+    use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{Adjustment, Effect, Fill, FxCommon};
+    use photocraft_geom::{Rect, Size};
+
+    /// A linked Pattern Overlay with the measured defaults: Normal, 100 %, scale 100, angle 0,
+    /// Link with Layer on, phase 0 / 0.
+    fn linked_overlay() -> Effect {
+        Effect::PatternOverlay {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            name: "quadrants".into(),
+            id: String::new(),
+            scale: 1.0,
+            angle: 0.0,
+            link: true,
+            phase: (0.0, 0.0),
+        }
+    }
+
+    /// A raster layer holding a filled rectangle at `rect`, as the measured "Shape" layer.
+    fn shape(rect: Rect) -> LayerContent {
+        let mut s = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(rect, &[1.0, 0.5, 0.0, 1.0]);
+        LayerContent::Raster(s)
+    }
+
+    /// A document holding one layer of `content` whose effects are `items`, and that layer's id.
+    fn doc(content: LayerContent, items: Vec<Effect>) -> (Document, LayerId) {
+        let mut d = Document::new("origin", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+        let mut l = Layer::new("Shape", content);
+        l.effects.items = items;
+        let id = l.id;
+        d.layers.push(l);
+        (d, id)
+    }
+
+    /// The reference point `id` carries in `doc`.
+    fn reference(doc: &Document, id: LayerId) -> Option<(f64, f64)> {
+        doc.layer(id).expect("the layer is there").effects.reference
+    }
+
+    /// Done when 2 and 3: a Move records the layer's moves as its effects reference point, which is
+    /// what the linked Pattern Overlay's grid anchors at (#14960), and the effect's own `phase`
+    /// stays 0 / 0 as measured. The commit and the drag preview record the same thing.
+    #[test]
+    fn a_move_records_the_effects_reference_point_a_linked_overlay_grid_needs() {
+        for (dx, dy) in [(7, 4), (5, 3), (-9, -2)] {
+            let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay()]);
+            let preview = moved(&before, &[id], dx, dy).expect("the layer moves");
+            assert_eq!(reference(&preview, id), Some((f64::from(dx), f64::from(dy))), "the Move preview of +{dx},+{dy}");
+            let mut committed = before.clone();
+            move_layers(&mut committed, &before, &[(id, dx, dy)]).expect("the command moves the layer");
+            assert_eq!(reference(&committed, id), Some((f64::from(dx), f64::from(dy))), "the committed move of +{dx},+{dy} matches the preview");
+            match &committed.layer(id).expect("the layer").effects.items[0] {
+                Effect::PatternOverlay { phase, .. } => assert_eq!(*phase, (0.0, 0.0), "the stored phase stays 0 / 0"),
+                other => panic!("the overlay is still there, got {other:?}"),
+            }
+        }
+    }
+
+    /// Done when 3: the overlay can be added after the layer has already moved, so the phase is
+    /// recorded by the move itself: a layer with no effects at all carries the sum of its moves.
+    #[test]
+    fn a_move_records_the_phase_on_a_layer_that_has_no_effects_yet() {
+        let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), Vec::new());
+        let after = moved(&before, &[id], 7, 4).expect("the layer moves");
+        assert_eq!(reference(&after, id), Some((7.0, 4.0)), "the grid of an overlay added later starts from this phase");
+    }
+
+    /// Done when 2: moving the layer back puts the grid on the document origin again. The phase is
+    /// the sum of the layer's moves, not something read off its bounds, which came back too.
+    #[test]
+    fn moving_the_layer_back_puts_the_reference_point_on_the_document_origin() {
+        let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay()]);
+        let there = moved(&before, &[id], 7, 4).expect("the layer moves");
+        let back = moved(&there, &[id], -7, -4).expect("the layer moves back");
+        let l = back.layer(id).expect("the layer");
+        assert_eq!(l.effects.reference, Some((0.0, 0.0)), "the sum of the moves, with the layer back where it was");
+        assert_eq!(crate::layer_multi_cmds::layer_bounds(l), Some(Rect::new(10, 10, 20, 20)), "and its bounds came back with it");
+    }
+
+    /// Done when 4: with the overlay on the group, only the group's own moves carry its grid. A
+    /// child moving alone leaves the group without a reference point, so the group keeps tiling on
+    /// the document grid.
+    #[test]
+    fn a_group_carries_the_reference_point_for_its_own_moves_only() {
+        let child = Layer::new("Shape", shape(Rect::new(10, 10, 20, 20)));
+        let child_id = child.id;
+        let mut group = Layer::group("Group", vec![child]);
+        group.effects.items = vec![linked_overlay()];
+        let group_id = group.id;
+        let mut d = Document::new("origin", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+        d.layers.push(group);
+        let only_child = moved(&d, &[child_id], 7, 4).expect("the child moves");
+        assert_eq!(reference(&only_child, group_id), None, "a child's move leaves the group's own grid alone");
+        assert_eq!(reference(&only_child, child_id), Some((7.0, 4.0)), "the moved child records its own phase");
+        let group_moved = moved(&d, &[group_id], 7, 4).expect("the group moves");
+        assert_eq!(reference(&group_moved, group_id), Some((7.0, 4.0)), "the group's own move records its phase");
+        assert_eq!(reference(&group_moved, child_id), Some((7.0, 4.0)), "and the child moved with it");
+    }
+
+    /// The unmeasured content types keep today's behaviour: an adjustment or fill layer has no
+    /// position, and a move of one still changes nothing about it.
+    #[test]
+    fn a_move_records_no_reference_point_on_content_that_has_no_position() {
+        let cases = [LayerContent::Adjustment(Adjustment::Invert), LayerContent::Fill(Fill::Solid(Color::rgb(1.0, 0.0, 0.0)))];
+        for content in cases {
+            let what = format!("{content:?}");
+            let (before, id) = doc(content, vec![linked_overlay()]);
+            let after = moved(&before, &[id], 7, 4).expect("the layer moves");
+            assert_eq!(after, before, "the whole document is unchanged for {what}");
+            assert_eq!(reference(&after, id), None, "no reference point for {what}");
+        }
     }
 }

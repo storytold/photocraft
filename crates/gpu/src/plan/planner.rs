@@ -53,6 +53,9 @@ struct EffectState<'a> {
     clip: Rect,
     sb: Rect,
     anchor: (f64, f64),
+    /// A linked Pattern Overlay's origin: the effects reference point, else the document origin
+    /// (the CPU's `EffectPass::overlay_anchor`, #14960).
+    overlay_anchor: (f64, f64),
     outline: bool,
     relative: bool,
     vector_shape: bool,
@@ -875,9 +878,11 @@ impl<'a> Planner<'a> {
             content = self.emit(p);
         }
 
-        // Linked patterns tile from the effects reference point (else the layer's top-left).
+        // Linked patterns tile from the effects reference point (else the layer's top-left); a
+        // Pattern Overlay from the reference point, else the document origin (#14960).
         let premerge = photocraft_compose::effects::premerges_layer(layer);
         let anchor = layer.effects.reference.unwrap_or((f64::from(sb.x0), f64::from(sb.y0)));
+        let overlay_anchor = layer.effects.reference.unwrap_or((0.0, 0.0));
         let vector_shape = matches!(layer.content, LayerContent::Shape(_)) && !outline;
         let rev = items.iter().copied().enumerate().rev().collect();
         let mut work = EffectState {
@@ -894,6 +899,7 @@ impl<'a> Planner<'a> {
             clip,
             sb,
             anchor,
+            overlay_anchor,
             outline,
             relative,
             vector_shape,
@@ -1030,12 +1036,13 @@ impl<'a> Planner<'a> {
         let clip = work.clip;
         let sb = work.sb;
         let anchor = work.anchor;
+        let overlay_anchor = work.overlay_anchor;
         let map = |item: usize, map: usize| MapRef { fx, item, map };
         for &(_, e) in &rev {
             if let Effect::PatternOverlay { common, name, id, scale, angle, link, phase } = e
                 && let Some(pat) = photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| p.is_paintable())
             {
-                let paint = Paint::Pattern(pat, placement(anchor, *link, *phase, *scale, *angle));
+                let paint = Paint::Pattern(pat, placement(overlay_anchor, *link, *phase, *scale, *angle));
                 l = self.paint(l, content, Cov::One, &paint, common.blend, common.opacity, F_GATE, clip, sb);
             }
         }
