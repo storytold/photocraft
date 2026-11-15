@@ -813,7 +813,22 @@ fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
             let (sn, cs) = rot.to_radians().sin_cos();
             // Clockwise on screen (y down) about the canvas centre.
             let m = [cs, sn, -sn, cs, cx - (cs * cx - sn * cy), cy - (sn * cx + cs * cy)];
+            // The whole layer turns even with a selection, which comes back as it was (#11993): the
+            // reference saves it, deselects, transforms and loads it again, all one step here.
+            let saved = doc(s)?.selection.clone();
+            if saved.is_some() {
+                s.edit("Deselect", |doc, _| {
+                    doc.selection = None;
+                    Ok(())
+                })?;
+            }
             s.execute("edit.transform", json!({"matrix": m}))?;
+            if let Some(selection) = saved {
+                s.edit("Load Selection", move |doc, _| {
+                    doc.selection = Some(selection);
+                    Ok(())
+                })?;
+            }
         }
         // The ruler is cleared after straightening, as in Photoshop.
         set_quiet(s, |d| d.measurement.ruler = None)
@@ -1439,5 +1454,8 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "analysis_straighten_enabled_tests.rs"]
 mod analysis_straighten_enabled_tests;
+#[cfg(test)]
+#[path = "analysis_straighten_selection_tests.rs"]
+mod analysis_straighten_selection_tests;
 #[cfg(test)]
 mod tests;
