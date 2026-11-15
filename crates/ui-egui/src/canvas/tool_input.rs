@@ -513,12 +513,15 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
 /// Color Sampler is left to #11731). A Move drag that began this way keeps the override for the
 /// rest of its events whatever modifiers they carry, so a release without Command still ends it.
 pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, view: Option<ToolViewContext<'_>>) {
-    let move_gesture = app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move);
+    // A latched Command (Window > Modifier Keys) counts, so the decision uses the effective modifiers.
+    let mods_in_effect = crate::workspace_ui::sticky_mods(app, mods);
+    // A guide taken with Command lives in guide_drag, not drag: its release is Move's too.
+    let move_gesture = app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move) || app.guide_drag.is_some_and(|d| d.index.is_some());
     let temporary_move = matches!(app.ui.tool, Tool::Ruler | Tool::Count | Tool::Note)
         && app.tool_override.is_none()
         && app.ui.transform.is_none()
         && app.ui.text_edit.is_none()
-        && (mods.command || move_gesture)
+        && (mods_in_effect.command || move_gesture)
         && crate::hold_keys::cmd_moves(app.ui.tool);
     if temporary_move {
         app.tool_override = Some(Tool::Move);

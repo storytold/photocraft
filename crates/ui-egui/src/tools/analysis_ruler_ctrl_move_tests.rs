@@ -184,3 +184,33 @@ fn ctrl_with_the_count_and_note_tools_is_the_move_tool_as_from_the_keyboard() {
         assert!(app.session.active().unwrap().doc.notes.is_empty(), "{tool:?}: no note");
     }
 }
+
+/// A latched Command (Window > Modifier Keys, `shell.sticky_command`) acts as a held key: the
+/// event carries no modifier, yet the Ruler's drag is the temporary Move tool for every handler.
+#[test]
+fn a_latched_command_with_the_ruler_is_the_move_tool() {
+    let mut app = ruler_app();
+    app.ui.shell.sticky_command = true;
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let (steps, before) = (history(&app), ruler(&app));
+    drag(&mut app, [120.0, 120.0], [170.0, 150.0], Modifiers::NONE);
+    check_moves_the_layer(&mut app, id, steps, before);
+}
+
+/// A Command press on a guide stores `guide_drag` (not `drag`); a release without Command must
+/// still finish that guide drag instead of the Ruler tool taking the event.
+#[test]
+fn a_guide_drag_started_with_ctrl_finishes_when_released_without_ctrl() {
+    let mut app = ruler_app();
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": 300})).unwrap();
+    let before = ruler(&app);
+    tool_event(&mut app, ToolEvent::Down { x: 300.0, y: 120.0, pressure: 1.0 }, CTRL);
+    assert!(app.guide_drag.is_some_and(|d| d.index.is_some()), "the Ctrl press took the guide");
+    tool_event(&mut app, ToolEvent::Move { x: 310.0, y: 120.0, pressure: 1.0 }, CTRL);
+    tool_event(&mut app, ToolEvent::Up { x: 320.0, y: 120.0 }, Modifiers::NONE);
+    assert!(app.guide_drag.is_none(), "the release finished the guide drag");
+    assert_eq!(app.session.active().unwrap().doc.guides.vertical, vec![320.0], "the guide moved to the release");
+    assert_eq!(ruler(&app), before, "the ruler stays");
+    assert!(app.ui.analysis.drag.is_none(), "the Ruler tool never started its own drag");
+    assert_eq!(app.ui.tool, Tool::Ruler, "the tool stays the Ruler");
+}
