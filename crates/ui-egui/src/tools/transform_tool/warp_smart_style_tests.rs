@@ -99,3 +99,35 @@ fn an_uneven_scale_shows_the_arc_family_as_its_mesh_and_keeps_the_other_presets(
     begin_warp(&mut app, &ctx).unwrap();
     assert_eq!(session_warp(&app).style, WarpStyle::Arc, "uniform scale stays on the preset path");
 }
+
+/// CodeRabbit on #15010: over an uneven scale the Warp preview draws the shape the canvas shows.
+/// The outline of the preview's mesh (what Warp mode warps the source through) matches the bounds of
+/// the render on the canvas, for the arc family and for the presets that keep their preset path.
+#[test]
+fn an_uneven_scale_previews_the_shape_the_canvas_shows() {
+    let ctx = egui::Context::default();
+    for style in ["arc", "arch", "bulge", "shellLower", "flag", "fisheye"] {
+        let mut app = warped(json!({"style": style, "bend": 50, "rect": [8, 8, 32, 32]}));
+        app.run("edit.transform", json!({"scaleX": 200, "scaleY": 100})).unwrap();
+        let canvas = {
+            let st = app.session.active().unwrap();
+            st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds()
+        };
+        begin_warp(&mut app, &ctx).unwrap();
+        let w = session_warp(&app);
+        let mesh = w.to_mesh(1, 1);
+        let n = 40;
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for i in 0..=n {
+            for j in 0..=n {
+                let p = mesh.eval(i as f64 / n as f64, j as f64 / n as f64);
+                (x0, y0, x1, y1) = (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]));
+            }
+        }
+        let got = [x0, y0, x1, y1];
+        let want = [canvas.x0 as f64, canvas.y0 as f64, canvas.x1 as f64, canvas.y1 as f64];
+        for k in 0..4 {
+            assert!((got[k] - want[k]).abs() <= 1.5, "{style}: preview outline {got:?} vs canvas {want:?}");
+        }
+    }
+}
