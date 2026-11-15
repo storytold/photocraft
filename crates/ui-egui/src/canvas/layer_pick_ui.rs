@@ -20,11 +20,40 @@ pub struct LayerMenu {
     pub pos: [f32; 2],
     /// (layer id, name).
     pub layers: Vec<(u64, String)>,
+    /// How far each row is indented (a frame's image under its frame, #13885); empty: none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depth: Vec<u8>,
+    /// The Frame tool's picker ends with a separator and Isolate Layers (#13885).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub isolate: bool,
 }
 
 /// Does a right-click with `tool` and `mods` open the layer menu (rather than the tool's own)?
 pub fn is_gesture(tool: Tool, mods: Modifiers) -> bool {
-    tool == Tool::Move || mods.command
+    tool == Tool::Move || tool == Tool::Frame || mods.command
+}
+
+/// The Frame tool's rows (#13885): each layer inside a frame comes right after its frame, one
+/// level in, the frame listed even where only its image has pixels under the pointer.
+fn frame_rows(app: &PhotocraftApp, layers: Vec<(u64, String)>) -> (Vec<(u64, String)>, Vec<u8>) {
+    let Some(st) = app.session.active() else { return (layers, Vec::new()) };
+    let doc = &st.doc;
+    let (mut rows, mut depth) = (Vec::new(), Vec::new());
+    for (id, name) in layers {
+        let frame = photocraft_engine::frame_cmds::frame_of(doc, photocraft_doc::LayerId(id)).filter(|f| f.0 != id);
+        if let Some(frame) = frame {
+            if !rows.iter().any(|(r, _)| *r == frame.0) {
+                rows.push((frame.0, doc.layer(frame).map(|l| l.name.clone()).unwrap_or_default()));
+                depth.push(0);
+            }
+            rows.push((id, name));
+            depth.push(1);
+        } else if !rows.iter().any(|(r, _)| *r == id) {
+            rows.push((id, name));
+            depth.push(0);
+        }
+    }
+    (rows, depth)
 }
 
 /// The layers at document point (x, y), topmost first, including text between glyphs.
@@ -48,7 +77,10 @@ pub fn open(app: &mut PhotocraftApp, ctx: &Context, at: [f32; 2], x: f64, y: f64
         return false;
     }
     app.ui.brush_picker = None;
-    app.ui.layer_menu = Some(LayerMenu { pos: at, layers });
+    // The Frame tool's picker nests frames' images and ends with Isolate Layers (#13885).
+    let frame = app.ui.tool == Tool::Frame;
+    let (layers, depth) = if frame { frame_rows(app, layers) } else { (layers, Vec::new()) };
+    app.ui.layer_menu = Some(LayerMenu { pos: at, layers, depth, isolate: frame });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
 }
@@ -78,6 +110,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(200.0, 24.0 * menu.layers.len() as f32 + 12.0), |r| r.size());
     let pos = egui::pos2(menu.pos[0].min(screen.right() - size.x).max(screen.left()), menu.pos[1].min(screen.bottom() - size.y).max(screen.top()));
     let mut chosen = None;
+    let mut isolate = false;
     let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::menu(ui.style()).show(ui, |ui| {
             // As wide as the longest name (long names are cut short), like a menu.
@@ -89,11 +122,24 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             // A long list scrolls instead of running off the screen.
             egui::ScrollArea::vertical().max_height((screen.height() - 24.0).max(48.0)).show(ui, |ui| {
                 ui.set_width(w);
-                for (layer, name) in &menu.layers {
-                    let b = egui::Button::selectable(Some(*layer) == active, name.as_str()).truncate().min_size(egui::vec2(w, 22.0));
-                    if ui.add(b).clicked() {
+                for (i, (layer, name)) in menu.layers.iter().enumerate() {
+                    let indent = f32::from(menu.depth.get(i).copied().unwrap_or(0)) * 14.0;
+                    let clicked = ui
+                        .horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            ui.add_space(indent);
+                            let b = egui::Button::selectable(Some(*layer) == active, name.as_str()).truncate().min_size(egui::vec2(w - indent, 22.0));
+                            ui.add(b).clicked()
+                        })
+                        .inner;
+                    if clicked {
                         chosen = Some(*layer);
                     }
+                }
+                if menu.isolate {
+                    ui.separator();
+                    let b = egui::Button::selectable(false, tl!("Isolate Layers")).min_size(egui::vec2(w, 22.0));
+                    isolate = ui.add(b).clicked();
                 }
             });
         });
@@ -102,10 +148,21 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
         choose(app, layer);
         return;
     }
+    if isolate {
+        app.ui.layer_menu = None;
+        if let Err(e) = app.run("select.isolateLayers", json!({})) {
+            app.ui.status = e;
+        }
+        return;
+    }
     if crate::canvas_popup::outside_pressed(ctx, id, area.response.rect) {
         app.ui.layer_menu = None;
     }
 }
+
+#[cfg(test)]
+#[path = "layer_pick_ui/frame_picker_tests.rs"]
+mod frame_picker_tests;
 
 #[cfg(test)]
 mod tests {
