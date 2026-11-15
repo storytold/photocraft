@@ -1346,8 +1346,9 @@ impl Document {
         let siblings = if parent.is_empty() { self.layers.len() } else { self.layer_at(parent).and_then(Layer::children).map_or(0, <[Layer]>::len) };
         let next = if up { idx.checked_add(1).filter(|n| *n < siblings) } else { idx.checked_sub(1) };
         let Some(next) = next else {
-            // The end of its group's children: out of the group, to the row beside it.
-            let Some(group) = self.layer_at(parent).map(|g| g.id) else { return false };
+            // The end of its group's children: out of the group, to the row beside it. A frame's
+            // image stays in its frame.
+            let Some(group) = self.layer_at(parent).filter(|g| g.frame.is_none()).map(|g| g.id) else { return false };
             let Some(l) = self.remove(id) else { return false };
             let _ = if up { self.insert_above(Some(group), l) } else { self.insert_below(Some(group), l) };
             return true;
@@ -1355,10 +1356,13 @@ impl Document {
         let mut beside = parent.to_vec();
         beside.push(next);
         // An artboard stays at the top level, where the document lists its boards, and Arrange
-        // doesn't step into a board either: both pass as one row.
+        // doesn't step into a board either: both pass as one row. So does a frame, which holds
+        // only its image.
         let fits = self.layer_at(&path).is_some_and(|l| l.artboard().is_none() && beside.len().saturating_add(l.subtree_depth()) <= MAX_GROUP_DEPTH);
-        let group =
-            self.layer_at(&beside).filter(|g| fits && matches!(&g.content, LayerContent::Group(gr) if gr.expanded && gr.artboard.is_none())).map(|g| g.id);
+        let group = self
+            .layer_at(&beside)
+            .filter(|g| fits && g.frame.is_none() && matches!(&g.content, LayerContent::Group(gr) if gr.expanded && gr.artboard.is_none()))
+            .map(|g| g.id);
         let Some(group) = group else { return self.shift(id, dir) };
         let Some(l) = self.remove(id) else { return false };
         match self.layer_mut(group).and_then(Layer::children_mut) {
@@ -1654,6 +1658,30 @@ mod tests {
         let b1 = d.layer_at(&[1, 0]).unwrap().id;
         assert!(d.step(b1, 1));
         assert_eq!(rows(&d), ["G", "  X", "  C", "B1", "Board", "Background"]);
+    }
+
+    #[test]
+    fn step_passes_a_frame_as_one_row_and_keeps_its_image_in_it() {
+        // A frame holds only its image: a layer passes it even when it is expanded, and the image
+        // doesn't step out of it.
+        let mut d = doc();
+        let bg = d.layers[0].id;
+        let mut frame = Layer::group("F", vec![Layer::raster("Image", d.pixel_format())]);
+        frame.frame = Some(Box::new(Frame { path: Path::default(), transform: Affine::IDENTITY, stroke: None }));
+        if let LayerContent::Group(gr) = &mut frame.content {
+            gr.expanded = true;
+        }
+        let f = d.insert_above(Some(bg), frame);
+        let x = d.insert_above(Some(f), Layer::raster("X", d.pixel_format()));
+        assert_eq!(rows(&d), ["X", "F", "  Image", "Background"]);
+        assert!(d.step(x, -1));
+        assert_eq!(rows(&d), ["F", "  Image", "X", "Background"]);
+        assert!(d.step(x, 1));
+        assert_eq!(rows(&d), ["X", "F", "  Image", "Background"]);
+        let image = d.layer_at(&[1, 0]).unwrap().id;
+        assert!(!d.step(image, 1));
+        assert!(!d.step(image, -1));
+        assert_eq!(rows(&d), ["X", "F", "  Image", "Background"]);
     }
 
     #[test]
