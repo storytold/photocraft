@@ -1627,7 +1627,6 @@ fn completed_placement_notices_survive_tab_changes_and_frame_results_without_cha
 }
 
 #[test]
-#[test]
 fn asynchronous_place_completion_displays_result_warnings() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width":2,"height":2})).unwrap();
