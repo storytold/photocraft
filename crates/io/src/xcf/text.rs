@@ -16,6 +16,17 @@ use super::{Result, invalid};
 const MAX_NODES: usize = 65_536;
 const MAX_DEPTH: usize = 32;
 const MAX_FEATURE_SETTINGS: usize = 64;
+// Shared across all optional point-origin layouts in one import. Costs are
+// scalars + 16 per style run + 32 per logical line, never refunded after work.
+pub(super) const POINT_LAYOUT_WORK_UNITS: usize = 1 << 20;
+mod layout_admission;
+#[cfg(test)]
+mod point_layout_review_tests;
+#[cfg(test)]
+thread_local! {
+    static ORIGIN_SHARED_ACCESSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ORIGIN_LAYOUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 mod diagnostic_review_tests;
@@ -332,15 +343,27 @@ pub(super) struct DecodedText {
 /// Source point text starts at its layout's top-left; native point text starts
 /// at a baseline anchor. Map the native logical origin through the source affine
 /// exactly once. Fixed boxes already have native top-left layout coordinates.
-fn anchor_point_origin(layer: &mut TextLayer, dpi: f32) -> Result<()> {
+fn anchor_point_origin(layer: &mut TextLayer, dpi: f32, ctl: &photocraft_raster::Interrupt<'_>, work_left: &mut usize) -> Result<bool> {
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     if !matches!(layer.shape, TextShape::Point) || layer.text.is_empty() {
-        return Ok(());
+        return Ok(true);
     }
-    let mut engine = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let bounds = engine
-        .layout(layer, dpi)
-        .bounds()
-        .ok_or_else(|| crate::IoError::Unsupported("native font metrics are unavailable for the source text origin".into()))?;
+    let Some(cost) = layout_admission::cost(layer, dpi) else { return Ok(false) };
+    let Some(remaining) = work_left.checked_sub(cost) else { return Ok(false) };
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+    *work_left = remaining;
+    // The gate and document charge precede shared access, font lookup and layout.
+    #[cfg(test)]
+    ORIGIN_SHARED_ACCESSES.with(|count| count.set(count.get() + 1));
+    let bounds = {
+        let mut engine = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+        #[cfg(test)]
+        ORIGIN_LAYOUTS.with(|count| count.set(count.get() + 1));
+        engine.layout(layer, dpi).bounds()
+    };
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+    let bounds = bounds.ok_or_else(|| crate::IoError::Unsupported("native font metrics are unavailable for the source text origin".into()))?;
     if !bounds.iter().all(|v| v.is_finite()) {
         return Err(crate::IoError::Unsupported("source text origin has no finite native layout bounds".into()));
     }
@@ -348,7 +371,7 @@ fn anchor_point_origin(layer: &mut TextLayer, dpi: f32) -> Result<()> {
     if !layer.transform.m.iter().all(|v| v.is_finite()) {
         return Err(invalid("native text anchor conversion exceeds affine bounds"));
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Admit the sRGB-literal conversion before replacing stored text/vector pixels.
@@ -425,7 +448,22 @@ pub(super) fn convert_colors(document: &mut photocraft_doc::Document, profile: &
 /// Decode an unmodified `gimp-text-layer` parasite. Callers retain the source
 /// config inert and disclose native layout/font substitution. Modified source
 /// layers must keep their separately stored raster instead of calling this.
+#[cfg(test)]
 pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<DecodedText> {
+    let mut work = POINT_LAYOUT_WORK_UNITS;
+    decode_with_interrupt(data, dpi, offset, &photocraft_raster::Interrupt::NONE, &mut work)?
+        .ok_or_else(|| crate::IoError::Unsupported("point text exceeds the bounded origin-layout allowance".into()))
+}
+
+/// None preserves saved pixels when optional point-origin measurement is not admitted.
+pub(super) fn decode_with_interrupt(
+    data: &[u8],
+    dpi: f32,
+    offset: (i32, i32),
+    ctl: &photocraft_raster::Interrupt<'_>,
+    work_left: &mut usize,
+) -> Result<Option<DecodedText>> {
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     if data.len() > super::MAX_STRING || !dpi.is_finite() || dpi <= 0.0 {
         return Err(invalid("text configuration size or DPI is invalid"));
     }
@@ -658,7 +696,9 @@ pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<Decode
     }
     layer.paragraphs.push(ParagraphRun { len: layer.text.len(), style: para });
     layer.sync_summary();
-    anchor_point_origin(&mut layer, dpi as f32)?;
+    if !anchor_point_origin(&mut layer, dpi as f32, ctl, work_left)? {
+        return Ok(None);
+    }
     // These GIMP-specific fields cannot silently control native layout.
     const MAPPED: &[&str] = &[
         "text",
@@ -689,13 +729,28 @@ pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<Decode
             note(&mut notes, format!("Source {name} is retained; native typography and rasterization apply"));
         }
     }
-    Ok(DecodedText { layer, source_only: notes, native_policy })
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+    Ok(Some(DecodedText { layer, source_only: notes, native_policy }))
 }
 
 /// Historical GDynText's public eight-field GDT10 record. XLFD identifies the
 /// requested native font; it never identifies a file to load. Independent stock
 /// compatibility probes establish that its finite rotation control is inactive.
+#[cfg(test)]
 pub(super) fn decode_gdyntext(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<DecodedText> {
+    let mut work = POINT_LAYOUT_WORK_UNITS;
+    decode_gdyntext_with_interrupt(data, dpi, offset, &photocraft_raster::Interrupt::NONE, &mut work)?
+        .ok_or_else(|| crate::IoError::Unsupported("point text exceeds the bounded origin-layout allowance".into()))
+}
+
+pub(super) fn decode_gdyntext_with_interrupt(
+    data: &[u8],
+    dpi: f32,
+    offset: (i32, i32),
+    ctl: &photocraft_raster::Interrupt<'_>,
+    work_left: &mut usize,
+) -> Result<Option<DecodedText>> {
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     if data.len() > super::MAX_STRING || !dpi.is_finite() || dpi <= 0. {
         return Err(invalid("invalid legacy text size or DPI"));
     }
@@ -787,8 +842,11 @@ pub(super) fn decode_gdyntext(data: &[u8], dpi: f32, offset: (i32, i32)) -> Resu
     layer.runs.push(TextRun { len: layer.text.len(), style });
     layer.paragraphs.push(ParagraphRun { len: layer.text.len(), style: ParagraphStyle { align, direction: TextDirection::Ltr, ..Default::default() } });
     layer.sync_summary();
-    anchor_point_origin(&mut layer, dpi)?;
-    Ok(DecodedText { layer, source_only: notes, native_policy })
+    if !anchor_point_origin(&mut layer, dpi, ctl, work_left)? {
+        return Ok(None);
+    }
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+    Ok(Some(DecodedText { layer, source_only: notes, native_policy }))
 }
 
 /// Translate stored font names, weight and slant into a native font request without loading bundled font resources.

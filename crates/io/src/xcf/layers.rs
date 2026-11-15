@@ -355,6 +355,7 @@ impl<'a> Image<'a> {
 
     /// Translate unmodified stored text into editable native text, retaining saved pixels on optional-data failures.
     pub(super) fn layer_text(&mut self, layer: &mut Layer, properties: &[Prop<'a>], position: (i32, i32), outcome: usize, ctl: &Interrupt<'_>) -> Result<()> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
         let (x, y) = position;
         let modified = properties.iter().find(|p| p.kind == 26).and_then(|p| be_u32(p.data)).is_some_and(|flags| flags & 2 != 0);
         let mut config: Option<(&str, &[u8])> = None;
@@ -407,12 +408,13 @@ impl<'a> Image<'a> {
             let decoded = if let Some(error) = &self.native_color_error {
                 Err(IoError::Unsupported(format!("native text colors cannot be converted: {error}")))
             } else if config_name == "plug_in_gdyntext/data" {
-                text::decode_gdyntext(config, self.resolution_dpi, (x, y))
+                text::decode_gdyntext_with_interrupt(config, self.resolution_dpi, (x, y), ctl, &mut self.point_text_work_left)
             } else {
-                text::decode(config, self.resolution_dpi, (x, y))
+                text::decode_with_interrupt(config, self.resolution_dpi, (x, y), ctl, &mut self.point_text_work_left)
             };
             match decoded {
-                Ok(decoded) => {
+                Ok(Some(decoded)) => {
+                    ctl.check().map_err(|_| IoError::Cancelled)?;
                     let Some(remaining) = self.meta_budget.checked_sub(text::retained_allocation(&decoded.layer)) else {
                         return self.text_retention_fallback(outcome);
                     };
@@ -448,6 +450,8 @@ impl<'a> Image<'a> {
                         )?;
                     }
                 }
+                Ok(None) => return self.text_layout_fallback(outcome),
+                Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                 Err(error) => self.outcomes.notice(
                     outcome,
                     "xcf.text",
@@ -471,6 +475,21 @@ impl<'a> Image<'a> {
             )?;
         }
         Ok(())
+    }
+
+    /// Optional origin measurement must not monopolize the shared text engine.
+    fn text_layout_fallback(&mut self, outcome: usize) -> Result<()> {
+        self.outcomes.notice(
+            outcome,
+            "xcf.text",
+            ConversionReason::RetentionLimit,
+            (
+                "Source point text exceeds the bounded native origin-layout allowance".into(),
+                "Stored pixels preserved as a native raster; complete original text configuration remains inert within source retention limits".into(),
+            ),
+            Some("has point text exceeding the bounded origin-layout allowance and opens as pixels"),
+            &mut self.warnings,
+        )
     }
 
     /// Optional editability cannot multiply one source record beyond the retained metadata allowance.

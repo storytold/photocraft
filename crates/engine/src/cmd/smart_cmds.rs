@@ -203,15 +203,15 @@ pub(crate) use placing::detach_psd;
 pub(crate) use placing::{affine_homography, set_placement, shift_smart, transform_placement};
 use placing::{convert, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
-#[cfg(test)]
-pub(crate) use rendering::DISPLAY_NATIVE_HASH_BYTES;
 use rendering::refresh_or_fail;
 #[cfg(test)]
+pub(crate) use rendering::{DISPLAY_NATIVE_HASH_BYTES, WARNING_SOURCE_DECODES, WARNING_SOURCE_LIMIT};
+#[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
+pub(crate) use rendering::{WarningRenderSources, render_with_warnings, render_with_warnings_using, source_box};
 pub use rendering::{
     apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image, stack_image_with_order,
 };
-pub(crate) use rendering::{render_with_warnings, source_box};
 #[cfg(test)]
 use source::svg_source_image_in;
 pub use source::{

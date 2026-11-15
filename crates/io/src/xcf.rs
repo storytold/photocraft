@@ -142,6 +142,8 @@ struct Image<'a> {
     /// offsets referencing one record with a large name would otherwise allocate an owned
     /// copy per reference, multiplying a small file into gigabytes of retained metadata.
     meta_budget: usize,
+    /// Cumulative optional point-origin shaping work; independent of retained metadata.
+    point_text_work_left: usize,
     warnings: Warnings,
     outcomes: conversion::Outcomes<'a>,
     /// Layers GIMP composites with "Clip to backdrop" (its default for every mode but Normal).
@@ -994,6 +996,7 @@ pub(crate) fn import_with_sample_order(
         colormap,
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
+        point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings,
         outcomes: conversion::Outcomes::new(version)?,
         clipped_to_backdrop: 0,

@@ -340,9 +340,111 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
 }
 
 /// Command-only rendering that retains usable SVG artwork and reports omitted embedded images.
-/// It deliberately bypasses both source and filter-stage caches: a later warningless render
-/// must not accidentally reuse an incomplete surface. Native previews remain strict.
+/// Its local source cache never enters the strict process-wide source/filter caches.
 pub(crate) fn render_with_warnings(doc: &Document, sm: &SmartObject) -> Result<(Option<Surface>, Vec<String>)> {
+    render_with_warnings_using(sm, &mut WarningRenderSources::new(doc))
+}
+
+struct WarningSource {
+    source: Arc<Vec<u8>>,
+    key: (u64, PixelFormat, [u8; 32]),
+    image: SourceImage,
+    warnings: Vec<String>,
+    bytes: usize,
+}
+
+/// One command's bounded source-space renders. Placement, warp, filters and masks
+/// are instance-specific and must never be cached here. Retaining the source Arc
+/// makes allocation identity safe without hashing the same encoded SVG per instance.
+pub(crate) struct WarningRenderSources<'a> {
+    document: &'a Document,
+    profile_context: Option<([u8; 32], bool)>,
+    entries: Vec<WarningSource>,
+    budget: usize,
+    limit: usize,
+    bytes: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static WARNING_SOURCE_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static WARNING_SOURCE_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+impl<'a> WarningRenderSources<'a> {
+    pub(crate) fn new(document: &'a Document) -> Self {
+        #[cfg(test)]
+        let limit = WARNING_SOURCE_LIMIT.with(|limit| limit.get().unwrap_or(32));
+        #[cfg(not(test))]
+        let limit = 32;
+        Self { document, profile_context: None, entries: Vec::new(), budget: if cfg!(target_arch = "wasm32") { 128 << 20 } else { 384 << 20 }, limit, bytes: 0 }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_limits(document: &'a Document, budget: usize, limit: usize) -> Self {
+        Self { budget, limit, ..Self::new(document) }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn profile_initialized(&self) -> bool {
+        self.profile_context.is_some()
+    }
+
+    fn image(&mut self, bytes: &Arc<Vec<u8>>, scale: f64) -> Result<(SourceImage, Vec<String>)> {
+        let doc = self.document;
+        // Non-SVG and unavailable sources keep their old fast path without
+        // materializing ICC bytes. This immutable document needs the context once.
+        let (profile_key, srgb) = *self.profile_context.get_or_insert_with(|| {
+            let profile = crate::color_cmds::document_profile(doc).to_bytes();
+            (
+                *blake3::hash(&profile).as_bytes(),
+                doc.mode == photocraft_color::ColorMode::Rgb && profile.as_ref() == craft_cms::Builtin::Srgb.profile().to_bytes().as_ref(),
+            )
+        });
+        let key = (scale.to_bits(), doc.pixel_format(), profile_key);
+        if let Some(index) = self.entries.iter().position(|entry| entry.key == key && Arc::ptr_eq(&entry.source, bytes)) {
+            let entry = self.entries.remove(index);
+            let result = (entry.image.clone(), entry.warnings.clone());
+            self.entries.push(entry);
+            return Ok(result);
+        }
+        #[cfg(test)]
+        WARNING_SOURCE_DECODES.with(|count| count.set(count.get().saturating_add(1)));
+        let (buf, warnings) = photocraft_io::svg::rasterize_bounded_with_warnings(bytes, scale as f32, 24_000_000)
+            .map_err(|e| other(format!("can't render the SVG smart object: {e}")))?;
+        // Charge full native tiles and retained encoded bytes, not just logical pixels.
+        // This is a soft memo budget: oversize entries retain the existing uncached path.
+        let cost = usize::try_from(photocraft_raster::tile_storage_bytes(buf.rect, &doc.pixel_format()))
+            .unwrap_or(usize::MAX)
+            .saturating_add(bytes.capacity())
+            .saturating_add(std::mem::size_of::<WarningSource>())
+            .saturating_add(warnings.capacity().saturating_mul(std::mem::size_of::<String>()))
+            .saturating_add(warnings.iter().fold(0usize, |total, warning| total.saturating_add(warning.capacity())));
+        let admitted = self.limit != 0 && cost <= self.budget;
+        if admitted {
+            while self.entries.len() >= self.limit || self.bytes > self.budget - cost {
+                let entry = self.entries.remove(0);
+                self.bytes = self.bytes.saturating_sub(entry.bytes);
+            }
+        }
+        // Preserve the normal renderer's exact built-in sRGB fast path.
+        let image = if srgb {
+            SourceImage { surface: Arc::new(super::source::buffer_to_surface(&buf, doc.pixel_format())), bounds: buf.rect }
+        } else {
+            let source = SourceImage { surface: Arc::new(super::source::buffer_to_surface(&buf, PixelFormat::RGBA32F)), bounds: buf.rect };
+            convert_svg_source(source, doc)?
+        };
+        if admitted && self.entries.try_reserve(1).is_ok() {
+            self.bytes += cost; // cost was admitted against budget - bytes above.
+            self.entries.push(WarningSource { source: Arc::clone(bytes), key, image: image.clone(), warnings: warnings.clone(), bytes: cost });
+        }
+        Ok((image, warnings))
+    }
+}
+
+/// Reuse only warning-aware source pixels during one shared-content update.
+pub(crate) fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderSources<'_>) -> Result<(Option<Surface>, Vec<String>)> {
+    let doc = sources.document;
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
     if !photocraft_io::is_svg_input(&name, &bytes) || sm.vector_preview.is_some() || sm.stack_mode.is_some() {
         return render(doc, sm).map(|surface| (surface, Vec::new()));
@@ -351,17 +453,10 @@ pub(crate) fn render_with_warnings(doc: &Document, sm: &SmartObject) -> Result<(
         return Err(other("the smart object has unsupported visible filters"));
     }
     let mut warnings = Vec::new();
-    let placed = place_with_svg(&name, &bytes, doc, sm, &mut |bytes, scale| {
-        let (buf, omitted) = photocraft_io::svg::rasterize_bounded_with_warnings(bytes, scale as f32, 24_000_000)
-            .map_err(|e| other(format!("can't render the SVG smart object: {e}")))?;
+    let placed = place_with_svg(&name, &bytes, doc, sm, &mut |_, scale| {
+        let (image, omitted) = sources.image(&bytes, scale)?;
         warnings.extend(omitted);
-        // Preserve the normal renderer's exact built-in sRGB fast path.
-        let profile = crate::color_cmds::document_profile(doc);
-        if doc.mode == photocraft_color::ColorMode::Rgb && profile.to_bytes().as_ref() == craft_cms::Builtin::Srgb.profile().to_bytes().as_ref() {
-            return Ok(SourceImage { surface: Arc::new(super::source::buffer_to_surface(&buf, doc.pixel_format())), bounds: buf.rect });
-        }
-        let source = SourceImage { surface: Arc::new(super::source::buffer_to_surface(&buf, PixelFormat::RGBA32F)), bounds: buf.rect };
-        convert_svg_source(source, doc)
+        Ok(image)
     })?;
     Ok((Some(apply_smart_filters(&placed, sm, doc.bounds())?), warnings))
 }

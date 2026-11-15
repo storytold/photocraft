@@ -176,7 +176,25 @@ pub fn same_format(path: &str) -> String {
         &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt"];
     let ext = extension(path).unwrap_or_else(|| "png".into());
     let no_writer = photocraft_formats::from_extension(&ext).is_some_and(|f| f.capabilities().write != photocraft_formats::Availability::Available);
-    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer { "psd".into() } else { ext }
+    if photocraft_io::is_xcf_input_name(path) || photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer {
+        "psd".into()
+    } else {
+        ext
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn same_format_maps_all_xcf_aliases_without_claiming_other_archives() {
+    for suffix in ["xcf", "xcf.gz", "xcfgz", "xcf.bz2", "xcfbz2", "xcf.xz", "xcfxz"] {
+        for name in [format!("/in/page.{suffix}"), format!("C:\\in\\PAGE.{}", suffix.to_ascii_uppercase())] {
+            assert!(photocraft_io::is_xcf_input_name(&name), "{name}");
+            assert_eq!(same_format(&name), "psd", "{name}");
+        }
+    }
+    for (name, expected) in [("/in/archive.tar.bz2", "bz2"), ("/in/notes.xz", "xz"), ("/in/page.xcf.xz.backup", "backup"), ("/in/page.png", "png")] {
+        assert_eq!(same_format(name), expected, "{name}");
+    }
 }
 
 #[cfg(test)]

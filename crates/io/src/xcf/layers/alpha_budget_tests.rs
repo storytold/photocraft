@@ -58,6 +58,7 @@ fn image(bytes: &[u8], budget: usize, base_type: u32, precision: Precision) -> I
         colormap: Vec::new(),
         budget,
         meta_budget: MAX_METADATA_BYTES,
+        point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings: Warnings::default(),
         outcomes: conversion::Outcomes::new(11).unwrap(),
         clipped_to_backdrop: 0,

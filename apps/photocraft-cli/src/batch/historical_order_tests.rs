@@ -56,6 +56,63 @@ fn batch_wrapped_historical_inputs_exclude_unrelated_archives_in_both_listing_mo
     }
 }
 
+#[test]
+fn batch_default_format_saves_every_xcf_alias_as_psd() {
+    let folder = tempfile::tempdir().unwrap();
+    let input = folder.path().join("in");
+    let actions = folder.path().join("actions.json");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(&actions, "[]").unwrap();
+    let plain = historical_rgb16(7, true);
+    let sources = [
+        ("plain.XCF", plain.as_slice()),
+        ("gzip.xcf.gz", GZIP),
+        ("compact-gzip.XCFGZ", GZIP),
+        ("bzip.xcf.bz2", BZIP),
+        ("compact-bzip.XCFBZ2", BZIP),
+        ("xz.xcf.xz", XZ),
+        ("compact-xz.XCFXZ", XZ),
+    ];
+    for (name, bytes) in sources {
+        std::fs::write(input.join(name), bytes).unwrap();
+    }
+    for named in [false, true] {
+        let output = folder.path().join(format!("out-{named}"));
+        let mut args = vec![
+            "batch",
+            "--actions",
+            actions.to_str().unwrap(),
+            "--in",
+            input.to_str().unwrap(),
+            "--out",
+            output.to_str().unwrap(),
+            "--no-gpu",
+            "--historical-xcf-sample-order",
+            "little-endian",
+        ];
+        if named {
+            args.extend(["--naming", "{name}{ext}"]);
+        }
+        let result = invoke(&args);
+        assert_eq!(result.code, 0, "{args:?}: {}{}", result.stdout, result.stderr);
+        assert!(result.stdout.contains("7 succeeded, 0 failed"), "{}", result.stdout);
+        assert_eq!(std::fs::read_dir(&output).unwrap().count(), sources.len());
+        for (name, original) in sources {
+            let stem = std::path::Path::new(name).file_stem().unwrap().to_string_lossy();
+            let target = output.join(format!("{stem}.psd"));
+            let bytes = std::fs::read(&target).unwrap();
+            assert!(bytes.starts_with(b"8BPS"), "{target:?}");
+            let imported = photocraft_io::import("output.psd", &bytes).unwrap();
+            let pixels = imported.document.layers[0].surface().unwrap().read_region(photocraft_doc::Rect::new(0, 0, 1, 1));
+            assert_eq!(pixels.len(), 4);
+            for (actual, expected) in pixels.iter().zip([0x1234u16, 0x5678, 0x9abc, 0xffff]) {
+                assert!((*actual - f32::from(expected) / 65535.).abs() <= 1. / 65535., "{name}: {pixels:?}");
+            }
+            assert_eq!(std::fs::read(input.join(name)).unwrap(), original, "batch preserves its XCF source");
+        }
+    }
+}
+
 /// Independently authored one-pixel RGB16 XCF, with versioned pointer widths and
 /// explicitly encoded sample bytes rather than a blank high-depth header.
 fn historical_rgb16(version: u32, little: bool) -> Vec<u8> {

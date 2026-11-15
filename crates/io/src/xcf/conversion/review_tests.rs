@@ -217,6 +217,7 @@ fn full_report_coverage_inventory_still_warns_without_reading_optional_source() 
         colormap: Vec::new(),
         budget: 0,
         meta_budget: 0,
+        point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings: Default::default(),
         outcomes,
         clipped_to_backdrop: 0,

@@ -14,6 +14,7 @@ fn image(bytes: &[u8], metadata: usize) -> Image<'_> {
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
         meta_budget: metadata,
+        point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings: Warnings::default(),
         outcomes: conversion::Outcomes::new(26).unwrap(),
         clipped_to_backdrop: 0,

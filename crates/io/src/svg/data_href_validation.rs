@@ -12,6 +12,12 @@ use craft_svg::tree::Limits;
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 const INVALID_IMAGE: &str = "data:image/png,%00";
+const IGNORED_DATA: &str = "data:application/octet-stream,%00";
+
+struct Patch {
+    range: Range<usize>,
+    replacement: &'static str,
+}
 
 fn invalid(message: &str) -> IoError {
     IoError::Svg(message.into())
@@ -44,8 +50,8 @@ pub(super) fn repair<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>,
     // validation reads them and emits at most that much decoded data, never a Vec.
     let mut work =
         text.len().checked_add(limits.entity_bytes).and_then(|n| n.checked_mul(2)).ok_or_else(|| invalid("SVG data-URL validation work exceeds its limit"))?;
-    let max_patches = (limits.bytes / std::mem::size_of::<Range<usize>>()).min(usize::try_from(limits.xml_nodes).unwrap_or(usize::MAX));
-    let mut patches: Vec<Range<usize>> = Vec::new();
+    let max_patches = (limits.bytes / std::mem::size_of::<Patch>()).min(usize::try_from(limits.xml_nodes).unwrap_or(usize::MAX));
+    let mut patches: Vec<Patch> = Vec::new();
     for node in xml.descendants().filter(|node| node.is_element()) {
         if !matches!(node.tag_name().name(), "image" | "feImage") {
             continue;
@@ -55,9 +61,7 @@ pub(super) fn repair<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>,
         // when one is inert or unselected. Only actual resolver callbacks count
         // omissions, so this does not turn hidden/unused resources into warnings.
         for href in node.attributes().filter(|a| a.name() == "href" && matches!(a.namespace(), None | Some(XLINK_NS))) {
-            if !malformed_data_url(href.value(), &mut work)? {
-                continue;
-            }
+            let Some(replacement) = malformed_data_url_replacement(href.value(), &mut work)? else { continue };
             let range = verified_value_range(text, node.range(), href.range(), href.range_qname(), href.range_value(), href.name())?;
             if patches.len() == patches.capacity() {
                 if patches.len() >= max_patches {
@@ -66,23 +70,26 @@ pub(super) fn repair<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>,
                 let capacity = patches.capacity().max(8).saturating_mul(2).min(max_patches);
                 patches.try_reserve_exact(capacity.saturating_sub(patches.len())).map_err(|_| invalid("could not allocate bounded SVG data-URL repairs"))?;
             }
-            patches.push(range);
+            patches.push(Patch { range, replacement });
         }
     }
     if patches.is_empty() {
         return Ok(Cow::Borrowed(text));
     }
-    patches.sort_unstable_by_key(|range| (range.start, range.end));
-    patches.dedup();
+    patches.sort_unstable_by_key(|patch| (patch.range.start, patch.range.end));
+    patches.dedup_by_key(|patch| (patch.range.start, patch.range.end));
     let mut end = 0;
     let mut length = text.len();
-    for range in &patches {
+    for patch in &patches {
+        let range = &patch.range;
         if range.start < end {
             return Err(invalid("SVG data-URL source ranges overlap"));
         }
         end = range.end;
-        length =
-            length.checked_sub(range.len()).and_then(|n| n.checked_add(INVALID_IMAGE.len())).ok_or_else(|| invalid("SVG data-URL repair size overflows"))?;
+        length = length
+            .checked_sub(range.len())
+            .and_then(|n| n.checked_add(patch.replacement.len()))
+            .ok_or_else(|| invalid("SVG data-URL repair size overflows"))?;
     }
     if length > limits.bytes {
         return Err(invalid("repaired SVG exceeds the text byte limit"));
@@ -90,21 +97,21 @@ pub(super) fn repair<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>,
     let mut result = String::new();
     result.try_reserve_exact(length).map_err(|_| invalid("could not allocate bounded repaired SVG text"))?;
     let mut cursor = 0;
-    for range in patches {
-        result.push_str(text.get(cursor..range.start).ok_or_else(|| invalid("invalid SVG data-URL source range"))?);
-        result.push_str(INVALID_IMAGE);
-        cursor = range.end;
+    for patch in patches {
+        result.push_str(text.get(cursor..patch.range.start).ok_or_else(|| invalid("invalid SVG data-URL source range"))?);
+        result.push_str(patch.replacement);
+        cursor = patch.range.end;
     }
     result.push_str(text.get(cursor..).ok_or_else(|| invalid("invalid SVG data-URL source range"))?);
     Ok(Cow::Owned(result))
 }
 
-fn malformed_data_url(value: &str, work: &mut usize) -> Result<bool, IoError> {
+fn malformed_data_url_replacement(value: &str, work: &mut usize) -> Result<Option<&'static str>, IoError> {
     *work = work.checked_sub(value.len()).ok_or_else(|| invalid("SVG data-URL validation work exceeds its limit"))?;
     let url = match data_url::DataUrl::process(value) {
         Ok(url) => url,
-        Err(data_url::DataUrlError::NoComma) => return Ok(true),
-        Err(data_url::DataUrlError::NotADataUrl) => return Ok(false),
+        Err(data_url::DataUrlError::NoComma) => return missing_comma_replacement(value, work).map(Some),
+        Err(data_url::DataUrlError::NotADataUrl) => return Ok(None),
     };
     let mut exhausted = false;
     let decoded = url.decode(|bytes| {
@@ -119,7 +126,32 @@ fn malformed_data_url(value: &str, work: &mut usize) -> Result<bool, IoError> {
     if exhausted {
         return Err(invalid("SVG data-URL validation work exceeds its limit"));
     }
-    Ok(decoded.is_err())
+    Ok(decoded.is_err().then(|| replacement_for_mime(url.mime_type())))
+}
+
+/// Preflight must see a valid URL, while the resolver must keep its original
+/// disposition. Non-image MIME types are ignored even when their body is bad.
+fn replacement_for_mime(mime: &data_url::mime::Mime) -> &'static str {
+    if mime.type_ == "image" || mime.matches("text", "plain") { INVALID_IMAGE } else { IGNORED_DATA }
+}
+
+fn missing_comma_replacement(value: &str, work: &mut usize) -> Result<&'static str, IoError> {
+    // NoComma does not expose its MIME type. Ask the same parser about a header
+    // with an empty body rather than guessing MIME defaults, case or parameters.
+    // Match its URL C0 trimming; fragments and MIME parameters cannot affect
+    // the image/text-plain essence. Do not allocate parameter bookkeeping for a
+    // hostile missing-comma header just to recover that disposition.
+    let normalized = value.trim_matches(|ch| ch <= ' ');
+    let header = normalized.split_once('#').map_or(normalized, |(header, _)| header);
+    let essence = header.split_once(';').map_or(header, |(essence, _)| essence);
+    *work = work.checked_sub(essence.len()).ok_or_else(|| invalid("SVG data-URL validation work exceeds its limit"))?;
+    let length = essence.len().checked_add(1).ok_or_else(|| invalid("SVG data-URL repair size overflows"))?;
+    let mut candidate = String::new();
+    candidate.try_reserve_exact(length).map_err(|_| invalid("could not allocate bounded SVG data-URL header"))?;
+    candidate.push_str(essence);
+    candidate.push(',');
+    let url = data_url::DataUrl::process(&candidate).map_err(|_| invalid("invalid SVG data-URL header framing"))?;
+    Ok(replacement_for_mime(url.mime_type()))
 }
 
 /// roxmltree bounds QName and equals-spacing bookkeeping internally. Refuse a
@@ -238,6 +270,42 @@ mod tests {
         }
         let text = "<svg><image href='data:image/png;base64'/></svg>";
         assert!(repair(text, &limits()).unwrap().contains(INVALID_IMAGE));
+    }
+
+    #[test]
+    fn malformed_non_image_urls_keep_ignored_replacements_even_without_a_comma() {
+        for value in [
+            "data:application/octet-stream;base64,A",
+            "data:application/octet-stream;base64",
+            "data:APPLICATION/OCTET-STREAM;BASE64,A",
+            "data:text/css;base64,A",
+            "data:audio/ogg;base64,A",
+            "data:application/octet-stream;base64#fragment,not-the-delimiter",
+        ] {
+            let text = format!("<svg><image href='{value}'/></svg>");
+            let repaired = repair(&text, &limits()).unwrap();
+            assert!(repaired.contains(IGNORED_DATA), "{value}: {repaired}");
+            assert!(!repaired.contains(INVALID_IMAGE));
+            assert!(matches!(repair(&repaired, &limits()).unwrap(), Cow::Borrowed(_)));
+            let resolver = craft_svg::tree::ImageResolver::new(limits());
+            resolver.check_document(&repaired).unwrap();
+            assert_eq!(resolver.usage().invalid_raster_images, 0);
+        }
+    }
+
+    #[test]
+    fn image_and_default_plain_mime_failures_remain_disclosed() {
+        for value in
+            ["data:IMAGE/PNG;base64,A", "data:image/png;base64", "data:text/plain;base64,A", "data:;base64,A", "data:;base64", "data:not-a-mime;base64"]
+        {
+            let text = format!("<svg><image href='{value}'/></svg>");
+            assert!(repair(&text, &limits()).unwrap().contains(INVALID_IMAGE), "{value}");
+        }
+        let value = "data:application/octet-stream;base64#fragment";
+        let mut insufficient = value.len();
+        assert!(malformed_data_url_replacement(value, &mut insufficient).is_err(), "the extra MIME-header parse has its own work charge");
+        let mut sufficient = value.len() * 2;
+        assert_eq!(malformed_data_url_replacement(value, &mut sufficient).unwrap(), Some(IGNORED_DATA));
     }
 
     #[test]

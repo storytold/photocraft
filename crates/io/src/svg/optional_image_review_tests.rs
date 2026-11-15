@@ -100,6 +100,71 @@ fn malformed_data_image_hrefs_are_disclosed_before_the_parser_discards_them() {
     }
 }
 
+fn assert_ignored_data_image_stays_quiet(text: &str) {
+    for bytes in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+        let imported = crate::import("ignored.svg", &bytes).unwrap();
+        assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+        assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [1., 0., 0., 1.]);
+        let strict = import_svg_bounded_images_strict("ignored.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+        assert!(strict.warnings.is_empty());
+        import_svg_preview_with_work("ignored.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+        let (pixels, warnings) = rasterize_bounded_with_warnings(&bytes, 1., MAX_RASTER_PIXELS).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(pixels.get(1, 1), [1., 0., 0., 1.]);
+        assert_eq!(rasterize_bounded(&bytes, 1., MAX_RASTER_PIXELS).unwrap().get(1, 1), [1., 0., 0., 1.]);
+        assert_eq!(rasterize(&bytes, 1.).unwrap().get(1, 1), [1., 0., 0., 1.]);
+    }
+}
+
+#[test]
+fn malformed_non_image_data_hrefs_stay_ignored_in_open_and_strict_rendering() {
+    for href in [
+        "data:application/octet-stream;base64,A",
+        "data:application/octet-stream;base64",
+        "data:APPLICATION/OCTET-STREAM;BASE64,A",
+        "data:text/css;base64,A",
+        "data:application/octet-stream;base64#fragment,not-the-delimiter",
+    ] {
+        let text = drawing(href);
+        assert_ignored_data_image_stays_quiet(&text);
+        assert_ignored_data_image_stays_quiet(&text.replace("href=", "xmlns:x='http://www.w3.org/1999/xlink' x:href="));
+        for child in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+            assert_ignored_data_image_stays_quiet(&drawing(&url("image/svg+xml", &child)));
+        }
+    }
+}
+
+#[test]
+fn default_and_explicit_plain_data_failures_keep_image_omission_policy() {
+    for href in ["data:text/plain;base64,A", "data:;base64,A", "data:;base64", "data:image/png;base64"] {
+        assert_incomplete_image_is_disclosed(&drawing(href));
+    }
+}
+
+#[test]
+fn ignored_non_image_repair_preserves_hidden_foreign_and_valid_image_controls() {
+    for content in [
+        "<image display='none' width='2' height='2' href='data:application/octet-stream;base64'/>",
+        "<foreign:image xmlns:foreign='urn:unrelated' width='2' height='2' href='data:application/octet-stream;base64,A'/>",
+        "<image width='2' height='2' xmlns:x='http://www.w3.org/1999/xlink' x:href='data:image/png;base64,A' href='data:application/octet-stream;base64,A'/>",
+    ] {
+        let text = format!("<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='red'/>{content}</svg>");
+        assert_ignored_data_image_stays_quiet(&text);
+    }
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let text = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><image width='2' height='2' href='{}'/><image width='2' height='2' href='data:application/octet-stream;base64,A'/></svg>",
+        url("image/png", &png)
+    );
+    let imported = crate::import("mixed.svg", text.as_bytes()).unwrap();
+    assert!(imported.warnings.is_empty());
+    assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [0., 1., 0., 1.]);
+    let strict = import_svg_bounded_images_strict("mixed.svg", text.as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert!(strict.warnings.is_empty());
+    assert_eq!(rasterize_bounded(text.as_bytes(), 1., MAX_RASTER_PIXELS).unwrap().get(1, 1), [0., 1., 0., 1.]);
+}
+
 #[test]
 fn malformed_nested_declarations_are_not_removed_into_valid_images() {
     let child = b"<?xml bogus?><svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='green'/></svg>";

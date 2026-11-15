@@ -15,6 +15,7 @@ fn image(bytes: &[u8]) -> Image<'_> {
         colormap: Vec::new(),
         budget: 16 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &PixelFormat::RGBA8)).unwrap(),
         meta_budget: META_ALLOWANCE,
+        point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings: Warnings::default(),
         outcomes: conversion::Outcomes::new(26).unwrap(),
         clipped_to_backdrop: 0,
