@@ -227,8 +227,10 @@ fn tl_keys(sources: &[(PathBuf, String)]) -> BTreeSet<Key> {
         }
         let code = without_test_modules(source);
         let mut rest = code.as_str();
-        while let Some(at) = rest.find("tl!(\"") {
-            rest = rest.get(at + 5..).unwrap_or("");
+        while let Some(at) = rest.find("tl!(") {
+            rest = rest.get(at + 4..).unwrap_or("").trim_start();
+            let Some(literal) = rest.strip_prefix('"') else { continue };
+            rest = literal;
             let bytes = rest.as_bytes();
             let mut end = 0;
             while end < bytes.len() && !(bytes[end] == b'"' && (end == 0 || bytes[end - 1] != b'\\')) {
@@ -236,7 +238,7 @@ fn tl_keys(sources: &[(PathBuf, String)]) -> BTreeSet<Key> {
             }
             if let Some(raw) = rest.get(..end) {
                 let source = unescape_rust_string(raw);
-                if rest.get(end + 1..end + 2) == Some(")") {
+                if rest.get(end + 1..).is_some_and(|after| after.trim_start().starts_with(')')) {
                     keys.insert(Key { context: String::new(), source });
                 }
             }
@@ -624,6 +626,62 @@ mod tests {
             let keys = tl_keys(&sources);
             assert!(keys.contains(&Key { context: String::new(), source: "production key".into() }));
             assert!(!keys.contains(&Key { context: String::new(), source: "test fixture key".into() }));
+        }
+    }
+
+    #[test]
+    fn literal_translation_keys_allow_formatting_whitespace() {
+        for newline in ["\n", "\r\n"] {
+            let source = format!("tl!({newline}    \"multiline key\"{newline}); tl!( \t\"inline key\" \t); tl!(\"compact key\");");
+            let sources = vec![(PathBuf::from("ui.rs"), source)];
+            let keys = tl_keys(&sources);
+            assert_eq!(
+                keys,
+                ["multiline key", "inline key", "compact key"].into_iter().map(|source| Key { context: String::new(), source: source.into() }).collect()
+            );
+        }
+        let sources = vec![(PathBuf::from("ui.rs"), r#"tl!(dynamic); tl!("prefix".to_string()); tl!("first", "second"); tl!("key" + suffix);"#.into())];
+        assert!(tl_keys(&sources).is_empty());
+    }
+
+    #[test]
+    fn gathers_multiline_tooltips_used_by_the_ui() {
+        let source = r#"
+            tl!(
+                "Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it."
+            );
+            tl!(
+                "How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with."
+            );
+            tl!(
+                "The estimate is above 8 GiB and the available memory is unknown, so this process or browser tab may run out of memory. You can still try to open it."
+            );
+            tl!(
+                "Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it."
+            );
+            tl!(
+                "The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory."
+            );
+            tl!(
+                "WinTab reads pressure, tilt, rotation and the eraser end from the tablet driver. Turn off Windows Ink in your tablet's software utility (for example Wacom Center) before using it."
+            );
+            tl!(
+                "AI apps such as Claude can open, edit and save documents in this window while ArtCraft Launcher › Settings › AI agents › Let AI agents use Craft apps is on. Only programs on this computer can connect."
+            );
+            tl!(
+                "PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?"
+            );
+        "#;
+        let expected: BTreeSet<Key> = quoted_strings(source).into_iter().map(|source| Key { context: String::new(), source }).collect();
+        assert_eq!(expected.len(), 8);
+        let keys = tl_keys(&[(PathBuf::from("ui.rs"), source.into())]);
+        assert_eq!(keys, expected);
+        let languages = [Language { code: "en".into() }, Language { code: "fr".into() }];
+        let report = format_report(&languages, &keys, &BTreeMap::from([("fr".into(), BTreeSet::new())]), &BTreeMap::new());
+        assert_eq!(report.lines().find(|line| line.starts_with("fr ")).and_then(|line| line.split_whitespace().nth(1)), Some("0/8"));
+        assert!(report.contains("fr: 8 missing\n"));
+        for key in &expected {
+            assert!(report.contains(&format!("    {}\n", key.source)), "{}", key.source);
         }
     }
 
