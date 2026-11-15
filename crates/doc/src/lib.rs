@@ -416,6 +416,8 @@ pub struct TextLayer {
     pub antialias: text::AntiAlias,
     /// Warp Text settings (applied to the glyph outlines when rendering).
     pub warp: Option<text::TextWarp>,
+    /// Dynamic Text: sizes are derived to fill the box or area. `None` = ordinary type.
+    pub fit: Option<text::TextFit>,
 }
 
 impl Default for TextLayer {
@@ -434,6 +436,7 @@ impl Default for TextLayer {
             orientation: text::Orientation::Horizontal,
             antialias: text::AntiAlias::Smooth,
             warp: None,
+            fit: None,
         }
     }
 }

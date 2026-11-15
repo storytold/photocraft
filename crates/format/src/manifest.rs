@@ -273,6 +273,8 @@ pub enum ContentM {
         antialias: text::AntiAlias,
         #[serde(default)]
         warp: Option<text::TextWarp>,
+        #[serde(default)]
+        fit: Option<text::TextFit>,
     },
     Shape {
         fill: Option<Fill>,
