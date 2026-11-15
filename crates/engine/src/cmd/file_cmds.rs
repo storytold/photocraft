@@ -556,3 +556,7 @@ mod load_stack_depth_tests;
 #[cfg(test)]
 #[path = "file_cmds/load_stack_smart_name_tests.rs"]
 mod load_stack_smart_name_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/load_stack_align_canvas_tests.rs"]
+mod load_stack_align_canvas_tests;

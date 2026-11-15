@@ -316,6 +316,9 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
     if align {
         s.execute("select.allLayers", json!({}))?;
         s.execute("edit.autoAlignLayers", json!({"projection": "auto"}))?;
+        // The canvas grows to the union of the aligned layers, as the reference's does (#13999):
+        // no aligned layer is cut off, and the new area is transparent. Nothing moved, no change.
+        s.execute("image.revealAll", json!({}))?;
         if smart {
             s.edit("Convert to Smart Object", |doc, active| {
                 let layers = std::mem::take(&mut doc.layers);
