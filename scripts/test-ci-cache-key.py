@@ -84,12 +84,28 @@ def cache_inputs(text):
     return matches[0]
 
 
-def workflow_environment():
-    """The `env:` block at the top of the workflow, as KEY: value pairs."""
-    block = re.search(r'^env:\n((?:  [A-Za-z_][A-Za-z0-9_]*:.*\n)+)', WORKFLOW, re.M)
+def environment_pairs(lines, indent):
+    """Literal environment keys at one mapping level; continuation lines are not new variables."""
+    pairs = {}
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        if len(line) - len(line.lstrip(' ')) > indent:
+            continue
+        field = re.fullmatch(r' {' + str(indent) + r'}([A-Za-z_][A-Za-z0-9_]*):[ \t]*(.*?)[ \t]*', line)
+        if field is None or field[1] in pairs:
+            raise AssertionError(f'unsupported or duplicate environment key: {line!r}')
+        pairs[field[1]] = field[2]
+    return pairs
+
+
+def workflow_environment(workflow=None):
+    """Read through comment/blank lines, stopping at the next column-zero YAML key."""
+    text = WORKFLOW if workflow is None else workflow
+    block = re.search(r'^env:\n((?:(?:[ ].*|#.*)?\n)+)', text, re.M)
     if block is None:
         raise AssertionError('no workflow-level env block')
-    return dict(re.findall(r'^  ([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*$', block.group(1), re.M))
+    return environment_pairs(block.group(1).splitlines(), 2)
 
 
 def job_environment(job_text):
@@ -99,14 +115,14 @@ def job_environment(job_text):
         start = lines.index('    env:')
     except ValueError:
         return {}
-    pairs = {}
+    block = []
     for line in lines[start + 1:]:
-        if line.strip() and not line.startswith('      '):
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        if len(line) - len(line.lstrip(' ')) <= 4:
             break
-        found = re.match(r'^      ([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*$', line)
-        if found:
-            pairs[found.group(1)] = found.group(2)
-    return pairs
+        block.append(line)
+    return environment_pairs(block, 6)
 
 
 def hashed(environment):
@@ -212,6 +228,32 @@ class WithoutHeifJobTests(unittest.TestCase):
     def test_hashes_exactly_the_gate_legs_variables(self):
         environment = {**workflow_environment(), **job_environment(self.text)}
         self.assertEqual(hashed(environment), GATE_VARIABLES)
+
+
+class EnvironmentReaderTests(unittest.TestCase):
+    def test_workflow_comments_and_blanks_do_not_hide_later_keys(self):
+        text = ('env:\n  CARGO_TERM_COLOR: always\n  # keep reading\n\n'
+                '# column-zero comments are not YAML keys\n  EMPTY:\n  RUSTFLAGS: -Dwarnings\n'
+                'jobs:\n  ignored: true\n')
+        self.assertEqual(workflow_environment(text),
+                         {'CARGO_TERM_COLOR': 'always', 'EMPTY': '', 'RUSTFLAGS': '-Dwarnings'})
+
+    def test_job_comments_and_blanks_do_not_hide_later_keys(self):
+        text = ('    env:\n      CARGO_INCREMENTAL: 0\n    # still inside the mapping\n\n'
+                '      EMPTY:\n      RUSTFLAGS: -Dwarnings\n    steps:\n      - run: true\n')
+        self.assertEqual(job_environment(text),
+                         {'CARGO_INCREMENTAL': '0', 'EMPTY': '', 'RUSTFLAGS': '-Dwarnings'})
+
+    def test_unsupported_or_duplicate_environment_keys_fail_closed(self):
+        for body in ("  'RUSTFLAGS': -Dwarnings\n", '  RUSTFLAGS: a\n  RUSTFLAGS: b\n'):
+            with self.subTest(body=body):
+                with self.assertRaises(AssertionError):
+                    workflow_environment('env:\n' + body + 'jobs: {}\n')
+
+    def test_runtime_expression_after_a_comment_is_not_dropped(self):
+        text = 'env:\n  PHOTOCRAFT_NO_PRINT: "1"\n  # cache-sensitive below\n\n  RUSTFLAGS: ${{ vars.EXTRA }}\njobs: {}\n'
+        with self.assertRaisesRegex(ValueError, 'unresolved'):
+            hashed(workflow_environment(text))
 
 
 class KeyTests(unittest.TestCase):
