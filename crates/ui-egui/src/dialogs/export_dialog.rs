@@ -225,7 +225,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
         for (doc, path) in docs.iter().zip(paths) {
             crate::app::ensure_memory_to_save(doc, &path)?;
             let export = app.services.export.as_ref().ok_or("no exporter configured")?;
-            let (bytes, warnings) = export(doc, &path, &ExportSettings { xmp_all: false, ..Default::default() })?;
+            let (bytes, warnings) = export(doc, &path, &ExportSettings { layer_alpha: true, xmp_all: false, ..Default::default() })?;
             let write = app.services.write.as_mut().ok_or("no writer configured")?;
             write(&path, &bytes)?;
             crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
@@ -485,6 +485,10 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         // Export As's JPGs are progressive (SOF2) in the reference application, measured at its
         // default quality; the scan layout is one setting for the whole dialog.
         jpeg_format: photocraft_codecs::JpegFormat::Progressive,
+        // A layer's PNG always keeps its alpha channel (#14816): the dialog exports one layer when
+        // it carries `__layer` (its first layer) or `__layers` (several, one file each). File >
+        // Export As has neither and keeps today's RGB for an opaque composite.
+        layer_alpha: f.contains_key("__layer") || f.contains_key("__layers"),
         ..Default::default()
     }
 }
@@ -1190,6 +1194,9 @@ mod enter_key_tests;
 
 #[cfg(test)]
 mod jpg_progressive_tests;
+
+#[cfg(test)]
+mod layer_png_rgba_tests;
 
 #[cfg(all(test, unix))]
 mod batch_name_tests {

@@ -443,6 +443,12 @@ pub struct ExportOptions {
     /// omit it; check the manifest's `full_composite` member ([`photocraft_format::read_full_composite`]
     /// reads it). Off by default.
     pub pcraft_full_composite: bool,
+    /// A flat export of a single layer (Layer › Export As and Quick Export as PNG, #14816): keep
+    /// the alpha channel even when every pixel turns out opaque, and store a pixel nothing painted
+    /// inside the exported bounds as white with a zero alpha, as the reference application does.
+    /// Off by default: a whole-document export drops the alpha of an opaque composite, which is
+    /// what File › Export As keeps doing, and formats without an alpha channel are unaffected.
+    pub layer_alpha: bool,
 }
 
 impl Default for ExportOptions {
@@ -462,6 +468,7 @@ impl Default for ExportOptions {
             read_linked_files: true,
             pdf_spot_plates: true,
             pcraft_full_composite: false,
+            layer_alpha: false,
         }
     }
 }

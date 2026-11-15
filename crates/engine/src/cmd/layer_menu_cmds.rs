@@ -993,7 +993,11 @@ fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result
         tmp.execute("image.imageSize", json!({"width": w, "resample": resample}))?;
         ldoc = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();
     }
-    let out = photocraft_io::export(&ldoc, path, &Default::default()).map_err(|e| other(e.to_string()))?;
+    // A layer export always keeps its alpha channel, opaque layer or not, and stores the pixels
+    // nothing painted inside its bounds as white (#14816). File > Export As of the whole document
+    // goes on dropping an opaque composite's alpha.
+    let opts = photocraft_io::ExportOptions { layer_alpha: true, ..Default::default() };
+    let out = photocraft_io::export(&ldoc, path, &opts).map_err(|e| other(e.to_string()))?;
     write_file(path, &out.bytes)?;
     Ok(json!({"path": path, "bytes": out.bytes.len(), "width": ldoc.size.width, "height": ldoc.size.height, "warnings": out.warnings}))
 }
