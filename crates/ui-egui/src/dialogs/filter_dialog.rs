@@ -20,14 +20,9 @@ mod zoom_center;
 
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
 pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
-/// Layer Style › Scale Effects: Scale opens at 100 every time, not the last value used (#14994).
-const SCALE_EFFECTS: &str = "layer.layerStyle.scaleEffects";
-
-std::thread_local! {
-    /// Scale Effects' Preview as its dialog last showed it, closed by OK or Cancel alike (#14994).
-    /// It lasts for this run only, so each start of the app opens with Preview on, as today.
-    static SCALE_EFFECTS_PREVIEW: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
-}
+/// Layer Style › Scale Effects: Scale opens at 100 every time, not the last value used, and its
+/// Preview is kept per session in `UiState::scale_effects_preview_off` (#14994).
+pub(crate) const SCALE_EFFECTS: &str = "layer.layerStyle.scaleEffects";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
@@ -330,7 +325,7 @@ pub const PREVIEWED: &[&str] = &[
     "image.mode.duotone",
     "layer.matting.defringe",
     "layer.matting.colorDecontaminate",
-    "layer.layerStyle.scaleEffects",
+    SCALE_EFFECTS,
     "type.warpText",
     // The preview shows the image through the chosen profile, as Photoshop's Preview does.
     "edit.assignProfile",
@@ -591,7 +586,7 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     fields.insert("__filter".into(), json!(true));
     // Select and Mask previews in its view modes (`select_mask_view`), not as the command's result.
     if command.starts_with("filter.") || PREVIEWED.contains(&command) || command == crate::select_mask_view::COMMAND {
-        let on = command != SCALE_EFFECTS || SCALE_EFFECTS_PREVIEW.with(std::cell::Cell::get);
+        let on = command != SCALE_EFFECTS || !app.ui.scale_effects_preview_off;
         fields.insert("__preview".into(), json!(on));
     }
     for p in parse_spec(spec.params) {
@@ -1448,10 +1443,6 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.add_space(4.0);
         crate::widgets::checkbox(ui, &mut preview, tl!("Preview"));
         f.insert("__preview".into(), json!(preview));
-        // What the dialog shows when it closes (OK, Cancel or Escape) is what it reopens with.
-        if cmd == SCALE_EFFECTS {
-            SCALE_EFFECTS_PREVIEW.with(|c| c.set(preview));
-        }
     }
 }
 

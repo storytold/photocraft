@@ -2,9 +2,6 @@
 //! value, and keeps Preview as the dialog last showed it, closed by OK or Cancel alike. Preview
 //! is on in a fresh session; Alt+Reset puts Scale back to 100 and leaves Preview alone. Other
 //! schema dialogs keep remembering their values and open with Preview on.
-//!
-//! Each test runs on its own thread, so each starts from a fresh session's Preview state.
-
 use serde_json::{Map, Value, json};
 
 use super::{body, open, reset_fields};
@@ -125,4 +122,32 @@ fn other_dialogs_keep_remembering_and_open_with_preview_on() {
     let (_id, f) = opened(&mut app, blur);
     assert_eq!(f["radius"].as_f64(), Some(7.0), "Gaussian Blur still remembers its radius");
     assert_eq!(f["__preview"], json!(true), "and opens with Preview on, as today");
+}
+
+#[test]
+fn preview_set_off_without_a_frame_is_kept_by_confirm_and_cancel() {
+    // The control channel or MCP sets the field and closes; no frame is ever drawn.
+    for confirm in [true, false] {
+        let mut app = styled();
+        let id = open(&mut app, CMD).unwrap();
+        app.ui.dialog_mut(id).unwrap().fields.insert("__preview".into(), json!(false));
+        if confirm {
+            crate::dialogs::confirm(&mut app, id).unwrap();
+        } else {
+            crate::dialogs::cancel(&mut app, id).unwrap();
+        }
+        let id = open(&mut app, CMD).unwrap();
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["__preview"], json!(false), "confirm={confirm}");
+    }
+}
+
+#[test]
+fn preview_memory_belongs_to_the_app_state() {
+    let mut a = styled();
+    let id = open(&mut a, CMD).unwrap();
+    a.ui.dialog_mut(id).unwrap().fields.insert("__preview".into(), json!(false));
+    crate::dialogs::cancel(&mut a, id).unwrap();
+    let mut b = styled();
+    let id = open(&mut b, CMD).unwrap();
+    assert_eq!(b.ui.dialog_mut(id).unwrap().fields["__preview"], json!(true), "another app starts with Preview on");
 }
