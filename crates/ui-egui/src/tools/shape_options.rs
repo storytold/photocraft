@@ -251,8 +251,9 @@ fn invalid_entry_left(ui: &egui::Ui, resp: &egui::Response) -> bool {
     if !resp.lost_focus() {
         return false;
     }
-    // Text typed on the pass that leaves the field is parsed in that pass, so its result wins
-    // over the flag an earlier pass left.
+    // The field stops reading its text once complete arithmetic is held (`50/2`), so the pass
+    // that leaves it can be the first to read the final text (`50/2x`): that result wins over
+    // the flag an earlier pass left.
     match crate::widgets::typed_text_parses(ui.ctx(), resp.id) {
         Some(parses) => !parses,
         None => owed,
