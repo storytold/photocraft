@@ -19,11 +19,13 @@ pub(super) struct Integrity {
     pixel_limit: u64,
     pixels_left: u64,
     svg_bytes_left: usize,
-    // A failed inflate/encoding spends the original allowance conservatively.
-    // A separate, nonrefundable pool may classify later omissions, never admit
-    // them. Thus rechecking adds at most one further 16 MiB allowance in all.
+    // Failed input spends the original allowance without refund. Later
+    // classification never admits children; it has a separate aggregate 16 MiB
+    // inflation allowance. Decoded UTF-8 is checked against the genuine content
+    // room saved before that failure, not against remaining inflation work.
     svg_failure_exhausted: bool,
     classification_bytes_left: usize,
+    classification_content_left: usize,
     raster: HashMap<usize, RasterRecord>,
     encoded_left: usize,
     invalid_raster: usize,
@@ -42,6 +44,7 @@ impl Integrity {
             svg_bytes_left: MAX_BOUNDED_SVG_BYTES as usize,
             svg_failure_exhausted: false,
             classification_bytes_left: MAX_BOUNDED_SVG_BYTES as usize,
+            classification_content_left: MAX_BOUNDED_SVG_BYTES as usize,
             raster: HashMap::new(),
             encoded_left: (MAX_INFLATED_BYTES + MAX_BOUNDED_SVG_BYTES) as usize,
             invalid_raster: 0,
@@ -76,31 +79,59 @@ impl Integrity {
         self.classification_bytes_left
     }
 
-    /// Distinguish a small unread child from a resource overrun after damaged
-    /// input spent the normal pool. These bytes can never reach the parser.
+    /// Classify only, without refund or admission. Gzip retries charge actual
+    /// inflated bytes; plain input needs no inflation. Latin-1/UTF-16 conversion
+    /// can expand text, so its content limit is independent of retry work.
     fn classify_after_svg_failure(&mut self, data: &[u8]) {
-        let room = self.classification_bytes_left;
-        if room == 0 {
+        if self.svg_resource_limits != 0 {
             self.svg_limits = self.svg_limits.saturating_add(1);
             self.svg_resource_limits = self.svg_resource_limits.saturating_add(1);
             return;
         }
-        match craft_svg::svgz::text(data, room) {
-            Ok(text) if text.len() <= room => {
-                self.classification_bytes_left = room.saturating_sub(text.len());
-                self.svg_limits = self.svg_limits.saturating_add(1);
-            }
-            error => {
-                // Failures already did bounded work, including an encoding
-                // conversion whose UTF-8 output exceeded the remaining pool.
-                self.classification_bytes_left = 0;
-                if matches!(error, Err(craft_svg::svgz::Error::TooLarge(_))) || error.is_ok() {
-                    self.svg_limits = self.svg_limits.saturating_add(1);
-                    self.svg_resource_limits = self.svg_resource_limits.saturating_add(1);
-                } else {
-                    self.invalid_svg = self.invalid_svg.saturating_add(1);
+        let compressed = data.starts_with(&[0x1f, 0x8b]);
+        let content_left = self.classification_content_left;
+        let limit = if compressed { content_left.min(self.classification_bytes_left) } else { content_left };
+        if compressed && limit == 0 {
+            self.svg_limits = self.svg_limits.saturating_add(1);
+            self.svg_resource_limits = self.svg_resource_limits.saturating_add(1);
+            return;
+        }
+        let resource_refusal = match craft_svg::svgz::inflate(data, limit) {
+            Ok(bytes) => {
+                if compressed {
+                    self.classification_bytes_left = self.classification_bytes_left.saturating_sub(bytes.len());
+                }
+                match craft_svg::svgz::decode(&bytes) {
+                    Ok(text) => text.len() > content_left,
+                    Err(_) => {
+                        self.invalid_svg = self.invalid_svg.saturating_add(1);
+                        return;
+                    }
                 }
             }
+            Err(craft_svg::svgz::Error::TooLarge(_)) => {
+                if compressed {
+                    self.classification_bytes_left = self.classification_bytes_left.saturating_sub(limit);
+                }
+                true
+            }
+            Err(error) => {
+                // Nested data was fully inflated before refusal. Other failures
+                // may have consumed the entire attempted inflation allowance.
+                if compressed {
+                    let charged = match error {
+                        craft_svg::svgz::Error::Nested(bytes) => bytes,
+                        _ => limit,
+                    };
+                    self.classification_bytes_left = self.classification_bytes_left.saturating_sub(charged);
+                }
+                self.invalid_svg = self.invalid_svg.saturating_add(1);
+                return;
+            }
+        };
+        self.svg_limits = self.svg_limits.saturating_add(1);
+        if resource_refusal {
+            self.svg_resource_limits = self.svg_resource_limits.saturating_add(1);
         }
     }
 
@@ -189,6 +220,7 @@ pub(super) fn wrap(base: usvg::ImageHrefResolver<'static>, state: Arc<Mutex<Inte
                         } else {
                             state.invalid_svg = state.invalid_svg.saturating_add(1);
                             state.svg_failure_exhausted = true;
+                            state.classification_content_left = room;
                         }
                         return None;
                     }

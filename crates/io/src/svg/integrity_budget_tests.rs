@@ -67,13 +67,13 @@ fn invalid_utf8_gzip_consumes_remaining_svg_work_before_the_next_child() {
         assert!((options.image_href_resolver.resolve_data)("image/svg+xml", valid, &options).is_none());
         let state = state.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!((state.invalid_svg, state.svg_limits, state.svg_resource_limits), (1, 1, 0));
-        assert_eq!(state.classification_bytes_left(), MAX_BOUNDED_SVG_BYTES as usize - valid_size);
+        assert_eq!(state.classification_bytes_left(), MAX_BOUNDED_SVG_BYTES as usize, "plain input does not spend retry inflation work");
         let usage = state.usage(resolver.usage()).unwrap();
         assert_eq!(usage.embedded_svg_bytes, MAX_BOUNDED_SVG_BYTES as usize);
         assert_eq!(usage.svg_resource_limit_images, 0, "a later small child is omitted, not a resource error");
         let charged = 2 * MAX_BOUNDED_SVG_BYTES as usize - state.svg_bytes_left - state.classification_bytes_left();
-        assert_eq!(charged, MAX_BOUNDED_SVG_BYTES as usize + valid_size);
-        assert!(charged <= 2 * MAX_BOUNDED_SVG_BYTES as usize, "both work pools together have a fixed 32 MiB allowance");
+        assert_eq!(charged, MAX_BOUNDED_SVG_BYTES as usize);
+        assert!(valid_size < MAX_BOUNDED_SVG_BYTES as usize);
         Ok(())
     })
     .unwrap();
@@ -86,15 +86,18 @@ fn post_failure_classification_is_cumulative_and_never_admits_later_children() {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         encoder.write_all(&[0xff; 256]).unwrap();
         assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(encoder.finish().unwrap()), &options).is_none());
-        let valid = Arc::new(b"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>".to_vec());
-        // Exercise the cumulative boundary with a small injected second pool;
-        // public policy tests separately cover the full 16 MiB allowance.
-        let classification_limit = valid.len() * 2 - 1;
+        let text = b"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>";
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(text).unwrap();
+        let valid = Arc::new(encoder.finish().unwrap());
+        // Exercise the cumulative inflated-byte boundary with a small injected
+        // second pool; public tests cover the full 16 MiB allowance.
+        let classification_limit = text.len() * 2 - 1;
         state.lock().unwrap_or_else(PoisonError::into_inner).classification_bytes_left = classification_limit;
         assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::clone(&valid), &options).is_none());
         {
             let state = state.lock().unwrap_or_else(PoisonError::into_inner);
-            assert_eq!(state.classification_bytes_left(), valid.len() - 1);
+            assert_eq!(state.classification_bytes_left(), text.len() - 1);
             assert_eq!((state.svg_limits, state.svg_resource_limits), (1, 0));
         }
         assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::clone(&valid), &options).is_none());
@@ -104,8 +107,47 @@ fn post_failure_classification_is_cumulative_and_never_admits_later_children() {
         assert_eq!(state.svg_bytes_left, 0, "classification never refunds original failed work");
         assert!(state.svg_failure_exhausted);
         let charged = 2 * MAX_BOUNDED_SVG_BYTES as usize - state.svg_bytes_left - state.classification_bytes_left();
-        assert_eq!(charged, 2 * MAX_BOUNDED_SVG_BYTES as usize, "exhausted pools cannot authorize more than their combined 32 MiB allowance");
+        assert_eq!(charged, 2 * MAX_BOUNDED_SVG_BYTES as usize, "original content plus aggregate retry inflation allowances remain bounded");
         assert_eq!(resolver.usage().embedded_svg_count, 0, "classified children must never reach the shared parser");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn retry_inflation_room_and_saved_decoded_content_room_remain_independent() {
+    super::super::on_svg_stack(|| {
+        let mut latin1 = b"<?xml version='1.0' encoding='ISO-8859-1'?><svg xmlns='http://www.w3.org/2000/svg'><!--".to_vec();
+        latin1.extend([0xe9; 100]);
+        latin1.extend(b"--></svg>");
+        let decoded_len = craft_svg::svgz::decode(&latin1).unwrap().len();
+        assert!(latin1.len() < 256 && decoded_len > 256 && decoded_len < 512);
+        let gzip = |bytes: &[u8]| {
+            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(bytes).unwrap();
+            Arc::new(encoder.finish().unwrap())
+        };
+        for (content_room, expected_resource) in [(512usize, false), (256, true)] {
+            let (options, state, resolver) = wrapped_options(MAX_RASTER_PIXELS);
+            // Model preceding genuine content consumption before an unreadable
+            // stream burns the rest. Classification must save this exact room.
+            state.lock().unwrap_or_else(PoisonError::into_inner).svg_bytes_left = content_room;
+            assert!((options.image_href_resolver.resolve_data)("image/svg+xml", gzip(&[0xff; 4]), &options).is_none());
+            {
+                let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                assert_eq!(state.classification_content_left, content_room);
+                assert_eq!(state.svg_bytes_left, 0);
+                // Enough compressed retry work for the raw Latin-1 bytes, but
+                // less than their decoded UTF-8 length, just like main's case.
+                state.classification_bytes_left = latin1.len() + 1;
+            }
+            assert!((options.image_href_resolver.resolve_data)("image/svg+xml", gzip(&latin1), &options).is_none());
+            let state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            assert_eq!(state.classification_bytes_left(), 1, "retry work charges inflated bytes, not UTF-8 bytes");
+            assert_eq!(state.svg_resource_limits, usize::from(expected_resource));
+            assert_eq!(state.svg_bytes_left, 0, "classification never restores original content allowance");
+            assert_eq!(resolver.usage().embedded_svg_count, 0, "no classified child is parsed or drawn");
+        }
         Ok(())
     })
     .unwrap();

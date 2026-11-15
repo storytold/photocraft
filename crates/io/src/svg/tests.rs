@@ -1170,8 +1170,54 @@ fn a_latin1_embedded_svg_that_decodes_past_the_budget_is_refused() {
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
     let error = parse_bounded(image_svg(&format!("{wide}{small}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
+    // An unreadable image charges the entire budget before the Latin-1 child is retried.
+    // The retry must measure decoded text too, not only its smaller inflated byte stream.
+    let compressed = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>");
+    let damaged = embedded_image("image/svg+xml", &compressed[..compressed.len() / 2]);
+    let error = parse_bounded(image_svg(&format!("{damaged}{wide}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+    assert!(error.to_string().contains("byte or nesting budget"), "{error}");
 }
 
+/// The retry allowance counts inflated bytes, not their possibly longer decoded UTF-8 text.
+#[test]
+fn fitting_latin1_retry_keeps_inflation_and_content_budgets_separate() {
+    let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
+    let mut latin1 = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg xmlns=\"http://www.w3.org/2000/svg\"><!--".to_vec();
+    latin1.resize(budget * 3 / 8, 0xe9);
+    latin1.extend_from_slice(b"--></svg>");
+    let decoded = craft_svg::svgz::decode(&latin1).unwrap();
+    assert!(latin1.len() < budget / 2);
+    assert!(decoded.len() > budget / 2 && decoded.len() < budget);
+    let state = Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS)));
+    let resolver = Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS)));
+    let options = options_with_isolation(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH, false, Arc::clone(&resolver), Arc::clone(&state));
+    let valid = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>");
+    let damaged = Arc::new(valid[..valid.len() / 2].to_vec());
+    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", damaged, &options).is_none());
+    assert_eq!(state.lock().unwrap().classification_bytes_left(), budget);
+
+    // Spend half the inflation allowance through an actual compressed retry.
+    // None of these retries may restore admission after the damaged source.
+    let mut primer = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><!--".to_vec();
+    let close = b"--></svg>";
+    primer.resize(budget / 2 - close.len(), b' ');
+    primer.extend_from_slice(close);
+    assert_eq!(primer.len(), budget / 2);
+    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(gzip(&primer)), &options).is_none());
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(state.classification_bytes_left(), budget / 2);
+        assert_eq!(state.usage(resolver.usage()).unwrap().svg_resource_limit_images, 0);
+    }
+    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(gzip(&latin1)), &options).is_none());
+    let state = state.lock().unwrap();
+    let usage = state.usage(resolver.usage()).unwrap();
+    assert_eq!(usage.svg_resource_limit_images, 0, "decoded content fits its independent original allowance");
+    assert_eq!(usage.svg_limit_images, 2, "both fitting retries remain omitted");
+    assert_eq!(usage.invalid_svg_images, 1, "the original corrupt source stays classified as unreadable");
+    assert_eq!(usage.embedded_svg_bytes, budget, "retry classification never refunds failed admission work");
+    assert_eq!(state.classification_bytes_left(), budget / 2 - latin1.len(), "only inflated Latin-1 bytes consume retry inflation work");
+}
 /// After a damaged image spent the budget, images refused for bytes are unpacked again to tell
 /// whether they are too large themselves, but at most one budget's worth in all: past that the
 /// drawing is refused rather than unpacking each one.
