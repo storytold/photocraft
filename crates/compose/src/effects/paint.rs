@@ -136,7 +136,7 @@ fn anti_aliased_contour(c: &Contour) -> bool {
 /// flag on, the Outer Glow reaches a pixel further at the top and left (its reported bounds grow
 /// there) and a pixel less at the bottom and right, and the Inner Shadow is weaker at the top and
 /// left edge and stronger at the bottom and right. Half a pixel overshoots (it puts the Inner
-/// Shadow 4 levels and the Outer Glow 15 levels off the measured profiles); a third lands the
+/// Shadow 5 levels and the Outer Glow 15 levels off the measured profiles); a third lands the
 /// Inner Shadow within 1.4 levels of every measured pixel, and the glow within 4.6 at four
 /// samples of eighteen and within 3 at the rest, which is where today's off-path profile already
 /// sits from the reference. *Why* the two pairs of edges differ is not measured, so this
