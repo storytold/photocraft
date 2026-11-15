@@ -292,3 +292,123 @@ fn copy_overwrite_of_a_flat_background_tiff_remains_conservatively_unsaved() {
         assert_eq!(app.session.active().unwrap().is_dirty(), copy, "ordinary saves retain their existing classification");
     }
 }
+
+/// The write service of a copy that fails: `published` says the atomic writer had already renamed
+/// the new bytes into place when the folder flush failed.
+fn failing_writer(stamps: Rc<RefCell<std::collections::HashMap<String, u64>>>, published: bool) -> impl FnMut(&str, &[u8]) -> Result<(), String> {
+    move |path: &str, _: &[u8]| {
+        if published {
+            stamps.borrow_mut().insert(path.to_string(), 2);
+        }
+        Err(format!("{path} was written, but the folder could not be flushed to disk"))
+    }
+}
+
+/// A write can fail after it replaced the file: `photocraft_format::atomic` renames the new bytes
+/// into place before it flushes the folder, and that error comes back with the copy already on
+/// disk. Every incomplete-copy path then still invalidates the savepoint; a failure before the
+/// rename leaves the file as it was, so the document stays clean.
+#[test]
+fn a_copy_that_failed_after_replacing_the_file_keeps_the_document_unsaved() {
+    for command in ["saveACopy", "writeDocument", "app.save", "export"] {
+        for published in [false, true] {
+            let mut app = app_at("own.tif");
+            let stamps = Rc::new(RefCell::new(std::collections::HashMap::from([("own.tif".to_string(), 1u64)])));
+            let read = stamps.clone();
+            app.services.file_stamp =
+                Some(Box::new(move |path: &str| read.borrow().get(path).map(|len| crate::services::FileStamp { len: *len, modified: None })));
+            let doc = app.session.active().unwrap().doc.id;
+            app.remember_stamp(doc, "own.tif");
+            let result = match command {
+                "saveACopy" => {
+                    app.services.write = Some(Box::new(failing_writer(stamps.clone(), published)));
+                    app.replay_save("file.saveACopy", &json!({"path": "own.tif", "tiffLayers": false}))
+                }
+                "writeDocument" => {
+                    app.services.write = Some(Box::new(failing_writer(stamps.clone(), published)));
+                    app.write_document("own.tif".into(), &crate::ExportSettings { tiff_layers: false, ..Default::default() }, true).map(|_| json!({}))
+                }
+                "app.save" => {
+                    app.services.automation_write = Some(Box::new(failing_writer(stamps.clone(), published)));
+                    let choices = crate::FormatChoices::from_params(&json!({"tiffLayers": false}), "app.save").unwrap();
+                    app.save_automation_with(Some("own.tif".into()), choices)
+                }
+                _ => {
+                    app.services.write = Some(Box::new(failing_writer(stamps.clone(), published)));
+                    app.replay_save(crate::export_dialog::COMMAND, &json!({"path": "own.tif", "format": "tif"}))
+                }
+            };
+            assert!(result.is_err(), "{command}, published={published}: the write failed");
+            assert_eq!(app.has_unsaved_work(), published, "{command}, published={published}: only a replaced file loses the savepoint");
+            assert_eq!(app.session.active().unwrap().path.as_deref(), Some("own.tif"), "{command}: the document keeps its path");
+        }
+    }
+}
+
+/// A layered TIFF copy keeps the document only when the file it wrote holds it: an Indexed,
+/// Bitmap, Duotone or Channel-multichannel document reopens as RGB or Grayscale, without its
+/// palette, bitmap bits, duotone inks or channels, so its savepoint goes
+/// (`tiff_layers::keeps_document`).
+#[test]
+fn copy_overwrite_uses_actual_tiff_mode_support() {
+    // (the document's mode, the Image > Mode conversion from it, kept by a layered TIFF)
+    let cases: [(&str, Option<(&str, &str)>, bool); 8] = [
+        ("rgb", None, true),
+        ("gray", None, true),
+        ("cmyk", None, true),
+        ("rgb", Some(("image.mode.lab", "{}")), false),
+        ("rgb", Some(("image.mode.indexedColor", "{}")), false),
+        ("gray", Some(("image.mode.bitmap", "{}")), false),
+        ("gray", Some(("image.mode.duotone", r#"{"type": "monotone"}"#)), false),
+        ("rgb", Some(("image.mode.multichannel", "{}")), false),
+    ];
+    for (base, conversion, kept) in cases {
+        let mut app = app_at("own.tif");
+        app.run("file.close", json!({})).unwrap();
+        app.run("file.new", json!({"width": 4, "height": 4, "mode": base})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        if let Some((command, params)) = conversion {
+            app.run(command, serde_json::from_str(params).unwrap()).unwrap();
+        }
+        let doc = app.session.active().unwrap().doc.clone();
+        app.session.active_mut().unwrap().saved_to("own.tif".into());
+        let bytes = Rc::new(RefCell::new(Vec::new()));
+        let written = bytes.clone();
+        app.services.write = Some(Box::new(move |_, data| {
+            *written.borrow_mut() = data.to_vec();
+            Ok(())
+        }));
+        app.replay_save("file.saveACopy", &json!({"path": "own.tif", "tiffLayers": true})).unwrap();
+        let back = photocraft_io::import("own.tif", &bytes.borrow()).unwrap().document;
+        assert_eq!(back.mode == doc.mode, kept, "{conversion:?} from {base}: the file reopens as {:?}, not {:?}", back.mode, doc.mode);
+        assert_eq!(app.has_unsaved_work(), !kept, "{conversion:?} from {base}");
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some("own.tif"), "{conversion:?}: the document keeps its file");
+    }
+}
+
+/// The layered writer stores at most `MAX_EXTRA_SAMPLES` extra channels and drops the rest: a copy
+/// that loses one leaves the document unsaved, while one that fits keeps it clean.
+#[test]
+fn copy_overwrite_past_the_tiff_channel_limit_keeps_the_document_unsaved() {
+    for extra in [photocraft_codecs::MAX_EXTRA_SAMPLES, photocraft_codecs::MAX_EXTRA_SAMPLES + 1] {
+        let mut app = app_at("own.tif");
+        app.run("file.close", json!({})).unwrap();
+        app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        for _ in 0..extra {
+            app.run("channel.new", json!({})).unwrap();
+        }
+        assert_eq!(app.session.active().unwrap().doc.channels.len(), extra, "the channels are there");
+        app.session.active_mut().unwrap().saved_to("own.tif".into());
+        let bytes = Rc::new(RefCell::new(Vec::new()));
+        let written = bytes.clone();
+        app.services.write = Some(Box::new(move |_, data| {
+            *written.borrow_mut() = data.to_vec();
+            Ok(())
+        }));
+        app.replay_save("file.saveACopy", &json!({"path": "own.tif", "tiffLayers": true})).unwrap();
+        let back = photocraft_io::import("own.tif", &bytes.borrow()).unwrap().document;
+        assert_eq!(back.channels.len(), extra.min(photocraft_codecs::MAX_EXTRA_SAMPLES), "{extra} channels written");
+        assert_eq!(app.has_unsaved_work(), extra > photocraft_codecs::MAX_EXTRA_SAMPLES, "{extra} channels");
+    }
+}

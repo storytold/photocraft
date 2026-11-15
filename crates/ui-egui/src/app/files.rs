@@ -598,10 +598,11 @@ impl PhotocraftApp {
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
-        write(&path, &bytes)?;
+        let written_bytes = write(&path, &bytes);
         if invalidate {
-            self.invalidate_savepoint(doc, &path);
+            self.invalidate_incomplete_copy(doc, &path, written_bytes.is_ok());
         }
+        written_bytes?;
         let revision = saved_revision_after_write(!self.services.write_unconfirmed, written, previous);
         self.saved(doc, revision, &path, &warnings, copy);
         Ok(Some((path, warnings)))
@@ -611,10 +612,7 @@ impl PhotocraftApp {
     /// layers. Recheck file identity after writing before invalidating its saved state.
     pub(crate) fn copy_needs_savepoint_check(doc: &photocraft_doc::Document, path: &str, settings: &ExportSettings) -> bool {
         let layered = photocraft_engine::file_cmds::holds_at(doc, path)
-            || (tiff_options_ui::is_tiff_path(path)
-                && settings.tiff_layers
-                && photocraft_io::tiff_layers::supports_layers(doc)
-                && photocraft_io::tiff_layers::would_write_layers(doc));
+            || (tiff_options_ui::is_tiff_path(path) && settings.tiff_layers && photocraft_io::tiff_layers::keeps_document(doc));
         !layered
     }
 
@@ -624,6 +622,24 @@ impl PhotocraftApp {
         if self.session.savepoints_at(path).contains(&doc) {
             self.session.invalidate_savepoints(&[doc]);
         }
+    }
+
+    /// [`Self::invalidate_savepoint`] after writing an incomplete copy: `written` says whether the
+    /// write reported success. A failed write normally leaves the file as it was, since every
+    /// document write goes through `photocraft_format::atomic`, which replaces the destination only
+    /// once the new file is complete and flushed. A folder flush can fail *after* the rename,
+    /// though, and that error comes back with the copy already in place; the disk stamp tells the
+    /// two apart, so a save that may have replaced the file never leaves the document looking saved.
+    pub(crate) fn invalidate_incomplete_copy(&mut self, doc: DocId, path: &str, written: bool) {
+        if written || self.changed_on_disk(doc, path) {
+            self.invalidate_savepoint(doc, path);
+        }
+    }
+
+    /// Whether a write to `path` replaced the file behind one of the documents saved there even
+    /// though it reported an error (see [`Self::invalidate_incomplete_copy`]).
+    pub(crate) fn published_over(&self, path: &str) -> bool {
+        self.session.savepoints_at(path).iter().any(|doc| self.changed_on_disk(*doc, path))
     }
 
     /// Record this app's write only when it replaced the document's bound file; a copy elsewhere
@@ -890,10 +906,11 @@ impl PhotocraftApp {
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &settings)?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
-        write(&target, &bytes)?;
+        let written_bytes = write(&target, &bytes);
         if invalidate {
-            self.invalidate_savepoint(doc, &target);
+            self.invalidate_incomplete_copy(doc, &target, written_bytes.is_ok());
         }
+        written_bytes?;
         self.saved_automation(doc, revision, &target, &warnings, false);
         Ok(reply(&target, &warnings))
     }

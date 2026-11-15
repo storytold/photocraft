@@ -741,10 +741,11 @@ pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(doc, path, &settings)?;
     let write = app.services.write.as_mut().ok_or("no writer configured")?;
-    write(path, &bytes)?;
+    let written = write(path, &bytes);
     if invalidate {
-        app.invalidate_savepoint(doc.id, path);
+        app.invalidate_incomplete_copy(doc.id, path, written.is_ok());
     }
+    written?;
     app.remember_written_savepoint(doc.id, path);
     app.detach_others_from_file(path, doc.id);
     app.sync_views();

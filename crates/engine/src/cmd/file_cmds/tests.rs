@@ -4560,3 +4560,88 @@ fn copy_overwrite_of_a_flat_background_tiff_remains_conservatively_unsaved() {
     assert!(s.active().unwrap().is_dirty());
     assert!(photocraft_codecs::tiff_photoshop_tags(&std::fs::read(&own).unwrap()).1.is_none());
 }
+
+/// `own-tif` for a document in the given Image › Mode, with a second layer so the layered
+/// encoder has layers to write.
+fn own_tiff_after(base: &str, conversion: Option<(&str, &str)>) -> (tempfile::TempDir, String, Session) {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": base})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    if let Some((command, params)) = conversion {
+        s.execute(command, serde_json::from_str(params).unwrap()).unwrap();
+    }
+    s.active_mut().unwrap().saved_to(own.clone());
+    (dir, own, s)
+}
+
+/// A copy over the document's own file: the savepoint survives only when the file holds all of it.
+fn copy_over_own_tiff(s: &mut Session, own: &str) -> serde_json::Value {
+    s.execute("file.saveACopy", json!({"path": own, "overwrite": true, "tiffLayers": true})).unwrap()
+}
+
+/// The review's case, one test each: a layered TIFF of an Indexed document writes it expanded, so
+/// reopening the file gives an RGB document without the colour table, and the savepoint goes.
+#[test]
+fn copy_overwrite_of_an_indexed_document_keeps_it_unsaved() {
+    let (_dir, own, mut s) = own_tiff_after("rgb", Some(("image.mode.indexedColor", "{}")));
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Indexed);
+    copy_over_own_tiff(&mut s, &own);
+    assert!(s.active().unwrap().is_dirty(), "the file no longer holds the palette or the mode");
+    let back = photocraft_io::import("own.tif", &std::fs::read(&own).unwrap()).unwrap().document;
+    assert_ne!(back.mode, ColorMode::Indexed, "reopening gives what was written");
+}
+
+/// A Bitmap document's layered TIFF is a Grayscale one: the bitmap bits and the mode are left
+/// behind, so the savepoint goes.
+#[test]
+fn copy_overwrite_of_a_bitmap_document_keeps_it_unsaved() {
+    let (_dir, own, mut s) = own_tiff_after("gray", Some(("image.mode.bitmap", "{}")));
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Bitmap);
+    copy_over_own_tiff(&mut s, &own);
+    assert!(s.active().unwrap().is_dirty(), "the file no longer holds the bitmap mode");
+    let back = photocraft_io::import("own.tif", &std::fs::read(&own).unwrap()).unwrap().document;
+    assert_ne!(back.mode, ColorMode::Bitmap);
+}
+
+/// A Duotone document keeps its layers in memory, so the layers alone would say "kept": it is the
+/// duotone inks the file cannot hold that keep the savepoint from surviving.
+#[test]
+fn copy_overwrite_of_a_duotone_document_keeps_it_unsaved() {
+    let (_dir, own, mut s) = own_tiff_after("gray", Some(("image.mode.duotone", r#"{"type": "monotone"}"#)));
+    let doc = s.active().unwrap().doc.clone();
+    assert_eq!(doc.mode, ColorMode::Duotone);
+    assert!(photocraft_io::tiff_layers::supports_layers(&doc), "the layers themselves fit a layered TIFF");
+    assert!(photocraft_io::tiff_layers::would_write_layers(&doc));
+    copy_over_own_tiff(&mut s, &own);
+    assert!(s.active().unwrap().is_dirty(), "the file no longer holds the duotone inks");
+    let back = photocraft_io::import("own.tif", &std::fs::read(&own).unwrap()).unwrap().document;
+    assert_ne!(back.mode, ColorMode::Duotone);
+}
+
+/// A Multichannel document's channels are the image, which a layered TIFF has no room for.
+#[test]
+fn copy_overwrite_of_a_multichannel_document_keeps_it_unsaved() {
+    let (_dir, own, mut s) = own_tiff_after("rgb", Some(("image.mode.multichannel", "{}")));
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Multichannel);
+    copy_over_own_tiff(&mut s, &own);
+    assert!(s.active().unwrap().is_dirty(), "the file no longer holds the channels");
+}
+
+/// Past `codecs::MAX_EXTRA_SAMPLES` the layered writer keeps only the first channels: the copy
+/// drops the rest, so the savepoint goes; a document that fits keeps it.
+#[test]
+fn copy_overwrite_past_the_tiff_channel_limit_keeps_it_unsaved() {
+    for extra in [photocraft_codecs::MAX_EXTRA_SAMPLES, photocraft_codecs::MAX_EXTRA_SAMPLES + 1] {
+        let (_dir, own, mut s) = own_tiff_after("rgb", None);
+        for _ in 0..extra {
+            s.execute("channel.new", json!({})).unwrap();
+        }
+        assert_eq!(s.active().unwrap().doc.channels.len(), extra);
+        copy_over_own_tiff(&mut s, &own);
+        assert_eq!(s.active().unwrap().is_dirty(), extra > photocraft_codecs::MAX_EXTRA_SAMPLES, "{extra} extra channels");
+        let back = photocraft_io::import("own.tif", &std::fs::read(&own).unwrap()).unwrap().document;
+        assert_eq!(back.channels.len(), extra.min(photocraft_codecs::MAX_EXTRA_SAMPLES), "{extra}: what the file kept");
+    }
+}

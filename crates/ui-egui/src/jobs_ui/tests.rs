@@ -1401,3 +1401,32 @@ fn background_copy_overwrite_recreating_a_deleted_backing_file_through_an_alias_
     assert!(h.state().session.active().unwrap().is_dirty());
     assert!(photocraft_codecs::tiff_photoshop_tags(&std::fs::read(&own).unwrap()).1.is_none());
 }
+
+/// #11258 review: a quit agreed to before a copy-overwrite job ends must not close over the file
+/// that copy replaced. `advance` sets `allow_close` when the exit prompt is answered, and the close
+/// it sends is held while another save runs; the held close is judged again once the job ends, so
+/// the document the finished copy left unsaved is asked about instead of closed.
+#[test]
+fn a_held_quit_asks_about_the_file_a_finished_copy_replaced() {
+    let mut h = app_harness();
+    let path = "/tmp/photocraft-test/own.tif";
+    h.state_mut().session.active_mut().unwrap().saved_to(path.into());
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    let settings = crate::ExportSettings { tiff_layers: false, ..Default::default() };
+    h.state_mut().write_document(path.into(), &settings, true).unwrap();
+    // Quitting is agreed to already (the exit prompt was answered while another save was still
+    // running) and the window close waits for the copy.
+    h.state_mut().allow_close = true;
+    assert!(press_window_close(h.state_mut()), "the close waits for the copy");
+    assert!(h.state().jobs.close_after_saves);
+    assert!(!h.state().allow_close, "the held close is judged again, so quitting is asked about");
+    // The copy ends, replacing the document's layers with a flat image.
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |app| !app.saving());
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().is_dirty(), "the copy left the file short of its document");
+    assert!(h.state().discard.is_some(), "the held quit asks about the layers now missing from disk");
+    assert!(!h.state().allow_close, "quitting is not agreed to until it is answered");
+    assert_eq!(h.state().session.documents().len(), 1, "the window stays open");
+}

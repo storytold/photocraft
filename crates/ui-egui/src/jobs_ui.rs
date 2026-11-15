@@ -471,6 +471,12 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
             }
         }
         JobOutcome::Failed(err) => {
+            // A worker that failed after publishing its bytes (a folder flush) still replaced the
+            // document's file: the copy is on disk, so its saved state goes with it. A cancelled
+            // job stopped before the atomic rename, which leaves the file as it was.
+            if save.invalidate_savepoint {
+                app.invalidate_incomplete_copy(save.doc, &save.path, false);
+            }
             // Don't close the window over the error.
             app.jobs.close_after_saves = false;
             notices::error(app, crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &err)]));
@@ -490,8 +496,10 @@ fn close_after_saves(app: &mut PhotocraftApp, ctx: &egui::Context) {
     app.jobs.saves.retain(|s| !(s.ended && s.state.finished()));
     if !app.saving() && !app.printing() && std::mem::take(&mut app.jobs.close_after_saves) {
         // A copy may just have replaced the only saved layers. Recheck the close guard after
-        // completion rather than closing over work that became unsaved while the writer ran.
-        if app.allow_close || !crate::discard_ui::intercept(app, "file.exit", &Value::Null) {
+        // completion rather than closing over work that became unsaved while the writer ran; the
+        // documents the exit prompt already answered are closed, so only new dirty ones are asked
+        // about, whether or not quitting was agreed to before the save ended.
+        if !crate::discard_ui::intercept(app, "file.exit", &Value::Null) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
