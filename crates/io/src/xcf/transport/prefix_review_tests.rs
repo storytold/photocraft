@@ -14,7 +14,7 @@ fn xz_preset_nine_dictionary_includes_decoder_overhead_but_stays_bounded() {
     // presets 9 and (9 | PRESET_EXTREME). Both produce these identical bytes.
     // Store the small result so running this test does not allocate a -9 encoder.
     let encoded = "fd377a585a000004e6d6b446020021011c00000010cf58cce0003d001b5d00339a49fbe397e4455415f47d24eb590444701acb0ca7bde17c6700000022f43d0d7a807d030001373eb408e0711fb6f37d010000000004595a";
-    let bytes: Vec<u8> = encoded.as_bytes().chunks_exact(2).map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect();
+    let bytes: Vec<u8> = encoded.as_bytes().as_chunks::<2>().0.iter().map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect();
     let mut expected = b"gimp xcf v026\0".to_vec();
     for value in [1_u32, 1, 0, 150] {
         expected.extend(value.to_be_bytes());

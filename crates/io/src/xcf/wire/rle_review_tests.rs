@@ -23,7 +23,7 @@ fn rle_literal_and_repeated_planes_preserve_interleaving_through_the_largest_til
     let decoded = rle_decode(&encoded, 32, 4096).unwrap();
     assert_eq!(decoded.len(), 4096 * 32);
     let expected: Vec<u8> = (0..32).collect();
-    for pixel in decoded.chunks_exact(32) {
+    for pixel in decoded.as_chunks::<32>().0 {
         assert_eq!(pixel, expected.as_slice());
     }
 }
