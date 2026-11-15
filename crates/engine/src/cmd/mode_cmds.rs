@@ -85,6 +85,30 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
     if deg.rem_euclid(360.0).abs() < 1e-9 {
         return Ok(json!({"width": s.active().map(|d| d.doc.size.width), "height": s.active().map(|d| d.doc.size.height)}));
     }
+    use crate::canvas_geom::{self, Turn};
+    let turn = match deg.rem_euclid(360.0) {
+        90.0 => Some(Turn::Cw90),
+        180.0 => Some(Turn::Rotate180),
+        270.0 => Some(Turn::Ccw90),
+        _ => None,
+    };
+    if image_rotation
+        && let Some(turn) = turn
+        && let Some(st) = s.active()
+        && !st.doc.has_artboards()
+    {
+        let a = turn.affine(f64::from(st.doc.size.width), f64::from(st.doc.size.height));
+        let half = Affine::translate(0.5, 0.5);
+        s.set_canvas_map(a, half.then(&a).then(&Affine::translate(-0.5, -0.5)));
+        let size = s.edit("Rotate Canvas", |doc, _| {
+            // Arbitrary rotation clears the selection and guides in the same history step.
+            doc.selection = None;
+            canvas_geom::keeping_count_points(doc, |doc| canvas_geom::turn_canvas(doc, turn));
+            doc.guides = Default::default();
+            Ok(doc.size)
+        })?;
+        return Ok(json!({"width": size.width, "height": size.height}));
+    }
     // The Background stays opaque, whatever the background colour's alpha.
     let bg = [s.tools.background[0], s.tools.background[1], s.tools.background[2], 1.0];
     // Color Sampler points turn with the canvas (the same map the edit applies to the geometry).
@@ -832,6 +856,9 @@ pub fn display_document(doc: &Document) -> Option<Document> {
     Some(out)
 }
 
+#[cfg(test)]
+#[path = "rotate_canvas_right_angle_tests.rs"]
+mod rotate_canvas_right_angle_tests;
 #[cfg(test)]
 #[path = "rotate_canvas_selection_tests.rs"]
 mod rotate_canvas_selection_tests;
