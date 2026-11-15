@@ -36,15 +36,25 @@ pub(crate) fn same_group(a: &str, b: &str) -> bool {
     crate::panels::toolbar::TOOL_SECTIONS.iter().flat_map(|section| section.iter()).any(|slot| slot.contains(&a) && slot.contains(&b))
 }
 
+/// Two tools of one toolbar group may both hold `key` (normalized) as their main shortcut: the
+/// tool keys then pick and cycle them. Only a plain letter qualifies, as [`letter`] reads no
+/// other key and no further (alternate) keys, so anything else still conflicts.
+pub(crate) fn may_share(a: &str, b: &str, key: &str) -> bool {
+    let mut chars = key.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.next().is_none() && same_group(a, b)
+}
+
 /// The letter that picks `tool` through the tool keys (group memory, ⇧ cycling, spring-loading):
-/// its default while unchanged, or a letter the user gave it and another tool as well (#14208).
-/// A key only one tool was given stays an ordinary shortcut for that tool.
+/// its default while unchanged, or a letter the user gave it and another tool as well, either
+/// assigned or as a group tool's default (#14208). A key only one tool has stays an ordinary
+/// shortcut for that tool.
 pub(crate) fn letter(app: &PhotocraftApp, tool: Tool) -> Option<char> {
     if uses_default(app, tool) {
         return (tool.key() != '\0').then_some(tool.key());
     }
     let own = user_letter(app, tool)?;
-    Tool::ALL.into_iter().any(|t| t != tool && user_letter(app, t) == Some(own)).then_some(own)
+    let shared = |t: Tool| user_letter(app, t) == Some(own) || (uses_default(app, t) && t.key() == own && same_group(&id(t), &id(tool)));
+    Tool::ALL.into_iter().any(|t| t != tool && shared(t)).then_some(own)
 }
 
 /// A single letter the user assigned to `tool`.

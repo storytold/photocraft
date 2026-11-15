@@ -138,3 +138,60 @@ fn a_single_user_letter_still_selects_its_one_tool() {
     press(&mut app, &ctx, Key::L, Modifiers::SHIFT);
     assert_eq!(app.ui.tool, Tool::MagneticLasso, "Shift+L skips the remapped Polygonal Lasso");
 }
+
+/// Select `command` in the dialog and record a plain `k` as a further (alternate) key.
+fn assign_alternate(h: &mut Harness<'_, PhotocraftApp>, id: u64, command: &str, k: Key) {
+    let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    f.insert("selected".into(), json!(command));
+    f.insert("capture".into(), json!(true));
+    f.insert("captureAlt".into(), json!(true));
+    h.run_steps(2);
+    for pressed in [true, false] {
+        h.event(Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    }
+}
+
+/// The tool keys only read a tool's main shortcut, so a further key two lassos share would leave
+/// one of them unreachable: it still conflicts, and after OK only one of them keeps it.
+#[test]
+fn a_shared_alternate_letter_still_conflicts() {
+    let (mut h, id) = dialog();
+    assign_alternate(&mut h, id, "tools.select.lasso", Key::Q);
+    assign_alternate(&mut h, id, "tools.select.polygonLasso", Key::Q);
+    let message = field(&h, id, "message");
+    assert!(message.as_str().unwrap().contains("already in use"), "{message}");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let prefs = h.state().session.prefs();
+    let holders = ["tools.select.lasso", "tools.select.polygonLasso"].into_iter().filter(|t| prefs.alternates(t, Some("L")).contains(&"Q".to_string())).count();
+    assert_eq!(holders, 1, "{:?}", prefs.alternate_shortcuts);
+}
+
+/// A main letter over a group tool's further key: the further key moves, as for any command.
+#[test]
+fn a_main_letter_takes_a_group_tools_alternate() {
+    let (mut h, id) = dialog();
+    assign_alternate(&mut h, id, "tools.select.lasso", Key::Q);
+    assign(&mut h, id, "tools.select.polygonLasso", Key::Q);
+    let message = field(&h, id, "message");
+    assert!(message.as_str().unwrap().contains("already in use"), "{message}");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let prefs = h.state().session.prefs();
+    assert!(!prefs.alternates("tools.select.lasso", Some("L")).contains(&"Q".to_string()), "{:?}", prefs.alternate_shortcuts);
+    assert_eq!(prefs.shortcuts.get("tools.select.polygonLasso").map(String::as_str), Some("Q"));
+}
+
+/// A letter given to one lasso that the others still have by default joins their group.
+#[test]
+fn a_group_default_letter_assigned_explicitly_keeps_cycling() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.polygonLasso": "L"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Brush;
+    press(&mut app, &ctx, Key::L, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Lasso);
+    for expected in [Tool::PolygonLasso, Tool::MagneticLasso, Tool::Lasso] {
+        press(&mut app, &ctx, Key::L, Modifiers::SHIFT);
+        assert_eq!(app.ui.tool, expected, "Shift+L");
+    }
+}

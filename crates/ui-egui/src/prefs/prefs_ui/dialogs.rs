@@ -382,16 +382,17 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                     continue;
                 }
                 for (other, _, _, def) in &items {
-                    // Tools of one toolbar group may share a key (#14208).
-                    if *other == id || crate::tool_shortcuts::same_group(other, &id) {
+                    if *other == id {
                         continue;
                     }
+                    // Tools of one toolbar group may share a main letter (#14208).
+                    let shared = !is_alt && crate::tool_shortcuts::may_share(other, &id, &norm);
                     let held = match ov.get(other) {
                         Some(s) if new => Some(s.as_str()),
                         Some(_) => None,
                         None => def.as_deref(),
                     };
-                    if held.and_then(prefs::normalize_shortcut).as_deref() == Some(norm.as_str()) {
+                    if !shared && held.and_then(prefs::normalize_shortcut).as_deref() == Some(norm.as_str()) {
                         ov.insert(other.clone(), String::new());
                     }
                     // Its further keys: the edited list when this assignment is new, else only
