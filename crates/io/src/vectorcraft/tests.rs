@@ -71,6 +71,14 @@ fn compressed_files_and_misleading_names_are_recognized_by_content() {
 }
 
 #[test]
+fn the_memory_preflight_treats_vectorcraft_files_as_unbounded() {
+    let bytes = file(Some(&pdf(20, 10, 1)));
+    assert_eq!(crate::import_preflight("Logo.vectorcraft", &bytes), crate::ImportPreflight::Unbounded);
+    assert_eq!(crate::import_preflight("Untitled", &gzip(&bytes)), crate::ImportPreflight::Unbounded);
+    assert_eq!(crate::import_preflight("Logo.drawcraft", b"not a document"), crate::ImportPreflight::Unbounded);
+}
+
+#[test]
 fn a_file_without_its_pdf_names_create_pdf_compatible_file() {
     let e = crate::import("Logo.vectorcraft", &file(None)).unwrap_err();
     assert!(matches!(e, IoError::VectorCraft(_)), "{e:?}");

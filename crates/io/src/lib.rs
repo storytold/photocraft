@@ -528,7 +528,7 @@ pub enum ImportPreflight {
     /// A flat raster decoded into one image, bounded by
     /// [`ImportOptions::flat_max_pixel_bytes`].
     Flat,
-    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, camera raw, PDF and `.pcraft` files: this
+    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, camera raw, PDF, VectorCraft and `.pcraft` files: this
     /// build has no header-only estimate of their pixel memory before decoding.
     Unbounded,
 }
@@ -552,6 +552,8 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
             | photocraft_formats::Format::Svgz
             | photocraft_formats::Format::Pdf,
         ) => ImportPreflight::Unbounded,
+        // The same check as `route`: VectorCraft files are drawn from their carried PDF.
+        detected if vectorcraft::is_vectorcraft(bytes) || (detected.is_none() && vectorcraft::has_extension(name)) => ImportPreflight::Unbounded,
         _ => ImportPreflight::Flat,
     }
 }
