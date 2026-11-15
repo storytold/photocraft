@@ -376,6 +376,12 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
             } else {
                 crate::view_cmds::form_body(ui, fields);
             }
+            // A form's static help text at the bottom (`__help`, already translated): Layers to
+            // Files (#13971).
+            if let Some(help) = fields.get("__help").and_then(Value::as_str) {
+                ui.add_space(8.0);
+                ui.label(help.to_owned());
+            }
         }
         _ => {}
     }
@@ -572,7 +578,7 @@ fn button_row(
 
 /// The default button's label: what OK means for this dialog.
 fn ok_label(d: &Dialog) -> &'static str {
-    if image_processor_ui::owns(&d.fields) {
+    if image_processor_ui::owns(&d.fields) || d.fields.get("__command").and_then(Value::as_str) == Some("file.export.layersToFiles") {
         tl!("Run")
     } else if d.kind == DialogKind::NewDocument {
         tl!("Create")

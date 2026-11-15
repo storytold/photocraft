@@ -536,7 +536,11 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             dialog(
                 app,
                 json!({"dir": dir, "prefix": name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a), "format": "png", "quality": null, JPEG_CUSTOM: false,
-                    JPEG_QUALITY: 10, "visibleOnly": true, "trim": false, "__order": ["dir", "prefix", "visibleOnly", "format", "quality", "trim"]}),
+                    JPEG_QUALITY: 10, "visibleOnly": true, "trim": false, "__order": ["dir", "prefix", "visibleOnly", "format", "quality", "trim"],
+                    // The reference's title, labels and help text (#13971); Run is in `ok_label`.
+                    "__label": "Export Layers To Files",
+                    "__labels": {"dir": tl!("Destination"), "prefix": tl!("File Name Prefix"), "visibleOnly": tl!("Visible Layers Only"), "format": tl!("File Type")},
+                    "__help": tl!("Please specify the format and location for saving each layer as a file.")}),
                 json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}),
             )
         }
