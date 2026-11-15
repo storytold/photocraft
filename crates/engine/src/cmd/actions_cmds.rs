@@ -181,6 +181,11 @@ pub struct ActionState {
     /// an empty one isn't remembered past the session.
     #[serde(skip)]
     pub sets: Vec<String>,
+    /// What Load Actions renamed to keep names unique, as `(set, name in the file)` to the loaded
+    /// name. A later load binds a call qualified with a set and a child of that set to the loaded
+    /// name through it; it is session state, so only a recorded rename is ever followed.
+    #[serde(skip)]
+    pub load_renames: std::collections::HashMap<(String, String), String>,
     /// Bumped whenever `list` changes, so the preset store can skip unchanged writes.
     #[serde(skip)]
     pub rev: u64,
@@ -585,9 +590,9 @@ pub(crate) fn resolve(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
 ///
 /// A call qualified with an action set resolves inside that set and nowhere else: a loaded
 /// library can hold one child name in two sets, and reaching the other set's action silently
-/// plays the wrong steps (#11523). A child the loader renamed is still found in its own set; a set
-/// holding no such child is an error, as Photoshop reports it, not a fallback to a same-named
-/// action elsewhere. A malformed qualifier is refused the same way: falling back to the name alone
+/// plays the wrong steps (#11523). The name is matched exactly inside that set; a set holding no
+/// such action is an error, as Photoshop reports it, not a fallback to a same-named action
+/// elsewhere or to one whose name merely looks like a rename. A malformed qualifier is refused the same way: falling back to the name alone
 /// is exactly how a call ends up in the wrong set. Only an absent (or null) `set` keeps the
 /// unqualified lookup the Actions panel and a recorded call use, and a call by list index resolves
 /// as before.
@@ -612,23 +617,14 @@ pub(crate) fn resolve_call(list: &[Action], p: &Value, cmd: &str) -> Result<usiz
     qualified_target(list, name, &set).ok_or_else(|| bad(cmd, format!("no action named `{name}` in set `{set}`")))
 }
 
-/// The action a call qualified with an action set means: that set's child of this name, or, when a
-/// Load Actions name collision renamed the child, the set's one child whose name is that rename
-/// (`"Child 2"` of `"Child"`). The set is the truth, whatever the loaded name became (#11523); a set
-/// holding no such child, or two children of the renamed form, gives `None` so the call is reported.
+/// The action a call qualified with an action set means: that set's action of exactly this name,
+/// and nothing else (#11523). A name is never taken for another because of its spelling: a set
+/// holding only an action genuinely named `Child 2` has no `Child`. When Load Actions renamed a
+/// colliding child, the loader recorded it ([`ActionState::load_renames`]) and rewrote the calls it
+/// could bind to the loaded name, so a call still naming the original finds nothing here and is
+/// reported.
 pub(crate) fn qualified_target(list: &[Action], name: &str, set: &str) -> Option<usize> {
-    let in_set = |a: &Action| a.set.as_deref() == Some(set);
-    if let Some(index) = list.iter().position(|a| in_set(a) && a.name == name) {
-        return Some(index);
-    }
-    let mut hits = list.iter().enumerate().filter(|(_, a)| in_set(a) && is_renamed_form(&a.name, name)).map(|(i, _)| i);
-    let first = hits.next()?;
-    hits.next().is_none().then_some(first)
-}
-
-/// Whether `child` is `name` with a Load Actions suffix: `"Child 2"` is a renamed `"Child"`.
-fn is_renamed_form(child: &str, name: &str) -> bool {
-    child.strip_prefix(name).and_then(|rest| rest.strip_prefix(' ')).and_then(|suffix| suffix.parse::<u32>().ok()).is_some_and(|n| n >= 2)
+    list.iter().position(|a| a.set.as_deref() == Some(set) && a.name == name)
 }
 
 fn from_step(p: &Value, len: usize) -> Result<usize> {

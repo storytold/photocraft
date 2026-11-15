@@ -919,9 +919,13 @@ A Play Action (`Ply `) step names its target as a reference: `Actn` by child nam
 reference application also records `ASet` by action-set name (as a named Batch step's `Usng` does,
 see the Batch table). Load Actions keeps a cross-set qualifier as
 `actions.play {"action": child, "set": set}`, and playback resolves a qualified call inside that
-set only: a child an earlier load renamed to keep names unique (`Child 2` for a second `Child`) is
-still found in its own set, and a set holding no such child is an error, never a same-named child of
-another set (#11523). A call of the loaded file's own set stays unqualified,
+set only, by the exact name: a set holding no action of that name is an error, never a same-named
+child of another set and never an action whose name merely looks like a rename (a set holding only a
+genuine `Child 2` has no `Child`; #11523). When a load renames a child to keep names unique (`Child 2`
+for a second `Child`) it records the rename for the session and binds the qualified calls it can,
+those in the files loaded later and those already in the library, to the loaded name; a call
+loaded in a later session than the rename, or after the set was edited, finds no `Child` and is
+reported. A call of the loaded file's own set stays unqualified,
 following this load's renames of the child (#6806); an unqualified call (the Actions panel, a
 recorded call, an older file) still resolves by name; a `set` that is not a name, or an empty one,
 is refused rather than ignored, because falling back to the name is how a call lands in the wrong

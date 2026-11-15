@@ -1712,8 +1712,8 @@ fn rename_follows_named_batch_steps_in_their_set() {
 }
 
 /// A Play call qualified with an action set reaches that set's child and never a same-named child
-/// of another set: the set's own `Child`, the child an earlier load renamed to `Child 2`, and an
-/// error when the set holds no such child or two children of the renamed form. An unqualified call
+/// of another set: the set's own `Child` or its exact loaded name, and an error when the set holds
+/// no action of exactly that name (an action genuinely named `Child 2` is not a `Child`). An unqualified call
 /// still reaches the first action of the name (#11523).
 #[test]
 fn a_set_qualified_play_reaches_that_sets_child() {
@@ -1734,7 +1734,6 @@ fn a_set_qualified_play_reaches_that_sets_child() {
     let cases = [
         (json!({"action": "Child"}), [1.0, 0.0, 0.0, 1.0], "unqualified: the first of the name"),
         (json!({"action": "Child", "set": "Blue"}), [0.0, 0.0, 1.0, 1.0], "that set's own child"),
-        (json!({"action": "Child", "set": "Green"}), [0.0, 1.0, 0.0, 1.0], "the child the loader renamed there"),
         (json!({"action": "Child 2", "set": "Green"}), [0.0, 1.0, 0.0, 1.0], "by the loaded name"),
     ];
     for (params, want, why) in cases {
@@ -1746,7 +1745,13 @@ fn a_set_qualified_play_reaches_that_sets_child() {
     // A set with no such child, and one holding two children of the renamed form, are reported
     // rather than answered with another set's action or a guess.
     s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
-    for params in [json!({"action": "Child", "set": "Missing"}), json!({"action": "Child", "set": "Two"}), json!({"action": "Nope", "set": "Blue"})] {
+    for params in [
+        json!({"action": "Child", "set": "Missing"}),
+        json!({"action": "Child", "set": "Two"}),
+        json!({"action": "Nope", "set": "Blue"}),
+        // Green holds only an action genuinely named `Child 2`: nothing records it as a renamed `Child`.
+        json!({"action": "Child", "set": "Green"}),
+    ] {
         let error = s.execute("actions.play", params.clone()).unwrap_err().to_string();
         let name = params["action"].as_str().unwrap_or_default();
         assert!(error.contains(name), "{params}: {error}");
@@ -1767,9 +1772,7 @@ fn a_set_qualified_play_reaches_that_sets_child() {
 }
 
 /// A rename follows a Play call qualified with the set the call reaches, and leaves a call that
-/// reaches another set's same-named child naming it still. A call the loader renamed reaches through
-/// its set too, so it follows the rename rather than dangling, and a call by list index is left
-/// alone.
+/// reaches another set's same-named child naming it still. A call by list index is left alone.
 #[test]
 fn rename_follows_a_set_qualified_play_call_that_reaches_the_action() {
     let mut s = Session::new();
@@ -1790,15 +1793,18 @@ fn rename_follows_a_set_qualified_play_call_that_reaches_the_action() {
     assert_eq!(caller[1].1, json!({"action": "Child"}), "the unqualified call reaches A's child and stays");
     assert_eq!(caller[2].1, json!({"action": 1}), "a call by list index names the row outright");
 
-    // The same call recorded with the name the file gave it, which this load renamed to `Child 2`:
-    // the set still identifies the action, so the rename reaches it.
+    // A call by the name the child carries in its set follows the rename; a call naming `Child`
+    // where the set holds only a genuine `Child 2` reaches nothing, so the rename leaves it alone.
     let mut s = Session::new();
     s.actions.list.push(Action { set: Some("A".into()), ..Action::new("Child", Vec::new()) });
     s.actions.list.push(Action { set: Some("B".into()), ..Action::new("Child 2", Vec::new()) });
-    s.actions.list.push(Action::new("Caller", vec![("actions.play".into(), json!({"action": "Child", "set": "B"}))]));
+    s.actions.list.push(Action::new(
+        "Caller",
+        vec![("actions.play".into(), json!({"action": "Child 2", "set": "B"})), ("actions.play".into(), json!({"action": "Child", "set": "B"}))],
+    ));
     s.execute("actions.rename", json!({"action": 1, "name": "Renamed"})).unwrap();
-    assert_eq!(s.actions.list[2].steps[0].1, json!({"action": "Renamed", "set": "B"}), "the renamed child's qualified call follows it");
-    assert!(s.execute("actions.play", json!({"action": "Caller"})).unwrap().get("failed").is_none(), "and still resolves");
+    assert_eq!(s.actions.list[2].steps[0].1, json!({"action": "Renamed", "set": "B"}), "the exact-named call follows the rename");
+    assert_eq!(s.actions.list[2].steps[1].1, json!({"action": "Child", "set": "B"}), "a call that reached nothing is not guessed into the rename");
 }
 
 /// Two sets' children of one name may call each other: the cycle check keys on the action the call
@@ -1871,7 +1877,7 @@ fn captured_calls_keep_an_unresolvable_qualified_target_failing() {
     let list = vec![action("Rotate", "image.imageRotation.90cw"), action("Child 2", "image.adjustments.invert"), action("Child 3", "image.imageRotation.180")];
     let mut steps = vec![
         ("actions.play".into(), json!({"action": "Rotate", "set": "Blue"})),
-        // Ambiguous: `Blue` holds both `Child 2` and `Child 3` and no plain `Child`.
+        // `Blue` holds only `Child 2` and `Child 3`, genuine names, and no `Child`.
         ("actions.play".into(), json!({"action": "Child", "set": "Blue"})),
     ];
     let called = called_actions(&list, &mut steps);

@@ -537,7 +537,10 @@ fn a_play_step_qualified_with_another_set_targets_that_sets_child() {
         assert_eq!(r["warnings"], json!([]), "{r}");
 
         let outer = s.actions.list.iter().find(|a| a.name == "Outer").unwrap();
-        assert_eq!(outer.steps, [("actions.play".to_string(), json!({"action": "Child", "set": BLUE_SET}))]);
+        // The load that renamed the Blue child recorded it, so the step names the child by the
+        // name it carries in Blue now; nothing is guessed from the name's spelling at play time.
+        let blue_child = if order[0] == RED_ATN { "Child 2" } else { "Child" };
+        assert_eq!(outer.steps, [("actions.play".to_string(), json!({"action": blue_child, "set": BLUE_SET}))]);
         let played = s.execute("actions.play", json!({"action": "Outer"})).unwrap();
         assert!(played.get("failed").is_none(), "{order:?}: {played}");
         assert_eq!(pixel(&mut s), [0.0, 0.0, 1.0, 1.0], "{order:?}: Outer must play the Blue child");
@@ -578,6 +581,31 @@ fn a_play_step_naming_an_unloaded_set_is_reported() {
     let played = s.execute("actions.play", json!({"action": "Outer"})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
     assert_eq!(pixel(&mut s), [0.0, 0.0, 1.0, 1.0]);
+}
+
+/// A set that genuinely holds an action named `Child 2` and no `Child`, with no load having renamed
+/// anything, is not a set holding `Child`: the step is reported at load and refused at playback,
+/// where the rename is only ever applied when the loader recorded it (#11523).
+#[test]
+fn a_play_step_does_not_guess_a_genuine_numbered_name_is_the_child() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
+    let fill = |color: &str| vec![("edit.fill".to_string(), json!({"contents": "color", "color": color}))];
+    let numbered = Action { name: "Child 2".into(), steps: fill("#0000ff"), ..Default::default() };
+    let (bytes, _) = export("Numbered", &[&numbered], &[], false).unwrap();
+    let r = s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
+    assert_eq!(r["warnings"], json!([]), "{r}");
+    let caller = Action { name: "Outer".into(), steps: vec![("actions.play".into(), json!({"action": "Child", "set": "Numbered"}))], ..Default::default() };
+    let (bytes, _) = export("Runner", &[&caller], &[], false).unwrap();
+    let r = s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
+    let warnings: Vec<&str> = r["warnings"].as_array().map(|w| w.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    assert!(warnings.iter().any(|w| w.contains("Child") && w.contains("Numbered") && w.contains("does not hold")), "{r}");
+    let outer = s.actions.list.iter().find(|a| a.name == "Outer").unwrap();
+    assert_eq!(outer.steps, [("actions.play".to_string(), json!({"action": "Child", "set": "Numbered"}))], "the step is left as written");
+    let played = s.execute("actions.play", json!({"action": "Outer"})).unwrap();
+    let error = played["failed"]["error"].as_str().unwrap_or_default();
+    assert!(error.contains("Child") && error.contains("Numbered"), "{played}");
+    assert_eq!(pixel(&mut s), [1.0, 1.0, 1.0, 1.0], "the genuine `Child 2` is not played for `Child`");
 }
 
 /// A Play step qualified with the file's own set names a child that set does not hold, while
