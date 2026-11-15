@@ -231,13 +231,23 @@ impl SnapTargets {
     /// target decides the correction. Returns the offset to add and the alignments made (every
     /// anchor that lines up after the correction, so equal-size neighbours show both edges).
     pub fn snap_rect(&self, r: [f64; 4], tol: f64) -> ([f64; 2], Vec<SnapLine>) {
+        self.snap_rect_anchors(r, tol, true)
+    }
+
+    /// [`SnapTargets::snap_rect`] with the rectangle's edges as its only anchors, not its centre lines: for
+    /// an object whose centre has nothing to align to (a frame moved onto other layers' edges).
+    pub fn snap_rect_edges(&self, r: [f64; 4], tol: f64) -> ([f64; 2], Vec<SnapLine>) {
+        self.snap_rect_anchors(r, tol, false)
+    }
+
+    fn snap_rect_anchors(&self, r: [f64; 4], tol: f64, centres: bool) -> ([f64; 2], Vec<SnapLine>) {
         let mut delta = [0.0, 0.0];
         let mut lines = Vec::new();
         for (axis, vertical) in [(0usize, true), (1usize, false)] {
             let (a, b) = (r[axis], r[axis + 2]);
-            let anchors = [a, (a + b) / 2.0, b];
+            let anchors: Vec<f64> = if centres { vec![a, (a + b) / 2.0, b] } else { vec![a, b] };
             let mut best: Option<(f64, f64)> = None; // (|d|, d)
-            for v in anchors {
+            for &v in &anchors {
                 if let Some(t) = self.nearest(vertical, v, tol) {
                     let d = t.pos - v;
                     if best.is_none_or(|(bd, _)| d.abs() < bd) {
@@ -248,7 +258,7 @@ impl SnapTargets {
             let Some((_, d)) = best else { continue };
             delta[axis] = d;
             let other = if vertical { (r[1], r[3]) } else { (r[0], r[2]) };
-            for v in anchors {
+            for &v in &anchors {
                 let moved = v + d;
                 let list = if vertical { &self.x } else { &self.y };
                 let hit = list.iter().copied().filter(|t| (t.pos - moved).abs() < 1e-6).min_by_key(|t| u8::from(t.kind != SnapKind::Guide));
