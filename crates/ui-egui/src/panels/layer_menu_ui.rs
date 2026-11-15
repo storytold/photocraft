@@ -49,12 +49,29 @@ pub fn single_layer_only(id: &str) -> bool {
     matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle") || (id.starts_with("layer.layerMask.") && !adds_mask)
 }
 
+/// The untranslated label of a layer row that names one layer or several: Duplicate, Delete and
+/// Rasterize act on every selected layer, so with several selected (`multi`) they read in the
+/// plural, as in Photoshop. `None` for other commands. Shared by this menu and the canvas tools'
+/// layer menu (#12358).
+pub(crate) fn layer_count_label(command: &str, multi: bool) -> Option<&'static str> {
+    let (one, several) = match command {
+        "layer.duplicate" => ("Duplicate Layer…", "Duplicate Layers…"),
+        "layer.delete" => ("Delete Layer", "Delete Layers"),
+        "layer.rasterize.layer" => ("Rasterize Layer", "Rasterize Layers"),
+        _ => return None,
+    };
+    Some(if multi { several } else { one })
+}
+
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
 pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     let mut v: Vec<Entry> = vec![Some((tl!("Blending Options…"), "layer.layerStyle.blendingOptions"))];
     v.push(None);
-    v.push(Some((if multi { tl!("Duplicate Layers…") } else { tl!("Duplicate Layer…") }, "layer.duplicate")));
-    v.push(Some((if multi { tl!("Delete Layers") } else { tl!("Delete Layer") }, "layer.delete")));
+    for id in ["layer.duplicate", "layer.delete"] {
+        if let Some(label) = layer_count_label(id, multi) {
+            v.push(Some((tl!(label), id)));
+        }
+    }
     // Groups the clicked layer, or the whole selection when several layers are selected, after
     // Photoshop's New Group dialog.
     v.push(Some((tl!("Group from Layers…"), "layer.new.groupFromLayers")));
@@ -73,7 +90,10 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         // One item for the whole selection, whatever the clicked layer is: Rasterize acts on every
         // selected layer. Edit Contents and Convert to Layers work on one layer, so they are not
         // offered here.
-        v.push(Some(("Rasterize Layers", "layer.rasterize.layer")));
+        let id = "layer.rasterize.layer";
+        if let Some(label) = layer_count_label(id, multi) {
+            v.push(Some((label, id)));
+        }
     } else {
         match &l.content {
             LayerContent::Text(_) => {
