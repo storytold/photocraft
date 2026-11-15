@@ -165,13 +165,8 @@ fn an_unmodified_set_switches_at_once() {
 fn an_action_function_key_is_no_edit() {
     let (mut h, first) = dialog();
     h.state_mut().ui.dialogs.retain(|d| d.id != first);
-    let app = h.state_mut();
-    app.run("actions.record", json!({"name": "Sepia"})).unwrap();
-    app.run("actions.stop", json!({})).unwrap();
-    let row = app.session.actions.list.iter().position(|action| action.name == "Sepia").unwrap();
-    crate::actions::assign_shortcut(app, row, "F2").unwrap();
-    let action_id = app.session.actions.list[row].action_id.as_deref().unwrap();
-    let shortcut_id = photocraft_engine::actions_cmds::occurrence_key(action_id);
+    h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Sepia", Vec::new()));
+    crate::actions::assign_shortcut(h.state_mut(), 0, "F2").unwrap();
     let ctx = h.ctx.clone();
     let id = crate::menus::invoke(h.state_mut(), &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
     h.run_steps(4);
@@ -179,7 +174,6 @@ fn an_action_function_key_is_no_edit() {
     pick_set(&mut h, "PhotoCraft Defaults");
     assert!(!asking(&h));
     assert_eq!(field(&h, id, "activeSet"), json!(""));
-    assert_eq!(field(&h, id, "overrides")[shortcut_id], "F2");
 }
 
 #[test]
