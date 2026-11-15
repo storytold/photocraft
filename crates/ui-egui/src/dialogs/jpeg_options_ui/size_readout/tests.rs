@@ -119,14 +119,11 @@ fn unchanged_settings_are_not_encoded_again() {
 
     let edited = Key { revision: 4, ..key };
     let (ready, wait) = std::sync::mpsc::channel::<()>();
-    let estimate = readout.update(
-        edited,
-        || move || {
-            let _ = wait.recv();
-            None
-        },
-        || {},
-    );
+    let encode = move || {
+        let _ = wait.recv();
+        None
+    };
+    let estimate = readout.update(edited, || encode, || {});
     ready.send(()).unwrap();
     assert_eq!(estimate, Estimate::Pending(None), "an edited document shows no size of the old one");
 }
