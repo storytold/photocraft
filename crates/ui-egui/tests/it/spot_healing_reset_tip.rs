@@ -88,6 +88,20 @@ fn a_first_use_starts_with_the_tip_and_then_keeps_its_own() {
 }
 
 #[test]
+fn a_first_use_keeps_the_current_brushs_other_settings() {
+    // Only the tip was measured; opacity, flow and the rest still come from the current brush on a
+    // first use, as before.
+    let mut app = app();
+    pick(&mut app, Tool::Pencil);
+    scramble(&mut app);
+    (app.session.tools.brush.opacity, app.session.tools.brush.flow) = (0.4, 0.6);
+    pick(&mut app, Tool::SpotHealing);
+    assert_eq!(tip(&mut app), SPOT_HEALING_TIP);
+    let b = &app.session.tools.brush;
+    assert_eq!((b.opacity, b.flow), (0.4, 0.6));
+}
+
+#[test]
 fn the_healing_brush_clone_stamp_and_brush_keep_their_reset_tips() {
     let cases = [(Tool::Healing, [19.0, 1.0, 0.25, 0.0, 1.0]), (Tool::CloneStamp, [21.0, 0.0, 0.25, 0.0, 1.0]), (Tool::Brush, [13.0, 0.0, 0.25, 0.0, 1.0])];
     for (tool, expected) in cases {

@@ -42,15 +42,10 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Art History Brush also starts at full opacity (#10263), and the Pattern Stamp at full
         // opacity and flow (#12616): those fields are their own.
-        // The Background Eraser, the Healing and Spot Healing Brushes, the Burn, Dodge and Sponge
-        // tools, the Clone Stamp and the Smudge tool start with their own measured tips instead, as
-        // the whole brush Reset Tool gives them (#11911, #12099, #12560, #12671, #12684, #13029,
-        // #12601, #12964).
-        None if matches!(
-            tool,
-            Tool::BackgroundEraser | Tool::Healing | Tool::SpotHealing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge
-        ) =>
-        {
+        // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
+        // Stamp and the Smudge tool start with their own measured tips instead, as the whole brush
+        // Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601, #12964).
+        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge) => {
             fresh_brush(tool, &current)
         }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
@@ -68,7 +63,14 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             };
             // The Remove tool starts at its measured 19 px; the rest is the current brush (#12548).
             let size = if tool == Tool::Remove { REMOVE_TOOL_SIZE } else { current.size };
-            BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current }
+            let mut b = BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current };
+            // The Spot Healing Brush starts with the measured tip (#12560); the rest of its brush
+            // wasn't measured, so it is the current brush as for the other tools.
+            if tool == Tool::SpotHealing {
+                (b.size, b.hardness, b.spacing) = HEALING_BRUSH_TIP;
+                (b.angle, b.roundness) = (0.0, 1.0);
+            }
+            b
         }
     };
     // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
