@@ -241,6 +241,9 @@ fn several_rows_are_refused_in_the_browser_build_with_the_reason() {
 fn names_that_fold_together_by_uppercase_are_one_file() {
     assert!(batch_file_names("harbor", "png", &rows(&[("1x", "σ"), ("2x", "ς")])).is_err());
     assert!(batch_file_names("harbor", "png", &rows(&[("1x", "σ"), ("2x", "s")])).is_ok());
+    // Normalisation: `e` + combining acute and the precomposed `é` are one name on APFS.
+    assert!(batch_file_names("harbor", "png", &rows(&[("1x", "e\u{301}"), ("2x", "\u{e9}")])).is_err());
+    assert!(batch_file_names("harbor", "png", &rows(&[("1x", "e"), ("2x", "\u{e9}")])).is_ok(), "a plain e is another name");
     // Lower-casing joins `K` and the Kelvin sign (APFS treats them as one name); upper-casing does not.
     assert!(batch_file_names("harbor", "png", &rows(&[("1x", "K"), ("2x", "\u{212A}")])).is_err());
 }

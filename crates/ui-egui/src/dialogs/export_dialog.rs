@@ -1256,13 +1256,22 @@ fn batch_unsupported(rows: usize, browser: bool) -> Option<&'static str> {
     (browser && rows > 1).then_some("Exporting several sizes at once needs a folder, which the browser can't write to; export one size at a time")
 }
 
+/// Whether two file names can be one file on some file system: equal once Unicode-normalised (APFS
+/// treats `e` + U+0301 and `é` as one name) and upper-cased (Windows folds `σ` and `ς`) or lower-cased
+/// (`K` and the Kelvin sign).
+fn file_names_clash(a: &str, b: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    let (a, b): (String, String) = (a.nfc().collect(), b.nfc().collect());
+    a.to_uppercase() == b.to_uppercase() || a.to_lowercase() == b.to_lowercase()
+}
+
 /// The file names a batch writes, `<name><suffix>.<ext>` per row, or an error naming the first one two
-/// rows share (suffixes that sanitize alike, or differ only in case, count: a file system may fold them, by upper-casing as Windows does, so `σ` and `ς` are one).
-/// Nothing is written then; replacing a file that already exists is unchanged.
+/// rows share (names a file system may fold into one, see [`file_names_clash`], count). Nothing is written
+/// then; replacing a file that already exists is unchanged.
 fn batch_file_names(stem: &str, ext: &str, rows: &[(String, String)]) -> Result<Vec<String>, String> {
     let names: Vec<String> = rows.iter().map(|(_, suffix)| format!("{stem}{}.{ext}", file_suffix(suffix))).collect();
     for (i, name) in names.iter().enumerate() {
-        if names[..i].iter().any(|other| other.to_uppercase() == name.to_uppercase() || other.to_lowercase() == name.to_lowercase()) {
+        if names[..i].iter().any(|other| file_names_clash(other, name)) {
             return Err(format!("Two sizes would write the same file, {name}; give each size its own suffix"));
         }
     }
