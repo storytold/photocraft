@@ -3,6 +3,8 @@
 //! `photocraft_algo::matting`; these commands pick the pixels to analyse (active layer or
 //! composite), run them, and store the result as the selection (or a mask / new layer).
 
+use std::borrow::Cow;
+
 use photocraft_algo::matting::{self, RefineParams};
 use photocraft_algo::segment::{Sampler, SurfaceSampler, focus, grabcut, quick, subject};
 use photocraft_algo::selection::{Region, SelectionMode, combine_region};
@@ -69,6 +71,26 @@ pub(crate) fn with_doc_sampler<R>(doc: &Document, layer: Option<LayerId>, all_la
     }
 }
 
+/// A flat, opaque image: what Quick Selection reads with a group active and Sample All Layers off.
+struct FlatSampler;
+
+impl Sampler for FlatSampler {
+    fn rgba(&self, r: Rect) -> Vec<[f32; 4]> {
+        vec![[0.0, 0.0, 0.0, 1.0]; r.width() as usize * r.height() as usize]
+    }
+}
+
+/// Runs `f` with Quick Selection's sampler: [`with_sampler`]'s, except that with a group active
+/// and Sample All Layers off it reads a flat area, so a click selects only the brush disc instead
+/// of the composite's shapes, as the reference application does (#12933). Artboards and frames,
+/// groups too but not measured, keep reading the composite.
+fn with_quick_sampler<R>(s: &Session, all_layers: bool, f: impl FnOnce(&dyn Sampler, &Document) -> R) -> Result<R> {
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let plain_group = |l: &Layer| l.frame.is_none() && matches!(&l.content, LayerContent::Group(g) if g.artboard.is_none());
+    let group = d.active_layer.and_then(|id| d.doc.layer(id)).is_some_and(plain_group);
+    if group && !all_layers { Ok(f(&FlatSampler, &d.doc)) } else { with_sampler(s, all_layers, f) }
+}
+
 /// Stores `region` combined with the current selection by `m` as one history step.
 /// Finding nothing never destroys work: the selection (and history) is left alone and the
 /// caller gets `changed: false`, whatever the mode. (Select Subject and Object Selection run
@@ -99,6 +121,7 @@ fn points(p: &Value) -> Vec<(f32, f32)> {
 /// edges and removes blockiness.
 const ENHANCE: RefineParams = RefineParams { radius: 4.0, smart_radius: true, smooth: 15.0, feather: 0.0, contrast: 25.0, shift_edge: 0.0 };
 
+/// Expands a selection around sampled points using image gradients, optionally enhancing edges.
 fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = points(p);
     if pts.is_empty() {
@@ -111,12 +134,28 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
         _ => SelectionMode::Add,
     };
     let enhance = b(p, "enhanceEdge", false);
-    let region = with_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| {
+    let region = with_quick_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| {
         let canvas = doc.bounds();
-        let r = quick::quick_select(smp, canvas, &pts, size)?;
-        if enhance { matting::refine_mask(smp, &matting::region_reader(&r), r.bbox, canvas, &ENHANCE) } else { Some(r) }
+        let Some(r) = quick::quick_select(smp, canvas, &pts, size) else { return Ok(None) };
+        let surface = matting::region_surface(&r);
+        if enhance { matting::refine_surface(smp, &surface, canvas, &ENHANCE, None).map_err(|e| EngineError::Other(e.to_string())) } else { Ok(Some(surface)) }
+    })??;
+    let Some(region) = region else { return apply(s, "Quick Selection", None, m) };
+    let bounds = region.content_bounds();
+    let selected = s.edit("Quick Selection", |doc, _| {
+        let empty = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+        let old = doc.selection.as_ref().unwrap_or(&empty);
+        let area = old.content_bounds().union(&bounds).intersect(&doc.bounds());
+        let out = match m {
+            SelectionMode::Replace => region.clone(),
+            SelectionMode::Add => photocraft_algo::selection::combine_sparse(old, &region, area, f32::max),
+            SelectionMode::Subtract => photocraft_algo::selection::combine_sparse(old, &region, area, |a, b| (a - b).max(0.0)),
+            SelectionMode::Intersect => photocraft_algo::selection::combine_surfaces(old, &region, area, f32::min),
+        };
+        doc.selection = (!out.content_bounds().is_empty()).then_some(out);
+        Ok(doc.selection.is_some())
     })?;
-    apply(s, "Quick Selection", region.as_ref(), m)
+    Ok(json!({"selected": selected, "changed": true, "bounds": [bounds.x0, bounds.y0, bounds.width(), bounds.height()]}))
 }
 
 fn rect_param(p: &Value) -> Option<Rect> {
@@ -238,12 +277,100 @@ pub fn empty_sampled_area(doc: &Document, layer: Option<LayerId>, all_layers: bo
     Some(if surf.content_bounds().is_empty() { "the active layer is empty" } else { "the active layer has no pixels in that area" })
 }
 
+/// Hard Edge off: [`soften_edge`]'s horizontal taps in 256ths, for the pixels two and one to the
+/// left, the pixel itself and the pixel to the right.
+const SOFT_EDGE_ACROSS: [f64; 4] = [30.0 / 256.0, 6.0 / 256.0, 118.0 / 256.0, 102.0 / 256.0];
+/// Hard Edge off: [`soften_edge`]'s vertical taps in 256ths, for the pixels two and one above,
+/// the pixel itself and the pixel below.
+const SOFT_EDGE_DOWN: [f64; 4] = [29.0 / 256.0, 11.0 / 256.0, 99.0 / 256.0, 117.0 / 256.0];
+/// Hard Edge off: the filtered coverage that maps to 0 and the one that maps to 1 (#12855).
+const SOFT_EDGE_RAMP: (f64, f64) = (0.10, 0.55);
+
+/// Object Selection with Hard Edge off (#12855): `region` with the reference application's
+/// softer rim. A four-tap filter runs across ([`SOFT_EDGE_ACROSS`]) and then down
+/// ([`SOFT_EDGE_DOWN`]), and a ramp maps [`SOFT_EDGE_RAMP`] to 0..1. On the reference
+/// application's test rectangle that softens both sides by one pixel, as it measures: the outer
+/// pixel on the left drops to about 176 and on the top to about 197, the old rim pixel on the
+/// right and bottom becomes fully selected, a new rim pixel of about 65 follows it, and then a
+/// line of value 1, which sets the right and bottom bounds. The result can reach one pixel
+/// further out on the left and top and two on the right and bottom. Pixels past `canvas` repeat
+/// the canvas edge, so an object that touches the document border stays fully selected there.
+fn soften_edge(region: &Region, canvas: Rect) -> Region {
+    let src = region.bbox;
+    let bbox = Rect::new(src.x0.saturating_sub(1), src.y0.saturating_sub(1), src.x1.saturating_add(2), src.y1.saturating_add(2)).intersect(&canvas);
+    if bbox.is_empty() || src.is_empty() {
+        return region.clone();
+    }
+    let (sw, sh) = (src.width() as usize, src.height() as usize);
+    let at = |x: i32, y: i32| -> f64 {
+        let (x, y) = (x.clamp(canvas.x0, canvas.x1 - 1), y.clamp(canvas.y0, canvas.y1 - 1));
+        if !src.contains(x, y) {
+            return 0.0;
+        }
+        let (cx, cy) = (x.abs_diff(src.x0) as usize, y.abs_diff(src.y0) as usize);
+        if cx >= sw || cy >= sh {
+            return 0.0;
+        }
+        region.mask.get(cy * sw + cx).map_or(0.0, |v| f64::from(*v) / 255.0)
+    };
+    let (w, h) = (bbox.width() as usize, bbox.height() as usize);
+    let (lo, hi) = SOFT_EDGE_RAMP;
+    // The vertical pass reads two rows above and one below, so the horizontal pass keeps four
+    // rows, not the whole box: a large found object costs its 8-bit mask, not eight bytes a pixel
+    // more.
+    let across = |y: i32, row: &mut Vec<f64>| {
+        row.clear();
+        row.extend((bbox.x0..).take(w).map(|x| SOFT_EDGE_ACROSS.iter().zip(-2i32..).map(|(k, dx)| k * at(x.saturating_add(dx), y)).sum::<f64>()));
+    };
+    // `rows` holds the horizontal pass of rows y - 2, y - 1, y and y + 1.
+    let mut rows: [Vec<f64>; 4] = std::array::from_fn(|_| Vec::with_capacity(w));
+    for (dy, row) in (-2i32..).zip(rows.iter_mut().take(3)) {
+        across(bbox.y0.saturating_add(dy), row);
+    }
+    let mut mask = Vec::with_capacity(w * h);
+    for y in bbox.y0..bbox.y1 {
+        across(y.saturating_add(1), &mut rows[3]);
+        let filtered = (0..w).map(|i| SOFT_EDGE_DOWN.iter().zip(&rows).map(|(k, row)| k * row[i]).sum::<f64>());
+        mask.extend(filtered.map(|v| (((v - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8));
+        rows.rotate_left(1);
+    }
+    trimmed(Region { bbox, mask }, w)
+}
+
+/// `r` (`w` pixels wide) cut down to its selected pixels, so the reported bounds are the
+/// selection's: [`soften_edge`]'s box has a spare pixel on each side that the ramp may empty.
+fn trimmed(r: Region, w: usize) -> Region {
+    let rows: Vec<&[u8]> = r.mask.chunks_exact(w).collect();
+    let used_rows: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.iter().any(|v| *v > 0)).map(|(y, _)| y).collect();
+    let used_cols: Vec<usize> = (0..w).filter(|x| rows.iter().any(|row| row[*x] > 0)).collect();
+    let (Some(&y0), Some(&y1), Some(&x0), Some(&x1)) = (used_rows.first(), used_rows.last(), used_cols.first(), used_cols.last()) else {
+        return Region { bbox: Rect::new(r.bbox.x0, r.bbox.y0, r.bbox.x0, r.bbox.y0), mask: Vec::new() };
+    };
+    let mask = rows[y0..=y1].iter().flat_map(|row| row[x0..=x1].iter().copied()).collect();
+    let at = |d: usize| i32::try_from(d).unwrap_or(i32::MAX);
+    let bbox = Rect::new(
+        r.bbox.x0.saturating_add(at(x0)),
+        r.bbox.y0.saturating_add(at(y0)),
+        r.bbox.x0.saturating_add(at(x1 + 1)),
+        r.bbox.y0.saturating_add(at(y1 + 1)),
+    );
+    Region { bbox, mask }
+}
+
+/// `select.object`'s `"hardEdge"` (default on): off, the found object gets [`soften_edge`]'s rim;
+/// on, the found object itself, borrowed rather than copied.
+fn object_edge<'a>(canvas: Rect, p: &Value, region: Option<&'a Region>) -> Option<Cow<'a, Region>> {
+    let region = region?;
+    Some(if b(p, "hardEdge", true) { Cow::Borrowed(region) } else { Cow::Owned(soften_edge(region, canvas)) })
+}
+
 /// `select.object` with `"point"`: the Object Finder's object under the point (cached).
 fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     check_sampled_pixels(&d.doc, d.active_layer, all_layers, Rect::from_xywh(x.floor() as i32, y.floor() as i32, 1, 1))?;
     let target = sampled_target(&d.doc, d.active_layer, all_layers);
+    let canvas = d.doc.bounds();
     let region = match s.object_finder.lookup(&d.doc, target, x, y) {
         Some(r) => Some(r),
         None => {
@@ -255,6 +382,8 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
             found
         }
     };
+    // The cache keeps the object as found; Hard Edge only shapes what is stored.
+    let region = object_edge(canvas, p, region.as_deref());
     let out = apply(s, "Object Selection", region.as_deref(), mode(p, "replace"))?;
     if let Some(d) = s.active() {
         let doc = std::sync::Arc::clone(&d.doc);
@@ -263,7 +392,25 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
     Ok(out)
 }
 
+/// The reference application's Object Selection alert in the modes it refuses (#12867).
+/// Multichannel and Duotone weren't measured and keep selecting.
+pub fn object_mode_refusal(mode: photocraft_color::ColorMode) -> Option<&'static str> {
+    use photocraft_color::ColorMode;
+    match mode {
+        ColorMode::Indexed => Some(
+            "Could not complete your request because the tool does not work with Indexed Color images. Please convert the image to RGB or another supported mode before using..",
+        ),
+        ColorMode::Bitmap => Some(
+            "Could not complete your request because the tool does not work with Bitmap images. Please convert the image to RGB or another supported mode before using..",
+        ),
+        _ => None,
+    }
+}
+
 fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(why) = s.active().and_then(|d| object_mode_refusal(d.doc.mode)) {
+        return Err(EngineError::Other(why.into()));
+    }
     if p.get("rect").is_none()
         && let Some(pt) = point_param(p)
     {
@@ -273,8 +420,9 @@ fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     check_sampled_pixels(&d.doc, d.active_layer, all_layers, rect)?;
-    let region = with_sampler(s, all_layers, |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
-    apply(s, "Object Selection", region.as_ref(), mode(p, "replace"))
+    let canvas = d.doc.bounds();
+    let found = with_sampler(s, all_layers, |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
+    apply(s, "Object Selection", object_edge(canvas, p, found.as_ref()).as_deref(), mode(p, "replace"))
 }
 
 /// Select Subject's last result (#2865), so running it again on unchanged pixels answers at
@@ -434,24 +582,14 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
         let edited = if edits.is_empty() { None } else { select_mask_edits::apply(doc, active, start.cloned(), &edits) };
         let Some(sel) = (if edits.is_empty() { start } else { edited.as_ref() }) else { return Ok(None) };
         let brush = matting::EdgeBrush::new(&strokes, doc.bounds());
-        // The refined result is dense over the selection's bounds: refuse what would not fit
-        // rather than allocate it (a thin edit across a huge canvas; the #8783 review).
-        let content = sel.content_bounds();
-        let area = matting::refine_area(content, doc.bounds(), &params, brush.as_ref());
-        if u64::from(area.width()) * u64::from(area.height()) > matting::MAX_REFINE_AREA {
-            return Err(bad(
-                "select.refineEdge",
-                &format!("the selection is too large to refine ({} × {} px; at most {} px in all)", area.width(), area.height(), matting::MAX_REFINE_AREA),
-            ));
-        }
-        Ok(matting::refine_mask_brushed(smp, &matting::surface_reader(sel), content, doc.bounds(), &params, brush.as_ref()))
+        matting::refine_surface(smp, sel, doc.bounds(), &params, brush.as_ref()).map_err(|e| EngineError::Other(e.to_string()))
     })??;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let active = d.active_layer.filter(|id| d.doc.layer(*id).is_some());
     match output.as_str() {
         "selection" => {
             let selected = s.edit("Select and Mask", |doc, _| {
-                doc.selection = region.as_ref().map(matting::region_surface);
+                doc.selection = region.clone();
                 Ok(doc.selection.is_some())
             })?;
             Ok(json!({ "output": output, "selected": selected }))
@@ -459,8 +597,7 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
         "layerMask" => {
             let id = active.ok_or_else(|| EngineError::Other("no active layer".into()))?;
             s.edit("Select and Mask", |doc, _| {
-                let surface =
-                    region.as_ref().map(matting::region_surface).unwrap_or_else(|| photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8));
+                let surface = region.clone().unwrap_or_else(|| photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8));
                 crate::extra_cmds::background_to_layer_for_mask(doc, id);
                 let existing = doc.layer(id).and_then(|l| l.mask.as_ref()).cloned().unwrap_or_else(LayerMask::reveal_all);
                 doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(LayerMask { surface, ..existing });
@@ -476,14 +613,14 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
                 EngineError::Other(format!("the active layer is {} {} layer without pixels", src_layer.content.article(), src_layer.content.kind_name()))
             })?;
             let name = d.doc.copy_name(&src_layer.name);
-            let empty = Region { bbox: Rect::EMPTY, mask: Vec::new() };
+            let empty = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
             let reg = region.as_ref().unwrap_or(&empty);
-            let pixels = if decontaminate { matting::decontaminate(src, reg, params.radius, amount) } else { src.clone() };
+            let pixels = if decontaminate { matting::decontaminate_surface(src, reg, params.radius, amount) } else { src.clone() };
             let with_mask = matches!(output.as_str(), "newLayerWithMask" | "newDocumentWithMask");
             let (content, mask) = if with_mask {
-                (pixels, Some(LayerMask { surface: matting::region_surface(reg), ..LayerMask::reveal_all() }))
+                (pixels, Some(LayerMask { surface: reg.clone(), ..LayerMask::reveal_all() }))
             } else {
-                (matting::masked_copy(&pixels, reg), None)
+                (matting::masked_copy_surface(&pixels, reg, reg.content_bounds()), None)
             };
             if output.starts_with("newDocument") {
                 // Same canvas, colour mode, depth and profile, so the pixels need no conversion.
@@ -536,7 +673,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.object",
             "Object Selection",
             [],
-            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false} (point: the Object Finder's object under the point, as hovering previews it)"##,
+            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim, up to one pixel further out on the left and top and two on the right and bottom)"##,
             has_doc,
             object_selection
         ),
@@ -568,4 +705,13 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+mod object_hard_edge_tests;
+#[cfg(test)]
+mod object_transparent_layer_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod object_mode_refusal_tests;
+#[cfg(test)]
+mod quick_group_target_tests;

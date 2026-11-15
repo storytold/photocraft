@@ -100,6 +100,11 @@ choice!(
     /// pointer (Photoshop), or erase with the current brush while dragging (Krita, Paint).
     RightClickPaint { BrushPicker = "brushPicker", Erase = "erase" } default BrushPicker
 );
+choice!(
+    /// Windows: which pen input supplies pressure. Windows Ink is the default; WinTab needs
+    /// Windows Ink turned off in the tablet driver's utility and a restart.
+    TabletInput { WindowsInk = "windowsInk", WinTab = "winTab" } default WindowsInk
+);
 choice!(OtherCursor { Standard = "standard", Precise = "precise" } default Standard);
 choice!(CheckerSize { None = "none", Small = "small", Medium = "medium", Large = "large" } default Medium);
 choice!(CheckerColors { Light = "light", Medium = "medium", Dark = "dark", Red = "red", Orange = "orange", Green = "green", Blue = "blue", Purple = "purple", Custom = "custom" } default Light);
@@ -114,6 +119,11 @@ choice!(
     /// (Hirakawa–Parks) keeps edges cleanest, Malvar–He–Cutler is sharp and fast, bilinear is the
     /// fastest and softest. Photoshop's Camera Raw has no such choice.
     RawDemosaic { Ahd = "ahd", Mhc = "mhc", Bilinear = "bilinear" } default Ahd
+);
+choice!(
+    /// MCP › When PhotoCraft Is Closed: what `photocraft-cli mcp` does when an
+    /// agent calls a tool and the app isn't running.
+    WhenAppClosed { Launch = "launch", Headless = "headless", Error = "error" } default Launch
 );
 
 impl Unit {
@@ -183,6 +193,78 @@ impl Unit {
         let unit = if suffix.is_empty() { None } else { Some(Unit::from_suffix(suffix)?) };
         Some((v, unit))
     }
+    /// A length typed as Photoshop's numeric fields take arithmetic (#10440): lengths and numbers
+    /// joined by `+`, `-`, `*` and `/`, e.g. "100% / 3", "100% - 50px", "1in + 10", "2 * 50 px".
+    /// `*` and `/` bind tighter, and `−` (U+2212) is a minus. A number without a unit added or
+    /// subtracted takes the first operand's unit (Photoshop: "1in + 10" is 11 in), or `default`
+    /// when the first has none; one multiplied or divided is a plain number. `to_px` converts a
+    /// value in a unit. `None` when the text is over 1024 bytes (the numeric fields' cap) or isn't
+    /// such an expression, multiplies two lengths, divides by a length or by zero, or the result
+    /// isn't finite.
+    pub fn eval_length(text: &str, default: Unit, to_px: impl Fn(f64, Unit) -> f64) -> Option<f64> {
+        if text.len() > 1024 {
+            return None;
+        }
+        let text = text.replace('−', "-");
+        // Tokens: operators, and operands (a number with an optional unit suffix).
+        let mut ops = Vec::new();
+        let mut operands: Vec<(f64, Option<Unit>)> = Vec::new();
+        let mut rest = text.trim();
+        let mut want_operand = true;
+        while !rest.is_empty() {
+            if want_operand {
+                let num_end = rest
+                    .char_indices()
+                    .find(|&(i, c)| !(c.is_ascii_digit() || matches!(c, '.' | ',') || (i == 0 && matches!(c, '-' | '+'))))
+                    .map_or(rest.len(), |(i, _)| i);
+                let after = &rest[num_end..];
+                let unit_end = after.find(['+', '-', '*', '/']).unwrap_or(after.len());
+                let (v, unit) = Unit::parse_length(&rest[..num_end + unit_end])?;
+                operands.push((v, unit));
+                rest = after[unit_end..].trim_start();
+                want_operand = false;
+            } else {
+                let op = rest.chars().next()?;
+                if !matches!(op, '+' | '-' | '*' | '/') {
+                    return None;
+                }
+                ops.push(op);
+                rest = rest[1..].trim_start();
+                want_operand = true;
+            }
+        }
+        if want_operand || operands.is_empty() {
+            return None;
+        }
+        let first_unit = operands[0].1.unwrap_or(default);
+        // Fold the products and quotients into terms: (sum of px for unit factors, scalar, has a unit).
+        let mut terms: Vec<(char, f64, Option<Unit>)> = Vec::new();
+        let (mut sign, mut value, mut unit) = ('+', operands[0].0, operands[0].1);
+        for (op, (v, u)) in ops.iter().zip(operands.iter().skip(1)) {
+            match op {
+                '*' => {
+                    if unit.is_some() && u.is_some() {
+                        return None;
+                    }
+                    value *= v;
+                    unit = unit.or(*u);
+                }
+                '/' => {
+                    if u.is_some() || *v == 0.0 {
+                        return None;
+                    }
+                    value /= v;
+                }
+                _ => {
+                    terms.push((sign, value, unit));
+                    (sign, value, unit) = (*op, *v, *u);
+                }
+            }
+        }
+        terms.push((sign, value, unit));
+        let px: f64 = terms.iter().map(|&(s, v, u)| if s == '-' { -1.0 } else { 1.0 } * to_px(v, u.unwrap_or(first_unit))).sum();
+        px.is_finite().then_some(px)
+    }
     /// The unit a typed suffix names, in any case: `px`, `in` or `"`, `cm`, `mm`, `pt`, `pc` or
     /// `pica`, `%`, and their long forms (`pixels`, `inches`, `centimetres`…). The one table every
     /// length field reads.
@@ -222,6 +304,10 @@ pub struct General {
     pub export_clipboard: bool,
     pub resize_image_during_place: bool,
     pub always_create_smart_objects_when_placing: bool,
+    /// Place files without opening Free Transform on them (#8492). Only the interactive place
+    /// (File ▸ Place, canvas drops) opens Free Transform; `file.placeEmbedded`/`file.placeLinked`
+    /// run with a `path` (actions, scripts, automation) never do, so this doesn't affect them.
+    pub skip_transform_when_placing: bool,
     /// Scroll wheel zooms instead of panning.
     pub zoom_with_scroll_wheel: bool,
     /// Wheel zoom eases over the frames of a notch; off, a notch is one instant ×1.1 step.
@@ -242,6 +328,7 @@ impl Default for General {
             export_clipboard: true,
             resize_image_during_place: true,
             always_create_smart_objects_when_placing: true,
+            skip_transform_when_placing: false,
             zoom_with_scroll_wheel: false,
             animated_zoom: true,
             zoom_resizes_windows: false,
@@ -287,9 +374,6 @@ pub struct Interface {
     /// objects in a large document stay visible (Photoshop's Clip Thumbnails to Layer Bounds; #4281).
     pub clip_thumbnails_to_layer_bounds: bool,
     pub show_tooltips: bool,
-    /// Menus, popups and collapsing sections fade and slide, and scroll areas glide to a new
-    /// position. Off, everything changes at once (a reduced-motion mode; #1218, #3273).
-    pub enable_animations: bool,
     /// Move tool drags show only the layer's outline and an arrow, leaving its pixels in place
     /// until release. Off (the default), the pixels follow the pointer live inside the outline.
     pub show_bounding_box_when_dragging_layer: bool,
@@ -330,7 +414,6 @@ impl Default for Interface {
             show_menu_colors: true,
             clip_thumbnails_to_layer_bounds: false,
             show_tooltips: true,
-            enable_animations: true,
             show_bounding_box_when_dragging_layer: false,
             system_title_bar: false,
             show_file_name_in_title: true,
@@ -396,6 +479,9 @@ pub struct Tools {
     pub right_click_with_painting_tools: RightClickPaint,
     /// Pen tablets: pressure, tilt and rotation reach the brush (off: a pen paints like a mouse).
     pub use_tablet_pressure: bool,
+    /// Windows: which pen input supplies pressure. Windows Ink is the default; WinTab needs
+    /// Windows Ink turned off in the tablet driver's utility and a restart.
+    pub tablet_input: TabletInput,
     /// Pen pressure response: `[input, output]` control points in 0..1 that the pen's pressure
     /// passes through before it reaches any brush ([`PressureCurve`]). Linear by default.
     pub pressure_curve: Vec<[f32; 2]>,
@@ -423,6 +509,7 @@ impl Default for Tools {
             double_click_layer_mask_launches_select_and_mask: true,
             right_click_with_painting_tools: RightClickPaint::BrushPicker,
             use_tablet_pressure: true,
+            tablet_input: TabletInput::WindowsInk,
             pressure_curve: vec![[0.0, 0.0], [1.0, 1.0]],
             bundle_nudges: true,
             nudge_bundle_pause_ms: 1000,
@@ -438,6 +525,8 @@ pub use photocraft_paint::ResponseCurve as PressureCurve;
 mod cmds;
 mod customize;
 mod files;
+#[cfg(test)]
+mod menus_hideable_tests;
 mod shortcuts;
 mod store;
 mod validate;
@@ -446,8 +535,8 @@ pub use cmds::specs;
 #[cfg(test)]
 pub(crate) use files::write_files_atomically;
 pub use shortcuts::{
-    ALTERNATE_SHORTCUTS, BindKind, MAX_ALTERNATES, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts, default_alternates, normalize_shortcut,
-    reserved_shortcut,
+    ALTERNATE_SHORTCUTS, BindKind, MAX_ALTERNATES, MIXER_BRUSH_COMMANDS, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts, default_alternates,
+    normalize_shortcut, reserved_shortcut,
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
@@ -488,6 +577,12 @@ pub struct FileHandling {
     pub recover_on_launch: bool,
     /// Open a file with no ICC profile as untagged even when its EXIF ColorSpace tag says sRGB.
     pub ignore_exif_profile_tag: bool,
+    /// PDF import resolution in DPI; the document keeps it so the page's print size is preserved.
+    pub pdf_dpi: f32,
+    /// The first PDF page to import (1-based; 0 imports from the first page).
+    pub pdf_first_page: u32,
+    /// The last PDF page to import (1-based; 0 imports to the last page).
+    pub pdf_last_page: u32,
     /// Most renderers write ACEScg EXRs without stating the colour space. With this on, an EXR
     /// that would otherwise open as linear sRGB opens as ACEScg (AP1, linear) instead.
     pub exr_aces_cg: bool,
@@ -525,6 +620,9 @@ impl Default for FileHandling {
             autosave_minutes: 10,
             recover_on_launch: true,
             ignore_exif_profile_tag: false,
+            pdf_dpi: 300.0,
+            pdf_first_page: 0,
+            pdf_last_page: 0,
             exr_aces_cg: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
@@ -548,6 +646,10 @@ pub struct Export {
     pub webp_quality: u32,
     pub metadata: ExportMetadata,
     pub convert_to_srgb: bool,
+    /// The folder the last successful export through a save dialog went to (Export As, Quick
+    /// Export, Save for Web, ...). The next export dialog starts there; empty until the first
+    /// export, and ignored while the folder no longer exists (#10192).
+    pub last_folder: String,
 }
 
 impl Default for Export {
@@ -560,6 +662,7 @@ impl Default for Export {
             webp_quality: 85,
             metadata: ExportMetadata::Copyright,
             convert_to_srgb: true,
+            last_folder: String::new(),
         }
     }
 }
@@ -828,7 +931,10 @@ impl TransparencyAndGamut {
 pub struct UnitsAndRulers {
     pub rulers: Unit,
     pub type_units: TypeUnit,
+    /// Column Size › Width in points: Image Size and Canvas Size's Columns width unit
+    /// (`n` columns are `n × column_width + (n − 1) × gutter`).
     pub column_width: f64,
+    /// Column Size › Gutter in points, the space between columns.
     pub gutter: f64,
     pub print_resolution: f64,
     pub screen_resolution: f64,
@@ -1070,36 +1176,129 @@ impl Default for RawDefaults {
     }
 }
 
+/// Before the agents switch, a Control Port other than 0 started the control server by itself.
+/// A saved `integrations` section like that keeps its connection: the port now means "on, at this
+/// port". Every reader of the saved section applies this (the app, its launch read, and
+/// `photocraft-cli mcp`), so they agree.
+pub fn migrate_integrations(section: &mut Value) {
+    if let Some(integrations) = section.as_object_mut()
+        && !integrations.contains_key("connectAgents")
+        && integrations.get("controlPort").and_then(Value::as_u64).is_some_and(|p| (1..=65535).contains(&p))
+    {
+        integrations.insert("connectAgents".into(), json!(true));
+    }
+}
+
+/// A saved `integrations` section read as the app's preference load reads it: migrated, and
+/// leniently (a value of the wrong type keeps its default, the rest still loads). The desktop
+/// app's launch read and `photocraft-cli mcp` use it, so a bad value can't reset, say, When
+/// PhotoCraft Is Closed for them alone.
+pub fn read_integrations_section(mut section: Value) -> Integrations {
+    migrate_integrations(&mut section);
+    read_section(section)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Integrations {
     /// Allow agents to drive the app over the loopback control channel / MCP bridge.
     pub allow_agent_control: bool,
-    /// Default control port (0 = only when `--control` is given).
+    /// Port agents connect to (0 = any free port, published in the connection file).
     pub control_port: u32,
+    /// The folder automation may read from when no `--automation-read-root` is given (empty =
+    /// none). Applied at once while agents are connected.
+    pub read_root: String,
+    /// The folder automation may write to when no `--automation-write-root` is given (empty =
+    /// none). Applied at once while agents are connected.
+    pub write_root: String,
+    /// Without the suite's `AI-MCP` flag, agents may connect: the desktop app serves the control
+    /// protocol on loopback for `photocraft-cli mcp` without `--control`, and starts or stops it at
+    /// once when this changes (off by default; launch flags still win). Set from a saved Control
+    /// Port ([`migrate_integrations`]); not in the dialog. With the flag the ArtCraft Launcher's
+    /// switch decides instead. After the older fields, so a
+    /// section saved as a list still reads them where they were.
+    pub connect_agents: bool,
+    /// What `photocraft-cli mcp` does while agents may use the app but it is closed.
+    pub when_app_closed: WhenAppClosed,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0 }
+        Self {
+            allow_agent_control: true,
+            control_port: 0,
+            read_root: String::new(),
+            write_root: String::new(),
+            connect_agents: false,
+            when_app_closed: WhenAppClosed::Launch,
+        }
     }
 }
 
-/// The History panel's History Options… (not part of Edit › Preferences in Photoshop either).
-/// Photoshop's snapshot options come with #3634.
+choice!(
+    /// Playback Options › Performance: how fast a person's Play runs an action's steps.
+    PlaybackPerformance { Accelerated = "accelerated", StepByStep = "step", Pause = "pause" } default Accelerated
+);
+
+/// Actions panel Playback Options. These are saved independently of an action library.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Actions {
+    pub create_single_history_state: bool,
+    /// Accelerated, Step by Step or Pause For. Agents and headless playback always run at once.
+    pub performance: PlaybackPerformance,
+    /// Pause For's whole seconds between steps, 1 to 60 (the dialog keeps it while another mode
+    /// is chosen, as the reference application does).
+    pub pause_seconds: u8,
+}
+
+impl Default for Actions {
+    fn default() -> Self {
+        Self { create_single_history_state: true, performance: PlaybackPerformance::Accelerated, pause_seconds: 1 }
+    }
+}
+
+impl Actions {
+    /// Shortest and longest Pause For, in seconds.
+    pub const PAUSE_SECONDS: std::ops::RangeInclusive<u8> = 1..=60;
+
+    /// Pause For's seconds, within [`Self::PAUSE_SECONDS`] also when a hand-edited file holds
+    /// another number.
+    pub fn pause_seconds(&self) -> u8 {
+        self.pause_seconds.clamp(*Self::PAUSE_SECONDS.start(), *Self::PAUSE_SECONDS.end())
+    }
+}
+
+/// The History panel's History Options… (not part of Edit › Preferences in Photoshop either),
+/// in the dialog's order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HistoryOptions {
+    /// Automatically Create First Snapshot: a new or opened document starts with a snapshot of
+    /// itself, named after it (the History panel's top row).
+    pub automatically_create_first_snapshot: bool,
+    /// Automatically Create New Snapshot When Saving: every save of the document (not a copy)
+    /// adds a snapshot named with the time of the save.
+    pub automatically_create_new_snapshot_when_saving: bool,
     /// Allow Non-Linear History: editing after selecting an earlier state keeps the later
     /// states (the new step is appended at the end), and deleting a state deletes only it.
     pub allow_non_linear_history: bool,
+    /// Show New Snapshot Dialog by Default: a plain click on the History panel's camera button
+    /// opens New Snapshot (otherwise only ⌥-click does).
+    pub show_new_snapshot_dialog_by_default: bool,
     /// Make Layer Visibility Changes Undoable: showing or hiding a layer is a history state.
     pub make_layer_visibility_changes_undoable: bool,
 }
 
 impl Default for HistoryOptions {
     fn default() -> Self {
-        Self { allow_non_linear_history: false, make_layer_visibility_changes_undoable: true }
+        Self {
+            automatically_create_first_snapshot: true,
+            automatically_create_new_snapshot_when_saving: false,
+            allow_non_linear_history: false,
+            show_new_snapshot_dialog_by_default: false,
+            make_layer_visibility_changes_undoable: true,
+        }
     }
 }
 
@@ -1113,10 +1312,12 @@ pub struct MenuCustomization {
 }
 
 impl MenuCustomization {
-    /// False for the items Edit › Menus can't hide (#5096): the way back into this dialog
-    /// (Edit › Menus, Edit › Keyboard Shortcuts), Preferences, Save, Save As and Exit.
+    /// False for the items Edit › Menus can't hide, as measured in the reference application
+    /// (#14335): File › Clear Recent File List, Close, Save, Save As…, Save a Copy… and Exit, and
+    /// Edit › Menus… (the way back into this dialog). Edit › Keyboard Shortcuts…, the Preferences
+    /// pages and the Help items can be hidden; any item can still be coloured.
     pub fn hideable(id: &str) -> bool {
-        !matches!(id, "edit.menus" | "edit.keyboardShortcuts" | "file.save" | "file.saveAs" | "file.exit") && !id.starts_with("edit.preferences")
+        !matches!(id, "file.clearRecent" | "file.close" | "file.save" | "file.saveAs" | "file.saveACopy" | "file.exit" | "edit.menus")
     }
 
     /// Whether the menus leave `id` out. Items that can't be hidden stay shown even when an
@@ -1126,12 +1327,129 @@ impl MenuCustomization {
     }
 }
 
-/// Edit › Toolbar: hidden tools and a custom order (tool names as in `ui.set {tool}`).
+/// Edit › Toolbar: the toolbar's group layout (tool names as in `ui.set {tool}`), plus the older
+/// flat `hidden` list and the unused `order` list.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ToolbarCustomization {
+    /// Tools taken off the toolbar one by one (the Keyboard Shortcuts dialog's Toolbar tab). The
+    /// layout moves each into `extras` as its own group.
     pub hidden: Vec<String>,
     pub order: Vec<String>,
+    /// The toolbar's slots in order, each a group of tools in flyout order. `None` is the
+    /// default layout ([`DEFAULT_TOOLBAR`]).
+    pub toolbar: Option<Vec<Vec<String>>>,
+    /// Extra Tools: groups that get no slot of their own. Like `toolbar`, `null` is the default
+    /// (stored as such, so `prefs.reset` of one path finds its default).
+    pub extras: Option<Vec<Vec<String>>>,
+}
+
+/// The default toolbar layout: one group per slot, in toolbar order (the same as the toolbar's
+/// `TOOL_SECTIONS` read slot by slot).
+pub const DEFAULT_TOOLBAR: &[&[&str]] = &[
+    &["Move", "Artboard"],
+    &["RectMarquee", "EllipseMarquee", "SingleRowMarquee", "SingleColumnMarquee"],
+    &["Lasso", "PolygonLasso", "MagneticLasso"],
+    &["ObjectSelection", "QuickSelection", "MagicWand"],
+    &["Crop", "PerspectiveCrop", "Slice", "SliceSelect"],
+    &["Frame"],
+    &["Eyedropper", "ColorSampler", "Ruler", "Note", "Count"],
+    &["SpotHealing", "Remove", "Healing", "Patch", "ContentAwareMove", "RedEye"],
+    &["Brush", "Pencil", "ColorReplacement", "MixerBrush"],
+    &["CloneStamp", "PatternStamp"],
+    &["HistoryBrush", "ArtHistoryBrush"],
+    &["Eraser", "BackgroundEraser", "MagicEraser"],
+    &["Gradient", "PaintBucket"],
+    &["Blur", "Sharpen", "Smudge"],
+    &["Dodge", "Burn", "Sponge"],
+    &["Pen", "FreeformPen", "CurvaturePen", "AddAnchorPoint", "DeleteAnchorPoint", "ConvertPoint"],
+    &["Type", "VerticalType", "VerticalTypeMask", "HorizontalTypeMask"],
+    &["PathSelection", "DirectSelection"],
+    &["Rectangle", "EllipseShape", "Triangle", "Polygon", "Star", "Line", "CustomShape"],
+    &["Hand", "RotateView"],
+    &["Zoom"],
+];
+
+/// A toolbar layout with every name resolved: the slots' groups and the Extra Tools groups.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolbarLayout {
+    pub toolbar: Vec<Vec<String>>,
+    pub extras: Vec<Vec<String>>,
+}
+
+impl ToolbarCustomization {
+    /// The tool `name` means, as its canonical name (the `tools.select.<tool>` id with a capital
+    /// first letter, which is the toolbar's `Tool` name). Matches like `ui.set {tool}`: case,
+    /// spaces, `_` and `-` don't count, a marquee may drop "Marquee", and the tool's own name
+    /// works with or without "Tool". `None` for a name that isn't a tool.
+    pub fn tool_name(name: &str) -> Option<String> {
+        let canonical = |key: &str| -> String { key.chars().take(1).flat_map(char::to_uppercase).chain(key.chars().skip(1)).collect() };
+        // Stored layouts hold canonical names: find those without allocating (the toolbar
+        // resolves its layout every frame).
+        if let Some(key) = crate::shell_commands::TOOLS.iter().filter_map(|(id, _, _)| id.strip_prefix("tools.select.")).find(|k| k.eq_ignore_ascii_case(name))
+        {
+            return Some(canonical(key));
+        }
+        let squash = |s: &str| s.to_ascii_lowercase().replace([' ', '_', '-'], "");
+        let n = squash(name);
+        if n.is_empty() {
+            return None;
+        }
+        crate::shell_commands::TOOLS.iter().find_map(|(id, label, _)| {
+            let key = id.strip_prefix("tools.select.")?;
+            let k = key.to_ascii_lowercase();
+            let label = squash(label);
+            let hit = n == k || n == k.replace("marquee", "") || n == label || Some(n.as_str()) == label.strip_suffix("tool");
+            hit.then(|| canonical(key))
+        })
+    }
+
+    /// The layout the toolbar shows. Unknown names are skipped and a tool listed twice keeps its
+    /// first place (the toolbar before the extras); empty groups are dropped. Each `hidden` tool
+    /// leaves its toolbar group for a group of its own in the extras, in toolbar order, and a
+    /// tool listed nowhere is added to the extras as its own group.
+    pub fn layout(&self) -> ToolbarLayout {
+        let hidden: Vec<String> = self.hidden.iter().filter_map(|h| Self::tool_name(h)).collect();
+        let stored = match &self.toolbar {
+            Some(groups) => groups.clone(),
+            None => DEFAULT_TOOLBAR.iter().map(|g| g.iter().map(|t| (*t).to_string()).collect()).collect(),
+        };
+        // `moved` collects the hidden tools when given; without it they stay in their group.
+        fn resolve(groups: &[Vec<String>], seen: &mut Vec<String>, hidden: &[String], mut moved: Option<&mut Vec<Vec<String>>>) -> Vec<Vec<String>> {
+            let mut out = Vec::new();
+            for group in groups {
+                let mut tools = Vec::new();
+                for name in group.iter().filter_map(|n| ToolbarCustomization::tool_name(n)) {
+                    if seen.contains(&name) {
+                        continue;
+                    }
+                    seen.push(name.clone());
+                    match moved.as_deref_mut() {
+                        Some(moved) if hidden.contains(&name) => moved.push(vec![name]),
+                        _ => tools.push(name),
+                    }
+                }
+                if !tools.is_empty() {
+                    out.push(tools);
+                }
+            }
+            out
+        }
+        let mut seen: Vec<String> = Vec::new();
+        let mut moved = Vec::new();
+        let toolbar = resolve(&stored, &mut seen, &hidden, Some(&mut moved));
+        let mut extras = resolve(self.extras.as_deref().unwrap_or_default(), &mut seen, &hidden, None);
+        extras.append(&mut moved);
+        for (id, _, _) in crate::shell_commands::TOOLS {
+            if let Some(name) = Self::tool_name(id.trim_start_matches("tools.select."))
+                && !seen.contains(&name)
+            {
+                seen.push(name.clone());
+                extras.push(vec![name]);
+            }
+        }
+        ToolbarLayout { toolbar, extras }
+    }
 }
 
 /// Layer Mask Display Options (double-click the layer mask's row in the Channels panel, or Mask
@@ -1169,6 +1487,7 @@ impl LayerMaskOverlay {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Preferences {
+    pub actions: Actions,
     pub general: General,
     pub interface: Interface,
     pub workspace: Workspace,
@@ -1241,6 +1560,13 @@ pub struct Preferences {
     /// Last selected tool, restored at launch. A tool-name string owned and validated by the
     /// shell; null in older files. Kept separate from tool options so neither overwrites the other.
     pub selected_tool: Value,
+    /// Foreground/background swatches for pixels and masks and exact CMYK picks, restored by the shell at launch.
+    /// Null in older files, which retain the default black/white pixel colours.
+    pub tool_colors: Value,
+    /// The tools used last, most recent first, restored at launch so each toolbar slot shows the
+    /// tool it was left on and each tool key brings it back, as in Photoshop (#3569). Tool-name
+    /// strings owned and validated by the shell; null in older files.
+    pub group_tools: Value,
     /// View › Extras, the View › Show items (Pixel Grid, Grid, Guides, …) and the View › Snap To
     /// targets that differ from their defaults, saved as the user toggles them and restored at
     /// launch, as Photoshop keeps them between sessions (#3762). JSON owned by the shell.
@@ -1267,6 +1593,11 @@ impl Preferences {
 
     /// Set a value by dotted path, validating it. Unknown paths and wrong types are errors.
     pub fn set(&mut self, path: &str, value: Value) -> std::result::Result<(), String> {
+        // `set_path` skips empty segments, so `.alternateShortcuts.x` would reach the typed state
+        // below the per-path validators above; refuse such paths instead.
+        if path.split('.').any(str::is_empty) {
+            return Err(format!("invalid preference path `{path}`"));
+        }
         if path == "alternateShortcuts" {
             let obj = value.as_object().ok_or("`alternateShortcuts` maps command ids to lists of shortcuts")?;
             let mut map = BTreeMap::new();
@@ -1361,7 +1692,8 @@ impl Preferences {
     pub fn alternates(&self, id: &str, primary: Option<&str>) -> Vec<String> {
         let main = primary.and_then(normalize_shortcut);
         let keys: Vec<String> = match self.alternate_shortcuts.get(id) {
-            Some(list) => list.iter().filter_map(|s| normalize_shortcut(s)).collect(),
+            // A hand-edited settings file can hold more than `alternate_keys` admits.
+            Some(list) => list.iter().take(MAX_ALTERNATES).filter_map(|s| normalize_shortcut(s)).collect(),
             None => default_alternates(id).filter_map(normalize_shortcut).collect(),
         };
         let mut out: Vec<String> = Vec::with_capacity(keys.len());
@@ -1484,6 +1816,16 @@ impl Session {
             // A partially migrated file may already contain a newer theme selection (#5139).
             interface.entry(slot).or_insert_with(|| json!(theme.name()));
         }
+        // The Serbian interface catalog was `sr`; since the catalogs moved to craft-i18n it is
+        // `sr-latn`, the same Latin text. A saved `sr` loads as `sr-latn` and is saved that way next.
+        if let Some(language) = v.get_mut("interface").and_then(|interface| interface.get_mut("language"))
+            && language.as_str().is_some_and(|code| code.eq_ignore_ascii_case("sr"))
+        {
+            *language = json!("sr-latn");
+        }
+        if let Some(integrations) = v.get_mut("integrations") {
+            migrate_integrations(integrations);
+        }
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));
         let mut invalid = Vec::new();
@@ -1494,7 +1836,15 @@ impl Session {
         prefs.performance.effect_cache_mb = accepted_effect_cache_mb(prefs.performance.effect_cache_mb, SMALL_ADDRESS_SPACE);
         if let Some(c) = color {
             self.color.settings = read_lenient(c, &["colorSettings"], &mut invalid);
+            // A number outside 0..MAX reads, but `validate_settings` would then refuse every
+            // later Color Settings edit: reset it like an unreadable value.
+            let gain = self.color.settings.spot_dot_gain;
+            if !(gain.is_finite() && (0.0..=photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN).contains(&gain)) {
+                invalid.push(InvalidPref { keys: vec!["colorSettings".into(), "spotDotGain".into()], value: json!(gain) });
+                self.color.settings.spot_dot_gain = photocraft_compose::multichannel::SPOT_DOT_GAIN;
+            }
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
+            photocraft_compose::multichannel::set_spot_dot_gain(self.color.settings.spot_dot_gain);
         }
         self.prefs.edit(|p| *p = prefs);
         if let Some(v) = presets {
@@ -1563,6 +1913,9 @@ impl Session {
             }
         } else {
             next.set(path, value)?;
+        }
+        if next.actions.create_single_history_state != self.prefs().actions.create_single_history_state && crate::actions_cmds::history_policy_in_use(self) {
+            return Err("cannot change action history settings during playback".into());
         }
         // Old `prefs.set interface.theme` clients (by path or inside a section object) still
         // select a visible theme.
