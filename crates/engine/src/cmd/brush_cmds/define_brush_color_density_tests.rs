@@ -251,3 +251,77 @@ fn zero_alpha_and_zero_selection_skip_hidden_colour() {
         }
     }
 }
+
+#[test]
+fn sampled_trcs_cannot_hide_non_finite_contributing_channels() {
+    let mut profile = Builtin::Srgb.profile().clone();
+    profile.trc = profile.trc.take().map(|curves| curves.map(|curve| craft_cms::Curve::Table(curve.sample(256))));
+    // Reset the built-in's encoded bytes and cache key after replacing its curves.
+    let icc = profile.with_encoded_bytes().to_bytes();
+    let parsed = craft_cms::Profile::parse(&icc).unwrap();
+    assert!(parsed.trc.as_ref().unwrap().iter().all(|curve| matches!(curve, craft_cms::Curve::Table(_))));
+    let options = TransformOptions { intent: Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    let gray = craft_cms::cached(&parsed, Builtin::SGray.profile(), options).unwrap();
+    let mut converted = [0.0f32; 16];
+    gray.eval(&[f32::INFINITY, 0.0, 0.0], &mut converted).unwrap();
+    assert!(converted[0].is_finite(), "the sampled-TRC fixture must expose clamping before the command's gray check");
+
+    for command in COMMANDS {
+        for selected in [false, true] {
+            let mut finite = rgb_source(32, [1.0, 0.0, 0.0, 1.0]);
+            finite
+                .edit("Assign sampled sRGB", |doc, _| {
+                    doc.icc_profile = Some(icc.clone());
+                    Ok(())
+                })
+                .unwrap();
+            assert!((define_square(&mut finite, command, selected) - 0.49).abs() <= 0.03);
+
+            for rgba in [
+                [f32::INFINITY, 0.0, 0.0, 1.0],
+                [0.0, f32::INFINITY, 0.0, 1.0],
+                [0.0, 0.0, f32::INFINITY, 1.0],
+                [0.0, 0.0, 0.0, f32::INFINITY],
+                [f32::NAN, 0.0, 0.0, 1.0],
+                [f32::NEG_INFINITY, 0.0, 0.0, 1.0],
+            ] {
+                let mut s = rgb_source(32, rgba);
+                s.edit("Assign sampled sRGB", |doc, _| {
+                    doc.icc_profile = Some(icc.clone());
+                    Ok(())
+                })
+                .unwrap();
+                if selected {
+                    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 24, "height": 24})).unwrap();
+                }
+                // An accepted invalid source would replace this existing preset.
+                s.execute("brush.presets.save", json!({"name": "Kept preset"})).unwrap();
+                let active = s.active().unwrap().active_layer.unwrap();
+                let stored = s.active().unwrap().doc.layer(active).unwrap().surface().unwrap().rgba(20, 20).map(f32::to_bits);
+                assert_eq!(stored, rgba.map(f32::to_bits), "non-finite values must reach the source read unchanged");
+                let doc = s.active().unwrap().doc.clone();
+                let history = s.active().unwrap().history.past_len();
+                let brush = s.tools.brush.clone();
+                let presets = s.tools.presets.clone();
+                let current = s.tools.current_preset.clone();
+                let revision = s.tools.brush_rev;
+                let journal = s.journal.clone();
+
+                let error = s.execute(command, json!({"name": "Kept preset"})).unwrap_err();
+
+                assert!(error.to_string().contains("non-finite"), "{command}: {error}");
+                assert!(Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+                assert_eq!(s.active().unwrap().history.past_len(), history);
+                assert_eq!(s.active().unwrap().active_layer, Some(active));
+                assert_eq!(s.active().unwrap().doc.selection.is_some(), selected);
+                assert_eq!(s.active().unwrap().doc.icc_profile.as_ref(), Some(&icc));
+                assert_eq!(s.active().unwrap().doc.layer(active).unwrap().surface().unwrap().rgba(20, 20).map(f32::to_bits), stored);
+                assert_eq!(s.tools.brush, brush);
+                assert_eq!(s.tools.presets, presets);
+                assert_eq!(s.tools.current_preset, current);
+                assert_eq!(s.tools.brush_rev, revision);
+                assert_eq!(s.journal, journal);
+            }
+        }
+    }
+}

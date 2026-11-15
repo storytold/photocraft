@@ -1093,6 +1093,9 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     // multiply is checked too: on a 32-bit target (wasm32) it can overflow where the rest of
     // this command is already fallible.
     let len = w.checked_mul(h).ok_or_else(|| crate::allocation::error("defining a brush from the selection", "requested size overflowed"))?;
+    // Sparse canvases can span huge areas: cap both live dense buffers before reserving either.
+    let mask_bytes = sel.map_or(0, |sel| (sel.channels() as u64).saturating_mul(4));
+    crate::allocation::check_dense(area, 4u64.saturating_add(mask_bytes), "defining a brush from the selection")?;
     let mut v = crate::allocation::filled(len, 0.0, "defining a brush from the selection")?;
     let sc = sel.map_or(1, |sel| sel.channels());
     // A selection mask, when present, is a second buffer of the same size; it must fail gracefully too
@@ -1119,6 +1122,11 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
             let c = surf.rgba(area.x0 + x as i32, area.y0 + y as i32);
             if c[3] == 0.0 {
                 continue;
+            }
+            // A sampled profile curve can clamp infinity to a finite endpoint;
+            // reject contributing invalid source values before the CMS can hide them.
+            if c.iter().any(|channel| !channel.is_finite()) {
+                return Err(bad(cmd, "brush source contains a non-finite colour channel"));
             }
             // Composite over white before the nonlinear gray conversion. The
             // selection scales the resulting density once; alpha is already in it.
