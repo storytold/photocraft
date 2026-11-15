@@ -291,7 +291,7 @@ fn clone_cross_document_matching_color_modes_and_profiles_use_cms() {
                 TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() },
             )
             .unwrap();
-            transform.eval(&native, &mut want);
+            transform.eval(&native, &mut want).unwrap();
         }
         s.execute("paint.cloneStamp", json!({"points": [[48,48]], "size": 8, "hardness": 100})).unwrap();
         let st = s.active().unwrap();
