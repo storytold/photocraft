@@ -87,8 +87,33 @@ impl Default for FrameToolUi {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrameDrag {
-    New { start: [f64; 2], cur: [f64; 2], square: bool, centred: bool, doc: DocId, revision: u64 },
-    Edit { layer: LayerId, doc: DocId, revision: u64, original: Box<Frame>, proposed: Affine, start: [f64; 2], mode: EditMode },
+    New {
+        start: [f64; 2],
+        cur: [f64; 2],
+        square: bool,
+        centred: bool,
+        doc: DocId,
+        revision: u64,
+    },
+    Edit {
+        layer: LayerId,
+        doc: DocId,
+        revision: u64,
+        original: Box<Frame>,
+        proposed: Affine,
+        start: [f64; 2],
+        mode: EditMode,
+    },
+    /// A press inside a frame (`frame`) that holds an image: dragged, the image (`layer`) moves
+    /// and the frame stays (#13878); a click selects both, as before.
+    Content {
+        frame: LayerId,
+        layer: LayerId,
+        doc: DocId,
+        revision: u64,
+        start: [f64; 2],
+        cur: [f64; 2],
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EditMode {
@@ -387,6 +412,20 @@ fn edit_transform(f: &Frame, mode: EditMode, start: [f64; 2], p: [f64; 2], mods:
     }
 }
 fn update_preview(app: &mut PhotocraftApp) {
+    // A frame's image being dragged shows where it moves, as the Move tool's drag does (#13878).
+    if let Some(FrameDrag::Content { layer, doc, revision, start, cur, .. }) = app.ui.frame_tool.drag.as_ref() {
+        let (layer, revision, (dx, dy)) = (*layer, *revision, content_delta(*start, *cur));
+        let shown = app
+            .session
+            .active()
+            .filter(|st| st.doc.id == *doc && st.revision == revision)
+            .and_then(|st| photocraft_engine::layer_multi_cmds::moved(&st.doc, &[layer], dx, dy).ok());
+        app.frame_preview = shown.map(|shown| {
+            let key = app.frame_preview.as_ref().map_or(1, |p| p.key.wrapping_add(1));
+            Preview { doc: std::sync::Arc::new(shown), revision, key }
+        });
+        return;
+    }
     let Some(FrameDrag::Edit { layer, doc, revision, proposed, .. }) = app.ui.frame_tool.drag.as_ref() else { return };
     let Some(st) = app.session.active().filter(|st| st.doc.id == *doc && st.revision == *revision) else {
         app.frame_preview = None;
@@ -586,7 +625,17 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 } else {
                     Target::Both
                 };
+                let content = l.children().and_then(|c| c.first()).map(|c| c.id);
                 select(app, id, t);
+                // Inside a frame with an image: a drag moves the image alone, one "Move" step on
+                // release, and leaves it the active layer (#13878). A click keeps both selected.
+                if t == Target::Both
+                    && let Some(content) = content
+                {
+                    let Some(st) = app.session.active() else { return true };
+                    app.ui.frame_tool.drag = Some(FrameDrag::Content { frame: id, layer: content, doc: st.doc.id, revision: st.revision, start: p, cur: p });
+                    return true;
+                }
                 if t != Target::Frame {
                     // The canvas's own context: preview textures loaded into another never draw.
                     let Some(ctx) = app.frame_tool_ctx.clone() else { return true };
@@ -631,6 +680,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                         *centred = mods.alt;
                     }
                     FrameDrag::Edit { original, proposed, start, mode, .. } => *proposed = edit_transform(original, *mode, *start, [x, y], mods),
+                    FrameDrag::Content { cur, .. } => *cur = [x, y],
                 }
             }
             update_preview(app);
@@ -639,7 +689,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             let Some(d) = app.ui.frame_tool.drag.take() else { return true };
             app.frame_preview = None;
             let (doc, revision) = match &d {
-                FrameDrag::New { doc, revision, .. } | FrameDrag::Edit { doc, revision, .. } => (*doc, *revision),
+                FrameDrag::New { doc, revision, .. } | FrameDrag::Edit { doc, revision, .. } | FrameDrag::Content { doc, revision, .. } => (*doc, *revision),
             };
             if !app.session.active().is_some_and(|st| st.doc.id == doc && st.revision == revision) {
                 return true;
@@ -664,10 +714,26 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                         report(app, r);
                     }
                 }
+                FrameDrag::Content { frame, layer, start, .. } => {
+                    let (dx, dy) = content_delta(start, [x, y]);
+                    if (dx, dy) != (0, 0) {
+                        select(app, frame, Target::Content);
+                        let r = app.run("layer.translate", json!({"layer": layer.0, "dx": dx, "dy": dy}));
+                        report(app, r);
+                    }
+                }
             }
         }
     }
     true
+}
+
+#[cfg(test)]
+mod content_drag_tests;
+/// The whole-pixel move of a frame's image dragged from `start` to `at` (#13878).
+fn content_delta(start: [f64; 2], at: [f64; 2]) -> (i32, i32) {
+    let d = |a: f64, b: f64| (b - a).round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+    (d(start[0], at[0]), d(start[1], at[1]))
 }
 fn paint_path(painter: &egui::Painter, xf: &ViewXform, path: &photocraft_doc::Path, stroke: Stroke) {
     for line in photocraft_vector::flatten::flatten_path(path, 0.5 / f64::from(xf.zoom).max(0.01)) {
