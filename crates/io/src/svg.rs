@@ -24,6 +24,10 @@ use photocraft_raster::Surface;
 
 use crate::{ImportResult, IoError};
 
+mod data_href_validation;
+mod image_integrity;
+mod raster_validation;
+
 /// Hard caps on the memory resvg needs to draw a subtree, checked before it draws: craft-svg's
 /// `tree::draw`, within this crate's peak pixel budget.
 #[cfg(test)]
@@ -376,7 +380,13 @@ fn parse_at_depth<T: Send>(depth: usize, isolated: bool, parse: impl FnOnce(bool
 /// Supplies bounded parsing options to direct resolver tests without changing their existing interface.
 #[cfg(test)]
 fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Options<'static> {
-    options_with_isolation(fontdb, depth_left, false, Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(depth_left, MAX_RASTER_PIXELS))))
+    options_with_isolation(
+        fontdb,
+        depth_left,
+        false,
+        Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(depth_left, MAX_RASTER_PIXELS))),
+        Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS))),
+    )
 }
 
 /// Parse options for an untrusted drawing. `<image href>` resolves only `data:` URLs: a file path
@@ -389,8 +399,15 @@ fn options_with_isolation(
     _depth_left: usize,
     _isolated: bool,
     image_resolver: Arc<craft_svg::tree::ImageResolver>,
+    integrity: Arc<Mutex<image_integrity::Integrity>>,
 ) -> usvg::Options<'static> {
-    usvg::Options { resources_dir: None, image_href_resolver: image_resolver.resolver(), fontdb, font_resolver: font_resolver(), ..usvg::Options::default() }
+    usvg::Options {
+        resources_dir: None,
+        image_href_resolver: image_integrity::wrap(image_resolver.resolver(), integrity),
+        fontdb,
+        font_resolver: font_resolver(),
+        ..usvg::Options::default()
+    }
 }
 
 /// A parsed drawing.
@@ -450,15 +467,18 @@ fn parse_with_image_limit(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Databas
     // the inflated content happened to start with a nested gzip stream.
     let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
     let image_resolver = Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, max_image_pixels)));
+    let integrity = Arc::new(Mutex::new(image_integrity::Integrity::new(max_image_pixels)));
     image_resolver.set_document_depth(depth);
     parse_at_depth(depth, false, |isolated| {
-        let opt = options_with_isolation(fontdb, MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&image_resolver));
-        let tree = guarded_parse(|| craft_svg::tree::parse_text(text, &tree_limits(MAX_XML_DEPTH, max_image_pixels), &opt))?;
+        let opt = options_with_isolation(fontdb, MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&image_resolver), Arc::clone(&integrity));
+        let text = data_href_validation::repair(text, &tree_limits(MAX_XML_DEPTH, max_image_pixels))?;
+        let tree = guarded_parse(|| craft_svg::tree::parse_text(&text, &tree_limits(MAX_XML_DEPTH, max_image_pixels), &opt))?;
         let tree = tree.map_err(svg_parse_error)?;
         // The resolver already rejects each over-budget optional image before decode.
         // Ordinary Open keeps the usable outer drawing, as before the shared-parser
         // migration; strict stored previews enforce completeness in their separate path.
-        Ok(Parsed { tree, fontless_text, image_usage: image_resolver.usage() })
+        let image_usage = integrity.lock().unwrap_or_else(PoisonError::into_inner).usage(image_resolver.usage())?;
+        Ok(Parsed { tree, fontless_text, image_usage })
     })
     .map_err(IoError::from)
 }
@@ -507,6 +527,7 @@ struct ImageBudget {
     strict: bool,
     error: Option<String>,
     resolver: Arc<craft_svg::tree::ImageResolver>,
+    integrity: Arc<Mutex<image_integrity::Integrity>>,
 }
 
 /// Record the first budget or decoding failure seen while usvg resolves images. Resolver
@@ -547,13 +568,15 @@ fn parse_image_bounded_with(
             budget.lock().unwrap_or_else(PoisonError::into_inner).fontless_text = true;
         }
         let resolver = Arc::clone(&budget.lock().unwrap_or_else(PoisonError::into_inner).resolver);
-        let opt = options_with_isolation(fontdb, xml_left, isolated, resolver);
+        let integrity = Arc::clone(&budget.lock().unwrap_or_else(PoisonError::into_inner).integrity);
+        let opt = options_with_isolation(fontdb, xml_left, isolated, resolver, integrity);
         let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
         let limits = tree_limits(xml_left, MAX_RASTER_PIXELS);
-        let tree = guarded_parse(|| craft_svg::tree::parse_text(text, &limits, &opt))?;
+        let text = data_href_validation::repair(text, &limits)?;
+        let tree = guarded_parse(|| craft_svg::tree::parse_text(&text, &limits, &opt))?;
         let tree = tree.map_err(svg_parse_error)?;
         let mut counter = budget.lock().unwrap_or_else(PoisonError::into_inner);
-        let usage = counter.resolver.usage();
+        let usage = counter.integrity.lock().unwrap_or_else(PoisonError::into_inner).usage(counter.resolver.usage())?;
         counter.pixels = counter.pixels.saturating_sub(usage.raster_pixels);
         counter.xml_bytes = counter.xml_bytes.saturating_sub(u64::try_from(usage.embedded_svg_bytes).unwrap_or(u64::MAX));
         counter.svg_images = usage.embedded_svg_count as u64;
@@ -690,12 +713,17 @@ fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: f
         strict,
         error: None,
         resolver: Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, max_pixels.min(MAX_RASTER_PIXELS)))),
+        integrity: Arc::new(Mutex::new(image_integrity::Integrity::new(max_pixels))),
     }));
     let tree = parse_image_bounded_with(bytes, budget.clone(), MAX_XML_DEPTH, fonts, false)?;
     let counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let decoded = max_pixels.min(MAX_RASTER_PIXELS).saturating_sub(counter.pixels);
     Ok(ParsedWork {
-        parsed: Parsed { tree, fontless_text: counter.fontless_text, image_usage: counter.resolver.usage() },
+        parsed: Parsed {
+            tree,
+            fontless_text: counter.fontless_text,
+            image_usage: counter.integrity.lock().unwrap_or_else(PoisonError::into_inner).usage(counter.resolver.usage())?,
+        },
         svg_images: counter.svg_images,
         svg_chain: counter.svg_chain,
         decoded,
@@ -1045,7 +1073,7 @@ fn import_parsed_with_limits(
     if doc.layers.is_empty() && !conv.noted.contains(&"raster-panic") {
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
     }
-    Ok(ImportResult { initial_view: None, document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false, initial_view: None })
 }
 
 /// One count-only warning bounds disclosure independently of the number or length of data URLs.

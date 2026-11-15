@@ -41,6 +41,7 @@ fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() 
         strict: false,
         error: None,
         resolver: Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS))),
+        integrity: Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS))),
     }));
     let invalid = image_svg(&embedded_image("image/svg+xml", b"<not-svg/>"));
     parse_image_bounded_with(invalid.as_bytes(), budget.clone(), MAX_XML_DEPTH, inter_only, false).unwrap();

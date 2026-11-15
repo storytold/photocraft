@@ -88,17 +88,34 @@ fn convert_to_layers_unpacks_full_canvas_shapes_in_a_4k_document() {
     s.execute("layer.smartObjects.convertToLayers", json!({"layer": id.0})).unwrap();
 }
 
-/// An SVG with an embedded image the bounded resolver can't read (an unknown MIME type) places
-/// and renders the rest of the drawing, as it did before the bounded render.
+/// Placement cannot silently omit an unreadable embedded image from its smart-object cache.
 #[test]
-fn svg_with_an_unreadable_embedded_image_still_places() {
-    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><image width=\"4\" height=\"4\" href=\"data:image/x-foo,abc\"/><rect x=\"4\" width=\"4\" height=\"8\" fill=\"#ff0000\"/></svg>";
+fn svg_with_an_unreadable_embedded_image_refuses_placement_without_editing() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
-    let placed = crate::file_cmds::place_bytes(&mut s, "Logo.svg", svg.as_bytes().to_vec(), None, &json!({"smartObject": true})).unwrap();
-    let doc = &s.active().unwrap().doc;
-    let LayerContent::Smart(sm) = &doc.layer(LayerId(placed["layer"].as_u64().unwrap())).unwrap().content else { panic!("smart") };
-    assert_eq!(sm.cache.as_ref().unwrap().rgba(6, 4), [1.0, 0.0, 0.0, 1.0]);
+    crate::file_cmds::place_bytes(&mut s, "Existing.svg", SVG.to_vec(), None, &json!({"smartObject": true})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let revision = s.active().unwrap().revision;
+    let history = s.active().unwrap().history.entries();
+    let past = s.active().unwrap().history.past_len();
+    let redo = s.active().unwrap().history.can_redo();
+    let selection = (s.active().unwrap().selected_layers.clone(), s.active().unwrap().active_layer);
+    let journal = s.journal.len();
+    for href in ["data:image/x-foo,abc", "data:image/png;base64,%%%"] {
+        let svg = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><image width=\"4\" height=\"4\" href=\"{href}\"/><rect x=\"4\" width=\"4\" height=\"8\" fill=\"#ff0000\"/></svg>"
+        );
+        assert!(crate::file_cmds::place_bytes(&mut s, "Logo.svg", svg.into_bytes(), None, &json!({"smartObject": true})).is_err(), "{href}");
+        let state = s.active().unwrap();
+        assert_eq!(state.doc, before);
+        assert!(Arc::ptr_eq(&state.doc, &before), "refusal must not replace the document or existing source");
+        assert_eq!(state.revision, revision);
+        assert_eq!(state.history.entries(), history);
+        assert_eq!(state.history.past_len(), past);
+        assert_eq!(state.history.can_redo(), redo);
+        assert_eq!((state.selected_layers.clone(), state.active_layer), selection);
+        assert_eq!(s.journal.len(), journal);
+    }
 }
 
 /// Warp setup needs only the source frame, found with the bounded parse and the exact canvas

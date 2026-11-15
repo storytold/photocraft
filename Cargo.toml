@@ -90,6 +90,11 @@ encoding_rs = { version = "0.8", default-features = false, features = ["alloc"] 
 image = { version = "0.25", default-features = false }
 # Baseline-JPEG decode of lossy DNG tiles (compression 34892).
 zune-core = "0.5"
+# Existing SVG renderer backends; zune-jpeg is used under its MIT licence.
+zune-jpeg = "=0.5.15"
+gif = "=0.14.2"
+image-webp = "=0.2.4"
+data-url = "=0.3.2"
 proptest = "1"
 eframe = { version = "0.37", default-features = false }
 # Without `default_fonts`, which embeds egui's fonts uncompressed: ui-egui ships them deflated

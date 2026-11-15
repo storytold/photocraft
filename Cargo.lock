@@ -5752,7 +5752,10 @@ dependencies = [
  "craft-tiff",
  "craft-xml",
  "crc32fast",
+ "data-url",
  "flate2",
+ "gif",
+ "image-webp",
  "kurbo 0.13.1",
  "lopdf",
  "lzma-rust2",
@@ -5776,6 +5779,7 @@ dependencies = [
  "tiff",
  "ttf-parser",
  "zune-core",
+ "zune-jpeg",
  "zune-jpegxl",
 ]
 

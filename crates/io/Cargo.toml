@@ -48,6 +48,12 @@ craft-tiff = { workspace = true }
 craft-crs = { workspace = true }
 craft-xml = { workspace = true }
 thiserror = { workspace = true }
+# Match the SVG renderer decoder backends when validating optional images.
+zune-core = { workspace = true }
+zune-jpeg = { workspace = true }
+gif = { workspace = true }
+image-webp = { workspace = true }
+data-url = { workspace = true }
 ttf-parser = "0.25.1"
 serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }

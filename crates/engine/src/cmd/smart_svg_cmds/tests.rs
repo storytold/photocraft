@@ -415,15 +415,35 @@ fn original_vector_formats_save_atomically_and_survive_undo_and_persistence() {
     }
 }
 
-/// A save from an external editor whose SVG embeds an image PhotoCraft can't read (here a BMP)
-/// is accepted with that image left out, as placing the same SVG is.
+/// An external editor's save cannot replace complete source artwork with an SVG whose image was omitted.
 #[test]
-fn saved_svg_with_an_unreadable_embedded_image_still_updates() {
+fn saved_svg_with_an_unreadable_embedded_image_refuses_update_without_editing() {
     let (mut s, id) = session(8);
-    let edited = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><image width="4" height="6" href="data:image/bmp,BM"/><rect x="4" width="4" height="6" fill="blue"/></svg>"#;
-    let params = request(&mut s, id, edited);
-    assert_eq!(s.execute(UPDATE, params).unwrap()["updated"], true);
-    assert_eq!(source(&s, id), edited.as_bytes());
+    let before = s.active().unwrap().doc.clone();
+    let original = source(&s, id);
+    let revision = s.active().unwrap().revision;
+    let history = s.active().unwrap().history.entries();
+    let past = s.active().unwrap().history.past_len();
+    let redo = s.active().unwrap().history.can_redo();
+    let selection = (s.active().unwrap().selected_layers.clone(), s.active().unwrap().active_layer);
+    let journal = s.journal.len();
+    for href in ["data:image/bmp,BM", "data:image/png;base64,%%%"] {
+        let edited = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><image width="4" height="6" href="{href}"/><rect x="4" width="4" height="6" fill="blue"/></svg>"#
+        );
+        let params = request(&mut s, id, &edited);
+        assert!(s.execute(UPDATE, params).is_err(), "{href}");
+        let state = s.active().unwrap();
+        assert_eq!(state.doc, before);
+        assert!(Arc::ptr_eq(&state.doc, &before), "refusal must preserve the original smart-object source");
+        assert_eq!(state.revision, revision);
+        assert_eq!(state.history.entries(), history);
+        assert_eq!(state.history.past_len(), past);
+        assert_eq!(state.history.can_redo(), redo);
+        assert_eq!((state.selected_layers.clone(), state.active_layer), selection);
+        assert_eq!(s.journal.len(), journal);
+        assert_eq!(source(&s, id), original);
+    }
 }
 
 /// updateSvg replaces SVG contents only: it never turns an AI, PDF or EPS source into SVG.
