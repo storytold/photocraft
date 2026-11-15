@@ -419,6 +419,21 @@ fn nef_uncompressed(cam: &[[f32; 3]], w: usize, h: usize, preview: Option<Vec<u8
 }
 
 fn nef_uncompressed_with_wb(cam: &[[f32; 3]], w: usize, h: usize, preview: Option<Vec<u8>>, wb: Option<[u32; 2]>) -> Vec<u8> {
+    nef_uncompressed_with_metadata(cam, w, h, preview, wb, None)
+}
+
+fn nef_uncompressed_with_as_shot(cam: &[[f32; 3]], w: usize, h: usize, neutral: [(u32, u32); 3]) -> Vec<u8> {
+    nef_uncompressed_with_metadata(cam, w, h, None, None, Some(neutral))
+}
+
+fn nef_uncompressed_with_metadata(
+    cam: &[[f32; 3]],
+    w: usize,
+    h: usize,
+    preview: Option<Vec<u8>>,
+    wb: Option<[u32; 2]>,
+    as_shot_neutral: Option<[(u32, u32); 3]>,
+) -> Vec<u8> {
     let data = mosaic(cam, w, [0, 1, 1, 2], 0, 4095);
     let mut t = TiffBuilder::default();
     let strip = t.blob(data.iter().flat_map(|v| v.to_le_bytes()).collect());
@@ -437,6 +452,9 @@ fn nef_uncompressed_with_wb(cam: &[[f32; 3]], w: usize, h: usize, preview: Optio
         (33422, Val::Byte(vec![0, 1, 1, 2])),
     ]);
     let mut ifd0 = vec![(271, Val::Ascii("NIKON CORPORATION".into())), (330, Val::Ifds(vec![raw]))];
+    if let Some(neutral) = as_shot_neutral {
+        ifd0.push((50728, Val::Rational(neutral.to_vec())));
+    }
     if let Some([r, b]) = wb {
         let mut note = TiffBuilder::default();
         let note_ifd = note.ifd(vec![(0x000C, Val::Rational(vec![(r, 1024), (b, 1024), (1, 1), (1, 1)]))]);
@@ -545,6 +563,37 @@ fn camera_raw_tuning_keeps_the_default_look_and_applies_user_gains_after_fitting
             assert_eq!(actual.data(), original.data());
         }
     }
+}
+
+#[test]
+fn derived_as_shot_balance_falls_back_when_camera_raw_gains_cross_the_neutral_floor() {
+    use photocraft_io::raw::{RawTuning, import_raw_tuned};
+
+    let (w, h) = (48, 32);
+    let cam = patches(w, h);
+    let bytes_for = |red_num| nef_uncompressed_with_as_shot(&cam, w, h, [(red_num, 100_000), (100_000, 100_000), (100_000, 100_000)]);
+    let pixels = |result: &photocraft_io::ImportResult| photocraft_io::document_to_image(&result.document, &mut Vec::new()).unwrap().data().to_vec();
+
+    let too_small = bytes_for(1);
+    let (small, small_applied) = import_raw_tuned("small.nef", &too_small, &RawTuning::default()).unwrap();
+    assert!(!small_applied, "a neutral below the normalizer floor uses the existing grey-world fallback");
+    assert!(small.warnings.iter().any(|warning| warning.contains("estimated white balance after tuned as-shot multipliers")), "{:?}", small.warnings);
+    assert!(small.warnings.iter().any(|warning| warning.contains("no as-shot white balance") && warning.contains("grey world")), "{:?}", small.warnings);
+
+    let just_above = bytes_for(11);
+    let (untuned, untuned_applied) = import_raw_tuned("near.nef", &just_above, &RawTuning::default()).unwrap();
+    let (crossed, crossed_applied) = import_raw_tuned("near.nef", &just_above, &RawTuning { temperature: 100.0, ..Default::default() }).unwrap();
+    assert!(untuned_applied, "the 1.1e-4 neutral is valid without tuned gains");
+    assert!(!crossed_applied, "the 1.35 red gain makes the derived neutral fall below 1e-4");
+    assert!(crossed.warnings.iter().any(|warning| warning.contains("as-shot white balance without temperature/tint")), "{:?}", crossed.warnings);
+    assert_eq!(pixels(&crossed), pixels(&untuned), "fallback keeps usable AsShotNeutral while omitting only the invalid tuning gains");
+
+    let above_gain_floor = bytes_for(14);
+    let (valid, valid_applied) = import_raw_tuned("valid.nef", &above_gain_floor, &RawTuning { temperature: 100.0, ..Default::default() }).unwrap();
+    let (valid_untuned, _) = import_raw_tuned("valid.nef", &above_gain_floor, &RawTuning::default()).unwrap();
+    assert!(valid_applied, "1.4e-4 remains above the normalizer floor after the maximum red gain");
+    assert!(valid.warnings.iter().any(|warning| warning.contains("temperature +100")), "{:?}", valid.warnings);
+    assert_ne!(pixels(&valid), pixels(&valid_untuned), "valid scaled camera white balance remains applied");
 }
 
 #[test]
