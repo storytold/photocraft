@@ -22,6 +22,29 @@ pub fn satin_lut(c: &Contour) -> Option<Vec<f32>> {
     Some(lut.iter().rev().map(|v| (v - end).abs()).collect())
 }
 
+/// How steeply a Drop Shadow's contour may rise from empty: Photoshop draws `min(contour(v),
+/// SHADOW_RAMP × v)`, so a contour that lifts 0 still fades in over the blurred edge's first
+/// ~30 levels instead of jumping to full strength at the faintest pixel.
+const SHADOW_RAMP: f32 = 25.0 / 3.0;
+
+/// A shadow's coverage transfer: its contour, except that a Drop Shadow fades in from empty.
+/// Photoshop 2026 caps the contour at [`SHADOW_RAMP`] × the blurred coverage. Measured on a
+/// 100 px square, multiply black, distance 0: flat-at-255, flat-at-128, descending and
+/// half-lifted contours, sizes 7 / 20 / 40 / 59 px, spread 0 / 32 / 80 %, anti-aliased on or
+/// off, all within 2 levels of `min(contour, 8.33 v)` (least-squares slope 8.33). A flat-at-255
+/// contour is therefore a solid core with a soft rim, not a solid band out to the effect's
+/// extent. `None` = identity.
+pub fn shadow_lut(c: &Contour, inner: bool) -> Option<Vec<f32>> {
+    let mut l = contour_lut(c)?;
+    if !inner {
+        let last = l.len().saturating_sub(1).max(1) as f32;
+        for (k, v) in l.iter_mut().enumerate() {
+            *v = v.min(SHADOW_RAMP * k as f32 / last);
+        }
+    }
+    Some(l)
+}
+
 /// Interpolated lookup in a 0..=1 table (as the GPU's `lut()`).
 pub(super) fn lut_at(l: &[f32], v: f32) -> f32 {
     let x = v.clamp(0.0, 1.0) * (l.len() - 1) as f32;
@@ -100,13 +123,6 @@ pub(super) fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
             let n = hash_noise(i64::from(x0 + x as i32), i64::from(y0 + y as i32));
             *v = (*v * (1.0 + (n - 0.5) * 2.0 * amount)).clamp(0.0, 1.0);
         }
-    }
-}
-
-fn apply_contour(m: Map, c: &Contour) -> Map {
-    match contour_lut(c) {
-        None => m,
-        Some(l) => m.map(|v| lut_at(&l, v)),
     }
 }
 
@@ -273,7 +289,7 @@ pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bo
     let (r, bw) = spread_split(s.size, s.spread);
     m = dilate(&m, r);
     blur(&mut m, bw);
-    let mut m = apply_contour(m, &s.contour);
+    let mut m = apply_lut(m, shadow_lut(&s.contour, inner));
     noise(&mut m, s.noise, origin.0, origin.1);
     if inner {
         for (v, a) in m.v.iter_mut().zip(&shape.v) {

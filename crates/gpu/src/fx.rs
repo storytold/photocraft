@@ -239,9 +239,6 @@ impl B {
         v.lut = Some(w);
         self.push(v)
     }
-    fn finish(&mut self, a: In, b: Option<In>, invert: bool, contour: &Contour, times_shape: bool, out: usize) {
-        self.finish_lut(a, b, invert, contour_lut(contour), times_shape, out);
-    }
     /// A glow's last step: its contour over the Range, then (centre-source inner glows) the
     /// inverse, then × the shape when inner.
     fn finish_glow(&mut self, a: In, lut: Option<Vec<f32>>, inner: bool, center: bool) {
