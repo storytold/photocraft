@@ -121,11 +121,6 @@ const INNER_ROW_WEIGHT: f64 = 1.005;
 /// a corner pulled out keeps its cell at (½..¾, 0..¼) whole up to a twist of 1.16 and splits it
 /// from 1.22 (a sweep of pulls), and an arc stored as a full mesh splits at 1.39.
 const ACROSS_TWIST_TOL: f64 = 1.2;
-/// The twist along a cell's v side (document px) past which a one-patch full mesh's cell that
-/// splits across splits down too, whatever its whole twist: the reference application's 16-bit
-/// redraws of fish and bulge meshes split their edge columns down from 1.06 px of twist down the
-/// column, where a pulled corner's twist (along its rows) stays under [`ACROSS_TWIST_TOL`].
-const FULL_COLUMN_TWIST_TOL: f64 = 1.0;
 /// The twist along a cell's top edge (its net's first row of quads, document px) past which a
 /// one-patch full mesh's cell that splits across splits down too. Only the top edge counts: with
 /// an inner control point moved 18 px across, the reference application cuts the quarter cell
@@ -956,15 +951,6 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             {
                 across = true;
             }
-            // A full mesh's cell split across splits down too where its twist along its v side passes
-            // FULL_COLUMN_TWIST_TOL (the edge columns of fish and bulge meshes).
-            if rules.force_down && twisty && across && !down {
-                let sub = sub();
-                let (p00, p01) = (sub.at(0, 0), sub.at(0, sub.nv - 1));
-                if sub.twist_along([p01[0] - p00[0], p01[1] - p00[1]]) > FULL_COLUMN_TWIST_TOL + EPS {
-                    down = true;
-                }
-            }
             // Forced down at the second split across: a cell half as wide as a first cell and as tall as one.
             if rules.force_down && across && (u1 - u0 - first / 2.0).abs() < EPS && (v1 - v0 - first).abs() < EPS {
                 down = true;
@@ -1700,11 +1686,26 @@ mod tests {
         assert!(log.iter().any(|s| s.down), "a one-patch mesh splits for any twist");
     }
 
-    /// A full mesh's cell that splits across splits down too where its twist down its v side
-    /// passes FULL_COLUMN_TWIST_TOL, though its whole twist stays under ACROSS_TWIST_TOL and its
-    /// columns are straight.
+    /// A wave ±50 net scaled to 0.9 (the reference application's redraw of it): the cell at
+    /// u 0..⅛, v ⅛..¼ splits down for its top edge's twist, and so does its row sibling; its mirror
+    /// at the bottom, twisted as much down its column but less along its top edge, stays whole
+    /// down.
     #[test]
-    fn a_full_mesh_cell_split_across_splits_down_for_twist_down_its_column() {
+    fn a_scaled_wave_cuts_its_top_side_cells_down_and_not_its_bottom_ones() {
+        let rows = [[83.2, 83.2, 83.2, 83.2], [134.4, 226.56, 42.24, 134.4], [185.6, 277.76, 93.44, 185.6], [236.8, 236.8, 236.8, 236.8]];
+        let p = (0..16).map(|k| [96.0 + 128.0 * (k % 4) as f64 / 3.0, rows[k / 4][k % 4]]).collect();
+        let net = Net { nu: 4, nv: 4, p };
+        let (leaves, _) = cells(&net, true, &one_patch_rules(&net, true));
+        let leaf = |c: Cell| leaves.iter().any(|l| (0..4).all(|k| (l[k] - c[k]).abs() < EPS));
+        assert!(leaf([0.0, 0.0625, 0.125, 0.1875]) && leaf([0.125, 0.1875, 0.125, 0.1875]), "top: cut down");
+        assert!(leaf([0.0, 0.0625, 0.75, 0.875]), "bottom: whole down");
+    }
+
+    /// A full mesh's cell that splits across splits down too where its top edge twists past
+    /// FULL_TOP_TWIST_TOL, though its whole twist stays under ACROSS_TWIST_TOL and its columns are
+    /// straight.
+    #[test]
+    fn a_full_mesh_cell_split_across_splits_down_for_its_top_edge_alone() {
         let at = |u: f64, v: f64| [128.0 * u, 128.0 * v + 20.0 * u * u * v];
         let net = cubic_net(&at);
         let (_, log) = cells(&net, true, &one_patch_rules(&net, true));
