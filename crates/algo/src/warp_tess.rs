@@ -732,7 +732,7 @@ fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
 
 /// A cell's twist as `rules` measure it, with the tolerances it must pass to split (alone, and
 /// when the cell already splits across): `(twist, tolerance, tolerance when across)`.
-fn twist_test(sub: &Net, rules: &Rules, whole: bool, goes_across: bool) -> (f64, f64, f64) {
+fn twist_test(sub: &Net, rules: &Rules, whole: bool, full_height: bool, goes_across: bool) -> (f64, f64, f64) {
     let (p00, p10, p01) = (sub.at(0, 0), sub.at(sub.nu - 1, 0), sub.at(0, sub.nv - 1));
     let (du, dv) = ([p10[0] - p00[0], p10[1] - p00[1]], [p01[0] - p00[0], p01[1] - p00[1]]);
     let first_row = rules.whole_first_row && rules.twist_spreads && whole && !goes_across;
@@ -742,8 +742,10 @@ fn twist_test(sub: &Net, rules: &Rules, whole: bool, goes_across: bool) -> (f64,
         // A quilt's patch: a whole patch splits down for the twist across its rows (the rows' own
         // stretching counts half), in an uneven quilt across its first row of quads only; a
         // smaller cell for the larger of its twist's components along its v side (at 0.9) and
-        // along its u side.
+        // along its u side, or for the latter alone where it is as tall as its patch (the patch
+        // kept whole down).
         (false, _) if first_row => sub.twist_across_rows(du, dv, 2.0, 1),
+        (false, false) if rules.twist_spreads && full_height => sub.twist_along(du),
         (false, _) if rules.twist_spreads && whole && !goes_across => sub.twist_across_rows(du, dv, 2.0, usize::MAX),
         (false, _) if rules.twist_spreads && !whole => (0.9 * sub.twist_along(dv)).max(sub.twist_along(du)),
         (false, _) => sub.twist(),
@@ -799,7 +801,8 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             let goes_across = lu > lv + EPS;
             if twisty {
                 let whole = lu > 1.0 - EPS && lv > 1.0 - EPS;
-                let (tw, tol, across_tol) = twist_test(&net.sub(c), rules, whole, goes_across);
+                let full_height = !whole && lv > 1.0 - EPS;
+                let (tw, tol, across_tol) = twist_test(&net.sub(c), rules, whole, full_height, goes_across);
                 if tw > tol + EPS && (!across || tw > across_tol + EPS) {
                     if goes_across {
                         across = true;
@@ -1595,13 +1598,9 @@ mod tests {
         assert_eq!(spread.difference(&alone).cloned().collect::<Vec<_>>(), halves.map(|c| (c, true, false)), "new splits");
     }
 
-    /// A whole patch of a quilt that doesn't halve evenly splits down for the twist of its first row
-    /// of quads only: a wave's bottom patch (three rows) twists most along its bottom, past the
-    /// whole-net tolerance, and stays whole.
-    #[test]
-    fn an_uneven_quilts_whole_patch_splits_down_by_its_first_row() {
-        // The bottom patch's control points (v from 2/3 to 1 of a 128 px mesh), each moved down by
-        // 5 sin(2 pi (u + 1/8)) sin(pi v).
+    /// A wave's bottom patch: its control points (v from 2/3 to 1 of a 128 px mesh of three rows),
+    /// each moved down by 5 sin(2 pi (u + 1/8)) sin(pi v).
+    fn wave_bottom_patch() -> Net {
         let pi = std::f64::consts::PI;
         let p = (0..4)
             .flat_map(|j| {
@@ -1611,7 +1610,15 @@ mod tests {
                 })
             })
             .collect();
-        let net = Net { nu: 4, nv: 4, p };
+        Net { nu: 4, nv: 4, p }
+    }
+
+    /// A whole patch of a quilt that doesn't halve evenly splits down for the twist of its first row
+    /// of quads only: a wave's bottom patch (three rows) twists most along its bottom, past the
+    /// whole-net tolerance, and stays whole.
+    #[test]
+    fn an_uneven_quilts_whole_patch_splits_down_by_its_first_row() {
+        let net = wave_bottom_patch();
         let (p00, p10, p01) = (net.at(0, 0), net.at(net.nu - 1, 0), net.at(0, net.nv - 1));
         let (du, dv) = ([p10[0] - p00[0], p10[1] - p00[1]], [p01[0] - p00[0], p01[1] - p00[1]]);
         let (all, first) = (net.twist_across_rows(du, dv, 2.0, usize::MAX), net.twist_across_rows(du, dv, 2.0, 1));
@@ -1623,6 +1630,23 @@ mod tests {
         let top = Seams { top: true, ..Seams::default() };
         assert_eq!(whole_down(top), Some(true), "an even quilt's patch splits by its whole net");
         assert_eq!(whole_down(Seams { uneven: true, ..top }), Some(false), "an uneven quilt's patch stays whole");
+    }
+
+    /// A quilt cell as tall as its patch (the patch kept whole down) splits down for its twist
+    /// along its rows alone: the wave's bottom patch splits across into halves, and the right half,
+    /// twisted across its rows past the tolerance, stays whole down, so nothing splits down.
+    #[test]
+    fn a_full_height_quilt_cell_splits_down_by_its_row_twist_alone() {
+        let net = wave_bottom_patch();
+        let half = net.sub([0.5, 1.0, 0.0, 1.0]);
+        let (p00, p10, p01) = (half.at(0, 0), half.at(half.nu - 1, 0), half.at(0, half.nv - 1));
+        let (du, dv) = ([p10[0] - p00[0], p10[1] - p00[1]], [p01[0] - p00[0], p01[1] - p00[1]]);
+        assert!(0.9 * half.twist_along(dv) > TWIST_TOL && half.twist_along(du) < TWIST_TOL, "{} {}", half.twist_along(dv), half.twist_along(du));
+        let (leaves, log) = cells(&net, true, &patch_rules(Seams { top: true, uneven: true, ..Seams::default() }));
+        let splits: Vec<(Cell, bool, bool)> = log.iter().map(|s| (s.cell, s.across, s.down)).collect();
+        assert!(splits.iter().all(|s| !s.2), "{splits:?}");
+        assert!(splits.contains(&([0.5, 1.0, 0.0, 1.0], true, false)), "{splits:?}");
+        assert!(leaves.iter().all(|c| c[2] == 0.0 && c[3] == 1.0), "{leaves:?}");
     }
 
     /// An inner control row counts a little more than the top and bottom rows: a row that bends
