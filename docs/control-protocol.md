@@ -113,7 +113,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
   Both source overlays honor Pattern Preview. Unsupported cross-document mask/alpha-channel gestures have no source overlay. Healing Brush excludes absent source pixels from its solve and paint coverage, independently of alpha reconstructed by the solver.
 - Clone Source X/Y are signed document-pixel offsets, using the existing `source - destination` convention. The panel derives the current preview/stroke pairing without anchoring it on hover. `cloneSource.list` exposes `anchor` (persistent Aligned pairing), `lastAnchor` (most recently used successful pairing), and `offset` (source minus that last reference). Unaligned strokes update the readout while restarting at the sample point each time; failed or canceled strokes do not commit a pairing. To edit the offset shown for a preview, use `cloneSource.set {"offset":[dx,dy],"anchor":[destinationX,destinationY]}`; without an explicit anchor an edit uses the last reported reference, then the existing aligned reference or sample point. Source picking clears both anchors; resetTransform retains them. Null optional coordinates are omitted consistently in mapping and source-document selection. Invalid coordinates, slot indexes, and oversized transformed sampling windows return errors without painting.
 - Brush Pose's `pose.overrideTiltX` and `pose.overrideTiltY` are independent booleans. For example, `engine.execute {"command":"tools.setBrush","params":{"pose":{"enabled":true,"tiltX":45,"overrideTiltX":true,"overrideTiltY":false}}}` fixes X at 45° while Y follows the stylus. Pose tilts are degrees (±90); the Brush Settings panel displays percentages (±100). Old stored `overrideTilt` values migrate to both axes. In command patches, `overrideTilt` sets both axes unless an explicit axis field in the same patch overrides it. `brush.get` includes both axis flags and the legacy combined readback (`overrideTilt` is true only when both flags are true). Axis-only journals omit that derived combined key so replay retains the other axis. Present flag values must be booleans; null and other types return an error.
-- `ui.set` also accepts the Eyedropper options bar (#1649): `eyedropperSampleSize` (`"point"` or 1, 3, 5, 11, 31, 51, 101: the side of the averaged square, shared by the Eyedropper, a painting tool's Alt-click eyedropper, the Curves/Color Picker eyedroppers and the Info panel), `eyedropperSample` (`current`, `currentAndBelow`, `all`, `allNoAdjustments`, `currentAndBelowNoAdjustments`) and `eyedropperRing` (boolean, Show Sampling Ring). `ui.inspect` reports them under `toolOptions` (`eyedropper_size`, `eyedropper_sample`, `eyedropper_ring`). The engine command `document.sampleColor {x, y, size, sampleLayer}` returns the colour such a sample picks, as four floats 0..1 (not 0..255).
+- `ui.set` also accepts the Eyedropper options bar (#1649): `eyedropperSampleSize` (`"point"` or 1, 3, 5, 11, 31, 51, 101: the side of the averaged square, shared by the Eyedropper, a painting tool's Alt-click eyedropper, the Curves/Color Picker eyedroppers and the Info panel), `eyedropperSample` (`current`, `currentAndBelow`, `all`, `allNoAdjustments`, `currentAndBelowNoAdjustments`) and `eyedropperRing` (boolean, Show Sampling Ring). `ui.inspect` reports them under `toolOptions` (`eyedropper_size`, `eyedropper_sample`, `eyedropper_ring`). The engine command `document.sampleColor {x, y, size, sampleLayer, zoom}` returns the colour such a sample picks, as four floats 0..1 (not 0..255). `zoom` is optional: the view zoom in screen pixels per document pixel (1 = 100 %, a positive number). Without it, an N by N Average reads the N × N square centred on the pixel. With it, the sample matches the Eyedropper at that zoom (#11751): above 100 % it is still the centred square, and at 100 % and below an N by N Average covers (N+1) × (N+1) *screen* pixels, so at 100 % 3 by 3 reads 4 × 4 document pixels and at 50 % 8 × 8. The side in document pixels is (N+1) ÷ `zoom` rounded to the nearest whole pixel, at least N+1 and at most 4096 (at 75 % a 3 by 3 Average reads 5 × 5). The box starts ⌈side ÷ 2⌉ − 1 pixels left of and above the sampled pixel, so an odd side is centred on it and an even side has one pixel more after it than before (at 100 % 3 by 3 reads x−1 … x+2). Like every sample, the box is clipped to the canvas, and a point off the canvas reads transparent. Point Sample reads one pixel at every zoom. To get what the Eyedropper picks, pass its `eyedropperSampleSize` as `size`, its `eyedropperSample` as `sampleLayer` and the document's zoom as `zoom`: left out, `size` is Point Sample (1) and `sampleLayer` is `all`.
 - `ui.set` also accepts the Crop tool's overlay menu (#1919): `cropOverlay` (`thirds`, `grid`, `diagonal`, `triangle`, `goldenRatio`, `goldenSpiral`), `cropOverlayShow` (`always`: the whole time a crop is pending, the default, as in the reference application; `auto`: only while the crop box is dragged; `never`) and `cropOverlayOrientation` (0..3; Triangle has two orientations and Golden Spiral four, the others ignore it). `ui.inspect` reports them under `toolOptions` (`crop_overlay`, `crop_overlay_show`, `crop_overlay_orientation`). In the app, O cycles the overlay and ⇧O its orientation while the Crop tool shows a box.
 - `ui.set` also accepts the Pen tools' options bar (#1397): `penMode` (`path` or `shape`) and `penPathOp`, the Path Operations menu (`newLayer`, `combine`, `subtract`, `intersect`, `exclude`): how the next Pen, Freeform Pen or Curvature Pen path joins the selected shape layer (Shape mode; `newLayer` makes a new one) or the targeted vector mask, selected path or Work Path (Path mode, where `newLayer` combines). `ui.inspect` reports them under `toolOptions` (`vector_mode`, `pen_path_op`). Merge Shape Components is the engine command `path.mergeShapeComponents` (work, saved or `layer` path) or `layer.combineShapes.mergeShapeComponents` (shape layers).
 - `ui.set` also accepts `cropFill` (`background`, the Fill dropdown's first entry, which reads Background (default), or Transparent (default) with Delete Cropped Pixels off, or `contentAware`), the Crop tool's Fill dropdown (#3823, #10872): with `contentAware`, committing a turned or extending frame passes `contentAware: true` to `image.crop`, which fills the area the image doesn't cover from its surroundings. `ui.inspect` reports it as `toolOptions.crop_content_aware`.
@@ -208,7 +208,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `type.hitTest` | `{"layer":id?,"x":px,"y":px}`: character under a document point. No `layer` picks the topmost visible type layer there. Result `{"layer","index","line","inside"}` |
 | `type.caret` | `{"layer":id?,"index":char}`: caret segment in document pixels, `{"index","line","segment":[[x,y],[x,y]]}` (rotated and vertical type included) |
 | `type.navigate` | `{"layer":id?,"index":char,"move":"wordPrev\|wordNext\|linePrev\|lineNext\|lineStart\|lineEnd\|start\|end","x":px?}`: neighbouring caret. `x` keeps the column across line moves. Result `{"index"}` |
-| `actions.list` | `{}` → `{actions:[{name, steps}], recording}` (the name being recorded, or null) |
+| `actions.list` | `{}` → `{actions:[{name, steps, set, setSlot?}], sets, setRows?, recording, toolRecording}`. `sets` lists distinct captions, while `setRows` lists physical folders in order, including empty folders and repeated captions. |
 | `actions.get` | `{"action": name or index}` → `{name, steps:[[id, params], …], disabled:[step, …]}`. `steps` is the shape `file.automate.batch` and droplets take; `disabled` lists the 0-based steps playback skips |
 | `actions.record` | `{"name":"Red"}` starts a new action (default name `Action N`). `{"action": name or index}` appends to one that exists |
 | `actions.stop` | `{}` → `{action, steps}`. Copies replayable journal entries since `actions.record` (queries and action-editing commands omitted). For portable playback, an active `layer` id is dropped only when it is the sole selected layer and does not supply source content (`layer.new.frame`, `select.loadSelection`, `type.createSelection`, `edit.checkSpelling`; a Check Spelling step keeps only `allLayers`, as the reference application's step does). Otherwise, including when several layers are selected, it is recorded by its unique name; `layer.select` records `{"name":"Layer","occurrence":0}`. Type tool keystrokes on a new layer fold into its `type.create` step; edits on an existing text layer retain separate replacements so styled text between edited spans survives replay. For commands other than `layer.select`, ambiguous layer names keep the id and require a unique name for portable playback |
@@ -238,14 +238,15 @@ Select an action and press Record to append steps; the plus button starts a new 
 A final `["view.fitOnScreen", {}]` step fits the resized document when the canvas is laid out.
 Headless playback reports unsupported view commands as failed steps.
 
-In the desktop Actions panel, right-click an action to assign a function key (F1–F12),
-or choose None to remove it. The binding follows the action name, regardless of the selected
-row, and is saved in preferences. For example, the existing `edit.keyboardShortcuts` command
-accepts `{"set":{"actions.play:My action":"F6"},"allowUnknown":true,"removeConflicts":false}`.
-A named action takes precedence over the ordinary menu shortcut while it exists and is bound;
-removing its binding or deleting it restores that menu shortcut. The panel moves a key away
-from another action when assigning it. Action playback still checks each nested command's
-automation permissions.
+In the desktop Actions panel, right-click an action occurrence to assign a function key (F1–F12),
+or choose None to remove it. The panel stores the binding by stable occurrence ID (`actions.playById:<id>`),
+so duplicate names can have independent shortcuts. The name-based `actions.play:<name>` form remains
+supported for legacy bindings; for an action with both keys, its valid occurrence binding takes
+precedence. For example, `edit.keyboardShortcuts` accepts
+`{"set":{"actions.play:My action":"F6"},"allowUnknown":true,"removeConflicts":false}`
+for a legacy name-based binding. Removing the applicable binding or deleting the action restores
+the ordinary menu shortcut. The panel moves a key away from another action when assigning it.
+Action playback still checks each nested command's automation permissions.
 
 UI-level commands (`view.zoomIn`, `window.theme.pro`, `edit.search`, …) are also accepted by `engine.execute` and `ui.menu.invoke`.
 
@@ -381,9 +382,10 @@ group, `ui.dialog.set {"choice":"replace"}` then `ui.dialog.confirm` replaces, a
 `ui.dialog.cancel` imports nothing.
 
 Named New Document presets also persist with preferences (`presets.documents`) on desktop and
-web. File › New › Save Preset… saves the current form; the Saved tab selects a configuration or
-deletes it. Selection only fills the form: Create still runs `file.new`, and the document name
-is independent of the preset name. Settings include pixel width/height, resolution in ppi,
+web. In File › New, the save icon right of Name (Save Document Preset, proposing the next free
+`Saved N`) saves the current form; the Saved tab selects a configuration or deletes it.
+Selection only fills the form: Create still runs `file.new`, and the document name is
+independent of the preset name. Settings include pixel width/height, resolution in ppi,
 mode, depth, background, and display `unit` (`px`, `in`, `cm`, `mm`, `pt`, `pica`) and
 `resolutionUnit` (`in`, `cm`). The defaults match File › New. Background Color captures the
 toolbox colour as `backgroundColor: [r,g,b]` (0..1), so reusing it does not follow later toolbox
@@ -789,7 +791,12 @@ the named call again if desired.
 Actions sit in **set folders** (`set` on `actions.list` / `actions.get`, filled by Load Actions,
 written by Save Actions, changed with `actions.assignSet`): the panel shows loose actions first,
 then each set as a collapsible folder (`ui.actions.collapsedSets`); dropping an action among
-another set's rows moves it into that set. Each step has Photoshop's two toggles: the check
+another set's rows moves it into that set. When recording a new action or assigning it to a folder,
+pass the caption and its zero-based `setSlot` from `setRows` to select a particular occurrence.
+Omitting `setSlot` infers a physical folder only if the caption identifies one occurrence and no
+legacy group shares it. Explicit null keeps name-only assignment. For Duplicate, a numeric
+`setSlot` selects one physical folder, null selects the implicit group, and omission selects by
+caption. Each step has Photoshop's two toggles: the check
 (`actions.toggle`, skipped when off) and the **dialog** toggle (`actions.dialog`). Playing a
 step with its dialog on opens that command's dialog seeded with the recorded values and pauses:
 the play result carries `paused: {step, id, dialog}`, OK runs the dialog's values and continues

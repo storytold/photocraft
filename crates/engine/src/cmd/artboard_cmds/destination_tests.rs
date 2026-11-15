@@ -42,9 +42,13 @@ fn successful_export_preserves_the_document_selection_and_history() {
 
     let result = s.execute(EXPORT, json!({"output": dir.path(), "prefix": "export"})).unwrap();
 
-    assert_eq!(result["files"].as_array().unwrap().len(), 2);
-    assert!(dir.path().join("export_0000_Blue.png").is_file());
-    assert!(dir.path().join("export_0001_Red.png").is_file());
+    let files = result["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    for (file, name) in files.iter().zip(["exportBlue.png", "exportRed.png"]) {
+        let path = std::path::Path::new(file.as_str().unwrap());
+        assert_eq!(path, dir.path().join(name));
+        assert!(path.is_file());
+    }
     let after = s.active().unwrap();
     assert!(std::sync::Arc::ptr_eq(&before.doc, &after.doc), "the source, including its pixel selection, is unchanged");
     assert_eq!(after.active_layer, before.active_layer);

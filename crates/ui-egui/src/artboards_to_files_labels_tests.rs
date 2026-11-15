@@ -115,7 +115,7 @@ fn export_workflow(snapshots: Option<&std::path::Path>) {
     assert_eq!(crate::dialogs::title(&dialogs[0]), "Artboards to Files");
     let message = format!("Artboards To Files was successful.\n{}", dir.path().display());
     h.get_by_label(&message);
-    assert!(dir.path().join("Custom_0000_Red Board.jpg").is_file());
+    assert!(dir.path().join("CustomRed-Board.jpg").is_file());
     snapshot(&mut h, snapshots, "success");
 
     click(&mut h, "OK");
