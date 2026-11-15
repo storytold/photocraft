@@ -30,6 +30,11 @@ pub struct FrameToolUi {
     pub sides: u32,
     /// The corner radius of Rectangle, Triangle and Polygon frames, in pixels (#13875).
     pub radius: f32,
+    /// A Polygon frame's star ratio in whole percents, 100 for a plain polygon (#13876).
+    pub star_ratio: f32,
+    /// Smooth Star Indents (#13876). Shown and kept; it doesn't change the outline yet (not
+    /// measured for frames).
+    pub smooth_indents: bool,
     pub stroke: Option<photocraft_doc::ShapeStroke>,
     pub target: Target,
     pub selected: Option<u64>,
@@ -68,6 +73,8 @@ impl Default for FrameToolUi {
             shape: "rectangle".into(),
             sides: 5,
             radius: 0.0,
+            star_ratio: 100.0,
+            smooth_indents: false,
             stroke: None,
             target: Target::Frame,
             selected: None,
@@ -183,6 +190,9 @@ fn shape_params(app: &PhotocraftApp, r: [i64; 4]) -> Value {
     if rounds(shape) && app.ui.frame_tool.radius > 0.0 {
         p["radius"] = json!(f64::from(app.ui.frame_tool.radius));
     }
+    if shape == "polygon" && app.ui.frame_tool.star_ratio < 100.0 {
+        p["starRatio"] = json!(f64::from(app.ui.frame_tool.star_ratio.round().clamp(1.0, 100.0)));
+    }
     if shape == "custom" {
         let name = app.ui.presets_ui.shape();
         if let Some(sh) = photocraft_engine::presets::shapes::all_groups(&app.session).iter().flat_map(|g| &g.items).find(|s| s.name == name) {
@@ -197,6 +207,14 @@ fn shape_params(app: &PhotocraftApp, r: [i64; 4]) -> Value {
 fn outline(app: &PhotocraftApp, r: [i64; 4]) -> Option<photocraft_doc::Path> {
     let p = shape_params(app, r);
     let shape = p.get("shape").and_then(Value::as_str)?;
+    // A star previews as the frame will be: the engine's own outline over the drag's box (#13876).
+    if let Some(percent) = p.get("starRatio").and_then(Value::as_f64) {
+        let [x, y, xe, ye] = r;
+        let (w, h) = ((xe - x) as f64, (ye - y) as f64);
+        let radius = p.get("radius").and_then(Value::as_f64).unwrap_or(0.0);
+        let unit = photocraft_engine::frame_cmds::star_path(u64::from(app.ui.frame_tool.sides.clamp(3, 100)), percent, radius, w, h).ok()?;
+        return Some(unit.transform(&Affine { m: [w, 0.0, 0.0, h, x as f64, y as f64] }));
+    }
     if shape == "custom" {
         let sh = photocraft_engine::vector_cmds::parse_path(p.get("path")?).ok()?;
         let (x0, y0, x1, y1) = sh.control_bounds()?;
@@ -212,6 +230,9 @@ fn outline(app: &PhotocraftApp, r: [i64; 4]) -> Option<photocraft_doc::Path> {
     let radius = p.get("radius").and_then(Value::as_f64).unwrap_or(0.0);
     photocraft_engine::vector_cmds::shape_path(&json!({"kind":match shape{"ellipse"=>"ellipse","triangle"|"polygon"=>"polygon",_=>"rect"},"rect":[x,y,xe-x,ye-y],"sides":if shape=="triangle"{3}else{app.ui.frame_tool.sides.clamp(3,100)},"radius":radius,"cornerRadius":radius})).ok()
 }
+
+/// The alert for a star ratio typed past 1–100 % (#13876), in the app's wording for whole percents.
+pub const STAR_RATIO_ALERT: &str = "An integer between 1% and 100% is required. Closest value inserted.";
 
 /// The frame shapes with corners to round (#13875): Rectangle, Triangle and Polygon.
 fn rounds(shape: &str) -> bool {
@@ -901,6 +922,24 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         let mut n = app.ui.frame_tool.sides.clamp(3, 100) as f32;
         crate::widgets::value_field_named(ui, tl!("Sides:"), &mut n, 3.0..=100.0, "", 44.);
         app.ui.frame_tool.sides = n as u32;
+        // The star ratio (whole percents 1–100) and Smooth Star Indents (#13876).
+        let t = Tokens::get(ui.ctx());
+        let (rect, icon) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+        let (c, r) = (rect.center(), rect.width() * 0.45);
+        let star: Vec<Pos2> = (0..10)
+            .map(|i| {
+                let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * i as f32 / 10.0;
+                let k = if i % 2 == 0 { r } else { r * 0.45 };
+                c + egui::vec2(a.cos(), a.sin()) * k
+            })
+            .collect();
+        ui.painter().add(egui::Shape::closed_line(star, Stroke::new(1.0, t.text_dim)));
+        icon.on_hover_text(tl!("Star Ratio"));
+        let (_, alert) = crate::widgets::value_field_whole_alerting(ui, tl!("Star Ratio"), &mut app.ui.frame_tool.star_ratio, 1.0..=100.0, "%", 52.0);
+        if alert {
+            crate::panels::options_bar::range_alert(&mut app.ui, STAR_RATIO_ALERT);
+        }
+        crate::widgets::checkbox(ui, &mut app.ui.frame_tool.smooth_indents, tl!("Smooth Star Indents"));
     }
     if app.ui.frame_tool.shape == "custom" {
         crate::preset_panels::shape_picker(app, ui);
