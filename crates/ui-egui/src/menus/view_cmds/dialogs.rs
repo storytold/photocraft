@@ -616,8 +616,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 "jpeg": {"enabled": true, "quality": 5, "convertToSrgb": false, "resize": false, "width": 1, "height": 1},
                 "psd": {"enabled": false, "maximizeCompatibility": true, "resize": false, "width": 1, "height": 1},
                 "tiff": {"enabled": false, "lzw": false, "resize": false, "width": 1, "height": 1},
-                "__labels": {"current": tl!("Current document"), "open": tl!("All open documents"), "folder": tl!("Folder"), "includeSubfolders": tl!("Include All Subfolders")},
-                "__order": ["source", "input", "includeSubfolders", "output"]
+                // Include ICC Profile, on by default (#13902).
+                "includeIcc": true,
+                "__labels": {"current": tl!("Current document"), "open": tl!("All open documents"), "folder": tl!("Folder"), "includeSubfolders": tl!("Include All Subfolders"), "includeIcc": tl!("Include ICC Profile")},
+                "__order": ["source", "input", "includeSubfolders", "output", "includeIcc"]
             }),
             json!({"source": ["current", "open", "folder"]}),
         ),

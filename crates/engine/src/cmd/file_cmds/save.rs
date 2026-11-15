@@ -48,6 +48,9 @@ pub(crate) struct SaveOpts {
     /// File Handling › Save Full-Size Composite in .pcraft Files, off by default). The save may
     /// omit it; check the manifest's `full_composite` member.
     pub pcraft_full_composite: bool,
+    /// Flat formats: embed the colour profile (Image Processor's Include ICC Profile, #13902). On
+    /// unless a command turns it off; PSD and `.pcraft` keep theirs.
+    pub embed_icc: bool,
 }
 
 impl Default for SaveOpts {
@@ -67,6 +70,7 @@ impl Default for SaveOpts {
             image_previews: true,
             psd_maximize_compatibility: true,
             pcraft_full_composite: false,
+            embed_icc: true,
         }
     }
 }
@@ -96,6 +100,7 @@ impl SaveOpts {
             image_previews: file_handling.image_previews != crate::prefs::Ask::Never,
             psd_maximize_compatibility: maximize_compatibility_param(p, cmd)?.unwrap_or(file_handling.maximize_psd_compatibility != crate::prefs::Ask::Never),
             pcraft_full_composite: pcraft_full_composite_param(p, cmd)?.unwrap_or(file_handling.pcraft_full_composite),
+            embed_icc: true,
         })
     }
 
@@ -269,6 +274,10 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     }
     opts.encode.tiff_pyramid = save.tiff_pyramid;
     opts.encode.dds = save.dds;
+    // A command that leaves the profile out of flat formats (Image Processor, #13902).
+    if !save.embed_icc {
+        opts.encode.embed_icc = false;
+    }
     if let Some(q) = save.quality {
         let q = jpeg_quality(q);
         opts.encode.jpeg_quality = q;
