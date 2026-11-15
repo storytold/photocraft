@@ -1492,12 +1492,29 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.add_space(4.0);
         ui.add(egui::Label::new(egui::RichText::new(note).color(t.text_dim)).wrap());
     }
+    // Fade draws Preview in its button column (#13815).
+    if cmd != super::fade_modes::COMMAND {
+        preview_checkbox(ui, f);
+    }
+}
+
+/// The dialog's Preview checkbox, when it has one.
+pub(crate) fn preview_checkbox(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if let Some(mut preview) = f.get("__preview").and_then(Value::as_bool) {
         ui.add_space(4.0);
         crate::widgets::checkbox(ui, &mut preview, tl!("Preview"));
         f.insert("__preview".into(), json!(preview));
     }
 }
+
+/// Edit › Fade's dialog puts OK, Cancel and Preview in a column right of its fields (#13815).
+pub(crate) fn buttons_in_column(f: &Map<String, Value>) -> bool {
+    f.contains_key("__filter") && f.get("__command").and_then(Value::as_str) == Some(super::fade_modes::COMMAND)
+}
+
+#[cfg(test)]
+#[path = "fade_layout_tests.rs"]
+mod fade_layout_tests;
 
 /// A new seed for a dialog's Random button: 0..=30000 (what the field takes), never `current`.
 /// `entropy` varies per click (the input time); the process's random hasher keys mix it.
