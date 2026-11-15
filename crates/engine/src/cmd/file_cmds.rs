@@ -552,3 +552,7 @@ mod load_stack_order_tests;
 #[cfg(test)]
 #[path = "file_cmds/load_stack_depth_tests.rs"]
 mod load_stack_depth_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/load_stack_smart_name_tests.rs"]
+mod load_stack_smart_name_tests;

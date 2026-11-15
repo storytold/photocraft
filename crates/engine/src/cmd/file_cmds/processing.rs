@@ -1,6 +1,6 @@
 use super::batch_run::{BatchInput, batch_inputs_tree, process_document_copies, process_tree};
 use super::open::import_opened;
-use super::paths::{file_name, list_images, read_file, stem, untitled_name};
+use super::paths::{file_name, list_images, read_file, untitled_name};
 use super::save::SaveOpts;
 use super::{
     ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Result, Session, Surface, Value, buffer_surface, flattened_checked, json, size_param,
@@ -287,8 +287,6 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
     let h = docs.iter().map(|(_, d)| d.size.height).max().unwrap_or(1);
     // A new unsaved "Untitled-N" document, like Photoshop's Load Layers, not one named after a file.
     let doc_name = untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
-    // The smart object (Create Smart Object) keeps the first file's name.
-    let smart_name = stem(&paths[0]);
     // A 16-bit file raises an 8-bit stack to 16 bits/channel, as the reference does (#13997); a
     // 32-bit file doesn't, and a 16- or 32-bit base keeps its depth.
     let raise = base.depth == photocraft_color::SampleType::U8 && docs.iter().any(|(_, d)| d.depth == photocraft_color::SampleType::U16);
@@ -311,7 +309,7 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         // for Layer › Smart Objects › Stack Mode. Like Photoshop, they sit at the top level of the
         // contents, with no wrapper group.
         let layers = std::mem::take(&mut stack.layers);
-        let smart = crate::smart_cmds::layers_to_smart(&stack, &smart_name, layers)?;
+        let smart = crate::smart_cmds::layers_to_smart(&stack, &top_layer_name(&layers), layers)?;
         stack.layers = vec![smart];
     }
     let i = s.add_document(stack, None);
@@ -321,7 +319,7 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         if smart {
             s.edit("Convert to Smart Object", |doc, active| {
                 let layers = std::mem::take(&mut doc.layers);
-                let smart = crate::smart_cmds::layers_to_smart(doc, &smart_name, layers)?;
+                let smart = crate::smart_cmds::layers_to_smart(doc, &top_layer_name(&layers), layers)?;
                 *active = Some(smart.id);
                 doc.layers = vec![smart];
                 Ok(())
@@ -332,6 +330,13 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         }
     }
     Ok(json!({"document": i, "layers": n}))
+}
+
+/// The smart object of Load Files into Stack (Create Smart Object) is named exactly like the top
+/// layer inside it, extension included, as the reference names it (#13998); its contents take
+/// the same text (`<name>.pcraft`).
+fn top_layer_name(layers: &[Layer]) -> String {
+    layers.last().map(|l| l.name.clone()).unwrap_or_default()
 }
 
 // ---------- Scripts: flatten effects / masks ----------
