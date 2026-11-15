@@ -675,6 +675,71 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Whether `fields` belong to the modal Gradient Editor opened from the Gradient Map dialog.
+pub fn owns_modal(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key("__gradientEditor")
+}
+
+/// Open the modal Gradient Editor on top of `dialog`, seeded with its `stops` and `source`.
+pub fn open_for_dialog(app: &mut PhotocraftApp, dialog: u64, values: &Value) {
+    if app.ui.dialogs.iter().any(|d| owns_modal(&d.fields)) {
+        return;
+    }
+    let mut fields = serde_json::Map::new();
+    fields.insert("__gradientEditor".into(), json!(true));
+    fields.insert("__label".into(), json!(tl!("Gradient Editor")));
+    fields.insert("__dialog".into(), json!(dialog));
+    fields.insert("stops".into(), values.get("stops").cloned().unwrap_or_else(|| json!([[0.0, "#000000"], [1.0, "#ffffff"]])));
+    if let Some(source) = values.get("source") {
+        fields.insert("source".into(), source.clone());
+    }
+    app.ui.open_dialog(crate::state::DialogKind::Command, fields);
+}
+
+/// Body of the modal Gradient Editor opened from the Gradient Map dialog.
+pub fn modal_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
+    let mut values = json!({
+        "stops": fields.get("stops").cloned().unwrap_or_else(|| json!([[0.0, "#000000"], [1.0, "#ffffff"]])),
+        "source": fields.get("source").cloned().unwrap_or(Value::Null),
+    });
+    let cx = crate::adjust_editors::EditorCx {
+        mem: egui::Id::unique(("gradient-editor-modal", fields.get("__dialog").and_then(Value::as_u64).unwrap_or(0))),
+        hist: None,
+        gray: false,
+        swatches: crate::adjust_editors::swatches(app),
+        gradients: Vec::new(),
+        dialog: false,
+        dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
+        isolated_curve: None,
+    };
+    let edit = crate::adjust_editors::modal_stop_editor(ui, &mut values, &cx);
+    if edit.changed
+        && let Value::Object(map) = values
+    {
+        for key in ["stops", "source"] {
+            if let Some(val) = map.get(key) {
+                fields.insert(key.into(), val.clone());
+            }
+        }
+    }
+}
+
+/// Commit the modal Gradient Editor back into its parent Gradient Map dialog.
+pub fn confirm_modal(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
+    let Some(parent_id) = fields.get("__dialog").and_then(Value::as_u64) else {
+        return Ok(Value::Null);
+    };
+    if let Some(parent) = app.ui.dialog_mut(parent_id) {
+        if let Some(stops) = fields.get("stops") {
+            parent.fields.insert("stops".into(), stops.clone());
+        }
+        if let Some(source) = fields.get("source") {
+            parent.fields.insert("source".into(), source.clone());
+        }
+    }
+    Ok(Value::Null)
+}
+
 /// Live mode: style, reverse and dither changes in the options bar also edit the selected gradient
 /// fill layer (one history step each), as in Photoshop. Its blend mode and opacity are the Layers
 /// panel's: the live bar has no Mode or Opacity (#12007).

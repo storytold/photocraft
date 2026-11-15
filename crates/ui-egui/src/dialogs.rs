@@ -335,13 +335,13 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::stack_dialog::owns(fields) => crate::stack_dialog::body(app, ui, fields, d.id),
         _ if crate::tool_reset::owns(fields) => crate::tool_reset::body(ui),
         _ if crate::crop_presets::owns(fields) => crate::crop_presets::body(app, ui, fields),
-        _ => return command_body_more(app, ui, d, fields, id),
+        _ => return command_body_more(app, ui, d, fields, id, interactive),
     }
     outcome
 }
 
 /// The rest of the command dialogs: files, colour, export, sizing, filters and forms.
-fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) -> Option<bool> {
+fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id, interactive: bool) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
         _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
@@ -360,7 +360,8 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         // Image Size and Canvas Size open on Width, selected (#2329).
         _ if fields.contains_key("__sizing") => first_field_focused(ui, id, |ui| crate::sizing::body(ui, fields)),
         _ if crate::smart_filter_dialog::owns(fields) => crate::smart_filter_dialog::body(app, ui, fields),
-        _ if crate::adjust_dialog::owns(fields) => crate::adjust_dialog::body(app, ui, fields),
+        _ if crate::gradient_ui::owns_modal(fields) => crate::gradient_ui::modal_body(app, ui, fields),
+        _ if crate::adjust_dialog::owns(fields) => outcome = crate::adjust_dialog::body_with_response(app, ui, d.id, fields, interactive),
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
         _ if crate::canvas_tool_menu::owns_make_selection(fields) => {
             first_field_focused(ui, id, |ui| crate::canvas_tool_menu::make_selection_body(app, ui, fields))
@@ -739,7 +740,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
                 browse_field(app, d.id, &fields, &key);
             }
-            if d.kind == DialogKind::LayerStyle || crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) {
+            if d.kind == DialogKind::LayerStyle
+                || crate::guide_layout_ui::owns(&fields)
+                || crate::brush_preset_dialog::owns(&fields)
+                || crate::adjust_dialog::owns_buttons(&fields)
+            {
                 // These dialogs own their right-side actions and validate Enter themselves.
             } else if crate::color_picker_ui::owns(&fields) {
                 if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -1090,6 +1095,9 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     {
         authorize(command, &Value::Object(d.fields.clone()))?;
     }
+    if app.ui.dialogs.iter().any(|child| crate::gradient_ui::owns_modal(&child.fields) && child.fields.get("__dialog").and_then(Value::as_u64) == Some(id)) {
+        return Err("confirm or cancel the Gradient Editor first".into());
+    }
     // A colour field shows the open picker's colour before its OK (`live_preview`): the dialog
     // would otherwise commit a colour the picker may still cancel.
     // The live preview's own record of the parent counts too: automation may rewrite `__dialog`.
@@ -1172,6 +1180,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
             crate::color_picker_ui::live_preview::end(app, d.id);
             crate::color_picker_ui::confirm(app, &d.fields)
         }
+        _ if crate::gradient_ui::owns_modal(&d.fields) => crate::gradient_ui::confirm_modal(app, &d.fields),
         _ if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
         _ if crate::prefs_ui::owns(&d.fields) => crate::prefs_ui::confirm(app, &d.fields),
         _ if d.fields.contains_key("__export") => crate::export_dialog::confirm(app, &d.fields),

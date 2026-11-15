@@ -799,8 +799,12 @@ fn gradient_map_picker_offers_the_gradient_library() {
 }
 
 fn import_gradients_from_picker(h: &mut Harness<'_, PhotocraftApp>) {
-    let preset = label_rect(h, "Preset:").unwrap();
-    click(h, Pos2::new(preset.right() + 60.0, preset.center().y));
+    if let Some(arrow) = h.query_by_label("Gradient Presets") {
+        arrow.click();
+        h.run_steps(2);
+    } else if let Some(preset) = label_rect(h, "Preset:") {
+        click(h, Pos2::new(preset.right() + 60.0, preset.center().y));
+    }
     h.get_by_label("Gradient Preset Options").click();
     h.run_steps(2);
     h.get_by_label("Import .GRD").click();

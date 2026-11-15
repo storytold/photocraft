@@ -359,6 +359,8 @@ fn gradient_map_dialog_handles_preview_without_committing_until_ok() {
     h.run_steps(4);
     let doc = h.state().session.active().unwrap().doc.clone();
     let steps = h.state().session.active().unwrap().history.past_len();
+    h.get_by_label("Gradient").click();
+    h.run_steps(3);
     let strip = h.get_by_label("Gradient stops").rect();
     let start = egui::pos2(strip.left() + 8.0, strip.top() + 36.0);
     let to = start + egui::vec2((strip.width() - 16.0) * 0.3, 0.0);
@@ -369,6 +371,8 @@ fn gradient_map_dialog_handles_preview_without_committing_until_ok() {
     h.hover_at(to);
     h.run_steps(1);
     h.drop_at(to);
+    h.run_steps(3);
+    h.query_all_by_label("OK").last().unwrap().click();
     h.run_steps(3);
     let stops = h.state().ui.dialogs[0].fields["stops"].as_array().unwrap();
     assert!((stops[0][0].as_f64().unwrap() - 0.3).abs() < 0.001);

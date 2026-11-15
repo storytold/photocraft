@@ -183,6 +183,274 @@ fn gradient_map_strip(ui: &mut egui::Ui, stops: &mut Vec<Stop>, cx: &EditorCx, s
 }
 
 pub(super) fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
+    if cx.dialog { gradient_map_dialog(ui, v, cx) } else { gradient_map_panel(ui, v, cx) }
+}
+
+/// Text with an optional underlined mnemonic character (case-insensitive first match).
+pub(crate) fn mnemonic_text(text: &str, ch: char, underline: bool, color: Color32, font: egui::FontId) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let plain = egui::TextFormat { font_id: font, color, ..Default::default() };
+    if underline && let Some((idx, m)) = text.char_indices().find(|(_, c)| c.eq_ignore_ascii_case(&ch)) {
+        let len = m.len_utf8();
+        if idx > 0 {
+            job.append(&text[..idx], 0.0, plain.clone());
+        }
+        job.append(&text[idx..idx + len], 0.0, egui::TextFormat { underline: Stroke::new(1.0, color), ..plain.clone() });
+        if idx + len < text.len() {
+            job.append(&text[idx + len..], 0.0, plain);
+        }
+    } else {
+        job.append(text, 0.0, plain);
+    }
+    job
+}
+
+/// Checkbox whose label underlines its mnemonic `ch` when `underline` is true (Alt held).
+pub fn mnemonic_checkbox(ui: &mut egui::Ui, on: &mut bool, text: &str, ch: char, underline: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let (mut resp, label_resp) = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::CLICK);
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            let job = mnemonic_text(text, ch, underline, t.text_dim, font);
+            let l = ui.add(egui::Label::new(job).selectable(false).sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand);
+            let pressed = resp.is_pointer_button_down_on() || l.is_pointer_button_down_on();
+            widgets::check_box(ui.painter(), rect, *on, resp.hovered() || l.hovered(), pressed, &t);
+            (resp.union(l.clone()), l)
+        })
+        .inner;
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    label_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, text));
+    resp
+}
+
+fn group_box(ui: &mut egui::Ui, title: &str, content: impl FnOnce(&mut egui::Ui)) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(RichText::new(tl!(title)).color(t.text).size(12.0));
+    egui::Frame::new().stroke(Stroke::new(1.0, t.field_border)).inner_margin(8.0).show(ui, |ui| {
+        ui.set_min_width(290.0);
+        content(ui);
+    });
+}
+
+fn current_method(v: &Value) -> &'static str {
+    match v.get("source").and_then(|s| s.get("method")).and_then(Value::as_str) {
+        Some("perceptual") => "perceptual",
+        Some("linear") => "linear",
+        Some("smooth") => "smooth",
+        _ => "classic",
+    }
+}
+
+fn set_method(v: &mut Value, stops: &[Stop], method: &str) {
+    if let Some(src) = v.get_mut("source").and_then(Value::as_object_mut) {
+        src.insert("method".into(), json!(method));
+    } else {
+        let mut sorted = stops.to_vec();
+        sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let stop_json: Vec<Value> = sorted.iter().map(|(t, c)| json!([round(*t, 0.001), adjust_params::hex(*c)])).collect();
+        let mids = vec![0.5; sorted.len().saturating_sub(1)];
+        v["source"] = json!({
+            "stops": stop_json,
+            "midpoints": mids,
+            "smoothness": 1.0,
+            "method": method,
+        });
+    }
+}
+
+fn preset_picker_contents(ui: &mut egui::Ui, cx: &EditorCx, e: &mut Edit) -> Option<Vec<Stop>> {
+    let t = Tokens::get(ui.ctx());
+    let [fg, bg] = cx.swatches.map(|c| [c[0], c[1], c[2], 1.0]);
+    let mut picked = None;
+    let gear = crate::icons::button(ui, "settings", 24.0, false, tl!("Gradient Preset Options"));
+    egui::containers::menu::SubMenu::new().show(ui, &gear, |ui| {
+        if ui.button(tl!("Import .GRD")).clicked() {
+            e.import_gradients = true;
+            ui.close();
+        }
+    });
+    ui.separator();
+    for g in &cx.gradients {
+        ui.label(RichText::new(&g.name).color(t.text_faint));
+        for p in &g.items {
+            ui.horizontal(|ui| {
+                let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
+                let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
+                crate::preset_panels::paint_gradient(ui, r, &rgba);
+                let name = ui.selectable_label(false, &p.name);
+                if swatch.clicked() || name.clicked() {
+                    picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
+                }
+            });
+        }
+    }
+    picked
+}
+
+fn gradient_map_dialog(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
+    let t = Tokens::get(ui.ctx());
+    let mut e = Edit::default();
+    let mut stops = read_stops(v);
+    let alt = ui.input(|i| i.modifiers.alt);
+    let interactive = ui.data(|d| d.get_temp::<bool>(cx.mem.with("interactive"))).unwrap_or(true);
+    let reverse_on = flag(v, "reverse", false);
+
+    group_box(ui, "Gradient Used for Grayscale Mapping", |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let (bar, strip_resp) = ui.allocate_exact_size(vec2(265.0, 18.0), Sense::click());
+            strip_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Gradient")));
+            let cols: Vec<Color32> = (0..=48)
+                .map(|i| {
+                    let u = i as f32 / 48.0;
+                    color32(sample_stops(&stops, if reverse_on { 1.0 - u } else { u }))
+                })
+                .collect();
+            spectrum_bar(ui.painter(), bar, &cols);
+            ui.painter().rect_stroke(bar, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
+            if strip_resp.clicked() {
+                e.edit_gradient = true;
+            }
+
+            let (arrow_rect, arrow_resp) = ui.allocate_exact_size(vec2(20.0, 18.0), Sense::click());
+            arrow_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Gradient Presets")));
+            let bg = if arrow_resp.hovered() { t.hover } else { t.field };
+            ui.painter().rect_filled(arrow_rect, t.radius_sm, bg);
+            ui.painter().rect_stroke(arrow_rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
+            let c = arrow_rect.center();
+            ui.painter().add(egui::Shape::convex_polygon(
+                vec![pos2(c.x - 4.0, c.y - 2.0), pos2(c.x + 4.0, c.y - 2.0), pos2(c.x, c.y + 3.0)],
+                t.text_dim,
+                Stroke::NONE,
+            ));
+            let popup_id = cx.mem.with("gm-preset-popup");
+            let mut picked = None;
+            egui::Popup::menu(&arrow_resp).id(popup_id).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                picked = preset_picker_contents(ui, cx, &mut e);
+                if ui.ctx().input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                    egui::Popup::close_id(ui.ctx(), popup_id);
+                }
+            });
+            if let Some(p) = picked {
+                stops = p;
+                if let Some(o) = v.as_object_mut() {
+                    o.insert("source".into(), Value::Null);
+                }
+                write_stops(v, &stops);
+                e.add(Edit::discrete(true));
+            }
+        });
+    });
+
+    ui.add_space(6.0);
+
+    group_box(ui, "Gradient Options", |ui| {
+        let popup_open = egui::Popup::is_any_open(ui.ctx());
+        let mut dither = flag(v, "dither", false);
+        let alt_d = interactive && !popup_open && alt && ui.input(|i| i.key_pressed(egui::Key::D));
+        if mnemonic_checkbox(ui, &mut dither, tl!("Dither"), 'D', alt).changed() || alt_d {
+            if alt_d {
+                dither = !dither;
+            }
+            v["dither"] = json!(dither);
+            e.add(Edit::discrete(true));
+        }
+
+        let mut reverse = flag(v, "reverse", false);
+        let alt_r = interactive && !popup_open && alt && ui.input(|i| i.key_pressed(egui::Key::R));
+        if mnemonic_checkbox(ui, &mut reverse, tl!("Reverse"), 'R', alt).changed() || alt_r {
+            if alt_r {
+                reverse = !reverse;
+            }
+            v["reverse"] = json!(reverse);
+            e.add(Edit::discrete(true));
+        }
+
+        ui.horizontal(|ui| {
+            let job = mnemonic_text(tl!("Method:"), 'M', alt, t.text_dim, egui::TextStyle::Body.resolve(ui.style()));
+            ui.label(job);
+            let mut method = current_method(v);
+            const METHODS: [(&str, &str); 4] = [("perceptual", "Perceptual"), ("linear", "Linear"), ("classic", "Classic"), ("smooth", "Smooth")];
+            if widgets::dropdown(ui, "gm-method", tl!("Method:"), &mut method, &METHODS, 130.0) {
+                set_method(v, &stops, method);
+                e.add(Edit::discrete(true));
+            }
+            if interactive && !popup_open && alt && ui.input(|i| i.key_pressed(egui::Key::M)) {
+                ui.memory_mut(|m| m.request_focus(ui.make_persistent_id(egui::IdSalt::new("gm-method"))));
+            }
+        });
+    });
+
+    e
+}
+
+/// Stop editor used by the modal Gradient Editor when opened from the Gradient Map dialog.
+pub fn modal_stop_editor(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
+    let mut e = Edit::default();
+    let mut stops = read_stops(v);
+    let selection = cx.mem.with("gm-modal-stop-selection");
+    let mut selected = ui.data(|d| d.get_temp::<usize>(selection)).unwrap_or(0).min(stops.len().saturating_sub(1));
+    let strip = gradient_map_strip(ui, &mut stops, cx, &mut selected);
+    let mut changed = strip.changed;
+    e.add(strip);
+    let mut location = None;
+    let mut remove = false;
+    let can_remove = stops.len() > 2;
+    if let Some(s) = stops.get_mut(selected) {
+        ui.horizontal(|ui| {
+            label(ui, tl!("Color:"));
+            let r = color_button(ui, &mut s.1, tl!("Stop Color"));
+            changed |= r.changed;
+            e.add(r);
+            ui.add_enabled_ui(can_remove, |ui| {
+                remove = crate::icons::button(ui, "x", 20.0, false, tl!("Remove stop")).clicked();
+            });
+        });
+        ui.horizontal(|ui| {
+            label(ui, tl!("Location:"));
+            let mut loc = s.0 * 100.0;
+            let rl = widgets::value_field(ui, &mut loc, 0.0..=100.0, "%", 70.0).accessible_name(tl!("Location:"));
+            if rl.changed() {
+                location = Some(loc / 100.0);
+                changed = true;
+            }
+            e.add(Edit::of(&rl));
+        });
+    }
+    if let Some(loc) = location {
+        selected = move_map_stop(&mut stops, selected, loc).unwrap_or(0);
+    }
+    if remove && can_remove {
+        stops.remove(selected);
+        selected = selected.min(stops.len() - 1);
+        changed = true;
+        e.add(Edit::discrete(true));
+    }
+    if stops.len() < 64 && widgets::secondary_button(ui, tl!("Add Stop"), 0.0).clicked() {
+        let mut sorted = stops.clone();
+        sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let at = sorted.windows(2).max_by(|a, b| (a[1].0 - a[0].0).total_cmp(&(b[1].0 - a[0].0))).map_or(0.5, |w| (w[0].0 + w[1].0) / 2.0);
+        stops.push((at, sample_stops(&stops, at)));
+        let index = stops.len() - 1;
+        selected = move_map_stop(&mut stops, index, at).unwrap_or(0);
+        changed = true;
+        e.add(Edit::discrete(true));
+    }
+    if changed {
+        write_stops(v, &stops);
+        e.changed = true;
+    }
+    ui.data_mut(|d| d.insert_temp(selection, selected));
+    e
+}
+
+fn gradient_map_panel(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let mut e = Edit::default();
     let mut stops = read_stops(v);
