@@ -35,7 +35,7 @@
 	Top Right	Viršuje dešinėje
 	Bottom Left	Apačioje kairėje
 	Bottom Right	Apačioje dešinėje
-	Filter	Filtras
+	Filter	Filtrai
 	View	Rodinys
 	Window	Langas
 	Help	Žinynas
@@ -645,7 +645,7 @@
 	175%	175%
 	250%	250%
 	300%	300%
-	Print Size	Spausdinimo dydis
+	Print Size	Spaudinio dydis
 	Pixel Aspect Ratio	Pikselių kraštinių santykis
 	Pixel Aspect Ratio Correction	Pikselių kraštinių santykio korekcija
 	Custom Pixel Aspect Ratio…	Pasirinktinis pikselių kraštinių santykis…
@@ -4300,7 +4300,7 @@ navigator	Zoom	Mastelis
 	Title	Pavadinimas
 	Working-cmyk	Darbinė CMYK spalvų erdvė
 	Simulate Paper	Imituoti popierių
-	Warming Filter (85)	Šildantis filtras (85)
+	Warming Filter (85)	Šiltų tonų filtras (85)
 	Cw	Cw
 	Ccw	Ccw
 	Nearest	Artimiausias
