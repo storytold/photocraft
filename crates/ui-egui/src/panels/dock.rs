@@ -11,7 +11,7 @@ use super::{PhotocraftApp, Stroke, Tokens, icons, pos2};
 /// docking layout, with the icon rail at the window's end edge in the Studio themes.
 pub fn dock_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    if app.ui.panels.rail && !t.pro {
+    if rail_shown(app) && !t.pro {
         rail(app, ui, &t);
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::panel_docking::show(app, ui));
@@ -28,7 +28,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("dock-edge-rendered-frame"), frame));
     let t = Tokens::get(ui.ctx());
     let (rail_w, _) = rail_widths(t.pro);
-    let rail_shown = app.ui.panels.rail;
+    let rail_shown = rail_shown(app);
     let rw = if rail_shown { rail_w } else { 0.0 };
     let content = ui.available_rect_before_wrap();
     let range = crate::panels::dock_width_range(content.width());
@@ -223,7 +223,7 @@ pub(crate) fn dock_panel_rect(ctx: &egui::Context) -> egui::Rect {
 pub(crate) fn canvas_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let backdrop = if app.ui.view.hides_chrome() { egui::Color32::BLACK } else { crate::prefs_ui::pasteboard_color(app).unwrap_or(t.canvas) };
-    if app.ui.panels.rail && t.pro {
+    if rail_shown(app) && t.pro {
         rail(app, ui, &t);
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| crate::canvas::document_area(app, ui));
@@ -232,6 +232,12 @@ pub(crate) fn canvas_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// The icon rail's width and its buttons' size, in points.
 fn rail_widths(pro: bool) -> (f32, f32) {
     if pro { (36.0, 28.0) } else { (44.0, 32.0) }
+}
+
+/// The icon rail shows when Preferences › Workspace › Show Panel Icon Rail is on and an
+/// embedding app has not hidden it; without it the canvas takes its width.
+pub(crate) fn rail_shown(app: &PhotocraftApp) -> bool {
+    app.ui.panels.rail && app.session.prefs().workspace.show_panel_icon_rail
 }
 
 /// Narrow icon rail, unless an embedding app hides it: shows, expands or collapses panel groups.

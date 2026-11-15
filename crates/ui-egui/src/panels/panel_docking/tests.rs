@@ -2,8 +2,12 @@ use super::*;
 use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
+/// The app with the icon rail's preference on, so `ui.panels.rail` alone says whether these
+/// tests draw the rail (#11180 hides it by default).
 fn app() -> PhotocraftApp {
-    PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
+    let mut session = photocraft_engine::Session::new();
+    session.edit_prefs(|p| p.workspace.show_panel_icon_rail = true);
+    PhotocraftApp::new(session, Default::default())
 }
 
 fn lay(app: &PhotocraftApp) -> &Layout<String> {
