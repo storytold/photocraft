@@ -42,10 +42,15 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Art History Brush also starts at full opacity (#10263), and the Pattern Stamp at full
         // opacity and flow (#12616): those fields are their own.
-        // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
-        // Stamp and the Smudge tool start with their own measured tips instead, as the whole brush
-        // Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601, #12964).
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge) => {
+        // The Background Eraser, the Healing and Spot Healing Brushes, the Burn, Dodge and Sponge
+        // tools, the Clone Stamp and the Smudge tool start with their own measured tips instead, as
+        // the whole brush Reset Tool gives them (#11911, #12099, #12560, #12671, #12684, #13029,
+        // #12601, #12964).
+        None if matches!(
+            tool,
+            Tool::BackgroundEraser | Tool::Healing | Tool::SpotHealing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge
+        ) =>
+        {
             fresh_brush(tool, &current)
         }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
@@ -95,7 +100,8 @@ const BRUSH_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 const ERASER_TOOL_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
 /// The Background Eraser's tip after Reset Tool (#11911): a 13 px hard round at 25 % spacing.
 const BACKGROUND_ERASER_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
-/// The Healing Brush's tip after Reset Tool (#12099): a 19 px hard round at 25 % spacing.
+/// The Healing Brush's tip after Reset Tool (#12099): a 19 px hard round at 25 % spacing. The Spot
+/// Healing Brush has the same measured tip (#12560).
 const HEALING_BRUSH_TIP: (f32, f32, f32) = (19.0, 1.0, 0.25);
 /// The Pencil tool's starting and Reset Tool tip, as the reference measures it (#12200): size,
 /// hardness and spacing of a 1 px hard round at 25 % spacing.
@@ -127,7 +133,7 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
             brush.smoothing.amount = 0.0;
         }
         Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
-        Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
+        Tool::Healing | Tool::SpotHealing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
         Tool::Pencil => (brush.size, brush.hardness, brush.spacing) = PENCIL_TOOL_TIP,
         Tool::Burn | Tool::Dodge | Tool::Sponge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
         Tool::Smudge => (brush.size, brush.hardness, brush.spacing) = SMUDGE_TOOL_TIP,

@@ -70,7 +70,7 @@ fn reset_all_tools_gives_it_19_px_active_or_picked_later() {
 #[test]
 fn other_tools_keep_their_reset_sizes() {
     for (tool, want) in
-        [(Tool::Brush, 13.0), (Tool::Pencil, 1.0), (Tool::Eraser, 13.0), (Tool::SpotHealing, 20.0), (Tool::Healing, 19.0), (Tool::CloneStamp, 21.0)]
+        [(Tool::Brush, 13.0), (Tool::Pencil, 1.0), (Tool::Eraser, 13.0), (Tool::SpotHealing, 19.0), (Tool::Healing, 19.0), (Tool::CloneStamp, 21.0)]
     {
         let mut a = app();
         pick(&mut a, tool);
@@ -78,10 +78,11 @@ fn other_tools_keep_their_reset_sizes() {
         invoke(&mut a, "tool.reset", json!({}));
         assert_eq!(tip(&mut a)[0], want, "{tool:?}");
     }
-    // The Spot Healing Brush's first use still takes the current brush, as before.
+    // The Spot Healing Brush's first use starts with its own 19 px tip, not the current brush
+    // (#12560).
     let mut a = app();
     pick(&mut a, Tool::Pencil);
     scramble(&mut a);
     pick(&mut a, Tool::SpotHealing);
-    assert_eq!(tip(&mut a)[0], 57.0, "Spot Healing Brush, first use");
+    assert_eq!(tip(&mut a)[0], 19.0, "Spot Healing Brush, first use");
 }

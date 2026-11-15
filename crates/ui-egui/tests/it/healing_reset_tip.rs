@@ -1,6 +1,7 @@
 //! #12099: Reset Tool gives the Healing Brush the reference application's tip, a 19 px hard round
 //! at 25 % spacing, not the 20 px default at 10 %; Reset All Tools and a first use do too. The
-//! Pattern Stamp, the Spot Healing Brush and commands without brush params keep theirs.
+//! Pattern Stamp and commands without brush params keep theirs; the Spot Healing Brush shares the
+//! Healing Brush's tip (#12560, `spot_healing_reset_tip.rs`).
 
 use photocraft_ui_egui::control::{ControlRequest, handle};
 use photocraft_ui_egui::{PhotocraftApp, Tool};
@@ -90,19 +91,18 @@ fn a_first_use_starts_with_the_tip() {
 
 #[test]
 fn other_retouch_tools_and_session_strokes_keep_their_tips() {
-    for tool in [Tool::PatternStamp, Tool::SpotHealing] {
-        let mut a = app();
-        pick(&mut a, tool);
-        scramble(&mut a);
-        control(&mut a, "ui.menu.invoke", json!({"id": "tool.reset"}));
-        assert_eq!(tip(&mut a), DEFAULT_TIP, "{tool:?}");
-        // A first use still takes the current tip, as before.
-        let mut a = app();
-        pick(&mut a, Tool::Pencil);
-        scramble(&mut a);
-        pick(&mut a, tool);
-        assert_eq!(tip(&mut a)[0], 57.0, "{tool:?}, first use");
-    }
+    let tool = Tool::PatternStamp;
+    let mut a = app();
+    pick(&mut a, tool);
+    scramble(&mut a);
+    control(&mut a, "ui.menu.invoke", json!({"id": "tool.reset"}));
+    assert_eq!(tip(&mut a), DEFAULT_TIP, "{tool:?}");
+    // A first use still takes the current tip, as before.
+    let mut a = app();
+    pick(&mut a, Tool::Pencil);
+    scramble(&mut a);
+    pick(&mut a, tool);
+    assert_eq!(tip(&mut a)[0], 57.0, "{tool:?}, first use");
 }
 
 /// The layer's pixels after `cmd` paints a short stroke in a fresh session, with `brush` params
