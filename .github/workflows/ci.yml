@@ -209,10 +209,6 @@ jobs:
           toolchain: stable
           components: clippy
 
-      # Only main saves caches; PRs restore main's, so the repo's 10 GB cache budget keeps main's.
-      # A failing test still saves: the cache holds compiled dependencies, not test results.
-      # Both legs share one key (same dependencies); the integration leg saves it, because it also
-      # runs Clippy and so leaves Clippy's dependency metadata in it.
       # rust-cache only looks at `<workspace>/<target>` (it joins the two), so the short
       # CARGO_TARGET_DIR above must be passed as a path relative to the checkout. Without it the
       # cache found nothing to restore or save and every run built all dependencies from scratch.
@@ -221,11 +217,17 @@ jobs:
         run: echo "relative=$(realpath -m --relative-to="$(cygpath -u "$GITHUB_WORKSPACE")" "$(cygpath -u "$CARGO_TARGET_DIR")")" >> "$GITHUB_OUTPUT"
         shell: bash
 
+      # Only main saves caches; PRs restore main's, so the repo's 10 GB cache budget keeps main's.
+      # Both legs share one key (same dependencies); the integration leg saves it, because it also
+      # runs Clippy and so leaves Clippy's dependency metadata in it. A failed run saves nothing:
+      # when Clippy fails, the test build never ran, and an entry saved then would lack its
+      # dependencies. rust-cache never replaces an entry with the same key, so every later run
+      # would restore that half-filled entry until Cargo.lock changes.
       - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
         with:
           workspaces: . -> ${{ steps.cache-target.outputs.relative }}
           save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == 'integration' }}
-          cache-on-failure: true
+          cache-on-failure: false
 
       - name: Clippy
         if: matrix.part == 'integration'
