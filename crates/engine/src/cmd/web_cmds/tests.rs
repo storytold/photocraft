@@ -544,7 +544,7 @@ fn export_preferences_drive_quick_export() {
     assert!(r["path"].as_str().unwrap().contains("Documents-assets"), "{r}");
     s.active_mut().unwrap().path = Some(format!("{dir}/web.psd"));
     let r = s.execute("file.export.quickExport", json!({})).unwrap();
-    assert_eq!(r["path"], json!(format!("{dir}/web-assets/web.jpg")));
+    assert_eq!(std::path::Path::new(r["path"].as_str().unwrap()), std::path::Path::new(&format!("{dir}/web-assets/web.jpg")));
     assert_eq!(decode(&format!("{dir}/web-assets/web.jpg")).dimensions(), (64, 48));
     s.execute("file.export.exportPreferences", json!({"quickExportFormat": "gif"})).unwrap();
     let r = s.execute("file.export.quickExport", json!({"path": format!("{dir}/x.gif")})).unwrap();
@@ -564,9 +564,10 @@ fn quick_export_never_replaces_the_documents_own_file_unasked() {
     let own = format!("{dir}/photo.png");
     std::fs::write(&own, b"original").unwrap();
     s.active_mut().unwrap().path = Some(own.clone());
-    assert_eq!(quick_export_target(&s), Some(format!("{dir}/photo-assets/photo.png")));
+    assert_eq!(quick_export_target(&s).as_deref().map(std::path::Path::new), Some(std::path::Path::new(&format!("{dir}/photo-assets/photo.png"))));
     assert!(!quick_export_target_is_own_file(&s));
-    assert_eq!(s.execute("file.export.quickExport", json!({})).unwrap()["path"], json!(format!("{dir}/photo-assets/photo.png")));
+    let r = s.execute("file.export.quickExport", json!({})).unwrap();
+    assert_eq!(std::path::Path::new(r["path"].as_str().unwrap()), std::path::Path::new(&format!("{dir}/photo-assets/photo.png")));
     assert_eq!(std::fs::read(&own).unwrap(), b"original", "the source is untouched");
     s.execute("file.export.quickExport", json!({"path": own})).unwrap();
     assert_eq!(decode(&own).dimensions(), (64, 48));
@@ -1351,7 +1352,7 @@ fn quick_export_exr_preserves_linear_hdr_and_alpha() {
         let result = s.execute("file.export.quickExport", json!({})).unwrap();
         assert_eq!(result["format"], "exr");
         let path = format!("{dir}/source-assets/source.exr");
-        assert_eq!(result["path"], path);
+        assert_eq!(std::path::Path::new(result["path"].as_str().unwrap()), std::path::Path::new(&path));
         assert_eq!(result["bytes"].as_u64(), Some(std::fs::metadata(&path).unwrap().len()));
         let decoded = decode(&path);
         assert_eq!(decoded.sample_type(), SampleType::F32);
@@ -1367,7 +1368,8 @@ fn quick_export_exr_preserves_linear_hdr_and_alpha() {
     std::fs::copy(format!("{dir}/source-assets/source.exr"), &own).unwrap();
     s.active_mut().unwrap().path = Some(own.clone());
     let before = std::fs::read(&own).unwrap();
-    assert_eq!(s.execute("file.export.quickExport", json!({})).unwrap()["path"], json!(format!("{dir}/source-assets/source.exr")));
+    let r = s.execute("file.export.quickExport", json!({})).unwrap();
+    assert_eq!(std::path::Path::new(r["path"].as_str().unwrap()), std::path::Path::new(&format!("{dir}/source-assets/source.exr")));
     assert_eq!(std::fs::read(&own).unwrap(), before);
     s.execute("file.export.quickExport", json!({"path": format!("{dir}/explicit.exr")})).unwrap();
     assert_eq!(decode(&format!("{dir}/explicit.exr")).dimensions(), (2, 1));

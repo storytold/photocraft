@@ -1,6 +1,6 @@
 use super::optimizer::{optimize, web_document, web_exif, web_warnings, web_xmp};
 use super::settings::WebSettings;
-use super::{EngineError, Result, Session, Value, bad, json, other, stem, write_file};
+use super::{EngineError, Result, Session, Value, bad, json, other, write_file};
 
 // ---------- Export Preferences / Quick Export ----------
 
@@ -43,8 +43,30 @@ pub fn quick_export_target(s: &Session) -> Option<String> {
     #[cfg(test)]
     let documents = Some(std::env::temp_dir().join(format!("pc-quick-home-{}", std::process::id())).join("Documents"));
     #[cfg(not(test))]
-    let documents = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join("Documents"));
+    let documents = documents_dir();
     assets_target(d.path.as_deref(), &d.doc.name, &quick_export_ext(s), documents.as_deref())
+}
+
+/// The user's Documents folder as the platform names it: a Windows known folder that was moved off the
+/// profile, the XDG documents directory, `~/Documents` on macOS. Nothing on the web.
+#[cfg(not(test))]
+fn documents_dir() -> Option<std::path::PathBuf> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let platform = dirs::document_dir();
+    #[cfg(target_arch = "wasm32")]
+    let platform = None;
+    documents_from(platform, std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(std::path::PathBuf::from))
+}
+
+/// `platform`'s Documents folder, else `<home>/Documents` when only a home folder is known.
+fn documents_from(platform: Option<std::path::PathBuf>, home: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    platform.or_else(|| home.map(|h| h.join("Documents")))
+}
+
+/// A path's file name without its last extension, by the host's own path rules: on Unix only `/`
+/// separates components and a backslash is part of a name.
+fn host_stem(path: &str) -> String {
+    std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 /// The assets-folder target, as measured in the reference application (#13794): a saved
@@ -55,12 +77,12 @@ pub fn assets_target(doc_path: Option<&str>, doc_name: &str, ext: &str, document
     let (folder, name) = match doc_path {
         Some(dp) => {
             let dir = std::path::Path::new(dp).parent().map(std::path::Path::to_path_buf).unwrap_or_default();
-            (dir.join(format!("{}-assets", stem(dp))), stem(dp))
+            (dir.join(format!("{}-assets", host_stem(dp))), host_stem(dp))
         }
         None => {
             let documents = documents?;
             let folder = documents.with_file_name(format!("{}-assets", documents.file_name()?.to_string_lossy()));
-            (folder, stem(doc_name))
+            (folder, host_stem(doc_name))
         }
     };
     Some(folder.join(format!("{name}.{ext}")).to_string_lossy().into_owned())

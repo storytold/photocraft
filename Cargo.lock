@@ -5628,6 +5628,7 @@ dependencies = [
  "craft-print",
  "craft-psd",
  "craft-xml",
+ "dirs",
  "exr",
  "flate2",
  "getrandom 0.3.4",
