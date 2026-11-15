@@ -1616,4 +1616,30 @@ fn imports_warn_when_embedded_images_are_omitted() {
     assert_eq!(omission_warnings(&bounded), 1, "{:?}", bounded.warnings);
     assert_eq!(photocraft_compose::flatten(&bounded.document).to_rgba8().pixels, vec![255, 0, 0, 255], "the bounded import retains the red rectangle");
     assert!(parse_bounded_work_with(svg.as_bytes(), MAX_RASTER_PIXELS, true, fonts).is_err(), "stored previews must still be complete");
+    // Pixel-only rasterizers cannot return the ordinary import's omission warning.
+    // Keep the original damaged and oversized inputs; a readable rectangle must not hide loss.
+    let oversized_svg = image_svg(&format!("{oversized}{oversized}{rect}"));
+    for source in [&oversized_svg, &svg] {
+        assert!(parse(source.as_bytes()).unwrap().omitted_images, "fixture must exercise a resolver omission");
+        let scaled = rasterize(source.as_bytes(), 1.0).unwrap_err();
+        let rgba8 = rasterize_rgba8(source.as_bytes()).unwrap_err();
+        for error in [scaled, rgba8] {
+            assert!(matches!(&error, IoError::Svg(message) if message.contains("embedded images were omitted")), "{error}");
+        }
+    }
+    // Externally edited SVG placement intentionally remains non-strict about unreadable images.
+    let placed = rasterize_bounded(svg.as_bytes(), 1.0, MAX_RASTER_PIXELS).unwrap();
+    assert_eq!(placed.px, vec![[1.0, 0.0, 0.0, 1.0]]);
+    // Complete drawings still rasterize to the same literal pixels, with and without an image.
+    let blue = photocraft_codecs::Image::from_u8(1, 1, photocraft_codecs::ChannelLayout::Rgb, vec![0, 0, 255]).unwrap();
+    let png = photocraft_codecs::encode(&blue, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    for (source, expected) in [(image_svg(rect), [255u8, 0, 0, 255]), (image_svg(&embedded_image("image/png", &png)), [0u8, 0, 255, 255])] {
+        assert!(!parse(source.as_bytes()).unwrap().omitted_images);
+        let (width, height, pixels) = rasterize_rgba8(source.as_bytes()).unwrap();
+        assert_eq!((width, height), (1, 1));
+        assert_eq!(pixels, expected);
+        let scaled = rasterize(source.as_bytes(), 1.0).unwrap();
+        assert_eq!(scaled.rect, Rect::new(0, 0, 1, 1));
+        assert_eq!(scaled.px, vec![expected.map(|channel| f32::from(channel) / 255.0)]);
+    }
 }

@@ -1168,11 +1168,21 @@ fn import_parsed_with_limits(
     Ok(ImportResult { document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
 }
 
+// These entry points return only pixels, with no warning channel. Refuse a partial drawing
+// instead of silently losing images; bounded placement deliberately retains its non-strict policy.
+fn complete_rasterization_tree(bytes: &[u8]) -> Result<usvg::Tree, IoError> {
+    let Parsed { tree, omitted_images, .. } = parse(bytes)?;
+    if omitted_images {
+        return Err(IoError::Svg("embedded images were omitted; the drawing cannot be rasterised completely".into()));
+    }
+    Ok(tree)
+}
+
 /// The whole drawing rendered at `scale` (1 = its own size), as a straight-alpha RGBA buffer at
 /// the origin. Smart objects use it to stay sharp at any placement.
 pub fn rasterize(bytes: &[u8], scale: f32) -> Result<photocraft_compose::Buffer, IoError> {
     on_svg_stack(|| {
-        let tree = parse(bytes)?.tree;
+        let tree = complete_rasterization_tree(bytes)?;
         rasterize_tree(&tree, scale)
     })
 }
@@ -1209,7 +1219,7 @@ fn rasterize_tree(tree: &usvg::Tree, scale: f32) -> Result<photocraft_compose::B
 /// for a drawing copied as SVG markup.
 pub fn rasterize_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), IoError> {
     on_svg_stack(|| {
-        let tree = parse(bytes)?.tree;
+        let tree = complete_rasterization_tree(bytes)?;
         let cv = canvas(&tree, &mut Vec::new());
         let (w, h) = (f64::from(tree.size().width() * cv.scale), f64::from(tree.size().height() * cv.scale));
         // The largest k ≤ 1 with (w·k + 2)(h·k + 2) ≤ the limit: `render` rounds each side up, and
