@@ -1999,3 +1999,110 @@ fn open_develops_with_the_masks() {
     let (plain, masked) = (mean_of(false), mean_of(true));
     assert!(masked > plain + 0.1, "the mask brightens the opened document: {plain} → {masked}");
 }
+
+/// The user's resize is remembered: Camera Raw's window opens at the size and place it was last
+/// left in, across opens of the dialog and restarts of the app (the preferences), fitted to the
+/// screen; the first open keeps the default size.
+#[test]
+fn the_camera_raw_window_opens_where_it_was_left() {
+    use std::sync::{Arc, Mutex};
+    type Shared = Arc<Mutex<(egui::ViewportInfo, Option<egui::ViewportBuilder>)>>;
+    let shared: Shared = Arc::new(Mutex::new((egui::ViewportInfo::default(), None)));
+    let host = shared.clone();
+    egui::Context::set_immediate_viewport_renderer(move |ctx, immediate| {
+        let id = immediate.ids.this;
+        let mut callback = immediate.viewport_ui_cb;
+        let info = {
+            let mut s = host.lock().unwrap();
+            s.1 = Some(immediate.builder.clone());
+            s.0.clone()
+        };
+        let input = egui::RawInput { viewport_id: id, viewports: std::iter::once((id, info)).collect(), ..Default::default() };
+        ctx.run_ui(input, |ui| callback(ui)).textures_delta.clear();
+    });
+    let monitor = egui::vec2(2560.0, 1440.0);
+    let new_app = |prefs: Option<photocraft_engine::prefs::Preferences>| {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        if let Some(p) = prefs {
+            app.session.prefs.edit(|now| *now = p);
+        }
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        ctx.set_embed_viewports(false);
+        (app, ctx)
+    };
+    let frame = |app: &mut PhotocraftApp, ctx: &egui::Context, t: f64| {
+        let mut input = egui::RawInput { time: Some(t), ..Default::default() };
+        let root = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+        root.monitor_size = Some(monitor);
+        root.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(1440.0, 900.0)));
+        ctx.run_ui(input, |ui| show(app, ui.ctx())).textures_delta.clear();
+    };
+    let opened_with = |s: &Shared| {
+        let b = s.lock().unwrap().1.clone().unwrap();
+        (b.inner_size, b.position, b.maximized)
+    };
+    let window = |s: &Shared, x: f32, y: f32, w: f32, h: f32, maximized: bool| {
+        let info = &mut s.lock().unwrap().0;
+        info.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h + 28.0)));
+        info.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(x, y + 28.0), egui::vec2(w, h)));
+        info.maximized = Some(maximized);
+    };
+
+    // first run: today's default
+    let (mut app, ctx) = new_app(None);
+    open(&mut app, &ctx).unwrap();
+    window(&shared, 200.0, 100.0, 1360.0, 900.0, false);
+    frame(&mut app, &ctx, 0.0);
+    assert_eq!(opened_with(&shared), (Some(egui::vec2(1360.0, 900.0)), None, None));
+    // the user makes it larger; saved once it keeps still, not mid-resize
+    window(&shared, 150.0, 60.0, 1900.0, 1200.0, false);
+    frame(&mut app, &ctx, 1.0);
+    assert!(!app.session.prefs().dialogs.contains_key(window_place::KEY), "still moving");
+    frame(&mut app, &ctx, 1.5);
+    let saved = app.session.prefs().dialogs.get(window_place::KEY).cloned().unwrap();
+    assert_eq!(saved, json!({"size": [1900.0, 1200.0], "pos": [150.0, 60.0], "maximized": false}));
+    // the builder doesn't follow the window while it's open (egui would resize it back)
+    assert_eq!(opened_with(&shared).0, Some(egui::vec2(1360.0, 900.0)));
+    // moved and closed at once: saved at the close
+    window(&shared, 300.0, 80.0, 1900.0, 1200.0, false);
+    frame(&mut app, &ctx, 2.0);
+    open::cancel(&mut app);
+    frame(&mut app, &ctx, 2.05);
+    assert_eq!(app.session.prefs().dialogs[window_place::KEY]["pos"], json!([300.0, 80.0]));
+
+    // the next open, and the next launch, come back there
+    open(&mut app, &ctx).unwrap();
+    frame(&mut app, &ctx, 3.0);
+    assert_eq!(opened_with(&shared), (Some(egui::vec2(1900.0, 1200.0)), Some(egui::pos2(300.0, 80.0)), None));
+    open::cancel(&mut app);
+    frame(&mut app, &ctx, 3.1);
+    let prefs = app.session.prefs().clone();
+    let (mut app, ctx) = new_app(Some(prefs.clone()));
+    open(&mut app, &ctx).unwrap();
+    frame(&mut app, &ctx, 0.0);
+    assert_eq!(opened_with(&shared), (Some(egui::vec2(1900.0, 1200.0)), Some(egui::pos2(300.0, 80.0)), None));
+    // maximised: comes back maximised, keeping the size to restore to
+    window(&shared, 0.0, 0.0, 2560.0, 1380.0, true);
+    frame(&mut app, &ctx, 1.0);
+    frame(&mut app, &ctx, 1.5);
+    assert_eq!(app.session.prefs().dialogs[window_place::KEY], json!({"size": [1900.0, 1200.0], "pos": [300.0, 80.0], "maximized": true}));
+    open::cancel(&mut app);
+    frame(&mut app, &ctx, 1.6);
+    open(&mut app, &ctx).unwrap();
+    frame(&mut app, &ctx, 2.0);
+    assert_eq!(opened_with(&shared), (Some(egui::vec2(1900.0, 1200.0)), Some(egui::pos2(300.0, 80.0)), Some(true)));
+    open::cancel(&mut app);
+    frame(&mut app, &ctx, 2.1);
+
+    // saved on a larger display than this one: fitted to the screen, never off it
+    let mut big = prefs;
+    big.dialogs.insert(window_place::KEY.into(), json!({"size": [3800.0, 2000.0], "pos": [2000.0, 900.0]}));
+    let (mut app, ctx) = new_app(Some(big));
+    open(&mut app, &ctx).unwrap();
+    frame(&mut app, &ctx, 0.0);
+    let (size, pos, _) = opened_with(&shared);
+    assert_eq!(size, Some(egui::vec2(2560.0, 1440.0 - crate::work_area::TASKBAR)));
+    assert_eq!(pos, Some(egui::pos2(0.0, 0.0)));
+}

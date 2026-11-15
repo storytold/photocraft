@@ -357,7 +357,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
-    let Some(d) = app.camera_raw.as_ref() else { return };
+    let Some(d) = app.camera_raw.as_ref() else {
+        // the window closed before its last resize or move settled: saved now
+        let mut tracker = super::window_place::Tracker::load(ctx);
+        if let Some(p) = tracker.unsaved(super::window_place::saved(app.session.prefs())) {
+            super::window_place::save(app, p);
+        }
+        if tracker.seen.is_some() || tracker.opened.is_some() {
+            tracker = Default::default();
+            tracker.store(ctx);
+        }
+        return;
+    };
     // Camera Raw's window is drawn from the main window's frame: while a filmstrip thumbnail waits
     // to be redrawn, the main window keeps frames coming, whatever reaches the dialog's own window.
     if super::filmstrip::thumbnails_pending(app) {
@@ -390,8 +401,23 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         d.main_focused = main_focused;
     }
-    // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
-    let builder = crate::os_window::builder().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
+    // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw,
+    // opening at the size and place it was last left in (`window_place`).
+    let mut tracker = super::window_place::Tracker::load(ctx);
+    let frame = ctx.cumulative_frame_nr();
+    let saved = super::window_place::saved(app.session.prefs());
+    let opened = match tracker.opened {
+        Some(p) if tracker.frame.saturating_add(1) >= frame => p,
+        _ => {
+            let screen = ctx.input(|i| super::window_place::screen(i.viewport().monitor_size, i.viewport().outer_rect.or(i.viewport().inner_rect)));
+            let p = super::window_place::fit(saved, screen);
+            tracker = super::window_place::Tracker { opened: Some(p), seen: None, frame };
+            p
+        }
+    };
+    tracker.frame = frame;
+    let builder = super::window_place::apply(crate::os_window::builder().with_title(window_title), opened);
+    let mut place = None;
     let mut close = false;
     let changed = has_changes(app);
     // Keys that reach the main window while the dialog is open are the dialog's: a native menu's
@@ -412,7 +438,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.ctx().input_mut(|i| i.events.extend(forwarded.iter().cloned()));
         }
         draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
+        let last = tracker.seen.map(|(p, _)| p).or(saved);
+        place =
+            (class != egui::ViewportClass::EmbeddedWindow).then(|| ui.ctx().input(|i| super::window_place::Placement::observe(i.viewport(), last))).flatten();
     });
+    let now = ctx.input(|i| i.time);
+    if let Some(p) = tracker.observe(place, now, saved) {
+        super::window_place::save(app, p);
+    } else if tracker.unsaved(saved).is_some() {
+        // the window was resized or moved: saved once it keeps still
+        ctx.request_repaint_after(super::window_place::Tracker::SETTLE);
+    }
+    tracker.store(ctx);
     if close && app.camera_raw.is_some() {
         request_cancel(app);
     }

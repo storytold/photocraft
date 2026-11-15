@@ -43,6 +43,7 @@ mod open;
 mod proxy;
 mod rail;
 mod sidecar;
+mod window_place;
 
 pub use controls::show;
 #[cfg(test)]
