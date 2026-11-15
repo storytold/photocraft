@@ -37,13 +37,23 @@ fn quick_export_ext(s: &Session) -> String {
 /// Location is "Export files to an assets folder next to the current document" (stored as
 /// `sameFolder`): see [`assets_target`]. `None` with "Ask where to export each time".
 pub fn quick_export_target(s: &Session) -> Option<String> {
+    quick_export_target_with(s, || {
+        // The engine's own tests never write into the real home folder.
+        #[cfg(test)]
+        {
+            Some(std::env::temp_dir().join(format!("pc-quick-home-{}", std::process::id())).join("Documents"))
+        }
+        #[cfg(not(test))]
+        documents_dir()
+    })
+}
+
+/// [`quick_export_target`] with the Documents folder lookup supplied, for an unsaved document. The tests
+/// pass their own, a redirected location included, through the same code the platform lookup feeds.
+fn quick_export_target_with(s: &Session, documents: impl FnOnce() -> Option<std::path::PathBuf>) -> Option<String> {
     let assets = s.prefs().export.quick_export_location == crate::prefs::ExportLocation::SameFolder;
     let d = s.active().filter(|_| assets)?;
-    // The engine's own tests never write into the real home folder.
-    #[cfg(test)]
-    let documents = Some(std::env::temp_dir().join(format!("pc-quick-home-{}", std::process::id())).join("Documents"));
-    #[cfg(not(test))]
-    let documents = documents_dir();
+    let documents = if d.path.is_none() { documents() } else { None };
     assets_target(d.path.as_deref(), &d.doc.name, &quick_export_ext(s), documents.as_deref())
 }
 

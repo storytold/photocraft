@@ -89,3 +89,24 @@ fn ask_still_needs_a_path_and_a_folder_that_cannot_be_made_is_an_error() {
     let err = s.execute("file.export.quickExport", json!({})).unwrap_err().to_string();
     assert!(err.contains("cannot create the assets folder"), "{err}");
 }
+
+/// CodeRabbit on #15082: an unsaved document's target follows whatever Documents folder the lookup gives,
+/// through `quick_export_target` itself: a redirected folder names the `-assets` folder, none means no
+/// target, and a saved document never asks the lookup.
+#[test]
+fn an_unsaved_documents_target_follows_a_redirected_documents_folder() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6, "name": "sketch"})).unwrap();
+    s.execute("file.export.exportPreferences", json!({"quickExportLocation": "sameFolder", "quickExportFormat": "png"})).unwrap();
+    let redirected = || Some(Path::new("/mnt/data/Docs").to_path_buf());
+    assert_eq!(quick_export_target_with(&s, redirected).map(std::path::PathBuf::from), Some(Path::new("/mnt/data/Docs-assets/sketch.png").to_path_buf()));
+    assert_eq!(quick_export_target_with(&s, || None), None, "no Documents folder, no target");
+    s.active_mut().unwrap().path = Some("/work/sketch.psd".into());
+    let asked = std::cell::Cell::new(false);
+    let target = quick_export_target_with(&s, || {
+        asked.set(true);
+        redirected()
+    });
+    assert_eq!(target.map(std::path::PathBuf::from), Some(Path::new("/work/sketch-assets/sketch.png").to_path_buf()));
+    assert!(!asked.get(), "a saved document does not look the Documents folder up");
+}
