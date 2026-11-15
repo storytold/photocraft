@@ -114,6 +114,8 @@ mod agents_tests;
 mod recovery_tests;
 
 #[cfg(test)]
+mod shared_tool_letter_tests;
+#[cfg(test)]
 mod shortcut_capture_tests;
 #[cfg(test)]
 mod shortcut_set_tests;

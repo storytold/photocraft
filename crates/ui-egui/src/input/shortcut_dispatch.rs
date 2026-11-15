@@ -79,6 +79,8 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
                 && photocraft_engine::commands::find(id).is_none()
                 && !crate::menus::UI_COMMANDS.iter().any(|c| c.0 == id.as_str())
                 && !crate::hold_keys::is_temporary(id)
+                // A letter several tools share goes to the tool keys, which cycle them (#14208).
+                && !crate::tool_shortcuts::tool(id).is_some_and(|t| crate::tool_shortcuts::letter(app, t).is_some())
         })
         .map(|(id, sc)| (id.as_str(), Some(sc.clone())));
     // A key the user assigned in Edit › Keyboard Shortcuts belongs to that command, ahead of any

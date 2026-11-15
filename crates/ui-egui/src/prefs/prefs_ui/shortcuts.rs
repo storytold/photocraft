@@ -291,6 +291,8 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                     .filter(|(id, _, _, def)| {
                         let cur = eff(&overrides, id, def);
                         *id != selected
+                            // Tools of one toolbar group may share a key (#14208).
+                            && !crate::tool_shortcuts::same_group(id, &selected)
                             && (cur.as_deref().and_then(prefs::normalize_shortcut) == Some(sc.clone())
                                 || eff_alts(&alt_overrides, id, cur.as_deref()).contains(&sc))
                     })

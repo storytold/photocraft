@@ -1030,7 +1030,13 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // group's current tool. From another group, the key picks the group's last-used tool.
     // A held tool letter is a spring-loaded tool (#2672), not a burst of presses: its key
     // repeats are dropped rather than cycling the group.
-    ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { key, pressed: true, repeat: true, .. } if crate::spring_tools::is_tool_key(*key))));
+    ctx.input_mut(|i| {
+        i.events.retain(|e| {
+            !matches!(e, egui::Event::Key { key, pressed: true, repeat: true, .. }
+                if crate::spring_tools::is_tool_key(*key)
+                    || Tool::ALL.into_iter().any(|t| crate::tool_shortcuts::letter(app, t).and_then(crate::spring_tools::key_of) == Some(*key)))
+        })
+    });
     if select_tool_by_key(app, ctx, &pressed) {
         return;
     }
@@ -1048,14 +1054,12 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
 fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &impl Fn(Key) -> bool) -> bool {
     let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
     for t in Tool::ALL {
-        if !crate::tool_shortcuts::uses_default(app, t) {
-            continue;
-        }
-        let Some(k) = crate::spring_tools::key_of(t.key()) else { continue };
+        let Some(letter) = crate::tool_shortcuts::letter(app, t) else { continue };
+        let Some(k) = crate::spring_tools::key_of(letter) else { continue };
         let cycle_shift = shift_switch && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, k));
         if cycle_shift || pressed(k) {
             let before = app.ui.tool;
-            let mut group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key() && crate::tool_shortcuts::uses_default(app, *x)).collect();
+            let mut group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| crate::tool_shortcuts::letter(app, *x) == Some(letter)).collect();
             // Shift+key cycles in toolbar flyout order.
             if cycle_shift {
                 group.sort_by_key(|x| crate::panels::toolbar::toolbar_position(*x));
@@ -1078,7 +1082,7 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
             crate::tool_memory::ended_by_tool(app);
             // `consume_key` ignores extra ⇧ and ⌥: a ⇧/⌥ switch is never spring-loaded.
             let (plain, now) = ctx.input(|i| (!cycle_shift && !i.modifiers.shift && !i.modifiers.alt, i.time));
-            crate::spring_tools::pressed(app, t.key(), before, plain, now);
+            crate::spring_tools::pressed(app, letter, before, plain, now);
             if app.ui.spring.is_none() {
                 // Permanent key choices own the tool; held-key switches keep the pen marker.
                 app.stylus.tool_before_eraser = None;

@@ -29,6 +29,31 @@ pub(crate) fn uses_default(app: &PhotocraftApp, tool: Tool) -> bool {
     !app.session.prefs().shortcuts.contains_key(&id(tool))
 }
 
+/// Two Keyboard Shortcuts rows for tools of one toolbar group: they may share a key, as the
+/// lassos share L (#14208).
+pub(crate) fn same_group(a: &str, b: &str) -> bool {
+    let (Some(a), Some(b)) = (tool(a), tool(b)) else { return false };
+    crate::panels::toolbar::TOOL_SECTIONS.iter().flat_map(|section| section.iter()).any(|slot| slot.contains(&a) && slot.contains(&b))
+}
+
+/// The letter that picks `tool` through the tool keys (group memory, ⇧ cycling, spring-loading):
+/// its default while unchanged, or a letter the user gave it and another tool as well (#14208).
+/// A key only one tool was given stays an ordinary shortcut for that tool.
+pub(crate) fn letter(app: &PhotocraftApp, tool: Tool) -> Option<char> {
+    if uses_default(app, tool) {
+        return (tool.key() != '\0').then_some(tool.key());
+    }
+    let own = user_letter(app, tool)?;
+    Tool::ALL.into_iter().any(|t| t != tool && user_letter(app, t) == Some(own)).then_some(own)
+}
+
+/// A single letter the user assigned to `tool`.
+fn user_letter(app: &PhotocraftApp, tool: Tool) -> Option<char> {
+    let mut chars = app.session.prefs().shortcuts.get(&id(tool))?.chars();
+    let c = chars.next().filter(char::is_ascii_alphabetic)?;
+    chars.next().is_none().then(|| c.to_ascii_uppercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

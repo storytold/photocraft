@@ -382,7 +382,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                     continue;
                 }
                 for (other, _, _, def) in &items {
-                    if *other == id {
+                    // Tools of one toolbar group may share a key (#14208).
+                    if *other == id || crate::tool_shortcuts::same_group(other, &id) {
                         continue;
                     }
                     let held = match ov.get(other) {
