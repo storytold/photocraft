@@ -106,6 +106,12 @@ const WHOLE_PATCH_TWIST_TOL: f64 = 1.8;
 /// keep a top patch whose first row twists by 1.76 whole (at any turn of the twist), and waves keep
 /// a bottom patch whose first row twists by 1.87 or 1.93 whole and split one at 2.24.
 const FIRST_ROW_TWIST_TOL: f64 = 2.07;
+/// The twist along its rows past which a cell as tall as its patch splits down in a quilt whose
+/// patches don't halve evenly ([`TWIST_TOL`] in an even quilt): such cells stay whole at 0.96 and
+/// 1.06 px (a lumpy shape at 100 % and 110 %) and split at 1.20 and 1.28 px (a wave of three by
+/// three patches, a bend three patches down). It is [`TWIST_TOL`] raised by the same factor that
+/// raises [`WHOLE_PATCH_TWIST_TOL`] to [`FIRST_ROW_TWIST_TOL`].
+const UNEVEN_FULL_HEIGHT_TWIST_TOL: f64 = 1.15;
 /// How much more an inner control row of a quilt cell's net counts than its top and bottom rows
 /// when the cell is measured for a split across: cells whose largest need comes from an inner row
 /// split from 0.9972 (and stay whole at 0.9900), while cells measured by their top or bottom row
@@ -553,7 +559,7 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             column_chords: None,
             flat_columns: None,
             surface_sides: [false; 2],
-            whole_first_row: false,
+            uneven_quilt: false,
         }
     } else {
         Rules {
@@ -570,7 +576,7 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             column_chords: tall.then_some(TALL_COLUMN_LEVEL),
             flat_columns: (!tall).then_some(FLAT_COLUMN_TOL),
             surface_sides: [false; 2],
-            whole_first_row: false,
+            uneven_quilt: false,
         }
     }
 }
@@ -619,7 +625,7 @@ fn patch_rules(seams: Seams) -> Rules {
         column_chords: None,
         flat_columns: None,
         surface_sides: if seams.top || seams.bottom { [false; 2] } else { [seams.left, seams.right] },
-        whole_first_row: seams.uneven,
+        uneven_quilt: seams.uneven,
     }
 }
 
@@ -667,9 +673,11 @@ struct Rules {
     /// The left and right sides whose points stay where the surface puts them rather than on the
     /// side's chord: a quilt patch's inner seams when the quilt has a single row of patches.
     surface_sides: [bool; 2],
-    /// A whole patch splits down for the twist across the rows of its first row of quads only, past
-    /// [`FIRST_ROW_TWIST_TOL`] (patches of a quilt that doesn't halve evenly).
-    whole_first_row: bool,
+    /// The patch belongs to a quilt that doesn't halve evenly: a whole patch splits down for the
+    /// twist across the rows of its first row of quads only, past [`FIRST_ROW_TWIST_TOL`], and a
+    /// cell as tall as its patch for the twist along its rows past
+    /// [`UNEVEN_FULL_HEIGHT_TWIST_TOL`].
+    uneven_quilt: bool,
 }
 
 /// The parent cell of `c` (one halving up both ways), as a comparable key.
@@ -745,7 +753,7 @@ fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
 fn twist_test(sub: &Net, rules: &Rules, whole: bool, full_height: bool, goes_across: bool) -> (f64, f64, f64) {
     let (p00, p10, p01) = (sub.at(0, 0), sub.at(sub.nu.saturating_sub(1), 0), sub.at(0, sub.nv.saturating_sub(1)));
     let (du, dv) = ([p10[0] - p00[0], p10[1] - p00[1]], [p01[0] - p00[0], p01[1] - p00[1]]);
-    let first_row = rules.whole_first_row && rules.twist_spreads && whole && !goes_across;
+    let first_row = rules.uneven_quilt && rules.twist_spreads && whole && !goes_across;
     let tw = match (rules.twist_by_side, goes_across) {
         (true, true) => sub.twist_left(),
         (true, false) => sub.twist_top(),
@@ -761,9 +769,11 @@ fn twist_test(sub: &Net, rules: &Rules, whole: bool, full_height: bool, goes_acr
         (false, _) => sub.twist(),
     };
     // A whole quilt patch splits for its twist only past WHOLE_PATCH_TWIST_TOL (FIRST_ROW_TWIST_TOL
-    // for its first row).
+    // for its first row), a full-height cell of an uneven quilt past UNEVEN_FULL_HEIGHT_TWIST_TOL.
     if first_row {
         (tw, FIRST_ROW_TWIST_TOL, FIRST_ROW_TWIST_TOL)
+    } else if rules.twist_spreads && rules.uneven_quilt && full_height && !goes_across {
+        (tw, UNEVEN_FULL_HEIGHT_TWIST_TOL, UNEVEN_FULL_HEIGHT_TWIST_TOL)
     } else if rules.twist_spreads && whole {
         (tw, WHOLE_PATCH_TWIST_TOL, WHOLE_PATCH_TWIST_TOL)
     } else {
@@ -1259,7 +1269,7 @@ mod tests {
                 column_chords: None,
                 flat_columns: None,
                 surface_sides: [false; 2],
-                whole_first_row: false,
+                uneven_quilt: false,
             },
         );
         assert!(log.iter().any(|s| s.cell == [0.0, 0.25, 0.0, 0.25]), "the corner cell splits");
@@ -1473,7 +1483,7 @@ mod tests {
             column_chords: None,
             flat_columns: None,
             surface_sides: [false; 2],
-            whole_first_row: false,
+            uneven_quilt: false,
         };
         assert!(tallest(&quilt) <= 0.25 + 1e-9, "bottom cells {}", tallest(&quilt));
         let alone = Rules { twist_spreads: false, ..quilt };
@@ -1517,7 +1527,7 @@ mod tests {
             column_chords: None,
             flat_columns: None,
             surface_sides: [false; 2],
-            whole_first_row: false,
+            uneven_quilt: false,
         }
     }
 
@@ -1614,12 +1624,17 @@ mod tests {
     /// A wave's bottom patch: its control points (v from 2/3 to 1 of a 128 px mesh of three rows),
     /// each moved down by 5 sin(2 pi (u + 1/8)) sin(pi v).
     fn wave_bottom_patch() -> Net {
+        wave_bottom_patch_by(5.0)
+    }
+
+    /// [`wave_bottom_patch`] with its control points moved down by `amp` sin(2 pi (u + 1/8)) sin(pi v).
+    fn wave_bottom_patch_by(amp: f64) -> Net {
         let pi = std::f64::consts::PI;
         let p = (0..4)
             .flat_map(|j| {
                 (0..4).map(move |i| {
                     let (u, v) = (i as f64 / 3.0, 2.0 / 3.0 + j as f64 / 9.0);
-                    [128.0 * u, 128.0 * v + 5.0 * (2.0 * pi * (u + 0.125)).sin() * (pi * v).sin()]
+                    [128.0 * u, 128.0 * v + amp * (2.0 * pi * (u + 0.125)).sin() * (pi * v).sin()]
                 })
             })
             .collect();
@@ -1660,6 +1675,29 @@ mod tests {
         assert!(splits.iter().all(|s| !s.2), "{splits:?}");
         assert!(splits.contains(&([0.5, 1.0, 0.0, 1.0], true, false)), "{splits:?}");
         assert!(leaves.iter().all(|c| c[2] == 0.0 && c[3] == 1.0), "{leaves:?}");
+    }
+
+    /// A cell as tall as its patch splits down for its twist along its rows past [`TWIST_TOL`] in a
+    /// quilt that halves evenly, but only past [`UNEVEN_FULL_HEIGHT_TWIST_TOL`] in one that doesn't:
+    /// a patch sheared further along its rows the further down it is splits across into halves
+    /// that twist 1.08 px along their rows, and those split down in the even quilt only.
+    #[test]
+    fn an_uneven_quilts_full_height_cell_splits_down_later() {
+        let at = |u: f64, v: f64| [96.0 + 128.0 * u + 19.44 * u * v, 96.0 + 40.0 * v];
+        let net = cubic_net(&at);
+        let half = net.sub([0.5, 1.0, 0.0, 1.0]);
+        let (p00, p10) = (half.at(0, 0), half.at(half.nu - 1, 0));
+        let tw = half.twist_along([p10[0] - p00[0], p10[1] - p00[1]]);
+        assert!(tw > TWIST_TOL && tw < UNEVEN_FULL_HEIGHT_TWIST_TOL, "{tw}");
+        for uneven in [false, true] {
+            let (_, log) = cells(&net, true, &patch_rules(Seams { top: true, uneven, ..Seams::default() }));
+            let splits: Vec<(Cell, bool, bool)> = log.iter().map(|s| (s.cell, s.across, s.down)).collect();
+            assert!(splits.contains(&([0.0, 1.0, 0.0, 1.0], true, false)), "the patch splits across only: {splits:?}");
+            for c in [[0.0, 0.5, 0.0, 1.0], [0.5, 1.0, 0.0, 1.0]] {
+                let down = splits.iter().any(|s| s.0 == c && s.2);
+                assert_eq!(down, !uneven, "uneven {uneven}: {splits:?}");
+            }
+        }
     }
 
     /// An inner control row counts a little more than the top and bottom rows: a row that bends
@@ -2108,7 +2146,7 @@ mod tests {
             column_chords: None,
             flat_columns: None,
             surface_sides: [false; 2],
-            whole_first_row: false,
+            uneven_quilt: false,
         };
         let (leaves, _) = cells(&net, true, &full);
         let tall = |ls: &[Cell]| ls.iter().any(|c| c[0] >= 0.5 - 1e-9 && c[1] <= 0.75 + 1e-9 && c[2].abs() < 1e-9 && (c[3] - 0.25).abs() < 1e-9);
@@ -2142,7 +2180,7 @@ mod tests {
             column_chords: None,
             flat_columns: None,
             surface_sides: [false; 2],
-            whole_first_row: false,
+            uneven_quilt: false,
         };
         let (leaves, _) = cells(&net, true, &full);
         assert_eq!(m.quads.len(), leaves.len(), "no leaf is cut across");
