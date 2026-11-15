@@ -2121,3 +2121,18 @@ fn mcp_without_consent_works_headless() {
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&empty);
 }
+
+/// With `CRAFT_AI_DIR` at an empty folder nothing is set up: Estimate Depth is refused with the
+/// shared layer's reason, never runs, and writes nothing.
+#[test]
+fn estimate_depth_is_refused_when_the_tool_is_not_set_up() {
+    let d = tmp("estimate-depth-unset");
+    write_png(&d.join("a.png"), 8, 4, 3);
+    let (ai, out) = (d.join("empty-ai"), d.join("out.png"));
+    std::fs::create_dir_all(&ai).unwrap();
+    let o = bin().env("CRAFT_AI_DIR", &ai).arg("run").arg(d.join("a.png")).args(["--cmd", "image.estimateDepth", "--out"]).arg(&out).output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "{err}");
+    assert!(err.to_lowercase().contains("model") || err.to_lowercase().contains("set up"), "{err}");
+    assert!(!out.exists(), "nothing written");
+}

@@ -11,7 +11,7 @@ use photocraft_geom::Point;
 
 use crate::brush::{BrushSettings, Control, Dynamic, Smoothing};
 use crate::rng::{rand_signed, rand01, stream};
-use crate::surface::{MapHandle, SurfaceMap, surface_dab_shape};
+use crate::surface::{Footprint, MapHandle, SurfaceMap, surface_dab_shape};
 use crate::{Dab, StrokePoint};
 
 /// Maximum pulled-string length at 100 % smoothing, in screen pixels.
@@ -699,10 +699,15 @@ impl DabBuilder {
                 }
             }
             // Follow Perspective: on a plane, the plane's projection replaces the pen-tilt one.
+            let mut footprint = None;
             if let Some(local) = self.surface.as_ref().and_then(|m| m.0.local(c)).filter(|l| l.is_valid()) {
                 let reference = self.surface.as_ref().and_then(|m| m.0.reference_scale());
                 let anchor = *self.anchor.get_or_insert(reference.unwrap_or(local.scale));
                 (radius, proj_angle, proj_scale) = surface_dab_shape(radius, Some(anchor), &local);
+                footprint = self.surface.as_ref().and_then(|m| m.0.footprint(c, radius, &local)).filter(Footprint::is_valid);
+                // Follow Folds' bend: the map was read at the undisplaced centre.
+                c.x += f64::from(local.offset[0]);
+                c.y += f64::from(local.offset[1]);
             }
             // Transfer.
             let tr = &b.transfer;
@@ -741,6 +746,7 @@ impl DabBuilder {
                 proj_scale,
                 wet,
                 mix,
+                footprint,
             });
         }
     }
@@ -796,6 +802,7 @@ impl DualBuilder {
                 proj_scale: 1.0,
                 wet: 1.0,
                 mix: 1.0,
+                footprint: None,
             });
         }
     }

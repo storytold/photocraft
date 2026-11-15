@@ -180,6 +180,7 @@ fn the_cursor_shape_is_the_first_dab_and_absent_off_plane() {
     for (x, y) in [(200.0, 270.0), (200.0, 140.0), (60.0, 270.0)] {
         let c = brush_cursor_shape(&mut s, x, y, 15.0).unwrap();
         let (r, a, k) = (c.radius, c.proj_angle, c.proj_scale);
+        assert_eq!(c.offset, [0.0, 0.0]);
         // The first dab of a stroke that starts there.
         let map = super::surface_wire::plane_map(&s).unwrap() as Arc<dyn SurfaceMap>;
         let brush = BrushSettings { size: 30.0, ..BrushSettings::default() };
@@ -205,6 +206,7 @@ fn the_cursor_shape_command_reads_and_fails_gracefully() {
     assert_eq!(r["onPlane"], true);
     // Nearer than the first plane's centre: larger than the brush size.
     assert!(r["radius"].as_f64().unwrap() > 15.0, "{r}");
+    assert!(r["outline"].is_null(), "planes alone keep the ellipse");
     assert!(r["projScale"].as_f64().unwrap() < 1.0);
     assert!(r["projAngle"].is_number());
     assert_eq!(s.execute("brush.cursorShape", json!({"x": 5, "y": 5})).unwrap(), json!({"onPlane": false}));
@@ -301,13 +303,7 @@ fn vanishing_point_paste_rejects_hostile_shade_params() {
     assert_eq!(s.active().unwrap().history.past_len(), steps);
 }
 
-fn dabs_with(brush: &BrushSettings, map: Arc<dyn SurfaceMap>, pts: &[StrokePoint]) -> Vec<photocraft_paint::Dab> {
-    let mut g = photocraft_paint::dynamics::DabGenerator::new(brush, 1.0).with_surface(Some(map));
-    let (mut dabs, mut dual) = (Vec::new(), Vec::new());
-    g.push(pts, &mut dabs, &mut dual);
-    g.finish(&mut dabs, &mut dual);
-    dabs
-}
+// ---- Follow Depth ----
 
 /// A document whose picture is a sinusoidal fold (columns of brightness `0.5 + 0.3 sin(2πx/16)`),
 /// with an empty layer on top: a photo for Surface Color.
@@ -325,6 +321,282 @@ fn folds_doc(w: u32, h: u32) -> Session {
     .unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s
+}
+
+/// A document with an empty layer and an alpha channel `name` holding `depth(x, y)`.
+fn depth_doc(w: u32, h: u32, name: &str, depth: impl Fn(i32, i32) -> f32) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": w, "height": h, "background": "transparent", "depth": 32})).unwrap();
+    s.edit("depth channel", |doc, _| {
+        let fmt = photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, doc.depth, false);
+        let mut surf = Surface::new(fmt);
+        let data: Vec<f32> = (0..h as i32).flat_map(|y| (0..w as i32).map(move |x| (x, y))).map(|(x, y)| depth(x, y)).collect();
+        surf.write_region(Rect::new(0, 0, w as i32, h as i32), &data);
+        doc.channels.push(photocraft_doc::AlphaChannel::new(name.to_string(), surf));
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+/// Depth rising from 0 at the left to 1 at the right edge of a 200 px wide image.
+fn ramp_doc() -> Session {
+    depth_doc(200, 100, "Depth", |x, _| x as f32 / 200.0)
+}
+
+fn depth_brush(extra: Value) -> Value {
+    let mut surface = json!({"depth": true, "relief": 1.0, "sizeByDepth": false});
+    for (k, v) in extra.as_object().unwrap() {
+        surface[k] = v.clone();
+    }
+    json!({"size": 12, "surface": surface})
+}
+
+fn dabs_with(brush: &BrushSettings, map: Arc<dyn SurfaceMap>, pts: &[StrokePoint]) -> Vec<photocraft_paint::Dab> {
+    let mut g = photocraft_paint::dynamics::DabGenerator::new(brush, 1.0).with_surface(Some(map));
+    let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+    g.push(pts, &mut dabs, &mut dual);
+    g.finish(&mut dabs, &mut dual);
+    dabs
+}
+
+/// The stroke's own wiring map (built, and cached, from the session brush).
+fn wiring_map(s: &Session) -> Arc<dyn SurfaceMap> {
+    let layer = s.active().unwrap().active_layer;
+    let wiring = super::surface_wire::Wiring::build(s, "test", &json!({}), &s.tools.brush, layer).unwrap();
+    wiring.map().unwrap().clone()
+}
+
+/// The first dab of a stroke starting at `(x, y)` under the stroke's own wiring.
+fn first_dab(s: &Session, x: f64, y: f64) -> Option<photocraft_paint::Dab> {
+    let layer = s.active().unwrap().active_layer;
+    let wiring = super::surface_wire::Wiring::build(s, "test", &json!({}), &s.tools.brush, layer).unwrap();
+    let map = wiring.map()?.clone();
+    dabs_with(&s.tools.brush, map, &[StrokePoint::new(x, y, 1.0)]).first().copied()
+}
+
+#[test]
+fn dabs_on_a_depth_slope_are_squashed_along_it_and_flat_ones_are_not() {
+    let mut s = ramp_doc();
+    s.execute("tools.setBrush", depth_brush(json!({}))).unwrap();
+    let d = first_dab(&s, 100.0, 50.0).unwrap();
+    assert_eq!(d.radius, 6.0, "no size by depth: the brush size");
+    assert!(d.proj_scale < 0.8, "{}", d.proj_scale);
+    assert!(d.proj_angle.cos().abs() > 0.99, "squashed along the ramp (x): {}", d.proj_angle);
+    // Relief 0 never squashes (and with no depth scale there is nothing to follow).
+    s.execute("tools.setBrush", json!({"surface": {"relief": 0}})).unwrap();
+    assert!(first_dab(&s, 100.0, 50.0).is_none_or(|d| d.proj_scale == 1.0));
+    // A flat depth plane is not squashed.
+    let mut flat = depth_doc(200, 100, "Depth", |_, _| 0.6);
+    flat.execute("tools.setBrush", depth_brush(json!({}))).unwrap();
+    assert!(first_dab(&flat, 100.0, 50.0).is_none_or(|d| d.proj_scale == 1.0 && d.radius == 6.0));
+}
+
+#[test]
+fn size_by_depth_is_anchored_at_the_middle_distance_for_every_stroke() {
+    let mut s = ramp_doc();
+    s.execute("tools.setBrush", depth_brush(json!({"sizeByDepth": true, "relief": 0}))).unwrap();
+    let brush = s.tools.brush.clone();
+    let map = wiring_map(&s);
+    // The median depth is 0.5: a dab at D = 0.5 is the brush size.
+    let dabs = dabs_with(&brush, map, &[StrokePoint::new(100.0, 50.0, 1.0), StrokePoint::new(30.0, 50.0, 1.0)]);
+    assert!((dabs.first().unwrap().radius - 6.0).abs() < 0.2, "{:?}", dabs.first().map(|d| d.radius));
+    assert!(dabs.windows(2).all(|w| w[1].radius <= w[0].radius + 1e-6), "dabs only shrink towards low D");
+    // D falls from 0.5 to 0.15 over the stroke: about 0.3 of the size.
+    let last = dabs.last().unwrap().radius;
+    assert!(last < 3.0 && last > 1.0, "{last}");
+    // A stroke that starts at the far side starts small, not at the brush size.
+    let far = dabs_with(&brush, wiring_map(&s), &[StrokePoint::new(30.0, 50.0, 1.0), StrokePoint::new(190.0, 50.0, 1.0)]);
+    assert!(far.first().unwrap().radius < 2.5, "{:?}", far.first().map(|d| d.radius));
+    assert!(far.last().unwrap().radius > far.first().unwrap().radius * 4.0);
+}
+
+fn assert_cursor_is_first_dab(s: &mut Session, x: f64, y: f64) {
+    let radius = (s.tools.brush.size / 2.0).max(0.5);
+    // The stroke's wiring builds (and caches) the geometry; the cursor only reads it.
+    let dab = first_dab(s, x, y);
+    let cursor = brush_cursor_shape(s, x, y, radius);
+    match (cursor, dab) {
+        (Some(c), Some(d)) => {
+            assert_eq!((c.radius, c.proj_angle, c.proj_scale), (d.radius, d.proj_angle, d.proj_scale), "({x}, {y})");
+            assert_eq!(c.offset, [0.0, 0.0]);
+            assert_eq!((d.center.x, d.center.y), (x, y));
+        }
+        (None, d) => assert!(d.is_none_or(|d| d.proj_scale == 1.0 && d.center.x == x && d.center.y == y), "({x}, {y}) {d:?}"),
+        (c, None) => panic!("cursor {c:?} but no dab at ({x}, {y})"),
+    }
+}
+
+#[test]
+fn the_cursor_is_the_first_dab_with_depth_and_with_both() {
+    let mut s = depth_doc(400, 300, "Depth", |x, y| (x as f32 / 400.0) * 0.7 + (y as f32 / 300.0) * 0.3);
+    s.execute("tools.setBrush", depth_brush(json!({"sizeByDepth": true}))).unwrap();
+    let mut shaped = 0;
+    for (x, y) in [(40.0, 50.0), (200.0, 150.0), (350.0, 280.0), (101.0, 200.0)] {
+        assert_cursor_is_first_dab(&mut s, x, y);
+        shaped += brush_cursor_shape(&mut s, x, y, 6.0).is_some_and(|c| c.proj_scale < 1.0) as u32;
+    }
+    assert!(shaped >= 3, "the slope shows");
+    // With planes as well: on the plane both apply, off it nothing does.
+    s.execute("perspective.setPlanes", json!({"planes": [FLOOR]})).unwrap();
+    s.execute("tools.setBrush", json!({"surface": {"perspective": true}})).unwrap();
+    for (x, y) in [(200.0, 270.0), (200.0, 200.0), (100.0, 250.0), (60.0, 270.0)] {
+        assert_cursor_is_first_dab(&mut s, x, y);
+    }
+    assert!(brush_cursor_shape(&mut s, 10.0, 10.0, 6.0).is_none(), "off the plane");
+    let both = brush_cursor_shape(&mut s, 202.0, 250.0, 6.0).unwrap();
+    s.execute("tools.setBrush", json!({"surface": {"depth": false}})).unwrap();
+    let plane = brush_cursor_shape(&mut s, 202.0, 250.0, 6.0).unwrap();
+    assert!(both.proj_scale != plane.proj_scale || both.proj_angle != plane.proj_angle, "{both:?} {plane:?}");
+}
+
+fn depth_stroke(s: &mut Session, y: i32) -> Result<Value> {
+    s.execute("paint.stroke", json!({"points": [[40, y], [160, y]], "color": "#c02020", "target": "pixels", "brush": depth_brush(json!({}))}))
+}
+
+#[test]
+fn the_depth_cursor_builds_on_the_first_hover_and_a_stroke_reuses_it() {
+    let mut s = ramp_doc();
+    s.execute("tools.setBrush", depth_brush(json!({"sizeByDepth": true}))).unwrap();
+    assert_eq!(s.surface_cache.depth_builds(), 0);
+    // No stroke yet: the first hover gives the depth-derived size (median depth 0.5, radius 6).
+    let far = brush_cursor_shape(&mut s, 30.0, 50.0, 6.0).expect("hover builds the depth geometry");
+    assert_eq!(s.surface_cache.depth_builds(), 1);
+    let (mid, near) = (brush_cursor_shape(&mut s, 100.0, 50.0, 6.0).unwrap(), brush_cursor_shape(&mut s, 170.0, 50.0, 6.0).unwrap());
+    assert_eq!(s.surface_cache.depth_builds(), 1, "kept for the next hovers");
+    assert!(far.radius < mid.radius && mid.radius < near.radius, "{} {} {}", far.radius, mid.radius, near.radius);
+    assert!((mid.radius - 6.0).abs() < 0.2 && far.radius < 3.0 && near.radius > 7.5);
+    depth_stroke(&mut s, 50).unwrap();
+    assert_eq!(s.surface_cache.depth_builds(), 1, "the stroke reuses what the hover built");
+    let r = s.execute("brush.cursorShape", json!({"x": 100, "y": 50})).unwrap();
+    assert_eq!(r["onPlane"], true);
+    assert_eq!(r["offset"], json!([0.0, 0.0]));
+    assert_eq!(r["outline"].as_array().map(Vec::len), Some(32));
+    // Without a depth channel the outline stays plain and nothing is built.
+    let mut none = striped(100, 100);
+    none.execute("tools.setBrush", depth_brush(json!({}))).unwrap();
+    assert!(brush_cursor_shape(&mut none, 50.0, 50.0, 6.0).is_none());
+    assert_eq!(none.surface_cache.depth_builds(), 0);
+}
+
+/// The dab of a stroke running from `from` to `to` that lies nearest to `to`.
+fn dab_near(s: &Session, from: (f64, f64), to: (f64, f64)) -> photocraft_paint::Dab {
+    let mut brush = s.tools.brush.clone();
+    brush.spacing = 0.01;
+    let dabs = dabs_with(&brush, wiring_map(s), &[StrokePoint::new(from.0, from.1, 1.0), StrokePoint::new(to.0, to.1, 1.0)]);
+    dabs.into_iter().min_by(|a, b| (a.center.x - to.0).hypot(a.center.y - to.1).total_cmp(&(b.center.x - to.0).hypot(b.center.y - to.1))).unwrap()
+}
+
+#[test]
+fn the_cursor_equals_the_dab_a_stroke_from_elsewhere_lays_down_there() {
+    let mut s = depth_doc(400, 300, "Depth", |x, y| (x as f32 / 400.0) * 0.7 + (y as f32 / 300.0) * 0.3);
+    s.execute("tools.setBrush", depth_brush(json!({"sizeByDepth": true}))).unwrap();
+    for (from, to) in [((350.0, 250.0), (60.0, 40.0)), ((40.0, 40.0), (330.0, 240.0)), ((200.0, 150.0), (210.0, 150.0))] {
+        let dab = dab_near(&s, from, to);
+        let cursor = brush_cursor_shape(&mut s, dab.center.x, dab.center.y, 6.0).unwrap();
+        assert!((cursor.radius - dab.radius).abs() < 1e-3 * dab.radius.max(1.0), "{from:?} -> {to:?}: {} vs {}", cursor.radius, dab.radius);
+        let foot = dab.footprint.expect("a depth dab carries its footprint");
+        let outline = cursor.outline.expect("and so does the cursor");
+        assert!(foot.rays.iter().zip(&outline).all(|(a, b)| (a - b).abs() < 1e-3), "{:?} vs {outline:?}", foot.rays);
+    }
+    // With the plane as well the dab's size is the plane's times the depth's, and still equal.
+    s.execute("perspective.setPlanes", json!({"planes": [FLOOR]})).unwrap();
+    s.execute("tools.setBrush", json!({"surface": {"perspective": true}})).unwrap();
+    for (from, to) in [((200.0, 270.0), (200.0, 160.0)), ((100.0, 150.0), (300.0, 270.0))] {
+        let dab = dab_near(&s, from, to);
+        let cursor = brush_cursor_shape(&mut s, dab.center.x, dab.center.y, 6.0).unwrap();
+        assert!((cursor.radius - dab.radius).abs() < 1e-3 * dab.radius.max(1.0), "{} vs {}", cursor.radius, dab.radius);
+    }
+}
+
+#[test]
+fn a_ridge_bends_the_footprint_and_flat_depth_keeps_it_round() {
+    // A sharp ridge at x = 100 (a gentle climb, a steep drop), then flat.
+    let mut s = depth_doc(240, 100, "Depth", |x, _| if x < 100 { 0.5 * x as f32 / 100.0 } else { (0.5 - 0.5 * (x as f32 - 100.0) / 20.0).max(0.0) });
+    s.execute("tools.setBrush", json!({"size": 40, "surface": {"depth": true, "relief": 1.0, "sizeByDepth": false}})).unwrap();
+    let c = brush_cursor_shape(&mut s, 92.0, 50.0, 20.0).unwrap();
+    let rays = c.outline.unwrap();
+    let across = rays[8].min(rays[24]);
+    assert!(rays[0] < across * 0.8 && rays[0] < rays[16] - 0.3, "east {} west {} across {across}", rays[0], rays[16]);
+    // Flat depth with sizeByDepth: a perfect circle.
+    let mut flat = depth_doc(100, 100, "Depth", |_, _| 0.6);
+    flat.execute("tools.setBrush", json!({"size": 20, "surface": {"depth": true, "relief": 1.0, "sizeByDepth": true}})).unwrap();
+    let f = brush_cursor_shape(&mut flat, 50.0, 50.0, 10.0).unwrap();
+    assert!(f.outline.unwrap().iter().all(|r| (r - f.radius).abs() < 1e-4));
+}
+
+#[test]
+fn painting_keeps_the_depth_cache_and_editing_the_channel_rebuilds_it() {
+    let mut s = ramp_doc();
+    depth_stroke(&mut s, 30).unwrap();
+    depth_stroke(&mut s, 60).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    depth_stroke(&mut s, 80).unwrap();
+    assert_eq!(s.surface_cache.depth_builds(), 1, "painting and adding layers keep the geometry");
+    s.edit("edit the depth", |doc, _| {
+        let ch = doc.channels.iter_mut().find(|c| c.name == "Depth").unwrap();
+        ch.surface.fill_rect(Rect::new(0, 0, 50, 50), &[1.0]);
+        Ok(())
+    })
+    .unwrap();
+    depth_stroke(&mut s, 90).unwrap();
+    assert_eq!(s.surface_cache.depth_builds(), 2);
+}
+
+#[test]
+fn a_missing_depth_channel_is_an_error() {
+    let mut s = striped(200, 100);
+    let p = json!({"points": [[10, 10], [50, 50]], "target": "pixels", "brush": depth_brush(json!({}))});
+    let e = s.execute("paint.stroke", p.clone()).unwrap_err().to_string();
+    assert!(e.contains("no Depth channel: run Image"), "{e}");
+    assert!(LiveStroke::begin_with(&s, "paint.stroke", &p).is_err());
+    assert!(layer_surface(&s).content_bounds().is_empty());
+    // Another name is looked up by that name.
+    let mut s = ramp_doc();
+    let other = json!({"points": [[10, 10], [50, 50]], "target": "pixels", "brush": depth_brush(json!({"depthChannel": "Relief"}))});
+    assert!(s.execute("paint.stroke", other).unwrap_err().to_string().contains("no Relief channel"));
+}
+
+#[test]
+fn hostile_depth_params_are_errors() {
+    let mut s = ramp_doc();
+    for opts in [
+        json!({"relief": 2}),
+        json!({"relief": -1}),
+        json!({"depthChannel": ""}),
+        json!({"depthChannel": "x".repeat(300)}),
+        json!({"depth": "yes"}),
+        json!({"sizeByDepth": "no"}),
+    ] {
+        let p = json!({"points": [[10, 10], [50, 50]], "target": "pixels", "brush": depth_brush(opts.clone())});
+        assert!(s.execute("paint.stroke", p.clone()).is_err(), "{opts}");
+        assert!(s.execute("paint.pencil", p).is_err(), "{opts}");
+        assert!(s.execute("tools.setBrush", json!({"surface": opts})).is_err(), "{opts}");
+    }
+    assert!(layer_surface(&s).content_bounds().is_empty());
+}
+
+#[test]
+fn a_live_stroke_with_depth_commits_the_pixels_it_shows() {
+    let p = json!({"points": [[20, 50]], "color": "#c04020", "seed": 3, "target": "pixels", "brush": depth_brush(json!({"sizeByDepth": true}))});
+    let mut s = ramp_doc();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let mut live = LiveStroke::begin_with(&s, "paint.stroke", &p).unwrap();
+    live.push(&[StrokePoint::new(90.0, 40.0, 1.0), StrokePoint::new(170.0, 60.0, 1.0)]).unwrap();
+    let mut commit = p.clone();
+    commit["points"] = json!([[20, 50], [90, 40], [170, 60]]);
+    commit["seed"] = json!(live.seed);
+    let id = s.active().unwrap().active_layer.unwrap();
+    let shown = live.doc.layer(id).unwrap().surface().unwrap().clone();
+    s.offer_live_stroke(live).unwrap();
+    assert_eq!(s.execute("paint.stroke", commit.clone()).unwrap()["fromLive"], true);
+    s.clear_live_stroke();
+    let area = Rect::new(0, 0, 200, 100);
+    assert!(same(&shown, &layer_surface(&s), area));
+    let mut fresh = ramp_doc();
+    fresh.execute("layer.new.layer", json!({})).unwrap();
+    fresh.execute("paint.stroke", commit).unwrap();
+    assert!(same(&layer_surface(&fresh), &layer_surface(&s), area));
 }
 
 // ---- Speed: the cache, the cursor and the sample ----
@@ -407,6 +679,25 @@ fn all_layers_leaves_out_the_layer_being_painted() {
 }
 
 #[test]
+fn a_depth_stroke_next_to_an_occlusion_edge_does_not_spill_onto_the_far_surface() {
+    // Near on the left, far on the right, the step at x = 100; a gentle ramp along y keeps the
+    // photo's slope scale a normal slope.
+    let mut s = depth_doc(200, 100, "Depth", |x, y| (if x < 100 { 0.8 } else { 0.2 }) + 0.0008 * y as f32);
+    let brush = json!({"size": 40, "hardness": 1, "surface": {"depth": true, "relief": 1.0, "sizeByDepth": false}});
+    s.execute("paint.stroke", json!({"points": [[92, 20], [92, 80]], "color": "#c02020", "target": "pixels", "brush": brush.clone()})).unwrap();
+    let surf = layer_surface(&s);
+    let painted = |x: i32, y: i32| surf.rgba(x, y)[3] > 0.0;
+    assert!((20..80).any(|y| painted(92, y)), "the near side is painted");
+    // Nothing past the edge (one pixel of antialiasing at most).
+    let spill = (0..100).flat_map(|y| (102..200).map(move |x| (x, y))).filter(|&(x, y)| painted(x, y)).count();
+    assert_eq!(spill, 0, "the dab must stop at the depth jump");
+    // The cursor outline agrees: the east ray is cut at the edge.
+    s.execute("tools.setBrush", brush).unwrap();
+    let c = brush_cursor_shape(&mut s, 92.0, 50.0, 20.0).unwrap();
+    assert!(c.outline.unwrap()[0] < 12.0);
+}
+
+#[test]
 fn the_eraser_on_a_mask_has_no_surface_effects_in_commit_and_live() {
     let mut s = striped(400, 300);
     let id = s.active().unwrap().active_layer.unwrap();
@@ -428,6 +719,24 @@ fn the_eraser_on_a_mask_has_no_surface_effects_in_commit_and_live() {
     let m = |x, y| s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.pixel(x, y)[0];
     assert!(m(200, 270) > 0.99 && m(200, 150) > 0.99, "erased back to white");
     assert!(m(200 - 11, 150) > 0.99 && m(200 + 11, 150) > 0.99, "a plain 30 px erasure, not shrunk by the plane");
+}
+
+#[test]
+fn follow_depth_and_perspective_keep_the_planes_foreshortening_in_the_footprint() {
+    // Flat depth with size by depth: the depth footprint alone is a circle, so any squash in the
+    // combined outline is the receding plane's (rays 0 and 16 run along x, 8 and 24 along y).
+    let mut s = depth_doc(400, 300, "Depth", |_, _| 0.6);
+    s.execute("perspective.setPlanes", json!({"planes": [FLOOR]})).unwrap();
+    s.execute("tools.setBrush", depth_brush(json!({"sizeByDepth": true, "perspective": true}))).unwrap();
+    let both = brush_cursor_shape(&mut s, 200.0, 200.0, 20.0).unwrap();
+    let rays = both.outline.expect("a footprint with depth on");
+    let (along_x, along_y) = (rays[0].min(rays[16]), rays[8].max(rays[24]));
+    assert!(along_y < along_x * 0.8, "the plane's foreshortening is in the outline: x {along_x}, y {along_y}");
+    assert!(rays.iter().all(|r| *r <= both.radius + 1e-4 && *r > 0.0));
+    // Depth alone stays a circle there.
+    s.execute("tools.setBrush", json!({"surface": {"perspective": false}})).unwrap();
+    let depth_only = brush_cursor_shape(&mut s, 200.0, 200.0, 20.0).unwrap();
+    assert!(depth_only.outline.unwrap().iter().all(|r| (r - depth_only.radius).abs() < 1e-4));
 }
 
 #[test]

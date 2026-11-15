@@ -201,7 +201,7 @@ pub(super) fn read_plane(s: &Surface, r: Rect) -> Vec<f32> {
     if ch > 1 { v.chunks_exact(ch).map(|p| p[0]).collect() } else { v }
 }
 
-pub(super) fn plane_surface(vals: &[f32], r: Rect, fmt: PixelFormat) -> Surface {
+pub(crate) fn plane_surface(vals: &[f32], r: Rect, fmt: PixelFormat) -> Surface {
     let mut s = Surface::new(fmt);
     let clamped: Vec<f32> = vals.iter().map(|v| v.clamp(0.0, 1.0)).collect();
     s.write_region(r, &clamped);

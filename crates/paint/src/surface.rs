@@ -39,11 +39,34 @@ pub struct SurfaceOptions {
     pub sample: SampleMode,
     /// Follow Perspective: dabs are sized and foreshortened by the perspective plane under them.
     pub perspective: bool,
+    /// Follow Depth: dabs are foreshortened by the slope of the document's depth channel, and
+    /// (with `size_by_depth`) sized by it.
+    pub depth: bool,
+    /// 0..1: how strongly a depth slope foreshortens the dab.
+    pub relief: f32,
+    /// Far surfaces get smaller dabs (the first dab keeps the brush size).
+    pub size_by_depth: bool,
+    /// Name of the alpha channel holding the depth (white = near).
+    pub depth_channel: String,
+    /// Estimate Depth runs the tiled, high-resolution estimate (slower, finer folds and edges)
+    /// rather than one whole-image pass.
+    pub depth_high_quality: bool,
 }
 
 impl Default for SurfaceOptions {
     fn default() -> Self {
-        Self { color: false, strength: 1.0, detail: 24.0, sample: SampleMode::AllLayers, perspective: false }
+        Self {
+            color: false,
+            strength: 1.0,
+            detail: 24.0,
+            sample: SampleMode::AllLayers,
+            perspective: false,
+            depth: false,
+            relief: 0.5,
+            size_by_depth: true,
+            depth_channel: "Depth".to_string(),
+            depth_high_quality: true,
+        }
     }
 }
 
@@ -55,6 +78,12 @@ impl SurfaceOptions {
         }
         if !self.detail.is_finite() || !DETAIL_RANGE.contains(&self.detail) {
             return Err(format!("surface detail must be between {} and {}, got {}", DETAIL_RANGE.start(), DETAIL_RANGE.end(), self.detail));
+        }
+        if !self.relief.is_finite() || !(0.0..=1.0).contains(&self.relief) {
+            return Err(format!("surface relief must be between 0 and 1, got {}", self.relief));
+        }
+        if self.depth_channel.is_empty() || self.depth_channel.chars().count() > 255 {
+            return Err("surface depth channel must be a channel name of 1 to 255 characters".to_string());
         }
         Ok(())
     }
@@ -85,6 +114,8 @@ pub struct Local {
     pub squash_angle: f32,
     /// σ2 / σ1 in `(0, 1]`: how much the minor axis is shortened.
     pub squash: f32,
+    /// Image pixels (y down) the dab centre moves by (Follow Folds' bend); `[0, 0]` for a plane.
+    pub offset: [f32; 2],
 }
 
 /// A perspective plane (or planes) the brush can follow.
@@ -98,12 +129,62 @@ pub trait SurfaceMap: Send + Sync {
     fn reference_scale(&self) -> Option<f32> {
         None
     }
+
+    /// The dab's outline bent over the surface at the (undisplaced) centre `p`, for a dab of
+    /// `radius` image pixels whose projection is `local`; `None` (the default) keeps the ellipse
+    /// of `local`. Only a round computed tip follows it; it costs far more than
+    /// [`local`](Self::local), so the spacing never asks.
+    fn footprint(&self, _p: Point, _radius: f32, _local: &Local) -> Option<Footprint> {
+        None
+    }
+}
+
+/// Number of directions of a [`Footprint`].
+pub const FOOTPRINT_RAYS: usize = 32;
+
+/// A dab's outline in image space: the distance from its centre to the edge along
+/// [`FOOTPRINT_RAYS`] evenly spaced directions (ray `k` at angle `k · 2π / 32`, counter-clockwise,
+/// y up, like the projection angles), size scaling included. Every ray is in
+/// `(0, radius]` of the dab it belongs to. Held inline (128 bytes) so a [`Dab`](crate::Dab) stays `Copy`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Footprint {
+    pub rays: [f32; FOOTPRINT_RAYS],
+}
+
+impl Footprint {
+    /// Is every ray finite and positive?
+    pub fn is_valid(&self) -> bool {
+        self.rays.iter().all(|r| r.is_finite() && *r > 0.0)
+    }
+
+    /// The outline distance at `theta` (radians, y up): the linear interpolation of the two
+    /// nearest rays.
+    pub fn radius_at(&self, theta: f32) -> f32 {
+        let t = theta.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU * FOOTPRINT_RAYS as f32;
+        let k = (t.floor() as usize).min(FOOTPRINT_RAYS - 1);
+        let f = (t - k as f32).clamp(0.0, 1.0);
+        let at = |i: usize| self.rays.get(i % FOOTPRINT_RAYS).copied().unwrap_or(1.0);
+        at(k) * (1.0 - f) + at(k + 1) * f
+    }
+
+    /// The tip-space point of the pixel offset `(ux, uy)` (y up) from the centre of a dab of
+    /// `radius`: the offset stretched so the outline lands on the circle of `radius`. A tip
+    /// painted at the result has the outline of this footprint.
+    pub fn to_tip(&self, ux: f32, uy: f32, radius: f32) -> (f32, f32) {
+        let d = ux.hypot(uy);
+        if d <= 1e-6 {
+            return (ux, uy);
+        }
+        let edge = self.radius_at(uy.atan2(ux)).clamp(radius * 0.01, radius.max(0.01));
+        let k = radius / edge;
+        (ux * k, uy * k)
+    }
 }
 
 impl Local {
     /// Is this a usable projection (finite, positive scale)?
     pub fn is_valid(&self) -> bool {
-        self.scale.is_finite() && self.scale > 0.0
+        self.scale.is_finite() && self.scale > 0.0 && self.offset.iter().all(|v| v.is_finite())
     }
 }
 
@@ -170,6 +251,11 @@ mod tests {
         assert!(SurfaceOptions { detail: 0.5, ..Default::default() }.validate().is_err());
         assert!(SurfaceOptions { detail: 600.0, ..Default::default() }.validate().is_err());
         assert!(SurfaceOptions { detail: f32::INFINITY, ..Default::default() }.validate().is_err());
+        for bad in [f32::NAN, -0.1, 1.5, f32::INFINITY] {
+            assert!(SurfaceOptions { relief: bad, ..Default::default() }.validate().is_err());
+        }
+        assert!(SurfaceOptions { depth_channel: String::new(), ..Default::default() }.validate().is_err());
+        assert!(SurfaceOptions { depth_channel: "x".repeat(256), ..Default::default() }.validate().is_err());
     }
 
     #[test]
@@ -182,7 +268,7 @@ mod tests {
 
     #[test]
     fn dab_shape_anchors_at_first_dab() {
-        let l = Local { scale: 2.0, squash_angle: 0.5, squash: 0.4 };
+        let l = Local { scale: 2.0, squash_angle: 0.5, squash: 0.4, offset: [0.0; 2] };
         let (r, a, s) = surface_dab_shape(10.0, None, &l);
         assert_eq!((r, a, s), (10.0, 0.5, 0.4));
         // Same place, anchored: unchanged. Half the scale: half the radius.
@@ -190,7 +276,7 @@ mod tests {
         let far = Local { scale: 1.0, ..l };
         assert_eq!(surface_dab_shape(10.0, Some(2.0), &far).0, 5.0);
         // Garbage never gives a non-finite dab.
-        let bad = Local { scale: f32::NAN, squash_angle: f32::NAN, squash: f32::NAN };
+        let bad = Local { scale: f32::NAN, squash_angle: f32::NAN, squash: f32::NAN, offset: [0.0; 2] };
         let (r, a, s) = surface_dab_shape(10.0, Some(2.0), &bad);
         assert_eq!((r, a, s), (10.0, 0.0, 1.0));
     }

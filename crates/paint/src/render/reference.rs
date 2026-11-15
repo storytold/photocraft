@@ -24,12 +24,13 @@ impl BrushContext {
         let (fx, fy) = (if d.flip_x { -1.0 } else { 1.0 }, if d.flip_y { -1.0 } else { 1.0 });
         // Brush Projection: stretch the sampling coordinates along the tilt direction, which
         // foreshortens the tip there by `proj_scale`.
-        let proj = (!dual && d.proj_scale < 0.999).then(|| {
+        let foot = surface_outline(d, dual, mips.is_some());
+        let proj = (!dual && foot.is_none() && d.proj_scale < 0.999).then(|| {
             let (ps, pc) = d.proj_angle.sin_cos();
             (pc, ps, 1.0 / d.proj_scale.max(0.05) - 1.0)
         });
         let r = d.radius;
-        let ro = d.roundness.max(0.5 / r).min(1.0);
+        let ro = tip_roundness(d, r, foot.is_some());
         let rm = (r * ro).max(0.5);
         let reach = if aliased || mips.is_some() { rm } else { crate::tip_reach(rm, hardness).max(rm) };
         let reach2 = (reach + 0.5) * (reach + 0.5);
@@ -45,6 +46,9 @@ impl BrushContext {
         // A pixel offset from the dab centre in tip space: to y-up, project, rotate by -angle, flip.
         let to_tip = |dx: f32, dy: f32| {
             let (mut ux, mut uy) = (dx, -dy);
+            if let Some(f) = foot {
+                return f.to_tip(ux, uy, r);
+            }
             if let Some((ax, ay, k)) = proj {
                 let t = (ux * ax + uy * ay) * k;
                 ux += t * ax;
@@ -217,6 +221,21 @@ fn rotated_ellipses_and_projected_circles_match_scalar_bits() {
                 compare(&ctx, &d, false, ctx.dab_rect(&d, false), false);
             }
         }
+    }
+}
+
+#[test]
+fn footprint_dabs_match_scalar_bits() {
+    for hardness in [0.0, 0.7, 1.0] {
+        let ctx = BrushContext::new(&BrushSettings { hardness, ..Default::default() });
+        let mut rays = [14.5f32; 32];
+        for (k, r) in rays.iter_mut().enumerate() {
+            *r = 14.5 * (0.3 + 0.7 * ((k as f32 * 0.7).cos() * 0.5 + 0.5));
+        }
+        let mut d = Dab::round(Point::new(-31.25, 63.75), 14.5, 0.37);
+        d.footprint = Some(crate::surface::Footprint { rays });
+        d.proj_scale = 0.5;
+        compare(&ctx, &d, false, ctx.dab_rect(&d, false), false);
     }
 }
 

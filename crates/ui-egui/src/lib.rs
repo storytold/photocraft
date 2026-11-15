@@ -354,6 +354,10 @@ pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// Estimate Depth's setup window and its workers (`dialogs::depth_ui`); not part of `UiState`
+    /// because it holds threads and shared-layer state.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) depth_ai: crate::dialogs::depth_ui::DepthAi,
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,

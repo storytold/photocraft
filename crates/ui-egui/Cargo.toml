@@ -55,6 +55,13 @@ web-time = { workspace = true }
 # Floating panels open in their own OS windows on the desktop; the web keeps them in the page.
 craft-ui = { workspace = true, features = ["native-windows"] }
 craft-update = { workspace = true }
+# Estimate Depth's setup screen: the shared AI layer's model setup session, the folder desk and the
+# egui widgets over them (storytold/craft-ai-integrations). Native only.
+craft-ai-client = { workspace = true }
+craft-ai-core = { workspace = true }
+craft-ai-features = { workspace = true }
+craft-ai-native = { workspace = true }
+craft-ai-egui = { workspace = true }
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"

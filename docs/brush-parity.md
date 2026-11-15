@@ -120,11 +120,15 @@ not blend modes, and are stored with each tool's brush. Tracked as
 | Feature | Status | Evidence |
 |---|---|---|
 | Surface Color: scales the paint per pixel by the photo's shading (luma over a blurred luma); options Strength (0..1), Detail (blur radius 1..512 px) and Sample (All Layers, which leaves out the layer being painted, or Current Layer) | done | `crates/algo/src/surface.rs`, `crates/paint/src/surface.rs`; banded 16-bit square-root-coded luma, about 72 MB at 36 MP, cached on the sampled layers' content so strokes on the paint layer keep it |
+| Estimate Depth (`image.estimateDepth`): runs the shared Craft AI tool `estimate-depth` (a depth model on this computer; nothing leaves it) and writes a Depth alpha channel (white = near); Fast is one whole-image pass, High Quality adds overlapping tiles; the result is refined against the photo so edges follow it | done | `crates/engine/src/cmd/depth_cmds.rs`, `crates/engine/src/cmd/depth_cmds/ai.rs`; the tool and its model live in storytold/craft-ai-integrations; the web build has no estimator |
+| Setting the model up: Set up AI in the ArtCraft Launcher, or Estimate Depth… in the Surface options, which opens the shared setup (missing-model popup, then the model setup screen: suggested or chosen folder, download with progress, check of files already on disk); the model files, sizes and checksums are declared by the shared layer; PhotoCraft has no `depth.*` commands | done | `crates/ui-egui/src/dialogs/depth_ui.rs`, `craft-ai-egui`; an estimate started on one document is not run when another is active after the setup |
+| Follow Depth: dabs are foreshortened by the depth slope (scale-free, normalised by the photo's 90th-percentile slope; Relief 0..1), sized by depth (brush size is the size at the median depth) and, for round tips, drawn inside a 32-ray outline traced along the surface that stops at depth edges | done | `crates/algo/src/surface.rs` `DepthGeometry`, `crates/engine/src/cmd/brush_cmds/surface_wire.rs`; full-precision depth while the channel is unchanged; folds narrower than about 4 px blur out; sampled tips keep an ellipse |
 | Follow Perspective: dabs are sized and foreshortened by the saved Vanishing Point plane under them; brush size is the size at the first plane's centre | done | `crates/paint/src/render.rs`, `dynamics.rs`; a plane seen edge-on (squash below 1e-4) draws a plain dab |
 | Planes saved with the document (`filter.vanishingPoint` `keepPlanes`, `perspective.setPlanes`), with canvas-size staleness | done | `crates/doc/src/lib.rs`, `.pcraft` round trip; a same-size canvas change (rotate 180, flip) is not detected as stale; tear-off parent links are lost on reload; the PSD vanishing point resource stays opaque |
-| Adaptive brush cursor: from the first hover, the outline shows the dab the brush will paint at that point (size and squash) | done | `brush.cursorShape`, `crates/ui-egui/src/tools/brush_cursor.rs` |
+| Adaptive brush cursor: from the first hover, the outline shows the dab the brush will paint at that point (size, squash, depth outline) | done | `brush.cursorShape`, `crates/ui-egui/src/tools/brush_cursor.rs` |
 | Vanishing Point paste shade (`shade`, `shadeDetail`): pasted colour takes the photo's shading | done | `crates/engine/src/cmd/vp_cmds.rs` |
 | Tools wired | partial | Brush and Pencil; Mixer Brush and the retouch tools are not wired |
+| Light painting from depth normals | open | |
 
 
 ## Presets
@@ -141,7 +145,7 @@ not blend modes, and are stored with each tool's brush. Tracked as
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-14 | minor | Surface-aware brush, beyond parity: Surface Color (strength, detail, sample), Follow Perspective on saved Vanishing Point planes, adaptive cursor, Vanishing Point paste shade (storytold/photocraft#14341). Light painting open. No brush-feel estimate changed. |
+| 2026-11-14 | minor | Surface-aware brush, beyond parity: Surface Color (strength, detail, sample), Estimate Depth (the shared `estimate-depth` tool, Fast and High Quality), Follow Depth, Follow Perspective on saved Vanishing Point planes, adaptive cursor, Vanishing Point paste shade (storytold/photocraft#14341). Light painting open. No brush-feel estimate changed. |
 | 2026-11-06 | minor | Eraser end of the pen switches to the Eraser on Windows with Windows Ink on (#2285); row stays partial (X11, web); no estimate changed |
 | 2026-10-30 | minor | Art History Brush Opacity on the options bar, #10263; no estimate changed |
 | 2026-10-25 | minor | Art History Brush row added as partial (8 of 10 styles, TOOL-213-20, #1610). No brush-feel estimate changed. |
