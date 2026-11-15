@@ -15,6 +15,8 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 
 mod print;
+mod printer_discovery;
+pub(crate) use printer_discovery::PrinterDiscovery;
 mod web;
 
 pub use print::open_print;

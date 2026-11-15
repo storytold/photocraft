@@ -354,6 +354,8 @@ pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// One dialog-owned discovery ticket; closing/reopening never queues another blocked resolver.
+    printer_discovery: Option<(u64, file_ui::PrinterDiscovery)>,
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,

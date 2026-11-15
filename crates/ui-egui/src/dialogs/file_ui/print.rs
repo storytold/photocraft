@@ -60,8 +60,28 @@ pub fn open_print(app: &mut PhotocraftApp) -> u64 {
     ] {
         f.entry(k.to_string()).or_insert(v);
     }
-    refresh_printers(app, &mut f);
-    app.ui.open_dialog(DialogKind::Command, f)
+    // Injected sources are deterministic test adapters. Native discovery is always off-UI.
+    app.printer_discovery = None;
+    let discovery = if app.session.printer_source.is_some() {
+        refresh_printers(app, &mut f);
+        None
+    } else {
+        match super::PrinterDiscovery::start() {
+            Ok(ticket) => {
+                f.insert("__printerListingPending".into(), json!(true));
+                f.insert("__printerListingSelection".into(), json!(s(&f, "printer", "")));
+                f.insert("__printerListingSettings".into(), f.get("printerSettings").cloned().unwrap_or(Value::Null));
+                Some(ticket)
+            }
+            Err(error) => {
+                f.insert("__printerListingError".into(), json!(error));
+                None
+            }
+        }
+    };
+    let id = app.ui.open_dialog(DialogKind::Command, f);
+    app.printer_discovery = discovery.map(|ticket| (id, ticket));
+    id
 }
 
 fn refresh_printers(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
@@ -76,7 +96,11 @@ fn refresh_printers(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
 fn take_printer_lists(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
     let printers = photocraft_engine::print_cmds::printers_without_waiting(&mut app.session);
     f.insert("__systemPrinters".into(), printers["printers"].clone());
-    if let Ok(list) = photocraft_engine::print_cmds::rgb_printers_without_waiting(&app.session) {
+    take_rgb_printers(f, photocraft_engine::print_cmds::rgb_printers_without_waiting(&app.session));
+}
+
+fn take_rgb_printers(f: &mut Map<String, Value>, list: photocraft_engine::print_cmds::RgbPrinters) {
+    if let Ok(list) = list {
         f.insert("__printers".into(), json!(list.iter().map(|p| p.name.clone()).collect::<Vec<_>>()));
         let known = |n: &str| list.iter().any(|p| p.name == n);
         if !list.is_empty() && !known(&s(f, "printer", "")) {
@@ -85,6 +109,50 @@ fn take_printer_lists(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
             f.remove("printerSettings");
         }
     }
+}
+
+/// Poll only this dialog's ticket. No I/O and no automatic retry after cancellation/error.
+fn poll_printers(app: &mut PhotocraftApp, f: &mut Map<String, Value>, id: u64) {
+    let Some((owner, ticket)) = &app.printer_discovery else {
+        f.remove("__printerListingPending");
+        return;
+    };
+    if *owner != id {
+        f.remove("__printerListingPending");
+        return;
+    }
+    let Some(answer) = ticket.poll() else { return };
+    app.printer_discovery = None;
+    f.remove("__printerListingPending");
+    match answer {
+        Ok((printers, rgb)) => {
+            f.insert("__systemPrinters".into(), printers.get("printers").cloned().unwrap_or_else(|| json!([])));
+            // An asynchronous answer must not undo a choice made while discovery was running.
+            let selection = f.get("printer").cloned();
+            let settings = f.get("printerSettings").cloned();
+            let changed = f.get("__printerListingSelection") != selection.as_ref()
+                || f.get("__printerListingSettings").unwrap_or(&Value::Null) != settings.as_ref().unwrap_or(&Value::Null);
+            take_rgb_printers(f, rgb);
+            if changed {
+                if let Some(selection) = selection {
+                    f.insert("printer".into(), selection);
+                }
+                match settings {
+                    Some(settings) => {
+                        f.insert("printerSettings".into(), settings);
+                    }
+                    None => {
+                        f.remove("printerSettings");
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            f.insert("__printerListingError".into(), json!(error));
+        }
+    }
+    f.remove("__printerListingSelection");
+    f.remove("__printerListingSettings");
 }
 
 /// Whether the driver's paper, as `driver_page` took it, is wider than tall: the Orientation
@@ -342,10 +410,20 @@ pub(super) fn print_preview_image(l: photocraft_engine::print_cmds::PrintLayout,
 /// the position row stays present while centered so switching to manual cannot move the page.
 pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     if b(f, "__printerListingPending", false) {
-        refresh_printers(app, f);
+        if app.session.printer_source.is_some() {
+            refresh_printers(app, f);
+        } else {
+            poll_printers(app, f, id);
+        }
         if b(f, "__printerListingPending", false) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
+    }
+    if let Some(error) = f.get("__printerListingError").and_then(Value::as_str) {
+        ui.label(error);
+    }
+    if b(f, "__printerListingPending", false) {
+        ui.label(tl!("Finding printers…"));
     }
     let t = Tokens::get(ui.ctx());
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
@@ -715,4 +793,47 @@ pub(crate) fn print_status(app: &mut PhotocraftApp, r: &Value) {
         crate::i18n::fmt(tl!(template), &[("path", r["pdf"].as_str().unwrap_or(""))])
     };
     app.ui.status_error = false;
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+    fn app() -> PhotocraftApp {
+        PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
+    }
+    #[test]
+    fn pending_poll_is_nonblocking_and_wrong_dialog_does_not_consume_result() {
+        let mut app = app();
+        let (send, ticket) = super::super::PrinterDiscovery::test_ticket();
+        app.printer_discovery = Some((7, ticket));
+        let mut fields = json!({"__printerListingPending": true}).as_object().unwrap().clone();
+        for _ in 0..100 {
+            poll_printers(&mut app, &mut fields, 7);
+        }
+        assert_eq!(fields["__printerListingPending"], true);
+        send.send(Err("old dialog failure".into())).unwrap();
+        poll_printers(&mut app, &mut fields, 8);
+        assert!(!fields.contains_key("__printerListingError"));
+        assert!(app.printer_discovery.is_some());
+        poll_printers(&mut app, &mut fields, 7);
+        assert_eq!(fields["__printerListingError"], "old dialog failure");
+        assert!(app.printer_discovery.is_none());
+    }
+    #[test]
+    fn late_listing_preserves_selection_and_driver_settings_edited_while_pending() {
+        let mut app = app();
+        let (send, ticket) = super::super::PrinterDiscovery::test_ticket();
+        app.printer_discovery = Some((1, ticket));
+        let mut fields = json!({"__printerListingPending": true, "__printerListingSelection": "Old", "printer": "User choice", "printerSettings": "0011"})
+            .as_object()
+            .unwrap()
+            .clone();
+        send.send(Ok((json!({"printers": [{"name": "Other"}]}), Ok(vec![craft_print::rgb::Printer { name: "Other".into(), default: true }])))).unwrap();
+        poll_printers(&mut app, &mut fields, 1);
+        assert_eq!(fields["printer"], "User choice");
+        assert_eq!(fields["printerSettings"], "0011");
+        assert_eq!(fields["__printers"], json!(["Other"]));
+        assert!(!fields.contains_key("__printerListingPending"));
+        assert!(app.printer_discovery.is_none());
+    }
 }
