@@ -273,11 +273,13 @@ fn apply(app: &mut PhotocraftApp, action: Action, skips: Skips, from_control: bo
         }
     }
     // The dialog has its own search position. A document edit can invalidate an outside match.
-    let document_version = |app: &PhotocraftApp| app.session.active().map(|st| (st.doc.id, st.revision));
-    let before = document_version(app);
+    // Finding a match advances the view's revision when it selects a layer, while
+    // a text edit replaces the document snapshot.
+    let before = app.session.active().map(|st| st.doc.clone());
     let outside_cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, cursor);
     let result = app.run(COMMAND, params);
-    let restore = if document_version(app) == before { outside_cursor } else { None };
+    let unchanged = before.as_ref().zip(app.session.active()).is_some_and(|(before, after)| std::sync::Arc::ptr_eq(before, &after.doc));
+    let restore = if unchanged { outside_cursor } else { None };
     let cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, restore);
     let reply = result?;
     let mut window = app.ui.find_replace.open.take().ok_or("Find and Replace Text is closed")?;
@@ -308,6 +310,9 @@ fn answer(app: &mut PhotocraftApp, choice: WarningChoice, from_control: bool) ->
         WarningChoice::Skip => pending.skips.layers.push(pending.warning.layer),
         WarningChoice::SkipAll => pending.skips.skip_kind(pending.warning.reason),
         WarningChoice::Cancel => {}
+    }
+    if pending.dont_show_again {
+        pending.skips.skip_kind(pending.warning.reason);
     }
     let result = apply(app, pending.action, pending.skips, from_control)?;
     if pending.dont_show_again {
