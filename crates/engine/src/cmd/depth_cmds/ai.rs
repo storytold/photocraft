@@ -196,6 +196,30 @@ impl AiState {
         }
     }
 
+    /// As [`status_reason`](Self::status_reason), but `None` while the first answer is still being
+    /// read (also never blocks). For the command's `enabled` check: an unknown status does not
+    /// refuse the command, whose run reads the status itself with
+    /// [`status_reason_now`](Self::status_reason_now), so a script's first call is not refused
+    /// only because no frame has read the store yet.
+    pub fn known_status_reason(&self) -> Option<String> {
+        if self.estimator.is_some() {
+            return None;
+        }
+        let known = lock(&self.inner.status).clone();
+        match known {
+            Some((at, reason)) => {
+                if web_time::Instant::now().duration_since(at) >= STATUS_TTL {
+                    self.refresh_in_background();
+                }
+                reason
+            }
+            None => {
+                self.refresh_in_background();
+                None
+            }
+        }
+    }
+
     /// As [`status_reason`](Self::status_reason) but reads the store now, on this thread, and keeps
     /// the answer. For a person's action, not for a frame.
     pub fn status_reason_now(&self) -> Option<String> {

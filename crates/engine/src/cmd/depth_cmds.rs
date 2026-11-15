@@ -270,7 +270,7 @@ fn enabled_estimate(s: &Session) -> std::result::Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     return Err(UNAVAILABLE_ON_WEB.to_owned());
     #[cfg(not(target_arch = "wasm32"))]
-    match s.depth.ai.status_reason() {
+    match s.depth.ai.known_status_reason() {
         Some(reason) => Err(reason),
         None => Ok(()),
     }
@@ -535,6 +535,20 @@ mod tests {
         s.depth.ai.set_host(AiHost::new(SharedStore::new("/nonexistent/x.json"), || Err("new".to_owned())));
         assert_eq!(s.depth.ai.status_reason_now().as_deref(), Some("new"));
         assert_eq!(s.depth.ai.status_reason().as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn a_first_call_before_any_status_read_gets_the_real_reason() {
+        // No frame has read the status yet: the command must not be refused as "checking", but
+        // run and report why the tool cannot run.
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = session(16, 16);
+        s.depth.ai.set_host(empty_host(dir.path()));
+        let e = s.execute("image.estimateDepth", json!({})).unwrap_err().to_string();
+        assert!(!e.contains("Checking"), "{e}");
+        let reason = s.depth.ai.status_reason_now().expect("nothing is set up");
+        assert!(e.contains(&reason), "{e} vs {reason}");
+        assert_eq!(channels(&s), 0);
     }
 
     #[test]
