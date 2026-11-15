@@ -41,12 +41,21 @@ fn overlay(app: &PhotocraftApp) -> Vec<egui::Shape> {
     shapes
 }
 
-/// The polylines and segments painted, as point lists.
+/// The polylines and segments painted, as point lists. A closed path ends on its first point again, so
+/// its closing side is a segment like any other; an open path does not get one (`PathShape::closed`).
 fn lines(shapes: &[egui::Shape]) -> Vec<Vec<[f32; 2]>> {
     shapes
         .iter()
         .filter_map(|s| match s {
-            egui::Shape::Path(p) => Some(p.points.iter().map(|p| [p.x, p.y]).collect()),
+            egui::Shape::Path(p) => {
+                let mut points: Vec<[f32; 2]> = p.points.iter().map(|p| [p.x, p.y]).collect();
+                if p.closed
+                    && let Some(first) = points.first().copied()
+                {
+                    points.push(first);
+                }
+                Some(points)
+            }
             egui::Shape::LineSegment { points, .. } => Some(points.iter().map(|p| [p.x, p.y]).collect()),
             _ => None,
         })
@@ -69,8 +78,7 @@ fn every_shape_shows_its_box_and_an_x() {
         for (a, b) in [(0, 1), (1, 2), (2, 3)] {
             assert!(has(BOX[a], BOX[b]), "{shape}: side {a}-{b}");
         }
-        let closed = drawn.iter().any(|l| l.len() == 4 && l.iter().all(|p| on_box(*p))) || has(BOX[3], BOX[0]);
-        assert!(closed, "{shape}: the box is closed");
+        assert!(has(BOX[3], BOX[0]), "{shape}: the box is closed (its fourth side, 3-0, is drawn)");
         assert!(has(BOX[0], BOX[2]) && has(BOX[1], BOX[3]), "{shape}: both diagonals");
     }
 }
@@ -86,4 +94,18 @@ fn the_placeholder_is_not_in_the_pixels() {
             assert_eq!(px, [1.0, 1.0, 1.0, 1.0], "{shape} at ({x},{y})");
         }
     }
+}
+
+/// CodeRabbit on #15149: an open path with the box's four corners has no fourth side, and the closure check
+/// says so (the first three sides and both diagonals alone do not make the box).
+#[test]
+fn an_open_four_corner_path_does_not_pass_for_a_closed_box() {
+    let open = egui::Shape::Path(egui::epaint::PathShape::line(BOX.iter().map(|p| egui::pos2(p[0], p[1])).collect(), egui::Stroke::NONE));
+    let drawn = lines(&[open]);
+    let has = |a: [f32; 2], b: [f32; 2]| drawn.iter().any(|l| l.windows(2).any(|w| (w[0] == a && w[1] == b) || (w[0] == b && w[1] == a)));
+    assert!(has(BOX[0], BOX[1]) && has(BOX[1], BOX[2]) && has(BOX[2], BOX[3]), "its three sides");
+    assert!(!has(BOX[3], BOX[0]), "no fourth side for an open path");
+    let closed = egui::Shape::Path(egui::epaint::PathShape::closed_line(BOX.iter().map(|p| egui::pos2(p[0], p[1])).collect(), egui::Stroke::NONE));
+    let drawn = lines(&[closed]);
+    assert!(drawn.iter().any(|l| l.windows(2).any(|w| w[0] == BOX[3] && w[1] == BOX[0])), "a closed one has it");
 }
