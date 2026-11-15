@@ -19,12 +19,18 @@ pub(super) struct Integrity {
     pixel_limit: u64,
     pixels_left: u64,
     svg_bytes_left: usize,
+    // A failed inflate/encoding spends the original allowance conservatively.
+    // A separate, nonrefundable pool may classify later omissions, never admit
+    // them. Thus rechecking adds at most one further 16 MiB allowance in all.
+    svg_failure_exhausted: bool,
+    classification_bytes_left: usize,
     raster: HashMap<usize, RasterRecord>,
     encoded_left: usize,
     invalid_raster: usize,
     invalid_svg: usize,
     raster_limits: usize,
     svg_limits: usize,
+    svg_resource_limits: usize,
     fatal: bool,
 }
 
@@ -34,12 +40,15 @@ impl Integrity {
             pixel_limit: pixels.min(MAX_RASTER_PIXELS),
             pixels_left: pixels.min(MAX_RASTER_PIXELS),
             svg_bytes_left: MAX_BOUNDED_SVG_BYTES as usize,
+            svg_failure_exhausted: false,
+            classification_bytes_left: MAX_BOUNDED_SVG_BYTES as usize,
             raster: HashMap::new(),
             encoded_left: (MAX_INFLATED_BYTES + MAX_BOUNDED_SVG_BYTES) as usize,
             invalid_raster: 0,
             invalid_svg: 0,
             raster_limits: 0,
             svg_limits: 0,
+            svg_resource_limits: 0,
             fatal: false,
         }
     }
@@ -55,11 +64,44 @@ impl Integrity {
         usage.invalid_svg_images = usage.invalid_svg_images.saturating_add(self.invalid_svg);
         usage.raster_limit_images = usage.raster_limit_images.saturating_add(self.raster_limits);
         usage.svg_limit_images = usage.svg_limit_images.saturating_add(self.svg_limits);
-        usage.svg_resource_limit_images = usage.svg_resource_limit_images.saturating_add(self.svg_limits);
+        usage.svg_resource_limit_images = usage.svg_resource_limit_images.saturating_add(self.svg_resource_limits);
         // Repairing a malformed href can shorten text. Its original expanded UTF-8
         // bytes remain charged, including XML declarations removed for transport.
         usage.embedded_svg_bytes = usage.embedded_svg_bytes.max((MAX_BOUNDED_SVG_BYTES as usize).saturating_sub(self.svg_bytes_left));
         Ok(usage)
+    }
+
+    #[cfg(test)]
+    pub(super) fn classification_bytes_left(&self) -> usize {
+        self.classification_bytes_left
+    }
+
+    /// Distinguish a small unread child from a resource overrun after damaged
+    /// input spent the normal pool. These bytes can never reach the parser.
+    fn classify_after_svg_failure(&mut self, data: &[u8]) {
+        let room = self.classification_bytes_left;
+        if room == 0 {
+            self.svg_limits = self.svg_limits.saturating_add(1);
+            self.svg_resource_limits = self.svg_resource_limits.saturating_add(1);
+            return;
+        }
+        match craft_svg::svgz::text(data, room) {
+            Ok(text) if text.len() <= room => {
+                self.classification_bytes_left = room.saturating_sub(text.len());
+                self.svg_limits = self.svg_limits.saturating_add(1);
+            }
+            error => {
+                // Failures already did bounded work, including an encoding
+                // conversion whose UTF-8 output exceeded the remaining pool.
+                self.classification_bytes_left = 0;
+                if matches!(error, Err(craft_svg::svgz::Error::TooLarge(_))) || error.is_ok() {
+                    self.svg_limits = self.svg_limits.saturating_add(1);
+                    self.svg_resource_limits = self.svg_resource_limits.saturating_add(1);
+                } else {
+                    self.invalid_svg = self.invalid_svg.saturating_add(1);
+                }
+            }
+        }
     }
 
     fn raster(&mut self, kind: &usvg::ImageKind) -> bool {
@@ -124,7 +166,14 @@ pub(super) fn wrap(base: usvg::ImageHrefResolver<'static>, state: Arc<Mutex<Inte
                 return None;
             }
             let data = if svg {
-                let room = state.lock().unwrap_or_else(PoisonError::into_inner).svg_bytes_left;
+                let room = {
+                    let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                    if state.svg_failure_exhausted {
+                        state.classify_after_svg_failure(&data);
+                        return None;
+                    }
+                    state.svg_bytes_left
+                };
                 // Inflate once under the original aggregate allowance, then pass UTF-8
                 // text onward. Nested parses retain these exact same wrapped options.
                 let text = match craft_svg::svgz::text(&data, room) {
@@ -136,8 +185,10 @@ pub(super) fn wrap(base: usvg::ImageHrefResolver<'static>, state: Arc<Mutex<Inte
                         state.svg_bytes_left = 0;
                         if matches!(error, Err(craft_svg::svgz::Error::TooLarge(_))) || error.is_ok() {
                             state.svg_limits = state.svg_limits.saturating_add(1);
+                            state.svg_resource_limits = state.svg_resource_limits.saturating_add(1);
                         } else {
                             state.invalid_svg = state.invalid_svg.saturating_add(1);
+                            state.svg_failure_exhausted = true;
                         }
                         return None;
                     }

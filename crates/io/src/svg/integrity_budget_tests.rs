@@ -29,13 +29,17 @@ fn original_nested_xml_bytes_are_not_refunded_when_malformed_hrefs_shrink() {
             drop(kind);
             let state = state.lock().unwrap_or_else(PoisonError::into_inner);
             assert_eq!(state.svg_bytes_left, MAX_BOUNDED_SVG_BYTES as usize - accepted * original_size);
+            assert!(!state.svg_failure_exhausted);
+            assert_eq!(state.classification_bytes_left(), MAX_BOUNDED_SVG_BYTES as usize);
             let usage = state.usage(resolver.usage()).unwrap();
             assert_eq!(usage.embedded_svg_bytes, accepted * original_size, "the short replacement cannot refund original XML work");
         }
         assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::clone(&source), &options).is_none());
         let state = state.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!(state.svg_bytes_left, 0);
-        assert_eq!(state.svg_limits, 1);
+        assert_eq!((state.svg_limits, state.svg_resource_limits), (1, 1));
+        assert!(!state.svg_failure_exhausted, "ordinary byte exhaustion cannot enter compatibility classification");
+        assert_eq!(state.classification_bytes_left(), MAX_BOUNDED_SVG_BYTES as usize);
         assert_eq!(state.usage(resolver.usage()).unwrap().svg_resource_limit_images, 1);
         Ok(())
     })
@@ -54,12 +58,54 @@ fn invalid_utf8_gzip_consumes_remaining_svg_work_before_the_next_child() {
             let state = state.lock().unwrap_or_else(PoisonError::into_inner);
             assert_eq!(state.svg_bytes_left, 0, "a failed decode cannot retry the full work allowance");
             assert_eq!(state.invalid_svg, 1);
+            assert!(state.svg_failure_exhausted);
+            assert_eq!(state.svg_resource_limits, 0);
+            assert_eq!(state.classification_bytes_left(), MAX_BOUNDED_SVG_BYTES as usize);
         }
         let valid = Arc::new(b"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1'/></svg>".to_vec());
+        let valid_size = valid.len();
         assert!((options.image_href_resolver.resolve_data)("image/svg+xml", valid, &options).is_none());
         let state = state.lock().unwrap_or_else(PoisonError::into_inner);
-        assert_eq!((state.invalid_svg, state.svg_limits), (1, 1));
-        assert_eq!(state.usage(resolver.usage()).unwrap().embedded_svg_bytes, MAX_BOUNDED_SVG_BYTES as usize);
+        assert_eq!((state.invalid_svg, state.svg_limits, state.svg_resource_limits), (1, 1, 0));
+        assert_eq!(state.classification_bytes_left(), MAX_BOUNDED_SVG_BYTES as usize - valid_size);
+        let usage = state.usage(resolver.usage()).unwrap();
+        assert_eq!(usage.embedded_svg_bytes, MAX_BOUNDED_SVG_BYTES as usize);
+        assert_eq!(usage.svg_resource_limit_images, 0, "a later small child is omitted, not a resource error");
+        let charged = 2 * MAX_BOUNDED_SVG_BYTES as usize - state.svg_bytes_left - state.classification_bytes_left();
+        assert_eq!(charged, MAX_BOUNDED_SVG_BYTES as usize + valid_size);
+        assert!(charged <= 2 * MAX_BOUNDED_SVG_BYTES as usize, "both work pools together have a fixed 32 MiB allowance");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn post_failure_classification_is_cumulative_and_never_admits_later_children() {
+    super::super::on_svg_stack(|| {
+        let (options, state, resolver) = wrapped_options(MAX_RASTER_PIXELS);
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&[0xff; 256]).unwrap();
+        assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(encoder.finish().unwrap()), &options).is_none());
+        let valid = Arc::new(b"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>".to_vec());
+        // Exercise the cumulative boundary with a small injected second pool;
+        // public policy tests separately cover the full 16 MiB allowance.
+        let classification_limit = valid.len() * 2 - 1;
+        state.lock().unwrap_or_else(PoisonError::into_inner).classification_bytes_left = classification_limit;
+        assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::clone(&valid), &options).is_none());
+        {
+            let state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            assert_eq!(state.classification_bytes_left(), valid.len() - 1);
+            assert_eq!((state.svg_limits, state.svg_resource_limits), (1, 0));
+        }
+        assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::clone(&valid), &options).is_none());
+        let state = state.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(state.classification_bytes_left(), 0);
+        assert_eq!((state.svg_limits, state.svg_resource_limits), (2, 1));
+        assert_eq!(state.svg_bytes_left, 0, "classification never refunds original failed work");
+        assert!(state.svg_failure_exhausted);
+        let charged = 2 * MAX_BOUNDED_SVG_BYTES as usize - state.svg_bytes_left - state.classification_bytes_left();
+        assert_eq!(charged, 2 * MAX_BOUNDED_SVG_BYTES as usize, "exhausted pools cannot authorize more than their combined 32 MiB allowance");
+        assert_eq!(resolver.usage().embedded_svg_count, 0, "classified children must never reach the shared parser");
         Ok(())
     })
     .unwrap();

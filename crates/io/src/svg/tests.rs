@@ -1189,8 +1189,9 @@ fn images_after_a_damaged_svgz_are_unpacked_again_within_one_budget() {
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
 }
 
-/// Each image unpacked again is charged at least what was unpacked, refused ones included, so
-/// however many follow a damaged image the unpacking adds up to one budget, not one each.
+/// Classification after damaged data has one separate allowance for the entire drawing.
+/// Exercise the real wrapped resolver: failed work stays charged and later references cannot
+/// acquire another classification allowance after the first oversized source exhausts it.
 #[test]
 fn unpacking_images_again_adds_up_to_one_budget_however_many_there_are() {
     let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
@@ -1198,12 +1199,31 @@ fn unpacking_images_again_adds_up_to_one_budget_however_many_there_are() {
     huge.resize(budget * 2, b' ');
     huge.extend_from_slice(b"</svg>");
     let huge = gzip(&huge);
-    // A damaged image was charged the whole budget; every later image is refused for size.
-    let refusals = SvgRefusals { unread_charges: AtomicUsize::new(budget), ..SvgRefusals::default() };
-    for _ in 0..64 {
-        note_byte_refusal(&huge, budget, &refusals);
-        assert!(refusals.over_budget.load(Ordering::Relaxed), "too large without the charges");
-        assert_eq!(refusals.rechecked.load(Ordering::Relaxed), budget);
+    let state = Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS)));
+    let resolver = Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS)));
+    let options = options_with_isolation(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH, false, Arc::clone(&resolver), Arc::clone(&state));
+    let valid = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>");
+    let damaged = Arc::new(valid[..valid.len() / 2].to_vec());
+    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", damaged, &options).is_none());
+    {
+        let state = state.lock().unwrap();
+        let usage = state.usage(resolver.usage()).unwrap();
+        assert_eq!(usage.invalid_svg_images, 1, "the actual damaged stream is omitted");
+        assert_eq!(usage.embedded_svg_bytes, budget, "failed work retains its original charge");
+        assert_eq!(usage.svg_resource_limit_images, 0, "corruption alone is not a resource overrun");
+        assert_eq!(state.classification_bytes_left(), budget, "classification has its own single shared allowance");
+    }
+    for index in 0..64 {
+        // Distinct references must share one classification pool, not acquire one
+        // pool per source or retry. This tail is never reached before the size cap.
+        let mut source = huge.clone();
+        source.push(index);
+        assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(source), &options).is_none());
+        let state = state.lock().unwrap();
+        let usage = state.usage(resolver.usage()).unwrap();
+        assert!(usage.svg_resource_limit_images > 0, "the body is too large independently of the failed-work charge");
+        assert_eq!(state.classification_bytes_left(), 0, "all 64 references share exactly one exhausted allowance");
+        assert_eq!(usage.embedded_svg_bytes, budget, "classification must not refund or multiply the original allowance");
     }
 }
 
