@@ -4639,8 +4639,14 @@ fn copy_overwrite_past_the_tiff_channel_limit_keeps_it_unsaved() {
             s.execute("channel.new", json!({})).unwrap();
         }
         assert_eq!(s.active().unwrap().doc.channels.len(), extra);
+        // The channels were added after the save, so mark the document saved again: its dirtiness
+        // must come from the copy's savepoint invalidation, not from the fixture that filled it.
+        s.active_mut().unwrap().saved_to(own.clone());
+        assert!(!s.active().unwrap().is_dirty(), "{extra}: the document starts saved");
         copy_over_own_tiff(&mut s, &own);
-        assert_eq!(s.active().unwrap().is_dirty(), extra > photocraft_codecs::MAX_EXTRA_SAMPLES, "{extra} extra channels");
+        let overwritten = extra > photocraft_codecs::MAX_EXTRA_SAMPLES;
+        assert_eq!(s.active().unwrap().is_dirty(), overwritten, "{extra} extra channels");
+        assert_eq!(s.active().unwrap().saved_revision == u64::MAX, overwritten, "{extra}: the savepoint, not the revision, is what a copy invalidates");
         let back = photocraft_io::import("own.tif", &std::fs::read(&own).unwrap()).unwrap().document;
         assert_eq!(back.channels.len(), extra.min(photocraft_codecs::MAX_EXTRA_SAMPLES), "{extra}: what the file kept");
     }
