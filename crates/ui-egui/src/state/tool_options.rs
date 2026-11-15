@@ -96,7 +96,7 @@ pub struct ToolOptions {
     pub smudge_mode: photocraft_color::BlendMode,
     /// Quick Selection enhance edge.
     pub enhance_edge: bool,
-    /// Quick Selection selection mode: 0 New, 1 Add (default), 2 Subtract.
+    /// Quick Selection selection mode: 0 New (default), 1 Add, 2 Subtract.
     #[serde(default = "default_quick_selection_mode")]
     pub quick_selection_mode: u8,
     /// Pen: "path" (work path) or "shape" (shape layer).
