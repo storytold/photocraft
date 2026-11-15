@@ -270,6 +270,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Layer"], "---", None, "---"),
     (&["Layer"], "Rename Layer…", None, "layer.renameLayer"),
     (&["Layer", "Layer Style"], "Blending Options…", None, "layer.layerStyle.blendingOptions"),
+    (&["Layer", "Layer Style"], "---", None, "---"),
     (&["Layer", "Layer Style"], "Bevel & Emboss…", None, "layer.layerStyle.bevelEmboss"),
     (&["Layer", "Layer Style"], "Stroke…", None, "layer.layerStyle.stroke"),
     (&["Layer", "Layer Style"], "Inner Shadow…", None, "layer.layerStyle.innerShadow"),
