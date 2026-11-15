@@ -53,11 +53,8 @@ fn artboards_to_files_keeps_its_top_first_order() {
     std::fs::create_dir_all(&dir).unwrap();
     let r = s.execute("file.export.artboardsToFiles", json!({"dir": dir.to_string_lossy(), "prefix": "p"})).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
-    let files: Vec<_> = r["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|file| std::path::Path::new(file.as_str().unwrap()).file_name().unwrap().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(files, ["pEmpty-Board.png", "pBlue-Board.png", "pRed-Board.png"]);
+    let files: Vec<&str> = r["files"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    // Files are named <prefix><artboard name>, spaces as hyphens (#13633); top artboard first.
+    let names: Vec<&str> = files.iter().map(|f| f.rsplit(['/', '\\']).next().unwrap_or(f)).collect();
+    assert_eq!(names, ["pEmpty-Board.png", "pBlue-Board.png", "pRed-Board.png"], "{files:?}");
 }
