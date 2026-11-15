@@ -78,8 +78,20 @@ impl PhotocraftApp {
         get().ok().map(|source| source.map(std::sync::Arc::new))
     }
 
-    /// Mirror the session clipboard onto the OS clipboard (RGBA8).
-    pub(super) fn export_os_clipboard(&mut self) {
+    /// Edit › Copy, Cut or Copy Merged succeeded, from the menu, a shortcut or an action's step
+    /// (an empty selection fails before this): the session clipboard holds PhotoCraft's own copy,
+    /// newer than the OS clipboard's image. `Services::clipboard_copied` hears of it whether or
+    /// not Export Clipboard mirrors it, then it is mirrored when it does.
+    pub(crate) fn copied_to_clipboard(&mut self) {
+        if let Some(copied) = self.services.clipboard_copied.as_mut() {
+            copied();
+        }
+        self.clip_external = false;
+        self.export_os_clipboard();
+    }
+
+    /// Mirror the session clipboard onto the OS clipboard (RGBA8) when Export Clipboard is on.
+    fn export_os_clipboard(&mut self) {
         self.clip_unmirrored = true;
         if !self.session.prefs().general.export_clipboard {
             return;

@@ -56,6 +56,65 @@ fn os_clipboard_honours_export_clipboard_preference() {
     assert!(os.lock().unwrap().is_none(), "copy does not mirror to OS clipboard when export_clipboard is off");
 }
 
+/// The web build can't put a copy on the system clipboard, so it hears of every copy instead
+/// (#7842): Copy, Cut and Copy Merged, with Export Clipboard on or off. A copy of an empty area
+/// fails and isn't one, and a paste isn't one either.
+#[test]
+fn every_copy_is_announced_even_when_it_is_not_exported() {
+    for export in [true, false] {
+        for id in ["edit.copy", "edit.copyMerged", "edit.cut"] {
+            let copies = Arc::new(Mutex::new(0));
+            let heard = copies.clone();
+            let services = Services { clipboard_copied: Some(Box::new(move || *heard.lock().unwrap() += 1)), ..Default::default() };
+            let mut app = PhotocraftApp::new(Session::new(), services);
+            app.session.execute("prefs.set", json!({"values": {"general.exportClipboard": export}})).unwrap();
+            app.session.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+            app.sync_views();
+            app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
+            app.run(id, json!({})).unwrap();
+            assert_eq!(*copies.lock().unwrap(), 1, "{id}, export {export}");
+            app.run("edit.paste", json!({})).unwrap();
+            assert_eq!(*copies.lock().unwrap(), 1, "a paste after {id}");
+            if id != "edit.copyMerged" {
+                // An empty layer: nothing to copy.
+                app.run("layer.new.layer", json!({})).unwrap();
+                app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
+                assert!(app.run(id, json!({})).is_err(), "{id} of an empty area");
+                assert_eq!(*copies.lock().unwrap(), 1, "a failed {id}");
+            }
+        }
+    }
+}
+
+/// A Copy step in an action is a copy like Edit › Copy (#7842): announced, and PhotoCraft's own,
+/// so text copied in another app since doesn't drop it as it drops an image imported from there.
+#[test]
+fn an_actions_copy_step_is_a_copy_too() {
+    let os: OsClip = Arc::default();
+    let copies = Arc::new(Mutex::new(0));
+    let (get, heard) = (os.clone(), copies.clone());
+    let services = Services {
+        clipboard_get_image: Some(Box::new(move || Ok(get.lock().unwrap().clone()))),
+        clipboard_copied: Some(Box::new(move || *heard.lock().unwrap() += 1)),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.session.execute("prefs.set", json!({"values": {"general.exportClipboard": false}})).unwrap();
+    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    app.sync_views();
+    // A 3×2 image from another app, pasted.
+    *os.lock().unwrap() = Some((3, 2, [255u8, 0, 0, 255].repeat(6)));
+    app.run("edit.paste", json!({})).unwrap();
+    let steps = vec![("select.rect".into(), json!({"x": 0, "y": 0, "width": 8, "height": 4})), ("edit.copyMerged".into(), json!({}))];
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action { name: "Copy".into(), steps, ..Default::default() });
+    app.run("actions.play", json!({"action": "Copy"})).unwrap();
+    assert_eq!(*copies.lock().unwrap(), 1);
+    *os.lock().unwrap() = None;
+    app.run("edit.paste", json!({})).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds().width(), 8);
+}
+
 type OsClip = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;
 
 const CLIP_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><path d="M1 1 C2 0 6 0 7 1 L7 5 L1 5 Z" fill="#e03020"/></svg>"##;
