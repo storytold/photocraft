@@ -939,8 +939,16 @@ fn transform_again_copy(s: &mut Session) -> Result<Value> {
 /// The `edit.transform` params that repeat the last transform on the layers `ids` (their frame
 /// together is the box it starts from).
 fn transform_again_params(s: &Session, ids: &[LayerId]) -> Result<Value> {
-    let (_, last) =
-        s.journal.iter().rev().find(|(id, _)| id == "edit.transform").cloned().ok_or(EngineError::Other("there is no transform to repeat".into()))?;
+    let last = match &s.last_transform {
+        Some(last) => last.clone(),
+        None => s
+            .journal
+            .iter()
+            .rev()
+            .find(|(id, _)| id == "edit.transform")
+            .map(|(_, p)| p.clone())
+            .ok_or(EngineError::Other("there is no transform to repeat".into()))?,
+    };
     let (rect, quad) = (last.get("rect").cloned(), last.get("quad").cloned());
     let mut p = json!({"interpolation": last.get("interpolation").cloned().unwrap_or(json!("bicubic"))});
     match (rect, quad, last.get("matrix").cloned()) {

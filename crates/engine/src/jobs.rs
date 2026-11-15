@@ -1956,6 +1956,11 @@ impl Session {
         }
         crate::edit_menu_cmds::after_command(self, id, &params);
         crate::automate_cmds::after_command(self, id);
+        // Repeat Transform repeats this one, whether or not the journal keeps the entry (a script file run
+        // during recording is cut out of it).
+        if id == "edit.transform" {
+            self.last_transform = Some(params.clone());
+        }
         self.sync_preset_store();
         if !journal {
             return;

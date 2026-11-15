@@ -120,3 +120,40 @@ fn outside_recording_and_for_script_text_nothing_changes() {
     let recorded: Vec<String> = steps(&mut s, "Text").as_array().unwrap().iter().map(|st| st[0].as_str().unwrap().to_owned()).collect();
     assert_eq!(recorded, ["select.all", "layer.new.layer"]);
 }
+
+/// CodeRabbit on #15118: a script file that moves the action being recorded keeps the recording on that
+/// action: `[Keep, Target]` recording into `Target`, the script moves it first, and the Browse step is
+/// recorded in `Target`, not in `Keep`.
+#[test]
+fn a_script_that_moves_the_recorded_action_keeps_recording_into_it() {
+    let (_dir, path) = script_file("actions.move {\"action\": \"Target\", \"to\": 0}\n");
+    let mut s = new_doc();
+    s.execute("actions.record", json!({"name": "Keep"})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    s.execute("actions.record", json!({"name": "Target"})).unwrap();
+    let run = s.execute("file.scripts.browse", json!({"path": path})).unwrap();
+    assert_eq!(run["ok"], true, "{run}");
+    assert_eq!(s.actions.list[0].name, "Target", "the script moved it first");
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(steps(&mut s, "Target"), json!([["file.scripts.browse", {"path": path}]]), "recorded into the moved action");
+    assert_eq!(steps(&mut s, "Keep"), json!([]), "and not into the one that took its place");
+}
+
+/// CodeRabbit on #15118: Repeat Transform repeats the last transform even when it ran in a script file during
+/// recording (whose journal entries are cut out of the recorded action).
+#[test]
+fn repeat_transform_repeats_a_transform_run_by_a_script_file_while_recording() {
+    let (_dir, path) = script_file("edit.transform {\"matrix\": [1, 0, 0, 1, 2, 0], \"interpolation\": \"nearest\"}\n");
+    let mut s = new_doc();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("actions.record", json!({"name": "Scale"})).unwrap();
+    s.execute("file.scripts.browse", json!({"path": path})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert!(s.journal.iter().all(|(id, _)| id != "edit.transform"), "the entry is not in the journal");
+    assert!(s.last_transform.is_some(), "but the last transform is kept");
+    let again = s.execute("edit.transform.again", json!({}));
+    assert!(again.is_ok(), "Repeat Transform has the script's transform to repeat: {again:?}");
+}
