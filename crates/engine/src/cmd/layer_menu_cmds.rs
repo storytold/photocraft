@@ -947,12 +947,8 @@ pub fn is_empty_layer(e: &EngineError) -> bool {
 
 pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    let mut alone = l.clone();
-    alone.visible = true;
-    alone.blend = if alone.is_group() { BlendMode::PassThrough } else { BlendMode::Normal };
-    alone.clipped = false;
     let mut tmp = doc.clone();
-    tmp.layers = vec![alone];
+    tmp.layers = clipping_stack(doc, id).unwrap_or_else(|| vec![export_base(l)]);
     tmp.selection = None;
     let area = doc.bounds();
     let buf = photocraft_compose::render(&tmp, area);
@@ -982,6 +978,34 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     surf.write_region(Rect::from_xywh(0, 0, b.width(), b.height()), &rows);
     out.layers.push(Layer::new(l.name.clone(), LayerContent::Raster(surf)));
     Ok(out)
+}
+
+/// `l` as an export draws it at the bottom of its stack: shown, unclipped, in Normal (Pass
+/// Through for a group), whatever its own visibility and blend mode.
+fn export_base(l: &Layer) -> Layer {
+    let mut base = l.clone();
+    base.visible = true;
+    base.blend = if base.is_group() { BlendMode::PassThrough } else { BlendMode::Normal };
+    base.clipped = false;
+    base
+}
+
+/// The layers an export of `id` draws when it is part of a clipping group: the base (as
+/// [`export_base`]) and every layer clipped to it, keeping their own settings, whichever of them
+/// `id` is (#14813). `None` when `id` has no clipping group, so it is drawn alone.
+fn clipping_stack(doc: &Document, id: LayerId) -> Option<Vec<Layer>> {
+    let path = doc.path_of(id)?;
+    let (&i, parent) = path.split_last()?;
+    let siblings = if parent.is_empty() { &doc.layers[..] } else { doc.layer_at(parent)?.children()? };
+    // Layers are bottom to top: a clipped layer clips to the nearest unclipped one below it.
+    let base = (0..=i).rev().find(|&b| !siblings[b].clipped)?;
+    let end = (base + 1..siblings.len()).find(|&j| !siblings[j].clipped).unwrap_or(siblings.len());
+    if end == base + 1 {
+        return None;
+    }
+    let mut stack = siblings[base..end].to_vec();
+    stack[0] = export_base(&stack[0]);
+    Some(stack)
 }
 
 fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result<Value> {
@@ -1124,5 +1148,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "layer_menu_cmds/export_clipping_tests.rs"]
+mod export_clipping_tests;
 #[cfg(test)]
 mod tests;
