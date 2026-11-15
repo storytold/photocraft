@@ -138,7 +138,10 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let r = if source == "folder" {
         let inputs = image_processor_folder_inputs(p, &output)?;
-        process_image_processor_folder(s, &inputs, &output, format, save, &process)?
+        let opened = Cell::new(false);
+        let result = process_image_processor_folder(s, &inputs, &output, format, save, &opened, &process);
+        require_opened_source(&opened)?;
+        result
     } else {
         let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().collect() };
         if documents.is_empty() {
@@ -171,14 +174,17 @@ fn process_image_processor_folder(
     output: &str,
     format: &str,
     save: SaveOpts,
+    opened: &Cell<bool>,
     process: &dyn Fn(&mut Session, &str) -> Result<bool>,
-) -> Result<Value> {
-    let opened = Cell::new(false);
-    let result = process_tree(s, inputs, output, format, save, "", &|scratch, out| {
+) -> Value {
+    process_tree(s, inputs, output, format, save, "", &|scratch, out| {
         opened.set(true);
         process(scratch, out)
-    });
-    if opened.get() { Ok(result) } else { Err(EngineError::Other(IMAGE_PROCESSOR_NO_SOURCE.into())) }
+    })
+}
+
+fn require_opened_source(opened: &Cell<bool>) -> Result<()> {
+    if opened.get() { Ok(()) } else { Err(EngineError::Other(IMAGE_PROCESSOR_NO_SOURCE.into())) }
 }
 
 fn image_processor_param(message: impl Into<String>) -> EngineError {
@@ -261,12 +267,17 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
         _ if s.documents().is_empty() => return Err(EngineError::NoDocument),
         _ => ProcessorInputs::Documents(s.documents().iter().collect()),
     };
+    run_processor_formats(s, &inputs, output, formats)
+}
+
+fn run_processor_formats(s: &Session, inputs: &ProcessorInputs<'_>, output: &str, formats: impl IntoIterator<Item = ProcessorFormat>) -> Result<Value> {
     let mut files = Vec::new();
     let mut errors = Vec::new();
+    let opened = Cell::new(false);
     for format in formats {
         // The existing runners prepare fresh scratch documents for each output.
         let process = |scratch: &mut Session, out: &str| {
-            if let ProcessorInputs::Folder(inputs) = &inputs
+            if let ProcessorInputs::Folder(inputs) = inputs
                 && super::paths::is_file(out)
                 && inputs.iter().any(|input| super::paths::same_file(&input.path, out))
             {
@@ -280,8 +291,8 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
             }
             Ok(false)
         };
-        let mut result = match &inputs {
-            ProcessorInputs::Folder(inputs) => process_image_processor_folder(s, inputs, output, format.extension, format.save, &process)?,
+        let mut result = match inputs {
+            ProcessorInputs::Folder(inputs) => process_image_processor_folder(s, inputs, output, format.extension, format.save, &opened, &process),
             ProcessorInputs::Documents(documents) => process_document_copies(s, documents, output, format.extension, format.save, &process),
         };
         if let Some(Value::Array(written)) = result.get_mut("files").map(Value::take) {
@@ -296,6 +307,9 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
                 failure
             }));
         }
+    }
+    if matches!(inputs, ProcessorInputs::Folder(_)) {
+        require_opened_source(&opened)?;
     }
     Ok(json!({"files": files, "errors": errors}))
 }

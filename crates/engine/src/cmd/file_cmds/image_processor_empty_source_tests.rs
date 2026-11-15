@@ -156,3 +156,34 @@ fn empty_explicit_inputs_error_and_invalid_recursion_keeps_its_diagnostic() {
     }
     assert!(!output.exists());
 }
+
+#[test]
+fn a_source_removed_between_formats_keeps_the_written_file_and_read_error() {
+    use super::{ProcessorInputs, image_processor_folder_inputs, processor_format, run_processor_formats};
+
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("output");
+    let input = root.path().join("test.ppm");
+    let jpeg = output.join("test.jpg");
+    fs::create_dir(&output).unwrap();
+    write_image(&input).unwrap();
+    let session = Session::new();
+    let output = output.to_str().unwrap();
+    let sources = image_processor_folder_inputs(&json!({"files": [input]}), output).unwrap();
+    let inputs = ProcessorInputs::Folder(sources);
+    let formats = [
+        processor_format(&session, "jpeg", "jpg", &json!({})).unwrap().unwrap(),
+        processor_format(&session, "tiff", "tif", &json!({})).unwrap().unwrap(),
+    ];
+    let result = run_processor_formats(&session, &inputs, output, formats.into_iter().inspect(|format| {
+        if format.extension == "tif" {
+            assert!(jpeg.is_file());
+            fs::remove_file(&input).unwrap();
+        }
+    })).unwrap();
+    assert_eq!(result["files"], json!([jpeg]));
+    let errors = result["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["file"], json!(input));
+    assert_eq!(errors[0]["format"], "tif");
+}
