@@ -385,6 +385,10 @@ pub struct PhotocraftApp {
     pub(crate) move_blocked_start: Option<[f64; 2]>,
     pub(crate) move_blocked_moved: bool,
     pub(crate) move_blocked_layer: Option<photocraft_doc::LayerId>,
+    /// The document the blocked press began in (#11971): another window can make a different
+    /// document active while the button is still held, and the recorded layer id would then
+    /// name a layer of that document.
+    pub(crate) move_blocked_doc: Option<photocraft_doc::DocId>,
     pub(crate) move_viewport: Option<egui::ViewportId>,
     pub(crate) current_viewport: Option<egui::ViewportId>,
     /// The tool pointer events go to this frame when it isn't the selected one: the Move tool

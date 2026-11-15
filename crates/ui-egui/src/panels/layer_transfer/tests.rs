@@ -404,20 +404,26 @@ fn a_move_tool_mask_selection_drag_onto_a_tab_copies_the_mask_and_leaves_layer_p
     h.state_mut().ui.tool = Tool::Move;
     h.run_steps(2);
 
-    // Snapshot the source mask and selection: arming the transfer and copying the selected
-    // pixels must leave both unchanged.
+    // The mask's own value and the layer's pixels are sampled separately: the transfer must
+    // leave both unchanged, and a mask-only change has to fail the mask assertion (#11971).
     let src_doc = h.state().session.active().unwrap().doc.id;
     let src_layer = h.state().session.active().unwrap().active_layer;
-    let mask_sample = |h: &Harness<'static, PhotocraftApp>| {
+    let layer_pixel = |h: &Harness<'static, PhotocraftApp>| {
         let st = h.state().session.documents().iter().find(|s| s.doc.id == src_doc).unwrap();
         let layer = src_layer.and_then(|id| st.doc.layer(id)).unwrap();
         let mut px = [0.0f32; 4];
         layer.surface().unwrap().read_pixel(6, 8, &mut px);
         px
     };
+    let mask_sample = |h: &Harness<'static, PhotocraftApp>| {
+        let st = h.state().session.documents().iter().find(|s| s.doc.id == src_doc).unwrap();
+        let layer = src_layer.and_then(|id| st.doc.layer(id)).unwrap();
+        layer.mask.as_ref().unwrap().value(6, 8)
+    };
     let selection_present =
         |h: &Harness<'static, PhotocraftApp>| h.state().session.documents().iter().find(|s| s.doc.id == src_doc).is_some_and(|s| s.doc.selection.is_some());
     let before_mask = mask_sample(&h);
+    let before_pixel = layer_pixel(&h);
     let before_selection = selection_present(&h);
 
     let grab = ViewXform::active(h.state()).unwrap().to_screen(6.0, 11.0);
@@ -434,6 +440,7 @@ fn a_move_tool_mask_selection_drag_onto_a_tab_copies_the_mask_and_leaves_layer_p
     assert!((sample[0] - sample[1]).abs() < 0.02 && (sample[0] - 128.0 / 255.0).abs() < 0.02, "copied mask gray, not red layer pixels: {sample:?}");
     assert_eq!(source_square(&h, paint), photocraft_geom::Rect::new(4, 6, 14, 16), "source layer pixels remain intact");
     assert_eq!(mask_sample(&h), before_mask, "arming and copying leave the source mask unchanged");
+    assert_eq!(layer_pixel(&h), before_pixel, "arming and copying leave the source layer pixels unchanged");
     assert_eq!(selection_present(&h), before_selection, "arming and copying leave the source selection unchanged");
 }
 
@@ -846,6 +853,40 @@ fn a_blocked_move_with_auto_select_off_transfers_the_pressed_layer() {
     assert_eq!(r.size(), vec2(10.0, 10.0));
     assert_eq!(h.state().session.documents()[0].active_layer, Some(bg), "source active layer stayed unchanged");
     assert!(h.state().session.documents()[0].doc.layer(paint).is_some());
+}
+
+/// #11971 review: a blocked press stays bound to the document it began in. When another window
+/// makes a different document active while the button is still held, hovering another tab arms
+/// nothing: the recorded layer id belongs to the press's document, so a transfer would be
+/// attempted against the wrong document.
+#[test]
+fn a_blocked_press_does_not_transfer_after_another_document_becomes_active() {
+    let (mut h, paint) = harness();
+    let bg = h.state().session.documents()[0].doc.layers[0].id;
+    let src_doc = h.state().session.documents()[0].doc.id;
+    h.state_mut().session.execute("layer.select", json!({"layer": bg.0})).unwrap();
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().ui.tool_options.move_auto_select = false;
+
+    use crate::canvas::{ToolEvent, tool_event};
+    tool_event(h.state_mut(), ToolEvent::Down { x: 8.0, y: 10.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(h.state().move_blocked, "the press over another layer is blocked");
+    assert_eq!(h.state().move_blocked_layer, Some(paint), "the pressed layer is recorded");
+    assert_eq!(h.state().move_blocked_doc, Some(src_doc), "the press records its document");
+
+    // Another document window gains focus: its document becomes active while the press is held.
+    h.state_mut().session.set_active(1);
+    let ctx = h.ctx.clone();
+    crate::layer_transfer::over_tab(h.state_mut(), &ctx, 0);
+
+    assert!(!crate::layer_transfer::is_transfer_armed(&ctx), "no transfer is armed against another document");
+    assert!(h.state().move_blocked, "the press stays with its own document");
+    assert_eq!(h.state().session.active_index(), Some(1), "the hover does not switch documents");
+
+    let docs = h.state().session.documents();
+    assert_eq!(docs[0].doc.layers.len(), 2, "nothing is copied into the source document");
+    assert_eq!(docs[1].doc.layers.len(), 1, "nothing is copied out of the other document");
+    assert!(!h.state().ui.status_error, "no copy is attempted from the other document");
 }
 
 /// #11971 review: when a blocked Move gesture starts in an extra document window, running the

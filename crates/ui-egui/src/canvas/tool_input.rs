@@ -283,6 +283,7 @@ fn record_blocked_press(app: &mut PhotocraftApp, x: f64, y: f64) {
     app.move_blocked_start = Some([x, y]);
     app.move_blocked_moved = false;
     app.move_blocked_layer = blocked_press_layer(app, x, y);
+    app.move_blocked_doc = app.session.active().map(|st| st.doc.id);
     app.move_viewport = app.current_viewport;
 }
 
@@ -570,6 +571,7 @@ fn handle_move_blocked_event(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool,
             if tool != Tool::Move && app.ui.transform.is_none() && crate::move_lock::blocked(app, tool, [x, y], mods) {
                 app.move_blocked = true;
                 app.move_blocked_start = Some([x, y]);
+                app.move_blocked_doc = app.session.active().map(|st| st.doc.id);
                 app.move_viewport = app.current_viewport;
                 return true;
             }

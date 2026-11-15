@@ -130,6 +130,12 @@ fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize)
                 app.move_viewport = None;
                 g
             } else if app.move_blocked {
+                // A blocked press belongs to the document it began in (#11971): another window's
+                // document can become active while the button is still held, and the recorded
+                // layer id would then name a layer of that document instead.
+                if app.move_blocked_doc != app.session.active().map(|st| st.doc.id) {
+                    return false;
+                }
                 let Some(hit) = app.move_blocked_layer.or_else(|| active.filter(|_| app.session.active().is_some_and(|st| st.doc.selection.is_some()))) else {
                     return false;
                 };
