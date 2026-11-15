@@ -1262,6 +1262,7 @@ fn handle_canvas_tool_stroke(
         let d = xf.to_doc(p);
         // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
         let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
+        let dialogs = app.ui.dialogs.len();
         tool_input::tool_event_with_view(
             app,
             ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
@@ -1269,8 +1270,18 @@ fn handle_canvas_tool_stroke(
             Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
         );
         app.press_stroke = app.drag.is_some();
+        app.press_alerted = app.drag.is_none() && app.ui.dialogs.len() > dialogs;
     }
     let press_stroke = app.press_stroke;
+    // A press that opened an alert is one attempt, as in Photoshop: neither the drag egui
+    // recognises later nor the click on release presses again (#15122).
+    if app.press_alerted {
+        buttons.started = false;
+        buttons.clicked = false;
+        if !ui.input(|i| i.pointer.primary_down()) {
+            app.press_alerted = false;
+        }
+    }
     // A live tool's press that went to the ⌥ eyedropper keeps sampling for the whole press: the
     // drag recognised later must not decide again with ⌥ already let go and paint (#7802).
     if press_stroke || (strokes_live(tool) && (app.alt_sampling || app.mixer_sampling)) {

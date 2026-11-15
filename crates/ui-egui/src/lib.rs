@@ -434,6 +434,9 @@ pub struct PhotocraftApp {
     /// A live painting stroke started on the press (`canvas_view`): the drag egui recognises later,
     /// or the click, continues or ends it rather than starting another.
     press_stroke: bool,
+    /// The press opened an alert instead of a stroke (a hidden or locked layer, #15122): the rest of
+    /// the gesture is consumed, so egui's drag or click doesn't press again and open another.
+    press_alerted: bool,
     /// Position and pen pressure at the last stroke's endpoint: ⇧-click interpolates from them (#178, #2827).
     last_stroke_end: Option<(DocId, [f64; 3])>,
     /// Control+Alt-drag brush resize in progress (`brush_resize`, #231).
@@ -1037,6 +1040,8 @@ mod stamp_tests;
 mod alt_click_tests;
 #[cfg(test)]
 mod artboard_first_board_tests;
+#[cfg(test)]
+mod brush_refusal_once_tests;
 #[cfg(test)]
 mod status_bar_tests;
 #[cfg(test)]

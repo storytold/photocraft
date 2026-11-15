@@ -80,6 +80,7 @@ impl PhotocraftApp {
             held_erase: false,
             defer_live_stroke: false,
             press_stroke: false,
+            press_alerted: false,
             last_stroke_end: None,
             brush_resize: None,
             quick_pick: false,
