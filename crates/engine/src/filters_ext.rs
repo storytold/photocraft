@@ -663,7 +663,7 @@ fn relight_lights(p: &Value) -> Vec<RelightLight> {
     v
 }
 
-fn validate_relight_lights(p: &Value) -> Result<()> {
+pub(crate) fn validate_relight_lights(p: &Value) -> Result<()> {
     let Some(lights) = p.get("lights") else { return Ok(()) };
     let Some(arr) = lights.as_array() else {
         return Err(relight_bad("\"lights\" must be an array"));
@@ -733,11 +733,14 @@ fn validate_relight(p: &Value) -> Result<()> {
     if !p.is_object() {
         return Err(relight_bad("params must be a JSON object"));
     }
-    relight_num(p, "angle", 45.0, -180.0, 180.0)?;
-    relight_num(p, "elevation", 40.0, 0.0, 90.0)?;
-    relight_num(p, "intensity", 40.0, 0.0, 100.0)?;
+    // With a light list, the single-light fields are ignored, so they are not checked either.
+    if p.get("lights").is_none() {
+        relight_num(p, "angle", 45.0, -180.0, 180.0)?;
+        relight_num(p, "elevation", 40.0, 0.0, 90.0)?;
+        relight_num(p, "intensity", 40.0, 0.0, 100.0)?;
+        relight_num(p, "warmth", 0.0, -100.0, 100.0)?;
+    }
     relight_num(p, "ambient", 55.0, 0.0, 100.0)?;
-    relight_num(p, "warmth", 0.0, -100.0, 100.0)?;
     relight_num(p, "softness", 25.0, 1.0, 100.0)?;
     validate_relight_lights(p)?;
     Ok(())

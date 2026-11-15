@@ -75,8 +75,9 @@ fn flat(st: SampleType, r: Rect, px: [f32; 4]) -> Surface {
 
 fn field_mean(s: &Surface, r: Rect) -> f32 {
     let v = s.read_region(r);
-    let n = v.chunks_exact(4).count().max(1) as f32;
-    v.chunks_exact(4).map(luma).sum::<f32>() / n
+    let (px, _) = v.as_chunks::<4>();
+    let n = px.len().max(1) as f32;
+    px.iter().map(|c| luma(c.as_slice())).sum::<f32>() / n
 }
 
 #[test]

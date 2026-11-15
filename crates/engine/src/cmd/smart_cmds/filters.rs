@@ -229,6 +229,11 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
                 f.params = photocraft_io::smart_map::displace_without_map(&f.params);
             }
         }
+        // A Relight light list is checked here too: a malformed light would otherwise be stored
+        // and silently dropped on every re-render.
+        if f.command == "filter.render.relight" {
+            crate::filters_ext::validate_relight_lights(&f.params)?;
+        }
         // Authorize the underlying command with the complete merged params, including paths
         // already stored in the document, before committing the edit or starting a worker.
         if let Some(gate) = authorize {

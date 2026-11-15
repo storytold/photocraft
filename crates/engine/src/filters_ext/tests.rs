@@ -511,3 +511,34 @@ fn relight_with_lights_changes_pixels() {
     assert_ne!(after, before);
     assert!(after.iter().all(|v| v.is_finite()));
 }
+
+#[test]
+fn relight_ignores_out_of_range_legacy_fields_when_lights_are_given() {
+    let mut s = relight_session(16, 16);
+    let p = json!({"intensity": 101, "angle": 999, "elevation": -5, "warmth": 500, "lights": [{"intensity": 50}]});
+    s.execute("filter.render.relight", p).unwrap();
+    // Without a light list they are still checked, and the shared fields always are.
+    for p in [json!({"intensity": 101}), json!({"ambient": 101, "lights": [{}]}), json!({"softness": 0, "lights": [{}]})] {
+        let mut s = relight_session(16, 16);
+        assert!(s.execute("filter.render.relight", p.clone()).is_err(), "{p}");
+    }
+}
+
+#[test]
+fn smart_relight_set_params_rejects_bad_lights_and_keeps_the_filter() {
+    let mut s = relight_session(16, 16);
+    s.execute("filter.convertForSmartFilters", json!({})).unwrap();
+    s.execute("filter.render.relight", json!({"lights": [{"intensity": 60}]})).unwrap();
+    let stored = |s: &Session| {
+        let d = s.active().unwrap();
+        let photocraft_doc::LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("smart object") };
+        sm.smart_filters[0].params.clone()
+    };
+    let before = stored(&s);
+    for bad in [json!({"lights": [{"kind": "spot"}]}), json!({"lights": []}), json!({"lights": [{}, {}, {}, {}]})] {
+        assert!(s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": bad.clone()})).is_err(), "{bad}");
+        assert_eq!(stored(&s), before, "{bad}");
+    }
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"lights": [{"intensity": 20}]}})).unwrap();
+    assert_ne!(stored(&s), before);
+}
