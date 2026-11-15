@@ -1462,11 +1462,14 @@ fn arrange_that_cannot_move_is_a_noop_in_playback() {
 
     // The predicate identifies no movement for every layer: top level, above the Background,
     // and inside a group (Bring Forward and Send Backward step out of a group, so inside one only
-    // Bring to Front and Send to Back can be at their end).
+    // Bring to Front and Send to Back can be at their end), and a frame's image, which stays in its
+    // frame.
     let a = s.execute("layer.new.layer", json!({"name": "A"})).unwrap()["layer"].clone();
     s.execute("layer.select", json!({"layer": a})).unwrap();
     s.execute("layer.groupLayers", json!({})).unwrap();
     s.execute("layer.new.layer", json!({"name": "B"})).unwrap();
+    let shape = s.execute("shape.create", json!({"kind": "rectangle", "rect": [1, 1, 4, 4], "fill": "#123456"})).unwrap()["layer"].clone();
+    s.execute("layer.new.frame", json!({"x": 0, "y": 0, "width": 6, "height": 6, "layer": shape})).unwrap();
     let cmds = [("layer.arrange.bringForward", 1), ("layer.arrange.bringToFront", 1), ("layer.arrange.sendBackward", -1), ("layer.arrange.sendToBack", -1)];
     let ids: Vec<_> = s.active().unwrap().doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
     let bg = crate::background_cmds::background_id(&s.active().unwrap().doc);

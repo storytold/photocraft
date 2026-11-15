@@ -30,9 +30,11 @@ pub(crate) fn arrange_at_end(doc: &Document, id: LayerId, dir: i32) -> bool {
 
 /// Is layer `id` already as far as Bring Forward / Send Backward can take it in direction `dir`?
 /// They step a row of the Layers panel at a time ([`Document::step`]), out of a group from its end,
-/// so only the ends of the top-level stack stop them.
+/// so only the ends of the top-level stack stop them, and the ends of a frame, whose image stays in
+/// it.
 pub(crate) fn step_at_end(doc: &Document, id: LayerId, dir: i32) -> bool {
-    doc.path_of(id).is_some_and(|p| p.len() == 1) && arrange_at_end(doc, id, dir)
+    let in_frame = |p: &[usize]| p.split_last().is_some_and(|(_, parent)| !parent.is_empty() && doc.layer_at(parent).is_some_and(|g| g.frame.is_some()));
+    doc.path_of(id).is_some_and(|p| p.len() == 1 || in_frame(&p)) && arrange_at_end(doc, id, dir)
 }
 
 pub(super) fn arrange(s: &mut Session, p: &Value, delta: i32) -> Result<Value> {
