@@ -1659,10 +1659,10 @@ fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     let which = p.get("paths").and_then(Value::as_str).unwrap_or("all");
     let saved = p.get("savedPath").and_then(Value::as_str);
     let (text, n) = paths_to_ai_with(&d.doc, which, saved, d.active_layer)?;
-    let which = saved.unwrap_or(which);
-    // Document Bounds writes the frame alone (#13771); any other choice must match a path.
-    if n == 0 && which != "documentBounds" {
-        return Err(bad(cmd, format!("no paths match `{which}`")));
+    // Document Bounds writes the frame alone (#13771); any other choice must match a path. Only the `paths`
+    // choice is that exemption: a saved path that happens to be called `documentBounds` must exist.
+    if n == 0 && (saved.is_some() || which != "documentBounds") {
+        return Err(bad(cmd, format!("no paths match `{}`", saved.unwrap_or(which))));
     }
     match p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()) {
         Some(path) => {
