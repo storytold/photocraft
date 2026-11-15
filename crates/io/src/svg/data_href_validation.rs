@@ -209,7 +209,11 @@ mod tests {
             let resolver = craft_svg::tree::ImageResolver::new(limits());
             resolver.check_document(&repaired).unwrap();
             let usage = resolver.usage();
-            assert_eq!((usage.invalid_raster_images, usage.invalid_svg_images), (0, 0), "shared whole-document scanning cannot invent omissions before resolution");
+            assert_eq!(
+                (usage.invalid_raster_images, usage.invalid_svg_images),
+                (0, 0),
+                "shared whole-document scanning cannot invent omissions before resolution"
+            );
             assert!(matches!(repair(&repaired, &limits()).unwrap(), Cow::Borrowed(_)), "normalization is idempotent");
         }
     }

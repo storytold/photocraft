@@ -1,7 +1,7 @@
 //! Validate optional raster images with the same backends used by the SVG renderer.
 //!
-//! Header probing alone cannot detect damaged pixel data. Keep this work separate
-//! from resolver admission: even a failed decode consumes its reserved work.
+//! Header probing alone cannot detect damaged pixel data. Admit dimensions and
+//! reserve work before decoding: even a failed decode keeps its charge.
 
 use std::io::Cursor;
 use std::num::NonZeroU64;

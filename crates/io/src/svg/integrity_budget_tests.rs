@@ -109,3 +109,23 @@ fn cached_valid_png_with_exactly_four_pixels_is_not_charged_twice() {
     assert_eq!((state.pixels_left, state.encoded_left, state.raster.len()), (0, charged, 1));
     assert_eq!((state.invalid_raster, state.raster_limits), (0, 0));
 }
+
+#[test]
+fn raster_callbacks_own_pixel_charges_and_keep_mime_aliases_separate() {
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let png = Arc::new(photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap());
+    let shared = craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, 4));
+    let state = Arc::new(Mutex::new(Integrity::new(4)));
+    let resolver = wrap(shared.resolver(), Arc::clone(&state));
+    for _ in 0..2 {
+        assert!((resolver.resolve_data)("image/png", Arc::clone(&png), &usvg::Options::default()).is_some());
+        let usage = state.lock().unwrap().usage(shared.usage()).unwrap();
+        assert_eq!(usage.raster_pixels, 4, "a retained alias does not spend decoding work again");
+        assert_eq!(usage.invalid_raster_images, 0);
+        assert_eq!(shared.usage().raster_pixels, 0, "generic decoding must not duplicate exact renderer validation");
+    }
+    assert!((resolver.resolve_data)("image/jpeg", png, &usvg::Options::default()).is_none());
+    let usage = state.lock().unwrap().usage(shared.usage()).unwrap();
+    assert_eq!(usage.raster_pixels, 4);
+    assert_eq!(usage.invalid_raster_images, 1, "a mismatched MIME cannot borrow the successful PNG cache entry");
+}

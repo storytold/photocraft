@@ -25,7 +25,7 @@ bench = false
 # A separate fuzz workspace does not inherit the host workspace patches.
 # craft-pdf requires the same reviewed Hayro API as the application.
 [patch.crates-io]
-hayro = { git = "https://github.com/storytold/craft-libs", rev = "c29336211a7f807729e97053257b69dddc8b1738" }
-hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "c29336211a7f807729e97053257b69dddc8b1738" }
-hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "c29336211a7f807729e97053257b69dddc8b1738" }
-hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "c29336211a7f807729e97053257b69dddc8b1738" }
+hayro = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
+hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }

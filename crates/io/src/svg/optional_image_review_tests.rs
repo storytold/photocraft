@@ -151,11 +151,7 @@ fn unused_hidden_and_unselected_href_failures_do_not_acquire_warnings() {
         "<foreign:image xmlns:foreign='urn:unrelated' width='2' height='2' href='data:image/png;base64,A'/>",
     ] {
         let text = format!("<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='red'/>{content}</svg>");
-        for source_text in [
-            text.clone(),
-            drawing(&url("image/svg+xml", text.as_bytes())),
-            drawing(&url("image/svg+xml", &gzip(text.as_bytes()))),
-        ] {
+        for source_text in [text.clone(), drawing(&url("image/svg+xml", text.as_bytes())), drawing(&url("image/svg+xml", &gzip(text.as_bytes())))] {
             for bytes in [source_text.as_bytes().to_vec(), gzip(source_text.as_bytes())] {
                 let imported = crate::import("unused.svg", &bytes).unwrap();
                 assert!(omission_warnings(&imported).is_empty(), "{content}: {:?}", imported.warnings);

@@ -9,8 +9,8 @@ use super::{IoError, MAX_BOUNDED_SVG_BYTES, MAX_INFLATED_BYTES, MAX_RASTER_PIXEL
 mod integrity_budget_tests;
 
 struct RasterRecord {
-    // Retain failed sources too: allocator address reuse must not evade the shared
-    // resolver's pointer-based admission or our own validation-work allowance.
+    // Retain successful and failed sources: parser-discarded image allocations
+    // must not recycle an address and bypass the validation-work allowance.
     _encoded: Arc<Vec<u8>>,
     result: Result<(), raster_validation::Failure>,
 }
