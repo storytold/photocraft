@@ -50,6 +50,21 @@ fn deleting_a_saved_paths_last_anchor_leaves_it_empty_in_one_undoable_step() {
     assert_eq!(s.execute("path.list", json!({})).unwrap()["paths"], json!([{"name": "Path 1", "knots": 0, "subpaths": 0}]));
 }
 
+/// ⌫ / Delete on the Add Anchor Point tool's selected anchor (`segments`, #12703) follows the same
+/// rule for the path's only anchor, which has no segments.
+#[test]
+fn deleting_the_only_anchor_with_its_segments_empties_a_saved_path_and_refuses_the_work_path() {
+    let s = &mut session();
+    s.execute("path.set", json!({"name": "Path 1", "path": lone()})).unwrap();
+    let r = s.execute("path.deleteAnchor", json!({"name": "Path 1", "subpath": 0, "knot": 0, "segments": true})).unwrap();
+    assert_eq!(r["subpathRemoved"], json!(true));
+    assert!(doc(s).paths[0].path.subpaths.is_empty());
+    s.execute("path.set", json!({"path": lone()})).unwrap();
+    let e = s.execute("path.deleteAnchor", json!({"subpath": 0, "knot": 0, "segments": true})).unwrap_err();
+    assert!(e.to_string().contains("only anchor"), "{e}");
+    assert_eq!(doc(s).work_path.as_ref().map(|p| p.subpaths.len()), Some(1));
+}
+
 #[test]
 fn the_work_paths_and_a_vector_masks_last_anchor_are_still_refused() {
     let mut s = session();
@@ -137,4 +152,22 @@ fn a_type_paths_last_anchor_is_still_refused() {
     assert!(e.to_string().contains("only anchor"), "{e}");
     assert_eq!(type_path(&s), Some(before));
     assert_eq!(s.active().unwrap().history.entries().len(), steps);
+}
+
+/// ⌫ / Delete on the Delete Anchor Point tool's last anchor of a subpath among others (#12761)
+/// takes the subpath as one Delete Selection step; the tool's click keeps Delete Anchor Point.
+#[test]
+fn deleting_a_subpaths_last_anchor_with_its_segments_is_delete_selection() {
+    let two = || json!({"subpaths": [{"closed": false, "knots": [[100, 300], [200, 300]]}, {"closed": false, "knots": [[400, 300]]}]});
+    let s = &mut session();
+    s.execute("path.set", json!({"name": "Path 1", "path": two()})).unwrap();
+    let before = doc(s).paths[0].path.clone();
+    let r = s.execute("path.deleteAnchor", json!({"name": "Path 1", "subpath": 1, "knot": 0, "segments": true})).unwrap();
+    assert_eq!(r["subpathRemoved"], json!(true));
+    assert_eq!(doc(s).paths[0].path.subpaths.len(), 1);
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Delete Selection"));
+    assert!(s.undo());
+    assert_eq!(doc(s).paths[0].path, before);
+    s.execute("path.deleteAnchor", json!({"name": "Path 1", "subpath": 1, "knot": 0})).unwrap();
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Delete Anchor Point"), "the click's label is unchanged");
 }
