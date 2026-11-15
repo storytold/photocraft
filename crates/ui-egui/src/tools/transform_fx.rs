@@ -106,7 +106,7 @@ pub fn work_layer(layer: &Layer, scale: f64) -> Layer {
     l.vector_mask = None;
     l.fill_cache = None;
     l.blend = BlendMode::Normal;
-    photocraft_engine::image_cmds::scale_effects(&mut l.effects, scale as f32);
+    photocraft_engine::image_cmds::scale_effects_preview(&mut l.effects, scale as f32);
     l.effects.reference = l.effects.reference.map(|(x, y)| (x * scale, y * scale));
     l
 }
@@ -256,7 +256,8 @@ pub fn compose(doc: &Document, work: &Layer, plan: &Plan, source: &Source) -> Op
         let band = Rect::new(shown.x0, y0, shown.x1, y0.saturating_add((px.len() / width.max(1)) as i32));
         let mut over = Buffer::transparent(band);
         effects::composite_with_effects(work, &crop(&content, band), &mut over, &maps, plan.bounds, &doc.patterns);
-        for (o, p) in px.iter_mut().zip(over.px) {
+        // Copied, not moved out, so `over` hands its band back to the scratch pool on drop.
+        for (o, p) in px.iter_mut().zip(over.px.iter().copied()) {
             *o = p;
         }
     });
@@ -465,6 +466,27 @@ mod tests {
         let mut l = Layer::raster("styled", PixelFormat::RGBA8);
         l.effects.items = effects;
         l
+    }
+
+    fn pattern_stroke_scale(l: &Layer) -> Option<f32> {
+        l.effects.items.iter().find_map(|e| match e {
+            Effect::Stroke(StrokeFx { paint: FxPaint::Pattern { scale, .. }, .. }) => Some(*scale),
+            _ => None,
+        })
+    }
+
+    /// The preview draws a pattern at the work scale exactly: the dialog's 1..1000 % range is for
+    /// stored styles, so a 2 % pattern at a quarter of the size is 0.5 %, and an imported 2000 %
+    /// one stays 2000 % at full size, as the committed style draws them.
+    #[test]
+    fn work_layer_scales_patterns_past_the_dialog_range() {
+        let with_pattern = |scale: f32| {
+            let Effect::Stroke(mut st) = stroke(3.0) else { panic!("a stroke") };
+            st.paint = FxPaint::Pattern { name: "Bubbles".into(), id: String::new(), scale };
+            styled(vec![Effect::Stroke(st)])
+        };
+        assert_eq!(pattern_stroke_scale(&work_layer(&with_pattern(0.02), 0.25)), Some(0.005));
+        assert_eq!(pattern_stroke_scale(&work_layer(&with_pattern(20.0), 1.0)), Some(20.0));
     }
 
     fn doc() -> Document {

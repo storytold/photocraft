@@ -5,18 +5,24 @@ use super::state::translated_menu_label;
 /// Most results the Help menu search lists.
 pub(super) const HELP_SEARCH_MAX: usize = 15;
 
-/// How well `query` (lowercase) matches a menu item: its label starting with it, then a word of
+/// How well `query` matches an English menu item without case distinctions: its label starting with it, then a word of
 /// the label starting with it, then anywhere in the label, then anywhere in its menu path.
 /// `None` when it doesn't match at all.
 pub fn search_rank(query: &str, label: &str, path: &[String]) -> Option<u8> {
-    let l = label.to_lowercase();
-    if l.starts_with(query) {
+    search_rank_in(crate::i18n::Lang::EN, query, label, path)
+}
+
+/// Compare the query, label and path under the same language's casing rules.
+fn search_rank_in(lang: crate::i18n::Lang, query: &str, label: &str, path: &[String]) -> Option<u8> {
+    let query = lang.lowercase(query);
+    let l = lang.lowercase(label);
+    if l.starts_with(&query) {
         Some(0)
-    } else if l.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(query)) {
+    } else if l.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(&query)) {
         Some(1)
-    } else if l.contains(query) {
+    } else if l.contains(&query) {
         Some(2)
-    } else if path.iter().any(|p| p.to_lowercase().contains(query)) {
+    } else if path.iter().any(|p| lang.contains_ignore_case(p, &query)) {
         Some(3)
     } else {
         None
@@ -27,14 +33,14 @@ pub fn search_rank(query: &str, label: &str, path: &[String]) -> Option<u8> {
 /// labels and their `lang` translations match, so a search works in the UI language and in
 /// English; untranslated strings are simply their English text.
 pub fn search_items<'a>(items: &'a [MenuItem], query: &str, lang: crate::i18n::Lang) -> Vec<&'a MenuItem> {
-    let q = query.trim().to_lowercase();
+    let q = query.trim();
     if q.is_empty() {
         return Vec::new();
     }
     let rank = |it: &MenuItem| {
-        let english = search_rank(&q, &it.label, &it.path);
+        let english = search_rank(q, &it.label, &it.path);
         let path: Vec<String> = it.path.iter().map(|p| crate::i18n::tr(lang, p).to_string()).collect();
-        let local = search_rank(&q, &translated_menu_label(lang, it), &path);
+        let local = search_rank_in(lang, q, &translated_menu_label(lang, it), &path);
         english.into_iter().chain(local).min()
     };
     let mut hits: Vec<(u8, usize, &MenuItem)> =
@@ -42,6 +48,12 @@ pub fn search_items<'a>(items: &'a [MenuItem], query: &str, lang: crate::i18n::L
     hits.sort_by_key(|(r, i, _)| (*r, *i));
     let mut seen = std::collections::HashSet::new();
     hits.into_iter().filter(|(_, _, it)| seen.insert(it.id.as_str())).take(HELP_SEARCH_MAX).map(|(_, _, it)| it).collect()
+}
+
+/// Help › Search was drawn in this frame (or the last): the open menu has a text field of its own.
+pub(super) fn shown(ctx: &egui::Context) -> bool {
+    let pass_id = egui::Id::unique("help-menu-search").with("pass");
+    ctx.data(|d| d.get_temp::<u64>(pass_id)).is_some_and(|p| p + 1 >= ctx.cumulative_pass_nr())
 }
 
 /// Help › Search : a field at the top of the Help menu that finds any menu command
@@ -60,7 +72,7 @@ pub(super) fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, 
     let field = ui.add(egui::TextEdit::singleline(&mut query).id(text_id.with("field")).hint_text(crate::i18n::tr(lang, "Search menus")).desired_width(220.0));
     // The menu opens on the press; the release a frame later completes a click on the title,
     // outside the field, and egui takes the focus away from it again (#1447, #1438).
-    if reopened || opening {
+    if (reopened || opening) && !crate::zoom_field::editing(&ctx) {
         field.request_focus();
     }
     let results = search_items(items, &query, lang);

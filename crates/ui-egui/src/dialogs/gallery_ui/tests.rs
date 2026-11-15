@@ -184,6 +184,33 @@ fn preview_and_thumbnails_render() {
     assert!(worst < 2e-3, "preview differs from the result by {worst}");
 }
 
+#[test]
+fn native_component_gallery_previews_match_commit_and_capture_the_target() {
+    for mode in ["rgb", "cmyk", "lab"] {
+        for depth in [8, 16, 32] {
+            for alpha in [true, false] {
+                let fixture = crate::distort_ui::component_tests::app(mode, depth);
+                let mut app = if alpha { fixture } else { crate::distort_ui::component_tests::without_alpha(fixture) };
+                open(&mut app).unwrap();
+                let d = app.distort.gallery.as_mut().unwrap();
+                d.effects = vec![EffectLayer::new(GalleryFilter::Cutout)];
+                let params = d.params();
+                let before = d.src.clone();
+                let bounds = d.canvas;
+                let layer = d.layer;
+                let preview = preview_pixels(&before, bounds, &params, bounds, 1, &Interrupt::NONE).unwrap();
+                crate::distort_ui::component_tests::protected(&before, &preview, bounds);
+                let thumbnail = render(&before, &params);
+                crate::distort_ui::component_tests::protected(&before, &thumbnail, bounds);
+                app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
+                commit(&mut app).unwrap();
+                let after = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
+                assert_eq!(after.read_region(bounds), preview.read_region(bounds));
+            }
+        }
+    }
+}
+
 /// A 240×160 layer with gradients, edges and fine detail, so every gallery filter has
 /// something to draw.
 fn photo_app() -> PhotocraftApp {
@@ -362,5 +389,31 @@ fn bench_gallery_preview() {
         std::hint::black_box(preview_pixels(&s, canvas, &p, Rect::new(2400, 1600, 3500, 2400), 1, &Interrupt::NONE));
         let screen = ms(t);
         println!("{f:>14}: old fit {old:>5.0} ms, new fit {fit:>6.0} ms, new 100 % (1100x800) {screen:>5.0} ms");
+    }
+}
+
+/// #10335: the effect-layer list grows with the dialog: a tall column gives it more than the 190 px
+/// minimum, a short one keeps the minimum, and the settings keep room above it.
+#[test]
+fn effect_layer_list_grows_with_the_dialog_height() {
+    let (_, short) = column_heights(400.0);
+    assert_eq!(short, 190.0);
+    let (params, tall) = column_heights(980.0);
+    assert!(tall > 190.0 + 100.0, "list height {tall}");
+    assert!(params >= 80.0);
+    assert!(params + tall + 110.0 <= 980.0 + 1.0);
+    assert_eq!(column_heights(f32::NAN).1, 190.0);
+    // Short, zero, negative and non-finite heights keep the settings at 80 px and the list at 190 px.
+    for h in [380.0, 300.0, 0.0, -50.0, f32::NAN, f32::NEG_INFINITY] {
+        assert_eq!(column_heights(h), (80.0, 190.0), "{h}");
+    }
+    // At every height the settings keep at least 80 px and the list at least 190 px; from 380 px,
+    // where both floors and the 110 px of chrome first fit, they stay within the column.
+    for h in (0..=4000).step_by(10).map(|h| h as f32) {
+        let (params, list) = column_heights(h);
+        assert!(params >= 80.0 && list >= 190.0, "{h}: {params} {list}");
+        if h >= 380.0 {
+            assert!(params + list + 110.0 <= h + 1.0, "{h}: {params} {list}");
+        }
     }
 }

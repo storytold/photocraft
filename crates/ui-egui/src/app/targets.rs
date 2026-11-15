@@ -20,6 +20,10 @@ impl PhotocraftApp {
         // Edit › Transform, Apply Image and the dialog filters act on the smart object.
         let target = if self.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(id) {
             "filterMask"
+        } else if self.vector_mask_targeted() && photocraft_engine::channel_cmds::follows_vector_mask_target(id) {
+            // The Layers panel targets a vector mask: the Rotate/Flip presets turn its path
+            // alone, whether it is linked or not (#12283).
+            "vectorMask"
         } else if self.layer_mask_targeted() {
             "mask"
         } else {
@@ -39,8 +43,22 @@ impl PhotocraftApp {
     pub fn filter_mask_targeted(&self) -> bool {
         let Some(st) = self.session.active() else { return false };
         let Some(id) = st.active_layer.filter(|id| self.ui.filter_mask_target == Some(id.0)) else { return false };
-        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
+        let composite = (st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite
+            || (matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Color(_))
+                && photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| v.filter)))
+            && st.doc.quick_mask.is_none();
         composite && st.doc.layer(id).is_some_and(|l| matches!(&l.content, photocraft_doc::LayerContent::Smart(sm) if !sm.smart_filters.is_empty()))
+    }
+
+    /// The active layer's vector mask is the Layers panel's target, and no alpha channel or Quick
+    /// Mask takes over (the engine routes those itself).
+    pub fn vector_mask_targeted(&self) -> bool {
+        if !self.ui.vector_mask_target {
+            return false;
+        }
+        let Some(st) = self.session.active() else { return false };
+        let alpha = matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Alpha(i) if i < st.doc.channels.len());
+        !alpha && st.doc.quick_mask.is_none()
     }
 
     /// The active layer's mask is what pixel commands edit: the Layers panel targets it, the layer
@@ -48,9 +66,17 @@ impl PhotocraftApp {
     /// is the picture. An alpha channel or Quick Mask wins, as the engine routes those itself.
     pub fn layer_mask_targeted(&self) -> bool {
         let Some(st) = self.session.active() else { return false };
+        if photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| v.filter) {
+            return false;
+        }
         let layer_mask = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask;
         let composite = (st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite || layer_mask) && st.doc.quick_mask.is_none();
         let has_mask = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some());
+        if matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Color(_))
+            && photocraft_engine::mask_view_cmds::current(st).is_some()
+        {
+            return true;
+        }
         if !composite || !has_mask {
             return false;
         }
@@ -96,6 +122,22 @@ impl PhotocraftApp {
         }
         self.ui.filter_mask_target = layer;
         self.sync_mask_targets();
+    }
+
+    /// Targeting a pixel layer's mask (its thumbnail, or a mask just added to it) takes the
+    /// Channels panel off colour rows left selected and onto the mask, as in Photoshop, so tools,
+    /// menu commands and the engine all edit the mask. A view change only: no command, no step.
+    pub(crate) fn target_mask_over_colour_rows(&mut self) {
+        use photocraft_engine::channel_cmds::ChannelTarget;
+        let Some(st) = self.session.active_mut() else { return };
+        let raster_with_mask =
+            st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some() && matches!(l.content, photocraft_doc::LayerContent::Raster(_)));
+        if matches!(st.channel_view.target, ChannelTarget::Color(_)) && photocraft_engine::mask_view_cmds::current(st).is_none() && raster_with_mask {
+            let v = &mut st.channel_view;
+            v.target = ChannelTarget::LayerMask;
+            v.selected_colors.clear();
+            v.color_hidden.clear();
+        }
     }
 
     /// Viewing a layer mask (#196) targets it; a vector-mask target needs a vector mask on the

@@ -40,6 +40,8 @@ pub fn load(app: &mut PhotocraftApp) {
             }
         }
     }
+    // Applies Memory Usage and the scratch disks even when the stored preferences were reset.
+    app.session.apply_prefs();
     crate::dock::restore(app);
     crate::color_panel_ui::restore(app);
     crate::brush_picker::restore(app);
@@ -202,7 +204,7 @@ pub(crate) fn on_recovery_event(app: &mut PhotocraftApp, e: &JobEvent) -> bool {
             // Native bundle decoding cannot stop midway. Cancel admission and the rest of the
             // batch so another large decoder isn't started while this worker finishes.
             app.prefs_rt.recovery_queue.clear();
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", tl!(&e.label))]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", tl!(&e.label))]);
             app.ui.status_error = false;
         }
     }
@@ -217,7 +219,13 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
         match rx.try_recv() {
             Ok(opened) => {
                 app.services.preset_store = None;
-                let warnings = app.session.attach_preset_store(opened);
+                // A clean library load has no early definitions waiting for a write.
+                let clean_load = app.session.actions.rev == 0 && !opened.store.actions_load_failed();
+                let (warnings, actions_written) = app.session.attach_preset_store_with_action_write(opened);
+                if clean_load {
+                    app.ui.actions.set_preset_store_disconnected(false);
+                }
+                crate::actions::finish_deferred_shortcut_conflicts(app, actions_written);
                 if let Some(w) = warnings.first() {
                     app.ui.status = if warnings.len() == 1 {
                         w.clone()
@@ -235,7 +243,10 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => app.services.preset_store = None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                app.services.preset_store = None;
+                app.ui.actions.set_preset_store_disconnected(true);
+            }
         }
     }
     if let Some(w) = app.session.preset_store.as_mut().map(|s| s.take_warnings()).and_then(|w| w.into_iter().next()) {

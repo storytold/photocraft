@@ -254,10 +254,7 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
 // ---------- commands ----------
 
 fn target(s: &Session, p: &Value) -> Result<LayerId> {
-    match p.get("layer").and_then(Value::as_u64) {
-        Some(v) => Ok(LayerId(v)),
-        None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
-    }
+    crate::commands::layer_param(s, p)
 }
 
 fn camera_info(doc: &Document) -> Option<exif::CameraInfo> {
@@ -279,14 +276,17 @@ fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     match d.doc.mode {
         ColorMode::Rgb | ColorMode::Grayscale => Ok(()),
-        m => Err(format!("Camera Raw Filter needs an RGB or Grayscale document (this one is {m:?})")),
+        m => Err(format!("RAW Develop Filter needs an RGB or Grayscale document (this one is {m:?})")),
     }
 }
 
 /// Runs `f` on the target layer (pixel layer edited in place inside the selection; smart object
 /// gets a smart filter with `stored` params).
-fn run_filter(s: &mut Session, cmd: &str, label: &str, stored: Value, float_bg: bool, f: &dyn Fn(&Surface, Rect) -> Surface) -> Result<LayerId> {
-    let id = target(s, &stored)?;
+fn run_filter(s: &mut Session, cmd: &str, label: &str, p: &Value, stored: Value, float_bg: bool, f: &dyn Fn(&Surface, Rect) -> Surface) -> Result<LayerId> {
+    let state = s.active().ok_or(EngineError::NoDocument)?;
+    let _working = photocraft_raster::memory::try_reserve_operation(state.doc.size.area().saturating_mul(64)).map_err(EngineError::Other)?;
+    let id = target(s, p)?;
+    let colors = crate::color_channels::target(s, p)?.is_some();
     let mut stored = stored;
     if let Value::Object(m) = &mut stored {
         m.remove("layer");
@@ -306,7 +306,7 @@ fn run_filter(s: &mut Session, cmd: &str, label: &str, stored: Value, float_bg: 
             return crate::smart_cmds::add_smart_filter(doc, id, sf, selection.as_ref());
         }
         // A Background layer gains transparency when the edge mode exposes it (as in Photoshop).
-        if float_bg && background {
+        if float_bg && background && !colors {
             l.locks.position = false;
             l.locks.transparency = false;
             l.name = "Layer 0".into();
@@ -332,7 +332,7 @@ fn lens_correction(s: &mut Session, p: &Value) -> Result<Value> {
     let stored = resolved_lens_params(p, &lc, profile_focal(LENS, p, info.as_ref())?);
     let t0 = Stopwatch::start();
     let id =
-        run_filter(s, LENS, "Lens Correction", stored.clone(), matches!(lc.edge, EdgeMode::Transparency), &|surf, canvas| lens::correct(surf, canvas, &lc))?;
+        run_filter(s, LENS, "Lens Correction", p, stored.clone(), matches!(lc.edge, EdgeMode::Transparency), &|surf, canvas| lens::correct(surf, canvas, &lc))?;
     Ok(json!({"layer": id.0, "profile": lc.profile.as_ref().map(|p| p.name.clone()), "angle": lc.angle, "scale": lc.scale, "params": stored, "ms": t0.ms()}))
 }
 
@@ -349,7 +349,7 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
         stored["layer"] = l.clone();
     }
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
-    let id = run_filter(s, WIDE, "Adaptive Wide Angle", stored.clone(), true, &|surf, canvas| {
+    let id = run_filter(s, WIDE, "Adaptive Wide Angle", p, stored.clone(), true, &|surf, canvas| {
         let tris = mesh.triangles();
         if canvas == frame {
             photocraft_algo::warp::warp_triangles(surf, canvas, &mesh.verts, &tris, interp)
@@ -382,7 +382,7 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
 /// ProPhoto's gamma 1.8 (raws open in it), Adobe RGB's 563/256, 1 for linear sRGB, else 0 for
 /// the sRGB curve.
 pub fn encoding_gamma(doc: &Document) -> f32 {
-    use photocraft_cms::Builtin;
+    use craft_cms::Builtin;
     let profile = crate::color_cmds::document_profile(doc);
     [(Builtin::ProPhotoCompat, 1.8), (Builtin::AdobeRgbCompat, 563.0 / 256.0), (Builtin::LinearSrgb, 1.0)]
         .into_iter()
@@ -412,12 +412,13 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         if raw_pixels(area).is_none() {
             return Err(bad(
                 RAW,
-                format!("the image is too large for Camera Raw ({}×{} px; max {} megapixels)", area.width(), area.height(), MAX_RAW_PIXELS / 1_000_000),
+                format!("the image is too large for RAW Develop ({}×{} px; max {} megapixels)", area.width(), area.height(), MAX_RAW_PIXELS / 1_000_000),
             ));
         }
     }
     let t0 = Stopwatch::start();
-    let id = run_filter(s, RAW, "Camera Raw Filter", p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
+    let id =
+        run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
 
@@ -436,6 +437,10 @@ fn lens_batch(s: &mut Session, p: &Value) -> Result<Value> {
     let r = crate::file_cmds::process_files(s, &inputs, &output, &format, crate::file_cmds::SaveOpts::from_params(s, p, LENS_BATCH)?, "", &|scratch| {
         if scratch.active().is_some_and(|d| d.doc.layers.len() > 1) {
             scratch.execute("layer.flattenImage", json!({}))?;
+        }
+        // Photoshop's batch hands back a Grayscale 8-bit source as RGB 8-bit, whatever the File Type.
+        if scratch.active().is_some_and(|d| d.doc.mode == ColorMode::Grayscale && d.doc.depth == SampleType::U8) {
+            scratch.execute("image.mode.rgb", json!({}))?;
         }
         scratch.execute(LENS, params.clone())?;
         Ok(())
@@ -469,7 +474,7 @@ pub fn specs() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: RAW,
-            label: "Camera Raw Filter…",
+            label: "RAW Develop Filter…",
             menu: &["Filter"],
             shortcut: Some("Cmd+Shift+A"),
             params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0}"##,
@@ -491,7 +496,17 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+#[path = "lens_batch_gray_tests.rs"]
+mod lens_batch_gray_tests;
+#[cfg(test)]
 mod tests {
+
+    #[test]
+    fn raw_develop_filter_keeps_its_automation_id() {
+        let command = super::specs().into_iter().find(|command| command.id == "filter.cameraRaw").expect("existing RAW command");
+        assert_eq!(command.label, "RAW Develop Filter…");
+    }
+
     use super::*;
 
     fn session(depth: u32) -> Session {

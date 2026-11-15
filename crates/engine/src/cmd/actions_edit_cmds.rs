@@ -1,6 +1,7 @@
 //! Editing an action's steps and its set, as the Actions panel does beyond recording:
 //! `actions.insert` (Photoshop's Insert Stop… and Insert Menu Item…), `actions.dialog` (the
-//! panel's dialog toggle column) and `actions.assignSet` (which set folder an action sits in).
+//! panel's dialog toggle column), `actions.assignSet` (which set folder an action sits in) and
+//! `actions.newSet` (New Set…, an empty set folder).
 //!
 //! All three refuse to run during playback, commit pending recorded steps first, and keep the
 //! per-step flag sets (`disabled`, `dialogs`) in step with the moved indices, like
@@ -8,9 +9,19 @@
 
 use serde_json::{Value, json};
 
-use crate::actions_cmds::{flush_recording, not_playing, pending_steps, resolve};
+use crate::actions_cmds::{flush_recording, not_playing, note_automation_edit, pending_steps, resolve};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
+
+mod insert_path;
+mod library_commands;
+mod record_again;
+
+pub use insert_path::selected_path as selected_recording_path;
+pub(crate) use library_commands::enabled as library_change_enabled;
+pub use library_commands::{LibraryUndo, undo_library_label};
+pub(crate) use library_commands::{check_library_size, confirmed_idle, publish_library};
+pub use record_again::{RecordAgainTarget, target as record_again_target};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -18,6 +29,35 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 
 fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
+}
+
+/// Flush under the old mode so changing the toggle never retroactively records or loses a stroke.
+fn allow_tool_recording(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.allowToolRecording";
+    not_playing(s, cmd)?;
+    let enabled = match p.get("enabled") {
+        None | Some(Value::Null) => !s.actions.record_tools,
+        Some(Value::Bool(enabled)) => *enabled,
+        Some(_) => return Err(bad(cmd, "`enabled` must be true or false")),
+    };
+    if enabled != s.actions.record_tools {
+        if s.actions.recording.is_some() && s.tool_stroke_job_running() {
+            return Err(bad(cmd, "wait for the current tool stroke before changing recording"));
+        }
+        flush_recording(s)?;
+        s.actions.record_tools = enabled;
+    }
+    Ok(json!({"enabled": enabled}))
+}
+
+/// Insert a menu event with absent settings, reusing the ordinary validated step insertion.
+fn insert_menu_item(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.as_object().is_some_and(|o| o.keys().any(|k| !matches!(k.as_str(), "action" | "at" | "id" | "eventKind"))) {
+        return Err(bad("actions.insertMenuItem", "menu items accept no recorded settings"));
+    }
+    let params = json!({"id":p.get("id"),"eventKind":p.get("eventKind").cloned().unwrap_or(json!("name"))});
+    crate::atn_cmds::menu_item_command(&params)?;
+    s.execute("actions.insert", json!({"action":p.get("action"),"at":p.get("at"),"id":crate::atn_cmds::MENU_ITEM,"params":params}))
 }
 
 fn index(p: &Value, key: &str, cmd: &str) -> Result<Option<usize>> {
@@ -33,6 +73,8 @@ fn is_step_command(id: &str) -> bool {
     crate::commands::find(id).is_some() || id == "actions.play" || crate::actions_cmds::shell_save_command(id) || crate::actions_cmds::shell_view_command(id)
 }
 
+/// `actions.insert`: insert a step into an action, marking the action as automation's when an
+/// automation gate is installed.
 fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.insert";
     not_playing(s, cmd)?;
@@ -51,8 +93,7 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if id == "actions.play" {
         // Refuse the one cycle visible here; deeper ones are caught at playback.
-        let target = params.get("action");
-        let is_self = target.and_then(Value::as_str) == Some(s.actions.list[idx].name.as_str()) || target.and_then(Value::as_u64) == Some(idx as u64);
+        let is_self = crate::actions_cmds::resolve_play_target(&s.actions.list, &params, cmd).ok() == Some(idx);
         if is_self {
             return Err(bad(cmd, "an action cannot play itself"));
         }
@@ -65,10 +106,141 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     if s.actions.recording.is_some_and(|(_, i)| i == idx) {
         flush_recording(s)?;
     }
+    let is_stop = id == crate::atn_cmds::STOP_MESSAGE;
+    let result = insert_step(s, idx, at, (id, params));
+    // A newly inserted Stop shows its message in the app. Duplicates keep their own flags.
+    if is_stop {
+        s.actions.list[idx].dialogs.insert(at);
+    }
+    Ok(result)
+}
+
+/// Insert an already validated step without normalizing a copied step's payload.
+fn insert_step(s: &mut Session, idx: usize, at: usize, step: (String, Value)) -> Value {
     let action = &mut s.actions.list[idx];
-    action.steps.insert(at, (id.clone(), params));
+    let id = step.0.clone();
+    action.steps.insert(at, step);
     action.remap_steps(|i| Some(if i >= at { i + 1 } else { i }));
     let result = json!({"action": action.name, "step": at, "id": id, "steps": action.steps.len()});
+    note_automation_edit(s, idx);
+    s.actions.touch();
+    result
+}
+
+/// Duplicate a step or action below its source, preserving settings and per-step flags.
+fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.duplicate";
+    not_playing(s, cmd)?;
+    if let Some(set) = p.get("set") {
+        if p.get("action").is_some() || p.get("step").is_some() {
+            return Err(bad(cmd, "select a set or an action step, not both"));
+        }
+        let name = set.as_str().ok_or_else(|| bad(cmd, "set must be a name"))?;
+        let slot = set_slot(s, p, Some(name), cmd)?;
+        // Omitted selects by caption, null selects the implicit group, and a number selects one physical folder.
+        return duplicate_set(s, name, p.get("setSlot").map(|_| slot));
+    }
+    let idx = resolve(&s.actions.list, p, cmd)?;
+    if let Some(step) = index(p, "step", cmd)? {
+        let len = s.actions.list[idx].steps.len().saturating_add(pending_steps(s, idx).count());
+        if step >= len {
+            return Err(bad(cmd, "step is out of range"));
+        }
+        if s.actions.recording.is_some_and(|(_, i)| i == idx) {
+            flush_recording(s)?;
+        }
+        let action = &s.actions.list[idx];
+        let copied = action.steps.get(step).cloned().ok_or_else(|| bad(cmd, "step is out of range"))?;
+        let (disabled, dialog) = (action.disabled.contains(&step), action.dialogs.contains(&step));
+        let at = step + 1;
+        let mut result = insert_step(s, idx, at, copied);
+        let action = &mut s.actions.list[idx];
+        if disabled {
+            action.disabled.insert(at);
+        }
+        if dialog {
+            action.dialogs.insert(at);
+        }
+        result["index"] = json!(idx);
+        return Ok(result);
+    }
+    if s.actions.recording.is_some() {
+        return Err(bad(cmd, "stop recording before duplicating an action"));
+    }
+    let mut copied = s.actions.list[idx].clone();
+    copied.action_id = None;
+    copied.legacy_shortcut_owner = false;
+    let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
+    copied.name = names.claim(&format!("{} copy", copied.name));
+    let at = idx + 1;
+    let result = json!({"action": copied.name, "index": at, "steps": copied.steps.len()});
+    s.actions.list.insert(at, copied);
+    crate::actions_cmds::shift_action_calls(&mut s.actions.list, at, 1);
+    s.actions.touch();
+    Ok(result)
+}
+
+/// Copy a physical folder occurrence or the legacy named group, including empty folders.
+fn duplicate_set(s: &mut Session, source: &str, slot_filter: Option<Option<usize>>) -> Result<Value> {
+    let cmd = "actions.duplicate";
+    if s.actions.recording.is_some() {
+        return Err(bad(cmd, "stop recording before duplicating a set"));
+    }
+    let sets = set_names(s);
+    if !sets.iter().any(|name| name == source) {
+        return Err(bad(cmd, "the selected set no longer exists"));
+    }
+    let name = crate::atn_cmds::UniqueNames::new(sets).claim(&format!("{source} copy"));
+    let copy_slot = slot_filter.flatten().map(|slot| slot + 1);
+    let belongs = |action: &crate::actions_cmds::Action| action.set.as_deref() == Some(source) && slot_filter.is_none_or(|slot| action.set_slot == slot);
+    let first = s.actions.list.iter().position(belongs);
+    // The panel groups a folder's actions even when they are interleaved in the underlying list.
+    let at = first.map(|first| first + s.actions.list[first..].iter().take_while(|action| belongs(action)).count());
+    let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|action| action.name.clone()));
+    let copies: Vec<_> = s
+        .actions
+        .list
+        .iter()
+        .filter(|action| belongs(action))
+        .cloned()
+        .map(|mut action| {
+            action.name = names.claim(&format!("{} copy", action.name));
+            action.set = Some(name.clone());
+            action.set_slot = copy_slot;
+            action.action_id = None;
+            action.legacy_shortcut_owner = false;
+            action
+        })
+        .collect();
+    let count = copies.len();
+    let mut result = json!({"set": name, "actions": count});
+    if let Some(slot) = copy_slot {
+        let old_len = s.actions.set_rows.len();
+        s.actions.set_rows.insert(slot, name);
+        s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
+        for action in &mut s.actions.list {
+            if let Some(row) = &mut action.set_slot
+                && (slot..old_len).contains(row)
+            {
+                *row += 1;
+            }
+        }
+        result["setSlot"] = json!(slot);
+    } else if at.is_none() {
+        if let Some(at) = s.actions.sets.iter().position(|set| set == source) {
+            s.actions.sets.insert(at + 1, name);
+        } else if slot_filter.is_none() {
+            // The caption can identify an empty imported folder with no legacy row to insert after.
+            s.actions.sets.push(name);
+        } else {
+            return Err(bad(cmd, "the selected set no longer exists"));
+        }
+    }
+    if let Some(at) = at {
+        s.actions.list.splice(at..at, copies);
+        crate::actions_cmds::shift_action_calls(&mut s.actions.list, at, count);
+        result["index"] = json!(at);
+    }
     s.actions.touch();
     Ok(result)
 }
@@ -115,15 +287,78 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     let idx = resolve(&s.actions.list, p, cmd)?;
     let set = match p.get("set") {
         None | Some(Value::Null) => None,
+        Some(Value::String(n)) if p.get("setSlot").and_then(Value::as_u64).is_some() => Some(n.clone()),
+        Some(Value::String(n)) if set_names(s).contains(n) => Some(n.clone()),
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(Value::String(_)) => return Err(bad(cmd, "`set` is empty; pass null to take the action out of its set")),
         Some(_) => return Err(bad(cmd, "`set` must be a name or null")),
     };
+    let slot = assignment_slot(s, p, set.as_deref(), cmd)?;
     let action = &mut s.actions.list[idx];
     action.set = set;
+    action.set_slot = slot;
     let result = json!({"action": action.name, "set": action.set});
     s.actions.touch();
     Ok(result)
+}
+
+/// Distinct set captions, including legacy empty sets.
+/// Use `actions.list`'s ordered `setRows` for physical folder occurrences.
+pub fn set_names(s: &Session) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    s.actions
+        .list
+        .iter()
+        .filter_map(|a| a.set.as_ref())
+        .chain(&s.actions.sets)
+        .chain(&s.actions.set_rows)
+        .filter(|set| seen.insert(set.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// An explicit folder is selected by both its current slot and caption.
+pub(crate) fn set_slot(s: &Session, p: &Value, name: Option<&str>, cmd: &str) -> Result<Option<usize>> {
+    let Some(slot) = index(p, "setSlot", cmd)? else { return Ok(None) };
+    if s.actions.set_rows.get(slot).map(String::as_str) != name || name.is_none() {
+        return Err(bad(cmd, "the selected Actions folder changed"));
+    }
+    Ok(Some(slot))
+}
+
+/// Record or assign by caption alone only when it denotes one explicit occurrence.
+/// Explicit null and captions shared with a legacy set keep their name-only semantics.
+pub(crate) fn assignment_slot(s: &Session, p: &Value, name: Option<&str>, cmd: &str) -> Result<Option<usize>> {
+    if p.get("setSlot").is_some() {
+        return set_slot(s, p, name, cmd);
+    }
+    let Some(name) = name else { return Ok(None) };
+    if s.actions.sets.iter().any(|set| set == name) || s.actions.list.iter().any(|action| action.set_slot.is_none() && action.set.as_deref() == Some(name)) {
+        return Ok(None);
+    }
+    let mut matches = s.actions.set_rows.iter().enumerate().filter(|(_, caption)| caption.as_str() == name);
+    let first = matches.next().map(|(slot, _)| slot);
+    Ok(if matches.next().is_none() { first } else { None })
+}
+
+/// New Set…: an empty set folder, named `name` or "Set N" (the first number no set has), that New
+/// Action can record into.
+fn new_set(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.newSet";
+    not_playing(s, cmd)?;
+    let names = set_names(s);
+    let name = match p.get("name") {
+        None | Some(Value::Null) => (1u32..).map(|n| format!("Set {n}")).find(|n| !names.contains(n)).ok_or_else(|| bad(cmd, "no free set name"))?,
+        Some(Value::String(n)) if !n.trim().is_empty() => n.trim().to_string(),
+        Some(Value::String(_)) => return Err(bad(cmd, "`name` is empty")),
+        Some(_) => return Err(bad(cmd, "`name` must be a string")),
+    };
+    if names.contains(&name) {
+        return Err(bad(cmd, format!("a set named `{name}` already exists")));
+    }
+    s.actions.sets.push(name.clone());
+    s.actions.touch();
+    Ok(json!({"set": name}))
 }
 
 /// The conditions of Photoshop's Insert Conditional, by their string ids.
@@ -220,25 +455,18 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(c)) => c.clone(),
         _ => return Err(bad(cmd, format!("needs `if`, one of {}", CONDITIONS.join("|")))),
     };
-    let branch = |key: &str| -> Result<Option<String>> {
-        match p.get(key) {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::String(n)) if !n.trim().is_empty() => Ok(Some(n.clone())),
-            Some(Value::String(_)) => Ok(None),
-            Some(_) => Err(bad(cmd, format!("`{key}` must be an action name or null"))),
-        }
-    };
-    let (then, otherwise) = (branch("then")?, branch("else")?);
+    let (then, otherwise) = (crate::actions_cmds::conditional_branch(p, "then")?, crate::actions_cmds::conditional_branch(p, "else")?);
     let holds = evaluate(s, &condition)?;
     let played = if holds { then } else { otherwise };
-    let mut out = json!({"if": condition, "holds": holds, "played": played});
-    if let Some(name) = played {
-        let r = s.execute("actions.play", json!({"action": name}))?;
+    let mut out = json!({"if": condition, "holds": holds, "played": played.as_ref().and_then(|p| p.get("action"))});
+    if let Some(params) = played {
+        let r = s.execute("actions.play", params)?;
         if let Some(f) = r.get("failed") {
             out["failed"] = f.clone();
         }
         out["ran"] = r.get("ran").cloned().unwrap_or(json!(0));
-        out["action"] = json!(name);
+        out["action"] = r["action"].clone();
+        out["played"] = r["action"].clone();
     }
     Ok(out)
 }
@@ -246,11 +474,91 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
+            id: "actions.clearAll",
+            label: "Clear All Actions",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"confirm":true} → {cleared}. Removes the Actions library, including empty folders. Undo with actions.undoLibrary."#,
+            enabled: library_commands::enabled,
+            run: library_commands::clear,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.reset",
+            label: "Reset Actions…",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"confirm":true,"mode":"replace"|"append"} → {set,slot,actions,appended}. Restores the original PhotoCraft Basics set."#,
+            enabled: library_commands::enabled,
+            run: library_commands::reset,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.undoLibrary",
+            label: "Undo Actions Library Change",
+            menu: &[],
+            shortcut: None,
+            params: "{} → {undone}. Restores the latest Clear All, Reset or Replace without editing document History.",
+            enabled: library_commands::undo_enabled,
+            run: library_commands::undo,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.insertMenuItem",
+            label: "Insert Menu Item…",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index,"id":menu command,"at":index?,"eventKind":"name"|"code"="name"} → {action,step,id,steps}. Records an unambiguous supported menu event without settings. Image Size and mapped filter menu events are supported. Desktop playback opens the existing editor when settings are needed; no-settings items run immediately."##,
+            enabled: always,
+            run: insert_menu_item,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.insertPath",
+            label: "Insert Path",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index,"name":"work"|"layer"|saved path name,"at":index?} → {action,step,id,steps}. Snapshot exactly the selected path as a path.set work-path step, preserving cubic handles and path options. No fallback from a missing Work Path to a layer path. The measured Work Path ATN descriptor supports absolute coordinates, cubic handles, even-odd subpaths and Add/Subtract/XOR. Paths outside that measured form still play natively and are reported as unsupported by ATN export."##,
+            enabled: always,
+            run: insert_path::run,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.allowToolRecording",
+            label: "Allow Tool Recording",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"enabled":bool?=toggle} → {enabled:bool}. Opt in to recording painting-tool strokes (off initially). Existing pending steps are committed under the previous mode. Painting, history and the journal are unchanged. actions.list reports toolRecording."##,
+            enabled: always,
+            run: allow_tool_recording,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.recordAgain",
+            label: "Record Again",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index,"step":index,"params":{new settings},"revision":u64?} → {action,step,id,result}. Replays the selected command and stores its new settings only after success, preserving its enabled/dialog flags. The panel opens the command's editor at the recorded settings. Stop recording or playback first; revision optionally rejects stale library state."##,
+            enabled: always,
+            run: record_again::run,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.duplicate",
+            label: "Duplicate Action",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index,"step":index?} or {"set":name,"setSlot":index|null?} → {action?,index?,step?,steps?,set?,setSlot?,actions?}. Copy an action, step or set below the source. A null setSlot selects the implicit set; omission selects by caption. Copies retain settings and flags, and leave shortcuts with the originals."##,
+            enabled: always,
+            run: duplicate,
+            journal: false,
+        },
+        CommandSpec {
             id: "actions.insert",
             label: "Insert Step",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "id":command id, "params":{}?, "at":index?=end} → {action, step, id, steps}. Inserts a step at the 0-based position (Photoshop's Insert Stop… with id actions.stopMessage, Insert Menu Item… with any command). Pending recorded steps count; flags of the steps after it follow them."##,
+            params: r##"{"action":name|index, "id":command id, "params":{}?, "at":index?=end} → {action, step, id, steps}. Inserts a step at the 0-based position (the reference application's Insert Stop… with id actions.stopMessage, its dialog toggle on; Insert Menu Item… with any command). Pending recorded steps count; flags of the steps after it follow them."##,
             enabled: always,
             run: insert,
             journal: false,
@@ -280,9 +588,19 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Move to Set",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "set":name|null} → {action, set}. The set folder the Actions panel shows the action under (what Load Actions fills and Save Actions writes); null takes it out of any set."##,
+            params: r##"{"action":name|index, "set":name|null, "setSlot":index?} → {action, set}. Move the action into a set or an explicit folder occurrence. Null takes it out of any set."##,
             enabled: always,
             run: assign_set,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.newSet",
+            label: "New Set",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"name":str? (default "Set N")} → {set}. An empty set folder in the Actions panel. New Action records into it and Save Actions… writes it even while empty."##,
+            enabled: always,
+            run: new_set,
             journal: false,
         },
     ]
@@ -292,6 +610,26 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use crate::actions_cmds::Action;
+
+    #[test]
+    fn inserted_play_calls_use_resolved_occurrences_for_self_call_guard() {
+        let mut s = Session::new();
+        let first = "112233445566778899aabbccddeeff00";
+        let second = "112233445566778899aabbccddeeff11";
+        for id in [first, second] {
+            let mut action = Action::new("Same", vec![]);
+            action.action_id = Some(id.into());
+            s.actions.list.push(action);
+        }
+        // An ID-bound self call cannot hide behind another displayed name.
+        assert!(s.execute("actions.insert", json!({"action":1,"id":"actions.play","params":{"action":"Other","actionId":second}})).is_err());
+        assert!(s.actions.list[1].steps.is_empty());
+        // The first same-caption row and an explicit other ID are legitimate children.
+        s.execute("actions.insert", json!({"action":1,"id":"actions.play","params":{"action":"Same"}})).unwrap();
+        s.execute("actions.insert", json!({"action":1,"id":"actions.play","params":{"action":"Same","actionId":first}})).unwrap();
+        assert_eq!(s.actions.list[1].steps.len(), 2);
+        assert!(s.execute("actions.insert", json!({"action":0,"id":"actions.play","params":{"action":"Same"}})).is_err());
+    }
 
     fn session_with(steps: &[&str]) -> Session {
         let mut s = Session::new();
@@ -312,7 +650,7 @@ mod tests {
         let a = &s.actions.list[0];
         assert_eq!(a.steps[1], ("actions.stopMessage".to_string(), json!({"message": "Check", "allowContinue": true})));
         assert_eq!(a.disabled.iter().copied().collect::<Vec<_>>(), [2], "the switched-off step moved down one");
-        assert_eq!(a.dialogs.iter().copied().collect::<Vec<_>>(), [3]);
+        assert_eq!(a.dialogs.iter().copied().collect::<Vec<_>>(), [1, 3], "the inserted Stop's dialog is on; the old toggle moved down one");
         // Default position: the end. A bare id works for a parameterless command.
         let r = s.execute("actions.insert", json!({"action": 0, "id": "layer.new.layer"})).unwrap();
         assert_eq!(r["step"], 4);
@@ -410,6 +748,28 @@ mod tests {
                 "{p}"
             );
         }
+    }
+
+    #[test]
+    fn new_set_makes_an_empty_folder_that_new_actions_record_into() {
+        let mut s = session_with(&["select.all"]);
+        s.execute("actions.assignSet", json!({"action": "A", "set": "Set 1"})).unwrap();
+        // Numbered past the sets the actions already have.
+        assert_eq!(s.execute("actions.newSet", json!({})).unwrap()["set"], "Set 2");
+        assert_eq!(s.execute("actions.newSet", json!({"name": " Retouch "})).unwrap()["set"], "Retouch");
+        assert_eq!(set_names(&s), ["Set 1", "Set 2", "Retouch"]);
+        // CodeRabbit on batch 11: Actions List names the empty sets too, so an agent can find them.
+        assert_eq!(s.execute("actions.list", json!({})).unwrap()["sets"], json!(["Set 1", "Set 2", "Retouch"]));
+        assert!(s.execute("actions.newSet", json!({"name": "Set 1"})).is_err(), "a set an action is in");
+        assert!(s.execute("actions.newSet", json!({"name": "Retouch"})).is_err(), "an empty set");
+        assert!(s.execute("actions.newSet", json!({"name": " "})).is_err());
+        // New Action into the empty set.
+        let r = s.execute("actions.record", json!({"set": "Retouch"})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        let i = r["index"].as_u64().unwrap() as usize;
+        assert_eq!(s.actions.list[i].set.as_deref(), Some("Retouch"));
+        assert_eq!(set_names(&s), ["Set 1", "Retouch", "Set 2"], "Retouch now holds an action");
+        assert!(s.execute("actions.record", json!({"set": 3})).is_err());
     }
 
     #[test]

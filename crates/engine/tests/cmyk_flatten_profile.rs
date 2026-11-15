@@ -34,12 +34,9 @@ const INKS: [[f32; 4]; 8] = [
 ];
 
 fn profile() -> Arc<Vec<u8>> {
-    photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
-        description: "Test Uncoated".into(),
-        tvi: [0.26, 0.26, 0.26, 0.3],
-        ..Default::default()
-    })
-    .to_bytes()
+    craft_cms::synth::cmyk_profile(&craft_cms::synth::CmykParams { description: "Test Uncoated".into(), tvi: [0.26, 0.26, 0.26, 0.3], ..Default::default() })
+        .unwrap()
+        .to_bytes()
 }
 
 /// A one-layer (Background) CMYK document, tagged with `profile()` when `tag`: the first row is
@@ -172,5 +169,21 @@ fn merge_visible_separates_through_the_document_profile() {
             s.execute("layer.mergeVisible", json!({})).unwrap();
         });
         assert!(d <= ROUND_TRIP, "{depth}-bit Merge Visible: inks moved by {d}");
+    }
+}
+
+/// Rasterize Layer Style bakes the layer through the RGB composite and separates the result
+/// back: through the document's profile, the one the layer was read with (#3778), so the inks
+/// under the effect-free area come back within the profile's round trip. The drop shadow falls
+/// off the canvas, so every pixel checked is the layer's own.
+#[test]
+fn rasterize_layer_style_separates_through_the_document_profile() {
+    for depth in [8, 16] {
+        let d = drift(depth, true, 0, |s| {
+            s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+            s.execute("layer.layerStyle.dropShadow", json!({"distance": 40, "size": 0})).unwrap();
+            s.execute("layer.rasterize.layerStyle", json!({})).unwrap();
+        });
+        assert!(d <= ROUND_TRIP, "{depth}-bit Rasterize Layer Style: inks moved by {d}");
     }
 }

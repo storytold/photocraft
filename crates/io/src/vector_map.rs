@@ -6,10 +6,10 @@
 //! a preserved block is written back byte-identical while it still decodes to the layer's
 //! current model; otherwise it is regenerated from the model.
 
+use craft_psd::descriptor::{Descriptor, Id, Value, VersionedDescriptor};
+use craft_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
 use photocraft_doc::{Fill, FillRule, Knot, LineCap, LineJoin, LiveShape, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask};
 use photocraft_geom::Point;
-use photocraft_psd::descriptor::{Descriptor, Id, Value, VersionedDescriptor};
-use photocraft_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
 
 use crate::blocks::{bool_of, enum_of, fill_from_desc, fill_to_desc, get_desc, num, parse_prefix_versioned};
 
@@ -407,11 +407,26 @@ pub fn live_from_vogk(data: &[u8]) -> Option<LiveShape> {
             Some(LiveShape::Rect { rect: rect_of(o)?, radii: [g("topLeft"), g("topRight"), g("bottomRight"), g("bottomLeft")] })
         }
         5 => Some(LiveShape::Ellipse { rect: rect_of(o)? }),
-        4 => Some(LiveShape::Line {
-            from: point_of(o, "keyOriginLineStart")?,
-            to: point_of(o, "keyOriginLineEnd")?,
-            weight: num(o.get("keyOriginLineWeight")).unwrap_or(1.0),
-        }),
+        4 => {
+            let from = point_of(o, "keyOriginLineStart")?;
+            let to = point_of(o, "keyOriginLineEnd")?;
+            let weight = num(o.get("keyOriginLineWeight")).unwrap_or(1.0);
+            let start = bool_of(o, "keyOriginLineArrowSt");
+            let end = bool_of(o, "keyOriginLineArrowEnd");
+            let width = num(o.get("keyOriginLineArrWdth")).unwrap_or(0.0);
+            let length = num(o.get("keyOriginLineArrLngth")).unwrap_or(0.0);
+            let concavity = num(o.get("keyOriginLineArrConc")).unwrap_or(0.0);
+            if start || end || width > 0.0 || length > 0.0 {
+                // Missing or invalid PSD arrow sizes must not prevent later edits.
+                let width = if width.is_finite() && width >= 1.0 { width } else { 52.0 };
+                let length = if length.is_finite() && length >= 1.0 { length } else { 50.0 };
+                // Photoshop's range is -50..50 % (#13258): keep a negative value.
+                let concavity = if concavity.is_finite() { concavity.clamp(-50.0, 50.0) } else { 0.0 };
+                Some(LiveShape::ArrowLine { from, to, weight, start, end, width, length, concavity })
+            } else {
+                Some(LiveShape::Line { from, to, weight })
+            }
+        }
         _ => None,
     }
 }
@@ -463,7 +478,21 @@ pub fn vogk_bytes(s: &LiveShape, dpi: f32) -> Option<Vec<u8>> {
                 .with("keyOriginLineArrLngth", Value::Double(0.0))
                 .with("keyOriginLineArrConc", Value::Integer(0))
         }
-        LiveShape::Polygon { .. } => return None,
+        LiveShape::ArrowLine { from, to, weight, start, end, width, length, concavity } => {
+            let pnt = |p: [f64; 2]| Value::Descriptor(Descriptor::new("Pnt ").with("Hrzn", Value::Double(p[0])).with("Vrtc", Value::Double(p[1])));
+            let r = [from[0].min(to[0]), from[1].min(to[1]), (from[0] - to[0]).abs(), (from[1] - to[1]).abs()];
+            base(4)
+                .with("keyOriginShapeBBox", bbox(r))
+                .with("keyOriginLineEnd", pnt(*to))
+                .with("keyOriginLineStart", pnt(*from))
+                .with("keyOriginLineWeight", Value::Double(*weight))
+                .with("keyOriginLineArrowSt", Value::Boolean(*start))
+                .with("keyOriginLineArrowEnd", Value::Boolean(*end))
+                .with("keyOriginLineArrWdth", Value::Double(*width))
+                .with("keyOriginLineArrLngth", Value::Double(*length))
+                .with("keyOriginLineArrConc", Value::Integer(concavity.round() as i32))
+        }
+        LiveShape::Polygon { .. } | LiveShape::Triangle { .. } => return None,
     };
     let o = o.with("keyOriginIndex", Value::Integer(0));
     let d = Descriptor::new("null").with("keyDescriptorList", Value::List(vec![Value::Descriptor(o)]));
@@ -709,11 +738,29 @@ mod tests {
             LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [1.0, 2.0, 3.0, 4.0] },
             LiveShape::Ellipse { rect: [5.0, 6.0, 7.0, 8.0] },
             LiveShape::Line { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0 },
+            LiveShape::ArrowLine { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0, start: false, end: true, width: 31.0, length: 31.0, concavity: 50.0 },
+            // Both arrowheads off still needs to retain the adjustable parameters.
+            LiveShape::ArrowLine { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0, start: false, end: false, width: 31.0, length: 31.0, concavity: 0.0 },
         ] {
             let b = vogk_bytes(&s, 72.0).unwrap();
             assert_eq!(live_from_vogk(&b), Some(s));
         }
         assert!(vogk_bytes(&LiveShape::Polygon { rect: [0.0; 4], sides: 5, star_ratio: 1.0, corner_radius: 0.0 }, 72.0).is_none());
+    }
+
+    /// A PSD arrow keeps a negative concavity, and one past 50 % opens clamped to 50 (#13258).
+    #[test]
+    fn vogk_arrow_concavity_keeps_negatives_and_clamps_to_fifty() {
+        let arrow =
+            |concavity| LiveShape::ArrowLine { from: [0.0, 10.0], to: [20.0, 0.0], weight: 3.0, start: false, end: true, width: 5.0, length: 10.0, concavity };
+        let read = |c| match live_from_vogk(&vogk_bytes(&arrow(c), 72.0).unwrap()) {
+            Some(LiveShape::ArrowLine { concavity, .. }) => concavity,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(read(-50.0), -50.0);
+        assert_eq!(read(-20.0), -20.0);
+        assert_eq!(read(80.0), 50.0);
+        assert_eq!(read(-90.0), -50.0);
     }
 
     #[test]

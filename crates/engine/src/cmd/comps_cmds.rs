@@ -202,8 +202,39 @@ fn apply(s: &mut Session, id: u32, label: &str) -> Result<Value> {
     Ok(json!({"comp": id, "missingLayers": missing}))
 }
 
+/// Resolve recorded comp forms without confusing panel indexes with persisted ids.
+fn recorded_comp(doc: &Document, selector: &Value) -> Result<Option<u32>> {
+    const CMD: &str = "layerComp.apply";
+    let fields = selector.as_object().filter(|fields| fields.len() == 1).ok_or_else(|| bad(CMD, "comp reference needs one index, id or ordinal"))?;
+    if let Some(index) = fields.get("index") {
+        if let Some(index) = index.as_u64() {
+            let index = u32::try_from(index).map_err(|_| bad(CMD, "comp index must be a 32-bit integer"))?;
+            return Ok(index.checked_sub(1).and_then(|index| usize::try_from(index).ok()).and_then(|index| doc.layer_comps.get(index)).map(|comp| comp.id));
+        }
+        if index.as_i64().is_some_and(|index| index < 0 && i32::try_from(index).is_ok()) {
+            return Ok(None);
+        }
+        return Err(bad(CMD, "comp index must be a 32-bit integer"));
+    }
+    if let Some(id) = fields.get("id") {
+        let id = crate::commands::u32_id(CMD, "comp id", id)?;
+        return doc.comp(id).map(|comp| Some(comp.id)).ok_or_else(|| bad(CMD, format!("no layer comp with id {id}")));
+    }
+    let ordinal = fields.get("ordinal").and_then(Value::as_str).ok_or_else(|| bad(CMD, "comp reference needs an index, id or ordinal"))?;
+    match ordinal {
+        "Trgt" | "Nxt" | "Prvs" => Ok(doc.last_applied_comp.filter(|id| doc.comp(*id).is_some()).or_else(|| doc.layer_comps.first().map(|comp| comp.id))),
+        "Frst" | "Lst" | "Al" => Ok(doc.layer_comps.first().map(|comp| comp.id)),
+        _ => Err(bad(CMD, format!("unsupported comp ordinal {ordinal}"))),
+    }
+}
+
+/// Apply the selected comp; a 32-bit index outside the comp list is a no-op.
 fn apply_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    if let Some(selector @ Value::Object(_)) = p.get("comp") {
+        let Some(id) = recorded_comp(&d.doc, selector)? else { return Ok(json!({"comp": null, "unchanged": true})) };
+        return apply(s, id, "Apply Layer Comp");
+    }
     let id = comp_param(&d.doc, p, "layerComp.apply")?;
     apply(s, id, "Apply Layer Comp")
 }
@@ -213,6 +244,9 @@ fn apply_cmd(s: &mut Session, p: &Value) -> Result<Value> {
 /// (#7181); by name the step finds that document's comp of the name, or stops with an error.
 /// The comp is the one just applied, so `{}` and `null` (the last applied) record its name too.
 pub(crate) fn recorded_apply(s: &Session, mut p: Value) -> Value {
+    if p.get("comp").is_some_and(Value::is_object) {
+        return p;
+    }
     let Some(d) = s.active() else { return p };
     let Some(comp) = d.doc.last_applied_comp.and_then(|id| d.doc.comp(id)) else { return p };
     // `null` params run as `{}` (the last applied comp), so they are recorded by name too.
@@ -423,8 +457,12 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         _ if flag(p, "selectedOnly", false) => vec![comp_param(&doc, &json!({}), cmd)?],
         _ => doc.layer_comps.iter().map(|c| c.id).collect(),
     };
+    let matching: Vec<(usize, &LayerComp)> = doc.layer_comps.iter().enumerate().filter(|(_, c)| chosen.contains(&c.id)).collect();
+    if matching.is_empty() {
+        return Err(bad(cmd, "no matching layer comps"));
+    }
     let mut files = Vec::new();
-    for (i, c) in doc.layer_comps.iter().enumerate().filter(|(_, c)| chosen.contains(&c.id)) {
+    for (i, c) in matching.iter().copied() {
         let mut one = (*doc).clone();
         apply_comp(&mut one, c, false);
         one.last_applied_comp = Some(c.id);
@@ -432,8 +470,11 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         save_doc(&one, &path, save)?;
         files.push(path);
     }
-    if files.is_empty() {
-        return Err(bad(cmd, "no matching layer comps"));
+    // Like the reference application, leave the document on the last exported comp, one "Apply Layer Comp" state each.
+    // A run that fails while writing returns before this point and leaves the document and its history as they were.
+    let ids: Vec<u32> = matching.iter().map(|(_, c)| c.id).collect();
+    for id in ids {
+        apply(s, id, "Apply Layer Comp")?;
     }
     Ok(json!({"files": files}))
 }
@@ -461,7 +502,14 @@ pub fn specs() -> Vec<CommandSpec> {
             has_comps,
             update_comp
         ),
-        spec!("layerComp.apply", "Apply Layer Comp", &[], r##"{"comp":id|name? (default: last applied)} → {comp, missingLayers}"##, has_comps, apply_cmd),
+        spec!(
+            "layerComp.apply",
+            "Apply Layer Comp",
+            &[],
+            r##"{"comp":id|name|{"index":int}|{"id":uint}|{"ordinal":"Trgt|Nxt|Prvs|Frst|Lst|Al"}? (default: last applied; typed index is one-based panel order, invalid indexes do nothing)} → {comp, missingLayers}"##,
+            has_comps,
+            apply_cmd
+        ),
         spec!("layerComp.previous", "Apply Previous Layer Comp", &[], "{}", has_comps, |s, _| step(s, -1)),
         spec!("layerComp.next", "Apply Next Layer Comp", &[], "{}", has_comps, |s, _| step(s, 1)),
         spec!("layerComp.delete", "Delete Layer Comp", &[], r##"{"comp":id|name?}"##, has_comps, delete),
@@ -511,3 +559,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "comps_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "comps_cmds/layer_comps_to_files_history_tests.rs"]
+mod layer_comps_to_files_history_tests;

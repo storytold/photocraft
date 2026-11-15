@@ -7,20 +7,68 @@ pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
 }
 
 /// The colour the Info panel reads at document pixel `(x, y)`, straight RGBA 0..1: averaged over
-/// the Eyedropper's Sample Size, as in Photoshop (#1649), and cached per pixel and revision.
+/// the Eyedropper's Sample Size over the box it reads at the view zoom, as in Photoshop (#1649,
+/// #11751), and cached per pixel, revision, size and zoom.
 pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
     let rev = app.session.active()?.revision;
     let sample_size = app.ui.tool_options.eyedropper_size;
-    if let Some(((cx, cy, cr, cs), v)) = app.info_sample
-        && (cx, cy, cr, cs) == (x, y, rev, sample_size)
+    let zoom = app.current_zoom();
+    let key = (x, y, rev, sample_size, zoom.to_bits());
+    if let Some((k, v)) = app.info_sample
+        && k == key
     {
         return Some(v);
     }
-    let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size});
+    let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size, "zoom": f64::from(zoom)});
     let v: Vec<f32> = serde_json::from_value(app.session.execute("document.sampleColor", params).ok()?).ok()?;
     let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
-    app.info_sample = Some(((x, y, rev, sample_size), v));
+    app.info_sample = Some((key, v));
     Some(v)
+}
+
+/// The Info panel's W and H for a size of `wh` px (the selection's or the pending crop frame's):
+/// both go through the ruler unit's formatter at `dpi`, percent of the document's `extent`.
+pub(crate) fn wh_readout(ur: &photocraft_engine::prefs::UnitsAndRulers, dpi: f64, extent: [f64; 2], wh: [f64; 2]) -> [String; 2] {
+    [ur.format(wh[0], dpi, extent[0]), ur.format(wh[1], dpi, extent[1])]
+}
+
+/// The Info panel's ruler cells (#11991), shown while the Ruler tool is active and a ruler is
+/// drawn: the angle and length(s), and the point and size the X/Y and W/H cells show instead of
+/// the pointer's and the selection's.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RulerRows {
+    /// "A:" and then "L:" (a plain ruler) or "L1:" and "L2:" (a protractor), with their values.
+    pub(crate) measure: Vec<(&'static str, String)>,
+    /// The start point (a plain ruler) or the second arm's end (a protractor), in document pixels.
+    pub(crate) point: [f64; 2],
+    /// End minus start, signed and y down, for a plain ruler. A protractor's is not measured, so
+    /// W/H keep showing what they show today.
+    pub(crate) size: Option<[f64; 2]>,
+}
+
+/// [`RulerRows`] for the active document, or `None` with another tool or no ruler. Lengths are in
+/// the ruler unit with 2 decimals and the angle has 1 decimal and "°"; the options bar's Use
+/// Measurement Scale never changes them, as measured.
+pub(crate) fn ruler_rows(app: &PhotocraftApp) -> Option<RulerRows> {
+    if app.ui.tool != crate::state::Tool::Ruler {
+        return None;
+    }
+    let doc = &app.session.active()?.doc;
+    let r = doc.measurement.ruler?;
+    // A unit scale: the Info panel reads pixels converted to the ruler unit, never the scale.
+    let info = photocraft_engine::analysis_cmds::ruler_info(&r, &Default::default());
+    let g = |k: &str| info[k].as_f64();
+    let units = &app.session.prefs().units_and_rulers;
+    let dpi = f64::from(doc.resolution_dpi);
+    let length = |px: f64| {
+        let v = units.rulers.from_px(px, dpi, f64::from(doc.size.width), units.point_size.per_inch());
+        format!("{v:.2}")
+    };
+    let angle = format!("{:.1}°", g("angle")?);
+    match r.protractor {
+        None => Some(RulerRows { measure: vec![("A:", angle), ("L:", length(g("l1")?))], point: r.start, size: Some([g("w")?, g("h")?]) }),
+        Some(q) => Some(RulerRows { measure: vec![("A:", angle), ("L1:", length(g("l1")?)), ("L2:", length(g("l2")?))], point: q, size: None }),
+    }
 }
 
 /// Photoshop's Info panel: colour under the pointer (RGB and CMYK), position, selection size.
@@ -37,8 +85,13 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let dpi = st.doc.resolution_dpi as f64;
     let fx = move |px: f64| units.format(px, dpi, size.width as f64);
     let units_y = app.session.prefs().units_and_rulers.clone();
+    let units_wh = app.session.prefs().units_and_rulers.clone();
     let fy = move |px: f64| units_y.format(px, dpi, size.height as f64);
-    let sel = st.doc.selection.as_ref().map(photocraft_compose::bounds::content_bounds);
+    let sel = st.doc.selection.as_ref().map(photocraft_compose::bounds::content_bounds).map(|r| [r.width() as f64, r.height() as f64]);
+    // With the Crop tool, W and H are the pending frame's, as in Photoshop (#3145).
+    let crop = crate::crop_ui::info_size(app);
+    let ruler = ruler_rows(app);
+    let wh = ruler.as_ref().and_then(|r| r.size).or(crop).or(sel);
     let pos = hover_pixel(app);
     // While a guide is dragged (#5728), the Info panel shows its position in one axis only, even
     // when the pointer is outside the canvas (ruler drags do not update `hover_doc` there).
@@ -70,13 +123,28 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     widgets::hairline(ui);
+    // The Ruler tool's angle and length(s) (#11991).
+    if let Some(r) = &ruler {
+        ui.columns(2, |cols| {
+            for (i, (k, v)) in r.measure.iter().enumerate() {
+                row(&mut cols[usize::from(i > 0)], k, v.clone());
+            }
+        });
+        widgets::hairline(ui);
+    }
+    // With a ruler, X/Y are its point instead of the pointer's (#11991).
+    let (guide_x, guide_y) = match &ruler {
+        Some(r) => (Some(r.point[0]), Some(r.point[1])),
+        None => (guide_x, guide_y),
+    };
     ui.columns(2, |cols| {
         let dash = || "—".to_string();
         // Measured from the rulers' zero point (#2955).
         row(&mut cols[0], "X:", guide_x.map(|p| fx(p - origin[0])).or_else(|| pos.map(|p| fx(p.0 as f64 - origin[0]))).unwrap_or_else(dash));
         row(&mut cols[0], "Y:", guide_y.map(|p| fy(p - origin[1])).or_else(|| pos.map(|p| fy(p.1 as f64 - origin[1]))).unwrap_or_else(dash));
-        row(&mut cols[1], "W:", sel.map_or_else(dash, |r| fx(r.width() as f64)));
-        row(&mut cols[1], "H:", sel.map_or_else(dash, |r| fy(r.height() as f64)));
+        let [w, h] = wh.map_or_else(|| [dash(), dash()], |s| wh_readout(&units_wh, dpi, [size.width as f64, size.height as f64], s));
+        row(&mut cols[1], "W:", w);
+        row(&mut cols[1], "H:", h);
     });
     widgets::hairline(ui);
     ui.label(
@@ -101,7 +169,8 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let (rgb, cmyk) = (&s["rgb"], &s["cmyk"]);
             ui.horizontal(|ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new(format!("#{n}")).color(t.text_dim).size(11.5)));
-                cell(ui, format!("X: {}  Y: {}", fx(at.0), fy(at.1)));
+                // The point sits on its pixel's centre (#11725); the row names the pixel, as the pointer row does.
+                cell(ui, format!("X: {}  Y: {}", fx(at.0.floor()), fy(at.1.floor())));
             });
             ui.horizontal(|ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
@@ -115,21 +184,29 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The Info panel's Color Sampler readouts and the (document, revision) they were composited for.
-pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64), std::sync::Arc<Vec<Value>>);
+/// The Info panel's Color Sampler readouts and the (document, revision, Sample Size) they were
+/// composited for.
+pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64, u32), std::sync::Arc<Vec<Value>>);
 
 /// The Color Sampler readouts of the active document, composited once per revision (#4528):
 /// adding, moving or deleting a sampler and every pixel edit bump the revision, so between them
 /// the Info panel reuses them instead of compositing each point through the stack every frame.
+/// They average over the Sample Size shared with the Eyedropper (#11732), which is part of the
+/// key, so changing it re-reads every sampler at once.
 pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Value>> {
-    let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision)) else { return std::sync::Arc::default() };
+    let size = app.ui.tool_options.eyedropper_size;
+    let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision, size)) else { return std::sync::Arc::default() };
     if let Some((k, v)) = &app.info_samplers
         && *k == key
     {
         return v.clone();
     }
-    let list = app.session.execute("view.colorSamplers.list", json!({})).ok();
+    let list = app.session.execute("view.colorSamplers.list", json!({"size": size})).ok();
     let v = std::sync::Arc::new(list.as_ref().and_then(|v| v["samplers"].as_array()).cloned().unwrap_or_default());
     app.info_samplers = Some((key, v.clone()));
     v
 }
+
+#[cfg(test)]
+#[path = "info_ruler_tests.rs"]
+mod info_ruler_tests;

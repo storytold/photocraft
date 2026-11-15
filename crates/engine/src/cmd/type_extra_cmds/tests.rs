@@ -243,6 +243,284 @@ fn opentype_toggles_store_features() {
     assert!(feature_on(&back.char_runs()[0].style, "swsh") && !back.char_runs()[0].style.ligatures);
 }
 
+/// Is `tag` on at character `ci` of an ASCII text layer?
+fn on_at(s: &Session, id: LayerId, ci: usize, tag: &str) -> bool {
+    let mut end = 0;
+    text(s, id)
+        .char_runs()
+        .iter()
+        .find(|r| {
+            end += r.len;
+            ci < end
+        })
+        .is_some_and(|r| feature_on(&r.style, tag))
+}
+
+#[test]
+fn numerals_are_registered_with_their_menu_path() {
+    for style in NumeralsStyle::ALL {
+        let spec = crate::commands::find(&format!("type.openType.numerals.{}", style.id())).unwrap();
+        assert_eq!(spec.label, style.label());
+        assert_eq!(spec.menu, ["Type", "OpenType", "Numerals"]);
+    }
+    assert!(crate::commands::find("type.openType.numerals.unknown").is_none());
+}
+
+#[test]
+fn numerals_replace_figure_tags_and_keep_other_features() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "012345");
+    let before = text(&s, id).char_runs()[0].style.clone();
+    s.execute("type.openType.fractions", json!({"on": true})).unwrap();
+    s.execute("type.openType.numerals.tabularLining", json!({})).unwrap();
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::TabularLining));
+    assert!(on_at(&s, id, 0, "tnum") && on_at(&s, id, 0, "lnum") && !on_at(&s, id, 0, "onum") && !on_at(&s, id, 0, "pnum"));
+    assert!(feature_on(&text(&s, id).char_runs()[0].style, "frac"), "non-figure features stay");
+    s.execute("type.openType.numerals.proportionalOldstyle", json!({})).unwrap();
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::ProportionalOldstyle));
+    assert!(on_at(&s, id, 0, "pnum") && on_at(&s, id, 0, "onum") && !on_at(&s, id, 0, "tnum") && !on_at(&s, id, 0, "lnum"));
+    s.execute("type.openType.numerals.default", json!({})).unwrap();
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::Default));
+    for tag in NUMERAL_FEATURE_TAGS {
+        assert!(!on_at(&s, id, 0, tag), "{tag}");
+    }
+    let st = text(&s, id).char_runs()[0].style.clone();
+    assert!(st.ligatures, "liga untouched");
+    assert_eq!((st.size_pt, st.font_family.clone(), st.color), (before.size_pt, before.font_family, before.color));
+}
+
+#[test]
+fn numerals_range_edits_only_those_characters() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "abcdef");
+    s.execute("type.openType.numerals.lining", json!({"range": [2, 5]})).unwrap();
+    let on: Vec<bool> = (0..6).map(|i| on_at(&s, id, i, "lnum")).collect();
+    assert_eq!(on, [false, false, true, true, true, false]);
+    assert_eq!(numerals_style_at(text(&s, id), 2), Some(NumeralsStyle::Lining));
+    assert_eq!(numerals_style_at(text(&s, id), 0), Some(NumeralsStyle::Default));
+    s.execute("type.openType.numerals.tabular", json!({"range": [2, 5]})).unwrap();
+    assert!(on_at(&s, id, 3, "tnum") && !on_at(&s, id, 3, "lnum"));
+    assert!(!on_at(&s, id, 0, "tnum"));
+}
+
+#[test]
+fn numerals_apply_to_every_listed_layer() {
+    let mut s = session(8);
+    let a = text_layer(&mut s, "one");
+    let b = text_layer(&mut s, "two");
+    s.execute("type.openType.numerals.oldstyle", json!({"layers": [a.0, b.0]})).unwrap();
+    assert!(on_at(&s, a, 0, "onum") && on_at(&s, b, 2, "onum"));
+    s.execute("type.openType.numerals.default", json!({"layers": [a.0, b.0]})).unwrap();
+    assert!(!on_at(&s, a, 0, "onum") && !on_at(&s, b, 0, "onum"));
+}
+
+#[test]
+fn numerals_are_one_undo_step_each() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "123");
+    s.execute("type.openType.numerals.lining", json!({})).unwrap();
+    s.execute("type.openType.numerals.tabularOldstyle", json!({})).unwrap();
+    assert!(s.undo());
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::Lining));
+    assert!(s.undo());
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::Default));
+    assert!(s.redo());
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::Lining));
+}
+
+#[test]
+fn numerals_survive_a_pcraft_round_trip() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Il36");
+    s.execute("type.openType.numerals.proportionalLining", json!({})).unwrap();
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let doc = photocraft_format::load_from_bytes(&bytes).unwrap();
+    let Some(LayerContent::Text(t)) = doc.layer(id).map(|l| &l.content) else { panic!("text layer lost") };
+    assert_eq!(numerals_style_of(&t.char_runs()[0].style), Some(NumeralsStyle::ProportionalLining));
+}
+
+#[test]
+fn numerals_fail_gracefully_on_bad_params() {
+    let mut s = session(8);
+    let bg = s.active().unwrap().active_layer.unwrap();
+    let id = text_layer(&mut s, "abc");
+    let cmd = "type.openType.numerals.tabularLining";
+    assert!(s.execute(cmd, json!({"layer": 987_654})).is_err(), "unknown layer");
+    assert!(s.execute(cmd, json!({"layer": bg.0})).is_err(), "not a type layer");
+    assert!(s.execute(cmd, json!({"layers": ["x"]})).is_err());
+    s.execute(cmd, json!({"range": [5, 2]})).unwrap();
+    s.execute(cmd, json!({"range": [50, 90]})).unwrap();
+    s.execute(cmd, json!({"range": [u64::MAX, 0]})).unwrap();
+    s.execute(cmd, json!({"range": "all"})).unwrap();
+    assert!(s.execute(cmd, json!({"layer": id.0, "range": [0, 1]})).is_ok());
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::TabularLining));
+}
+
+#[test]
+fn numerals_tabular_changes_inter_digit_widths() {
+    let mut s = session(8);
+    let r = s.execute("type.create", json!({"x": 20, "y": 70, "text": "1111111111", "font": "Inter", "size": 36, "color": "#000000"})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    let width = |s: &Session| {
+        let t = text(s, id).clone();
+        let mut e = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+        let layout = e.layout(&t, 72.0);
+        layout.lines.first().map_or(0.0, |line| line.x1 - line.x0)
+    };
+    let plain = width(&s);
+    s.execute("type.openType.numerals.tabular", json!({})).unwrap();
+    let tab = width(&s);
+    assert!((tab - plain).abs() > 0.5, "tnum changes Inter's digit advances: {plain} → {tab}");
+    s.execute("type.openType.numerals.default", json!({})).unwrap();
+    assert!((width(&s) - plain).abs() < 0.5, "default restores the advances");
+}
+
+const SET_IDS: [&str; 3] = ["type.openType.stylisticSets.set1", "type.openType.stylisticSets.set3", "type.openType.stylisticSets.set20"];
+
+#[test]
+fn stylistic_sets_are_registered_with_their_menu_path() {
+    for n in 1..=20 {
+        let spec = crate::commands::find(&format!("type.openType.stylisticSets.set{n}")).unwrap();
+        assert_eq!(spec.label, format!("Set {n}"));
+        assert_eq!(spec.menu, ["Type", "OpenType", "Stylistic Sets"]);
+    }
+    assert!(crate::commands::find("type.openType.stylisticSets.set0").is_none());
+    assert!(crate::commands::find("type.openType.stylisticSets.set21").is_none());
+}
+
+#[test]
+fn stylistic_sets_toggle_independently_and_keep_other_features() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "office 1/2");
+    let before = text(&s, id).char_runs()[0].style.clone();
+    s.execute("type.openType.stylisticAlternates", json!({})).unwrap();
+    s.execute(SET_IDS[0], json!({})).unwrap();
+    s.execute(SET_IDS[1], json!({})).unwrap();
+    s.execute(SET_IDS[2], json!({"on": true})).unwrap();
+    for tag in ["ss01", "ss03", "ss20", "salt"] {
+        assert!(on_at(&s, id, 0, tag), "{tag}");
+    }
+    assert!(!on_at(&s, id, 0, "ss02"));
+    s.execute(SET_IDS[0], json!({})).unwrap();
+    assert!(!on_at(&s, id, 0, "ss01"), "toggled off");
+    for tag in ["ss03", "ss20", "salt"] {
+        assert!(on_at(&s, id, 0, tag), "{tag} stays");
+    }
+    let st = text(&s, id).char_runs()[0].style.clone();
+    assert!(st.ligatures, "liga untouched");
+    assert_eq!((st.size_pt, st.font_family.clone(), st.color), (before.size_pt, before.font_family, before.color));
+}
+
+#[test]
+fn stylistic_set_range_edits_only_those_characters_and_direction_follows_the_range_start() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "abcdef");
+    s.execute("type.openType.stylisticSets.set2", json!({"range": [3, 6]})).unwrap();
+    let on: Vec<bool> = (0..6).map(|i| on_at(&s, id, i, "ss02")).collect();
+    assert_eq!(on, [false, false, false, true, true, true]);
+    // The range starts on the set, so the default direction is off.
+    let r = s.execute("type.openType.stylisticSets.set2", json!({"range": [3, 6]})).unwrap();
+    assert_eq!(r["on"], false);
+    assert!((0..6).all(|i| !on_at(&s, id, i, "ss02")));
+    s.execute("type.openType.stylisticSets.set2", json!({"on": true, "range": [3, 6]})).unwrap();
+    // A range starting before the styled characters turns it on (start is off), for all of them.
+    let r = s.execute("type.openType.stylisticSets.set2", json!({"range": [1, 6]})).unwrap();
+    assert_eq!(r["on"], true);
+    let on: Vec<bool> = (0..6).map(|i| on_at(&s, id, i, "ss02")).collect();
+    assert_eq!(on, [false, true, true, true, true, true]);
+    // And a range starting on a set character toggles off even though it begins mid-text.
+    let r = s.execute("type.openType.stylisticSets.set2", json!({"range": [4, 5]})).unwrap();
+    assert_eq!(r["on"], false);
+    let on: Vec<bool> = (0..6).map(|i| on_at(&s, id, i, "ss02")).collect();
+    assert_eq!(on, [false, true, true, true, false, true]);
+}
+
+#[test]
+fn stylistic_sets_apply_to_every_listed_layer() {
+    let mut s = session(8);
+    let a = text_layer(&mut s, "one");
+    let b = text_layer(&mut s, "two");
+    s.execute("type.openType.stylisticSets.set7", json!({"layers": [a.0, b.0]})).unwrap();
+    assert!(on_at(&s, a, 0, "ss07") && on_at(&s, b, 2, "ss07"));
+    s.execute("type.openType.stylisticSets.set7", json!({"layers": [a.0, b.0]})).unwrap();
+    assert!(!on_at(&s, a, 0, "ss07") && !on_at(&s, b, 0, "ss07"));
+}
+
+#[test]
+fn stylistic_set_toggles_are_one_undo_step_each() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "abc");
+    s.execute(SET_IDS[0], json!({})).unwrap();
+    s.execute(SET_IDS[1], json!({})).unwrap();
+    assert!(s.undo());
+    assert!(on_at(&s, id, 0, "ss01") && !on_at(&s, id, 0, "ss03"), "one step undone");
+    assert!(s.undo());
+    assert!(!on_at(&s, id, 0, "ss01"));
+    assert!(s.redo());
+    assert!(on_at(&s, id, 0, "ss01") && !on_at(&s, id, 0, "ss03"), "one step redone");
+    assert!(s.redo());
+    assert!(on_at(&s, id, 0, "ss01") && on_at(&s, id, 0, "ss03"));
+}
+
+/// The sets survive a `.pcraft` save. In PSD they live only in the file's `Txt2` block, which a
+/// document made here doesn't get yet; the PSD round trip of an opened file is tested in
+/// `photocraft-io` (`psd_kerning.rs`, `edited_text_layer_keeps_its_stylistic_sets`).
+#[test]
+fn stylistic_sets_survive_a_pcraft_round_trip() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Il36");
+    s.execute("type.openType.stylisticSets.set1", json!({})).unwrap();
+    s.execute("type.openType.stylisticSets.set5", json!({})).unwrap();
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let doc = photocraft_format::load_from_bytes(&bytes).unwrap();
+    let Some(LayerContent::Text(t)) = doc.layer(id).map(|l| &l.content) else { panic!("text layer lost") };
+    let st = &t.char_runs()[0].style;
+    assert!(feature_on(st, "ss01") && feature_on(st, "ss05") && !feature_on(st, "ss02"));
+}
+
+#[test]
+fn stylistic_sets_fail_gracefully_on_bad_params() {
+    let mut s = session(8);
+    let bg = s.active().unwrap().active_layer.unwrap();
+    let id = text_layer(&mut s, "abc");
+    let cmd = "type.openType.stylisticSets.set9";
+    assert!(s.execute(cmd, json!({"layer": 987_654})).is_err(), "unknown layer");
+    assert!(s.execute(cmd, json!({"layer": bg.0})).is_err(), "not a type layer");
+    assert!(s.execute(cmd, json!({"layers": ["x"]})).is_err());
+    // Same as the other toggles: an unusable `on` falls back to toggling, a reversed range is
+    // read in order, and a range past the end clamps (nothing to style).
+    s.execute(cmd, json!({"on": "x"})).unwrap();
+    assert!(on_at(&s, id, 0, "ss09"));
+    s.execute(cmd, json!({"range": [5, 2]})).unwrap();
+    s.execute(cmd, json!({"range": [50, 90]})).unwrap();
+    s.execute(cmd, json!({"range": [u64::MAX, 0]})).unwrap();
+    s.execute(cmd, json!({"range": "all"})).unwrap();
+    assert!(s.execute(cmd, json!({"layer": id.0, "range": [0, 1], "on": null})).is_ok());
+}
+
+#[test]
+fn stylistic_sets_change_inter_glyphs() {
+    let mut s = session(8);
+    let r = s.execute("type.create", json!({"x": 20, "y": 70, "text": "Il36", "font": "Inter", "size": 36, "color": "#000000"})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    let glyphs = |s: &Session| {
+        let t = text(s, id).clone();
+        let mut e = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+        e.layout(&t, 72.0).glyphs.iter().map(|g| g.id).collect::<Vec<_>>()
+    };
+    let plain = glyphs(&s);
+    s.execute("type.openType.stylisticSets.set1", json!({"range": [2, 4]})).unwrap();
+    let one = glyphs(&s);
+    assert_ne!(one, plain, "ss01 redraws the digits");
+    s.execute("type.openType.stylisticSets.set2", json!({"range": [0, 2]})).unwrap();
+    let two = glyphs(&s);
+    assert_ne!(two, one, "ss02 redraws I and l");
+    assert_eq!(two.len(), plain.len());
+    s.execute("type.openType.stylisticSets.set1", json!({"range": [2, 4]})).unwrap();
+    s.execute("type.openType.stylisticSets.set2", json!({"range": [0, 2]})).unwrap();
+    assert_eq!(glyphs(&s), plain, "turning both off restores the glyphs");
+}
+
 #[test]
 fn lorem_update_fonts_and_default_styles() {
     let mut s = session(16);
@@ -383,7 +661,7 @@ fn an_edited_type_path_keeps_the_knot_cap() {
     let id = text_layer(&mut s, "Hi");
     let knots: Vec<(f64, f64)> = (0..=MAX_TYPE_PATH_KNOTS).map(|i| (i as f64 * 0.001, 50.0)).collect();
     let mut t = text(&s, id).clone();
-    t.shape = TextShape::Path { path: Subpath::polyline(&knots[..2]), start: 0.0, flip: false };
+    t.shape = TextShape::Path { path: Subpath::polyline(&knots[..2]), start: 0.0, end: None, flip: false };
     assert!(set_type_path(&mut t, &Path::new(vec![Subpath::polyline(&knots[..MAX_TYPE_PATH_KNOTS])])).is_ok());
     assert!(set_type_path(&mut t, &Path::new(vec![Subpath::polyline(&knots)])).is_err());
 }
@@ -560,4 +838,222 @@ fn a_document_without_type_never_waits_for_the_text_engine() {
     let mut s = session(8);
     text_layer(&mut s, "type");
     assert!(has_type_layers(&s.active().unwrap().doc));
+}
+
+/// Verifies `type.setPathPlacement` commits valid range updates with undo/redo and rejects inverted, infinite, or out-of-bounds inputs.
+#[test]
+fn path_placement_updates_and_rejects_invalid_inputs() {
+    let mut empty = Session::new();
+    assert!(empty.execute("type.setPathPlacement", json!({})).is_err());
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Path");
+    assert!(s.execute("type.setPathPlacement", json!({"start": 1})).is_err());
+    s.edit("path", |doc, _| {
+        doc.work_path = Some(Path::new(vec![Subpath::polyline(&[(10.0, 60.0), (200.0, 60.0)])]));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.attachToPath", json!({"start": 4})).unwrap();
+    let original = text(&s, id).shape.clone();
+    let path = crate::type_extra_cmds::type_path(text(&s, id)).unwrap();
+    s.edit("remove work path", |doc, _| {
+        doc.work_path = None;
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.setPathPlacement", json!({"layer": id.0, "start": 20, "flip": true})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 20.0, flip: true, .. }));
+    assert_eq!(crate::type_extra_cmds::type_path(text(&s, id)).unwrap(), path);
+    assert!(s.undo());
+    assert_eq!(text(&s, id).shape, original);
+    assert!(s.redo());
+    s.execute("type.setPathPlacement", json!({"start": 30})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 30.0, flip: true, .. }));
+    s.execute("type.setPathPlacement", json!({"flip": false})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 30.0, flip: false, .. }));
+    for p in [json!({"start": "bad"}), json!({"start": 1e100}), json!({"flip": 1}), json!({"layer": "bad"})] {
+        assert!(s.execute("type.setPathPlacement", p).is_err());
+    }
+    s.execute("type.setPathPlacement", json!({"end": 50})).unwrap();
+    s.execute("type.setPathPlacement", json!({"flip": true})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 30.0, end: Some(50.0), .. }));
+    let before = text(&s, id).shape.clone();
+    for params in [json!({"end": 29}), json!({"start": 51}), json!({"end": 1e100}), json!({"end": "bad"}), json!({"start": -1}), json!({"end": 191})] {
+        assert!(s.execute("type.setPathPlacement", params).is_err());
+        assert_eq!(text(&s, id).shape, before);
+    }
+    let path = crate::type_extra_cmds::type_path(text(&s, id)).unwrap();
+    let mut layer = text(&s, id).clone();
+    set_type_path(&mut layer, &path).unwrap();
+    assert!(matches!(layer.shape, TextShape::Path { end: Some(50.0), .. }));
+    s.execute("type.setPathPlacement", json!({"start": 0, "end": 190})).unwrap();
+    s.execute("type.setPathPlacement", json!({"end": null})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { end: None, .. }));
+    s.execute("layer.setProps", json!({"layer": id.0, "locked": true})).unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"layer": id.0, "flip": true})).is_err());
+}
+
+/// Ensures command availability is restricted to path text layers and correctly handles legacy unconstrained endpoints or degenerate subpaths.
+#[test]
+fn path_placement_availability_and_legacy_ranges() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Path");
+    let line = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+    with_text(&mut s, &json!({}), "area", |t, _| {
+        t.shape = TextShape::Area { path: Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])]) };
+        Ok(())
+    })
+    .unwrap();
+    assert!(!s.is_enabled("type.setPathPlacement"));
+    assert!(s.is_enabled("type.detachFromPath"));
+    assert!(s.execute("type.setPathPlacement", json!({"start": 0})).is_err());
+    s.execute("type.detachFromPath", json!({})).unwrap();
+    with_text(&mut s, &json!({}), "path", |t, _| {
+        t.shape = TextShape::Path { path: line.clone(), start: -5.0, end: Some(10.0), flip: false };
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.is_enabled("type.setPathPlacement"));
+    s.execute("type.setPathPlacement", json!({"end": null})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: -5.0, end: None, .. }));
+    with_text(&mut s, &json!({}), "degenerate", |t, _| {
+        t.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (0.0, 0.0)]), start: 0.0, end: None, flip: false };
+        Ok(())
+    })
+    .unwrap();
+    let before = text(&s, id).shape.clone();
+    assert!(s.execute("type.setPathPlacement", json!({"end": 0, "flip": true})).is_err());
+    assert_eq!(text(&s, id).shape, before);
+    with_text(&mut s, &json!({}), "closed", |t, _| {
+        let mut path = line.clone();
+        path.closed = true;
+        t.shape = TextShape::Path { path, start: 0.0, end: None, flip: false };
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.setPathPlacement", json!({"start": 190, "end": 210})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 190.0, end: Some(210.0), .. }));
+
+    // Degenerate closed path is rejected on explicit range.
+    with_text(&mut s, &json!({}), "degenerate_closed", |t, _| {
+        t.shape = TextShape::Path { path: Subpath::polygon(&[(0.0, 0.0), (0.0, 0.0)]), start: 0.0, end: None, flip: false };
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"start": 0.0, "end": 10.0})).is_err());
+
+    // Closed negative seam offsets, huge multi-lap ranges, and stationary ranges are stored gracefully.
+    with_text(&mut s, &json!({}), "closed_ranges", |t, _| {
+        let mut path = line.clone();
+        path.closed = true;
+        t.shape = TextShape::Path { path, start: 0.0, end: None, flip: false };
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.setPathPlacement", json!({"start": -25.0, "end": 1000.0})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: -25.0, end: Some(1000.0), .. }));
+    s.execute("type.setPathPlacement", json!({"start": 40.0, "end": 40.0})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 40.0, end: Some(40.0), .. }));
+
+    // Explicit start on open legacy end:null validated against bounds and canonical normalized.
+    with_text(&mut s, &json!({}), "open_start_null_end", |t, _| {
+        t.shape = TextShape::Path { path: line.clone(), start: 10.0, end: Some(50.0), flip: false };
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"start": 120.0, "end": null})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"start": -5.0, "end": null})).is_err());
+    s.execute("type.setPathPlacement", json!({"start": 30.0, "end": null})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 30.0, end: None, .. }));
+
+    // Position-locked and fully locked layers are rejected upfront.
+    s.execute("layer.lockLayers", json!({"position": true})).unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"start": 10.0})).is_err());
+    s.execute("layer.lockLayers", json!({"position": false, "all": true})).unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"start": 10.0})).is_err());
+    s.execute("layer.lockLayers", json!({"all": false})).unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"start": 10.0})).is_ok());
+}
+
+/// Proves path placement validation tolerates `f32` precision upward rounding at endpoints while rejecting true out-of-bounds spans.
+#[test]
+fn path_placement_noninteger_line_rounding_upward_and_zero_capacity() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Path");
+    // Line from (0, 0) to (7, 7) has length 7 * sqrt(2) ≈ 9.899494936611665.
+    // In f32, length rounds upward to 9.8994951248168945.
+    let knots = [(0.0, 0.0), (7.0, 7.0)];
+    let path = Subpath::polyline(&knots);
+    let geometry = photocraft_text::warp::PathGeometry::new(&path, false).unwrap();
+    let length = geometry.length();
+    let length_f32 = length as f32;
+    assert!(f64::from(length_f32) > length, "scale 7 * sqrt2 must round upward in f32");
+    let canonical = geometry.canonical_length_f32();
+    assert!(f64::from(canonical) <= length, "canonical f32 must never exceed geometry");
+
+    with_text(&mut s, &json!({}), "attach", |t, _| {
+        t.shape = TextShape::Path { path: path.clone(), start: 0.0, end: None, flip: false };
+        Ok(())
+    })
+    .unwrap();
+
+    // Genuine out-of-bounds rejected.
+    assert!(s.execute("type.setPathPlacement", json!({"end": 9.95})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"end": length_f32 + 0.1})).is_err());
+
+    // Upward-rounded endpoint is accepted and normalized to canonical maximum.
+    s.execute("type.setPathPlacement", json!({"end": length_f32})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { end: Some(e), .. } if e == canonical));
+
+    // Zero-capacity endpoint range at the path boundary is accepted.
+    s.execute("type.setPathPlacement", json!({"start": length_f32, "end": length_f32})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start, end: Some(end), .. } if start == canonical && end == canonical));
+
+    // Flipped case at the path boundary is accepted.
+    s.execute("type.setPathPlacement", json!({"start": 0.0, "end": length_f32, "flip": true})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 0.0, end: Some(end), flip: true, .. } if end == canonical));
+}
+
+/// Flipping preserves stale endpoints after shortening a path; endpoint edits still validate.
+#[test]
+fn path_placement_shortened_path_flip_only_and_endpoint_rejection() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Path");
+    let line100 = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+    with_text(&mut s, &json!({}), "attach", |t, _| {
+        t.shape = TextShape::Path { path: line100, start: 10.0, end: Some(80.0), flip: false };
+        Ok(())
+    })
+    .unwrap();
+
+    // Shorten the path from length 100 to length 50.
+    let shortened = Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (50.0, 0.0)])]);
+    with_text(&mut s, &json!({}), "shorten", |t, _| set_type_path(t, &shortened)).unwrap();
+
+    // Stored end (80.0) is now past the shortened path length (50.0).
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 10.0, end: Some(80.0), flip: false, .. }));
+
+    // Flip-only call must succeed and preserve the stored range.
+    let r = s.execute("type.setPathPlacement", json!({"flip": true})).unwrap();
+    assert_eq!(r, json!({"start": 10.0, "end": 80.0, "flip": true}));
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 10.0, end: Some(80.0), flip: true, .. }));
+
+    // Flip back without supplying endpoints also succeeds.
+    let r = s.execute("type.setPathPlacement", json!({"flip": false})).unwrap();
+    assert_eq!(r, json!({"start": 10.0, "end": 80.0, "flip": false}));
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 10.0, end: Some(80.0), flip: false, .. }));
+
+    // Supplying out-of-bounds start or end on the shortened path must be rejected.
+    let before = text(&s, id).shape.clone();
+    assert!(s.execute("type.setPathPlacement", json!({"end": 80.0})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"start": 60.0})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"start": -5.0})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"start": 10.0, "flip": true})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"start": 40.0, "end": 30.0})).is_err());
+    assert_eq!(text(&s, id).shape, before);
+
+    // Supplying a valid range on the shortened path succeeds and updates the range.
+    let r = s.execute("type.setPathPlacement", json!({"start": 5.0, "end": 45.0, "flip": true})).unwrap();
+    assert_eq!(r, json!({"start": 5.0, "end": 45.0, "flip": true}));
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 5.0, end: Some(45.0), flip: true, .. }));
 }

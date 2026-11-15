@@ -5,16 +5,19 @@ use photocraft_geom::Rect;
 const INVERT: &[u8] = include_bytes!("../../../../plugins/tests/fixtures/invert.wasm");
 const INVERT_ID: &str = "org.photocraft.example.invert";
 
-fn b64(b: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for c in b.chunks(3) {
-        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
-        for i in 0..4 {
-            out.push(if i <= c.len() { T[(n >> (18 - 6 * i)) as usize & 63] as char } else { '=' });
-        }
+#[test]
+fn plugin_base64_keeps_standard_urlsafe_and_mixed_alphabets() {
+    for data in ["+/8=", "-_8=", "+_8=", "-/8=", "-_8"] {
+        assert_eq!(b64_decode(data), Some(vec![251, 255]), "{data}");
     }
-    out
+    assert_eq!(b64_decode("aGk="), Some(b"hi".to_vec()));
+    assert_eq!(b64_decode("aGk"), Some(b"hi".to_vec()));
+    assert_eq!(b64_decode("a"), None);
+    assert_eq!(b64_decode("QQ==QUJD"), None);
+}
+
+fn b64(b: &[u8]) -> String {
+    photocraft_paint::tile::b64_encode(b)
 }
 
 /// A WAT plug-in with its own `id` whose `pc_filter` body is `filter`.
@@ -131,6 +134,23 @@ fn example_invert_matches_builtin_invert_and_round_trips_the_registry() {
     Session::new().execute("plugin.remove", json!({"id": INVERT_ID})).unwrap();
     assert!(doc(8).execute("plugin.run", json!({"id": INVERT_ID})).is_err(), "removed");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn installing_a_file_that_is_not_wasm_names_what_it_is() {
+    // #10362: the Plug-ins > Install Plug-in dialog pointed at an old Photoshop plug-in (.8bt, a
+    // native Windows module) failed with a message that said nothing about that file. `path` goes
+    // through `registry::load_file`, so this is the exact user path.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Old Plug-in.8bt");
+    std::fs::write(&path, b"MZ\x90\x00\x03\0").unwrap();
+    let e = Session::new().execute("plugin.install", json!({"path": path.to_str().unwrap()})).unwrap_err();
+    let msg = e.to_string();
+    assert!(msg.contains("Windows") && msg.contains("8bf"), "{msg}");
+    assert!(msg.contains("WebAssembly"), "{msg}");
+    // The hint is static text: no path the person did not choose is added to the message.
+    assert!(!msg.contains(dir.path().to_str().unwrap()), "{msg}");
 }
 
 #[test]
@@ -307,9 +327,6 @@ fn bad_params_are_errors_not_panics() {
     }
     // No document: running is disabled.
     assert!(Session::new().execute("plugin.run", json!({"id": "x"})).is_err());
-    assert_eq!(b64_decode("aGk="), Some(b"hi".to_vec()));
-    assert_eq!(b64_decode("aGk"), Some(b"hi".to_vec()));
-    assert_eq!(b64_decode("a"), None);
 }
 
 #[test]
@@ -331,4 +348,28 @@ fn preference_folder_is_loaded() {
     assert_eq!(r["loaded"], json!(["test.cmds.folder"]));
     registry::remove("test.cmds.folder");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn bitmap_documents_refuse_plugin_filters_but_keep_plugin_management() {
+    // #10484: Photoshop 2025 refuses its filter plug-in modules (Solarize, Clouds, Average) on a
+    // Bitmap document and runs them on a Grayscale one. Installing, listing and removing stay.
+    let id = "test.cmds.bitmap";
+    Session::new().execute("plugin.install", json!({"data": b64(&wat_plugin(id, "{}", GREY))})).unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 28, "mode": "grayscale", "background": "white"})).unwrap();
+    s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+    let before = pixels(&s);
+    let steps = s.active().unwrap().history.past_len();
+    assert!(!s.is_enabled(RUN), "Filter › Plug-ins is greyed out");
+    let e = s.execute(RUN, json!({"id": id})).unwrap_err().to_string();
+    assert!(e.contains("Bitmap mode"), "{e}");
+    assert_eq!(pixels(&s), before);
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "no undo step");
+    for cmd in ["plugin.list", "plugin.install", "plugin.remove", "plugin.reload"] {
+        assert!(s.is_enabled(cmd), "{cmd}");
+    }
+    let list = s.execute("plugin.list", json!({})).unwrap();
+    assert!(list["plugins"].as_array().unwrap().iter().any(|p| p["id"] == id));
+    s.execute("plugin.remove", json!({"id": id})).unwrap();
 }
