@@ -41,7 +41,9 @@ pub fn is_live(id: &str) -> bool {
 const PLACE_AFTER: &[(&str, &str)] = &[
     ("file.newFromClipboard", "file.new"),
     ("filter.render.relight", "filter.render.lightingEffects"),
-    ("view.resetView", "view.flipHorizontal"),
+    ("view.rotateLeft", "view.flipHorizontal"),
+    ("view.rotateRight", "view.rotateLeft"),
+    ("view.resetView", "view.rotateRight"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
 ];
 
@@ -137,7 +139,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         item.label = reveal_label().into();
     }
     // File › Open Recent: a dynamic submenu of recently opened files (inserted after "Open As…").
-    if let Some(after) = items.iter().position(|i| i.id == "file.openAs") {
+    if let Some(after) = items.iter().position(|i| i.id == "file.openAsSmartObject").or_else(|| items.iter().position(|i| i.id == "file.openAs")) {
         let rp: Vec<String> = vec!["File".into(), "Open Recent".into()];
         let mut recent: Vec<MenuItem> = app
             .ui
@@ -240,6 +242,11 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         item.id = "layer.releaseClippingMask".into();
         item.label = "Release Clipping Mask".into();
         item.enabled = is_enabled(app, &item.id);
+    }
+    if let Some(label) = crate::actions::library::edit_undo_label(app)
+        && let Some(item) = items.iter_mut().find(|item| item.id == "edit.undo")
+    {
+        item.label = label.into();
     }
     items
 }
