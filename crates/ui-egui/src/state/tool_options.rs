@@ -13,6 +13,8 @@ pub struct ToolOptions {
     pub sample_all: SampleAllLayers,
     /// Object Selection › Object Finder: hovering highlights the object a click selects (#4087).
     pub object_finder: bool,
+    /// Object Selection › Hard Edge (#12855): off, the result gets a softer, slightly wider rim.
+    pub object_hard_edge: bool,
     /// Remove tool: the fill goes to a new layer above the target (Photoshop's Create a new layer).
     pub remove_new_layer: bool,
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
@@ -74,7 +76,9 @@ pub struct ToolOptions {
     pub cam_mode: String,
     pub cam_structure: f32,
     pub cam_color: f32,
-    /// Content-Aware Move: Transform On Drop (a transform box on the dropped patch).
+    /// Content-Aware Move: Transform On Drop (a transform box on the dropped patch). On by
+    /// default (#12185); a saved `false` stays off.
+    #[serde(default = "yes")]
     pub cam_transform_on_drop: bool,
     /// Dodge/Burn: shadows | midtones | highlights, exposure %, protect tones.
     pub tone_range: String,
@@ -82,11 +86,16 @@ pub struct ToolOptions {
     pub protect_tones: bool,
     /// Sponge: desaturate | saturate, vibrance.
     pub sponge_mode: String,
+    /// Sponge: Flow %, whole numbers 1..100 (#12976). Settings saved before it load as 50.
+    #[serde(default = "fifty")]
+    pub sponge_flow: f32,
     pub vibrance: bool,
     /// Blur/Sharpen/Smudge strength %, Sharpen protect detail, Smudge finger painting.
     pub strength: f32,
     pub protect_detail: bool,
     pub finger_painting: bool,
+    /// Smudge › Mode (#12959): Normal, Darken, Lighten, Hue, Saturation, Color or Luminosity.
+    pub smudge_mode: photocraft_color::BlendMode,
     /// Quick Selection enhance edge.
     pub enhance_edge: bool,
     /// Pen: "path" (work path) or "shape" (shape layer).
@@ -96,6 +105,11 @@ pub struct ToolOptions {
     /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
+    /// Shape tools › Path operations (#13235): how a drag combines with the active shape layer
+    /// (Shape mode) or work path (Path mode). Same values as `pen_path_op`; in Path mode "newLayer"
+    /// means Exclude Overlapping Shapes.
+    #[serde(default = "default_shape_path_op")]
+    pub shape_path_op: String,
     /// Shape tools: "shape" (a shape layer) or "path" (the work path), as Photoshop's tool mode
     /// (#9453). Shape by default, where the Pen's own mode defaults to Path.
     pub shape_mode: String,
@@ -110,6 +124,9 @@ pub struct ToolOptions {
     pub shape_fill_gradient: Option<photocraft_doc::Fill>,
     pub shape_stroke_gradient: Option<photocraft_doc::Fill>,
     pub corner_radius: f32,
+    /// Shape tools' Align Edges: snap the drawn shape's box to whole pixels. On by default; the
+    /// Triangle tool shows it, enabled in Shape mode only (#13370); the other shape tools always snap.
+    pub align_edges: bool,
     pub polygon_sides: u32,
     pub line_weight: f32,
     /// Line arrowheads.
@@ -118,6 +135,17 @@ pub struct ToolOptions {
     pub arrow_width: f32,
     pub arrow_length: f32,
     pub arrow_concavity: f32,
+    /// Rectangle tool › gear (#13343): how a drag sizes the rectangle: "unconstrained" (the
+    /// default), "square", "fixedSize" or "proportional".
+    pub rect_constraint: String,
+    /// Rectangle tool › gear › Fixed Size W and H in px; 0 is an empty field, as they start.
+    pub rect_fixed_width: f32,
+    pub rect_fixed_height: f32,
+    /// Rectangle tool › gear › Proportional W : H, 1 : 1 to start.
+    pub rect_ratio_width: f32,
+    pub rect_ratio_height: f32,
+    /// Rectangle tool › gear › From Center: every drag draws from its centre. Off to start.
+    pub rect_from_center: bool,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -125,6 +153,10 @@ pub struct ToolOptions {
     /// on one of its anchors deletes it (#4144).
     #[serde(default = "yes")]
     pub pen_auto_add_delete: bool,
+    /// Pen › gear › Rubber Band: while drawing, preview the next segment from the last anchor to
+    /// the pointer. Off by default, as in Photoshop (#12900).
+    #[serde(default)]
+    pub pen_rubber_band: bool,
     /// Marquee options bar: "normal" | "fixedRatio" | "fixedSize", with the ratio or size.
     #[serde(default = "default_marquee_style")]
     pub marquee_style: String,
@@ -226,6 +258,9 @@ pub struct ToolOptions {
     pub bg_limits: String,
     pub bg_tolerance: f32,
     pub bg_protect_fg: bool,
+    /// The Background Eraser popup's "Tolerance:" pen control (#11910): `off`, `penPressure` (the
+    /// reference's default) or `stylusWheel`.
+    pub bg_tolerance_control: String,
     /// Color Replacement: mode (hue | saturation | color | luminosity), sampling (continuous |
     /// once | backgroundSwatch), limits (discontiguous | contiguous | findEdges), tolerance % and
     /// anti-alias, as `paint.colorReplacement` takes them.
@@ -237,6 +272,14 @@ pub struct ToolOptions {
     /// Zoom tool › Scrubby Zoom: dragging left/right zooms continuously (else a zoom rectangle).
     #[serde(default = "yes")]
     pub zoom_scrubby: bool,
+    /// Zoom tool › Zoom In / Zoom Out: which way a click steps (⌥ turns it around). Reset Tool
+    /// leaves it, as in Photoshop.
+    #[serde(default = "yes")]
+    pub zoom_in: bool,
+    /// Hand tool › Scroll All Windows: a Hand drag pans every shown document view, not only the
+    /// one dragged in (`scroll_all_windows.rs`). Shift held while dragging does the same.
+    #[serde(default)]
+    pub hand_scroll_all: bool,
     /// Pencil › Auto Erase: a stroke that starts on the foreground colour paints the background colour.
     #[serde(default)]
     pub pencil_auto_erase: bool,
@@ -251,6 +294,13 @@ pub struct ToolOptions {
     /// `paint.pencil`), as in Photoshop's options bar (#2662).
     #[serde(default = "default_eraser_mode")]
     pub eraser_mode: String,
+    /// Eraser › Erase to History: the Eraser paints the History panel's source state back
+    /// instead of erasing, as in Photoshop.
+    #[serde(default)]
+    pub erase_to_history: bool,
+    /// Mixer Brush › Useful mixer brush combinations: the entry last picked, an index into
+    /// `brush_controls::MIXER_COMBINATIONS` (0 = Custom, #11946).
+    pub mixer_combination: usize,
     /// Magnetic Lasso: detection width (px, 1..256), edge contrast (%, 1..100), how often it
     /// fastens points by itself (0..100), and whether pen pressure narrows the width.
     pub magnetic_width: f32,
@@ -284,7 +334,7 @@ pub struct ToolOptions {
 }
 
 fn default_art_history_style() -> String {
-    "tightMedium".into()
+    "tightShort".into()
 }
 
 pub(super) fn yes() -> bool {
@@ -300,6 +350,10 @@ fn default_move_target() -> String {
 }
 
 fn default_pen_path_op() -> String {
+    "newLayer".into()
+}
+
+fn default_shape_path_op() -> String {
     "newLayer".into()
 }
 
@@ -426,6 +480,7 @@ impl Default for ToolOptions {
             anti_alias: true,
             sample_all: SampleAllLayers::default(),
             object_finder: true,
+            object_hard_edge: true,
             remove_new_layer: false,
             remove_after_each_stroke: true,
             feather: 0.0,
@@ -459,18 +514,21 @@ impl Default for ToolOptions {
             cam_mode: "move".into(),
             cam_structure: 4.0,
             cam_color: 0.0,
-            cam_transform_on_drop: false,
+            cam_transform_on_drop: true,
             tone_range: "midtones".into(),
             exposure: 50.0,
             protect_tones: true,
             sponge_mode: "desaturate".into(),
+            sponge_flow: 50.0,
             vibrance: true,
             strength: 50.0,
             protect_detail: true,
             finger_painting: false,
+            smudge_mode: photocraft_color::BlendMode::Normal,
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
+            shape_path_op: default_shape_path_op(),
             shape_mode: "shape".into(),
             shape_fill: true,
             stroke_width: 0.0,
@@ -478,15 +536,23 @@ impl Default for ToolOptions {
             shape_fill_gradient: None,
             shape_stroke_gradient: None,
             corner_radius: 0.0,
+            align_edges: true,
             polygon_sides: 5,
-            line_weight: 3.0,
+            line_weight: 1.0,
             arrow_start: false,
             arrow_end: false,
-            arrow_width: 52.0,
-            arrow_length: 50.0,
+            arrow_width: 5.0,
+            arrow_length: 10.0,
             arrow_concavity: 0.0,
+            rect_constraint: "unconstrained".into(),
+            rect_fixed_width: 0.0,
+            rect_fixed_height: 0.0,
+            rect_ratio_width: 1.0,
+            rect_ratio_height: 1.0,
+            rect_from_center: false,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
+            pen_rubber_band: false,
             marquee_style: default_marquee_style(),
             marquee_width: 1.0,
             marquee_height: 1.0,
@@ -522,16 +588,21 @@ impl Default for ToolOptions {
             bg_limits: "contiguous".into(),
             bg_tolerance: 50.0,
             bg_protect_fg: false,
+            bg_tolerance_control: "penPressure".into(),
             cr_mode: "color".into(),
             cr_sampling: "continuous".into(),
             cr_limits: "contiguous".into(),
             cr_tolerance: 30.0,
             cr_anti_alias: true,
             zoom_scrubby: true,
+            zoom_in: true,
+            hand_scroll_all: false,
             pencil_auto_erase: false,
             brush_clear: false,
             pencil_clear: false,
             eraser_mode: default_eraser_mode(),
+            erase_to_history: false,
+            mixer_combination: 0,
             magnetic_width: 10.0,
             magnetic_contrast: 10.0,
             magnetic_frequency: 57.0,
@@ -547,3 +618,7 @@ impl Default for ToolOptions {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../cam_transform_on_drop_default_tests.rs"]
+mod cam_transform_on_drop_default_tests;
