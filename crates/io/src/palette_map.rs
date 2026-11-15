@@ -5,10 +5,10 @@
 //! Data (768 bytes: 256 reds, 256 greens, 256 blues), its length in resource 1046 and the
 //! transparent entry in resource 1047; for Bitmap one plane of 1 bit per pixel, 1 = black.
 
+use craft_psd::resources::{ImageResource, ResolutionInfo, ids};
+use craft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, PsdFile};
 use photocraft_color::ColorMode;
 use photocraft_doc::{ColorTable, Document};
-use photocraft_psd::resources::{ImageResource, ResolutionInfo, ids};
-use photocraft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, PsdFile};
 
 /// Indexed Color Table Count: the number of colours in the table (u16).
 pub(crate) const COLOR_TABLE_COUNT: u16 = 1046;
