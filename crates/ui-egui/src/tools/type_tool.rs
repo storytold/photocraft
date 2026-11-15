@@ -27,6 +27,7 @@ mod ime_edit;
 mod insertion_style;
 mod keys;
 mod layout;
+mod opentype;
 mod options_bar;
 mod overlay;
 mod panel;
@@ -62,6 +63,7 @@ pub(crate) use keys::flow_key;
 pub use keys::handle_keys;
 pub use layout::layout;
 pub(crate) use layout::{hit_layer, offset_at, shows_own_layout};
+pub(crate) use opentype::{Availability as OpenTypeAvailability, availability as opentype_availability, target_features as opentype_target_features};
 #[cfg(test)]
 use options_bar::num_field;
 pub use options_bar::options_bar;
@@ -162,3 +164,6 @@ mod locked_layer_alert_tests;
 mod ime_tests;
 #[cfg(test)]
 mod mask_escape_tests;
+
+#[cfg(test)]
+mod opentype_tests;

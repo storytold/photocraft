@@ -1,5 +1,5 @@
 use super::invoke::{panel_alias, proof_preset, workspace_name};
-use super::state::{checked, is_enabled, reveal_label};
+use super::state::{checked, is_enabled_without_opentype, reveal_label};
 use super::{DOCUMENT_ITEM, PhotocraftApp, UI_COMMANDS};
 
 /// Menu tree entry for rendering and for `ui.inspect`.
@@ -47,7 +47,17 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.other.colorToAlpha", "filter.other.offset"),
 ];
 
+/// Build one complete menu state using a single OpenType target snapshot for all feature rows.
+/// Other shell/engine enablement and upstream checked/localized state keep their existing paths.
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
+    menu_items_with_retry(app).0
+}
+
+/// Report transient font-engine contention with the rows so renderers can retry instead of
+/// caching the temporarily disabled rows as stable menu state.
+pub(super) fn menu_items_with_retry(app: &PhotocraftApp) -> (Vec<MenuItem>, bool) {
+    let features = crate::type_tool::opentype_target_features(app);
+    let enabled = |id: &str| features.availability(id).is_none_or(|availability| availability.enabled()) && is_enabled_without_opentype(app, id);
     // 1) Photoshop's full menu tree, in Photoshop order; live where we implement the command.
     let known = is_live;
     let mut items: Vec<MenuItem> = crate::menu_catalog::CATALOG
@@ -59,7 +69,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             // A live item shows the shortcut that runs it ([`crate::shortcut_dispatch::bindings`]
             // prefers the command's own over the catalogue's): Undo ⌘Z, Copy ⌘C, Hide Layers ⌘,.
             shortcut: if known(id) { crate::shortcuts::default_shortcut(id) } else { sc.map(Into::into) },
-            enabled: known(id) && is_enabled(app, id),
+            enabled: known(id) && enabled(id),
             checked: checked(app, id),
             color: None,
         })
@@ -72,7 +82,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             label: label.into(),
             path: path.iter().map(|s| s.to_string()).collect(),
             shortcut: sc.map(Into::into),
-            enabled: is_enabled(app, id),
+            enabled: enabled(id),
             checked: checked(app, id),
             color: None,
         });
@@ -83,7 +93,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             label: c.label.into(),
             path: c.menu.iter().map(|s| s.to_string()).collect(),
             shortcut: c.shortcut.map(Into::into),
-            enabled: is_enabled(app, c.id),
+            enabled: enabled(c.id),
             checked: None,
             color: None,
         });
@@ -241,9 +251,9 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     {
         item.id = "layer.releaseClippingMask".into();
         item.label = "Release Clipping Mask".into();
-        item.enabled = is_enabled(app, &item.id);
+        item.enabled = enabled(&item.id);
     }
-    items
+    (items, features.busy())
 }
 
 /// Background tint of an Edit › Menus colour name.
@@ -263,8 +273,8 @@ pub(super) fn menu_tint(name: &str) -> Option<egui::Color32> {
 /// The open menus' items, kept between frames: building them asks every command whether it can
 /// run, which on a document with thousands of layers costs far more than a frame.
 pub(crate) struct ItemCache {
-    /// [`crate::native_menu::state_hash`] of the state the items were built from.
-    pub(super) state: u64,
+    /// [`crate::native_menu::state_hash`] of stable items, or None if font metadata was busy.
+    pub(super) state: Option<u64>,
     pub(super) items: Vec<MenuItem>,
 }
 
@@ -272,6 +282,6 @@ impl ItemCache {
     /// The items, while they still describe `state`. A frame with a click or key press rebuilds
     /// them, which covers state the hash doesn't list.
     pub(super) fn reuse(self, state: u64, input: bool) -> Option<Vec<MenuItem>> {
-        (!input && self.state == state).then_some(self.items)
+        (!input && self.state == Some(state)).then_some(self.items)
     }
 }

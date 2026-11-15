@@ -417,23 +417,33 @@ fn type_menu_checkmarks_follow_the_layer() {
     assert_eq!(checked(&app, "type.orientation.horizontal"), Some(true));
 }
 
+/// Numeral menu checkmarks follow the stored style, including a combination that the
+/// current face cannot apply. Default can always reset those saved tags on a type layer.
 #[test]
 fn numerals_checkmark_follows_the_selection() {
     let (mut app, ctx) = app_with(1);
-    let id = "type.openType.numerals.tabularLining";
+    let id = "type.openType.numerals.tabular";
+    let combination = "type.openType.numerals.tabularLining";
+    let default = "type.openType.numerals.default";
     assert!(!crate::menus::is_enabled(&app, id));
     assert_eq!(checked(&app, id), None, "no type layer");
-    app.run("type.create", json!({"x": 10, "y": 50, "text": "Type", "size": 24})).unwrap();
-    assert!(crate::menus::is_enabled(&app, id));
-    assert_eq!(checked(&app, "type.openType.numerals.default"), Some(true));
+    app.run("type.create", json!({"x": 10, "y": 50, "text": "Type", "size": 24, "font": "Inter"})).unwrap();
+    assert!(crate::menus::is_enabled(&app, id), "Inter advertises tabular numerals");
+    assert!(!crate::menus::is_enabled(&app, combination), "Inter does not advertise the lining substitution");
+    assert_eq!(checked(&app, default), Some(true));
     assert_eq!(checked(&app, id), Some(false));
     menu(&mut app, &ctx, id, json!({})).unwrap();
     assert_eq!(checked(&app, id), Some(true));
-    assert_eq!(checked(&app, "type.openType.numerals.default"), Some(false));
+    assert_eq!(checked(&app, default), Some(false));
     assert_eq!(checked(&app, "type.openType.numerals.lining"), Some(false));
-    menu(&mut app, &ctx, "type.openType.numerals.default", json!({})).unwrap();
-    assert_eq!(checked(&app, "type.openType.numerals.default"), Some(true));
+
+    app.run(combination, json!({})).unwrap();
+    assert_eq!(checked(&app, combination), Some(true), "disabled controls still show saved combinations");
     assert_eq!(checked(&app, id), Some(false));
+    assert!(crate::menus::is_enabled(&app, default));
+    menu(&mut app, &ctx, default, json!({})).unwrap();
+    assert_eq!(checked(&app, default), Some(true));
+    assert_eq!(checked(&app, combination), Some(false));
     assert_eq!(checked(&app, "type.openType.numerals.notAStyle"), None);
 }
 

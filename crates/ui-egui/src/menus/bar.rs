@@ -1,5 +1,5 @@
 use super::invoke::invoke;
-use super::items::{ItemCache, MenuItem, menu_items};
+use super::items::{ItemCache, MenuItem, menu_items_with_retry};
 use super::render::{alt_click, render_level, render_level_rows};
 use super::search::help_search;
 use super::{PhotocraftApp, TOP_MENUS, Value, json};
@@ -85,8 +85,14 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                             .get_or_init(|| {
                                 let state = crate::native_menu::state_hash(app_ref, None);
                                 let input = crate::native_menu::had_input(ui.ctx());
-                                let items = kept.take().and_then(|c| c.reuse(state, input)).unwrap_or_else(|| menu_items(app_ref));
-                                ItemCache { state, items }
+                                if let Some(items) = kept.take().and_then(|c| c.reuse(state, input)) {
+                                    return ItemCache { state: Some(state), items };
+                                }
+                                let (items, retry) = menu_items_with_retry(app_ref);
+                                if retry {
+                                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+                                }
+                                ItemCache { state: (!retry).then_some(state), items }
                             })
                             .items;
                         let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(*top)).collect();
