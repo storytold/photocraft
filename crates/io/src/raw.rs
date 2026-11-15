@@ -120,23 +120,11 @@ fn import_raw_tuned_inner(name: &str, bytes: &[u8], tuning: &RawTuning, decode: 
     // without colour calibration), so re-developing changes only what the sliders change.
     let camera_look = decode.look.clone();
     let mut opts = DevelopOptions { limits: limits(), exposure, demosaic: tuning.demosaic, tone, camera_look, ..Default::default() };
-    let derived_as_shot_wb = camera_wb_matches_as_shot_neutral(sensor);
-    let mut wb_fell_back = false;
     let wb_applied = match sensor.camera_wb {
         Some(m) => {
             let g = wb_gains(tuning.temperature, tuning.tint);
-            let multipliers = [m[0] * g[0], m[1] * g[1], m[2] * g[2]];
-            if derived_as_shot_wb && tuning.temperature.is_finite() && tuning.tint.is_finite() && !camera_raw_multipliers_are_accepted(multipliers) {
-                // The reciprocal AsShotNeutral is a derived camera balance. If Camera Raw's
-                // gains push its inverse below normalize's established floor, keep the normal
-                // AsShot/grey-world fallback instead of making this tuned import fail.
-                opts.white_balance = WhiteBalance::AsShot;
-                wb_fell_back = true;
-                false
-            } else {
-                opts.white_balance = WhiteBalance::Multipliers(multipliers);
-                true
-            }
+            opts.white_balance = WhiteBalance::Multipliers([m[0] * g[0], m[1] * g[1], m[2] * g[2]]);
+            true
         }
         None => false,
     };
@@ -151,10 +139,6 @@ fn import_raw_tuned_inner(name: &str, bytes: &[u8], tuning: &RawTuning, decode: 
     };
     let wb = if wb_applied {
         format!("as-shot white balance, temperature {:+.0}, tint {:+.0}", tuning.temperature, tuning.tint)
-    } else if wb_fell_back && dev.warnings.iter().any(|warning| warning.starts_with("no as-shot white balance")) {
-        "estimated white balance after tuned as-shot multipliers exceeded the supported range".into()
-    } else if wb_fell_back {
-        "as-shot white balance without temperature/tint after tuned multipliers exceeded the supported range".into()
     } else {
         "estimated white balance".into()
     };
@@ -333,22 +317,6 @@ fn camera_name(make: Option<&str>, model: Option<&str>) -> String {
 /// Raw filter applies ([`photocraft_algo::camera_raw::white_balance_gains`]).
 fn wb_gains(temperature: f32, tint: f32) -> [f64; 3] {
     photocraft_algo::camera_raw::white_balance_gains(temperature.clamp(-100.0, 100.0), tint.clamp(-100.0, 100.0)).map(f64::from)
-}
-
-/// Whether the adapter derived this camera-WB value by reciprocating the same AsShotNeutral.
-fn camera_wb_matches_as_shot_neutral(sensor: &Sensor) -> bool {
-    if sensor.format == photocraft_raw::RawFormat::Dng {
-        return false;
-    }
-    let (Some(camera_wb), Some(neutral)) = (sensor.camera_wb, sensor.color.as_shot_neutral) else { return false };
-    neutral.iter().all(|value| value.is_finite() && *value > 0.0 && (1.0 / value).is_finite()) && camera_wb == neutral.map(|value| 1.0 / value)
-}
-
-/// Whether Camera Raw multipliers satisfy the same inverse-neutral floor as RAW normalization.
-fn camera_raw_multipliers_are_accepted(multipliers: [f64; 3]) -> bool {
-    let neutral = multipliers.map(|value| 1.0 / value);
-    let maximum = neutral.iter().copied().fold(f64::MIN, f64::max);
-    maximum > 0.0 && neutral.iter().all(|value| value.is_finite() && *value > 1e-4)
 }
 
 /// A developed raw as a 16-bit ProPhoto document, with a note saying how it was developed.
