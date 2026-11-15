@@ -127,6 +127,13 @@ fn render_start_rail(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail_w: f32) {
     // 3. "Home" Nav Item (Selected)
     let (home_rect, home_resp) = ui.allocate_exact_size(egui::vec2(rail_w, 32.0), Sense::click());
     home_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Home")));
+    // Home hides the tab strip and options bar, so this entry is the way back to the open
+    // documents (with none open there is nothing behind Home).
+    if app.session.documents().is_empty() {
+        // Nothing to go back to.
+    } else if home_resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        app.ui.chrome.home = None;
+    }
     let active_bar = Rect::from_min_size(egui::pos2(home_rect.left(), home_rect.center().y - 7.0), egui::vec2(1.5, 14.0));
     ui.painter().rect_filled(active_bar, 1.0, t.accent);
     let house_box = Rect::from_center_size(egui::pos2(home_rect.left() + 20.0, home_rect.center().y), egui::vec2(16.0, 16.0));
@@ -267,13 +274,9 @@ fn render_first_run_content(app: &mut PhotocraftApp, ui: &mut egui::Ui, content_
     });
 }
 
-/// Wayland has no native file drops (winit 0.30, #386), so the hint offers File › Open and paste.
-pub(crate) fn start_screen_drop_hint(app: &PhotocraftApp) -> std::borrow::Cow<'static, str> {
-    if app.services.is_wayland {
-        crate::i18n::fmt(tl!("Use File › Open, or paste a copied image with {paste}."), &[("paste", &crate::notices::paste_hint(app))]).into()
-    } else {
-        tl!("Drop an image or PSD anywhere to open it.").into()
-    }
+/// Hint displayed on the start screen for opening files.
+pub(crate) fn start_screen_drop_hint(_app: &PhotocraftApp) -> std::borrow::Cow<'static, str> {
+    tl!("Drop an image or PSD anywhere to open it.").into()
 }
 
 /// Recent files listed on the Home screen.
