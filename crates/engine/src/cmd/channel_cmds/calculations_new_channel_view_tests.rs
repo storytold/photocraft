@@ -36,6 +36,19 @@ fn new_channel_result_is_targeted_and_the_only_visible_channel() {
 }
 
 #[test]
+fn new_channel_result_replaces_a_shown_layer_mask() {
+    let mut s = session();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    s.execute("view.layerMask", json!({"mode": "gray"})).unwrap();
+    assert!(view(&s).layer_mask.is_some());
+    calc(&mut s, "newChannel");
+    assert_eq!(view(&s).target, ChannelTarget::Alpha(0));
+    assert!(view(&s).layer_mask.is_none(), "the new channel is the only one shown");
+}
+
+#[test]
 fn undo_from_the_composite_matches_new_channel() {
     let mut s = session();
     let before = view(&s);

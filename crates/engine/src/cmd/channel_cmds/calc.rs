@@ -120,8 +120,12 @@ pub(super) fn calculations(s: &mut Session, p: &Value) -> Result<Value> {
                 doc.channels.push(AlphaChannel::new(name, plane_surface(&out, area, fmt)));
                 Ok(doc.channels.len() - 1)
             })?;
-            // Like New Channel: the new channel is targeted and shown on its own.
+            // Like New Channel: the new channel is targeted and shown on its own, so a layer mask
+            // shown on the canvas goes away too.
             target(s, ChannelTarget::Alpha(i));
+            if let Some(st) = s.active_mut() {
+                st.channel_view.layer_mask = None;
+            }
             Ok(json!({ "channel": i }))
         }
         "newDocument" => {
