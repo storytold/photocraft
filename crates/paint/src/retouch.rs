@@ -676,7 +676,7 @@ mod tests {
                     let rect = Rect::new(0, 0, 2, 2);
                     let before = target.read_region(rect);
                     let paint = Region::new(rect, fmt.channels());
-                    apply_coverage(&mut target, rect, &[1.0; 4], 1.0, None, false, &paint, blend);
+                    apply_coverage(&mut target, rect, &[1.0; 4], 1.0, None, false, &paint, blend, false);
                     assert_eq!(target.read_region(rect), before, "{fmt:?}, {blend:?}");
                 }
             }
