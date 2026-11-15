@@ -116,6 +116,10 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     {
         item.label = "Merge Group".into();
     }
+    // Edit › Fade names the step it fades (#13803).
+    if let Some(item) = items.iter_mut().find(|i| i.id == "edit.fade") {
+        item.label = photocraft_engine::edit_menu_cmds::fade_menu_label(&app.session);
+    }
     // The File quick-export command uses the format selected in Export Preferences.
     // On the web it intentionally downloads PNG until the quick-export service supports
     // the other formats; the Layer quick-export command also always produces PNG.

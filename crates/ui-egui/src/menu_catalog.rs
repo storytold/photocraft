@@ -79,6 +79,8 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Edit"], "Undo", None, "edit.undo"),
     (&["Edit"], "Redo", None, "edit.redo"),
     (&["Edit"], "Toggle Last State", Some("Cmd+Alt+Z"), "edit.toggleLastState"),
+    // Fade sits in its own group, between separators (#13803).
+    (&["Edit"], "---", None, "---"),
     (&["Edit"], "Fade…", Some("Cmd+Shift+F"), "edit.fade"),
     (&["Edit"], "---", None, "---"),
     (&["Edit"], "Cut", None, "edit.cut"),

@@ -1783,8 +1783,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                     };
                     let text = match row_label(app, &menu, label, command) {
                         // Spelled out so `cargo xtask i18n-coverage` lists the new label.
-                        "Free Transform Points" => tl!("Free Transform Points"),
-                        key => tl!(key),
+                        "Free Transform Points" => tl!("Free Transform Points").to_string(),
+                        // The same label as Edit › Fade (#13803).
+                        "Fade…" => crate::menus::fade_label(app),
+                        key => tl!(key).to_string(),
                     };
                     let item = egui::Button::selectable(mode_checked(app, &menu, command), text).min_size(egui::vec2(200.0, 20.0));
                     if ui.add_enabled(entry_enabled(app, &menu, command), item).clicked() {

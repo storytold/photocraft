@@ -150,3 +150,12 @@ pub fn alt_click(id: String, alt: bool) -> String {
         _ => id,
     }
 }
+
+/// Edit › Fade's label as the menus show it, translated (#13803): `Fade Invert…` while Fade can
+/// run, `Fade…` when it can't. The selection right-click menu shows the same.
+pub fn fade_label(app: &crate::PhotocraftApp) -> String {
+    match crate::menus::menu_items(app).into_iter().find(|i| i.id == "edit.fade") {
+        Some(item) => translated_menu_label(crate::i18n::current(), &item),
+        None => tl!("Fade…").to_string(),
+    }
+}
