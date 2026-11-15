@@ -53,3 +53,47 @@ fn a_bad_star_ratio_is_an_error_not_a_panic() {
         assert!(s.execute("layer.new.frame", json!({"x": 10, "y": 10, "width": 50, "height": 50, "shape": "polygon", "starRatio": ok})).is_ok(), "{ok}");
     }
 }
+
+fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
+}
+
+/// CodeRabbit on #15172 and #15174: the accepted 1 % ratio is 1 % of the apothem, which is below the
+/// shape command's 1 % floor on the radius (0.8 % on five sides, 0.5 % on three). The inner points
+/// must keep that ratio, not be pushed out to the floor: the ring of inner points is measured
+/// against the ring of outer points on a frame as wide as it is tall.
+#[test]
+fn a_1_percent_star_keeps_its_inner_radius_below_the_shape_commands_floor() {
+    let mean_ring = |points: &[[f64; 2]], centre: [f64; 2]| points.iter().map(|p| dist(*p, centre)).sum::<f64>() / points.len() as f64;
+    for (sides, want) in [(5u64, 0.01 * (std::f64::consts::PI / 5.0).cos()), (3, 0.005)] {
+        let mut s = session();
+        let got = anchors(&mut s, json!({"x": 0, "y": 0, "width": 1000, "height": 1000, "shape": "polygon", "sides": sides, "starRatio": 1}));
+        assert_eq!(got.len() as u64, sides * 2);
+        let inner: Vec<[f64; 2]> = got.iter().skip(1).step_by(2).copied().collect();
+        let outer: Vec<[f64; 2]> = got.iter().step_by(2).copied().collect();
+        let centre = [inner.iter().map(|p| p[0]).sum::<f64>() / inner.len() as f64, inner.iter().map(|p| p[1]).sum::<f64>() / inner.len() as f64];
+        let ratio = mean_ring(&inner, centre) / mean_ring(&outer, centre);
+        // The stretch to the box is not uniform, so the ratio is only about the radius ratio: well
+        // clear of the floor's 0.01 (5 sides) and 0.01 (3 sides) it must not be.
+        assert!(ratio < want * 1.2 && ratio > want * 0.8, "{sides} sides: inner/outer {ratio}, wanted about {want}");
+    }
+}
+
+/// CodeRabbit on #15174: the outer points are rounded in document pixels, after the star is stretched
+/// to the frame. On a 200 x 100 frame the arc at a tip is circular with the radius asked for: the
+/// chord between its tangent points is 2 r cos(half the tip's angle).
+#[test]
+fn star_corners_are_rounded_in_document_pixels_on_a_wide_frame() {
+    let mut s = session();
+    let frame = |radius: f64| json!({"x": 0, "y": 0, "width": 200, "height": 100, "shape": "polygon", "sides": 5, "starRatio": 50, "radius": radius});
+    let sharp = anchors(&mut s, frame(0.0));
+    let round = anchors(&mut s, frame(10.0));
+    assert_eq!((sharp.len(), round.len()), (10, 15), "five tips become two knots each");
+    let (v, a, b) = (sharp[0], sharp[9], sharp[1]);
+    let (u1, u2) = ([a[0] - v[0], a[1] - v[1]], [b[0] - v[0], b[1] - v[1]]);
+    let cos = (u1[0] * u2[0] + u1[1] * u2[1]) / (u1[0].hypot(u1[1]) * u2[0].hypot(u2[1]));
+    let half = cos.acos() / 2.0;
+    let want = 2.0 * 10.0 * half.cos();
+    let got = dist(round[0], round[1]);
+    assert!((got - want).abs() < 1e-6, "chord {got} vs {want}");
+}
