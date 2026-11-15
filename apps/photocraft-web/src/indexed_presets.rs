@@ -182,6 +182,17 @@ pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     }
 }
 
+/// A malformed retained migration backup must not invalidate the published Actions library.
+fn record_action_issue(name: &str, error: String, action_issue: &mut Option<String>, warnings: &mut Vec<String>) {
+    if name == MIGRATED_ACTIONS_FILE {
+        if warnings.len() < 8 {
+            warnings.push(format!("Browser Actions recovery backup was skipped: {error}"));
+        }
+    } else {
+        *action_issue = Some(error);
+    }
+}
+
 async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), String> {
     let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readonly).map_err(js)?;
     let req = tx.object_store(FILES).map_err(js)?.open_cursor().map_err(js)?;
@@ -210,7 +221,7 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         if matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) && !stored.is_instance_of::<Blob>() {
             match paired_actions(&stored) {
                 Ok(record) => action_records.push((name, record)),
-                Err(error) => action_issue = Some(error),
+                Err(error) => record_action_issue(&name, error, &mut action_issue, &mut warnings),
             }
             next = request(&req);
             cursor.continue_().map_err(js)?;
@@ -255,10 +266,11 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
     for (name, blob) in records {
         let result = before(&blob.array_buffer(), deadline).await.and_then(|buffer| bridge.load(&name, Uint8Array::new(&buffer).to_vec()));
         if let Err(error) = result {
-            if name != ACTIONS_FILE {
+            if name == ACTIONS_FILE || name == MIGRATED_ACTIONS_FILE {
+                record_action_issue(&name, error, &mut action_issue, &mut warnings);
+            } else {
                 return Err(error);
             }
-            action_issue = Some(error);
         }
     }
     for (name, (revision, definitions, keys)) in action_records {
@@ -282,7 +294,7 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         }
         .await;
         if let Err(error) = result {
-            action_issue = Some(error);
+            record_action_issue(&name, error, &mut action_issue, &mut warnings);
         }
     }
     if let Some(error) = action_issue {

@@ -6,7 +6,7 @@ use crate::{
 };
 use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
-    descriptor::{Descriptor, Id, UnicodeString, Value as D},
+    descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, Value as D},
 };
 use serde_json::{Value, json};
 
@@ -658,23 +658,27 @@ fn set_override_retargets_internal_play_and_conditional_scopes_before_collision_
 #[test]
 fn import_checks_exact_durable_group_capacity_before_changing_actions_or_preferences() {
     let mut session = crate::Session::new();
-    for index in 0..atn::MAX_SETS {
-        let mut action = Action::new(format!("Local {index}"), vec![]);
-        action.set = Some(if index % 2 == 0 { "A" } else { "B" }.into());
-        session.actions.list.push(action);
-    }
+    // MAX_SETS and MAX_TOTAL_ACTIONS are equal. Empty physical groups isolate the group ceiling.
+    session.actions.set_rows = (0..atn::MAX_SETS).map(|index| format!("Local set {index}")).collect();
     let before = encode(&session.actions);
+    let files = atn::parse_sets(&before).unwrap();
+    assert_eq!(files.len(), atn::MAX_SETS);
+    assert_eq!(files.iter().map(|file| file.actions.len()).sum::<usize>(), 0);
     let preferences = session.prefs().clone();
     let revision = session.actions.rev;
     let bytes = native_archive(&[("C", &[Action::new("Imported", vec![])])]);
-    assert!(session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"replace":false})).is_err());
+    let error = session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"replace":false})).unwrap_err().to_string();
+    assert!(error.contains("too many action set rows"), "the single imported action must fail the group limit, not the action limit: {error}");
     assert_eq!(encode(&session.actions), before);
     assert_eq!(session.prefs(), &preferences);
     assert_eq!(session.actions.rev, revision);
-    // Replacing the interleaved A rows reduces the actual durable group count and is admitted.
-    let bytes = native_archive(&[("A", &[Action::new("Replacement", vec![])])]);
+    // Replacing an existing empty group keeps the durable group count at the limit and is admitted.
+    let bytes = native_archive(&[("Local set 0", &[Action::new("Replacement", vec![])])]);
     session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
-    assert!(library::decode(&encode(&session.actions)).is_ok());
+    let restored = library::decode(&encode(&session.actions)).unwrap();
+    assert_eq!(restored.set_rows.len(), atn::MAX_SETS);
+    assert_eq!(restored.list.len(), 1);
+    assert_eq!(restored.list[0].name, "Replacement");
 }
 
 #[test]
@@ -1358,4 +1362,41 @@ fn review_portable_grouping_rebases_numeric_calls_without_touching_embedded_scop
     let skipped = session.execute("actions.save", json!({"action":"Caller","skipUnsupported":true})).unwrap();
     assert_eq!(skipped["skipped"].as_array().unwrap().len(), original[2].steps.len(), "explicit skipping still omits whole native source steps");
     assert_eq!(session.actions.list, original, "export remaps only private copies");
+}
+
+#[test]
+fn portable_conditionals_use_the_exported_wire_set_name() {
+    for (logical, wire) in [(atn_cmds::UNGROUPED_SET, ""), ("Named control", "Named control")] {
+        for by_id in [false, true] {
+            let id = "11111111111111111111111111111111";
+            let mut child = Action::new("Child", vec![]);
+            child.action_id = Some(id.into());
+            child.set = (logical != atn_cmds::UNGROUPED_SET).then(|| logical.into());
+            let params =
+                if by_id { json!({"if":"hasLayers", "thenActionId":id, "elseActionId":id}) } else { json!({"if":"hasLayers", "then":"Child", "else":"Child"}) };
+            let mut parent = Action::new("Parent", vec![("actions.conditional".into(), params)]);
+            parent.set.clone_from(&child.set);
+            let (bytes, skipped) = atn_cmds::export(logical, &[&child, &parent], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            let files = atn::parse_sets(&bytes).unwrap();
+            assert_eq!(files[0].name.to_string_lossy(), wire);
+            let descriptor = files[0].actions[1].items[0].descriptor.as_ref().unwrap();
+            for branch in ["then", "else"] {
+                let Some(D::Reference(items)) = descriptor.get(branch) else { panic!("a native conditional must retain its {branch} reference") };
+                let scope = items.iter().find_map(|item| match item {
+                    ReferenceItem::Name { class, name } if class.class_id.is("ASet") => Some(name.to_string_lossy()),
+                    _ => None,
+                });
+                assert_eq!(scope.as_deref(), Some(wire), "{logical}, by_id={by_id}, {branch}: reference scope must equal the exported set name");
+            }
+            let mut imported = atn_cmds::import(&bytes).unwrap();
+            atn_cmds::normalize_import(&mut imported, [], false).unwrap();
+            let params = &imported.actions[1].steps[0].1;
+            assert_eq!(imported.actions[1].steps[0].0, "actions.conditional");
+            assert_eq!(params["if"], "hasLayers");
+            assert_eq!(params["then"], "Child");
+            assert_eq!(params["else"], "Child");
+            assert_eq!(params["set"], logical);
+        }
+    }
 }

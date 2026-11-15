@@ -1043,8 +1043,8 @@ pub(crate) fn retire_legacy_group(state: &mut ActionState, name: &str) {
 
 /// Hash the existing canonical ATN projection and exact opaque metadata, never a shadow step codec.
 fn wire_fingerprint(file: &AtnFile, record: &AtnAction, action: &Action, metadata: Option<&sidecar::SetMetadata>) -> Result<String> {
-    let mut singleton = file.clone();
-    singleton.actions = vec![record.clone()];
+    // Only name, expanded and actions are written; warnings and detected encoding are parse annotations.
+    let singleton = AtnFile { name: file.name.clone(), expanded: file.expanded, actions: vec![record.clone()], warnings: Vec::new(), encoding: None };
     let record = atn::write(&singleton).map_err(|error| error.to_string())?;
     let entry = sidecar::identity_entry(action)?;
     let set = sidecar::identity_set(metadata)?;

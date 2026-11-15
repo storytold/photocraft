@@ -705,7 +705,10 @@ impl<'a> ExportTargets<'a> {
             clipped: Default::default(),
             names: Default::default(),
             scopes: Default::default(),
-            wire_sets: groups.iter().flat_map(|(name, group)| group.actions.iter().map(move |action| (std::ptr::from_ref(*action), *name))).collect(),
+            wire_sets: groups
+                .iter()
+                .flat_map(|(name, group)| group.actions.iter().map(move |action| (std::ptr::from_ref(*action), super::wire_set_name(*name))))
+                .collect(),
         };
         for (index, action) in actions.iter().enumerate() {
             if let Some(id) = action.action_id.as_deref() {

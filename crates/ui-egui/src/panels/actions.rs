@@ -826,21 +826,18 @@ fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &Value) -> Re
 }
 
 fn conditional_frame(app: &mut PhotocraftApp, p: &Value, preserve_tail: bool) -> Result<Value, String> {
-    let branch = |key: &str| match p.get(key) {
-        None | Some(Value::Null) => Some(None),
-        Some(Value::String(n)) => Some(Some(n.clone()).filter(|n| !n.trim().is_empty())),
-        Some(_) => None,
-    };
-    let (Some(condition), Some(then), Some(otherwise)) = (p.get("if").and_then(Value::as_str), branch("then"), branch("else")) else {
+    let (Some(condition), Ok(then), Ok(otherwise)) =
+        (p.get("if").and_then(Value::as_str), actions_cmds::conditional_branch(p, "then"), actions_cmds::conditional_branch(p, "else"))
+    else {
         return app.session.execute("actions.conditional", p.clone()).map_err(|e| e.to_string());
     };
     let Ok(holds) = photocraft_engine::actions_edit_cmds::evaluate(&app.session, condition) else {
         return app.session.execute("actions.conditional", p.clone()).map_err(|e| e.to_string());
     };
     let played = if holds { then } else { otherwise };
-    let mut out = json!({"if": condition, "holds": holds, "played": played});
-    if let Some(name) = played {
-        let child = Frame::library(&app.session, &json!({"action": name}))?;
+    let mut out = json!({"if": condition, "holds": holds, "played": played.as_ref().and_then(|target| target.get("action"))});
+    if let Some(target) = played {
+        let child = Frame::library(&app.session, &target)?;
         let r = run_frame(app, child, None, preserve_tail)?;
         for key in ["failed", "paused", "stopped", "yielded"] {
             if let Some(v) = r.get(key) {
@@ -848,7 +845,8 @@ fn conditional_frame(app: &mut PhotocraftApp, p: &Value, preserve_tail: bool) ->
             }
         }
         out["ran"] = r.get("ran").cloned().unwrap_or(json!(0));
-        out["action"] = json!(name);
+        out["action"] = r["action"].clone();
+        out["played"] = r["action"].clone();
     }
     Ok(out)
 }
@@ -991,6 +989,7 @@ fn run_frame_steps(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, pre
         }
         None => false,
     };
+    let last_enabled_step = action.enabled_steps().last().map(|(i, _)| i);
     for (i, (id, p)) in action.enabled_steps().skip_while(|(i, _)| *i < frame.from).filter(|_| !paced_call) {
         if app.actions_runtime.quantum == Some(0) {
             app.actions_runtime.yielded = Some(frame.after(i));
@@ -1102,7 +1101,7 @@ fn run_frame_steps(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, pre
                     break;
                 }
                 ran += 1;
-                if action.enabled_steps().any(|(next, _)| next > i)
+                if last_enabled_step.is_some_and(|last| last > i)
                     && let Some(wait) = playback::step_pause(app)
                 {
                     match playback::pace(app, &frame, i, id, ran, wait) {
