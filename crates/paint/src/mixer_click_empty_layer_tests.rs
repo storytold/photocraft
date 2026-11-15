@@ -20,7 +20,7 @@ fn click_with(s: &mut Surface, wet: f32, mix: f32, flow: f32) {
     let mut st = MixerState::default();
     st.load([0.0, 0.0, 0.0, 1.0]);
     let m = MixerSettings { wet, load: 0.75, mix, flow, ..Default::default() };
-    apply_mixer_stroke(s, None, &stroke, &m, &mut st, None, false);
+    apply_mixer_stroke(s, None, &stroke, &m, &mut st, None, false).unwrap();
 }
 
 fn alpha(s: &Surface, x: i32, y: i32) -> i32 {
