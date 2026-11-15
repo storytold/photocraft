@@ -119,8 +119,9 @@ fn rgb_at_every_depth_and_a_smart_object_keep_working() {
         let mut s = Session::new();
         s.add_document(d, None);
         assert!(s.is_enabled("image.adjustments.colorLookup"), "{depth:?}: enabled");
+        let before = s.active().unwrap().history.past_len();
         s.execute("image.adjustments.colorLookup", json!({"lut": "warm"})).unwrap_or_else(|e| panic!("{depth:?}: {e}"));
-        assert!(s.active().unwrap().history.past_len() > 0, "{depth:?}: one history step");
+        assert_eq!(s.active().unwrap().history.past_len(), before + 1, "{depth:?}: one history step");
     }
     let mut s = session(ColorMode::Rgb);
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
@@ -140,4 +141,16 @@ fn a_targeted_alpha_channel_keeps_todays_behaviour_on_a_hidden_or_empty_layer() 
     s.execute("layer.new.layer", json!({"name": "empty"})).unwrap();
     s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
     s.execute("image.adjustments.colorLookup", json!({"lut": "warm"})).expect("a channel edit on an empty layer runs");
+}
+
+#[test]
+fn a_selection_still_applies_inside_it_with_one_history_step() {
+    let mut s = session(ColorMode::Rgb);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 24, "mode": "replace"})).unwrap();
+    let before = s.active().unwrap().history.past_len();
+    s.execute("image.adjustments.colorLookup", json!({"lut": "warm"})).expect("Color Lookup runs with a selection");
+    assert_eq!(s.active().unwrap().history.past_len(), before + 1, "one history step");
+    let st = s.active().unwrap();
+    let surf = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+    assert_ne!(surf.rgba(4, 12).to_vec(), surf.rgba(28, 12).to_vec(), "inside the selection changed, outside did not");
 }
