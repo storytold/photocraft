@@ -1457,6 +1457,9 @@ pub struct Preferences {
     pub script_events: crate::automate_cmds::ScriptEvents,
     /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.
     pub layer_mask_overlay: LayerMaskOverlay,
+    /// Layer › Layer Style › Global Light… default for new documents.
+    #[serde(default)]
+    pub global_light: photocraft_doc::GlobalLight,
 }
 
 impl Preferences {

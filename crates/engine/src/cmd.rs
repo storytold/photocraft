@@ -322,6 +322,7 @@ fn build() -> Vec<CommandSpec> {
                     d
                 };
                 doc.resolution_dpi = res;
+                doc.global_light = s.prefs().global_light;
                 // Photoshop's New Document › Color Profile: tag the document with another profile
                 // than the working space (#321). Checked before the document opens.
                 if let Some(spec) = p.get("profile").and_then(Value::as_str).filter(|spec| !matches!(*spec, "working" | "none")) {
