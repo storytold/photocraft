@@ -19,6 +19,8 @@ craft-psd = { workspace = true }
 # directories ourselves (native) and always register the bundled fonts (native + web).
 parley = { version = "0.11", default-features = false, features = ["std"] }
 skrifa = "0.47"
+# First strong character of a paragraph (its Auto direction), already in the tree through parley.
+icu_properties = { version = "2.1.2", default-features = false, features = ["compiled_data"] }
 flate2 = { workspace = true }
 
 # ICU dictionary data for Japanese word boundaries and complex-script (Thai, Lao, Khmer, Burmese)

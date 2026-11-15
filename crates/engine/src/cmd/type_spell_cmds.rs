@@ -134,7 +134,9 @@ fn change(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Check Spelling", |doc, _| {
         let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
         if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            let was_fitted = t.fit.is_some();
             replace_text(t, a, b, &to);
+            crate::type_fit_cmds::guard_fit(was_fitted, t, cmd)?;
             refresh_at(dpi, format, t);
         }
         Ok(())
@@ -162,9 +164,11 @@ fn change_all(s: &mut Session, p: &Value) -> Result<Value> {
             let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
             for (id, hits) in &plan {
                 if let Some(LayerContent::Text(t)) = doc.layer_mut(*id).map(|l| &mut l.content) {
+                    let was_fitted = t.fit.is_some();
                     for (a, b) in hits.iter().rev() {
                         replace_text(t, *a, *b, &to);
                     }
+                    crate::type_fit_cmds::guard_fit(was_fitted, t, cmd)?;
                     refresh_at(dpi, format, t);
                 }
             }
@@ -259,7 +263,9 @@ fn insert_text(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit(&label, |doc, _| {
         let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
         if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            let was_fitted = t.fit.is_some();
             replace_text(t, ba, bb, &new);
+            crate::type_fit_cmds::guard_fit(was_fitted, t, cmd)?;
             refresh_at(dpi, format, t);
         }
         Ok(())

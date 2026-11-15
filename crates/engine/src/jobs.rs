@@ -1807,8 +1807,11 @@ impl Session {
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
         self.live_commit = live_commit.filter(|live| live.cmd == id);
+        // A command run on another's behalf names itself while it runs, then hands back.
+        let outer_command = self.running_command.replace(spec.id);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
+        self.running_command = outer_command;
         self.live_commit = None;
         if self.actions.recording.is_none() {
             self.actions.recording = recording;

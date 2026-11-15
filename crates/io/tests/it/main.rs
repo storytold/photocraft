@@ -54,6 +54,7 @@ mod psd_background;
 mod psd_block_alignment;
 mod psd_block_layout;
 mod psd_damaged_merged;
+mod psd_dynamic_text;
 mod psd_empty_channels;
 mod psd_flat_spot_channels;
 mod psd_font_identity;

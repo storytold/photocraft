@@ -5811,6 +5811,7 @@ version = "0.23.1"
 dependencies = [
  "craft-psd",
  "flate2",
+ "icu_properties",
  "parley",
  "photocraft-color",
  "photocraft-doc",

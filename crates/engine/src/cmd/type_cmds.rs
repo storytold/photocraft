@@ -624,6 +624,16 @@ pub fn replace_text(t: &mut TextLayer, a: usize, b: usize, new: &str) {
     let mut cr = adjust(cr, a, b, new.len(), false);
     let mut pr = adjust(pr, a, b, new.len(), true);
     t.text.replace_range(a..b, &new);
+    // Dynamic Text's solved lines are byte offsets into the text they were solved for. After an
+    // edit an old offset can still land on a char boundary and force a break mid-word, so drop
+    // them: the layer lays out with its natural breaks until the solver runs again. A replacement
+    // that changes nothing (`type.edit` with the same text: an empty span) keeps them, as the
+    // refresh after it only renders and would not solve them again.
+    if !(a == b && new.is_empty())
+        && let Some(fit) = t.fit.as_mut()
+    {
+        fit.lines.clear();
+    }
     if t.text.ends_with(['\r', '\n'])
         && let Some(style) = trailing_style
     {
@@ -640,7 +650,9 @@ pub fn replace_text(t: &mut TextLayer, a: usize, b: usize, new: &str) {
     t.sync_summary();
 }
 
-/// Re-renders the layer's pixels and regenerates its PSD `TySh` data.
+/// Re-renders the layer's pixels and regenerates its PSD `TySh` data. Dynamic Text is refitted
+/// first, so every edit that ends here (typing, styles, box resize, path changes, font swaps)
+/// keeps the text filling its box; a layer without fit returns from the solver at once.
 pub fn refresh(doc: &Document, t: &mut TextLayer) {
     refresh_at(doc.resolution_dpi, doc.pixel_format(), t);
 }
@@ -650,6 +662,9 @@ pub fn refresh(doc: &Document, t: &mut TextLayer) {
 /// document to pass it, once per keystroke and pointer move while typing (#7092).
 pub fn refresh_at(dpi: f32, format: PixelFormat, t: &mut TextLayer) {
     let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+    if t.fit.is_some() && crate::type_fit_cmds::fit_refusal(t).is_none() {
+        photocraft_text::fit::refit(&mut eng, t, dpi);
+    }
     let (layout, r) = eng.render(t, dpi, format);
     t.cache = Some(r.surface);
     t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh(t, dpi, layout.bounds())));
@@ -687,6 +702,7 @@ pub(crate) fn check_text_unlocked(doc: &Document, id: LayerId) -> Result<()> {
 fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32, &mut Option<String>) -> Result<R>) -> Result<R> {
     let id = layer_id(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+    let cmd = crate::type_fit_cmds::guard_cmd(s, label);
     let typed = typed_name(s, id);
     let mut named = None;
     let (r, damage) = s.edit(label, |doc, _| {
@@ -700,7 +716,9 @@ fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&m
         // Only a text change renames: a style or layout edit keeps a copy's "Title copy" (#9023).
         let old_text = auto_named.then(|| t.text.clone());
         let mut rename = None;
+        let was_fitted = t.fit.is_some();
         let r = f(t, dpi, &mut rename)?;
+        crate::type_fit_cmds::guard_fit(was_fitted, t, cmd)?;
         refresh_at(dpi, format, t);
         // Only this layer's pixels changed: the canvas recomposites their old and new area
         // instead of the whole document (#124). Unknown old pixels mean a full refresh.
@@ -767,6 +785,7 @@ pub(crate) fn with_text_targets(
     mut f: impl FnMut(&mut TextLayer, (usize, usize)) -> Result<()>,
 ) -> Result<Vec<LayerId>> {
     let ids = format_targets(s, p)?;
+    let cmd = crate::type_fit_cmds::guard_cmd(s, label);
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     for id in &ids {
         check_text_unlocked(doc, *id)?;
@@ -778,7 +797,9 @@ pub(crate) fn with_text_targets(
             let Some(LayerContent::Text(t)) = doc.layer_mut(*id).map(|l| &mut l.content) else { return Err(EngineError::NoLayer(*id)) };
             let before = t.cache.as_ref().map(|c| c.tile_bounds());
             let range = if p.get("layers").is_none() || p.get("layer").is_some() { range_param(&t.text, p) } else { (0, t.text.len()) };
+            let was_fitted = t.fit.is_some();
             f(t, range)?;
+            crate::type_fit_cmds::guard_fit(was_fitted, t, cmd)?;
             refresh_at(dpi, format, t);
             // An unknown old/new cache retains Session.edit's full-refresh fallback.
             damage = damage.zip(before).zip(t.cache.as_ref().map(|c| c.tile_bounds())).map(|((all, a), b)| all.union(&a).union(&b));

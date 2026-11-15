@@ -286,11 +286,13 @@ fn restyle(t: &mut TextLayer, old: &TextStyles, new: &TextStyles, range: Option<
 /// Replaces the document's styles with `new` and re-resolves every type layer (as one history
 /// step), applying `op` to `target` (layer + optional byte range).
 fn commit(s: &mut Session, label: &str, new: TextStyles, target: &[Target], op: Op) -> Result<usize> {
-    s.edit(label, |doc, _| Ok(apply_styles(doc, &new, target, op)))
+    let cmd = crate::type_fit_cmds::guard_cmd(s, label);
+    s.edit(label, |doc, _| apply_styles(doc, &new, target, op, cmd))
 }
 
-// Shared by history-backed commands and isolated preview documents.
-fn apply_styles(doc: &mut Document, new: &TextStyles, target: &[Target], op: Op) -> usize {
+// Shared by history-backed commands and isolated preview documents. `cmd` names the command in
+// the Dynamic Text guard's refusal.
+fn apply_styles(doc: &mut Document, new: &TextStyles, target: &[Target], op: Op, cmd: &str) -> Result<usize> {
     let old = doc.text_styles.clone();
     doc.text_styles = new.clone();
     let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
@@ -299,16 +301,18 @@ fn apply_styles(doc: &mut Document, new: &TextStyles, target: &[Target], op: Op)
     for id in ids {
         let tgt = target.iter().find(|(t, _)| *t == id);
         let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) else { continue };
+        let was_fitted = t.fit.is_some();
         let did = match tgt {
             Some((_, r)) => restyle(t, &old, new, *r, op),
             None => restyle(t, &old, new, Some((0, 0)), Op::default()),
         };
         if did {
+            crate::type_fit_cmds::guard_fit(was_fitted, t, cmd)?;
             refresh_at(dpi, format, t);
             changed += 1;
         }
     }
-    changed
+    Ok(changed)
 }
 
 /// A type layer and an optional byte range in it.
@@ -615,7 +619,7 @@ fn prepare_options(mut st: TextStyles, p: &Value, paragraph: bool) -> Result<(Te
 pub fn preview_options(doc: &Document, p: &Value, paragraph: bool) -> Result<Document> {
     let (new, _) = prepare_options(doc.text_styles.clone(), p, paragraph)?;
     let mut shown = doc.clone();
-    apply_styles(&mut shown, &new, &[], Op::default());
+    apply_styles(&mut shown, &new, &[], Op::default(), if paragraph { "type.paragraphStyle.set" } else { "type.characterStyle.set" })?;
     Ok(shown)
 }
 
