@@ -77,3 +77,25 @@ fn a_rotated_placement_keeps_showing_the_mesh() {
     begin_warp(&mut app, &ctx).unwrap();
     assert_eq!(session_warp(&app).style, WarpStyle::Custom, "the preset through its rotated placement, as today");
 }
+
+/// CodeRabbit on #15010: the arc family (Arc, Arch, Bulge, Arc Lower and Upper, Shell Lower and
+/// Upper) depends on its box's aspect, so under a placement that scales x and y differently the
+/// preset over the placed box would be a different shape from the one the canvas draws (the stored
+/// source-space preset stretched through the placement). They show the mesh then; the other
+/// presets don't use the aspect and keep their preset path.
+#[test]
+fn an_uneven_scale_shows_the_arc_family_as_its_mesh_and_keeps_the_other_presets() {
+    let ctx = egui::Context::default();
+    for (style, kept) in [("arc", false), ("arch", false), ("bulge", false), ("shellLower", false), ("flag", true), ("fisheye", true), ("twist", true)] {
+        let mut app = warped(json!({"style": style, "bend": 50, "rect": [8, 8, 32, 32]}));
+        app.run("edit.transform", json!({"scaleX": 200, "scaleY": 100})).unwrap();
+        begin_warp(&mut app, &ctx).unwrap();
+        let w = session_warp(&app);
+        assert_eq!(w.style != WarpStyle::Custom, kept, "{style}: preset kept = {kept}, got {:?}", w.style);
+    }
+    // An even scale keeps the arc family a preset.
+    let mut app = warped(json!({"style": "arc", "bend": 50, "rect": [8, 8, 32, 32]}));
+    app.run("edit.transform", json!({"scaleX": 150, "scaleY": 150})).unwrap();
+    begin_warp(&mut app, &ctx).unwrap();
+    assert_eq!(session_warp(&app).style, WarpStyle::Arc, "uniform scale stays on the preset path");
+}

@@ -90,6 +90,15 @@ fn preset_through(w: &Warp, h: &Homography, b: [f64; 4]) -> Option<Warp> {
     if matches!(w.style, WarpStyle::None | WarpStyle::Custom | WarpStyle::Cylinder) || !axis_aligned || !(sx > 0.0 && sy > 0.0) {
         return None;
     }
+    // The arc family is defined by its box's aspect (it stays circular in pixels), so over an uneven
+    // scale the preset would be a different shape from the stored one drawn through the placement.
+    let arc_family = matches!(
+        w.style,
+        WarpStyle::Arc | WarpStyle::Arch | WarpStyle::Bulge | WarpStyle::ArcLower | WarpStyle::ArcUpper | WarpStyle::ShellLower | WarpStyle::ShellUpper
+    );
+    if arc_family && (sx - sy).abs() > 1e-9 * sx.max(sy) {
+        return None;
+    }
     Some(Warp { bounds: b, mesh: None, values: Vec::new(), ..w.clone() })
 }
 
