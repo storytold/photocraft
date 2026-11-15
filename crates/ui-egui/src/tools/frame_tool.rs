@@ -549,6 +549,11 @@ pub(crate) fn snap_press(app: &PhotocraftApp, p: [f64; 2]) -> Option<(Option<[f6
     let st = app.session.active()?;
     let mut exclude: Vec<LayerId> = st.doc.layers.iter().filter(|l| st.doc.is_background(l.id)).map(|l| l.id).collect();
     let Some(id) = frame_at(app, p) else { return Some((None, exclude)) };
+    // A press on a shape lying above an empty frame drags the shape (#13882): the frame's bounds are no
+    // gesture for it, so it moves by the pointer's offset, not one corrected to the frame's edges.
+    if shape_above(app, id, p).is_some() {
+        return None;
+    }
     let l = st.doc.layer(id)?;
     let f = l.frame.as_ref()?;
     let locks = st.doc.effective_locks(id);

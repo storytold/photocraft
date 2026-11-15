@@ -79,3 +79,16 @@ fn elsewhere_in_the_frame_the_drag_moves_the_frame() {
     assert_eq!(shape_box(&app, shape), [450.0, 50.0, 550.0, 150.0], "the shape stayed");
     assert_eq!(entries(&app).last().map(String::as_str), Some("Move"));
 }
+
+/// CodeRabbit on #15174: with Snap on, a drag that starts on the shape above an empty frame moves the shape by
+/// the pointer's offset. The frame's bounds are not a snap gesture for it: dragging 8 px left would bring the
+/// frame's left edge (430 - 8 = 422) onto Blue's right edge (420), and the shape would have moved 10.
+#[test]
+fn the_shape_above_the_frame_moves_by_the_drag_offset_with_snap_on() {
+    let (mut app, frame, shape) = app();
+    app.ui.views[0].zoom = 1.0;
+    app.ui.extras.snap = true;
+    drag(&mut app, [480.0, 120.0], [472.0, 120.0]);
+    assert_eq!(shape_box(&app, shape), [442.0, 50.0, 542.0, 150.0], "moved -8, not snapped to -10");
+    assert_eq!(frame_box(&app, frame), [430, 100, 520, 200], "the frame stayed");
+}
