@@ -251,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_window_owning_marquee_clears_layer_box_without_grabbed_layer() {
+    fn closing_window_owning_marquee_clears_layer_box_even_after_finish_clears_move_viewport() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let vid = egui::ViewportId::from_hash_of("secondary-window");
         app.current_viewport = Some(vid);
@@ -259,12 +259,28 @@ mod tests {
         assert_eq!(app.move_viewport, Some(vid));
         assert!(app.layer_box.as_ref().is_some_and(|b| b.grabbed_layer.is_none()));
 
-        // When the owning window closes, tabs::document_windows clears move_blocked and layer_box
-        if app.move_viewport == Some(vid) {
+        let close = true;
+        // Captured before finish runs:
+        let closing_owner = close && app.move_viewport == Some(vid);
+
+        // When the window closes with the pointer up, layer_transfer::finish runs first
+        // inside the closing window's viewport (where ctx.viewport_id() == vid)
+        // and clears move_viewport via clear_move_blocked:
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput { viewport_id: vid, ..Default::default() };
+        raw.viewports.insert(vid, egui::ViewportInfo::default());
+        let mut out = ctx.run_ui(raw, |ui| {
+            crate::layer_transfer::finish(&mut app, ui.ctx());
+        });
+        out.textures_delta.clear();
+        assert_eq!(app.move_viewport, None, "finish cleared move_viewport");
+        assert!(app.layer_box.is_some(), "finish without grabbed_layer does not clear layer_box");
+
+        // The close handler uses the saved closing_owner flag to complete the cleanup:
+        if close && closing_owner {
             app.clear_move_blocked();
             app.layer_box = None;
         }
-        assert!(app.layer_box.is_none());
-        assert_eq!(app.move_viewport, None);
+        assert!(app.layer_box.is_none(), "marquee is properly cancelled when its owning window closes");
     }
 }

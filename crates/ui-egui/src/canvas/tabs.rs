@@ -835,6 +835,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let shares = owned.is_some();
         let mut view = owned.unwrap_or_else(|| app.ui.windows.iter().find(|x| x.id == w.id).map_or_else(|| w.view.clone(), |x| x.view.clone()));
         let mut close = false;
+        let mut closing_owner = false;
         let mut focused = false;
         ctx.show_viewport_immediate(vid, builder, |ui, class| {
             if ui.ctx().input(|i| i.viewport().close_requested()) {
@@ -846,6 +847,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             let (shown, rect) = document_window_canvas(app, ui, &w, view.clone(), focused);
             view = shown;
+            closing_owner = close && app.move_viewport == Some(vid);
             // The fork's cross-document transfer finishes its gesture per document window, right
             // after its canvas drew (it used to run inside this panel before upstream's refactor).
             crate::layer_transfer::finish(app, ui.ctx());
@@ -860,7 +862,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             win.focused = focused;
             if close {
                 win.open = false;
-                if app.move_viewport == Some(vid) {
+                if closing_owner {
                     app.clear_move_blocked();
                     app.layer_box = None;
                 }
