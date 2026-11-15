@@ -1093,11 +1093,12 @@ fn shift_rgba(px: &[[f32; 4]], w: usize, h: usize, dx: i32, dy: i32) -> Vec<[f32
         .collect()
 }
 
-/// `Untitled_HDR-N` with the smallest N >= 1 that no open document already uses.
+/// `Untitled_HDR-N` with the smallest N >= 1 that no open document, and no document held
+/// back for its profile prompt, already uses.
 fn merged_hdr_name(s: &Session) -> String {
     let taken: std::collections::HashSet<u64> =
         s.documents().iter().filter_map(|d| d.doc.name.strip_prefix("Untitled_HDR-")).filter_map(|n| n.parse::<u64>().ok()).collect();
-    let n = (1u64..).find(|n| !taken.contains(n)).unwrap_or(1);
+    let n = (1u64..).find(|n| !taken.contains(n) && !s.held_open_named(&format!("Untitled_HDR-{n}"))).unwrap_or(1);
     format!("Untitled_HDR-{n}")
 }
 

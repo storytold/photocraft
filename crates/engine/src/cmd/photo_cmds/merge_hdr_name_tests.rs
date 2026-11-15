@@ -63,3 +63,11 @@ fn name_stays_unique_after_a_result_is_closed() {
     dedup.dedup();
     assert_eq!(dedup.len(), names.len(), "{names:?}");
 }
+
+#[test]
+fn result_skips_the_name_of_a_document_held_for_its_profile_prompt() {
+    let mut s = session_with_exposures();
+    s.hold_open(flat_doc("Untitled_HDR-1", 0.5), false);
+    let (_, name) = merge(&mut s);
+    assert_eq!(name, "Untitled_HDR-2", "a held document keeps its name when admitted");
+}
