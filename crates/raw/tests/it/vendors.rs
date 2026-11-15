@@ -62,7 +62,7 @@ fn cr2_srgb_raw_is_unsupported() {
     let sof = b.windows(2).position(|w| w == [0xFF, 0xC3]).unwrap();
     b[sof + 11] = 0x21;
     match decode(&b, &Limits::default()) {
-        Err(RawError::Unsupported(m)) => assert!(m.contains("sRAW"), "{m}"),
+        Err(RawError::Unsupported(m)) => assert!(m.contains("subsampled"), "{m}"),
         other => panic!("expected unsupported sRAW, got {other:?}"),
     }
 }
@@ -110,11 +110,11 @@ fn other_raw_containers_are_recognised_but_unsupported() {
     cr3.extend_from_slice(&[0; 12]);
     assert_eq!(identify(&cr3), Some(RawFormat::Cr3));
     assert!(matches!(decode(&cr3, &Limits::default()), Err(RawError::Unsupported(_))));
-    // A bare RAF header has no CFA TIFF (like early FinePix files): recognised, unsupported.
+    // A bare RAF signature has no declared raw data: recognized, but malformed.
     let mut raf = b"FUJIFILMCCD-RAW 0201FF383501".to_vec();
     raf.resize(200, 0);
     assert_eq!(identify(&raf), Some(RawFormat::Raf));
-    assert!(matches!(decode(&raf, &Limits::default()), Err(RawError::Unsupported(_))));
+    assert!(matches!(decode(&raf, &Limits::default()), Err(RawError::Malformed(_))));
     assert_eq!(decode(b"not a raw file", &Limits::default()).unwrap_err(), RawError::NotRaw);
 }
 
@@ -185,16 +185,20 @@ fn grey_patch(d: &Developed, x0: usize) -> [f64; 3] {
 }
 
 #[test]
-fn cr2_cfa_phase_is_measured_for_every_row_phase_and_border_parity() {
+fn cr2_tagged_cfa_phase_is_preserved_for_every_row_phase_and_border_parity() {
     // Canon data has red in the even columns; the red rows are even (RGGB at the data
     // origin: 40D, 5D Mark III, …) or odd (GBRG: 7D, 550D, 5D Mark II, …). Odd image-area
     // borders used to shift the assumed pattern and swap green with red/blue.
-    for cfa in [[0, 1, 1, 2], [1, 2, 0, 1]] {
+    // Current craft-raw trusts the explicit phase tag; image content alone is ambiguous.
+    for (cfa, tag, conflicting_model) in [([0, 1, 1, 2], 1, 0x8000_0250), ([1, 2, 0, 1], 3, 0x8000_0001)] {
         for (l, t) in [(16, 4), (17, 4), (16, 5), (17, 5)] {
-            let b = cr2_phase_spec(cfa, l, t, None).build();
+            let b = cr2_phase_spec(cfa, l, t, Some(conflicting_model)).build_with_cfa_pattern(tag);
             let s = decode(&b, &Limits::default()).unwrap();
             assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), cfa, "cfa {cfa:?} borders ({l}, {t})");
-            assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+            // No white-level tag is written by this independent phase fixture.
+            // Its documented full-range fallback must not hide any phase warning.
+            assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
+            assert!(s.warnings[0].contains("white level") && s.warnings[0].contains("full sample range"), "{:?}", s.warnings);
             let d = develop_sensor(&s, &DevelopOptions { orient: false, ..Default::default() }).unwrap();
             let [r, g, bl] = grey_patch(&d, 192 / 2 - l);
             // Neutral grey decodes neutral (a swapped phase gives a strong magenta or green cast).
@@ -211,14 +215,15 @@ fn cr2_cfa_phase_falls_back_to_the_model_table() {
         spec.data.iter_mut().for_each(|v| *v = 512);
         decode(&spec.build(), &Limits::default()).unwrap()
     };
-    // EOS 7D (Canon model ID 0x80000250): green/blue first.
+    // EOS 7D (Canon model ID 0x80000250): green/blue first, still an assumed phase.
     let s = flat(Some(0x8000_0250));
     assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), [1, 2, 0, 1]);
-    assert!(!s.warnings.iter().any(|w| w.contains("colour filter phase")), "{:?}", s.warnings);
+    assert!(s.warnings.iter().any(|w| w.contains("colour filter phase")), "{:?}", s.warnings);
     // Unknown model: red/green first, with a warning.
     let s = flat(Some(0x8000_0001));
     assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), [0, 1, 1, 2]);
     assert!(s.warnings.iter().any(|w| w.contains("colour filter phase")), "{:?}", s.warnings);
     let s = flat(None);
     assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), [0, 1, 1, 2]);
+    assert!(s.warnings.iter().any(|w| w.contains("colour filter phase")), "{:?}", s.warnings);
 }

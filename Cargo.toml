@@ -62,7 +62,8 @@ craft-kra = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3"
 craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-pdn = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3", features = ["tree-render", "tree-render-system-fonts"] }
-craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
+# RAW adapter fixes from craft-libs#1300; keep this immutable pin until they merge.
+craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "ce608a6405823a0839f90be5f3b41eeb0da23e8b" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-crs = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 # Interface translations: lookup, fallback, CLDR plurals and language names over the craft-i18n
