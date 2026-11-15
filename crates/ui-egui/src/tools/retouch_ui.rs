@@ -948,6 +948,10 @@ fn protect_tones_checkbox(ui: &mut egui::Ui, on: &mut bool) -> (egui::Response, 
     (resp, label_resp.id)
 }
 
+fn clone_aligned_option(options: &mut crate::state::ToolOptions, tool: Tool) -> &mut bool {
+    if tool == Tool::Healing { &mut options.healing_aligned } else { &mut options.clone_aligned }
+}
+
 /// The Clone Stamp's and Healing Brush's Sample. `indexed` ([`clone_stamp_indexed`]) greys it at
 /// Current Layer and leaves the stored choice for other documents.
 fn clone_sample_dropdown(ui: &mut egui::Ui, stored: &mut String, indexed: bool) {
@@ -1038,8 +1042,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             pattern_stamp_options(app, ui);
         }
         Tool::Healing | Tool::CloneStamp => {
-            let aligned = if tool == Tool::Healing { &mut o.healing_aligned } else { &mut o.clone_aligned };
-            crate::widgets::checkbox(ui, aligned, tl!("Aligned"));
+            crate::widgets::checkbox(ui, clone_aligned_option(o, tool), tl!("Aligned"));
             opt(ui, tl!("Sample:"));
             clone_sample_dropdown(ui, &mut o.clone_sample, indexed);
             if app.session.presets.clone.active().source.is_none() {
