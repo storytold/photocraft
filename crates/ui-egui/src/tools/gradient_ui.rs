@@ -84,9 +84,10 @@ pub(crate) fn editing(app: &PhotocraftApp) -> bool {
 
 /// Whether the Gradient tool is in its live (Gradient Fill layer) mode.
 /// Painting into a layer mask, an alpha channel or the Quick Mask stays classic (pixels), except
-/// that a selected gradient fill layer is always edited live (selecting it targets its mask).
+/// that a selected gradient fill layer is always edited live (selecting it targets its mask), even
+/// with Classic gradient chosen ([`fill_layer_active`]).
 pub fn live_mode(app: &PhotocraftApp) -> bool {
-    if app.active_tool() != Tool::Gradient || app.ui.tool_options.gradient_classic {
+    if app.active_tool() != Tool::Gradient || (app.ui.tool_options.gradient_classic && !fill_layer_active(app)) {
         return false;
     }
     match crate::canvas::paint_target(app).as_str() {
@@ -94,6 +95,17 @@ pub fn live_mode(app: &PhotocraftApp) -> bool {
         Some("mask") => active_gradient(app).is_some(),
         _ => false,
     }
+}
+
+/// Whether the active layer is a shown, unlocked gradient fill layer the tool paints into (its
+/// pixels or its mask). The Gradient tool then edits it live whatever the stored Gradient / Classic
+/// gradient choice, and the options bar greys that choice out (#12008). Hidden and locked fill
+/// layers (or ones in a hidden or locked group), and the Quick Mask or an alpha channel as the
+/// target, were not measured and keep the choice.
+pub(crate) fn fill_layer_active(app: &PhotocraftApp) -> bool {
+    let Some((l, ..)) = active_gradient(app) else { return false };
+    matches!(crate::canvas::paint_target(app).as_str(), Some("pixels" | "mask"))
+        && app.session.active().is_some_and(|st| st.doc.path_of(l.id).is_some_and(|p| st.doc.shown_at(&p) && !st.doc.locks_at(&p).any()))
 }
 
 /// The active layer when it is a gradient fill layer: (layer, its frame, the canvas).
@@ -132,10 +144,11 @@ fn edited_fill(app: &PhotocraftApp, layer: &Layer, canvas: Rect32, cmd: &str, p:
     })
 }
 
-/// Options-bar params of a new live gradient.
+/// Options-bar params of a new live gradient. Its fill layer is Normal at 100 %: the options bar's
+/// blend Mode and Opacity belong to the Classic gradient (#12007).
 fn create_params(app: &PhotocraftApp, from: [f32; 2], to: [f32; 2]) -> Value {
     let o = &app.ui.tool_options;
-    json!({"from": from, "to": to, "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "opacity": o.fill_opacity, "mode": o.gradient_blend_mode.label()})
+    json!({"from": from, "to": to, "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither})
 }
 
 fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
@@ -662,17 +675,16 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Live mode: style, reverse, dither and blend mode changes in the options bar also edit the selected
-/// gradient fill layer (one history step each), as in Photoshop.
+/// Live mode: style, reverse and dither changes in the options bar also edit the selected gradient
+/// fill layer (one history step each), as in Photoshop. Its blend mode and opacity are the Layers
+/// panel's: the live bar has no Mode or Opacity (#12007).
 pub fn options_changed(app: &mut PhotocraftApp, before: &crate::state::ToolOptions) {
     let o = app.ui.tool_options.clone();
-    if app.ui.tool != Tool::Gradient || o.gradient_classic {
+    // A gradient fill layer is edited live whatever the stored choice (#12008).
+    if app.ui.tool != Tool::Gradient || (o.gradient_classic && !fill_layer_active(app)) {
         return;
     }
     let Some((l, ..)) = active_gradient(app) else { return };
-    if o.gradient_blend_mode != before.gradient_blend_mode {
-        let _ = app.run("layer.setProps", json!({"layer": l.id.0, "blend": o.gradient_blend_mode.label()}));
-    }
     if o.gradient_style == before.gradient_style && o.gradient_reverse == before.gradient_reverse && o.gradient_dither == before.gradient_dither {
         return;
     }
@@ -687,25 +699,6 @@ pub fn options_changed(app: &mut PhotocraftApp, before: &crate::state::ToolOptio
         p["dither"] = json!(o.gradient_dither);
     }
     let _ = app.run(cmds::SET, p);
-}
-
-/// Live mode: the options bar's Opacity sets a selected gradient fill layer's opacity, as a
-/// drag's `opacity` does, live while it is scrubbed; `drag` numbers the scrub so it is one undo
-/// step, as in the Layers panel (#5012).
-pub fn opacity_changed(app: &mut PhotocraftApp, drag: Option<u64>) {
-    let o = &app.ui.tool_options;
-    if app.ui.tool != Tool::Gradient || o.gradient_classic {
-        return;
-    }
-    let opacity = o.fill_opacity / 100.0;
-    let Some((l, ..)) = active_gradient(app) else { return };
-    if (l.opacity - opacity).abs() > 1e-6 {
-        let mut p = json!({"layer": l.id.0, "opacity": opacity});
-        if let Some(n) = drag {
-            p["coalesce"] = json!(format!("gradient-tool-opacity:{n}"));
-        }
-        let _ = app.run("layer.setProps", p);
-    }
 }
 
 // ---------------------------------------------------------------- Properties panel
