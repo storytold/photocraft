@@ -98,9 +98,6 @@ fn modeless_window_focus_enter_tab_and_escape() {
 
     let mut app = app();
     type_layer(&mut app, "cat dog");
-    open(&mut app).unwrap();
-    set_field(&mut app, "find", json!("selected on open")).unwrap();
-    set_field(&mut app, "replace", json!("old")).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(vec2(960.0, 660.0)).build_ui_state(
         |ui, app| {
             escape(app, ui.ctx());
@@ -109,6 +106,9 @@ fn modeless_window_focus_enter_tab_and_escape() {
         app,
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    open(h.state_mut()).unwrap();
+    set_field(h.state_mut(), "find", json!("selected on open")).unwrap();
+    set_field(h.state_mut(), "replace", json!("old")).unwrap();
     h.run_steps(5);
     h.event(Event::Text("cat".into()));
     h.run_steps(2);
