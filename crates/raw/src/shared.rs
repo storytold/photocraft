@@ -105,8 +105,11 @@ fn warnings(image: &craft_raw::RawImage) -> Vec<String> {
             break;
         }
     }
-    if image.notices.gain_table_omitted || image.color.profile.gain_table_map.is_some() {
-        out.push("the raw camera profile's ProfileGainTableMap is not applied by PhotoCraft".to_string());
+    if image.notices.gain_table_omitted {
+        out.push("the raw camera profile's invalid gain table map (ProfileGainTableMap) was omitted".to_string());
+    }
+    if image.color.profile.gain_table_map.is_some() {
+        out.push("the raw camera profile's gain table map (ProfileGainTableMap) is not applied by PhotoCraft".to_string());
     }
     out
 }

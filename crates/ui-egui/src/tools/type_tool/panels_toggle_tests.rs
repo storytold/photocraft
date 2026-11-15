@@ -47,8 +47,7 @@ fn editing(mut app: PhotocraftApp, id: LayerId) -> PhotocraftApp {
 
 /// The options bar in a row, once the app's fonts are set up (the first pass has none).
 fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    // Finish font initialization before pointer input: replacing loading controls during
-    // separate hover, press and release frames changes later automatic widget IDs.
+    // Load the fonts first: if they finish mid-test the bar swaps "Loading fonts…" for its menus and a click is lost (#13408).
     let _ = photocraft_text::shared();
     assert!(photocraft_text::try_shared().is_some(), "font menus must be ready before pointer events");
     let mut h = Harness::builder().with_size(vec2(1400.0, 200.0)).with_max_steps(16).build_ui_state(

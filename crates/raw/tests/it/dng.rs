@@ -827,6 +827,13 @@ fn map_polynomial_maps_each_plane_of_floating_point_data() {
     let want: Vec<f32> = data.iter().enumerate().map(|(i, &v)| poly(&planes[i % 3], f64::from(f32::from(v) / 65535.)) as f32).collect();
     assert!(near(floats(&s), &unit(&data)), "stored float values stay unprocessed until development");
     assert_polynomial_development(&s, want);
+    assert_eq!(s.polynomials.len(), planes.len());
+    for (p, c) in s.polynomials.iter().zip(&planes) {
+        assert_eq!(&p.coefficients, c);
+        for x in [0.0, 0.2, 0.5, 1.0] {
+            assert!((p.eval(x) - poly(c, x)).abs() < 1e-12);
+        }
+    }
     assert!(s.warnings.iter().all(|w| !w.contains("MapPolynomial")), "{:?}", s.warnings);
     let d = develop(&bytes, &DevelopOptions::default()).unwrap();
     assert!(d.warnings.iter().all(|w| !w.contains("MapPolynomial")), "{:?}", d.warnings);
@@ -979,11 +986,29 @@ fn jpeg_xl_mismatches_are_errors() {
 
 #[test]
 fn profile_gain_table_map_is_reported() {
-    let gain_table = |s: &Sensor| s.warnings.iter().any(|w| w.contains("ProfileGainTableMap"));
+    let gain_table = |s: &Sensor| s.warnings.iter().any(|w| w.contains("gain table map"));
     let mut spec = DngSpec::cfa(8, 8, vec![500; 64]);
     assert!(!gain_table(&sensor(&spec.build())));
-    spec.profile_gain_table_map = Some(vec![0; 64]);
-    assert!(gain_table(&sensor(&spec.build())));
+    // A well-formed ProfileGainTableMap (version 1, little-endian): one table of one gain. craft-raw
+    // reads the tag; a malformed optional map is omitted with a separate notice.
+    let mut map = Vec::new();
+    map.extend_from_slice(&[1, 0, 0, 0, 1, 0, 0, 0]); // points V, H
+    for v in [1.0f64, 1.0, 0.0, 0.0] {
+        map.extend_from_slice(&v.to_le_bytes()); // spacing V, H; origin V, H
+    }
+    map.extend_from_slice(&1u32.to_le_bytes()); // points N
+    for v in [0.3f32, 0.6, 0.1, 0.0, 0.0] {
+        map.extend_from_slice(&v.to_le_bytes()); // weights
+    }
+    map.extend_from_slice(&1.0f32.to_le_bytes()); // the gain
+    spec.profile_gain_table_map = Some(map);
+    let s = sensor(&spec.build());
+    assert!(gain_table(&s));
+    let d = develop_sensor(&s, &DevelopOptions::default()).unwrap();
+    for warnings in [&s.warnings, &d.warnings] {
+        assert!(warnings.iter().any(|w| w.contains("gain table map") && w.contains("not applied")), "{warnings:?}");
+        assert!(!warnings.iter().any(|w| w.contains("gain table map") && w.contains("omitted")), "{warnings:?}");
+    }
 }
 
 // ---------------------------------------------------------------- lossy DNG (compression 34892)
@@ -1225,4 +1250,33 @@ fn lossy_jpeg_rejects_other_depths_and_sample_counts() {
     bytes[at + 8] = 4;
     let err = decode(&bytes, &Limits::default()).unwrap_err();
     assert!(matches!(&err, RawError::Unsupported(m) if m.contains("4 samples")), "{err}");
+}
+
+/// Decoder fallback notices must survive both the adapter and development.
+#[test]
+fn adjusted_crop_and_omitted_gain_table_notices_survive_development() {
+    let mut spec = DngSpec::cfa(16, 12, vec![1000; 16 * 12]);
+    spec.active_area = Some([2, 3, 10, 14]);
+    let check = |spec: &DngSpec, crop: Rect, crop_warning: bool, gain_warning: bool| {
+        let s = sensor(&spec.build());
+        assert_eq!(s.crop, crop);
+        let d = develop_sensor(&s, &DevelopOptions { orient: false, ..Default::default() }).unwrap();
+        assert_eq!((d.width as usize, d.height as usize), (crop.width, crop.height));
+        for warnings in [&s.warnings, &d.warnings] {
+            assert_eq!(warnings.iter().any(|w| w.contains("default crop")), crop_warning, "{warnings:?}");
+            assert_eq!(warnings.iter().any(|w| w.contains("gain table map") && w.contains("omitted")), gain_warning, "{warnings:?}");
+        }
+    };
+    check(&spec, Rect::new(3, 2, 11, 8), false, false);
+    spec.default_crop = Some(([1, 1], [4, 4]));
+    check(&spec, Rect::new(4, 3, 4, 4), false, false);
+    spec.default_crop = Some(([8, 1], [5, 4]));
+    check(&spec, Rect::new(11, 3, 3, 4), true, false);
+    spec.default_crop_origin_double = Some([1e300, 0.0]);
+    check(&spec, Rect::new(3, 2, 11, 8), true, false);
+    spec.profile_gain_table_map = Some(vec![0; 16]);
+    check(&spec, Rect::new(3, 2, 11, 8), true, true);
+    spec.default_crop = None;
+    spec.default_crop_origin_double = None;
+    check(&spec, Rect::new(3, 2, 11, 8), false, true);
 }
