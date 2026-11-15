@@ -32,16 +32,17 @@ fn add_path(s: &mut Session, name: &str) {
 fn bounds(s: &mut Session) -> String {
     let r = s.execute(CMD, json!({"paths": "documentBounds"})).unwrap();
     assert_eq!(r["paths"], 0);
-    r["ai"].as_str().unwrap().to_owned()
+    // LF line endings for these checks; the file has CR ones (#13779).
+    r["ai"].as_str().unwrap().replace('\r', "\n")
 }
 
 #[test]
 fn document_bounds_writes_the_frame_without_a_path() {
     let mut s = plain(72.0);
     let ai = bounds(&mut s);
-    assert!(ai.starts_with("%!PS-Adobe-2.0 EPSF-1.2\n"), "{ai}");
+    assert!(ai.starts_with("%!PS-Adobe-2.0\n"), "{ai}");
     assert!(ai.contains("%%BoundingBox: 0 0 300 200\n"), "{ai}");
-    assert!(ai.contains("%%EndSetup\n%%PageTrailer\n%%Trailer\n%%EOF\n"), "nothing between setup and trailer: {ai}");
+    assert!(ai.ends_with("%%Note:\n%%Trailer\n%%EOF"), "nothing between the note and the trailer (#13779 layout): {ai}");
     assert!(!ai.contains(BEGIN));
 }
 
@@ -77,7 +78,7 @@ fn document_bounds_writes_the_file_and_reports_no_paths() {
     let r = s.execute(CMD, json!({"path": file, "paths": "documentBounds"})).unwrap();
     assert_eq!(r["paths"], 0);
     let written = std::fs::read_to_string(&file).unwrap();
-    assert!(written.contains("%%BoundingBox: 0 0 300 200\n") && written.ends_with("%%EOF\n"), "{written}");
+    assert!(written.contains("%%BoundingBox: 0 0 300 200\r") && written.ends_with("%%EOF"), "{written}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

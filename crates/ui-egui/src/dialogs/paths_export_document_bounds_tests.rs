@@ -40,7 +40,8 @@ fn document_bounds_comes_before_the_paths() {
     app.run("path.set", json!({"name": "work", "path": path})).unwrap();
     app.ui.selected_path = None;
     let (names, paths) = open(&mut app);
-    assert_eq!(names, ["documentBounds", "all", "work", "Rect A"]);
+    // The saved paths come before the Work Path (#13776).
+    assert_eq!(names, ["documentBounds", "all", "Rect A", "work"]);
     assert_eq!(paths, "all", "the default stays All Paths (#13777)");
 }
 
@@ -50,5 +51,5 @@ fn ok_with_document_bounds_exports_the_frame() {
     let (_, paths) = open(&mut app);
     let r = app.run(COMMAND, json!({"paths": paths})).unwrap();
     assert_eq!(r["paths"], 0);
-    assert!(r["ai"].as_str().unwrap().contains("%%BoundingBox: 0 0 300 200\n"));
+    assert!(r["ai"].as_str().unwrap().contains("%%BoundingBox: 0 0 300 200\r"), "CR line endings (#13779)");
 }
