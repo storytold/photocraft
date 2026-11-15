@@ -78,7 +78,11 @@ jobs:
   # get both. Other PRs get Windows when they touch code whose behaviour differs by platform: the
   # app shell, UI, text and fonts, GPU, pen input, native saves, build scripts or the lockfile.
   # Format changes must exercise the Windows-only publication barriers (#8034). macOS is tested
-  # only by release.yml.
+  # only by release.yml. `windows_gpu`: whether those Windows legs run photocraft-gpu's tests, which
+  # render on WARP, the CPU Direct3D 12 rasterizer, and took half of the integration leg's test time.
+  # Pull requests run them only when they change the GPU crate, a workspace crate it builds on, or
+  # a file outside the workspace packages other than documentation (scripts/ci-windows-gpu-tests.py,
+  # #15247); the Linux gate runs them on every pull request, and main runs them on Windows too.
   platforms:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     timeout-minutes: 10
@@ -86,6 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       windows: ${{ steps.pick.outputs.windows }}
+      windows_gpu: ${{ steps.pick.outputs.windows_gpu }}
       web: ${{ steps.pick.outputs.web }}
     steps:
       - name: Harden runner
@@ -104,6 +109,7 @@ jobs:
         run: |
           if [ "$EVENT" != pull_request ] || [ "$FULL" = true ]; then
             echo "windows=true" >> "$GITHUB_OUTPUT"
+            echo "windows_gpu=true" >> "$GITHUB_OUTPUT"
             echo "web=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -121,6 +127,8 @@ jobs:
           else
             echo "windows=false" >> "$GITHUB_OUTPUT"
           fi
+          gpu=$(python3 scripts/ci-windows-gpu-tests.py "$BASE")
+          echo "windows_gpu=$gpu" >> "$GITHUB_OUTPUT"
 
   # The Linux gate. Its rust-cache entry is the one `test (without heif)` restores.
   gate:
@@ -144,7 +152,7 @@ jobs:
       timeout-minutes: 100
       # fmt, clippy, layers, panel-commands, scorecard, tests, panic_hunt, doctests and the wasm32 check, with
       # `--locked --features heif`, then the missing-translations report (xtask/src/main.rs).
-      command: python3 scripts/test-ci-gpu-lavapipe.py && cargo xtask ci && python3 scripts/ci-gpu-lavapipe.py
+      command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && cargo xtask ci && python3 scripts/ci-gpu-lavapipe.py
 
   # Windows tests run as two legs in parallel: the unit tests and the integration tests. As one job
   # they took ~28 min on the Windows runner; the legs take ~13 and ~15. Splitting the integration
@@ -232,16 +240,24 @@ jobs:
 
       # The unit leg runs `--lib --bins` and the integration leg `--test '*'` (every
       # integration-test target); the feature selection stays the same, so both legs share the
-      # dependency cache.
+      # dependency cache. photocraft-gpu's tests run when the `platforms` job says they can be
+      # affected (`windows_gpu`); excluding the package also skips building its test binaries.
       - name: Test
         env:
           PART: ${{ matrix.part }}
+          GPU: ${{ needs.platforms.outputs.windows_gpu }}
         run: |
           case "$PART" in
             unit) targets=(--lib --bins) ;;
             *) targets=(--test '*') ;;
           esac
-          cargo nextest run --profile ci --workspace --locked --features heif "${targets[@]}"
+          skip=()
+          # Only an explicit `false` skips them: a missing output runs everything.
+          if [ "$GPU" = false ]; then
+            skip=(--exclude photocraft-gpu)
+            echo "::notice::photocraft-gpu's tests are skipped on Windows: this pull request changes nothing they are built from (the Linux gate still runs them)."
+          fi
+          cargo nextest run --profile ci --workspace "${skip[@]}" --locked --features heif "${targets[@]}"
         shell: bash
 
       - name: Doctests
