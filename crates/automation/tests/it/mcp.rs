@@ -532,7 +532,7 @@ async fn headless_doc_save_takes_maximize_compatibility() {
         let r = call(&client, tool, params.clone()).await;
         assert_ne!(r.is_error, Some(true), "{params}: {}", text(&r));
         let bytes = std::fs::read(dir.join(params["path"].as_str().unwrap())).unwrap();
-        assert_eq!(photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
+        assert_eq!(craft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
     }
     let r = call(&client, "doc_export", json!({"path": "bad.psd", "maximizeCompatibility": "no"})).await;
     assert_eq!(r.is_error, Some(true), "{}", text(&r));
@@ -555,7 +555,7 @@ async fn headless_doc_export_layers_takes_maximize_compatibility() {
         let file = result["files"][0].as_str().unwrap();
         assert!(file.starts_with(sub), "{file}");
         let bytes = std::fs::read(dir.join(file)).unwrap();
-        assert_eq!(photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
+        assert_eq!(craft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
     }
     let r = call(&client, "doc_export_layers", json!({"dir": "bad", "format": "psd", "maximizeCompatibility": "no"})).await;
     assert_eq!(r.is_error, Some(true), "{}", text(&r));
