@@ -2721,7 +2721,7 @@ fn layers_to_files_reports_skipped_layers_without_changing_files() {
 }
 
 #[test]
-fn layers_to_files_reports_groups_as_exports_and_failures_as_errors() {
+fn layers_to_files_walks_groups_and_reports_failures_as_errors() {
     let mut s = session(4, 4, 8);
     s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap();
     s.execute("layer.new.groupFromLayers", json!({"name": "Pack"})).unwrap();
@@ -2733,9 +2733,10 @@ fn layers_to_files_reports_groups_as_exports_and_failures_as_errors() {
         Ok(())
     })
     .unwrap();
-    assert_eq!(names, vec!["doc_0000_Pack.png", "doc_0001_Background.png"]);
+    // Groups are walked (#13957): Pack gets no file, and its adjustment layer is skipped.
+    assert_eq!(names, vec!["doc_0000_Background.png"]);
     assert_eq!(report.files, names);
-    assert!(report.skipped.is_empty(), "a group's adjustment is not an omitted top-level layer");
+    assert_eq!(report.skipped.iter().map(|l| l.reason).collect::<Vec<_>>(), ["adjustment layer has no pixels of its own"]);
     assert_eq!(export_layers_with(&s, &params, |_, _| Ok(())).unwrap(), names, "legacy Rust helper remains compatible");
     assert!(export_layers_report_with(&s, &params, |_, _| Err(EngineError::Other("disk full".into()))).unwrap_err().to_string().contains("disk full"));
     assert!(export_layers_report_with(&s, &json!({"format": "not-a-format"}), |_, _| panic!("must not write")).is_err());
