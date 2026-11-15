@@ -142,3 +142,18 @@ fn other_schema_dialogs_still_remember_their_choices() {
     let id = open(&mut app, "filter.blur.gaussianBlur").unwrap();
     assert_eq!(app.ui.dialog_mut(id).unwrap().fields["radius"], json!(11.0), "the blur dialog still remembers");
 }
+/// Preferences written before this change can hold a saved LUT choice. The restore filter rejects
+/// it while the other saved fields still come back.
+#[test]
+fn color_lookup_legacy_saved_preferences_restore_everything_but_the_lut() {
+    let mut app = app_with_doc();
+    app.session
+        .prefs
+        .edit(|prefs| prefs.dialogs.insert(COLOR_LOOKUP.into(), json!({"lut": "warm", "file": "old.cube", "dither": true, "interpolation": "tetrahedral"})));
+    let id = open(&mut app, COLOR_LOOKUP).unwrap();
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(fields["lut"], json!("none"), "a legacy saved look is not restored");
+    assert_eq!(fields["file"], json!(""), "a legacy saved LUT file is not restored");
+    assert_eq!(fields["dither"], json!(true), "a legacy saved Dither still is");
+    assert_eq!(fields["interpolation"], json!("tetrahedral"), "a legacy saved Interpolation still is");
+}
