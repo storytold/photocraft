@@ -643,9 +643,15 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Whether a journal entry is recorded as an action step: a replayable command, except Check
-/// Spelling's corrections and lookups.
+/// Spelling's corrections and lookups, and a script file run through Browse… (#13849).
 fn recorded(id: &str, p: &Value) -> bool {
-    replayable(id) && (id != "edit.checkSpelling" || crate::type_spell_cmds::records(p))
+    (replayable(id) && (id != "edit.checkSpelling" || crate::type_spell_cmds::records(p))) || browse_file_step(id, p).is_some()
+}
+
+/// The script file a recorded File › Scripts › Browse… step runs (#13849): one step stands for
+/// the whole run, which [`replayable`] leaves out for scripts given as text or steps (#3057).
+pub fn browse_file_step<'a>(id: &str, p: &'a Value) -> Option<&'a str> {
+    (id == "file.scripts.browse").then(|| p.get("path").and_then(Value::as_str)).flatten()
 }
 
 /// Commands recorded with their step's dialog on: Check Spelling.

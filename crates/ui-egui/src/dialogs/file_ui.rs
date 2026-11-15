@@ -131,7 +131,11 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             let start = app.scripts_start_dir();
             return Some(app.pick_file_bytes_titled(SCRIPT_EXTENSIONS, start, Some(tl!("Load")), Some(tl!("Script Files")), |app, name, bytes| {
                 app.remember_scripts_folder(&name);
-                let r = app.run("file.scripts.browse", json!({"name": name, "script": String::from_utf8_lossy(&bytes)}));
+                // A script file on disk runs from its path, so an action recording it names the
+                // file (#13849); the web picks contents, which run as text.
+                let on_disk = cfg!(not(target_arch = "wasm32")) && std::path::Path::new(&name).is_absolute();
+                let params = if on_disk { json!({"path": name}) } else { json!({"name": name, "script": String::from_utf8_lossy(&bytes)}) };
+                let r = app.run("file.scripts.browse", params);
                 if r.is_ok() {
                     let template = "Ran script {name}";
                     app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &name)]);

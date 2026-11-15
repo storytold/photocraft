@@ -781,7 +781,10 @@ fn paint_check(ui: &egui::Ui, rect: Rect, on: bool, t: &Tokens) {
 }
 
 fn step_label(id: &str, params: &Value) -> String {
-    if id == "actions.play" {
+    if photocraft_engine::actions_cmds::browse_file_step(id, params).is_some() {
+        // A script file run through Browse… while recording (#13849); its file is the detail line.
+        tl!("Scripts").to_owned()
+    } else if id == "actions.play" {
         let target = params.get("action").map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())).unwrap_or_default();
         format!("{}: {target}", label_of(id))
     } else if id == "layer.select" {
@@ -2381,6 +2384,22 @@ fn draw_step_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, context: &StepRows
             events.dialog_toggled = Some((context.action, step));
         } else if response.clicked() {
             app.ui.actions.select(context.action, Some(step));
+        }
+        // A Browse… step's detail line, "File: <path>" (#13849).
+        if let Some(path) = photocraft_engine::actions_cmds::browse_file_step(id, params) {
+            let detail = crate::i18n::fmt(tl!("File: {path}"), &[("path", path)]);
+            let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click());
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &detail));
+            ui.painter().text(
+                pos2(context.x0 + 74.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                &detail,
+                egui::FontId::proportional(11.0),
+                context.tokens.text_faint,
+            );
+            if response.clicked() {
+                app.ui.actions.select(context.action, Some(step));
+            }
         }
     }
     events
