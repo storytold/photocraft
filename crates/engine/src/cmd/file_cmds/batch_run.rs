@@ -1058,6 +1058,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 {
                     scratch.depth.ai = ai.shared();
                 }
+                // A command inside the action (Estimate Depth waits on a model) stops with this Batch.
+                // Only the cancel is shared: the scratch's progress, commit and Esc state stay its own.
+                scratch.set_inline_job_ctx(Some(ctx.child()));
                 scratch.actions = actions.clone();
                 scratch.actions.playback_steps = carried.get();
                 scratch.actions.script_steps = script_steps.get();
@@ -1643,6 +1646,34 @@ mod shared_ai_tests {
             Ok(ai::encode_gray16(&vec![30000; (w * h) as usize], w, h))
         }));
         s
+    }
+
+    /// A Batch cancelled while an input's Estimate Depth waits stops that estimate at once, not
+    /// when the estimator finally answers.
+    #[test]
+    fn cancelling_a_batch_stops_an_estimate_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = inputs(dir.path());
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = std::sync::Mutex::new(release_rx);
+        let mut s = Session::new();
+        s.depth.ai.estimator = Some(Arc::new(move |_, w, h, _| {
+            let _ = entered_tx.send(());
+            // Held until the test ends; a cancel must not wait for it.
+            let _ = release_rx.lock().unwrap().recv_timeout(std::time::Duration::from_secs(60));
+            Ok(ai::encode_gray16(&vec![30000; (w * h) as usize], w, h))
+        }));
+        let steps = vec![("image.estimateDepth".to_string(), json!({"quality": "fast"}))];
+        let started = s.start("file.automate.batch", json!({"action": "Depth", "steps": steps, "input": paths, "output": dir.path().join("out")})).unwrap();
+        let crate::jobs::Started::Job(job) = started else { panic!("a Batch of two files runs in the background") };
+        entered_rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        let cancelled_at = std::time::Instant::now();
+        assert!(s.cancel_job(job));
+        let result = s.wait_job(job);
+        assert!(cancelled_at.elapsed() < std::time::Duration::from_secs(20), "the Batch waited for the estimator: {result:?}");
+        assert!(matches!(result, Err(EngineError::Cancelled)), "{result:?}");
+        let _ = release_tx.send(());
     }
 
     /// Batch and droplet copies run an action that estimates depth through the parent's AI layer.

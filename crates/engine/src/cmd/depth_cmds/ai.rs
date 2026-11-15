@@ -8,7 +8,7 @@
 
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use craft_ai_client::{AiClient, AppTools, Job, RoleStatus};
@@ -99,6 +99,9 @@ struct Inner {
     epoch: AtomicU64,
     /// A background refresh is running (at most one at a time).
     refreshing: AtomicBool,
+    /// Signalled (with the `status` lock held) when a background refresh ends, so a reader that
+    /// found no answer can wait for the read in flight instead of starting a second one.
+    refresh_done: Condvar,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -133,6 +136,31 @@ impl Inner {
                 RoleStatus::Unavailable { reason } => Some(reason),
             },
         }
+    }
+
+    /// The answer for a reader that found none cached: waits for the background refresh in flight
+    /// (so there is one read, one answer), and reads now only when none is running. Never holds
+    /// the status lock while reading.
+    fn wait_or_refresh(&self) -> Option<String> {
+        {
+            let mut slot = lock(&self.status);
+            while slot.is_none() && self.refreshing.load(Ordering::SeqCst) {
+                slot = self.refresh_done.wait(slot).unwrap_or_else(PoisonError::into_inner);
+            }
+            if let Some((_, reason)) = slot.as_ref() {
+                return reason.clone();
+            }
+        }
+        self.refresh()
+    }
+
+    /// Marks the background refresh as ended and wakes the readers waiting for it. Taking the
+    /// status lock before the wake-up means a waiter either sees the flag cleared or is already
+    /// waiting.
+    fn finish_refresh(&self) {
+        self.refreshing.store(false, Ordering::SeqCst);
+        let _slot = lock(&self.status);
+        self.refresh_done.notify_all();
     }
 
     /// Computes the status and keeps it, unless it was forgotten meanwhile.
@@ -222,10 +250,12 @@ impl AiState {
     }
 
     /// The answer for the command's `enabled` check. Once an answer is known it is returned at
-    /// once (and refreshed in the background when older than a second). The first time, none is
-    /// known, so it is read now, on this thread, and kept: reading `enabled` twice must give one
-    /// answer (a listing of the commands read twice must not change), which a provisional "enabled"
-    /// while a background read runs would not.
+    /// once (and refreshed in the background when older than a second). Setting a host (and
+    /// forgetting the status) starts a background read, so the cache is normally warm by the first
+    /// check. When none is known yet, this waits for the read in flight, or reads now when none is
+    /// running, and returns the kept answer: reading `enabled` twice must give one answer (a
+    /// listing of the commands read twice must not change), which a provisional "enabled" while a
+    /// background read runs would not.
     pub fn known_status_reason(&self) -> Option<String> {
         if self.estimator.is_some() {
             return None;
@@ -238,7 +268,7 @@ impl AiState {
                 }
                 reason
             }
-            None => self.inner.refresh(),
+            None => self.inner.wait_or_refresh(),
         }
     }
 
@@ -260,23 +290,47 @@ impl AiState {
         let started = std::thread::Builder::new().name("photocraft-depth-status".into()).spawn(move || {
             // A panic in the shared layer must not leave `refreshing` set for good.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inner.refresh()));
-            inner.refreshing.store(false, Ordering::SeqCst);
+            inner.finish_refresh();
         });
         if started.is_err() {
-            self.inner.refreshing.store(false, Ordering::SeqCst);
+            self.inner.finish_refresh();
         }
     }
 
-    /// Drops the cached status; the next [`status_reason`](Self::status_reason) reads it again.
+    /// Drops the cached status and starts reading it again in the background, so the next check
+    /// normally finds it warm.
     pub fn forget_status(&self) {
         self.inner.epoch.fetch_add(1, Ordering::SeqCst);
         *lock(&self.inner.status) = None;
+        if self.estimator.is_none() {
+            self.refresh_in_background();
+        }
     }
 
     /// What a job calls: send `png` (`w` x `h`) and get the gray PNG back.
     pub(super) fn backend(&self) -> std::result::Result<Backend, String> {
         if let Some(e) = self.estimator.clone() {
-            return Ok(Arc::new(move |_, png, w, h, q| e(&png, w, h, q.name()).map_err(bad)));
+            // The stand-in runs on its own thread so a cancel of the job reaches it as it does the
+            // real tool (which waits through `wait_cancellable`); a cancelled one is left to finish.
+            return Ok(Arc::new(move |ctx, png, w, h, q| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let e = e.clone();
+                let name = q.name();
+                std::thread::Builder::new()
+                    .name("photocraft-depth-estimator".into())
+                    .spawn(move || {
+                        let _ = tx.send(e(&png, w, h, name));
+                    })
+                    .map_err(|e| bad(format!("could not start the estimate: {e}")))?;
+                loop {
+                    match rx.recv_timeout(CANCEL_TICK) {
+                        Ok(answer) => return answer.map_err(bad),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) if ctx.cancelled() => return Err(EngineError::Cancelled),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err(bad("Estimate Depth stopped unexpectedly")),
+                    }
+                }
+            }));
         }
         let tools = self.tools()?;
         Ok(Arc::new(move |ctx, png, _, _, q| call_tool(&tools, ctx, png, q)))
@@ -505,6 +559,32 @@ mod tests {
         let child = parent.shared();
         assert!(child.host().is_ok());
         assert_eq!(child.status_reason_now().as_deref(), Some("parent host"));
+    }
+
+    /// A first `known_status_reason` while the background read runs waits for that read: the
+    /// client is made once and the answer is the one the background read stored.
+    #[test]
+    fn a_first_status_read_waits_for_the_read_in_flight() {
+        use std::sync::atomic::AtomicUsize;
+        let made = Arc::new(AtomicUsize::new(0));
+        let counter = made.clone();
+        let state = AiState::default();
+        state.set_host(AiHost::new(SharedStore::new("/nonexistent/x.json"), move || {
+            let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
+            std::thread::sleep(Duration::from_millis(200));
+            // A failure is not kept, so a second read would make a second client and say "read 2".
+            Err(format!("read {n}"))
+        }));
+        // Wait until the background read is inside the slow client maker.
+        while made.load(Ordering::SeqCst) == 0 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let started = std::time::Instant::now();
+        assert_eq!(state.known_status_reason().as_deref(), Some("read 1"));
+        // It waited for the background read (not a Checking answer, not a second read).
+        assert!(started.elapsed() >= Duration::from_millis(50), "returned before the read ended");
+        assert_eq!(state.known_status_reason().as_deref(), Some("read 1"));
+        assert_eq!(made.load(Ordering::SeqCst), 1, "the status was read more than once");
     }
 
     #[test]
