@@ -24,6 +24,7 @@ mod overlay;
 mod path_ops;
 mod paths_panel;
 mod pen;
+mod pen_resume;
 mod shapes;
 
 pub(crate) use curvature::curvature_anchor_at;
@@ -40,23 +41,27 @@ use overlay::{MAX_CURVE_PIECES, bezier};
 pub(crate) use overlay::{curve_points, path_lines, selected_saved_path, shows_anchors};
 pub(crate) use overlay::{draw_anchor, draw_handle, draw_outline};
 #[cfg(test)]
+use path_ops::delete_key_deletes_work_path;
+#[cfg(test)]
 use path_ops::target_path;
 pub use path_ops::{
     active_path_name, make_shape, path_selection_finish, path_to_selection, pick_shape_at, selected_document_path, takes_path_mask, with_active_path,
 };
 pub(crate) use path_ops::{
-    active_shape_path, active_type_path, delete_key_deletes_work_path, deselect_loaded_path, free_transform_path, targeted_vector_mask, work_path_shown,
+    active_shape_path, active_type_path, delete_key_deletes_anchor, delete_key_deletes_path, delete_key_deletes_segment, deselect_loaded_path,
+    free_transform_path, targeted_vector_mask, work_path_shown,
 };
 #[cfg(test)]
 use paths_panel::path_context_actions;
+pub(crate) use paths_panel::path_renaming;
 pub use paths_panel::{PathEntry, PathRow, path_rows, paths_footer, paths_panel};
 #[cfg(test)]
 pub(crate) use pen::over_first_anchor;
 #[cfg(test)]
 use pen::pen_to_json;
-pub(crate) use pen::{PATH_OPS, pen_path, pen_replace};
+pub(crate) use pen::{PATH_OPS, path_op_field, pen_path, pen_replace};
 pub use pen::{
-    cancel_stale, closes_path_at, continues_path_at, freeform_finish, pen_break_handle, pen_commit, pen_down, pen_end, pen_grab_handle, pen_move,
+    cancel_stale, closes_path_at, continues_path_at, freeform_finish, pen_break_handle, pen_commit, pen_down, pen_end, pen_enter, pen_grab_handle, pen_move,
     pen_undo_last_point, pen_up,
 };
 #[cfg(test)]
@@ -111,7 +116,7 @@ fn copy_arrow_to_tool_defaults(app: &mut PhotocraftApp, id: photocraft_doc::Laye
                         *end,
                         bounded(*width, 1.0, 4096.0),
                         bounded(*length, 1.0, 4096.0),
-                        bounded(*concavity, 0.0, 100.0),
+                        bounded(*concavity, -50.0, 50.0),
                         bounded(*weight, 1.0, 10000.0),
                     ))
                 }
@@ -166,6 +171,9 @@ pub struct PenPath {
     /// The last commit failed: the draft stays as it was and isn't retried on its own.
     #[serde(skip)]
     pub(crate) commit_failed: bool,
+    /// Runtime origin of a refused Freeform release; its own tool keeps the existing anchor Undo.
+    #[serde(skip)]
+    pub(crate) freeform_origin: bool,
     /// Drawing carries on from an endpoint of this open subpath of a document path (#6593): the
     /// commit replaces that subpath instead of adding one.
     #[serde(default)]
@@ -197,6 +205,12 @@ impl PenPath {
     pub fn drawn_with(&self, tool: Tool) -> bool {
         tool == if self.curvature { Tool::CurvaturePen } else { Tool::Pen }
     }
+
+    /// A retained failed Freeform release keeps Undo in its own tool without treating another
+    /// tool's retained Pen draft as a Freeform draft. Drawing and commit ownership stay separate.
+    pub(crate) fn owns_undo(&self, tool: Tool) -> bool {
+        self.drawn_with(tool) || (self.freeform_origin && tool == Tool::FreeformPen)
+    }
 }
 
 #[cfg(test)]
@@ -215,9 +229,53 @@ mod pen_draw_tests;
 mod pen_path_ops_tests;
 
 #[cfg(test)]
+mod pen_rubber_band_tests;
+
+#[cfg(test)]
 mod paint_tests;
 
+#[cfg(test)]
+mod triangle_box_geometry_tests;
+#[cfg(test)]
+mod triangle_properties_fields_tests;
+
+#[cfg(test)]
+mod pen_resume_tests;
+
+#[cfg(test)]
+mod add_anchor_options_bar_tests;
+
+#[cfg(test)]
+mod delete_anchor_options_bar_tests;
+
+#[cfg(test)]
+mod pen_enter_deselects_tests;
+
+#[cfg(test)]
+mod line_shift_snap_tests;
+
+#[cfg(test)]
+mod ellipse_shift_circle_tests;
+
+#[cfg(test)]
+mod pen_mode_menu_tests;
+
+#[cfg(test)]
+mod ellipse_path_menus_tests;
+
+#[cfg(test)]
+mod triangle_align_edges_tests;
+
+#[cfg(test)]
+mod triangle_shift_equilateral_tests;
+
+#[cfg(test)]
+mod rectangle_gear_tests;
+
 pub(crate) use pen::freeform_locked_shape;
+#[cfg(test)]
+use pen_resume::pen_finish_on_redo;
+pub(crate) use pen_resume::{FinishedPen, box_steps, pen_history_enabled, pen_history_step};
 
 /// Where a Pen draft goes, captured at its first anchor.
 #[derive(Clone, Debug)]
@@ -261,9 +319,7 @@ enum PenTarget {
 pub(crate) fn capture_pen_owner(app: &PhotocraftApp) -> Option<PenOwner> {
     let st = app.session.active()?;
     let target = if app.ui.tool_options.vector_mode == "shape" {
-        let mut open_stroke = app.ui.tool_options.shape_stroke.params();
-        open_stroke["width"] = json!(app.ui.tool_options.stroke_width.max(1.0));
-        open_stroke["color"] = json!(app.session.tools.foreground);
+        let open_stroke = shapes::open_pen_stroke_param(app);
         PenTarget::Shape { fill: fill_param(app), stroke: stroke_param(app), open_stroke }
     } else if let Some((name, _)) = selected_document_geometry(app) {
         PenTarget::Path { name, append: true }
@@ -297,6 +353,13 @@ use std::sync::{Arc, Weak};
 use path_ops::{selected_document_geometry, targeted_vector_mask_id};
 pub(crate) use pen::{finish_pen_if_left, freeform_finish_owned};
 use shapes::{fill_param, stroke_param};
+
+/// Whether Edit Undo currently belongs to the active tool's live or refused Freeform draft.
+pub(crate) fn pen_can_undo(app: &PhotocraftApp) -> bool {
+    app.ui.pen.as_ref().is_some_and(|pen| {
+        pen.owns_undo(app.ui.tool) && pen.owner.as_ref().is_some_and(|owner| owner.valid(app)) && (!pen.knots.is_empty() || pen.resumes.is_some())
+    })
+}
 
 /// Commit a valid source-owned draft on a tab switch; otherwise cancel with an actionable diagnostic.
 pub(crate) fn cancel_stale_pen(app: &mut PhotocraftApp) -> bool {

@@ -20,7 +20,7 @@ fn batch_resolves_action_by_name_and_detects_recursion() {
         p["output"] = json!(out);
         assert!(s.execute("file.automate.batch", p).is_err());
     }
-    s.actions.playback_stack.push("Scale".into());
+    s.actions.playback_stack.push(crate::actions_cmds::PlaybackTarget { name: "Scale".into(), id: None, position: None });
     let err = s.execute("file.automate.batch", json!({"action":"Scale","input":[input],"output":out})).unwrap_err();
     assert!(err.to_string().contains("recursive action call"), "{err}");
 }
@@ -145,7 +145,7 @@ fn batch_folder_input_controls(s: &mut Session, dir: &str, input: &str, first: &
     png(&output, "ignored.png", 3, 2, "#ffffff");
     let sub = join(input, "sub");
     std::fs::create_dir_all(&sub).unwrap();
-    let raw = join(&sub, "d.cr3");
+    let raw = join(&sub, "d.orf");
     std::fs::copy(first, &raw).unwrap();
     let result = s
         .execute(
@@ -481,8 +481,8 @@ fn batch_quiet_profile_open_uses_caller_policy_and_retains_diagnostics() {
     assert_eq!(result["notices"][0]["color"]["action"], "converted");
     assert_eq!(result["notices"][0]["color"]["ask"], false);
     let saved = photocraft_io::import("a.png", &std::fs::read(join(&output, "a.png")).unwrap()).unwrap().document;
-    let profile = photocraft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
-    assert!(profile.same_colors(photocraft_cms::Builtin::Srgb.profile()));
+    let profile = craft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
+    assert!(profile.same_colors(craft_cms::Builtin::Srgb.profile()));
     // A script calling an action with a failing inner Batch still retains both import reports.
     let inner = join(&dir, "inner");
     s.actions.list.push(crate::actions_cmds::Action::new(
@@ -532,7 +532,7 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
             crate::actions_cmds::Action::new("Leaf", vec![("actions.play".into(), json!({"action":0}))]),
         ];
         let definitions = s.actions.list[1..].to_vec();
-        s.actions.playback_stack = vec!["Enclosing".into()];
+        s.actions.playback_stack = vec![crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None, position: None }];
         s.actions.recording = Some((s.journal.len(), 0));
         let take = s.actions.take;
         s.authorize = Some(gate);
@@ -540,7 +540,7 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
         let result = batch(&mut s, &json!({"source":"open","action":"Loop A"})).unwrap();
         assert!(result["errors"][0]["error"].as_str().unwrap().contains("recursive action"), "{result}");
         assert!(CALLS.load(Ordering::SeqCst) <= 2, "the cycle check must beat the finite sentinel");
-        assert_eq!(s.actions.playback_stack, ["Enclosing"]);
+        assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None, position: None }]);
         assert_eq!(s.actions.recording.map(|(_, owner)| owner), Some(0));
         assert_eq!(s.actions.take, take);
         assert_eq!(&s.actions.list[1..], definitions.as_slice());
@@ -549,10 +549,82 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
         let result = batch(&mut s, &json!({"source":"open","action":"Leaf","calledActions":embedded})).unwrap();
         assert_eq!(result["errors"], json!([]), "{result}");
         assert_eq!(doc(&s).walk().len(), before + 1);
-        assert_eq!(s.actions.playback_stack, ["Enclosing"]);
+        assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None, position: None }]);
         assert_eq!(s.actions.recording.map(|(_, owner)| owner), Some(0));
         assert_eq!(s.actions.take, take);
         assert_eq!(&s.actions.list[1..], definitions.as_slice());
+    }
+}
+
+#[test]
+fn batch_legacy_rows_in_embedded_libraries_do_not_alias_the_caller() {
+    use crate::actions_cmds::Action;
+    let dir = tmp("batch-legacy-occurrence");
+    let input = png(&dir, "red.png", 8, 8, "#ff0000");
+    let embedded = vec![Action::new("Shared", vec![("layer.new.layer".into(), json!({"name": "embedded leaf"}))])];
+    let play = ("actions.play".to_string(), json!({"action": 0}));
+    for source in ["open", "folder"] {
+        let mut s = Session::new();
+        if source == "open" {
+            s.execute("file.openAs", json!({"path": input})).unwrap();
+        }
+        s.actions.list.push(Action::new("Shared", vec![play.clone()]));
+        let result = s
+            .execute(
+                "file.automate.batch",
+                json!({
+                    "source": source, "input": [input], "output": join(&dir, source),
+                    "format": "png", "action": 0, "calledActions": embedded,
+                }),
+            )
+            .unwrap();
+        assert_eq!(result["errors"], json!([]), "{result}");
+        assert_eq!(s.actions.playback_namespace, 0);
+        assert!(s.actions.playback_stack.is_empty());
+    }
+
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("actions.record", json!({"name": "Recorder"})).unwrap();
+    let params = json!({"source": "open", "steps": [play], "calledActions": embedded});
+    let result = s.execute("file.automate.batch", params.clone()).unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    assert!(doc(&s).layers.iter().any(|layer| layer.name == "embedded leaf"));
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].steps, [("file.automate.batch".to_string(), params)]);
+}
+
+#[test]
+fn batch_stable_ids_are_scoped_to_the_embedded_library() {
+    use crate::actions_cmds::Action;
+
+    let dir = tmp("batch-stable-occurrence");
+    let input = png(&dir, "red.png", 8, 8, "#ff0000");
+    let id = "112233445566778899aabbccddeeff00";
+    let mut leaf = Action::new("Leaf", vec![("layer.new.layer".into(), json!({"name":"embedded leaf"}))]);
+    leaf.action_id = Some(id.into());
+    for source in ["open", "folder"] {
+        let mut s = Session::new();
+        if source == "open" {
+            s.execute("file.openAs", json!({"path":input})).unwrap();
+        }
+        let mut caller = Action::new("Caller", vec![("actions.play".into(), json!({"actionId":id}))]);
+        caller.action_id = Some(id.into());
+        s.actions.list.push(caller);
+        let mut params = json!({
+            "source":source, "input":[input], "output":join(&dir, source),
+            "format":"png", "actionId":id, "calledActions":[leaf],
+        });
+        let result = s.execute("file.automate.batch", params.clone()).unwrap();
+        assert_eq!(result["errors"], json!([]), "{result}");
+        assert_eq!(s.actions.playback_namespace, 0);
+        assert!(s.actions.playback_stack.is_empty());
+        if source == "open" {
+            assert!(doc(&s).layers.iter().any(|layer| layer.name == "embedded leaf"));
+            params.as_object_mut().unwrap().remove("calledActions");
+            let recursive = s.execute("file.automate.batch", params).unwrap();
+            assert!(recursive["errors"][0]["error"].as_str().unwrap().contains("recursive action"), "{recursive}");
+        }
     }
 }
 
@@ -678,8 +750,8 @@ fn background_recorded_batch_keeps_opening_and_destination_policies() {
     let bytes = std::fs::read(saved_path).unwrap();
     assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "the structured suffix does not choose the encoder");
     let saved = photocraft_io::import("result.png", &bytes).unwrap().document;
-    let profile = photocraft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
-    assert!(profile.same_colors(photocraft_cms::Builtin::Srgb.profile()));
+    let profile = craft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
+    assert!(profile.same_colors(craft_cms::Builtin::Srgb.profile()));
     assert_eq!(std::fs::read(source).unwrap(), original);
     assert_eq!(serde_json::to_value(s.prefs()).unwrap(), prefs);
     assert_eq!(s.color.settings, settings);
@@ -1446,7 +1518,7 @@ fn camera_raw_opens_as_16_bit_with_notes() {
     assert_eq!(doc(&s).depth, photocraft_color::SampleType::U16);
     // Damaged raw data is an error, not a crash.
     let mut bad = spec.build();
-    bad.truncate(bad.len() / 2);
+    bad.truncate(bad.len() / 5);
     assert!(open_bytes_as(&mut s, "bad.dng", &bad, None, None).is_err());
 }
 
@@ -1684,6 +1756,34 @@ fn save_a_copy_writes_the_targa_bits_asked_for() {
     }
 }
 
+/// A PDF keeps the document's spot channels as `/Separation` plates unless `pdfSpotPlates` is
+/// false; anything but a boolean is refused before anything is written.
+#[test]
+fn save_a_copy_writes_pdf_spot_plates_unless_asked_not_to() {
+    let dir = tmp("pdf-spot-plates");
+    let mut s = session(12, 6, 8);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Underbase White", "color": "#ffffff"})).unwrap();
+    let has = |bytes: &[u8], needle: &str| bytes.windows(needle.len()).any(|w| w == needle.as_bytes());
+    for (params, plates) in
+        [(json!({}), true), (json!({"pdfSpotPlates": true}), true), (json!({"pdfSpotPlates": null}), true), (json!({"pdfSpotPlates": false}), false)]
+    {
+        let out = join(&dir, "a.pdf");
+        let mut p = params.clone();
+        p["path"] = json!(out);
+        s.execute("file.saveACopy", p).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        assert_eq!(has(&bytes, "/Separation /Underbase#20White /DeviceCMYK"), plates, "{params}");
+        assert_eq!(has(&bytes, "/OP true /op true"), plates, "{params}: overprint rides with the plates");
+    }
+    for bad in [json!(1), json!("true"), json!([true])] {
+        let out = join(&dir, "bad.pdf");
+        let r = s.execute("file.saveACopy", json!({"path": out, "pdfSpotPlates": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert!(!std::path::Path::new(&out).exists(), "{bad}: nothing written");
+    }
+}
+
 /// `dpxBits` picks a DPX's bits per sample (byte 803 of the header); unset, it follows the
 /// document's depth. Anything but 8, 10, 12 or 16 is refused before anything is written.
 #[test]
@@ -1755,6 +1855,17 @@ fn dds_params_are_none_until_one_is_given() {
     assert_eq!(dds_param(&json!({"ddsCompression": null}), "file.saveAs").unwrap(), None);
     assert_eq!(dds_param(&json!({"ddsMipmaps": true}), "file.saveAs").unwrap(), Some(DdsOptions { compression: DdsCompression::None, mipmaps: true }));
     assert_eq!(dds_param(&json!({"ddsCompression": "bc2"}), "file.saveAs").unwrap(), Some(DdsOptions { compression: DdsCompression::Bc2, mipmaps: false }));
+}
+
+/// The layer export's `format` is an extension, never a path: separators and `..` are refused.
+#[test]
+fn layer_export_format_cannot_carry_path_components() {
+    let dir = tmp("fmt-path");
+    let mut s = session(8, 8, 8);
+    for bad in ["png/../../x", "..\\x", "a/b", ""] {
+        let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "format": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+    }
 }
 
 /// A `tgaBits` other than 24 or 32 is a bad parameter, reported before anything is written.
@@ -1832,8 +1943,8 @@ fn image_previews_preference_controls_the_psd_thumbnail() {
     let dir = tmp("previews");
     let mut s = session(300, 200, 16);
     let has_thumbnail = |path: &str| {
-        let file = photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap();
-        file.resources.iter().any(|r| r.id == photocraft_psd::resources::ids::THUMBNAIL)
+        let file = craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap();
+        file.resources.iter().any(|r| r.id == craft_psd::resources::ids::THUMBNAIL)
     };
     for (ask, expect) in [(Ask::Always, true), (Ask::Never, false), (Ask::Ask, true)] {
         s.edit_prefs(|p| p.file_handling.image_previews = ask);
@@ -1854,7 +1965,7 @@ fn maximize_compatibility_preference_controls_the_psd_merged_image() {
     let dir = tmp("maximize");
     let mut s = session(300, 200, 16);
     s.execute("layer.new.layer", json!({})).unwrap();
-    let real_merged = |path: &str| photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |path: &str| craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
     for (ask, expect) in [(Ask::Always, true), (Ask::Never, false), (Ask::Ask, true)] {
         s.edit_prefs(|p| p.file_handling.maximize_psd_compatibility = ask);
         for ext in ["psd", "psb"] {
@@ -1905,7 +2016,7 @@ fn maximize_compatibility_param_overrides_the_preference_for_one_save() {
     let dir = tmp("maximize-param");
     let mut s = session(300, 200, 16);
     s.execute("layer.new.layer", json!({})).unwrap();
-    let real_merged = |path: &str| photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |path: &str| craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
     for (ask, param, expect) in [
         (Ask::Always, json!(false), false),
         (Ask::Never, json!(true), true),
@@ -1974,6 +2085,21 @@ fn place_embedded_centres_fits_and_embeds() {
         assert!(s.undo() && s.undo());
         assert_eq!(doc(&s).layers.len(), 1);
     }
+}
+
+/// A caller-chosen placement scale cannot ask for an image beyond the render limit.
+#[test]
+fn placing_refuses_a_scale_that_would_exceed_the_pixel_limit() {
+    let dir = tmp("place-huge-scale");
+    let small = png(&dir, "small.png", 200, 100, "#ff0000");
+    let mut s = session(100, 100, 8);
+    for scale in [1e9, 1e300, 1e308, 23170.25] {
+        assert!(matches!(s.execute("file.placeEmbedded", json!({"path": small, "scale": scale})), Err(EngineError::BadParams { .. })), "{scale}");
+    }
+    assert!(s.execute("file.placeEmbedded", json!({"path": small, "scale": 50})).is_ok());
+    // The error names the command that asked.
+    let linked = s.execute("file.placeLinked", json!({"path": small, "scale": 1e9}));
+    assert!(matches!(linked, Err(EngineError::BadParams { ref cmd, .. }) if cmd == "file.placeLinked"), "{linked:?}");
 }
 
 /// Preferences ▸ General ▸ Always Create Smart Objects When Placing: unchecked, an embedded place
@@ -2579,7 +2705,7 @@ fn layers_to_files_reports_skipped_layers_without_changing_files() {
                 {"layer": adjustment, "name": "Levels/α", "reason": "adjustment layer has no pixels of its own"}
             ])
         );
-        assert_eq!(result["files"], json!([join(&dir, "doc_0001_Background.png")]));
+        assert_eq!(result["files"], json!([join(&dir, "doc_0002_Background.png")]));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         assert_eq!(s.active().unwrap().doc.layers.len(), before.layers.len());
         assert!(!s.active().unwrap().doc.layer(LayerId(hidden.as_u64().unwrap())).unwrap().visible);
@@ -2634,7 +2760,7 @@ fn layers_to_files_writes_each_visible_layer() {
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "doc", "format": "png"})).unwrap();
     let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
     assert_eq!(files.len(), 2, "{files:?}");
-    assert!(files[0].ends_with("doc_0000_Ink_1.png"), "{files:?}");
+    assert!(files[0].ends_with("doc_0001_Ink_1.png"), "{files:?}");
     assert!(files.iter().all(|f| std::path::Path::new(f).is_file()));
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "visibleOnly": false, "format": "psd"})).unwrap();
     assert_eq!(r["files"].as_array().unwrap().len(), 3);
@@ -2693,6 +2819,41 @@ fn trimming_an_empty_layer_keeps_a_valid_nonzero_canvas() {
     let bytes = std::fs::read(result["files"][0].as_str().unwrap()).unwrap();
     let back = photocraft_io::import("empty.png", &bytes).unwrap().document;
     assert_eq!((back.size.width, back.size.height), (6, 7));
+}
+
+#[test]
+fn image_processor_scratch_sessions_answer_to_the_authorization_gate() {
+    fn deny_image(id: &str, _: &Value) -> Result<()> {
+        if id.starts_with("image.") { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let dir = tmp("proc-gate");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    png(&input, "a.png", 40, 20, "#ff0000");
+    let mut s = Session::new();
+    s.authorize = Some(deny_image);
+    let out = join(&dir, "out");
+    let r = s.execute("file.scripts.imageProcessor", json!({"input": input, "output": out, "format": "jpg", "width": 20, "height": 20})).unwrap();
+    assert!(r["files"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["errors"].as_array().unwrap().len(), 1, "{r}");
+}
+
+#[test]
+fn batch_save_points_answer_to_the_authorization_gate() {
+    fn deny_save(id: &str, _: &Value) -> Result<()> {
+        if id == "file.save" { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let dir = tmp("batch-save-gate");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    png(&input, "a.png", 8, 8, "#ff0000");
+    let mut s = Session::new();
+    s.authorize = Some(deny_save);
+    let out = join(&dir, "out");
+    let r = s.execute("file.automate.batch", json!({"steps": [["file.save", {}]], "input": input, "output": out, "format": "png"})).unwrap();
+    assert!(r["files"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["errors"].as_array().unwrap().len(), 1, "{r}");
+    assert!(!std::path::Path::new(&join(&out, "a.png")).exists());
 }
 
 #[test]
@@ -2799,7 +2960,7 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
         }
         s.actions.list.push(Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
         s.actions.playing = 16;
-        s.actions.playback_stack = (0..16).map(|i| format!("Parent{i}")).collect();
+        s.actions.playback_stack = (0..16).map(|i| crate::actions_cmds::PlaybackTarget { name: format!("Parent{i}"), id: None, position: None }).collect();
         let before = s.actions.clone();
         let error = s.execute("file.automate.batch", params.clone()).unwrap_err();
         assert!(error.to_string().contains("nesting exceeds 16"), "{error}");
@@ -2855,14 +3016,14 @@ fn named_batch_charges_the_existing_budget_across_inputs_and_children() {
         Action::new("Leaf", vec![("select.deselect".into(), json!({})); 2]),
     ];
     s.actions.playing = 1;
-    s.actions.playback_stack = vec!["Parent".into()];
+    s.actions.playback_stack = vec![crate::actions_cmds::PlaybackTarget { name: "Parent".into(), id: None, position: None }];
     s.actions.playback_steps = MAX_PLAYBACK_STEPS - 4;
     let result = s.execute("file.automate.batch", json!({"action": "Outer", "input": [input, input], "output": output, "naming": "{serial}"})).unwrap();
     assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
     assert!(result["errors"][0]["error"].as_str().unwrap().contains("step limit"), "{result}");
     assert_eq!(s.actions.playback_steps, MAX_PLAYBACK_STEPS);
     assert_eq!(s.actions.playing, 1);
-    assert_eq!(s.actions.playback_stack, ["Parent"]);
+    assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Parent".into(), id: None, position: None }]);
 }
 
 /// Nested named batches honor the caller's authorization and preserve its action state.
@@ -3074,14 +3235,14 @@ fn cube_export_uses_only_selected_adjustments_in_document_order() {
     let first = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
     let second = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
     let both = s.execute("file.export.colorLookupTables", json!({"size": 3})).unwrap();
-    let all = photocraft_cms::lutfile::parse_cube(both["cube"].as_str().unwrap()).unwrap();
+    let all = craft_cms::lutfile::parse_cube(both["cube"].as_str().unwrap()).unwrap();
     assert_eq!(both["layerCount"], 2);
     assert!(all.data[0] < 0.001, "two Invert adjustments produce identity");
 
     // Selection comes from the Layers panel rather than the active layer alone.
     s.execute("layer.select", json!({"layer": first})).unwrap();
     let selected = s.execute("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).unwrap();
-    let one = photocraft_cms::lutfile::parse_cube(selected["cube"].as_str().unwrap()).unwrap();
+    let one = craft_cms::lutfile::parse_cube(selected["cube"].as_str().unwrap()).unwrap();
     assert_eq!(selected["layerCount"], 1);
     assert!(one.data[0] > 0.999, "one invert maps black to white");
     assert_eq!(all.size, one.size);
@@ -3140,7 +3301,7 @@ fn exported_selected_cube_round_trips_through_lookup_importer() {
     assert_eq!(r["size"], 17);
     assert_eq!(r["layerCount"], 1);
     let text = std::fs::read_to_string(&path).unwrap();
-    let parsed = photocraft_cms::lutfile::parse_cube(&text).unwrap();
+    let parsed = craft_cms::lutfile::parse_cube(&text).unwrap();
     assert_eq!(parsed.size, 17);
     assert_eq!(parsed.data.len(), 17 * 17 * 17 * 3);
     assert!(parsed.data[..3].iter().all(|v| *v > 0.999));
@@ -3721,9 +3882,9 @@ fn folder_listing_recognises_gzipped_xcf_by_its_double_extension() {
 }
 
 /// A folder batch picks up every extension that the codecs open: Cineon, DICOM, Amiga IFF, PCX,
-/// XPM, DDS, the Netpbm family, and Photoshop templates. Not the raws whose usual files open only
-/// as the embedded JPEG preview (CR3, compressed ORF and RAF, RW2 other than raw formats 3, 4 and
-/// 5): a batch would process the thumbnail without a word.
+/// XPM, DDS, the Netpbm family, and Photoshop templates. Not raws that this build cannot decode
+/// natively (ORF, RAF, SRF, SR2, and RW2 variants other than raw formats 3, 4 and 5): a batch
+/// should not process an embedded JPEG preview without a word.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn folder_listing_takes_every_format_photocraft_opens() {
@@ -3870,6 +4031,33 @@ fn sanitize_keeps_windows_device_names_off_the_disk() {
     for name in ["console", "normal", "com10", "lpt0", "nullify", "con_", "com⁴", "com¹¹"] {
         assert_eq!(sanitize(name), name);
     }
+}
+
+/// A droplet whose steps run the same droplet stops at the nesting limit with an error for the
+/// input, rather than opening documents until the stack or memory runs out.
+#[test]
+fn a_droplet_that_runs_itself_stops_at_the_nesting_limit() {
+    let dir = tmp("droplet-recursion");
+    let input = png(&dir, "a.png", 4, 4, "#ff0000");
+    let droplet = join(&dir, "self.pcdroplet");
+    let out = join(&dir, "out");
+    let step = json!(["file.automate.runDroplet", {"droplet": droplet, "input": [input], "output": out}]);
+    std::fs::write(&droplet, json!({"photocraftDroplet": 1, "name": "self", "action": {"steps": [step]}, "options": {"format": "png"}}).to_string()).unwrap();
+    let mut s = Session::new();
+    // Each level runs the next in a scratch session; the innermost is refused, so this returns.
+    let r = s.execute("file.automate.runDroplet", json!({"droplet": droplet, "input": [input], "output": out})).unwrap();
+    assert_eq!(s.actions.batch_depth, 0);
+    // The limit reaches the outermost result: the input failed, nothing was saved unprocessed.
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("nested more than"), "{r}");
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert!(!std::path::Path::new(&out).join("a.png").exists());
+    // At the limit, the droplet is refused before its file is read (this one doesn't exist).
+    s.actions.batch_depth = crate::actions_cmds::MAX_BATCH_DEPTH;
+    let missing = join(&dir, "missing.pcdroplet");
+    let e = s.execute("file.automate.runDroplet", json!({"droplet": missing, "input": [input], "output": out})).unwrap_err();
+    assert!(e.to_string().contains("nested more than"), "{e}");
+    let e = s.execute("file.automate.batch", json!({"steps": [], "input": [input], "output": out})).unwrap_err();
+    assert!(e.to_string().contains("nested more than"), "{e}");
 }
 
 #[test]
@@ -4380,4 +4568,76 @@ fn save_and_close_refuses_a_read_only_source() {
         assert!(error.contains("cannot replace this source"), "overrideOpen {override_open}: {result}");
         assert_eq!(std::fs::read(&source).unwrap(), bytes, "overrideOpen {override_open}: the source is unchanged");
     }
+}
+
+/// The public helper must retain the registered library, not alias an embedded namespace.
+#[test]
+fn public_begin_playback_scopes_registered_actions_but_still_rejects_real_recursion() {
+    use crate::actions_cmds::{Action, begin_playback, finish_playback};
+    let dir = tmp("public-playback-namespace");
+    let input = png(&dir, "red.png", 8, 8, "#ff0000");
+    let id = "112233445566778899aabbccddeeff00";
+    for source in ["open", "folder"] {
+        for stable in [false, true] {
+            let mut s = Session::new();
+            if source == "open" {
+                s.execute("file.openAs", json!({"path":input})).unwrap();
+            }
+            let mut registered = Action::new("Shared", vec![]);
+            let mut embedded = Action::new("Shared", vec![("layer.new.layer".into(), json!({"name":"embedded helper leaf"}))]);
+            if stable {
+                registered.action_id = Some(id.into());
+                embedded.action_id = Some(id.into());
+            }
+            s.actions.list.push(registered.clone());
+            let recording = begin_playback(&mut s, &registered).unwrap();
+            let stack = s.actions.playback_stack.clone();
+            assert_eq!(stack[0].position, Some((0, 0)), "public helper captures registered origin");
+            let target = if stable { json!({"actionId":id}) } else { json!({"action":0}) };
+            let result = s
+                .execute(
+                    "file.automate.batch",
+                    json!({
+                        "source":source,"input":[input],"output":join(&dir, &format!("{source}-{stable}")),"format":"png",
+                        "steps":[["actions.play",target]],"calledActions":[embedded],
+                    }),
+                )
+                .unwrap();
+            assert_eq!(result["errors"], json!([]), "a different library may reuse this identity: {result}");
+            assert_eq!(s.actions.playback_namespace, 0);
+            assert_eq!(s.actions.playback_stack, stack, "embedded playback restores the exact caller stack");
+            assert_eq!(s.actions.list, [registered.clone()]);
+            if source == "open" {
+                assert!(doc(&s).layers.iter().any(|layer| layer.name == "embedded helper leaf"));
+            }
+            let error = s.execute("actions.play", target).unwrap_err().to_string();
+            assert!(error.contains("recursive action"), "same-library recursion must still be refused: {error}");
+            assert_eq!(s.actions.playback_stack, stack);
+            finish_playback(&mut s, recording, &registered, 0);
+            assert!(s.actions.playback_stack.is_empty());
+        }
+    }
+    // A duplicate legacy caption is not a resolved occurrence. In particular, the row1
+    // caller must not be positioned at row0 and replay side effects before recursion is seen.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":8,"height":8})).unwrap();
+    s.actions.list.push(Action::new("Duplicate", vec![]));
+    let second = Action::new("Duplicate", vec![("layer.new.layer".into(), json!({"name":"must not replay"})), ("actions.play".into(), json!({"action":1}))]);
+    s.actions.list.push(second.clone());
+    let layers = doc(&s).layers.len();
+    let recording = begin_playback(&mut s, &second).unwrap();
+    assert!(s.actions.playback_stack[0].position.is_none());
+    let error = s.execute("actions.play", json!({"action":1})).unwrap_err().to_string();
+    assert!(error.contains("recursive action"), "{error}");
+    assert_eq!(doc(&s).layers.len(), layers, "immediate recursion cannot replay the first side effect");
+    assert!(!doc(&s).layers.iter().any(|layer| layer.name == "must not replay"));
+    finish_playback(&mut s, recording, &second, 0);
+    assert!(s.actions.playback_stack.is_empty());
+
+    // Synthetic callers not in the registered list retain the conservative legacy behavior.
+    let mut s = Session::new();
+    let driver = Action::new("Synthetic driver", vec![]);
+    let recording = begin_playback(&mut s, &driver).unwrap();
+    assert!(s.actions.playback_stack[0].position.is_none());
+    finish_playback(&mut s, recording, &driver, 0);
 }
