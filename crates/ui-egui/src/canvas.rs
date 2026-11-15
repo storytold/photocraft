@@ -828,9 +828,10 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     // is its locator, and a click centres the window there (#9648), whatever the tool. Only the
     // press counts: as in the reference application, dragging on afterwards leaves the window be.
     let locating = input.primary && crate::filter_preview_ui::locator(app).is_some();
-    // Layer Style on a Drop or Inner Shadow page: a drag on the image moves the shadow (#5701).
+    // Layer Style on a Drop or Inner Shadow page: a drag on the image moves the shadow (#5701); on
+    // a Satin page it moves the satin (#14985).
     let shadow_drag =
-        !picking && app.ui.dialogs.last().is_some_and(|d| d.kind == crate::state::DialogKind::LayerStyle && crate::layer_style::drags_shadow(&d.fields));
+        !picking && app.ui.dialogs.last().is_some_and(|d| d.kind == crate::state::DialogKind::LayerStyle && crate::layer_style::drags_offset(&d.fields));
     // Layer Style on a Gradient Overlay page: a drag on the image moves the gradient (#10763), as
     // long as the dialog's layer is there to move it on.
     let gradient_drag = !picking
@@ -908,7 +909,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             let (start, origin) = input.ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.press_origin().unwrap_or(p)));
             let total = input.xf.unmap_vec(p - origin) / (input.view.zoom / input.ppp);
             if let Some(d) = app.ui.dialogs.last_mut() {
-                crate::layer_style::drag_shadow(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)]);
+                crate::layer_style::drag_offset(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)]);
             }
         }
     } else if gradient_drag && !input.middle && crate::dialogs::free_pointer_over(input.ctx, input.rect).is_some() {

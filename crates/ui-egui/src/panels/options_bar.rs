@@ -121,6 +121,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             icons::paint(ui, r, "chevron-down", 10.0, t.text_faint);
                         }
                         widgets::vline(ui, 22.0);
+                        // A Layer Style page a drag on the image edits says so (#14985).
+                        if let Some(h) = app
+                            .ui
+                            .dialogs
+                            .last()
+                            .filter(|d| d.kind == crate::state::DialogKind::LayerStyle)
+                            .and_then(|d| crate::layer_style::canvas_drag_hint(&d.fields))
+                        {
+                            hint(ui, h);
+                            return;
+                        }
                         if app.ui.transform.is_some() {
                             crate::transform_tool::options_bar(app, ui);
                             return;
