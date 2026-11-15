@@ -8,11 +8,17 @@ fn ids() -> Vec<&'static str> {
     CATALOG.iter().filter(|e| e.0 == ["Image", "Adjustments"]).map(|e| e.3).collect()
 }
 
+/// The submenu's labels, top to bottom: the menus draw a separator for the label "---".
+fn labels() -> Vec<&'static str> {
+    CATALOG.iter().filter(|e| e.0 == ["Image", "Adjustments"]).map(|e| e.1).collect()
+}
+
 #[test]
 fn a_separator_follows_exposure_and_precedes_vibrance() {
     let ids = ids();
     let exposure = ids.iter().position(|id| *id == "image.adjustments.exposure").unwrap();
     assert_eq!(ids[exposure + 1..exposure + 3], ["---", "image.adjustments.vibrance"]);
+    assert_eq!(labels()[exposure + 1], "---", "the row is drawn as a separator");
 }
 
 #[test]
