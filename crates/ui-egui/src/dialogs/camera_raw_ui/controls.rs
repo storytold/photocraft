@@ -413,6 +413,27 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Keeps the mask brush's Auto Mask and its preference (`rawDefaults.brushAutoMask`) together: the
+/// dialog starts from the preference, a change in the dialog (its checkbox, the A key, the control
+/// channel) is saved there, and a change of the preference elsewhere reaches the dialog.
+pub(super) fn sync_auto_mask(app: &mut PhotocraftApp) {
+    let pref = app.session.prefs().raw_defaults.brush_auto_mask;
+    let Some(d) = app.camera_raw.as_mut() else { return };
+    let st = &mut d.local;
+    match st.auto_mask_synced {
+        Some(was) if st.brush.auto_mask != was => {
+            let on = st.brush.auto_mask;
+            st.auto_mask_synced = Some(on);
+            app.session.edit_prefs(|p| p.raw_defaults.brush_auto_mask = on);
+        }
+        Some(was) if was == pref => {}
+        _ => {
+            st.brush.auto_mask = pref;
+            st.auto_mask_synced = Some(pref);
+        }
+    }
+}
+
 /// The develop view's Heal, Masking and Red Eye on the preview's image rect `r`: the mask
 /// overlay, the tool's outlines and handles, and its gestures.
 fn local_preview(preview: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, response: &egui::Response, panning: bool) {
@@ -580,6 +601,7 @@ impl CameraRawDialog {
 /// The dialog's contents over the whole of `ctx`'s window. `own_window`: the OS window already
 /// shows the title, so none is painted.
 fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
+    sync_auto_mask(app);
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // A raw being opened is not in the session: its own document says how it displays.

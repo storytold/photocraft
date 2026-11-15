@@ -27,6 +27,8 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         return Some(opened);
     }
     let ui = params.get("ui")?;
+    // (the brush's Auto Mask from its preference before this request changes it)
+    super::controls::sync_auto_mask(app);
     let Some(fields) = ui.as_object() else {
         return Some(Err("RAW Develop ui must be an object".into()));
     };
@@ -194,6 +196,8 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     {
         return Some(Err(e));
     }
+    super::controls::sync_auto_mask(app);
+    let Some(d) = app.camera_raw.as_mut() else { return Some(Err("RAW Develop closed".into())) };
     if ui.get("auto").and_then(Value::as_bool) == Some(true) {
         d.auto_all = true;
     }
@@ -249,7 +253,9 @@ fn frame_point(v: &Value) -> Option<craft_geom::Point> {
 /// open sections and flyouts), `newMask` (a kind: brush, linear, radial, luminanceRange,
 /// colorRange), `addComponent` ({kind, op: add | subtract}), `selectMask` (an id, or null),
 /// `overlay` (show the selected mask's overlay), `brush` ({points: [[x, y]…] on the shown frame,
-/// size, feather, flow, erase}: a stroke painted into the selected brush component), `heal`
+/// size, feather, flow, erase, autoMask}: a stroke painted into the selected brush component, or
+/// with the Brush armed and no mask selected into a new brush mask; without points only the
+/// brush's settings change), `heal`
 /// ({at: [x, y], mode: heal | clone | remove}: a spot placed as a click places it), `redEye`
 /// ({at: [x, y], pet}). Checked whole before anything changes; one undo step.
 fn local_update(d: &mut super::CameraRawDialog, v: &Value) -> Result<(), String> {
@@ -294,8 +300,6 @@ fn local_update(d: &mut super::CameraRawDialog, v: &Value) -> Result<(), String>
                 }
                 "overlay" => st.overlay = value.as_bool().ok_or("overlay must be a boolean")?,
                 "brush" => {
-                    let map = map.as_ref().ok_or("the preview has not rendered yet")?;
-                    let on_photo = local::selected_mask(&st, &mut settings).ok_or("no mask is selected")?.on_photo;
                     let f = |k: &str| value.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
                     if let Some(v) = f("size") {
                         st.brush.size = v.clamp(0.0025, 0.25);
@@ -309,7 +313,19 @@ fn local_update(d: &mut super::CameraRawDialog, v: &Value) -> Result<(), String>
                     if let Some(e) = value.get("erase").and_then(Value::as_bool) {
                         st.brush.erase = e;
                     }
-                    let pts = value.get("points").and_then(Value::as_array).ok_or("brush needs points")?;
+                    if let Some(a) = value.get("autoMask") {
+                        st.brush.auto_mask = a.as_bool().ok_or("brush autoMask must be a boolean")?;
+                    }
+                    // without points: only the brush's settings
+                    let Some(pts) = value.get("points") else { continue };
+                    let pts = pts.as_array().ok_or("brush points must be a list of [x, y] pairs")?;
+                    let map = map.as_ref().ok_or("the preview has not rendered yet")?;
+                    // an armed Brush's stroke makes a new mask (on the photo, as every new one is)
+                    let on_photo = match local::selected_mask(&st, &mut settings) {
+                        Some(m) => m.on_photo,
+                        None if st.armed() => craft_develop_model::Mask::default().on_photo,
+                        None => return Err("no mask is selected".into()),
+                    };
                     let pts = pts
                         .iter()
                         .take(4096)

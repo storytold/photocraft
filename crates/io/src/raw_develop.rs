@@ -196,11 +196,14 @@ impl DevelopSource {
         }
         let overlay = craft_develop::Overlay::Mask { id: id16, view: craft_develop::MaskView::WhiteOnBlack, color: [255, 255, 255], opacity: 100 };
         let req = RenderRequest { overlay, quality: Quality::Full, ..RenderRequest::exact(w, h) };
-        let out = render_cached(&self.proxy, &self.info, s, &req, &self.overlay_cache);
-        if (out.image.width, out.image.height) != (w, h) {
-            return Err(engine_error(format!("rendered {}×{}, not the {w}×{h} asked for", out.image.width, out.image.height)));
+        // the mask alone, not the picture under it: a brush stroke being painted re-renders this
+        // on every pointer move
+        let alpha = craft_develop::mask_alpha_cached(&self.proxy, &self.info, s, &req, &self.overlay_cache, id)
+            .ok_or_else(|| engine_error(format!("no mask {id} to show")))?;
+        if (alpha.width, alpha.height) != (w, h) {
+            return Err(engine_error(format!("rendered {}×{}, not the {w}×{h} asked for", alpha.width, alpha.height)));
         }
-        Ok(out.image.data.iter().map(|p| p[0]).collect())
+        Ok(alpha.data.iter().map(|a| (255.0 * a.clamp(0.0, 1.0)).round() as u8).collect())
     }
 
     /// Where the proxy's render of `s` at `w`×`h` comes from ([`ViewMap`]): how a point on the
@@ -488,5 +491,58 @@ mod tests {
         assert!((q.x - p.x).abs() < 1e-6 && (q.y - p.y).abs() < 1e-6);
         assert!(map.px_per_long() > 0.0);
         assert!(source.color_range_sample(&s, craft_geom::Point::new(0.5, 0.5), w, h).is_some());
+    }
+
+    /// Per-move cost of a long Auto Mask brush stroke at the dialog's preview size: what the
+    /// develop view's worker renders for each pointer move (the develop and the overlay's alpha).
+    /// `PHOTOCRAFT_LC_RAW=<raw> cargo test --release -p photocraft-io --lib auto_mask_stroke_timing -- --ignored --nocapture`
+    #[test]
+    #[ignore = "timing on a real raw (PHOTOCRAFT_LC_RAW)"]
+    fn auto_mask_stroke_timing() {
+        use craft_develop_model::{BrushStroke, Mask, MaskComponent, MaskOp, MaskShape};
+        let Ok(path) = std::env::var("PHOTOCRAFT_LC_RAW") else { return };
+        let source = DevelopSource::new(Arc::new(std::fs::read(path).unwrap()), 900, 6000).unwrap();
+        let (w, h) = source.proxy_size();
+        let mut s = source.defaults();
+        let auto = std::env::var("PHOTOCRAFT_AUTO_MASK").map_or(true, |v| v != "0");
+        let stroke = |n: usize| {
+            // a zigzag over the frame's middle, a dab spacing (a quarter of the radius) apart
+            let points = (0..n)
+                .map(|i| {
+                    let t = i as f64 * 0.0075;
+                    let x = 0.35 + (t % 0.3);
+                    let y = 0.35 + 0.05 * (t / 0.3).floor();
+                    craft_geom::Point::new(x, y)
+                })
+                .collect();
+            BrushStroke { points, size: 0.03, auto_mask: auto, ..BrushStroke::default() }
+        };
+        let adjust = craft_develop_model::LocalAdjustments { exposure: 1.0, ..Default::default() };
+        s.masks.push(Mask {
+            id: 1,
+            adjust,
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![] } }],
+            ..Mask::default()
+        });
+        let _ = source.develop_proxy_with(&s, w, h).unwrap();
+        let _ = source.mask_alpha(&s, 1, w, h);
+        eprintln!("preview {w}x{h}, auto mask {auto}");
+        let (mut dev, mut ov) = (Vec::new(), Vec::new());
+        for n in 1..=240 {
+            s.masks[0].components[0].shape = MaskShape::Brush { strokes: vec![stroke(n)] };
+            let t = std::time::Instant::now();
+            let _ = source.develop_proxy_with(&s, w, h).unwrap();
+            let d = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let _ = source.mask_alpha(&s, 1, w, h).unwrap();
+            let o = t.elapsed().as_secs_f64() * 1e3;
+            dev.push(d);
+            ov.push(o);
+            if n % 40 == 0 {
+                let k = n - 40..n;
+                let mean = |v: &[f64]| v[k.clone()].iter().sum::<f64>() / 40.0;
+                eprintln!("moves {:>3}..{n}: develop {:.1} ms, overlay {:.1} ms per move", n - 39, mean(&dev), mean(&ov));
+            }
+        }
     }
 }

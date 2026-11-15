@@ -27,9 +27,12 @@ pub(super) fn handle(d: &mut CameraRawDialog, ctx: &egui::Context) {
     // Delete only when it has a guide or a local tool's selection to remove: otherwise it is the
     // point curve's (a selected point) and the widgets'
     let delete = guides_take_delete(d) || local_tool_live(d);
+    // A only while the mask brush paints: elsewhere the key is left alone
+    let brush = develop && d.tool == Tool::Masking && d.local.draw == Draw::Brush;
     let actions = d.keymap.take(ctx, |a| match a {
         Action::GuidedUpright => true,
         Action::DeleteSelected => delete,
+        Action::AutoMask => brush,
         _ => develop,
     });
     for action in actions {
@@ -44,6 +47,8 @@ fn perform(d: &mut CameraRawDialog, action: Action) {
         Action::Section(n) => section(d, n),
         Action::DeleteSelected => delete(d),
         Action::BrushSmaller | Action::BrushLarger | Action::FeatherLess | Action::FeatherMore => brush(d, action),
+        // a tool setting, not an edit: saved as the brush's preference, not an undo step
+        Action::AutoMask => d.local.brush.auto_mask = !d.local.brush.auto_mask,
     }
 }
 

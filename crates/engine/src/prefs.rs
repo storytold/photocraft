@@ -1118,6 +1118,10 @@ pub struct RawDefaults {
     /// as Camera Raw's "Save image settings in: Sidecar .xmp files"; the sidecar is read again
     /// when the file is next opened. Off reads sidecars but never writes one.
     pub write_xmp_sidecars: bool,
+    /// The Camera Raw dialog's mask brush starts with Auto Mask on (it paints only what is like
+    /// the colour under the brush and stops at edges); the dialog's checkbox changes this, so the
+    /// choice is remembered from one session to the next.
+    pub brush_auto_mask: bool,
 }
 
 impl RawColorSpace {
@@ -1169,6 +1173,7 @@ impl Default for RawDefaults {
             shared_engine: true,
             demosaic: RawDemosaic::Ahd,
             write_xmp_sidecars: true,
+            brush_auto_mask: true,
         }
     }
 }

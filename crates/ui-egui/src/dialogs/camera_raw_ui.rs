@@ -177,7 +177,8 @@ impl CameraRawDialog {
         result["shortcuts"] = self.keymap.describe();
         result["sectionOrder"] = json!(develop_panel::numbered_sections().into_iter().map(|(id, _)| id).collect::<Vec<_>>());
         result["sectionsInView"] = json!(self.develop_panel.in_view);
-        result["brush"] = json!({"size": self.local.brush.size, "feather": self.local.brush.feather});
+        let b = &self.local.brush;
+        result["brush"] = json!({"size": b.size, "feather": b.feather, "flow": b.flow, "erase": b.erase, "autoMask": b.auto_mask, "armed": self.local.armed()});
         result["healBrush"] = json!({"size": self.local.heal.size, "feather": self.local.heal.feather});
         result["sections"] = json!(self.develop_panel.open);
         result["selectedMask"] = json!(self.local.selected);
@@ -309,6 +310,12 @@ impl CameraRawDialog {
     pub(crate) fn tool_changed(&mut self, was: rail::Tool) {
         self.local.end_gesture();
         self.local.paused = false;
+        if self.tool == rail::Tool::Masking
+            && was != rail::Tool::Masking
+            && let Some(e) = &self.develop
+        {
+            self.local.enter_masking(&e.settings);
+        }
         if was == rail::Tool::Masking || self.tool == rail::Tool::Masking {
             self.dirty = true;
         }

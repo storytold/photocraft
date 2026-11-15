@@ -202,7 +202,14 @@ pub(crate) fn masking(ui: &mut egui::Ui, st: &mut LocalTools, s: &mut DevelopSet
             st.validate(s);
         }
     });
-    let Some(id) = st.selected else { return };
+    let Some(id) = st.selected else {
+        // the Brush armed: its settings, for the stroke that makes the mask
+        if st.armed() {
+            divider(ui);
+            brush_settings(ui, st);
+        }
+        return;
+    };
     if !s.masks.iter().any(|m| m.id == id) {
         return;
     }
@@ -403,7 +410,7 @@ fn row(ui: &mut egui::Ui, spec: &ControlSpec, v: f64) -> Option<f64> {
     ui.push_id(spec.id, |ui| slider(ui, spec, v, true, tr(spec.label))).inner.value
 }
 
-/// The brush's Add / Erase, Size, Feather and Flow.
+/// The brush's Add / Erase, Size, Feather, Flow and Auto Mask.
 fn brush_settings(ui: &mut egui::Ui, st: &mut LocalTools) {
     let t = Lc::get(ui.ctx());
     padded(ui, 6, 0, |ui| {
@@ -430,6 +437,9 @@ fn brush_settings(ui: &mut egui::Ui, st: &mut LocalTools) {
     if let Some(v) = slider(ui, &flow, b.flow, true, tr("Flow")).value {
         b.flow = v;
     }
+    padded(ui, 2, 4, |ui| {
+        ui.checkbox(&mut b.auto_mask, tr("Auto Mask")).on_hover_text(tr("Paint only areas like the one under the brush's centre, stopping at edges"));
+    });
 }
 
 /// The Heal panel: the mode for new spots, and Size / Feather / Opacity of the selected spot (or

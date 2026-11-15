@@ -27,7 +27,7 @@ pub(crate) enum Draw {
     ColorPick,
 }
 
-/// The brush's settings (LightCraft's Size, Feather, Flow, and Add / Erase).
+/// The brush's settings (LightCraft's Size, Feather, Flow, Auto Mask, and Add / Erase).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Brush {
     /// Radius as a fraction of the image's long edge.
@@ -35,11 +35,21 @@ pub(crate) struct Brush {
     pub feather: f64,
     pub flow: f64,
     pub erase: bool,
+    /// Auto Mask: strokes paint only what is like the colour under the brush's centre and stop at
+    /// edges. The preference `rawDefaults.brushAutoMask` remembers it (on for a first-time user).
+    pub auto_mask: bool,
 }
 
 impl Default for Brush {
     fn default() -> Self {
-        Brush { size: 0.03, feather: 50.0, flow: 100.0, erase: false }
+        Brush { size: 0.03, feather: 50.0, flow: 100.0, erase: false, auto_mask: true }
+    }
+}
+
+impl Brush {
+    /// A new stroke of this brush through `points` (mask coordinates), erasing when `erase`.
+    pub(crate) fn stroke(&self, points: Vec<Point>, erase: bool) -> BrushStroke {
+        BrushStroke { points, size: self.size, feather: self.feather, flow: self.flow, erase, auto_mask: self.auto_mask, ..BrushStroke::default() }
     }
 }
 
@@ -102,6 +112,8 @@ pub(crate) struct LocalTools {
     pub view_map: Option<ViewMap>,
     /// The overlay of the shown frame, and the mask it shows.
     pub(super) overlay_tex: Option<(egui::TextureHandle, u32)>,
+    /// The Auto Mask setting last read from or written to the preferences (`None`: not read yet).
+    pub(super) auto_mask_synced: Option<bool>,
 }
 
 impl Default for LocalTools {
@@ -121,6 +133,7 @@ impl Default for LocalTools {
             gesture: None,
             view_map: None,
             overlay_tex: None,
+            auto_mask_synced: None,
         }
     }
 }
@@ -133,7 +146,8 @@ impl LocalTools {
             None => {
                 self.selected = None;
                 self.component = 0;
-                if self.draw == Draw::ColorPick || self.draw == Draw::Brush {
+                // with nothing selected the brush stays armed: its first stroke makes a mask
+                if self.draw != Draw::Brush {
                     self.draw = Draw::None;
                 }
             }
@@ -155,6 +169,24 @@ impl LocalTools {
     /// Ends whatever gesture was going on (the tool changed).
     pub(crate) fn end_gesture(&mut self) {
         self.gesture = None;
+    }
+
+    /// Masking was picked: ready to paint at once. The selected mask stays selected (a drag does
+    /// what its selected component's kind does: paints on a brush); with none, the Brush is armed
+    /// as the new mask's kind, and the mask is made by the first stroke ([`Self::armed`]), so
+    /// none is left empty if nothing is painted.
+    pub(crate) fn enter_masking(&mut self, s: &DevelopSettings) {
+        self.validate(s);
+        self.paused = false;
+        self.draw = match self.selected.and_then(|id| s.masks.iter().find(|m| m.id == id)) {
+            Some(m) => m.components.get(self.component).map_or(Draw::None, |c| draw_of(&c.shape)),
+            None => Draw::Brush,
+        };
+    }
+
+    /// The Brush is armed with no mask selected: the next stroke makes a brush mask.
+    pub(crate) fn armed(&self) -> bool {
+        self.selected.is_none() && self.draw == Draw::Brush
     }
 }
 
@@ -548,8 +580,20 @@ fn masking(
         return;
     }
     let draw = st.draw;
-    let comp = st.component;
     let brush = st.brush;
+    if st.armed() {
+        if let Some(at) = pointer
+            && response.hovered()
+        {
+            brush_cursor(ui, p, c, brush, at);
+        }
+        // the first stroke makes the brush mask it paints
+        if !(live && press && st.gesture.is_none() && pointer.is_some()) || add_mask(st, s, "brush").is_err() {
+            return;
+        }
+        out.edited = true;
+    }
+    let comp = st.component;
     let Some(m) = selected_mask(st, s) else { return };
     let on_photo = m.on_photo;
     for (i, k) in m.components.iter().enumerate() {
@@ -566,11 +610,7 @@ fn masking(
     let Some(at) = pointer else { return };
     let mask_at = c.screen_to_mask(on_photo, at);
     if draw == Draw::Brush && response.hovered() {
-        // the brush's size and feather under the pointer
-        let rad = (brush.size as f32 * c.pts_per_long()).max(1.0);
-        p.circle_stroke(at, rad, Stroke::new(1.0, Color32::WHITE));
-        p.circle_stroke(at, rad * (1.0 - (brush.feather as f32 / 100.0) * 0.5), Stroke::new(1.0, Color32::from_white_alpha(120)));
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        brush_cursor(ui, p, c, brush, at);
     }
     if !live {
         return;
@@ -587,14 +627,7 @@ fn masking(
                 Draw::Linear | Draw::Radial => st.gesture = Some(Gesture::Shape(mask_at)),
                 Draw::Brush => {
                     if let Some(MaskShape::Brush { strokes }) = m.components.get_mut(comp).map(|k| &mut k.shape) {
-                        strokes.push(BrushStroke {
-                            points: vec![mask_at],
-                            size: brush.size,
-                            feather: brush.feather,
-                            flow: brush.flow,
-                            erase: brush.erase || alt,
-                            ..BrushStroke::default()
-                        });
+                        strokes.push(brush.stroke(vec![mask_at], brush.erase || alt));
                         st.gesture = Some(Gesture::Stroke(strokes.len() - 1));
                         out.edited = true;
                     }
@@ -658,6 +691,14 @@ fn masking(
         }
         _ => {}
     }
+}
+
+/// The brush's size and feather drawn under the pointer at `at`.
+fn brush_cursor(ui: &egui::Ui, p: &egui::Painter, c: &Canvas, brush: Brush, at: Pos2) {
+    let rad = (brush.size as f32 * c.pts_per_long()).max(1.0);
+    p.circle_stroke(at, rad, Stroke::new(1.0, Color32::WHITE));
+    p.circle_stroke(at, rad * (1.0 - (brush.feather as f32 / 100.0) * 0.5), Stroke::new(1.0, Color32::from_white_alpha(120)));
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
 }
 
 /// Removes the selected mask (Masking), spot (Heal) or red eye (Red Eye). Says whether it did.
@@ -866,14 +907,18 @@ fn red_eye(
 }
 
 /// Paints brush stroke `points` (mask coordinates on a `size` brush) into the selected brush
-/// component, as a drag on the preview would: the control channel's `brush`.
+/// component, as a drag on the preview would: the control channel's `brush`. With the Brush armed
+/// and no mask selected ([`LocalTools::armed`]) the stroke makes a brush mask, as a drag does.
 pub(crate) fn paint_stroke(st: &mut LocalTools, s: &mut DevelopSettings, points: Vec<Point>) -> Result<(), String> {
+    if st.armed() {
+        add_mask(st, s, "brush")?;
+    }
     let brush = st.brush;
     let comp = st.component;
     let m = selected_mask(st, s).ok_or("no mask is selected")?;
     match m.components.get_mut(comp).map(|k| &mut k.shape) {
         Some(MaskShape::Brush { strokes }) => {
-            strokes.push(BrushStroke { points, size: brush.size, feather: brush.feather, flow: brush.flow, erase: brush.erase, ..BrushStroke::default() });
+            strokes.push(brush.stroke(points, brush.erase));
             Ok(())
         }
         _ => Err("the selected mask component is not a brush".into()),
