@@ -66,8 +66,9 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
     rotate_arbitrary_with(s, p, true)
 }
 
-/// Image Rotation uses hundredths of a degree and leaves count points in place (#11762).
-/// Crop and Ruler straightening use the full angle and rotate the count points.
+/// Image Rotation rounds to hundredths of a degree, keeps count points in place (#11762),
+/// and drops the selection in the same history step (#14507). Crop and Ruler straightening
+/// use the full angle, move count points with the image, and warp the selection.
 pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: bool) -> Result<Value> {
     const CMD: &str = "image.rotation.arbitrary";
     // At full precision: an f32 angle can grow the canvas 1 px past what `rotated_size` gives callers.
@@ -147,7 +148,9 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
         for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
             ch.surface = crate::transform_cmds::warp_gray(&ch.surface, &h, interp)?;
         }
-        if let Some(sel) = &doc.selection {
+        if image_rotation {
+            doc.selection = None;
+        } else if let Some(sel) = &doc.selection {
             doc.selection = Some(crate::transform_cmds::warp_gray(sel, &h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
         }
         // Type, shapes and smart objects re-render from their new geometry; type in a missing
@@ -829,6 +832,9 @@ pub fn display_document(doc: &Document) -> Option<Document> {
     Some(out)
 }
 
+#[cfg(test)]
+#[path = "rotate_canvas_selection_tests.rs"]
+mod rotate_canvas_selection_tests;
 #[cfg(test)]
 mod tests;
 
