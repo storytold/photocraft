@@ -199,7 +199,7 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Resu
         return Err(EngineError::NoDocument);
     };
     let map: Vec<Option<usize>> = spots.iter().enumerate().map(|(i, &spot)| (!spot).then(|| spots.iter().take(i).filter(|&&sp| !sp).count())).collect();
-    let how = s.edit("Mode Change", |doc, active| {
+    let how = s.edit(crate::color_cmds::mode_step_label(mode), |doc, active| {
         let (inks, others): (Vec<AlphaChannel>, Vec<AlphaChannel>) = std::mem::take(&mut doc.channels).into_iter().partition(|c| c.spot.is_some());
         let canvas = doc.bounds();
         // The interleaved output, the rendered look (straight RGBA f32) and one ink plane at a
