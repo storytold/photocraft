@@ -351,8 +351,9 @@ fn a_copy_that_failed_after_replacing_the_file_keeps_the_document_unsaved() {
 /// (`tiff_layers::keeps_document`).
 #[test]
 fn copy_overwrite_uses_actual_tiff_mode_support() {
-    // (the document's mode, the Image > Mode conversion from it, kept by a layered TIFF)
-    let cases: [(&str, Option<(&str, &str)>, bool); 8] = [
+    // (the document's mode, the Image > Mode conversion from it, kept by a layered TIFF); the type
+    // is inferred so the table stays a table rather than a clippy `type_complexity` annotation
+    let cases = [
         ("rgb", None, true),
         ("gray", None, true),
         ("cmyk", None, true),
