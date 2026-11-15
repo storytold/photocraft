@@ -66,9 +66,10 @@ fn reset_all_tools_gives_it_the_tip_active_or_picked_later() {
     assert_eq!(tip(&mut app), SMUDGE_TIP, "picked after the reset");
 }
 
+/// The Sharpen tool has its own measured tip (#12950, `sharpen_default_tip_tests`).
 #[test]
-fn blur_and_sharpen_keep_their_tips() {
-    for tool in [Tool::Blur, Tool::Sharpen] {
+fn blur_keeps_its_tip() {
+    for tool in [Tool::Blur] {
         let mut a = app();
         pick(&mut a, tool);
         scramble(&mut a);
