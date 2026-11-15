@@ -8,6 +8,7 @@
 //! * Drag selected anchors to move them, a direction handle to turn it (a smooth point keeps its
 //!   handles collinear; ⌥ breaks them apart), or a segment to bend it (straight segments move).
 //!   The arrow keys nudge the selected anchors 1 px (⇧ 10 px), one history step per press.
+//!   ⌥-drag on a segment drags a copy of its subpath, appended to the path (⌥-click selects it).
 //! * Convert Point (the tool, or Pen + ⌥): click an anchor to make it a corner, drag from it to
 //!   pull out smooth handles, drag a handle to move it alone. The tool selects the anchor it
 //!   converts, so its handles show; a press on empty canvas does nothing, and ⌘/Ctrl is Direct
@@ -281,13 +282,15 @@ pub enum Edit {
     Convert([usize; 2]),
     /// Add Anchor Point's drag from the anchor it just added: pulls out its handles (#12707).
     Pull(crate::anchor_tools::Pull),
+    /// ⌥-drag on a segment: a moved copy of the subpath of these anchors (all of them) goes last.
+    Duplicate(Vec<[usize; 2]>),
 }
 
 impl Edit {
     /// The drag's end with ⇧ held: moving anchors locks to multiples of 45°, as in Photoshop (#5475),
     /// with the measured (+60, -25) drag kept on the axis (#13207).
     fn constrain(&self, start: [f64; 2], p: [f64; 2], shift: bool) -> [f64; 2] {
-        if shift && matches!(self, Edit::Anchors(_)) { crate::stroke_constraint::snap45_anchor(start, p) } else { p }
+        if shift && matches!(self, Edit::Anchors(_) | Edit::Duplicate(_)) { crate::stroke_constraint::snap45_anchor(start, p) } else { p }
     }
 
     /// The edit for a drag from `start` to `end`, as commands and their params (without target).
@@ -301,6 +304,9 @@ impl Edit {
     fn command(&self, start: [f64; 2], end: [f64; 2]) -> (&'static str, Value) {
         let d = [end[0] - start[0], end[1] - start[1]];
         match self {
+            // One anchor is "Drag Anchor Point" in History, two or more the default "Drag Anchor
+            // Points", as in Photoshop (#13205).
+            Edit::Anchors(a) if a.len() == 1 => ("path.moveAnchors", json!({"anchors": a, "move": d, "stepName": "Drag Anchor Point"})),
             Edit::Anchors(a) => ("path.moveAnchors", json!({"anchors": a, "move": d})),
             Edit::Curvature(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "curvature": true})),
             Edit::Handle([s, k], h, from, independent) => {
@@ -310,6 +316,7 @@ impl Edit {
             Edit::Path(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "stepName": "Drag Path"})),
             Edit::Convert([s, k]) => ("path.convertPoint", json!({"subpath": s, "knot": k, "out": end})),
             Edit::Pull(pull) => ("path.convertPoint", json!({"subpath": pull.knot[0], "knot": pull.knot[1], "out": end})),
+            Edit::Duplicate(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "duplicate": true, "stepName": "Drag Path"})),
         }
     }
 
@@ -324,6 +331,11 @@ impl Edit {
             Edit::Segment(k, t) => edit::bend_segment(&mut p, *k, *t, d),
             Edit::Convert(k) => edit::convert_point(&mut p, *k, Some(Point::new(end[0], end[1]))),
             Edit::Pull(pull) => pull.apply(&mut p),
+            Edit::Duplicate(a) => {
+                p.subpaths.push(p.subpaths.get(a.first()?[0])?.clone());
+                let last = p.subpaths.len() - 1;
+                edit::move_anchors(&mut p, &a.iter().map(|&[_, k]| [last, k]).collect::<Vec<_>>(), d)
+            }
         }
         .ok()?;
         Some(p)
@@ -675,6 +687,10 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
     }
     let owner = Owner::current(app);
     let tool_is_path_selection = app.ui.tool == Tool::PathSelection;
+    // ⌥-drag on a segment duplicates its subpath (#13211). With ⌘/Ctrl or ⇧ too, or on the Pen
+    // path or a Type Path, the reference was not measured: it moves the subpath, as before.
+    let alt_duplicates =
+        app.ui.tool == Tool::DirectSelection && !mods.command && !mods.ctrl && !mods.shift && !matches!(target, PathRef::Pen | PathRef::TypePath(_));
     let ds = &mut app.ui.direct_selection;
     if ds.target.as_ref() != Some(&target) {
         *ds = DirectSelection { target: Some(target), ..Default::default() };
@@ -731,7 +747,7 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
         Hit::Segment(k, _) if mods.alt => {
             ds.segment = None;
             ds.anchors = edit::subpath_anchors(&base, k[0]);
-            Edit::Anchors(ds.anchors.clone())
+            if alt_duplicates { Edit::Duplicate(ds.anchors.clone()) } else { Edit::Anchors(ds.anchors.clone()) }
         }
         Hit::Segment(k, t) => {
             ds.anchors.clear();
@@ -892,9 +908,18 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
     }
     // sync_views checks ownership while the command runs: keep this selection off the live UI
     // until its own command is done, then bind it to the revision that made.
-    let selection = std::mem::take(&mut app.ui.direct_selection);
+    let mut selection = std::mem::take(&mut app.ui.direct_selection);
     match commands.into_iter().try_for_each(|(id, params)| app.run(id, params).map(|_| ())) {
-        Ok(()) => keep_after_command(app, selection),
+        Ok(()) => {
+            if let Edit::Duplicate(a) = edit {
+                // The copy is what was dragged: it ends up selected, not the source.
+                selection.anchors = a.iter().map(|&[_, k]| [base.subpaths.len(), k]).collect();
+                if let Some(shown) = selection.shown.as_mut() {
+                    shown.push(base.subpaths.len());
+                }
+            }
+            keep_after_command(app, selection)
+        }
         Err(e) => {
             if selection.owner.as_ref().is_some_and(|owner| owner.valid(app)) {
                 app.ui.direct_selection = selection;
@@ -1030,7 +1055,19 @@ mod convert_point_tolerance_tests;
 mod convert_point_drag_segment_tests;
 
 #[cfg(test)]
+mod delete_key_tests;
+
+#[cfg(test)]
+mod history_names_tests;
+
+#[cfg(test)]
 mod shift_angle_tests;
+
+#[cfg(test)]
+mod options_bar_tests;
+
+#[cfg(test)]
+mod alt_drag_duplicate_tests;
 
 #[cfg(test)]
 mod freeform_command_tests {

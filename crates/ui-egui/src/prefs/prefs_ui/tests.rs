@@ -598,7 +598,7 @@ fn preferences_interface_search_hides_rows_and_skips_empty_groups() {
     }
 }
 
-fn app_with_store() -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {
+pub(super) fn app_with_store() -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {
     app_with_saved(None)
 }
 
@@ -1375,23 +1375,24 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     app.session.tools.brush_changed();
     crate::last_brush::persist(&mut app, &ctx);
     crate::tool_memory::persist(&mut app, &ctx);
-    // The Brush's tip becomes a big sampled one, then the Eraser takes over that brush.
+    // The Brush's tip becomes a big sampled one, then the Blur tool takes over that brush (the Eraser has its own
+    // starting tip since #11936).
     app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0));
     app.session.tools.brush_changed();
-    app.ui.tool = Tool::Eraser;
+    app.ui.tool = Tool::Blur;
     crate::paint_mouse::sync_tool_brush(&mut app);
     crate::last_brush::persist(&mut app, &ctx);
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
     let saved = stored(&store);
     assert_eq!(saved["lastBrush"]["brush"]["size"], json!(77.0), "the big tip is not remembered yet");
-    assert_ne!(saved["toolBrushes"]["owner"], json!("Eraser"), "{saved}");
+    assert_ne!(saved["toolBrushes"]["owner"], json!("Blur"), "{saved}");
     let (mut app2, _) = app_with_saved(store.lock().unwrap().clone());
     tick(&mut app2, &ctx);
     assert_eq!(app2.ui.brush_tool, Tool::Brush, "the 77 px brush is the Brush's");
     assert_eq!(app2.session.tools.brush.size, 77.0);
 
-    // Once the Eraser's brush is saved, the Eraser owns it in the preferences too.
+    // Once the Blur tool's brush is saved, the Blur tool owns it in the preferences too.
     app.session.tools.brush.tip = TipShape::Round;
     app.session.tools.brush.size = 33.0;
     app.session.tools.brush_changed();
@@ -1399,7 +1400,7 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
     let saved = stored(&store);
-    assert_eq!(saved["toolBrushes"]["owner"], json!("Eraser"), "{saved}");
+    assert_eq!(saved["toolBrushes"]["owner"], json!("Blur"), "{saved}");
     assert_eq!(saved["lastBrush"]["brush"]["size"], json!(33.0));
 }
 
@@ -1582,10 +1583,13 @@ fn unimplemented_preferences_are_hidden_from_the_dialog() {
     assert!(has_visible_fields(&values, "fileHandling"));
     assert!(has_visible_fields(&values, "scratchDisks"));
     assert!(!prefs::is_hidden("scratchDisks.disks"));
-    // Allow Agent Control and Control Port are read at launch (apps/photocraft main.rs).
+    // MCP: the agent connection and its folders apply at once (`agents.rs`).
     assert!(has_visible_fields(&values, "integrations"));
     assert!(!prefs::is_hidden("integrations.allowAgentControl"));
     assert!(!prefs::is_hidden("integrations.controlPort"));
+    assert!(!prefs::is_hidden("integrations.readRoot"));
+    assert!(!prefs::is_hidden("integrations.writeRoot"));
+    assert!(!prefs::is_hidden("integrations.connectAgents"));
     // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
     assert!(has_visible_fields(&values, "type"));
     assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
@@ -1830,18 +1834,13 @@ fn rendering_mode_explains_next_launch() {
     assert!(h.query_by_label("Applies at next launch.").is_none());
 }
 
-/// #4097: Allow Agent Control and Control Port are read when the app starts, and say so.
+/// Integrations' rows apply at once, so none of them says "Applies at next launch." (it did
+/// before the agent connection followed the preferences live).
 #[test]
-fn integrations_explain_next_launch() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let obj = json!({"allowAgentControl": true, "controlPort": 0}).as_object().unwrap().clone();
-    let mut h = Harness::new_ui_state(
-        |ui, obj: &mut Map<String, Value>| section_fields(ui, "integrations", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""),
-        obj,
-    );
-    h.run_steps(4);
-    h.get_by_label("Allow agent control");
-    assert_eq!(h.query_all_by_label("Applies at next launch.").count(), 2, "one notice under each row");
+fn integrations_apply_without_a_restart() {
+    for key in ["allowAgentControl", "connectAgents", "controlPort", "readRoot", "writeRoot", "whenAppClosed"] {
+        assert!(!graphics::read_at_launch(&format!("integrations.{key}")), "{key}");
+    }
 }
 
 #[test]
