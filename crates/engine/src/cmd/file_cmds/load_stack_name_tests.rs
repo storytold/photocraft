@@ -68,6 +68,7 @@ fn the_smart_object_keeps_the_first_files_name() {
         assert_eq!(st.path, None, "align {align}");
         assert_eq!(st.doc.layers.len(), 1, "align {align}");
         assert!(matches!(st.doc.layers[0].content, LayerContent::Smart(_)), "align {align}");
-        assert_eq!(st.doc.layers[0].name, "a_base", "align {align}");
+        // Named exactly like its top layer, extension included (#13998).
+        assert_eq!(st.doc.layers[0].name, "a_base.png", "align {align}");
     }
 }
