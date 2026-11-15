@@ -1019,7 +1019,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         crate::actions::abandoned(app, &d.fields);
         return Err("dialog has no command".into());
     };
-    let params = crate::filter_dialog::params_of(&d.fields);
+    let params = crate::file_ui::paths_export_params(&cmd, crate::filter_dialog::params_of(&d.fields));
     if let Err(error) = crate::actions::authorize_panel_preview(app, d.id, &d.fields, &cmd, &params) {
         app.filter_preview = None;
         crate::actions::abandoned(app, &d.fields);

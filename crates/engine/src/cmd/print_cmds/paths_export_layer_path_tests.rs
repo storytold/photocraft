@@ -94,11 +94,15 @@ fn a_layer_path_alone_works_without_saved_or_work_paths() {
     assert_eq!(export(&mut s, "all").unwrap().1, 1);
 }
 
-/// CodeRabbit on #15051: saved paths named `all` and `path:all` are told apart. The first one's value
-/// is `path:all`, which selects it, not the one literally called `path:all` (whose value is
-/// `path:path:all`); an old call that names the second one plainly still finds it when no `all` exists.
+fn export_saved(s: &mut Session, name: &str) -> std::result::Result<(String, u64), String> {
+    let r = s.execute("file.export.pathsToIllustrator", json!({"savedPath": name})).map_err(|e| e.to_string())?;
+    Ok((r["ai"].as_str().unwrap().to_string(), r["paths"].as_u64().unwrap()))
+}
+
+/// CodeRabbit on #15051: a saved path is chosen by `savedPath`, its exact name, so one called `all` or
+/// `path:all` is never taken for another. The older `paths` calls keep their reading: exact name first.
 #[test]
-fn an_explicit_saved_path_value_is_read_before_a_path_called_like_it() {
+fn a_saved_path_is_chosen_by_its_exact_name_and_paths_keeps_its_older_reading() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 300, "height": 200})).unwrap();
     s.edit("paths", |d, _| {
@@ -108,16 +112,19 @@ fn an_explicit_saved_path_value_is_read_before_a_path_called_like_it() {
         Ok(())
     })
     .unwrap();
-    assert_eq!(first_points(&export(&mut s, "path:all").unwrap().0), [10.0], "the path called all");
-    assert_eq!(first_points(&export(&mut s, "path:path:all").unwrap().0), [70.0], "the path called path:all");
-    assert_eq!(first_points(&export(&mut s, "all").unwrap().0), [10.0, 70.0], "All Paths");
-    // Only `path:all` exists: an old call by that plain name still finds it.
+    assert_eq!(first_points(&export_saved(&mut s, "all").unwrap().0), [10.0], "the path called all, not All Paths");
+    assert_eq!(first_points(&export_saved(&mut s, "path:all").unwrap().0), [70.0], "the path called path:all");
+    assert!(export_saved(&mut s, "work").is_err(), "no saved path called work: an error, not the Work Path");
+    // Older calls: `all` is All Paths, `path:all` is the path called that when it exists.
+    assert_eq!(first_points(&export(&mut s, "all").unwrap().0), [10.0, 70.0]);
+    assert_eq!(first_points(&export(&mut s, "path:all").unwrap().0), [70.0], "legacy exact name first");
+    // With only `all` saved, `path:all` is still the prefix form for it.
     s.edit("one", |d, _| {
-        d.paths.remove(0);
+        d.paths.remove(1);
         Ok(())
     })
     .unwrap();
-    assert_eq!(first_points(&export(&mut s, "path:all").unwrap().0), [70.0], "no `all`: read as the plain name");
+    assert_eq!(first_points(&export(&mut s, "path:all").unwrap().0), [10.0]);
 }
 
 /// CodeRabbit on #15051: the active layer's path has its own selector, so a saved path with the same
@@ -132,14 +139,13 @@ fn the_active_layers_path_has_a_selector_apart_from_a_saved_path_of_its_name() {
     .unwrap();
     s.execute("shape.create", json!({"kind": "rectangle", "rect": [200, 120, 60, 50]})).unwrap();
     assert_eq!(first_points(&export(&mut s, "layer").unwrap().0), [200.0], "the layer's path");
-    assert_eq!(first_points(&export(&mut s, "path:Rectangle 1 Shape Path").unwrap().0), [250.0], "the saved path of the same name");
+    assert_eq!(first_points(&export_saved(&mut s, "Rectangle 1 Shape Path").unwrap().0), [250.0], "the saved path of the same name");
     // An old call by the name finds the saved path first, as before.
     assert_eq!(first_points(&export(&mut s, "Rectangle 1 Shape Path").unwrap().0), [250.0]);
-    // A saved path called `layer` is reached by its explicit value; without a layer path, plainly too.
     s.edit("named layer", |d, _| {
         d.paths.push(NamedPath { name: "layer".into(), path: Path::new(vec![rect(300.0, 10.0, 320.0, 40.0)]), psd_raw: None });
         Ok(())
     })
     .unwrap();
-    assert_eq!(first_points(&export(&mut s, "path:layer").unwrap().0), [300.0]);
+    assert_eq!(first_points(&export_saved(&mut s, "layer").unwrap().0), [300.0], "a saved path called layer");
 }

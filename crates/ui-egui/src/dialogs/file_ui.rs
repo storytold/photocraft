@@ -148,7 +148,11 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             // its layer row is the layer path's entry, a saved path its entry's value. A row the
             // document no longer has falls back to All Paths (Document Bounds without paths).
             let layer = app.session.active().and_then(|d| photocraft_engine::print_cmds::active_layer_path(&d.doc, d.active_layer).map(|(n, _)| n));
-            let selected = app.ui.selected_path.as_deref().map(|s| match s {
+            // The Paths panel keeps the raw name of the selected row, so `layer` and `work` are the layer row or
+            // the Work Path and also a saved path of that name. With such a path in the document the panel's
+            // selection says nothing about which: open on All Paths rather than export the wrong geometry.
+            let ambiguous = |s: &str| matches!(s, "layer" | "work") && app.session.active().is_some_and(|d| d.doc.paths.iter().any(|p| p.name == s));
+            let selected = app.ui.selected_path.as_deref().filter(|s| !ambiguous(s)).map(|s| match s {
                 "layer" => layer.as_ref().map(|_| "layer".to_string()).unwrap_or_default(),
                 "work" => "work".to_string(),
                 name => saved_path_value(name),
@@ -193,6 +197,24 @@ fn paths_export_entries(app: &PhotocraftApp) -> (Vec<String>, Map<String, Value>
         names.push(value);
     }
     (names, labels, groups)
+}
+
+/// The command params of the Paths to Illustrator dialog's choice. A saved path goes as `savedPath`, its
+/// exact name, apart from `paths`, which keeps its older reading for scripts (a `paths` of `path:all` still
+/// means a path literally named so when it exists). The reserved choices stay `paths`. Other commands'
+/// params come back as they were.
+pub(crate) fn paths_export_params(cmd: &str, mut params: Value) -> Value {
+    if cmd != "file.export.pathsToIllustrator" {
+        return params;
+    }
+    let choice = params.get("paths").and_then(Value::as_str).map(str::to_string);
+    if let (Some(choice), Some(o)) = (choice, params.as_object_mut())
+        && !matches!(choice.as_str(), "documentBounds" | "all" | "work" | "layer")
+    {
+        o.remove("paths");
+        o.insert("savedPath".into(), json!(choice.strip_prefix("path:").unwrap_or(&choice)));
+    }
+    params
 }
 
 /// The value a saved path is exported by: its name, or `path:<name>` when the name is one of the
