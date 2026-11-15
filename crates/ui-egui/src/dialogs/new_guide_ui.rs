@@ -203,7 +203,8 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         let position_label = ui.label(tl!("Position"));
         // The dialog opens on Position, so the field takes the keyboard with its text selected
         // before it is drawn: a keystroke in that same frame replaces the readout (#15055).
-        if crate::widgets::take_first_field(ui) {
+        let first_focus = crate::widgets::take_first_field(ui);
+        if first_focus {
             let id = ui.next_auto_id();
             ui.memory_mut(|m| m.request_focus(id));
             crate::field_tab::select_all(ui.ctx(), id, &position);
@@ -212,7 +213,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         if ui.is_enabled() {
             crate::field_tab::register(ui.ctx(), response.id);
         }
-        if response.gained_focus() {
+        // Tab and clicks select here; on the opening frame the text is already selected and the
+        // field may have just typed into it, so selecting again would swallow that keystroke.
+        if response.gained_focus() && !first_focus {
             crate::field_tab::select_all(ui.ctx(), response.id, &position);
         }
         if response.changed() && f.contains_key(EDIT) {

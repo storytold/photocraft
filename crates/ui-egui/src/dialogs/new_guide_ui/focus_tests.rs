@@ -68,3 +68,20 @@ fn typing_on_the_first_focused_frame_replaces_the_readout() {
     h.run_steps(2);
     assert_eq!(h.state_mut().ui.dialog_mut(d).unwrap().fields["position"], "120", "typing replaced the selected \"0 px\"");
 }
+
+/// Keystrokes on successive frames, the first in the frame Position takes the keyboard, all
+/// land: the field's own gained-focus select-all must not reselect the first one typed.
+#[test]
+fn typing_across_frames_from_the_first_focused_frame_keeps_every_keystroke() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let d = crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    h.step();
+    h.event(egui::Event::Text("1".into()));
+    h.step();
+    h.event(egui::Event::Text("2".into()));
+    h.step();
+    h.event(egui::Event::Text("0".into()));
+    h.run_steps(2);
+    assert_eq!(h.state_mut().ui.dialog_mut(d).unwrap().fields["position"], "120");
+}
