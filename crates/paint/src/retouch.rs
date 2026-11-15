@@ -402,14 +402,14 @@ pub fn mix_back(target: &mut Surface, orig: &Region, work: &Region, rect: Rect, 
 #[inline]
 pub fn mix_premultiplied(dst: &mut [f32], src: &[f32], a: usize, k: f32) {
     let (Some(&da), Some(&sa)) = (dst.get(a), src.get(a)) else { return };
-    let oa = da + (sa - da) * k;
+    // Weighted, not `d + (s - d) * k`: at k = 1 the destination drops out exactly, even for
+    // large 32-bit values (or a tiny alpha next to 1) where the difference would round away the source.
+    let oa = da * (1.0 - k) + sa * k;
     for (c, (d, s)) in dst.iter_mut().zip(src).enumerate() {
         if c == a {
             continue;
         }
-        // Weighted, not `d + (s - d) * k`: at k = 1 the destination drops out exactly, even for
-        // large 32-bit values where the difference would round away the source.
-        *d = if oa > 1e-6 { (*d * da * (1.0 - k) + *s * sa * k) / oa } else { *d * (1.0 - k) + *s * k };
+        *d = if oa > 0.0 { (*d * da * (1.0 - k) + *s * sa * k) / oa } else { *d * (1.0 - k) + *s * k };
     }
     if let Some(d) = dst.get_mut(a) {
         *d = oa;
@@ -1035,6 +1035,21 @@ mod tests {
         let mut d = [67_108_864.0, 0.0, 0.0, 1.0];
         mix_premultiplied(&mut d, &[1.0, 0.0, 0.0, 1.0], 3, 1.0);
         assert_eq!(d, [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn premultiplied_mix_keeps_colour_at_tiny_alpha() {
+        // Half of a barely-there 32-bit red over transparent black is still that red, not half of it.
+        let mut d = [0.0, 0.0, 0.0, 0.0];
+        mix_premultiplied(&mut d, &[1.0e6, 0.0, 0.0, 5.0e-7], 3, 0.5);
+        assert_eq!(d, [1.0e6, 0.0, 0.0, 2.5e-7]);
+    }
+
+    #[test]
+    fn premultiplied_mix_at_full_weight_keeps_a_tiny_source_alpha() {
+        let mut d = [0.0, 0.0, 0.0, 1.0];
+        mix_premultiplied(&mut d, &[1.0, 0.0, 0.0, 1.0e-8], 3, 1.0);
+        assert_eq!(d, [1.0, 0.0, 0.0, 1.0e-8]);
     }
 
     #[test]
