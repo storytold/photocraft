@@ -181,7 +181,7 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
             let o = app.ui.tool_options.clone();
             let _ = app.run(
                 "paint.gradient",
-                json!({"from": [d.start[0], d.start[1]], "to": [end[0], end[1]], "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "method": o.gradient_method, "useTransparency": o.gradient_transparency, "opacity": o.fill_opacity, "mode": o.gradient_blend_mode.label(), "target": paint_target(app)}),
+                json!({"from": [d.start[0], d.start[1]], "to": [end[0], end[1]], "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "method": o.gradient_method, "useTransparency": use_transparency(app), "opacity": o.fill_opacity, "mode": o.gradient_blend_mode.label(), "target": paint_target(app)}),
             );
         }
         Tool::Move => {
@@ -190,6 +190,15 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
         }
         _ => {}
     }
+}
+
+/// `useTransparency` of a gradient drag: the Transparency checkbox's stored value only while the
+/// checkbox is shown (Classic gradient, no gradient fill layer selected). A drag into a layer mask's
+/// sibling targets (an alpha channel, the Quick Mask) can take the classic path with the live mode
+/// chosen, and must not carry an off value the user can no longer see (#12009).
+fn use_transparency(app: &PhotocraftApp) -> bool {
+    let o = &app.ui.tool_options;
+    !(o.gradient_classic && !crate::gradient_ui::fill_layer_active(app)) || o.gradient_transparency
 }
 
 /// The release of selection drag `d` at `end` (`click`: see [`finish`]). A Single Row / Single
