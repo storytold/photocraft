@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use photocraft_cms::Builtin;
+use craft_cms::Builtin;
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{
     Document, Effect, Effects, FxCommon, FxPaint, Layer, LayerContent, LayerId, LayerMask, Path, SmartFilter, SmartObject, SmartSource, StrokeFx,
@@ -31,12 +31,15 @@ fn layered(depth: u32, mode: &str) -> Session {
         Ok(())
     })
     .unwrap();
+    // Assign Profile is greyed for Lab documents (#14238), which are device-independent anyway.
     let profile = match mode {
-        "cmyk" => "coated-cmyk",
-        "lab" => "lab-d50",
-        _ => "srgb",
+        "cmyk" => Some("coated-cmyk"),
+        "lab" => None,
+        _ => Some("srgb"),
     };
-    s.execute("edit.assignProfile", json!({"profile": profile})).unwrap();
+    if let Some(profile) = profile {
+        s.execute("edit.assignProfile", json!({"profile": profile})).unwrap();
+    }
     s
 }
 
