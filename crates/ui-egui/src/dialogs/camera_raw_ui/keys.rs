@@ -31,6 +31,73 @@ pub(super) struct View<'a> {
     pub filmstrip: bool,
 }
 
+/// How long Z or H must be held for its release to go back to the tool it interrupted (shorter, a
+/// tap: the Zoom or Hand stays until it is tapped again or another tool is picked), unless the
+/// Zoom or Hand was used meanwhile.
+pub(super) const HOLD_S: f64 = 0.3;
+
+/// The Zoom or Hand a press of Z or H brought up, spring-loaded as in Photoshop: held, it lasts
+/// while the key is down and its release goes back to what was there; tapped, it stays (sticky)
+/// until a second tap, a tool key or Esc goes back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Spring {
+    pub hand: bool,
+    /// The key it is held by (`None`: bound with modifiers, only tapped).
+    key: Option<egui::Key>,
+    since: f64,
+    /// The Zoom or Hand was used (a press on the preview) while held.
+    used: bool,
+    /// The key is still down.
+    pub held: bool,
+    /// What it interrupted: the navigation's Hand and Zoom, and whether the local tool was paused.
+    was: (bool, bool, bool),
+}
+
+impl Spring {
+    fn id() -> egui::Id {
+        egui::Id::unique("camera-raw-spring-tool")
+    }
+
+    pub(super) fn get(ctx: &egui::Context) -> Option<Spring> {
+        ctx.data(|d| d.get_temp::<Option<Spring>>(Self::id())).flatten()
+    }
+
+    fn set(ctx: &egui::Context, s: Option<Spring>) {
+        ctx.data_mut(|d| d.insert_temp(Self::id(), s));
+    }
+}
+
+/// Back to what the Zoom or Hand interrupted, exactly as it was (the local tool's mask, brush and
+/// selection were never touched). A button still down (a zoom click let go of after the key)
+/// makes no dab: the tool waits for it to come up.
+fn spring_back(d: &mut CameraRawDialog, nav: &mut CameraRawPreviewState, was: (bool, bool, bool), ctx: &egui::Context) {
+    (nav.hand, nav.zoom_tool, d.local.paused) = was;
+    if ctx.input(|i| i.pointer.any_down()) {
+        d.local.wait_release = true;
+    }
+}
+
+/// A held Z or H let go of: back to the tool, unless it was a tap (the tool then stays).
+fn release_spring(d: &mut CameraRawDialog, nav: &mut CameraRawPreviewState, ctx: &egui::Context) {
+    let Some(mut sp) = Spring::get(ctx).filter(|s| s.held) else { return };
+    let now = ctx.input(|i| i.time);
+    if ctx.input(|i| i.pointer.any_pressed()) {
+        sp.used = true;
+    }
+    let down = sp.key.is_some_and(|k| ctx.input(|i| i.key_down(k)));
+    if down {
+        Spring::set(ctx, Some(sp));
+        return;
+    }
+    sp.held = false;
+    if sp.used || now - sp.since >= HOLD_S {
+        spring_back(d, nav, sp.was, ctx);
+        Spring::set(ctx, None);
+    } else {
+        Spring::set(ctx, Some(sp));
+    }
+}
+
 /// This frame's shortcuts. The classic panel has the dialog's own (undo, zoom, Hand and Zoom,
 /// before / after, clipping, the sampler, Esc) and Guided Upright's (⇧T and Delete); the develop
 /// view (a raw the shared engine develops) has them all.
@@ -40,6 +107,7 @@ pub(super) fn handle(d: &mut CameraRawDialog, view: View<'_>, ctx: &egui::Contex
         return Outcome::default();
     }
     let develop = d.develop.is_some();
+    release_spring(d, view.nav, ctx);
     if develop {
         // the layout table and bracket fallback the app's own `[` `]` get (#3102, #3109): the
         // application's key handling, which applies them, doesn't run under the dialog
@@ -54,14 +122,9 @@ pub(super) fn handle(d: &mut CameraRawDialog, view: View<'_>, ctx: &egui::Contex
     // (Esc closes an open menu or list first, as everywhere)
     let popup = egui::Popup::is_any_open(ctx);
     let actions = d.keymap.take(ctx, |a| match a {
-        Action::GuidedUpright
-        | Action::Undo
-        | Action::Redo
-        | Action::HandTool
-        | Action::ZoomTool
-        | Action::BeforeAfter
-        | Action::ShadowClipping
-        | Action::ColorSampler => true,
+        // (not in the middle of a stroke or a drag of a handle: the switch would end it)
+        Action::HandTool | Action::ZoomTool => !d.local.gesture_active(),
+        Action::GuidedUpright | Action::Undo | Action::Redo | Action::BeforeAfter | Action::ShadowClipping | Action::ColorSampler => true,
         Action::ZoomFit | Action::Zoom100 | Action::ZoomIn | Action::ZoomOut => d.viewport.is_some(),
         Action::DeleteSelected => delete,
         Action::AutoMask => brush,
@@ -76,7 +139,35 @@ pub(super) fn handle(d: &mut CameraRawDialog, view: View<'_>, ctx: &egui::Contex
     });
     let mut out = Outcome::default();
     for action in actions {
-        perform(d, action, view.nav, view.scope, &mut out);
+        let spring = Spring::get(ctx);
+        match action {
+            Action::HandTool | Action::ZoomTool => {
+                let hand = action == Action::HandTool;
+                match spring {
+                    // the tapped Zoom (Hand), still up, tapped again: back to what it interrupted
+                    Some(sp) if !sp.held && sp.hand == hand && (if hand { view.nav.hand } else { view.nav.zoom_tool }) => {
+                        spring_back(d, view.nav, sp.was, ctx);
+                        Spring::set(ctx, None);
+                    }
+                    _ => {
+                        let was = spring.map_or((view.nav.hand, view.nav.zoom_tool, d.local.paused), |s| s.was);
+                        perform(d, action, view.nav, view.scope, &mut out);
+                        let key = d.keymap.plain_key(action);
+                        let since = ctx.input(|i| i.time);
+                        Spring::set(ctx, Some(Spring { hand, key, since, used: false, held: key.is_some(), was }));
+                    }
+                }
+            }
+            Action::Tool(_) | Action::Cancel if spring.is_some_and(|s| !s.held) && d.local.paused => {
+                // a tool's key (or Esc) over the tapped Zoom or Hand: the navigation as it was
+                if let Some(sp) = spring {
+                    (view.nav.hand, view.nav.zoom_tool) = (sp.was.0, sp.was.1);
+                }
+                Spring::set(ctx, None);
+                perform(d, action, view.nav, view.scope, &mut out);
+            }
+            _ => perform(d, action, view.nav, view.scope, &mut out),
+        }
     }
     out
 }

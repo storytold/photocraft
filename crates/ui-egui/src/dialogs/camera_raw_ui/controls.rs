@@ -562,6 +562,7 @@ pub(super) fn sync_auto_mask(app: &mut PhotocraftApp) {
 /// The develop view's Heal, Masking and Red Eye on the preview's image rect `r`: the mask
 /// overlay, the tool's outlines and handles, and its gestures.
 fn local_preview(preview: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, response: &egui::Response, panning: bool) {
+    d.local.cursor_shown = None;
     if d.show_before || d.tool == super::rail::Tool::Edit {
         return;
     }

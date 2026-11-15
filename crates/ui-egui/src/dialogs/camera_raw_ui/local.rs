@@ -110,6 +110,12 @@ pub(crate) struct LocalTools {
     pub pet: bool,
     /// The preview navigates (Hand, Zoom) instead of the tool until a tool is picked again.
     pub paused: bool,
+    /// The tool came back from the Hand or Zoom with a button still down: it waits for the
+    /// button to come up, so the release of a zoom click is no dab or spot.
+    pub wait_release: bool,
+    /// The brush cursor drawn this frame, and whether it erases (the control channel's
+    /// `brushCursor`).
+    pub cursor_shown: Option<bool>,
     gesture: Option<Gesture>,
     /// How the shown frame maps to the settings' coordinates.
     pub view_map: Option<ViewMap>,
@@ -133,6 +139,8 @@ impl Default for LocalTools {
             eye: None,
             pet: false,
             paused: false,
+            wait_release: false,
+            cursor_shown: None,
             gesture: None,
             view_map: None,
             overlay_tex: None,
@@ -545,10 +553,17 @@ pub(crate) fn preview(
     sample: &dyn Fn(&DevelopSettings, Point) -> Option<[f64; 3]>,
 ) -> PreviewOut {
     let mut out = PreviewOut::default();
+    st.cursor_shown = None;
     let Some(map) = st.view_map.clone() else { return out };
     let c = Canvas { r, map: &map };
     let p = ui.painter().clone();
-    let live = !panning && !st.paused;
+    // the tool's cursor shows while the tool has the preview; the Hand and Zoom show their own
+    let cursor = !panning && !st.paused;
+    let waiting = st.wait_release;
+    if !ui.input(|i| i.pointer.any_down()) {
+        st.wait_release = false;
+    }
+    let live = cursor && !waiting;
     let press = response.drag_started() || response.clicked();
     // a drag starts where it was pressed, not where egui saw it move far enough to be one
     let origin = if response.drag_started() { ui.input(|i| i.pointer.press_origin()) } else { None };
@@ -557,8 +572,8 @@ pub(crate) fn preview(
     // (`keys::delete`)
     match tool {
         Tool::Edit => {}
-        Tool::Masking => masking(ui, st, s, &c, &p, response, live, press, pointer, sample, &mut out),
-        Tool::Heal => heal(ui, st, s, &c, &p, response, live, press, pointer, &mut out),
+        Tool::Masking => masking(ui, st, s, &c, &p, response, (live, cursor), press, pointer, sample, &mut out),
+        Tool::Heal => heal(ui, st, s, &c, &p, response, (live, cursor), press, pointer, &mut out),
         Tool::RedEye => red_eye(st, s, &c, &p, response, live, press, pointer, &mut out),
     }
     if !(response.dragged() || response.drag_started()) || !live {
@@ -575,7 +590,7 @@ fn masking(
     c: &Canvas,
     p: &egui::Painter,
     response: &Response,
-    live: bool,
+    (live, cursor): (bool, bool),
     press: bool,
     pointer: Option<Pos2>,
     sample: &dyn Fn(&DevelopSettings, Point) -> Option<[f64; 3]>,
@@ -604,11 +619,15 @@ fn masking(
     }
     let draw = st.draw;
     let brush = st.brush;
+    // ⌥ paints the other way: erases with the brush, adds with the Erase brush
+    let erase = brush.erase != alt;
     if st.armed() {
         if let Some(at) = pointer
             && response.hovered()
+            && cursor
         {
-            brush_cursor(ui, p, c, brush, at);
+            brush_cursor(ui, p, c, brush, erase, at);
+            st.cursor_shown = Some(erase);
         }
         // the first stroke makes the brush mask it paints
         if !(live && press && st.gesture.is_none() && pointer.is_some()) || add_mask(st, s, "brush").is_err() {
@@ -632,8 +651,9 @@ fn masking(
     }
     let Some(at) = pointer else { return };
     let mask_at = c.screen_to_mask(on_photo, at);
-    if draw == Draw::Brush && response.hovered() {
-        brush_cursor(ui, p, c, brush, at);
+    if draw == Draw::Brush && response.hovered() && cursor {
+        brush_cursor(ui, p, c, brush, erase, at);
+        st.cursor_shown = Some(erase);
     }
     if !live {
         return;
@@ -654,7 +674,7 @@ fn masking(
                 }
                 Draw::Brush => {
                     if let Some(MaskShape::Brush { strokes }) = m.components.get_mut(comp).map(|k| &mut k.shape) {
-                        strokes.push(brush.stroke(vec![mask_at], brush.erase || alt));
+                        strokes.push(brush.stroke(vec![mask_at], erase));
                         st.gesture = Some(Gesture::Stroke(strokes.len() - 1));
                         st.show_overlay();
                         out.edited = true;
@@ -721,12 +741,31 @@ fn masking(
     }
 }
 
-/// The brush's size and feather drawn under the pointer at `at`.
-fn brush_cursor(ui: &egui::Ui, p: &egui::Painter, c: &Canvas, brush: Brush, at: Pos2) {
+/// The brush's size and feather drawn under the pointer at `at`, with a + (it adds to the mask)
+/// or a − (`erase`: it takes away) beside the crosshair, so ⌥ and the Erase brush show before a
+/// stroke.
+fn brush_cursor(ui: &egui::Ui, p: &egui::Painter, c: &Canvas, brush: Brush, erase: bool, at: Pos2) {
     let rad = (brush.size as f32 * c.pts_per_long()).max(1.0);
     p.circle_stroke(at, rad, Stroke::new(1.0, Color32::WHITE));
     p.circle_stroke(at, rad * (1.0 - (brush.feather as f32 / 100.0) * 0.5), Stroke::new(1.0, Color32::from_white_alpha(120)));
+    brush_sign(p, at + vec2(11.0, 11.0), erase);
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+}
+
+/// The brush cursor's sign: a + or (`erase`) a −, white on a dark outline so it reads on any
+/// photo.
+pub(crate) fn brush_sign(p: &egui::Painter, at: Pos2, erase: bool) {
+    let arm = 4.5;
+    let mut bars = vec![[at - vec2(arm, 0.0), at + vec2(arm, 0.0)]];
+    if !erase {
+        bars.push([at - vec2(0.0, arm), at + vec2(0.0, arm)]);
+    }
+    for b in &bars {
+        p.line_segment(*b, Stroke::new(3.5, Color32::from_black_alpha(170)));
+    }
+    for b in &bars {
+        p.line_segment(*b, Stroke::new(1.5, Color32::WHITE));
+    }
 }
 
 /// Removes the selected mask (Masking), spot (Heal) or red eye (Red Eye). Says whether it did.
@@ -770,7 +809,7 @@ fn heal(
     c: &Canvas,
     p: &egui::Painter,
     response: &Response,
-    live: bool,
+    (live, cursor): (bool, bool),
     press: bool,
     pointer: Option<Pos2>,
     out: &mut PreviewOut,
@@ -810,7 +849,7 @@ fn heal(
         }
     }
     let Some(at) = pointer else { return };
-    if response.hovered() && st.gesture.is_none() {
+    if response.hovered() && st.gesture.is_none() && cursor {
         let rad = (st.heal.size as f32 * ppl).max(3.0);
         p.circle_stroke(at, rad, Stroke::new(1.0, Color32::from_white_alpha(200)));
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);

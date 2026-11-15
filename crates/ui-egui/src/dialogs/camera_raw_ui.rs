@@ -207,6 +207,8 @@ impl CameraRawDialog {
         result["discardPrompt"] = json!(self.confirm_discard);
         // the Hand or Zoom has the preview, the local tool waiting until it is picked again
         result["toolPaused"] = json!(self.local.paused);
+        // the mask brush's ring under the pointer this frame: whether it erases (its −)
+        result["brushCursor"] = json!(self.local.cursor_shown.map(|erase| json!({"erase": erase})));
         result["maskOverlayShown"] = json!(self.local.overlay_tex.as_ref().map(|(_, id)| *id));
         result["selectedSpot"] = json!(self.local.spot);
         result["selectedEye"] = json!(self.local.eye);

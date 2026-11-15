@@ -91,6 +91,23 @@ impl Action {
         }
     }
 
+    /// Whether holding its key repeats it (a brush size, a zoom step, undo): a tool or a toggle
+    /// happens once per press, however long the key is held (Z held is the Zoom while held).
+    pub(crate) fn repeats(self) -> bool {
+        matches!(
+            self,
+            Action::BrushSmaller
+                | Action::BrushLarger
+                | Action::FeatherLess
+                | Action::FeatherMore
+                | Action::Undo
+                | Action::Redo
+                | Action::ZoomIn
+                | Action::ZoomOut
+                | Action::DeleteSelected
+        )
+    }
+
     pub(crate) fn from_id(id: &str) -> Option<Action> {
         if let Some(t) = id.strip_prefix("tool.") {
             return Tool::from_id(t).map(Action::Tool);
@@ -213,6 +230,12 @@ impl Keymap {
         crate::shortcuts::parse(chord).is_some_and(|sc| self.bindings.iter().any(|b| crate::shortcuts::key_matches(&b.2, sc.logical_key, sc.modifiers)))
     }
 
+    /// The key `action` is bound to without modifiers (Z for the Zoom), the one a spring-loaded
+    /// tool is held by.
+    pub(crate) fn plain_key(&self, action: Action) -> Option<egui::Key> {
+        self.bindings.iter().find(|b| b.0 == action && b.2.modifiers.is_none()).map(|b| b.2.logical_key)
+    }
+
     /// The table as the control channel describes it: action id → chord.
     pub(crate) fn describe(&self) -> serde_json::Value {
         serde_json::Value::Object(self.bindings.iter().map(|(a, chord, _)| (a.id(), serde_json::Value::from(chord.as_str()))).collect())
@@ -221,14 +244,18 @@ impl Keymap {
     /// The actions this frame's key presses ask for, in the order pressed, of those `wanted` takes
     /// now; their presses are consumed, so nothing behind the dialog sees them too. A press of an
     /// action not wanted (Delete with nothing of the keymap's selected) is left for the widgets.
+    /// A key held down repeats only the actions that [`Action::repeats`]; the others' repeats are
+    /// consumed, so a held Z doesn't toggle the Zoom on and off.
     pub(crate) fn take(&self, ctx: &egui::Context, wanted: impl Fn(Action) -> bool) -> Vec<Action> {
         ctx.input_mut(|i| {
             let mut out = Vec::new();
             i.events.retain(|e| {
-                let egui::Event::Key { key, pressed: true, modifiers, .. } = e else { return true };
+                let egui::Event::Key { key, pressed: true, modifiers, repeat, .. } = e else { return true };
                 let hit = self.bindings.iter().find(|b| wanted(b.0) && crate::shortcuts::key_matches(&b.2, *key, *modifiers));
                 let Some(b) = hit else { return true };
-                out.push(b.0);
+                if !*repeat || b.0.repeats() {
+                    out.push(b.0);
+                }
                 false
             });
             out
@@ -242,7 +269,9 @@ mod tests {
     use egui::{Event, Key, Modifiers};
 
     fn press(ctx: &egui::Context, key: Key, modifiers: Modifiers, map: &Keymap) -> Vec<Action> {
-        let raw = egui::RawInput { events: vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }], ..Default::default() };
+        // (let go of again: egui marks a press of a key still down as its repeat)
+        let ev = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+        let raw = egui::RawInput { events: vec![ev(true), ev(false)], ..Default::default() };
         ctx.begin_pass(raw);
         let got = map.take(ctx, |_| true);
         ctx.end_pass().textures_delta.clear();
@@ -294,6 +323,28 @@ mod tests {
         ] {
             assert!(press(&ctx, key, m, &map).is_empty(), "{key:?} {m:?}");
         }
+    }
+
+    /// A held key: its auto-repeat steps a brush size, but picks a tool or toggles a view once.
+    #[test]
+    fn a_held_key_repeats_only_what_repeats() {
+        let map = Keymap::default();
+        let ctx = egui::Context::default();
+        let held = |key| {
+            let ev = |repeat| Event::Key { key, physical_key: None, pressed: true, repeat, modifiers: Modifiers::NONE };
+            let up = Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE };
+            ctx.begin_pass(egui::RawInput { events: vec![ev(false), ev(true), ev(true), up], ..Default::default() });
+            let got = map.take(&ctx, |_| true);
+            let left = ctx.input(|i| i.events.len());
+            ctx.end_pass().textures_delta.clear();
+            (got, left)
+        };
+        assert_eq!(held(Key::Z), (vec![Action::ZoomTool], 1), "once, the repeats consumed (the release is left)");
+        assert_eq!(held(Key::H), (vec![Action::HandTool], 1));
+        assert_eq!(held(Key::Y).0, vec![Action::BeforeAfter]);
+        assert_eq!(held(Key::CloseBracket).0, vec![Action::BrushLarger; 3]);
+        assert_eq!(map.plain_key(Action::ZoomTool), Some(Key::Z));
+        assert_eq!(map.plain_key(Action::ZoomIn), None, "⌘= has a modifier");
     }
 
     /// Another host's table: its own chords, unknown actions and malformed chords left out.
