@@ -16,8 +16,8 @@ use crate::state::Tool;
 /// A second digit within this long of the first makes a two-digit value.
 const TWO_DIGITS_MS: f64 = 800.0;
 
-/// The first digit of a possible two-digit value: (digit, ⇧ held, when).
-pub type Pending = Option<(u8, bool, f64)>;
+/// The first digit of a possible two-digit value: (digit, ⇧ held, when, originating tool).
+pub type Pending = Option<(u8, bool, f64, Tool)>;
 
 /// What a tool's number keys change.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -132,10 +132,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// One digit press at `now` (ms).
 pub fn press(app: &mut PhotocraftApp, d: u8, shift: bool, now: f64) {
+    let tool = app.ui.tool;
     let percent = match app.opacity_keys.take() {
-        Some((first, s, at)) if s == shift && now - at < TWO_DIGITS_MS && now >= at => f32::from(first * 10 + d),
+        Some((first, s, at, started_with)) if started_with == tool && s == shift && now - at < TWO_DIGITS_MS && now >= at => f32::from(first * 10 + d),
         _ => {
-            app.opacity_keys = Some((d, shift, now));
+            app.opacity_keys = Some((d, shift, now, tool));
             if d == 0 { 100.0 } else { f32::from(d) * 10.0 }
         }
     };
@@ -200,6 +201,29 @@ mod tests {
         let st = app.session.active().unwrap();
         let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
         (l.opacity, l.fill_opacity)
+    }
+
+    #[test]
+    fn two_digits_do_not_pair_across_tools() {
+        // Brush and Eraser both target shared brush opacity, but a tool switch starts a new value.
+        let mut brush_then_eraser = app(Tool::Brush);
+        press(&mut brush_then_eraser, 4, false, 0.0);
+        brush_then_eraser.ui.tool = Tool::Eraser;
+        press(&mut brush_then_eraser, 5, false, 300.0);
+        assert_eq!(brush_then_eraser.session.tools.brush.opacity, 0.5);
+
+        // Gradient and Paint Bucket share their opacity option but still have separate sequences.
+        let mut gradient_then_bucket = app(Tool::Gradient);
+        press(&mut gradient_then_bucket, 4, false, 0.0);
+        gradient_then_bucket.ui.tool = Tool::PaintBucket;
+        press(&mut gradient_then_bucket, 5, false, 300.0);
+        assert_eq!(gradient_then_bucket.ui.tool_options.fill_opacity, 50.0);
+
+        // Same-tool pairs remain exact.
+        let mut same_tool = app(Tool::Brush);
+        press(&mut same_tool, 4, false, 0.0);
+        press(&mut same_tool, 5, false, 300.0);
+        assert_eq!(same_tool.session.tools.brush.opacity, 0.45);
     }
 
     #[test]

@@ -53,3 +53,19 @@ fn magic_eraser_digits_leave_tolerance_layer_and_brush_alone() {
     press(&mut a, 0, false, 5100.0);
     assert_eq!(a.ui.tool_options.magic_eraser_opacity, 100.0, "unmeasured 00 keeps the first zero's value");
 }
+#[test]
+fn digits_do_not_pair_across_tools() {
+    let mut brush_to_magic = app(Tool::Brush);
+    press(&mut brush_to_magic, 4, false, 0.0);
+    brush_to_magic.ui.tool = Tool::MagicEraser;
+    press(&mut brush_to_magic, 5, false, 300.0);
+    assert_eq!(brush_to_magic.session.tools.brush.opacity, 0.4);
+    assert_eq!(brush_to_magic.ui.tool_options.magic_eraser_opacity, 50.0);
+
+    let mut magic_to_brush = app(Tool::MagicEraser);
+    press(&mut magic_to_brush, 4, false, 0.0);
+    magic_to_brush.ui.tool = Tool::Brush;
+    press(&mut magic_to_brush, 5, false, 300.0);
+    assert_eq!(magic_to_brush.ui.tool_options.magic_eraser_opacity, 40.0);
+    assert_eq!(magic_to_brush.session.tools.brush.opacity, 0.5);
+}
