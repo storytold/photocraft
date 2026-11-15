@@ -1,7 +1,7 @@
 //! #7669: strict ATN export must not replace a native fractional Crystallize cell size.
+use craft_psd::{atn, descriptor::Value as D};
 use photocraft_engine::actions_cmds::Action;
 use photocraft_engine::{Session, atn_cmds};
-use photocraft_psd::{atn, descriptor::Value as D};
 use serde_json::{Value, json};
 
 const CRYSTALLIZE: &str = "filter.pixelate.crystallize";
@@ -24,7 +24,7 @@ fn fixture(depth: u32) -> Session {
 
 /// Compare the actual flattened document rather than just the imported parameters.
 fn pixels(s: &Session) -> Vec<[f32; 4]> {
-    photocraft_compose::flatten(&s.active().unwrap().doc).px
+    photocraft_compose::flatten(&s.active().unwrap().doc).into_px()
 }
 
 /// Fractions remain valid native edits; strict integer ATN conversion must refuse them.

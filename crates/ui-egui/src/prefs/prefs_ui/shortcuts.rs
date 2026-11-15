@@ -19,7 +19,14 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
     let tools_key = |id: &str| id.starts_with("tools.") || photocraft_engine::fill_key_cmds::IDS.contains(&id);
     let mut tools = Vec::new();
     let mut layer = Vec::new();
+    // The Mixer Brush's Load, Clean and switches have no default key but are listed together under
+    // Tools, as in the reference (#11959).
+    let mut mixer = Vec::new();
     for c in photocraft_engine::command_specs() {
+        if prefs::MIXER_BRUSH_COMMANDS.contains(&c.id) && seen.insert(c.id.to_string()) {
+            mixer.push((c.id.to_string(), c.label.to_string(), vec!["Tools".to_string()], c.shortcut.map(Into::into)));
+            continue;
+        }
         if seen.insert(c.id.to_string()) && c.shortcut.is_some() {
             let item = (c.id.to_string(), c.label.to_string(), c.menu.iter().map(|s| s.to_string()).collect::<Vec<_>>(), c.shortcut.map(Into::into));
             if c.menu.is_empty() && tools_key(c.id) {
@@ -36,6 +43,8 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
     let at = out.iter().rposition(|i| i.2.first().map(String::as_str) == Some("Layer")).map_or(out.len(), |i| i + 1);
     out.splice(at..at, layer);
     out.extend(tools);
+    mixer.sort_by_key(|item| prefs::MIXER_BRUSH_COMMANDS.iter().position(|id| *id == item.0));
+    out.extend(mixer);
     out.extend(
         crate::state::Tool::ALL
             .into_iter()
@@ -62,6 +71,14 @@ fn conflict_state(overrides: &BTreeMap<String, String>, alternates: &BTreeMap<St
 /// notation, where `Cmd` is Ctrl off the Mac.
 pub fn reserved_shortcut(sc: &str) -> bool {
     prefs::reserved_shortcut(sc)
+}
+
+/// Is a shortcut field in the front dialog (Edit › Keyboard Shortcuts) waiting for keys? Then
+/// the key pressed is the shortcut to record, so nothing else may take it first (#8965): not the
+/// dialog's own ⌘Z (#9487), the view keys that work under dialogs (⌘0, ⌘+…), or the macOS menu
+/// bar, which swallows the key equivalent of a disabled item.
+pub(crate) fn capturing_shortcut(app: &PhotocraftApp) -> bool {
+    app.ui.dialogs.last().is_some_and(|d| d.kind == crate::state::DialogKind::Command && d.fields.get("capture").and_then(Value::as_bool) == Some(true))
 }
 
 /// Text of a key press for the shortcut editor (`Cmd+Shift+K`), `None` for bare modifiers.
@@ -324,7 +341,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             }
         }
     }
-    let needle = filter.to_ascii_lowercase();
+    let needle = filter.trim();
     egui::ScrollArea::vertical().max_height(420.0).id_salt("shortcuts-scroll").show(ui, |ui| {
         let mut last_top = String::new();
         egui::Grid::new("shortcut-grid").num_columns(3).spacing([12.0, 3.0]).striped(true).show(ui, |ui| {
@@ -336,10 +353,12 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                 let alts = eff_alts(&alt_overrides, id, cur.as_deref());
                 let (shown_path, shown_label) = shown(id, label, path);
                 // Match what is shown and the English name (commands are documented in English).
-                let hay =
-                    format!("{} {} {} {} {} {}", shown_path.join(" "), shown_label, path.join(" "), label, cur.clone().unwrap_or_default(), alts.join(" "))
-                        .to_lowercase();
-                if !needle.is_empty() && !hay.contains(&needle) && !id.to_ascii_lowercase().contains(&needle) {
+                let local = format!("{} {}", shown_path.join(" "), shown_label);
+                let english = format!("{} {} {} {} {id}", path.join(" "), label, cur.clone().unwrap_or_default(), alts.join(" "));
+                if !needle.is_empty()
+                    && !crate::i18n::current().contains_ignore_case(&local, needle)
+                    && !crate::i18n::Lang::EN.contains_ignore_case(&english, needle)
+                {
                     continue;
                 }
                 if tab == 0 && path.is_empty() && def.is_none() && cur.is_none() && alts.is_empty() {
@@ -401,14 +420,18 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                         }
                     });
                 } else {
-                    // Edit › Menus, Keyboard Shortcuts, Preferences, Save and Exit always stay (#5096).
-                    let hideable = photocraft_engine::prefs::MenuCustomization::hideable(id);
-                    let mut visible = !hideable || !hidden.contains(id);
-                    ui.add_enabled_ui(hideable, |ui| crate::widgets::checkbox(ui, &mut visible, tl!("Visible")));
-                    if visible {
-                        hidden.retain(|h| h != id);
-                    } else if !hidden.contains(id) {
-                        hidden.push(id.clone());
+                    // Items that can't be hidden (File › Close, Save…, Edit › Menus…) have no
+                    // visibility control at all, as in the reference application (#14335).
+                    if photocraft_engine::prefs::MenuCustomization::hideable(id) {
+                        let mut visible = !hidden.contains(id);
+                        crate::widgets::checkbox(ui, &mut visible, tl!("Visible"));
+                        if visible {
+                            hidden.retain(|h| h != id);
+                        } else if !hidden.contains(id) {
+                            hidden.push(id.clone());
+                        }
+                    } else {
+                        ui.label("");
                     }
                     let mut col = colors.get(id).cloned().unwrap_or_else(|| "none".into());
                     let opts: Vec<(String, &str)> =
@@ -587,6 +610,10 @@ fn set_row(
     };
     let names: Vec<(String, String)> = std::iter::once(String::new()).chain(sets.keys().cloned()).map(|n| (n.clone(), shown(&n))).collect();
     let mut new_name: Option<String> = f.get("newSetName").and_then(Value::as_str).map(str::to_string);
+    // #14326: a set chosen while this one has unsaved edits waits for Yes / No / Cancel, and
+    // after Yes, for the edits to be saved under a new name.
+    let mut switch_to: Option<String> = f.get("switchTo").and_then(Value::as_str).map(str::to_string);
+    let mut switch_after_save: Option<String> = f.get("switchAfterSave").and_then(Value::as_str).map(str::to_string);
     let set_label = if active.is_empty() { defaults.clone() } else { active.clone() };
     let mut export = false;
     let mut summarize = false;
@@ -595,13 +622,28 @@ fn set_row(
         let mut chosen = active.clone();
         let pairs: Vec<(String, &str)> = names.iter().map(|(n, l)| (n.clone(), l.as_str())).collect();
         if crate::widgets::dropdown(ui, "shortcut-set", tl!("Set:"), &mut chosen, &pairs, 220.0) && chosen != active {
-            // As `useSet`: the set's bindings, keeping the actions' F-keys.
-            sets.get(&chosen).cloned().unwrap_or_default().apply(overrides, alternates);
-            active = chosen;
-            message.clear();
+            if modified {
+                // Unsaved edits: ask first (an action's F-key is no edit, see `differs`). The new
+                // question replaces any naming step left open after an earlier Yes.
+                switch_to = Some(chosen);
+                new_name = None;
+                switch_after_save = None;
+            } else {
+                // As `useSet`: the set's bindings, keeping the actions' F-keys.
+                sets.get(&chosen).cloned().unwrap_or_default().apply(overrides, alternates);
+                active = chosen;
+                message.clear();
+                // This replaces a question left open for another set, and a naming step left open
+                // after Yes with its pending switch.
+                switch_to = None;
+                new_name = None;
+                switch_after_save = None;
+            }
         }
         if ui.button(tl!("New Set…")).on_hover_text(tl!("Save these shortcuts as a new set")).clicked() {
             new_name = Some(String::new());
+            // A plain new set: no switch follows it.
+            switch_after_save = None;
         }
         if ui.add_enabled(!active.is_empty() && modified, egui::Button::new(tl!("Save"))).on_hover_text(tl!("Save the changes to this set")).clicked() {
             sets.insert(active.clone(), now.clone());
@@ -611,12 +653,37 @@ fn set_row(
         if ui.add_enabled(!active.is_empty(), egui::Button::new(tl!("Delete"))).on_hover_text(tl!("Delete this set")).clicked() {
             sets.remove(&active);
             active.clear();
+            new_name = None;
+            switch_after_save = None;
             *message = tl!("Set deleted.").into();
             *warning = false;
         }
         export = ui.button(tl!("Export…")).on_hover_text(tl!("Save these shortcuts as a .kys file")).clicked();
         summarize = ui.button(tl!("Summarize…")).on_hover_text(tl!("Save a list of these shortcuts as a web page")).clicked();
     });
+    if let Some(target) = switch_to.clone() {
+        ui.horizontal(|ui| {
+            ui.label(tl!(SWITCH_SET_QUESTION));
+            if ui.button(tl!("Yes")).clicked() {
+                // Save first, under a name asked for as New Set… asks, then switch.
+                new_name = Some(crate::i18n::fmt(tl!("{set} Copy"), &[("set", &set_label)]));
+                switch_after_save = Some(target.clone());
+                switch_to = None;
+            }
+            if ui.button(tl!("No")).clicked() {
+                sets.get(&target).cloned().unwrap_or_default().apply(overrides, alternates);
+                active = target.clone();
+                switch_to = None;
+                message.clear();
+                // Replaces a naming step left open after an earlier Yes, and its pending switch.
+                new_name = None;
+                switch_after_save = None;
+            }
+            if ui.button(tl!("Cancel")).clicked() {
+                switch_to = None;
+            }
+        });
+    }
     if let Some(name) = new_name.as_mut() {
         let mut create = false;
         let mut cancel = false;
@@ -639,6 +706,11 @@ fn set_row(
                     new_name = None;
                     *message = tl!("Set saved.").into();
                     *warning = false;
+                    // Yes to the switch question: the edits are saved, so switch now.
+                    if let Some(target) = switch_after_save.take() {
+                        sets.get(&target).cloned().unwrap_or_default().apply(overrides, alternates);
+                        active = target;
+                    }
                 }
                 Err(e) => {
                     *message = e;
@@ -646,7 +718,9 @@ fn set_row(
                 }
             }
         } else if cancel {
+            // Not measured: cancelling the name after Yes keeps this set and its edits.
             new_name = None;
+            switch_after_save = None;
         }
     }
     if export || summarize {
@@ -684,7 +758,12 @@ fn set_row(
     f.insert("sets".into(), json!(sets));
     f.insert("activeSet".into(), json!(active));
     f.insert("newSetName".into(), new_name.map_or(Value::Null, Value::String));
+    f.insert("switchTo".into(), switch_to.map_or(Value::Null, Value::String));
+    f.insert("switchAfterSave".into(), switch_after_save.map_or(Value::Null, Value::String));
 }
+
+/// The reference application's question when another set is chosen over unsaved edits (#14326).
+const SWITCH_SET_QUESTION: &str = "Selecting a different set will result in a loss of all unsaved shortcuts.  Save your changes before switching sets?";
 
 /// Save `text` through the save dialog under the suggested file name.
 fn save_text(app: &mut PhotocraftApp, suggested: &str, text: String) -> Result<Value, String> {
@@ -696,3 +775,7 @@ fn save_text(app: &mut PhotocraftApp, suggested: &str, text: String) -> Result<V
         Ok(json!({"path": path}))
     })
 }
+
+#[cfg(test)]
+#[path = "shortcut_set_switch_tests.rs"]
+mod shortcut_set_switch_tests;
