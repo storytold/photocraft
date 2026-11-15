@@ -126,6 +126,13 @@ const ACROSS_TWIST_TOL: f64 = 1.2;
 /// redraws of fish and bulge meshes split their edge columns down from 1.06 px of twist down the
 /// column, where a pulled corner's twist (along its rows) stays under [`ACROSS_TWIST_TOL`].
 const FULL_COLUMN_TWIST_TOL: f64 = 1.0;
+/// A cell of a one-patch full mesh twisted past this splits both ways (probes with one inner
+/// control point moved: cells at 2.25 px split across and down, at 1.75 px only the one way).
+const BOTH_WAYS_TWIST_TOL: f64 = 2.0;
+/// A first-level split down of a one-patch full mesh carries to the other row only from a cell
+/// whose columns ask for this much (moved control points: 1.12 stays in its row, 1.55 and up
+/// carry to all four cells).
+const FIRST_LEVEL_SPREAD_FV: f64 = 1.5;
 /// The twist of a tall envelope's square cell (its whole net) past which it splits across as well:
 /// sideways Fish and Wave at ±50 match with 2.0 and lose most of their cells' agreement at 1.2.
 const TALL_SQUARE_TWIST_TOL: f64 = 2.0;
@@ -741,6 +748,28 @@ fn spread_down_in_row(level_cells: &[Cell], decisions: &mut [(bool, bool)], from
     }
 }
 
+/// A one-patch full mesh's cells twisted past [`BOTH_WAYS_TWIST_TOL`] (`measured`, column need
+/// and twist per cell) split both ways.
+fn split_both_ways_past_twist(decisions: &mut [(bool, bool)], measured: &[(f64, f64)]) {
+    for (d, &(_, tw)) in decisions.iter_mut().zip(measured) {
+        if tw > BOTH_WAYS_TWIST_TOL + EPS {
+            *d = (true, true);
+        }
+    }
+}
+
+/// A one-patch full mesh's first-level split down: it carries to the cell beside it in its row, and
+/// to every first cell where the cell's columns (`measured`, column need and twist per cell) ask
+/// for [`FIRST_LEVEL_SPREAD_FV`].
+fn first_level_spread_full(level_cells: &[Cell], decisions: &mut [(bool, bool)], measured: &[(f64, f64)]) {
+    let down: Vec<(Cell, f64)> = level_cells.iter().zip(decisions.iter()).zip(measured).filter(|((_, d), _)| d.1).map(|((c, _), m)| (*c, m.0)).collect();
+    for (c, d) in level_cells.iter().zip(decisions) {
+        if down.iter().any(|(m, fv)| (m[2] - c[2]).abs() < EPS || *fv > FIRST_LEVEL_SPREAD_FV + EPS) {
+            d.1 = true;
+        }
+    }
+}
+
 /// The control net the reference application cuts by: an envelope's at the degree it was stored at
 /// (recovered from the map), a full mesh's cubic both ways, even where it is flatter.
 fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
@@ -801,6 +830,9 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
         // split down for its curvature.
         let mut curved_rows: Vec<(f64, f64, i64, f64)> = Vec::new();
         let column = |c: &Cell| (c[0] / (2.0 * (c[1] - c[0])) + EPS).floor() as i64;
+        // A one-patch full mesh: each cell's column need and twist, for the rules after the cells' own decisions.
+        let full_one = rules.force_down && !rules.twist_spreads;
+        let mut measured: Vec<(f64, f64)> = Vec::with_capacity(level_cells.len());
         for &c in &level_cells {
             let [u0, u1, v0, v1] = c;
             // The cell's own control net, built once when a rule needs it.
@@ -880,6 +912,9 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             }
             decisions.push((across, down));
             twisted.push(twist_down);
+            if full_one {
+                measured.push((fv, if twisty { sub().twist() } else { 0.0 }));
+            }
         }
         if rules.twist_spreads {
             strip_down_cuts(net, &level_cells, &mut decisions, &mut twisted);
@@ -888,8 +923,13 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
         if rules.twist_spreads_in_row {
             spread_down_in_row(&level_cells, &mut decisions, &twisted);
         }
+        if full_one {
+            split_both_ways_past_twist(&mut decisions, &measured);
+        }
         let first_level = level_cells.first().is_some_and(|c| (c[3] - c[2] - first).abs() < EPS);
-        if first_level {
+        if first_level && full_one {
+            first_level_spread_full(&level_cells, &mut decisions, &measured);
+        } else if first_level {
             let down: Vec<bool> = decisions.iter().map(|d| d.1).collect();
             spread_down(&level_cells, &mut decisions, &down);
         }
@@ -2481,6 +2521,47 @@ mod tests {
         let gentle = net_of(&in_perspective(WarpStyle::Arch, 12.0, 0.0, 0.0), true);
         let (once, _) = cells(&gentle, twisty_net(&gentle), &one_patch_rules(&gentle, true));
         assert!(once.len() == 8 && sized(&once, 0.25, 0.5), "split across once: quarters by halves, {} cells", once.len());
+    }
+
+    /// A full mesh over 128 px with its inner control point (i, j) moved by `d`.
+    fn moved_point_net(i: usize, j: usize, d: P) -> Net {
+        let mut p: Vec<P> = (0..16).map(|k| [96.0 + 128.0 * (k % 4) as f64 / 3.0, 96.0 + 128.0 * (k / 4) as f64 / 3.0]).collect();
+        if let Some(q) = p.get_mut(j * 4 + i) {
+            *q = [q[0] + d[0], q[1] + d[1]];
+        }
+        Net { nu: 4, nv: 4, p }
+    }
+
+    /// A one-patch full mesh's first split down carries along its row only, unless the cell's
+    /// columns ask for 1.5 or more: with its top-left inner point moved 8 px across, the top cells
+    /// split down and the bottom right cell stays a half tall (columns 1.12); moved 8 px down
+    /// (columns 1.88), all four first cells split down.
+    #[test]
+    fn a_full_meshs_first_split_down_carries_along_its_row() {
+        let rules = one_patch_rules(&moved_point_net(1, 1, [0.0, 0.0]), true);
+        assert!(rules.force_down && !rules.twist_spreads);
+        let halved = |leaves: &[Cell]| leaves.iter().filter(|c| c[0] > 0.5 - EPS && c[2] > 0.5 - EPS).all(|c| (c[3] - c[2] - 0.5).abs() < EPS);
+        let (across, _) = cells(&moved_point_net(1, 1, [8.0, 0.0]), true, &rules);
+        assert!(halved(&across), "moved across: the bottom right cell stays whole down");
+        assert!(across.iter().any(|c| c[0] > 0.5 - EPS && c[2] < EPS && c[3] - c[2] < 0.5 - EPS), "the top right cell splits down with the top left");
+        let (down, _) = cells(&moved_point_net(1, 1, [0.0, 8.0]), true, &rules);
+        assert!(!halved(&down), "moved down: the split carries to the bottom right cell too");
+    }
+
+    /// A one-patch full mesh's cell twisted past 2 px splits both ways: with the top-left inner
+    /// point moved 18 px across, the top right cell (twist 2.25, its rows asking 0.84) splits across
+    /// as well as down, so the lower half of it is cut across too; moved 14 px (twist 1.75) it
+    /// splits down only and that half stays whole across.
+    #[test]
+    fn a_full_mesh_cell_twisted_past_two_splits_both_ways() {
+        let rules = one_patch_rules(&moved_point_net(1, 1, [0.0, 0.0]), true);
+        let lower_half_whole = |leaves: &[Cell]| {
+            leaves.iter().any(|c| (c[0] - 0.5).abs() < EPS && (c[1] - 1.0).abs() < EPS && (c[2] - 0.25).abs() < EPS && (c[3] - 0.5).abs() < EPS)
+        };
+        let (far, _) = cells(&moved_point_net(1, 1, [18.0, 0.0]), true, &rules);
+        assert!(!lower_half_whole(&far), "twist 2.25: split across too");
+        let (near, _) = cells(&moved_point_net(1, 1, [14.0, 0.0]), true, &rules);
+        assert!(lower_half_whole(&near), "twist 1.75: down only");
     }
 
     /// A first cell's split down carries to the other cells of its quarter of the envelope and no
