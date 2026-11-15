@@ -888,11 +888,12 @@ fn inner_glow_center_source_survives_ok() {
 
 /// #6698: Inner Glow lacked Photoshop's Technique and Range, Outer Glow its Technique. They
 /// show in Photoshop's order, the dialog loads them, and OK keeps them.
+/// #14944 moved the Outer Glow's Noise under Opacity, so its order here is the grouped page's.
 #[test]
 fn glows_show_and_keep_technique_and_range() {
     let keys = |kind: &str| spec(kind).iter().map(|(k, _, _)| *k).collect::<Vec<_>>();
     assert_eq!(keys("innerGlow"), ["blend", "opacity", "color", "technique", "source", "choke", "size", "contour", "range", "noise"]);
-    assert_eq!(keys("outerGlow"), ["blend", "opacity", "color", "technique", "spread", "size", "contour", "range", "noise"]);
+    assert_eq!(keys("outerGlow"), ["blend", "opacity", "noise", "color", "technique", "spread", "size", "contour", "range"]);
     let mut s = session();
     s.execute("layer.layerStyle.innerGlow", json!({"technique": "precise", "range": 30})).unwrap();
     s.execute("layer.layerStyle.outerGlow", json!({"technique": "precise"})).unwrap();
@@ -1312,4 +1313,83 @@ fn style_click_does_not_mutate_document_until_confirm() {
     // Confirm commits the style.
     confirm(&mut app, &f).unwrap();
     assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().effects.items.len(), 1);
+}
+
+/// #14944: the Outer Glow page carries Photoshop's Structure / Elements / Quality titles, each
+/// above the row that starts its block, with Noise right under Opacity. No other page is grouped
+/// yet (#14917 is the Inner Glow's own ticket).
+#[test]
+fn the_outer_glow_page_shows_photoshops_group_titles() {
+    let mut blocks: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
+    for &(key, _, _) in spec("outerGlow") {
+        match group_title("outerGlow", key) {
+            Some(title) => blocks.push((title, vec![key])),
+            None => blocks.last_mut().expect("the page's first row starts a group").1.push(key),
+        }
+    }
+    assert_eq!(
+        blocks,
+        [("Structure", vec!["blend", "opacity", "noise", "color"]), ("Elements", vec!["technique", "spread", "size"]), ("Quality", vec!["contour", "range"]),]
+    );
+    for kind in ["innerShadow", "dropShadow", "innerGlow", "stroke", "colorOverlay", "gradientOverlay", "patternOverlay", "bevelEmboss", "satin"] {
+        assert_eq!(group_title(kind, "blend"), None, "{kind} gained a group title");
+    }
+}
+
+/// #14944: a new Outer Glow opens at the reference application's factory values, and OK stores
+/// exactly those.
+#[test]
+fn a_new_outer_glow_opens_at_the_factory_values_and_ok_keeps_them() {
+    let p = fresh_params("outerGlow", 120.0, None);
+    assert_eq!(
+        (
+            p["blend"].as_str(),
+            p["opacity"].as_f64(),
+            p["color"].as_str(),
+            p["technique"].as_str(),
+            p["size"].as_f64(),
+            p["range"].as_f64(),
+            p["antiAlias"].as_bool()
+        ),
+        (Some("Screen"), Some(35.0), Some("#ffffff"), Some("softer"), Some(7.0), Some(50.0), Some(false)),
+        "the page's own seed"
+    );
+    let mut s = session();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let mut f = initial_fields(s.active().unwrap().doc.layer(layer).unwrap(), None, 120.0);
+    add_instance(&mut f, "outerGlow");
+    let e = &effects_of(&f)[0];
+    assert_eq!(
+        (e["params"]["opacity"].as_f64(), e["params"]["color"].as_str(), e["params"]["size"].as_f64()),
+        (Some(35.0), Some("#ffffff"), Some(7.0)),
+        "a new instance on the list starts there"
+    );
+    apply(&f, |cmd, params| s.execute(cmd, params).map_err(|err| err.to_string())).unwrap();
+    let d = s.active().unwrap();
+    let Effect::OuterGlow(g) = &d.doc.layer(d.active_layer.unwrap()).unwrap().effects.items[0] else {
+        panic!("{:?}", d.doc.layer(d.active_layer.unwrap()).unwrap().effects.items)
+    };
+    assert!((g.common.opacity * 100.0 - 35.0).abs() < 1e-4 && (g.size - 7.0).abs() < 1e-4, "OK stored {g:?}");
+    let FxPaint::Color(c) = &g.paint else { panic!("{:?}", g.paint) };
+    assert!(c.to_rgb().iter().all(|v| (v - 1.0).abs() < 1e-3), "OK stored the colour {:?}", c.to_rgb());
+}
+
+/// #14944: the factory values never reach an Outer Glow the layer already carries: the page shows
+/// its own values and OK keeps them, as it does for a glow read from a PSD or `.pcraft`.
+#[test]
+fn an_existing_outer_glow_is_edited_with_its_own_values() {
+    let mut s = session();
+    s.execute("layer.layerStyle.outerGlow", json!({"opacity": 75, "color": "#ffffbe", "size": 5})).unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let f = initial_fields(s.active().unwrap().doc.layer(layer).unwrap(), None, 120.0);
+    let e = &effects_of(&f)[0];
+    assert_eq!(
+        (e["params"]["opacity"].as_f64(), e["params"]["color"].as_str(), e["params"]["size"].as_f64()),
+        (Some(75.0), Some("#ffffbe"), Some(5.0)),
+        "the page shows what the layer has"
+    );
+    apply(&f, |cmd, params| s.execute(cmd, params).map_err(|err| err.to_string())).unwrap();
+    let d = s.active().unwrap();
+    let Effect::OuterGlow(g) = &d.doc.layer(d.active_layer.unwrap()).unwrap().effects.items[0] else { panic!("no outer glow") };
+    assert!((g.common.opacity * 100.0 - 75.0).abs() < 1e-4 && (g.size - 5.0).abs() < 1e-4, "OK kept {g:?}");
 }

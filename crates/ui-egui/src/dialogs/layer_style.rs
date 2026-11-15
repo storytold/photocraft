@@ -102,6 +102,16 @@ fn fresh_params(kind: &str, light: f32, user: Option<&Value>) -> Value {
     p
 }
 
+/// Photoshop's titled groups on an effect page: for each kind, the title above the row that
+/// starts a group (#14944: the Outer Glow page's Structure, Elements and Quality). Only the
+/// pages Photoshop groups are listed; the others stay one flat list.
+const GROUP_TITLES: &[(&str, &[(&str, &str)])] = &[("outerGlow", &[("Structure", "blend"), ("Elements", "technique"), ("Quality", "contour")])];
+
+/// The group title the page shows above the row `key`, for the effect kind `kind`.
+fn group_title(kind: &str, key: &str) -> Option<&'static str> {
+    GROUP_TITLES.iter().find(|(k, _)| *k == kind).and_then(|(_, titles)| titles.iter().find(|(_, start)| *start == key)).map(|(title, _)| *title)
+}
+
 fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
     const POS: &[(&str, &str)] = &[("outside", "Outside"), ("inside", "Inside"), ("center", "Center")];
     const GSTYLE: &[(&str, &str)] = &[("linear", "Linear"), ("radial", "Radial"), ("angle", "Angle"), ("reflected", "Reflected"), ("diamond", "Diamond")];
@@ -138,16 +148,18 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
             ("noise", "Noise", P::Slider(0.0, 100.0, "%")),
         ],
         // Photoshop's order (#6698): Technique before the spread or choke, Range after the contour.
+        // #14944: Noise sits right under Opacity, and the rows fall into the Structure, Elements
+        // and Quality groups the page titles above them (GROUP_TITLES).
         "outerGlow" => &[
             ("blend", "Blend Mode", P::Blend),
             ("opacity", "Opacity", P::Slider(0.0, 100.0, "%")),
+            ("noise", "Noise", P::Slider(0.0, 100.0, "%")),
             ("color", "Color", P::Color),
             ("technique", "Technique", P::Choice(GLOW_TECHNIQUE)),
             ("spread", "Spread", P::Slider(0.0, 100.0, "%")),
             ("size", "Size", P::Slider(0.0, 250.0, "px")),
             ("contour", "Contour", CONTOUR),
             ("range", "Range", P::Slider(1.0, 100.0, "%")),
-            ("noise", "Noise", P::Slider(0.0, 100.0, "%")),
         ],
         "innerGlow" => &[
             ("blend", "Blend Mode", P::Blend),
@@ -1644,6 +1656,11 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
         }
     }
     for &(key, label, kind_p) in spec(&sel_kind) {
+        // Photoshop's group titles, above the row that starts each block (#14944).
+        if let Some(title) = group_title(&sel_kind, key) {
+            widgets::section_label(ui, title);
+            ui.add_space(2.0);
+        }
         match kind_p {
             P::Angle => {
                 let mut v = disp.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
