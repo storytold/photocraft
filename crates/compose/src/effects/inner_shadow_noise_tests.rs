@@ -132,3 +132,30 @@ fn bit_hash(m: &Map) -> u64 {
 fn noise_zero_maps_stay_bit_identical() {
     assert_eq!(bit_hash(&map(0.0)), 0x2200_2b2d_61bc_9c2d, "the Noise 0 inner shadow map moved");
 }
+
+/// The issues measure falloff bands only. A big Drop Shadow's solid interior (coverage exactly
+/// 1.0 in the Size 40 blur plateau) keeps today's multiplicative jitter: at Noise 100 the core
+/// still spans both sides of 0.5 and still holds full coverage.
+/// Guard test, passes before and after the law change - it pins the unmeasured case.
+#[test]
+fn solid_core_keeps_todays_jitter() {
+    let mut shape = Map::new(DOC_W, DOC_H, 0.0);
+    for y in 75..=224 {
+        for x in 100..=299 {
+            shape.v[y * DOC_W + x] = 1.0;
+        }
+    }
+    // The plateau of the Size 40 blur at Distance 0 (measured: coverage is exactly 1.0 on these
+    // samples, at least 45 px in from every edge).
+    let core = |noise: f32| {
+        let s = Shadow { size: 40.0, noise, ..shadow(0.0) };
+        let m = shadow_map(&shape, &s, &GlobalLight::default(), false, (0, 0));
+        (145..=176).step_by(3).flat_map(|y| (150..=250).step_by(5).map(move |x| (x, y))).map(|(x, y)| m.get(x, y)).collect::<Vec<f32>>()
+    };
+    let plain = core(0.0);
+    assert!(plain.iter().all(|v| *v == 1.0), "the Size 40 drop shadow plateau is solid: {plain:?}");
+    let half = core(0.5);
+    assert!(half.iter().any(|v| *v < 1.0) && half.contains(&1.0), "Noise 50 speckles the solid core: {half:?}");
+    let heavy = core(1.0);
+    assert!(heavy.iter().any(|v| *v < 0.5) && heavy.contains(&1.0), "Noise 100 spans both sides of 0.5 in the solid core: {heavy:?}");
+}
