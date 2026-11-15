@@ -326,6 +326,15 @@ const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 /// declarations, so nothing inside them is read as markup, and it reads declarations only inside
 /// start tags and outside quoted attribute values (#11116). The last RDF end tag wins.
 fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
+    rdf_end_scan(x).map(|(a, b, _)| (a, b))
+}
+
+/// [`rdf_end_tag`]'s range plus whether the `rdf` prefix is bound to the RDF namespace in the scope
+/// of the element that range closes, which is the scope a description inserted at its start sits
+/// in. The scope is the stack of the elements open at that point, so an earlier `rdf:RDF` that has
+/// already closed (or closed on the spot) contributes nothing, and a rebinding of `rdf` to another
+/// namespace on that element or an ancestor counts as unbound (#11116).
+fn rdf_end_scan(x: &str) -> Option<(usize, usize, bool)> {
     let b = x.as_bytes();
     let is_ws = |c: u8| matches!(c, b' ' | b'\t' | b'\r' | b'\n');
     // One entry per open element: the `(prefix, binds the RDF namespace)` pairs its start tag
@@ -335,7 +344,7 @@ fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
         let (prefix, local) = name.split_once(':').unwrap_or(("", name));
         local == "RDF" && scopes.iter().rev().flatten().rev().find(|(p, _)| p == prefix).is_some_and(|(_, rdf)| *rdf)
     };
-    let mut found: Option<(usize, usize)> = None;
+    let mut found: Option<(usize, usize, bool)> = None;
     let mut i = 0usize;
     while i < b.len() {
         if b[i] != b'<' {
@@ -369,7 +378,7 @@ fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
             if tail.starts_with('>') {
                 let end = x.len() - tail.len() + 1;
                 if resolves_to_rdf(&scopes, &x[name_start..name_end]) {
-                    found = Some((i, end));
+                    found = Some((i, end, resolves_to_rdf(&scopes, "rdf:RDF")));
                 }
                 scopes.pop();
                 i = end;
@@ -509,50 +518,6 @@ fn decode_char_refs(s: &str) -> Option<String> {
     Some(out)
 }
 
-/// Whether the open RDF element's start tag binds the `rdf` prefix above `at`, so a description
-/// inserted there can inherit the declaration (#11116). The element that closes at `at` is the
-/// nearest non-self-closed `<rdf:RDF` start tag before it (XML gives no same-name nesting), and
-/// only its own declarations reach the insertion point; a self-closed or already-closed lookalike
-/// binds nothing there. Comments and CDATA are skipped, and when in doubt the writer re-declares
-/// `rdf`, which is always valid.
-fn rdf_bound_above(x: &str, at: usize) -> bool {
-    let b = x.as_bytes();
-    let mut open: Option<(usize, usize)> = None;
-    let mut i = 0usize;
-    while i < at {
-        if b[i..].starts_with(b"<!--") {
-            i = x[i + 4..at].find("-->").map_or(at, |e| i + 7 + e);
-            continue;
-        }
-        if b[i..].starts_with(b"<![CDATA[") {
-            i = x[i + 9..at].find("]]>").map_or(at, |e| i + 12 + e);
-            continue;
-        }
-        if b[i..].starts_with(b"<rdf:RDF") {
-            let after = i + "<rdf:RDF".len();
-            // The element name ends at whitespace, `/` or `>`; `<rdf:RDFjunk` is a different name.
-            let name_ends = matches!(b.get(after), Some(c) if *c == b' ' || *c == b'\t' || *c == b'\r' || *c == b'\n' || *c == b'/' || *c == b'>');
-            if name_ends && let Some(end) = x[after..at].find('>') {
-                let tag_end = after + end;
-                // `<rdf:RDF .../>` closed on the spot: it is not the open element's start tag.
-                if b.get(tag_end - 1) != Some(&b'/') {
-                    open = Some((after, tag_end));
-                }
-            }
-            i = after;
-            continue;
-        }
-        i += 1;
-    }
-    match open {
-        Some((start, end)) => {
-            let tag = &x[start..end];
-            tag.contains(&format!("xmlns:rdf=\"{RDF_NS}\"")) || tag.contains(&format!("xmlns:rdf='{RDF_NS}'"))
-        }
-        None => false,
-    }
-}
-
 /// Rewrites only changed File Info fields of an XMP packet (creating one when there is none),
 /// keeping the other properties verbatim. Edited properties move into their own
 /// `rdf:Description` (several descriptions per packet are valid XMP). A packet whose RDF element
@@ -612,10 +577,10 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
         body.push_str(&format!("   <xmpRights:WebStatement>{}</xmpRights:WebStatement>\n", xml_escape(u)));
     }
     if !body.is_empty() {
-        let at = rdf_end_tag(&x).map(|(a, _)| a).unwrap_or(x.len());
+        let (at, bound) = rdf_end_scan(&x).map_or((x.len(), false), |(a, _, bound)| (a, bound));
         // The inserted description uses the `rdf:` prefix, so it must bind that prefix itself
-        // unless the RDF element's own start tag already binds it above the insertion point (#11116).
-        let bind = if rdf_bound_above(&x, at) { String::new() } else { format!(" xmlns:rdf=\"{RDF_NS}\"") };
+        // unless the elements open at the insertion point already bind it (#11116).
+        let bind = if bound { String::new() } else { format!(" xmlns:rdf=\"{RDF_NS}\"") };
         let desc = format!(
             "  <rdf:Description rdf:about=\"\"{bind} xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\" xmlns:xmpRights=\"http://ns.adobe.com/xap/1.0/rights/\">\n{body}  </rdf:Description>\n "
         );

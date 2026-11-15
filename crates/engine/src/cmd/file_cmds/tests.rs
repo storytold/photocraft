@@ -2246,6 +2246,43 @@ fn file_info_reads_declarations_the_way_an_xml_reader_does() {
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
 }
 
+/// The `rdf` prefix of the inserted description is resolved in the scope of the element it lands
+/// in, not taken from an earlier `rdf:RDF` that already closed (#11116). Each output is parsed
+/// as namespace-aware XML: a description whose `rdf` prefix is unbound reads as a plain
+/// `Description`, so two `rdf:Description` elements prove the prefix resolved.
+#[test]
+fn file_info_binds_rdf_for_the_description_from_the_open_element_scope() {
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    let rdf_descriptions = |out: &str| {
+        let namespaces = [("rdf", NS), ("xmp", "http://ns.adobe.com/xap/1.0/"), ("photoshop", "http://ns.adobe.com/photoshop/1.0/"), ("x", "adobe:ns:meta/")];
+        let canonical = craft_xml::Canonical::new(&namespaces);
+        let doc = craft_xml::Options::canonical(&canonical).parse(out.as_bytes()).expect("the output is well-formed XML");
+        let names: Vec<String> = doc.descendants().filter(|e| e.name.ends_with("Description")).map(|e| e.name.clone()).collect();
+        names
+    };
+    // An ordinary closed `rdf:RDF` sibling comes first; the edit lands in the later `q:RDF`, which
+    // does not bind `rdf` at all.
+    let closed_sibling = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"></rdf:RDF><q:RDF xmlns:q="{NS}"><q:Description q:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></q:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&closed_sibling), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the later RDF element is kept: {out}");
+    assert_eq!(rdf_descriptions(&out), ["rdf:Description", "rdf:Description"], "the inserted description binds rdf: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // The element the edit lands in binds `rdf` to a foreign namespace: re-declare it.
+    let foreign_rdf = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><q:RDF xmlns:q="{NS}" xmlns:rdf="urn:other"><q:Description q:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></q:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&foreign_rdf), &json!({"authorTitle": "Artist"}));
+    assert_eq!(rdf_descriptions(&out), ["rdf:Description", "rdf:Description"], "{out}");
+    // The canonical case keeps its single declaration: the element binds `rdf` and the inserted
+    // description does not repeat it.
+    let canonical = format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about=""/></rdf:RDF></x:xmpmeta>"#);
+    let out = write_file_info(Some(&canonical), &json!({"authorTitle": "Artist"}));
+    assert_eq!(rdf_descriptions(&out), ["rdf:Description", "rdf:Description"], "{out}");
+    assert_eq!(out.matches(&format!("xmlns:rdf=\"{NS}\"")).count(), 1, "{out}");
+}
+
 /// A prefix bound to the RDF namespace in one element and rebound to another namespace in a later
 /// sibling is two different names: only the closing tag that resolves to the RDF namespace in its
 /// own scope is the RDF end tag, so the edit never lands in the foreign element (#11116).
