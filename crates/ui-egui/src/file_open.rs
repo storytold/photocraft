@@ -561,6 +561,7 @@ impl PhotocraftApp {
                 // Running in the background: Free Transform starts when the layer has landed.
                 Ok(started) if crate::jobs_ui::track_place(self, &name, &started) => return,
                 Ok(result) => {
+                    notices::io_warnings(self, &name, &crate::jobs_ui::warnings_of(&result));
                     if result.get("frame").and_then(serde_json::Value::as_u64).is_some() {
                         continue;
                     }

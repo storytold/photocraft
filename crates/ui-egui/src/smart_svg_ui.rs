@@ -473,6 +473,7 @@ pub(crate) fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         report(app, "The SVG update did not return its fingerprint; syncing stopped".into());
                         continue;
                     }
+                    crate::notices::io_warnings(app, if native { "Vector" } else { "SVG" }, &crate::jobs_ui::warnings_of(&result));
                 }
                 Err(error) => {
                     let stale = error.contains("contents changed") || error.contains("conflicting contents");

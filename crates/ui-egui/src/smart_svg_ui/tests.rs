@@ -767,3 +767,35 @@ fn finished_session_retains_final_save_until_target_is_safe() {
     poll(&mut app, &ctx);
     assert!(app.smart_svg.editing.is_empty());
 }
+
+#[test]
+fn external_svg_save_back_reports_omissions_once_and_keeps_silent_updates_quiet() {
+    for omitted in [false, true] {
+        let (mut app, saves, _) = fixture();
+        open(&mut app);
+        app.smart_svg.pending.as_mut().unwrap().editor = Editor::Illustrator;
+        confirm(&mut app).unwrap();
+        app.ui.notices.clear();
+        let before = app.session.active().unwrap().doc.clone();
+        let child = if omitted { "<image width='2' height='2' href='data:image/png,%00'/>" } else { "" };
+        let svg = SVG.replace("red", "blue").replace("</svg>", &format!("{child}</svg>"));
+        saves.borrow_mut().push_back(Ok(svg.into_bytes()));
+        let ctx = egui::Context::default();
+        poll(&mut app, &ctx);
+        assert_ne!(app.session.active().unwrap().doc, before);
+        assert_eq!(app.smart_svg.editing.len(), 1, "the session keeps the successful new fingerprint");
+        if omitted {
+            assert_eq!(app.ui.notices.len(), 1);
+            assert!(app.ui.notices[0].title.contains("SVG"));
+            assert!(app.ui.notices[0].lines.iter().any(|line| line.contains("embedded") && line.contains("omitted")));
+            assert!(!app.ui.notices[0].error);
+        } else {
+            assert!(app.ui.notices.is_empty(), "{:?}", app.ui.notices);
+        }
+        let notices = app.ui.notices.clone();
+        poll(&mut app, &ctx);
+        assert_eq!(app.ui.notices, notices, "polling the same completed save cannot duplicate a warning");
+        app.session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc, before);
+    }
+}

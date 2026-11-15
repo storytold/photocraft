@@ -1850,3 +1850,29 @@ fn the_last_export_folder_is_a_preference_that_old_files_lack() {
     let old: photocraft_engine::prefs::Preferences = serde_json::from_value(json).unwrap();
     assert_eq!(old.export.last_folder, "");
 }
+
+#[test]
+fn place_picker_contents_reports_svg_omissions_and_keeps_silent_success_quiet() {
+    for omitted in [false, true] {
+        let (mut app, open, _) = app();
+        app.background_jobs = false;
+        let ctx = egui::Context::default();
+        let before = app.session.active().unwrap().doc.layers.len();
+        let child = if omitted { "<image width='2' height='2' href='data:image/png,%00'/>" } else { "" };
+        let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='red'/>{child}</svg>");
+        menus::invoke(&mut app, &ctx, "file.placeEmbedded", json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        answer(&open, Some(FileDialogAnswer::Contents("Picked.svg".into(), svg.into_bytes())));
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), before + 1);
+        assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+        if omitted {
+            assert_eq!(app.ui.notices.len(), 1);
+            assert!(app.ui.notices[0].title.contains("Picked.svg"));
+            assert!(app.ui.notices[0].lines.iter().any(|line| line.contains("embedded") && line.contains("omitted")));
+            assert!(!app.ui.notices[0].error);
+        } else {
+            assert!(app.ui.notices.is_empty(), "{:?}", app.ui.notices);
+        }
+    }
+}

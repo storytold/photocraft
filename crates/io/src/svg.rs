@@ -957,6 +957,16 @@ pub fn import_svg_bounded_images(name: &str, bytes: &[u8], max_decoded_pixels: u
     on_svg_stack(|| import_parsed(name, parse_bounded(bytes, max_decoded_pixels)?, MAX_GROUP_DEPTH, None, false))
 }
 
+/// Layered SVG contents for Stack Mode. Preserve the image-only work allowance of
+/// [`import_svg_bounded_images`], but fail if any referenced image was omitted: Stack Mode
+/// has no warning channel and must not cache a silently incomplete set of source layers.
+pub fn import_svg_bounded_images_strict(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<ImportResult, IoError> {
+    on_svg_stack(|| {
+        let parsed = parse_bounded_work_with(bytes, max_decoded_pixels, true, fonts)?.parsed;
+        import_parsed(name, parsed, MAX_GROUP_DEPTH, None, false)
+    })
+}
+
 /// The pixel bounds [`import_svg_bounded`] gives the drawing, found without rendering any layer
 /// cache. It applies the same bounded parse (decoded-image and nested-SVG budgets) and the same
 /// canvas limit, so a canvas of exactly `max_cached_pixels` (at most 24 MP) fits and one more

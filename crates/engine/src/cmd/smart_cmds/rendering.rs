@@ -25,11 +25,21 @@ pub fn stack_image_with_order(
 ) -> Result<SourceImage> {
     use photocraft_algo::stack::Stat;
     let mut key = cache_key_with_order(bytes, fmt, order);
-    key.0 = *blake3::hash(&[&key.0[..], b"stack:", mode.id().as_bytes()].concat()).as_bytes();
+    // Incomplete warning-aware imports must never share a strict Stack Mode cache.
+    let domain: &[u8] = if photocraft_io::svg::is_svg(bytes) { b"stack-svg-complete-v1:" } else { b"stack:" };
+    key.0 = *blake3::hash(&[&key.0[..], domain, mode.id().as_bytes()].concat()).as_bytes();
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
-    let doc = decode_source_with_order(file_name, bytes, order)?;
+    let doc = if photocraft_io::svg::is_svg(bytes) {
+        // Stack Mode has no omission-warning channel. Decode complete layers before
+        // computing statistics, rather than caching statistics from a partial drawing.
+        photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)
+            .map(|imported| imported.document)
+            .map_err(|error| other(format!("can't read SVG Stack Mode contents: {error}")))?
+    } else {
+        decode_source_with_order(file_name, bytes, order)?
+    };
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
         all => all,
@@ -380,6 +390,10 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
     if photocraft_io::svg::is_svg(&bytes) {
         let mut h = blake3::Hasher::new();
         h.update(&placed_key);
+        if sm.stack_mode.is_some() {
+            // Old placed/filter stages may have been computed from omitted SVG data.
+            h.update(b"stack-svg-complete-v1:");
+        }
         h.update(&crate::color_cmds::document_profile(doc).to_bytes());
         placed_key = *h.finalize().as_bytes();
     }

@@ -2025,3 +2025,28 @@ fn open_as_smart_object_opens_in_the_background_in_name_order() {
     assert!(app.ui.notices.iter().any(|n| n.error && n.title.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn synchronous_dropped_svg_placement_reports_omissions_and_keeps_silent_success_quiet() {
+    for omitted in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        app.background_jobs = false;
+        app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let doc = app.session.active().unwrap().doc.id;
+        let before = app.session.active().unwrap().doc.layers.len();
+        let child = if omitted { "<image width='2' height='2' href='data:image/png,%00'/>" } else { "" };
+        let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='red'/>{child}</svg>");
+        app.drop_places.push_back((doc, crate::file_open::DropPlace::Bytes("Dropped.svg".into(), svg.into_bytes())));
+        app.place_next_dropped(&egui::Context::default());
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), before + 1);
+        assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+        if omitted {
+            assert_eq!(app.ui.notices.len(), 1);
+            assert!(app.ui.notices[0].title.contains("Dropped.svg"));
+            assert!(app.ui.notices[0].lines.iter().any(|line| line.contains("embedded") && line.contains("omitted")));
+            assert!(!app.ui.notices[0].error);
+        } else {
+            assert!(app.ui.notices.is_empty(), "{:?}", app.ui.notices);
+        }
+    }
+}

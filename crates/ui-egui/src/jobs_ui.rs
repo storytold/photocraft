@@ -248,6 +248,7 @@ fn finish_place(app: &mut PhotocraftApp, ctx: &egui::Context, place: PlaceJob, o
     app.sync_views();
     match outcome {
         JobOutcome::Done(result) => {
+            crate::notices::io_warnings(app, &place.name, &warnings_of(&result));
             // The tab can change while the file is placed: the box opens only on the document it
             // was placed in, and never over another one. An image placed into a frame has none.
             if app.ui.transform.is_none()
@@ -451,7 +452,7 @@ pub fn start_save(
     }
 }
 
-fn warnings_of(v: &Value) -> Vec<String> {
+pub(crate) fn warnings_of(v: &Value) -> Vec<String> {
     v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 

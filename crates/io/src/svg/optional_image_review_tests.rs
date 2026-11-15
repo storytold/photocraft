@@ -9,7 +9,16 @@ fn assert_incomplete_image_is_disclosed(text: &str) {
         let bounded = import_svg_bounded_images("damaged.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
         assert_omission_warning(&bounded, 1);
         assert!(import_svg_preview_with_work("damaged.svg", &bytes, MAX_RASTER_PIXELS).is_err());
+        assert!(import_svg_bounded_images_strict("damaged.svg", &bytes, MAX_RASTER_PIXELS).is_err());
         assert!(rasterize(&bytes, 1.).is_err());
+        assert!(rasterize_bounded(&bytes, 1., MAX_RASTER_PIXELS).is_err());
+        let (pixels, warnings) = rasterize_bounded_with_warnings(&bytes, 1., MAX_RASTER_PIXELS).unwrap();
+        assert_eq!(pixels.get(1, 1), [1., 0., 0., 1.]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("SVG: 1 embedded "));
+        assert!(warnings[0].len() < 256);
+        assert!(!warnings[0].contains("data:"));
+        // A warning-aware parse cannot make a later strict render accept an omission.
         assert!(rasterize_bounded(&bytes, 1., MAX_RASTER_PIXELS).is_err());
         assert!(rasterize_rgba8(&bytes).is_err());
     }

@@ -1591,3 +1591,37 @@ fn unsupported_native_path_names_warn_once_without_selecting_or_renaming_paths()
         assert_eq!(app.ui.notices, notices, "the consumed hint must not warn again");
     }
 }
+
+#[test]
+fn completed_placement_notices_survive_tab_changes_and_frame_results_without_changing_silent_success() {
+    for frame in [false, true] {
+        for warnings in [vec!["An embedded image was omitted"], Vec::new()] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+            let target = app.session.active().unwrap().doc.id;
+            app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+            let active = app.session.active().unwrap().doc.clone();
+            let mut result = json!({"warnings": warnings});
+            if frame {
+                result["frame"] = json!(7);
+            }
+            super::finish_place(
+                &mut app,
+                &egui::Context::default(),
+                super::PlaceJob { job: JobId(42), name: "Artwork.svg".into(), doc: target },
+                photocraft_engine::jobs::JobOutcome::Done(result),
+            );
+            assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &active));
+            assert!(app.ui.transform.is_none());
+            if warnings.is_empty() {
+                assert!(app.ui.notices.is_empty());
+            } else {
+                assert_eq!(app.ui.notices.len(), 1);
+                assert!(app.ui.notices[0].title.contains("Artwork.svg"));
+                assert_eq!(app.ui.notices[0].lines, warnings);
+                assert!(!app.ui.notices[0].error);
+                assert!(app.ui.status.contains("omitted"));
+            }
+        }
+    }
+}
