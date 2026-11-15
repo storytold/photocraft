@@ -32,15 +32,17 @@ fn harness(text: &str, seen: Rc<Cell<(bool, bool)>>) -> egui_kittest::Harness<'s
 
 /// `harness` that also runs `extra` every frame before the dialog, for drawing another window.
 fn harness_with(text: &str, seen: Rc<Cell<(bool, bool)>>, extra: impl FnMut(&egui::Context) + 'static) -> egui_kittest::Harness<'static, PhotocraftApp> {
-    harness_ordered(text, seen, extra, false)
+    harness_ordered(text, seen, extra, false, false)
 }
 
-/// `harness_with`, `after` choosing whether `extra` draws after the dialog instead of before it.
+/// `harness_with`, `after` choosing whether `extra` draws after the dialog instead of before it, and
+/// `shortcuts` running the real per-frame key handling before the windows, in frame.rs's order.
 fn harness_ordered(
     text: &str,
     seen: Rc<Cell<(bool, bool)>>,
     mut extra: impl FnMut(&egui::Context) + 'static,
     after: bool,
+    shortcuts: bool,
 ) -> egui_kittest::Harness<'static, PhotocraftApp> {
     let mut app = app_with_text(text);
     menu(&mut app, "edit.checkSpelling", &json!({})).unwrap().unwrap();
@@ -48,6 +50,9 @@ fn harness_ordered(
     let spell = app.ui.type_panels.spell.take();
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
         move |ui, app| {
+            if shortcuts {
+                crate::shortcuts::handle(app, ui.ctx());
+            }
             if !after {
                 extra(ui.ctx());
             }
@@ -145,10 +150,18 @@ fn enter_on_the_focused_change_button_runs_change() {
 }
 
 fn other_window() -> impl FnMut(&egui::Context) {
+    other_window_focusing(Rc::new(Cell::new(false)))
+}
+
+/// The other window's field takes the focus (a request, not a click) on the one frame `take_focus` is set.
+fn other_window_focusing(take_focus: Rc<Cell<bool>>) -> impl FnMut(&egui::Context) {
     let mut buf = String::new();
     move |ctx| {
         egui::Window::new("Other").show(ctx, |ui| {
-            ui.add(egui::TextEdit::singleline(&mut buf)).accessible_name("Other field");
+            let field = ui.add(egui::TextEdit::singleline(&mut buf)).accessible_name("Other field");
+            if take_focus.replace(false) {
+                field.request_focus();
+            }
         });
     }
 }
@@ -178,12 +191,29 @@ fn enter_in_another_window_leaves_check_spelling_open() {
 #[test]
 fn escape_after_a_window_drawn_later_took_the_focus_leaves_check_spelling_open() {
     let seen = Rc::new(Cell::new((false, false)));
-    let mut h = harness_ordered("Teh cat. Wrold", seen, other_window(), true);
-    // The click gives the later window's field the focus in a frame where the dialog has already
-    // drawn; the very next frame carries Escape.
-    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Other field").click();
-    h.run_steps(1);
+    let take_focus = Rc::new(Cell::new(false));
+    let mut h = harness_ordered("Teh cat. Wrold", seen, other_window_focusing(take_focus.clone()), true, false);
+    // The later window's field takes the focus on one frame, after the dialog has drawn; Escape is
+    // on the very next frame, where egui drops the focus before the dialog runs.
+    take_focus.set(true);
+    h.step();
+    h.key_press(egui::Key::Escape);
+    h.step();
+    h.run_steps(2);
+    assert!(h.state().ui.type_panels.spell.is_some(), "Escape in the later window left Check Spelling open");
+}
+
+#[test]
+fn escape_runs_done_before_the_view_keys_reset_a_rotated_view_or_deselect() {
+    let seen = Rc::new(Cell::new((false, false)));
+    let mut h = harness_ordered("Teh cat. Wrold", seen, |_| {}, false, true);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    let index = h.state().session.active_index().unwrap();
+    h.state_mut().ui.views[index].rotation = 0.5;
+    h.run_steps(2);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
-    assert!(h.state().ui.type_panels.spell.is_some(), "Escape in the later window left Check Spelling open");
+    assert!(h.state().ui.type_panels.spell.is_none(), "Escape closed Check Spelling");
+    assert_eq!(h.state().ui.views[index].rotation, 0.5, "the rotated view was not reset");
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "the selection stays");
 }

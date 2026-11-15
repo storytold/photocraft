@@ -912,13 +912,14 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Esc with no active operation leaves a full screen mode, else deselects (#2674), like ⌘D.
     // The key is never taken from a state that handles Esc itself: menus, dialogs, text fields
     // and inline type returned above, transform, pen, lasso and crop consumed it, and these own
-    // theirs later in the frame: the palette, the canvas and layer menus, the brush picker,
+    // theirs later in the frame: Check Spelling (Esc is its Done), the palette, the canvas and layer menus, the brush picker,
     // Rotate View, Adaptive Wide Angle, the Filter Gallery, the TIFF prompt, any open egui popup
     // and the toolbar tool and "…" flyouts. A canvas drag in progress (a marquee being drawn) keeps it too.
     let esc_taken = app.drag.is_some()
         // A Direct Selection drag (a Cmd-drag on an anchor) never reaches `app.drag`: Esc must not
         // leave full screen or deselect pixels while its release is still to come (#13072).
         || (app.ui.tool == Tool::DeleteAnchorPoint && app.ui.direct_selection.drag.is_some())
+        || app.ui.type_panels.spell.is_some()
         || app.ui.palette_open
         || app.ui.canvas_tool_menu.is_some()
         || app.ui.layer_menu.is_some()
