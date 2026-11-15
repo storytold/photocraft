@@ -794,8 +794,11 @@ fn confirm_delete_set(ui: &egui::Ui, name: &str, opening: bool) -> Option<bool> 
         ui.label(crate::i18n::fmt(tl!("Are you sure you want to delete {set}?"), &[("set", name)]));
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("No"), 84.0).focus(opening), DialogButton::new(ButtonRole::Alternate, tl!("Yes"), 84.0)])
-                .map(|role| role == ButtonRole::Alternate)
+            dialog_buttons(
+                ui,
+                &[DialogButton::new(ButtonRole::Default, tl!("No"), 84.0).focus(opening), DialogButton::new(ButtonRole::Alternate, tl!("Yes"), 84.0)],
+            )
+            .map(|role| role == ButtonRole::Alternate)
         })
         .inner
     });
