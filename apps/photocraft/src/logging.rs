@@ -219,7 +219,7 @@ fn prune_instance_logs(dir: &Path) {
         // A missing lock file means nobody holds it; an unknown lock state counts as running.
         let running = match OpenOptions::new().read(true).write(true).open(instance_lock(dir, pid)) {
             Ok(lock) => !try_hold(&lock).unwrap_or(false),
-            Err(_) => false,
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
         };
         if !running {
             let modified = entry.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
@@ -542,6 +542,15 @@ mod tests {
         let held = File::create(instance_lock(&dir, 5)).expect("lock file");
         held.try_lock().expect("hold");
 
+        // An older log whose lock cannot be opened has an unknown owner, so keep it too.
+        let unknown = instance_log(&dir, 6);
+        std::fs::write(&unknown, "unknown owner").expect("write");
+        File::options().write(true).open(&unknown).expect("open").set_modified(now - Duration::from_secs(1000)).expect("mtime");
+        let unknown_lock = instance_lock(&dir, 6);
+        std::fs::create_dir(&unknown_lock).expect("unusable lock path");
+        let error = OpenOptions::new().read(true).write(true).open(&unknown_lock).expect_err("a directory is not a lock file");
+        assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+
         let second = rotate(&dir).expect("second start");
         assert_eq!(second.path, instance_log(&dir, std::process::id()));
         // The newest KEEP finished ones stay, the rest go with their lock files.
@@ -549,6 +558,8 @@ mod tests {
         assert!(!instance_log(&dir, 2).exists() && !instance_log(&dir, 1).exists());
         assert!(!instance_lock(&dir, 2).exists());
         assert_eq!(read(&live), "live");
+        assert_eq!(read(&unknown), "unknown owner");
+        assert!(unknown_lock.is_dir());
         drop((first, second, held));
         let _ = std::fs::remove_dir_all(&dir);
     }
