@@ -92,6 +92,9 @@ impl Ask {
 
 /// The setup window. Bound to the document that started the estimate.
 struct Window {
+    /// Which setup this is. A new one is made by [`start`] and by Back, so an answer (a picked
+    /// folder) meant for an earlier setup is told apart from this one's.
+    id: u64,
     doc: DocId,
     /// The channel and quality asked for when Estimate Depth was chosen, used when setup ends.
     ask: Ask,
@@ -125,6 +128,8 @@ impl Window {
 #[derive(Default)]
 pub struct DepthAi {
     window: Option<Window>,
+    /// The id the next setup gets.
+    next_id: u64,
     /// A folder the person picked, waiting for the next frame to start its plan worker (the file
     /// dialog's answer arrives without an egui context).
     pending: Option<Folder>,
@@ -249,11 +254,28 @@ pub fn start(app: &mut PhotocraftApp) {
         }
     };
     let (tx, rx) = mpsc::channel();
-    app.depth_ai.window = Some(Window { doc, ask, host, tx, rx, stage: Stage::Loading, working: false, started: false, provider: None, error: None });
+    let id = new_setup_id(app);
+    app.depth_ai.window = Some(Window { id, doc, ask, host, tx, rx, stage: Stage::Loading, working: false, started: false, provider: None, error: None });
 }
 
-/// Close the window and stop its download.
+/// A fresh setup identity.
+fn new_setup_id(app: &mut PhotocraftApp) -> u64 {
+    app.depth_ai.next_id = app.depth_ai.next_id.wrapping_add(1);
+    app.depth_ai.next_id
+}
+
+/// Close the window when the document it was started for is no longer open: its setup could only
+/// end in an estimate for a document that is gone.
+pub fn cancel_stale(app: &mut PhotocraftApp) {
+    let gone = app.depth_ai.window.as_ref().is_some_and(|w| !app.session.documents().iter().any(|d| d.doc.id == w.doc));
+    if gone {
+        cancel(app);
+    }
+}
+
+/// Close the window and stop its download. A folder picked for it and not yet used is dropped.
 pub fn cancel(app: &mut PhotocraftApp) {
+    app.depth_ai.pending = None;
     if let Some(mut w) = app.depth_ai.window.take()
         && let Stage::Setup(session) = &mut w.stage
     {
@@ -373,15 +395,23 @@ fn finish(app: &mut PhotocraftApp, current: Option<DocId>) -> Option<Ask> {
 /// Ask for a folder, then rebuild the plan with it. `existing` is true for a folder that already
 /// holds model files (linked for discovery), false for the folder downloads go to.
 fn pick_folder(app: &mut PhotocraftApp, existing: bool) {
+    // The file dialog answers later: only the setup that asked takes the answer.
+    let Some(id) = app.depth_ai.window.as_ref().map(|w| w.id) else { return };
     let asked = app.ask_folder(move |app, path| {
-        if app.depth_ai.window.is_some() {
-            let path = PathBuf::from(path);
-            app.depth_ai.pending = Some(if existing { Folder::Existing(path) } else { Folder::Destination(path) });
-        }
+        folder_answered(app, id, existing, path);
         Ok(Value::Null)
     });
     if let (Err(e), Some(w)) = (asked, app.depth_ai.window.as_mut()) {
         w.error = Some(e);
+    }
+}
+
+/// A folder was picked for the setup `id`. It is kept only while that setup is the open one; after
+/// Back or a close (and a new start) it belongs to nobody.
+fn folder_answered(app: &mut PhotocraftApp, id: u64, existing: bool, path: String) {
+    if app.depth_ai.window.as_ref().is_some_and(|w| w.id == id) {
+        let path = PathBuf::from(path);
+        app.depth_ai.pending = Some(if existing { Folder::Existing(path) } else { Folder::Destination(path) });
     }
 }
 
@@ -548,7 +578,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// answers channel is replaced, so a worker still running from before (a plan, a choice, an
 /// adoption) sends into a channel nobody reads and cannot move this window to a stale screen.
 fn go_back(app: &mut PhotocraftApp) {
+    // It restarts the setup: a folder picked for the old one is not this one's.
+    app.depth_ai.pending = None;
+    let id = new_setup_id(app);
     if let Some(w) = app.depth_ai.window.as_mut() {
+        w.id = id;
         if let Stage::Setup(session) = &mut w.stage {
             session.cancel();
         }
@@ -721,6 +755,53 @@ mod tests {
         // The stale worker's answer goes nowhere, and nothing is waiting in the window's channel.
         assert!(stale.send(Msg::Failed("stale".into())).is_err());
         assert!(matches!(app.depth_ai.window.as_ref().unwrap().rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    /// Closing the document the setup was started for closes the window (and stops its download).
+    #[test]
+    fn closing_the_document_closes_the_setup_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app(dir.path());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        start(&mut app);
+        let started_on = app.depth_ai.window.as_ref().map(|w| w.doc).unwrap();
+        // The window's document is still open: nothing is cancelled.
+        cancel_stale(&mut app);
+        assert!(app.depth_ai.window.is_some());
+        // Closed behind the app's back, so the explicit cleanup is what is tested.
+        app.session.execute("file.close", json!({})).unwrap();
+        assert!(!app.session.documents().iter().any(|d| d.doc.id == started_on));
+        cancel_stale(&mut app);
+        assert!(app.depth_ai.window.is_none());
+    }
+
+    /// A folder answered after Back, or after the window was closed and another one opened, is not
+    /// taken by the new setup.
+    #[test]
+    fn a_folder_answer_for_an_earlier_setup_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app(dir.path());
+        start(&mut app);
+        let asked = app.depth_ai.window.as_ref().map(|w| w.id).unwrap();
+        // The answer for the setup that asked is kept.
+        folder_answered(&mut app, asked, false, "/models".into());
+        assert!(matches!(&app.depth_ai.pending, Some(Folder::Destination(p)) if p == &PathBuf::from("/models")));
+        app.depth_ai.pending = None;
+        // After Back, the setup is a new one.
+        go_back(&mut app);
+        assert_ne!(app.depth_ai.window.as_ref().map(|w| w.id), Some(asked));
+        folder_answered(&mut app, asked, true, "/models".into());
+        assert!(app.depth_ai.pending.is_none());
+        // After a close and a new start too, and a pick waiting at the close is dropped.
+        let current = app.depth_ai.window.as_ref().map(|w| w.id).unwrap();
+        folder_answered(&mut app, current, true, "/found".into());
+        assert!(matches!(&app.depth_ai.pending, Some(Folder::Existing(_))));
+        cancel(&mut app);
+        assert!(app.depth_ai.pending.is_none());
+        start(&mut app);
+        assert_ne!(app.depth_ai.window.as_ref().map(|w| w.id), Some(current));
+        folder_answered(&mut app, current, false, "/models".into());
+        assert!(app.depth_ai.pending.is_none());
     }
 
     #[test]

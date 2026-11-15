@@ -90,6 +90,9 @@ pub struct AiState {
 #[derive(Default)]
 struct Inner {
     host: Mutex<Option<AiHost>>,
+    /// Why the standard host could not be made (no home folder), kept so the commands say it
+    /// instead of the generic "not set up in this frontend".
+    host_error: Mutex<Option<String>>,
     tools: Mutex<Option<Arc<AppTools>>>,
     status: Mutex<Option<(web_time::Instant, Option<String>)>>,
     /// Bumped when the cached status is forgotten, so a refresh that began before is not stored.
@@ -107,7 +110,7 @@ const CHECKING: &str = "Checking Estimate Depth\u{2026}";
 
 impl Inner {
     fn host(&self) -> std::result::Result<AiHost, String> {
-        lock(&self.host).clone().ok_or_else(|| "Estimate Depth is not set up in this frontend".to_owned())
+        lock(&self.host).clone().ok_or_else(|| lock(&self.host_error).clone().unwrap_or_else(|| "Estimate Depth is not set up in this frontend".to_owned()))
     }
 
     fn tools(&self) -> std::result::Result<Arc<AppTools>, String> {
@@ -155,13 +158,35 @@ impl AiState {
     /// Uses the person's real shared AI store (`CRAFT_AI_DIR` moves it). The desktop app and the
     /// CLI call this; the error is the sentence to show (no home folder).
     pub fn use_standard_host(&self) -> std::result::Result<(), String> {
-        self.set_host(AiHost::standard()?);
-        Ok(())
+        match AiHost::standard() {
+            Ok(host) => {
+                self.set_host(host);
+                Ok(())
+            }
+            Err(reason) => {
+                self.fail_host(reason.clone());
+                Err(reason)
+            }
+        }
+    }
+
+    /// Keeps `reason` as why there is no host, so [`host`](Self::host) and the status say it.
+    fn fail_host(&self, reason: String) {
+        *lock(&self.inner.host_error) = Some(reason);
+        self.forget_status();
+    }
+
+    /// The same AI layer for another session: the host, the tools and the status are this one's
+    /// (a scratch session of Batch or a droplet runs actions that estimate depth), and so is the
+    /// test hook. A session without a host gives one without a host, so tests stay isolated.
+    pub fn shared(&self) -> AiState {
+        AiState { estimator: self.estimator.clone(), inner: self.inner.clone() }
     }
 
     /// Uses `host` instead of the real store (tests). Forgets the tools and the cached status.
     pub fn set_host(&self, host: AiHost) {
         *lock(&self.inner.host) = Some(host);
+        *lock(&self.inner.host_error) = None;
         *lock(&self.inner.tools) = None;
         self.forget_status();
     }
@@ -196,11 +221,11 @@ impl AiState {
         }
     }
 
-    /// As [`status_reason`](Self::status_reason), but `None` while the first answer is still being
-    /// read (also never blocks). For the command's `enabled` check: an unknown status does not
-    /// refuse the command, whose run reads the status itself with
-    /// [`status_reason_now`](Self::status_reason_now), so a script's first call is not refused
-    /// only because no frame has read the store yet.
+    /// The answer for the command's `enabled` check. Once an answer is known it is returned at
+    /// once (and refreshed in the background when older than a second). The first time, none is
+    /// known, so it is read now, on this thread, and kept: reading `enabled` twice must give one
+    /// answer (a listing of the commands read twice must not change), which a provisional "enabled"
+    /// while a background read runs would not.
     pub fn known_status_reason(&self) -> Option<String> {
         if self.estimator.is_some() {
             return None;
@@ -213,10 +238,7 @@ impl AiState {
                 }
                 reason
             }
-            None => {
-                self.refresh_in_background();
-                None
-            }
+            None => self.inner.refresh(),
         }
     }
 
@@ -457,6 +479,32 @@ mod tests {
         });
         assert!(a.stops.load(Ordering::SeqCst) >= 1);
         assert_eq!(b.stops.load(Ordering::SeqCst), 0);
+    }
+
+    /// The reason the standard host could not be made is what the commands say, until a host is set.
+    #[test]
+    fn a_failed_standard_host_keeps_its_reason() {
+        let state = AiState::default();
+        assert_eq!(state.host().err().as_deref(), Some("Estimate Depth is not set up in this frontend"));
+        state.fail_host("no home folder to keep AI settings in".to_owned());
+        assert_eq!(state.host().err().as_deref(), Some("no home folder to keep AI settings in"));
+        assert_eq!(state.status_reason_now().as_deref(), Some("no home folder to keep AI settings in"));
+        // A host that works replaces the failure.
+        let host = AiHost::new(SharedStore::new("/nonexistent/x.json"), || Err("later".to_owned()));
+        state.set_host(host);
+        assert!(state.host().is_ok());
+        assert_eq!(state.status_reason_now().as_deref(), Some("later"));
+    }
+
+    /// A shared state sees the parent's host and status; one made from a state without a host has none.
+    #[test]
+    fn a_shared_state_uses_the_parents_host() {
+        let parent = AiState::default();
+        assert!(parent.shared().host().is_err());
+        parent.set_host(AiHost::new(SharedStore::new("/nonexistent/x.json"), || Err("parent host".to_owned())));
+        let child = parent.shared();
+        assert!(child.host().is_ok());
+        assert_eq!(child.status_reason_now().as_deref(), Some("parent host"));
     }
 
     #[test]

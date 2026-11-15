@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn a_first_call_before_any_status_read_gets_the_real_reason() {
         // No frame has read the status yet: the command must not be refused as "checking", but
-        // run and report why the tool cannot run.
+        // report why the tool cannot run.
         let dir = tempfile::tempdir().unwrap();
         let mut s = session(16, 16);
         s.depth.ai.set_host(empty_host(dir.path()));
@@ -549,6 +549,23 @@ mod tests {
         let reason = s.depth.ai.status_reason_now().expect("nothing is set up");
         assert!(e.contains(&reason), "{e} vs {reason}");
         assert_eq!(channels(&s), 0);
+    }
+
+    /// Reading whether the command is enabled twice in a row gives one answer, before any status
+    /// was read: a provisional "enabled" while a background read runs would flip a command listing.
+    #[test]
+    fn enabled_reads_on_a_fresh_session_agree() {
+        let dir = tempfile::tempdir().unwrap();
+        let not_set_up = session(8, 8);
+        not_set_up.depth.ai.set_host(empty_host(dir.path()));
+        let no_host = session(8, 8);
+        for (case, s) in [("tool not set up", &not_set_up), ("no host", &no_host)] {
+            let first = s.disabled_reason("image.estimateDepth");
+            let second = s.disabled_reason("image.estimateDepth");
+            assert!(first.is_some(), "{case}: the tool cannot run");
+            assert_eq!(first, second, "{case}");
+            assert!(!s.is_enabled("image.estimateDepth"), "{case}");
+        }
     }
 
     #[test]

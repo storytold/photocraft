@@ -29,6 +29,9 @@ mod web {
 
     pub fn show(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
 
+    /// There is no setup window to close.
+    pub fn cancel_stale(_app: &mut PhotocraftApp) {}
+
     pub fn inspect(_app: &PhotocraftApp) -> Value {
         Value::Null
     }
