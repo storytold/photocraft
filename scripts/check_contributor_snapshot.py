@@ -95,7 +95,8 @@ def check(root, revision='HEAD'):
         if not parents:
             raise ValueError('Uncovered root commit ' + commit)
         parent = parents[0]
-        paths = set(git(root, 'diff', '--name-only', '--no-renames', parent, commit).splitlines())
+        # Keep paths repository-wide even from a subdirectory with diff.relative enabled.
+        paths = set(git(root, 'diff', '--name-only', '--no-renames', '--no-relative', parent, commit).splitlines())
         other = paths - {SNAPSHOT}
         if not other:
             continue

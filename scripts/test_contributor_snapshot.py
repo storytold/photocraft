@@ -68,6 +68,16 @@ class SnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'omits change'):
             check(self.root)
 
+    def test_relative_diff_from_subdirectory_still_checks_root_changes(self):
+        self.git('config', '--local', 'diff.relative', 'true')
+        self.snapshot()
+        subdir = self.root / 'subdir'
+        subdir.mkdir()
+        self.write('source.txt', 'new work')
+        uncovered = self.commit()
+        with self.assertRaisesRegex(ValueError, rf'^Snapshot omits change at {uncovered}: source\.txt$'):
+            check(subdir)
+
     def test_reverted_work_still_needs_credit(self):
         self.snapshot()
         self.write('source.txt', 'new work')
