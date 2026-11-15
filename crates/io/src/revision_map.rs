@@ -18,12 +18,24 @@
 //!   u8  flags                     (bit 0: green box; bit 1: green marked by hand)
 //!   u16 note_len, UTF-8 note
 //! ```
+//!
+//! Marker groups live in their own private resource (0x0F01), so the marker block above keeps the
+//! exact layout earlier builds read:
+//! ```text
+//! u32 count
+//! per group:
+//!   u32 id, u16 name_len, UTF-8 name
+//!   u32 member_count, per member: u32 marker_index
+//! ```
 
-use photocraft_doc::{Document, LayerId, RevisionMarker};
+use photocraft_doc::{Document, LayerId, RevisionGroup, RevisionMarker};
 
 /// Private PSD image resource id for the revision markers (0x0F00 = 3840, inside the spec's
 /// private 0x0BB7–0x0FFF range).
 pub const REVISION_MARKERS: u16 = 0x0F00;
+
+/// Private PSD image resource id for the marker groups, right after [`REVISION_MARKERS`].
+pub const REVISION_GROUPS: u16 = 0x0F01;
 
 /// Append a big-endian `u16`, the width of the name and note length fields.
 fn put_u16(out: &mut Vec<u8>, v: u16) {
@@ -172,6 +184,8 @@ pub fn decode(data: &[u8]) -> Option<Vec<RevisionMarker>> {
             done,
             manual_done,
             note,
+            // Group membership is written to its own resource (see `encode_groups`).
+            group: None,
         });
     }
     if r.p != data.len() {
@@ -180,11 +194,105 @@ pub fn decode(data: &[u8]) -> Option<Vec<RevisionMarker>> {
     Some(out)
 }
 
+/// Encode the document's groups and which markers belong to each; `None` when the document has no
+/// groups (nothing to write, and any imported copy is left alone).
+pub fn encode_groups(doc: &Document) -> Option<Vec<u8>> {
+    let groups: Vec<(&RevisionGroup, Vec<u32>)> = doc
+        .revision_groups
+        .iter()
+        .map(|g| {
+            let members: Vec<u32> = doc
+                .revision_markers
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.group == Some(g.id))
+                .map(|(i, _)| i as u32)
+                .collect();
+            (g, members)
+        })
+        .filter(|(_, members)| !members.is_empty())
+        .collect();
+    if groups.is_empty() {
+        return None;
+    }
+    let mut out = Vec::new();
+    put_u32(&mut out, groups.len() as u32);
+    for (g, members) in groups {
+        put_u32(&mut out, g.id);
+        put_str(&mut out, &g.name);
+        put_u32(&mut out, members.len() as u32);
+        for i in members {
+            put_u32(&mut out, i);
+        }
+    }
+    Some(out)
+}
+
+/// Parse a groups block into its groups and the marker indices each covers; `None` when the block
+/// is malformed.
+pub fn decode_groups(data: &[u8]) -> Option<Vec<(RevisionGroup, Vec<usize>)>> {
+    let mut r = R { d: data, p: 0 };
+    let count = r.u32()? as usize;
+    if count > 10_000 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let id = r.u32()?;
+        let name = r.str()?;
+        let n = r.u32()? as usize;
+        if n > 1_000_000 {
+            return None;
+        }
+        let mut members = Vec::with_capacity(n);
+        for _ in 0..n {
+            members.push(r.u32()? as usize);
+        }
+        out.push((RevisionGroup { id, name }, members));
+    }
+    if r.p != data.len() {
+        return None;
+    }
+    Some(out)
+}
+
+/// Point the markers of an imported document at the groups its groups resource lists. Markers past
+/// the end of the list are ignored, and a group nothing claims is dropped: the markers are
+/// authoritative, the resource only says which of them belong together.
+pub fn apply_groups(doc: &mut Document, data: &[u8]) -> bool {
+    let Some(groups) = decode_groups(data) else { return false };
+    if groups.is_empty() {
+        return false;
+    }
+    doc.revision_groups.clear();
+    let n = doc.revision_markers.len();
+    for (g, members) in groups {
+        let mut kept = Vec::new();
+        for i in members {
+            if i < n && kept.iter().all(|k| *k != i) {
+                kept.push(i);
+            }
+        }
+        if kept.is_empty() {
+            continue;
+        }
+        for i in kept {
+            doc.revision_markers[i].group = Some(g.id);
+        }
+        doc.revision_groups.push(g);
+    }
+    !doc.revision_groups.is_empty()
+}
+
 /// Whether an imported copy of the resource still describes the document. Once the document has
 /// its own markers (added, edited or detected in this session), the stale imported bytes are
 /// replaced by `encode`'s output on save.
 pub fn keep_resource(doc: &Document, id: u16) -> bool {
-    id == REVISION_MARKERS && doc.revision_markers.is_empty()
+    match id {
+        REVISION_MARKERS => doc.revision_markers.is_empty(),
+        REVISION_GROUPS => doc.revision_groups.is_empty(),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -203,6 +311,7 @@ mod tests {
             done: false,
             manual_done: false,
             note: "改这里".into(),
+            group: None,
         }
     }
 
@@ -234,6 +343,37 @@ mod tests {
         let back = decode(&data).unwrap();
         assert!(back[0].manual_done, "the hand-marked flag survives the resource");
         assert_eq!(back, d.revision_markers);
+    }
+
+    /// Groups are written to their own resource and read back onto the markers they list, and the
+    /// marker block itself keeps the exact bytes it had before groups existed.
+    #[test]
+    fn groups_roundtrip_on_their_own() {
+        let mut d = Document::new("m", photocraft_geom::Size::new(100, 100), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        d.revision_markers.push(marker("A"));
+        d.revision_markers.push(marker("B"));
+        let plain = encode(&d).unwrap();
+        d.revision_groups.push(RevisionGroup { id: 3, name: "第 3 页".into() });
+        d.revision_markers[0].group = Some(3);
+        d.revision_markers[1].group = Some(3);
+        // The markers' own block is untouched by grouping: older builds read it as they always did.
+        assert_eq!(encode(&d).unwrap(), plain, "grouping does not change the marker block");
+        let data = encode_groups(&d).unwrap();
+        let back = decode_groups(&data).unwrap();
+        assert_eq!(back, vec![(RevisionGroup { id: 3, name: "第 3 页".into() }, vec![0, 1])]);
+        // Applying it points the markers at the group and keeps the group.
+        let mut fresh = Document::new("m", photocraft_geom::Size::new(100, 100), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        fresh.revision_markers = d.revision_markers.clone();
+        for m in &mut fresh.revision_markers {
+            m.group = None;
+        }
+        assert!(apply_groups(&mut fresh, &data), "the markers take the group");
+        assert_eq!(fresh.revision_markers[0].group, Some(3));
+        assert_eq!(fresh.revision_groups.len(), 1, "with its name");
+        // A document with no groups writes no resource at all.
+        let mut lone = Document::new("m", photocraft_geom::Size::new(100, 100), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        lone.revision_markers.push(marker("A"));
+        assert!(encode_groups(&lone).is_none(), "nothing to say about groups");
     }
 
     /// Bytes that are not a marker block, and a truncated one, are rejected rather than panicking.

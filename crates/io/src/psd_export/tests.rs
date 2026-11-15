@@ -864,6 +864,7 @@ fn unknown_imported_resources_survive_a_save_that_rewrites_the_markers() {
         done: false,
         manual_done: false,
         note: String::new(),
+        group: None,
     });
     let file = document_to_psd(&doc);
     let kept = |id: u16| file.resources.iter().filter(|r| r.id == id).count();

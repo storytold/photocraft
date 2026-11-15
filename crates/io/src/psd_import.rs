@@ -1171,6 +1171,8 @@ fn read_initial_metadata(
     warnings: &mut Vec<String>,
 ) -> (bool, Option<String>) {
     let header = &file.header;
+    // The groups resource lists marker indices, so it is applied once every marker has been read.
+    let mut group_resource: Option<Vec<u8>> = None;
     for resource in &file.resources {
         match resource.id {
             ids::RESOLUTION_INFO => {
@@ -1217,11 +1219,21 @@ fn read_initial_metadata(
                     doc.metadata.psd_resources.push((resource.id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone())));
                 }
             }
+            crate::revision_map::REVISION_GROUPS => {
+                if crate::revision_map::decode_groups(&resource.data).is_some() {
+                    group_resource = Some(resource.data.clone());
+                } else {
+                    doc.metadata.psd_resources.push((resource.id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone())));
+                }
+            }
             id if MAPPED_RESOURCES.contains(&id) => {}
             id => doc.metadata.psd_resources.push((id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone()))),
         }
     }
     crate::guides_map::apply_colors(doc);
+    if let Some(data) = group_resource {
+        crate::revision_map::apply_groups(doc, &data);
+    }
     doc.metadata.psd_global_blocks.extend(global.iter().cloned());
     // A 16/32-bit file whose layer block can't be parsed would otherwise open as a flattened
     // file without a word (#2700). The raw block is kept, but a PSD save writes the document's

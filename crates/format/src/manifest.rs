@@ -95,6 +95,9 @@ pub struct DocM {
     /// `photocraft_doc::revision`); `done` markers turned green by detection.
     #[serde(default)]
     pub revision_markers: Vec<photocraft_doc::RevisionMarker>,
+    /// Groups the revision markers belong to (see `photocraft_doc::revision`).
+    #[serde(default)]
+    pub revision_groups: Vec<photocraft_doc::RevisionGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

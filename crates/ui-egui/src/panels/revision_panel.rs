@@ -14,11 +14,12 @@ use crate::canvas::revision_overlay::{DONE, TODO};
 /// per marker.
 pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let Some(st) = app.session.active() else {
+    if app.session.active().is_none() {
         empty(ui, tl!("No document"));
         return;
-    };
-    let n = st.doc.revision_markers.len();
+    }
+    let n = app.session.active().map_or(0, |st| st.doc.revision_markers.len());
+    let mut opacity = app.session.prefs().workspace.revision_opacity() * 100.0;
     ui.horizontal_wrapped(|ui| {
         if ui.button(tl!("Add from Selection")).clicked() {
             add_from_selection(app);
@@ -37,6 +38,23 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if ui.add_enabled(can, egui::Button::new(tl!("Clear All"))).clicked() {
             let _ = app.run("revision.clear", json!({}));
         }
+        // Grouping keeps the frames out of the Layers panel and puts them under one header here:
+        // picking the header picks every frame, so they move as one on the canvas.
+        let picked_n = app.revision_tool.selected.len();
+        if ui.add_enabled(picked_n >= 2, egui::Button::new(tl!("Group"))).on_hover_text(tl!("Group the frames picked on the canvas")).clicked() {
+            let _ = app.run("revision.group", json!({ "indices": app.revision_tool.selected.clone() }));
+        }
+        if ui.add_enabled(picked_n >= 1, egui::Button::new(tl!("Ungroup"))).clicked() {
+            let _ = app.run("revision.ungroup", json!({ "indices": app.revision_tool.selected.clone() }));
+        }
+        // How solid the frames draw over the artwork: the same preference the tool's options bar
+        // edits, so the boxes can be faded without leaving the panel.
+        ui.add_space(6.0);
+        ui.label(RichText::new(tl!("Opacity")).size(11.5).color(t.text_dim));
+        if crate::widgets::value_field_named(ui, tl!("Opacity"), &mut opacity, 5.0..=100.0, "%", 62.0).changed() {
+            let v = (opacity / 100.0).clamp(0.05, 1.0);
+            app.session.prefs.edit(|p| p.workspace.revision_marker_opacity = v);
+        }
     });
     if n == 0 {
         ui.add_space(4.0);
@@ -48,41 +66,38 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     }
     ui.separator();
+    // The rows, in the order a layer stack reads: the frames that stand on their own first, then one
+    // header per group with its frames indented under it. Built fresh each frame, because a row's
+    // Delete changes the list while it is being laid out; `row` skips an index that has gone.
+    let plan = row_plan(app);
     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
-        // The rows are drawn from the live list, not to the length read before the buttons ran:
-        // Delete and Clear All shrink the list while these rows are being laid out, and asking for
-        // the marker at the old index after that ran off the end of the list and took PhotoCraft
-        // down with it.
-        let mut i = 0;
-        loop {
-            let len = app.session.active().map_or(0, |st| st.doc.revision_markers.len());
-            if i >= len {
-                break;
+        for r in plan {
+            match r {
+                Row::Group(id) => group_header(app, ui, id, &t),
+                Row::Marker(i, indented) => row(app, ui, i, &t, indented),
             }
-            row(app, ui, i, &t);
             ui.add_space(2.0);
-            // The row's own Delete removed this marker, so the next one slid down into its place:
-            // draw it as the same index rather than stepping over it.
-            if app.session.active().map_or(0, |st| st.doc.revision_markers.len()) == len {
-                i += 1;
-            }
         }
     });
 }
 
 /// Draw one marker: its state dot, the editable name, and the buttons that act on it (Delete,
 /// Reset, Bind/Unbind).
-fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, i: usize, t: &Tokens) {
+fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, i: usize, t: &Tokens, indented: bool) {
     // Read the marker's row data up front and drop the document borrow, so the button closures
     // below can call `app.run` (which borrows the app mutably) without a conflict.
     let (name, layer_id, done, pos, size) = {
         let Some(st) = app.session.active() else { return };
-        let m = &st.doc.revision_markers[i];
+        // A Delete pressed on the row above shrank the list after this plan was laid out.
+        let Some(m) = st.doc.revision_markers.get(i) else { return };
         (m.name.clone(), m.layer_id, m.done, m.pos, m.size)
     };
     let bound_name = layer_id.and_then(|id| app.session.active()?.doc.layer(id).map(|l| l.name.clone()));
     let color = if done { DONE } else { TODO };
     ui.horizontal(|ui| {
+        if indented {
+            ui.add_space(16.0);
+        }
         ui.colored_label(color, if done { "✓" } else { "●" });
         // The row's controls are laid out from the right edge inwards, Delete first: in a narrow
         // dock the row used to push the ✕ out of sight, which read as "markers cannot be deleted".
@@ -152,6 +167,73 @@ fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, i: usize, t: &Tokens) {
         round1(size[1])
     );
     ui.label(RichText::new(pos).size(10.5).color(t.text_dim));
+}
+
+/// One line of the panel's list: a group's header, or a marker (indented when its group's header is
+/// above it).
+#[derive(Clone, Copy, PartialEq)]
+enum Row {
+    Group(u32),
+    Marker(usize, bool),
+}
+
+/// The rows to draw: loose markers first, then each group followed by its members.
+fn row_plan(app: &PhotocraftApp) -> Vec<Row> {
+    let Some(doc) = app.session.active().map(|st| &st.doc) else { return Vec::new() };
+    let mut plan = Vec::with_capacity(doc.revision_markers.len() + doc.revision_groups.len());
+    for (i, m) in doc.revision_markers.iter().enumerate() {
+        if m.group.is_none() {
+            plan.push(Row::Marker(i, false));
+        }
+    }
+    for g in &doc.revision_groups {
+        let members: Vec<usize> =
+            doc.revision_markers.iter().enumerate().filter(|(_, m)| m.group == Some(g.id)).map(|(i, _)| i).collect();
+        if members.is_empty() {
+            continue;
+        }
+        plan.push(Row::Group(g.id));
+        for i in members {
+            plan.push(Row::Marker(i, true));
+        }
+    }
+    plan
+}
+
+/// A group's header row: clicking the arrow picks every frame in it (so the next canvas drag moves
+/// the lot), the name is editable in place, and Ungroup dissolves it.
+fn group_header(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: u32, t: &Tokens) {
+    let (name, members) = {
+        let Some(doc) = app.session.active().map(|st| &st.doc) else { return };
+        let name = doc.revision_groups.iter().find(|g| g.id == id).map(|g| g.name.clone()).unwrap_or_default();
+        let members: Vec<usize> =
+            doc.revision_markers.iter().enumerate().filter(|(_, m)| m.group == Some(id)).map(|(i, _)| i).collect();
+        (name, members)
+    };
+    if members.is_empty() {
+        return;
+    }
+    let picked_all = members.iter().all(|i| app.revision_tool.selected.contains(i));
+    ui.horizontal(|ui| {
+        let arrow = if picked_all { "▾" } else { "▸" };
+        let toggle = ui.add(egui::Button::new(RichText::new(arrow).size(12.5)).frame(false)).on_hover_text(tl!("Pick every frame of this group"));
+        if toggle.clicked() {
+            app.revision_tool.selected = members.clone();
+        }
+        let mut name = name;
+        if ui
+            .add(egui::TextEdit::singleline(&mut name).desired_width(ui.available_width().max(60.0)).font(egui::FontId::proportional(11.5)))
+            .changed()
+        {
+            let _ = app.run("revision.renameGroup", json!({ "group": id, "name": name }));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add(egui::Button::new(RichText::new(tl!("Ungroup")).size(11.5)).small()).clicked() {
+                let _ = app.run("revision.ungroup", json!({ "group": id }));
+            }
+            ui.label(RichText::new(format!("{}", members.len())).size(10.5).color(t.text_dim));
+        });
+    });
 }
 
 /// A coordinate to one decimal, without a trailing `.0` when it is a whole number.

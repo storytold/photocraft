@@ -25,6 +25,9 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &
     }
     let tool_state = &app.revision_tool;
     let accent = Tokens::get(painter.ctx()).accent;
+    // Preferences ▸ Workspace ▸ Revision marker opacity: how much of the frame the artwork
+    // shows through. The chip's text keeps its colour so the name still reads.
+    let opacity = app.session.prefs().workspace.revision_opacity();
     let canvas = doc.bounds();
     let clip = painter.clip_rect();
     for (i, m) in doc.revision_markers.iter().enumerate() {
@@ -43,7 +46,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &
         if !rect.intersects(clip) || rect.width() < 1.0 || rect.height() < 1.0 {
             continue;
         }
-        let color = if m.done { DONE } else { TODO };
+        let color = faded(if m.done { DONE } else { TODO }, opacity);
         // The picked marker is the one the options bar edits and the one a drag would move.
         let picked = tool_state.selected.contains(&i);
         let width = if picked { 3.0 } else { 2.0 };
@@ -51,27 +54,53 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &
         // screenshotting the manual.
         painter.extend(egui::Shape::dashed_line(&[a, pos2(b.x, a.y), b, pos2(a.x, b.y), a], Stroke::new(width, color), 6.0, 3.0));
         if picked {
-            painter.rect_stroke(rect, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Outside);
+            // The pick stays readable at any opacity, or the frame being edited is lost.
+            painter.rect_stroke(rect, 0.0, Stroke::new(1.0, faded(accent, opacity.max(0.5))), egui::StrokeKind::Outside);
         }
-        draw_label(painter, rect, &m.name, color, m.done);
+        draw_label(painter, rect, &m.name, color, m.done, opacity);
     }
-    // The marker a drag is moving: the frame it would have where the pointer is now, drawn in the
-    // accent colour so the drop reads before the release commits it.
-    if let Some((index, pos)) = tool_state.preview
-        && let Some(m) = doc.revision_markers.get(index)
-    {
-        let a = xf.to_screen(pos[0] as f32, pos[1] as f32);
-        let b = xf.to_screen((pos[0] + m.size[0]) as f32, (pos[1] + m.size[1]) as f32);
-        let rect = Rect::from_two_pos(a, b);
-        if rect.intersects(clip) {
-            painter.extend(egui::Shape::dashed_line(&[a, pos2(b.x, a.y), b, pos2(a.x, b.y), a], Stroke::new(2.0, accent), 4.0, 3.0));
+    // The frames a drag is moving: where each would land, drawn in the accent colour so the drop
+    // reads before the release commits it. A set or a whole group moves as one, so every frame of it
+    // gets its ghost.
+    if let Some(preview) = &tool_state.preview {
+        let ghost = faded(accent, opacity.max(0.5));
+        for (index, pos, size) in &preview.targets {
+            let _ = index;
+            let a = xf.to_screen((pos[0] + preview.dx) as f32, (pos[1] + preview.dy) as f32);
+            let b = xf.to_screen((pos[0] + preview.dx + size[0]) as f32, (pos[1] + preview.dy + size[1]) as f32);
+            let rect = Rect::from_two_pos(a, b);
+            if rect.intersects(clip) {
+                painter.extend(egui::Shape::dashed_line(&[a, pos2(b.x, a.y), b, pos2(a.x, b.y), a], Stroke::new(2.0, ghost), 4.0, 3.0));
+            }
+        }
+        // The smart guides the drag lined up with: one line each, spanning the frames and whatever
+        // they snapped to, so it reads which edges are now on each other.
+        for g in &preview.guides {
+            let stroke = Stroke::new(1.0, faded(accent, opacity.max(0.7)));
+            if g.vertical {
+                let x = xf.to_screen(g.at as f32, 0.0).x;
+                let y0 = xf.to_screen(0.0, g.from as f32).y;
+                let y1 = xf.to_screen(0.0, g.to as f32).y;
+                painter.extend(egui::Shape::dashed_line(&[pos2(x, y0), pos2(x, y1)], stroke, 4.0, 3.0));
+            } else {
+                let y = xf.to_screen(0.0, g.at as f32).y;
+                let x0 = xf.to_screen(g.from as f32, 0.0).x;
+                let x1 = xf.to_screen(g.to as f32, 0.0).x;
+                painter.extend(egui::Shape::dashed_line(&[pos2(x0, y), pos2(x1, y)], stroke, 4.0, 3.0));
+            }
         }
     }
 }
 
+/// `color` at `opacity` (its own alpha kept), for the frames drawn over the artwork.
+fn faded(color: Color32, opacity: f32) -> Color32 {
+    let a = (f32::from(color.a()) * opacity).round().clamp(0.0, 255.0) as u8;
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), a)
+}
+
 /// The marker's name chip at the box's top-left corner (moved above the box when it would run
 /// off the top of the screen).
-fn draw_label(painter: &egui::Painter, rect: Rect, name: &str, color: Color32, done: bool) {
+fn draw_label(painter: &egui::Painter, rect: Rect, name: &str, color: Color32, done: bool, opacity: f32) {
     let mark = if done { "✓ " } else { "◉ " };
     let text = format!("{mark}{name}");
     let font = FontId::proportional(11.0);
@@ -82,6 +111,8 @@ fn draw_label(painter: &egui::Painter, rect: Rect, name: &str, color: Color32, d
     let galley = painter.layout_no_wrap(text, font, color);
     let pad = vec2(3.0, 2.0);
     let bg = Rect::from_min_size(at, galley.size() + pad * 2.0);
-    painter.rect(bg, 2.0, Color32::from_black_alpha(180), Stroke::new(1.0, color), egui::StrokeKind::Middle);
+    // The chip's plate follows the frames' opacity; its text and outline keep the marker's own
+    // colour, so the name stays legible over the artwork it now lets through.
+    painter.rect(bg, 2.0, Color32::from_black_alpha((180.0 * opacity).round() as u8), Stroke::new(1.0, color), egui::StrokeKind::Middle);
     painter.galley(at + pad, galley, color);
 }

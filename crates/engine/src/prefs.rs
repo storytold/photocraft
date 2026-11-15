@@ -428,6 +428,9 @@ pub struct Workspace {
     pub large_tabs: bool,
     pub enable_narrow_options_bar: bool,
     pub remember_workspace_changes: bool,
+    /// How solid the revision markers' boxes and name chips draw on the canvas, 0-1 (1 = as
+    /// before). Lower values let the artwork under a marker be read through it.
+    pub revision_marker_opacity: f32,
 }
 
 impl Default for Workspace {
@@ -440,6 +443,7 @@ impl Default for Workspace {
             large_tabs: false,
             enable_narrow_options_bar: false,
             remember_workspace_changes: true,
+            revision_marker_opacity: 1.0,
         }
     }
 }
@@ -449,6 +453,14 @@ impl Workspace {
     /// height, as in Photoshop, so the document gets more room (see `panels::options_bar`).
     pub fn narrow_options_bar(&self) -> bool {
         self.enable_narrow_options_bar
+    }
+
+    /// The revision markers' opacity, clamped so a hand-edited 0 still shows the frames.
+    pub fn revision_opacity(&self) -> f32 {
+        if self.revision_marker_opacity.is_nan() {
+            return 1.0;
+        }
+        self.revision_marker_opacity.clamp(0.05, 1.0)
     }
 }
 

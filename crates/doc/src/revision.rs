@@ -43,6 +43,9 @@ pub struct RevisionMarker {
     pub manual_done: bool,
     /// Free-form note the author leaves on the marker.
     pub note: String,
+    /// The group the marker belongs to (`None`: on its own, see [`RevisionGroup`]). Markers of one
+    /// group move together and collapse under a single header row in the Revision panel.
+    pub group: Option<u32>,
 }
 
 impl RevisionMarker {
@@ -74,6 +77,25 @@ impl Default for RevisionMarker {
             done: false,
             manual_done: false,
             note: String::new(),
+            group: None,
         }
+    }
+}
+
+/// One group of revision markers: the frames of a run of pages that should be moved (and picked)
+/// as a whole, the way layer groups keep their layers together. The markers name it by `id`; a
+/// group exists exactly as long as one marker carries it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RevisionGroup {
+    /// Identity the markers carry (`RevisionMarker::group`).
+    pub id: u32,
+    /// Name shown on the group's header row in the panel and on its frames.
+    pub name: String,
+}
+
+impl Default for RevisionGroup {
+    fn default() -> Self {
+        Self { id: 0, name: String::new() }
     }
 }

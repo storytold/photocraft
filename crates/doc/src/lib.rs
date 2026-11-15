@@ -41,7 +41,7 @@ pub use effects::{
 pub use frame::Frame;
 pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
-pub use revision::RevisionMarker;
+pub use revision::{RevisionGroup, RevisionMarker};
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
 pub use photocraft_raster::Surface;
@@ -959,6 +959,9 @@ pub struct Document {
     /// Revision markers: red boxes over content that must be changed (see [`revision`]). Detected
     /// as changed (green) when the framed pixels differ from the marker's snapshot.
     pub revision_markers: Vec<RevisionMarker>,
+    /// Groups the markers can belong to (see [`RevisionGroup`]): picking one picks every frame in
+    /// it, and dragging one moves the whole group.
+    pub revision_groups: Vec<RevisionGroup>,
 }
 
 /// The encoder settings a document's file was opened or saved with: what File › Save and the
@@ -1035,6 +1038,7 @@ impl Document {
             timeline: None,
             file_encoding: FileEncoding::default(),
             revision_markers: Vec::new(),
+            revision_groups: Vec::new(),
         }
     }
 

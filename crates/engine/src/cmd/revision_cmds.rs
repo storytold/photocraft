@@ -7,7 +7,7 @@
 //! Markers are document data ([`photocraft_doc::RevisionMarker`]), saved in `.pcraft` and as a
 //! private PSD image resource; each change here is one history step.
 
-use photocraft_doc::{Document, LayerId, RevisionMarker};
+use photocraft_doc::{Document, LayerId, RevisionGroup, RevisionMarker};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -47,13 +47,45 @@ pub fn marker_json(i: usize, m: &RevisionMarker) -> Value {
         "done": m.done,
         "manualDone": m.manual_done,
         "note": m.note,
+        "group": m.group,
         "hasSnapshot": !m.snapshot.is_empty(),
     })
 }
 
+/// The document's groups and the markers each covers, as the panel and `revision.list` show them.
+fn groups_json(d: &Document) -> Value {
+    let groups: Vec<Value> = d
+        .revision_groups
+        .iter()
+        .map(|g| {
+            let members: Vec<usize> =
+                d.revision_markers.iter().enumerate().filter(|(_, m)| m.group == Some(g.id)).map(|(i, _)| i).collect();
+            json!({"id": g.id, "name": g.name, "members": members})
+        })
+        .collect();
+    Value::Array(groups)
+}
+
+/// Drop groups no marker carries any more: a group lives exactly as long as its markers do.
+fn prune_groups(d: &mut Document) {
+    let live: Vec<u32> = d.revision_markers.iter().filter_map(|m| m.group).collect();
+    d.revision_groups.retain(|g| live.contains(&g.id));
+    // A marker whose group no longer exists (a hand-edited file, say) goes back to standing alone.
+    for m in &mut d.revision_markers {
+        if let Some(id) = m.group
+            && !d.revision_groups.iter().any(|g| g.id == id)
+        {
+            m.group = None;
+        }
+    }
+}
+
 /// `{"markers": [...]}` for the whole document: what `revision.list` returns.
 fn list_json(d: &Document) -> Value {
-    json!({"markers": d.revision_markers.iter().enumerate().map(|(i, m)| marker_json(i, m)).collect::<Vec<_>>()})
+    json!({
+        "markers": d.revision_markers.iter().enumerate().map(|(i, m)| marker_json(i, m)).collect::<Vec<_>>(),
+        "groups": groups_json(d),
+    })
 }
 
 /// The `index` param as a position in the marker list, checked against the list's length.
@@ -199,6 +231,7 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let i = index_of(s, p, CMD)?;
     s.edit("Delete Revision Marker", |d, _| {
         d.revision_markers.remove(i);
+        prune_groups(d);
         Ok(())
     })?;
     Ok(Value::Null)
@@ -212,6 +245,7 @@ fn clear(s: &mut Session, _: &Value) -> Result<Value> {
     }
     s.edit("Delete All Revision Markers", |d, _| {
         d.revision_markers.clear();
+        d.revision_groups.clear();
         Ok(())
     })?;
     Ok(json!({ "removed": n }))
@@ -285,6 +319,132 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"index": i, "marker": out, "changed": true}))
+}
+
+/// The `indices` param of a batch command: positions in the marker list, checked and ordered.
+fn indices_of(s: &Session, p: &Value, cmd: &str) -> Result<Vec<usize>> {
+    let n = s.active().ok_or(EngineError::NoDocument)?.doc.revision_markers.len();
+    let raw = p.get("indices").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`indices` must be an array of marker indices"))?;
+    let mut picked: Vec<usize> = Vec::with_capacity(raw.len());
+    for v in raw {
+        let i = v.as_u64().ok_or_else(|| bad(cmd, "`indices` must be an array of marker indices"))? as usize;
+        if i >= n {
+            return Err(bad(cmd, format!("no revision marker {i} (the document has {n})")));
+        }
+        picked.push(i);
+    }
+    picked.sort_unstable();
+    picked.dedup();
+    Ok(picked)
+}
+
+/// Move a set of markers by one offset in a single undo step: what a drag of several picked frames
+/// (or of a whole group) does. Each moved frame re-takes its snapshot, so a batch move re-arms the
+/// markers it covered exactly like a single one does.
+fn translate(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "revision.translate";
+    let picked = indices_of(s, p, CMD)?;
+    let dx = f64_of(CMD, p, "dx")?.ok_or_else(|| bad(CMD, "pass `dx` and `dy`"))?;
+    let dy = f64_of(CMD, p, "dy")?.ok_or_else(|| bad(CMD, "pass `dx` and `dy`"))?;
+    if picked.is_empty() || (dx.abs() < 1.0e-9 && dy.abs() < 1.0e-9) {
+        return Ok(json!({"moved": 0, "markers": list_json(&s.active().ok_or(EngineError::NoDocument)?.doc)}));
+    }
+    let mut plan: Vec<(usize, [f64; 2])> = Vec::with_capacity(picked.len());
+    let d0 = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    for i in &picked {
+        let m = &d0.revision_markers[*i];
+        plan.push((*i, [m.pos[0] + dx, m.pos[1] + dy]));
+    }
+    let moved = plan.len();
+    let label = if moved == 1 { "Move Revision Marker" } else { "Move Revision Markers" };
+    s.edit(label, move |d, _| {
+        for (i, pos) in plan {
+            let mut m = d.revision_markers[i].clone();
+            m.pos = pos;
+            m.snapshot = snapshot_for(d, &m)?;
+            m.done = false;
+            m.manual_done = false;
+            d.revision_markers[i] = m;
+        }
+        Ok(())
+    })?;
+    Ok(json!({"moved": moved, "markers": list_json(&s.active().ok_or(EngineError::NoDocument)?.doc)}))
+}
+
+/// Group the picked markers so they are picked, moved and collapsed in the panel as one, like a layer
+/// group. The name is `name`, or "Group N" with the next free number.
+ fn group(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "revision.group";
+    let picked = indices_of(s, p, CMD)?;
+    if picked.len() < 2 {
+        return Err(bad(CMD, "grouping needs at least two markers"));
+    }
+    let d0 = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    let next_id = d0.revision_groups.iter().map(|g| g.id).max().unwrap_or(0).saturating_add(1);
+    let name = match p.get("name").and_then(Value::as_str) {
+        Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+        _ => format!("Group {next_id}"),
+    };
+    let out = json!({"id": next_id, "name": name.clone()});
+    s.edit("Group Revision Markers", move |d, _| {
+        d.revision_groups.retain(|g| g.id != next_id);
+        d.revision_groups.push(RevisionGroup { id: next_id, name: name.clone() });
+        for i in &picked {
+            d.revision_markers[*i].group = Some(next_id);
+        }
+        prune_groups(d);
+        Ok(())
+    })?;
+    Ok(json!({"group": out, "markers": list_json(&s.active().ok_or(EngineError::NoDocument)?.doc)}))
+}
+
+/// Take markers out of their group: by `indices`, or every marker of one `group` id. A group left
+/// with one marker or none is dissolved, since a group of one frames nothing that moves together.
+fn ungroup(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "revision.ungroup";
+    let d0 = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    let picked: Vec<usize> = if let Some(id) = p.get("group").and_then(Value::as_u64) {
+        let id = id as u32;
+        if !d0.revision_groups.iter().any(|g| g.id == id) {
+            return Err(bad(CMD, format!("no revision group {id}")));
+        }
+        d0.revision_markers.iter().enumerate().filter(|(_, m)| m.group == Some(id)).map(|(i, _)| i).collect()
+    } else {
+        indices_of(s, p, CMD)?
+    };
+    let count = picked.len();
+    if count == 0 {
+        return Ok(json!({"ungrouped": 0, "markers": list_json(&d0)}));
+    }
+    s.edit("Ungroup Revision Markers", move |d, _| {
+        for i in &picked {
+            if let Some(m) = d.revision_markers.get_mut(*i) {
+                m.group = None;
+            }
+        }
+        prune_groups(d);
+        Ok(())
+    })?;
+    Ok(json!({"ungrouped": count, "markers": list_json(&s.active().ok_or(EngineError::NoDocument)?.doc)}))
+}
+
+/// Rename one group (`group` id, `name`).
+fn group_rename(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "revision.renameGroup";
+    let id = p.get("group").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "pass `group`"))? as u32;
+    let name = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(CMD, "pass `name`"))?;
+    let name = name.to_string();
+    let d0 = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    if !d0.revision_groups.iter().any(|g| g.id == id) {
+        return Err(bad(CMD, format!("no revision group {id}")));
+    }
+    s.edit("Rename Revision Group", move |d, _| {
+        if let Some(g) = d.revision_groups.iter_mut().find(|g| g.id == id) {
+            g.name = name.clone();
+        }
+        Ok(())
+    })?;
+    Ok(list_json(&s.active().ok_or(EngineError::NoDocument)?.doc))
 }
 
 /// Line the picked markers up: their left, right, top or bottom edges, or their centres (`left`,
@@ -561,6 +721,46 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"indices":[n,...],"mode":"left|right|top|bottom|centerX|centerY|distributeX|distributeY"} -> {aligned,markers} (one undo step; every moved frame re-snapshots)"##,
             enabled: has_markers,
             run: align,
+            journal: true,
+        },
+        CommandSpec {
+            id: "revision.translate",
+            label: "Move Revision Markers",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"indices":[n,...],"dx":px,"dy":px} -> {moved,markers} (one undo step for the whole set; every moved frame re-snapshots)"##,
+            enabled: has_markers,
+            run: translate,
+            journal: true,
+        },
+        CommandSpec {
+            id: "revision.group",
+            label: "Group Revision Markers",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"indices":[n,...],"name":str?} -> {group,markers} (two markers or more become one group)"##,
+            enabled: has_markers,
+            run: group,
+            journal: true,
+        },
+        CommandSpec {
+            id: "revision.ungroup",
+            label: "Ungroup Revision Markers",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"indices":[n,...]}|{"group":id} -> {ungrouped,markers} (a group with one marker left is dissolved)"##,
+            enabled: has_markers,
+            run: ungroup,
+            journal: true,
+        },
+        CommandSpec {
+            id: "revision.renameGroup",
+            label: "Rename Revision Group",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"group":id,"name":str} -> markers"##,
+            enabled: has_markers,
+            run: group_rename,
             journal: true,
         },
         CommandSpec {
@@ -886,6 +1086,55 @@ mod tests {
         let d = &s.active().unwrap().doc;
         let middle = |i: usize| d.revision_markers[i].pos[0] + d.revision_markers[i].size[0] / 2.0;
         assert_eq!(middle(0), middle(1), "both frames share their centre");
+    }
+
+    /// Moving a picked set is one history step, and every frame of it lands on the same offset.
+    #[test]
+    fn translating_moves_the_whole_set_in_one_step() {
+        let mut s = session();
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 40.0, "height": 20.0})).unwrap();
+        s.execute("revision.add", json!({"x": 60.0, "y": 40.0, "width": 40.0, "height": 20.0})).unwrap();
+        let steps = s.active().unwrap().history.entries().len();
+        let v = s.execute("revision.translate", json!({"indices": [0, 1], "dx": 15.0, "dy": -5.0})).unwrap();
+        assert_eq!(v["moved"], json!(2), "both frames moved");
+        let d = &s.active().unwrap().doc;
+        assert_eq!(d.revision_markers[0].pos, [25.0, 5.0], "the first frame took the whole offset");
+        assert_eq!(d.revision_markers[1].pos, [75.0, 35.0], "and so did the second");
+        assert!(
+            s.active().unwrap().history.entries().len() == steps + 1,
+            "the set move is a single undo step, not one per frame"
+        );
+        s.execute("history.undo", json!({})).unwrap();
+        let d = &s.active().unwrap().doc;
+        assert_eq!(d.revision_markers[0].pos, [10.0, 10.0], "one undo puts both frames back");
+        assert_eq!(d.revision_markers[1].pos, [60.0, 40.0], "both of them");
+    }
+
+    /// Grouping two frames records both of them under one id, and ungrouping takes them out again;
+    /// a group that would be left with one frame dissolves, because nothing moves with it any more.
+    #[test]
+    fn grouping_and_ungrouping_frames() {
+        let mut s = session();
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 40.0, "height": 20.0})).unwrap();
+        s.execute("revision.add", json!({"x": 60.0, "y": 40.0, "width": 40.0, "height": 20.0})).unwrap();
+        // One frame cannot be a group: it would be a group of one.
+        assert!(s.execute("revision.group", json!({"indices": [0]})).is_err(), "one frame is not a group");
+        let v = s.execute("revision.group", json!({"indices": [0, 1], "name": "第 3 页"})).unwrap();
+        let id = v["group"]["id"].as_u64().unwrap() as u32;
+        assert_eq!(v["group"]["name"], json!("第 3 页"), "the group keeps the name it was given");
+        let d = &s.active().unwrap().doc;
+        assert_eq!(d.revision_markers[0].group, Some(id), "the first frame carries the group");
+        assert_eq!(d.revision_markers[1].group, Some(id), "and the second");
+        assert_eq!(d.revision_groups.len(), 1, "one group was created");
+        // Taking one frame out leaves the other one grouped, so the group still exists.
+        s.execute("revision.ungroup", json!({"indices": [1]})).unwrap();
+        let d = &s.active().unwrap().doc;
+        assert_eq!(d.revision_markers[1].group, None, "the second frame stands alone again");
+        assert_eq!(d.revision_groups.len(), 1, "the group survives while a frame carries it");
+        // Taking the other one out leaves nothing in it, and the group goes with it.
+        s.execute("revision.ungroup", json!({"indices": [0]})).unwrap();
+        let d = &s.active().unwrap().doc;
+        assert!(d.revision_groups.is_empty(), "a group with no frames is gone");
     }
 
     /// A marker marked green by hand keeps that green through the next check instead of being

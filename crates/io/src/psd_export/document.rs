@@ -260,6 +260,9 @@ fn export_supported_document(
     if let Some(data) = crate::revision_map::encode(doc) {
         resources.push(ImageResource::new(crate::revision_map::REVISION_MARKERS, data));
     }
+    if let Some(data) = crate::revision_map::encode_groups(doc) {
+        resources.push(ImageResource::new(crate::revision_map::REVISION_GROUPS, data));
+    }
     if let Some(Some(data)) = comps_resource {
         resources.push(ImageResource::new(crate::comps_map::LAYER_COMPS, data));
     }
