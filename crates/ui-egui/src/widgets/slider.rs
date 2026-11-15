@@ -24,6 +24,74 @@ pub struct RowGestures {
     /// values get fine steps (Photoshop's mask Feather, #6545). Typed, scrubbed and stepped
     /// values stay linear; only the track maps through the curve.
     pub curve: Option<f32>,
+    /// A track measured at thumb positions instead of a power: `(fraction, value)` pairs,
+    /// ascending, first at fraction 0 and last at 1 (see [`track_value`] and [`track_fraction`]).
+    /// Photoshop's Layer Style Distance sliders are measured this way (#14940). Takes
+    /// precedence over `curve`; typed, scrubbed and stepped values stay linear as well.
+    pub track: Option<&'static [(f32, f32)]>,
+}
+
+/// The value at fraction `f` of a track measured at `points`: each segment between two measured
+/// points is the power curve through them (so the low end keeps its fine steps); a segment
+/// starting at 0 is straight, as a power of 0 would be 0 everywhere. [`track_fraction`] inverts it.
+pub(crate) fn track_value(f: f32, points: &[(f32, f32)]) -> f32 {
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+        return f;
+    };
+    if !f.is_finite() {
+        return if f > 0.0 { last.1 } else { first.1 };
+    }
+    let f = f.clamp(first.0, last.0);
+    for w in points.windows(2) {
+        let (f0, v0) = w[0];
+        let (f1, v1) = w[1];
+        if f <= f1 {
+            return segment_value(f, f0, v0, f1, v1);
+        }
+    }
+    last.1
+}
+
+/// Where the value `v` sits on the track [`track_value`] describes, as a fraction. An unset (NaN)
+/// value puts the knob at the start, as a plain track does.
+pub(crate) fn track_fraction(v: f32, points: &[(f32, f32)]) -> f32 {
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+        return 0.0;
+    };
+    if v.is_nan() || v <= first.1 {
+        return first.0;
+    }
+    if v >= last.1 {
+        return last.0;
+    }
+    for w in points.windows(2) {
+        let (f0, v0) = w[0];
+        let (f1, v1) = w[1];
+        if v <= v1 {
+            return segment_fraction(v, f0, v0, f1, v1);
+        }
+    }
+    last.0
+}
+
+fn segment_value(f: f32, f0: f32, v0: f32, f1: f32, v1: f32) -> f32 {
+    if v0 > 0.0 && f0 > 0.0 && v1 > v0 && f1 > f0 {
+        v0 * (f / f0).powf((v1 / v0).ln() / (f1 / f0).ln())
+    } else if f1 > f0 {
+        v0 + (f - f0) * (v1 - v0) / (f1 - f0)
+    } else {
+        v1
+    }
+}
+
+fn segment_fraction(v: f32, f0: f32, v0: f32, f1: f32, v1: f32) -> f32 {
+    if v0 > 0.0 && f0 > 0.0 && v1 > v0 && f1 > f0 {
+        f0 * (v / v0).powf((f1 / f0).ln() / (v1 / v0).ln())
+    } else if v1 > v0 {
+        f0 + (v - v0) * (f1 - f0) / (v1 - v0)
+    } else {
+        f1
+    }
 }
 
 /// The value at fraction `f` of a track over `lo..=hi`, through `curve` (see [`RowGestures`]).
@@ -136,7 +204,10 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
         && (resp.dragged() || resp.clicked())
     {
         let f = ((p.x - track.left()) / track.width()).clamp(0.0, 1.0);
-        let nv = curve_value(f, lo, hi, g.curve);
+        let nv = match g.track {
+            Some(points) => track_value(f, points),
+            None => curve_value(f, lo, hi, g.curve),
+        };
         if (nv - *value).abs() > f32::EPSILON {
             *value = nv;
             resp.mark_changed();
@@ -159,7 +230,10 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
             }
         }
     }
-    let f = curve_fraction(*value, lo, hi, g.curve);
+    let f = match g.track {
+        Some(points) => track_fraction(*value, points),
+        None => curve_fraction(*value, lo, hi, g.curve),
+    };
     let knob_x = track.left() + f * track.width();
     let painter = ui.painter();
     match gradient {
@@ -290,6 +364,20 @@ pub fn row_label(ui: &mut Ui, label: &str, width: f32) -> Response {
 /// [`slider_row`] on one line, as Photoshop lays out Layer Style: the label in a `label_w` column
 /// ([`row_label`]), the slider, then the value field. The label still scrubs the field.
 pub fn slider_line(ui: &mut Ui, label: &str, label_w: f32, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str) -> Response {
+    slider_line_with(ui, label, label_w, value, range, suffix, RowGestures::default())
+}
+
+/// [`slider_line`] with Photoshop's extra gestures ([`RowGestures`]): a Layer Style row whose
+/// track is measured rather than straight, while its field takes the whole range (#14940).
+pub fn slider_line_with(
+    ui: &mut Ui,
+    label: &str,
+    label_w: f32,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    g: RowGestures,
+) -> Response {
     const FIELD_W: f32 = 64.0;
     let mut field = None;
     let s = ui
@@ -299,7 +387,7 @@ pub fn slider_line(ui: &mut Ui, label: &str, label_w: f32, value: &mut f32, rang
             let w = (ui.available_width() - FIELD_W - ui.spacing().item_spacing.x).max(60.0);
             let s = ui
                 .allocate_ui_with_layout(vec2(w, VALUE_FIELD_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    slider_with(ui, value, range.clone(), None, RowGestures::default())
+                    slider_with(ui, value, range.clone(), None, g)
                 })
                 .inner;
             field = Some(value_field_in(ui, value, range.clone(), suffix, FIELD_W, 0.0, FieldOpts::default(), Some(label)).0);

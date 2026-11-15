@@ -32,6 +32,10 @@ mod gradient_method_tests;
 #[derive(Clone, Copy)]
 enum P {
     Slider(f32, f32, &'static str),
+    /// A slider whose track is measured at `track` (see [`widgets::slider_line_with`]) while its
+    /// field takes the whole `min..=max`: Photoshop's Inner Shadow Distance, where most of the
+    /// travel is the first few pixels (#14940).
+    TrackSlider(f32, f32, &'static str, &'static [(f32, f32)]),
     Color,
     Blend,
     Choice(&'static [(&'static str, &'static str)]),
@@ -39,6 +43,9 @@ enum P {
     Gradient,
     Check,
     Angle,
+    /// An Angle field that types a full turn each way (-360..360); the engine stores it wrapped
+    /// into half a turn (#14940). The dial itself still points anywhere on the circle.
+    WideAngle,
     /// A pattern from the dialog's `patternList` field (`[[id, name], …]`).
     Pattern,
     /// A contour (thumbnail, preset picker, Contour Editor), with the key of its Anti-aliased
@@ -102,6 +109,12 @@ fn fresh_params(kind: &str, light: f32, user: Option<&Value>) -> Value {
     p
 }
 
+/// Photoshop's Inner Shadow Distance track, measured (#14940): the thumb at half its travel sits
+/// at 47 px, at three quarters at 93 px and at the right end at 30000 px. The curve between the
+/// points is the page's own (the reference application's exact one was not measured); it keeps
+/// the fine control at the low end the measured points show.
+const INNER_SHADOW_DISTANCE: &[(f32, f32)] = &[(0.0, 0.0), (0.5, 47.0), (0.75, 93.0), (1.0, 30000.0)];
+
 fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
     const POS: &[(&str, &str)] = &[("outside", "Outside"), ("inside", "Inside"), ("center", "Center")];
     const GSTYLE: &[(&str, &str)] = &[("linear", "Linear"), ("radial", "Radial"), ("angle", "Angle"), ("reflected", "Reflected"), ("diamond", "Diamond")];
@@ -129,9 +142,9 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
             ("blend", "Blend Mode", P::Blend),
             ("color", "Color", P::Color),
             ("opacity", "Opacity", P::Slider(0.0, 100.0, "%")),
-            ("angle", "Angle", P::Angle),
+            ("angle", "Angle", P::WideAngle),
             ("useGlobalLight", "Use Global Light", P::Check),
-            ("distance", "Distance", P::Slider(0.0, 300.0, "px")),
+            ("distance", "Distance", P::TrackSlider(0.0, 30000.0, "px", INNER_SHADOW_DISTANCE)),
             ("choke", "Choke", P::Slider(0.0, 100.0, "%")),
             ("size", "Size", P::Slider(0.0, 250.0, "px")),
             ("contour", "Contour", CONTOUR),
@@ -1645,9 +1658,12 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
     }
     for &(key, label, kind_p) in spec(&sel_kind) {
         match kind_p {
-            P::Angle => {
+            // The Inner Shadow page types a full turn each way and stores it wrapped (#14940);
+            // the other pages' Angle fields keep Photoshop's half turn each way.
+            P::Angle | P::WideAngle => {
+                let (lo, hi) = if matches!(kind_p, P::WideAngle) { (-360.0, 360.0) } else { (-180.0, 180.0) };
                 let mut v = disp.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-                if widgets::angle_dial_line(ui, label, Some(LABEL_W), &mut v, -180.0..=180.0).changed() {
+                if widgets::angle_dial_line(ui, label, Some(LABEL_W), &mut v, lo..=hi).changed() {
                     let value = json!(v);
                     disp[key] = value.clone();
                     set_param(f, selected, key, value);
@@ -1656,6 +1672,15 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
             P::Slider(min, max, unit) => {
                 let mut v = disp.get(key).and_then(Value::as_f64).unwrap_or(min as f64) as f32;
                 if widgets::slider_line(ui, label, LABEL_W, &mut v, min..=max, unit).changed() {
+                    let value = json!(v.round());
+                    disp[key] = value.clone();
+                    set_param(f, selected, key, value);
+                }
+            }
+            P::TrackSlider(min, max, unit, track) => {
+                let mut v = disp.get(key).and_then(Value::as_f64).unwrap_or(min as f64) as f32;
+                let g = widgets::RowGestures { track: Some(track), ..Default::default() };
+                if widgets::slider_line_with(ui, label, LABEL_W, &mut v, min..=max, unit, g).changed() {
                     let value = json!(v.round());
                     disp[key] = value.clone();
                     set_param(f, selected, key, value);

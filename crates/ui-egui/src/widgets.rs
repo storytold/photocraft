@@ -67,9 +67,11 @@ pub use scrub::{scrub_label, scrub_option_icon, scrub_option_label};
 #[cfg(test)]
 use slider::DOUBLE_CLICK_S;
 pub(crate) use slider::count_notches;
-pub use slider::{RowGestures, row_label, second_click, slider, slider_line, slider_row, slider_row_prec, slider_row_with};
+pub use slider::{RowGestures, row_label, second_click, slider, slider_line, slider_line_with, slider_row, slider_row_prec, slider_row_with};
 #[cfg(test)]
 pub(crate) use slider::{curve_fraction, curve_value};
+#[cfg(test)]
+pub(crate) use slider::{track_fraction, track_value};
 pub use text_field::{
     INPUT_EVENT_LIMIT, TEXT_FIELD_H, TEXT_FIELD_LIMIT, cap_text_events, focus_first_field, text_field, text_field_ex, text_field_with_trailing,
 };

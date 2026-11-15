@@ -1313,3 +1313,61 @@ fn style_click_does_not_mutate_document_until_confirm() {
     confirm(&mut app, &f).unwrap();
     assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().effects.items.len(), 1);
 }
+
+/// #14940: the Inner Shadow page's Distance field and track reach 30000 px, and its Angle field
+/// types a full turn each way. The other pages keep Photoshop's older ranges (#14893 is the
+/// Drop Shadow's own ticket).
+#[test]
+fn the_inner_shadow_page_types_the_measured_ranges() {
+    let row = |kind: &str, key: &str| spec(kind).iter().find(|(k, _, _)| *k == key).map(|(_, _, p)| *p);
+    let Some(P::TrackSlider(lo, hi, unit, track)) = row("innerShadow", "distance") else {
+        panic!("Inner Shadow's Distance is not a tracked slider");
+    };
+    assert_eq!((lo, hi, unit), (0.0, 30000.0, "px"));
+    assert_eq!(track, INNER_SHADOW_DISTANCE, "the track runs through the measured thumb positions");
+    assert!(matches!(row("innerShadow", "angle"), Some(P::WideAngle)), "the Angle field types -360..360");
+    let Some(P::Slider(lo, hi, unit)) = row("innerShadow", "size") else { panic!("Inner Shadow's Size is not a plain slider") };
+    assert_eq!((lo, hi, unit), (0.0, 250.0, "px"), "Size keeps its 0..250 px");
+    // Untouched pages: the Drop Shadow's Distance still stops at 300 px and its Angle at half a
+    // turn, as does every other page's angle field.
+    let Some(P::Slider(lo, hi, _)) = row("dropShadow", "distance") else { panic!("Drop Shadow's Distance changed") };
+    assert_eq!(lo..=hi, 0.0..=300.0, "the Drop Shadow page is #14893's");
+    for kind in ["dropShadow", "gradientOverlay", "patternOverlay", "bevelEmboss", "satin"] {
+        assert!(matches!(row(kind, "angle"), Some(P::Angle)), "{kind}'s Angle field changed");
+    }
+}
+
+/// #14940: the Distance track passes through the measured points (half the travel at 47 px,
+/// three quarters at 93 px, the right end at 30000 px), never goes backwards, and puts the knob
+/// back where a dragged value came from.
+#[test]
+fn the_inner_shadow_distance_track_passes_its_measured_points() {
+    let close = |got: f32, want: f32| (got - want).abs() <= (want.abs() * 1e-5).max(1e-3);
+    for &(fraction, value) in INNER_SHADOW_DISTANCE {
+        assert!(
+            close(crate::widgets::track_value(fraction, INNER_SHADOW_DISTANCE), value),
+            "thumb at {fraction} shows {}",
+            crate::widgets::track_value(fraction, INNER_SHADOW_DISTANCE)
+        );
+        assert!(
+            close(crate::widgets::track_fraction(value, INNER_SHADOW_DISTANCE), fraction),
+            "value {value} sits at {}",
+            crate::widgets::track_fraction(value, INNER_SHADOW_DISTANCE)
+        );
+    }
+    let mut last = -1.0;
+    for i in 0..=100 {
+        let v = crate::widgets::track_value(i as f32 / 100.0, INNER_SHADOW_DISTANCE);
+        assert!(v >= last, "the track went backwards at {i} %: {v} after {last}");
+        last = v;
+    }
+    assert!(close(last, 30000.0), "the right end of the track reaches the field's maximum, not {last}");
+    // The fine end: a quarter of the travel is still under 24 px.
+    assert!(crate::widgets::track_value(0.25, INNER_SHADOW_DISTANCE) < 24.0, "the low end lost its fine steps");
+    // A drag round-trips: the value the knob paints sits at that knob again.
+    for fraction in [0.05f32, 0.3, 0.55, 0.8, 0.95] {
+        let v = crate::widgets::track_value(fraction, INNER_SHADOW_DISTANCE);
+        let back = crate::widgets::track_fraction(v, INNER_SHADOW_DISTANCE);
+        assert!((back - fraction).abs() < 1e-4, "{fraction} -> {v} -> {back}");
+    }
+}
