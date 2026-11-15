@@ -3701,7 +3701,6 @@ fn physical_recording_reveal_restores_only_its_saved_occurrence() {
     assert_eq!(h.state().session.prefs().collapsed_action_set_rows.get(&0), Some(&("Same".into(), true)));
 }
 
-
 /// Same-caption implicit and physical folders have separate disclosure containers.
 fn recording_reveals_only_its_folder_identity(panel_entry: bool) {
     use egui_kittest::{Harness, kittest::Queryable};
@@ -3712,7 +3711,8 @@ fn recording_reveals_only_its_folder_identity(panel_entry: bool) {
         app.session.actions.list = [
             Action { set: Some("Same".into()), set_slot: Some(0), ..Action::new("Physical target", vec![]) },
             Action { set: Some("Same".into()), ..Action::new("Implicit target", vec![]) },
-        ].into();
+        ]
+        .into();
         app.session.prefs.edit(|prefs| {
             prefs.collapsed_action_sets.insert("Same".into(), true);
             prefs.collapsed_action_set_rows.insert(0, ("Same".into(), true));
