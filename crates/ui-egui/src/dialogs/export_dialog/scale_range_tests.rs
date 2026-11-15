@@ -72,6 +72,20 @@ fn type_into(h: &mut Harness<'_, PhotocraftApp>, label: &str, text: &str) {
     h.run_steps(4);
 }
 
+/// Like [`type_into`], but the whole text arrives as one event, as a paste does.
+fn paste_into(h: &mut Harness<'_, PhotocraftApp>, label: &str, text: &str) {
+    let x = h.get_by_role_and_label(Role::SpinButton, "Scale").rect().min.x;
+    let field = h.query_all_by_role_and_label(Role::SpinButton, label).find(|n| (n.rect().min.x - x).abs() < 40.0).expect("the dialog's field");
+    field.click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.event(egui::Event::Text(text.to_string()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+}
+
 /// (width, height, scale, warning shown)
 fn state(h: &Harness<'_, PhotocraftApp>) -> (f64, f64, f64, bool) {
     let f = &h.state().ui.dialogs.last().expect("Export As is open").fields;
@@ -211,4 +225,17 @@ fn a_valid_scale_result_just_above_the_linked_bound_is_left_alone() {
     type_into(&mut h, "Width", "200");
     let f = &h.state().ui.dialogs.last().unwrap().fields;
     assert!(n(f, "width", 0.0) <= 75.0 && n(f, "height", 0.0) <= 300_000.0, "{:?}", (n(f, "width", 0.0), n(f, "height", 0.0)));
+}
+
+/// CodeRabbit on #15032: a width pasted in one go above the linked bound is clamped to that bound (74 px,
+/// not the stored 75) with the warning, not rejected: on 1 x 4001 at 7498 %, 200 gives 74 x 296074.
+#[test]
+fn a_pasted_width_above_the_linked_bound_is_clamped_to_it() {
+    let mut h = harness_sized(1, 4001);
+    open_dialog(&mut h);
+    type_into(&mut h, "Scale", "7498");
+    assert_eq!(state(&h).0, 75.0);
+    paste_into(&mut h, "Width", "200");
+    let (w, hh, _, warn) = state(&h);
+    assert_eq!((w, hh, warn), (74.0, 296_074.0, true));
 }

@@ -974,9 +974,15 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
             ui.label(egui::RichText::new(label).color(t.text_dim));
             clamped = crate::widgets::value_field_whole_alerting(ui, label, &mut v, min as f32..=top as f32, "px", 70.0).1;
         });
-        let typed = f64::from(v).round();
+        let mut typed = f64::from(v).round();
         if (typed - stored.round()).abs() <= 0.01 && !clamped {
             continue;
+        }
+        // The range reaches up to the stored value so an idle frame leaves it alone; an edit above the
+        // linked limit (a paste of 200 in one go) is clamped to the limit here, with the warning.
+        if typed > max && ((typed - stored.round()).abs() > 0.01 || clamped) {
+            typed = max;
+            clamped = true;
         }
         let (w, h) = if edited_width { (typed, n(f, "height", src_h.max(1.0))) } else { (n(f, "width", src_w.max(1.0)), typed) };
         if let Ok(size) = resize_from_side(src_w, src_h, w, h, lock, edited_width) {
