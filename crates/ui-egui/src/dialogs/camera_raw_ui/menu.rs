@@ -252,7 +252,8 @@ fn frame_point(v: &Value) -> Option<craft_geom::Point> {
 /// gestures drive them. `tool` ("edit", "heal", "masking", "redEye"), `sections` (the Edit panel's
 /// open sections and flyouts), `newMask` (a kind: brush, linear, radial, luminanceRange,
 /// colorRange), `addComponent` ({kind, op: add | subtract}), `selectMask` (an id, or null),
-/// `overlay` (show the selected mask's overlay), `brush` ({points: [[x, y]…] on the shown frame,
+/// `overlay` (show the selected mask's overlay), `adjust` ({slider: value}: the selected mask's
+/// effects, as its sliders set them; hides the overlay as they do), `brush` ({points: [[x, y]…] on the shown frame,
 /// size, feather, flow, erase, autoMask}: a stroke painted into the selected brush component, or
 /// with the Brush armed and no mask selected into a new brush mask; without points only the
 /// brush's settings change), `heal`
@@ -299,6 +300,19 @@ fn local_update(d: &mut super::CameraRawDialog, v: &Value) -> Result<(), String>
                     local::select(&mut st, &settings, id);
                 }
                 "overlay" => st.overlay = value.as_bool().ok_or("overlay must be a boolean")?,
+                "adjust" => {
+                    // the selected mask's effect sliders, as the panel's set them: the overlay
+                    // hides (as Lightroom's mask.adjust)
+                    let fields = value.as_object().ok_or("adjust must be an object of slider values")?;
+                    let m = local::selected_mask(&st, &mut settings).ok_or("no mask is selected")?;
+                    for (id, v) in fields {
+                        let spec = super::local_panels::LOCAL.iter().find(|s| s.id == id).ok_or(format!("unknown mask slider {id}"))?;
+                        let v = v.as_f64().filter(|v| v.is_finite()).ok_or(format!("adjust {id} must be a number"))?;
+                        let f = local::local_field(&mut m.adjust, id).ok_or(format!("unknown mask slider {id}"))?;
+                        *f = v.clamp(spec.min, spec.max);
+                    }
+                    st.hide_overlay();
+                }
                 "brush" => {
                     let f = |k: &str| value.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
                     if let Some(v) = f("size") {

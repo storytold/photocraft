@@ -11,6 +11,7 @@ mod brush_reset_defaults;
 mod camera_raw_develop_automask;
 mod camera_raw_develop_brush;
 mod camera_raw_develop_keys;
+mod camera_raw_develop_overlay;
 mod camera_raw_develop_view;
 mod camera_raw_guided_upright;
 mod camera_raw_filmstrip;

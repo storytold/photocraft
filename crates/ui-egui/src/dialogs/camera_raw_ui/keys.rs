@@ -33,6 +33,9 @@ pub(super) fn handle(d: &mut CameraRawDialog, ctx: &egui::Context) {
         Action::GuidedUpright => true,
         Action::DeleteSelected => delete,
         Action::AutoMask => brush,
+        // O shows / hides the mask overlay while masking (Lightroom's key); elsewhere it is the
+        // highlight clipping warning's, as in Camera Raw
+        Action::MaskOverlay => develop && d.tool == Tool::Masking,
         _ => develop,
     });
     for action in actions {
@@ -49,6 +52,11 @@ fn perform(d: &mut CameraRawDialog, action: Action) {
         Action::BrushSmaller | Action::BrushLarger | Action::FeatherLess | Action::FeatherMore => brush(d, action),
         // a tool setting, not an edit: saved as the brush's preference, not an undo step
         Action::AutoMask => d.local.brush.auto_mask = !d.local.brush.auto_mask,
+        Action::MaskOverlay => {
+            // a view setting, not an edit; the preview renders the mask's alpha when it shows
+            d.local.overlay = !d.local.overlay;
+            d.dirty = true;
+        }
     }
 }
 

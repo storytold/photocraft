@@ -94,7 +94,10 @@ pub(crate) struct LocalTools {
     pub component: usize,
     pub draw: Draw,
     pub brush: Brush,
-    /// Show the selected mask's red overlay.
+    /// Show the selected mask's red overlay. As in Lightroom it comes and goes by itself: an
+    /// effect slider of the mask hides it (to judge the effect on the photo), and making or
+    /// picking a mask, adding to it, painting or dragging its geometry shows it again
+    /// ([`Self::show_overlay`], [`Self::hide_overlay`]); its eye button (and O) toggle it.
     pub overlay: bool,
     /// A mask being renamed, and the name typed so far.
     pub renaming: Option<(u32, String)>,
@@ -184,6 +187,16 @@ impl LocalTools {
         };
     }
 
+    /// The mask's geometry is being made or edited: the overlay shows (again).
+    pub(crate) fn show_overlay(&mut self) {
+        self.overlay = true;
+    }
+
+    /// One of the mask's effects changed: the overlay hides so the effect shows on the photo.
+    pub(crate) fn hide_overlay(&mut self) {
+        self.overlay = false;
+    }
+
     /// The Brush is armed with no mask selected: the next stroke makes a brush mask.
     pub(crate) fn armed(&self) -> bool {
         self.selected.is_none() && self.draw == Draw::Brush
@@ -240,6 +253,9 @@ pub(crate) fn draw_of(shape: &MaskShape) -> Draw {
 pub(crate) fn select(st: &mut LocalTools, s: &DevelopSettings, id: Option<u32>) {
     st.selected = id.filter(|id| s.masks.iter().any(|m| m.id == *id));
     st.component = 0;
+    if st.selected.is_some() {
+        st.show_overlay();
+    }
     st.draw = st.selected.and_then(|id| s.masks.iter().find(|m| m.id == id)).and_then(|m| m.components.first()).map_or(Draw::None, |c| draw_of(&c.shape));
 }
 
@@ -269,6 +285,7 @@ pub(crate) fn add_mask(st: &mut LocalTools, s: &mut DevelopSettings, kind: &str)
     st.component = 0;
     st.draw = draw_for(kind);
     st.paused = false;
+    st.show_overlay();
     Ok(id)
 }
 
@@ -280,6 +297,7 @@ pub(crate) fn add_component(st: &mut LocalTools, s: &mut DevelopSettings, kind: 
     st.component = m.components.len() - 1;
     st.draw = draw_for(kind);
     st.paused = false;
+    st.show_overlay();
     Ok(())
 }
 
@@ -622,13 +640,18 @@ fn masking(
             && let Some((h, _)) = handles(c, &shape).into_iter().find(|(_, n)| c.mask_to_screen(on_photo, *n).is_some_and(|q| q.distance(at) <= grabbed))
         {
             st.gesture = Some(Gesture::Handle { comp, handle: h, shape });
+            st.show_overlay();
         } else {
             match draw {
-                Draw::Linear | Draw::Radial => st.gesture = Some(Gesture::Shape(mask_at)),
+                Draw::Linear | Draw::Radial => {
+                    st.gesture = Some(Gesture::Shape(mask_at));
+                    st.show_overlay();
+                }
                 Draw::Brush => {
                     if let Some(MaskShape::Brush { strokes }) = m.components.get_mut(comp).map(|k| &mut k.shape) {
                         strokes.push(brush.stroke(vec![mask_at], brush.erase || alt));
                         st.gesture = Some(Gesture::Stroke(strokes.len() - 1));
+                        st.show_overlay();
                         out.edited = true;
                     }
                 }
@@ -919,6 +942,7 @@ pub(crate) fn paint_stroke(st: &mut LocalTools, s: &mut DevelopSettings, points:
     match m.components.get_mut(comp).map(|k| &mut k.shape) {
         Some(MaskShape::Brush { strokes }) => {
             strokes.push(brush.stroke(points, brush.erase));
+            st.show_overlay();
             Ok(())
         }
         _ => Err("the selected mask component is not a brush".into()),

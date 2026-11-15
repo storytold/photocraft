@@ -168,6 +168,7 @@ pub(crate) fn masking(ui: &mut egui::Ui, st: &mut LocalTools, s: &mut DevelopSet
                 st.selected = Some(m.id);
                 st.component = 0;
                 st.draw = m.components.first().map_or(Draw::None, |c| local::draw_of(&c.shape));
+                st.show_overlay();
             }
             if resp.double_clicked() {
                 st.renaming = Some((m.id, m.name.clone()));
@@ -221,12 +222,18 @@ pub(crate) fn masking(ui: &mut egui::Ui, st: &mut LocalTools, s: &mut DevelopSet
     }
     divider(ui);
     let Some(m) = local::selected_mask(st, s) else { return };
+    let effects = m.adjust;
     for spec in LOCAL {
         let Some(v) = local::local_field(&mut m.adjust, spec.id) else { continue };
         let out = ui.push_id(("lc-local", spec.id), |ui| slider(ui, spec, *v, true, tr(spec.label))).inner;
         if let Some(nv) = out.value {
             *v = nv;
         }
+    }
+    // an effect changed (a drag, a typed value, a reset): the overlay hides, as in Lightroom, so
+    // the effect shows on the photo (Refine Edges, below, is the mask's shape: it keeps it)
+    if m.adjust != effects {
+        st.hide_overlay();
     }
     let out = slider(ui, &REFINE, m.refine, true, tr(REFINE.label));
     if let Some(v) = out.value {

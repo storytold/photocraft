@@ -442,12 +442,17 @@ fn local_preview(preview: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, resp
     }
     let Some(e) = d.develop.as_mut() else { return };
     super::local::paint_overlay(preview, &d.local, r, d.tool, &e.settings);
+    let overlay_was = d.local.overlay_mask(d.tool, &e.settings);
     let source = d.develop_source.clone();
     let (pw, ph) = (d.pw, d.ph);
     let sample = move |s: &craft_develop_model::DevelopSettings, n: craft_geom::Point| source.as_ref().and_then(|src| src.color_range_sample(s, n, pw, ph));
     let out = super::local::preview(preview, &mut d.local, d.tool, &mut e.settings, r, response, panning, &sample);
     if out.edited {
         d.params = e.camera_raw(&d.params);
+        d.dirty = true;
+    }
+    // a press on the mask's geometry brought its overlay back: the preview renders its alpha
+    if d.local.overlay_mask(d.tool, &e.settings) != overlay_was {
         d.dirty = true;
     }
 }
