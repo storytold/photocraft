@@ -134,6 +134,8 @@ pub(super) fn choice_label(v: &str) -> String {
         "jpg" => "JPG".into(),
         "gif" => "GIF".into(),
         "webp" => "WebP".into(),
+        // Export › Quick Export Metadata's choice, as the reference application names it (#13788).
+        "copyright" => "Copyright and Contact Info".into(),
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
         "75" | "80" | "85" | "90" | "95" | "100" | "105" | "110" | "115" | "120" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
