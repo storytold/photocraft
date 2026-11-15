@@ -77,10 +77,17 @@ fn file_name(p: &str) -> &str {
     std::path::Path::new(p).file_name().and_then(|n| n.to_str()).unwrap_or(p)
 }
 
-/// The open documents that have a file, in tab order (what Add Open Files adds).
-fn open_files(app: &PhotocraftApp) -> Vec<String> {
-    app.session.documents().iter().filter_map(|d| d.path.clone()).collect()
+/// What Add Open Files adds: the open documents saved and unchanged since, in tab order, as the
+/// reference adds them (#14001); and whether another open document (never saved, or changed
+/// since its save) was left out.
+fn open_files(app: &PhotocraftApp) -> (Vec<String>, bool) {
+    let docs = app.session.documents();
+    let saved: Vec<String> = docs.iter().filter(|d| !d.is_dirty()).filter_map(|d| d.path.clone()).collect();
+    (saved.clone(), saved.len() < docs.len())
 }
+
+/// The reference's alert when Add Open Files leaves unsaved documents out (#14001).
+pub(crate) const UNSAVED_ALERT: &str = "Documents must be saved before they can be merged.";
 
 /// OK needs files to load: some in the list, or a chosen folder.
 pub fn can_confirm(f: &Map<String, Value>) -> bool {
@@ -178,9 +185,15 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 f.insert("files".into(), json!(list));
                 f.remove("selected");
             }
-            let open = open_files(app);
-            if ui.add_enabled_ui(!folder_mode && !open.is_empty(), |ui| widgets::secondary_button(ui, tl!("Add Open Files"), 120.0)).inner.clicked() {
-                add(f, open);
+            // Enabled as today: when an open document has a file (not measured otherwise).
+            let has_file = app.session.documents().iter().any(|d| d.path.is_some());
+            if ui.add_enabled_ui(!folder_mode && has_file, |ui| widgets::secondary_button(ui, tl!("Add Open Files"), 120.0)).inner.clicked() {
+                let (saved, left_out) = open_files(app);
+                add(f, saved);
+                // One alert per click, however many were left out; the saved ones are added.
+                if left_out {
+                    app.ui.open_dialog(DialogKind::Error, Map::from_iter([("message".to_string(), json!(tl!(UNSAVED_ALERT)))]));
+                }
             }
             if ui.add_enabled_ui(!folder_mode && files(f).len() > 1, |ui| widgets::secondary_button(ui, tl!("Sort By Name"), 120.0)).inner.clicked() {
                 let mut list = files(f);
@@ -240,3 +253,6 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod add_open_files_tests;
