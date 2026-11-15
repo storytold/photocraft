@@ -134,8 +134,8 @@ pub(crate) fn reidentify_copied_layers(doc: &mut Document) {
     }
 }
 
-/// Scale every size and distance of a style by `k` (Image Size's Scale Styles and Layer Style ›
-/// Scale Effects), with pattern scales kept within the dialog's 1..1000 %.
+/// Scale every size and distance of a style by `k` (Image Size's Scale Styles), with pattern scales
+/// kept within 1..1000 %. Layer Style › Scale Effects uses [`scale_effects_rounded`] instead.
 pub fn scale_effects(fx: &mut Effects, k: f32) {
     scale_effects_with(fx, k, true);
 }
@@ -146,6 +146,10 @@ pub fn scale_effects(fx: &mut Effects, k: f32) {
 /// to 1..1000 % as in [`scale_effects`]. Computed as `v × pct / 100` in f64, so a whole value at
 /// a whole percent lands exactly on its half (10 at 35 % is 3.5, not 3.4999).
 pub fn scale_effects_rounded(fx: &mut Effects, pct: f64) {
+    // 100 % is not a change: nothing is rounded or held to a range, and psd_raw stays.
+    if pct == 100.0 {
+        return;
+    }
     const SIZE: (f64, f64) = (0.0, 250.0);
     const DISTANCE: (f64, f64) = (0.0, 30000.0);
     let px = |v: &mut f32, (min, max): (f64, f64)| *v = whole_px(f64::from(*v) * pct / 100.0, min, max);
@@ -179,9 +183,7 @@ pub fn scale_effects_rounded(fx: &mut Effects, pct: f64) {
             Effect::GradientOverlay { .. } | Effect::ColorOverlay { .. } => {}
         }
     }
-    if pct != 100.0 {
-        fx.psd_raw = None;
-    }
+    fx.psd_raw = None;
 }
 
 /// `v` rounded half up to a whole number within `min..=max`, as an f32; NaN (a zero value at an

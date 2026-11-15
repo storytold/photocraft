@@ -154,3 +154,27 @@ fn a_huge_scale_never_panics_and_stays_finite() {
     scale_effects_rounded(&mut f, f64::INFINITY);
     assert_eq!(shadow(&f.items[0]), (0.0, 250.0));
 }
+
+#[test]
+fn a_hundred_percent_changes_nothing_and_adds_no_history_step() {
+    let (mut s, id) = styled("dropShadow", json!({"distance": 10, "size": 10}));
+    // Values the dialog would round or hold to a range, as Image Size can leave them.
+    s.edit("Odd style", |doc, _| {
+        let l = doc.layer_mut(id).unwrap();
+        if let Some(Effect::DropShadow(d)) = l.effects.items.first_mut() {
+            d.size = 3.5;
+            d.distance = 300.0;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let before = first(&s, id);
+    let steps = s.active().unwrap().history.past_len();
+    s.execute(CMD, json!({"scale": 100})).unwrap();
+    assert_eq!(first(&s, id), before, "the style is untouched at 100 %");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "no History step");
+
+    let mut f = Effects { items: vec![before.clone()], ..Effects::default() };
+    scale_effects_rounded(&mut f, 100.0);
+    assert_eq!(f.items, vec![before], "the helper keeps 3.5 and 300 at 100 %");
+}

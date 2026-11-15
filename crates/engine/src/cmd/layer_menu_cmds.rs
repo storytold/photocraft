@@ -735,14 +735,17 @@ fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn scale_effects(s: &mut Session, p: &Value) -> Result<Value> {
-    // Actions and scripts may pass more than the dialog's 1000 % (5000 scales by 50); below 1
+    // Params (scripts, JSON) may pass more than the dialog's 1000 % (5000 scales by 50); below 1
     // counts as 1, as before (#14989).
     let pct = p.get("scale").and_then(Value::as_f64).unwrap_or(100.0).max(1.0);
     let id = layer_param(s, p)?;
+    // 100 % changes nothing: no History step, and the style keeps its imported data.
+    if pct == 100.0 {
+        return Ok(Value::Null);
+    }
     s.edit("Scale Effects", |doc, _| {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         crate::image_cmds::scale_effects_rounded(&mut l.effects, pct);
-        l.effects.psd_raw = None;
         Ok(())
     })?;
     Ok(Value::Null)
@@ -1081,7 +1084,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.layerStyle.scaleEffects",
             "Scale Effects…",
             ["Layer", "Layer Style"],
-            r##"{"scale":1..1000=100} (%: actions and scripts may pass more, 5000 scales by 50; sizes and distances are stored rounded half up to whole pixels within their ranges)"##,
+            r##"{"scale":1..1000=100} (%: params (scripts, JSON) may pass more, 5000 scales by 50; sizes and distances are stored rounded half up to whole pixels within their ranges)"##,
             has_effects,
             scale_effects
         ),
