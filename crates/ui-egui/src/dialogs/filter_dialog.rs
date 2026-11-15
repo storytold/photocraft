@@ -20,6 +20,14 @@ mod zoom_center;
 
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
 pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
+/// Layer Style › Scale Effects: Scale opens at 100 every time, not the last value used (#14994).
+const SCALE_EFFECTS: &str = "layer.layerStyle.scaleEffects";
+
+std::thread_local! {
+    /// Scale Effects' Preview as its dialog last showed it, closed by OK or Cancel alike (#14994).
+    /// It lasts for this run only, so each start of the app opens with Preview on, as today.
+    static SCALE_EFFECTS_PREVIEW: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
@@ -366,6 +374,9 @@ fn rememberable(kind: &Kind, value: &Value) -> bool {
 }
 
 fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &mut Map<String, Value>) {
+    if command == SCALE_EFFECTS {
+        return;
+    }
     let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(command) else { return };
     // Select and Mask starts from its defaults unless Remember Settings was on, as in Photoshop
     // (#9423).
@@ -385,7 +396,7 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
 
 /// Remember successful built-in schema dialogs; failed or cancelled dialogs do not persist.
 pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<String, Value>) {
-    if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") {
+    if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") || command == SCALE_EFFECTS {
         return;
     }
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
@@ -580,7 +591,8 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     fields.insert("__filter".into(), json!(true));
     // Select and Mask previews in its view modes (`select_mask_view`), not as the command's result.
     if command.starts_with("filter.") || PREVIEWED.contains(&command) || command == crate::select_mask_view::COMMAND {
-        fields.insert("__preview".into(), json!(true));
+        let on = command != SCALE_EFFECTS || SCALE_EFFECTS_PREVIEW.with(std::cell::Cell::get);
+        fields.insert("__preview".into(), json!(on));
     }
     for p in parse_spec(spec.params) {
         if let Some(v) = default_value(app, command, &p) {
@@ -1436,6 +1448,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.add_space(4.0);
         crate::widgets::checkbox(ui, &mut preview, tl!("Preview"));
         f.insert("__preview".into(), json!(preview));
+        // What the dialog shows when it closes (OK, Cancel or Escape) is what it reopens with.
+        if cmd == SCALE_EFFECTS {
+            SCALE_EFFECTS_PREVIEW.with(|c| c.set(preview));
+        }
     }
 }
 
@@ -1872,3 +1888,7 @@ mod multi_channel_dialog_tests {
         assert_eq!(preview.layer(layer).unwrap().surface(), app.session.active().unwrap().doc.layer(layer).unwrap().surface());
     }
 }
+
+#[cfg(test)]
+#[path = "scale_effects_opening_tests.rs"]
+mod scale_effects_opening_tests;
