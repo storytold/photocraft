@@ -622,8 +622,8 @@ fn duplicating_one_same_caption_occurrence_keeps_only_its_opaque_metadata() {
     let original = fixture(&["Same", "Same"], false, "shared archive note");
     let mut session = Session::new();
     session.actions = crate::actions_cmds::library::decode(&original.bytes).unwrap();
-    let first = session.actions.atn_set_rows.iter().find(|row| row.slot == 0).unwrap().source.raw.clone();
-    let second = session.actions.atn_set_rows.iter().find(|row| row.slot == 1).unwrap().source.raw.clone();
+    let first = session.actions.atn_set_rows.iter().find(|row| row.slot == 0).unwrap().source.raw.bytes().to_vec();
+    let second = session.actions.atn_set_rows.iter().find(|row| row.slot == 1).unwrap().source.raw.bytes().to_vec();
     assert_ne!(first, second);
     let ids = ["11111111111111111111111111111111", "22222222222222222222222222222222"];
     for (action, id) in session.actions.list.iter_mut().zip(ids) {
@@ -643,6 +643,7 @@ fn duplicating_one_same_caption_occurrence_keeps_only_its_opaque_metadata() {
     assert_eq!(session.prefs().shortcuts.get(&crate::actions_cmds::occurrence_key(ids[1])).map(String::as_str), Some("F7"));
     let bytes = crate::actions_cmds::library::encode(&session.actions, &[]).unwrap();
     let restored = crate::actions_cmds::library::decode(&bytes).unwrap();
-    assert_eq!(restored.atn_set_rows.iter().find(|row| row.slot == 0).unwrap().source.raw, first);
-    assert_eq!(restored.atn_set_rows.iter().find(|row| row.slot == 2).unwrap().source.raw, second);
+    // The archive gains a copied set and local identity metadata; only these descriptor spans must stay exact.
+    assert_eq!(restored.atn_set_rows.iter().find(|row| row.slot == 0).unwrap().source.raw.bytes(), first.as_slice());
+    assert_eq!(restored.atn_set_rows.iter().find(|row| row.slot == 2).unwrap().source.raw.bytes(), second.as_slice());
 }
