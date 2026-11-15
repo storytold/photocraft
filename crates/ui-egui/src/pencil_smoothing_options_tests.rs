@@ -44,7 +44,13 @@ fn the_gear_sits_after_smoothing_and_before_auto_erase() {
         let h = bar(theme);
         let gear = x0(&h, GEAR);
         // After the Smoothing label and its field, before Auto Erase.
-        let smoothing = h.query_all_by_label("Smoothing").map(|n| n.accesskit_node().bounding_box().unwrap().x1).fold(0.0, f64::max);
+        // The field is named by its caption ("Smoothing:"); an empty match would make the check vacuous.
+        let fields: Vec<_> = h
+            .query_all_by_role(egui::accesskit::Role::SpinButton)
+            .filter(|n| n.accesskit_node().label().is_some_and(|l| l.trim_end_matches(':') == "Smoothing"))
+            .collect();
+        assert!(!fields.is_empty(), "{theme:?}: the Smoothing field is found");
+        let smoothing = fields.iter().map(|n| n.accesskit_node().bounding_box().unwrap().x1).fold(0.0, f64::max);
         assert!(smoothing <= gear && gear < x0(&h, "Auto Erase"), "{theme:?}: Smoothing ({smoothing}) < gear ({gear}) < Auto Erase");
     }
 }

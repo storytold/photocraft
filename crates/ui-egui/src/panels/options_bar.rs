@@ -308,7 +308,15 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 }
             }
             opt_label(ui, tl!("Smoothing"));
-            if super::brush_controls::smoothing_field_alerting(ui, b, if t.pro { 58.0 } else { 66.0 }).1 {
+            // Whole percents on the bar, but a typed decimal keeps today's value (25.5 % is 0.255; not
+            // measured, #11965), so the field is the decimal one that still reports a clamp.
+            let mut smoothing = (b.smoothing.amount * 100.0).round();
+            let (r, alert) = widgets::value_field_alerting(ui, tl!("Smoothing"), &mut smoothing, 0.0..=100.0, "%", if t.pro { 58.0 } else { 66.0 });
+            if r.changed() {
+                b.smoothing.enabled = true;
+                b.smoothing.amount = (smoothing / 100.0).clamp(0.0, 1.0);
+            }
+            if alert {
                 range_alert(&mut app.ui, ZERO_TO_100);
             }
             // The Smoothing Options gear, right after the field as on the Brush (#11963); the

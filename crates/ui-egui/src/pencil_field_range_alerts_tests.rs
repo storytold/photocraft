@@ -96,3 +96,14 @@ fn the_alert_is_listed_over_the_control_channel() {
     let crate::control::Outcome::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!("ui.inspect replies at once") };
     assert!(v.to_string().contains(ZERO_TO_100), "{v}");
 }
+
+/// CodeRabbit on #14954: a decimal in Smoothing keeps today's value (25.5 % is 0.255, not rounded
+/// to 26 %) and shows no alert; decimals were not measured, so they behave as before.
+#[test]
+fn a_decimal_smoothing_is_kept_as_typed() {
+    let mut h = pencil();
+    type_into(&mut h, "Smoothing", "25.5");
+    let amount = h.state().session.tools.brush.smoothing.amount;
+    assert!((amount - 0.255).abs() < 1e-4, "25.5 % stays 0.255, got {amount}");
+    assert!(alerts(&h).is_empty(), "no alert for an in-range decimal");
+}
