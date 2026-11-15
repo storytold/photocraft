@@ -129,7 +129,16 @@ pub fn dropdown_grouped_icons<T: PartialEq + Clone>(
     enabled: impl Fn(&T) -> bool,
     icon: OptionIcon<'_, T>,
 ) -> bool {
-    !dropdown_with_icons(ui, id, name, current, options, width, true, true, &starts_group, &enabled, Some(icon)).0.is_empty()
+    let before = current.clone();
+    let chosen = dropdown_with_icons(ui, id, name, current, options, width, true, true, &starts_group, &enabled, Some(icon)).0;
+    // The arrow keys and type-ahead step onto greyed rows too; landing there keeps the value, as
+    // `dropdown_enabled` does.
+    if !enabled(current) {
+        *current = before;
+        ui.ctx().request_repaint();
+        return false;
+    }
+    !chosen.is_empty()
 }
 
 #[allow(clippy::too_many_arguments)]

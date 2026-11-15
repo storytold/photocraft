@@ -114,3 +114,41 @@ fn no_mesh_is_drawn_over_type() {
     assert!(count(true) > 0, "a pixel layer's mesh draws lines");
     assert_eq!(count(false), 0, "type draws none");
 }
+
+/// CodeRabbit on #15012: on editable type the open list greys Custom, and an arrow key that steps
+/// onto it (Arc, ArrowUp) must not pick it: the style stays Arc.
+#[test]
+fn an_arrow_key_onto_the_greyed_custom_row_keeps_the_style() {
+    let mut app = type_app();
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "edit.transform.warp", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 400.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                ui.horizontal_centered(|ui| options_bar(app, ui));
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run_steps(6);
+    if !h.ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+        return;
+    }
+    let at = h
+        .query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Warp"))
+        .expect("the Warp dropdown")
+        .rect()
+        .center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.transform.as_ref().and_then(|t| t.warp.as_ref()).map(|w| w.style), Some(WarpStyle::Arc));
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.transform.as_ref().and_then(|t| t.warp.as_ref()).map(|w| w.style), Some(WarpStyle::Arc), "the greyed Custom was not picked");
+}
