@@ -28,6 +28,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod initial_focus_tests;
 
 #[derive(Clone, Copy)]
 enum P {
@@ -1049,9 +1051,36 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
             p["blend"] = json!(cur);
         }
     });
+    // A dialog opening on this page opens on Opacity, its text selected, as Photoshop's does
+    // (#14862): the dialog's first (sizing) pass arms it, the first frame drawn focuses it. A
+    // dialog that opened on an effect page leaves the focus alone.
+    let (ctx, armed) = (ui.ctx().clone(), ui.scope_id().with("opacity-first-focus"));
+    let typed = armed.with("typed");
+    let focus = if ui.is_sizing_pass() {
+        ctx.data_mut(|d| d.insert_temp(armed, true));
+        false
+    } else {
+        ctx.data_mut(|d| d.remove_temp::<bool>(armed)).unwrap_or(false)
+    };
+    if focus {
+        // The field selects its text only after reading this frame's keys, so keys typed on
+        // the frame it gains the focus wait for the next one, to replace the number.
+        let held: Vec<egui::Event> = ui.input_mut(|i| {
+            let (held, rest) = std::mem::take(&mut i.events).into_iter().partition(|e| matches!(e, egui::Event::Text(_) | egui::Event::Paste(_)));
+            i.events = rest;
+            held
+        });
+        ctx.data_mut(|d| d.insert_temp(typed, held));
+        widgets::focus_first_field(&ctx, true);
+    } else if let Some(held) = ctx.data_mut(|d| d.remove_temp::<Vec<egui::Event>>(typed)) {
+        ui.input_mut(|i| drop(i.events.splice(0..0, held)));
+    }
     let mut v = num(p, "opacity", 100.0);
     if widgets::slider_line(ui, "Opacity", LABEL_W, &mut v, 0.0..=100.0, "%").changed() {
         p["opacity"] = json!(v.round());
+    }
+    if focus {
+        widgets::focus_first_field(&ctx, false);
     }
     widgets::hairline(ui);
     widgets::section_label(ui, "Advanced Blending");
