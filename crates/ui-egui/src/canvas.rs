@@ -2519,6 +2519,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         d.reposition = reposition;
         drawing = true;
     }
+    // A frame being drawn with the Frame tool moves while Space is held (#13867).
+    drawing |= crate::frame_tool::set_space(app, reposition);
     let temporary = crate::hold_keys::for_frame(app, &ctx, drawing || crate::type_transform::active(app));
     let space_pan = temporary == Some(crate::hold_keys::Temporary::Hand);
     let middle = ui.input(|i| i.pointer.middle_down());
@@ -3046,12 +3048,12 @@ mod rotation_preview_isolation_tests {
         let description = |doc: &Document| photocraft_engine::color_cmds::profile_from_bytes(doc.icc_profile.as_ref().unwrap()).unwrap().description.clone();
 
         let assigned = preview(&mut app, "edit.assignProfile", "prophoto-compat");
-        assert_eq!(description(&assigned), photocraft_cms::Builtin::ProPhotoCompat.description());
+        assert_eq!(description(&assigned), craft_cms::Builtin::ProPhotoCompat.description());
         let shown = shown_pixels(&app, &assigned);
         assert!(shown.r().abs_diff(before.r()) > 10 || shown.b().abs_diff(before.b()) > 10, "the assigned profile shows: {before:?} → {shown:?}");
 
         let converted = preview(&mut app, "edit.convertToProfile", "working");
-        assert_eq!(description(&converted), photocraft_cms::Builtin::DisplayP3.description(), "`working` is Color Settings' working space");
+        assert_eq!(description(&converted), craft_cms::Builtin::DisplayP3.description(), "`working` is Color Settings' working space");
         let shown = shown_pixels(&app, &converted);
         for (a, b) in [(shown.r(), before.r()), (shown.g(), before.g()), (shown.b(), before.b())] {
             assert!(a.abs_diff(b) <= 2, "converting keeps the look: {before:?} → {shown:?}");
