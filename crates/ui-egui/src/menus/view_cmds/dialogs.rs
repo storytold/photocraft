@@ -133,7 +133,8 @@ pub fn form_keys(f: &Map<String, Value>) -> Vec<String> {
 }
 
 /// A `__choices` entry that is not a value but the line between two groups of the dropdown's list,
-/// as in the menu catalog (#14479). The entry after it starts a group.
+/// as in the menu catalog (#14479). The entry after it starts a group. Only in a list the form names
+/// in `__groupedChoices`: elsewhere "---" is a literal value.
 const CHOICE_SEPARATOR: &str = "---";
 
 /// The `__choices` entries that start a group of the list: every entry written after a
@@ -234,11 +235,15 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                             // Action and set names are the user's own text, never catalogue entries.
                             let action_names = matches!(k.as_str(), "action" | "set")
                                 && matches!(f.get("__command").and_then(Value::as_str), Some("file.automate.batch" | "file.automate.createDroplet"));
-                            let grouped = group_lines(options);
+                            // Only a list the dialog marks as grouped (`__groupedChoices`) has lines; in any
+                            // other list "---" is a literal value (an action, set, layer or channel name).
+                            let is_grouped =
+                                f.get("__groupedChoices").and_then(Value::as_array).is_some_and(|a| a.iter().any(|g| g.as_str() == Some(k.as_str())));
+                            let grouped = if is_grouped { group_lines(options) } else { Vec::new() };
                             let opts: Vec<(String, String)> = options
                                 .iter()
                                 .filter_map(Value::as_str)
-                                .filter(|o| *o != CHOICE_SEPARATOR)
+                                .filter(|o| !is_grouped || *o != CHOICE_SEPARATOR)
                                 .map(|o| (o.to_string(), if action_names { o.to_string() } else { label(o) }))
                                 .collect();
                             let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
@@ -750,7 +755,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                     // Scale and Offset only affect Add and Subtract.
                     dialog(
                         app,
-                        json!({"sourceLayer": "merged", "sourceChannel": chans[0], "sourceInvert": false, "blending": "multiply", "opacity": 100.0, "scale": 1.0, "offset": 0, "preserveTransparency": false, "maskChannel": "none", "__labels": names}),
+                        json!({"sourceLayer": "merged", "sourceChannel": chans[0], "sourceInvert": false, "blending": "multiply", "opacity": 100.0, "scale": 1.0, "offset": 0, "preserveTransparency": false, "maskChannel": "none", "__labels": names, "__groupedChoices": ["blending"]}),
                         json!({"sourceLayer": layers, "sourceChannel": load, "blending": apply_image_blend_choices(), "maskChannel": masks}),
                     )
                 }

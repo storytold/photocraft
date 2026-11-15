@@ -178,3 +178,40 @@ fn the_apply_image_dropdown_draws_a_line_between_each_group() {
         );
     });
 }
+
+/// A literal "---" in a list the dialog does not mark as grouped is a value, not a line: an action
+/// or set named "---" in Batch, and a layer or channel named "---" in Apply Image, stay selectable.
+#[test]
+fn a_literal_triple_dash_is_kept_in_every_ungrouped_list() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    // The Apply Image dialog marks only its Blending list as grouped.
+    assert_eq!(open("image.applyImage")["__groupedChoices"], json!(["blending"]));
+
+    let cases = [
+        ("file.automate.batch", "action", "Action", json!(["Retouch", "---", "Invert"])),
+        ("file.automate.batch", "set", "Set", json!(["Default Actions", "---", "Mine"])),
+        ("image.applyImage", "sourceLayer", "Source layer", json!(["merged", "---", "Skin"])),
+        ("image.applyImage", "sourceChannel", "Source channel", json!(["red", "---", "Alpha 1"])),
+    ];
+    for (command, key, combo, options) in cases {
+        let first = options[0].clone();
+        let mut f = Map::new();
+        f.insert("__command".into(), json!(command));
+        f.insert("__form".into(), json!(true));
+        f.insert("__choices".into(), json!({ key: options }));
+        f.insert(key.into(), first);
+        let mut h = Harness::builder().with_size(egui::vec2(600.0, 600.0)).build_ui_state(|ui, f: &mut Map<String, Value>| super::form_body(ui, f), f);
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        crate::i18n::with_language(crate::i18n::Lang::EN, || {
+            h.run_steps(3);
+            h.get_by_role_and_label(Role::ComboBox, combo).click();
+            h.run_steps(2);
+            assert_eq!(h.query_all_by_label("---").count(), 1, "{command} {key}: the literal \"---\" is a row of the list");
+            h.get_by_label("---").click();
+            h.run_steps(2);
+            assert_eq!(h.state()[key], json!("---"), "{command} {key}: it can be selected");
+        });
+    }
+}
