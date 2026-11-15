@@ -19,7 +19,8 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
 
 /// Open the dialog with an empty Files list. Returns its id.
 pub fn open(app: &mut PhotocraftApp) -> u64 {
-    open_for(app, COMMAND, "Load Files into Stack…")
+    // The window is titled "Load Layers", as the reference's is; the menu item keeps its name (#14006).
+    open_for(app, COMMAND, "Load Layers")
 }
 
 pub fn open_statistics(app: &mut PhotocraftApp) -> u64 {
@@ -143,6 +144,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         ui.add_space(8.0);
     }
     ui.label(RichText::new(tl!("Source Files")).font(crate::theme::semibold(13.0)));
+    // The reference's hint above Use: (#14006); Statistics keeps none (not measured there).
+    if !statistics(f) {
+        ui.add_space(2.0);
+        ui.label(tl!("Choose two or more files to load into an image stack."));
+    }
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label(tl!("Use:"));
@@ -273,3 +279,6 @@ mod multi_select_tests;
 
 #[cfg(test)]
 mod non_image_tests;
+
+#[cfg(test)]
+mod title_tests;
