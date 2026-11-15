@@ -24,8 +24,17 @@ pub(crate) fn decode_import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, allow
     decode_stream(name, bytes, ctl, MAX_INFLATED, false, allow_svg)
 }
 
+/// Recognize SVG inside a gzip envelope without inflating its remaining drawing.
+/// This is a cancellable worker probe, not a complete SVG or envelope validation.
+pub(crate) fn svg_prefix(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<Vec<u8>>> {
+    decode_stream(name, bytes, ctl, SVG_PROBE_BYTES, true, true)
+        .map(|decoded| decoded.filter(|decoded| !decoded.is_xcf && svg_signature(&decoded.bytes)).map(|decoded| decoded.bytes))
+}
+
 mod bzip;
 
+#[cfg(test)]
+mod geometry_prefix_tests;
 #[cfg(test)]
 mod gzip_tests;
 #[cfg(test)]
@@ -163,6 +172,88 @@ fn decode_inner(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pre
     decode_stream(name, bytes, ctl, limit, prefix_only, false).map(|value| value.map(|value| value.bytes))
 }
 
+/// Construct the same bounded decoder for prefix queries and complete imports.
+fn compressed_reader<'a, 'bytes: 'a, 'ctl: 'a>(
+    kind: crate::ImportCompression,
+    input: &'a mut Input<'bytes, 'ctl>,
+    policy: &'a GzipPolicy,
+) -> Box<dyn Read + 'a> {
+    #[cfg(test)]
+    DECODER_STARTS.with(|starts| starts.set(starts.get() + 1));
+    match kind {
+        crate::ImportCompression::Gzip => Box::new(Gzip::new(input, policy)),
+        crate::ImportCompression::Bzip2 => Box::new(bzip::Reader::new(input)),
+        // The decoder limit includes fixed LZMA2 buffers as well as the dictionary.
+        // Admit the 64 MiB dictionary used by -9/-9e without admitting larger ones.
+        crate::ImportCompression::Xz => Box::new(lzma_rust2::XzReader::new_mem_limit(input, true, lzma_rust2::lzma2_get_memory_usage(XZ_MAX_DICTIONARY_BYTES))),
+    }
+}
+
+/// A geometry query owns no inflated document buffer. Limit both its total
+/// metadata work and cancellation latency, including discarded property payloads.
+struct PrefixRead<'a, 'ctl> {
+    reader: &'a mut dyn Read,
+    ctl: &'a Interrupt<'ctl>,
+    left: usize,
+}
+
+impl Read for PrefixRead<'_, '_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        self.ctl.check().map_err(io::Error::other)?;
+        if output.is_empty() {
+            return Ok(0);
+        }
+        if self.left == 0 {
+            return Err(io::Error::other("XCF metadata exceeds the inflated prefix allowance"));
+        }
+        let capacity = output.len().min(self.left).min(CHUNK);
+        let target = output.get_mut(..capacity).ok_or_else(|| io::Error::other("invalid metadata read range"))?;
+        let count = self.reader.read(target)?;
+        self.left = self.left.saturating_sub(count);
+        Ok(count)
+    }
+}
+
+/// Scan only the XCF prefix the caller needs, through one cancellable decoder.
+/// The caller must stop after its metadata. Unread drawables, trailers and tails
+/// are deliberately not validated here; complete import keeps its strict path.
+pub(super) fn with_xcf_prefix<T>(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, scan: impl FnOnce(&mut dyn Read) -> Result<T>) -> Result<Option<T>> {
+    with_xcf_prefix_limit(name, bytes, ctl, MAX_INFLATED, scan)
+}
+
+fn with_xcf_prefix_limit<T>(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, scan: impl FnOnce(&mut dyn Read) -> Result<T>) -> Result<Option<T>> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    if super::is_xcf(bytes) {
+        let mut reader = bytes;
+        let result = scan(&mut PrefixRead { reader: &mut reader, ctl, left: limit });
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        return result.map(Some);
+    }
+    let Some(kind) = crate::import_compression(bytes) else { return Ok(None) };
+    let mut input = Input { remaining: bytes, ctl: *ctl };
+    let policy = GzipPolicy { strict: std::cell::Cell::new(true), verified_output: std::cell::Cell::new(0), rollback: std::cell::Cell::new(None) };
+    let mut decoder = compressed_reader(kind, &mut input, &policy);
+    let mut magic = [0; MAGIC.len()];
+    let result = decoder.read_exact(&mut magic);
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    if let Err(error) = result {
+        return if crate::is_xcf_input_name(name) { Err(invalid(format!("compressed XCF prefix: {error}"))) } else { Ok(None) };
+    }
+    if magic != MAGIC {
+        return if crate::is_xcf_input_name(name) {
+            Err(invalid("compressed content is not a plain XCF file; recursive wrapping is unsupported"))
+        } else {
+            Ok(None)
+        };
+    }
+    // Replay only the already-read magic, not another decoder. The scanner then
+    // sees the same framing as an uncompressed XCF and pays for every byte once.
+    let mut reader = magic.as_slice().chain(decoder);
+    let result = scan(&mut PrefixRead { reader: &mut reader, ctl, left: limit });
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    result.map(Some)
+}
+
 fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, prefix_only: bool, allow_svg: bool) -> Result<Option<DecodedImport>> {
     let Some(kind) = crate::import_compression(bytes) else { return Ok(None) };
     let compression = match kind {
@@ -173,19 +264,11 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
     // SVGZ is a gzip envelope; other compressed formats may claim only actual XCF bytes.
     let allow_svg = allow_svg && kind == crate::ImportCompression::Gzip;
     let lower = name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase();
-    let declared = [".xcf.gz", ".xcfgz", ".xcf.bz2", ".xcfbz2", ".xcf.xz", ".xcfxz"].iter().any(|suffix| lower.ends_with(suffix));
+    let declared = crate::is_xcf_input_name(name) && !lower.ends_with(".xcf");
     let declared_svg = lower.ends_with(".svg") || lower.ends_with(".svgz");
     let mut input = Input { remaining: bytes, ctl: *ctl };
     let gzip_policy = GzipPolicy { strict: std::cell::Cell::new(!allow_svg), verified_output: std::cell::Cell::new(0), rollback: std::cell::Cell::new(None) };
-    #[cfg(test)]
-    DECODER_STARTS.with(|starts| starts.set(starts.get() + 1));
-    let mut decoder: Box<dyn Read + '_> = match compression {
-        "gzip" => Box::new(Gzip::new(&mut input, &gzip_policy)),
-        "bzip2" => Box::new(bzip::Reader::new(&mut input)),
-        // The decoder limit includes fixed LZMA2 buffers as well as the dictionary.
-        // Admit the 64 MiB dictionary used by -9/-9e without admitting larger ones.
-        _ => Box::new(lzma_rust2::XzReader::new_mem_limit(&mut input, true, lzma_rust2::lzma2_get_memory_usage(XZ_MAX_DICTIONARY_BYTES))),
-    };
+    let mut decoder = compressed_reader(kind, &mut input, &gzip_policy);
     let mut prefix = [0; MAGIC.len()];
     let mut prefix_len = 0usize;
     while prefix_len < prefix.len() {

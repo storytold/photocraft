@@ -7,7 +7,7 @@ fn batch_wrapped_historical_inputs_exclude_unrelated_archives_in_both_listing_mo
     let actions = folder.path().join("actions.json");
     std::fs::create_dir(&input).unwrap();
     std::fs::write(&actions, "[]").unwrap();
-    let sources = [("gzip.xcf.gz", GZIP), ("bzip.xcf.bz2", BZIP), ("xz.XCF.XZ", XZ), ("alias.xcfgz", GZIP)];
+    let sources = [("gzip.xcf.gz", GZIP), ("bzip.xcf.bz2", BZIP), ("xz.XCF.XZ", XZ), ("alias.xcfgz", GZIP), ("compact.XCFBZ2", BZIP), ("compact-xz.XCFXZ", XZ)];
     for (name, bytes) in sources {
         std::fs::write(input.join(name), bytes).unwrap();
         assert!(super::is_input(&input.join(name)), "{name}");
@@ -37,9 +37,9 @@ fn batch_wrapped_historical_inputs_exclude_unrelated_archives_in_both_listing_mo
         }
         let result = invoke(&args);
         assert_eq!(result.code, 0, "{args:?}: {}{}", result.stdout, result.stderr);
-        assert!(result.stdout.contains("4 succeeded, 0 failed"), "{}", result.stdout);
+        assert!(result.stdout.contains("6 succeeded, 0 failed"), "{}", result.stdout);
         assert!(!result.stderr.contains("FAIL"), "{}", result.stderr);
-        assert_eq!(std::fs::read_dir(&output).unwrap().count(), 4);
+        assert_eq!(std::fs::read_dir(&output).unwrap().count(), 6);
         for (name, bytes) in sources {
             let stem = std::path::Path::new(name).file_stem().unwrap().to_string_lossy();
             let target = output.join(format!("{stem}.pcraft"));

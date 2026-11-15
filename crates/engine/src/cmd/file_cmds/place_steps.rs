@@ -144,7 +144,8 @@ impl PlaceSteps {
         let (name, fmt) = (&self.input.name, self.input.fmt);
         crate::memory_gate::ensure(&format!("place \u{201c}{}\u{201d}", file_name(name)), crate::memory_gate::place_need(&self.bytes, fmt.bytes_per_pixel()))?;
         // A path isn't read when the input is made, so whether it is a vector source is decided now.
-        let vector = self.input.frame.is_some() || photocraft_io::is_svg_input(name, &self.bytes);
+        let vector = self.input.frame.is_some()
+            || ctx.stage(0.0, 0.0, "Decoding", |ctl| photocraft_io::is_svg_input_with(name, &self.bytes, ctl)).map_err(|e| self.io_error(e))?;
         self.input.doc = self.input.doc.take().filter(|_| vector);
         Ok(())
     }

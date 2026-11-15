@@ -80,6 +80,7 @@ pub mod psd_thumbnail;
 pub mod raw;
 pub mod renderer;
 pub use renderer::{BandRenderer, CpuRenderer, RenderBand, RenderError};
+mod import_report_notice;
 mod initial_view;
 pub mod slices_map;
 pub mod smart_map;
@@ -333,19 +334,7 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
 /// Retained parser properties are inert history, not evidence that native content was lost.
 /// Keep notices for actual approximations/unapplied content, missing property bytes and future reports.
 fn import_report_needs_notice(doc: &Document) -> bool {
-    use photocraft_doc::import_conversion::{ConversionDisposition as D, ConversionReason as R, ImportConversion};
-    match doc.metadata.import_conversion.as_deref() {
-        Some(ImportConversion::Report(report)) => report.entries.iter().any(|entry| {
-            entry.disposition != D::NativeEquivalent
-                && !(entry.disposition == D::RetainedUnapplied
-                    && entry.feature_code.starts_with("xcf.source_property.")
-                    && matches!(entry.reason, R::MissingMapping | R::NativePolicy)
-                    && !entry.attachments.is_empty()
-                    && entry.attachments.iter().all(|index| report.attachments.get(*index as usize).is_some()))
-        }),
-        Some(ImportConversion::Opaque { .. }) => true,
-        None => false,
-    }
+    import_report_notice::needs_notice(doc)
 }
 
 /// Result of [`export`].
@@ -583,6 +572,25 @@ fn invoke_format_detector(name: &str, bytes: &[u8]) -> Option<photocraft_formats
         COMPRESSED_DETECTOR_CALLS.with(|calls| calls.set(calls.get() + 1));
     }
     photocraft_formats::detect(name, bytes)
+}
+
+// Query the central detector's precedence for verified SVG magic without ever
+// handing it a compressed stream (its SVGZ detector inflates internally).
+fn svg_magic_takes_precedence(name: &str) -> bool {
+    central_format(name, b"<svg/>") == Some(photocraft_formats::Format::Svg)
+}
+
+const XCF_INPUT_SUFFIXES: &[&str] = &[".xcf", ".xcf.gz", ".xcfgz", ".xcf.bz2", ".xcfbz2", ".xcf.xz", ".xcfxz"];
+
+/// Whether a filename declares XCF, including the supported compound and compact
+/// compression aliases. Generic archive suffixes alone never declare an image.
+pub fn is_xcf_input_name(name: &str) -> bool {
+    let basename = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    XCF_INPUT_SUFFIXES.iter().any(|suffix| basename.get(basename.len().saturating_sub(suffix.len())..).is_some_and(|tail| tail.eq_ignore_ascii_case(suffix)))
+}
+
+fn is_xcf_extension(ext: &str) -> bool {
+    XCF_INPUT_SUFFIXES.iter().any(|suffix| suffix.trim_start_matches('.').eq_ignore_ascii_case(ext))
 }
 
 /// PSD/PSB/PSDT by magic, or by a declared Photoshop extension when no other raster
@@ -1159,7 +1167,7 @@ fn route_forced(ext: &str) -> Route {
         Route::Ora
     } else if kra::EXTENSIONS.contains(&ext.as_str()) {
         Route::Kra
-    } else if matches!(ext.as_str(), "xcf" | "xcf.gz" | "xcfgz" | "xcf.bz2" | "xcfbz2" | "xcf.xz" | "xcfxz") {
+    } else if is_xcf_extension(&ext) {
         Route::Xcf
     } else if ext == "pdn" {
         Route::Pdn
@@ -1194,10 +1202,9 @@ fn import_stages(
     // Only an automatic route may change format after probing. Forced Open As keeps
     // precedence, while explicitly forcing XCF still accepts its supported envelopes.
     let decoded = if selected == Route::Compressed || (selected == Route::Xcf && import_compression(bytes).is_some()) {
-        // The shared detector deliberately prioritizes the explicit .af alias over
-        // SVG sniffing. Keep that policy while still letting actual XCF magic win.
-        let affinity_alias = name.rsplit(['/', '\\']).next().and_then(|name| name.rsplit_once('.')).is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("af"));
-        let svg = selected == Route::Compressed && !affinity_alias;
+        // Preserve the central detector's verified-SVG precedence without copying
+        // its filename policy or letting its SVGZ probe inflate unbounded input.
+        let svg = selected == Route::Compressed && svg_magic_takes_precedence(name);
         let decoded = xcf::transport::decode_import(name, bytes, ctl, svg)?;
         selected = match &decoded {
             Some(value) if value.is_xcf => Route::Xcf,
@@ -1239,7 +1246,22 @@ fn import_stages(
 /// Valid plain SVG is recognized by its XML content; an otherwise unknown `.svg` is passed to the
 /// SVG parser for a useful malformed-file error, and `.svgz` disambiguates gzip streams.
 pub fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
-    matches!(central_format(name, bytes), Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz))
+    is_svg_input_with(name, bytes, &photocraft_raster::Interrupt::NONE).unwrap_or_else(|_| {
+        // Keep the named malformed-SVG fallback; import supplies the useful error.
+        matches!(central_format(name, bytes), Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz))
+    })
+}
+
+/// Cancellable SVG recognition. Gzip inputs are sniffed only through the bounded
+/// transport prefix reader; no full drawing or image pixels are decoded here.
+/// Call this on the import worker, never while deciding whether to spawn one.
+pub fn is_svg_input_with(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<bool, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    match import_compression(bytes) {
+        None => Ok(matches!(central_format(name, bytes), Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz))),
+        Some(ImportCompression::Gzip) if svg_magic_takes_precedence(name) => Ok(xcf::transport::svg_prefix(name, bytes, ctl)?.is_some()),
+        Some(_) => Ok(false),
+    }
 }
 
 fn extension(name_or_ext: &str) -> String {
@@ -1871,3 +1893,5 @@ mod historical_source_tests;
 
 #[cfg(test)]
 mod import_report_warning_tests;
+#[cfg(test)]
+mod svg_input_routing_tests;

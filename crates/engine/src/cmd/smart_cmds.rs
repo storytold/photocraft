@@ -75,7 +75,7 @@ pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
 
 /// Decode with the persisted interpretation of historical XCF sample bytes, without inferring an order.
 pub fn decode_source_with_order(file_name: &str, bytes: &[u8], order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> Result<Document> {
-    if photocraft_io::svg::is_svg(bytes) {
+    if photocraft_io::is_svg_input(file_name, bytes) {
         // This API has no warning channel. Stack/source caches and contents edits must not
         // turn a partial SVG import into silently complete smart-object contents.
         return photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)

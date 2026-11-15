@@ -21,15 +21,12 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 pub(crate) fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub" | "xcf" | "xcfgz")
+        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
             || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
     };
     // Compression suffixes alone also name unrelated archives; only XCF compounds
     // participate in batch discovery, matching the engine's recursive listing.
-    let wrapped_xcf = p.file_name().is_some_and(|name| {
-        let lower = name.to_string_lossy().to_ascii_lowercase();
-        [".xcf.gz", ".xcf.bz2", ".xcf.xz"].iter().any(|suffix| lower.ends_with(suffix))
-    });
+    let wrapped_xcf = p.file_name().is_some_and(|name| photocraft_io::is_xcf_input_name(&name.to_string_lossy()));
     p.is_file() && (wrapped_xcf || p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase())))
 }
 

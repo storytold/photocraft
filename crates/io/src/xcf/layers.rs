@@ -815,7 +815,13 @@ impl<'a> Image<'a> {
         }
         self.layer_initial_view(&layer, &lprops);
         if !effect_pointers.is_empty() {
-            let bounds = x.checked_add(lw as i32).zip(y.checked_add(lh as i32)).map_or(Rect::EMPTY, |(right, bottom)| Rect::new(x, y, right, bottom));
+            // Groups have no hierarchy dimension check. Their declared effect frame
+            // must still fit native coordinates rather than wrap into an inverted rectangle.
+            let width = i32::try_from(lw).map_err(|_| invalid("layer effect width exceeds native coordinates"))?;
+            let height = i32::try_from(lh).map_err(|_| invalid("layer effect height exceeds native coordinates"))?;
+            let right = x.checked_add(width).ok_or_else(|| invalid("layer effect right edge exceeds native coordinates"))?;
+            let bottom = y.checked_add(height).ok_or_else(|| invalid("layer effect bottom edge exceeds native coordinates"))?;
+            let bounds = Rect::new(x, y, right, bottom);
             self.pending_effects.push(PendingLayerEffects { layer: layer.id, owner: outcome, bounds, pointers: effect_pointers });
         }
         Ok(Some((Node { layer, path, group, children: Vec::new(), outcome }, linear)))

@@ -35,15 +35,18 @@ fn xz(bytes: &[u8]) -> Vec<u8> {
             }
         }
     }
-    assert!(!bytes.is_empty() && bytes.len() <= 65536);
+    assert!(!bytes.is_empty());
     let mut out = b"\xfd7zXZ\0\0\x01".to_vec();
     out.extend(crc32fast::hash(&[0, 1]).to_le_bytes());
     let mut block_header = vec![2, 0, 0x21, 1, 0, 0, 0, 0];
     block_header.extend(crc32fast::hash(&block_header).to_le_bytes());
     out.extend(&block_header);
-    let mut data = vec![1];
-    data.extend(((bytes.len() - 1) as u16).to_be_bytes());
-    data.extend(bytes);
+    let mut data = Vec::new();
+    for chunk in bytes.chunks(65536) {
+        data.push(1);
+        data.extend(((chunk.len() - 1) as u16).to_be_bytes());
+        data.extend(chunk);
+    }
     data.push(0);
     out.extend(&data);
     while !out.len().is_multiple_of(4) {
@@ -93,15 +96,22 @@ fn geometry_needs_no_drawable_or_sample_order_and_uses_native_resolution_policy(
 }
 
 #[test]
-fn wrapped_geometry_validates_envelopes_without_requiring_drawable_data() {
+fn wrapped_geometry_stops_at_properties_while_full_decode_validates_envelopes() {
     let bytes = header(&[dpi(240., 240.)]);
     for (name, wrapped) in wrappers(&bytes) {
         assert_eq!(crate::smart_xcf_order::geometry(name, &wrapped, Some(Order::LittleEndian), &Interrupt::NONE).unwrap(), ((317., 193.), 240.));
         assert_eq!(source_geometry("unknown.bin", &wrapped, &Interrupt::NONE).unwrap(), Some(((317., 193.), 240.)), "XCF signature claims the wrapper");
-        assert!(source_geometry(name, &wrapped[..wrapped.len() - 1], &Interrupt::NONE).is_err(), "{name}: validate the whole envelope trailer");
+        let truncated = &wrapped[..wrapped.len() - 1];
+        assert_eq!(
+            source_geometry(name, truncated, &Interrupt::NONE).unwrap(),
+            Some(((317., 193.), 240.)),
+            "{name}: unread trailers are outside a prefix query"
+        );
+        assert!(transport::decode(name, truncated, &Interrupt::NONE).is_err(), "{name}: complete transport still validates trailers");
         let mut garbage = wrapped;
         garbage.extend_from_slice(b"not a stream");
-        assert!(source_geometry(name, &garbage, &Interrupt::NONE).is_err(), "{name}: reject unconsumed trailing input");
+        assert_eq!(source_geometry(name, &garbage, &Interrupt::NONE).unwrap(), Some(((317., 193.), 240.)));
+        assert!(transport::decode(name, &garbage, &Interrupt::NONE).is_err(), "{name}: complete transport still rejects trailing input");
     }
 }
 
@@ -128,6 +138,102 @@ fn geometry_preserves_canvas_and_property_limits() {
     excessive_payload.extend_from_slice(&999u32.to_be_bytes());
     excessive_payload.extend_from_slice(&((super::super::MAX_PAYLOAD + 1) as u32).to_be_bytes());
     assert!(source_geometry("source.xcf", &excessive_payload, &Interrupt::NONE).is_err());
+}
+
+#[test]
+fn wrapped_geometry_does_not_inflate_large_drawable_tails() {
+    let mut bytes = header(&[dpi(360., 180.)]);
+    bytes.resize(bytes.len() + 4 * 1024 * 1024, 0x7d);
+    for (name, wrapped) in wrappers(&bytes) {
+        let polls = AtomicUsize::new(0);
+        let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= 64;
+        let ctl = Interrupt::cancel_only(&cancel);
+        assert_eq!(source_geometry(name, &wrapped, &ctl).unwrap(), Some(((317., 193.), 360.)), "{name}");
+        assert!(polls.load(Ordering::Relaxed) < 64, "geometry stops after properties, not after all drawable output");
+        polls.store(0, Ordering::Relaxed);
+        assert!(
+            matches!(transport::decode(name, &wrapped, &ctl), Err(IoError::Cancelled)),
+            "{name}: the independent full decode reaches the later cancellation threshold"
+        );
+    }
+}
+
+#[test]
+fn geometry_stream_matches_shared_irregular_property_framing() {
+    fn string(value: &[u8], data: &mut Vec<u8>) {
+        data.extend((value.len() as u32).to_be_bytes());
+        data.extend(value);
+    }
+    let mut colormap = 2u32.to_be_bytes().to_vec();
+    colormap.extend([17, 31, 57, 101, 127, 193]);
+    let mut link = 0u32.to_be_bytes().to_vec();
+    string(b"source.xcf\0", &mut link);
+    link.extend(317u32.to_be_bytes());
+    link.extend(193u32.to_be_bytes());
+    let mut cases: Vec<(u32, u32, u32, Vec<u8>)> = vec![(7, 1, 6, colormap), (26, 48, (link.len() - 4) as u32, link)];
+    for version in [20, 21] {
+        let mut unit = [1f32.to_be_bytes(), 2u32.to_be_bytes()].concat();
+        for _ in 0..if version < 21 { 5 } else { 3 } {
+            string(b"unit\0", &mut unit);
+        }
+        cases.push((version, 24, 4, unit));
+    }
+    for (version, kind, declared, payload) in cases {
+        let mut bytes = header(&[]);
+        bytes[9..14].copy_from_slice(format!("v{version:03}\0").as_bytes());
+        bytes.truncate(bytes.len() - 8);
+        bytes.extend(kind.to_be_bytes());
+        bytes.extend(declared.to_be_bytes());
+        bytes.extend(payload);
+        bytes.extend(19u32.to_be_bytes());
+        bytes.extend(12u32.to_be_bytes());
+        bytes.extend([288f32.to_be_bytes(), 144f32.to_be_bytes(), 123u32.to_be_bytes()].concat());
+        bytes.extend(0u32.to_be_bytes());
+        bytes.extend(999u32.to_be_bytes()); // END ignores the unused length, as wire does.
+        let (mut cursor, header) = read_header(&bytes).unwrap();
+        let props = wire::props_version_with_interrupt(&mut cursor, Some(header.version), &Interrupt::NONE).unwrap();
+        let expected = metadata::image_resolution(&props, 72.);
+        assert_eq!(expected, 288.);
+        for (name, wrapped) in std::iter::once(("source.xcf", bytes.clone())).chain(wrappers(&bytes)) {
+            assert_eq!(
+                source_geometry(name, &wrapped, &Interrupt::NONE).unwrap(),
+                Some(((317., 193.), f64::from(expected))),
+                "kind {kind}, version {version}, {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn geometry_stream_checks_legacy_headers_and_property_string_limits() {
+    let mut legacy = header(&[dpi(144., 144.)]);
+    legacy[9..14].copy_from_slice(b"file\0");
+    legacy.drain(26..30); // Legacy headers have no precision word.
+    for (name, bytes) in std::iter::once(("source.xcf", legacy.clone())).chain(wrappers(&legacy)) {
+        assert_eq!(source_geometry(name, &bytes, &Interrupt::NONE).unwrap(), Some(((317., 193.), 144.)));
+    }
+    for kind in [24u32, 48] {
+        let mut bytes = header(&[]);
+        bytes.truncate(bytes.len() - 8);
+        bytes.extend(kind.to_be_bytes());
+        bytes.extend(0u32.to_be_bytes());
+        bytes.extend(vec![0; if kind == 24 { 8 } else { 4 }]);
+        bytes.extend(((super::super::MAX_STRING + 1) as u32).to_be_bytes());
+        for (name, bytes) in std::iter::once(("source.xcf", bytes.clone())).chain(wrappers(&bytes)) {
+            let error = source_geometry(name, &bytes, &Interrupt::NONE).unwrap_err();
+            assert!(error.to_string().contains("string"), "kind {kind}, {name}: {error}");
+        }
+    }
+}
+
+#[test]
+fn geometry_cancels_while_discarding_large_optional_properties() {
+    let bytes = header(&[(999, vec![0; 2 * 1024 * 1024]), dpi(300., 300.)]);
+    for (name, bytes) in std::iter::once(("source.xcf", bytes.clone())).chain(wrappers(&bytes)) {
+        let polls = AtomicUsize::new(0);
+        let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= 12;
+        assert!(matches!(source_geometry(name, &bytes, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)), "{name}");
+    }
 }
 
 #[test]

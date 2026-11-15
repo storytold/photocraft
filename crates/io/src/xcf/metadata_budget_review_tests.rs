@@ -96,6 +96,103 @@ fn coverage_owner(image: &mut Image<'_>) -> usize {
         .unwrap()
 }
 
+#[test]
+fn effect_group_bounds_reject_wrapped_dimensions_and_coordinate_overflow_without_decoding_hierarchy() {
+    fn group(w: &mut W, width: u32, height: u32, x: i32, y: i32) -> usize {
+        let effect = effect(w, 0);
+        let at = w.out.len();
+        for value in [width, height, 1] {
+            w.u32(value);
+        }
+        w.string("Group");
+        w.prop(29, &[]);
+        let offsets = [x.to_be_bytes(), y.to_be_bytes()].concat();
+        w.prop(15, &offsets);
+        w.end();
+        w.ptr(usize::MAX); // Groups must never follow this deliberately invalid hierarchy.
+        w.ptr(0);
+        w.ptr(effect);
+        w.ptr(0);
+        at
+    }
+    for (width, height, x, y, message) in
+        [(i32::MAX as u32 + 1, 1, 0, 0, "width"), (1, u32::MAX, 0, 0, "height"), (2, 1, i32::MAX - 1, 0, "right edge"), (1, 2, 0, i32::MAX - 1, "bottom edge")]
+    {
+        let mut w = W { out: vec![0; 4], wide: true };
+        let ptr = group(&mut w, width, height, x, y);
+        let mut image = image(&w.out, MAX_METADATA_BYTES);
+        let before = image.budget;
+        let error = image.import_layers(&[ptr], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap_err();
+        assert!(error.to_string().contains(message), "{error}");
+        assert_eq!(image.budget, before, "no group hierarchy pixels are admitted");
+        assert!(image.pending_effects.is_empty());
+    }
+    for (width, x, right) in [(i32::MAX as u32, 0, i32::MAX), (i32::MAX as u32, i32::MIN, -1)] {
+        let mut w = W { out: vec![0; 4], wide: true };
+        let ptr = group(&mut w, width, 1, x, -1);
+        let mut image = image(&w.out, MAX_METADATA_BYTES);
+        let before = image.budget;
+        let (layers, _) = image.import_layers(&[ptr], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
+        assert!(layers[0].is_group());
+        assert_eq!(image.pending_effects[0].bounds, Rect::new(x, -1, right, 0));
+        assert_eq!(image.budget, before);
+    }
+}
+
+#[test]
+fn repeated_auxiliary_mask_names_are_bounded_before_allocation_and_charged_once() {
+    let mut w = W { out: vec![0; 4], wide: true };
+    let name = "界".repeat(30_000);
+    let masks: Vec<_> = (0..24).map(|_| channel(&mut w, &name, &[])).collect();
+    let header_bytes = std::mem::size_of::<CoverageMaskHeader<'_>>();
+    let allowance = masks.len() * header_bytes;
+    let mut bounded = image(&w.out, allowance);
+    for (ordinal, offset) in masks.iter().enumerate() {
+        let record = bounded.coverage_mask_header(*offset, &Interrupt::NONE).unwrap();
+        assert!(record.name_limited);
+        assert_eq!(record.name, "Mask");
+        assert!(record.name.capacity() <= 16, "no source-sized retained name");
+        assert!(record.children.is_empty());
+        assert_eq!(bounded.meta_budget, allowance - (ordinal + 1) * header_bytes);
+    }
+    let mut admitted = image(&w.out, MAX_METADATA_BYTES);
+    let before = admitted.meta_budget;
+    let record = admitted.coverage_mask_header(masks[0], &Interrupt::NONE).unwrap();
+    assert!(!record.name_limited);
+    assert_eq!(record.name, name);
+    assert_eq!(before - admitted.meta_budget, header_bytes + record.name.capacity(), "admitted names are not double charged");
+    let cancelled = Interrupt::cancel_only(&|| true);
+    let before = admitted.meta_budget;
+    assert!(matches!(admitted.coverage_mask_header(masks[0], &cancelled), Err(IoError::Cancelled)));
+    assert_eq!(admitted.meta_budget, before);
+}
+
+#[test]
+fn omitted_auxiliary_mask_names_keep_inventory_and_later_pixels_with_persistent_loss_report() {
+    let mut w = W { out: vec![0; 4], wide: true };
+    let child = effect(&mut w, 0);
+    let mask = channel(&mut w, &"界".repeat(30_000), &[child]);
+    let parent = effect(&mut w, mask);
+    let later = layer(&mut w, "Later", &[], 0);
+    let mut image = image(&w.out, 16_384);
+    let owner = coverage_owner(&mut image);
+    image.inventory_coverage_effects(owner, &[parent], &Interrupt::NONE).unwrap();
+    let (layers, _) = image.import_layers(&[later], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
+    assert_eq!(layers[0].surface().unwrap().pixel(0, 0), vec![17. / 255., 31. / 255., 57. / 255., 1.]);
+    assert!(
+        (0..8).filter_map(|index| image.outcomes.entry(index).ok()).any(|entry| entry.feature_code == "xcf.coverage_effect_mask"),
+        "mask configuration remains inventoried"
+    );
+    assert_eq!(
+        (0..8).filter_map(|index| image.outcomes.entry(index).ok()).filter(|entry| entry.feature_code == "xcf.coverage_effect").count(),
+        2,
+        "the child effect remains inventoried after its mask name is omitted"
+    );
+    let mut document = Document::new("Retained pixels", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    document.layers = layers;
+    persist(document, image, &["xcf.coverage_effect_mask_name"]);
+}
+
 fn persist(mut document: Document, image: Image<'_>, features: &[&str]) {
     assert!(image.warnings.finish().iter().any(|warning| warning.contains("metadata retention limits")));
     let conversion = image.outcomes.finish().unwrap();

@@ -39,6 +39,8 @@ mod effects;
 mod floating_gray_review_tests;
 #[cfg(test)]
 mod historical_precision_tests;
+#[cfg(test)]
+mod import_notice_review_tests;
 mod metadata;
 #[cfg(test)]
 mod metadata_budget_review_tests;
@@ -166,6 +168,7 @@ struct Channel<'a> {
 /// Bounded header/configuration facts; auxiliary hierarchy pixels are never decoded.
 struct CoverageMaskHeader<'a> {
     name: String,
+    name_limited: bool,
     properties: Vec<Prop<'a>>,
     width: u32,
     height: u32,
@@ -403,16 +406,15 @@ impl<'a> Image<'a> {
         let mut c = self.c.at(offset);
         let (width, height) = (c.u32()?, c.u32()?);
         validate_canvas(width, height)?;
-        let name = c.string()?;
+        let (name, name_limited) = self.metadata_name(&mut c, "Mask")?;
         let properties = props(&mut c)?;
         let _hierarchy = c.ptr()?;
         let children = if self.version >= 26 { effects::read_pointers(&mut c, &mut self.meta_budget, ctl)? } else { Vec::new() };
-        let bytes = name
-            .len()
-            .saturating_add(std::mem::size_of::<CoverageMaskHeader<'_>>())
-            .saturating_add(properties.len().saturating_mul(std::mem::size_of::<Prop<'_>>()));
+        // metadata_name already charged the admitted name allocation. The fallback
+        // is bounded; never materialize a source-sized name before checking its allowance.
+        let bytes = std::mem::size_of::<CoverageMaskHeader<'_>>().saturating_add(properties.len().saturating_mul(std::mem::size_of::<Prop<'_>>()));
         self.meta_budget = self.meta_budget.checked_sub(bytes).ok_or(IoError::XcfMetadataLimit)?;
-        Ok(CoverageMaskHeader { name, properties, width, height, children })
+        Ok(CoverageMaskHeader { name, name_limited, properties, width, height, children })
     }
 
     /// Current P2 has no coverage adapters: inventory source configuration once,
@@ -588,6 +590,13 @@ impl<'a> Image<'a> {
                 })?;
                 if !self.outcomes.recording() {
                     return Ok(());
+                }
+                if record.name_limited {
+                    self.metadata_limit(
+                        mask_outcome,
+                        "xcf.coverage_effect_mask_name",
+                        "Auxiliary mask name omitted after the shared metadata allowance was exhausted",
+                    )?;
                 }
                 for property in &record.properties {
                     self.outcomes.property(mask_outcome, property.kind, property.offset, property.data)?;

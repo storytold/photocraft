@@ -31,6 +31,39 @@ fn old_placed_key(bytes: &[u8], doc: &Document, smart: &SmartObject) -> StageKey
 }
 
 #[test]
+fn gzipped_svg_sources_keep_omission_warnings_and_reject_legacy_stack_caches() {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&incomplete_svg()).unwrap();
+    let bytes = encoder.finish().unwrap();
+    let session = session(8);
+    let doc = &session.active().unwrap().doc;
+    for name in ["logo.gz", "without-extension"] {
+        let mut smart = SmartObject::new(SmartSource::Embedded { file_name: name.into(), bytes: Arc::new(bytes.clone()) }, Affine::IDENTITY, None);
+        let (ordinary, warnings) = render_with_warnings(doc, &smart).unwrap();
+        assert_eq!(ordinary.unwrap().rgba(1, 1), [1., 0., 0., 1.]);
+        assert_eq!(warnings.len(), 1);
+        assert!(decode_source(name, &bytes).is_err(), "warningless source decoding must be complete");
+        smart.stack_mode = Some(photocraft_doc::StackMode::Mean);
+        let mut poisoned = Surface::new(PixelFormat::RGBA32F);
+        poisoned.fill_rect(Rect::new(0, 0, 2, 2), &[0., 1., 0., 1.]);
+        source::cache_put(
+            old_stack_key(&bytes, PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean),
+            source::SourceImage { surface: Arc::new(poisoned), bounds: Rect::new(0, 0, 2, 2) },
+        );
+        let mut poisoned = Surface::new(doc.pixel_format());
+        poisoned.fill_rect(Rect::new(0, 0, 2, 2), &[0., 1., 0., 1.]);
+        stack_cache::put(old_placed_key(&bytes, doc, &smart), &Stage { surface: poisoned, extent: doc.bounds() });
+        for _ in 0..2 {
+            assert!(stack_image(name, &bytes, PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean).is_err());
+            assert!(render(doc, &smart).is_err());
+            assert!(render_with_warnings(doc, &smart).is_err());
+            assert_eq!(source_box(doc, &smart), None);
+        }
+    }
+}
+
+#[test]
 fn svg_stack_rejects_incomplete_pixels_repeatedly_but_ordinary_placement_keeps_warnings() {
     let session = session(8);
     let doc = &session.active().unwrap().doc;
