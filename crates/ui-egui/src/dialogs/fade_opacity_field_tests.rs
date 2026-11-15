@@ -143,3 +143,36 @@ fn typing_a_decimal_with_a_trailing_zero_keeps_the_zero() {
     leave(&mut h);
     assert_eq!(opacity(&h, id), json!(4));
 }
+
+/// CodeRabbit on #15123: `0.4` then a `0` typed in a later frame is `0.40` to the parser but 0.4 to the number,
+/// which does not change. The text is what is read, so opacity goes from 4 to 40.
+#[test]
+fn appending_a_zero_in_a_later_frame_reads_the_whole_text() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "0.4");
+    h.run_steps(2);
+    assert_eq!(opacity(&h, id), json!(4), "0.4 is 4");
+    h.event(Event::Text("0".into()));
+    h.run_steps(2);
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(40), "0.40 is 40");
+    assert_eq!(alerts(&h), 0);
+}
+
+/// The text the field held before it had the focus is not an entry: clicking into it after `150` was
+/// entered does not read that text again (the value stays 100, no second alert).
+#[test]
+fn clicking_back_into_the_field_does_not_reread_the_old_text() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "150");
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(100));
+    h.state_mut().ui.dialogs.retain(|d| d.kind != DialogKind::Error);
+    h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == id).unwrap().fields.insert("opacity".into(), json!(60));
+    h.run_steps(2);
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Opacity")).expect("an Opacity field");
+    field.click();
+    h.run_steps(3);
+    assert_eq!(opacity(&h, id), json!(60), "gaining the focus changes nothing");
+    assert_eq!(alerts(&h), 0);
+}

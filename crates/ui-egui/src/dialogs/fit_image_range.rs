@@ -90,14 +90,19 @@ pub(super) fn finish(ui: &mut UiState, interactive: bool, alert: Option<Alert>, 
     outcome
 }
 
-/// Drops the text events from position `at` on (where the consumed shortcut was): the character a shortcut
-/// types follows it, and numbers typed in the frame before it do not.
+/// Drops the character a consumed shortcut types, from position `at` on (where the shortcut was): the
+/// first text event after it that is one character and not a digit (Option+W types `∑` on macOS). Text
+/// typed before the shortcut, and what follows the character in the same frame (digits, a number's
+/// following characters), is an entry and stays.
 pub(super) fn drop_text_after(events: &mut Vec<egui::Event>, at: usize) {
-    let mut n = 0;
-    events.retain(|e| {
-        n += 1;
-        !matches!(e, egui::Event::Text(_)) || n <= at
-    });
+    let typed = events
+        .iter()
+        .enumerate()
+        .skip(at)
+        .find_map(|(i, e)| matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && !t.chars().any(|c| c.is_ascii_digit())).then_some(i));
+    if let Some(i) = typed {
+        events.remove(i);
+    }
 }
 
 /// The dialog as the reference application lays it out (#13851): Width, Height and Don't Enlarge

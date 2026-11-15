@@ -1181,14 +1181,24 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
         })
         .inner;
     let out_id = r.id.with(OUT_OF_RANGE);
+    // The typed text, which changes without the number changing (`0.4` then `0` is `0.40`: 0.4 both
+    // times): the entry is read again when either changed. What was typed before the field had the
+    // focus is not an entry, so the text it held on gaining it is the starting point.
+    let text_id = r.id.with("fade-opacity-text");
+    let text = crate::widgets::typed_text(ui.ctx(), r.id);
     if r.gained_focus() {
         ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+        ui.ctx().data_mut(|d| d.insert_temp(text_id, text.clone()));
     }
-    if r.changed() && typed.is_finite() {
+    let text_changed = r.has_focus() && ui.ctx().data(|d| d.get_temp::<Option<String>>(text_id)).is_some_and(|before| before != text);
+    if text_changed {
+        ui.ctx().data_mut(|d| d.insert_temp(text_id, text.clone()));
+    }
+    if (r.changed() || text_changed) && typed.is_finite() {
         // Typed text is read without its dot; a scrub drag, whose fractions come from the drag speed, is
         // only rounded, as every other field's drag is (a drag to 37.5 is 38, not 375).
         let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
-        let whole = read_fade_opacity(typed, crate::widgets::typed_text(ui.ctx(), r.id).as_deref(), typing);
+        let whole = read_fade_opacity(typed, text.as_deref(), typing);
         v = whole.round().clamp(0.0, 100.0);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, typing && !(0.0..=100.0).contains(&whole)));
         if typing && r.has_focus() {

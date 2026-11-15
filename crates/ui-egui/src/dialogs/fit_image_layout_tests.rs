@@ -159,9 +159,10 @@ fn text_typed_in_the_frame_of_alt_w_still_reaches_the_active_field() {
     assert_eq!(f["height"], json!(120), "the number typed with the shortcut was entered");
 }
 
-/// The shortcut's own character goes, the numbers typed before it stay (the frame's events in order).
+/// The shortcut's own character goes; the numbers typed before it, and the text typed after it in the same
+/// frame, stay (the frame's events in order).
 #[test]
-fn only_the_text_after_the_shortcut_is_dropped() {
+fn only_the_shortcuts_own_character_is_dropped() {
     use super::fit_image_range::drop_text_after;
     let text = |t: &str| Event::Text(t.into());
     // [Text 120, (the shortcut, already consumed, was here), Text ∑]: the shortcut sat at index 1.
@@ -170,8 +171,14 @@ fn only_the_text_after_the_shortcut_is_dropped() {
     assert_eq!(events.len(), 2);
     assert!(matches!(&events[0], Event::Text(t) if t == "120"), "the number stays");
     assert!(matches!(events[1], Event::PointerGone), "other events stay");
-    // A shortcut first: every text after it goes.
-    let mut events = vec![text("\u{2211}"), text("7")];
+    // A shortcut first: its character goes, the entry typed after it in the same frame stays.
+    let mut events = vec![text("\u{2211}"), text("7"), text("42")];
     drop_text_after(&mut events, 0);
-    assert!(events.is_empty());
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(matches!(&events[0], Event::Text(t) if t == "7"), "{events:?}");
+    assert!(matches!(&events[1], Event::Text(t) if t == "42"), "{events:?}");
+    // Nothing the shortcut typed (Windows): nothing goes.
+    let mut events = vec![text("7")];
+    drop_text_after(&mut events, 0);
+    assert_eq!(events.len(), 1);
 }
