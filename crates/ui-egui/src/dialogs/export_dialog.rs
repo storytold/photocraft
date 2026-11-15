@@ -1023,6 +1023,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         ui.vertical(|ui| {
             ui.set_width(248.0);
             scale_all_fields(ui, f);
+            let layer = f.get("__layer").and_then(Value::as_u64);
+            asset_fields(ui, f, &doc, egui::Id::unique(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer)));
             ui.label(egui::RichText::new(tl!("File Settings")).font(crate::theme::semibold(12.0)).color(t.text));
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Format")).color(t.text_dim));
@@ -1148,11 +1150,55 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let exact = poll_or_start_exact_estimate(ui, key, &sig, doc.clone(), f, source_profile.clone()).flatten();
             #[cfg(target_arch = "wasm32")]
             let exact: Option<u64> = None;
-            let est =
-                exact.or_else(|| preview.as_ref().and_then(|preview| preview.estimate)).map_or("—".to_string(), |b| crate::sizing::human_bytes(b as f64));
+            let bytes = exact.or_else(|| preview.as_ref().and_then(|preview| preview.estimate));
+            match bytes {
+                Some(b) => f.insert("__estimate".into(), json!(b)),
+                None => f.remove("__estimate"),
+            };
+            let est = bytes.map_or("—".to_string(), |b| crate::sizing::estimate_text(b as f64));
             ui.label(egui::RichText::new(format!("{}  ≈ {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
         });
     });
+}
+
+/// Whether the asset row (and so Select All) is ticked; both are when the dialog opens.
+fn asset_ticked(f: &Map<String, Value>) -> bool {
+    f.get("__asset").and_then(Value::as_bool).unwrap_or(true)
+}
+
+/// Export is greyed while nothing in the asset list is ticked. Other dialogs are not affected.
+pub fn can_confirm(f: &Map<String, Value>) -> bool {
+    !f.contains_key("__export") || asset_ticked(f)
+}
+
+/// Export As's asset list: Select All, then the one row a document without artboards gives, with
+/// its checkbox, thumbnail (the preview), name, format, output size and estimate. The estimate
+/// is the one the preview column computed last; `—` until there is one, as today.
+fn asset_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &Document, preview: egui::Id) {
+    let t = Tokens::get(ui.ctx());
+    let mut on = asset_ticked(f);
+    crate::widgets::checkbox(ui, &mut on, tl!("Select All"));
+    ui.horizontal(|ui| {
+        let name = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
+        let response = ui.add(egui::Checkbox::without_text(&mut on));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, &name));
+        let (r, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+        crate::widgets::checker(ui.painter(), r, 4.0);
+        let cached: Option<CachedPreview> = ui.data(|d| d.get_temp(preview));
+        if let Some(tex) = cached.and_then(|c| c.texture) {
+            let ts = tex.size_vec2();
+            let ir = egui::Rect::from_center_size(r.center(), ts * (32.0 / ts.x.max(ts.y)));
+            ui.painter().image(tex.id(), ir, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+        }
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new(&name).color(t.text));
+            let (w, h) = export_pixels(f64::from(doc.size.width), f64::from(doc.size.height), f, None).unwrap_or((0.0, 0.0));
+            let est = f.get("__estimate").and_then(Value::as_f64).map_or("—".to_string(), crate::sizing::estimate_text);
+            ui.label(egui::RichText::new(format!("{}  {w} x {h}  {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
+        });
+    });
+    f.insert("__asset".into(), json!(on));
+    ui.add_space(8.0);
 }
 
 /// Export with the dialog's settings: choose a path, render, encode, write.
@@ -1357,5 +1403,7 @@ mod batch_name_tests {
     }
 }
 
+#[cfg(test)]
+mod asset_list_tests;
 #[cfg(test)]
 mod scale_all_tests;

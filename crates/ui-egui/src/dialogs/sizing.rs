@@ -205,6 +205,19 @@ pub fn human_bytes(b: f64) -> String {
     }
 }
 
+/// Export As's estimate text, as measured in the reference application: `N bytes` below 1 KB,
+/// else KB with at most one decimal and no trailing `.0`. From 1 MB on it is [`human_bytes`].
+pub fn estimate_text(b: f64) -> String {
+    if b < 1024.0 {
+        return format!("{} bytes", b.max(0.0).round());
+    }
+    if b >= 1024.0 * 1024.0 {
+        return human_bytes(b);
+    }
+    let kb = (b / 1024.0 * 10.0).round() / 10.0;
+    if kb.fract() == 0.0 { format!("{kb:.0} KB") } else { format!("{kb:.1} KB") }
+}
+
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if f.get("__command").and_then(Value::as_str) == Some("image.canvasSize") {
         canvas_size(ui, f);
