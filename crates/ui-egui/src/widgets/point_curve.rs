@@ -93,7 +93,7 @@ pub fn interact(ui: &mut Ui, resp: &Response, graph: Rect, pts: &mut Vec<[f32; 2
     interact_with_hit_radius(ui, resp, graph, pts, state, HIT_RADIUS)
 }
 
-/// [`interact`], with the host's grab radius in screen pixels: the Curves graph passes
+/// [`interact`], with the host's grab radius in egui points (screen pixels at scale 1.0): the Curves graph passes
 /// [`CURVES_HIT_RADIUS`]; a host the reference application was not measured in passes the 9 px
 /// default.
 pub fn interact_with_hit_radius(
@@ -192,7 +192,7 @@ pub fn interact_with_hit_radius(
     }
     // Arrows edit this graph rather than navigating to another widget on the next frame.
     ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() }));
-    // Keys while the graph has focus: Delete/Backspace removes, arrows nudge (Shift: Ã—10).
+    // Keys while the graph has focus: Delete/Backspace removes, arrows nudge (Shift: ×10).
     if resp.has_focus() {
         crate::shortcut_dispatch::claim_delete_keys(ui.ctx(), resp.id);
     }

@@ -9,8 +9,9 @@ use egui_kittest::Harness;
 use crate::state::PointCurveState;
 use crate::widgets::point_curve::{self, CURVES_HIT_RADIUS};
 
-/// One screen pixel per input level, the scale the issue measures at: the graph is exactly 255 px
-/// on a side, so a screen distance in px and an input distance in levels are the same number.
+/// One egui point per input level (one screen pixel at scale 1.0, the scale the issue measures at):
+/// the graph is exactly 255 points on a side, so a distance in points and an input distance in
+/// levels are the same number.
 const SIDE: f32 = 255.0;
 /// The radius of the hosts that stay as they are today.
 const TODAY: f32 = 9.0;
