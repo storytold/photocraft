@@ -289,7 +289,11 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
     let doc_name = untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
     // The smart object (Create Smart Object) keeps the first file's name.
     let smart_name = stem(&paths[0]);
-    let mut stack = Document::new(doc_name, photocraft_doc::Size::new(w, h), base.mode, base.depth);
+    // A 16-bit file raises an 8-bit stack to 16 bits/channel, as the reference does (#13997); a
+    // 32-bit file doesn't, and a 16- or 32-bit base keeps its depth.
+    let raise = base.depth == photocraft_color::SampleType::U8 && docs.iter().any(|(_, d)| d.depth == photocraft_color::SampleType::U16);
+    let depth = if raise { photocraft_color::SampleType::U16 } else { base.depth };
+    let mut stack = Document::new(doc_name, photocraft_doc::Size::new(w, h), base.mode, depth);
     stack.resolution_dpi = base.resolution_dpi;
     stack.icc_profile = base.icc_profile.clone();
     let fmt = stack.pixel_format();
