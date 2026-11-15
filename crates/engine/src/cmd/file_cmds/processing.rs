@@ -115,6 +115,19 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     if format.trim_start_matches('.').is_empty() || format.contains(['/', '\\']) || format.chars().any(char::is_control) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: "format must be a filename extension".into() });
     }
+    // TIFF results are `.tif` files that keep their layers, the composite on white without an
+    // alpha channel (#13898), unless the call says otherwise.
+    let tiff = matches!(format.trim_start_matches('.').to_ascii_lowercase().as_str(), "tif" | "tiff");
+    let format = if tiff { "tif" } else { format };
+    let mut params = p.clone();
+    if tiff {
+        for (key, default) in [("tiffLayers", true), ("tiffTransparency", false)] {
+            if p.get(key).is_none() {
+                params[key] = json!(default);
+            }
+        }
+    }
+    let p = &params;
     let fit = match (size_param(p, "width"), size_param(p, "height")) {
         (None, None) => None,
         (w, h) => Some(json!({"width": w.unwrap_or(1e9), "height": h.unwrap_or(1e9), "dontEnlarge": true})),
@@ -195,7 +208,8 @@ fn processor_format(s: &Session, key: &str, extension: &'static str, options: &V
         "psd" => (json!({"maximizeCompatibility": processor_bool(options, "maximizeCompatibility", true)?}), false),
         _ => {
             let compression = if processor_bool(options, "lzw", false)? { "lzw" } else { "none" };
-            (json!({"tiffLayers": true, "tiffCompression": compression}), false)
+            // The composite on white, without an alpha channel, as the reference writes it (#13898).
+            (json!({"tiffLayers": true, "tiffTransparency": false, "tiffCompression": compression}), false)
         }
     };
     let save = SaveOpts::from_params(s, &params, IMAGE_PROCESSOR)?;

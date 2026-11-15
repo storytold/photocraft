@@ -544,3 +544,7 @@ mod aces_exr_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "file_cmds/image_processor_tiff_tests.rs"]
+mod image_processor_tiff_tests;
