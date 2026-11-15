@@ -419,13 +419,24 @@ fn original_vector_formats_save_atomically_and_survive_undo_and_persistence() {
 /// is accepted with that image left out, as placing the same SVG is.
 #[test]
 fn saved_svg_with_an_unreadable_embedded_image_still_updates() {
-    let (mut s, id) = session(8);
-    let edited = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><image width="4" height="6" href="data:image/bmp,BM"/><rect x="4" width="4" height="6" fill="blue"/></svg>"#;
-    let params = request(&mut s, id, edited);
-    let result = s.execute(UPDATE, params).unwrap();
-    assert_eq!(result["updated"], true);
-    assert!(result["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("embedded image was omitted")));
-    assert_eq!(source(&s, id), edited.as_bytes());
+    for href in ["data:image/bmp,BM", "data:image/png;base64,A"] {
+        let (mut s, id) = session(8);
+        let edited = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><image width="4" height="6" href="{href}"/><rect x="4" width="4" height="6" fill="blue"/></svg>"#
+        );
+        let params = request(&mut s, id, &edited);
+        let result = s.execute(UPDATE, params).unwrap();
+        assert_eq!(result["updated"], true);
+        let warnings = result["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1, "{href}: {warnings:?}");
+        assert!(warnings[0].as_str().unwrap().contains("embedded image was omitted"));
+        assert_eq!(source(&s, id), edited.as_bytes());
+        let doc = &s.active().unwrap().doc;
+        let sm = smart(doc, id).unwrap();
+        assert_eq!(sm.cache.as_ref().unwrap().rgba(18, 11), [0.0, 0.0, 1.0, 1.0]);
+        assert!(crate::smart_cmds::render(doc, sm).is_err(), "warning-bearing save must not populate strict caches: {href}");
+        assert_eq!(source(&s, id), edited.as_bytes(), "strict refusal must leave the unrepaired source intact");
+    }
 }
 
 /// updateSvg replaces SVG contents only: it never turns an AI, PDF or EPS source into SVG.

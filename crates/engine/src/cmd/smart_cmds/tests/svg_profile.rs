@@ -92,16 +92,23 @@ fn convert_to_layers_unpacks_full_canvas_shapes_in_a_4k_document() {
 /// and renders the rest of the drawing, as it did before the bounded render.
 #[test]
 fn svg_with_an_unreadable_embedded_image_still_places() {
-    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><image width=\"4\" height=\"4\" href=\"data:image/x-foo,abc\"/><rect x=\"4\" width=\"4\" height=\"8\" fill=\"#ff0000\"/></svg>";
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
-    let placed = crate::file_cmds::place_bytes(&mut s, "Logo.svg", svg.as_bytes().to_vec(), None, &json!({"smartObject": true})).unwrap();
-    assert!(placed["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("embedded image was omitted")));
-    let doc = &s.active().unwrap().doc;
-    let LayerContent::Smart(sm) = &doc.layer(LayerId(placed["layer"].as_u64().unwrap())).unwrap().content else { panic!("smart") };
-    assert_eq!(sm.cache.as_ref().unwrap().rgba(6, 4), [1.0, 0.0, 0.0, 1.0]);
-    // A warning-bearing command must not poison the strict source/filter caches.
-    assert!(render(doc, sm).is_err());
+    for href in ["data:image/x-foo,abc", "data:image/png;base64,A"] {
+        let svg = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><image width=\"4\" height=\"4\" href=\"{href}\"/><rect x=\"4\" width=\"4\" height=\"8\" fill=\"#ff0000\"/></svg>"
+        );
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let placed = crate::file_cmds::place_bytes(&mut s, "Logo.svg", svg.as_bytes().to_vec(), None, &json!({"smartObject": true})).unwrap();
+        let warnings = placed["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1, "{href}: {warnings:?}");
+        assert!(warnings[0].as_str().unwrap().contains("embedded image was omitted"));
+        let doc = &s.active().unwrap().doc;
+        let LayerContent::Smart(sm) = &doc.layer(LayerId(placed["layer"].as_u64().unwrap())).unwrap().content else { panic!("smart") };
+        assert_eq!(sm.cache.as_ref().unwrap().rgba(6, 4), [1.0, 0.0, 0.0, 1.0]);
+        assert!(matches!(&sm.source, SmartSource::Embedded { file_name, bytes } if file_name == "Logo.svg" && bytes.as_slice() == svg.as_bytes()));
+        // The warning render must neither repair the original bytes nor populate strict caches.
+        assert!(render(doc, sm).is_err(), "{href}");
+    }
 }
 
 /// Warp setup needs only the source frame, found with the bounded parse and the exact canvas
