@@ -239,7 +239,8 @@ pub fn open_bytes_as_with_options(
 }
 
 /// Extensions Open As reads besides the codec formats, the camera raw formats
-/// (`photocraft_io::raw::EXTENSIONS`) and the Affinity ones (`photocraft_io::affinity::EXTENSIONS`):
+/// (`photocraft_io::raw::EXTENSIONS`), the Affinity ones (`photocraft_io::affinity::EXTENSIONS`)
+/// and the VectorCraft ones (`photocraft_io::vectorcraft::EXTENSIONS`):
 /// the document and vector formats `photocraft_io::import` handles, and `raw`, the Open As type
 /// for any camera raw.
 const OPEN_AS_EXTRA: &[&str] = &["raw", "pdn", "ora", "xcf", "xcf.gz", "xcfgz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "pdf", "ai"];
@@ -251,6 +252,7 @@ fn is_open_as_format(ext: &str) -> bool {
     OPEN_AS_EXTRA.contains(&ext)
         || photocraft_io::raw::EXTENSIONS.contains(&ext)
         || photocraft_io::affinity::EXTENSIONS.contains(&ext)
+        || photocraft_io::vectorcraft::EXTENSIONS.contains(&ext)
         || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read)
 }
 

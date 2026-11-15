@@ -984,6 +984,8 @@ fn route_forced(ext: &str) -> Route {
         Route::Psd
     } else if affinity::EXTENSIONS.contains(&ext.as_str()) {
         Route::Affinity
+    } else if vectorcraft::EXTENSIONS.contains(&ext.as_str()) {
+        Route::VectorCraft
     } else if ext == "ora" {
         Route::Ora
     } else if kra::EXTENSIONS.contains(&ext.as_str()) {

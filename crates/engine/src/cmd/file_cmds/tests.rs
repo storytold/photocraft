@@ -1984,6 +1984,19 @@ fn open_as_forces_the_decoder() {
     assert!(s.execute("file.openAs", json!({"path": join(&dir, "missing.png")})).is_err());
 }
 
+/// Open As with a VectorCraft type opens the file through the VectorCraft reader, whatever its name.
+#[test]
+fn open_as_vectorcraft_uses_the_vectorcraft_reader() {
+    let dir = tmp("openas-vectorcraft");
+    let renamed = join(&dir, "mystery.bin");
+    std::fs::write(&renamed, vectorcraft_file(40, 20, "0 0 1")).unwrap();
+    for ext in ["vectorcraft", "drawcraft", ".VectorCraft"] {
+        let mut s = Session::new();
+        s.execute("file.openAs", json!({"path": renamed, "as": ext})).unwrap();
+        assert_eq!((doc(&s).size.width, doc(&s).size.height), (40, 20), "{ext}");
+    }
+}
+
 #[test]
 fn place_embedded_centres_fits_and_embeds() {
     let dir = tmp("place");
