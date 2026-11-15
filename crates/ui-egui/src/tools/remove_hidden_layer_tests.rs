@@ -47,7 +47,8 @@ fn a_hidden_active_layer_is_quiet() {
 #[test]
 fn the_other_tools_keep_their_message() {
     refused(&mut hidden(Tool::Brush), "Could not use the brush tool because the target layer is hidden.");
-    for tool in [Tool::Pencil, Tool::Eraser, Tool::SpotHealing, Tool::Healing, Tool::CloneStamp, Tool::Smudge] {
+    refused(&mut hidden(Tool::Smudge), "Could not use the smudge tool because the target layer is hidden.");
+    for tool in [Tool::Pencil, Tool::Eraser, Tool::SpotHealing, Tool::Healing, Tool::CloneStamp] {
         let mut app = hidden(tool);
         let before = steps(&app);
         stroke(&mut app);
