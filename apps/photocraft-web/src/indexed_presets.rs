@@ -13,7 +13,7 @@ use web_sys::{Blob, Event, EventTarget, IdbDatabase, IdbRequest, IdbTransactionM
 use crate::preset_bridge::{ActionKeys, ActionWrite, Batch, Bridge, MAX_RECORDS, WriteError, record_limit};
 
 mod migration;
-use photocraft_engine::preset_store::{ACTIONS_FILE, LEGACY_ACTIONS_FILE, MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES, MAX_STORE_BYTES};
+use photocraft_engine::preset_store::{ACTIONS_FILE, LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES, MAX_STORE_BYTES, MIGRATED_ACTIONS_FILE};
 
 const DATABASE: &str = "photocraft.presets";
 const FILES: &str = "files";
@@ -114,7 +114,12 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
     let upgrade_req = req.clone();
     upgrade
         .add(&req, "upgradeneeded", move |_| {
-            if js_sys::Date::now() >= deadline { if let Some(tx) = upgrade_req.transaction() { let _ = tx.abort(); } return; }
+            if js_sys::Date::now() >= deadline {
+                if let Some(tx) = upgrade_req.transaction() {
+                    let _ = tx.abort();
+                }
+                return;
+            }
             let result = (|| -> Result<(), JsValue> {
                 let db = upgrade_req.result()?.dyn_into::<IdbDatabase>()?;
                 let tx = upgrade_req.transaction().ok_or_else(|| JsValue::from_str("No preset database upgrade transaction"))?;
@@ -268,8 +273,11 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
                 let buffer = before(&blob.array_buffer(), deadline).await?;
                 bridge.load(&name, Uint8Array::new(&buffer).to_vec())?;
             }
-            if name == ACTIONS_FILE { bridge.load_action_keys(revision, keys); }
-            else if name == LEGACY_ACTIONS_FILE { bridge.load_legacy_action_keys(revision, keys); }
+            if name == ACTIONS_FILE {
+                bridge.load_action_keys(revision, keys);
+            } else if name == LEGACY_ACTIONS_FILE {
+                bridge.load_legacy_action_keys(revision, keys);
+            }
             Ok::<_, String>(())
         }
         .await;
@@ -328,7 +336,10 @@ pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), WriteError> {
                 }
             }
             Batch::Actions(action) => {
-                if action.migration.is_some() { migration_scope = Some(migration::start(&tx, &store, action, deadline)?); return Ok(()); }
+                if action.migration.is_some() {
+                    migration_scope = Some(migration::start(&tx, &store, action, deadline)?);
+                    return Ok(());
+                }
                 let keys = action.keys.encode()?;
                 if keys.len() as u64 > MAX_ACTIONS_BYTES {
                     return Err("Browser Action shortcuts are too large to save".into());
@@ -394,7 +405,9 @@ pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), WriteError> {
         }
     });
     let outcome = before(&promise, deadline).await;
-    if let Some(error) = migration_scope.as_ref().and_then(migration::Scope::error) { return Err(error); }
+    if let Some(error) = migration_scope.as_ref().and_then(migration::Scope::error) {
+        return Err(error);
+    }
     if let Some(error) = compare_error.take() {
         // No put was queued on any comparison failure.
         return Err(error);
@@ -412,39 +425,60 @@ pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), WriteError> {
     }
 }
 
-
 struct ActionRecord {
     revision: u64,
     definitions: Option<Vec<u8>>,
     keys: Option<ActionKeys>,
 }
 impl ActionRecord {
-    fn pair(&self) -> Option<(u64, ActionKeys)> { self.keys.clone().map(|keys| (self.revision, keys)) }
+    fn pair(&self) -> Option<(u64, ActionKeys)> {
+        self.keys.clone().map(|keys| (self.revision, keys))
+    }
 }
 async fn action_record(value: JsValue, deadline: f64) -> Result<Option<ActionRecord>, WriteError> {
-    if value.is_undefined() { return Ok(None); }
-    let (revision, definitions, keys) = if value.is_instance_of::<Blob>() { (0, Some(value.dyn_into::<Blob>().map_err(js)?), None) }
-    else { let (revision, definitions, keys) = paired_actions(&value).map_err(WriteError::Blocked)?; (revision, definitions, Some(keys)) };
-    let read = async |blob: Blob| -> Result<Vec<u8>, WriteError> {
-        if blob.size() > MAX_ACTIONS_BYTES as f64 { return Err(WriteError::Blocked("Actions migration record exceeds its file limit".into())); }
-        let buffer = before(&blob.array_buffer(), deadline).await?; Ok(Uint8Array::new(&buffer).to_vec())
+    if value.is_undefined() {
+        return Ok(None);
+    }
+    let (revision, definitions, keys) = if value.is_instance_of::<Blob>() {
+        (0, Some(value.dyn_into::<Blob>().map_err(js)?), None)
+    } else {
+        let (revision, definitions, keys) = paired_actions(&value).map_err(WriteError::Blocked)?;
+        (revision, definitions, Some(keys))
     };
-    let definitions = match definitions { Some(blob) => Some(read(blob).await?), None => None };
-    let keys = match keys { Some(blob) => Some(ActionKeys::decode(&read(blob).await?).map_err(WriteError::Blocked)?), None => None };
+    let read = async |blob: Blob| -> Result<Vec<u8>, WriteError> {
+        if blob.size() > MAX_ACTIONS_BYTES as f64 {
+            return Err(WriteError::Blocked("Actions migration record exceeds its file limit".into()));
+        }
+        let buffer = before(&blob.array_buffer(), deadline).await?;
+        Ok(Uint8Array::new(&buffer).to_vec())
+    };
+    let definitions = match definitions {
+        Some(blob) => Some(read(blob).await?),
+        None => None,
+    };
+    let keys = match keys {
+        Some(blob) => Some(ActionKeys::decode(&read(blob).await?).map_err(WriteError::Blocked)?),
+        None => None,
+    };
     Ok(Some(ActionRecord { revision, definitions, keys }))
 }
 
 /// Called only by an active request callback after every migration tuple was authenticated.
 fn queue_migration(store: &web_sys::IdbObjectStore, action: &ActionWrite, legacy: &JsValue, committed: bool) -> Result<(), WriteError> {
-    if committed { return Ok(()); }
+    if committed {
+        return Ok(());
+    }
     let migration = action.migration.as_ref().ok_or("missing Actions migration identity")?;
     let definitions = action.definitions.as_deref().map(blob).transpose()?.map_or(JsValue::NULL, JsValue::from);
     let keys = blob(&action.keys.encode()?)?;
     let record = Array::of3(&JsValue::from_str(&action.revision.to_string()), &definitions, keys.as_ref());
     // The original v2 paired value (including its key map) is retained, not reconstructed.
     store.add_with_key(legacy, &JsValue::from_str(MIGRATED_ACTIONS_FILE)).map_err(js)?;
-    if migration.published { store.put_with_key(&record, &JsValue::from_str(ACTIONS_FILE)).map_err(js)?; }
-    else { store.add_with_key(&record, &JsValue::from_str(ACTIONS_FILE)).map_err(js)?; }
+    if migration.published {
+        store.put_with_key(&record, &JsValue::from_str(ACTIONS_FILE)).map_err(js)?;
+    } else {
+        store.add_with_key(&record, &JsValue::from_str(ACTIONS_FILE)).map_err(js)?;
+    }
     store.delete(&JsValue::from_str(LEGACY_ACTIONS_FILE)).map_err(js)?;
     Ok(())
 }

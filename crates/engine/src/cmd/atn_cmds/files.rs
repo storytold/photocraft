@@ -1,10 +1,10 @@
 use super::convert::{export_groups, import_with_encoding};
 
 mod replacement;
-pub(super) use replacement::replace;
-pub use replacement::validate as validate_replacement;
 use super::sidecar;
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
+pub(super) use replacement::replace;
+pub use replacement::validate as validate_replacement;
 
 /// A set rename moves its own references; foreign scopes retain their meaning.
 fn retarget_scopes(action: &mut Action, from: &str, to: &str) {
@@ -106,7 +106,8 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|count| *count <= super::atn::MAX_TOTAL_ITEMS)
             .ok_or_else(|| bad(cmd, "combined action library exceeds the step limit"))?;
     }
-    let previous_rows: std::collections::HashSet<String> = s.actions.sets.iter().chain(&s.actions.set_rows).filter(|name| targets.contains(*name)).cloned().collect();
+    let previous_rows: std::collections::HashSet<String> =
+        s.actions.sets.iter().chain(&s.actions.set_rows).filter(|name| targets.contains(*name)).cloned().collect();
     let old_rows = s.actions.sets.iter().chain(&s.actions.set_rows).filter(|name| !replace || !targets.contains(*name)).count();
     let new_rows = if provenance.is_some() || imp.sets.iter().any(|set| set.metadata.is_some()) {
         imp.sets.len()
@@ -156,8 +157,12 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         if provenance.is_some() || set.metadata.is_some() {
             let slot = proposed.set_rows.len();
             sidecar::install_row(&mut proposed, &set.name, set.metadata);
-            for action in &mut added[set.actions.clone()] { action.set_slot = Some(slot); }
-            if let Some(raw) = &provenance { crate::actions_cmds::library::import_row(&mut proposed, raw, index, slot); }
+            for action in &mut added[set.actions.clone()] {
+                action.set_slot = Some(slot);
+            }
+            if let Some(raw) = &provenance {
+                crate::actions_cmds::library::import_row(&mut proposed, raw, index, slot);
+            }
         } else if (set.actions.is_empty() || previous_rows.contains(&set.name)) && !proposed.sets.contains(&set.name) {
             proposed.sets.push(set.name.clone());
         }
@@ -171,7 +176,9 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     // The exact durable representation owns group, sidecar and byte limits. Refuse before
     // publishing either the actions or preferences so a rejected import leaves both intact.
     crate::actions_cmds::library::check_definition(&proposed, &shortcuts).map_err(|error| bad(cmd, error))?;
-    if replace { crate::actions_cmds::remove_shortcuts(s, |_, action| targets.contains(super::logical_set_name(action.set.as_deref()))); }
+    if replace {
+        crate::actions_cmds::remove_shortcuts(s, |_, action| targets.contains(super::logical_set_name(action.set.as_deref())));
+    }
     s.actions.list = proposed.list;
     s.actions.sets = proposed.sets;
     s.actions.set_rows = proposed.set_rows;
@@ -218,15 +225,30 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     };
     let slot = crate::actions_edit_cmds::set_slot(s, p, set_param.as_deref(), cmd)?;
-    if p.get("setSlot").is_some() && p.get("action").is_some() { return Err(bad(cmd, "select a folder occurrence or an action")); }
+    if p.get("setSlot").is_some() && p.get("action").is_some() {
+        return Err(bad(cmd, "select a folder occurrence or an action"));
+    }
     let mut groups = if p.get("action").is_some() {
         let idx = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
         let a = &s.actions.list[idx];
         vec![(set_param.clone().unwrap_or_else(|| super::logical_set_name(a.set.as_deref()).to_string()), sidecar::selection(&s.actions, a))]
     } else if let Some(set) = &set_param {
         let groups = if p.get("setSlot").is_some() {
-            crate::actions_cmds::library::projected_groups(&s.actions).map_err(|error| bad(cmd, error))?.into_iter().filter(|(key, name, _)| *name == set && match key { crate::actions_cmds::library::identity_manifest::GroupKey::Folder(row) => Some(*row) == slot, _ => slot.is_none() }).map(|(_, name, selection)| (name, selection)).collect()
-        } else { sidecar::groups(&s.actions, Some(set)).map_err(|error| bad(cmd, error))? };
+            crate::actions_cmds::library::projected_groups(&s.actions)
+                .map_err(|error| bad(cmd, error))?
+                .into_iter()
+                .filter(|(key, name, _)| {
+                    *name == set
+                        && match key {
+                            crate::actions_cmds::library::identity_manifest::GroupKey::Folder(row) => Some(*row) == slot,
+                            _ => slot.is_none(),
+                        }
+                })
+                .map(|(_, name, selection)| (name, selection))
+                .collect()
+        } else {
+            sidecar::groups(&s.actions, Some(set)).map_err(|error| bad(cmd, error))?
+        };
         if groups.is_empty() {
             return Err(bad(cmd, format!("no actions in a set named `{set}`")));
         }

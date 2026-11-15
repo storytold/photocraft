@@ -49,7 +49,10 @@ fn recorded_first_duplicate_keeps_its_target_after_dialog_pause_and_reorder() {
     assert!(app.session.actions.recording.is_none());
     crate::dialogs::confirm(&mut app, dialog).unwrap();
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list[2].steps, [("actions.play".to_string(), json!({"action":"Same","actionId":id,"set":photocraft_engine::atn_cmds::UNGROUPED_SET}))]);
+    assert_eq!(
+        app.session.actions.list[2].steps,
+        [("actions.play".to_string(), json!({"action":"Same","actionId":id,"set":photocraft_engine::atn_cmds::UNGROUPED_SET}))]
+    );
 
     app.run("actions.move", json!({"action":0,"to":1})).unwrap();
     app.run("file.new", json!({"width":8,"height":8})).unwrap();

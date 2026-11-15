@@ -3,7 +3,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use super::{
-    ACTIONS_FILE, Array, ActionWrite, Closure, Event, IdbRequest, JsCast, JsValue, LEGACY_ACTIONS_FILE, MIGRATED_ACTIONS_FILE, Promise, WriteError,
+    ACTIONS_FILE, ActionWrite, Array, Closure, Event, IdbRequest, JsCast, JsValue, LEGACY_ACTIONS_FILE, MIGRATED_ACTIONS_FILE, Promise, WriteError,
     action_record, before, js, queue_migration, request,
 };
 
@@ -109,8 +109,18 @@ pub(super) fn start(tx: &web_sys::IdbTransaction, store: &web_sys::IdbObjectStor
             let atn = action_record(values.get(0), deadline).await?;
             let legacy = action_record(values.get(1), deadline).await?;
             let backup = action_record(values.get(2), deadline).await?;
-            let committed = migration.already_committed(atn.as_ref().and_then(|record| record.definitions.as_deref()), legacy.as_ref().and_then(|record| record.definitions.as_deref()), backup.as_ref().and_then(|record| record.definitions.as_deref()))?;
-            migration.validate_pairs(&action, committed, atn.as_ref().map(|record| (record.revision, record.keys.clone())), legacy.as_ref().and_then(|record| record.pair()), backup.as_ref().and_then(|record| record.pair()))?;
+            let committed = migration.already_committed(
+                atn.as_ref().and_then(|record| record.definitions.as_deref()),
+                legacy.as_ref().and_then(|record| record.definitions.as_deref()),
+                backup.as_ref().and_then(|record| record.definitions.as_deref()),
+            )?;
+            migration.validate_pairs(
+                &action,
+                committed,
+                atn.as_ref().map(|record| (record.revision, record.keys.clone())),
+                legacy.as_ref().and_then(|record| record.pair()),
+                backup.as_ref().and_then(|record| record.pair()),
+            )?;
             Ok((committed, values.get(1)))
         }
         .await;

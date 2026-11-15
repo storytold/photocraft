@@ -103,7 +103,12 @@ impl Replacement {
             }
         }
         check_library_size(&list, &[], &rows, COMMAND)?;
-        let (library, metadata) = crate::actions_cmds::library::decode_import(bytes).ok().map(|state| crate::actions_cmds::library::replacement_provenance(&state, &rows)).transpose().map_err(|error| bad(COMMAND, error))?.unwrap_or_default();
+        let (library, metadata) = crate::actions_cmds::library::decode_import(bytes)
+            .ok()
+            .map(|state| crate::actions_cmds::library::replacement_provenance(&state, &rows))
+            .transpose()
+            .map_err(|error| bad(COMMAND, error))?
+            .unwrap_or_default();
         Ok(Self { list, rows, keys, warnings, unsupported, library, metadata })
     }
 }

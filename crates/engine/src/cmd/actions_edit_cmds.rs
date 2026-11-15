@@ -187,18 +187,35 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
 /// Copy a physical folder occurrence or the legacy named group, including empty folders.
 fn duplicate_set(s: &mut Session, source: &str, slot_filter: Option<Option<usize>>) -> Result<Value> {
     let cmd = "actions.duplicate";
-    if s.actions.recording_active() { return Err(bad(cmd, "stop recording before duplicating a set")); }
-    if !set_names(s).iter().any(|name| name == source) { return Err(bad(cmd, "the selected set no longer exists")); }
+    if s.actions.recording_active() {
+        return Err(bad(cmd, "stop recording before duplicating a set"));
+    }
+    if !set_names(s).iter().any(|name| name == source) {
+        return Err(bad(cmd, "the selected set no longer exists"));
+    }
     let name = crate::atn_cmds::UniqueNames::new(set_names(s)).claim(&format!("{source} copy"));
     let copy_slot = slot_filter.flatten().map(|slot| slot + 1);
-    let belongs = |action: &crate::actions_cmds::Action| crate::atn_cmds::logical_set_name(action.set.as_deref()) == source && slot_filter.is_none_or(|slot| action.set_slot == slot);
+    let belongs = |action: &crate::actions_cmds::Action| {
+        crate::atn_cmds::logical_set_name(action.set.as_deref()) == source && slot_filter.is_none_or(|slot| action.set_slot == slot)
+    };
     let first = s.actions.list.iter().position(belongs);
     let at = first.map(|first| first + s.actions.list[first..].iter().take_while(|action| belongs(action)).count());
     let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|action| action.name.clone()));
-    let copies: Vec<_> = s.actions.list.iter().filter(|action| belongs(action)).cloned().map(|mut action| {
-        action.name = names.claim(&format!("{} copy", action.name)); action.set = Some(name.clone()); action.set_slot = copy_slot;
-        action.action_id = None; action.legacy_shortcut_owner = false; action
-    }).collect();
+    let copies: Vec<_> = s
+        .actions
+        .list
+        .iter()
+        .filter(|action| belongs(action))
+        .cloned()
+        .map(|mut action| {
+            action.name = names.claim(&format!("{} copy", action.name));
+            action.set = Some(name.clone());
+            action.set_slot = copy_slot;
+            action.action_id = None;
+            action.legacy_shortcut_owner = false;
+            action
+        })
+        .collect();
     let count = copies.len();
     crate::actions_cmds::library::check_action_count(&s.actions, s.actions.list.iter().chain(&copies)).map_err(|error| bad(cmd, error))?;
     let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
@@ -207,19 +224,29 @@ fn duplicate_set(s: &mut Session, source: &str, slot_filter: Option<Option<usize
         crate::actions_cmds::library::insert_folder(&mut proposed, slot, &name, slot_filter.flatten());
         result["setSlot"] = json!(slot);
     } else if at.is_none() {
-        if let Some(at) = proposed.sets.iter().position(|set| set == source) { proposed.sets.insert(at + 1, name.clone()); }
-        else if slot_filter.is_none() { proposed.sets.push(name.clone()); }
-        else { return Err(bad(cmd, "the selected set no longer exists")); }
+        if let Some(at) = proposed.sets.iter().position(|set| set == source) {
+            proposed.sets.insert(at + 1, name.clone());
+        } else if slot_filter.is_none() {
+            proposed.sets.push(name.clone());
+        } else {
+            return Err(bad(cmd, "the selected set no longer exists"));
+        }
     }
-    if copy_slot.is_none() { crate::actions_cmds::library::copy_legacy_rows(&mut proposed, source, &name); }
+    if copy_slot.is_none() {
+        crate::actions_cmds::library::copy_legacy_rows(&mut proposed, source, &name);
+    }
     if let Some(at) = at {
         proposed.list.splice(at..at, copies);
         crate::actions_cmds::shift_action_calls(&mut proposed.list, at, count);
         result["index"] = json!(at);
     }
     crate::actions_cmds::library::check_definition(&proposed, &s.prefs().shortcuts).map_err(|error| bad(cmd, error))?;
-    s.actions.list = proposed.list; s.actions.sets = proposed.sets; s.actions.set_rows = proposed.set_rows;
-    s.actions.set_rows_revision = proposed.set_rows_revision; s.actions.library = proposed.library; s.actions.atn_set_rows = proposed.atn_set_rows;
+    s.actions.list = proposed.list;
+    s.actions.sets = proposed.sets;
+    s.actions.set_rows = proposed.set_rows;
+    s.actions.set_rows_revision = proposed.set_rows_revision;
+    s.actions.library = proposed.library;
+    s.actions.atn_set_rows = proposed.atn_set_rows;
     s.actions.touch();
     Ok(result)
 }
@@ -286,7 +313,16 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
 /// Use `actions.list`'s ordered `setRows` for physical folder occurrences.
 pub fn set_names(s: &Session) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
-    s.actions.list.iter().map(|action| crate::atn_cmds::logical_set_name(action.set.as_deref())).chain(s.actions.sets.iter().map(String::as_str)).chain(s.actions.set_rows.iter().map(String::as_str)).chain(s.actions.library.has_implicit_rows().then_some(crate::atn_cmds::UNGROUPED_SET)).filter(|name| seen.insert(*name)).map(str::to_string).collect()
+    s.actions
+        .list
+        .iter()
+        .map(|action| crate::atn_cmds::logical_set_name(action.set.as_deref()))
+        .chain(s.actions.sets.iter().map(String::as_str))
+        .chain(s.actions.set_rows.iter().map(String::as_str))
+        .chain(s.actions.library.has_implicit_rows().then_some(crate::atn_cmds::UNGROUPED_SET))
+        .filter(|name| seen.insert(*name))
+        .map(str::to_string)
+        .collect()
 }
 
 /// An explicit folder is selected by both its current slot and caption.

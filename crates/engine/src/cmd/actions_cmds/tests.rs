@@ -1052,7 +1052,10 @@ fn recording_a_later_legacy_occurrence_persists_its_id_and_step() {
     assert_eq!(live["ran"], 1, "{live}");
     s.execute("actions.stop", json!({})).unwrap();
     let id = s.actions.list[2].action_id.clone().unwrap();
-    assert_eq!(s.actions.list[4].steps, [("actions.play".to_string(), json!({"action": "Invert Colors", "actionId": id, "set":crate::atn_cmds::UNGROUPED_SET, "from": 1}))]);
+    assert_eq!(
+        s.actions.list[4].steps,
+        [("actions.play".to_string(), json!({"action": "Invert Colors", "actionId": id, "set":crate::atn_cmds::UNGROUPED_SET, "from": 1}))]
+    );
     s.execute("actions.move", json!({"action": 2, "to": 3})).unwrap();
     let saved = serde_json::to_string(&s.actions.list).unwrap();
     let mut replay = Session::new();

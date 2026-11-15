@@ -421,7 +421,9 @@ fn action_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, action: 
 
 /// Give playback and the owned editor precedence, then dispatch list operations after drawing.
 pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if app.ui.actions.slot_revision != app.session.actions.set_rows_revision { super::library_slots_changed(app); }
+    if app.ui.actions.slot_revision != app.session.actions.set_rows_revision {
+        super::library_slots_changed(app);
+    }
     if let Err(error) = attach(app) {
         report(app, Err(error));
     }
@@ -485,21 +487,30 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if !query.is_empty() && !members.iter().any(|&index| matches(&list[index])) {
                 continue;
             }
-            let collapsed = group.slot.map_or_else(|| app.ui.actions.collapsed_sets.contains(&group.name), |slot| app.ui.actions.collapsed_set_slots.contains(&slot));
-            let header = ui.push_id((&group.name, group.slot), |ui| ui.horizontal(|ui| {
-                if icons::button(ui, if collapsed { "chevron-right" } else { "chevron-down" }, 20.0, false, &group.name).clicked() {
-                    if let Some(slot) = group.slot {
-                        if collapsed { app.ui.actions.collapsed_set_slots.retain(|row| *row != slot); }
-                        else { app.ui.actions.collapsed_set_slots.push(slot); }
-                    } else if collapsed { app.ui.actions.collapsed_sets.retain(|name| name != &group.name); }
-                    else { app.ui.actions.collapsed_sets.push(group.name.clone()); }
-                }
-                ui.strong(&group.name);
-                let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
-                egui::Popup::menu(&menu).show(|ui| {
-                    operation = context(ui, None, Some(group), members.clone()).or(operation.take());
-                });
-            }));
+            let collapsed =
+                group.slot.map_or_else(|| app.ui.actions.collapsed_sets.contains(&group.name), |slot| app.ui.actions.collapsed_set_slots.contains(&slot));
+            let header = ui.push_id((&group.name, group.slot), |ui| {
+                ui.horizontal(|ui| {
+                    if icons::button(ui, if collapsed { "chevron-right" } else { "chevron-down" }, 20.0, false, &group.name).clicked() {
+                        if let Some(slot) = group.slot {
+                            if collapsed {
+                                app.ui.actions.collapsed_set_slots.retain(|row| *row != slot);
+                            } else {
+                                app.ui.actions.collapsed_set_slots.push(slot);
+                            }
+                        } else if collapsed {
+                            app.ui.actions.collapsed_sets.retain(|name| name != &group.name);
+                        } else {
+                            app.ui.actions.collapsed_sets.push(group.name.clone());
+                        }
+                    }
+                    ui.strong(&group.name);
+                    let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
+                    egui::Popup::menu(&menu).show(|ui| {
+                        operation = context(ui, None, Some(group), members.clone()).or(operation.take());
+                    });
+                })
+            });
             if let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
                 operation = Some(Operation::Assign(Box::new((*drag).clone()), group.clone()));
             }
@@ -517,9 +528,12 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let ungrouped: Vec<_> = list
             .iter()
             .enumerate()
-            .filter(|(_, action)| action.set_slot.is_none() && photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == photocraft_engine::atn_cmds::UNGROUPED_SET)
+            .filter(|(_, action)| {
+                action.set_slot.is_none() && photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == photocraft_engine::atn_cmds::UNGROUPED_SET
+            })
             .collect();
-        let empty_ungrouped = ungrouped.is_empty() && groups.iter().any(|group| group.slot.is_none() && group.name == photocraft_engine::atn_cmds::UNGROUPED_SET);
+        let empty_ungrouped =
+            ungrouped.is_empty() && groups.iter().any(|group| group.slot.is_none() && group.name == photocraft_engine::atn_cmds::UNGROUPED_SET);
         if !ungrouped.is_empty() || empty_ungrouped {
             ui.separator();
         }
@@ -534,11 +548,13 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.strong(set_label(photocraft_engine::atn_cmds::UNGROUPED_SET));
                 let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
                 egui::Popup::menu(&menu).show(|ui| {
-                    operation = context(ui, None, Some(&super::Folder { name: photocraft_engine::atn_cmds::UNGROUPED_SET.into(), slot: None }), Vec::new()).or(operation.take());
+                    operation = context(ui, None, Some(&super::Folder { name: photocraft_engine::atn_cmds::UNGROUPED_SET.into(), slot: None }), Vec::new())
+                        .or(operation.take());
                 });
             });
             if let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
-                operation = Some(Operation::Assign(Box::new((*drag).clone()), super::Folder { name: photocraft_engine::atn_cmds::UNGROUPED_SET.into(), slot: None }));
+                operation =
+                    Some(Operation::Assign(Box::new((*drag).clone()), super::Folder { name: photocraft_engine::atn_cmds::UNGROUPED_SET.into(), slot: None }));
             }
         }
         if list.is_empty() {
@@ -627,8 +643,16 @@ fn start_library_with_gate(app: &mut PhotocraftApp, indices: &[usize], captured:
         .map(|&index| app.session.actions.list.get(index).cloned().ok_or("The selected action no longer exists".to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let (_, _, owner) = actions_cmds::playback::Owner::library(&mut app.session, &json!({"action":index})).map_err(|error| error.to_string())?;
-    for (snapshot, &row) in then.iter_mut().zip(rest) { *snapshot = app.session.actions.list[row].clone(); }
-    let frame = match Frame::library(&app.session, &json!({"action":index})) { Ok(frame) => frame, Err(error) => { owner.finish(&mut app.session); return Err(error); } };
+    for (snapshot, &row) in then.iter_mut().zip(rest) {
+        *snapshot = app.session.actions.list[row].clone();
+    }
+    let frame = match Frame::library(&app.session, &json!({"action":index})) {
+        Ok(frame) => frame,
+        Err(error) => {
+            owner.finish(&mut app.session);
+            return Err(error);
+        }
+    };
     queue(app, frame, owner, then, gate)
 }
 
@@ -1004,12 +1028,26 @@ mod tests;
 #[path = "deferred_policy_tests.rs"]
 mod deferred_policy_tests;
 
-
 fn group_folders(session: &photocraft_engine::Session) -> Vec<super::Folder> {
     let mut names = std::collections::HashSet::new();
-    let mut groups: Vec<_> = session.actions.list.iter().filter(|action| action.set_slot.is_none()).map(|action| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref())).chain(session.actions.sets.iter().map(String::as_str)).filter(|name| names.insert(*name)).map(|name| super::Folder { name: name.into(), slot: None }).collect();
-    if photocraft_engine::actions_edit_cmds::set_names(session).iter().any(|name| name == photocraft_engine::atn_cmds::UNGROUPED_SET) && !groups.iter().any(|group| group.slot.is_none() && group.name == photocraft_engine::atn_cmds::UNGROUPED_SET) { groups.push(super::Folder { name: photocraft_engine::atn_cmds::UNGROUPED_SET.into(), slot: None }); }
+    let mut groups: Vec<_> = session
+        .actions
+        .list
+        .iter()
+        .filter(|action| action.set_slot.is_none())
+        .map(|action| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()))
+        .chain(session.actions.sets.iter().map(String::as_str))
+        .filter(|name| names.insert(*name))
+        .map(|name| super::Folder { name: name.into(), slot: None })
+        .collect();
+    if photocraft_engine::actions_edit_cmds::set_names(session).iter().any(|name| name == photocraft_engine::atn_cmds::UNGROUPED_SET)
+        && !groups.iter().any(|group| group.slot.is_none() && group.name == photocraft_engine::atn_cmds::UNGROUPED_SET)
+    {
+        groups.push(super::Folder { name: photocraft_engine::atn_cmds::UNGROUPED_SET.into(), slot: None });
+    }
     groups.extend(session.actions.set_rows.iter().enumerate().map(|(slot, name)| super::Folder { name: name.clone(), slot: Some(slot) }));
     groups
 }
-fn group_exists(session: &photocraft_engine::Session, group: &super::Folder) -> bool { group_folders(session).contains(group) }
+fn group_exists(session: &photocraft_engine::Session, group: &super::Folder) -> bool {
+    group_folders(session).contains(group)
+}

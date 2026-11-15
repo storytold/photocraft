@@ -868,7 +868,9 @@ fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Load
             }
             let mut state = ActionState { list: file.actions, sets: file.sets, set_rows: file.set_rows, ..Default::default() };
             crate::actions_cmds::invalidate_duplicate_ids(&mut state.list);
-            for action in &mut state.list { action.set_slot = action.set_slot.filter(|&slot| action.set.is_some() && state.set_rows.get(slot) == action.set.as_ref()); }
+            for action in &mut state.list {
+                action.set_slot = action.set_slot.filter(|&slot| action.set.is_some() && state.set_rows.get(slot) == action.set.as_ref());
+            }
             state.library.legacy = match library::LegacyOrigin::new(&legacy) {
                 Ok(origin) => Some(origin),
                 Err(error) => return fail(warnings, LEGACY_ACTIONS_FILE, error),
@@ -1303,11 +1305,7 @@ impl PresetStore {
 }
 
 fn action_shortcuts(prefs: &crate::prefs::Preferences) -> Vec<(String, String)> {
-    prefs
-        .shortcuts
-        .iter()
-        .filter(|(key, _)| crate::actions_cmds::is_action_key(key)).map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
+    prefs.shortcuts.iter().filter(|(key, _)| crate::actions_cmds::is_action_key(key)).map(|(key, value)| (key.clone(), value.clone())).collect()
 }
 
 fn builtin_names() -> &'static [String] {
@@ -1372,7 +1370,9 @@ impl Session {
         self.preset_store = Some(store);
         let migrating = matches!(disk, LoadedActions::Migrated(_) | LoadedActions::MigrationBlocked(_));
         if let Some(mut disk) = disk.into_state().filter(|_| !std::mem::take(&mut self.actions.replaced_before_attachment)) {
-            if !disk.list.is_empty() || !disk.sets.is_empty() || !disk.set_rows.is_empty() { self.actions.library_undo = None; }
+            if !disk.list.is_empty() || !disk.sets.is_empty() || !disk.set_rows.is_empty() {
+                self.actions.library_undo = None;
+            }
             actions::pin_disk_targets(self, &mut disk.list, &mut warnings);
             let keys: HashMap<_, _> = crate::actions_cmds::library::function_keys(&disk).into_iter().collect();
             let names: HashSet<_> = crate::actions_cmds::library::header_commands(&disk).into_iter().map(|(_, command)| command).collect();
@@ -1418,8 +1418,11 @@ impl Session {
         for (command, key) in headers {
             if crate::actions_cmds::shortcut_row(&self.actions.list, &command).is_some() {
                 self.edit_prefs(|prefs| {
-                    if let Some(key) = key { prefs.shortcuts.insert(command, key); }
-                    else if prefs.shortcuts.get(&command).is_some_and(|key| crate::atn_cmds::parse_function_key(key).is_some()) { prefs.shortcuts.remove(&command); }
+                    if let Some(key) = key {
+                        prefs.shortcuts.insert(command, key);
+                    } else if prefs.shortcuts.get(&command).is_some_and(|key| crate::atn_cmds::parse_function_key(key).is_some()) {
+                        prefs.shortcuts.remove(&command);
+                    }
                 });
             }
         }

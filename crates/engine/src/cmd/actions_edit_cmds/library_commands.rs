@@ -93,7 +93,15 @@ pub(crate) fn check_library_size(list: &[Action], sets: &[String], rows: &[Strin
 
 /// Replace library definitions and remember both shortcut maps for the one-step undo.
 /// Append pins an existing legacy binding before adding a namesake.
-pub(crate) fn publish_library(s: &mut Session, list: Vec<Action>, sets: Vec<String>, rows: Vec<String>, new_shortcuts: Option<Shortcuts>, label: &'static str, cmd: &str) -> Result<()> {
+pub(crate) fn publish_library(
+    s: &mut Session,
+    list: Vec<Action>,
+    sets: Vec<String>,
+    rows: Vec<String>,
+    new_shortcuts: Option<Shortcuts>,
+    label: &'static str,
+    cmd: &str,
+) -> Result<()> {
     publish_library_with_origins(s, list, sets, rows, new_shortcuts, label, cmd, None)
 }
 
@@ -127,8 +135,16 @@ pub(crate) fn publish_library_with_origins(
         }
     };
     check_library_size(&list, &sets, &rows, cmd)?;
-    let (library, metadata) = origins.unwrap_or_else(|| if replacing { Default::default() } else { (s.actions.library.clone(), s.actions.atn_set_rows.clone()) });
-    let proposed = crate::actions_cmds::ActionState { list: list.clone(), sets: sets.clone(), set_rows: rows.clone(), library: library.clone(), atn_set_rows: metadata.clone(), ..Default::default() };
+    let (library, metadata) =
+        origins.unwrap_or_else(|| if replacing { Default::default() } else { (s.actions.library.clone(), s.actions.atn_set_rows.clone()) });
+    let proposed = crate::actions_cmds::ActionState {
+        list: list.clone(),
+        sets: sets.clone(),
+        set_rows: rows.clone(),
+        library: library.clone(),
+        atn_set_rows: metadata.clone(),
+        ..Default::default()
+    };
     crate::actions_cmds::library::check_definition(&proposed, &after_shortcuts).map_err(|error| bad(cmd, error))?;
     if after_shortcuts != shortcuts || after_alternates != alternates {
         replace_bindings(s, after_shortcuts.clone(), after_alternates.clone());

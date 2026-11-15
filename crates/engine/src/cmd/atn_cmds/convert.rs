@@ -1,7 +1,7 @@
 use super::descriptors::{desc, get_obj, get_ref, jstr};
 use super::events::{event_and_descriptor, event_for};
 use super::fields::Mapped;
-use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, Descriptor, ReferenceItem, PHOTOSHOP_STEP, UnicodeString, Value, atn, json};
+use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, Descriptor, PHOTOSHOP_STEP, ReferenceItem, UnicodeString, Value, atn, json};
 use crate::actions_cmds::{color_from_atn, color_to_atn};
 
 // ------------------------------------------------------------------ import
@@ -321,7 +321,9 @@ fn convert_action(
                 return Err("too many converted steps in one action".into());
             }
             if !is_native {
-                if let Some(descriptor) = &item.descriptor { retain_action_scopes(descriptor, &s.0, &mut s.1); }
+                if let Some(descriptor) = &item.descriptor {
+                    retain_action_scopes(descriptor, &s.0, &mut s.1);
+                }
                 normalise(&mut s.1);
             }
             let idx = action.steps.len();
@@ -481,7 +483,9 @@ pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
 
 /// [`import`], reading 8-bit step names in `encoding` (a label such as `"shift_jis"` or
 /// `"gbk"`) instead of working it out. An unknown label fails.
-pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> { import_with_owners(bytes, encoding).map(|(imported, _)| imported) }
+pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> {
+    import_with_owners(bytes, encoding).map(|(imported, _)| imported)
+}
 
 fn import_with_owners(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<(Imported, Vec<usize>), String> {
     let files = atn::parse_sets_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
@@ -695,7 +699,14 @@ struct ExportTargets<'a> {
 
 impl<'a> ExportTargets<'a> {
     fn new(actions: &'a [&'a Action], groups: &[(&'a str, super::sidecar::Selection<'a>)]) -> Self {
-        let mut out = Self { actions, ids: Default::default(), clipped: Default::default(), names: Default::default(), scopes: Default::default(), wire_sets: groups.iter().flat_map(|(name, group)| group.actions.iter().map(move |action| (std::ptr::from_ref(*action), *name))).collect() };
+        let mut out = Self {
+            actions,
+            ids: Default::default(),
+            clipped: Default::default(),
+            names: Default::default(),
+            scopes: Default::default(),
+            wire_sets: groups.iter().flat_map(|(name, group)| group.actions.iter().map(move |action| (std::ptr::from_ref(*action), *name))).collect(),
+        };
         for (index, action) in actions.iter().enumerate() {
             if let Some(id) = action.action_id.as_deref() {
                 out.ids.entry(id).and_modify(|row| *row = None).or_insert(Some(index));
@@ -742,7 +753,9 @@ fn export_targeted_items(id: &str, params: &Value, set: &str, targets: &ExportTa
         } else if let Some(target) = params.get(*name).and_then(Value::as_str) {
             let original_scope = params.get(*scope).filter(|value| !value.is_null()).or_else(|| params.get("set")).and_then(Value::as_str);
             if targets.internal(target, original_scope) {
-                if let Some(action) = targets.by_name(target, original_scope) { params[*scope] = json!(targets.wire_sets.get(&std::ptr::from_ref(action)).copied().unwrap_or(set)); }
+                if let Some(action) = targets.by_name(target, original_scope) {
+                    params[*scope] = json!(targets.wire_sets.get(&std::ptr::from_ref(action)).copied().unwrap_or(set));
+                }
             }
         }
     }
@@ -821,7 +834,17 @@ fn export_set(
     for a in actions {
         let color = color_to_atn(&a.color).ok_or_else(|| format!("action `{}` has an invalid colour", a.name))?;
         let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, color, ..Default::default() };
-        if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| a.action_id.as_deref().is_some_and(|id| n == &crate::actions_cmds::occurrence_key(id))).or_else(|| function_keys.iter().find(|(n, _)| (a.legacy_shortcut_owner || targets.clipped.get(&clip_name(a.name.trim_end_matches('\0'))) == Some(&1)) && (n == &a.name || n == &format!("{}{}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX, a.name)))).and_then(|(_, key)| parse_function_key(key)) {
+        if let Some((n, shift, command)) = function_keys
+            .iter()
+            .find(|(n, _)| a.action_id.as_deref().is_some_and(|id| n == &crate::actions_cmds::occurrence_key(id)))
+            .or_else(|| {
+                function_keys.iter().find(|(n, _)| {
+                    (a.legacy_shortcut_owner || targets.clipped.get(&clip_name(a.name.trim_end_matches('\0'))) == Some(&1))
+                        && (n == &a.name || n == &format!("{}{}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX, a.name))
+                })
+            })
+            .and_then(|(_, key)| parse_function_key(key))
+        {
             (out.function_key, out.shift, out.command) = (n, shift, command);
         }
         for (i, (id, params)) in a.steps.iter().enumerate() {
@@ -829,9 +852,18 @@ fn export_set(
             // explicit defaults). The durable library uses the stricter library_items path.
             let items = match export_targeted_items(id, params, set, targets) {
                 Some(items) => items,
-                None if (id == "actions.play" && params.get("actionId").is_some()) || (id == "actions.conditional" && ["thenActionId", "elseActionId"].iter().any(|key| params.get(*key).is_some())) => {
-                    if skip_unsupported { skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() }); continue; }
-                    return Err(format!("step {} of `{}` has an absent or ambiguous ID-bound target in this portable selection; pass \"skipUnsupported\": true to leave it out", i + 1, a.name));
+                None if (id == "actions.play" && params.get("actionId").is_some())
+                    || (id == "actions.conditional" && ["thenActionId", "elseActionId"].iter().any(|key| params.get(*key).is_some())) =>
+                {
+                    if skip_unsupported {
+                        skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
+                        continue;
+                    }
+                    return Err(format!(
+                        "step {} of `{}` has an absent or ambiguous ID-bound target in this portable selection; pass \"skipUnsupported\": true to leave it out",
+                        i + 1,
+                        a.name
+                    ));
                 }
                 None if id == PHOTOSHOP_STEP => {
                     if skip_unsupported {
@@ -907,7 +939,6 @@ impl UniqueNames {
     }
 }
 
-
 pub(super) struct ReplacementSet {
     pub imported: Imported,
     pub keys: Vec<(usize, String)>,
@@ -915,7 +946,11 @@ pub(super) struct ReplacementSet {
 
 pub(super) fn import_sets(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Vec<(ReplacementSet, Vec<usize>)>, String> {
     let (mut imported, unsupported_rows) = import_with_owners(bytes, encoding)?;
-    if let Ok(provenance) = crate::actions_cmds::library::decode_import(bytes) { for (action, original) in imported.actions.iter_mut().zip(&provenance.list) { crate::actions_cmds::library::bind_import(action, original); } }
+    if let Ok(provenance) = crate::actions_cmds::library::decode_import(bytes) {
+        for (action, original) in imported.actions.iter_mut().zip(&provenance.list) {
+            crate::actions_cmds::library::bind_import(action, original);
+        }
+    }
     let mut out = Vec::with_capacity(imported.sets.len());
     for set in &imported.sets {
         let actions = imported.actions[set.actions.clone()].to_vec();
@@ -923,12 +958,27 @@ pub(super) fn import_sets(bytes: &[u8], encoding: Option<&str>) -> std::result::
         let mut unsupported = Vec::new();
         let mut owners = Vec::new();
         for (issue, &owner) in imported.unsupported.iter().zip(&unsupported_rows) {
-            if set.actions.contains(&owner) { unsupported.push(issue.clone()); owners.push(owner - set.actions.start); }
+            if set.actions.contains(&owner) {
+                unsupported.push(issue.clone());
+                owners.push(owner - set.actions.start);
+            }
         }
-        let mut part = Imported { set: set.name.clone(), actions, unsupported, warnings: imported.warnings.clone(), encoding: imported.encoding.clone(), ..Default::default() };
+        let mut part = Imported {
+            set: set.name.clone(),
+            actions,
+            unsupported,
+            warnings: imported.warnings.clone(),
+            encoding: imported.encoding.clone(),
+            ..Default::default()
+        };
         part.action_keys = imported.action_keys[set.actions.clone()].to_vec();
         part.function_keys = part.actions.iter().zip(&part.action_keys).filter_map(|(action, key)| key.clone().map(|key| (action.name.clone(), key))).collect();
-        part.sets.push(ImportedSet { name: set.name.clone(), wire_name: set.wire_name.clone(), actions: 0..part.actions.len(), metadata: set.metadata.clone() });
+        part.sets.push(ImportedSet {
+            name: set.name.clone(),
+            wire_name: set.wire_name.clone(),
+            actions: 0..part.actions.len(),
+            metadata: set.metadata.clone(),
+        });
         out.push((ReplacementSet { imported: part, keys }, owners));
     }
     Ok(out)

@@ -272,7 +272,9 @@ impl PlaybackTarget {
         }
         match (self.id.as_deref(), action.action_id.as_deref().filter(|id| identity::valid_action_id(id))) {
             (Some(left), Some(right)) => left == right && self.position.is_none_or(|(namespace, _, _)| namespace == s.actions.playback_namespace),
-            (None, None) => self.position.map_or_else(|| self.name == action.name, |(namespace, position, _)| (namespace, position) == (s.actions.playback_namespace, row)),
+            (None, None) => {
+                self.position.map_or_else(|| self.name == action.name, |(namespace, position, _)| (namespace, position) == (s.actions.playback_namespace, row))
+            }
             _ => false,
         }
     }
@@ -291,7 +293,9 @@ pub fn refresh_playback_target(s: &Session, action: &Action, target: &PlaybackTa
     }
     if let Some(id) = target.id.as_deref() {
         let row = resolve_action_id(&s.actions.list, id).ok_or_else(|| bad("actions.play", "the paused action identity is missing or ambiguous"))?;
-        if s.actions.list.get(row) != Some(action) { return Err(bad("actions.play", "the paused action definition changed")); }
+        if s.actions.list.get(row) != Some(action) {
+            return Err(bad("actions.play", "the paused action definition changed"));
+        }
         return playback_target(s, row).ok_or_else(|| bad("actions.play", "the paused action no longer exists"));
     }
     if revision == s.actions.rev {
@@ -851,18 +855,29 @@ fn num(v: &Value) -> Option<i64> {
 
 pub(crate) fn resolve_play_target(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
     // A durable ID is authoritative; stale display captions/scopes never retarget or invalidate it.
-    if let Some(id) = p.get("actionId") { return id.as_str().and_then(|id| resolve_action_id(list, id)).ok_or_else(|| bad(cmd, "invalid, missing, or duplicate action ID")); }
+    if let Some(id) = p.get("actionId") {
+        return id.as_str().and_then(|id| resolve_action_id(list, id)).ok_or_else(|| bad(cmd, "invalid, missing, or duplicate action ID"));
+    }
     let scope = p.get("set").filter(|scope| !scope.is_null());
-    if scope.is_some_and(|scope| !scope.is_string()) { return Err(bad(cmd, "set must be a set name")); }
-    let in_scope = |action: &Action| scope.is_none_or(|scope| scope.as_str().is_some_and(|name| crate::atn_cmds::logical_set_name(action.set.as_deref()) == name));
-    if scope.is_some() && let Some(name) = p.get("action").and_then(Value::as_str) {
+    if scope.is_some_and(|scope| !scope.is_string()) {
+        return Err(bad(cmd, "set must be a set name"));
+    }
+    let in_scope =
+        |action: &Action| scope.is_none_or(|scope| scope.as_str().is_some_and(|name| crate::atn_cmds::logical_set_name(action.set.as_deref()) == name));
+    if scope.is_some()
+        && let Some(name) = p.get("action").and_then(Value::as_str)
+    {
         let mut matching = list.iter().enumerate().filter(|(_, action)| action.name == name && in_scope(action));
         let row = matching.next().map(|(row, _)| row).ok_or_else(|| bad(cmd, "no action in the named set"))?;
-        if matching.next().is_some() { return Err(bad(cmd, "ambiguous action in the named set")); }
+        if matching.next().is_some() {
+            return Err(bad(cmd, "ambiguous action in the named set"));
+        }
         return Ok(row);
     }
     let row = resolve(list, p, cmd)?;
-    if !in_scope(&list[row]) { return Err(bad(cmd, "the selected action is not in its named set")); }
+    if !in_scope(&list[row]) {
+        return Err(bad(cmd, "the selected action is not in its named set"));
+    }
     Ok(row)
 }
 
@@ -885,7 +900,9 @@ pub fn conditional_branch(p: &Value, branch: &str) -> Result<Option<Value>> {
     };
     if let Some(target) = target.as_mut() {
         let field = if branch == "then" { "thenSet" } else { "elseSet" };
-        if let Some(scope) = p.get(field).filter(|value| !value.is_null()).or_else(|| p.get("set").filter(|value| !value.is_null())) { target["set"] = scope.clone(); }
+        if let Some(scope) = p.get(field).filter(|value| !value.is_null()).or_else(|| p.get("set").filter(|value| !value.is_null())) {
+            target["set"] = scope.clone();
+        }
     }
     Ok(target)
 }
@@ -1324,7 +1341,9 @@ pub fn recorded_target(s: &Session, action: &Action, from: usize) -> Value {
 /// Keep a numeric selector when its exact occurrence cannot be selected by name and set.
 pub fn recorded_target_for(s: &Session, action: &Action, from: usize, target: &PlaybackTarget) -> Value {
     let mut params = json!({"action": action.name, "set": crate::atn_cmds::logical_set_name(action.set.as_deref())});
-    if let Some(id) = target.id.as_deref().filter(|id| resolve_action_id(&s.actions.list, id).is_some()) { params["actionId"] = json!(id); }
+    if let Some(id) = target.id.as_deref().filter(|id| resolve_action_id(&s.actions.list, id).is_some()) {
+        params["actionId"] = json!(id);
+    }
     if let Some((namespace, row, _)) = target.position
         && namespace == s.actions.playback_namespace
         && playback_index(&s.actions.list, &params).ok() != Some(row)
@@ -1535,13 +1554,22 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
             .list
             .iter()
             .enumerate()
-            .filter_map(|(index, action)| (crate::atn_cmds::logical_set_name(action.set.as_deref()) == set && (!only_slot || action.set_slot == slot)).then_some(index))
+            .filter_map(|(index, action)| {
+                (crate::atn_cmds::logical_set_name(action.set.as_deref()) == set && (!only_slot || action.set_slot == slot)).then_some(index)
+            })
             .collect();
         let names = remove_actions(s, &removed);
         if only_slot {
-            if let Some(slot) = slot { let keep: Vec<_> = (0..s.actions.set_rows.len()).map(|row| row != slot).collect(); library::retain_folders(&mut s.actions, &keep); }
-            else { s.actions.sets.retain(|name| name != &set); library::retire_legacy_group(&mut s.actions, &set); }
-        } else { crate::atn_cmds::sidecar::retire_sets(&mut s.actions, &std::collections::HashSet::from([set.clone()])); }
+            if let Some(slot) = slot {
+                let keep: Vec<_> = (0..s.actions.set_rows.len()).map(|row| row != slot).collect();
+                library::retain_folders(&mut s.actions, &keep);
+            } else {
+                s.actions.sets.retain(|name| name != &set);
+                library::retire_legacy_group(&mut s.actions, &set);
+            }
+        } else {
+            crate::atn_cmds::sidecar::retire_sets(&mut s.actions, &std::collections::HashSet::from([set.clone()]));
+        }
         s.actions.touch();
         return Ok(json!({"deletedSet": set, "deleted": names}));
     }

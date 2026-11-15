@@ -632,7 +632,15 @@ pub(crate) fn play_command(app: &mut PhotocraftApp, params: &Value) -> Result<Va
 pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
     playback::stop(app);
     let (_, _, record) = actions_cmds::playback::library(&mut app.session, params).map_err(|e| e.to_string())?;
-    let frame = match Frame::library(&app.session, params) { Ok(frame) => frame, Err(error) => { if let Some(record) = record { record.finish(&mut app.session); } return Err(error); } };
+    let frame = match Frame::library(&app.session, params) {
+        Ok(frame) => frame,
+        Err(error) => {
+            if let Some(record) = record {
+                record.finish(&mut app.session);
+            }
+            return Err(error);
+        }
+    };
     let used = if app.session.actions.playing > 0 { app.session.actions.playback_steps } else { 0 };
     run_owned(app, frame, Vec::new(), record, 0, used, false)
 }
@@ -2478,8 +2486,16 @@ struct Folder {
     slot: Option<usize>,
 }
 
-impl From<&str> for Folder { fn from(name: &str) -> Self { Self { name: name.into(), slot: None } } }
-impl From<String> for Folder { fn from(name: String) -> Self { Self { name, slot: None } } }
+impl From<&str> for Folder {
+    fn from(name: &str) -> Self {
+        Self { name: name.into(), slot: None }
+    }
+}
+impl From<String> for Folder {
+    fn from(name: String) -> Self {
+        Self { name, slot: None }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum PanelRow {
@@ -2617,7 +2633,9 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
 }
 
 fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if app.ui.actions.slot_revision != app.session.actions.set_rows_revision { library_slots_changed(app); }
+    if app.ui.actions.slot_revision != app.session.actions.set_rows_revision {
+        library_slots_changed(app);
+    }
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
     let shortcuts: Vec<_> = actions_cmds::action_shortcuts(&app.session).into_iter().map(|key| key.map(str::to_owned)).collect();

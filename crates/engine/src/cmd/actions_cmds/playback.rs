@@ -78,15 +78,20 @@ fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<Va
 
 /// Bind the same-caption target before recording its call; shell leases also bind the recorder.
 pub(super) fn prepare_library(s: &mut Session, params: &Value, shell: bool) -> Result<(usize, Action, usize)> {
-    if shell && s.has_jobs() { return Err(bad("actions.play", "finish the running jobs before suspending capture")); }
+    if shell && s.has_jobs() {
+        return Err(bad("actions.play", "finish the running jobs before suspending capture"));
+    }
     super::flush_recording(s)?;
     let (row, mut action, from) = super::playback_plan_at(s, params)?;
     if shell && let Some((_, owner)) = s.actions.recording {
-        let id = super::prepare_action_id(&s.actions.list, owner)?; super::commit_action_id(s, owner, id)?;
+        let id = super::prepare_action_id(&s.actions.list, owner)?;
+        super::commit_action_id(s, owner, id)?;
         action = s.actions.list[row].clone();
     }
     if s.actions.recording_active() && s.actions.list.iter().filter(|candidate| candidate.name == action.name).take(2).count() > 1 {
-        let id = super::prepare_action_id(&s.actions.list, row)?; super::commit_action_id(s, row, id.clone())?; action.action_id = Some(id);
+        let id = super::prepare_action_id(&s.actions.list, row)?;
+        super::commit_action_id(s, row, id.clone())?;
+        action.action_id = Some(id);
     }
     Ok((row, action, from))
 }

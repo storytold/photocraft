@@ -474,7 +474,14 @@ fn references(s: &Session, draft: &Draft, value: &mut Action) -> Vec<(usize, usi
 fn bindings(s: &Session, draft: &Draft, value: &Action) -> Bindings {
     let mut keys = s.prefs().shortcuts.clone();
     let mut alternates = s.prefs().alternate_shortcuts.clone();
-    let command = |action: &Action| action.action_id.as_deref().filter(|id| super::valid_action_id(id)).map(super::occurrence_key).unwrap_or_else(|| format!("{}{}", super::PLAY_SHORTCUT_PREFIX, action.name));
+    let command = |action: &Action| {
+        action
+            .action_id
+            .as_deref()
+            .filter(|id| super::valid_action_id(id))
+            .map(super::occurrence_key)
+            .unwrap_or_else(|| format!("{}{}", super::PLAY_SHORTCUT_PREFIX, action.name))
+    };
     let new = command(value);
     let old_legacy = format!("{}{}", super::PLAY_SHORTCUT_PREFIX, draft.opening.name);
     let new_legacy = format!("{}{}", super::PLAY_SHORTCUT_PREFIX, value.name);
@@ -482,8 +489,12 @@ fn bindings(s: &Session, draft: &Draft, value: &Action) -> Bindings {
     // Keep the legacy alias as a fallback while an asynchronous ID write is not yet durable.
     let owns_legacy = draft.source.is_some_and(|index| super::shortcut_row(&s.actions.list, &old_legacy) == Some(index));
     if owns_legacy && old_legacy != new_legacy {
-        if let Some(key) = keys.remove(&old_legacy) { keys.insert(new_legacy.clone(), key); }
-        if let Some(key) = alternates.remove(&old_legacy) { alternates.insert(new_legacy.clone(), key); }
+        if let Some(key) = keys.remove(&old_legacy) {
+            keys.insert(new_legacy.clone(), key);
+        }
+        if let Some(key) = alternates.remove(&old_legacy) {
+            alternates.insert(new_legacy.clone(), key);
+        }
     }
     if draft.shortcut != draft.opening_shortcut {
         if !draft.shortcut.is_empty() {
@@ -541,7 +552,11 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let new_identity = draft.shortcut != draft.opening_shortcut && value.action_id.is_none();
     if draft.shortcut != draft.opening_shortcut {
         let mut proposed = s.actions.list.clone();
-        if target == proposed.len() { proposed.push(value.clone()); } else { proposed[target] = value.clone(); }
+        if target == proposed.len() {
+            proposed.push(value.clone());
+        } else {
+            proposed[target] = value.clone();
+        }
         value.action_id = Some(super::prepare_action_id(&proposed, target)?);
     }
     let (keys, alternates) = bindings(s, draft, &value);
@@ -575,7 +590,9 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     super::library::check_definition(&proposed, &keys).map_err(|error| bad(SAVE, error))?;
     // A new ID must reach the definition backend before any key is rebound to it.
     if new_identity {
-        if let Some(store) = s.preset_store.as_mut() { store.commit_action_definitions(&proposed, next.library_revision).map_err(|error| bad(SAVE, error))?; }
+        if let Some(store) = s.preset_store.as_mut() {
+            store.commit_action_definitions(&proposed, next.library_revision).map_err(|error| bad(SAVE, error))?;
+        }
     }
     // Encoding succeeded. Publish definitions without replacing the live capture/owner state.
     s.actions.list = proposed.list;
@@ -660,44 +677,62 @@ pub(super) fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-
 #[cfg(test)]
 mod identity_bridge_tests {
     use super::*;
     #[test]
     fn editor_renames_an_id_bound_action_without_moving_its_shortcuts_to_a_namesake() {
-        let mut session = Session::new(); let id = "11111111111111111111111111111111";
-        let mut action = Action::new("Same", Vec::new()); action.action_id = Some(id.into());
+        let mut session = Session::new();
+        let id = "11111111111111111111111111111111";
+        let mut action = Action::new("Same", Vec::new());
+        action.action_id = Some(id.into());
         session.actions.list = vec![Action::new("Same", Vec::new()), action];
-        session.edit_prefs(|prefs| { prefs.shortcuts.insert(super::super::occurrence_key(id), "F6".into()); prefs.alternate_shortcuts.insert(super::super::occurrence_key(id), vec!["F7".into()]); });
-        let opened = session.execute("actions.editor.open", json!({"action":1})).unwrap(); assert_eq!(opened["shortcut"], "F6");
-        let draft = opened["draft"].clone(); session.execute("actions.editor.update", json!({"draft":draft,"name":"Renamed"})).unwrap();
+        session.edit_prefs(|prefs| {
+            prefs.shortcuts.insert(super::super::occurrence_key(id), "F6".into());
+            prefs.alternate_shortcuts.insert(super::super::occurrence_key(id), vec!["F7".into()]);
+        });
+        let opened = session.execute("actions.editor.open", json!({"action":1})).unwrap();
+        assert_eq!(opened["shortcut"], "F6");
+        let draft = opened["draft"].clone();
+        session.execute("actions.editor.update", json!({"draft":draft,"name":"Renamed"})).unwrap();
         session.execute("actions.editor.save", json!({"draft":draft})).unwrap();
-        assert_eq!(session.actions.list[1].action_id.as_deref(), Some(id)); assert_eq!(session.actions.list[0].name, "Same");
+        assert_eq!(session.actions.list[1].action_id.as_deref(), Some(id));
+        assert_eq!(session.actions.list[0].name, "Same");
         assert_eq!(session.prefs().shortcuts.get(&super::super::occurrence_key(id)).map(String::as_str), Some("F6"));
         assert_eq!(session.prefs().alternate_shortcuts.get(&super::super::occurrence_key(id)).unwrap(), &["F7"]);
     }
     #[test]
     fn a_new_editor_draft_keeps_the_selected_same_caption_folder_occurrence() {
-        let mut session = Session::new(); session.actions.set_rows = vec!["Same".into(), "Same".into()];
+        let mut session = Session::new();
+        session.actions.set_rows = vec!["Same".into(), "Same".into()];
         let opened = session.execute("actions.editor.open", json!({"name":"New","set":"Same","setSlot":1})).unwrap();
-        let draft = opened["draft"].clone(); session.execute("actions.editor.update", json!({"draft":draft,"description":"publish"})).unwrap();
+        let draft = opened["draft"].clone();
+        session.execute("actions.editor.update", json!({"draft":draft,"description":"publish"})).unwrap();
         session.execute("actions.editor.save", json!({"draft":draft})).unwrap();
-        assert_eq!(session.actions.list[0].set_slot, Some(1)); assert_eq!(session.actions.set_rows, ["Same", "Same"]);
+        assert_eq!(session.actions.list[0].set_slot, Some(1));
+        assert_eq!(session.actions.set_rows, ["Same", "Same"]);
     }
 }
-
 
 #[cfg(test)]
 mod legacy_id_alias_tests {
     use super::*;
     #[test]
     fn an_id_bearing_editor_rename_retains_its_owned_legacy_shortcut_alias() {
-        let mut session = Session::new(); let id = "22222222222222222222222222222222";
-        let mut action = Action::new("Before", Vec::new()); action.action_id = Some(id.into()); session.actions.list.push(action);
-        session.edit_prefs(|prefs| { prefs.shortcuts.insert("actions.play:Before".into(), "F6".into()); prefs.alternate_shortcuts.insert("actions.play:Before".into(), vec!["F7".into()]); });
-        let opened = session.execute("actions.editor.open", json!({"action":0})).unwrap(); assert_eq!(opened["shortcut"], "F6");
-        let draft = opened["draft"].clone(); session.execute("actions.editor.update", json!({"draft":draft,"name":"After"})).unwrap(); session.execute("actions.editor.save", json!({"draft":draft})).unwrap();
+        let mut session = Session::new();
+        let id = "22222222222222222222222222222222";
+        let mut action = Action::new("Before", Vec::new());
+        action.action_id = Some(id.into());
+        session.actions.list.push(action);
+        session.edit_prefs(|prefs| {
+            prefs.shortcuts.insert("actions.play:Before".into(), "F6".into());
+            prefs.alternate_shortcuts.insert("actions.play:Before".into(), vec!["F7".into()]);
+        });
+        let opened = session.execute("actions.editor.open", json!({"action":0})).unwrap();
+        assert_eq!(opened["shortcut"], "F6");
+        let draft = opened["draft"].clone();
+        session.execute("actions.editor.update", json!({"draft":draft,"name":"After"})).unwrap();
+        session.execute("actions.editor.save", json!({"draft":draft})).unwrap();
         assert_eq!(session.actions.list[0].action_id.as_deref(), Some(id));
         assert_eq!(session.prefs().shortcuts.get("actions.play:After").map(String::as_str), Some("F6"));
         assert_eq!(session.prefs().alternate_shortcuts.get("actions.play:After").unwrap(), &["F7"]);

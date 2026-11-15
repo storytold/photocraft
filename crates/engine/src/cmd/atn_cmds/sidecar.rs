@@ -249,7 +249,9 @@ pub(super) fn empty_source(state: &ActionState, slot: usize) -> Option<Arc<SetMe
 pub(crate) fn install_row(state: &mut ActionState, name: &str, source: Option<Arc<SetMetadata>>) {
     let slot = state.set_rows.len();
     crate::actions_cmds::library::insert_folder(state, slot, name, None);
-    if let Some(source) = source { state.atn_set_rows.push(SetRowMetadata { slot, row: name.into(), source }); }
+    if let Some(source) = source {
+        state.atn_set_rows.push(SetRowMetadata { slot, row: name.into(), source });
+    }
 }
 
 /// Remove exactly the selected canonical occurrences and remap every surviving carrier.
@@ -257,7 +259,9 @@ pub(crate) fn retire_sets(state: &mut ActionState, names: &std::collections::Has
     let keep: Vec<_> = state.set_rows.iter().map(|name| !names.contains(name)).collect();
     crate::actions_cmds::library::retain_folders(state, &keep);
     state.sets.retain(|name| !names.contains(name));
-    for name in names { crate::actions_cmds::library::retire_legacy_group(state, name); }
+    for name in names {
+        crate::actions_cmds::library::retire_legacy_group(state, name);
+    }
 }
 
 /// Inherit group metadata only when all action and empty-row carriers identify one source set.
@@ -325,7 +329,8 @@ pub(crate) fn remap_scopes(action: &mut Action, names: &std::collections::HashMa
 pub(crate) fn portable_actions(state: &ActionState, groups: &[(String, Selection<'_>)], skip_unsupported: bool) -> Result<Vec<Vec<Action>>> {
     let positions: std::collections::HashMap<_, _> =
         groups.iter().flat_map(|(_, selection)| &selection.actions).enumerate().map(|(index, action)| (std::ptr::from_ref(*action), index)).collect();
-    let target_sets: std::collections::HashMap<_, _> = groups.iter().flat_map(|(name, selection)| selection.actions.iter().map(move |action| (std::ptr::from_ref(*action), name.as_str()))).collect();
+    let target_sets: std::collections::HashMap<_, _> =
+        groups.iter().flat_map(|(name, selection)| selection.actions.iter().map(move |action| (std::ptr::from_ref(*action), name.as_str()))).collect();
     let mut output: Vec<Vec<Action>> = groups.iter().map(|(_, selection)| selection.actions.iter().map(|action| (**action).clone()).collect()).collect();
     let mut result = Ok(());
     for action in output.iter_mut().flatten() {
@@ -337,10 +342,14 @@ pub(crate) fn portable_actions(state: &ActionState, groups: &[(String, Selection
                 _ => &[],
             };
             for &(name, scope, identity) in branches {
-                if params.get(identity).is_some() || !params.get(name).is_some_and(serde_json::Value::is_string) { continue; }
+                if params.get(identity).is_some() || !params.get(name).is_some_and(serde_json::Value::is_string) {
+                    continue;
+                }
                 let target = if id == "actions.play" { Some(params.clone()) } else { crate::actions_cmds::conditional_branch(params, name).ok().flatten() };
                 if let Some(index) = target.as_ref().and_then(|target| crate::actions_cmds::resolve_play_target(&state.list, target, "actions.save").ok()) {
-                    if let Some(group) = target_sets.get(&std::ptr::from_ref(&state.list[index])) { params[scope] = serde_json::json!(group); }
+                    if let Some(group) = target_sets.get(&std::ptr::from_ref(&state.list[index])) {
+                        params[scope] = serde_json::json!(group);
+                    }
                 }
             }
             if !matches!(id, "actions.play" | "file.automate.batch" | "file.automate.createDroplet")
@@ -365,7 +374,11 @@ pub(crate) fn portable_actions(state: &ActionState, groups: &[(String, Selection
 
 /// Build the portable logical-set selection, preserving its opaque metadata and enforcing archive limits.
 pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<Vec<(&'a str, Selection<'a>)>> {
-    Ok(crate::actions_cmds::library::projected_groups(state)?.into_iter().filter(|(_, name, _)| only.is_none_or(|only| only == *name)).map(|(_, name, selection)| (name, selection)).collect())
+    Ok(crate::actions_cmds::library::projected_groups(state)?
+        .into_iter()
+        .filter(|(_, name, _)| only.is_none_or(|only| only == *name))
+        .map(|(_, name, selection)| (name, selection))
+        .collect())
 }
 
 pub(crate) struct Decoded {
@@ -427,7 +440,9 @@ pub(crate) fn identity_bytes(source: Option<&Source>) -> Result<Option<Vec<u8>>>
     let root = source.root.parsed()?;
     let mut fields = root.items.iter().filter(|(id, _)| id.is("photocraftLibraryIdentityV1"));
     let Some((_, value)) = fields.next() else { return Ok(None) };
-    if fields.next().is_some() { return Err("duplicate local library identity metadata".into()); }
+    if fields.next().is_some() {
+        return Err("duplicate local library identity metadata".into());
+    }
     let D::RawData(bytes) = value else { return Err("invalid local library identity metadata".into()) };
     Ok(Some(bytes.clone()))
 }
@@ -494,7 +509,12 @@ fn decode_inner(files: &[AtnFile], library: bool, raw_outer: Option<&[u8]>) -> R
         let signature_item = signature_file.actions.first_mut().and_then(|action| action.items.first_mut()).ok_or("missing sidecar signature item")?;
         signature_item.descriptor = Some(Descriptor::from_bytes(&outer_signature).map_err(|error| error.to_string())?);
         let mut signature = atn::write(&signature_file).map_err(|error| error.to_string())?;
-        signature.extend(root.patch(&[("sets", Some(objects(&[])?)), ("photocraftLegacyJsonV1", None), ("photocraftLibraryIdentityV1", None), (EMPTY_LIBRARY, None)])?);
+        signature.extend(root.patch(&[
+            ("sets", Some(objects(&[])?)),
+            ("photocraftLegacyJsonV1", None),
+            ("photocraftLibraryIdentityV1", None),
+            (EMPTY_LIBRARY, None),
+        ])?);
         let source = Arc::new(Source { wrapper: atn::write(file).map_err(|error| error.to_string())?, outer, root, signature });
         result.source = Some(source.clone());
         let mut ordinal = 0usize;
@@ -579,16 +599,26 @@ pub(crate) fn apply(action: &mut Action, metadata: ActionMetadata) {
 /// Drop only an exact canonical entry; original/noncanonical/unknown bytes remain attached.
 pub(crate) fn apply_local(action: &mut Action, metadata: ActionMetadata, identity_carrier: bool) -> Result<()> {
     if identity_carrier {
-        action.description = metadata.description.clone(); action.icon = metadata.icon.clone(); action.automation = metadata.automation;
-        if entry(action)?.as_slice() == metadata.raw.bytes() { return Ok(()); }
+        action.description = metadata.description.clone();
+        action.icon = metadata.icon.clone();
+        action.automation = metadata.automation;
+        if entry(action)?.as_slice() == metadata.raw.bytes() {
+            return Ok(());
+        }
     }
-    apply(action, metadata); Ok(())
+    apply(action, metadata);
+    Ok(())
 }
 
 /// Bind a private local identity to opaque metadata without duplicating the definition codec.
-pub(crate) fn identity_entry(action: &Action) -> Result<Vec<u8>> { entry(action) }
+pub(crate) fn identity_entry(action: &Action) -> Result<Vec<u8>> {
+    entry(action)
+}
 pub(crate) fn identity_set(source: Option<&SetMetadata>) -> Result<Vec<u8>> {
-    match source { Some(source) => source.raw.patch(&[("actions", None)]), None => Ok(Descriptor::new("null").with("setColorIndex", D::Integer(0)).to_bytes()) }
+    match source {
+        Some(source) => source.raw.patch(&[("actions", None)]),
+        None => Ok(Descriptor::new("null").with("setColorIndex", D::Integer(0)).to_bytes()),
+    }
 }
 
 /// Patch only changed description/icon fields; unchanged and unknown metadata retains its original bytes.
@@ -751,7 +781,8 @@ fn append_inner(
         // A portable subset is not proof that the complete legacy library was published.
         RawDescriptor::new(&root)?.patch(&[("photocraftLegacyJsonV1", None)])?
     };
-    let root = RawDescriptor::new(&root)?.patch(&[("photocraftLibraryIdentityV1", identities.map(|bytes| value_bytes(D::RawData(bytes.to_vec()))).transpose()?)])?;
+    let root =
+        RawDescriptor::new(&root)?.patch(&[("photocraftLibraryIdentityV1", identities.map(|bytes| value_bytes(D::RawData(bytes.to_vec()))).transpose()?)])?;
     let mut payload = 16u32.to_be_bytes().to_vec();
     extend(&mut payload, &root)?;
     let outer = match &source {
