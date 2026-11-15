@@ -283,6 +283,52 @@ fn a_psd_type_layer_keeps_a_name_photoshop_did_not_take_from_its_text() {
     assert_eq!(layer_name_of(&s, ids[2]), "South Wind", "rend: the name follows the text");
 }
 
+/// The active document saved as PSD and opened again in a new session.
+fn reopened_as_psd(s: &Session) -> Session {
+    let psd = photocraft_io::export(&s.active().unwrap().doc, "psd", &photocraft_io::ExportOptions::default()).unwrap().bytes;
+    let mut back = Session::new();
+    back.add_document(photocraft_io::import("x.psd", &psd).unwrap().document, None);
+    back
+}
+
+/// The id of the type layer called `name` in the active document.
+fn text_layer_named(s: &Session, name: &str) -> u64 {
+    let doc = &s.active().unwrap().doc;
+    doc.walk().into_iter().find(|(_, _, l)| l.name == name && matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id.0).unwrap()
+}
+
+/// A type layer made in PhotoCraft still follows its text after a PSD save and reopen: the save
+/// records that its name came from the text (`lnsr` `rend`). One renamed before the save keeps
+/// its name.
+#[test]
+fn a_type_layer_made_here_follows_its_text_after_a_psd_round_trip() {
+    let mut s = session();
+    s.execute("type.create", json!({"x": 0, "y": 40, "text": "Title"})).unwrap();
+    let renamed = s.execute("type.create", json!({"x": 0, "y": 80, "text": "Caption"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setProps", json!({"layer": renamed, "name": "Byline"})).unwrap();
+    let mut s = reopened_as_psd(&s);
+    let (title, byline) = (text_layer_named(&s, "Title"), text_layer_named(&s, "Byline"));
+    s.execute("type.edit", json!({"layer": title, "text": "South Wind"})).unwrap();
+    s.execute("type.edit", json!({"layer": byline, "text": "North Wind"})).unwrap();
+    assert_eq!(layer_name_of(&s, title), "South Wind", "named after its text: follows it after reopening");
+    assert_eq!(layer_name_of(&s, byline), "Byline", "renamed: keeps its name after reopening");
+}
+
+/// A PSD type layer whose name Photoshop marks as given by hand (`layr`) keeps it after a save
+/// and reopen, even though the name equals its text.
+#[test]
+fn a_psd_type_layers_given_name_survives_a_psd_round_trip() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "name"})).unwrap()["layer"].as_u64().unwrap();
+    let l = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(LayerId(id)).unwrap();
+    l.psd_id = Some(u32::try_from(id).unwrap());
+    l.psd_blocks.push((*b"lnsr", std::sync::Arc::new(b"layr".to_vec())));
+    let mut s = reopened_as_psd(&s);
+    let id = text_layer_named(&s, "name");
+    s.execute("type.edit", json!({"layer": id, "text": "South Wind"})).unwrap();
+    assert_eq!(layer_name_of(&s, id), "name");
+}
+
 /// #9023: a duplicated type layer ("Title copy") is named after its new text once that is
 /// edited, as the original would be; a renamed copy keeps its name.
 #[test]

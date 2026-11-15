@@ -857,12 +857,10 @@ fn copy_root(name: &str) -> Option<&str> {
     (rest.is_empty() || rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))).then_some(root)
 }
 
-/// The name a type layer gets from its text: its first non-empty line, at most 40 characters.
+/// The name a type layer gets from its text ([`photocraft_doc::text::auto_layer_name`]).
 /// The Type tool names new layers with this too, so `is_auto_named` recognises them.
 pub fn layer_name(text: &str) -> String {
-    let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    let name: String = first.chars().take(40).collect();
-    if name.is_empty() { "Type Layer".into() } else { name }
+    photocraft_doc::text::auto_layer_name(text)
 }
 
 fn info(s: &Session, p: &Value) -> Result<Value> {

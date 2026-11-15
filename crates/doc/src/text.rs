@@ -295,6 +295,15 @@ pub struct TextWarp {
     pub horizontal: bool,
 }
 
+/// The name a type layer gets from its text: its first non-empty line, at most 40 characters.
+/// It lives here so the engine (which renames layers after their text) and the PSD writer
+/// (which records whether a name came from the text) use the same rule.
+pub fn auto_layer_name(text: &str) -> String {
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let name: String = first.chars().take(40).collect();
+    if name.is_empty() { "Type Layer".into() } else { name }
+}
+
 #[cfg(test)]
 mod tests {
     /// Ensures `TextShape::Path` serializes backward-compatibly without an `"end"` field when `end` is `None`.
