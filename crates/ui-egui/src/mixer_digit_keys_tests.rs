@@ -63,3 +63,19 @@ fn shift_sets_flow_alt_sets_smoothing_and_airbrush_does_not_swap_roles() {
     crate::opacity_keys::press(&mut a, 6, true, 40000.0);
     assert_eq!(a.session.tools.brush.mixer.flow, 0.6);
 }
+#[test]
+fn digits_do_not_pair_across_tools() {
+    let mut brush_to_mixer = app(Tool::Brush);
+    press(&mut brush_to_mixer, 4, false, 0.0);
+    brush_to_mixer.ui.tool = Tool::MixerBrush;
+    press(&mut brush_to_mixer, 5, false, 300.0);
+    assert_eq!(brush_to_mixer.session.tools.brush.opacity, 0.4);
+    assert_eq!(brush_to_mixer.session.tools.brush.mixer.wet, 0.5);
+
+    let mut mixer_to_brush = app(Tool::MixerBrush);
+    press(&mut mixer_to_brush, 4, false, 0.0);
+    mixer_to_brush.ui.tool = Tool::Brush;
+    press(&mut mixer_to_brush, 5, false, 300.0);
+    assert_eq!(mixer_to_brush.session.tools.brush.mixer.wet, 0.4);
+    assert_eq!(mixer_to_brush.session.tools.brush.opacity, 0.5);
+}
