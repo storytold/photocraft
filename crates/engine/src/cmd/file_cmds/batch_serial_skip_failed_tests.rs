@@ -103,3 +103,28 @@ fn a_refused_input_named_like_a_source_does_not_stop_an_in_place_batch() {
     assert_eq!(files, ["a_001.png", "c_002.png", "z_003_003.png"]);
     assert_eq!(errors, 2);
 }
+
+#[test]
+fn the_error_log_may_take_a_refused_inputs_name() {
+    // `d.txt` takes no number, so its name `d_003.png` is never written and the log can use it.
+    let dir = tmp("log-name");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    for name in ["a.png", "c.png"] {
+        write_png(&join(&input, name));
+    }
+    for name in ["b.txt", "d.txt"] {
+        std::fs::write(join(&input, name), b"not an image").unwrap();
+    }
+    let output = join(&dir, "out");
+    let log = join(&output, "d_003.png");
+    let p = json!({
+        "input": input, "output": output, "steps": [], "format": "same", "includeNonImages": true,
+        "naming": "{name}_{serial:3}.png", "errorLog": log
+    });
+    let result = Session::new().execute("file.automate.batch", p).unwrap();
+    let files: Vec<String> = result["files"].as_array().unwrap().iter().map(|f| file_name(f.as_str().unwrap()).to_string()).collect();
+    assert_eq!(files, ["a_001.png", "c_002.png"]);
+    assert_eq!(result["errors"].as_array().unwrap().len(), 2);
+    assert_eq!(result["errorLog"], json!(log));
+}

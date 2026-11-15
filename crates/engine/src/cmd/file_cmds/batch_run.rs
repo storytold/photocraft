@@ -948,7 +948,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     };
     #[cfg(not(target_arch = "wasm32"))]
     validate_written_outputs(&outputs, &|index| inputs.get(index).is_none_or(counts))?;
-    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), outputs.iter().map(|(_, path)| path.clone()))?;
+    // Every input is protected; a refused input's name is never written, so the log may take it.
+    let written = outputs.iter().zip(&inputs).filter(|(_, input)| counts(input)).map(|((_, path), _)| path.clone());
+    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), written)?;
     let was_playing = nested;
     #[cfg(test)]
     let history_observer = s.batch_history_observer;
