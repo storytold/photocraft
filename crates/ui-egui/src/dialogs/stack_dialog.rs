@@ -112,7 +112,12 @@ fn browse(app: &mut PhotocraftApp, id: u64, folder: bool) {
     } else {
         let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
         app.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, move |app, answer| {
-            let FileDialogAnswer::Paths(paths) = answer else { return Err("Load Files into Stack reads files from disk".into()) };
+            let FileDialogAnswer::Paths(mut paths) = answer else { return Err("Load Files into Stack reads files from disk".into()) };
+            // Files PhotoCraft can't open as images are dropped silently, by Folder mode's rule
+            // (#14005). A pick with no image at all is kept as today (not measured).
+            if paths.iter().any(|p| photocraft_engine::file_cmds::is_openable_image(p)) {
+                paths.retain(|p| photocraft_engine::file_cmds::is_openable_image(p));
+            }
             let d = app.ui.dialog_mut(id).ok_or("the dialog was closed")?;
             add(&mut d.fields, paths);
             Ok(Value::Null)
@@ -265,3 +270,6 @@ mod folder_append_tests;
 
 #[cfg(test)]
 mod multi_select_tests;
+
+#[cfg(test)]
+mod non_image_tests;

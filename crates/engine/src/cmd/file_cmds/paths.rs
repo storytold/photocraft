@@ -55,6 +55,12 @@ pub fn list_images(dir: &str) -> Result<Vec<String>> {
     list_files(dir, false)
 }
 
+/// Whether `path` names a file the batch commands open as an image: [`list_images`]'s rule, for
+/// a dialog that picks files one by one (Load Files into Stack's Browse…, #14005).
+pub fn is_openable_image(path: &str) -> bool {
+    openable_name(path)
+}
+
 /// Sorted regular files, optionally retaining unsupported names for per-file Batch errors.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn list_files(dir: &str, include_non_images: bool) -> Result<Vec<String>> {
