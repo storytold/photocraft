@@ -6,7 +6,7 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
 
-use photocraft_cms::Profile;
+use craft_cms::Profile;
 use photocraft_doc::{ColorMode, Document};
 use serde_json::{Map, Value, json};
 
@@ -237,10 +237,24 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
     })
 }
 
+/// The first 80 characters of `name`, each control character and each character a file name
+/// can't hold (`< > : " / \ | ? *`) turned into `_`.
+fn file_name_chars(name: &str) -> String {
+    name.chars().take(80).map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect()
+}
+
 fn export_name(name: &str) -> String {
-    let name: String = name.chars().take(80).map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect();
+    let name = file_name_chars(name);
     let name = name.trim().trim_matches('.');
     if name.is_empty() { "layer".into() } else { name.into() }
+}
+
+/// A single layer's export name: like [`export_name`], but boundary spaces and dots stay as the
+/// name holds them; only a name that is empty or nothing but dots and whitespace falls back to
+/// "layer".
+fn layer_export_name(name: &str) -> String {
+    let name = file_name_chars(name);
+    if name.chars().all(|c| c.is_whitespace() || c == '.') { "layer".into() } else { name }
 }
 
 /// The files a multi-layer export writes: the chosen path, then numbered siblings named after
@@ -332,7 +346,7 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
     }
     let mut session = photocraft_engine::Session::new();
     session.add_document(copy, None);
-    if srgb && (doc.mode != ColorMode::Rgb || !source_profile.same_bytes(photocraft_cms::Builtin::Srgb.profile())) {
+    if srgb && (doc.mode != ColorMode::Rgb || !source_profile.same_bytes(craft_cms::Builtin::Srgb.profile())) {
         session.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"})).map_err(|e| e.to_string())?;
     }
     let (w, h) = export_pixels(f64::from(doc.size.width), f64::from(doc.size.height), f, max_side)?;
@@ -482,6 +496,9 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         // Metadata: None drops EXIF and resolution as well as XMP. A missing key keeps them,
         // which is what Export As wrote before the choice existed.
         embed_metadata: metadata != "none",
+        // Export As's JPGs are progressive (SOF2) in the reference application, measured at its
+        // default quality; the scan layout is one setting for the whole dialog.
+        jpeg_format: photocraft_codecs::JpegFormat::Progressive,
         ..Default::default()
     }
 }
@@ -1051,6 +1068,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let doc = source_document(app, f)?;
     let source_profile = effective_source_profile(app, &doc);
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
+    // A layer's name may hold characters a file name can't (#14810): `a/b:c*?` suggests
+    // `a_b_c__`. Unlike the multi-layer export's `export_name`, boundary spaces and dots stay.
+    let stem = if f.get("__layer").and_then(Value::as_u64).is_some() { layer_export_name(&stem) } else { stem };
     let ext = s_fmt(f);
     let suggested = format!("{stem}.{ext}");
     let f = f.clone();
@@ -1184,6 +1204,11 @@ mod tests;
 
 #[cfg(test)]
 mod enter_key_tests;
+
+#[cfg(test)]
+mod jpg_progressive_tests;
+#[cfg(test)]
+mod layer_name_sanitise_tests;
 
 #[cfg(all(test, unix))]
 mod batch_name_tests {
