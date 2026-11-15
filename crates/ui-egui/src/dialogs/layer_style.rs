@@ -651,8 +651,7 @@ fn fields_with_defaults(
         }));
     }
     f.insert("effects".into(), Value::Array(effects));
-    let opening_satins: Vec<_> = layer.effects.items.iter().filter(|e| matches!(e, Effect::Satin(_)))
-        .map(|e| values_of(e, 0.0)).collect();
+    let opening_satins: Vec<_> = layer.effects.items.iter().filter(|e| matches!(e, Effect::Satin(_))).map(|e| values_of(e, 0.0)).collect();
     f.insert("__openingSatins".into(), json!(opening_satins));
     let selected = match select {
         None => effects_of(&f).first().and_then(|e| e.get("id").and_then(Value::as_str)).map(str::to_string).unwrap_or_else(|| "dropShadow".into()),
