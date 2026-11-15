@@ -438,6 +438,31 @@ fn a_move_tool_mask_selection_drag_onto_a_tab_copies_the_mask_and_leaves_layer_p
 }
 
 #[test]
+/// When a floating pixel selection exists, dragging transfers the floating pixels even if the mask is targeted.
+fn a_floating_pixel_selection_transfers_as_pixels_even_when_mask_is_targeted() {
+    let (mut h, _paint) = harness();
+    h.state_mut().session.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    h.state_mut().session.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+    h.state_mut().session.execute("select.float", json!({"dx": 0, "dy": 0})).unwrap();
+    h.state_mut().ui.mask_target = true;
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(2);
+
+    let grab = ViewXform::active(h.state()).unwrap().to_screen(6.0, 11.0);
+    let over_tab = tab(&h, "dest-doc");
+    let drop = h.state().last_canvas_rect.center();
+    drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
+
+    let (_, r) = copy(&h);
+    assert_eq!(r.size(), vec2(5.0, 10.0), "only the 5x10 selected pixel region is copied");
+    let st = h.state().session.active().unwrap();
+    let dst_layer = st.active_layer.and_then(|id| st.doc.layer(id)).unwrap();
+    let mut sample = [0.0f32; 4];
+    dst_layer.surface().unwrap().read_pixel(r.min.x as i32 + 1, r.min.y as i32 + 1, &mut sample);
+    assert!(sample[0] > 0.9 && sample[1] < 0.1, "transferred red pixel content: {sample:?}");
+}
+
+#[test]
 /// In Arrange views, dragging a selection into the neighbouring cell transfers it there directly.
 fn a_move_tool_selection_drag_in_arranged_view_transfers_directly_to_neighbour_cell() {
     let (mut h, paint) = harness();

@@ -58,8 +58,9 @@ fn begin(app: &PhotocraftApp, ctx: &egui::Context, id: LayerId, grab: Option<[f6
     // exactly one raster layer.
     let selection_only = grab.is_some() && layers.len() == 1 && st.doc.selection.is_some();
     // A mask target travels as the mask, not as the layer's pixels: the mask's own selection
-    // is what the pointer grabbed.
-    let mask = selection_only && st.floating.as_ref().is_some_and(|f| f.parts.is_mask()) || selection_only && app.layer_mask_targeted();
+    // is what the pointer grabbed. When a floating piece exists, its kind decides whether pixels
+    // or mask content are being transferred.
+    let mask = selection_only && st.floating.as_ref().map_or_else(|| app.layer_mask_targeted(), |f| f.parts.is_mask());
     let t = Transfer { source: st.doc.id, layers: layers.iter().map(|l| l.0).collect(), grab, label, selection_only, mask, viewport: ctx.viewport_id() };
     ctx.data_mut(|d| d.insert_temp(key(), t));
     true

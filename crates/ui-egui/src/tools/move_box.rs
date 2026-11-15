@@ -30,6 +30,7 @@ pub(crate) struct LayerBox {
 /// Temporary Move keeps ordinary lock filtering. Marquees clear the press's snapping and ⇧/⌥ state.
 pub(crate) fn begin(app: &mut PhotocraftApp, p: [f64; 2], add: bool, move_auto_select: bool, clear_on_empty: bool) {
     app.layer_box = Some(LayerBox { start: p, end: p, add, grabbed_layer: None, move_auto_select, clear_on_empty });
+    app.move_viewport = app.current_viewport;
     app.prefs_rt.snap = None;
     app.prefs_rt.snap_lines.clear();
     app.move_mods = Default::default();
@@ -238,5 +239,14 @@ mod tests {
         assert!(app.ui.dialogs.iter().all(|d| d.kind != crate::state::DialogKind::Error), "no lock dialog");
         assert!(app.layer_box.is_none());
         assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint]);
+    }
+
+    #[test]
+    fn begin_records_current_viewport_as_marquee_owner() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.current_viewport = Some(egui::ViewportId::from_hash_of("secondary-window"));
+        app.move_viewport = None;
+        super::begin(&mut app, [10.0, 10.0], false, true, false);
+        assert_eq!(app.move_viewport, Some(egui::ViewportId::from_hash_of("secondary-window")));
     }
 }

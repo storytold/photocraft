@@ -836,6 +836,30 @@ fn a_floating_piece_must_match_the_requested_target() {
 }
 
 #[test]
+/// Cutting a selection from another layer while a layer has a floating selection is rejected,
+/// so it cannot discard or corrupt the floating move.
+fn cutting_another_layer_while_floating_selection_exists_is_rejected() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    let _other = LayerId(s.execute("layer.new.layer", json!({"name": "other"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    s.execute("select.float", json!({"dx": 2, "dy": 0})).unwrap();
+    assert!(s.documents()[0].floating.is_some());
+
+    let before = doc(&s, 0).clone();
+    let err = s.execute("layer.copyToDocument", json!({
+        "document": 1,
+        "layers": [paint.0],
+        "selection": true,
+        "cut": true,
+    })).unwrap_err();
+    assert!(err.to_string().contains("floating selection"), "{err}");
+    assert_eq!(*doc(&s, 0), before, "source document and selection remain untouched");
+    assert!(s.documents()[0].floating.is_some(), "floating selection remains intact");
+    assert_eq!(doc(&s, 1).layers.len(), 1, "destination remains untouched");
+}
+
+#[test]
 /// A destination edit failure during a cut restores the pre-cut source without rolling back an
 /// earlier coalesced edit.
 fn failed_destination_insert_during_cut_restores_source_and_preserves_coalesced_history() {

@@ -263,6 +263,9 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     if cut && !selection {
         return Err(bad("`cut` requires `selection: true`"));
     }
+    if cut && floating.as_ref().is_some_and(|f| !ids.contains(&f.layer)) {
+        return Err(bad("cannot cut a selection while another layer has a floating selection"));
+    }
     let mask_target = selection && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Mask;
     for (doc, role) in [(&sdoc, "source"), (&ddoc, "destination")] {
         if !layered(doc.mode) {
