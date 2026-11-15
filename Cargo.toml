@@ -42,12 +42,11 @@ photocraft-engine = { path = "crates/engine" }
 photocraft-ui-egui = { path = "crates/ui-egui" }
 photocraft-testkit = { path = "crates/testkit" }
 photocraft-tablet = { path = "crates/tablet" }
-photocraft-ipp = { path = "crates/ipp" }
 
 # external
 # ICC colour management: the shared crate (replaces crates/cms; craft-libs#779).
 craft-cms = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "4c36677fa144f4829fd536076c2381fc9bc5f250" }
 # HEIC/HEIF: the shared decoder (replaces crates/heif; craft-libs#784).
 craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3", features = ["raster", "write-raster"] }

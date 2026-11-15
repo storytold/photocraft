@@ -1,3 +1,7 @@
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+#[path = "tests/ipp_fixture.rs"]
+mod ipp_fixture;
+
 use super::*;
 use photocraft_doc::{Knot, NamedPath, Path, Subpath};
 
@@ -1099,17 +1103,17 @@ fn lp_takes_the_job_only_when_cups_lists_a_printer_and_picks_the_only_one() {
     assert_eq!(lp_route(&asked, &[]).and_then(|j| j.printer), Some("Lab".into()));
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
 mod cups {
-    use super::*;
-    use photocraft_ipp::{
-        Attribute, OP_CUPS_GET_CLASSES, OP_CUPS_GET_DEFAULT, OP_CUPS_GET_PRINTERS, OP_PRINT_JOB, Printer, Request, TAG_JOB_GROUP, TAG_NAME, TAG_PRINTER_GROUP,
+    use super::ipp_fixture::{
+        Attribute, OP_CUPS_GET_CLASSES, OP_CUPS_GET_DEFAULT, OP_CUPS_GET_PRINTERS, OP_PRINT_JOB, Request, TAG_JOB_GROUP, TAG_NAME, TAG_PRINTER_GROUP,
     };
+    use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::sync::mpsc;
 
-    fn printer(name: &str, is_default: bool) -> Printer {
-        Printer { name: name.into(), info: String::new(), state: 3, accepting_jobs: true, is_default, is_class: false }
+    fn printer(name: &str, is_default: bool) -> craft_print::cups::Queue {
+        craft_print::cups::Queue { name: name.into(), info: String::new(), state: 3, accepting_jobs: true, is_default, is_class: false }
     }
 
     #[test]
@@ -1170,12 +1174,13 @@ mod cups {
                 }
                 let mut body = vec![0u8; len];
                 reader.read_exact(&mut body).unwrap();
-                let (op, attrs, doc) = photocraft_ipp::parse_request(&body).unwrap();
+                let (op, attrs, doc) = super::ipp_fixture::parse_request(&body).unwrap();
+                let request_id = u32::from_be_bytes(body[4..8].try_into().unwrap());
                 let list = |names: &[&str]| {
                     if names.is_empty() {
-                        return Request::new(0x0406, 1).end();
+                        return Request::new(0x0406, request_id).end();
                     }
-                    let mut r = Request::new(0, 1);
+                    let mut r = Request::new(0, request_id);
                     for p in names {
                         r.group(TAG_PRINTER_GROUP);
                         r.attr(TAG_NAME, "printer-name", p.as_bytes());
@@ -1187,20 +1192,20 @@ mod cups {
                     OP_CUPS_GET_CLASSES => list(classes),
                     OP_CUPS_GET_DEFAULT => match default {
                         Some(d) => {
-                            let mut r = Request::new(0, 1);
+                            let mut r = Request::new(0, request_id);
                             r.group(TAG_PRINTER_GROUP);
                             r.attr(TAG_NAME, "printer-name", d.as_bytes());
                             r.end()
                         }
-                        None => Request::new(0x0406, 1).end(),
+                        None => Request::new(0x0406, request_id).end(),
                     },
                     OP_PRINT_JOB => {
-                        let mut r = Request::new(0, 1);
+                        let mut r = Request::new(0, request_id);
                         r.group(TAG_JOB_GROUP);
                         r.integer("job-id", 42);
                         r.end()
                     }
-                    _ => Request::new(0x0501, 1).end(),
+                    _ => Request::new(0x0501, request_id).end(),
                 };
                 let _ = tx.send((op, attrs, doc));
                 let mut out = reader.into_inner();

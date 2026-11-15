@@ -1573,7 +1573,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=4c36677fa144f4829fd536076c2381fc9bc5f250#4c36677fa144f4829fd536076c2381fc9bc5f250"
 dependencies = [
  "craft-winprint-gdi",
  "log",
@@ -5590,7 +5590,6 @@ dependencies = [
  "photocraft-format",
  "photocraft-geom",
  "photocraft-io",
- "photocraft-ipp",
  "photocraft-ops",
  "photocraft-paint",
  "photocraft-plugins",
@@ -5710,10 +5709,6 @@ dependencies = [
  "zune-core",
  "zune-jpegxl",
 ]
-
-[[package]]
-name = "photocraft-ipp"
-version = "0.23.1"
 
 [[package]]
 name = "photocraft-ops"
@@ -9515,7 +9510,7 @@ dependencies = [
 [[package]]
 name = "winprint"
 version = "0.2.1"
-source = "git+https://github.com/storytold/winprint.rs?rev=72951d7455ebcab569fbd9386c513d3d9f53fb02#72951d7455ebcab569fbd9386c513d3d9f53fb02"
+source = "git+https://github.com/storytold/winprint.rs?rev=8ae097ef941b432b0e7671b1ec3a506800e65e57#8ae097ef941b432b0e7671b1ec3a506800e65e57"
 dependencies = [
  "flate2",
  "fmt-derive",
