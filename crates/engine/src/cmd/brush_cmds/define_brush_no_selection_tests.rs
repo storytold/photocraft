@@ -87,7 +87,7 @@ fn a_partial_selection_keeps_coverage_alpha_and_canvas_clipping() {
 }
 
 #[test]
-fn no_document_and_non_pixel_active_layers_keep_their_disabled_state() {
+fn no_document_is_disabled_and_a_group_active_capture_uses_visible_pixels() {
     let mut s = Session::new();
     for command in COMMANDS {
         assert!(!s.is_enabled(command));
@@ -96,8 +96,9 @@ fn no_document_and_non_pixel_active_layers_keep_their_disabled_state() {
     s = source(8);
     s.execute("layer.new.group", json!({"name": "Not pixels"})).unwrap();
     for command in COMMANDS {
-        assert!(!s.is_enabled(command));
-        assert!(s.execute(command, json!({"name": "No pixel layer"})).is_err());
+        assert!(s.is_enabled(command));
+        s.execute(command, json!({"name": "Visible pixels"})).unwrap();
+        assert_eq!((tip(&s).width, tip(&s).height), (100, 50));
     }
 }
 
