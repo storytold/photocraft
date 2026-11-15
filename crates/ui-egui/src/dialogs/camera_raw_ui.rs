@@ -1,5 +1,6 @@
 //! Filter › Camera Raw Filter…: a large dialog like Adobe Camera Raw's (preview on the left,
-//! edit panels on the right: Light, Color, Effects, Curve, Color Mixer, Color Grading, Detail).
+//! edit panels on the right in Camera Raw's order: Light, Color, Effects, Curve, Detail, Color
+//! Mixer, Color Grading, Calibration; the tool strip at the far right).
 //!
 //! The preview runs [`photocraft_algo::camera_raw::develop`] on a CPU proxy of the layer
 //! (≤ 900 px, `pixel_scale` keeps pixel radii true to the full image), recomputed when a
@@ -31,16 +32,22 @@ use crate::widgets;
 
 mod controls;
 mod convert;
+mod edit_panel;
 mod filmstrip;
+mod geometry_panel;
+mod masks_panel;
 mod menu;
 mod open;
+mod panels;
 mod proxy;
 mod sidecar;
+mod wb_picker;
 
 pub use controls::show;
 #[cfg(test)]
 use convert::open_pixels;
 pub use filmstrip::HeldRaw;
+pub(crate) use masks_panel::drop_drawing_tool;
 pub use menu::menu;
 #[cfg(test)]
 use open::{Coverage, commit_open_raw, document_index, finish_redevelop, open_raw, replace_raw_document};
@@ -59,7 +66,8 @@ const PROXY_SIDE: usize = 900;
 /// split costs more than the work.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const PARALLEL_MIN_PIXELS: usize = 16 * 1024;
-const PANEL_W: f32 = 330.0;
+/// The Edit column, scroll bar included: Camera Raw 18.6 measures 272 pt at 100 % display scale.
+const PANEL_W: f32 = 272.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
 pub struct CameraRawDialog {
@@ -78,6 +86,11 @@ pub struct CameraRawDialog {
     pub(crate) ph: usize,
     pub(crate) full_w: usize,
     full_h: usize,
+    /// The canvas's part of the proxy when the layer reaches past it ([`convert::canvas_in_proxy`]).
+    canvas_frame: Option<[usize; 4]>,
+    /// The layer has no transparency to show (no alpha, or the Background): what Geometry
+    /// uncovers turns white, as the filter makes it.
+    opaque: bool,
     preview_ppp: f32,
     pub(crate) detail: crate::camera_raw_detail_ui::DetailPreview,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
@@ -90,6 +103,8 @@ pub struct CameraRawDialog {
     before_display_key: Option<u64>,
     pub(crate) before_histogram: RgbHistogram,
     pub(crate) processed: Vec<[f32; 4]>,
+    /// The last develop's pixels as the masks saw them ([`proxy::Unmasked`]): the mask overlay's.
+    pub(crate) unmasked: Option<proxy::Unmasked>,
     pub(crate) lab_transform: std::sync::Arc<craft_cms::Transform>,
     pub(crate) scope_transform: std::sync::Arc<craft_cms::Transform>,
     pub(crate) scope: crate::camera_raw_scope_ui::ScopeView,
@@ -98,7 +113,8 @@ pub struct CameraRawDialog {
     histogram_ms: f64,
     pub(crate) dirty: bool,
     pub show_before: bool,
-    mixer_tab: usize,
+    /// Which Edit panels are open or hidden, the Color Mixer's mode and the Curve channel.
+    panels: panels::PanelState,
     pub render_ms: f64,
     /// Set for the open-time dialog ([`Target::OpenRaw`]).
     raw_open: Option<RawOpen>,
@@ -121,6 +137,8 @@ pub struct CameraRawDialog {
     redo: Vec<CameraRaw>,
     /// Params at pointer-down. One drag is one undo step.
     edit_origin: Option<CameraRaw>,
+    /// Upright's analyses of the full canvas, one per mode ([`proxy::UprightSource`]).
+    upright_done: std::sync::Arc<std::sync::Mutex<Vec<photocraft_algo::camera_raw::geometry::UprightFix>>>,
 }
 
 impl CameraRawDialog {
@@ -164,6 +182,7 @@ impl CameraRawDialog {
         result["hoverSample"] = json!(self.hover_sample(view.vectorscope));
         result["vectorscopeRect"] = json!(self.scope.vectorscope_rect.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
         result["scopeRect"] = json!(self.scope.rect.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
+        result["panels"] = self.panels.describe();
         result
     }
 
@@ -173,7 +192,13 @@ impl CameraRawDialog {
 
     /// Params for the engine: only the settings that differ from the defaults.
     pub fn command_params(&self) -> Value {
-        non_defaults(&self.params)
+        non_defaults(&self.effective_params())
+    }
+
+    /// The settings the preview and OK apply: [`Self::params`] without the panels hidden by
+    /// their eye button.
+    pub(crate) fn effective_params(&self) -> CameraRaw {
+        self.panels.effective(&self.params)
     }
 
     fn image(px: &[[f32; 4]], w: usize, h: usize, display: &photocraft_engine::display_color::CanvasDisplay) -> egui::ColorImage {
@@ -203,14 +228,27 @@ impl CameraRawDialog {
             proxy: self.proxy.clone(),
             selection: self.selection.clone(),
             raw_curve: self.raw_curve.clone(),
-            params: self.params.clone(),
+            params: self.effective_params(),
             float: self.float,
             size: (self.pw, self.ph),
             full_w: self.full_w,
+            canvas_frame: self.canvas_frame,
+            opaque: self.opaque,
             display: self.display.clone(),
             gpu: self.gpu.clone(),
             source_key: self.source_key,
+            upright: self.upright_source(),
         }
+    }
+
+    /// Upright's analysis source for the proxy develops: the full-resolution canvas the filter
+    /// develops. The open-time dialog (a raw being opened) develops its proxy as before.
+    fn upright_source(&self) -> Option<proxy::UprightSource> {
+        if self.raw_curve.is_some() || self.raw_open.is_some() {
+            return None;
+        }
+        let (source, frame) = self.detail.geometry_source();
+        Some(proxy::UprightSource { source: source.clone(), frame, done: self.upright_done.clone() })
     }
 
     fn publish(&mut self, ctx: &egui::Context, frame: ProxyFrame) {
@@ -229,6 +267,7 @@ impl CameraRawDialog {
         self.after_histogram = frame.histogram;
         self.histogram_ms = frame.histogram_ms;
         self.processed = frame.px;
+        self.unmasked = frame.unmasked;
         self.scope.cache = None;
         self.render_ms = frame.ms;
         self.develop_ms = frame.develop_ms;
