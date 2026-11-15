@@ -4644,7 +4644,6 @@ fn public_begin_playback_scopes_registered_actions_but_still_rejects_real_recurs
     finish_playback(&mut s, recording, &driver, 0);
 }
 
-
 #[test]
 fn embedded_open_document_batch_restores_the_callers_namespace_on_every_exit() {
     use crate::actions_cmds::{Action, PlaybackTarget};
@@ -4674,7 +4673,10 @@ fn embedded_open_document_batch_restores_the_callers_namespace_on_every_exit() {
                 let result = result.unwrap();
                 assert_eq!(result["errors"].as_array().unwrap().len(), 1, "the embedded command must actually fail: {result}");
                 let error = result["errors"][0]["error"].as_str().unwrap();
-                assert!(error.contains("layer.renameLayer") && error.contains("missing `name`"), "the registered leaf must execute, not fail command preflight: {error}");
+                assert!(
+                    error.contains("layer.renameLayer") && error.contains("missing `name`"),
+                    "the registered leaf must execute, not fail command preflight: {error}"
+                );
             }
             "no_document" => assert!(matches!(result, Err(EngineError::NoDocument))),
             _ => unreachable!(),
