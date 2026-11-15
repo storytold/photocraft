@@ -110,12 +110,18 @@ fn each_pick_moves_only_its_own_end_point() {
         assert!(master.len() == 2 && close(&master[0], 0.0, 0.0) && close(&master[1], 1.0, 1.0), "the composite stays straight: {master:?}");
     }
 
-    // An end point that was edited by hand keeps its output too.
+    // An end point that was edited by hand keeps its output too, on either side.
     let base = json!({"red": [[10, 40], [255, 255]], "green": [[10, 40], [255, 255]], "blue": [[10, 40], [255, 255]]});
     let white = curves_eyedropper(&base, CurvesEyedropper::White, [WHITE; 3], ColorMode::Rgb).unwrap();
     for curve in channels(&white).1 {
         assert!(close(&curve[0], 10.0 / 255.0, 40.0 / 255.0), "{curve:?}");
         assert!(close(&curve[1], WHITE, 1.0), "{curve:?}");
+    }
+    let base = json!({"red": [[0, 0], [245, 215]], "green": [[0, 0], [245, 215]], "blue": [[0, 0], [245, 215]]});
+    let black = curves_eyedropper(&base, CurvesEyedropper::Black, [BLACK; 3], ColorMode::Rgb).unwrap();
+    for curve in channels(&black).1 {
+        assert!(close(&curve[0], BLACK, 0.0), "{curve:?}");
+        assert!(close(&curve[1], 245.0 / 255.0, 215.0 / 255.0), "{curve:?}");
     }
 }
 
@@ -145,34 +151,65 @@ fn a_first_pick_scales_inner_points_as_before() {
     }
 }
 
-/// After the other end point was moved, inner points are remapped between the kept end point and
-/// the sample (scaling them by the sample would give 54.6 here, and could push one past the black
-/// end point).
+/// A curve's points as `to_params` stores them: hundredths of a 0..255 level.
+fn stored(level: f32) -> f32 {
+    (level * 100.0).round() / 100.0
+}
+
+/// After the other end point was moved, inner points are still scaled as before, and only the
+/// other end point stays where it is.
 #[test]
-fn inner_points_are_remapped_between_the_end_points() {
+fn inner_points_keep_their_old_scaling_after_the_other_end_point_moved() {
     let base = json!({"red": [[0, 0], [40, 60], [255, 255]], "green": [[0, 0], [40, 60], [255, 255]], "blue": [[0, 0], [40, 60], [255, 255]]});
     let adjustment = picks(base, [(CurvesEyedropper::Black, BLACK), (CurvesEyedropper::White, WHITE)]);
-    // After the black pick the inner point sits at 32 + 40 × 223/255, kept to hundredths of a level.
-    let after_black = ((32.0 + 40.0 * 223.0 / 255.0) * 100.0_f32).round() / 100.0;
-    let inner = (32.0 + (after_black - 32.0) * 176.0 / 223.0) / 255.0;
+    // The black pick puts the inner point at 32 + 40 × 223/255, the white pick scales that by 208/255.
+    let inner = stored(32.0 + 40.0 * 223.0 / 255.0) * 208.0 / 255.0 / 255.0;
     for curve in channels(&adjustment).1 {
         assert_eq!(curve.len(), 3, "{curve:?}");
         assert!(close(&curve[0], BLACK, 0.0) && close(&curve[2], WHITE, 1.0), "{curve:?}");
-        assert!(close(&curve[1], inner, 60.0 / 255.0), "the inner point lands at 59.6 and keeps its output: {curve:?}");
+        assert!(close(&curve[1], inner, 60.0 / 255.0), "the inner point lands at 54.6 and keeps its output: {curve:?}");
     }
 }
 
-/// A second pick with the same eyedropper replaces the first: inner points end where a single
-/// pick on the second sample puts them, not scaled twice.
+/// A second pick with the same eyedropper scales the inner points again, as before.
 #[test]
-fn a_repeat_pick_does_not_compound() {
+fn a_repeat_pick_scales_inner_points_again() {
     let base = json!({"red": [[0, 0], [100, 130], [255, 255]], "green": [[0, 0], [100, 130], [255, 255]], "blue": [[0, 0], [100, 130], [255, 255]]});
     let second = 200.0 / 255.0;
     let adjustment = picks(base, [(CurvesEyedropper::White, WHITE), (CurvesEyedropper::White, second)]);
+    let inner = stored(100.0 * 208.0 / 255.0) * second / 255.0;
     for curve in channels(&adjustment).1 {
         assert_eq!(curve.len(), 3, "{curve:?}");
         assert!(close(&curve[0], 0.0, 0.0) && close(&curve[2], second, 1.0), "{curve:?}");
-        assert!(close(&curve[1], 100.0 / 255.0 * second, 130.0 / 255.0), "{curve:?}");
+        assert!(close(&curve[1], inner, 130.0 / 255.0), "{curve:?}");
+    }
+}
+
+/// An inner point that the old scaling would put past the kept end point makes the pick scale
+/// every point, as before, so the points stay in order.
+#[test]
+fn an_inner_point_scaled_past_the_kept_end_point_scales_every_point() {
+    let base = json!({"red": [[32, 0], [35, 60], [255, 255]], "green": [[32, 0], [35, 60], [255, 255]], "blue": [[32, 0], [35, 60], [255, 255]]});
+    let white = curves_eyedropper(&base, CurvesEyedropper::White, [WHITE; 3], ColorMode::Rgb).unwrap();
+    for curve in channels(&white).1 {
+        assert_eq!(curve.len(), 3, "{curve:?}");
+        assert!(close(&curve[0], BLACK * WHITE, 0.0), "{curve:?}");
+        assert!(close(&curve[1], 35.0 / 255.0 * WHITE, 60.0 / 255.0), "{curve:?}");
+        assert!(close(&curve[2], WHITE, 1.0), "{curve:?}");
+    }
+}
+
+/// An inner point that the old scaling would put within half a level of the kept end point would
+/// be merged with it when the curve is stored, so the pick scales every point, as before.
+#[test]
+fn an_inner_point_scaled_onto_the_kept_end_point_scales_every_point() {
+    let base = json!({"red": [[32, 0], [39.5, 60], [255, 255]], "green": [[32, 0], [39.5, 60], [255, 255]], "blue": [[32, 0], [39.5, 60], [255, 255]]});
+    let white = curves_eyedropper(&base, CurvesEyedropper::White, [WHITE; 3], ColorMode::Rgb).unwrap();
+    for curve in channels(&white).1 {
+        assert_eq!(curve.len(), 3, "{curve:?}");
+        assert!(close(&curve[0], BLACK * WHITE, 0.0), "{curve:?}");
+        assert!(close(&curve[1], 39.5 / 255.0 * WHITE, 60.0 / 255.0), "{curve:?}");
+        assert!(close(&curve[2], WHITE, 1.0), "{curve:?}");
     }
 }
 
@@ -194,6 +231,14 @@ fn a_pick_past_the_other_end_point_scales_every_point() {
         assert_eq!(curve.len(), 2, "{curve:?}");
         assert!(close(&curve[0], black, 0.0), "{curve:?}");
         assert!(close(&curve[1], black + white * (1.0 - black), 1.0), "{curve:?}");
+    }
+
+    // A white pick exactly on the black end point counts as past it.
+    let adjustment = picks(json!({}), [(CurvesEyedropper::Black, BLACK), (CurvesEyedropper::White, BLACK)]);
+    for curve in channels(&adjustment).1 {
+        assert_eq!(curve.len(), 2, "{curve:?}");
+        assert!(close(&curve[0], BLACK * BLACK, 0.0), "{curve:?}");
+        assert!(close(&curve[1], BLACK, 1.0), "{curve:?}");
     }
 }
 
