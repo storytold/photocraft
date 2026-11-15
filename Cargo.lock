@@ -1382,7 +1382,7 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=ad8faa1c136ce289e9f132c9137d0cd913bd4ef6#ad8faa1c136ce289e9f132c9137d0cd913bd4ef6"
 dependencies = [
  "craft-ecproj-format",
- "craft-pcraft-format",
+ "craft-pcraft-format 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ad8faa1c136ce289e9f132c9137d0cd913bd4ef6)",
  "craft-vectorcraft-format",
  "flate2",
  "serde",
