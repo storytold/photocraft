@@ -1572,12 +1572,26 @@ fn ai_points(v: f64) -> String {
 /// follows the reference application's layout (#13779): its comments, prolog, setup and
 /// graphics state, the path blocks after `%%Note:`, CR line endings and no break after `%%EOF`.
 pub fn paths_to_ai_titled(doc: &Document, which: &str, active: Option<photocraft_doc::LayerId>, title: Option<&str>) -> Result<(String, usize)> {
+    paths_to_ai_titled_with(doc, which, None, active, title)
+}
+
+/// [`paths_to_ai_for`] with `saved`, when given, naming one saved path exactly: no reserved word, `path:`
+/// prefix or layer name is read, and `which` is ignored. The Export Paths dialog's choices use it, so
+/// they cannot be taken for another path; the plain `which` calls keep their older reading.
+pub fn paths_to_ai_titled_with(
+    doc: &Document,
+    which: &str,
+    saved: Option<&str>,
+    active: Option<photocraft_doc::LayerId>,
+    title: Option<&str>,
+) -> Result<(String, usize)> {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let k = 72.0 / dpi;
     let (w, h) = (f64::from(doc.size.width) * k, f64::from(doc.size.height) * k);
     let layer = active_layer_path(doc, active);
     let mut chosen: Vec<&photocraft_doc::Path> = Vec::new();
     match which {
+        _ if saved.is_some() => chosen.extend(doc.paths.iter().filter(|p| Some(p.name.as_str()) == saved).map(|p| &p.path)),
         "all" => {
             chosen.extend(doc.paths.iter().map(|p| &p.path));
             if let Some(wp) = &doc.work_path {
@@ -1591,15 +1605,13 @@ pub fn paths_to_ai_titled(doc: &Document, which: &str, active: Option<photocraft
         // no such layer path, a saved path named `layer` (an old call) is still found.
         "layer" if layer.is_some() => chosen.extend(layer.as_ref().map(|(_, p)| *p)),
         name => {
-            // `path:<name>` names a saved path explicitly and is read first, so a saved path called
-            // `all` (value `path:all`) is not taken for one called `path:all`, whose own value is
-            // `path:path:all` (#13776). Only when no saved path has the decoded name is the value
-            // read as a plain name, which keeps an old call for a path called `path:...`.
-            if let Some(saved) = name.strip_prefix("path:") {
+            chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| &p.path));
+            // `path:<name>` is a saved path for one named like a reserved value, when no path has the whole
+            // name (#13776). The dialog does not rely on this: it sends `savedPath`.
+            if chosen.is_empty()
+                && let Some(saved) = name.strip_prefix("path:")
+            {
                 chosen.extend(doc.paths.iter().filter(|p| p.name == saved).map(|p| &p.path));
-            }
-            if chosen.is_empty() {
-                chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| &p.path));
             }
             if chosen.is_empty() {
                 chosen.extend(layer.as_ref().filter(|(n, _)| n == name).map(|(_, p)| *p));
@@ -1672,7 +1684,9 @@ fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     let out = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     // The written file's name is its title; the text returned without a file keeps the document's.
     let title = out.map(|path| std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path));
-    let (text, n) = paths_to_ai_titled(&d.doc, which, d.active_layer, title)?;
+    let saved = p.get("savedPath").and_then(Value::as_str);
+    let (text, n) = paths_to_ai_titled_with(&d.doc, which, saved, d.active_layer, title)?;
+    let which = saved.unwrap_or(which);
     // Document Bounds writes the frame alone (#13771); any other choice must match a path.
     if n == 0 && which != "documentBounds" {
         return Err(bad(cmd, format!("no paths match `{which}`")));
@@ -1754,7 +1768,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paths to Illustrator…",
             &["File", "Export"],
             None,
-            r##"{"path":str? (.ai; omit to return the text),"paths":"documentBounds|all|work|layer|path:<saved path name>|<path name>"="all" (layer: the active layer's path; path:<name>: that saved path, read before a path literally named so; documentBounds: the file frame with the canvas as bounding box and no path)} → {path, paths}"##,
+            r##"{"path":str? (.ai; omit to return the text),"paths":"documentBounds|all|work|layer|<path name>"="all","savedPath":"exactly this saved path's name; no reserved word or prefix is read (overrides paths)"? (layer: the active layer's path; a path named like a reserved word or starting path: is reached by savedPath, or by path:<name> when no path has that whole name; documentBounds: the file frame with the canvas as bounding box and no path)} → {path, paths}"##,
             has_document,
             paths_to_illustrator
         ),
