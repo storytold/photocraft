@@ -1587,13 +1587,19 @@ pub fn paths_to_ai_titled(doc: &Document, which: &str, active: Option<photocraft
         }
         "work" => chosen.extend(doc.work_path.iter()),
         "documentBounds" => {}
+        // The active layer's path, by its own selector, whatever a saved path is called (#13774). With
+        // no such layer path, a saved path named `layer` (an old call) is still found.
+        "layer" if layer.is_some() => chosen.extend(layer.as_ref().map(|(_, p)| *p)),
         name => {
-            chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| &p.path));
-            // `path:<name>` is always a saved path, for one named like a reserved value (#13776).
-            if chosen.is_empty()
-                && let Some(saved) = name.strip_prefix("path:")
-            {
+            // `path:<name>` names a saved path explicitly and is read first, so a saved path called
+            // `all` (value `path:all`) is not taken for one called `path:all`, whose own value is
+            // `path:path:all` (#13776). Only when no saved path has the decoded name is the value
+            // read as a plain name, which keeps an old call for a path called `path:...`.
+            if let Some(saved) = name.strip_prefix("path:") {
                 chosen.extend(doc.paths.iter().filter(|p| p.name == saved).map(|p| &p.path));
+            }
+            if chosen.is_empty() {
+                chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| &p.path));
             }
             if chosen.is_empty() {
                 chosen.extend(layer.as_ref().filter(|(n, _)| n == name).map(|(_, p)| *p));
@@ -1748,7 +1754,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paths to Illustrator…",
             &["File", "Export"],
             None,
-            r##"{"path":str? (.ai; omit to return the text),"paths":"documentBounds|all|work|<path name>"="all" (documentBounds: the file frame with the canvas as bounding box and no path)} → {path, paths}"##,
+            r##"{"path":str? (.ai; omit to return the text),"paths":"documentBounds|all|work|layer|path:<saved path name>|<path name>"="all" (layer: the active layer's path; path:<name>: that saved path, read before a path literally named so; documentBounds: the file frame with the canvas as bounding box and no path)} → {path, paths}"##,
             has_document,
             paths_to_illustrator
         ),

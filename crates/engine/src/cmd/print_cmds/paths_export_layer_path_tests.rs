@@ -93,3 +93,53 @@ fn a_layer_path_alone_works_without_saved_or_work_paths() {
     assert!(s.is_enabled("file.export.pathsToIllustrator"));
     assert_eq!(export(&mut s, "all").unwrap().1, 1);
 }
+
+/// CodeRabbit on #15051: saved paths named `all` and `path:all` are told apart. The first one's value
+/// is `path:all`, which selects it, not the one literally called `path:all` (whose value is
+/// `path:path:all`); an old call that names the second one plainly still finds it when no `all` exists.
+#[test]
+fn an_explicit_saved_path_value_is_read_before_a_path_called_like_it() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 300, "height": 200})).unwrap();
+    s.edit("paths", |d, _| {
+        d.resolution_dpi = 72.0;
+        d.paths.push(NamedPath { name: "all".into(), path: Path::new(vec![rect(10.0, 10.0, 50.0, 40.0)]), psd_raw: None });
+        d.paths.push(NamedPath { name: "path:all".into(), path: Path::new(vec![rect(70.0, 10.0, 90.0, 40.0)]), psd_raw: None });
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(first_points(&export(&mut s, "path:all").unwrap().0), [10.0], "the path called all");
+    assert_eq!(first_points(&export(&mut s, "path:path:all").unwrap().0), [70.0], "the path called path:all");
+    assert_eq!(first_points(&export(&mut s, "all").unwrap().0), [10.0, 70.0], "All Paths");
+    // Only `path:all` exists: an old call by that plain name still finds it.
+    s.edit("one", |d, _| {
+        d.paths.remove(0);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(first_points(&export(&mut s, "path:all").unwrap().0), [70.0], "no `all`: read as the plain name");
+}
+
+/// CodeRabbit on #15051: the active layer's path has its own selector, so a saved path with the same
+/// display name is not exported in its place.
+#[test]
+fn the_active_layers_path_has_a_selector_apart_from_a_saved_path_of_its_name() {
+    let mut s = session(true);
+    s.edit("clash", |d, _| {
+        d.paths.push(NamedPath { name: "Rectangle 1 Shape Path".into(), path: Path::new(vec![rect(250.0, 10.0, 280.0, 40.0)]), psd_raw: None });
+        Ok(())
+    })
+    .unwrap();
+    s.execute("shape.create", json!({"kind": "rectangle", "rect": [200, 120, 60, 50]})).unwrap();
+    assert_eq!(first_points(&export(&mut s, "layer").unwrap().0), [200.0], "the layer's path");
+    assert_eq!(first_points(&export(&mut s, "path:Rectangle 1 Shape Path").unwrap().0), [250.0], "the saved path of the same name");
+    // An old call by the name finds the saved path first, as before.
+    assert_eq!(first_points(&export(&mut s, "Rectangle 1 Shape Path").unwrap().0), [250.0]);
+    // A saved path called `layer` is reached by its explicit value; without a layer path, plainly too.
+    s.edit("named layer", |d, _| {
+        d.paths.push(NamedPath { name: "layer".into(), path: Path::new(vec![rect(300.0, 10.0, 320.0, 40.0)]), psd_raw: None });
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(first_points(&export(&mut s, "path:layer").unwrap().0), [300.0]);
+}

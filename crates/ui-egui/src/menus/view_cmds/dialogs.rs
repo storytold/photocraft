@@ -232,7 +232,9 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                                 .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
                                 .unwrap_or_default();
                             if !groups.is_empty() {
-                                crate::widgets::dropdown_wheel_grouped(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0, |v: &String| {
+                                // Literal: the labels are already localised where needed, and a saved path's
+                                // own name must not be translated.
+                                crate::widgets::dropdown_wheel_grouped_literal(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0, |v: &String| {
                                     groups.contains(v)
                                 });
                             } else if action_names {
