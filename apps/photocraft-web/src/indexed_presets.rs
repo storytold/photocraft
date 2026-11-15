@@ -108,6 +108,9 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
     // Version 3 excludes both legacy v2 JSON-pair writers and v2 ATN-Blob writers.
     let req = factory.open_with_u32(DATABASE, 3).map_err(js)?;
     let mut upgrade = Listeners::new();
+    let blocked = Rc::new(Cell::new(false));
+    let noticed = blocked.clone();
+    upgrade.add(&req, "blocked", move |_| noticed.set(true)).map_err(js)?;
     let upgrade_req = req.clone();
     upgrade
         .add(&req, "upgradeneeded", move |_| {
@@ -129,8 +132,22 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
         .map_err(js)?;
     let pending = request(&req);
     match before(&pending.promise, deadline).await {
-        Ok(value) => value.dyn_into().map_err(|_| "invalid preset database".into()),
+        Ok(value) => {
+            let db: IdbDatabase = value.dyn_into().map_err(|_| "invalid preset database")?;
+            let connection = db.clone();
+            let close = Closure::<dyn FnMut(Event)>::new(move |_| connection.close());
+            db.set_onversionchange(Some(close.as_ref().unchecked_ref()));
+            close.forget(); // Connection lifetime is the page lifetime.
+            Ok(db)
+        }
         Err(e) => {
+            let e = if blocked.get() {
+                format!(
+                    "{e}; browser storage upgrade is blocked by another tab. Close other tabs for this site, then reload this tab to enable saving. Reloading discards session-only brushes."
+                )
+            } else {
+                e
+            };
             // An open request cannot be cancelled (another tab may block its upgrade). Keep
             // its handlers alive and close any late connection; never hydrate a live session.
             wasm_bindgen_futures::spawn_local(async move {
