@@ -882,6 +882,20 @@ fn max_side_px(src: f64) -> f64 {
     (src.max(1.0) * MAX_SCALE / 100.0).floor().clamp(1.0, MAX_PX)
 }
 
+/// The largest Scale for a source: 7500 %, or less when the pixel limit ([`MAX_PX`]) is reached first
+/// (5000 % of a 10000 px side is 500000 px). A typed value above it clamps, with the warning, instead
+/// of being dropped.
+fn max_scale(src_w: f64, src_h: f64) -> f64 {
+    let by_pixels = (MAX_PX / src_w.max(src_h).max(1.0) * 100.0 * 1000.0).floor() / 1000.0;
+    by_pixels.clamp(1.0, MAX_SCALE)
+}
+
+/// The smallest side a source side `src` can be exported at: 1 % of it (rounded up), so the scale
+/// the sides imply is never under the 1 % the Scale field shows.
+fn min_side_px(src: f64) -> f64 {
+    (src.max(1.0) / 100.0).ceil().max(1.0)
+}
+
 /// Whether `exact` pixels had to be rounded to a whole number.
 fn rounded(exact: f64) -> bool {
     (exact - exact.round()).abs() > 1e-6
@@ -895,12 +909,13 @@ fn rounded(exact: f64) -> bool {
 /// pixel size.
 fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h: f64) {
     let t = Tokens::get(ui.ctx());
-    let passed = n(f, "scale", 100.0).clamp(1.0, MAX_SCALE);
+    let max_sc = max_scale(src_w, src_h);
+    let passed = n(f, "scale", 100.0).clamp(1.0, max_sc);
     let mut sc = passed as f32;
     let (mut clamped, mut preset) = (false, None);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Scale")).color(t.text_dim));
-        clamped = crate::widgets::value_field_alerting(ui, tl!("Scale"), &mut sc, 1.0..=MAX_SCALE as f32, "%", 70.0).1;
+        clamped = crate::widgets::value_field_alerting(ui, tl!("Scale"), &mut sc, 1.0..=max_sc as f32, "%", 70.0).1;
         ui.menu_button("▾", |ui| {
             for p in SCALE_PRESETS {
                 if ui.button(format!("{p}%")).clicked() {
@@ -917,10 +932,12 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
             ));
         }
     });
-    let sc_r = preset.unwrap_or_else(|| (f64::from(sc) * 1000.0).round() / 1000.0).clamp(1.0, MAX_SCALE);
-    if ((sc_r - passed).abs() > 1e-6 || clamped)
-        && let Ok(size) = resize_from_scale(src_w, src_h, sc_r)
-    {
+    let sc_r = preset.unwrap_or_else(|| (f64::from(sc) * 1000.0).round() / 1000.0).clamp(1.0, max_sc);
+    // An edit of the widget, a preset or a clamp: not the stored scale seen again. A remembered
+    // 200/3 % (from a linked width) is displayed rounded to 66.667 and must not be rewritten as a
+    // scale on an idle frame, which would turn an exact pixel size into a percentage.
+    let edited = preset.is_some() || clamped || (f64::from(sc) - f64::from(passed as f32)).abs() > 1e-9;
+    if edited && let Ok(size) = resize_from_scale(src_w, src_h, sc_r) {
         let inexact = rounded(src_w.max(1.0) * sc_r / 100.0) || rounded(src_h.max(1.0) * sc_r / 100.0);
         write_size(f, size, "scale");
         f.insert("__sizeWarn".into(), json!(clamped || inexact));
@@ -928,13 +945,13 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
     let lock = f.get("lockAspect").and_then(Value::as_bool).unwrap_or(true);
     for edited_width in [true, false] {
         let (key, label, src, other) = if edited_width { ("width", tl!("Width"), src_w, src_h) } else { ("height", tl!("Height"), src_h, src_w) };
-        let max = max_side_px(src);
+        let (min, max) = (min_side_px(src), max_side_px(src));
         let stored = n(f, key, src.max(1.0));
-        let mut v = stored.clamp(1.0, max) as f32;
+        let mut v = stored.clamp(min, max) as f32;
         let mut clamped = false;
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(label).color(t.text_dim));
-            clamped = crate::widgets::value_field_whole_alerting(ui, label, &mut v, 1.0..=max as f32, "px", 70.0).1;
+            clamped = crate::widgets::value_field_whole_alerting(ui, label, &mut v, min as f32..=max as f32, "px", 70.0).1;
         });
         let typed = f64::from(v).round();
         if (typed - stored.round()).abs() <= 0.01 && !clamped {

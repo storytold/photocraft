@@ -37,10 +37,14 @@ fn a_recorded_scale_past_7500_is_an_error_and_older_remembered_sizes_load() {
 }
 
 fn harness() -> Harness<'static, PhotocraftApp> {
-    Harness::builder().with_size(egui::vec2(1100.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
+    harness_sized(200, 150)
+}
+
+fn harness_sized(w: u32, h: u32) -> Harness<'static, PhotocraftApp> {
+    Harness::builder().with_size(egui::vec2(1100.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.session.add_document(Document::with_background("Sizes", Size::new(200, 150), ColorMode::Rgb, SampleType::U8, Color::WHITE), None);
+        app.session.add_document(Document::with_background("Sizes", Size::new(w, h), ColorMode::Rgb, SampleType::U8, Color::WHITE), None);
         app
     })
 }
@@ -103,4 +107,48 @@ fn the_scale_list_offers_the_twelve_presets_in_order() {
     h.get_by_role_and_label(Role::Button, "25%").click();
     h.run_steps(4);
     assert_eq!(state(&h), (50.0, 38.0, 25.0, true), "37.5 px rounds to 38");
+}
+
+/// CodeRabbit on #15032: a scale whose size passes the pixel limit clamps, with the warning, instead
+/// of being dropped (5000 % of 10000 px is 500000 px; the limit is 300000).
+#[test]
+fn a_scale_past_the_pixel_limit_clamps_with_the_warning() {
+    assert_eq!(max_scale(10_000.0, 10_000.0), 3000.0);
+    assert_eq!(max_scale(200.0, 150.0), 7500.0);
+    let mut h = harness_sized(10_000, 10_000);
+    open_dialog(&mut h);
+    type_into(&mut h, "Scale", "5000");
+    assert_eq!(state(&h), (300_000.0, 300_000.0, 3000.0, true));
+}
+
+/// CodeRabbit on #15032: a remembered exact pixel size whose scale shows rounded stays pixels on an
+/// idle frame (30 x 40 with a linked width of 20 is 66.667 %, but exactly 20 px).
+#[test]
+fn an_idle_frame_does_not_turn_a_pixel_size_into_a_scale() {
+    let mut h = harness_sized(30, 40);
+    open_dialog(&mut h);
+    let f = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
+    f.insert("sizing".into(), json!("pixels"));
+    f.insert("width".into(), json!(20.0));
+    f.insert("height".into(), json!(27.0));
+    f.insert("scale".into(), json!(200.0 / 3.0));
+    h.run_steps(8);
+    let f = &h.state().ui.dialogs.last().unwrap().fields;
+    assert_eq!(s(f, "sizing"), "pixels");
+    assert_eq!((n(f, "width", 0.0), n(f, "height", 0.0)), (20.0, 27.0));
+    assert!((n(f, "scale", 0.0) - 200.0 / 3.0).abs() < 1e-9, "the stored scale is untouched: {}", n(f, "scale", 0.0));
+}
+
+/// CodeRabbit on #15032: Width and Height both stop at 1 % of their source side, so a linked 1 px on a
+/// 2000 x 1000 source is 20 x 10 at 1 %, with the warning.
+#[test]
+fn width_and_height_stop_at_one_percent_of_the_source() {
+    assert_eq!((min_side_px(2000.0), min_side_px(1000.0), min_side_px(150.0), min_side_px(1.0)), (20.0, 10.0, 2.0, 1.0));
+    let mut h = harness_sized(2000, 1000);
+    open_dialog(&mut h);
+    type_into(&mut h, "Width", "1");
+    assert_eq!(state(&h), (20.0, 10.0, 1.0, true));
+    type_into(&mut h, "Scale", "50");
+    type_into(&mut h, "Height", "1");
+    assert_eq!(state(&h), (20.0, 10.0, 1.0, true));
 }
