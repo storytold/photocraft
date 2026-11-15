@@ -149,3 +149,18 @@ fn the_active_layers_path_has_a_selector_apart_from_a_saved_path_of_its_name() {
     .unwrap();
     assert_eq!(first_points(&export_saved(&mut s, "layer").unwrap().0), [300.0], "a saved path called layer");
 }
+
+/// CodeRabbit on #15051: a missing saved path called `documentBounds` is an error, not the Document Bounds
+/// frame: the exemption belongs to the `paths` choice only.
+#[test]
+fn a_missing_saved_path_called_document_bounds_is_an_error() {
+    let mut s = session(false);
+    assert!(export_saved(&mut s, "documentBounds").is_err(), "no such saved path");
+    assert!(export(&mut s, "documentBounds").is_ok(), "the Document Bounds choice still writes the frame alone");
+    s.edit("named like the choice", |d, _| {
+        d.paths.push(NamedPath { name: "documentBounds".into(), path: Path::new(vec![rect(5.0, 5.0, 25.0, 25.0)]), psd_raw: None });
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(first_points(&export_saved(&mut s, "documentBounds").unwrap().0), [5.0], "an existing one is found");
+}
