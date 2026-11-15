@@ -81,3 +81,29 @@ fn other_formats_still_skip_the_adjustment_and_keep_its_number() {
     let names: Vec<&str> = files.iter().map(|f| f.rsplit(['/', '\\']).next().unwrap()).collect();
     assert_eq!(names, ["doc_0001_Empty.psd", "doc_0002_Background.psd"]);
 }
+
+#[test]
+fn an_adjustment_whose_mask_hides_part_of_it_is_still_skipped() {
+    // Not measured: a mask that hides something (here made from a selection) keeps today's skip.
+    let dir = tmp("masked");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 50, "height": 80})).unwrap();
+    s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap();
+    let adjustment = s.active().unwrap().doc.layers.last().unwrap().id.0;
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "doc"})).unwrap();
+    assert_eq!(r["skipped"], json!([{"layer": adjustment, "name": "Levels 1", "reason": "adjustment layer has no pixels of its own"}]));
+    assert_eq!(r["files"].as_array().unwrap().len(), 1, "only the Background");
+}
+
+#[test]
+fn an_adjustment_with_a_vector_mask_is_still_skipped() {
+    let dir = tmp("vector-masked");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+    let path = json!({"subpaths": [{"closed": true, "knots": [[0, 0], [50, 0], [50, 80], [0, 80]]}]});
+    s.execute("layer.newAdjustmentLayer.levels", json!({"path": path})).unwrap();
+    let adjustment = s.active().unwrap().doc.layers.last().unwrap().id.0;
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "doc", "format": "jpg"})).unwrap();
+    assert_eq!(r["skipped"], json!([{"layer": adjustment, "name": "Levels 1", "reason": "adjustment layer has no pixels of its own"}]));
+}
