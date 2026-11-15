@@ -1,13 +1,15 @@
 //! Curves points handed to a command as params (#14444), measured against the reference
 //! application: they are sorted by input, two points with the same input keep the later one, and
-//! 2 to 16 points are accepted. Points the engine wrote itself - `curve_arr` at hundredths of a
+//! 2 to 16 points are accepted, and fractions are truncated to whole levels. Points the engine wrote itself - `curve_arr` at hundredths of a
 //! level - keep their params round trip.
 
 use super::*;
 
 /// One curve of a Curves param set, as parsed: `points` (the composite) or a channel key.
 fn curve(params: &Value, key: &str) -> Vec<CurvePoint> {
-    let Adjustment::Curves { master, per_channel, .. } = from_params("curves", params, None, ColorMode::Rgb).unwrap_or_else(|e| panic!("{params}: {e}")) else {
+    let Adjustment::Curves { master, per_channel, .. } =
+        from_command_params("curves", params, None, ColorMode::Rgb).unwrap_or_else(|e| panic!("{params}: {e}"))
+    else {
         panic!("expected a Curves adjustment from {params}")
     };
     match key {
@@ -61,9 +63,9 @@ fn equal_input_points_keep_the_later_one() {
 #[test]
 fn params_take_16_points_and_refuse_17() {
     let at = |n: usize, step: usize| json!({"points": (0..n).map(|k| [k * step, k * step]).collect::<Vec<_>>()});
-    assert!(from_params("curves", &at(16, 16), None, ColorMode::Rgb).is_ok(), "16 points work");
+    assert!(from_command_params("curves", &at(16, 16), None, ColorMode::Rgb).is_ok(), "16 points work");
     for (n, step) in [(17, 14), (18, 14), (19, 13), (20, 13), (64, 4)] {
-        let e = from_params("curves", &at(n, step), None, ColorMode::Rgb).unwrap_err().to_string();
+        let e = from_command_params("curves", &at(n, step), None, ColorMode::Rgb).unwrap_err().to_string();
         assert!(e.contains("2..=16") && !e.contains("19"), "{n} points are refused by a message naming 16: {e}");
     }
     // A curve read from a file or placed by the engine's own edits keeps the wider record limit.
@@ -92,6 +94,41 @@ fn points_the_engine_wrote_keep_their_round_trip() {
     // Two points a fraction of a level apart - only the engine places those - keep their positions.
     let tight = json!({"points": [[0, 0], [100.25, 100.5], [100.85, 120.25], [255, 255]]});
     let a = from_params("curves", &tight, None, ColorMode::Rgb).unwrap();
-    assert_eq!(curve(&tight, "points").len(), 4, "a point closer than a level is not merged");
+    assert!(matches!(&a, Adjustment::Curves { master, .. } if master.len() == 4), "a point closer than a level is not merged");
     assert_eq!(to_params(&from_params("curves", &to_params(&a), None, ColorMode::Rgb).unwrap()), to_params(&a));
+}
+
+#[test]
+fn command_params_truncate_fractions_to_whole_levels() {
+    let whole = json!({"points": [[0, 0], [127, 160], [255, 255]]});
+    let fractional = json!({"points": [[0, 0], [127.5, 160.4], [255, 255]]});
+    assert_eq!(ramps_off(&fractional, &whole), 0, "127.5,160.4 acts as 127,160");
+    assert_eq!(param_ramp(&fractional), param_ramp(&whole), "the whole 256-level ramp is the same");
+    // A channel curve truncates too, and so do two points that land on one level.
+    let channel = json!({"red": [[0, 0], [127.9, 160.9], [255, 255]]});
+    assert_eq!(curve(&channel, "red"), curve(&json!({"red": [[0, 0], [127, 160], [255, 255]]}), "red"));
+    let same_level = json!({"points": [[0, 0], [127.2, 100.7], [127.9, 160.4], [255, 255]]});
+    assert_eq!(curve(&same_level, "points"), curve(&whole, "points"), "both become input 127, the later one wins");
+    // Points given as whole numbers are untouched.
+    assert_eq!(curve(&whole, "points").len(), 3);
+}
+
+#[test]
+fn serialized_curves_keep_17_to_19_points_and_hundredths_through_from_params() {
+    // A curve a file carries may have up to 19 points and an eyedropper anchors at hundredths of a
+    // level; `from_params` is the inverse of `to_params` for both, only a command's own params are
+    // held to 16 points and whole levels.
+    for n in [17usize, 19] {
+        let pts: Vec<[f64; 2]> = (0..n).map(|k| [k as f64 * 13.25, k as f64 * 13.25]).collect();
+        let params = json!({"points": pts});
+        let a = from_params("curves", &params, None, ColorMode::Rgb).unwrap();
+        assert!(matches!(&a, Adjustment::Curves { master, .. } if master.len() == n), "{n} points survive from_params");
+        assert_eq!(from_params("curves", &to_params(&a), None, ColorMode::Rgb).unwrap(), a, "{n} points round-trip");
+        assert!(from_command_params("curves", &params, None, ColorMode::Rgb).is_err(), "but {n} points handed to a command are refused");
+    }
+    let anchored = json!({"points": [[0, 0], [43.35, 33.2], [255, 255]]});
+    let a = from_params("curves", &anchored, None, ColorMode::Rgb).unwrap();
+    let back = to_params(&a);
+    let level = |k: usize, i: usize| back["points"][k][i].as_f64().unwrap_or(f64::NAN);
+    assert!((level(1, 0) - 43.35).abs() < 1e-3 && (level(1, 1) - 33.2).abs() < 1e-3, "hundredths survive: {back}");
 }

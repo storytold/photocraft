@@ -86,6 +86,27 @@ pub fn gray_tone_params(p: &Value) -> Value {
     }
 }
 
+/// [`from_params`] for the params a command was given (a script, an action step or an MCP call): a
+/// Curves point array is first read by the reference's rules ([`CurveSource::Params`]: 2 to 16
+/// points, fractions truncated, the later of two equal inputs wins). Params the engine serialized
+/// itself go through [`from_params`] directly and keep their 17 to 19 points and hundredths.
+pub fn from_command_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: ColorMode) -> Result<Adjustment> {
+    if kind != "curves" {
+        return from_params(kind, p, base, mode);
+    }
+    let Some(obj) = p.as_object() else { return from_params(kind, p, base, mode) };
+    let mut obj = obj.clone();
+    let keys =
+        ["points", "gray"].into_iter().chain([ToneSpace::Rgb, ToneSpace::Cmyk, ToneSpace::Lab].into_iter().flat_map(|s| channel_keys(s).iter().copied()));
+    for key in keys {
+        // A pencil map (numbers) is not a point array and keeps its own reader.
+        let Some(v) = obj.get(key).filter(|v| v.as_array().and_then(|a| a.first()).is_some_and(Value::is_array)) else { continue };
+        let pts = parse_curve(&format!("{kind} adjustment"), key, v, CurveSource::Params)?;
+        obj.insert(key.to_string(), curve_arr(&pts));
+    }
+    from_params(kind, &Value::Object(obj), base, mode)
+}
+
 /// Reads the adjustment of `kind` from `p` over `base` (or the kind's defaults when `base` is
 /// None or of another kind). `mode` picks the Levels/Curves channel space when neither the params
 /// nor the base name one.
@@ -1086,10 +1107,9 @@ pub enum CurveSource {
 }
 
 /// `[[in, out], …]` in 0..255 as a command names them: sorted by input, the later of two points
-/// closer than half a level wins, 2..=16 points ([`CurveSource::Params`]) or 2..=19
-/// ([`CurveSource::Serialized`]). Coordinates keep the level they were given: the reference
-/// truncates fractions, which this parser cannot do while it also reads back what [`curve_arr`]
-/// wrote at hundredths of a level (see the note in the body).
+/// closer than half a level wins, 2..=16 points with fractions truncated to whole levels
+/// ([`CurveSource::Params`]) or 2..=19 points at the precision they were written
+/// ([`CurveSource::Serialized`], which [`curve_arr`] writes at hundredths of a level).
 pub fn parse_curve(cmd: &str, key: &str, v: &Value, source: CurveSource) -> Result<Vec<CurvePoint>> {
     let limit = match source {
         CurveSource::Params => MAX_CURVE_PARAM_POINTS,
@@ -1100,7 +1120,7 @@ pub fn parse_curve(cmd: &str, key: &str, v: &Value, source: CurveSource) -> Resu
     if a.len() < 2 || a.len() > limit {
         return Err(err());
     }
-    let mut given = Vec::with_capacity(a.len());
+    let mut given: Vec<[f64; 2]> = Vec::with_capacity(a.len());
     for q in a {
         let q = q.as_array().filter(|q| q.len() == 2).ok_or_else(err)?;
         // Like Photoshop, a point outside 0..255 is refused rather than moved onto the edge.
@@ -1122,13 +1142,15 @@ pub fn parse_curve(cmd: &str, key: &str, v: &Value, source: CurveSource) -> Resu
         }
         kept
     };
+    // The reference truncates fractional coordinates of what a command is given to whole levels:
+    // `127.5,160.4` acts as `127,160`. Points the engine wrote itself (an eyedropper's anchor sits at
+    // the sampled level, hundredths of a level) keep their precision.
+    if source == CurveSource::Params {
+        for p in &mut given {
+            *p = p.map(f64::trunc);
+        }
+    }
     let given = collapse(given);
-    // The reference also truncates fractional coordinates to whole levels: `127.5,160.4` acts as
-    // `127,160`. That rule cannot land on this parser while `curve_arr` writes the engine's own
-    // curves at hundredths of a level and they are read back through it: an eyedropper's point sits
-    // at the sampled level, and snapping it moves the sample by up to a whole level (the
-    // `adjust_params` round-trip and neutral-gray tests pin the sub-level position). Asked on
-    // #14444; until that is settled the coordinates keep the values they were given.
     let pts = given.iter().map(point).collect::<Vec<_>>();
     if pts.len() < 2 {
         return Err(err());
@@ -1152,7 +1174,10 @@ fn parse_curve_in(cmd: &str, key: &str, v: &Value, pencil: bool) -> Result<Vec<C
         let map = parse_map(cmd, key, v)?;
         Ok(if pencil { map } else { map_to_points(&map) })
     } else {
-        let pts = parse_curve(cmd, key, v, CurveSource::Params)?;
+        // Both what a command names and what the engine serialized arrive here (`from_params` is
+        // also the inverse of `to_params`), so the wide limit and the written precision apply;
+        // [`from_command_params`] holds a command's own params to the reference's rules first.
+        let pts = parse_curve(cmd, key, v, CurveSource::Serialized)?;
         Ok(if pencil { points_to_map(&pts) } else { pts })
     }
 }
