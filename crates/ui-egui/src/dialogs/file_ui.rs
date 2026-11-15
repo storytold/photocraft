@@ -18,7 +18,7 @@ mod print;
 mod web;
 
 pub(crate) use print::print_status;
-pub use print::{RECORD_DONE, open_print, shows_record_done};
+pub use print::{RECORD_DONE, open_print, shows_done};
 #[cfg(test)]
 use print::{drag_print_position, driver_paper_is_wide, print_params, print_preview_image, printer_options, take_turned_page, turn_driver};
 use print::{print_body, print_confirm, record_done};
@@ -209,7 +209,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     if f.contains_key("__web") {
         web_confirm(app, f)
     } else if owns_record_done(f) {
-        // Done while an action records: store the print settings, print nothing (#11655).
+        // Done, recording or not: keep the print settings, print nothing (#11655).
         record_done(app, f)
     } else {
         print_confirm(app, f)

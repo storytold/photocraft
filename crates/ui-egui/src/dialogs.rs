@@ -544,9 +544,9 @@ fn button_row(
                 fields.insert("choice".into(), json!("new"));
             }
             hit
-        } else if crate::file_ui::shows_record_done(app, fields) {
-            // Photoshop: while an action records, the Print dialog answers with **Done** beside
-            // Print: it keeps the settings as the action's step and closes without printing
+        } else if crate::file_ui::shows_done(fields) {
+            // Photoshop's Print dialog always answers Cancel, Done, Print: Done keeps the settings
+            // and closes without printing, and while an action records that click is the step
             // (#11655). Print stays the default, so Enter still prints as before.
             let done = DialogButton::new(ButtonRole::Alternate, tl!("Done"), 84.0);
             let hit = dialog_buttons(ui, &[ok, done, cancel]);

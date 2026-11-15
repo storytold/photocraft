@@ -1,5 +1,6 @@
-//! #11655: while an action records, the Print dialog answers with **Done** beside Print: it keeps
-//! the chosen settings as the action's step, closes, and prints nothing. Print One Copy sends them.
+//! #11655: the Print dialog answers Cancel, Done and Print at all times; Done keeps the chosen
+//! settings, closes, and prints nothing, and while an action records it is the action's step. Print
+//! One Copy sends them.
 //! Driven through the real dialog chrome, as `custom_print_paper.rs` does.
 use egui::vec2;
 use egui_kittest::{Harness, kittest::Queryable};
@@ -56,21 +57,22 @@ fn run(h: &mut Harness<'_, PhotocraftApp>, id: &str, params: Value) -> Value {
     h.state_mut().session.execute(id, params).unwrap_or_else(|e| panic!("{id}: {e}"))
 }
 
-/// Photoshop shows Done only while an action is recording; PhotoCraft follows it, and Print stays
-/// the dialog's default answer either way.
+/// The reference application's button row is Cancel, Done and Print at all times, recording or not;
+/// Print stays the dialog's default answer.
 #[test]
-fn done_shows_while_an_action_records_and_not_otherwise() {
+fn done_is_always_beside_print_and_cancel() {
     let (app, id) = app();
     let mut h = harness(app);
     assert!(shown(&h, "Print"), "Print is the dialog's answer");
-    assert!(!shown(&h, "Done"), "no Done with nothing recording");
+    assert!(shown(&h, "Cancel"), "and Cancel is there");
+    assert!(shown(&h, "Done"), "Done is there with nothing recording");
     h.state_mut().session.execute("actions.record", json!({"name": "Print setup"})).expect("record");
     h.run_steps(3);
-    assert!(shown(&h, "Done"), "Done appears while an action records");
+    assert!(shown(&h, "Done"), "Done is there while an action records");
     assert!(shown(&h, "Print"), "and Print is still there beside it");
     h.state_mut().session.execute("actions.stop", json!({})).expect("stop");
     h.run_steps(3);
-    assert!(!shown(&h, "Done"), "and goes when the recording stops");
+    assert!(shown(&h, "Done"), "and stays when the recording stops");
     assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "the dialog stays open throughout");
     // A dialog an agent confirms still prints: the Done answer is a marker it may not add.
     assert!(photocraft_ui_egui::dialogs::is_route_marker("__recordPrintSettings"), "Done is a route marker");
@@ -116,6 +118,28 @@ fn done_keeps_the_settings_as_a_step_and_prints_nothing() {
         (json!([want.paper.0, want.paper.1]), json!(150.0), json!(1)),
         "Print One Copy repeats the recorded settings, one copy"
     );
+}
+
+/// Done with no action recording still closes the dialog and keeps the chosen settings, without
+/// printing, recording or touching the document: Print opens with them again and Print One Copy
+/// sends them.
+#[test]
+fn done_without_recording_keeps_the_settings_and_prints_nothing() {
+    let (app, id) = app();
+    let mut h = harness(app);
+    assert!(h.state().session.actions.recording.is_none(), "nothing is recording");
+    set_fields(&mut h, id, json!({"paper": "a4", "scale": 150, "copies": 2}));
+    let (revision, steps) = (h.state().session.active().unwrap().revision, h.state().session.active().unwrap().history.past_len());
+    click(&mut h, "Done");
+    assert!(h.state().ui.dialogs.is_empty(), "Done closes the dialog");
+    let kept = h.state().session.file_menu.last_print.clone().expect("Done kept the settings");
+    assert_eq!((kept["paper"].clone(), kept["scale"].clone(), kept["copies"].clone()), (json!("a4"), json!(150.0), json!(2.0)));
+    assert!(h.state().session.jobs().is_empty(), "nothing was spooled");
+    assert_eq!(h.state().session.active().unwrap().revision, revision, "the document is unchanged");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "and Done adds no history step");
+    assert!(h.state().session.actions.list.is_empty(), "no action was created");
+    let one = run(&mut h, "file.printOneCopy", json!({"dryRun": true}));
+    assert_eq!((one["scale"].clone(), one["copies"].clone()), (json!(150.0), json!(1)), "Print One Copy sends the kept settings, one copy");
 }
 
 /// Cancel records nothing: the settings the user was looking at stay in the dialog, not the action.

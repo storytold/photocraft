@@ -1,6 +1,6 @@
 //! File › Print…, Print One Copy, File › Package… and File › Export › Paths to Illustrator….
-//! `file.printSettings` stores what the Print dialog's Done button chose while an action recorded
-//! (#11655): the settings of `file.print` without a print.
+//! `file.printSettings` stores what the Print dialog's Done button chose, recorded as an action
+//! step while one records (#11655): the settings of `file.print` without a print.
 //!
 //! Printing renders the flattened document into a PDF page (paper size, orientation, position,
 //! scale, colour handling with printer profile / intent / black-point compensation, corner and
@@ -1302,8 +1302,9 @@ fn check_print_settings(doc: &Document, p: &Value, cmd: &str) -> Result<(PrintLa
     Ok((layout(doc, p, cmd)?, copies))
 }
 
-/// Photoshop's Print dialog answers with **Done** while an action is recording: the settings the
-/// user chose become a step and the dialog closes without printing (#11655). They go to the same
+/// Photoshop's Print dialog always answers with **Done** beside Print: the settings the user chose
+/// are kept and the dialog closes without printing, and while an action records the same click
+/// becomes a step (#11655). They go to the same
 /// store a print leaves behind, so Print opens with them again and Print One Copy is what sends
 /// the job. Nothing here touches a printer, a file or the document, so the step also replays
 /// headless, and no history step: the document is unchanged.
