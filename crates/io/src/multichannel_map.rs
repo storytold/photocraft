@@ -189,7 +189,7 @@ pub(crate) fn layerless_file(
     if let Some(e) = &doc.metadata.exif {
         resources.push(ImageResource::new(
             ids::EXIF,
-            photocraft_codecs::exif_with_pixel_size(&photocraft_codecs::export_exif(e, ppi), (doc.size.width, doc.size.height)).into_owned(),
+            craft_metadata::edit::exif_with_pixel_size(&photocraft_codecs::export_exif(e, ppi), (doc.size.width, doc.size.height)).into_owned(),
         ));
     }
     // Every other imported resource (print settings, IPTC, the layer-id seed, ...), except the

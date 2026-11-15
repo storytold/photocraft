@@ -174,7 +174,7 @@ fn export_supported_document(
     if let Some(e) = &doc.metadata.exif {
         resources.push(ImageResource::new(
             ids::EXIF,
-            photocraft_codecs::exif_with_pixel_size(&photocraft_codecs::export_exif(e, ppi), (doc.size.width, doc.size.height)).into_owned(),
+            craft_metadata::edit::exif_with_pixel_size(&photocraft_codecs::export_exif(e, ppi), (doc.size.width, doc.size.height)).into_owned(),
         ));
     }
     let mut global_blocks = Vec::new();
