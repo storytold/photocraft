@@ -776,6 +776,12 @@ pub fn straighten_angle(r: &Ruler) -> f64 {
     a - 90.0 * (a / 90.0).round()
 }
 
+/// Is `sel` a plain rectangle: the pixels inside its bounds all fully selected?
+fn plain_rectangle(sel: &photocraft_raster::Surface) -> bool {
+    let bounds = sel.content_bounds();
+    !bounds.is_empty() && sel.read_region(bounds).iter().all(|v| *v >= 0.999)
+}
+
 fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
     let d = doc(s)?;
     let r = d.measurement.ruler.ok_or_else(|| EngineError::Other("no ruler line".into()))?;
@@ -815,7 +821,9 @@ fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
             let m = [cs, sn, -sn, cs, cx - (cs * cx - sn * cy), cy - (sn * cx + cs * cy)];
             // The whole layer turns even with a selection, which comes back as it was (#11993): the
             // reference saves it, deselects, transforms and loads it again, all one step here.
-            let saved = doc(s)?.selection.clone();
+            // Only a plain rectangle (every pixel fully selected) is the measured case; an elliptical or
+            // feathered selection keeps today's behaviour (only its pixels turn).
+            let saved = doc(s)?.selection.clone().filter(plain_rectangle);
             if saved.is_some() {
                 s.edit("Deselect", |doc, _| {
                     doc.selection = None;

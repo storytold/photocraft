@@ -81,3 +81,26 @@ fn no_channel_is_left_behind() {
     s.execute(CMD, json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.channels.len(), channels);
 }
+
+/// CodeRabbit on #14986: only a plain rectangle (every pixel fully selected) gets the whole-layer
+/// turn. An elliptical or feathered selection was not measured and keeps today's behaviour: only the
+/// selected pixels turn.
+#[test]
+fn an_elliptical_or_feathered_selection_keeps_turning_only_its_pixels() {
+    for kind in ["ellipse", "feathered"] {
+        let (mut s, l) = session();
+        match kind {
+            "ellipse" => {
+                s.execute("select.rect", json!({"x": 150, "y": 150, "width": 50, "height": 50, "ellipse": true})).unwrap();
+            }
+            _ => {
+                select_square(&mut s);
+                s.execute("select.modify.feather", json!({"radius": 8})).unwrap();
+            }
+        }
+        s.execute(CMD, json!({})).unwrap();
+        let (mut plain, pl) = session();
+        plain.execute(CMD, json!({})).unwrap();
+        assert!(layer(&s, l) != layer(&plain, pl), "{kind}: not the whole-layer turn a plain rectangle gets");
+    }
+}
