@@ -1573,6 +1573,12 @@ pub fn paths_to_ai_for(doc: &Document, which: &str, active: Option<photocraft_do
         "documentBounds" => {}
         name => {
             chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| &p.path));
+            // `path:<name>` is always a saved path, for one named like a reserved value (#13776).
+            if chosen.is_empty()
+                && let Some(saved) = name.strip_prefix("path:")
+            {
+                chosen.extend(doc.paths.iter().filter(|p| p.name == saved).map(|p| &p.path));
+            }
             if chosen.is_empty() {
                 chosen.extend(layer.as_ref().filter(|(n, _)| n == name).map(|(_, p)| *p));
             }

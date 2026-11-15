@@ -213,10 +213,29 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                             // Action and set names are the user's own text, never catalogue entries.
                             let action_names = matches!(k.as_str(), "action" | "set")
                                 && matches!(f.get("__command").and_then(Value::as_str), Some("file.automate.batch" | "file.automate.createDroplet"));
-                            let opts: Vec<(String, String)> =
-                                opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), if action_names { o.to_string() } else { label(o) })).collect();
+                            // `__choiceLabels` names entries literally (a path's own name); `__choiceGroups`
+                            // lists the entries a separator goes above (#13776).
+                            let named = f.get("__choiceLabels").and_then(|m| m.get(&k));
+                            let opts: Vec<(String, String)> = opts
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(|o| {
+                                    let shown = named.and_then(|m| m.get(o)).and_then(Value::as_str).map(str::to_string);
+                                    (o.to_string(), shown.unwrap_or_else(|| if action_names { o.to_string() } else { label(o) }))
+                                })
+                                .collect();
                             let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
-                            if action_names {
+                            let groups: Vec<String> = f
+                                .get("__choiceGroups")
+                                .and_then(|m| m.get(&k))
+                                .and_then(Value::as_array)
+                                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                                .unwrap_or_default();
+                            if !groups.is_empty() {
+                                crate::widgets::dropdown_wheel_grouped(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0, |v: &String| {
+                                    groups.contains(v)
+                                });
+                            } else if action_names {
                                 crate::widgets::dropdown_literal(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
                             } else {
                                 crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
