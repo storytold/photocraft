@@ -61,7 +61,7 @@ fn png8_writes_indexed_pngs() {
         assert!(f.ends_with(".png"), "{f}");
         assert_eq!(png_color_type(f), 3, "{f} is not indexed");
     }
-    assert!(files[2].ends_with("abfiles-test_0002_Red Board.png"), "{files:?}");
+    assert!(files[2].ends_with("abfiles-testRed-Board.png"), "{files:?}");
     assert_eq!(size_of(&files[2], "png"), (200, 150));
     // Red stays red through the palette.
     let red = photocraft_io::import("x.png", &std::fs::read(&files[2]).unwrap()).unwrap().document;
@@ -81,7 +81,7 @@ fn png24_writes_truecolour_pngs_with_alpha_where_transparent() {
         assert!(matches!(png_color_type(f), 2 | 6), "{f} is not truecolour");
     }
     // The empty board is transparent: the file keeps its alpha.
-    assert!(files[0].ends_with("abfiles-test_0000_Empty Board.png"), "{files:?}");
+    assert!(files[0].ends_with("abfiles-testEmpty-Board.png"), "{files:?}");
     assert_eq!(png_color_type(&files[0]), 6);
     assert_eq!(size_of(&files[1], "png"), (200, 200));
     let _ = std::fs::remove_dir_all(&dir);
