@@ -80,9 +80,9 @@ jobs:
   # Format changes must exercise the Windows-only publication barriers (#8034). macOS is tested
   # only by release.yml. `windows_gpu`: whether those Windows legs run photocraft-gpu's tests, which
   # render on WARP, the CPU Direct3D 12 rasterizer, and took half of the integration leg's test time.
-  # Pull requests run them only when they change the GPU crate, a workspace crate it builds on, or
-  # a file outside the workspace packages other than documentation (scripts/ci-windows-gpu-tests.py,
-  # #15247); the Linux gate runs them on every pull request, and main runs them on Windows too.
+  # Pull requests run them only when they change the GPU crate, a workspace crate it builds on, any
+  # package manifest, or a file outside the workspace packages other than documentation
+  # (scripts/ci-windows-gpu-tests.py, #15247); the Linux gate runs them on every pull request, and main runs them on Windows too.
   platforms:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     timeout-minutes: 10

@@ -46,6 +46,12 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(needs('crates/ui-egui/src/canvas.rs', path))
 
+    def test_any_package_manifest_runs_them(self):
+        # A feature enabled in ui-egui's manifest unifies into the workspace build gpu is tested in.
+        for path in ['crates/ui-egui/Cargo.toml', 'apps/photocraft/Cargo.toml']:
+            with self.subTest(path=path):
+                self.assertTrue(needs(path))
+
     def test_documentation_skips_them(self):
         self.assertFalse(needs('docs/development.md', 'README.md', 'crates/ui-egui/README.md', 'scorecard/ui.toml'))
 

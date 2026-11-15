@@ -7,6 +7,9 @@ legs skip them unless the pull request changes something they are built from:
 
 - photocraft-gpu or a workspace package it depends on (any dependency kind, from `cargo metadata`,
   so a new dependency is covered without editing this file);
+- any package's `Cargo.toml`: `cargo test --workspace` unifies features across the members, so a
+  feature turned on in another member's manifest can change how photocraft-gpu's dependencies are
+  built, and `Cargo.lock` does not record features;
 - any file outside the workspace packages, except the documentation-only paths below. That covers
   the shared build inputs (workspace manifest, lockfile, Cargo and nextest config, this workflow,
   this script) and any input added later.
@@ -63,6 +66,9 @@ def needs_gpu_tests(changed, packages, root):
     # Longest directory first, so a nested package wins over the one around it.
     dirs = sorted(((d, n) for n, d in package_dirs(packages, root).items() if d), key=lambda x: -len(x[0]))
     for path in changed:
+        # Feature unification: any member manifest can change the GPU build (module docstring).
+        if path == 'Cargo.toml' or path.endswith('/Cargo.toml'):
+            return True
         owner = next((n for d, n in dirs if path.startswith(d + '/')), None)
         if owner is not None:
             if owner in inputs:
