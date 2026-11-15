@@ -138,6 +138,11 @@ const FIRST_LEVEL_SPREAD_FV: f64 = 1.5;
 /// moved across (its rows' first point lags) but not the one right of it, where the second point
 /// lags as much (moved-point probes and their mirror images; 0.7 to 0.75 fit both).
 const FIRST_POINT_ROW_WEIGHT: f64 = 0.75;
+/// A fold tip: on a chord shorter than this (document px) whose inner points reach past its end
+/// once and never before its start, the point past the end still counts toward the mean drift
+/// along the chord, held at the end. Crease redraws keep such narrow tips whole where the inside
+/// point alone would cut them (crease probes from 0.07 to 1.24 px; 1.5 and 3 fit alike).
+const FOLD_TIP_CHORD: f64 = 1.5;
 /// The twist of a tall envelope's square cell (its whole net) past which it splits across as well:
 /// sideways Fish and Wave at ±50 match with 2.0 and lose most of their cells' agreement at 1.2.
 const TALL_SQUARE_TWIST_TOL: f64 = 2.0;
@@ -397,6 +402,7 @@ fn need_weighing_first(c: &[P], first_weight: f64) -> f64 {
         let along_of = |p: &P| ((p[0] - a[0]) * tx + (p[1] - a[1]) * ty) / len;
         let first = (1..n).filter_map(|k| c.get(k)).map(along_of).fold(f64::INFINITY, f64::min);
         let last = (1..n).filter_map(|k| c.get(k)).map(along_of).fold(f64::NEG_INFINITY, f64::max);
+        let fold_tip = len < FOLD_TIP_CHORD && first >= 0.0 && (1..n).filter_map(|k| c.get(k)).filter(|p| along_of(p) > 1.0).count() == 1;
         let before_tol = if first > -SHALLOW_BEFORE_REACH { SHALLOW_BEFORE_TOL } else { BEFORE_TOL };
         let after_tol = if last >= 1.0 && last - first < SHARP_FOLD_SPAN {
             (SHARP_FOLD_TOL * last).min(SHARP_FOLD_MAX)
@@ -415,6 +421,10 @@ fn need_weighing_first(c: &[P], first_weight: f64) -> f64 {
                 far = far.max(side.hypot(-along * len) / before_tol);
             } else if along > 1.0 {
                 far = far.max(side.hypot((along - 1.0) * len) / after_tol);
+                if fold_tip {
+                    sum += (1.0 - k as f64 / n as f64) * len;
+                    inside += 1;
+                }
             } else if along >= 0.0 {
                 let drift = (along - k as f64 / n as f64) * len;
                 if k == 1 {
@@ -1402,6 +1412,17 @@ mod tests {
         assert_eq!((n.nu, n.nv), (3, 2));
     }
 
+    /// At a fold tip under 1.5 px (crease redraws), the point past the end is held at the end
+    /// and counts toward the mean: the inside point's 0.59 px drift alone would cut the chord.
+    #[test]
+    fn a_fold_tip_counts_its_point_past_the_end_toward_the_drift() {
+        let l = 0.997;
+        assert!(need(&[[0.0, 0.0], [0.925 * l, 0.0], [1.232 * l, 0.0], [l, 0.0]]) < 1.0);
+        // Not past FOLD_TIP_CHORD: held at the end of a 3 px chord, the second point of this
+        // shallow turn would count a full px of drift and cut what the reference keeps whole.
+        assert!(need(&[[0.0, 0.0], [1.0, 0.0], [3.4, 0.0], [3.0, 0.0]]) < 1.0);
+    }
+
     #[test]
     fn need_tests_sideways_and_along() {
         // Inner points of a straight cubic evenly spaced: nothing to split.
@@ -1414,7 +1435,8 @@ mod tests {
     }
 
     /// A control point outside its chord's span (a row turning back on itself in a crease) counts
-    /// by its distance from that end, not in the mean along the chord.
+    /// by its distance from that end, not in the mean along the chord (except at a fold tip, see
+    /// [`FOLD_TIP_CHORD`]).
     #[test]
     fn need_measures_a_point_past_the_chord_from_that_end() {
         let t = 4.0 / 3.0;
