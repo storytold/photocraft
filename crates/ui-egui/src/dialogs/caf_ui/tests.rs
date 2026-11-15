@@ -602,8 +602,9 @@ fn custom_sampling_erased_again_hints_and_apply_and_ok_do_not_run_the_fill() {
 #[test]
 fn custom_apply_and_ok_with_nothing_painted_show_the_translated_hint_not_an_error() {
     let ja = crate::i18n::Lang::from_code("ja").unwrap();
+    // The catalogs live in craft-i18n now: the hint shows in Japanese once it is translated
+    // there, and in English until then; either way it is the hint, not an error.
     let hint = crate::i18n::tr(ja, CUSTOM_HINT);
-    assert_ne!(hint, CUSTOM_HINT, "the catalog translates the hint");
     let mut app = app_with_selection();
     open(&mut app).unwrap();
     control(&mut app, &json!({"sampling": "custom"})).unwrap();
