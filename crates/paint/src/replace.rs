@@ -8,7 +8,7 @@ use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
 
 use crate::Stroke;
-use crate::retouch::{Footprint, Region, apply_dab_stroke};
+use crate::retouch::{Footprint, Region, StrokeTooLarge, apply_dab_stroke};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,8 +77,14 @@ fn dist(a: &[f32; 4], b: [f32; 3]) -> f32 {
     (a[0] - b[0]).abs().max((a[1] - b[1]).abs()).max((a[2] - b[2]).abs())
 }
 
-/// Replace colours along a stroke. Returns the damaged rectangle.
-pub fn apply_color_replacement(target: &mut Surface, stroke: &Stroke, rs: &ReplaceSettings, selection: Option<&Surface>, lock_transparency: bool) -> Rect {
+/// Replace colours along a stroke. Returns the damaged rectangle, or an error for a stroke too large to run.
+pub fn apply_color_replacement(
+    target: &mut Surface,
+    stroke: &Stroke,
+    rs: &ReplaceSettings,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+) -> Result<Rect, StrokeTooLarge> {
     let effect = color_replacement_effect(target.clone(), rs.clone());
     apply_dab_stroke(target, stroke, selection, lock_transparency, 0, effect)
 }
@@ -273,7 +279,7 @@ mod tests {
         for mode in [ReplaceMode::Hue, ReplaceMode::Saturation, ReplaceMode::Color, ReplaceMode::Luminosity] {
             let mut s = setup(PixelFormat::RGBA32F);
             let rs = ReplaceSettings { mode, sampling: Sampling::Once, limits: Limits::Discontiguous, tolerance: 0.1, color: fg, ..Default::default() };
-            apply_color_replacement(&mut s, &stroke(), &rs, None, false);
+            apply_color_replacement(&mut s, &stroke(), &rs, None, false).unwrap();
             let c = s.rgba(20, 20);
             let green = [0.2, 0.6, 0.2];
             match mode {
@@ -302,12 +308,12 @@ mod tests {
             color: [1.0, 0.0, 0.0, 1.0],
             ..Default::default()
         };
-        apply_color_replacement(&mut s, &stroke(), &rs, None, false);
+        apply_color_replacement(&mut s, &stroke(), &rs, None, false).unwrap();
         assert!(s.rgba(20, 20)[0] > 0.3 && s.rgba(70, 20)[0] > s.rgba(70, 20)[1], "both halves recoloured {:?} {:?}", s.rgba(20, 20), s.rgba(70, 20));
         // Background swatch = white: nothing matches.
         let mut s2 = setup(PixelFormat::RGBA8);
         let rs2 = ReplaceSettings { sampling: Sampling::BackgroundSwatch, background: [1.0; 4], ..rs };
-        apply_color_replacement(&mut s2, &stroke(), &rs2, None, false);
+        apply_color_replacement(&mut s2, &stroke(), &rs2, None, false).unwrap();
         assert_eq!(s2.rgba(20, 20), setup(PixelFormat::RGBA8).rgba(20, 20));
     }
 
@@ -329,7 +335,7 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
                 ..Default::default()
             };
-            apply_color_replacement(&mut t, &st, &rs, None, false);
+            apply_color_replacement(&mut t, &st, &rs, None, false).unwrap();
             let changed = (t.rgba(34, 20)[0] - 0.2).abs() > 0.05;
             assert_eq!(changed, island_changed, "{limits:?}");
             assert!(t.rgba(20, 20)[0] > 0.3);

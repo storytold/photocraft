@@ -268,7 +268,7 @@ pub const AFFINITY: PinnedCorpus = PinnedCorpus {
     },
 };
 /// Photoshop Actions files (`.atn`) from public repositories under permissive licences, the
-/// real-file oracles of `photocraft-psd::atn` and the engine's `.atn` import (2026-10-12).
+/// real-file oracles of `craft-psd::atn` and the engine's `.atn` import (2026-10-12).
 /// https://github.com/sbaril/Photoshop-Scripts (MIT): `Actions/`.
 pub const SBARIL_COMMIT: &str = "622493c9c617c9d2ff38500e8e512c0ad421eed9";
 /// https://github.com/bjango/Bjango-Actions (BSD, `Help/License.md`): three sets at the root.
