@@ -280,19 +280,21 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         let bytes = read_file(path)?;
         docs.push((file_name(path), import_opened(s, &file_name(path), &bytes)?));
     }
-    let first = &docs[0].1;
+    // The last file is the bottom layer and gives the stack its mode, depth, resolution and
+    // profile, as the reference's Load Layers does (#13995).
+    let Some((_, base)) = docs.last() else { return Err(EngineError::BadParams { cmd: cmd.into(), msg: "no files to load".into() }) };
     let w = docs.iter().map(|(_, d)| d.size.width).max().unwrap_or(1);
     let h = docs.iter().map(|(_, d)| d.size.height).max().unwrap_or(1);
     // A new unsaved "Untitled-N" document, like Photoshop's Load Layers, not one named after a file.
     let doc_name = untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
     // The smart object (Create Smart Object) keeps the first file's name.
     let smart_name = stem(&paths[0]);
-    let mut stack = Document::new(doc_name, photocraft_doc::Size::new(w, h), first.mode, first.depth);
-    stack.resolution_dpi = first.resolution_dpi;
-    stack.icc_profile = first.icc_profile.clone();
+    let mut stack = Document::new(doc_name, photocraft_doc::Size::new(w, h), base.mode, base.depth);
+    stack.resolution_dpi = base.resolution_dpi;
+    stack.icc_profile = base.icc_profile.clone();
     let fmt = stack.pixel_format();
-    // First file at the bottom, like Photoshop's script.
-    for (name, d) in &docs {
+    // The first file on top, the last at the bottom (layers are stored bottom first).
+    for (name, d) in docs.iter().rev() {
         stack.layers.push(Layer::new(name.clone(), LayerContent::Raster(flattened_checked(d, fmt, cmd)?)));
     }
     let n = stack.layers.len();

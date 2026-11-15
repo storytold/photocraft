@@ -619,7 +619,8 @@ fn stacked_smart_object_holds_the_loaded_layers_at_its_top_level() {
         let photocraft_doc::SmartSource::Embedded { file_name, bytes } = &so.source else { panic!("not embedded") };
         let inner = crate::smart_cmds::decode_source(file_name, bytes).unwrap();
         let names: Vec<&str> = inner.layers.iter().map(|l| l.name.as_str()).collect();
-        assert_eq!(names, ["img0.png", "img1.png", "img2.png"], "align {align}");
+        // Stored bottom first: the first file is the top layer, as Load Layers stacks them (#13995).
+        assert_eq!(names, ["img2.png", "img1.png", "img0.png"], "align {align}");
         assert_eq!(photocraft_compose::flatten(d).px, source.px, "align {align}");
     }
 }
