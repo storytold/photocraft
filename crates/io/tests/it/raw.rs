@@ -419,21 +419,6 @@ fn nef_uncompressed(cam: &[[f32; 3]], w: usize, h: usize, preview: Option<Vec<u8
 }
 
 fn nef_uncompressed_with_wb(cam: &[[f32; 3]], w: usize, h: usize, preview: Option<Vec<u8>>, wb: Option<[u32; 2]>) -> Vec<u8> {
-    nef_uncompressed_with_metadata(cam, w, h, preview, wb, None)
-}
-
-fn nef_uncompressed_with_as_shot(cam: &[[f32; 3]], w: usize, h: usize, neutral: [(u32, u32); 3]) -> Vec<u8> {
-    nef_uncompressed_with_metadata(cam, w, h, None, None, Some(neutral))
-}
-
-fn nef_uncompressed_with_metadata(
-    cam: &[[f32; 3]],
-    w: usize,
-    h: usize,
-    preview: Option<Vec<u8>>,
-    wb: Option<[u32; 2]>,
-    as_shot_neutral: Option<[(u32, u32); 3]>,
-) -> Vec<u8> {
     let data = mosaic(cam, w, [0, 1, 1, 2], 0, 4095);
     let mut t = TiffBuilder::default();
     let strip = t.blob(data.iter().flat_map(|v| v.to_le_bytes()).collect());
@@ -452,9 +437,6 @@ fn nef_uncompressed_with_metadata(
         (33422, Val::Byte(vec![0, 1, 1, 2])),
     ]);
     let mut ifd0 = vec![(271, Val::Ascii("NIKON CORPORATION".into())), (330, Val::Ifds(vec![raw]))];
-    if let Some(neutral) = as_shot_neutral {
-        ifd0.push((50728, Val::Rational(neutral.to_vec())));
-    }
     if let Some([r, b]) = wb {
         let mut note = TiffBuilder::default();
         let note_ifd = note.ifd(vec![(0x000C, Val::Rational(vec![(r, 1024), (b, 1024), (1, 1), (1, 1)]))]);
@@ -470,6 +452,49 @@ fn nef_uncompressed_with_metadata(
         ifd0.extend([(513, Val::Blobs(vec![b])), (514, Val::Long(vec![len]))]);
     }
     let ifd0 = t.ifd(ifd0);
+    t.chain = vec![ifd0];
+    t.build()
+}
+
+/// A Hasselblad 3FR-shaped CFA file with exact IFD0 AsShotNeutral rationals.
+/// The shared Hasselblad test generator rounds neutral values to 1e-4, while
+/// this regression needs to exercise values immediately around 1e-4.
+fn hasselblad_3fr_with_as_shot(cam: &[[f32; 3]], w: usize, h: usize, neutral: [(u32, u32); 3]) -> Vec<u8> {
+    let data = mosaic(cam, w, [0, 1, 1, 2], 0, 4095);
+    let mut t = TiffBuilder::default();
+    let strip = t.blob(data.iter().flat_map(|&v| v.to_le_bytes()).collect());
+    let raw_ifd = t.ifd(vec![
+        (254, Val::Long(vec![0])),
+        (256, Val::Long(vec![w as u32])),
+        (257, Val::Long(vec![h as u32])),
+        (258, Val::Short(vec![16])),
+        (259, Val::Short(vec![1])),
+        (262, Val::Short(vec![32803])),
+        (273, Val::Blobs(vec![strip])),
+        (277, Val::Short(vec![1])),
+        (278, Val::Long(vec![h as u32])),
+        (279, Val::Long(vec![(data.len() * 2) as u32])),
+        (50714, Val::Rational(vec![(0, 1)])),
+        (50717, Val::Short(vec![4095])),
+    ]);
+    let thumbnail = t.blob(vec![128; 12]);
+    let ifd0 = t.ifd(vec![
+        (254, Val::Long(vec![1])),
+        (256, Val::Long(vec![2])),
+        (257, Val::Long(vec![2])),
+        (258, Val::Short(vec![8, 8, 8])),
+        (259, Val::Short(vec![7])),
+        (262, Val::Short(vec![6])),
+        (271, Val::Ascii("Hasselblad".into())),
+        (272, Val::Ascii("X2D II 100C".into())),
+        (273, Val::Blobs(vec![thumbnail])),
+        (277, Val::Short(vec![3])),
+        (278, Val::Long(vec![2])),
+        (279, Val::Long(vec![12])),
+        (330, Val::Ifds(vec![raw_ifd])),
+        (50708, Val::Ascii("Hasselblad X2D II 100C".into())),
+        (50728, Val::Rational(neutral.to_vec())),
+    ]);
     t.chain = vec![ifd0];
     t.build()
 }
@@ -571,26 +596,39 @@ fn derived_as_shot_balance_falls_back_when_camera_raw_gains_cross_the_neutral_fl
 
     let (w, h) = (48, 32);
     let cam = patches(w, h);
-    let bytes_for = |red_num| nef_uncompressed_with_as_shot(&cam, w, h, [(red_num, 100_000), (100_000, 100_000), (100_000, 100_000)]);
+    let bytes_for = |red_num| hasselblad_3fr_with_as_shot(&cam, w, h, [(red_num, 100_000), (100_000, 100_000), (100_000, 100_000)]);
+    let assert_decoded_balance = |bytes: &[u8], red_num: u32| {
+        let sensor = photocraft_raw::decode(bytes, &photocraft_raw::Limits::default()).unwrap();
+        assert_eq!(sensor.format, photocraft_raw::RawFormat::Fff);
+        let neutral = sensor.color.as_shot_neutral.expect("decoded 3FR AsShotNeutral");
+        assert!((neutral[0] - f64::from(red_num) / 100_000.0).abs() < 1e-12, "{neutral:?}");
+        assert_eq!(&neutral[1..], &[1.0, 1.0]);
+        let camera_wb = sensor.camera_wb.expect("derived camera white balance");
+        assert!((camera_wb[0] - 100_000.0 / f64::from(red_num)).abs() < 1e-8, "{camera_wb:?}");
+        assert_eq!(&camera_wb[1..], &[1.0, 1.0]);
+    };
     let pixels = |result: &photocraft_io::ImportResult| photocraft_io::document_to_image(&result.document, &mut Vec::new()).unwrap().data().to_vec();
 
     let too_small = bytes_for(1);
-    let (small, small_applied) = import_raw_tuned("small.nef", &too_small, &RawTuning::default()).unwrap();
+    assert_decoded_balance(&too_small, 1);
+    let (small, small_applied) = import_raw_tuned("small.3fr", &too_small, &RawTuning::default()).unwrap();
     assert!(!small_applied, "a neutral below the normalizer floor uses the existing grey-world fallback");
     assert!(small.warnings.iter().any(|warning| warning.contains("estimated white balance after tuned as-shot multipliers")), "{:?}", small.warnings);
     assert!(small.warnings.iter().any(|warning| warning.contains("no as-shot white balance") && warning.contains("grey world")), "{:?}", small.warnings);
 
     let just_above = bytes_for(11);
-    let (untuned, untuned_applied) = import_raw_tuned("near.nef", &just_above, &RawTuning::default()).unwrap();
-    let (crossed, crossed_applied) = import_raw_tuned("near.nef", &just_above, &RawTuning { temperature: 100.0, ..Default::default() }).unwrap();
+    assert_decoded_balance(&just_above, 11);
+    let (untuned, untuned_applied) = import_raw_tuned("near.3fr", &just_above, &RawTuning::default()).unwrap();
+    let (crossed, crossed_applied) = import_raw_tuned("near.3fr", &just_above, &RawTuning { temperature: 100.0, ..Default::default() }).unwrap();
     assert!(untuned_applied, "the 1.1e-4 neutral is valid without tuned gains");
     assert!(!crossed_applied, "the 1.35 red gain makes the derived neutral fall below 1e-4");
     assert!(crossed.warnings.iter().any(|warning| warning.contains("as-shot white balance without temperature/tint")), "{:?}", crossed.warnings);
     assert_eq!(pixels(&crossed), pixels(&untuned), "fallback keeps usable AsShotNeutral while omitting only the invalid tuning gains");
 
     let above_gain_floor = bytes_for(14);
-    let (valid, valid_applied) = import_raw_tuned("valid.nef", &above_gain_floor, &RawTuning { temperature: 100.0, ..Default::default() }).unwrap();
-    let (valid_untuned, _) = import_raw_tuned("valid.nef", &above_gain_floor, &RawTuning::default()).unwrap();
+    assert_decoded_balance(&above_gain_floor, 14);
+    let (valid, valid_applied) = import_raw_tuned("valid.3fr", &above_gain_floor, &RawTuning { temperature: 100.0, ..Default::default() }).unwrap();
+    let (valid_untuned, _) = import_raw_tuned("valid.3fr", &above_gain_floor, &RawTuning::default()).unwrap();
     assert!(valid_applied, "1.4e-4 remains above the normalizer floor after the maximum red gain");
     assert!(valid.warnings.iter().any(|warning| warning.contains("temperature +100")), "{:?}", valid.warnings);
     assert_ne!(pixels(&valid), pixels(&valid_untuned), "valid scaled camera white balance remains applied");
