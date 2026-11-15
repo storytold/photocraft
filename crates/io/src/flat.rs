@@ -127,6 +127,9 @@ fn import_flat_impl_with_options(
         }
     };
     apply_flat_format(&mut r, bytes, format, img.as_ref())?;
+    // A palette PNG whose entries share a colour is read again there for its indices (#14342),
+    // a pass that doesn't watch for a cancel: one raised meanwhile still fails the open.
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     Ok(r)
 }
 
@@ -3141,6 +3144,20 @@ mod fused_tile_tests {
         assert!(matches!(r, Err(IoError::Cancelled)));
         let r = import_flat_with("t", broken, &Interrupt::NONE);
         assert!(matches!(&r, Err(e) if !matches!(e, IoError::Cancelled)), "{:?}", r.map(|_| ()));
+    }
+
+    #[test]
+    fn a_cancel_while_a_palette_png_is_read_for_its_indices_fails_the_open() {
+        // Red, white, white: two entries share a colour, so once the pixels are built the open
+        // reads the file again for each pixel's entry (#14342). A cancel raised then still counts.
+        let png = codecs::encode_png_indexed(4, 2, &[0, 1, 2, 2, 0, 1, 2, 2], &[[255, 0, 0], [255, 255, 255], [255, 255, 255]], None, None, None).unwrap();
+        let last = std::sync::Mutex::new(0.0f32);
+        let progress = |f: f32| *last.lock().unwrap() = f;
+        let pixels_built = || *last.lock().unwrap() >= 0.95;
+        let r = import_flat_with("t.png", &png, &Interrupt::new(&pixels_built, &progress));
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        let r = import_flat_with("t.png", &png, &Interrupt::NONE).unwrap();
+        assert!(r.document.color_indices.is_some(), "the file was read for its indices");
     }
 
     #[test]
