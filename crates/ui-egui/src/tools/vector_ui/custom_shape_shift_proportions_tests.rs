@@ -116,7 +116,26 @@ fn other_shape_tools_keep_their_shift_rule() {
     for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star] {
         for mods in [Modifiers::SHIFT, Modifiers::SHIFT | Modifiers::ALT] {
             let own = shape_geometry(&app.ui.tool_options, tool, [400.0, 300.0], [600.0, 400.0], mods);
-            assert_eq!(drag_geometry(&app, tool, [400.0, 300.0], [600.0, 400.0], mods), own, "{tool:?} with {mods:?}");
+            assert_eq!(drag_geometry(&app, tool, [400.0, 300.0], [600.0, 400.0], mods, false), own, "{tool:?} with {mods:?}");
         }
     }
+}
+
+/// ⇧ held at the press with a shape layer active is not measured (the reference application
+/// adds to the layer there), so it keeps the box from before #13464: the tool's own ⇧ rule with
+/// the shape centred in it. ⇧ pressed after the start is proportional as without a shape layer.
+#[test]
+fn shift_at_the_press_with_a_shape_layer_active_keeps_the_previous_box() {
+    let mut app = app();
+    drag(&mut app, [50.0, 50.0], [150.0, 120.0], Modifiers::NONE, Modifiers::NONE);
+    assert!(super::super::options::selected_shape(&app.session).is_some(), "a shape layer is active");
+    let rect = shape_geometry(&app.ui.tool_options, Tool::CustomShape, [400.0, 300.0], [600.0, 400.0], Modifiers::SHIFT).unwrap()["rect"].clone();
+    let rect: [f64; 4] = serde_json::from_value(rect).unwrap();
+    let (x0, y0, x1, y1) = photocraft_engine::presets::shapes::fit(&chosen_shape(&app).unwrap().path, rect, true).control_bounds().unwrap();
+    drag(&mut app, [400.0, 300.0], [600.0, 400.0], Modifiers::SHIFT, Modifiers::SHIFT);
+    assert!(near(bounds(&app), [x0, y0, x1 - x0, y1 - y0]), "{:?}", bounds(&app));
+
+    let a = heart_aspect(&app);
+    drag(&mut app, [400.0, 300.0], [600.0, 400.0], Modifiers::NONE, Modifiers::SHIFT);
+    assert!(near(bounds(&app), [400.0, 300.0, 100.0 * a, 100.0]), "{:?}", bounds(&app));
 }

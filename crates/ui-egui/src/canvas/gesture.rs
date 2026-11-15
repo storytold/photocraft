@@ -118,7 +118,7 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
             && (crate::vector_ui::draws_path(&app.ui.tool_options)
                 || crate::shape_dialog::click_inside_active_rectangle(app, t, d.start)
                 || crate::shape_dialog::open(app, t, d.start).is_some()) => {}
-        t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
+        t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape_pressed(app, t, d.start, [end[0], end[1]], d.live, d.modifiers),
         Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => commit_brush_stroke(app, &d),
@@ -173,7 +173,7 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
                 if made.is_ok() && d.tool != Tool::Lasso {
                     crate::retouch_ui::patch_hint(app);
                 }
-            } else if app.session.is_enabled("select.deselect") {
+            } else if (d.tool != Tool::Lasso || selection_mode(app, d.modifiers) == "replace") && app.session.is_enabled("select.deselect") {
                 let _ = app.run("select.deselect", json!({}));
             }
         }
