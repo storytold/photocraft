@@ -81,7 +81,6 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         return None;
     }
     let dir = default_dir(app);
-    let stem = doc_stem(app);
     Some(Ok(match id {
         "file.export.saveForWebLegacy" => {
             app.session.active()?;
@@ -154,10 +153,12 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
                 name => saved_path_value(name),
             });
             let paths = selected.filter(|s| names.iter().any(|n| n == s)).unwrap_or_else(|| fallback.to_string());
-            let id = form(app, id, "Export Paths to File", json!({"path": format!("{dir}/{stem}.ai"), "paths": paths}), json!({"paths": names}));
+            // Only the Paths choice: OK then asks where to save the `.ai` file (#13778).
+            let id = form(app, id, "Export Paths to File", json!({"paths": paths}), json!({"paths": names}));
             if let Some(d) = id.get("dialog").and_then(Value::as_u64).and_then(|d| app.ui.dialog_mut(d)) {
                 d.fields.insert("__choiceLabels".into(), json!({"paths": labels}));
                 d.fields.insert("__choiceGroups".into(), json!({"paths": groups}));
+                d.fields.insert(PATHS_EXPORT.into(), json!(true));
             }
             id
         }
@@ -215,7 +216,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 
 /// Dialogs whose body and confirm live here.
 pub fn owns(f: &Map<String, Value>) -> bool {
-    f.contains_key("__web") || f.contains_key("__print")
+    f.contains_key("__web") || f.contains_key("__print") || f.contains_key(PATHS_EXPORT)
 }
 
 pub fn dialog_width(f: &Map<String, Value>) -> Option<f32> {
@@ -240,7 +241,10 @@ pub fn ok_label(f: &Map<String, Value>) -> Option<&'static str> {
 
 /// The body of Save for Web or Print (dialog `id`).
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
-    if f.contains_key("__web") {
+    if f.contains_key(PATHS_EXPORT) {
+        // Paths to Illustrator is a plain form; only its OK is ours (#13778).
+        crate::view_cmds::form_body(ui, f);
+    } else if f.contains_key("__web") {
         web_body(app, ui, f);
     } else {
         print_body(app, ui, f, id);
@@ -248,7 +252,36 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 }
 
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    if f.contains_key(PATHS_EXPORT) {
+        return paths_export_confirm(app, f);
+    }
     if f.contains_key("__web") { web_confirm(app, f) } else { print_confirm(app, f) }
+}
+
+#[cfg(test)]
+#[path = "paths_export_save_dialog_tests.rs"]
+mod paths_export_save_dialog_tests;
+
+/// Marks the Paths to Illustrator dialog, whose OK asks for the file (#13778).
+const PATHS_EXPORT: &str = "__pathsExport";
+
+/// Paths to Illustrator's OK: the save dialog for the `.ai` file, suggesting the document name
+/// with its last extension replaced (`My Doc.v2.psd` → `My Doc.v2.ai`). The app's save dialog adds
+/// a missing `.ai`, asks before replacing a file and starts where the last export went; Cancel
+/// writes nothing. The web downloads the file under the chosen name.
+fn paths_export_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    let paths = s(f, "paths", "all");
+    let suggested = format!("{}.ai", doc_stem(app));
+    app.pick_export(&suggested, move |app, path| {
+        if cfg!(target_arch = "wasm32") {
+            let r = app.run("file.export.pathsToIllustrator", json!({"paths": paths}))?;
+            let text = r["ai"].as_str().unwrap_or_default().to_string();
+            let write = app.services.write.as_mut().ok_or("no writer configured")?;
+            write(&path, text.as_bytes())?;
+            return Ok(json!({"path": path, "paths": r["paths"]}));
+        }
+        app.run("file.export.pathsToIllustrator", json!({"paths": paths, "path": path}))
+    })
 }
 
 fn params(f: &Map<String, Value>) -> Value {
