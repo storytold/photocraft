@@ -475,6 +475,8 @@ pub struct UiState {
     /// Character/Paragraph Styles, Glyphs and Check Spelling (see `type_panels_ui`).
     #[serde(default)]
     pub type_panels: crate::type_panels_ui::TypePanelsUi,
+    #[serde(skip)]
+    pub(crate) find_replace: crate::dialogs::find_replace_ui::FindReplaceUi,
     /// Ruler/Count/Note tools, Measurement Log and Notes panels (see `analysis_ui`).
     #[serde(default)]
     pub analysis: crate::analysis_ui::AnalysisUi,
@@ -662,6 +664,7 @@ impl Default for UiState {
             presets_ui: Default::default(),
             web_view: None,
             type_panels: Default::default(),
+            find_replace: Default::default(),
             analysis: Default::default(),
             timeline: Default::default(),
             slices: Default::default(),

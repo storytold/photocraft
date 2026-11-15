@@ -613,7 +613,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     crate::edit_history::track_dialogs(app, ctx);
     let dialogs = app.ui.dialogs.clone();
     let top = dialogs.last().map(|d| d.id);
-    let mut shown = Vec::new();
+    let mut shown: Vec<_> = find_replace_ui::show(app, ctx).into_iter().collect();
     for d in dialogs {
         let lang = if crate::prefs_ui::is_preferences(&d.fields) {
             crate::i18n::Lang::from_pref(d.fields.get("values").and_then(|v| v.pointer("/interface/language")).and_then(Value::as_str).unwrap_or("auto"))
@@ -1361,6 +1361,7 @@ pub mod filter_dialog;
 pub(super) mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod filter_preview_worker;
+pub(crate) mod find_replace_ui;
 mod fit_image_range;
 #[cfg(test)]
 mod fit_image_range_tests;

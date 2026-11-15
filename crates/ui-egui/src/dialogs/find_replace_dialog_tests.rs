@@ -1,0 +1,93 @@
+use super::*;
+use crate::{Services, state::Tool};
+use photocraft_doc::LayerContent;
+use photocraft_engine::Session;
+
+fn app() -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(Session::new(), Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app
+}
+
+fn type_layer(app: &mut PhotocraftApp, text: &str) -> u64 {
+    app.run("type.create", json!({"text": text, "x": 10, "y": 30})).unwrap()["layer"].as_u64().unwrap()
+}
+
+fn text(app: &PhotocraftApp, layer: u64) -> &str {
+    let LayerContent::Text(text) = &app.session.active().unwrap().doc.layer(LayerId(layer)).unwrap().content else { panic!("expected a type layer") };
+    &text.text
+}
+
+#[test]
+fn repeated_search_and_replace_show_the_match_and_restore_the_opening_selection() {
+    let mut app = app();
+    let layer = type_layer(&mut app, "café cat cat");
+    let raster = LayerId(app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let before = app.session.active().unwrap().history.past_len();
+    open(&mut app).unwrap();
+    assert!(command(&mut app, "find").is_err());
+    set_field(&mut app, "find", json!("cat")).unwrap();
+    set_field(&mut app, "replace", json!("dog")).unwrap();
+    assert!(command(&mut app, "change").is_err());
+
+    assert_eq!(command(&mut app, "find").unwrap()["found"]["layer"], layer);
+    let edit = app.ui.text_edit.as_ref().unwrap();
+    assert_eq!((edit.anchor, edit.caret), (5, 8), "the canvas selects character offsets");
+    assert_eq!(app.ui.tool, Tool::Type);
+    assert_eq!(app.session.active().unwrap().history.past_len(), before);
+    assert_eq!(inspect(&app).unwrap()["hasMatch"], true);
+    let reply = command(&mut app, "changeFind").unwrap();
+    assert_eq!(reply["found"]["start"], 10);
+    assert_eq!(text(&app, layer), "café dog cat");
+    assert_eq!(command(&mut app, "change").unwrap()["changed"]["layer"], layer);
+    assert_eq!(inspect(&app).unwrap()["hasMatch"], false);
+    assert_eq!(text(&app, layer), "café dog dog");
+
+    set_field(&mut app, "forward", json!(false)).unwrap();
+    set_field(&mut app, "ignoreAccents", json!(true)).unwrap();
+    command(&mut app, "done").unwrap();
+    assert_eq!(app.session.active().unwrap().active_layer, Some(raster));
+    assert!(app.ui.text_edit.is_none());
+    assert_eq!(text(&app, layer), "café dog dog");
+
+    open(&mut app).unwrap();
+    let fields = inspect(&app).unwrap()["fields"].clone();
+    assert_eq!(fields["find"], "cat");
+    assert_eq!(fields["replace"], "dog");
+    assert_eq!(fields["forward"], false);
+    assert_eq!(fields["ignoreAccents"], true);
+    assert_eq!(inspect(&app).unwrap()["hasMatch"], false);
+}
+
+#[test]
+fn query_and_external_edits_invalidate_the_previous_match() {
+    let mut app = app();
+    let layer = type_layer(&mut app, "Cat cat");
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("cat")).unwrap();
+    command(&mut app, "find").unwrap();
+    set_field(&mut app, "caseSensitive", json!(true)).unwrap();
+    assert!(app.ui.text_edit.is_none());
+    assert!(command(&mut app, "change").is_err());
+    assert_eq!(command(&mut app, "find").unwrap()["found"]["start"], 4);
+    app.run("type.edit", json!({"layer": layer, "text": "different cat"})).unwrap();
+    assert!(command(&mut app, "changeFind").is_err());
+    assert_eq!(text(&app, layer), "different cat");
+}
+
+#[test]
+fn window_cursor_is_independent_of_headless_searches_and_bound_to_its_document() {
+    let mut app = app();
+    let layer = type_layer(&mut app, "cat cat");
+    assert_eq!(app.run(COMMAND, json!({"find": "cat", "action": "find"})).unwrap()["found"]["start"], 0);
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("cat")).unwrap();
+    assert_eq!(command(&mut app, "find").unwrap()["found"]["start"], 0);
+    assert_eq!(app.run(COMMAND, json!({"find": "cat", "action": "find"})).unwrap()["found"]["start"], 4);
+    app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
+    let other = app.session.active().unwrap().doc.id;
+    assert!(command(&mut app, "changeAll").is_err());
+    assert!(inspect(&app).is_none());
+    assert_eq!(app.session.active().unwrap().doc.id, other);
+    assert!(app.session.documents()[0].doc.layer(LayerId(layer)).is_some());
+}

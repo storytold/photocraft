@@ -101,7 +101,9 @@ impl PhotocraftApp {
             crate::dialogs::filter_preview_worker::discard_closed(self);
             if type_tool::in_ui_pass(ctx) {
                 if self.fonts_ready {
-                    shortcuts::handle(self, ctx);
+                    if !dialogs::find_replace_ui::escape(self, ctx) {
+                        shortcuts::handle(self, ctx);
+                    }
                 } else {
                     type_tool::controls_only(self, ctx);
                 }
