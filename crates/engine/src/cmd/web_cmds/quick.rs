@@ -18,6 +18,7 @@ pub(super) fn export_preferences(s: &mut Session, p: &Value) -> Result<Value> {
         ("metadata", "export.metadata"),
         ("convertToSrgb", "export.convertToSrgb"),
         ("pngSmallerFile", "export.pngSmallerFile"),
+        ("exportAsLocation", "export.exportAsLocation"),
     ] {
         if let Some(v) = p.get(k) {
             // Scripts written for the earlier Metadata › All get Copyright and Contact Info (#13788).

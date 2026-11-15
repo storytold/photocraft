@@ -424,11 +424,12 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
 /// space, in that order. Settings added later go below them. A search hides the rows that don't
 /// match and skips a group left empty.
 fn export_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[String], lang: crate::i18n::Lang, query: &str) {
-    const GROUPS: [(&str, &[&str]); 4] = [
+    const GROUPS: [(&str, &[&str]); 5] = [
         ("Quick Export Format", &["quickExportFormat", "pngSmallerFile", "jpegQuality", "webpLossless", "webpQuality"]),
         ("Quick Export Location", &["quickExportLocation"]),
         ("Quick Export Metadata", &["metadata"]),
         ("Quick Export Color Space", &["convertToSrgb"]),
+        ("Export As Location", &["exportAsLocation"]),
     ];
     let shown = |obj: &Map<String, Value>, k: &str| keys.iter().any(|key| key == k) && field_visible("export", obj, k, query);
     for (title, names) in GROUPS {
@@ -439,6 +440,8 @@ fn export_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[String
         pref_group(ui, title, |ui| {
             if title == "Quick Export Location" {
                 export_location_radios(ui, obj);
+            } else if title == "Export As Location" {
+                export_as_location_radios(ui, obj);
             } else {
                 egui::Grid::new(("prefs-grid-export", title)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, "export", obj, rows, lang));
             }
@@ -454,6 +457,15 @@ fn export_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[String
 #[cfg(test)]
 #[path = "export_page_tests.rs"]
 mod export_page_tests;
+
+/// Export › Export As Location as the reference application's two radio buttons (#13799), the
+/// last location by default.
+fn export_as_location_radios(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
+    let mut v = obj.get("exportAsLocation").and_then(Value::as_str).unwrap_or("last").to_string();
+    ui.radio_value(&mut v, "document".to_string(), tl!("Export assets to the location of the current document"));
+    ui.radio_value(&mut v, "last".to_string(), tl!("Export assets to the last location specified"));
+    obj.insert("exportAsLocation".into(), json!(v));
+}
 
 /// Export › Quick Export Location as the reference application's two radio buttons. The stored
 /// values stay `ask` and `sameFolder`.

@@ -1229,7 +1229,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     }
     let suggested = format!("{stem}.{ext}");
     let f = scaled_fields(f, scale_factor(&rows[0].0));
-    app.pick_export(&suggested, move |app, path| {
+    // Export Preferences › Export As Location picks where this dialog starts (#13799).
+    app.pick_export_as(&suggested, move |app, path| {
         let r = write_export(app, &doc, &f, &path, &source_profile)?;
         // An action being recorded keeps a whole-document export with its destination and
         // settings (#7207). A layer's export isn't recorded: its layer is this document's.

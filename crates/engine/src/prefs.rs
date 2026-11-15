@@ -90,6 +90,11 @@ choice!(Ask { Always = "always", Never = "never", Ask = "ask" } default Always);
 choice!(QuickExportFormat { Png = "png", Jpg = "jpg", Gif = "gif", Webp = "webp", Exr = "exr" } default Png);
 choice!(ExportLocation { Ask = "ask", SameFolder = "sameFolder" } default Ask);
 choice!(
+    /// Export Preferences › Export As Location (#13799): where Export As's save dialog starts, in
+    /// the saved document's folder (`document`) or the last export folder (`last`, the default).
+    ExportAsLocation { Document = "document", Last = "last" } default Last
+);
+choice!(
     /// Quick Export › Metadata, as the reference application offers it (#13788): None (the
     /// default) or Copyright and Contact Info (`copyright`). An `all` stored by earlier versions
     /// loads as Copyright and Contact Info.
@@ -663,6 +668,7 @@ pub struct Export {
     pub convert_to_srgb: bool,
     /// PNG › Smaller File (8-bit): Quick Export writes a palette PNG (#13785). Off by default.
     pub png_smaller_file: bool,
+    pub export_as_location: ExportAsLocation,
     /// The folder the last successful export through a save dialog went to (Export As, Quick
     /// Export, Save for Web, ...). The next export dialog starts there; empty until the first
     /// export, and ignored while the folder no longer exists (#10192).
@@ -680,6 +686,7 @@ impl Default for Export {
             metadata: ExportMetadata::None,
             convert_to_srgb: true,
             png_smaller_file: false,
+            export_as_location: ExportAsLocation::Last,
             last_folder: String::new(),
         }
     }

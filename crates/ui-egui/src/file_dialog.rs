@@ -158,6 +158,18 @@ impl PhotocraftApp {
         self.pick_save_in(suggested, true, then)
     }
 
+    /// Export As's save dialog (#13799): as [`Self::pick_export`], but starting in the saved
+    /// document's folder when Export Preferences › Export As Location is the document's, whatever
+    /// was exported last. With the last location, or for an unsaved document, as today.
+    pub(crate) fn pick_export_as(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        let document = self.session.prefs().export.export_as_location == photocraft_engine::prefs::ExportAsLocation::Document;
+        let dir = document.then(|| self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| Path::new(p).parent()).map(Path::to_path_buf)).flatten();
+        match dir.filter(|d| !d.as_os_str().is_empty() && Path::new(suggested).parent().is_some_and(|p| p.as_os_str().is_empty())) {
+            Some(dir) => self.pick_save_in(&dir.join(suggested).to_string_lossy(), true, then),
+            None => self.pick_export(suggested, then),
+        }
+    }
+
     fn pick_save_in(
         &mut self,
         suggested: &str,
@@ -491,6 +503,9 @@ pub(crate) fn fake(answers: Vec<Option<FileDialogAnswer>>) -> (FileDialogFn, std
     (show, asked)
 }
 
+#[cfg(test)]
+#[path = "file_dialog/export_as_location_tests.rs"]
+mod export_as_location_tests;
 #[cfg(test)]
 #[path = "file_dialog/tests.rs"]
 mod tests;
