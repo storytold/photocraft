@@ -10,8 +10,8 @@ Explicit decoder notices preserve calibration and CFA fallback provenance. Non-D
 are not rewritten by the app's separate DNG clipping policy.
 
 The adapter and fixture corrections follow [PhotoCraft #11029](https://github.com/storytold/photocraft/pull/11029).
-`craft-raw` is pinned to an immutable revision of the fixes in
-[craft-libs #1300](https://github.com/storytold/craft-libs/pull/1300), pending their upstream merge.
+The fixes in [craft-libs #1300](https://github.com/storytold/craft-libs/pull/1300) are now merged;
+`craft-raw` uses the shared immutable revision pinned in the workspace manifest.
 
 ```rust
 use photocraft_raw::{develop, DevelopOptions, Demosaic};

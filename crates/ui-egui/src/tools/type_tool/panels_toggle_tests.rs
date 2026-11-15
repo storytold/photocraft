@@ -47,8 +47,7 @@ fn editing(mut app: PhotocraftApp, id: LayerId) -> PhotocraftApp {
 
 /// The options bar in a row, once the app's fonts are set up (the first pass has none).
 fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    // Finish the background font scan before recording button positions. Replacing the
-    // loading placeholder between pointer-down and pointer-up moves the panel button.
+    // Load the fonts first: if they finish mid-test the bar swaps "Loading fonts…" for its menus and a click is lost (#13408).
     let _ = photocraft_text::shared();
     let mut h = Harness::builder().with_size(vec2(1400.0, 200.0)).with_max_steps(16).build_ui_state(
         |ui, app| {

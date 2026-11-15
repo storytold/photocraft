@@ -26,15 +26,11 @@ pub struct Cr2Spec {
 
 impl Cr2Spec {
     pub fn build(&self) -> Vec<u8> {
-        self.build_with_pattern(None)
+        self.build_with_cfa_tag(None)
     }
 
-    /// Write the authoritative CR2CFAPattern tag in the raw IFD.
-    pub fn build_with_cfa_pattern(&self, pattern: u16) -> Vec<u8> {
-        self.build_with_pattern(Some(pattern))
-    }
-
-    fn build_with_pattern(&self, pattern: Option<u16>) -> Vec<u8> {
+    /// Write the raw IFD's Canon CR2CFAPattern tag; absent by default for fallback tests.
+    pub fn build_with_cfa_tag(&self, cfa_tag: Option<u32>) -> Vec<u8> {
         let (w, h) = (self.width, self.height);
         // Slice the sensor data into the JPEG sample order.
         let widths: Vec<usize> = if self.slices.is_empty() { vec![w] } else { self.slices.clone() };
@@ -53,8 +49,8 @@ impl Cr2Spec {
         let mut t = TiffBuilder::default();
         let jb = t.blob(jpeg.clone());
         let mut raw = vec![(259, Val::Short(vec![6])), (273, Val::Blobs(vec![jb])), (279, Val::Long(vec![jpeg.len() as u32]))];
-        if let Some(pattern) = pattern {
-            raw.push((0xc5e0, Val::Short(vec![pattern])));
+        if let Some(code) = cfa_tag {
+            raw.push((0xc5e0, Val::Long(vec![code])));
         }
         if !self.slices.is_empty() {
             let n = widths.len() - 1;
