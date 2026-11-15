@@ -268,7 +268,6 @@ fn binding_changing_actions_drop_the_pending_key() {
     }
 }
 
-<<<<<<< HEAD
 /// CodeRabbit on #14838: a key pressed into a field that is still open when OK is clicked joins the
 /// set as Enter would have put it there. It was dropped, and the old binding saved, without a word.
 #[test]
@@ -291,7 +290,9 @@ fn ok_saves_a_key_still_pending_in_the_open_field() {
         } else {
             assert_eq!(p.shortcuts.get("edit.cut").map(String::as_str), Some(FREE_TEXT), "saved as the main key");
         }
-=======
+    }
+}
+
 fn conflict_offered(h: &Harness<'_, PhotocraftApp>) -> bool {
     h.query_by_role_and_label(egui::accesskit::Role::Button, "Accept and Go to Conflict").is_some()
 }
@@ -330,6 +331,25 @@ fn use_default_and_reset_all_drop_the_conflict_of_a_pending_key() {
         click(&mut h, action);
         assert!(!conflict_offered(&h), "{action}: the conflict went with the pending key");
         assert_ne!(main_key(&h, id, "edit.copy"), json!(""), "{action}: Copy keeps Cmd+C");
->>>>>>> c6c894d8f (Keyboard Shortcuts pending edit: a refused key leaves no conflict; discarding a pending key drops its conflict (CodeRabbit on shortcuts.rs:441, :566))
     }
+}
+
+/// CodeRabbit on #14838: a key still pending when OK is clicked takes precedence over an earlier
+/// edit of the same key on another command: Copy was given FREE and committed, Cut is then given
+/// FREE and not committed; OK saves it for Cut and takes it from Copy, not the other way round.
+#[test]
+fn a_pending_key_wins_over_an_earlier_edit_of_the_same_key_on_ok() {
+    let (mut h, id) = dialog("edit.copy");
+    click_cell(&mut h, "Cmd+C");
+    press(&mut h, FREE.0, FREE.1);
+    press(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(main_key(&h, id, "edit.copy"), json!(FREE_TEXT), "Copy has the key");
+    click_cell(&mut h, "Cmd+X");
+    press(&mut h, FREE.0, FREE.1);
+    assert_eq!(field(&h, id, super::PENDING), json!(FREE_TEXT), "Cut's field holds it, uncommitted");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+    h.run_steps(4);
+    let p = h.state().session.prefs();
+    assert_eq!(p.shortcuts.get("edit.cut").map(String::as_str), Some(FREE_TEXT), "Cut has the key");
+    assert_ne!(p.shortcuts.get("edit.copy").map(String::as_str), Some(FREE_TEXT), "Copy lost it");
 }

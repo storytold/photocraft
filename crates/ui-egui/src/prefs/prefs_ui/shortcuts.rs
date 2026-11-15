@@ -287,6 +287,20 @@ fn change(before: Value, overrides: &BTreeMap<String, String>, alternates: &BTre
     json!({"before": before, "after": keys_of(overrides, alternates, ids), "undone": false})
 }
 
+/// Remembers a committed change for Undo, when the command took the key.
+fn record_change(
+    last_change: &mut Option<Value>,
+    assigned: bool,
+    before: Value,
+    overrides: &BTreeMap<String, String>,
+    alternates: &BTreeMap<String, Vec<String>>,
+    ids: &[String],
+) {
+    if assigned {
+        *last_change = Some(change(before, overrides, alternates, ids));
+    }
+}
+
 /// Is the change still what the bindings show? A change not stamped yet (this frame's) is.
 fn fresh(change: &Value, overrides: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>, set: Option<&Value>) -> bool {
     change.get("state").is_none_or(|s| s.as_u64() == Some(conflict_state(overrides, alternates, "", set)))
@@ -343,15 +357,16 @@ pub(super) fn settle_pending(
     items: &[(String, String, Vec<String>, Option<String>)],
     overrides: &mut BTreeMap<String, String>,
     alternates: &mut BTreeMap<String, Vec<String>>,
-) {
+) -> Option<(String, String, bool)> {
     let open = f.get("capture").and_then(Value::as_bool).unwrap_or(false) && f.get("tab").and_then(Value::as_u64).unwrap_or(0) == 0;
     let (Some(sc), Some(command)) = (f.get(PENDING).and_then(Value::as_str), f.get("selected").and_then(Value::as_str).filter(|c| !c.is_empty())) else {
-        return;
+        return None;
     };
     if !open {
-        return;
+        return None;
     }
-    if f.get("captureAlt").and_then(Value::as_bool).unwrap_or(false) {
+    let alt = f.get("captureAlt").and_then(Value::as_bool).unwrap_or(false);
+    if alt {
         let default = items.iter().find(|i| i.0 == command).and_then(|i| i.3.clone());
         let main = match overrides.get(command) {
             Some(s) if s.is_empty() => None,
@@ -370,6 +385,7 @@ pub(super) fn settle_pending(
     } else {
         overrides.insert(command.to_string(), sc.to_string());
     }
+    Some((command.to_string(), sc.to_string(), alt))
 }
 
 /// A committed key the command couldn't take (it has as many further keys as it may): there is no
@@ -579,9 +595,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             let ids = touched(&selected, conflict.as_ref());
             let before = keys_of(&overrides, &alt_overrides, &ids);
             let assigned = assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
-            if assigned {
-                last_change = Some(change(before, &overrides, &alt_overrides, &ids));
-            }
+            record_change(&mut last_change, assigned, before, &overrides, &alt_overrides, &ids);
             commit_pending(&mut message, &mut message_warning, &mut conflict, assigned, &sc);
         }
         capture = false;
@@ -758,9 +772,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             let ids = touched(row, conflict.as_ref());
             let before = keys_of(&overrides, &alt_overrides, &ids);
             let assigned = assign(&mut overrides, &mut alt_overrides, row, &sc, *alt);
-            if assigned {
-                last_change = Some(change(before, &overrides, &alt_overrides, &ids));
-            }
+            record_change(&mut last_change, assigned, before, &overrides, &alt_overrides, &ids);
             commit_pending(&mut message, &mut message_warning, &mut conflict, assigned, &sc);
         }
         if *row != selected {
@@ -791,9 +803,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                     let ids = touched(&selected, conflict.as_ref());
                     let before = keys_of(&overrides, &alt_overrides, &ids);
                     let assigned = assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
-                    if assigned {
-                        last_change = Some(change(before, &overrides, &alt_overrides, &ids));
-                    }
+                    record_change(&mut last_change, assigned, before, &overrides, &alt_overrides, &ids);
                     commit_pending(&mut message, &mut message_warning, &mut conflict, assigned, &sc);
                 }
                 capture = false;

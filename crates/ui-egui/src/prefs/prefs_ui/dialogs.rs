@@ -356,7 +356,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                 serde_json::from_value(alternates).map_err(|e| format!("alternates must map command IDs to lists of shortcuts: {e}"))?;
             let items = shortcut_items(app);
             // A key pressed into a field still open joins the set first, as Enter would put it.
-            super::shortcuts::settle_pending(f, &items, &mut ov, &mut alt);
+            let pending = super::shortcuts::settle_pending(f, &items, &mut ov, &mut alt);
             // Newly assigned shortcuts are checked first and take theirs from any holder, custom
             // overrides included; unchanged overrides only take theirs from defaults. A
             // command's further keys (#3665) take and lose keys the same way.
@@ -368,7 +368,10 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                 let new = before_alt.get(k) != Some(keys);
                 todo.extend(keys.iter().map(|s| (k.clone(), s.clone(), new, true)));
             }
-            todo.sort_by_key(|(_, _, new, _)| !new);
+            // New assignments first, and the key still pending in the field before the rest: it was
+            // pressed last, so it takes the key from a holder edited earlier in the dialog.
+            let is_pending = |id: &String, sc: &String, alt: bool| pending.as_ref().is_some_and(|p| p.0 == *id && p.1 == *sc && p.2 == alt);
+            todo.sort_by_key(|(id, sc, new, is_alt)| (!new, !is_pending(id, sc, *is_alt)));
             let main_of = |ov: &BTreeMap<String, String>, id: &str, def: Option<&str>| -> Option<String> {
                 match ov.get(id) {
                     Some(s) if s.is_empty() => None,
