@@ -265,8 +265,10 @@ impl FlatBuilder {
 /// tell entries of one colour apart (#14342). `None`, and Color Table falls back to the nearest
 /// entry, when the document's one layer doesn't show each pixel's entry at the file's place for
 /// it (an EXIF orientation turned the pixels, which colours alone can't show when entries repeat,
-/// or a colour conversion changed them), or when the file is interlaced (not read here). One row at a time:
-/// next to the layer, only the indices themselves (a byte per pixel) are held.
+/// or a colour conversion changed them), or when the file is interlaced (not read here). One row
+/// at a time, into tiles one band of rows at a time: next to the layer, only the indices
+/// themselves (a byte per pixel) and one band are held. `None` too when memory can't hold them:
+/// the open's own memory check didn't count them.
 fn png_color_indices(bytes: &[u8], doc: &Document) -> Option<ColorIndices> {
     let table = doc.color_table.as_ref()?;
     // Only entries that share a colour need the file. When every entry has its own colour, each
@@ -290,13 +292,18 @@ fn png_color_indices(bytes: &[u8], doc: &Document) -> Option<ColorIndices> {
         return None;
     }
     let width = usize::try_from(w).ok()?;
-    let count = width.checked_mul(usize::try_from(h).ok()?)?;
-    let mut indices = Vec::new();
-    indices.try_reserve_exact(count).ok()?;
+    let rows = usize::try_from(TILE_SIZE).ok()?;
+    let band_len = width.checked_mul(rows)?;
+    let needed = u64::from(w).checked_mul(u64::from(h))?.checked_add(u64::try_from(band_len).ok()?)?;
+    crate::memory::check_fits(w, h, needed, crate::memory::available()).ok()?;
+    let mut band = Vec::new();
+    band.try_reserve_exact(band_len).ok()?;
+    let mut map = Surface::new(PixelFormat::GRAY8);
     let mut shown = vec![[0u8; 4]; width];
-    let mut y = 0;
+    let (mut y, mut band_y) = (0i32, 0i32);
+    let height = i32::try_from(h).ok()?;
     while let Some(row) = reader.next_row().ok()? {
-        if indices.len() >= count {
+        if y >= height {
             return None;
         }
         surface.read_rgba8_into(Rect::from_xywh(0, y, w, 1), &mut shown);
@@ -309,16 +316,21 @@ fn png_color_indices(bytes: &[u8], doc: &Document) -> Option<ColorIndices> {
             if !ok {
                 return None;
             }
-            indices.push(i);
+            band.push(i);
         }
         y += 1;
+        if band.len() >= band_len || y == height {
+            map.try_write_interleaved(Rect::from_xywh(0, band_y, w, u32::try_from(y - band_y).ok()?), &band).ok()?;
+            band.clear();
+            band_y = y;
+        }
     }
     // An eXIf after the pixels counts too.
     reader.finish().ok()?;
-    if reader.info().exif_metadata.as_deref().is_some_and(|e| codecs::exif_orientation(e) != 1) || indices.len() != count {
+    if reader.info().exif_metadata.as_deref().is_some_and(|e| codecs::exif_orientation(e) != 1) || y != height {
         return None;
     }
-    ColorIndices::new(layer.id, surface, doc.bounds(), &indices)
+    Some(ColorIndices { layer: layer.id, pixels: surface.clone(), indices: map })
 }
 
 /// What every flat format does to the document of its pixels: the palette mode, the save

@@ -245,6 +245,18 @@ fn a_transparent_entry_keeps_its_index() {
 }
 
 #[test]
+fn indices_taller_than_one_band_of_rows_land_in_place() {
+    // Rows past the first band (one tile high) go in with the next one, and the last band is short.
+    let (w, h) = (3, photocraft_geom::TILE_SIZE as usize * 2 + 5);
+    let indices: Vec<u8> = (0..w * h).map(|k| ((k / w + k % w) % 2) as u8).collect();
+    let png = palette_png(w as u32, &indices, png::BitDepth::Eight, &[[255, 255, 255], [255, 255, 255]], None);
+    let doc = photocraft_io::import("tall.png", &png).unwrap().document;
+    let layer = &doc.layers[0];
+    let known = doc.color_indices.as_ref().unwrap().known(layer.id, layer.surface().unwrap(), doc.bounds());
+    assert_eq!(known.as_deref(), Some(&indices[..]));
+}
+
+#[test]
 fn a_palette_png_without_shared_colours_is_not_read_again() {
     // Every entry its own colour: the colours already name the entries, so the open skips the
     // second pass over the file, and Color Table still recolours by entry.
