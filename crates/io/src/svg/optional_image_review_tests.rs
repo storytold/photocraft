@@ -109,11 +109,11 @@ fn malformed_nested_declarations_are_not_removed_into_valid_images() {
 }
 
 #[test]
-fn used_data_images_with_unsupported_or_mismatched_mime_are_disclosed() {
+fn used_data_images_with_mismatched_image_mime_are_disclosed() {
     let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
     let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
     assert_eq!(photocraft_codecs::decode(&png).unwrap().dimensions(), (2, 2));
-    for mime in ["application/octet-stream", "image/jpeg"] {
+    for mime in ["image/jpeg", "image/jpg"] {
         let direct = drawing(&url(mime, &png));
         assert_incomplete_image_is_disclosed(&direct);
         for child in [direct.as_bytes().to_vec(), gzip(direct.as_bytes())] {

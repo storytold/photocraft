@@ -115,9 +115,12 @@ pub(super) fn wrap(base: usvg::ImageHrefResolver<'static>, state: Arc<Mutex<Inte
             }
             let svg = matches!(mime, "image/svg+xml" | "text/plain");
             if !svg {
-                // A used data URL with an unsupported or mismatched MIME cannot draw.
-                let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
-                state.invalid_raster = state.invalid_raster.saturating_add(1);
+                // Count failed declared images, while preserving the existing policy:
+                // non-image media types are ignored before decoding or pixel admission.
+                if mime.starts_with("image/") {
+                    let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                    state.invalid_raster = state.invalid_raster.saturating_add(1);
+                }
                 return None;
             }
             let data = if svg {
@@ -176,6 +179,9 @@ pub(super) fn wrap(base: usvg::ImageHrefResolver<'static>, state: Arc<Mutex<Inte
 // borrow a successful validation belonging to a different rendering decoder.
 fn raster_kind(mime: &str, data: &Arc<Vec<u8>>) -> Option<usvg::ImageKind> {
     use photocraft_codecs::Format;
+    if !matches!(mime, "image/jpg" | "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "text/plain") {
+        return None;
+    }
     let format = photocraft_codecs::detect(data)?;
     let accepted = match mime {
         "image/jpg" | "image/jpeg" => format == Format::Jpeg,
