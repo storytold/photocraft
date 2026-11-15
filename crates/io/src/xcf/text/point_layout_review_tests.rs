@@ -54,8 +54,25 @@ fn point_origin_admission_precedes_shared_access_for_scalar_line_run_and_geometr
     refused_before_shared(&config(&"a".repeat(layout_admission::MAX_LINE_SCALARS + 1)), 72.);
     refused_before_shared(&config(&"x\n".repeat(layout_admission::MAX_BREAKS + 1)), 72.);
     refused_before_shared(&config(&"x".repeat(512 * 1024)), 72.);
+    // This markup reaches the older materialized-formatting allowance before
+    // origin admission. Keep its distinct refusal and pre-lock guarantees.
     let markup = format!("(markup \"<markup>{}</markup>\")", "<b>x</b><i>x</i>".repeat(layout_admission::MAX_RUNS / 2 + 1));
-    refused_before_shared(markup.as_bytes(), 72.);
+    reset();
+    let mut work = POINT_LAYOUT_WORK_UNITS;
+    assert!(matches!(controlled(markup.as_bytes(), &mut work), Err(crate::IoError::Unsupported(message)) if message.contains("bounded formatting allowance")));
+    assert_eq!((work, accesses(), layouts()), (POINT_LAYOUT_WORK_UNITS, 0, 0));
+    // Construct the final native data directly to isolate the new run limit
+    // from that independent parser allocation allowance.
+    let mut layer = TextLayer { text: "x".repeat(layout_admission::MAX_RUNS), ..Default::default() };
+    layer.runs = vec![TextRun { len: 1, style: CharStyle::default() }; layout_admission::MAX_RUNS];
+    layer.paragraphs.push(ParagraphRun { len: layer.text.len(), style: ParagraphStyle::default() });
+    assert!(layout_admission::cost(&layer, 72.).is_some(), "the run boundary itself is admitted");
+    layer.text.push('x');
+    layer.runs.push(TextRun { len: 1, style: CharStyle::default() });
+    layer.paragraphs[0].len = layer.text.len();
+    assert!(layout_admission::cost(&layer, 72.).is_none());
+    assert!(!anchor_point_origin(&mut layer, 72., &Interrupt::NONE, &mut work).unwrap());
+    assert_eq!((work, accesses(), layouts()), (POINT_LAYOUT_WORK_UNITS, 0, 0));
     refused_before_shared(b"(text \"x\") (font-size 8192) (font-size-unit points)", 999_999.);
 }
 

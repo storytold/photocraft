@@ -100,13 +100,22 @@ fn malformed_data_image_hrefs_are_disclosed_before_the_parser_discards_them() {
     }
 }
 
+fn assert_no_omission_or_unexpected_import_warning(imported: &ImportResult) {
+    assert!(omission_warnings(imported).is_empty(), "{:?}", imported.warnings);
+    assert!(
+        imported.warnings.iter().all(|warning| warning == "SVG: embedded images are pixel layers"),
+        "only the existing pixel-layer information is expected: {:?}",
+        imported.warnings
+    );
+}
+
 fn assert_ignored_data_image_stays_quiet(text: &str) {
     for bytes in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
         let imported = crate::import("ignored.svg", &bytes).unwrap();
-        assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+        assert_no_omission_or_unexpected_import_warning(&imported);
         assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [1., 0., 0., 1.]);
         let strict = import_svg_bounded_images_strict("ignored.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
-        assert!(strict.warnings.is_empty());
+        assert_no_omission_or_unexpected_import_warning(&strict);
         import_svg_preview_with_work("ignored.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
         let (pixels, warnings) = rasterize_bounded_with_warnings(&bytes, 1., MAX_RASTER_PIXELS).unwrap();
         assert!(warnings.is_empty());
@@ -158,10 +167,10 @@ fn ignored_non_image_repair_preserves_hidden_foreign_and_valid_image_controls() 
         url("image/png", &png)
     );
     let imported = crate::import("mixed.svg", text.as_bytes()).unwrap();
-    assert!(imported.warnings.is_empty());
+    assert_eq!(imported.warnings, vec!["SVG: embedded images are pixel layers"]);
     assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [0., 1., 0., 1.]);
     let strict = import_svg_bounded_images_strict("mixed.svg", text.as_bytes(), MAX_RASTER_PIXELS).unwrap();
-    assert!(strict.warnings.is_empty());
+    assert_eq!(strict.warnings, vec!["SVG: embedded images are pixel layers"]);
     assert_eq!(rasterize_bounded(text.as_bytes(), 1., MAX_RASTER_PIXELS).unwrap().get(1, 1), [0., 1., 0., 1.]);
 }
 

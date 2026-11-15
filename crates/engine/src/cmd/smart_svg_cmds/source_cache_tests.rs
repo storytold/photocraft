@@ -25,6 +25,17 @@ fn reset() {
     WARNING_SOURCE_DECODES.with(|count| count.set(0));
 }
 
+fn assert_update_warnings(result: &Value) {
+    let warnings = result["warnings"].as_array().unwrap();
+    let omitted = "SVG: 1 embedded image was omitted";
+    assert_eq!(warnings.iter().filter(|warning| warning.as_str().unwrap().starts_with(omitted)).count(), 1);
+    assert!(warnings.len() <= 2, "at most one omission and one image-layer information notice: {warnings:?}");
+    assert!(warnings.iter().all(|warning| {
+        let warning = warning.as_str().unwrap();
+        warning.starts_with(omitted) || warning == "SVG: embedded images are pixel layers"
+    }));
+}
+
 fn draw(sources: &mut WarningRenderSources<'_>, sm: &SmartObject) -> photocraft_raster::Surface {
     let (surface, warnings) = render_with_warnings_using(sm, sources).unwrap();
     assert_eq!(warnings.len(), 1);
@@ -88,7 +99,7 @@ fn shared_svg_update_decodes_one_source_for_equal_scale_and_keeps_warning_caches
     reset();
     let result = s.execute(UPDATE, params).unwrap();
     assert_eq!(count(), 1, "each placement must reuse the update's source-space render");
-    assert_eq!(result["warnings"].as_array().unwrap().len(), 1);
+    assert_update_warnings(&result);
     let doc = &s.active().unwrap().doc;
     let instances: Vec<_> = doc.layers.iter().filter(|layer| matches!(&layer.content, LayerContent::Smart(_))).collect();
     assert_eq!(instances.len(), 100);
@@ -123,7 +134,7 @@ fn local_svg_sources_separate_scale_and_profile_but_keep_instance_filters_and_pl
     let mut moved = first.clone();
     moved.transform = Affine::translate(20., 0.);
     moved.smart_filters.push(SmartFilter {
-        command: "filter.invert".into(),
+        command: "image.adjustments.invert".into(),
         params: json!({}),
         blend: photocraft_color::BlendMode::Normal,
         opacity: 0.5,
@@ -183,21 +194,26 @@ fn shared_svg_update_render_failure_and_cancelled_authorization_preserve_documen
         let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
         let LayerContent::Smart(sm) = &mut doc.layers.last_mut().unwrap().content else { panic!("smart") };
         sm.smart_filters.push(SmartFilter {
-            command: if cancel { "filter.invert" } else { "unsupported.persisted.filter" }.into(),
+            command: if cancel { "image.adjustments.invert" } else { "unsupported.persisted.filter" }.into(),
             params: json!({}),
             blend: photocraft_color::BlendMode::Normal,
             opacity: 1.,
             visible: true,
         });
         if cancel {
-            s.authorize = Some(|command, _| if command == "filter.invert" { Err(EngineError::Cancelled) } else { Ok(()) });
+            s.authorize = Some(|command, _| if command == "image.adjustments.invert" { Err(EngineError::Cancelled) } else { Ok(()) });
         }
         let before = s.active().unwrap().doc.clone();
         let history = s.active().unwrap().history.entries();
         let revision = s.active().unwrap().revision;
         let params = request(&mut s, id, &artwork(4, 4));
         reset();
-        assert!(s.execute(UPDATE, params).is_err());
+        let error = s.execute(UPDATE, params).unwrap_err();
+        if cancel {
+            assert!(matches!(error, EngineError::Cancelled), "expected the authority cancellation, got {error}");
+        } else {
+            assert!(error.to_string().contains("unsupported visible filters"), "{error}");
+        }
         assert_eq!(s.active().unwrap().doc, before);
         assert_eq!(s.active().unwrap().history.entries(), history);
         assert_eq!(s.active().unwrap().revision, revision);
@@ -251,7 +267,7 @@ fn shared_svg_update_24mp_source_timing() {
         let result = s.execute(UPDATE, params).unwrap();
         let elapsed = start.elapsed().as_secs_f64() * 1000.;
         assert_eq!(count(), decodes, "{label}");
-        assert_eq!(result["warnings"].as_array().unwrap().len(), 1);
+        assert_update_warnings(&result);
         let doc = &s.active().unwrap().doc;
         let mut pixels = blake3::Hasher::new();
         let mut sources = blake3::Hasher::new();
