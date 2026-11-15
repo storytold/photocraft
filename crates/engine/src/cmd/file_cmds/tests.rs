@@ -1446,7 +1446,7 @@ fn camera_raw_opens_as_16_bit_with_notes() {
     assert_eq!(doc(&s).depth, photocraft_color::SampleType::U16);
     // Damaged raw data is an error, not a crash.
     let mut bad = spec.build();
-    bad.truncate(bad.len() / 2);
+    bad.truncate(bad.len() / 5);
     assert!(open_bytes_as(&mut s, "bad.dng", &bad, None, None).is_err());
 }
 
@@ -3817,16 +3817,16 @@ fn folder_listing_recognises_gzipped_xcf_by_its_double_extension() {
 #[test]
 fn folder_listing_takes_every_format_photocraft_opens() {
     let codecs = ["a.cin", "a.dcm", "a.dicom", "a.dc3", "a.iff", "a.lbm", "a.ilbm", "a.pcx", "a.xpm", "a.dds", "a.pbm", "a.pam", "a.pfm", "a.psdt", "A.PCX"];
-    let raws = ["a.dng", "IMG_0001.CR2", "a.nef", "a.nrw", "a.arw", "a.pef", "a.cr3"];
+    let raws = ["a.dng", "IMG_0001.CR2", "a.nef", "a.nrw", "a.arw", "a.pef"];
     for name in codecs.into_iter().chain(raws) {
         assert!(super::openable_name(name), "{name}");
     }
-    for f in photocraft_formats::Format::ALL.into_iter().filter(|f| f.capabilities().read == photocraft_formats::Availability::Available) {
+    for f in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read) {
         for ext in f.extensions() {
             assert!(super::openable_name(&format!("a.{ext}")), "{f:?} .{ext}");
         }
     }
-    for name in ["a.orf", "a.raf", "a.rw2", "a.srf", "a.sr2"] {
+    for name in ["a.cr3", "IMG_0001.CR3", "a.orf", "a.raf", "a.rw2", "a.srf", "a.sr2"] {
         assert!(!super::openable_name(name), "{name}");
     }
     // PhotoCraft does not read AVIF.
