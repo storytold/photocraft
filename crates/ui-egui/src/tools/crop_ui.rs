@@ -63,6 +63,10 @@ pub struct CropState {
     reset_to: Option<[f64; 4]>,
     /// The frame is being edited (pressed since it was made): the canvas shows what lies past it.
     pub editing: bool,
+    /// The drag in progress has changed the frame at some point, even if it has since come back to
+    /// where it started: the crop has started, and its look stays for the rest of the drag
+    /// (`crop_overlay::crop_started`, #10930).
+    pub drag_moved: bool,
     /// The document the pending frame (or gesture) belongs to ([`cancel_stale`], #1918).
     doc: Option<photocraft_doc::DocId>,
     /// The options-bar Straighten button and ⌘-drag (`crop_straighten`).
@@ -1013,10 +1017,18 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
 /// Press, drag and release of the frame. Returns true when the frame needs syncing to the view.
 fn track(app: &mut PhotocraftApp, ev: ToolEvent, p: [f64; 2], mods: Modifiers) -> bool {
     match ev {
-        ToolEvent::Down { .. } => begin_drag(app, p),
-        ToolEvent::Move { .. } => update(app, p, mods),
+        ToolEvent::Down { .. } => {
+            app.crop.drag_moved = false;
+            begin_drag(app, p);
+        }
+        ToolEvent::Move { .. } => {
+            update(app, p, mods);
+            app.crop.drag_moved |= crate::crop_overlay::drag_changed(app);
+        }
         ToolEvent::Up { .. } => {
             update(app, p, mods);
+            // The release's own position counts toward whether the gesture changed the frame.
+            app.crop.drag_moved |= crate::crop_overlay::drag_changed(app);
             let Some(drag) = app.crop.drag.take() else { return false };
             release(app, drag);
         }
@@ -1101,11 +1113,16 @@ fn outside_drag(app: &PhotocraftApp, p: [f64; 2], rect: [f64; 4], deg: f64) -> C
 /// Ends `drag`: keeps a valid frame or restores the previous one, and records an undo step when it changed.
 fn release(app: &mut PhotocraftApp, drag: CropDrag) {
     let ok = app.ui.crop_rect.is_some_and(size_ok);
-    // A click outside the untouched default frame (no turn) leaves it the default.
-    let changed = !matches!(drag, CropDrag::Rotate { from, .. } | CropDrag::TurnImage { from, .. } if from == angle(app))
-        && !matches!(drag, CropDrag::MoveImage { rect, .. } if app.ui.crop_rect == Some(rect))
-        // A press that never moved draws nothing: the frame shown is still the previous one.
-        && !matches!(drag, CropDrag::Draw { anchor, cur, .. } if anchor == cur);
+    // A click outside the untouched default frame (no turn) leaves it the default. A drawn, moved
+    // or resized frame has changed when the gesture changed it at some point (`drag_moved`), not
+    // when it ends unlike its start: a click inside the frame or on a handle draws or resizes
+    // nothing, and an Alt-drag from the centre can draw the very frame it started from (noted in
+    // review).
+    let changed = match drag {
+        CropDrag::Rotate { from, .. } | CropDrag::TurnImage { from, .. } => from != angle(app),
+        CropDrag::MoveImage { rect, .. } => app.ui.crop_rect != Some(rect),
+        CropDrag::Draw { .. } | CropDrag::Move { .. } | CropDrag::Resize { .. } => app.crop.drag_moved,
+    };
     if ok && changed {
         app.crop.default_frame = false;
     }
