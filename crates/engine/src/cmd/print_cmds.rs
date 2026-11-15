@@ -1485,10 +1485,15 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                             .any(|entry| entry.file_name().to_string_lossy().to_lowercase() == n.to_lowercase())
                 };
                 let mut fname = base.clone();
-                let mut k = copied.len();
+                // A clash is `<stem>_<n>.<ext>` (`<name>_<n>` without an extension), n = 1, 2, ...
+                let (clash_stem, clash_ext) = match std::path::Path::new(&base).extension().and_then(|e| e.to_str()) {
+                    Some(e) if base.len() > e.len() + 1 => (&base[..base.len() - e.len() - 1], format!(".{e}")),
+                    _ => (base.as_str(), String::new()),
+                };
+                let mut n = 1usize;
                 while taken(&fname) {
-                    fname = format!("{k}-{base}");
-                    k += 1;
+                    fname = format!("{clash_stem}_{n}{clash_ext}");
+                    n += 1;
                 }
                 let t = join(&links_dir, &fname);
                 // A path that is not followed is packaged as missing, like a file that is gone.
@@ -1531,8 +1536,9 @@ fn ps_comment_text(s: &str) -> String {
     s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
-/// The document's paths as an Illustrator 3 PostScript file. `which`: "all", "work" or a path
-/// name. Coordinates are points (pixels at the document resolution), y up.
+/// The document's paths as an Illustrator 3 PostScript file. `which`: "documentBounds" (the
+/// frame alone, no path: header, bounding box and trailer), "all", "work" or a path name.
+/// Coordinates are points (pixels at the document resolution), y up.
 pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let k = 72.0 / dpi;
@@ -1546,6 +1552,7 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
             }
         }
         "work" => chosen.extend(doc.work_path.iter()),
+        "documentBounds" => {}
         name => chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| &p.path)),
     }
     let mut s = String::new();
@@ -1610,7 +1617,8 @@ fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let which = p.get("paths").and_then(Value::as_str).unwrap_or("all");
     let (text, n) = paths_to_ai(&d.doc, which)?;
-    if n == 0 {
+    // Document Bounds writes the frame alone (#13771); any other choice must match a path.
+    if n == 0 && which != "documentBounds" {
         return Err(bad(cmd, format!("no paths match `{which}`")));
     }
     match p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()) {
@@ -1622,9 +1630,9 @@ fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
-fn has_paths(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document open")?;
-    if d.doc.paths.is_empty() && d.doc.work_path.is_none() { Err("the document has no paths".into()) } else { Ok(()) }
+/// Enabled for every open document, with or without paths: Document Bounds needs none (#13771).
+fn has_document(s: &Session) -> std::result::Result<(), String> {
+    s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -1690,8 +1698,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paths to Illustrator…",
             &["File", "Export"],
             None,
-            r##"{"path":str? (.ai; omit to return the text),"paths":"all|work|<path name>"="all"} → {path, paths}"##,
-            has_paths,
+            r##"{"path":str? (.ai; omit to return the text),"paths":"documentBounds|all|work|<path name>"="all" (documentBounds: the file frame with the canvas as bounding box and no path)} → {path, paths}"##,
+            has_document,
             paths_to_illustrator
         ),
     ]
@@ -1702,5 +1710,13 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests;
 
 #[cfg(test)]
+#[path = "print_cmds/paths_export_document_bounds_tests.rs"]
+mod paths_export_document_bounds_tests;
+
+#[cfg(test)]
 #[path = "print_cmds/paths_export_path_blocks_tests.rs"]
 mod paths_export_path_blocks_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/package_clash_name_tests.rs"]
+mod package_clash_name_tests;
