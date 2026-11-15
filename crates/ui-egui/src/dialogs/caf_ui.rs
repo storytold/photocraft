@@ -60,8 +60,9 @@ const UNDO_LIMIT: usize = 100;
 const MAX_OUTLINE_SEGMENTS: usize = 200_000;
 /// Photoshop's overlay colour as it shows (a 50 % tint of grey 200 reads 171, 204, 153).
 const OVERLAY_COLOR: [u8; 3] = [142, 208, 106];
-/// The `prefs.dialogs` key under which the settings are remembered.
-const REMEMBERED: &str = "edit.contentAwareFill.workspace";
+/// The `prefs.dialogs` key under which the settings are remembered (an empty recorded step plays
+/// with them).
+const REMEMBERED: &str = photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS;
 const CMD: &str = "edit.contentAwareFill";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
