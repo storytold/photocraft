@@ -224,8 +224,17 @@ fn start(app: &PhotocraftApp) -> Option<Finder> {
     })
 }
 
+/// The options bar's Refresh and gear buttons (#12857).
+pub(crate) fn bar_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let clicked = crate::icons::button(ui, "rotate-cw", 24.0, false, tl!("Click to refresh object finder.")).clicked();
+    gear(&mut app.ui.tool_options, ui);
+    if clicked {
+        refresh(app);
+    }
+}
+
 /// The options bar's gear button and its menu (#12857).
-pub(crate) fn gear(o: &mut ToolOptions, ui: &mut egui::Ui) {
+fn gear(o: &mut ToolOptions, ui: &mut egui::Ui) {
     let r = crate::icons::button(ui, "settings", 24.0, false, tl!("Set additional options"));
     egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         crate::widgets::checkbox(ui, &mut o.object_finder, tl!("Object Finder"));

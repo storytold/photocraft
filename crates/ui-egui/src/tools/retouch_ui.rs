@@ -1227,12 +1227,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::vline(ui, 22.0);
             crate::widgets::checkbox(ui, &mut o.sample_all.object_selection, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.object_hard_edge, tl!("Hard Edge"));
-            let refresh = crate::icons::button(ui, "rotate-cw", 24.0, false, tl!("Click to refresh object finder.")).clicked();
-            crate::object_finder::gear(o, ui);
+            crate::object_finder::bar_buttons(app, ui);
             crate::widgets::vline(ui, 22.0);
-            if refresh {
-                crate::object_finder::refresh(app);
-            }
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
                 let r = app.run("select.subject", json!({}));
                 report_smart_result(app, r, tl!("No subject found — try a rectangle around the object"));
