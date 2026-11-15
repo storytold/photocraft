@@ -434,6 +434,16 @@ fn failing_after_write(publish: bool) -> impl FnMut(&str, &[u8]) -> Result<(), S
     }
 }
 
+/// [`failing_after_write`] with a call counter, so a fixture that never reaches the writer (the
+/// wrong service slot, for instance) fails loudly instead of passing for the wrong reason.
+fn counting_writer(inner: impl FnMut(&str, &[u8]) -> Result<(), String>, calls: Rc<std::cell::Cell<usize>>) -> impl FnMut(&str, &[u8]) -> Result<(), String> {
+    let mut inner = inner;
+    move |path: &str, bytes: &[u8]| {
+        calls.set(calls.get() + 1);
+        inner(path, bytes)
+    }
+}
+
 /// A failed copy that published its bytes through an alias of the document's own file
 /// (`nested/../own.tif`, a symlink, another case on a case-insensitive volume) still costs the
 /// savepoint: the stamp is read at the bound path, not at the spelling the write was given. The
@@ -516,13 +526,21 @@ fn a_failed_copy_that_published_detaches_the_other_documents_file() {
             app.remember_stamp(b, &other);
             let a = app.session.documents()[0].doc.id;
             app.session.set_active(0);
-            app.services.write = Some(Box::new(failing_after_write(published)));
+            // `app.save` writes through the automation authority; the others through `write`.
+            let calls = Rc::new(std::cell::Cell::new(0));
+            let writer = counting_writer(failing_after_write(published), calls.clone());
+            if entry == "app.save" {
+                app.services.automation_write = Some(Box::new(writer));
+            } else {
+                app.services.write = Some(Box::new(writer));
+            }
             let settings = crate::ExportSettings { tiff_layers: true, ..Default::default() };
             let r = match entry {
                 "file.saveACopy" => app.replay_save(entry, &json!({"path": other, "tiffLayers": true})),
                 "writeDocument" => app.write_document(other.clone(), &settings, true).map(|_| json!({})),
                 _ => app.save_automation_with(Some(other.clone()), crate::FormatChoices::from_params(&json!({"tiffLayers": true}), "app.save").unwrap()),
             };
+            assert_eq!(calls.get(), 1, "{entry}, published={published}: the fixture reached the writer");
             assert!(r.is_err(), "{entry}, published={published}: the write reported a failure");
             let b_state = app.session.documents().iter().find(|st| st.doc.id == b).unwrap();
             assert_eq!(b_state.path.is_none(), published, "{entry}, published={published}: the other tab loses a file that now holds this document");
@@ -554,13 +572,20 @@ fn a_failed_copy_over_a_hard_link_leaves_the_other_documents_file_alone() {
             app.session.active_mut().unwrap().saved_to(other.clone());
             app.remember_stamp(b, &other);
             app.session.set_active(0);
-            app.services.write = Some(Box::new(failing_after_write(published)));
+            let calls = Rc::new(std::cell::Cell::new(0));
+            let writer = counting_writer(failing_after_write(published), calls.clone());
+            if entry == "app.save" {
+                app.services.automation_write = Some(Box::new(writer));
+            } else {
+                app.services.write = Some(Box::new(writer));
+            }
             let settings = crate::ExportSettings { tiff_layers: true, ..Default::default() };
             let r = match entry {
                 "file.saveACopy" => app.replay_save(entry, &json!({"path": alias, "tiffLayers": true})),
                 "writeDocument" => app.write_document(alias.clone(), &settings, true).map(|_| json!({})),
                 _ => app.save_automation_with(Some(alias.clone()), crate::FormatChoices::from_params(&json!({"tiffLayers": true}), "app.save").unwrap()),
             };
+            assert_eq!(calls.get(), 1, "{entry}, published={published}: the fixture reached the writer");
             assert!(r.is_err(), "{entry}, published={published}: the write reported a failure");
             let b_state = app.session.documents().iter().find(|st| st.doc.id == b).unwrap();
             assert_eq!(b_state.path.as_deref(), Some(other.as_str()), "{entry}, published={published}: B keeps its own file");

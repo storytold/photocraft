@@ -1433,12 +1433,13 @@ fn a_held_quit_asks_about_the_file_a_finished_copy_replaced() {
 
 /// A background copy of A over another open document B's file that publishes and then fails must
 /// detach B like a successful copy does, even though A's own copy is complete (so
-/// `invalidate_savepoint` is false). The unpublised half is the control. Expected from source; not
-/// an executed result until hosted CI runs it.
+/// `invalidate_savepoint` is false). A stays bound and clean; the unpublished half is the control.
+/// Expected from source; not an executed result until hosted CI runs it.
 #[test]
 fn a_background_copy_that_published_before_failing_detaches_the_other_documents_file() {
     for published in [false, true] {
         let dir = tempfile::tempdir().unwrap();
+        let a_path = dir.path().join("a.tif").to_string_lossy().into_owned();
         let other = dir.path().join("b.tif").to_string_lossy().into_owned();
         std::fs::write(&other, b"saved original").unwrap();
         let mut h = app_harness();
@@ -1450,16 +1451,25 @@ fn a_background_copy_that_published_before_failing_detaches_the_other_documents_
         let b = h.state().active_doc_id().unwrap();
         h.state_mut().session.active_mut().unwrap().saved_to(other.clone());
         h.state_mut().remember_stamp(b, &other);
+        // A copies: bound to its own file and clean, and complete so the copy keeps its savepoint.
         h.state_mut().session.set_active(0);
+        h.state_mut().session.active_mut().unwrap().saved_to(a_path.clone());
+        let a = h.state().active_doc_id().unwrap();
+        let settings = crate::ExportSettings { tiff_layers: true, ..Default::default() };
+        assert!(
+            !PhotocraftApp::copy_needs_savepoint_check(&h.state().session.documents()[0].doc, &other, &settings),
+            "A's layered copy is complete, so its own savepoint is not at stake"
+        );
         h.state_mut().services.save_file = Some(Arc::new(move |_, path, _, ctl| {
             ctl.check()?;
             if published {
+                // The bytes are a mock, not an encoded TIFF: what matters is that they land.
+                ctl.commit()?;
                 photocraft_format::atomic_write(std::path::Path::new(path), b"a's copy").map_err(|e| e.to_string())?;
                 return Err("the folder could not be flushed after the write".into());
             }
             Err("disk full".into())
         }));
-        let settings = crate::ExportSettings { tiff_layers: true, ..Default::default() };
         h.state_mut().write_document(other.clone(), &settings, true).unwrap();
         step_until(&mut h, |app| !app.saving());
         let b_state = h.state().session.documents().iter().find(|st| st.doc.id == b).unwrap();
@@ -1470,5 +1480,8 @@ fn a_background_copy_that_published_before_failing_detaches_the_other_documents_
             published,
             "published={published}: the file holds the copy only when the write published"
         );
+        let a_state = h.state().session.documents().iter().find(|st| st.doc.id == a).unwrap();
+        assert_eq!(a_state.path.as_deref(), Some(a_path.as_str()), "published={published}: the copying document keeps its own file");
+        assert!(!a_state.is_dirty(), "published={published}: a failed copy does not save the document it copied");
     }
 }

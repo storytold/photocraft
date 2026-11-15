@@ -427,6 +427,11 @@ pub fn start_save(
         // The worker can fail after it published (a folder flush): the other tabs' files are the
         // same file this document just wrote.
         Err(e) => {
+            // Inline (wasm, or spawn=false) the worker can publish and then fail, exactly as in
+            // `finish_save`: the source and every other tab are judged the same way.
+            if invalidate_savepoint {
+                app.invalidate_incomplete_copy(doc, &path, false);
+            }
             app.detach_others_after_replaced_write(&path, doc);
             return Err(e.to_string());
         }
