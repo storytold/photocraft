@@ -230,13 +230,18 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
         dialog = dialog.set_parent(parent);
     }
     let answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>> = match request {
-        FileDialogRequest::Open { multiple, initial_dir, extensions } => {
+        FileDialogRequest::Open { multiple, initial_dir, extensions, title, filter_name } => {
             if let Some(dir) = initial_dir {
                 dialog = dialog.set_directory(dir);
             }
+            // A picker the command names (Scripts › Browse…'s "Load", #13846); the system's otherwise.
+            if let Some(title) = title {
+                dialog = dialog.set_title(title);
+            }
             // A command-specific filter must not inherit the image formats used by File › Open.
             let dialog = if let Some(exts) = extensions {
-                dialog.add_filter("Supported Files", &open_filter_extensions(&exts.iter().map(String::as_str).collect::<Vec<_>>()))
+                let name = filter_name.as_deref().unwrap_or("Supported Files");
+                dialog.add_filter(name, &open_filter_extensions(&exts.iter().map(String::as_str).collect::<Vec<_>>()))
             } else {
                 open_filters().into_iter().fold(dialog, |dialog, (name, extensions)| dialog.add_filter(name, &extensions))
             };
