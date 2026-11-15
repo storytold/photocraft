@@ -265,11 +265,15 @@ impl Net {
     /// The largest of the net's rows' [`need`]s, its inner control rows included and counted
     /// [`INNER_ROW_WEIGHT`] times.
     fn rows_need(&self) -> f64 {
+        self.rows_need_by(INNER_ROW_WEIGHT)
+    }
+    /// The largest of the net's rows' [`need`]s, its inner control rows counted `inner` times.
+    fn rows_need_by(&self, inner: f64) -> f64 {
         let last = self.nv.saturating_sub(1);
         (0..self.nv)
             .map(|j| {
                 let n = need(&(0..self.nu).map(|i| self.at(i, j)).collect::<Vec<_>>());
-                if j == 0 || j == last { n } else { INNER_ROW_WEIGHT * n }
+                if j == 0 || j == last { n } else { inner * n }
             })
             .fold(0.0, f64::max)
     }
@@ -846,6 +850,8 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             } else {
                 need(&segment(net.col(u0), v0, v1)).max(need(&segment(net.col(u1), v0, v1)))
             };
+            // A one-patch full mesh also measures its cells by every row and column of their control nets.
+            let (fu, fv) = if full_one { (fu.max(sub().rows_need_by(1.0)), fv.max(sub().cols_need())) } else { (fu, fv) };
             let (mut across, mut down) = (fu >= 1.0 - EPS, fv >= 1.0 - EPS);
             let mut twist_down = false;
             let (lu, lv) = (u1 - u0, v1 - v0);
@@ -2546,6 +2552,21 @@ mod tests {
         assert!(across.iter().any(|c| c[0] > 0.5 - EPS && c[2] < EPS && c[3] - c[2] < 0.5 - EPS), "the top right cell splits down with the top left");
         let (down, _) = cells(&moved_point_net(1, 1, [0.0, 8.0]), true, &rules);
         assert!(!halved(&down), "moved down: the split carries to the bottom right cell too");
+    }
+
+    /// A one-patch full mesh measures a cell by every column of its control net, not only by the
+    /// surface's columns at its sides: with the top-left inner point moved 11 px down, the quarter
+    /// cell at u ¼..½, v 0..¼ has sides asking 0.94 but an inner control column asking 1.05, and
+    /// the reference cuts it (and the cell beside it) into eighths down; moved 8 px (0.76) it stays
+    /// a quarter.
+    #[test]
+    fn a_full_mesh_cell_is_measured_by_its_whole_control_net() {
+        let rules = one_patch_rules(&moved_point_net(1, 1, [0.0, 0.0]), true);
+        let eighths = |leaves: &[Cell]| leaves.iter().any(|c| c[0] > 0.25 - EPS && c[1] < 0.5 + EPS && c[3] < 0.25 + EPS && c[3] - c[2] < 0.25 - EPS);
+        let (deep, _) = cells(&moved_point_net(1, 1, [0.0, 11.0]), true, &rules);
+        assert!(eighths(&deep), "11 px: cut into eighths down");
+        let (shallow, _) = cells(&moved_point_net(1, 1, [0.0, 8.0]), true, &rules);
+        assert!(!eighths(&shallow), "8 px: stays a quarter");
     }
 
     /// A one-patch full mesh's cell twisted past 2 px splits both ways: with the top-left inner
