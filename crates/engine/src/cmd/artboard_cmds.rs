@@ -978,11 +978,11 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
-#[path = "artboard_cmds/file_types_tests.rs"]
-mod file_types_tests;
-#[cfg(test)]
 #[path = "artboard_cmds/file_names_tests.rs"]
 mod file_names_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/file_types_tests.rs"]
+mod file_types_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
