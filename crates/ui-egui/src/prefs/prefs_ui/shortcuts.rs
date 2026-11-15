@@ -253,6 +253,23 @@ fn commit_message(message: &mut String, warning: &mut bool, conflict: Option<&mu
     }
 }
 
+/// A committed key the command couldn't take (it has as many further keys as it may): there is no
+/// conflict to accept, since the key stays with the commands that hold it, and a warning says why.
+fn refused(message: &mut String, warning: &mut bool, conflict: &mut Option<Value>) {
+    *conflict = None;
+    *message = tl!("This command can't take another shortcut; the key stays where it is.").into();
+    *warning = true;
+}
+
+/// A key the field commits: `assigned` says whether the command took it (see [`refused`]).
+fn commit_pending(message: &mut String, warning: &mut bool, conflict: &mut Option<Value>, assigned: bool, sc: &str) {
+    if assigned {
+        commit_message(message, warning, conflict.as_mut(), sc);
+    } else {
+        refused(message, warning, conflict);
+    }
+}
+
 /// Takes the pressed `key` out of this frame's events whatever modifiers it carries: the mask the
 /// capture inferred can hold a modifier (a Shift released in the same frame) that the event no
 /// longer has, and a key left in the queue would also press the dialog's default button.
@@ -438,8 +455,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     }
     if commit {
         if let Some(sc) = pending.take() {
-            let _ = assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
-            commit_message(&mut message, &mut message_warning, conflict.as_mut(), &sc);
+            commit_pending(&mut message, &mut message_warning, &mut conflict, assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt), &sc);
         }
         capture = false;
     }
@@ -568,6 +584,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             if ui.add_enabled(has_sel, egui::Button::new(tl!("Use Default"))).clicked() {
                 pending = None;
                 capture = false;
+                conflict = None;
                 overrides.remove(&selected);
                 alt_overrides.remove(&selected);
                 message = tl!("Default restored.").into();
@@ -576,6 +593,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             if ui.add_enabled(has_sel, egui::Button::new(tl!("Delete Shortcut"))).clicked() {
                 pending = None;
                 capture = false;
+                conflict = None;
                 overrides.insert(selected.clone(), String::new());
                 message = tl!("Shortcut removed.").into();
                 message_warning = false;
@@ -583,6 +601,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             if ui.button(tl!("Reset All to Defaults")).clicked() {
                 pending = None;
                 capture = false;
+                conflict = None;
                 overrides.clear();
                 alt_overrides.clear();
                 message = tl!("All shortcuts reset to PhotoCraft defaults.").into();
@@ -605,8 +624,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     // where it was opened; a click on another row's key opens that row's field instead.
     if let Some((row, alt)) = editing.as_ref().filter(|(row, alt)| *row != selected || *alt != capture_alt) {
         if let Some(sc) = pending.take() {
-            let _ = assign(&mut overrides, &mut alt_overrides, row, &sc, *alt);
-            commit_message(&mut message, &mut message_warning, conflict.as_mut(), &sc);
+            commit_pending(&mut message, &mut message_warning, &mut conflict, assign(&mut overrides, &mut alt_overrides, row, &sc, *alt), &sc);
         }
         if *row != selected {
             capture = reopened;
@@ -633,8 +651,13 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             // Accept: enabled while a field is open; commits it like Enter.
             if ui.add_enabled(capture, egui::Button::new(tl!("Accept"))).on_hover_text(tl!("Enter the selected shortcut into the set")).clicked() {
                 if let Some(sc) = pending.take() {
-                    let _ = assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
-                    commit_message(&mut message, &mut message_warning, conflict.as_mut(), &sc);
+                    commit_pending(
+                        &mut message,
+                        &mut message_warning,
+                        &mut conflict,
+                        assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt),
+                        &sc,
+                    );
                 }
                 capture = false;
             }

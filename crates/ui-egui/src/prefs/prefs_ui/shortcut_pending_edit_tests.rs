@@ -267,3 +267,44 @@ fn binding_changing_actions_drop_the_pending_key() {
         assert_ne!(main_key(&h, id, "edit.cut"), json!(FREE_TEXT), "{action}: the pending key did not come back");
     }
 }
+
+fn conflict_offered(h: &Harness<'_, PhotocraftApp>) -> bool {
+    h.query_by_role_and_label(egui::accesskit::Role::Button, "Accept and Go to Conflict").is_some()
+}
+
+/// CodeRabbit on #14835: a key a command can't take (it holds `MAX_ALTERNATES` further keys) leaves
+/// no conflict to accept, whichever way it was committed, so the other command keeps it.
+#[test]
+fn a_refused_key_leaves_no_conflict_after_enter_or_accept() {
+    for how in ["Enter", "Accept"] {
+        let (mut h, id) = dialog("edit.cut");
+        let full: Vec<String> = (0..photocraft_engine::prefs::MAX_ALTERNATES).map(|k| format!("Cmd+Alt+Shift+F{}", k + 1)).collect();
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("alternates".into(), json!({ "edit.cut": full }));
+        h.run_steps(3);
+        click(&mut h, "Add Shortcut");
+        press(&mut h, Key::C, Modifiers::COMMAND);
+        assert!(conflict_offered(&h), "{how}: the key is in use, so a conflict is offered while it is pending");
+        if how == "Enter" {
+            press(&mut h, Key::Enter, Modifiers::NONE);
+        } else {
+            click(&mut h, "Accept");
+        }
+        assert!(!conflict_offered(&h), "{how}: the refused key leaves nothing to accept");
+        assert_ne!(main_key(&h, id, "edit.copy"), json!(""), "{how}: Copy keeps Cmd+C");
+    }
+}
+
+/// CodeRabbit on #14835: discarding a pending key with Use Default or Reset All also drops the
+/// conflict it raised, even when the maps were already empty and nothing else changed.
+#[test]
+fn use_default_and_reset_all_drop_the_conflict_of_a_pending_key() {
+    for action in ["Use Default", "Reset All to Defaults", "Delete Shortcut"] {
+        let (mut h, id) = dialog("edit.cut");
+        click_cell(&mut h, "Cmd+X");
+        press(&mut h, Key::C, Modifiers::COMMAND);
+        assert!(conflict_offered(&h), "{action}: Cmd+C is in use");
+        click(&mut h, action);
+        assert!(!conflict_offered(&h), "{action}: the conflict went with the pending key");
+        assert_ne!(main_key(&h, id, "edit.copy"), json!(""), "{action}: Copy keeps Cmd+C");
+    }
+}
