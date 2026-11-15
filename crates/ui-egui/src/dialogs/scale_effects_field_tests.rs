@@ -10,7 +10,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Map, Value, json};
 
-use super::{SCALE_ALERT, SCALE_ALERT_TEXT, SCALE_ALERT_TITLE, body, open, params_of};
+use super::{SCALE_ALERT, SCALE_ALERT_TEXT, SCALE_ALERT_TITLE, body, open, params_of, scale_effects_json, whole_in};
 use crate::PhotocraftApp;
 
 const CMD: &str = "layer.layerStyle.scaleEffects";
@@ -262,16 +262,31 @@ fn shift_esc_with_the_alert_up_closes_the_alert_only() {
 }
 
 #[test]
-fn ctrl_enter_with_the_alert_up_is_left_alone() {
-    // Not pinned by the reference: Ctrl/Cmd+Enter is not the alert's key. As coded, it passes
-    // through to the dialog and the alert stays up. This documents that, it does not endorse it.
+fn ctrl_enter_with_the_alert_up_does_not_confirm_the_dialog() {
+    // Ctrl/Cmd+Enter, press and repeat, is the alert's like any Enter: the dialog's OK must not see it.
+    for repeat in [false, true] {
+        let mut h = harness(scale_fields());
+        type_into(&mut h, "Scale", "1001", egui::Key::Tab);
+        assert!(alert_up(&h));
+        h.event(key(egui::Key::Enter, true, repeat, egui::Modifiers::COMMAND));
+        h.run_steps(2);
+        assert!(!h.state().1, "repeat={repeat}: the dialog does not confirm under its alert");
+        assert!(!h.state().2, "repeat={repeat}: nor cancel");
+    }
+}
+
+#[test]
+fn ctrl_does_not_let_a_held_enters_repeats_through() {
     let mut h = harness(scale_fields());
     type_into(&mut h, "Scale", "1001", egui::Key::Tab);
-    assert!(alert_up(&h));
-    h.event(key(egui::Key::Enter, true, false, egui::Modifiers::COMMAND));
+    h.event(key(egui::Key::Enter, true, false, egui::Modifiers::NONE));
     h.run_steps(2);
-    assert!(alert_up(&h), "the alert stays up");
-    assert!(h.state().1, "the dialog sees the Ctrl+Enter");
+    assert!(!alert_up(&h));
+    for _ in 0..3 {
+        h.event(key(egui::Key::Enter, true, true, egui::Modifiers::COMMAND));
+        h.run_steps(2);
+    }
+    assert!(!h.state().1, "Ctrl-carrying repeats of the held Enter do not confirm the dialog");
 }
 
 #[test]
@@ -294,26 +309,18 @@ fn a_held_enter_after_the_alert_closes_does_not_leave_the_focused_field() {
 }
 
 #[test]
-fn a_release_carrying_ctrl_still_ends_the_hold() {
-    let mut h = harness(scale_fields());
-    type_into(&mut h, "Scale", "1001", egui::Key::Tab);
-    h.event(key(egui::Key::Enter, true, false, egui::Modifiers::NONE));
-    h.run_steps(2);
-    assert!(!alert_up(&h) && !h.state().1);
-    // Ctrl was pressed before the Enter came up: the release carries it.
-    h.event(key(egui::Key::Enter, false, false, egui::Modifiers::COMMAND));
-    h.run_steps(2);
-    h.event(key(egui::Key::Enter, true, true, egui::Modifiers::NONE));
-    h.run_steps(2);
-    assert!(h.state().1, "the key is the dialog's again");
+fn whole_in_gives_the_closest_whole_number_in_range() {
+    assert_eq!(whole_in(5000.0, 1.0, 1000.0), 1000.0);
+    assert_eq!(whole_in(0.0, 1.0, 1000.0), 1.0);
+    assert_eq!(whole_in(f64::NAN, 1.0, 1000.0), 1.0);
+    assert_eq!(whole_in(f64::INFINITY, 1.0, 1000.0), 1.0);
+    assert_eq!(whole_in(1.5, 1.0, 1000.0), 2.0);
+    assert_eq!(whole_in(10.0, 1000.0, 1.0), 1000.0, "reversed bounds do not panic");
 }
 
 #[test]
-fn a_scale_held_in_range_when_it_is_serialized() {
-    for (stored, want) in [(5000, 1000.0), (0, 1.0)] {
-        let mut fields = scale_fields();
-        fields.insert("scale".into(), json!(stored));
-        let h = harness(fields);
-        assert_eq!(scale(&h), want, "{stored}");
-    }
+fn the_serialized_scale_is_held_in_range() {
+    assert_eq!(scale_effects_json(5000.0, 1.0, 1000.0), json!(1000));
+    assert_eq!(scale_effects_json(0.0, 1.0, 1000.0), json!(1));
+    assert_eq!(scale_effects_json(f32::NAN, 1.0, 1000.0), json!(1));
 }
