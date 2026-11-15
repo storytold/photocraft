@@ -518,7 +518,8 @@ pub const NO_SELECTION_MENU: &[Row] = &[
 ];
 
 /// Photoshop's generic layer menu, in its order for a pixel layer without a selection: the Count
-/// tool's canvas menu on a marker or off one (#11772), and the Red Eye and Object Selection
+/// tool's canvas menu on a marker or off one (#11772), the Ruler's on its line or off it (#12036),
+/// and the Red Eye and Object Selection
 /// (#12866) tools' without a selection. Each row is enabled as the Layers panel menu enables it
 /// for the active layer (`menus::is_enabled`) and runs like the menu item.
 pub const COUNT_MENU: &[Row] = &[
@@ -819,8 +820,9 @@ pub fn applies(tool: Tool) -> bool {
             // selection menu, as in Photoshop (#7268).
             | Tool::QuickSelection
             | Tool::ColorSampler
-            // The layer menu (#11772).
+            // The layer menu (#11772), and the Ruler's, on or off its line (#12036).
             | Tool::Count
+            | Tool::Ruler
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
             | Tool::ContentAwareMove
@@ -927,7 +929,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         if menu.has_path { SHAPE_MENU } else { SHAPE_MENU_NO_PATH }
     } else if sampler_menu(menu) {
         SAMPLER_MENU
-    } else if menu.tool == Tool::Count {
+    } else if matches!(menu.tool, Tool::Count | Tool::Ruler) {
         COUNT_MENU
     } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection) {
         if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
@@ -1917,6 +1919,9 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 pub(crate) mod count_tests;
+
+#[cfg(test)]
+mod ruler_tests;
 
 #[cfg(test)]
 mod hand_menu_entries_tests;
