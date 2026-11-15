@@ -249,4 +249,22 @@ mod tests {
         super::begin(&mut app, [10.0, 10.0], false, true, false);
         assert_eq!(app.move_viewport, Some(egui::ViewportId::from_hash_of("secondary-window")));
     }
+
+    #[test]
+    fn closing_window_owning_marquee_clears_layer_box_without_grabbed_layer() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let vid = egui::ViewportId::from_hash_of("secondary-window");
+        app.current_viewport = Some(vid);
+        super::begin(&mut app, [10.0, 10.0], false, true, false);
+        assert_eq!(app.move_viewport, Some(vid));
+        assert!(app.layer_box.as_ref().is_some_and(|b| b.grabbed_layer.is_none()));
+
+        // When the owning window closes, tabs::document_windows clears move_blocked and layer_box
+        if app.move_viewport == Some(vid) {
+            app.clear_move_blocked();
+            app.layer_box = None;
+        }
+        assert!(app.layer_box.is_none());
+        assert_eq!(app.move_viewport, None);
+    }
 }

@@ -862,9 +862,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 win.open = false;
                 if app.move_viewport == Some(vid) {
                     app.clear_move_blocked();
-                    if app.layer_box.as_ref().is_some_and(|b| b.grabbed_layer.is_some()) {
-                        app.layer_box = None;
-                    }
+                    app.layer_box = None;
                 }
             }
         }
