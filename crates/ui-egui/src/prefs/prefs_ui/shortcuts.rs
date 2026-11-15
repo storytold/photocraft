@@ -680,7 +680,7 @@ fn set_row(
                 })
                 .collect();
             let text = photocraft_engine::kys::write(&set_label, &entries);
-            save_text(app, &format!("{set_label}.kys"), text)
+            save_text(app, &format!("{set_label}.kys"), text, false)
         } else {
             let mut sections: Vec<shortcut_sets::Section> = Vec::new();
             for (id, label, path, def) in items {
@@ -693,7 +693,7 @@ fn set_row(
                 }
             }
             let html = shortcut_sets::summarize(&set_label, &sections, cfg!(target_os = "macos"));
-            save_text(app, &format!("{set_label}.html"), html)
+            save_text(app, &format!("{set_label}.htm"), html, true)
         };
         if let Err(e) = result {
             *message = e;
@@ -705,13 +705,16 @@ fn set_row(
     f.insert("newSetName".into(), new_name.map_or(Value::Null, Value::String));
 }
 
-/// Save `text` through the save dialog under the suggested file name.
-fn save_text(app: &mut PhotocraftApp, suggested: &str, text: String) -> Result<Value, String> {
+/// Save `text` through the save dialog under the suggested file name, optionally opening it.
+fn save_text(app: &mut PhotocraftApp, suggested: &str, text: String, open_after: bool) -> Result<Value, String> {
     // A set name can hold characters a file name can't.
     let name: String = suggested.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c }).collect();
     app.pick_save(&name, move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, text.as_bytes())?;
+        if open_after {
+            crate::links::open_file(app, &path);
+        }
         Ok(json!({"path": path}))
     })
 }

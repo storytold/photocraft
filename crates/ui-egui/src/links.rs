@@ -33,6 +33,15 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context, url: &str) -> Value {
     json!({"url": url})
 }
 
+/// Open a saved local file through the platform `open_url` service (no-op when unset, as on
+/// the web), reporting a failure in the status bar without failing the save.
+pub fn open_file(app: &mut PhotocraftApp, path: &str) {
+    let Some(open_url) = app.services.open_url.as_ref() else { return };
+    if let Err(e) = open_url(path) {
+        app.ui.status = e;
+    }
+}
+
 /// The prominent "Join us on Discord" button.
 pub fn discord_button(app: &mut PhotocraftApp, ui: &mut egui::Ui, min_width: f32) -> egui::Response {
     let r = crate::widgets::primary_button(ui, tl!("Join us on Discord"), min_width).on_hover_text(DISCORD);
