@@ -4592,7 +4592,7 @@ fn public_begin_playback_scopes_registered_actions_but_still_rejects_real_recurs
             s.actions.list.push(registered.clone());
             let recording = begin_playback(&mut s, &registered).unwrap();
             let stack = s.actions.playback_stack.clone();
-            assert_eq!(stack[0].position, Some((0, 0)), "public helper captures registered origin");
+            assert_eq!(stack, [crate::actions_cmds::playback_target(&s, 0).unwrap()], "public helper captures the complete registered origin");
             let target = if stable { json!({"actionId":id}) } else { json!({"action":0}) };
             let result = s
                 .execute(
@@ -4617,8 +4617,8 @@ fn public_begin_playback_scopes_registered_actions_but_still_rejects_real_recurs
             assert!(s.actions.playback_stack.is_empty());
         }
     }
-    // A duplicate legacy caption is not a resolved occurrence. In particular, the row1
-    // caller must not be positioned at row0 and replay side effects before recursion is seen.
+    // A duplicate caption must not alias row0: the distinct registered definition resolves
+    // to row1, so recursion is refused before any of its side effects can replay.
     let mut s = Session::new();
     s.execute("file.new", json!({"width":8,"height":8})).unwrap();
     s.actions.list.push(Action::new("Duplicate", vec![]));
@@ -4626,7 +4626,7 @@ fn public_begin_playback_scopes_registered_actions_but_still_rejects_real_recurs
     s.actions.list.push(second.clone());
     let layers = doc(&s).layers.len();
     let recording = begin_playback(&mut s, &second).unwrap();
-    assert!(s.actions.playback_stack[0].position.is_none());
+    assert_eq!(s.actions.playback_stack, [crate::actions_cmds::playback_target(&s, 1).unwrap()]);
     let error = s.execute("actions.play", json!({"action":1})).unwrap_err().to_string();
     assert!(error.contains("recursive action"), "{error}");
     assert_eq!(doc(&s).layers.len(), layers, "immediate recursion cannot replay the first side effect");
@@ -4637,8 +4637,10 @@ fn public_begin_playback_scopes_registered_actions_but_still_rejects_real_recurs
     // Synthetic callers not in the registered list retain the conservative legacy behavior.
     let mut s = Session::new();
     let driver = Action::new("Synthetic driver", vec![]);
+    let expected = crate::actions_cmds::playback_snapshot_target(&s, &driver);
+    assert_ne!(expected, crate::actions_cmds::PlaybackTarget::from(&driver), "an unpublished caller keeps its immutable snapshot");
     let recording = begin_playback(&mut s, &driver).unwrap();
-    assert!(s.actions.playback_stack[0].position.is_none());
+    assert_eq!(s.actions.playback_stack, [expected]);
     finish_playback(&mut s, recording, &driver, 0);
 }
 

@@ -721,7 +721,11 @@ fn action_definitions_written_requires_a_successful_current_write() {
     use crate::actions_cmds::commit_action_id;
 
     let mem = MemBackend::default();
-    mem.write(ACTIONS_FILE, br#"{"version":1,"actions":[{"name":"First"},{"name":"Second"}]}"#).unwrap();
+    let initial = crate::actions_cmds::ActionState {
+        list: vec![crate::actions_cmds::Action::new("First", Vec::new()), crate::actions_cmds::Action::new("Second", Vec::new())],
+        ..Default::default()
+    };
+    mem.write(ACTIONS_FILE, &crate::actions_cmds::library::encode(&initial).unwrap()).unwrap();
     let mut s = Session::new();
     assert!(!s.action_definitions_written());
     s.attach_preset_store(open(Box::new(mem.clone())));
@@ -736,9 +740,11 @@ fn action_definitions_written_requires_a_successful_current_write() {
     let id = "00000000000000000000000000000001";
     commit_action_id(&mut s, 1, id.into()).unwrap();
     assert!(s.action_definitions_written());
-    let saved = load_actions(&mem, &mut Vec::new()).unwrap();
-    assert_eq!(saved.actions[0].name, "Renamed");
-    assert_eq!(saved.actions[1].action_id.as_deref(), Some(id));
+    let mut warnings = Vec::new();
+    let LoadedActions::Loaded(saved) = load_actions(&mem, &mut warnings) else { panic!("the current ATN definitions must load: {warnings:?}") };
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(saved.list[0].name, "Renamed");
+    assert_eq!(saved.list[1].action_id.as_deref(), Some(id));
 
     let mut rejected = Session::new();
     rejected.attach_preset_store(open(Box::new(MigrationFail { mem, fail_name: ACTIONS_FILE.into() })));
