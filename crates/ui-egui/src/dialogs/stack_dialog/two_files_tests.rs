@@ -95,10 +95,7 @@ fn can_confirm_statistics_and_folder_mode_keep_existing_rules() {
 #[test]
 fn load_files_into_stack_ui_greys_ok_and_align_until_two_files() {
     let (_, paths) = pngs("ui-stack", &["a.png", "b.png"]);
-    let mut h = harness(vec![
-        Some(FileDialogAnswer::Paths(vec![paths[0].clone()])),
-        Some(FileDialogAnswer::Paths(vec![paths[1].clone()])),
-    ]);
+    let mut h = harness(vec![Some(FileDialogAnswer::Paths(vec![paths[0].clone()])), Some(FileDialogAnswer::Paths(vec![paths[1].clone()]))]);
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap();
     h.run_steps(4);
