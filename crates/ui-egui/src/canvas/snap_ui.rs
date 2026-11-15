@@ -54,6 +54,9 @@ pub struct ActiveSnap {
     /// Layer alignments only (smart guides), when View › Snap and Smart Guides are on.
     pub smart: SnapTargets,
     pub disabled: bool,
+    /// A Frame-tool press (drawing a frame, or moving an empty one): it snaps to other layers' edges only,
+    /// a moved frame by its edges and never by its centre, and a click that does not drag moves nothing.
+    pub frame: bool,
 }
 
 /// Snap To options from the View menu and the Guides/Grid preferences.
@@ -222,6 +225,8 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     let moves_layer = crate::canvas::command_moves_layer(app, tool, p, mods);
     let crop_tol = crate::crop_ui::tolerance(app);
     let straightens = tool == Tool::Crop && app.crop.drag.is_none() && (app.crop.straighten.armed || mods.command);
+    // Set by the Frame branch below: only a press the Frame tool takes gets its snapping rules.
+    let mut frame_press = false;
     let gesture = if let Some(t) = &app.ui.transform {
         use crate::transform_tool::Hit;
         let h = crate::transform_tool::box_hit(app, t, p, crate::transform_tool::handle_tolerance(app));
@@ -309,7 +314,9 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     } else if tool == Tool::Frame {
         // A frame being drawn snaps its corners; an empty frame being moved snaps its edges, not to
         // itself (#13871).
-        crate::frame_tool::snap_press(app, p).map(|(moved, exclude)| match moved {
+        let press = crate::frame_tool::snap_press(app, p);
+        frame_press = press.is_some();
+        press.map(|(moved, exclude)| match moved {
             Some(rect) => (Gesture::Move { rect }, exclude),
             None => (Gesture::Point, exclude),
         })
@@ -328,8 +335,7 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     }
     // The Frame tool snaps to other layers' edges only, the case measured (#13871): guides, the
     // grid and the document keep today's behaviour of not snapping it.
-    let frame_tool = tool == Tool::Frame;
-    if frame_tool {
+    if frame_press {
         targets = targets.filtered(|k| k == SnapKind::LayerEdge);
     }
     if matches!(gesture, Gesture::SelectionMove { .. })
@@ -342,14 +348,14 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     }
     let smart = if snap_on(app) && matches!(gesture, Gesture::Move { .. } | Gesture::CropImage) && smart_on(app) {
         let smart = build(app, &exclude, true);
-        if frame_tool { smart.filtered(|k| k == SnapKind::LayerEdge) } else { smart }
+        if frame_press { smart.filtered(|k| k == SnapKind::LayerEdge) } else { smart }
     } else {
         SnapTargets::default()
     };
     // Windows Ctrl both starts a straighten line and is held while it is drawn: the override then
     // covers the press too, or the line's start would snap and its end not.
     let disabled = straightens && override_held(mods);
-    app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled });
+    app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled, frame: frame_press });
 }
 
 /// Snap a guide drag that ⌘ with a selection tool starts at `p` (`canvas::command_guide_at`,
@@ -357,7 +363,7 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
 pub fn begin_guide(app: &mut PhotocraftApp, p: [f64; 2]) {
     app.prefs_rt.snap_lines.clear();
     let targets = if snap_on(app) { build(app, &[], false).filtered(|k| k != SnapKind::Guide) } else { SnapTargets::default() };
-    app.prefs_rt.snap = Some(ActiveSnap { gesture: Gesture::Guide, start: p, targets, smart: SnapTargets::default(), disabled: false });
+    app.prefs_rt.snap = Some(ActiveSnap { gesture: Gesture::Guide, start: p, targets, smart: SnapTargets::default(), disabled: false, frame: false });
 }
 
 /// Snap `p` as a point press does (`Gesture::Point`), for a press that began as a selection move
@@ -421,7 +427,8 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2
             let d = [p[0] - snap.start[0], p[1] - snap.start[1]];
             let moved = [rect[0] + d[0], rect[1] + d[1], rect[2] + d[0], rect[3] + d[1]];
             let set = if snap.targets.is_empty() { &snap.smart } else { &snap.targets };
-            let (adj, lines) = set.snap_rect(moved, tol);
+            let (adj, lines) =
+                if snap.frame && matches!(snap.gesture, Gesture::Move { .. }) { set.snap_rect_edges(moved, tol) } else { set.snap_rect(moved, tol) };
             ([p[0] + adj[0], p[1] + adj[1]], lines)
         }
         Gesture::CropImage => {
@@ -654,7 +661,10 @@ pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifier
             if let Some(s) = app.prefs_rt.snap.as_mut() {
                 s.disabled = disabled;
             }
-            let q = apply(app, [x, y], mods);
+            // A click on an empty frame that does not drag moves nothing: the release stays the press, however
+            // near another layer's edge the frame lies.
+            let click = app.prefs_rt.snap.as_ref().is_some_and(|s| s.frame && matches!(s.gesture, Gesture::Move { .. }) && s.start == [x, y]);
+            let q = if click { [x, y] } else { apply(app, [x, y], mods) };
             let p = pixel_round(app, q);
             app.prefs_rt.snap = None;
             app.prefs_rt.snap_lines.clear();
