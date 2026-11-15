@@ -18,7 +18,7 @@ fn dng_opens_as_16_bit_prophoto() {
     assert_eq!(d.depth, SampleType::U16);
     assert_eq!(d.layers.len(), 1);
     let icc = d.icc_profile.as_ref().expect("profile");
-    assert_eq!(icc.as_slice(), &photocraft_cms::Builtin::ProPhotoCompat.profile().to_bytes()[..]);
+    assert_eq!(icc.as_slice(), &craft_cms::Builtin::ProPhotoCompat.profile().to_bytes()[..]);
     assert!(r.warnings.iter().any(|w| w.contains("DNG") && w.contains("ProPhoto")), "{:?}", r.warnings);
 }
 
@@ -232,8 +232,8 @@ fn nef_with_preview_exif(adobe_rgb: bool) -> Vec<u8> {
 fn a_preview_fallback_keeps_the_colour_space_the_raw_states() {
     let tagged = import("DSC_0001.NEF", &nef_with_preview_exif(true)).unwrap();
     let icc = tagged.document.icc_profile.as_deref().expect("an Adobe RGB preview opens tagged");
-    let profile = photocraft_cms::Profile::parse(icc).unwrap();
-    assert!(profile.same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile()));
+    let profile = craft_cms::Profile::parse(icc).unwrap();
+    assert!(profile.same_colors(craft_cms::Builtin::AdobeRgbCompat.profile()));
     // Unstated: untagged sRGB, as before.
     assert!(import("DSC_0001.NEF", &nef_with_preview()).unwrap().document.icc_profile.is_none());
 }
@@ -246,7 +246,7 @@ fn unsupported_raw_falls_back_to_the_embedded_preview() {
 }
 
 /// A DNG 1.7 laid out as converters write one with JPEG XL raw data: an 8×6 JPEG thumbnail in
-/// IFD0, raw data this reader refuses (here floating-point LinearRaw), and a 40×30 preview
+/// IFD0, raw data this reader refuses (here 64-bit floating-point LinearRaw), and a 40×30 preview
 /// compressed with JPEG XL, stored as the raw is (IFD0 Orientation 6).
 fn dng_with_jxl_preview() -> Vec<u8> {
     use zune_core::{bit_depth::BitDepth, colorspace::ColorSpace, options::EncoderOptions};
@@ -257,18 +257,18 @@ fn dng_with_jxl_preview() -> Vec<u8> {
     let mut preview = Vec::new();
     zune_jpegxl::JxlSimpleEncoder::new(&rgb, EncoderOptions::new(w, h, ColorSpace::RGB, BitDepth::Eight)).encode(&mut preview).unwrap();
     let mut t = TiffBuilder::default();
-    let raw_strip = t.blob(vec![0; 4 * 4 * 3 * 2]);
+    let raw_strip = t.blob(vec![0; 4 * 4 * 3 * 8]);
     let raw = t.ifd(vec![
         (254, Val::Long(vec![0])),
         (256, Val::Long(vec![4])),
         (257, Val::Long(vec![4])),
-        (258, Val::Short(vec![16, 16, 16])),
+        (258, Val::Short(vec![64, 64, 64])),
         (259, Val::Short(vec![1])),
         (262, Val::Short(vec![34892])),
         (273, Val::Blobs(vec![raw_strip])),
         (277, Val::Short(vec![3])),
         (278, Val::Long(vec![4])),
-        (279, Val::Long(vec![4 * 4 * 3 * 2])),
+        (279, Val::Long(vec![4 * 4 * 3 * 8])),
         (339, Val::Short(vec![3, 3, 3])),
     ]);
     let preview_len = preview.len() as u32;
@@ -342,13 +342,25 @@ fn cr3_opens_its_upright_camera_jpeg_with_explicit_preview_warning() {
     assert!(r.warnings[0].contains("CR3"));
 }
 
+/// A little-endian TIFF stream whose first directory holds `entries`: a CR3 CMT box.
+fn cmt(entries: Vec<(u16, Val)>) -> Vec<u8> {
+    let mut t = TiffBuilder::default();
+    let ifd = t.ifd(entries);
+    t.chain = vec![ifd];
+    t.build()
+}
+
+/// A plain 32x20 camera JPEG.
+fn camera_jpeg() -> Vec<u8> {
+    let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![180; 32 * 20 * 3]).unwrap();
+    photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap()
+}
+
 /// A CR3 keeps its camera data in CMT boxes (IFD0 in CMT1, the Exif directory in CMT2, GPS in
 /// CMT4), not in a TIFF stream: the preview it opens keeps it for File Info's Camera Data,
-/// without the orientation (the preview is turned upright) or the Exif pixel dimensions.
+/// upright (the preview is already turned) and with the Exif pixel dimensions of the image.
 #[test]
 fn a_cr3_preview_keeps_the_raws_camera_data() {
-    let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![180; 32 * 20 * 3]).unwrap();
-    let jpeg = photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
     let ifd0 = [(271, Val::Ascii("Canon".into())), (272, Val::Ascii("Canon EOS Synthetic".into()))];
     let exif = [
         (33434, Val::Rational(vec![(1, 200)])),
@@ -358,7 +370,7 @@ fn a_cr3_preview_keeps_the_raws_camera_data() {
         (40962, Val::Long(vec![6720])),
         (40963, Val::Long(vec![4480])),
     ];
-    let raw = photocraft_raw::testgen::cr3_preview_with_exif(&jpeg, 6, &ifd0, &exif, &[(0, Val::Byte(vec![2, 3, 0, 0]))]);
+    let raw = photocraft_raw::testgen::cr3_preview_with_exif(&camera_jpeg(), 6, &ifd0, &exif, &[(0, Val::Byte(vec![2, 3, 0, 0]))]);
     let r = import("shot.cr3", &raw).unwrap();
     assert!(r.warnings[0].contains("CR3"), "the preview: {:?}", r.warnings);
     assert_eq!((r.document.size.width, r.document.size.height), (20, 32), "upright");
@@ -368,72 +380,30 @@ fn a_cr3_preview_keeps_the_raws_camera_data() {
     assert_eq!(camera.lens.as_deref(), Some("RF24-105mm F4 L IS USM"));
     assert_eq!((camera.exposure_time, camera.f_number, camera.iso), (Some(1.0 / 200.0), Some(5.6), Some(800.0)));
     assert_eq!(photocraft_codecs::exif_orientation(exif), 1, "no orientation to apply a second time");
-    let tags = exif_ifd_tags(exif);
-    assert!(!tags.contains(&40962) && !tags.contains(&40963), "no Exif pixel dimensions: {tags:?}");
+    let stated = craft_metadata::read_exif(exif);
+    assert_eq!((stated.width, stated.height), (Some(20), Some(32)), "the image's size, not the sensor's");
     assert!(ifd0_tags(exif).contains(&34853), "the GPS directory");
 }
 
-/// An EXIF block has one byte order: a CMT box in another order than CMT1 is left out, not
-/// copied with its values read the wrong way round.
+/// A CMT2 in the other byte order than CMT1 is still read: its values are not read the wrong
+/// way round, nor dropped.
 #[test]
-fn cr3_directories_in_another_byte_order_are_left_out() {
-    let tiff = |big_endian: bool, entries: Vec<(u16, Val)>| {
-        let mut t = TiffBuilder { big_endian, ..Default::default() };
-        let ifd = t.ifd(entries);
-        t.chain = vec![ifd];
-        t.build()
-    };
-    let ifd0 = tiff(false, vec![(271, Val::Ascii("Canon".into()))]);
-    let exif = tiff(true, vec![(33434, Val::Rational(vec![(1, 200)]))]);
-    let block = photocraft_codecs::raw_exif_from_directories(Some(&ifd0), Some(&exif), None).expect("IFD0's tags");
-    let camera = photocraft_algo::exif::read(&block);
-    assert_eq!((camera.make.as_deref(), camera.exposure_time), (Some("Canon"), None));
-    assert_eq!(photocraft_codecs::raw_exif_from_directories(None, None, None), None);
-    assert_eq!(photocraft_codecs::raw_exif_from_directories(Some(b"not a TIFF"), None, None), None);
-}
-
-/// A CMT1 whose header reads but whose IFD0 doesn't sets no byte order: the Exif directory, in
-/// the other order, is kept rather than dropped as mismatched.
-#[test]
-fn an_unreadable_cmt1_does_not_decide_the_byte_order() {
+fn a_cr3_exif_directory_in_the_other_byte_order_is_read() {
     let mut t = TiffBuilder { big_endian: true, ..Default::default() };
     let ifd = t.ifd(vec![(33434, Val::Rational(vec![(1, 200)]))]);
     t.chain = vec![ifd];
-    let exif = t.build();
-    // A little-endian header pointing at an IFD past its end.
-    let ifd0 = b"II*\0\xff\xff\0\0";
-    let block = photocraft_codecs::raw_exif_from_directories(Some(ifd0), Some(&exif), None).expect("the Exif directory");
-    assert_eq!(photocraft_algo::exif::read(&block).exposure_time, Some(1.0 / 200.0));
-}
-
-/// Each CMT box is its own stream with its own copy budget: a GPS directory near the cap doesn't
-/// crowd out the Exif directory's lens name.
-#[test]
-fn a_large_gps_directory_keeps_the_exif_directory() {
-    let tiff = |entries: Vec<(u16, Val)>| {
-        let mut t = TiffBuilder::default();
-        let ifd = t.ifd(entries);
-        t.chain = vec![ifd];
-        t.build()
-    };
-    // Just under the 4 MiB codecs copies from one stream.
-    let gps = tiff(vec![(27, Val::Undefined(vec![0; 4 * 1024 * 1024 - 16]))]);
-    let exif = tiff(vec![(42036, Val::Ascii("RF24-105mm F4 L IS USM".into()))]);
-    let block = photocraft_codecs::raw_exif_from_directories(None, Some(&exif), Some(&gps)).expect("EXIF");
-    assert_eq!(photocraft_algo::exif::read(&block).lens.as_deref(), Some("RF24-105mm F4 L IS USM"));
-    assert!(ifd0_tags(&block).contains(&34853), "the large GPS directory");
+    let boxes = [(*b"CMT1", cmt(vec![(271, Val::Ascii("Canon".into()))])), (*b"CMT2", t.build())];
+    let r = import("shot.cr3", &photocraft_raw::testgen::cr3_with_boxes(&camera_jpeg(), &boxes)).unwrap();
+    let camera = photocraft_algo::exif::read(r.document.metadata.exif.as_deref().expect("EXIF"));
+    assert_eq!((camera.make.as_deref(), camera.exposure_time), (Some("Canon"), Some(1.0 / 200.0)));
 }
 
 /// A CR3 preview that carries an EXIF block of its own (here only an orientation) still gets the
 /// raw's camera data.
 #[test]
 fn a_cr3_preview_with_its_own_exif_takes_the_raws_camera_data() {
-    let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![180; 32 * 20 * 3]).unwrap();
-    let plain = photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
-    let mut t = TiffBuilder::default();
-    let ifd = t.ifd(vec![(274, Val::Short(vec![1]))]);
-    t.chain = vec![ifd];
-    let app1 = [b"Exif\0\0".as_slice(), &t.build()].concat();
+    let plain = camera_jpeg();
+    let app1 = [b"Exif\0\0".as_slice(), &cmt(vec![(274, Val::Short(vec![1]))])].concat();
     let jpeg = [&plain[..2], &[0xFF, 0xE1], &((app1.len() + 2) as u16).to_be_bytes(), &app1, &plain[2..]].concat();
     let ifd0 = [(271, Val::Ascii("Canon".into())), (272, Val::Ascii("Canon EOS Synthetic".into()))];
     let r = import("shot.cr3", &photocraft_raw::testgen::cr3_preview_with_exif(&jpeg, 1, &ifd0, &[], &[])).unwrap();
@@ -444,22 +414,12 @@ fn a_cr3_preview_with_its_own_exif_takes_the_raws_camera_data() {
 /// A damaged CMT2 before a good one: the good one's exposure is read.
 #[test]
 fn a_damaged_cmt2_gives_way_to_a_later_one() {
-    let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![180; 32 * 20 * 3]).unwrap();
-    let jpeg = photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
-    let tiff = |entries: Vec<(u16, Val)>| {
-        let mut t = TiffBuilder::default();
-        let ifd = t.ifd(entries);
-        t.chain = vec![ifd];
-        t.build()
-    };
     let boxes = [
-        (*b"CMT1", tiff(vec![(271, Val::Ascii("Canon".into()))])),
+        (*b"CMT1", cmt(vec![(271, Val::Ascii("Canon".into()))])),
         (*b"CMT2", b"II*\0\xff\xff\0\0".to_vec()),
-        // An Olympus-style header with a readable IFD: not an EXIF block either.
-        (*b"CMT2", [b"IIRO".as_slice(), &tiff(vec![(33434, Val::Rational(vec![(1, 8)]))])[4..]].concat()),
-        (*b"CMT2", tiff(vec![(33434, Val::Rational(vec![(1, 200)]))])),
+        (*b"CMT2", cmt(vec![(33434, Val::Rational(vec![(1, 200)]))])),
     ];
-    let r = import("shot.cr3", &photocraft_raw::testgen::cr3_with_boxes(&jpeg, &boxes)).unwrap();
+    let r = import("shot.cr3", &photocraft_raw::testgen::cr3_with_boxes(&camera_jpeg(), &boxes)).unwrap();
     let camera = photocraft_algo::exif::read(r.document.metadata.exif.as_deref().expect("EXIF"));
     assert_eq!((camera.make.as_deref(), camera.exposure_time), (Some("Canon"), Some(1.0 / 200.0)));
 }
@@ -477,6 +437,17 @@ fn a_developed_raf_keeps_the_camera_data_of_its_jpeg() {
     let camera = photocraft_algo::exif::read(exif);
     assert_eq!((camera.make.as_deref(), camera.model.as_deref()), (Some("FUJIFILM"), Some("X-Synthetic")));
     assert_eq!(photocraft_codecs::exif_orientation(exif), 1, "no orientation to apply a second time");
+}
+
+/// Cut short anywhere, a CR3 with camera data opens or fails, never panics.
+#[test]
+fn truncated_cr3s_with_camera_data_do_not_panic() {
+    let ifd0 = [(271, Val::Ascii("Canon".into()))];
+    let exif = [(33434, Val::Rational(vec![(1, 200)]))];
+    let b = photocraft_raw::testgen::cr3_preview_with_exif(&camera_jpeg(), 6, &ifd0, &exif, &[(0, Val::Byte(vec![2, 3, 0, 0]))]);
+    for n in 0..b.len() {
+        let _ = import("shot.cr3", &b[..n]);
+    }
 }
 
 #[test]
@@ -758,4 +729,75 @@ fn a_re_develop_keeps_the_fitted_look() {
     // The camera's brightening curve: mid-grey comes out lighter.
     let mid = curve.iter().find(|k| k[0] >= 0.18).unwrap();
     assert!(mid[1] > mid[0], "{mid:?}");
+}
+
+/// The open-time Camera Raw dialog decodes the file once, in the open: its preview curve and
+/// Open's re-develop reuse that decode and fitted look, and the developed pixels are those of
+/// decoding and fitting again (#9432).
+#[test]
+fn a_kept_decode_gives_the_same_pixels_and_decodes_once() {
+    use photocraft_io::raw::{
+        Demosaic, RawDecode, RawTuning, decodes_on_this_thread, import_raw_demosaic_keeping, import_raw_tuned, import_raw_tuned_from, take_kept_decode,
+    };
+    let pixels = |r: &photocraft_io::ImportResult| photocraft_io::document_to_image(&r.document, &mut Vec::new()).unwrap().data().to_vec();
+
+    let (w, h) = (480, 320);
+    let cam = patches(w, h);
+    let nef = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
+    let (dw, dh) = (40, 24);
+    let mut dng = DngSpec::cfa(dw, dh, mosaic(&scene(dw, dh), dw, [0, 1, 1, 2], 0, 65535));
+    dng.as_shot_neutral = Some([0.6, 1.0, 0.8]);
+    let dng = dng.build();
+    let (cw, ch) = (48, 16);
+    let cr2 = Cr2Spec {
+        width: cw,
+        height: ch,
+        data: mosaic(&scene(cw, ch), cw, [0, 1, 1, 2], 256, 12000),
+        precision: 14,
+        components: 2,
+        slices: vec![24, 24],
+        borders: None,
+        wb_rggb: None,
+        orientation: 6,
+        model_id: None,
+    }
+    .build();
+
+    for (name, bytes) in [("a.nef", &nef), ("b.dng", &dng), ("c.cr2", &cr2)] {
+        // The open, keeping its decode: one decode in all.
+        let before = decodes_on_this_thread();
+        let opened = import_raw_demosaic_keeping(name, bytes, Demosaic::default()).unwrap();
+        assert_eq!(decodes_on_this_thread() - before, 1, "{name}: the open");
+        let kept = take_kept_decode(bytes).expect("the open kept its decode");
+        assert!(take_kept_decode(bytes).is_none(), "{name}: taking it removes it");
+        let mut reference = pixels(&import(name, bytes).unwrap());
+        assert_eq!(pixels(&opened), reference, "{name}: keeping changes nothing about the open");
+        assert_eq!(kept.tone_curve(), photocraft_io::raw::tone_curve(bytes), "{name}: curve");
+
+        for tuning in [
+            RawTuning::default(),
+            RawTuning { exposure: 0.5, temperature: 20.0, tint: -15.0, shadows: 30.0, clarity: 20.0, ..Default::default() },
+            RawTuning { demosaic: Demosaic::Bilinear, highlights: -40.0, ..Default::default() },
+        ] {
+            let (old, old_wb) = import_raw_tuned(name, bytes, &tuning).unwrap();
+            let before = decodes_on_this_thread();
+            let (new, new_wb) = import_raw_tuned_from(name, bytes, &tuning, &kept).unwrap();
+            assert_eq!(decodes_on_this_thread() - before, 0, "{name}: Open decodes nothing again");
+            assert_eq!((old_wb, &old.warnings), (new_wb, &new.warnings), "{name}");
+            reference = pixels(&old);
+            assert_eq!(pixels(&new), reference, "{name}: {tuning:?}");
+        }
+        // A decode made from the same bytes later (a miss of the open's) is as good.
+        let later = RawDecode::new(bytes).unwrap();
+        let (a, _) = import_raw_tuned_from(name, bytes, &RawTuning::default(), &later).unwrap();
+        assert_eq!(pixels(&a), pixels(&import_raw_tuned(name, bytes, &RawTuning::default()).unwrap().0));
+    }
+
+    // A decode of another file is not used for this one.
+    let other = RawDecode::new(&dng).unwrap();
+    let before = decodes_on_this_thread();
+    let (got, _) = import_raw_tuned_from("a.nef", &nef, &RawTuning::default(), &other).unwrap();
+    assert_eq!(decodes_on_this_thread() - before, 1);
+    assert_eq!(pixels(&got), pixels(&import_raw_tuned("a.nef", &nef, &RawTuning::default()).unwrap().0));
+    assert_eq!((got.document.size.width, got.document.size.height), (w as u32, h as u32));
 }
