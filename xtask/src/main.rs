@@ -170,7 +170,7 @@ fn wasm_set() -> Result<Vec<String>, String> {
 
 /// Optional features that official builds enable and the web app ships, also checked for wasm32:
 /// (package, feature).
-const WASM_FEATURES: &[(&str, &str)] = &[("photocraft-codecs", "heif")];
+const WASM_FEATURES: &[(&str, &str)] = &[("photocraft-io", "heif")];
 
 /// One `cargo check` for the whole set: each crate is checked once, and `--keep-going` still
 /// reports every failing crate. Features unify across the set, so each crate is checked with the
@@ -225,7 +225,7 @@ fn cmd_test() -> Result<(), String> {
     run(c, &format!("cargo {tool} {}", TEST_TARGETS.join(" ")))
 }
 
-/// What the CI gate adds to every build: `--locked`, and the optional photocraft-heif crate that
+/// What the CI gate adds to every build: `--locked`, and the optional craft-heif decoder that
 /// official builds open HEIC photos with.
 const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif"];
 

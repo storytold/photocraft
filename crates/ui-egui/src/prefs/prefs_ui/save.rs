@@ -16,6 +16,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     sync_tooltips(app, ctx);
     crate::widgets::set_scrub_acceleration(ctx, app.session.prefs().enhanced_controls.scrubby_slider_acceleration);
     app.sync_recent();
+    super::agents::sync_agent_link(app, ctx);
     // Monotonic, not `ctx.input(|i| i.time)`: logic also runs on hidden ticks, where egui's input
     // time is that of the last UI pass.
     if let Some(wait) = persist(app, crate::gpu_canvas::now_ms() / 1000.0) {
