@@ -2,6 +2,10 @@ use super::paths::{join, sanitize, stem, write_file};
 use super::save::{SaveOpts, encode};
 use super::{ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Rect, Result, Session, Surface, Value, from_rgba_into, json, str_param};
 
+#[cfg(test)]
+#[path = "layers_to_files_index_tests.rs"]
+mod layers_to_files_index_tests;
+
 // ---------- Export ----------
 
 pub(super) fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
@@ -58,17 +62,16 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
     let mut report = LayerExportReport::default();
-    // Hidden layers never consumed a filename index; every other layer does. An adjustment layer
-    // has no pixels of its own: for PNG and JPEG it exports like an empty layer, as measured
-    // (#13966); the other formats were not measured and still skip it, keeping its number.
-    let mut i = 0usize;
-    for l in doc.layers.iter().rev() {
+    // Every layer takes its panel-order index, even one skipped as hidden or as an adjustment,
+    // so a file keeps the same number whether Visible Layers Only is on or off (#13959). An
+    // adjustment layer has no pixels of its own: for PNG and JPEG it exports like an empty layer
+    // under its own panel-order index, as measured (#13966); the other formats were not measured
+    // and still skip it, leaving its number unused.
+    for (index, l) in doc.layers.iter().rev().enumerate() {
         if !l.visible && visible_only {
             report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" });
             continue;
         }
-        let index = i;
-        i += 1;
         if matches!(l.content, LayerContent::Adjustment(_)) && !matches!(format.as_str(), "png" | "jpg" | "jpeg") {
             report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "adjustment layer has no pixels of its own" });
             continue;
@@ -96,7 +99,8 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
             }
         }
 
-        let name = format!("{}_{:04}_{}.{format}", sanitize(&prefix), index, sanitize(&l.name));
+        // The prefix is optional; only the layer name needs the empty-name fallback.
+        let name = format!("{}_{:04}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, index, sanitize(&l.name));
         let (bytes, _warnings) = encode(&one, &name, save)?;
         write(&name, &bytes)?;
         report.files.push(name);
@@ -263,3 +267,7 @@ pub(super) fn push_unique(v: &mut Vec<f64>, x: f64) {
         v.push(x);
     }
 }
+
+#[cfg(test)]
+#[path = "layers_to_files_prefix_tests.rs"]
+mod layers_to_files_prefix_tests;
