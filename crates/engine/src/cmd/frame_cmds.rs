@@ -2,8 +2,9 @@
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 use photocraft_color::{BlendMode, Color};
-use photocraft_doc::{Document, Frame, Layer, LayerContent, LayerId, Path, VectorMask};
+use photocraft_doc::{Document, Frame, Layer, LayerContent, LayerId, LiveShape, Path, VectorMask};
 use photocraft_geom::Affine;
+use photocraft_vector as vector;
 use serde_json::{Value, json};
 
 fn bad(msg: impl Into<String>) -> EngineError {
@@ -33,11 +34,19 @@ pub const MAX_FRAME_RADIUS: f64 = 150_000.0;
 
 /// A star Polygon frame's unit outline (#13876), as the reference application draws it: `sides`
 /// outer points, the inner ones at `percent` of the polygon's apothem (not of its radius), the
-/// whole star stretched to fill the frame's `w` × `h` box; corners rounded by `radius` px.
+/// whole star stretched to fill the frame's `w` × `h` box; the outer points rounded by `radius` px.
+///
+/// The star is built from its live shape, not through `shape.create`, which clamps the ratio to
+/// 1 %: 1 % of the apothem is below that (0.8 % of the radius on five sides, 0.5 % on three).
+/// The sharp star is stretched to the box first and rounded there, in document pixels, so the arcs
+/// stay circular and `radius` is the radius drawn on a frame that isn't square.
 pub fn star_path(sides: u64, percent: f64, radius: f64, w: f64, h: f64) -> Result<Path> {
-    let inner = percent / 100.0 * (std::f64::consts::PI / sides.max(3) as f64).cos();
-    let sized = crate::vector_cmds::shape_path(&json!({"kind": "star", "rect": [0.0, 0.0, w, h], "sides": sides, "starRatio": inner, "cornerRadius": radius}))?;
-    Ok(normalized(&sized)?.0)
+    let sides = sides.clamp(3, 100);
+    let inner = percent / 100.0 * (std::f64::consts::PI / sides as f64).cos();
+    let sharp = vector::shapes::live_path(&LiveShape::Polygon { rect: [0.0, 0.0, w, h], sides: sides as u32, star_ratio: inner, corner_radius: 0.0 });
+    let sized = normalized(&sharp)?.0.transform(&Affine { m: [w, 0.0, 0.0, h, 0.0, 0.0] });
+    let rounded = vector::shapes::round_corners_where(sized, radius, |i| vector::shapes::polygon_rounds_vertex(inner, i));
+    Ok(rounded.transform(&Affine { m: [1.0 / w, 0.0, 0.0, 1.0 / h, 0.0, 0.0] }))
 }
 
 fn geometry(p: &Value) -> Result<Frame> {
