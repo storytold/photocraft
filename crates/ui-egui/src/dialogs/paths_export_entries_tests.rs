@@ -27,10 +27,10 @@ fn app() -> PhotocraftApp {
 #[test]
 fn entries_labels_and_separators_follow_the_reference_order() {
     let (names, labels, groups) = paths_export_entries(&app());
-    assert_eq!(names, ["documentBounds", "all", "Rect A", "path:all", "work", "Rectangle 1 Shape Path"]);
+    assert_eq!(names, ["documentBounds", "all", "Rect A", "path:all", "work", "layer"]);
     let label = |v: &str| labels[v].as_str().unwrap().to_string();
     assert_eq!(
-        [label("documentBounds"), label("all"), label("Rect A"), label("path:all"), label("work"), label("Rectangle 1 Shape Path")],
+        [label("documentBounds"), label("all"), label("Rect A"), label("path:all"), label("work"), label("layer")],
         ["Document Bounds", "All Paths", "Rect A", "all", "Work Path", "Rectangle 1 Shape Path"]
     );
     assert_eq!(groups, ["all", "Rect A"], "separators above All Paths and above the first path");
@@ -72,4 +72,25 @@ fn the_dropdown_shows_the_labels_in_order() {
     let order = [y("Document Bounds"), y("Rect A"), y("Work Path"), y("Rectangle 1 Shape Path")];
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
     assert!(h.query_by_label("All").is_none() && h.query_by_label("Work").is_none(), "no raw values");
+}
+
+/// CodeRabbit on #15051: every entry has its own value. Saved paths called `layer` and `path:all` get
+/// `path:` values, and the active layer's path is `layer` whatever a saved path is named, so two rows
+/// never send the same value.
+#[test]
+fn every_entry_has_its_own_value_even_for_awkward_names() {
+    let mut app = app();
+    for (name, x) in [("layer", 150.0), ("path:all", 180.0), ("Rectangle 1 Shape Path", 210.0)] {
+        app.run("path.set", json!({"name": name, "path": path(x)})).unwrap();
+    }
+    let (names, labels, _) = paths_export_entries(&app);
+    let unique: std::collections::HashSet<_> = names.iter().collect();
+    assert_eq!(unique.len(), names.len(), "{names:?}");
+    assert!(names.contains(&"path:layer".to_string()) && names.contains(&"path:path:all".to_string()) && names.contains(&"layer".to_string()));
+    // The layer row and the saved path of the same display name export different geometry.
+    let layer_rows: Vec<_> = names.iter().filter(|v| labels[v.as_str()] == json!("Rectangle 1 Shape Path")).collect();
+    assert_eq!(layer_rows.len(), 2, "one saved path and the layer, same label: {layer_rows:?}");
+    let mut ai = |v: &str| app.run(COMMAND, json!({"paths": v})).unwrap()["ai"].as_str().unwrap().to_string();
+    assert!(ai("layer").contains("200.0000") && !ai("layer").contains("210.0000"));
+    assert!(ai("Rectangle 1 Shape Path").contains("210.0000"));
 }

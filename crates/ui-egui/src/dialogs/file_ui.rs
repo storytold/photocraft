@@ -148,7 +148,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             // document no longer has falls back to All Paths (Document Bounds without paths).
             let layer = app.session.active().and_then(|d| photocraft_engine::print_cmds::active_layer_path(&d.doc, d.active_layer).map(|(n, _)| n));
             let selected = app.ui.selected_path.as_deref().map(|s| match s {
-                "layer" => layer.clone().unwrap_or_default(),
+                "layer" => layer.as_ref().map(|_| "layer".to_string()).unwrap_or_default(),
                 "work" => "work".to_string(),
                 name => saved_path_value(name),
             });
@@ -181,7 +181,8 @@ fn paths_export_entries(app: &PhotocraftApp) -> (Vec<String>, Map<String, Value>
     if d.doc.work_path.is_some() {
         paths.push(("work".into(), tl!("Work Path").into()));
     }
-    paths.extend(layer.map(|n| (n.clone(), n)));
+    // The active layer's path has its own selector, so a saved path of the same name stays distinct.
+    paths.extend(layer.map(|n| ("layer".to_string(), n)));
     if paths.is_empty() {
         return (names, labels, Vec::new());
     }
@@ -196,9 +197,10 @@ fn paths_export_entries(app: &PhotocraftApp) -> (Vec<String>, Map<String, Value>
 }
 
 /// The value a saved path is exported by: its name, or `path:<name>` when the name is one of the
-/// reserved values (`all`, `work`, `documentBounds`) or itself starts with `path:` (#13776).
+/// reserved values (`all`, `work`, `layer`, `documentBounds`) or itself starts with `path:` (#13776).
+/// The engine reads a `path:` value as the saved path with the rest as its name before anything else.
 fn saved_path_value(name: &str) -> String {
-    if matches!(name, "all" | "work" | "documentBounds") || name.starts_with("path:") { format!("path:{name}") } else { name.to_string() }
+    if matches!(name, "all" | "work" | "layer" | "documentBounds") || name.starts_with("path:") { format!("path:{name}") } else { name.to_string() }
 }
 
 #[cfg(test)]

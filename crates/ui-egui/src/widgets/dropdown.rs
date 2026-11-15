@@ -75,6 +75,20 @@ pub fn dropdown_wheel_grouped<T: PartialEq + Clone>(
     dropdown_with(ui, id, name, current, options, width, true, true, &starts_group, &|_| true)
 }
 
+/// [`dropdown_wheel_grouped`] whose option labels are shown exactly as given: a name the user typed (a
+/// saved path called `All Paths`, say) must not be translated.
+pub fn dropdown_wheel_grouped_literal<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    starts_group: impl Fn(&T) -> bool,
+) -> (Vec<T>, Option<T>) {
+    dropdown_with(ui, id, name, current, options, width, true, false, &starts_group, &|_| true)
+}
+
 /// [`dropdown_wheel_grouped`] whose open list greys the options `enabled` refuses: drawn disabled,
 /// not picked by the pointer and not previewed, and passed over by every wheel notch. The keys
 /// still land on them; the caller steps past (#12879, the Pattern Stamp's Behind on the
