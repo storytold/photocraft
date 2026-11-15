@@ -38,7 +38,25 @@ pub struct FrameToolUi {
     /// Space (the reposition key) is held: a frame being drawn moves instead of sizing (#13867).
     #[serde(skip)]
     pub space: bool,
+    /// The options bar's stroke width, alignment and colour, kept while the stroke is off (No
+    /// Color) for the next time a colour turns it on (#13873).
+    #[serde(default = "default_stroke_style")]
+    pub stroke_style: photocraft_doc::ShapeStroke,
 }
+
+/// A new frame's stroke as the reference application starts it (#13873): 1 px, Center, solid
+/// black; off until a colour is picked.
+pub fn default_stroke_style() -> photocraft_doc::ShapeStroke {
+    photocraft_doc::ShapeStroke { width: 1.0, ..photocraft_doc::ShapeStroke::default() }
+}
+
+#[cfg(test)]
+mod stroke_options_tests;
+/// The options bar's stroke width range (#13873).
+pub const STROKE_WIDTH: std::ops::RangeInclusive<f32> = 0.0..=288.0;
+
+/// The alert for a width typed past [`STROKE_WIDTH`], as the reference application words it.
+pub const STROKE_WIDTH_ALERT: &str = "A value between 0 pixel and 288 Pixels is required. Closest value inserted.";
 impl Default for FrameToolUi {
     fn default() -> Self {
         Self {
@@ -51,6 +69,7 @@ impl Default for FrameToolUi {
             drag: None,
             auto_transform: false,
             space: false,
+            stroke_style: default_stroke_style(),
         }
     }
 }
@@ -738,6 +757,78 @@ fn stroke_controls(ui: &mut egui::Ui, value: &mut Option<photocraft_doc::ShapeSt
     }
     *value != before
 }
+/// The stroke after the options bar's swatch answered `change` (#13873): a colour turns it on with
+/// that colour and `style`'s width and alignment, No Color turns it off. Gradients aren't a frame
+/// stroke yet (not measured), and the Color Picker button opens nothing here: both change nothing.
+pub(crate) fn stroke_after_swatch(
+    style: &photocraft_doc::ShapeStroke,
+    change: &crate::shape_paint_ui::PaintChange,
+) -> Option<Option<photocraft_doc::ShapeStroke>> {
+    use crate::shape_paint_ui::PaintChange;
+    match change {
+        PaintChange::Color([r, g, b, a]) => {
+            Some(Some(photocraft_doc::ShapeStroke { paint: photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(*r, *g, *b, *a)), ..style.clone() }))
+        }
+        PaintChange::None => Some(None),
+        PaintChange::Gradient(_) | PaintChange::OpenPicker => None,
+    }
+}
+
+/// The Frame tool's options-bar stroke (#13873): the stroke swatch (No Color by default), the
+/// width field (0–288 px, decimals kept) and the alignment, always shown. `stroke` is the stroke
+/// shown (`None`: off); `style` keeps the width, alignment and colour while it is off. Returns the
+/// new stroke when it changed, and whether a width past the range was typed.
+fn options_stroke_controls(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    stroke: &Option<photocraft_doc::ShapeStroke>,
+) -> (Option<Option<photocraft_doc::ShapeStroke>>, bool) {
+    let mut style = stroke.clone().unwrap_or_else(|| app.ui.frame_tool.stroke_style.clone());
+    let mut changed: Option<Option<photocraft_doc::ShapeStroke>> = None;
+    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let lib = crate::paint_picker::library(&app.session, ui.ctx());
+    let mut gradients = crate::shape_gradient_ui::GradientChoices {
+        presets: &app.session.presets.gradients,
+        current: &app.session.presets.gradient,
+        recent: &mut app.ui.recent_gradients,
+        fg,
+        bg,
+    };
+    if let Some(change) = crate::shape_paint_ui::swatch(ui, &lib, stroke.as_ref().map(|s| &s.paint), fg, tl!("Set Frame stroke type"), &mut gradients) {
+        changed = stroke_after_swatch(&style, &change);
+    }
+    let (r, alert) = crate::widgets::value_field_alerting(ui, tl!("Set Frame stroke width"), &mut style.width, STROKE_WIDTH, "px", 58.0);
+    let r = r.on_hover_text(tl!("Set Frame stroke width"));
+    let mut align = style.align;
+    craft_ui::ComboBox::from_id_salt("frame-stroke-align")
+        .selected_text(match style.align {
+            photocraft_doc::StrokeAlign::Inside => tl!("Inside"),
+            photocraft_doc::StrokeAlign::Outside => tl!("Outside"),
+            _ => tl!("Center"),
+        })
+        .show_ui(ui, |ui| {
+            for (a, label) in [
+                (photocraft_doc::StrokeAlign::Inside, tl!("Inside")),
+                (photocraft_doc::StrokeAlign::Center, tl!("Center")),
+                (photocraft_doc::StrokeAlign::Outside, tl!("Outside")),
+            ] {
+                ui.selectable_value(&mut align, a, label);
+            }
+        })
+        .response
+        .on_hover_text(tl!("Set align type for stroke"));
+    if changed.is_none() && (r.changed() || align != style.align) {
+        style.align = align;
+        // Width and alignment change the stroke when it is on, and are only kept for later (below)
+        // when it is off.
+        changed = stroke.as_ref().map(|_| Some(style.clone()));
+    }
+    // Whatever the stroke is now, its width, alignment and colour are the next ones to use.
+    let kept = changed.clone().flatten().unwrap_or_else(|| style.clone());
+    app.ui.frame_tool.stroke_style = photocraft_doc::ShapeStroke { align, ..kept };
+    (changed, alert)
+}
+
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if tool != Tool::Frame {
         return false;
@@ -774,8 +865,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     crate::widgets::vline(ui, 22.);
     let gesture = crate::vector_ui::paint_gesture(ui, ui.scope_id().with("frame-options-gesture"));
     let coalesce = format!("frame-stroke-{}-{gesture}", ui.scope_id().value());
-    let mut stroke = selected(app).and_then(|l| l.frame.as_ref()).map_or_else(|| app.ui.frame_tool.stroke.clone(), |f| f.stroke.clone());
-    if stroke_controls(ui, &mut stroke) {
+    let stroke = selected(app).and_then(|l| l.frame.as_ref()).map_or_else(|| app.ui.frame_tool.stroke.clone(), |f| f.stroke.clone());
+    let (changed, alert) = options_stroke_controls(app, ui, &stroke);
+    if alert {
+        crate::panels::options_bar::range_alert(&mut app.ui, STROKE_WIDTH_ALERT);
+    }
+    if let Some(stroke) = changed {
         app.ui.frame_tool.stroke = stroke.clone();
         if let Some(id) = selected(app).map(|l| l.id) {
             let params = stroke.as_ref().map(stroke_json).unwrap_or(Value::Null);
