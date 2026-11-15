@@ -13,13 +13,14 @@ fn xz_preset_nine_dictionary_includes_decoder_overhead_but_stays_bounded() {
     // Original minimal v26 XCF, compressed using Python's liblzma FORMAT_XZ
     // presets 9 and (9 | PRESET_EXTREME). Both produce these identical bytes.
     // Store the small result so running this test does not allocate a -9 encoder.
-    let encoded = "fd377a585a000004e6d6b446020021011c00000010cf58cce00035001b5d00339a49fbe397e4455415f47d24eb590444701acb0ca7bdd59927000000ff32c0ddfaf594fb0001373686803b7f1fb6f37d010000000004595a";
+    let encoded = "fd377a585a000004e6d6b446020021011c00000010cf58cce0003d001b5d00339a49fbe397e4455415f47d24eb590444701acb0ca7bde17c6700000022f43d0d7a807d030001373eb408e0711fb6f37d010000000004595a";
     let bytes: Vec<u8> = encoded.as_bytes().chunks_exact(2).map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect();
     let mut expected = b"gimp xcf v026\0".to_vec();
     for value in [1_u32, 1, 0, 150] {
         expected.extend(value.to_be_bytes());
     }
-    expected.extend([0; 24]);
+    // Property END plus 64-bit layer, channel, and v18+ path-list terminators.
+    expected.extend([0; 32]);
     assert_eq!(bytes[16], 28, "LZMA2 property 28 declares a 64 MiB dictionary");
     assert_eq!(lzma_rust2::lzma2_get_memory_usage(64 << 20), 65_640);
     assert_eq!(decode("preset-9.xcf.xz", &bytes, &Interrupt::NONE).unwrap().unwrap(), expected);
