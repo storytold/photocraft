@@ -251,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_window_owning_marquee_clears_layer_box_even_after_finish_clears_move_viewport() {
+    fn finish_and_clear_move_blocked_retain_move_viewport_while_layer_box_is_active() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let vid = egui::ViewportId::from_hash_of("secondary-window");
         app.current_viewport = Some(vid);
@@ -259,13 +259,11 @@ mod tests {
         assert_eq!(app.move_viewport, Some(vid));
         assert!(app.layer_box.as_ref().is_some_and(|b| b.grabbed_layer.is_none()));
 
-        let close = true;
-        // Captured before finish runs:
-        let closing_owner = close && app.move_viewport == Some(vid);
+        // While an empty-space marquee is active, clear_move_blocked retains move_viewport:
+        app.clear_move_blocked();
+        assert_eq!(app.move_viewport, Some(vid), "move_viewport is retained while layer_box is active");
 
-        // When the window closes with the pointer up, layer_transfer::finish runs first
-        // inside the closing window's viewport (where ctx.viewport_id() == vid)
-        // and clears move_viewport via clear_move_blocked:
+        // finish also retains move_viewport:
         let ctx = egui::Context::default();
         let mut raw = egui::RawInput { viewport_id: vid, ..Default::default() };
         raw.viewports.insert(vid, egui::ViewportInfo::default());
@@ -273,14 +271,36 @@ mod tests {
             crate::layer_transfer::finish(&mut app, ui.ctx());
         });
         out.textures_delta.clear();
-        assert_eq!(app.move_viewport, None, "finish cleared move_viewport");
-        assert!(app.layer_box.is_some(), "finish without grabbed_layer does not clear layer_box");
+        assert_eq!(app.move_viewport, Some(vid), "finish retains move_viewport while layer_box is active");
 
-        // The close handler uses the saved closing_owner flag to complete the cleanup:
+        // Events from another viewport are guarded:
+        app.current_viewport = Some(egui::ViewportId::from_hash_of("other-window"));
+        let ev = ToolEvent::Move { x: 20.0, y: 20.0, pressure: 1.0 };
+        assert!(!super::pointer(&mut app, ev), "other viewport event is guarded");
+
+        // Ending the marquee via Up clears both layer_box and move_viewport:
+        app.current_viewport = Some(vid);
+        let up = ToolEvent::Up { x: 20.0, y: 20.0 };
+        assert!(super::pointer(&mut app, up));
+        assert!(app.layer_box.is_none());
+        assert_eq!(app.move_viewport, None, "marquee end clears move_viewport");
+    }
+
+    #[test]
+    fn closing_window_owning_marquee_clears_layer_box() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let vid = egui::ViewportId::from_hash_of("secondary-window");
+        app.current_viewport = Some(vid);
+        super::begin(&mut app, [10.0, 10.0], false, true, false);
+        assert_eq!(app.move_viewport, Some(vid));
+
+        let close = true;
+        let closing_owner = close && app.move_viewport == Some(vid);
         if close && closing_owner {
-            app.clear_move_blocked();
             app.layer_box = None;
+            app.clear_move_blocked();
         }
-        assert!(app.layer_box.is_none(), "marquee is properly cancelled when its owning window closes");
+        assert!(app.layer_box.is_none());
+        assert_eq!(app.move_viewport, None);
     }
 }

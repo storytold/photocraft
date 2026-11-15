@@ -329,7 +329,9 @@ impl PhotocraftApp {
         self.move_blocked_start = None;
         self.move_blocked_moved = false;
         self.move_blocked_layer = None;
-        self.move_viewport = None;
+        if self.layer_box.is_none() {
+            self.move_viewport = None;
+        }
     }
 }
 

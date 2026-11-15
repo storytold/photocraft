@@ -411,10 +411,25 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(parts) = &float_parts {
                 if parts.copied {
                     // A copy-created float leaves the original pixels in the source layer, so
-                    // `cut` clears the selected pixels there instead of restoring a remainder
-                    // that was never cut.
+                    // `cut` removes the selected pixels there instead of restoring a remainder
+                    // that was never cut. For non-Background pixel layers, lift the selection
+                    // coverage (as a cut-created float does) so partially selected pixels do not
+                    // leave residual alpha in the source.
                     if mask_target {
                         crate::cmd::edit_cmds::clear_mask(doc, cut_id, bg, &json!({"target": "mask"}))?;
+                    } else if doc.is_background(cut_id) {
+                        crate::cmd::edit_cmds::clear_selected(doc, cut_id, bg)?;
+                    } else if let Some(sel) = doc.selection.clone() {
+                        let surf = crate::commands::paint_surface(doc, cut_id, &Value::Null)?;
+                        let fmt = surf.format();
+                        if !fmt.alpha {
+                            *surf = surf.convert(photocraft_color::PixelFormat::new(fmt.mode, fmt.sample, true));
+                        }
+                        let b = sel.content_bounds().intersect(&surf.content_bounds());
+                        if !b.is_empty() {
+                            crate::pixels::try_lift_coverage(surf, b, &sel)?;
+                            surf.prune();
+                        }
                     } else {
                         crate::cmd::edit_cmds::clear_selected(doc, cut_id, bg)?;
                     }

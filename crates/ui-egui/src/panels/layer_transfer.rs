@@ -208,6 +208,7 @@ pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
             && b.grabbed_layer.is_some()
         {
             app.layer_box = None;
+            app.move_viewport = None;
         }
     }
     let Some(t) = get(ctx) else { return };
