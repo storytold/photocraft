@@ -486,11 +486,14 @@ fn add_instance(f: &mut Map<String, Value>, kind: &str) {
 /// Inserts a copy of the instance `id` (every value, a new id) directly above it, and selects
 /// it: the "+" on a selected Stroke row, as measured in the reference (#15003).
 fn copy_instance(f: &mut Map<String, Value>, id: &str) {
+    let Some(a) = f.get("effects").and_then(Value::as_array) else { return };
+    let Some(pos) = a.iter().position(|e| e.get("id").and_then(Value::as_str) == Some(id)) else { return };
+    let Some(mut copy) = a.get(pos).cloned() else { return };
     let new_id = next_id(f);
+    // A source that is not an object (hostile or damaged state) is left alone; indexing would panic.
+    let Some(o) = copy.as_object_mut() else { return };
+    o.insert("id".into(), json!(new_id));
     if let Some(a) = f.get_mut("effects").and_then(Value::as_array_mut) {
-        let Some(pos) = a.iter().position(|e| e.get("id").and_then(Value::as_str) == Some(id)) else { return };
-        let Some(mut copy) = a.get(pos).cloned() else { return };
-        copy["id"] = json!(new_id);
         a.insert(pos, copy);
         f.insert("selected".into(), json!(new_id));
     }

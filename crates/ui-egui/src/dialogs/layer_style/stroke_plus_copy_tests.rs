@@ -128,22 +128,67 @@ fn plus_on_a_stroke_row_that_is_not_selected_keeps_adding_fresh_values() {
     assert_eq!(h.state()["selected"], after[2]["id"]);
 }
 
-#[test]
-fn the_fx_menu_and_the_empty_stroke_row_keep_adding_fresh_values() {
-    let mut f = fields("stroke", &[blue()], 0);
-    pick_from_fx_menu(&mut f, "stroke");
-    let a = f["effects"].as_array().unwrap();
-    assert!(a.iter().any(|e| e["params"] == fresh_params("stroke", 120.0, None)), "the fx menu adds fresh values: {a:?}");
-
-    let mut f = Map::new();
-    f.insert("effects".into(), json!([]));
-    f.insert("selected".into(), json!(BLENDING));
-    add_instance(&mut f, "stroke");
-    assert_eq!(f["effects"][0]["params"], fresh_params("stroke", 120.0, None), "the empty row's + adds fresh values");
+/// Clicks the greyed (empty) Stroke row of a list that has no effects, as a user does.
+fn click_empty_stroke_row(h: &mut Harness<'static, Map<String, Value>>) {
+    let mut rows: Vec<egui::Rect> = h
+        .query_all(by())
+        .filter_map(|n| n.accesskit_node().bounding_box())
+        .map(|r| egui::Rect::from_min_max(egui::pos2(r.x0 as f32, r.y0 as f32), egui::pos2(r.x1 as f32, r.y1 as f32)))
+        .filter(|r| (r.height() - 26.0).abs() < 0.5 && r.width() > 100.0)
+        .collect();
+    rows.sort_by(|a, b| a.center().y.total_cmp(&b.center().y));
+    rows.dedup_by(|b, a| (a.center().y - b.center().y).abs() < 1.0);
+    // Styles and Blending Options come first, then one row per kind, all greyed here.
+    let index = 2 + KINDS.iter().position(|k| k.0 == "stroke").unwrap_or(0);
+    let Some(row) = rows.get(index).copied() else { panic!("row {index} exists: {rows:?}") };
+    let pos = row.left_center() + vec2(60.0, 0.0);
+    h.event(egui::Event::PointerMoved(pos));
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
 }
 
 #[test]
-fn plus_on_a_selected_drop_shadow_row_is_unchanged() {
+fn the_empty_stroke_row_adds_exactly_one_fresh_stroke() {
+    let mut f = Map::new();
+    f.insert("effects".into(), json!([]));
+    f.insert("selected".into(), json!(BLENDING));
+    let mut h = list(f);
+    click_empty_stroke_row(&mut h);
+    let after = effects(&h);
+    assert_eq!(after.len(), 1, "one entry more, not a copy of anything: {after:?}");
+    assert_eq!(after[0]["kind"], "stroke");
+    assert_eq!(after[0]["params"], fresh_params("stroke", 120.0, None), "default values");
+    assert_eq!(h.state()["selected"], after[0]["id"]);
+}
+
+#[test]
+fn the_fx_menu_adds_exactly_one_fresh_stroke_after_the_last() {
+    let mut f = fields("stroke", &[blue()], 0);
+    pick_from_fx_menu(&mut f, "stroke");
+    let a = f["effects"].as_array().unwrap();
+    assert_eq!(a.len(), 2);
+    assert_eq!(a[1]["params"], fresh_params("stroke", 120.0, None), "the fx menu adds fresh values: {a:?}");
+    assert_eq!(a[0]["params"]["color"], "#0000ff", "the existing stroke is untouched");
+}
+
+#[test]
+fn a_source_that_is_not_an_object_is_left_alone() {
+    let mut f = Map::new();
+    f.insert("effects".into(), json!([5]));
+    copy_instance(&mut f, "fx1");
+    assert_eq!(f["effects"], json!([5]));
+    let mut f = Map::new();
+    f.insert("effects".into(), json!([{"id": "fx1"}, 7]));
+    f.insert("selected".into(), json!("fx1"));
+    copy_instance(&mut f, "fx1");
+    assert_eq!(f["effects"].as_array().map(Vec::len), Some(3), "an object source still copies");
+}
+
+#[test]
+/// Pins the scope of #15003 (Stroke only), not measured parity: a later change may copy other kinds too.
+fn plus_on_a_selected_drop_shadow_row_keeps_adding_fresh_values_in_this_scope() {
     let shadow = json!({"distance": 12.0, "size": 9.0});
     let mut h = list(fields("dropShadow", &[shadow.clone(), shadow], 0));
     click_plus(&mut h, 0);
