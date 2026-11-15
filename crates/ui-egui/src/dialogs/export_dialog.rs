@@ -506,6 +506,10 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
     // A preview bounds the final canvas, not only the image: a 1 × 1 image on a 15000 × 15000 canvas
     // would otherwise be a 225-million-pixel proxy. The image shrinks with it.
     let canvas = export_canvas(f, w, h);
+    // The exported canvas counts for ICO as well: a small image on a 512 px canvas is a 512 px icon.
+    if s_fmt(f) == "ico" && max_side.is_none() && canvas.is_some_and(|(cw, ch)| cw > 256.0 || ch > 256.0) {
+        return Err("ICO export is limited to 256 × 256 pixels; reduce the canvas size".into());
+    }
     let (w, h, canvas) = match (canvas, max_side) {
         (Some((cw, ch)), Some(m)) if cw.max(ch) > f64::from(m) => {
             let k = f64::from(m) / cw.max(ch);

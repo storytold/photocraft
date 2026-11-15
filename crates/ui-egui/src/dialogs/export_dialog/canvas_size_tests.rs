@@ -221,3 +221,22 @@ fn an_untouched_canvas_over_the_limit_crops_nothing() {
     let set = json!({"width": 20000, "height": 1000, "canvasWidth": 18000, "canvasHeight": 1000});
     assert_eq!(exported_size(&doc, set, None), (15_000, 1_000), "a set side clamps to the limit");
 }
+
+/// CodeRabbit on #15025: the ICO limit applies to the exported canvas, not only the image.
+#[test]
+fn an_ico_canvas_over_256_px_is_refused() {
+    let doc = big_doc(128, 128);
+    let mut f = json!({"format": "ico", "scale": 100, "profile": "document", "width": 128, "height": 128, "canvasWidth": 512, "canvasHeight": 512})
+        .as_object()
+        .unwrap()
+        .clone();
+    let profile = photocraft_engine::color_cmds::document_profile(&doc);
+    let err = export_document(&doc, &f, None, &profile).unwrap_err();
+    assert!(err.contains("256"), "{err}");
+    // Within the limit it exports, and a preview is not refused.
+    f.insert("canvasWidth".into(), json!(256));
+    f.insert("canvasHeight".into(), json!(200));
+    assert_eq!(export_document(&doc, &f, None, &profile).map(|d| (d.size.width, d.size.height)), Ok((256, 200)));
+    f.insert("canvasWidth".into(), json!(512));
+    assert!(export_document(&doc, &f, Some(256), &profile).is_ok());
+}
