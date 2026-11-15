@@ -16,9 +16,11 @@ use serde_json::{Map, Value, json};
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
 
+mod color_settings_presets;
 mod zoom_center;
 
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
+pub(crate) use color_settings_presets::MONITOR_RGB as COLOR_SETTINGS_MONITOR_RGB;
 pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1223,6 +1225,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             super::fade_modes::row(ui, f, &label(&p.key));
             continue;
         }
+        if color_settings_presets::owns(&cmd, &p.key) {
+            color_settings_presets::row(ui, f);
+            continue;
+        }
         if zoom_center::owns(&cmd, f) && matches!(p.key.as_str(), "centerX" | "centerY") {
             if p.key == "centerX" {
                 zoom_center::row(ui, f);
@@ -1494,6 +1500,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
     if cmd == REPLACE_COLOR {
         replace_color_result(ui, f);
+    }
+    if cmd == color_settings_presets::COMMAND {
+        color_settings_presets::sync(ui.ctx(), f);
     }
     // Read-only context the dialog opener supplies (e.g. the monitor profile in use).
     if let Some(note) = f.get("__note").and_then(Value::as_str) {

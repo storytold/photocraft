@@ -434,6 +434,10 @@ fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
     // Color Settings: the monitor profile in use can change while it is open.
     if fields.get("__command").and_then(Value::as_str) == Some("edit.colorSettings") {
         fields.insert("__note".into(), Value::String(crate::monitor_status::note(app)));
+        // The working RGB the Settings menu's "Monitor Color" sets with the shown Monitor Profile (#14229).
+        let monitor = fields.get("monitorProfile").and_then(Value::as_str).unwrap_or("auto");
+        let rgb = app.session.color.monitor_rgb_for(monitor);
+        fields.insert(crate::filter_dialog::COLOR_SETTINGS_MONITOR_RGB.into(), Value::String(rgb));
     }
     // Long parameter lists (Flame, Lighting Effects) scroll, so the title and the
     // OK / Cancel buttons stay inside a small window. The preview window below the
