@@ -152,16 +152,46 @@ fn alpha_at(params: serde_json::Value, x: i32) -> f32 {
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, 300)[3]
 }
 
-/// CodeRabbit on #15017: a Classic drag keeps a Foreground to Transparent ramp linear. Baking the
-/// merged stops gave each sample the alpha of its nearest stop, a four-level staircase.
+/// Alpha at `x`, 300 on a new transparent layer after a Gradient-tool drag (100,300 to 700,300) with
+/// Foreground to Transparent current and `method` chosen.
+fn dragged_alpha(method: &str, x: i32) -> f32 {
+    let mut a = app();
+    a.run("layer.new.layer", json!({})).unwrap();
+    a.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
+    a.run("gradient.presets.select", json!({"preset": "Foreground to Transparent"})).unwrap();
+    a.ui.tool_options.gradient_classic = true;
+    a.ui.tool_options.gradient_dither = false;
+    a.ui.tool_options.gradient_method = method.into();
+    crate::canvas::tool_event(&mut a, ToolEvent::Down { x: 100.0, y: 300.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    crate::canvas::tool_event(&mut a, ToolEvent::Move { x: 400.0, y: 300.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    crate::canvas::tool_event(&mut a, ToolEvent::Move { x: 700.0, y: 300.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    crate::canvas::tool_event(&mut a, ToolEvent::Up { x: 700.0, y: 300.0 }, egui::Modifiers::NONE);
+    let st = a.session.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, 300)[3]
+}
+
+/// CodeRabbit on #15017: Photoshop's transparency under a method other than Smooth was not measured, so
+/// a drag with transparency sends no method and keeps today's straight stops: a linear ramp, whichever
+/// method the dropdown shows. (`paint.gradient` itself is not changed.)
 #[test]
-fn a_classic_drag_with_transparency_keeps_the_alpha_linear() {
-    let base = json!({"from": [100, 300], "to": [700, 300], "method": "classic", "dither": false, "transparency": [[0, 100], [1, 0]]});
-    for x in [175, 220, 250, 340, 520] {
-        let t = (x as f32 + 0.5 - 100.0) / 600.0;
-        let a = alpha_at(base.clone(), x);
-        assert!((a - (1.0 - t)).abs() < 0.02, "x {x}: alpha {a} vs linear {}", 1.0 - t);
+fn a_drag_with_transparency_keeps_the_straight_ramp_for_every_method_but_smooth() {
+    for method in ["classic", "linear", "perceptual", "stripes"] {
+        for x in [175, 250, 340, 520] {
+            let t = (x as f32 + 0.5 - 100.0) / 600.0;
+            let a = dragged_alpha(method, x);
+            assert!((a - (1.0 - t)).abs() < 0.02, "{method} x {x}: alpha {a} vs linear {}", 1.0 - t);
+        }
     }
+    // Smooth's own opacity curve (measured, #12010) still applies: not the straight ramp.
+    assert!((dragged_alpha("smooth", 250) - (1.0 - (250.5 - 100.0) / 600.0)).abs() > 0.005);
+}
+
+/// The command is as it was: with a method and merged transparency, `paint.gradient` takes the nearest
+/// stop's alpha (t = 0.126 is nearest the first stop, opaque).
+#[test]
+fn paint_gradient_with_a_method_and_transparency_is_unchanged() {
+    let alpha = alpha_at(json!({"from": [100, 300], "to": [700, 300], "method": "classic", "dither": false, "transparency": [[0, 100], [1, 0]]}), 175);
+    assert!(alpha > 0.99, "unchanged: {alpha}");
 }
 
 /// CodeRabbit on #15017: only two opaque colour stops are the measured Stripes case. More colours,

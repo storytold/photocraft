@@ -211,19 +211,8 @@ pub fn bake(stops: Vec<(f32, Color)>, midpoints: &[f32], smoothness: f32, method
     let mut s = stops;
     s.sort_by(|a, b| a.0.total_cmp(&b.0));
     let alpha = |t: f32| -> f32 {
-        // Stop colours carry no alpha in Photoshop (opacity has its own stops), so a stop list from a
-        // file is opaque. For Classic, opacity merged into the stops (`paint.gradient`) stays linear
-        // between them, as the straight stops had it: the nearest stop's alpha made a staircase.
-        // Only Classic (#12004): the other methods' transparency was not measured and keeps the
-        // nearest stop's alpha, as before.
-        if method != Method::Classic {
-            return s.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())).map_or(1.0, |x| x.1.alpha);
-        }
-        let Some(i) = s.iter().position(|x| x.0 >= t) else { return s.last().map_or(1.0, |x| x.1.alpha) };
-        let Some(prev) = i.checked_sub(1).and_then(|k| s.get(k)) else { return s[i].1.alpha };
-        let (a, b) = (prev, &s[i]);
-        let h = b.0 - a.0;
-        if h > 1e-9 { a.1.alpha + (b.1.alpha - a.1.alpha) * ((t - a.0) / h).clamp(0.0, 1.0) } else { b.1.alpha }
+        // Stop colours carry no alpha in Photoshop (opacity has its own stops); keep the nearest.
+        s.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())).map_or(1.0, |x| x.1.alpha)
     };
     let pts: Vec<(f32, [f32; 3])> = s.iter().map(|(t, c)| (*t, if lab { [c.c[0], c.c[1], c.c[2]] } else { into_space(method, c.to_rgb()) })).collect();
     const N: usize = 96;
@@ -362,30 +351,6 @@ mod tests {
     /// Photoshop Gradient Overlay samples (black, Normal, over white; a 256 px wide linear
     /// gradient, pixel `x` at t = (x + 0.5) / 256): opacity stops, midpoints, Smoothness, method,
     /// and (x, opacity) pairs read from the composite.
-    /// CodeRabbit on #15017: opacity merged into the stops is linear for Classic and keeps the nearest
-    /// stop's alpha for every other method, as on main.
-    #[test]
-    fn merged_alpha_is_linear_only_for_classic() {
-        let stops = || vec![(0.0, Color::rgba(0.0, 0.0, 0.0, 1.0)), (0.25, Color::rgba(0.0, 0.0, 0.0, 0.75)), (1.0, Color::rgba(0.0, 0.0, 0.0, 0.0))];
-        let alpha_at = |out: &[(f32, Color)], t: f32| {
-            let i = out.windows(2).position(|w| t >= w[0].0 && t <= w[1].0).unwrap();
-            let (a, b) = (out[i], out[i + 1]);
-            a.1.alpha + (b.1.alpha - a.1.alpha) * (t - a.0) / (b.0 - a.0)
-        };
-        // Between the first two stops (t = 0.125, 0.2): linear is 0.875 / 0.8; the nearest is 1.0 / 0.75.
-        let classic = bake(stops(), &[0.5, 0.5], 1.0, Method::Classic);
-        assert!((alpha_at(&classic, 0.125) - 0.875).abs() < 0.02 && (alpha_at(&classic, 0.2) - 0.8).abs() < 0.02);
-        for m in [Method::Linear, Method::Perceptual, Method::Smooth] {
-            let out = bake(stops(), &[0.5, 0.5], 1.0, m);
-            let near = |t: f32| out.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())).map(|x| x.1.alpha).unwrap();
-            assert_eq!(near(0.0), 1.0, "{m:?}");
-            assert!(
-                out.iter().all(|(t, c)| *t >= 0.125 + 0.1 || (*t <= 0.125 - 0.1) || c.alpha == 1.0 || c.alpha == 0.75),
-                "{m:?}: alpha stays on a stop's value around the first segment"
-            );
-        }
-    }
-
     #[test]
     fn opacity_matches_photoshop_samples() {
         type Case = (&'static [(f32, f32)], &'static [f32], f32, Method, &'static [(f32, f32)]);
