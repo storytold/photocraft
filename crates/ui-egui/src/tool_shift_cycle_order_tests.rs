@@ -160,5 +160,5 @@ fn a_plain_w_from_outside_the_group_keeps_selecting_what_it_selected_before() {
     ctx.begin_pass(raw);
     crate::shortcuts::handle(&mut app, &ctx);
     ctx.end_pass().textures_delta.clear();
-    assert_eq!(app.ui.tool, Tool::MagicWand, "the first W tool in Tool::ALL, not the first in the flyout");
+    assert_eq!(app.ui.tool, Tool::ObjectSelection, "fresh W selects the first tool in the flyout");
 }
