@@ -528,6 +528,15 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.ui.stroke_editor.is_some() && !ctx.input(|i| i.modifiers.command || i.modifiers.ctrl) {
         return false;
     }
+    // Check Spelling owns a plain Esc and ↵ (Done, #14179), as Photoshop's modal dialog does: in a
+    // frame with either, no shortcut below runs, so neither commits or cancels a crop, a polygon, a
+    // Pen path or a shape under the dialog, nor resets the view. The dialog, drawn later, reads them.
+    if app.ui.type_panels.spell.is_some() {
+        let plain = |e: &egui::Event| matches!(e, egui::Event::Key { key: Key::Escape | Key::Enter, pressed: true, modifiers, .. } if modifiers.is_none());
+        if ctx.input(|i| i.events.iter().any(plain)) {
+            return false;
+        }
+    }
     // So does the right-click menu of text being edited: Esc closes only it, and keys typed while
     // it is open don't reach the text beneath. The crop menu's likewise: Esc and ↵ don't cancel or
     // commit the crop under it (#6561).

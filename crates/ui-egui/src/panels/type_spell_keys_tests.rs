@@ -217,3 +217,36 @@ fn escape_runs_done_before_the_view_keys_reset_a_rotated_view_or_deselect() {
     assert_eq!(h.state().ui.views[index].rotation, 0.5, "the rotated view was not reset");
     assert!(h.state().session.active().unwrap().doc.selection.is_some(), "the selection stays");
 }
+
+#[test]
+fn enter_and_escape_run_done_and_leave_a_pending_crop_alone() {
+    for key in [egui::Key::Enter, egui::Key::Escape] {
+        let seen = Rc::new(Cell::new((false, false)));
+        let mut h = harness_ordered("Teh cat. Wrold", seen, |_| {}, false, true);
+        h.state_mut().ui.tool = crate::state::Tool::Crop;
+        h.state_mut().ui.crop_rect = Some([10.0, 10.0, 100.0, 60.0]);
+        h.state_mut().crop.default_frame = false;
+        h.run_steps(2);
+        h.key_press(key);
+        h.run_steps(3);
+        assert!(h.state().ui.type_panels.spell.is_none(), "{key:?} closed Check Spelling");
+        assert_eq!(h.state().ui.crop_rect, Some([10.0, 10.0, 100.0, 60.0]), "{key:?} left the crop frame pending");
+        assert_eq!(h.state().session.active().unwrap().doc.size.width, 300, "{key:?} did not crop");
+    }
+}
+
+#[test]
+fn enter_and_escape_run_done_and_leave_a_pen_path_in_progress_alone() {
+    for key in [egui::Key::Enter, egui::Key::Escape] {
+        let seen = Rc::new(Cell::new((false, false)));
+        let mut h = harness_ordered("Teh cat. Wrold", seen, |_| {}, false, true);
+        h.state_mut().ui.tool = crate::state::Tool::Pen;
+        let owner = crate::vector_ui::capture_pen_owner(h.state());
+        h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3]], owner, ..Default::default() });
+        h.run_steps(2);
+        h.key_press(key);
+        h.run_steps(3);
+        assert!(h.state().ui.type_panels.spell.is_none(), "{key:?} closed Check Spelling");
+        assert!(h.state().ui.pen.as_ref().is_some_and(|p| p.knots.len() == 2), "{key:?} left the Pen path in progress");
+    }
+}
