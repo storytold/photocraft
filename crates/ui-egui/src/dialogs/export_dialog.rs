@@ -964,11 +964,15 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
         let (key, label, src, other) = if edited_width { ("width", tl!("Width"), src_w, src_h) } else { ("height", tl!("Height"), src_h, src_w) };
         let (min, max) = side_range(src, other, lock);
         let stored = n(f, key, src.max(1.0));
-        let mut v = stored.clamp(min, max) as f32;
+        // The value shown is the stored one within the side's own limits. The linked limit applies to what is
+        // typed, so a valid Scale result just above it (75 px on a 1 x 4001 source at 7498 %) is left alone
+        // until the side is edited: the range reaches up to the value already there.
+        let mut v = stored.clamp(min, max_side_px(src)) as f32;
+        let top = max.max(f64::from(v));
         let mut clamped = false;
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(label).color(t.text_dim));
-            clamped = crate::widgets::value_field_whole_alerting(ui, label, &mut v, min as f32..=max as f32, "px", 70.0).1;
+            clamped = crate::widgets::value_field_whole_alerting(ui, label, &mut v, min as f32..=top as f32, "px", 70.0).1;
         });
         let typed = f64::from(v).round();
         if (typed - stored.round()).abs() <= 0.01 && !clamped {

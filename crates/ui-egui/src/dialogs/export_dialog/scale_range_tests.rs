@@ -195,3 +195,20 @@ fn a_linked_side_limits_the_edited_one() {
     type_into(&mut h, "Width", "4000");
     assert_eq!(state(&h), (3000.0, 300_000.0, 3000.0, true));
 }
+
+/// CodeRabbit on #15032: the linked upper bound applies to edits only. 7498 % of a 1 x 4001 source is a
+/// valid 75 x 299995, one pixel wider than the linked bound allows a typed width; it stays as it is.
+#[test]
+fn a_valid_scale_result_just_above_the_linked_bound_is_left_alone() {
+    assert_eq!(side_range(1.0, 4001.0, true).1, 74.0);
+    let mut h = harness_sized(1, 4001);
+    open_dialog(&mut h);
+    type_into(&mut h, "Scale", "7498");
+    h.run_steps(6);
+    let f = &h.state().ui.dialogs.last().unwrap().fields;
+    assert_eq!((n(f, "width", 0.0), n(f, "height", 0.0), s(f, "sizing")), (75.0, 299_995.0, "scale".to_string()));
+    // Typing a width past the bound still clamps, with the warning.
+    type_into(&mut h, "Width", "200");
+    let f = &h.state().ui.dialogs.last().unwrap().fields;
+    assert!(n(f, "width", 0.0) <= 75.0 && n(f, "height", 0.0) <= 300_000.0, "{:?}", (n(f, "width", 0.0), n(f, "height", 0.0)));
+}
