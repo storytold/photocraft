@@ -246,4 +246,6 @@ impl FxMaps {
 }
 
 #[cfg(test)]
+mod inner_shadow_anti_alias_tests;
+#[cfg(test)]
 mod tests;

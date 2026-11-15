@@ -121,6 +121,30 @@ pub(super) fn offset(angle: f32, distance: f32) -> (f32, f32) {
     ((-a.cos() * distance).round(), (a.sin() * distance).round())
 }
 
+/// Whether an effect's Anti-aliased checkbox moves its source map: only for the contour the
+/// reference application was measured with. #14934 (Inner Shadow) and #14951 (Outer Glow) both
+/// measure Size 10 with the Gaussian contour and leave Anti-aliased with any other contour
+/// unmeasured, so every other contour keeps today's map bit-for-bit. The built-in Gaussian preset
+/// carries that name from the Contour picker and from a PSD import; an edited curve becomes
+/// "Custom" and keeps today's map.
+fn anti_aliased_contour(c: &Contour) -> bool {
+    matches!(c, Contour::Custom { name, .. } if name.eq_ignore_ascii_case("Gaussian"))
+}
+
+/// The sub-pixel offset towards the top-left that an anti-aliased effect builds its map from,
+/// added to the whole-pixel light offset. Both measured tables sit on a third of a pixel: with the
+/// flag on, the Outer Glow reaches a pixel further at the top and left (its reported bounds grow
+/// there) and a pixel less at the bottom and right, and the Inner Shadow is weaker at the top and
+/// left edge and stronger at the bottom and right. Half a pixel overshoots (it puts the Inner
+/// Shadow 4 levels and the Outer Glow 15 levels off the measured profiles); a third lands the
+/// Inner Shadow within 1.4 levels of every measured pixel, and the glow within 4.6 at four
+/// samples of eighteen and within 3 at the rest, which is where today's off-path profile already
+/// sits from the reference. *Why* the two pairs of edges differ is not measured, so this
+/// reproduces both profiles instead of guessing a rule for the unmeasured cases.
+fn aa_shift(on: bool, c: &Contour) -> f32 {
+    if on && anti_aliased_contour(c) { -1.0 / 3.0 } else { 0.0 }
+}
+
 /// The lengths a 100 % gradient at `angle` spans in a `w` × `h` frame: the chord (Linear and
 /// Reflected) and the ellipse-norm length (Radial, Angle, Diamond; its half is the radius).
 pub fn gradient_units(angle: f32, w: f32, h: f32) -> (f32, f32) {
@@ -268,8 +292,11 @@ pub fn spread_split(size: f32, spread: f32) -> (f32, f32) {
 pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin: (i32, i32)) -> Map {
     let angle = if s.use_global_light { light.angle } else { s.angle };
     let (dx, dy) = offset(angle, s.distance);
+    // #14934: an Anti-aliased Inner Shadow builds its map from the shape off-centre (`aa_shift`).
+    // Only the inner branch was measured, so a Drop Shadow keeps today's map (#14881 is its own).
+    let aa = aa_shift(inner && s.anti_alias, &s.contour);
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
-    let mut m = src.shifted(dx, dy, if inner { 1.0 } else { 0.0 });
+    let mut m = src.shifted(dx + aa, dy + aa, if inner { 1.0 } else { 0.0 });
     let (r, bw) = spread_split(s.size, s.spread);
     m = dilate(&m, r);
     blur(&mut m, bw);
