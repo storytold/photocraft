@@ -550,7 +550,15 @@ fn the_mac_menu_bar_hands_its_keys_to_a_waiting_shortcut_field() {
     if let Some(menu) = h.state_mut().services.native_menu.as_mut() {
         menu.raw_input(&mut raw);
     }
-    assert_eq!(raw.events.len(), 1, "{:?}", raw.events);
+    // A key equivalent is a whole tap, its press and a release (#11555).
+    assert!(
+        matches!(
+            raw.events.as_slice(),
+            [egui::Event::Key { key: egui::Key::Z, pressed: true, .. }, egui::Event::Key { key: egui::Key::Z, pressed: false, .. }]
+        ),
+        "{:?}",
+        raw.events
+    );
     for e in raw.events {
         h.event(e);
     }
