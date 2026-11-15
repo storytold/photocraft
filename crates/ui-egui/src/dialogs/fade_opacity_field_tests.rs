@@ -128,3 +128,26 @@ fn a_scrub_drag_rounds_and_does_not_drop_the_dot() {
     assert_eq!(read_fade_opacity(37.5, false).round().clamp(0.0, 100.0), 38.0);
     assert_eq!(read_fade_opacity(12.3, false).round(), 12.0);
 }
+
+/// CodeRabbit on #15106: the Enter that leaves an out-of-range Opacity raises the alert and does not also
+/// confirm Fade: the dialog stays open, with the closest value in it, and the alert on top.
+#[test]
+fn enter_on_an_out_of_range_value_raises_the_alert_and_keeps_fade_open() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "150");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "Fade is still open");
+    assert_eq!(alerts(&h), 1, "the range alert is up");
+    assert_eq!(opacity(&h, id), json!(100), "with the closest value");
+}
+
+/// CodeRabbit on #15106: the opacity slider keeps its double-click reset to 100 (`RowGestures::reset`), which the
+/// plain `slider` did not carry. The widget's own reset is `slider_with`'s, unchanged; a harness frame is too
+/// long (0.25 to 0.5 s) to land two clicks inside its 0.5 s double-click window, so this pins the setting.
+#[test]
+fn the_opacity_slider_resets_to_100_on_a_double_click() {
+    let g = super::fade_slider_gestures();
+    assert_eq!(g.reset, Some(100.0));
+    assert_eq!(g.wheel_step, None, "nothing else changes about the slider");
+}

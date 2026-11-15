@@ -67,7 +67,7 @@ pub use scrub::{scrub_label, scrub_option_icon, scrub_option_label};
 #[cfg(test)]
 use slider::DOUBLE_CLICK_S;
 pub(crate) use slider::count_notches;
-pub use slider::{RowGestures, row_label, second_click, slider, slider_line, slider_row, slider_row_prec, slider_row_with};
+pub use slider::{RowGestures, row_label, second_click, slider, slider_line, slider_row, slider_row_prec, slider_row_with, slider_with};
 #[cfg(test)]
 pub(crate) use slider::{curve_fraction, curve_value};
 pub use text_field::{

@@ -1203,6 +1203,12 @@ fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
 /// it (#13811).
 pub(crate) const FADE_OPACITY_RANGE_ALERT: &str = "An integer between 0 and 100 is required. Closest value inserted.";
 
+/// The Fade Opacity slider's gestures: a double-click puts the opacity back to 100, as it did before the
+/// row had a whole-number field.
+fn fade_slider_gestures() -> crate::widgets::RowGestures {
+    crate::widgets::RowGestures { reset: Some(100.0), ..Default::default() }
+}
+
 /// A value the Fade Opacity field holds, read as the reference application reads it: typed text loses
 /// its dot (`12.3` is 123, `0.4` is 4); anything else, a scrub drag's fractions included (`37.5`), is
 /// the number itself, rounded by the caller.
@@ -1258,7 +1264,7 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
     if r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false) {
         f.insert("__rangeAlert".into(), json!(tl!(FADE_OPACITY_RANGE_ALERT)));
     }
-    if crate::widgets::slider(ui, &mut v, 0.0..=100.0, None).changed() {
+    if crate::widgets::slider_with(ui, &mut v, 0.0..=100.0, None, fade_slider_gestures()).changed() {
         v = v.round();
     }
     f.insert("opacity".into(), json!(v.clamp(0.0, 100.0) as i64));

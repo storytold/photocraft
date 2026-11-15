@@ -763,6 +763,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             crate::field_tab::end(ui.ctx(), tab);
             // A field's "Closest value inserted" alert: the Fade dialog's Opacity (#13811).
             if let Some(message) = fields.remove("__rangeAlert").and_then(|v| v.as_str().map(str::to_owned)) {
+                // The Enter that left the field raised the alert and must not also confirm the dialog: the
+                // user corrects the value after dismissing it.
+                if outcome == Some(true) {
+                    outcome = None;
+                }
                 let shown =
                     app.ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields.get("message").and_then(Value::as_str) == Some(message.as_str()));
                 if !shown {
