@@ -1011,6 +1011,18 @@ fn file_command(fields: &Fields) -> Option<&'static str> {
 /// in their result's `errors`; the status bar and a notice say which files failed and why, so a run
 /// that fails on every file isn't silent (#10682). Each file is named by its whole path: files of
 /// the same name in different subfolders are told apart.
+/// Layers to Files refused its destination (#13969): the dialog back with every value, under the
+/// reference's alert.
+fn layers_to_files_destination_alert(app: &mut PhotocraftApp, d: &Dialog, result: &Result<Value, String>) {
+    let message = match result {
+        Err(e) if e == "Please specify destination." => tl!("Please specify destination."),
+        Err(e) if e.starts_with("Destination does not exist:") => tl!("Destination does not exist."),
+        _ => return,
+    };
+    app.ui.dialogs.push(d.clone());
+    app.ui.open_dialog(DialogKind::Error, Fields::from_iter([("message".into(), json!(message))]));
+}
+
 fn report_file_errors(app: &mut PhotocraftApp, d: &Dialog, r: &Value) {
     let Some(errors) = r.get("errors").and_then(Value::as_array).filter(|e| !e.is_empty()) else { return };
     let lines: Vec<String> = errors
@@ -1099,6 +1111,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     }
     if result.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
+    }
+    if cmd == "file.export.layersToFiles" {
+        layers_to_files_destination_alert(app, &d, &result);
     }
     if result.is_ok() {
         if crate::adjust_dialog::owns(&d.fields) {

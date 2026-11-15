@@ -531,6 +531,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "type.warpText" => Some(Ok(json!({"dialog": crate::dialogs::open_command_dialog(app, id, label)}))),
         "file.export.layersToFiles" => {
             let (_, _, name) = doc?;
+            // An unsaved document starts with an empty Destination, as the reference does (#13969).
+            let dir = if app.session.active().is_some_and(|d| d.path.is_some()) { dir } else { String::new() };
             dialog(
                 app,
                 json!({"dir": dir, "prefix": name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a), "format": "png", "quality": null, JPEG_CUSTOM: false,
