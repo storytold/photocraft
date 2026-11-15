@@ -143,7 +143,14 @@ fn reset_and_restart_use_the_user_default() {
     new_document(&mut app);
     let next = open(&mut app, Some("satin")).unwrap();
     assert_eq!(params(&mut app, next)["size"].as_f64(), Some(15.0));
-    let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        |ui, app| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                crate::dialogs::show(app, ui.ctx());
+            }
+        },
+        app,
+    );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     h.run_steps(3);
     h.get_by_label("Reset to Default").click();
