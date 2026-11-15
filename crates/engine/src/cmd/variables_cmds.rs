@@ -282,18 +282,19 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
     let (set, idx) = resolve_set(s, p, "image.applyDataSet")?;
     let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
     authorize_pixel_paths(s, &set)?;
-    let label = format!("Apply Data Set \"{}\"", set.name);
+    // One history state named exactly "Apply Data Set", whatever the set is called (#14498).
+    let label = "Apply Data Set";
     if replaces_locked_text(&s.active().ok_or(EngineError::NoDocument)?.doc, &vars, &set) {
         // As in the reference application, nothing of the set is applied, but the attempt is
         // still a history state (one that changes nothing), and the alert names no layer (#14499).
-        s.edit(&label, |_, _| Ok(()))?;
+        s.edit(label, |_, _| Ok(()))?;
         return Err(EngineError::Other(DATA_SET_LAYER_LOCKED.into()));
     }
-    match s.edit(&label, |doc, _| apply_to_doc(doc, &vars, &set)) {
+    match s.edit(label, |doc, _| apply_to_doc(doc, &vars, &set)) {
         // A missing replacement file applies nothing of the set (the edit is dropped whole), but
         // the attempt is still a history state that changes nothing, as for a locked layer (#14500).
         Err(EngineError::Other(m)) if m.starts_with(DATA_SET_FILE_MISSING) => {
-            s.edit(&label, |_, _| Ok(()))?;
+            s.edit(label, |_, _| Ok(()))?;
             return Err(EngineError::Other(m));
         }
         r => r?,
@@ -381,7 +382,10 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
         sets.push(DataSet { name, values });
     }
     let n = sets.len();
-    set_vars(s, |v| v.data_sets = sets)?;
+    s.edit("Import Data Sets", |doc, _| {
+        doc.variables.data_sets = sets;
+        Ok(())
+    })?;
     Ok(json!({"imported": n}))
 }
 
@@ -604,6 +608,8 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+mod import_history_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
@@ -614,3 +620,6 @@ mod locked_text_layer_tests;
 
 #[cfg(test)]
 mod missing_file_tests;
+
+#[cfg(test)]
+mod apply_history_name_tests;
