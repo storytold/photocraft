@@ -736,6 +736,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 outcome = dialog_body(app, ui, &d, &mut fields, id, interactive);
             }
             crate::field_tab::end(ui.ctx(), tab);
+            // A field's "Closest value inserted" alert: the Fade dialog's Opacity (#13811).
+            if let Some(message) = fields.remove("__rangeAlert").and_then(|v| v.as_str().map(str::to_owned)) {
+                let shown =
+                    app.ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields.get("message").and_then(Value::as_str) == Some(message.as_str()));
+                if !shown {
+                    app.ui.open_dialog(DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+                }
+            }
             if let Some(index) = fields.remove("__scratchBrowse").and_then(|v| v.as_u64()) {
                 let dialog_id = d.id;
                 let result = app.ask_folder(move |app, path| {
