@@ -97,6 +97,38 @@ pub(super) fn align_line_edges(a: [f64; 2], b: [f64; 2], weight: f64, keep_angle
 /// Geometry of a Shape-tool drag as `shape.create` params, without fill and stroke (None when too
 /// small): ⇧ constrains proportions, ⌥ draws from the centre. Custom shapes give their box as a `rect`.
 pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
+    shape_geometry_with(o, tool, start, end, mods, None)
+}
+
+/// [`shape_geometry`] of a drag in `app`: ⇧ with the Custom Shape tool keeps the chosen shape's own
+/// proportions (#13464), unless `press_square` (see [`press_keeps_square`]).
+fn drag_geometry(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers, press_square: bool) -> Option<Value> {
+    let aspect = if tool == Tool::CustomShape && !press_square { chosen_shape(app).and_then(|s| aspect(&s.path)) } else { None };
+    shape_geometry_with(&app.ui.tool_options, tool, start, end, mods, aspect)
+}
+
+/// ⇧ held at the press with a shape layer active: not measured in the reference application
+/// (there it adds to the layer), so the Custom Shape tool keeps the box it drew before #13464.
+fn press_keeps_square(app: &PhotocraftApp, press: egui::Modifiers) -> bool {
+    press.shift && super::options::selected_shape(&app.session).is_some()
+}
+
+/// The custom shape the Custom Shape tool draws (the options bar's pick).
+fn chosen_shape(app: &PhotocraftApp) -> Option<photocraft_engine::presets::shapes::ShapePreset> {
+    let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
+    groups.into_iter().flat_map(|g| g.items).find(|s| s.name == app.ui.presets_ui.shape())
+}
+
+/// Width over height of the box `presets::shapes::fit` maps `path` from.
+fn aspect(path: &photocraft_doc::vector::Path) -> Option<f64> {
+    let (x0, y0, x1, y1) = path.control_bounds()?;
+    (x1 > x0 && y1 > y0).then(|| (x1 - x0) / (y1 - y0))
+}
+
+/// [`shape_geometry`] where ⇧ keeps the proportions `aspect` (width over height) when given: the
+/// largest box of that aspect inside the drag's, from the press corner (⌥: centred on the press),
+/// as Photoshop's Custom Shape tool does. Without it ⇧ follows the tool's own rule (`drag_box`).
+fn shape_geometry_with(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers, aspect: Option<f64>) -> Option<Value> {
     Some(if tool == Tool::Line {
         let (mut dx, mut dy) = (end[0] - start[0], end[1] - start[1]);
         // Too short a drag draws nothing. Measured before ⇧ shortens a diagonal, so a short
@@ -128,7 +160,10 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             // Settings saved with the old 0..100 range draw at the nearest value (#13258).
             "arrowConcavity": if o.arrow_concavity.is_finite() { o.arrow_concavity.round().clamp(-50.0, 50.0) } else { 0.0 }})
     } else {
-        let [x0, y0, w, h] = drag_box(o, tool, start, end, mods);
+        let [x0, y0, w, h] = match (mods.shift, aspect) {
+            (true, Some(a)) => aspect_box(start, end, mods.alt, a),
+            _ => drag_box(o, tool, start, end, mods),
+        };
         let rect = [x0.min(x0 + w), y0.min(y0 + h), w.abs(), h.abs()];
         // Align Edges (#13370) is the Triangle tool's option, and only in Shape mode, where its
         // checkbox is enabled. The other shape tools, and a greyed checkbox, still snap.
@@ -164,6 +199,15 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
 /// reference. Fixed Size puts the gear's W × H with its top-left corner at the release point;
 /// Proportional draws the largest box of the gear's W : H inside the dragged one, from the press
 /// point. A Fixed Size or Proportional field left empty draws as Unconstrained.
+/// The largest box of aspect `a` (width over height) inside the drag's, from the press corner
+/// (`from_center`: centred on the press), as `[x, y, w, h]` with signed `w`/`h` (#13464).
+fn aspect_box(start: [f64; 2], end: [f64; 2], from_center: bool, a: f64) -> [f64; 4] {
+    let (w, h) = (end[0] - start[0], end[1] - start[1]);
+    let (aw, ah) = if w.abs() > h.abs() * a { (h.abs() * a, h.abs()) } else { (w.abs(), w.abs() / a) };
+    let (w, h) = (aw.copysign(w), ah.copysign(h));
+    if from_center { [start[0] - w, start[1] - h, 2.0 * w, 2.0 * h] } else { [start[0], start[1], w, h] }
+}
+
 fn drag_box(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> [f64; 4] {
     let gear = tool == Tool::Rectangle;
     let constraint = if gear { o.rect_constraint.as_str() } else { "unconstrained" };
@@ -209,9 +253,19 @@ pub fn shape_bounds(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2],
 
 /// Finish a Shape-tool drag: ⇧ constrains proportions, ⌥ draws from the centre.
 pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    finish_shape_with(app, tool, start, end, mods, false);
+}
+
+/// [`finish_shape`] of a canvas drag, with the modifiers held at its press (`press`).
+pub fn finish_shape_pressed(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers, press: egui::Modifiers) {
+    let square = press_keeps_square(app, press);
+    finish_shape_with(app, tool, start, end, mods, square);
+}
+
+fn finish_shape_with(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers, press_square: bool) {
     if draws_path(&app.ui.tool_options) {
         // Path mode: the outline joins the work path (one more subpath), and no layer is made.
-        let Some(outline) = shape_outline(app, tool, start, end, mods) else { return };
+        let Some(outline) = shape_outline(app, tool, start, end, mods, press_square) else { return };
         // Appended here rather than with `path.set`'s `op`, which would turn a custom shape's
         // subtracted subpaths (holes) into combined ones; the shape goes in as one component.
         // A new work path takes the outline's fill rule.
@@ -241,13 +295,13 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         }
         return;
     }
-    let Some(mut p) = shape_geometry(&app.ui.tool_options, tool, start, end, mods) else { return };
+    let Some(mut p) = drag_geometry(app, tool, start, end, mods, press_square) else { return };
     if tool == Tool::CustomShape {
         // With an operation other than New Layer the shape joins the active shape layer as one
         // component, its holes joined to it as in Path mode.
         if let Some(op) = drag_path_op(app)
             && let Some(id) = super::options::selected_shape(&app.session)
-            && let Some(outline) = shape_outline(app, tool, start, end, mods)
+            && let Some(outline) = shape_outline(app, tool, start, end, mods, press_square)
         {
             // `shape.create` gives every component the operation, so a shape of several components
             // that can't be made one (its parts intersect or exclude) would change: refuse it.
@@ -267,7 +321,7 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
             }
             return;
         }
-        // ⇧ keeps the shape's proportions (the rect is already squared).
+        // ⇧ keeps the shape's proportions (the rect already has them).
         if let Ok(rect) = serde_json::from_value(p["rect"].take()) {
             let (fill, stroke) = (fill_param(app), stroke_param(app));
             crate::preset_panels::finish_custom_shape(app, rect, mods.shift, fill, stroke);
@@ -365,12 +419,18 @@ fn as_one_component(outline: &photocraft_doc::vector::Path, rule: photocraft_doc
 }
 
 /// The outline a Shape-tool drag draws, as a path (a custom shape fitted to the drag's box).
-fn shape_outline(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::vector::Path> {
-    let geometry = shape_geometry(&app.ui.tool_options, tool, start, end, mods)?;
+fn shape_outline(
+    app: &PhotocraftApp,
+    tool: Tool,
+    start: [f64; 2],
+    end: [f64; 2],
+    mods: egui::Modifiers,
+    press_square: bool,
+) -> Option<photocraft_doc::vector::Path> {
+    let geometry = drag_geometry(app, tool, start, end, mods, press_square)?;
     if tool == Tool::CustomShape {
         let rect = geometry.get("rect").and_then(|r| serde_json::from_value::<[f64; 4]>(r.clone()).ok())?;
-        let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
-        let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
+        let shape = chosen_shape(app)?;
         Some(photocraft_engine::presets::shapes::fit(&shape.path, rect, mods.shift))
     } else {
         photocraft_engine::vector_cmds::shape_path(&geometry).ok()
@@ -379,9 +439,21 @@ fn shape_outline(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2]
 
 /// The preview and command both use the full float tool colours, including transparent paint.
 /// In Path mode only the outline shows, as the drag draws no layer.
+#[cfg(test)]
 pub(super) fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::ShapeLayer> {
+    shape_preview_with(app, tool, start, end, mods, false)
+}
+
+fn shape_preview_with(
+    app: &PhotocraftApp,
+    tool: Tool,
+    start: [f64; 2],
+    end: [f64; 2],
+    mods: egui::Modifiers,
+    press_square: bool,
+) -> Option<photocraft_doc::ShapeLayer> {
     let o = &app.ui.tool_options;
-    let path = shape_outline(app, tool, start, end, mods)?;
+    let path = shape_outline(app, tool, start, end, mods, press_square)?;
     let paint = !draws_path(o);
     Some(photocraft_doc::ShapeLayer {
         path,
@@ -392,8 +464,19 @@ pub(super) fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], en
 }
 
 /// Shape-tool drag preview using the same path and vector stroke geometry as the commit.
-pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
-    let Some(mut shape) = shape_preview(app, tool, start, end, mods) else { return };
+/// `press`: the modifiers held at the drag's press, as [`finish_shape_pressed`] takes them.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_shape_preview(
+    app: &PhotocraftApp,
+    painter: &egui::Painter,
+    xf: &ViewXform,
+    tool: Tool,
+    start: [f64; 2],
+    end: [f64; 2],
+    mods: egui::Modifiers,
+    press: egui::Modifiers,
+) {
+    let Some(mut shape) = shape_preview_with(app, tool, start, end, mods, press_keeps_square(app, press)) else { return };
     let path = shape.path.clone();
     let origin = xf.to_screen(0.0, 0.0);
     let x = xf.to_screen(1.0, 0.0) - origin;
@@ -412,3 +495,7 @@ pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
         painter.extend(crate::tool_feedback::contrast_path(pts, true, accent));
     }
 }
+
+#[cfg(test)]
+#[path = "custom_shape_shift_proportions_tests.rs"]
+mod custom_shape_shift_proportions_tests;
