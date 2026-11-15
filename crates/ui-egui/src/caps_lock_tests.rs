@@ -74,6 +74,11 @@ fn fp(h: &Harness<'_, PhotocraftApp>) -> CursorFp {
     }
 }
 
+/// The eyedropper's pipette: the OS bitmap where one uploads, else drawn (#12523).
+fn pipette_shown(h: &Harness<'_, PhotocraftApp>) -> bool {
+    crate::tool_cursor::pipette_shown(&h.ctx, &h.output().platform_output)
+}
+
 fn painting(h: &mut Harness<'_, PhotocraftApp>, value: &str) {
     h.state_mut().run("prefs.set", json!({"path": "cursors.painting", "value": value})).unwrap();
     h.run_steps(2);
@@ -143,7 +148,7 @@ fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
         Tool::Pen,
         Tool::FreeformPen,
         Tool::CurvaturePen,
-        Tool::AddAnchorPoint,
+        // Add Anchor Point shows the pen only over a segment (#12729): `add_anchor_cursor_tests`.
         Tool::DeleteAnchorPoint,
         Tool::ConvertPoint,
         Tool::Eyedropper,
@@ -164,9 +169,9 @@ fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
             assert_eq!(img.size, expected.size, "{tool:?}: bitmap dimensions match rasterized variant");
             assert_eq!(img.hotspot, expected.hotspot, "{tool:?}: hotspot matches variant");
             assert_eq!(img.rgba, expected.rgba, "{tool:?}: RGBA bitmap matches variant rasterization");
-        } else if tool == Tool::PaintBucket && cfg!(not(target_arch = "wasm32")) {
-            assert_eq!(standard.icon, CursorIcon::Crosshair, "PaintBucket: the OS bitmap has a visible fallback");
-            assert!(standard.image.is_some(), "PaintBucket: the standard cursor is the unified OS bitmap");
+        } else if matches!(tool, Tool::PaintBucket | Tool::Eyedropper | Tool::ColorSampler) && cfg!(not(target_arch = "wasm32")) {
+            assert_eq!(standard.icon, CursorIcon::Crosshair, "{tool:?}: the OS bitmap has a visible fallback");
+            assert!(standard.image.is_some(), "{tool:?}: the standard cursor is the OS bitmap");
         } else {
             assert_eq!(standard.icon, CursorIcon::None, "{tool:?}: the standard cursor is the tool's own icon, drawn");
             assert!(standard.image.is_none(), "{tool:?}: painted fallback has no native cursor bitmap");
@@ -204,13 +209,12 @@ fn caps_lock_gives_the_curves_eyedroppers_the_precise_crosshair() {
     h.run_steps(3);
     other(&mut h, "standard");
     let standard = fp(&h);
-    assert_eq!(standard.icon, CursorIcon::None, "the drawn pipette, not the Move tool's arrow over it");
+    assert!(pipette_shown(&h), "the pipette, not the Move tool's arrow over it");
     other(&mut h, "precise");
     let precise = fp(&h);
     assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
-    // CodeRabbit on #10406: the pipette is painted, not only the icon hidden.
-    assert_ne!(standard.shapes, precise.shapes, "Standard paints a cursor of its own where Precise shows the crosshair");
-    assert_ne!(standard, precise, "Standard: the pipette");
+    // CodeRabbit on #10406: the pipette is shown (drawn, or the OS bitmap), not only the icon hidden.
+    assert_ne!(standard, precise, "Standard shows a cursor of its own where Precise shows the crosshair");
     other(&mut h, "standard");
     caps(&mut h, true);
     assert_eq!(fp(&h), precise, "caps lock turns the pipette into the precise crosshair");
@@ -232,12 +236,12 @@ fn caps_lock_gives_the_properties_eyedroppers_the_precise_crosshair() {
     h.run_steps(3);
     other(&mut h, "standard");
     let standard = fp(&h);
-    assert_eq!(standard.icon, CursorIcon::None, "the drawn pipette, not the Move tool's arrow over it");
+    assert!(pipette_shown(&h), "the pipette, not the Move tool's arrow over it");
     other(&mut h, "precise");
     let precise = fp(&h);
     assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
-    // CodeRabbit on #10406: the pipette is painted, not only the icon hidden.
-    assert_ne!(standard.shapes, precise.shapes, "Standard paints a cursor of its own where Precise shows the crosshair");
+    // CodeRabbit on #10406: the pipette is shown (drawn, or the OS bitmap), not only the icon hidden.
+    assert_ne!(standard, precise, "Standard shows a cursor of its own where Precise shows the crosshair");
     other(&mut h, "standard");
     caps(&mut h, true);
     assert_eq!(fp(&h), precise, "caps lock turns the pipette into the precise crosshair");
@@ -257,13 +261,12 @@ fn caps_lock_gives_the_color_pickers_eyedropper_the_precise_crosshair() {
     h.run_steps(3);
     other(&mut h, "standard");
     let standard = fp(&h);
-    assert_eq!(standard.icon, CursorIcon::None, "the drawn pipette, not the Move tool's arrow over it");
+    assert!(pipette_shown(&h), "the pipette, not the Move tool's arrow over it");
     other(&mut h, "precise");
     let precise = fp(&h);
     assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
-    // CodeRabbit on #10406: the pipette is painted, not only the icon hidden.
-    assert_ne!(standard.shapes, precise.shapes, "Standard paints a cursor of its own where Precise shows the crosshair");
-    assert_ne!(standard, precise);
+    // CodeRabbit on #10406: the pipette is shown (drawn, or the OS bitmap), not only the icon hidden.
+    assert_ne!(standard, precise, "Standard shows a cursor of its own where Precise shows the crosshair");
     other(&mut h, "standard");
     caps(&mut h, true);
     assert_eq!(fp(&h), precise, "caps lock turns the pipette into the precise crosshair");
@@ -283,7 +286,7 @@ fn a_lent_hand_shows_its_cursor_over_an_eyedropper_when_it_is_also_selected() {
     assert!(crate::color_picker_ui::top(h.state()).is_some(), "the Color Picker owns the image");
     other(&mut h, "standard");
     let pipette = fp(&h);
-    assert_eq!(pipette.icon, CursorIcon::None, "the eyedropper's drawn pipette");
+    assert!(pipette_shown(&h), "the eyedropper's pipette");
     let p = h.state().last_canvas_rect.center();
     let middle = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
     h.event(middle(true));

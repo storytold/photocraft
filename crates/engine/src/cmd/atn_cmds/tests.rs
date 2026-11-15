@@ -1,6 +1,6 @@
 use super::*;
-use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
-use photocraft_psd::descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
+use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+use craft_psd::descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use serde_json::json;
 
 /// A wire key has one mapper; distinct wire aliases may still name the same command.
@@ -508,6 +508,21 @@ fn load_renames_play_targets_longer_than_the_name_limit() {
     assert_eq!(caller.steps[0].1["action"], renamed.as_str());
 }
 
+/// The `set` override is copied into every loaded action, so it is held to the same limit as a
+/// set name read from the file.
+#[test]
+fn load_clips_an_overlong_set_override() {
+    let mut s = Session::new();
+    let actions: Vec<Action> = (0..3).map(|i| Action::new(format!("A{i}"), vec![])).collect();
+    let refs: Vec<&Action> = actions.iter().collect();
+    let (bytes, _) = export("File", &refs, &[], false).unwrap();
+    let long = "s".repeat(super::convert::MAX_NAME_CHARS * 4);
+    s.execute("actions.load", json!({"data": b64(&bytes), "set": long})).unwrap();
+    let clipped = "s".repeat(super::convert::MAX_NAME_CHARS);
+    assert_eq!(s.actions.list.len(), 3);
+    assert!(s.actions.list.iter().all(|a| a.set.as_deref() == Some(clipped.as_str())));
+}
+
 #[test]
 fn load_many_duplicate_names_get_sequential_suffixes() {
     // Several actions share one base name. Deduplication must stay O(n) overall and produce
@@ -691,7 +706,10 @@ fn every_mapped_command_exports_and_imports_back() {
                 "rotationAdaptation":"none","scale":true,"mirror":false,"output":"new"}),
         ),
         ("edit.fade", json!({"opacity":50,"mode":"Multiply"})),
+        ("layer.new.frameFromLayers", json!({"layer": "Photo", "name": "Frame 1"})),
         ("layer.linkLayers", json!({})),
+        ("layer.new.artboard", json!({"rect": [10, 20, 100, 50], "name": "Hero"})),
+        ("layer.new.artboardFromLayers", json!({"name": "Cards"})),
         ("layer.smartObjects.stackMode.range", json!({})),
         ("layer.smartObjects.stackMode.entropy", json!({})),
         ("layer.smartObjects.stackMode.kurtosis", json!({})),
@@ -865,6 +883,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.videoLayers.deleteFrame", json!({})),
         ("file.automate.cropAndStraightenPhotos", json!({})),
         ("file.automate.cropAndStraightenPhotos", json!({"_atnNoTarget": true})),
+        ("file.automate.fitImage", json!({"width": 800, "height": 600, "dontEnlarge": true})),
         ("layer.new.artboardFromGroup", json!({})),
         ("layer.new.artboardFromGroup", json!({"background":"white","color":[1,1,1],"preset":"","guideIDs":[],"changeBackground":1})),
         (

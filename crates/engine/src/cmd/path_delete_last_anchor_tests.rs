@@ -153,3 +153,21 @@ fn a_type_paths_last_anchor_is_still_refused() {
     assert_eq!(type_path(&s), Some(before));
     assert_eq!(s.active().unwrap().history.entries().len(), steps);
 }
+
+/// ⌫ / Delete on the Delete Anchor Point tool's last anchor of a subpath among others (#12761)
+/// takes the subpath as one Delete Selection step; the tool's click keeps Delete Anchor Point.
+#[test]
+fn deleting_a_subpaths_last_anchor_with_its_segments_is_delete_selection() {
+    let two = || json!({"subpaths": [{"closed": false, "knots": [[100, 300], [200, 300]]}, {"closed": false, "knots": [[400, 300]]}]});
+    let s = &mut session();
+    s.execute("path.set", json!({"name": "Path 1", "path": two()})).unwrap();
+    let before = doc(s).paths[0].path.clone();
+    let r = s.execute("path.deleteAnchor", json!({"name": "Path 1", "subpath": 1, "knot": 0, "segments": true})).unwrap();
+    assert_eq!(r["subpathRemoved"], json!(true));
+    assert_eq!(doc(s).paths[0].path.subpaths.len(), 1);
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Delete Selection"));
+    assert!(s.undo());
+    assert_eq!(doc(s).paths[0].path, before);
+    s.execute("path.deleteAnchor", json!({"name": "Path 1", "subpath": 1, "knot": 0})).unwrap();
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Delete Anchor Point"), "the click's label is unchanged");
+}

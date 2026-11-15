@@ -1,6 +1,6 @@
 use super::*;
-use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
-use photocraft_psd::descriptor::{Descriptor, ReferenceItem, UnicodeString, Value as D};
+use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+use craft_psd::descriptor::{Descriptor, ReferenceItem, UnicodeString, Value as D};
 use serde_json::json;
 
 fn item(event: &str, label: &str, d: Option<Descriptor>) -> AtnItem {
