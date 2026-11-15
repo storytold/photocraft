@@ -4,10 +4,10 @@
 //! mixers (photoshop corpus cmyk8 and cmyk16 channel-mixer.psd) are read, rendered on their inks
 //! against the files' merged images, and saved back byte for byte.
 
+use craft_psd::PsdFile;
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent, Size};
 use photocraft_io::*;
-use photocraft_psd::PsdFile;
 
 /// The identity RGB matrix a CMYK mixer carries unused.
 const RGB_IDENTITY: [[f32; 4]; 3] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
