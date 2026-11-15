@@ -248,7 +248,15 @@ fn invalid_entry_left(ui: &egui::Ui, resp: &egui::Response) -> bool {
         return false;
     }
     let owed = ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number)).unwrap_or(false);
-    owed && resp.lost_focus()
+    if !resp.lost_focus() {
+        return false;
+    }
+    // Text typed on the pass that leaves the field is parsed in that pass, so its result wins
+    // over the flag an earlier pass left.
+    match crate::widgets::typed_text_parses(ui.ctx(), resp.id) {
+        Some(parses) => !parses,
+        None => owed,
+    }
 }
 
 /// The Polygon tool's Sides: whole numbers 3..100. Returns true once the field is left with a

@@ -133,6 +133,38 @@ fn text_that_is_not_a_number_keeps_the_previous_radius_and_alerts() {
     assert!(alerts(&h).is_empty(), "7 is a number in range");
 }
 
+/// Clicks Radius and types `first` (one pass), then replaces it with `last` and Tabs out in the
+/// same pass, so the field is left on the pass its final text is parsed.
+fn retype_and_leave(h: &mut Harness<'static, PhotocraftApp>, first: &str, last: &str) {
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(first.into()));
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(last.into()));
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+}
+
+#[test]
+fn a_number_typed_on_the_pass_the_field_is_left_raises_no_invalid_alert() {
+    let mut h = bar();
+    retype_and_leave(&mut h, "abc", "7");
+    assert_eq!(radius(&h), 7.0);
+    assert!(alerts(&h).is_empty(), "7 is the text left in the field: {:?}", alerts(&h));
+}
+
+#[test]
+fn a_non_number_typed_on_the_pass_the_field_is_left_raises_the_invalid_alert() {
+    let mut h = bar();
+    type_radius(&mut h, "12");
+    retype_and_leave(&mut h, "9", "abc");
+    // 9 is taken while it is typed (the field updates as you type), so it is the last valid value.
+    assert_eq!(radius(&h), 9.0, "the last valid value stays");
+    assert_eq!(alerts(&h), vec![RADIUS_INVALID_ALERT.to_string()], "abc is the text left in the field");
+}
+
 #[test]
 fn the_radius_field_leaves_the_active_triangle_alone() {
     let mut app = new_app();
