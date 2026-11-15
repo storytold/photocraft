@@ -802,8 +802,14 @@ fn options_stroke_controls(
     if let Some(change) = crate::shape_paint_ui::swatch(ui, &lib, stroke.as_ref().map(|s| &s.paint), fg, tl!("Set Frame stroke type"), &mut gradients) {
         changed = stroke_after_swatch(&style, &change);
     }
+    let stored_width = style.width;
     let (r, alert) = crate::widgets::value_field_alerting(ui, tl!("Set Frame stroke width"), &mut style.width, STROKE_WIDTH, "px", 58.0);
     let r = r.on_hover_text(tl!("Set Frame stroke width"));
+    // The field shows its value within 0–288, but only an edit changes the width: a frame that stores 500 px
+    // keeps it when the alignment is changed, and the retained tool width is not rewritten by being drawn.
+    if !r.changed() {
+        style.width = stored_width;
+    }
     let mut align = style.align;
     craft_ui::ComboBox::from_id_salt("frame-stroke-align")
         .selected_text(match style.align {
