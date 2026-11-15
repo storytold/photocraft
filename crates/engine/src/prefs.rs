@@ -646,6 +646,8 @@ pub struct Export {
     pub webp_quality: u32,
     pub metadata: ExportMetadata,
     pub convert_to_srgb: bool,
+    /// PNG › Smaller File (8-bit): Quick Export writes a palette PNG (#13785). Off by default.
+    pub png_smaller_file: bool,
     /// The folder the last successful export through a save dialog went to (Export As, Quick
     /// Export, Save for Web, ...). The next export dialog starts there; empty until the first
     /// export, and ignored while the folder no longer exists (#10192).
@@ -662,6 +664,7 @@ impl Default for Export {
             webp_quality: 85,
             metadata: ExportMetadata::Copyright,
             convert_to_srgb: true,
+            png_smaller_file: false,
             last_folder: String::new(),
         }
     }
