@@ -257,7 +257,8 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
         let _ = id;
         return changed;
     }
-    let mut v = to_unit(px, &unit, orig, res, ppi) as f32;
+    let mut v = (to_unit(px, &unit, orig, res, ppi)
+        + if key == "height" && f.get("resample").and_then(Value::as_str) == Some("none") { 1e-5 } else { 0.0 }) as f32;
     // The engine's 300000 px limit in this unit (never below 30000), so a large document's size
     // isn't clamped when the field is drawn: egui clamps the shown value to the range, and the
     // field reports that as an edit (#4162).
@@ -400,7 +401,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, tl!("Resolution:"), 90.0);
         let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
-        if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).accessible_name(tl!("Resolution")).changed() {
+        if crate::widgets::value_field_prec(ui, &mut r, 1.0..=30000.0, "", 90.0, 3).accessible_name(tl!("Resolution")).changed() {
             let r = r.max(1.0) as f64;
             if !resampling {
                 // Without resampling the pixel count is fixed: physical size follows resolution.
@@ -580,5 +581,8 @@ fn anchor_grid(ui: &mut egui::Ui, current: &str, dw: f64, dh: f64) -> Option<&'s
     picked
 }
 
+#[cfg(test)]
+#[path = "image_size_resolution_decimals_tests.rs"]
+mod image_size_resolution_decimals_tests;
 #[cfg(test)]
 mod tests;
