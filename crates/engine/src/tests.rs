@@ -163,11 +163,11 @@ fn file_new_tags_the_document_with_the_chosen_profile() {
     // #321: New Document › Color Profile, as in Photoshop: another profile than the working space.
     let desc = |s: &Session| {
         let bytes = s.active().unwrap().doc.icc_profile.clone();
-        bytes.map(|b| photocraft_cms::Profile::parse(&b).unwrap().description)
+        bytes.map(|b| craft_cms::Profile::parse(&b).unwrap().description)
     };
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 4, "height": 4, "profile": "adobe-rgb-compat"})).unwrap();
-    assert_eq!(desc(&s).as_deref(), Some(photocraft_cms::Builtin::AdobeRgbCompat.description()));
+    assert_eq!(desc(&s).as_deref(), Some(craft_cms::Builtin::AdobeRgbCompat.description()));
     s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk", "profile": "coated-cmyk"})).unwrap();
     assert!(desc(&s).is_some());
     // The working space (the default, or asked for) leaves it as before.
@@ -964,6 +964,27 @@ fn command_list_filter_finds_the_marquees_by_keyword() {
     assert!(rows.iter().find(|c| c["id"] == "file.new").unwrap().get("keywords").is_none());
     assert_eq!(found("gaussian blur"), ["filter.blur.gaussianBlur"]);
     assert!(found("no command is called this").is_empty());
+}
+
+/// The rename to "RAW Develop" is display only: the filter and RAW Defaults are still found by
+/// Photoshop's "Camera Raw" name, which their keywords carry (#12403).
+#[test]
+fn command_list_filter_finds_the_raw_commands_by_their_photoshop_name() {
+    let mut s = Session::new();
+    let list = s.execute("command.list", json!({})).unwrap();
+    let rows = list.as_array().unwrap();
+    let found = |needle: &str| -> Vec<String> {
+        rows.iter().filter(|c| crate::commands::list_entry_matches(c, needle)).map(|c| c["id"].as_str().unwrap().to_string()).collect()
+    };
+    for needle in ["camera raw", "Camera Raw", "CAMERA RAW"] {
+        let ids = found(needle);
+        assert!(ids.contains(&"filter.cameraRaw".to_string()), "{needle}: {ids:?}");
+        assert!(ids.contains(&"edit.preferences.rawDefaults".to_string()), "{needle}: {ids:?}");
+    }
+    // What the menus show is the new name, and the keywords are not a label.
+    let label = |id: &str| rows.iter().find(|c| c["id"] == id).unwrap()["label"].as_str().unwrap().to_string();
+    assert_eq!(label("filter.cameraRaw"), "RAW Develop Filter…");
+    assert_eq!(label("edit.preferences.rawDefaults"), "RAW Defaults…");
 }
 
 /// Every keyword entry names a real command, so a renamed id can't leave one behind.
