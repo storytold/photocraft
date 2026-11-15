@@ -170,7 +170,7 @@ fn update_fields(app: &mut PhotocraftApp, fields: Fields) {
     app.ui.find_replace.fields = fields;
 }
 
-fn apply(app: &mut PhotocraftApp, action: Action) -> Result<Value, String> {
+fn apply(app: &mut PhotocraftApp, action: Action, from_control: bool) -> Result<Value, String> {
     if action == Action::Done {
         return close(app);
     }
@@ -188,11 +188,17 @@ fn apply(app: &mut PhotocraftApp, action: Action) -> Result<Value, String> {
     if !fields.all_layers {
         params["layer"] = json!(window.layer.ok_or("no layer was selected when Find and Replace Text opened")?.0);
     }
+    if from_control && let Some(authorize) = app.services.automation_command.as_ref() {
+        authorize(COMMAND, &params)?;
+    }
     let cursor = window.cursor.clone();
-    // The window owns its search position. Commands from actions and control clients have their own.
+    // The dialog has its own search position. A document edit can invalidate an outside match.
+    let document_version = |app: &PhotocraftApp| app.session.active().map(|st| (st.doc.id, st.revision));
+    let before = document_version(app);
     let outside_cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, cursor);
     let result = app.run(COMMAND, params);
-    let cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, outside_cursor);
+    let restore = if document_version(app) == before { outside_cursor } else { None };
+    let cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, restore);
     let reply = result?;
     let mut window = app.ui.find_replace.open.take().ok_or("Find and Replace Text is closed")?;
     if owns_edit(app, &window) {
@@ -239,7 +245,7 @@ pub(crate) fn command(app: &mut PhotocraftApp, action: &str) -> Result<Value, St
         "changeFind" => Action::ChangeFind,
         _ => return Err(format!("unknown Find and Replace Text action `{action}`")),
     };
-    apply(app, action)
+    apply(app, action, true)
 }
 
 fn field(ui: &mut egui::Ui, label: &str, buffer: &mut String, focus: bool) -> egui::Response {
@@ -335,7 +341,7 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui:
     }
     update_fields(app, fields);
     if let Some(action) = if open { action } else { Some(Action::Done) }
-        && let Err(error) = apply(app, action)
+        && let Err(error) = apply(app, action, false)
     {
         app.ui.status = error;
         app.ui.status_error = true;

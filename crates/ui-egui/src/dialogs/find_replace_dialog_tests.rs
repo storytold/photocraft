@@ -132,3 +132,24 @@ fn modeless_window_focus_enter_tab_and_escape() {
     assert!(inspect(h.state()).is_none());
     assert!(h.state().ui.text_edit.is_none());
 }
+
+#[test]
+fn dialog_replacement_clears_an_outside_match_at_an_old_offset() {
+    let mut app = app();
+    let layer = type_layer(&mut app, "a a a");
+    for start in [0, 2] {
+        assert_eq!(app.run(COMMAND, json!({"find": "a", "action": "find"})).unwrap()["found"]["start"], start);
+    }
+    let outside = app.session.edit_state.find_cursor.clone();
+    open(&mut app).unwrap();
+    set_field(&mut app, "find", json!("a")).unwrap();
+    set_field(&mut app, "replace", json!("aaa")).unwrap();
+    command(&mut app, "find").unwrap();
+    assert_eq!(app.session.edit_state.find_cursor, outside);
+    command(&mut app, "change").unwrap();
+
+    assert!(app.session.edit_state.find_cursor.is_none());
+    let reply = app.run(COMMAND, json!({"find": "a", "replace": "Z", "action": "change"})).unwrap();
+    assert!(reply["changed"].is_null());
+    assert_eq!(text(&app, layer), "aaa a a");
+}
