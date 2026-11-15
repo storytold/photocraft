@@ -199,17 +199,16 @@ mod quick_export_label_tests {
         }
     }
 
-    /// CodeRabbit on #15076: the web downloads PNG whatever the format, but writes a palette PNG when
-    /// Smaller File (8-bit) is on, so its label reads PNG-8 too. (The browser flag is passed in, as this
-    /// is not a wasm build.)
+    /// CodeRabbit on #15076: the web's Quick Export never writes a palette PNG (it exports through the Export
+    /// As path with PNG settings), so its label stays PNG with Smaller File on; desktop names the format.
+    /// (The browser flag is passed in, as this is not a wasm build.)
     #[test]
-    fn the_web_label_follows_smaller_file_and_desktop_names_the_format() {
+    fn the_web_label_stays_png_and_desktop_names_the_format() {
         use photocraft_engine::prefs::QuickExportFormat as F;
         let name = items::quick_export_format_name;
-        assert_eq!(name(true, F::Png, true), "PNG-8");
-        assert_eq!(name(true, F::Png, false), "PNG");
-        assert_eq!(name(true, F::Jpg, true), "PNG-8", "the web writes PNG whatever the format preference is");
-        assert_eq!(name(true, F::Jpg, false), "PNG");
+        for (format, smaller) in [(F::Png, true), (F::Png, false), (F::Jpg, true), (F::Jpg, false)] {
+            assert_eq!(name(true, format, smaller), "PNG", "{format:?} {smaller}");
+        }
         assert_eq!(name(false, F::Png, true), "PNG-8");
         assert_eq!(name(false, F::Jpg, true), "JPG", "Smaller File is a PNG option");
         assert_eq!([name(false, F::Gif, false), name(false, F::Webp, false), name(false, F::Exr, false)], ["GIF", "WebP", "EXR"]);

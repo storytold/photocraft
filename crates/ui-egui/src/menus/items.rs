@@ -271,13 +271,12 @@ impl ItemCache {
     }
 }
 
-/// The format Quick Export's menu item names. The web downloads PNG whatever the format preference is,
-/// but its handler writes a palette PNG when Smaller File (8-bit) is on, so the label follows that too
-/// (#13785); desktop names the chosen format, PNG-8 for a PNG with Smaller File on.
+/// The format Quick Export's menu item names. The web downloads a PNG whatever the format preference is
+/// and, through the Export As path it takes, never a palette PNG, so its label is always PNG; desktop
+/// names the chosen format, PNG-8 for a PNG with Smaller File on (#13785).
 pub(crate) fn quick_export_format_name(browser: bool, format: photocraft_engine::prefs::QuickExportFormat, smaller_file: bool) -> &'static str {
     use photocraft_engine::prefs::QuickExportFormat;
     match format {
-        _ if browser && smaller_file => "PNG-8",
         _ if browser => "PNG",
         QuickExportFormat::Png if smaller_file => "PNG-8",
         QuickExportFormat::Png => "PNG",
