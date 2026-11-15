@@ -136,10 +136,15 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let enhance = b(p, "enhanceEdge", false);
     let all_layers = b(p, "sampleAllLayers", false);
     // Transparency is an edge for the cut (#12921) on a layer's own pixels only. The composite
-    // (Sample All Layers on) and a group (not measured) are cut as before, a transparent part of
-    // them reading as the mid-grey behind it.
-    let on_layer =
-        !all_layers && s.active().and_then(|d| d.active_layer.and_then(|id| d.doc.layer(id))).is_none_or(|l| !matches!(l.content, LayerContent::Group(_)));
+    // (Sample All Layers on, or no pixels to sample) and a group (not measured) are cut as before,
+    // a transparent part of them reading as the mid-grey behind it.
+    // The measured case only: an 8-bit RGB layer whose own pixels are sampled (`sampled_target`; an
+    // adjustment, fill or group layer reads the composite or a flat area).
+    let on_layer = s.active().is_some_and(|d| {
+        d.doc.mode == photocraft_color::ColorMode::Rgb
+            && d.doc.depth == photocraft_color::SampleType::U8
+            && sampled_target(&d.doc, d.active_layer, all_layers).is_some()
+    });
     let region = with_quick_sampler(s, all_layers, |smp, doc| {
         let canvas = doc.bounds();
         // Enhance Edge reads the pixels as before.

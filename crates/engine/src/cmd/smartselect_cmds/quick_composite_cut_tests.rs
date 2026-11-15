@@ -62,3 +62,33 @@ fn sample_all_layers_keeps_its_cut_on_a_transparent_composite() {
     let whole = bounds(&off);
     assert!(whole[2] > 300, "Sample All Layers off takes the whole ramp: {whole:?}");
 }
+
+/// CodeRabbit on #14824: with Sample All Layers off but an adjustment layer active, there is no
+/// layer surface to sample, so the cut reads the composite and keeps its cut as before.
+#[test]
+fn an_active_adjustment_layer_keeps_the_composite_cut() {
+    let mut s = document_without_background();
+    s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+    let active = s.active().unwrap().active_layer.and_then(|id| s.active().unwrap().doc.layer(id).map(|l| l.surface().is_none())).unwrap_or(false);
+    assert!(active, "the adjustment layer is active and has no pixels");
+    let r = s.execute("select.quick", json!({"points": [[120.0, 400.0]], "size": 30, "mode": "new", "sampleAllLayers": false})).unwrap();
+    assert_eq!(bounds(&r), [99, 349, 42, 102], "the composite is cut as before: the 100 block alone");
+}
+
+/// CodeRabbit on #14824: 16-bit documents were not measured and keep their cut.
+#[test]
+fn a_16_bit_layer_keeps_its_cut() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": 16, "background": "transparent"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint_new_layer(&mut s, W, H, |x, y| {
+        let (x, y) = (x as i32, y as i32);
+        if (100..500).contains(&x) && (350..450).contains(&y) {
+            let v = (100 + 5 * ((x - 100) / 40)) as f32 / 255.0;
+            return [v, v, v, 1.0];
+        }
+        [0.0, 0.0, 0.0, 0.0]
+    });
+    let r = s.execute("select.quick", json!({"points": [[120.0, 400.0]], "size": 30, "mode": "new", "sampleAllLayers": false})).unwrap();
+    assert_eq!(bounds(&r), [99, 349, 42, 102], "the 100 block alone, as before this change");
+}
