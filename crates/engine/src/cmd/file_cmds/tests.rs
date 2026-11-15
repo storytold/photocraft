@@ -896,7 +896,9 @@ fn batch_stop_on_error_reports_skipped_inputs_and_writes_the_error_log() {
     assert_eq!(result["stopped"], json!(missing), "{result}");
     assert_eq!(result["skipped"], json!([good]), "{result}");
     let text = batch_log(&log);
-    assert!(text.starts_with("Start Batch\r\n\r\n") && text.contains("missing.png") && text.contains("File: \"") && text.contains("Error: "), "{text}");
+    // The whole path as given, in the platform's separators (`native_separators`), then the error.
+    let file = if cfg!(windows) { missing.replace('/', "\\") } else { missing.clone() };
+    assert!(text.starts_with("Start Batch\r\n\r\n") && text.contains(&format!("File: \"{file}\"\r\nError: ")), "{text}");
     assert!(text.ends_with("End Batch\r\n"), "{text}");
     assert!(!std::path::Path::new(&join(&output, "good.png")).exists());
 }
