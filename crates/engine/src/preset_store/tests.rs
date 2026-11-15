@@ -725,7 +725,7 @@ fn action_definitions_written_requires_a_successful_current_write() {
         list: vec![crate::actions_cmds::Action::new("First", Vec::new()), crate::actions_cmds::Action::new("Second", Vec::new())],
         ..Default::default()
     };
-    mem.write(ACTIONS_FILE, &crate::actions_cmds::library::encode(&initial).unwrap()).unwrap();
+    mem.write(ACTIONS_FILE, &crate::actions_cmds::library::encode(&initial, &[]).unwrap()).unwrap();
     let mut s = Session::new();
     assert!(!s.action_definitions_written());
     s.attach_preset_store(open(Box::new(mem.clone())));
