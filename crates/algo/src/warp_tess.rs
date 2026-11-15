@@ -156,17 +156,16 @@ impl Net {
     }
     /// The row curve at `v` (control points across).
     fn row(&self, v: f64) -> Vec<P> {
-        (0..self.nu).map(|i| blend(&(0..self.nv).map(|j| self.at(i, j)).collect::<Vec<_>>(), v)).collect()
+        (0..self.nu).map(|i| blend((0..self.nv).map(|j| self.at(i, j)).collect(), v)).collect()
     }
     /// The column curve at `u` (control points down).
     fn col(&self, u: f64) -> Vec<P> {
-        (0..self.nv).map(|j| blend(&(0..self.nu).map(|i| self.at(i, j)).collect::<Vec<_>>(), u)).collect()
+        (0..self.nv).map(|j| blend((0..self.nu).map(|i| self.at(i, j)).collect(), u)).collect()
     }
     /// The net of the part `[u0, u1] × [v0, v1]`.
     fn sub(&self, c: Cell) -> Net {
-        let rows: Vec<Vec<P>> = (0..self.nv).map(|j| segment(&(0..self.nu).map(|i| self.at(i, j)).collect::<Vec<_>>(), c[0], c[1])).collect();
-        let cols: Vec<Vec<P>> =
-            (0..self.nu).map(|i| segment(&rows.iter().map(|r| r.get(i).copied().unwrap_or([f64::NAN; 2])).collect::<Vec<_>>(), c[2], c[3])).collect();
+        let rows: Vec<Vec<P>> = (0..self.nv).map(|j| segment((0..self.nu).map(|i| self.at(i, j)).collect(), c[0], c[1])).collect();
+        let cols: Vec<Vec<P>> = (0..self.nu).map(|i| segment(rows.iter().map(|r| r.get(i).copied().unwrap_or([f64::NAN; 2])).collect(), c[2], c[3])).collect();
         let mut p = Vec::with_capacity(self.p.len());
         for j in 0..self.nv {
             for col in &cols {
@@ -289,39 +288,49 @@ impl Net {
     }
 }
 
-/// The Bezier curve with control points `c` at `t` (de Casteljau).
-fn blend(c: &[P], t: f64) -> P {
-    let mut p = c.to_vec();
-    while p.len() > 1 {
-        p = p.windows(2).map(|w| [w[0][0] + (w[1][0] - w[0][0]) * t, w[0][1] + (w[1][1] - w[0][1]) * t]).collect();
+/// The Bezier curve with control points `p` at `t` (de Casteljau, in place).
+fn blend(mut p: Vec<P>, t: f64) -> P {
+    for n in (1..p.len()).rev() {
+        for k in 0..n {
+            if let (Some(&a), Some(&b)) = (p.get(k), p.get(k + 1)) {
+                p[k] = lerp(a, b, t);
+            }
+        }
     }
     p.first().copied().unwrap_or([f64::NAN; 2])
 }
 
-/// Splits the curve `c` at `t`: (left part, right part).
-fn split(c: &[P], t: f64) -> (Vec<P>, Vec<P>) {
-    let mut p = c.to_vec();
-    let (mut left, mut right) = (Vec::with_capacity(c.len()), Vec::with_capacity(c.len()));
-    while let (Some(&a), Some(&b)) = (p.first(), p.last()) {
-        left.push(a);
-        right.push(b);
-        if p.len() == 1 {
-            break;
+/// Replaces the control points `p` of a curve with those of its part before `t` (de Casteljau in
+/// place: each point becomes the first of its level).
+fn keep_before(p: &mut [P], t: f64) {
+    for r in 1..p.len() {
+        for k in (r..p.len()).rev() {
+            if let (Some(&a), Some(&b)) = (p.get(k - 1), p.get(k)) {
+                p[k] = lerp(a, b, t);
+            }
         }
-        p = p.windows(2).map(|w| [w[0][0] + (w[1][0] - w[0][0]) * t, w[0][1] + (w[1][1] - w[0][1]) * t]).collect();
     }
-    right.reverse();
-    (left, right)
 }
 
-/// The control points of the part `[t0, t1]` of the curve `c`.
-fn segment(c: &[P], t0: f64, t1: f64) -> Vec<P> {
-    let mut c = c.to_vec();
+/// Replaces the control points `p` of a curve with those of its part after `t` (each point
+/// becomes the last of its level).
+fn keep_after(p: &mut [P], t: f64) {
+    for r in 1..p.len() {
+        for k in 0..p.len() - r {
+            if let (Some(&a), Some(&b)) = (p.get(k), p.get(k + 1)) {
+                p[k] = lerp(a, b, t);
+            }
+        }
+    }
+}
+
+/// The control points of the part `[t0, t1]` of the curve `c` (worked out in place).
+fn segment(mut c: Vec<P>, t0: f64, t1: f64) -> Vec<P> {
     if t1 < 1.0 {
-        c = split(&c, t1).0;
+        keep_before(&mut c, t1);
     }
     if t0 > 0.0 && t1 > 0.0 {
-        c = split(&c, t0 / t1).1;
+        keep_after(&mut c, t0 / t1);
     }
     c
 }
@@ -683,7 +692,7 @@ fn strip_down_cuts(net: &Net, level_cells: &[Cell], decisions: &mut [(bool, bool
     }
     let strip = |v0: f64| {
         let s = net.sub([0.0, 1.0, v0, v0 + 0.5]);
-        let sides = [0.0, 0.5, 1.0].iter().map(|&u| need(&segment(&net.col(u), v0, v0 + 0.5))).fold(0.0, f64::max);
+        let sides = [0.0, 0.5, 1.0].iter().map(|&u| need(&segment(net.col(u), v0, v0 + 0.5))).fold(0.0, f64::max);
         let fv = sides.max(s.cols_need());
         (s.top_row_twist(), s.twist(), fv)
     };
@@ -783,13 +792,16 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
         let column = |c: &Cell| (c[0] / (2.0 * (c[1] - c[0])) + EPS).floor() as i64;
         for &c in &level_cells {
             let [u0, u1, v0, v1] = c;
+            // The cell's own control net, built once when a rule needs it.
+            let sub_net = std::cell::OnceCell::new();
+            let sub = || sub_net.get_or_init(|| net.sub(c));
             // A quilt's patch measures its cells' rows by all the rows of their control nets.
-            let fu = if rules.twist_spreads { net.sub(c).rows_need() } else { need(&segment(&net.row(v0), u0, u1)).max(need(&segment(&net.row(v1), u0, u1))) };
+            let fu = if rules.twist_spreads { sub().rows_need() } else { need(&segment(net.row(v0), u0, u1)).max(need(&segment(net.row(v1), u0, u1))) };
             // A whole quilt patch measures its columns by every column of its control net.
             let fv = if rules.twist_spreads && u1 - u0 > 1.0 - EPS && v1 - v0 > 1.0 - EPS {
                 net.cols_need()
             } else {
-                need(&segment(&net.col(u0), v0, v1)).max(need(&segment(&net.col(u1), v0, v1)))
+                need(&segment(net.col(u0), v0, v1)).max(need(&segment(net.col(u1), v0, v1)))
             };
             let (mut across, mut down) = (fu >= 1.0 - EPS, fv >= 1.0 - EPS);
             let mut twist_down = false;
@@ -802,7 +814,7 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             if twisty {
                 let whole = lu > 1.0 - EPS && lv > 1.0 - EPS;
                 let full_height = !whole && lv > 1.0 - EPS;
-                let (tw, tol, across_tol) = twist_test(&net.sub(c), rules, whole, full_height, goes_across);
+                let (tw, tol, across_tol) = twist_test(sub(), rules, whole, full_height, goes_across);
                 if tw > tol + EPS && (!across || tw > across_tol + EPS) {
                     if goes_across {
                         across = true;
@@ -826,7 +838,7 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             // A whole quilt patch whose twist runs along its rows (the rows stretch unevenly) past
             // ROW_TWIST_ACROSS_TOL splits across, as twist across its rows splits it down.
             if rules.twist_spreads && twisty && lu > 1.0 - EPS && lv > 1.0 - EPS {
-                let sub = net.sub(c);
+                let sub = sub();
                 let (p00, p10) = (sub.at(0, 0), sub.at(sub.nu - 1, 0));
                 if sub.twist_along([p10[0] - p00[0], p10[1] - p00[1]]) > ROW_TWIST_ACROSS_TOL + EPS {
                     across = true;
@@ -835,14 +847,14 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             if let Some(tol) = rules.square_twist
                 && twisty
                 && square
-                && net.sub(c).twist() > tol + EPS
+                && sub().twist() > tol + EPS
             {
                 across = true;
             }
             // A full mesh's cell split across splits down too where its twist along its v side passes
             // FULL_COLUMN_TWIST_TOL (the edge columns of fish and bulge meshes).
             if rules.force_down && twisty && across && !down {
-                let sub = net.sub(c);
+                let sub = sub();
                 let (p00, p01) = (sub.at(0, 0), sub.at(0, sub.nv - 1));
                 if sub.twist_along([p01[0] - p00[0], p01[1] - p00[1]]) > FULL_COLUMN_TWIST_TOL + EPS {
                     down = true;
@@ -943,7 +955,7 @@ fn own_points(
     }
     // A new vertex on a row the row didn't need is dropped onto that row segment's chord.
     let mut order = keys.to_vec();
-    order.sort_by_key(|p| level(p[0]));
+    order.sort_by_cached_key(|p| level(p[0]));
     for &[u, v] in &order {
         let lv = level(u);
         // The surface's top and bottom edges keep only their corners, its middle row its own
@@ -966,7 +978,7 @@ fn own_points(
         }) {
             continue;
         }
-        if need(&segment(&net.row(v), a, b)) < 1.0 - EPS {
+        if need(&segment(net.row(v), a, b)) < 1.0 - EPS {
             let m = onto_chord(place(&own, a, v), place(&own, b, v), surf(u, v));
             own.insert(key(u, v), m);
         }
@@ -974,7 +986,7 @@ fn own_points(
     // The same for columns: on the surface's left and right sides, or (a tall envelope) everywhere,
     // by the row rule turned on its side. Inside other envelopes, only where the column's own
     // stretch is nearly straight.
-    order.sort_by_key(|p| level(p[1]));
+    order.sort_by_cached_key(|p| level(p[1]));
     for &[u, v] in &order {
         let lv = level(v);
         let w = 1.0 / f64::from(1u32 << lv);
@@ -982,7 +994,7 @@ fn own_points(
         let on_side = (u.abs() < 1e-12 && !rules.surface_sides[0]) || ((u - 1.0).abs() < 1e-12 && !rules.surface_sides[1]);
         let across = |s: &Split| s.cell[2] <= a + 1e-9 && s.cell[3] >= b - 1e-9 && s.cell[0] < u - 1e-9 && s.cell[1] > u + 1e-9;
         if let (None, Some(tol), false) = (rules.column_chords, rules.flat_columns, on_side) {
-            if lv > fixed_level && !log.iter().any(across) && need(&segment(&net.col(u), a, b)) < tol {
+            if lv > fixed_level && !log.iter().any(across) && need(&segment(net.col(u), a, b)) < tol {
                 let m = onto_chord(place(&own, u, a), place(&own, u, b), surf(u, v));
                 own.insert(key(u, v), m);
             }
@@ -998,7 +1010,7 @@ fn own_points(
         } else if lv <= fixed_level || !on_side {
             continue;
         }
-        if need(&segment(&net.col(u), a, b)) < 1.0 - EPS {
+        if need(&segment(net.col(u), a, b)) < 1.0 - EPS {
             let m = onto_chord(place(&own, u, a), place(&own, u, b), surf(u, v));
             own.insert(key(u, v), m);
         }
@@ -1378,7 +1390,7 @@ mod tests {
             let cubic = cubic_net(&at);
             for k in 0..=10 {
                 let (u, v) = (k as f64 / 10.0, (k * 7 % 11) as f64 / 10.0);
-                let q = blend(&cubic.col(u), v);
+                let q = blend(cubic.col(u), v);
                 let p = at(u, v);
                 assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "{style:?} at ({u}, {v}): {p:?} vs {q:?}");
             }
@@ -1728,7 +1740,7 @@ mod tests {
         let (bow, rows) = ([0.0, 1.0, -1.0, 0.0], [0.0, 0.0, 1.0, 1.0]);
         let p = (0..16).map(|k: usize| [128.0 * (k % 4) as f64 / 3.0 + 8.0 * bow[k % 4] * rows[k / 4], 64.0 * (k / 4) as f64 / 3.0]).collect();
         let net = Net { nu: 4, nv: 4, p };
-        let straight = [0.0, 0.5, 1.0].iter().map(|&u| need(&segment(&net.col(u), 0.0, 0.5))).fold(0.0, f64::max);
+        let straight = [0.0, 0.5, 1.0].iter().map(|&u| need(&segment(net.col(u), 0.0, 0.5))).fold(0.0, f64::max);
         assert!(straight < 1e-9, "a side or middle column bends: {straight}");
         let quarters: Vec<Cell> = vec![[0.0, 0.5, 0.0, 0.5], [0.5, 1.0, 0.0, 0.5], [0.0, 0.5, 0.5, 1.0], [0.5, 1.0, 0.5, 1.0]];
         let mut d = vec![(true, false); 4];
@@ -2340,7 +2352,7 @@ mod tests {
         for (uv, p) in m.uv.iter().zip(&m.pos) {
             let quarter = (uv[0] - 0.25).abs() < 1e-12 || (uv[0] - 0.75).abs() < 1e-12;
             let (a, c) = if uv[0] < 0.5 { (0.0, 0.5) } else { (0.5, 1.0) };
-            if !quarter || level(uv[1]) < 2 || need(&segment(&net.row(uv[1]), a, c)) >= 1.0 - EPS {
+            if !quarter || level(uv[1]) < 2 || need(&segment(net.row(uv[1]), a, c)) >= 1.0 - EPS {
                 continue;
             }
             let s = at(uv[0], uv[1]);
@@ -2373,7 +2385,7 @@ mod tests {
             let off = (p[0] - s[0]).hypot(p[1] - s[1]);
             assert!(off > 0.02 && off < 0.2, "(½, {v}) is just off the surface: {off}");
             assert!(off_line(vertex(&m, 0.5, v - 0.125), vertex(&m, 0.5, v + 0.125), p) < 1e-9, "(½, {v}) is on the chord between the quarter points");
-            let straight = need(&segment(&net.col(0.25), v - 0.125, v + 0.125));
+            let straight = need(&segment(net.col(0.25), v - 0.125, v + 0.125));
             assert!(straight > FLAT_COLUMN_TOL && straight < 1.0, "the column at ¼ asks for {straight} of a split");
             let (p, s) = (vertex(&m, 0.25, v), at(0.25, v));
             assert!((p[0] - s[0]).hypot(p[1] - s[1]) < 1e-9, "(¼, {v}) stays on the surface");
@@ -2394,12 +2406,12 @@ mod tests {
             (p[0] - s[0]).hypot(p[1] - s[1])
         };
         for (a, u, b) in [(0.0, 0.25, 0.5), (0.5, 0.75, 1.0)] {
-            let asks = need(&segment(&net.row(0.5), a, b));
+            let asks = need(&segment(net.row(0.5), a, b));
             assert!(asks > 0.8 && asks < 0.9, "the middle row asks for {asks} of a split");
             assert!(off(u, 0.5) > 0.6, "({u}, ½) is off the surface: {}", off(u, 0.5));
             assert!(off_line(vertex(&m, a, 0.5), vertex(&m, b, 0.5), vertex(&m, u, 0.5)) < 1e-9, "({u}, ½) is on the chord");
             assert!(off(a, 0.5) < 1e-9 && off(b, 0.5) < 1e-9, "the chord's ends stay on the surface");
-            assert!(need(&segment(&net.row(0.25), a, b)) < 0.5);
+            assert!(need(&segment(net.row(0.25), a, b)) < 0.5);
             assert!(off(u, 0.25) < 1e-9, "({u}, ¼) stays on the surface");
         }
     }
@@ -2503,7 +2515,7 @@ mod tests {
         use photocraft_geom::warp::WarpStyle;
         let at = distorted(WarpStyle::ArcLower, 60.0, -12.0);
         let net = net_of(&at, false);
-        let asks = need(&segment(&net.row(0.0), 0.0, 1.0));
+        let asks = need(&segment(net.row(0.0), 0.0, 1.0));
         assert!(asks > 0.85 && asks < 1.0 - EPS, "the top edge asks for {asks} of a split");
         let m = envelope_mesh(&at, false).expect("finite");
         let (a, b) = (vertex(&m, 0.0, 0.0), vertex(&m, 1.0, 0.0));
@@ -2518,7 +2530,7 @@ mod tests {
 
         let at = in_perspective(WarpStyle::Fisheye, 40.0, 8.0, 8.0);
         let net = net_of(&at, true);
-        assert!(need(&segment(&net.row(0.0), 0.0, 1.0)) < 1.0 - EPS);
+        assert!(need(&segment(net.row(0.0), 0.0, 1.0)) < 1.0 - EPS);
         let m = envelope_mesh(&at, true).expect("finite");
         let (p, s) = (vertex(&m, 0.5, 0.0), at(0.5, 0.0));
         assert!(off_line(vertex(&m, 0.0, 0.0), vertex(&m, 1.0, 0.0), p) < 1e-9, "a full mesh's (½, 0) is on the chord between the corners");
