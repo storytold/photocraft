@@ -315,7 +315,7 @@ pub const PREVIEWED: &[&str] = &[
     "image.adjustments.shadowsHighlights",
     "image.adjustments.replaceColor",
     MATCH_COLOR,
-    "image.adjustments.hdrToning",
+    HDR_TONING,
     "image.rotation.arbitrary",
     "image.mode.indexedColor",
     "image.mode.bitmap",
@@ -366,7 +366,7 @@ fn rememberable(kind: &Kind, value: &Value) -> bool {
 }
 
 /// HDR Toning reopens at its factory defaults after every OK, as in Photoshop (#14737). Values an
-/// earlier version remembered for it are ignored too.
+/// earlier version remembered for it are ignored, and dropped at the next OK.
 const HDR_TONING: &str = "image.adjustments.hdrToning";
 
 fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &mut Map<String, Value>) {
@@ -392,7 +392,15 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
 
 /// Remember successful built-in schema dialogs; failed or cancelled dialogs do not persist.
 pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<String, Value>) {
-    if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") || command == HDR_TONING {
+    if command == HDR_TONING {
+        if app.session.prefs().dialogs.contains_key(command) {
+            app.session.prefs.edit(|prefs| {
+                prefs.dialogs.remove(command);
+            });
+        }
+        return;
+    }
+    if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") {
         return;
     }
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
