@@ -121,6 +121,30 @@ pub(super) fn offset(angle: f32, distance: f32) -> (f32, f32) {
     ((-a.cos() * distance).round(), (a.sin() * distance).round())
 }
 
+/// Whether an effect's Anti-aliased checkbox moves its source map: only for the contour the
+/// reference application was measured with. #14934 (Inner Shadow) and #14951 (Outer Glow) both
+/// measure Size 10 with the Gaussian contour and leave Anti-aliased with any other contour
+/// unmeasured, so every other contour keeps today's map bit-for-bit. The built-in Gaussian preset
+/// carries that name from the Contour picker and from a PSD import; an edited curve becomes
+/// "Custom" and keeps today's map.
+fn anti_aliased_contour(c: &Contour) -> bool {
+    matches!(c, Contour::Custom { name, .. } if name.eq_ignore_ascii_case("Gaussian"))
+}
+
+/// The sub-pixel offset towards the top-left that an anti-aliased effect builds its map from,
+/// added to the whole-pixel light offset. Both measured tables sit on a third of a pixel: with the
+/// flag on, the Outer Glow reaches a pixel further at the top and left (its reported bounds grow
+/// there) and a pixel less at the bottom and right, and the Inner Shadow is weaker at the top and
+/// left edge and stronger at the bottom and right. Half a pixel overshoots (it puts the Inner
+/// Shadow 4 levels and the Outer Glow 15 levels off the measured profiles); a third lands the
+/// Inner Shadow within 1.4 levels of every measured pixel, and the glow within 4.6 at four
+/// samples of eighteen and within 3 at the rest, which is where today's off-path profile already
+/// sits from the reference. *Why* the two pairs of edges differ is not measured, so this
+/// reproduces both profiles instead of guessing a rule for the unmeasured cases.
+fn aa_shift(on: bool, c: &Contour) -> f32 {
+    if on && anti_aliased_contour(c) { -1.0 / 3.0 } else { 0.0 }
+}
+
 /// The lengths a 100 % gradient at `angle` spans in a `w` × `h` frame: the chord (Linear and
 /// Reflected) and the ellipse-norm length (Radial, Angle, Diamond; its half is the radius).
 pub fn gradient_units(angle: f32, w: f32, h: f32) -> (f32, f32) {
@@ -288,6 +312,11 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
     // after the contour and Range (Photoshop 27.11, measured: the centre glow is exactly
     // 1 − the edge glow, for both techniques).
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
+    // #14951: an Anti-aliased Outer Glow builds its map from that shape off-centre (`aa_shift`).
+    // The Precise technique and the Inner Glow (#14927) were not measured and keep today's map;
+    // `aa_shift` is only ever negative, so a map that keeps `aa` at 0 skips the resample.
+    let aa = if inner || g.technique == GlowTechnique::Precise { 0.0 } else { aa_shift(g.anti_alias, &g.contour) };
+    let src = if aa < 0.0 { src.shifted(aa, aa, 0.0) } else { src };
     let mut m = match g.technique {
         GlowTechnique::Precise => {
             // Coverage falls linearly from 0.5 at the edge to 0 at `size + 1` px (centre to

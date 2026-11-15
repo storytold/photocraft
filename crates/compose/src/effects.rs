@@ -246,4 +246,6 @@ impl FxMaps {
 }
 
 #[cfg(test)]
+mod outer_glow_anti_alias_tests;
+#[cfg(test)]
 mod tests;
