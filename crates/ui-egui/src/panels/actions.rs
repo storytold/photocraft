@@ -51,9 +51,8 @@ pub(crate) fn library_slot_inserted(app: &mut PhotocraftApp, slot: usize) {
     }
     app.session.prefs.edit(|prefs| {
         let previous = std::mem::take(&mut prefs.collapsed_action_set_rows);
-        prefs.collapsed_action_set_rows = previous.into_iter().map(|(existing, state)| {
-            (if existing >= slot { existing.saturating_add(1) } else { existing }, state)
-        }).collect();
+        prefs.collapsed_action_set_rows =
+            previous.into_iter().map(|(existing, state)| (if existing >= slot { existing.saturating_add(1) } else { existing }, state)).collect();
     });
     let ui = &mut app.ui.actions;
     ui.slot_revision = revision;
@@ -69,11 +68,7 @@ pub(crate) fn library_slot_inserted(app: &mut PhotocraftApp, slot: usize) {
 pub(crate) fn sync_physical_disclosures(app: &mut PhotocraftApp, force: bool) {
     let prefs = app.session.prefs();
     let ui = &mut app.ui.actions;
-    if !force
-        && ui.physical_prefs_ready
-        && ui.physical_prefs == prefs.collapsed_action_set_rows
-        && ui.physical_legacy_prefs == prefs.collapsed_action_sets
-    {
+    if !force && ui.physical_prefs_ready && ui.physical_prefs == prefs.collapsed_action_set_rows && ui.physical_legacy_prefs == prefs.collapsed_action_sets {
         return;
     }
     for (slot, name) in app.session.actions.set_rows.iter().enumerate() {
@@ -81,8 +76,7 @@ pub(crate) fn sync_physical_disclosures(app: &mut PhotocraftApp, force: bool) {
             rows.get(&slot).filter(|(caption, _)| caption == name).map_or_else(|| names.get(name).copied().unwrap_or(false), |(_, collapsed)| *collapsed)
         };
         let collapsed = choice(&prefs.collapsed_action_set_rows, &prefs.collapsed_action_sets);
-        let saved = prefs.collapsed_action_set_rows.get(&slot).is_some_and(|(caption, _)| caption == name)
-            || prefs.collapsed_action_sets.contains_key(name);
+        let saved = prefs.collapsed_action_set_rows.get(&slot).is_some_and(|(caption, _)| caption == name) || prefs.collapsed_action_sets.contains_key(name);
         if force || (!ui.physical_prefs_ready && saved) || (ui.physical_prefs_ready && collapsed != choice(&ui.physical_prefs, &ui.physical_legacy_prefs)) {
             ui.collapsed_set_slots.retain(|&value| value != slot);
             if collapsed {

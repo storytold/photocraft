@@ -3678,9 +3678,10 @@ fn physical_recording_reveal_restores_only_its_saved_occurrence() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":8,"height":8})).unwrap();
     app.session.actions.set_rows = vec!["Same".into(), "Same".into()];
-    app.session.actions.list = [("Record here", 0), ("Other occurrence", 1)].into_iter().map(|(name, slot)| {
-        Action { set: Some("Same".into()), set_slot: Some(slot), ..Action::new(name, vec![]) }
-    }).collect();
+    app.session.actions.list = [("Record here", 0), ("Other occurrence", 1)]
+        .into_iter()
+        .map(|(name, slot)| Action { set: Some("Same".into()), set_slot: Some(slot), ..Action::new(name, vec![]) })
+        .collect();
     app.session.prefs.edit(|prefs| {
         prefs.collapsed_action_set_rows.insert(0, ("Same".into(), true));
         prefs.collapsed_action_set_rows.insert(1, ("Same".into(), true));

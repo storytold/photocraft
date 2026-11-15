@@ -2708,9 +2708,13 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
 fn physical_action_folder_choices_merge_between_instances() {
     let store = Arc::new(Mutex::new(Some(json!({"collapsedActionSets":{"Same":true}}).to_string())));
     let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
-    a.session.prefs.edit(|prefs| { prefs.collapsed_action_set_rows.insert(0, ("Same".into(), false)); });
+    a.session.prefs.edit(|prefs| {
+        prefs.collapsed_action_set_rows.insert(0, ("Same".into(), false));
+    });
     super::save::save_preferences(&mut a).unwrap();
-    b.session.prefs.edit(|prefs| { prefs.collapsed_action_set_rows.insert(1, ("Same".into(), true)); });
+    b.session.prefs.edit(|prefs| {
+        prefs.collapsed_action_set_rows.insert(1, ("Same".into(), true));
+    });
     super::save::save_preferences(&mut b).unwrap();
     assert_eq!(stored(&store)["collapsedActionSetRows"], json!({"0":["Same",false],"1":["Same",true]}));
     let restored = app_on(&store, Arc::default());
