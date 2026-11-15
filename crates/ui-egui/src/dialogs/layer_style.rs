@@ -28,6 +28,10 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod gradient_overlay_angle_range_tests;
+#[cfg(test)]
+mod pattern_overlay_angle_range_tests;
 
 #[derive(Clone, Copy)]
 enum P {
@@ -100,6 +104,16 @@ fn fresh_params(kind: &str, light: f32, user: Option<&Value>) -> Value {
         p["angle"] = json!(light);
     }
     p
+}
+
+/// Pattern and Gradient Overlay take typed angles from -360 to 360; the dial still points in
+/// -180..=180 and every other effect keeps that range for its field too.
+fn wide_angle_kind(kind: &str) -> bool {
+    matches!(kind, "patternOverlay" | "gradientOverlay")
+}
+
+fn angle_field_range(kind: &str) -> std::ops::RangeInclusive<f32> {
+    if wide_angle_kind(kind) { -360.0..=360.0 } else { -180.0..=180.0 }
 }
 
 fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
@@ -807,6 +821,10 @@ fn apply(f: &Map<String, Value>, mut run: impl FnMut(&str, Value) -> Result<Valu
         let on = e.get("on").and_then(Value::as_bool).unwrap_or(true);
         let mut params = e.get("params").cloned().unwrap_or_else(|| json!({}));
         params["enabled"] = json!(on);
+        // 360 degrees is the same direction as 0: the field accepts it, the stored value is 0.
+        if wide_angle_kind(kind) && params.get("angle").and_then(Value::as_f64) == Some(360.0) {
+            params["angle"] = json!(0.0);
+        }
         entries.push(effect_entry(e, kind, params, initial_light_angle));
     }
     run("layer.layerStyle.replace", json!({"layer": layer, "effects": entries}))?;
@@ -1647,7 +1665,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
         match kind_p {
             P::Angle => {
                 let mut v = disp.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-                if widgets::angle_dial_line(ui, label, Some(LABEL_W), &mut v, -180.0..=180.0).changed() {
+                if widgets::angle_dial_line(ui, label, Some(LABEL_W), &mut v, angle_field_range(&sel_kind)).changed() {
                     let value = json!(v);
                     disp[key] = value.clone();
                     set_param(f, selected, key, value);
