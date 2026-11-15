@@ -83,8 +83,15 @@ fn the_boxes_are_the_canvas_in_whole_points() {
 #[test]
 fn the_title_is_the_written_files_name_and_cannot_break_the_line() {
     let mut s = session(300, 200, 72.0);
-    let text = written(&mut s, "a(b)c\\d.ai", "documentBounds");
-    assert!(text.contains("\r%%Title: (a_b_c_d.ai)\r"), "{text}");
+    // Portable: the parentheses of a file name cannot end the title early.
+    let text = written(&mut s, "a(b)c.ai", "documentBounds");
+    assert!(text.contains("\r%%Title: (a_b_c.ai)\r"), "{text}");
+    // A backslash is part of a file name only where it is not a separator (Windows splits the path there).
+    #[cfg(unix)]
+    {
+        let text = written(&mut s, "a(b)c\\d.ai", "documentBounds");
+        assert!(text.contains("\r%%Title: (a_b_c_d.ai)\r"), "{text}");
+    }
     // Without a file the title keeps the document's name.
     let r = s.execute(CMD, json!({"paths": "documentBounds"})).unwrap();
     assert!(r["ai"].as_str().unwrap().contains("\r%%Title: (Header.psd)\r"));
