@@ -30,16 +30,31 @@ fn harness(text: &str, seen: Rc<Cell<(bool, bool)>>) -> egui_kittest::Harness<'s
     harness_with(text, seen, |_| {})
 }
 
-/// `harness` that also runs `extra` every frame, for drawing another window beside the dialog.
-fn harness_with(text: &str, seen: Rc<Cell<(bool, bool)>>, mut extra: impl FnMut(&egui::Context) + 'static) -> egui_kittest::Harness<'static, PhotocraftApp> {
+/// `harness` that also runs `extra` every frame before the dialog, for drawing another window.
+fn harness_with(text: &str, seen: Rc<Cell<(bool, bool)>>, extra: impl FnMut(&egui::Context) + 'static) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    harness_ordered(text, seen, extra, false)
+}
+
+/// `harness_with`, `after` choosing whether `extra` draws after the dialog instead of before it.
+fn harness_ordered(
+    text: &str,
+    seen: Rc<Cell<(bool, bool)>>,
+    mut extra: impl FnMut(&egui::Context) + 'static,
+    after: bool,
+) -> egui_kittest::Harness<'static, PhotocraftApp> {
     let mut app = app_with_text(text);
     menu(&mut app, "edit.checkSpelling", &json!({})).unwrap().unwrap();
     // The fonts are set up after the harness's first frame: the window appears after it.
     let spell = app.ui.type_panels.spell.take();
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
         move |ui, app| {
-            extra(ui.ctx());
+            if !after {
+                extra(ui.ctx());
+            }
             windows(app, ui.ctx());
+            if after {
+                extra(ui.ctx());
+            }
             let keys = ui.ctx().input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
             if keys.0 || keys.1 {
                 let old = seen.get();
@@ -117,7 +132,7 @@ fn the_keys_do_nothing_when_the_dialog_is_closed() {
 #[test]
 fn enter_on_the_focused_change_button_runs_change() {
     let seen = Rc::new(Cell::new((false, false)));
-    let mut h = harness("Teh cat. Wrold", seen);
+    let mut h = harness("Teh cat. Wrold", seen.clone());
     h.state_mut().ui.type_panels.spell.as_mut().unwrap().change_to = "The".into();
     h.run_steps(2);
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Change").focus();
@@ -126,6 +141,7 @@ fn enter_on_the_focused_change_button_runs_change() {
     h.run_steps(3);
     assert!(layer_text(h.state()).starts_with("The cat"), "Enter on Change changed the word: {}", layer_text(h.state()));
     assert!(h.state().ui.type_panels.spell.is_some(), "and the dialog stays open");
+    assert!(!seen.get().0, "Enter did not reach the canvas or the tool shortcuts either");
 }
 
 fn other_window() -> impl FnMut(&egui::Context) {
@@ -157,4 +173,17 @@ fn enter_in_another_window_leaves_check_spelling_open() {
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert!(h.state().ui.type_panels.spell.is_some(), "Enter in the other window left Check Spelling open");
+}
+
+#[test]
+fn escape_after_a_window_drawn_later_took_the_focus_leaves_check_spelling_open() {
+    let seen = Rc::new(Cell::new((false, false)));
+    let mut h = harness_ordered("Teh cat. Wrold", seen, other_window(), true);
+    // The click gives the later window's field the focus in a frame where the dialog has already
+    // drawn; the very next frame carries Escape.
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Other field").click();
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().ui.type_panels.spell.is_some(), "Escape in the later window left Check Spelling open");
 }

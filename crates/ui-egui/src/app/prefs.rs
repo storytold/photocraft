@@ -57,6 +57,7 @@ impl PhotocraftApp {
         // The wheel goes to a focused value field before the canvas or a panel sees it (#5473), in
         // every window: a floated panel's window has input of its own (#11353).
         ctx.add_plugin(field_wheel::FieldWheel);
+        ctx.add_plugin(crate::type_panels_ui::SpellingFocus);
         theme::install_fonts(ctx);
         egui_extras::install_image_loaders(ctx);
         theme::apply(ctx, kind);

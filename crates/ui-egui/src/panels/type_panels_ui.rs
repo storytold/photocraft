@@ -827,6 +827,29 @@ fn spelling_change_all_params(item: &Value, word: &str, replace: &str, all_layer
     params
 }
 
+fn last_focus_id() -> egui::Id {
+    egui::Id::unique("check-spelling-last-focus")
+}
+
+/// Records the focus at the end of every pass, after every window has drawn, for Check Spelling to
+/// read the next frame. While Escape or Enter is down the record is kept: the key itself makes a
+/// text edit drop its focus, and the record must stay the focus the key was typed into.
+pub(crate) struct SpellingFocus;
+
+impl egui::Plugin for SpellingFocus {
+    fn debug_name(&self) -> &'static str {
+        "SpellingFocus"
+    }
+
+    fn on_end_pass(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx();
+        if !ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter)) {
+            let focused = ctx.memory(|m| m.focused());
+            ctx.data_mut(|d| d.insert_temp(last_focus_id(), focused));
+        }
+    }
+}
+
 /// Render spelling navigation and corrections using the retained opening receiver and paused-action continuation.
 fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
@@ -841,20 +864,20 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // window (a key typed into another open window, such as Styles, is not ours), and Enter also
     // needs that focus to be a text edit, so a focused button keeps its own Enter (its click).
     // A text edit gives up its focus on Escape or Enter, possibly before this runs, so with either key
-    // down the focus of the frame before is used when nothing is focused now.
+    // down the focus at the end of the frame before is used when nothing is focused now (recorded by
+    // `SpellingFocus`, after every window has drawn).
     let window_id = egui::Id::unique("check-spelling");
-    let last_focus_id = egui::Id::unique("check-spelling-last-focus");
     let focused = ctx.memory(|m| m.focused());
     let key_down = ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter));
-    let last_focus = ctx.data(|d| d.get_temp::<Option<egui::Id>>(last_focus_id)).flatten();
-    if !key_down {
-        ctx.data_mut(|d| d.insert_temp(last_focus_id, focused));
-    }
-    if ctx.memory(|m| m.top_modal_layer().is_none()) {
+    let last_focus = ctx.data(|d| d.get_temp::<Option<egui::Id>>(last_focus_id())).flatten();
+    let no_modal = ctx.memory(|m| m.top_modal_layer().is_none());
+    let mut dialog_has_focus = false;
+    if no_modal {
         let window_layer = egui::LayerId::new(egui::Order::Middle, window_id);
         let in_window = |f: egui::Id| ctx.read_response(f).is_some_and(|r| r.layer_id == window_layer);
         let key_focus = focused.or(if key_down { last_focus } else { None });
         let inside = key_focus.is_none_or(in_window);
+        dialog_has_focus = inside;
         let enter_free = key_focus.is_none_or(|f| in_window(f) && egui::TextEdit::load_state(ctx, f).is_some());
         let none = egui::Modifiers::NONE;
         let (esc, enter) = ctx.input_mut(|i| (inside && i.consume_key(none, egui::Key::Escape), enter_free && i.consume_key(none, egui::Key::Enter)));
@@ -948,6 +971,11 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 });
             });
         });
+    // Enter on a focused button was left to the button (its click is made at the start of the pass):
+    // it stays in the dialog, so the canvas and the shortcuts after it do not see it.
+    if no_modal && dialog_has_focus {
+        ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+    }
     if let Some(s) = app.ui.type_panels.spell.as_mut() {
         s.change_to = change_to.clone();
         s.all_layers = all_layers;
