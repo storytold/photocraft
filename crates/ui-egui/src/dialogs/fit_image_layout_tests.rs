@@ -140,3 +140,38 @@ fn enter_is_ok_and_escape_is_cancel_with_the_same_field_names() {
     assert!(h.state().ui.dialogs.iter().all(|d| d.id != id), "Enter runs it");
     assert_eq!(dims(&h), (200, 150), "fitted within 200 × 200");
 }
+
+/// CodeRabbit on #15123: numbers typed in the same frame as the shortcut still reach the field that has the
+/// focus; only the character the shortcut itself types (after it) is dropped.
+#[test]
+fn text_typed_in_the_frame_of_alt_w_still_reaches_the_active_field() {
+    let (mut h, id) = open();
+    h.key_press_modifiers(Modifiers::ALT, Key::H);
+    h.run_steps(3);
+    assert_eq!(focused(&h).as_deref(), Some("Height"));
+    h.event(Event::Text("120".into()));
+    h.key_press_modifiers(Modifiers::ALT, Key::W);
+    h.run_steps(3);
+    assert_eq!(focused(&h).as_deref(), Some("Width"), "the shortcut still moves the focus");
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    let f = &h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields;
+    assert_eq!(f["height"], json!(120), "the number typed with the shortcut was entered");
+}
+
+/// The shortcut's own character goes, the numbers typed before it stay (the frame's events in order).
+#[test]
+fn only_the_text_after_the_shortcut_is_dropped() {
+    use super::fit_image_range::drop_text_after;
+    let text = |t: &str| Event::Text(t.into());
+    // [Text 120, (the shortcut, already consumed, was here), Text ∑]: the shortcut sat at index 1.
+    let mut events = vec![text("120"), Event::PointerGone, text("\u{2211}")];
+    drop_text_after(&mut events, 1);
+    assert_eq!(events.len(), 2);
+    assert!(matches!(&events[0], Event::Text(t) if t == "120"), "the number stays");
+    assert!(matches!(events[1], Event::PointerGone), "other events stay");
+    // A shortcut first: every text after it goes.
+    let mut events = vec![text("\u{2211}"), text("7")];
+    drop_text_after(&mut events, 0);
+    assert!(events.is_empty());
+}

@@ -1143,8 +1143,14 @@ pub(crate) const FADE_OPACITY_RANGE_ALERT: &str = "An integer between 0 and 100 
 /// A value the Fade Opacity field holds, read as the reference application reads it: typed text loses
 /// its dot (`12.3` is 123, `0.4` is 4); anything else, a scrub drag's fractions included (`37.5`), is
 /// the number itself, rounded by the caller.
-fn read_fade_opacity(value: f32, typing: bool) -> f32 {
-    if value.fract() == 0.0 || !typing { value } else { format!("{value}").replace('.', "").parse::<f32>().unwrap_or(value) }
+fn read_fade_opacity(value: f32, text: Option<&str>, typing: bool) -> f32 {
+    if value.fract() == 0.0 || !typing {
+        return value;
+    }
+    // From the text as it was typed, so `0.40` is 40 and `0.4` is 4; the number's own formatting has lost
+    // its trailing zeros.
+    let digits = text.map_or_else(|| format!("{value}"), str::to_owned).replace('.', "");
+    digits.parse::<f32>().unwrap_or(value)
 }
 
 /// Edit › Fade's Opacity (#13811): whole percents 0..=100, a field with `%` and a slider. A typed
@@ -1182,7 +1188,7 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
         // Typed text is read without its dot; a scrub drag, whose fractions come from the drag speed, is
         // only rounded, as every other field's drag is (a drag to 37.5 is 38, not 375).
         let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
-        let whole = read_fade_opacity(typed, typing);
+        let whole = read_fade_opacity(typed, crate::widgets::typed_text(ui.ctx(), r.id).as_deref(), typing);
         v = whole.round().clamp(0.0, 100.0);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, typing && !(0.0..=100.0).contains(&whole)));
         if typing && r.has_focus() {

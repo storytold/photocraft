@@ -114,17 +114,32 @@ fn the_schema_keeps_the_0_to_100_range_with_100_by_default() {
     assert!(spec.params.contains("whole %"));
 }
 
-/// CodeRabbit on #15099: scrubbing the field is not typing. A scrub's fractions (37.5, from the drag speed)
-/// are rounded like any field's drag, not read without their dot (375, clamped to 100); typed text still is.
+/// CodeRabbit on #15099 and #15123: scrubbing the field is not typing. A scrub's fractions (37.5, from the
+/// drag speed) are rounded like any field's drag, not read without their dot (375, clamped to 100); typed
+/// text still is, read from the text as typed (`0.40` is 40, `0.4` is 4).
 #[test]
 fn a_scrub_drag_rounds_and_does_not_drop_the_dot() {
     use super::read_fade_opacity;
-    // Typed: the dot goes.
-    assert_eq!(read_fade_opacity(12.3, true), 123.0);
-    assert_eq!(read_fade_opacity(0.4, true), 4.0);
-    assert_eq!(read_fade_opacity(50.0, true), 50.0);
+    assert_eq!(read_fade_opacity(12.3, Some("12.3"), true), 123.0);
+    assert_eq!(read_fade_opacity(0.4, Some("0.4"), true), 4.0);
+    assert_eq!(read_fade_opacity(0.4, Some("0.40"), true), 40.0, "trailing zeros count");
+    assert_eq!(read_fade_opacity(0.1, Some("0.10"), true), 10.0);
+    assert_eq!(read_fade_opacity(50.0, Some("50"), true), 50.0);
+    assert_eq!(read_fade_opacity(0.4, None, true), 4.0, "without the text, the number's own form");
     // A drag: the number itself, which the field rounds (37.5 -> 38, never 375 -> 100).
-    assert_eq!(read_fade_opacity(37.5, false), 37.5);
-    assert_eq!(read_fade_opacity(37.5, false).round().clamp(0.0, 100.0), 38.0);
-    assert_eq!(read_fade_opacity(12.3, false).round(), 12.0);
+    assert_eq!(read_fade_opacity(37.5, None, false), 37.5);
+    assert_eq!(read_fade_opacity(37.5, Some("37.5"), false).round().clamp(0.0, 100.0), 38.0);
+    assert_eq!(read_fade_opacity(12.3, None, false).round(), 12.0);
+}
+
+/// CodeRabbit on #15123: typing `0.40` into the field (through the widget, so its text is what was typed) gives 40.
+#[test]
+fn typing_a_decimal_with_a_trailing_zero_keeps_the_zero() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "0.40");
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(40));
+    type_opacity(&mut h, "0.4");
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(4));
 }

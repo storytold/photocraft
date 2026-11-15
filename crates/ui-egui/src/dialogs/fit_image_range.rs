@@ -90,16 +90,28 @@ pub(super) fn finish(ui: &mut UiState, interactive: bool, alert: Option<Alert>, 
     outcome
 }
 
+/// Drops the text events from position `at` on (where the consumed shortcut was): the character a shortcut
+/// types follows it, and numbers typed in the frame before it do not.
+pub(super) fn drop_text_after(events: &mut Vec<egui::Event>, at: usize) {
+    let mut n = 0;
+    events.retain(|e| {
+        n += 1;
+        !matches!(e, egui::Event::Text(_)) || n <= at
+    });
+}
+
 /// The dialog as the reference application lays it out (#13851): Width, Height and Don't Enlarge
 /// in a "Constrain Within" group, each size followed by "pixels". Alt+W and Alt+H go to the sizes;
 /// Tab goes Width, Height, Don't Enlarge, then on to OK and Cancel (drawn after this).
 pub(super) fn body(ui: &mut egui::Ui, fields: &mut Fields) -> Option<Alert> {
     let mnemonic = |ui: &mut egui::Ui, key: egui::Key| {
         ui.input_mut(|i| {
+            let at = i.events.iter().position(|e| matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.alt));
             let hit = i.consume_key(egui::Modifiers::ALT, key);
-            // The character Alt+key types (on macOS) isn't an entry.
-            if hit {
-                i.events.retain(|e| !matches!(e, egui::Event::Text(_)));
+            // The character Alt+key types (on macOS) isn't an entry: it arrives after the shortcut. Text that
+            // came before it in the same frame is one, and stays for the field that has the focus.
+            if let (true, Some(at)) = (hit, at) {
+                drop_text_after(&mut i.events, at);
             }
             hit
         })

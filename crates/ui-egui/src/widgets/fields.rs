@@ -619,8 +619,12 @@ fn number_edit(
                 } else {
                     parse_num_in(s, units)
                 };
-                // Whether the text being typed is a number at all, for [`typed_text_parses`].
-                ctx.data_mut(|d| d.insert_temp(id.with("parses"), v.is_some()));
+                // Whether the text being typed is a number at all, for [`typed_text_parses`], and the text
+                // itself, for [`typed_text`].
+                ctx.data_mut(|d| {
+                    d.insert_temp(id.with("parses"), v.is_some());
+                    d.insert_temp(id.with("typed-text"), s.to_owned());
+                });
                 if ctx.memory(|m| m.has_focus(id)) && !blank && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
                     ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
@@ -657,6 +661,12 @@ fn number_edit(
 /// as a number, an arithmetic entry included once it is complete: `None` before anything was typed.
 pub fn typed_text_parses(ctx: &egui::Context, id: egui::Id) -> Option<bool> {
     ctx.data(|d| d.get_temp::<bool>(id.with("parses")))
+}
+
+/// The text last parsed in the number field `id` (a [`value_field`]'s response id), as it was typed:
+/// `0.40` stays `0.40` where the number it stands for is 0.4. `None` before anything was typed.
+pub fn typed_text(ctx: &egui::Context, id: egui::Id) -> Option<String> {
+    ctx.data(|d| d.get_temp::<String>(id.with("typed-text")))
 }
 
 /// The zoom a zoom field's text stands for, with at most one decimal separator (`,` or `.`): a
