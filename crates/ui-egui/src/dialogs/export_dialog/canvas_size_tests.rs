@@ -188,3 +188,36 @@ fn exporting_with_a_canvas_leaves_the_document_and_its_history_alone() {
     assert!(Arc::ptr_eq(&before, &st.doc), "the document is untouched");
     assert_eq!(st.history.entries().len(), states, "no history step");
 }
+
+fn big_doc(w: u32, h: u32) -> Document {
+    Document::with_background("Big", Size::new(w, h), ColorMode::Rgb, SampleType::U8, Color::WHITE)
+}
+
+fn exported_size(doc: &Document, extra: Value, max_side: Option<u32>) -> (u32, u32) {
+    let mut f = json!({"format": "png", "scale": 100, "profile": "document", "embedProfile": false}).as_object().unwrap().clone();
+    f.extend(extra.as_object().unwrap().clone());
+    let out = export_document(doc, &f, max_side, &photocraft_engine::color_cmds::document_profile(doc)).unwrap();
+    (out.size.width, out.size.height)
+}
+
+/// CodeRabbit on #15025: the preview bounds the final canvas, whatever the image size.
+#[test]
+fn a_preview_bounds_the_final_canvas() {
+    let doc = big_doc(1, 1);
+    let (w, h) = exported_size(&doc, json!({"width": 1, "height": 1, "canvasWidth": 6000, "canvasHeight": 4000}), Some(512));
+    assert!(w.max(h) <= 512, "the preview canvas is {w} x {h}");
+    assert_eq!((w, h), (512, 341), "in proportion");
+    // The export itself is not reduced.
+    assert_eq!(exported_size(&doc, json!({"width": 1, "height": 1, "canvasWidth": 600, "canvasHeight": 400}), None), (600, 400));
+}
+
+/// CodeRabbit on #15025: an image side past 15000 px with the canvas left at the image size is
+/// exported whole, as the dialog shows it; a canvas the user sets past the limit still clamps.
+#[test]
+fn an_untouched_canvas_over_the_limit_crops_nothing() {
+    let doc = big_doc(20_000, 1_000);
+    let same = json!({"width": 20000, "height": 1000, "canvasWidth": 20000, "canvasHeight": 1000});
+    assert_eq!(exported_size(&doc, same, None), (20_000, 1_000));
+    let set = json!({"width": 20000, "height": 1000, "canvasWidth": 18000, "canvasHeight": 1000});
+    assert_eq!(exported_size(&doc, set, None), (15_000, 1_000), "a set side clamps to the limit");
+}

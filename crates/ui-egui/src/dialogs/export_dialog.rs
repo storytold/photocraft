@@ -503,10 +503,21 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
     if s_fmt(f) == "ico" && (w > 256.0 || h > 256.0) && max_side.is_none() {
         return Err("ICO export is limited to 256 × 256 pixels; reduce the export scale".into());
     }
+    // A preview bounds the final canvas, not only the image: a 1 × 1 image on a 15000 × 15000 canvas
+    // would otherwise be a 225-million-pixel proxy. The image shrinks with it.
+    let canvas = export_canvas(f, w, h);
+    let (w, h, canvas) = match (canvas, max_side) {
+        (Some((cw, ch)), Some(m)) if cw.max(ch) > f64::from(m) => {
+            let k = f64::from(m) / cw.max(ch);
+            let px = |v: f64| (v * k).round().max(1.0);
+            (px(w), px(h), Some((px(cw), px(ch))))
+        }
+        (c, _) => (w, h, c),
+    };
     if (w - doc.size.width as f64).abs() >= 1.0 || (h - doc.size.height as f64).abs() >= 1.0 {
         session.execute("image.imageSize", json!({"width": w, "height": h, "resample": resample})).map_err(|e| e.to_string())?;
     }
-    if let Some((cw, ch)) = export_canvas(f, w, h) {
+    if let Some((cw, ch)) = canvas {
         // Centred, with a transparent extension that a flatten below turns white (JPG, or
         // Transparency off), as measured in the reference application.
         let p = json!({"width": cw, "height": ch, "anchor": "center", "extensionColor": "transparent"});
@@ -531,7 +542,9 @@ fn export_canvas(f: &Map<String, Value>, w: f64, h: f64) -> Option<(f64, f64)> {
     if ![cw, ch, iw, ih].iter().all(|v| v.is_finite() && *v >= 1.0) {
         return None;
     }
-    let side = |c: f64, image: f64, out: f64| (c.clamp(1.0, MAX_CANVAS) / image * out).round().max(1.0);
+    // A side left at the image size is the whole image, even past the limit: nothing is cropped
+    // that the dialog shows as unchanged. Only a side the user set is clamped (with its warning).
+    let side = |c: f64, image: f64, out: f64| if (c - image).abs() < 0.5 { out } else { (c.clamp(1.0, MAX_CANVAS) / image * out).round().max(1.0) };
     let canvas = (side(cw, iw, w), side(ch, ih, h));
     (canvas != (w, h)).then_some(canvas)
 }
