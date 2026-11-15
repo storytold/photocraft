@@ -1,6 +1,5 @@
 //! #14724: HDR Toning's Highlight works as in the reference application (-100 darkens the
-//! highlights, +100 brightens them), and Shadow leaves ordinary images unchanged while images with
-//! values above 1.0 keep today's Shadow.
+//! highlights, +100 brightens them) without reversing the tone order, and Shadow changes nothing.
 
 use super::checked_hdr::process_with;
 use super::{HdrToning, hdr_toning};
@@ -29,7 +28,6 @@ fn test_document() -> Vec<[f32; 4]> {
     px
 }
 
-/// The test document toned with `p`, as 8-bit levels per pixel (RGB).
 fn toned(p: &HdrToning) -> Vec<[i32; 3]> {
     let mut px = test_document();
     hdr_toning(&mut px, W, H, p);
@@ -57,74 +55,105 @@ fn highlight_minus_100_darkens_white_and_plus_100_brightens_it() {
     assert!(plus > default, "Highlight +100 gives white {plus}, the default {default}");
 }
 
+fn ramp(p: &HdrToning) -> Vec<i32> {
+    let levels = toned(p);
+    (0..256).map(|v| levels[32 * W + v * 2][0]).collect()
+}
+
 #[test]
-fn shadow_leaves_the_gray_patches_and_ramp_within_3_levels() {
-    let default = toned(&HdrToning::default());
-    for shadow in [-100.0, 100.0] {
-        let changed = toned(&with(|p| p.shadow = shadow));
-        // The ramp (rows 0..64) and the gray patches (rows 64..128).
-        for i in (0..128 * W).step_by(7) {
-            let d = (changed[i][0] - default[i][0]).abs();
-            assert!(d <= 3, "Shadow {shadow}: pixel {i} moved {d} levels ({} -> {})", default[i][0], changed[i][0]);
+fn highlight_keeps_the_tone_order_and_never_turns_white_black() {
+    // l + c·l³ with c < 0 turns back down past its peak: with Exposure +1 and Highlight -100 the
+    // ramp's white came out black. Its shoulder holds the peak instead.
+    for exposure in [0.0, 1.0, 1.5, 3.0] {
+        for highlight in [-100.0, -50.0, 0.0, 50.0, 100.0] {
+            let r = ramp(&with(|p| (p.exposure, p.highlight) = (exposure, highlight)));
+            assert!(r.windows(2).all(|w| w[1] >= w[0]), "Exposure {exposure}, Highlight {highlight}: {r:?}");
         }
     }
 }
 
 #[test]
-fn shadow_still_acts_on_values_above_one() {
-    // A high-dynamic-range ramp, 0 to 4: Shadow there keeps today's effect.
+fn shadow_changes_nothing() {
+    // The reference's Shadow changed neither measured document; HDR data wasn't measured.
+    let default = toned(&HdrToning::default());
+    for shadow in [-100.0, 100.0] {
+        assert!(toned(&with(|p| p.shadow = shadow)) == default, "Shadow {shadow}, 8-bit document");
+    }
     let hdr = || (0..64 * 16).map(|i| [(i % 64) as f32 / 16.0; 3]).map(|c| [c[0], c[1], c[2], 1.0]).collect::<Vec<_>>();
     let run = |shadow: f32| {
         let mut px = hdr();
-        hdr_toning(&mut px, 64, 16, &with(|p| p.shadow = shadow));
+        hdr_toning(&mut px, 64, 16, &with(|p| (p.exposure, p.shadow) = (1.0, shadow)));
         px
     };
-    assert_ne!(run(0.0), run(100.0), "Shadow +100 changes an image with values above 1.0");
-    assert_ne!(run(0.0), run(-100.0), "Shadow -100 changes an image with values above 1.0");
+    assert_eq!(run(100.0), run(0.0), "Shadow +100 on values above 1.0");
+    assert_eq!(run(-100.0), run(0.0), "Shadow -100 on values above 1.0");
+}
+
+#[test]
+fn the_highlight_curve() {
+    let curve = |h: f32, l: f64| super::HdrHighlight::new(h).apply(l);
+    for l in [0.0, 0.3, 0.7, 1.0, 2.0] {
+        assert_eq!(curve(0.0, l), l, "Highlight 0 leaves {l}");
+        assert!((curve(100.0, l) - (l + 0.5 * l.powi(3))).abs() < 1e-12, "+100 at {l}");
+    }
+    // -100: l - l³/3 up to white (2/3), with a slope that never goes below 0, then white's level.
+    assert!((curve(-100.0, 1.0) - 2.0 / 3.0).abs() < 1e-12);
+    let samples: Vec<f64> = (0..=1000).map(|i| curve(-100.0, f64::from(i) / 1000.0)).collect();
+    assert!(samples.windows(2).all(|w| w[1] >= w[0]), "-100 keeps the order up to white");
+    assert!(samples.windows(2).take(999).all(|w| w[1] > w[0]), "-100 keeps distinct highlights apart below white");
+    for l in [1.5, 10.0, 1e30, f64::INFINITY] {
+        assert_eq!(curve(-100.0, l), curve(-100.0, 1.0), "{l}");
+    }
+    // A milder darkening keeps values above 1.0 apart up to its own turning point, √2 at -50.
+    let (a, b, knee) = (curve(-50.0, 1.2), curve(-50.0, 1.4), curve(-50.0, 2f64.sqrt()));
+    assert!(a < b && b < knee && knee < 1.0, "{a} {b} {knee}");
+    assert_eq!(curve(-50.0, 3.0), knee);
+    assert!(curve(-100.0, f64::NAN).is_nan(), "a NaN stays NaN");
 }
 
 #[test]
 fn results_stay_in_range_for_every_slider_value() {
-    for shadow in [-100.0, -50.0, 0.0, 50.0, 100.0] {
+    for exposure in [0.0, 2.0] {
         for highlight in [-100.0, -50.0, 0.0, 50.0, 100.0] {
             let mut px = test_document();
-            hdr_toning(&mut px, W, H, &with(|p| (p.shadow, p.highlight) = (shadow, highlight)));
-            assert!(px.iter().flat_map(|q| &q[..3]).all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "Shadow {shadow}, Highlight {highlight}");
+            hdr_toning(&mut px, W, H, &with(|p| (p.highlight, p.exposure) = (highlight, exposure)));
+            assert!(px.iter().flat_map(|q| &q[..3]).all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "Exposure {exposure}, Highlight {highlight}");
         }
     }
 }
 
 #[test]
 fn the_checked_path_gives_the_same_result() {
-    // An ordinary image and one with values above 1.0, so both Shadow cases are compared.
     let ordinary: Vec<[f32; 4]> = (0..72).map(|i| [i as f32 / 71.0, 0.3, 0.6, 1.0]).collect();
     let hdr: Vec<[f32; 4]> = (0..72).map(|i| [i as f32 / 71.0 * 3.0, 0.3, 0.6, 1.0]).collect();
     for input in [ordinary, hdr] {
-        for (shadow, highlight) in [(-100.0, 0.0), (100.0, 0.0), (0.0, -100.0), (0.0, 100.0), (60.0, -40.0)] {
-            let p = with(|p| (p.radius, p.shadow, p.highlight) = (7.0, shadow, highlight));
+        for (highlight, exposure, shadow) in [(-100.0, 1.0, 0.0), (100.0, 0.0, 0.0), (-40.0, 1.5, 60.0), (60.0, 0.5, -60.0)] {
+            let p = with(|p| (p.radius, p.highlight, p.exposure, p.shadow) = (7.0, highlight, exposure, shadow));
             let mut native = input.clone();
             hdr_toning(&mut native, 9, 8, &p);
             let mut checked = input.clone();
             process_with(&mut checked, 9, 8, &p, &Interrupt::NONE).unwrap();
             for (a, b) in checked.iter().zip(&native) {
-                assert!(a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6), "Shadow {shadow}, Highlight {highlight}: {a:?} vs {b:?}");
+                assert!(a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6), "Highlight {highlight}, Exposure {exposure}: {a:?} vs {b:?}");
             }
         }
     }
 }
 
 #[test]
-fn the_wide_range_fallback_follows_the_same_sign() {
-    // Values large enough that the f32 polynomial overflows take the checked path's f64 fallback;
-    // with the same exposure, Highlight -100 must not come out brighter there either.
-    let run = |highlight: f32| {
-        let mut px: Vec<[f32; 4]> = (0..16).map(|i| [1e37 * (i + 1) as f32, 1e37, 1e37, 1.0]).collect();
-        process_with(&mut px, 4, 4, &with(|p| (p.radius, p.exposure, p.highlight) = (2.0, 5.0, highlight)), &Interrupt::NONE).unwrap();
-        px
-    };
-    let (minus, plus) = (run(-100.0), run(100.0));
-    for (a, b) in minus.iter().zip(&plus) {
-        assert!(a.iter().chain(b).all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
-        assert!(a[0] <= b[0], "Highlight -100 {} vs +100 {}", a[0], b[0]);
+fn values_past_f32_saturate_and_never_turn_black() {
+    // Gamma 0.1 takes these gray values past f32 before Highlight. +100 and 0 make them white;
+    // -100 gives white's level, 2/3. Both paths agree.
+    let input: Vec<[f32; 4]> = (0..16).map(|i| [1e37 * (i + 1) as f32; 3]).map(|c| [c[0], c[1], c[2], 1.0]).collect();
+    for (highlight, want) in [(-100.0, 2.0 / 3.0), (0.0, 1.0), (100.0, 1.0)] {
+        let p = with(|p| (p.radius, p.exposure, p.gamma, p.saturation, p.highlight) = (2.0, 5.0, 0.1, 0.0, highlight));
+        let mut checked = input.clone();
+        process_with(&mut checked, 4, 4, &p, &Interrupt::NONE).unwrap();
+        let mut native = input.clone();
+        hdr_toning(&mut native, 4, 4, &p);
+        for (a, b) in checked.iter().zip(&native) {
+            assert!((a[1] - want).abs() < 1e-3, "Highlight {highlight}: {a:?}");
+            assert!(a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6), "Highlight {highlight}: {a:?} vs {b:?}");
+        }
     }
 }

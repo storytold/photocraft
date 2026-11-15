@@ -700,7 +700,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.adjustments.hdrToning",
             "HDR Toning…",
             ["Image", "Adjustments"],
-            r##"{"radius":1..500=30,"strength":0.1..4=0.5,"gamma":0.1..2=1,"exposure":-5..5=0,"detail":-100..300=30,"shadow":-100..100=0,"highlight":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=20,"curve":[[in,out],…] 0..255} (flattens the image)"##,
+            r##"{"radius":1..500=30,"strength":0.1..4=0.5,"gamma":0.1..2=1,"exposure":-5..5=0,"detail":-100..300=30,"shadow":-100..100=0,"highlight":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=20,"curve":[[in,out],…] 0..255} (flattens the image; `shadow` is accepted and has no effect yet, #14724)"##,
             has_doc,
             hdr_toning
         ),
