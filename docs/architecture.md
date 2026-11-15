@@ -18,7 +18,7 @@ What exists on `main` today. The numbered sections below are the original design
   UI, CLI, JSON control channel and MCP server all dispatch by command id. 628 Photoshop menu items
   map to them (`crates/ui-egui/src/menu_catalog.rs`).
 - **Rendering:** CPU compositor (`compose`, the oracle) and wgpu compositor (`gpu`, ≤ 1/255 of the
-  CPU); colour through our own ICC engine (`cms`), GPU display conversion through matrix/shaper stages or a 3D LUT fallback.
+  CPU); colour through our own ICC engine (`craft-cms`, from craft-libs), GPU display conversion through matrix/shaper stages or a 3D LUT fallback.
 - **Files:** own PSD/PSB crate (`psd`), flat codecs (`codecs`), camera raw (`raw`), HEIF (`craft-heif`, from craft-libs),
   Affinity (`affinity`), document mapping (`io`), native `.pcraft` (`format`, atomic saves).
   Coverage: [`file-format-parity.md`](file-format-parity.md).
@@ -108,7 +108,6 @@ photocraft/
 ├─ crates/
 │  │  ── foundation (no_std-friendly where practical, wasm-safe) ──
 │  ├─ geom/                    photocraft-geom      points, rects, affine/perspective, tile coords, bezier (kurbo)
-│  ├─ cms/                     photocraft-cms       pure-Rust ICC colour management: profiles, transforms, intents, BPC, soft proof, 3D LUTs
 │  ├─ color/                   photocraft-color     pixel formats, color spaces, blend-mode math (scalar reference); conversions via cms
 │  ├─ raster/                  photocraft-raster    tiled COW surfaces, masks, mip pyramids, damage regions, pixel iterators
 │  │  ── document ──
@@ -124,10 +123,10 @@ photocraft/
 │  ├─ gpu/                     photocraft-gpu       wgpu backend for the DrawOp plan + GPU kernels (WGSL), residency cache, memory budget
 │  ├─ viewport/                photocraft-viewport  camera (zoom/pan/rotate), visible tiles/mips, renders a doc into a wgpu texture; toolkit-agnostic
 │  │  ── I/O ──
-│  ├─ psd/                     photocraft-psd       PSD/PSB read + write; its OWN format-level model; depends on nothing in this workspace
+│  ├─ psd/                     craft-psd       PSD/PSB read + write; its OWN format-level model; depends on nothing in this workspace
 │  ├─ adobe-assets/            photocraft-adobe-assets  .abr .asl .aco/.ase .grd .pat .csh .atn .cube/.3dl, ACR .xmp presets (standalone, like psd)
 │  ├─ codecs/                  photocraft-codecs    flat raster decode/encode at format-supported depths; AVIF encode only (feature `avif`), HEIF/HEIC decode only (feature `heif`); no JPEG XL
-│  ├─ affinity/                photocraft-affinity  bounded native Affinity reader: archive, object stream, layers, vectors, text, pixels (standalone; read only)
+│  ├─ affinity/                craft-affinity       bounded native Affinity reader: archive, object stream, layers, vectors, text, pixels (shared in craft-libs)
 │  ├─ raw/                     photocraft-raw       clean-room camera RAW decode (DNG, CR2, TIFF/EP) + develop pipeline (standalone, like psd)
 │  ├─ format/                  photocraft-format    native document format (.pcraft bundle): manifest + content-addressed tiles
 │  ├─ io/                      photocraft-io        import/export orchestration; doc ⇄ PSD mapping; PDF/SVG import (features)
@@ -158,7 +157,7 @@ photocraft/
 
 **Crate granularity:** start with the crates above. Split `algo` into `-adjust`, `-filters`, `-select`, `-inpaint` and `-warp` once any module passes about 10k lines, or once compile times hurt. Its internal module boundaries should already follow those lines.
 
-**Naming:** directories are short and packages are prefixed `photocraft-`. `photocraft-psd` gets a neutral, publishable name (such as `psd-rw`) if we release it to crates.io.
+**Naming:** directories are short and packages are prefixed `photocraft-`. `craft-psd` gets a neutral, publishable name (such as `psd-rw`) if we release it to crates.io.
 
 ---
 
@@ -179,7 +178,7 @@ photocraft/
 
 1. A crate may depend only on crates in **lower** layers. No cycles and no sideways dependencies, except where listed.
 2. **Nothing below L6 may depend on any UI toolkit, winit, or a `platform` implementation.** Platform services reach the engine through traits defined in `engine` (or in `platform`'s trait-only core), and are injected at startup.
-3. **`photocraft-psd` depends on no workspace crate.** The doc ⇄ PSD mapping lives in `io`. This keeps the PSD crate publishable and reusable by other projects. The same holds for every standalone crate; `STANDALONE_EXCEPTIONS` in `xtask/src/layers.rs` is empty since HEIF decoding moved to craft-libs' `craft-heif`.
+3. **`craft-psd` depends on no workspace crate.** The doc ⇄ PSD mapping lives in `io`. This keeps the PSD crate publishable and reusable by other projects. The same holds for every standalone crate; `STANDALONE_EXCEPTIONS` in `xtask/src/layers.rs` is empty since HEIF decoding moved to craft-libs' `craft-heif`.
 4. **wasm gate:** every crate in L0–L5 (except feature-gated native backends) must build for `wasm32-unknown-unknown`. CI runs `cargo build -p photocraft-engine --target wasm32-unknown-unknown --no-default-features --features web`.
 5. `gpu` is optional for `engine`. Engine features are `gpu` (default on) and `cpu-only`, and `cpu-only` builds are what the headless CLI and CI tests use.
 6. **C dependencies** (optional LibRaw) only behind features, only in `codecs`, `raw` or `io`, and never on by default for the web target.
@@ -359,7 +358,7 @@ Both backends consume the same plan. This is the only place that encodes Photosh
 
 ---
 
-## 8. `photocraft-psd`: standalone PSD/PSB crate
+## 8. `craft-psd`: standalone PSD/PSB crate
 
 **Scope:** faithful, format-level read and write of PSD (v1) and PSB (v2, 64-bit lengths). It has no dependency on our document model.
 
@@ -530,7 +529,7 @@ schemars = "1"
 blake3 = "1"
 zstd = "*"           # native; ruzstd for wasm decode
 # color / codecs
-# ICC: our own photocraft-cms (pure Rust)
+# ICC: our own craft-cms (pure Rust, from craft-libs)
 image = { version = "*", default-features = false }
 jxl-oxide = "*"
 # gpu
