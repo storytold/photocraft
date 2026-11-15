@@ -151,13 +151,17 @@ pub(super) fn fade(s: &mut Session, p: &Value) -> Result<Value> {
     // blends the step's own result over the pixels before it, and the history keeps one Fade
     // state (#13804).
     let again = s.edit_state.fade.as_ref().is_some_and(|f| f.faded.is_some_and(|(id, _)| current(s) == Some(id)));
+    // The job reads the state before an earlier Fade straight from the history, so everything that can
+    // fail is done before that Fade is taken back: a bad parameter, a missing earlier state, a changed
+    // pixel format.
+    let j = fade_job(s, p)?;
     if again {
-        // Checked before taking the earlier Fade back, so a bad parameter changes nothing.
-        f32_or(p, "opacity", 100.0);
-        blend_from_str(str_or(p, "mode", "normal")).ok_or_else(|| bad("edit.fade", "unknown blend mode"))?;
+        // A dry run on the state the real one will start from, so a failure in the blend (an
+        // allocation, say) also leaves the earlier Fade where it was.
+        let base = fade_base(s).ok_or(EngineError::NoDocument)?;
+        apply_fade(&mut Document::clone(&base), &j)?;
         s.rollback();
     }
-    let j = fade_job(s, p)?;
     let label = format!("Fade {}", j.label);
     s.edit(&label, |doc, _| apply_fade(doc, &j))?;
     let (state, revision) = (current(s), s.active().map(|st| st.revision));

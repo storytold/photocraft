@@ -85,3 +85,43 @@ fn undo_after_a_replaced_fade_returns_to_the_step() {
     assert_eq!(pixel(&s), before);
     assert_eq!(tail(&s), ["Invert", "Fade Invert"]);
 }
+
+/// CodeRabbit on #15094: Invert, a layer hidden in History, Fade, Undo: Fade is available again, as the
+/// state to come back to is the hide's row, not the Invert's.
+#[test]
+fn fade_is_available_after_undoing_a_fade_that_followed_a_visibility_change() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 50, "height": 50, "background": "white"})).unwrap();
+    let bg = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 30})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("image.adjustments.invert", json!({})).unwrap();
+    s.execute("layer.hideLayers", json!({"layer": bg.0})).unwrap();
+    assert!(s.is_enabled("edit.fade"), "still available after hiding another layer");
+    s.execute("edit.fade", json!({"opacity": 40})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().history.entries().last().map(String::as_str), Some("Hide Layer"), "the Undo returned to the hide's row");
+    assert!(s.is_enabled("edit.fade"), "Fade is available again after undoing the Fade");
+    s.execute("edit.fade", json!({"opacity": 40})).unwrap();
+    assert_eq!(s.active().unwrap().history.entries().iter().filter(|e| e.starts_with("Fade")).count(), 1);
+}
+
+/// CodeRabbit on #15094: a Fade that fails while replacing an earlier one leaves that Fade as it was. The
+/// document, the History and Fade itself are untouched, and fading again works.
+#[test]
+fn a_failed_second_fade_keeps_the_first() {
+    let mut s = inverted();
+    s.execute("edit.fade", json!({"opacity": 40, "mode": "normal"})).unwrap();
+    let (doc, history) = (s.active().unwrap().doc.clone(), s.active().unwrap().history.entries());
+    crate::allocation::fail_next_for_test();
+    let result = s.execute("edit.fade", json!({"opacity": 70, "mode": "normal"}));
+    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+    assert!(result.is_err());
+    assert_eq!(*s.active().unwrap().doc, *doc, "the first Fade's result is still there");
+    assert_eq!(s.active().unwrap().history.entries(), history, "and its History step, with no redo lost");
+    assert!(s.is_enabled("edit.fade"));
+    s.execute("edit.fade", json!({"opacity": 70, "mode": "normal"})).unwrap();
+    assert_eq!(s.active().unwrap().history.entries().iter().filter(|e| e.starts_with("Fade")).count(), 1);
+}

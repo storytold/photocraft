@@ -150,9 +150,12 @@ fn keep_after_visibility(s: &mut Session, id: &str, params: &Value) {
     if fade::before_state(st, f).is_none_or(|before| visible(&before) != visible(&st.doc)) {
         return;
     }
-    let revision = st.revision;
+    let (revision, state) = (st.revision, current_state(st));
     if let Some(f) = s.edit_state.fade.as_mut() {
         f.revision = revision;
+        // The state a Fade is made from is now the hide's row: undoing a Fade made after it returns
+        // there, and Fade is available again at that row (#13804).
+        f.op_state = state;
     }
 }
 
