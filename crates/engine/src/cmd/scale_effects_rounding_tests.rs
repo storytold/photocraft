@@ -158,23 +158,52 @@ fn a_huge_scale_never_panics_and_stays_finite() {
 #[test]
 fn a_hundred_percent_changes_nothing_and_adds_no_history_step() {
     let (mut s, id) = styled("dropShadow", json!({"distance": 10, "size": 10}));
+    s.execute("layer.layerStyle.stroke", json!({"size": 4})).unwrap();
     // Values the dialog would round or hold to a range, as Image Size can leave them.
     s.edit("Odd style", |doc, _| {
         let l = doc.layer_mut(id).unwrap();
-        if let Some(Effect::DropShadow(d)) = l.effects.items.first_mut() {
-            d.size = 3.5;
-            d.distance = 300.0;
+        for e in &mut l.effects.items {
+            match e {
+                Effect::DropShadow(d) => (d.size, d.distance) = (3.5, 300.0),
+                Effect::Stroke(st) => st.size = 0.5,
+                _ => {}
+            }
         }
         Ok(())
     })
     .unwrap();
-    let before = first(&s, id);
+    let items = |s: &Session| s.active().unwrap().doc.layer(id).unwrap().effects.items.clone();
+    let before = items(&s);
+    assert_eq!(before.len(), 2, "a shadow and a stroke");
     let steps = s.active().unwrap().history.past_len();
     s.execute(CMD, json!({"scale": 100})).unwrap();
-    assert_eq!(first(&s, id), before, "the style is untouched at 100 %");
+    assert_eq!(items(&s), before, "the style is untouched at 100 %, ranges included");
     assert_eq!(s.active().unwrap().history.past_len(), steps, "no History step");
 
-    let mut f = Effects { items: vec![before.clone()], ..Effects::default() };
+    let mut f = Effects { items: before.clone(), ..Effects::default() };
     scale_effects_rounded(&mut f, 100.0);
-    assert_eq!(f.items, vec![before], "the helper keeps 3.5 and 300 at 100 %");
+    assert_eq!(f.items, before, "the helper keeps 3.5, 300 and a 0.5 stroke at 100 %");
+}
+
+#[test]
+fn a_missing_layer_is_an_error_at_every_percent() {
+    let (mut s, _) = styled("dropShadow", json!({"distance": 3, "size": 7}));
+    for pct in [99, 100, 101] {
+        assert!(s.execute(CMD, json!({"scale": pct, "layer": 99999})).is_err(), "{pct} %");
+    }
+}
+
+#[test]
+fn psd_raw_survives_a_hundred_percent_and_goes_at_fifty() {
+    let (mut s, id) = styled("dropShadow", json!({"distance": 3, "size": 7}));
+    s.edit("Imported", |doc, _| {
+        doc.layer_mut(id).unwrap().effects.psd_raw = Some(std::sync::Arc::new(vec![1, 2, 3]));
+        Ok(())
+    })
+    .unwrap();
+    let raw = |s: &Session| s.active().unwrap().doc.layer(id).unwrap().effects.psd_raw.is_some();
+    s.execute(CMD, json!({"scale": 100})).unwrap();
+    assert!(raw(&s), "kept at 100 %");
+    s.execute(CMD, json!({"scale": 50})).unwrap();
+    assert!(!raw(&s), "dropped once the style changes");
 }

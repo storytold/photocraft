@@ -145,6 +145,7 @@ pub fn scale_effects(fx: &mut Effects, k: f32) {
 /// Size 7 at 50 % become 2 / 4). Bevel Soften is rounded but not capped; pattern scales are held
 /// to 1..1000 % as in [`scale_effects`]. Computed as `v × pct / 100` in f64, so a whole value at
 /// a whole percent lands exactly on its half (10 at 35 % is 3.5, not 3.4999).
+/// 100 % is a no-op: nothing is rounded and psd_raw stays.
 pub fn scale_effects_rounded(fx: &mut Effects, pct: f64) {
     // 100 % is not a change: nothing is rounded or held to a range, and psd_raw stays.
     if pct == 100.0 {

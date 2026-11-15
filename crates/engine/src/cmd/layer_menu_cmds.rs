@@ -739,6 +739,9 @@ fn scale_effects(s: &mut Session, p: &Value) -> Result<Value> {
     // counts as 1, as before (#14989).
     let pct = p.get("scale").and_then(Value::as_f64).unwrap_or(100.0).max(1.0);
     let id = layer_param(s, p)?;
+    if s.active().is_none_or(|d| d.doc.layer(id).is_none()) {
+        return Err(EngineError::NoLayer(id));
+    }
     // 100 % changes nothing: no History step, and the style keeps its imported data.
     if pct == 100.0 {
         return Ok(Value::Null);
