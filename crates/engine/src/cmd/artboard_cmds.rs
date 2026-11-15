@@ -7,6 +7,8 @@
 //! `layer.translate`) moves the board with its contents. The canvas grows to fit every board,
 //! in every direction, like Photoshop's auto-expanding artboard canvas ([`fit_canvas`]).
 
+use std::collections::HashSet;
+
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Artboard, ArtboardBackground, Document, Layer, LayerContent, LayerId, Size};
 use photocraft_geom::{Affine, Rect};
@@ -152,9 +154,11 @@ fn xywh(r: Rect) -> [i64; 4] {
 /// it puts it right of the board, a [`GAP`] away, sliding further right past any board in the
 /// way. Moves the copy, layer `id` (just inserted on top of its original), there with its
 /// contents and grows the canvas to show it; anything that isn't an artboard is left alone.
-pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<()> {
+/// Returns [`fit_canvas`]'s shift (a board already past the origin, as a PSD can hold, re-bases the
+/// document), for [`follow_shift`].
+pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<(i32, i32)> {
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    let Some(r) = l.artboard().map(|a| a.rect) else { return Ok(()) };
+    let Some(r) = l.artboard().map(|a| a.rect) else { return Ok((0, 0)) };
     let name = l.name.clone();
     let boards: Vec<Rect> = doc.artboards().iter().filter(|b| b.0 != id).map(|b| b.2.rect).collect();
     let (y0, y1, w) = (i64::from(r.y0), i64::from(r.y1), i64::from(r.width()));
@@ -180,8 +184,7 @@ pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<()> {
     let copy = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     crate::commands::translate_layer(&snapshot, copy, dx, 0);
     crate::vector_cmds::translate_vectors(&snapshot, copy, f64::from(dx), 0.0);
-    fit_canvas(doc);
-    Ok(())
+    Ok(fit_canvas(doc))
 }
 
 /// Record a Duplicate's `inPlace` only when a copy (the selection after it) is an artboard: for
@@ -203,8 +206,11 @@ pub(crate) fn recorded_duplicate(s: &Session, mut p: Value) -> Value {
 /// contents, guides, paths…) right/down by its overhang, then the canvas grows to show it. An
 /// axis whose boards span more than the largest canvas, or a shift that would push pixels past
 /// the 32-bit range, stays unshifted: the board stays partly off-canvas, as one past the size
-/// limit does.
-pub(crate) fn fit_canvas(doc: &mut Document) {
+/// limit does. Returns the shift, for [`follow_shift`]: `translate_doc` moves the document's own
+/// geometry, but the session's Color Sampler points and painting symmetry stay behind unless the
+/// caller passes it on.
+#[must_use = "pass the shift to `follow_shift`, or the Color Samplers and symmetry stay behind (#9302)"]
+pub(crate) fn fit_canvas(doc: &mut Document) -> (i32, i32) {
     let max = i64::from(crate::document_preset_cmds::MAX_DIMENSION);
     let boards: Vec<Rect> = doc.artboards().iter().map(|b| b.2.rect).collect();
     // The canvas and every board, per axis (`lo` ≤ 0 is the canvas origin or a board past it).
@@ -226,6 +232,20 @@ pub(crate) fn fit_canvas(doc: &mut Document) {
         // shapes against it, leaving them missing or clipped (#2389).
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
     }
+    (sx, sy)
+}
+
+/// Keep the Color Sampler points and the painting symmetry on their pixels after an edit shifted
+/// the document by `(dx, dy)` to show a board past the origin ([`fit_canvas`]), as Canvas Size's
+/// sampler map does (#9302). View state: no history step. The canvas only grew, so every point
+/// stays on it.
+pub(crate) fn follow_shift(s: &mut Session, (dx, dy): (i32, i32)) {
+    let Some(st) = s.active_mut().filter(|_| (dx, dy) != (0, 0)) else { return };
+    for p in &mut st.color_samplers {
+        *p = [p[0] + f64::from(dx), p[1] + f64::from(dy)];
+    }
+    let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
+    st.symmetry = st.symmetry.take().and_then(|sym| sym.transform(&a));
 }
 
 fn next_artboard_name(doc: &Document) -> String {
@@ -294,7 +314,7 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
         None => false,
         Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`takeBackground` must be true or false"))?,
     };
-    let id = s.edit("New Artboard", |doc, active| {
+    let (id, shift) = s.edit("New Artboard", |doc, active| {
         let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc)), vec![]);
         set_artboard(&mut g, Artboard { rect, background, preset });
         // Only the first board takes the Background in (decided before the board exists).
@@ -303,10 +323,11 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
         if take {
             move_background_into(doc, id);
         }
-        fit_canvas(doc);
+        let shift = fit_canvas(doc);
         *active = Some(id);
-        Ok(id)
+        Ok((id, shift))
     })?;
+    follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![id], Some(id), Some(id))?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
@@ -344,17 +365,18 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let canvas = d.doc.bounds();
     let background = if apply_background { background_param(p, cmd)?.unwrap_or_default() } else { ArtboardBackground::White };
-    let rect = s.edit("Artboard from Group", |doc, active| {
+    let (rect, shift) = s.edit("Artboard from Group", |doc, active| {
         if !doc.layers.iter().any(|t| t.id == id && t.is_group() && t.artboard().is_none()) {
             return Err(EngineError::Other("artboards are made from a top-level layer group".into()));
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let rect = crate::layer_multi_cmds::layer_bounds(l).unwrap_or(canvas);
         set_artboard(l, Artboard { rect, background, preset });
-        fit_canvas(doc);
+        let shift = fit_canvas(doc);
         *active = Some(id);
-        Ok(rect)
+        Ok((rect, shift))
     })?;
+    follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![id], Some(id), Some(id))?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
@@ -388,7 +410,7 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     // A size of the user's own (a post, a story…) from the layers' top left; 0 or none keeps
     // their bounds on that axis (#9087).
     let size = [int(p, "width").filter(|v| *v != 0), int(p, "height").filter(|v| *v != 0)];
-    let (gid, rect) = s.edit("Artboard from Layers", |doc, active| {
+    let (gid, rect, shift) = s.edit("Artboard from Layers", |doc, active| {
         let ids = crate::layer_multi_cmds::top_level(doc, &sel);
         if ids.is_empty() || ids.iter().any(|id| doc.artboard_of(*id).is_some()) {
             return Err(EngineError::Other("select layers that are not in an artboard".into()));
@@ -403,10 +425,11 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         set_artboard(&mut g, Artboard { rect, background, preset: String::new() });
         let gid = doc.insert_above(None, g);
         crate::layer_multi_cmds::check_group_depth(doc, "Artboard from Layers")?;
-        fit_canvas(doc);
+        let shift = fit_canvas(doc);
         *active = Some(gid);
-        Ok((gid, rect))
+        Ok((gid, rect, shift))
     })?;
+    follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![gid], Some(gid), Some(gid))?;
     Ok(json!({"layer": gid.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
@@ -445,7 +468,7 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
             ));
         }
     };
-    s.edit("Edit Artboard", |doc, _| {
+    let shift = s.edit("Edit Artboard", |doc, _| {
         if move_contents && (dx, dy) != (0, 0) {
             let snapshot = doc.clone();
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -467,9 +490,9 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
             None if rect.width() != old.rect.width() || rect.height() != old.rect.height() => a.preset.clear(),
             None => {}
         }
-        fit_canvas(doc);
-        Ok(())
+        Ok(fit_canvas(doc))
     })?;
+    follow_shift(s, shift);
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
 
@@ -546,7 +569,7 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
     let grown = |len: u32, by: i32| (i64::from(len) + i64::from(by)).clamp(1, 300_000) as u32;
     let label = if duplicate { "Duplicate Artboard" } else { "New Artboard" };
     let add_copy = crate::commands::layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
-    let (nid, rect) = s.edit(label, |doc, active| {
+    let (nid, rect, (fx, fy)) = s.edit(label, |doc, active| {
         if (sx, sy) != (0, 0) {
             crate::image_cmds::translate_doc(doc, cmd, sx, sy)?;
             doc.size = Size::new(grown(doc.size.width, sx), grown(doc.size.height, sy));
@@ -575,10 +598,11 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
             set_artboard(&mut g, Artboard { rect, background: src.background, preset: src.preset.clone() });
             doc.insert_above(Some(id), g)
         };
-        fit_canvas(doc);
+        let fitted = fit_canvas(doc);
         *active = Some(nid);
-        Ok((nid, rect))
+        Ok((nid, rect, fitted))
     })?;
+    follow_shift(s, (sx.saturating_add(fx), sy.saturating_add(fy)));
     crate::layer_multi_cmds::set_selection(s, vec![nid], Some(nid), Some(nid))?;
     Ok(json!({"layer": nid.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
@@ -653,7 +677,57 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
     }
 }
 
-/// File › Export › Artboards to Files: `<prefix>_<index:04>_<artboard name>.<format>` per board.
+/// Formats whose file names Artboards to Files writes with a `-` for each space, as the reference
+/// application does for PNG (and, per #13633, JPEG, BMP, Targa and TIFF). PSD keeps its spaces,
+/// as do the formats the reference application was not measured with.
+const HYPHENATED_FORMATS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tga", "tif", "tiff"];
+
+/// The file names (without extension) Artboards to Files writes for `names`, in export order:
+/// `<prefix><artboard name>` with no separator or index between them, [`sanitize`]d as a whole,
+/// and with each space turned into `-` when `hyphenate`.
+///
+/// A name equal to an earlier one ignoring letter case ([`collision_key`]), or equal once
+/// sanitized, gets the first `-2`, `-3`… that no other board's own name and no earlier suffix
+/// takes. Every board still gets a file of its own on case-insensitive file systems (#6613), and
+/// the first board of a name, like every board whose name is unique, keeps the plain name.
+fn artboard_file_stems(prefix: &str, names: &[&str], hyphenate: bool) -> Vec<String> {
+    let plain: Vec<String> = names
+        .iter()
+        .map(|name| {
+            let stem = sanitize(&format!("{prefix}{name}"));
+            if hyphenate { stem.replace(' ', "-") } else { stem }
+        })
+        .collect();
+    let mut taken: HashSet<String> = plain.iter().map(|stem| collision_key(stem)).collect();
+    let mut seen = HashSet::new();
+    plain
+        .into_iter()
+        .map(|stem| {
+            if seen.insert(collision_key(&stem)) {
+                return stem;
+            }
+            let mut n = 2u64;
+            loop {
+                let candidate = format!("{stem}-{n}");
+                if taken.insert(collision_key(&candidate)) {
+                    break candidate;
+                }
+                n += 1;
+            }
+        })
+        .collect()
+}
+
+/// The key two file names are compared by to decide whether a case-insensitive file system would
+/// take them for one file: lower case, then upper case. Upper case alone misses the Kelvin sign
+/// `K`, which macOS folds into `K`; lower case alone misses `σ` and `ς`, which NTFS both reads as
+/// `Σ`. Merging a few names a file system would keep apart only costs a `-2` suffix.
+fn collision_key(stem: &str) -> String {
+    stem.to_lowercase().to_uppercase()
+}
+
+/// File › Export › Artboards to Files: one `<prefix><artboard name>.<format>` per board, named by
+/// [`artboard_file_stems`] (`abfiles-testRed-Board.png`, `abfiles-testRed Board.psd`).
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
@@ -662,12 +736,12 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
+    let boards = chosen_documents(&doc, p)?;
+    let names: Vec<&str> = boards.iter().map(|one| one.name.as_str()).collect();
     let mut files = Vec::new();
-    for (i, one) in chosen_documents(&doc, p)?.into_iter().enumerate() {
-        // Names may be identical, or collide after sanitizing or filesystem case folding.
-        let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
+    for (one, name) in boards.iter().zip(artboard_file_stems(&prefix, &names, HYPHENATED_FORMATS.contains(&format.as_str()))) {
         let path = join(&dir, &format!("{name}.{format}"));
-        save_doc(&one, &path, save)?;
+        save_doc(one, &path, save)?;
         files.push(path);
     }
     if files.is_empty() {
@@ -730,7 +804,9 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
     let mut pages = Vec::new();
-    for one in chosen_documents(&doc, p)? {
+    // Pages go bottom artboard of the Layers panel first, as in the reference application (#13643);
+    // `chosen_documents` lists them top first, the order Artboards to Files keeps.
+    for one in chosen_documents(&doc, p)?.into_iter().rev() {
         let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
         let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
         let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
@@ -765,7 +841,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "layer.new.artboardFromGroup",
-            "Artboard from Group…",
+            "Artboard from Group",
             &["Layer", "New"],
             r##"{"layer":id? (a top-level group; default active),"background":…?,"color":[r,g,b]|"#rrggbb"?,"preset":str? (tag only; does not resize),"guideIDs":[int]? (ignored recording metadata),"changeBackground":int? (1 or absent applies background/color; other integers give white; legacy true = 1)} → {layer, rect}"##,
             has_plain_group,
@@ -807,7 +883,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files} (one "<prefix><artboard name>.<format>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
             export_artboards,
             artboards_to_files
         ),
@@ -815,7 +891,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board)"##,
+            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -823,8 +899,14 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+#[path = "artboard_cmds/file_names_tests.rs"]
+mod file_names_tests;
+#[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_page_order_tests.rs"]
+mod pdf_page_order_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;

@@ -201,13 +201,15 @@ fn the_options_bar_reset_button_resets_a_changed_frame() {
     });
     h.state_mut().ui.tool = Tool::Crop;
     h.run_steps(8);
-    let button = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.get_by_role_and_label(egui::accesskit::Role::Button, "Reset").accesskit_node().is_disabled();
+    let button = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Reset the crop box, image rotation, and aspect ratio settings").accesskit_node().is_disabled()
+    };
     assert!(button(&h), "an untouched frame has nothing to reset");
     h.state_mut().ui.crop_rect = Some([50.0, 20.0, 120.0, 70.0]);
     h.state_mut().crop.default_frame = false;
     h.run_steps(4);
     assert!(!button(&h), "a changed frame can be reset");
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Reset").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Reset the crop box, image rotation, and aspect ratio settings").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, 200.0, 100.0]));
     assert!(button(&h));
@@ -522,6 +524,7 @@ fn a_click_on_the_frame_or_a_handle_never_snaps_it() {
 #[test]
 fn edit_undo_steps_the_crop_box_not_the_document() {
     let mut app = app(SampleType::U8);
+    app.run("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
     app.ui.crop_rect = Some([40.0, 30.0, 100.0, 70.0]);
     app.crop.default_frame = false;
     let before = app.ui.crop_rect.unwrap();
@@ -529,7 +532,8 @@ fn edit_undo_steps_the_crop_box_not_the_document() {
     drag(&mut app, &[[70.0, 50.0], [90.0, 50.0]], NONE); // move the frame right 20
     let moved = app.ui.crop_rect.unwrap();
     assert!((moved[0] - 60.0).abs() < 1e-3, "{moved:?}");
-    app.run("edit.undo", json!({})).unwrap();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.actions.set_rows.len(), 1, "the library edit remains available");
     assert_eq!(app.ui.crop_rect, Some(before), "undo restores the box");
     assert_eq!(app.session.active().unwrap().history.past_len(), doc_steps, "the document is untouched");
     app.run("edit.redo", json!({})).unwrap();
