@@ -1267,3 +1267,246 @@ fn tip_adapter_matches_shared_codec_and_keeps_preview_limit() {
         assert_eq!(decode_tip_max(&shared, t.width).unwrap(), t);
     }
 }
+
+
+fn migration_key_fixture() -> (MemBackend, Vec<u8>) {
+    let mem = MemBackend::default();
+    let legacy = br#" {"version":1,"actions":[{"name":"Legacy","steps":[]}]} "#.to_vec();
+    mem.write(LEGACY_ACTIONS_FILE, &legacy).unwrap();
+    (mem, legacy)
+}
+
+fn migration_keys_pending(mem: &MemBackend) -> bool {
+    crate::actions_cmds::library::decode(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap())
+        .unwrap()
+        .library
+        .legacy
+        .as_ref()
+        .unwrap()
+        .function_keys_pending()
+}
+
+fn legacy_function_key(mem: &MemBackend) -> u16 {
+    let files = craft_psd::atn::parse_sets(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap()).unwrap();
+    let mut actions = files.iter().flat_map(|set| &set.actions).filter(|action| action.name.to_string_lossy() == "Legacy");
+    let key = actions.next().unwrap().function_key;
+    assert!(actions.next().is_none(), "the native header belongs to exactly one Legacy action");
+    key
+}
+
+fn legacy_key_preferences(session: &mut Session, key: &str) {
+    session.edit_prefs(|prefs| {
+        prefs.shortcuts.insert("actions.play:Legacy".into(), key.into());
+        prefs.alternate_shortcuts.insert("actions.play:Legacy".into(), vec!["F8".into()]);
+        prefs.shortcuts.insert("file.save".into(), "Cmd+S".into());
+    });
+}
+
+struct InitialKeysWrite {
+    mem: MemBackend,
+    reject: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    attempts: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl PresetBackend for InitialKeysWrite {
+    fn list(&self) -> Result<Vec<(String, u64)>, String> {
+        self.mem.list()
+    }
+    fn read(&self, name: &str, max: u64) -> Result<Vec<u8>, String> {
+        self.mem.read(name, max)
+    }
+    fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        if name == ACTIONS_FILE {
+            self.attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if self.reject.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("injected key initialization failure".into());
+            }
+        }
+        self.mem.write(name, bytes)
+    }
+    fn remove(&self, name: &str) -> Result<(), String> {
+        self.mem.remove(name)
+    }
+}
+
+#[test]
+fn migration_reopen_before_attachment_preserves_preference_owned_function_keys() {
+    let (mem, legacy) = migration_key_fixture();
+    let first = open(Box::new(mem.clone()));
+    assert!(matches!(first.actions, LoadedActions::Migrated(_)));
+    assert!(first.warnings.is_empty(), "{:?}", first.warnings);
+    let published = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+    assert_eq!(legacy_function_key(&mem), 0, "the background opener has no preference snapshot");
+    drop(first);
+    for _ in 0..3 {
+        let reopened = open(Box::new(mem.clone()));
+        assert!(matches!(reopened.actions, LoadedActions::Migrated(_)), "pending authority survives process loss before attach");
+        assert!(reopened.warnings.is_empty(), "{:?}", reopened.warnings);
+        assert!(migration_keys_pending(&mem));
+        assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), published);
+    }
+    let mut session = Session::new();
+    legacy_key_preferences(&mut session, "F4");
+    assert!(session.attach_preset_store(open(Box::new(mem.clone()))).is_empty());
+    assert_eq!(session.prefs().shortcuts["actions.play:Legacy"], "F4");
+    assert_eq!(session.prefs().alternate_shortcuts["actions.play:Legacy"], ["F8"]);
+    assert_eq!(session.prefs().shortcuts["file.save"], "Cmd+S");
+    assert!(session.action_definitions_written());
+    assert_eq!(legacy_function_key(&mem), 4);
+    assert!(!migration_keys_pending(&mem));
+    assert!(crate::actions_cmds::matches_library_definition(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), &session.actions), "the browser's definition matcher accepts the initialized live receipt");
+    assert_eq!(mem.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), legacy);
+    assert!(mem.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).is_err());
+}
+
+#[test]
+fn pending_migration_definition_commit_does_not_acknowledge_empty_keys() {
+    use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+    let (mem, legacy) = migration_key_fixture();
+    drop(open(Box::new(mem.clone())));
+    let pending = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+    let reject = Arc::new(AtomicBool::new(true));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut session = Session::new();
+    assert!(action_shortcuts(session.prefs()).is_empty());
+    let warnings = session.attach_preset_store(open(Box::new(InitialKeysWrite { mem: mem.clone(), reject: reject.clone(), attempts: attempts.clone() })));
+    assert!(warnings.iter().any(|warning| warning.contains("injected key initialization failure")), "{warnings:?}");
+    assert!(!session.action_definitions_written());
+    assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), pending);
+    reject.store(false, Ordering::Relaxed);
+    crate::actions_cmds::commit_action_id(&mut session, 0, "00112233445566778899aabbccddeeff".into()).unwrap();
+    assert!(migration_keys_pending(&mem), "definition-only publication does not initialize absent headers");
+    assert!(!session.action_definitions_written(), "even equal revision and empty key snapshots cannot acknowledge pending initialization");
+    session.sync_preset_store();
+    assert!(!migration_keys_pending(&mem));
+    assert!(session.action_definitions_written());
+    assert_eq!(legacy_function_key(&mem), 0);
+    let written = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+    let count = attempts.load(Ordering::Relaxed);
+    let revision = session.actions.rev;
+    session.sync_preset_store();
+    assert_eq!(attempts.load(Ordering::Relaxed), count, "initialized no-op sync is still quiet");
+    assert_eq!(session.actions.rev, revision);
+    assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), written);
+    assert!(!session.actions.library.legacy.as_ref().unwrap().function_keys_pending());
+    // A proposed definition captured before initialization can still carry the old receipt.
+    session.actions.library.legacy = Some(crate::actions_cmds::library::LegacyOrigin::new_pending(&legacy).unwrap());
+    session.preset_store.as_mut().unwrap().commit_action_definitions(&session.actions, session.actions.rev).unwrap();
+    assert!(!migration_keys_pending(&mem), "later definition writes must not restore that stale marker");
+    session.sync_preset_store();
+    assert!(!session.actions.library.legacy.as_ref().unwrap().function_keys_pending());
+    assert!(crate::actions_cmds::matches_library_definition(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), &session.actions));
+    assert!(session.action_definitions_written());
+    assert_eq!(mem.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), legacy);
+    let reopened = open(Box::new(mem));
+    assert!(matches!(reopened.actions, LoadedActions::Loaded(_)));
+    assert!(reopened.warnings.is_empty(), "{:?}", reopened.warnings);
+}
+
+#[test]
+fn initialized_migration_headers_apply_intentional_clears_after_restart() {
+    let (mem, legacy) = migration_key_fixture();
+    let mut session = Session::new();
+    legacy_key_preferences(&mut session, "F4");
+    assert!(session.attach_preset_store(open(Box::new(mem.clone()))).is_empty());
+    assert_eq!(legacy_function_key(&mem), 4);
+    let mut reopened = Session::new();
+    legacy_key_preferences(&mut reopened, "F9");
+    let opened = open(Box::new(mem.clone()));
+    assert!(matches!(opened.actions, LoadedActions::Loaded(_)));
+    assert!(reopened.attach_preset_store(opened).is_empty());
+    assert_eq!(reopened.prefs().shortcuts["actions.play:Legacy"], "F4", "initialized headers remain authoritative despite migration origin");
+    reopened.edit_prefs(|prefs| { prefs.shortcuts.insert("actions.play:Legacy".into(), String::new()); });
+    reopened.sync_preset_store();
+    assert!(reopened.action_definitions_written());
+    assert_eq!(legacy_function_key(&mem), 0);
+    assert!(!migration_keys_pending(&mem));
+    let mut after_clear = Session::new();
+    legacy_key_preferences(&mut after_clear, "F4");
+    assert!(after_clear.attach_preset_store(open(Box::new(mem.clone()))).is_empty());
+    assert!(after_clear.prefs().shortcuts.get("actions.play:Legacy").is_none_or(String::is_empty), "a deliberate native clear must not resurrect stale F4");
+    assert_eq!(after_clear.prefs().alternate_shortcuts["actions.play:Legacy"], ["F8"]);
+    assert_eq!(after_clear.prefs().shortcuts["file.save"], "Cmd+S");
+    assert_eq!(mem.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), legacy);
+}
+
+#[test]
+fn pending_migration_function_keys_survive_a_rejected_initialization_write() {
+    use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+    let (mem, legacy) = migration_key_fixture();
+    drop(open(Box::new(mem.clone())));
+    let pending = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+    let reject = Arc::new(AtomicBool::new(true));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    for _ in 0..2 {
+        let mut session = Session::new();
+        legacy_key_preferences(&mut session, "F4");
+        let opened = open(Box::new(InitialKeysWrite { mem: mem.clone(), reject: reject.clone(), attempts: attempts.clone() }));
+        assert!(matches!(opened.actions, LoadedActions::Migrated(_)));
+        let warnings = session.attach_preset_store(opened);
+        assert!(warnings.iter().any(|warning| warning.contains("injected key initialization failure")), "{warnings:?}");
+        assert_eq!(session.prefs().shortcuts["actions.play:Legacy"], "F4");
+        assert_eq!(session.prefs().alternate_shortcuts["actions.play:Legacy"], ["F8"]);
+        assert!(!session.action_definitions_written());
+        assert!(migration_keys_pending(&mem));
+        assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), pending);
+    }
+    reject.store(false, Ordering::Relaxed);
+    let mut session = Session::new();
+    legacy_key_preferences(&mut session, "F4");
+    assert!(session.attach_preset_store(open(Box::new(InitialKeysWrite { mem: mem.clone(), reject, attempts }))).is_empty());
+    assert!(session.action_definitions_written());
+    assert!(!migration_keys_pending(&mem));
+    assert_eq!(legacy_function_key(&mem), 4);
+    assert_eq!(mem.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), legacy);
+}
+
+#[test]
+fn migration_key_marker_keeps_old_receipts_and_rejects_malformed_state() {
+    use crate::actions_cmds::library::{self, LegacyOrigin};
+    use craft_psd::descriptor::Value as D;
+    let legacy = br#"{"version":1,"actions":[]}"#;
+    let old = LegacyOrigin::new(legacy).unwrap().descriptor().unwrap();
+    assert_eq!(old.items.len(), 3);
+    let decoded = LegacyOrigin::from_descriptor(&old).unwrap();
+    assert!(!decoded.function_keys_pending());
+    assert_eq!(decoded.descriptor().unwrap().to_bytes(), old.to_bytes());
+    let pending = LegacyOrigin::new_pending(legacy).unwrap().descriptor().unwrap();
+    assert_eq!(pending.items.len(), 4);
+    assert!(LegacyOrigin::from_descriptor(&pending).unwrap().function_keys_pending());
+    let mut bad_type = pending.clone();
+    bad_type.items.last_mut().unwrap().1 = D::Integer(1);
+    assert!(LegacyOrigin::from_descriptor(&bad_type).is_err());
+    let mut duplicate_pending = pending.clone();
+    duplicate_pending.items.push(pending.items.last().unwrap().clone());
+    assert!(LegacyOrigin::from_descriptor(&duplicate_pending).is_err());
+    let mut explicit_initialized = pending.clone();
+    explicit_initialized.items.last_mut().unwrap().1 = D::Boolean(false);
+    assert_eq!(LegacyOrigin::from_descriptor(&explicit_initialized).unwrap().descriptor().unwrap().items.len(), 3);
+    let mut repeated = old.clone();
+    repeated.items.push(old.items[0].clone());
+    assert!(LegacyOrigin::from_descriptor(&repeated).is_err());
+    let mut oversized = old.clone();
+    oversized.items.iter_mut().find(|(id, _)| id.is("bytes")).unwrap().1 = D::Integer(i32::MAX);
+    assert!(LegacyOrigin::from_descriptor(&oversized).is_err());
+    let plain = crate::actions_cmds::ActionState { list: vec![crate::actions_cmds::Action::new("Native", Vec::new())], ..Default::default() };
+    let bytes = library::encode(&plain, &[]).unwrap();
+    assert!(bytes.starts_with(&16u32.to_be_bytes()));
+    assert_eq!(library::encode(&library::decode(&bytes).unwrap(), &[]).unwrap(), bytes, "ordinary v16 without a migration origin stays byte-exact");
+    let (mem, backup) = migration_key_fixture();
+    drop(open(Box::new(mem.clone())));
+    let mut files = craft_psd::atn::parse_sets(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap()).unwrap();
+    let wrapper = files.last_mut().unwrap().actions[0].items[0].descriptor.as_mut().unwrap();
+    let D::RawData(payload) = &mut wrapper.items.iter_mut().find(|(id, _)| id.is("modernizedActionData")).unwrap().1 else { panic!("missing native sidecar") };
+    let mut outer = craft_psd::descriptor::Descriptor::from_bytes(payload).unwrap();
+    let D::Descriptor(origin) = &mut outer.items.iter_mut().find(|(id, _)| id.is("photocraftLegacyJsonV1")).unwrap().1 else { panic!("missing origin") };
+    origin.items.iter_mut().find(|(id, _)| id.is("functionKeysPending")).unwrap().1 = D::Integer(1);
+    *payload = outer.to_bytes();
+    let corrupt = craft_psd::atn::write_sets(&files).unwrap();
+    mem.write(ACTIONS_FILE, &corrupt).unwrap();
+    let opened = open(Box::new(mem.clone()));
+    assert!(matches!(opened.actions, LoadedActions::Failed));
+    assert!(!opened.warnings.is_empty());
+    assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), corrupt);
+    assert_eq!(mem.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), backup);
+}

@@ -610,6 +610,8 @@ pub struct PresetStore {
     /// [`crate::actions_cmds::ActionState::rev`] last loaded, written, or skipped.
     actions_rev: u64,
     actions_keys: Vec<(String, String)>,
+    /// Migrated native headers gain authority only after a prefs-aware successful write.
+    actions_keys_initialized: bool,
     actions_written_rev: Option<u64>,
     /// Authoritative startup ATN headers, reapplied after asynchronous preference hydration.
     actions_headers: HashMap<String, Option<String>>,
@@ -755,6 +757,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         index: None,
         actions_rev: 0,
         actions_keys: Vec::new(),
+        actions_keys_initialized: !matches!(&actions, LoadedActions::Migrated(_) | LoadedActions::MigrationBlocked(_)),
         actions_written_rev: None,
         actions_headers: HashMap::new(),
         actions_skipped,
@@ -851,7 +854,11 @@ fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Load
                     Err(error) => warnings.push(format!("actions: ATN loaded; legacy retirement pending: {error}")),
                 }
             }
-            LoadedActions::Loaded(state)
+            if state.library.legacy.as_ref().is_some_and(library::LegacyOrigin::function_keys_pending) {
+                LoadedActions::Migrated(state)
+            } else {
+                LoadedActions::Loaded(state)
+            }
         }
         Err(error) if missing_file(&error) => {
             let legacy = match backend.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES) {
@@ -871,7 +878,7 @@ fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Load
             for action in &mut state.list {
                 action.set_slot = action.set_slot.filter(|&slot| action.set.is_some() && state.set_rows.get(slot) == action.set.as_ref());
             }
-            state.library.legacy = match library::LegacyOrigin::new(&legacy) {
+            state.library.legacy = match library::LegacyOrigin::new_pending(&legacy) {
                 Ok(origin) => Some(origin),
                 Err(error) => return fail(warnings, LEGACY_ACTIONS_FILE, error),
             };
@@ -1237,7 +1244,7 @@ impl PresetStore {
 
     /// Persist the complete library, including physical empty rows and shortcut-only header edits.
     pub fn sync_actions(&mut self, state: &crate::actions_cmds::ActionState, keys: &[(String, String)]) -> bool {
-        if self.actions_rev == state.rev && self.actions_keys == keys {
+        if self.actions_keys_initialized && self.actions_rev == state.rev && self.actions_keys == keys {
             return false;
         }
         if self.actions_skipped {
@@ -1246,7 +1253,7 @@ impl PresetStore {
             self.actions_keys = keys.to_vec();
             return false;
         }
-        let bytes = match crate::actions_cmds::library::encode(state, keys) {
+        let bytes = match crate::actions_cmds::library::encode_initialized(state, keys) {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.warnings.push(format!("Couldn't save actions: {error}"));
@@ -1276,6 +1283,7 @@ impl PresetStore {
             Ok(()) => {
                 self.actions_rev = state.rev;
                 self.actions_keys = keys.to_vec();
+                self.actions_keys_initialized = true;
                 self.actions_written_rev = Some(state.rev);
                 return true;
             }
@@ -1296,7 +1304,11 @@ impl PresetStore {
         if self.actions_skipped {
             return Err(format!("Couldn't save actions: {ACTIONS_FILE} could not be read, so it was left unchanged"));
         }
-        let bytes = crate::actions_cmds::library::encode(state, &self.actions_keys)?;
+        let bytes = if self.actions_keys_initialized {
+            crate::actions_cmds::library::encode_initialized(state, &self.actions_keys)?
+        } else {
+            crate::actions_cmds::library::encode(state, &self.actions_keys)?
+        };
         if bytes.len() as u64 > MAX_ACTIONS_BYTES {
             return Err(format!("actions: the action list is too large to save ({} MB limit)", MAX_ACTIONS_BYTES >> 20));
         }
@@ -1437,7 +1449,8 @@ impl Session {
     /// A previous write of the same revision cannot acknowledge a newer key-only edit.
     pub fn action_definitions_written(&self) -> bool {
         self.preset_store.as_ref().is_some_and(|store| {
-            store.actions_written_rev == Some(self.actions.rev)
+            store.actions_keys_initialized
+                && store.actions_written_rev == Some(self.actions.rev)
                 && store.actions_keys.iter().map(|(key, chord)| (key, chord)).eq(self
                     .prefs()
                     .shortcuts
@@ -1460,6 +1473,9 @@ impl Session {
                 }
             }
             let actions_written = st.sync_actions(&self.actions, &action_keys);
+            if st.actions_keys_initialized && let Some(origin) = self.actions.library.legacy.as_mut() {
+                origin.initialize_function_keys();
+            }
             st.sync_patterns(&self.patterns);
             return actions_written;
         }

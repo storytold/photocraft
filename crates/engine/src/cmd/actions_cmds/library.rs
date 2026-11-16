@@ -125,6 +125,7 @@ impl RowOrigin {
 pub(crate) struct LegacyOrigin {
     bytes: usize,
     digest: String,
+    function_keys_pending: bool,
 }
 
 impl LegacyOrigin {
@@ -133,7 +134,23 @@ impl LegacyOrigin {
         if bytes.len() > MAX_BYTES {
             return Err("legacy Actions library exceeds byte limit".into());
         }
-        Ok(Self { bytes: bytes.len(), digest: blake3::hash(bytes).to_hex().to_string() })
+        Ok(Self { bytes: bytes.len(), digest: blake3::hash(bytes).to_hex().to_string(), function_keys_pending: false })
+    }
+    /// Initial migration has no preference snapshot; absent native keys are not authoritative yet.
+    pub(crate) fn new_pending(bytes: &[u8]) -> Result<Self> {
+        let mut origin = Self::new(bytes)?;
+        origin.function_keys_pending = true;
+        Ok(origin)
+    }
+    pub(crate) fn function_keys_pending(&self) -> bool {
+        self.function_keys_pending
+    }
+    /// Match the live receipt to a successfully initialized store without changing definitions.
+    pub(crate) fn initialize_function_keys(&mut self) {
+        self.function_keys_pending = false;
+    }
+    fn initialized(&self) -> Self {
+        Self { function_keys_pending: false, ..self.clone() }
     }
     /// Require the exact original legacy bytes, including for same-size replacement inputs.
     pub(crate) fn matches(&self, bytes: &[u8]) -> bool {
@@ -141,14 +158,18 @@ impl LegacyOrigin {
     }
     /// Encode the receipt version, bounded byte count and digest into the library sidecar.
     pub(crate) fn descriptor(&self) -> Result<Descriptor> {
-        Ok(Descriptor::new("null")
+        let mut value = Descriptor::new("null")
             .with("version", D::Integer(1))
             .with("bytes", D::Integer(i32::try_from(self.bytes).map_err(|_| "legacy length overflow")?))
-            .with("digest", D::Text(UnicodeString::new(&self.digest))))
+            .with("digest", D::Text(UnicodeString::new(&self.digest)));
+        if self.function_keys_pending {
+            value = value.with("functionKeysPending", D::Boolean(true));
+        }
+        Ok(value)
     }
     /// Validate the receipt schema, unique fields, byte ceiling and lowercase digest before use.
     pub(crate) fn from_descriptor(value: &Descriptor) -> Result<Self> {
-        if !value.class_id.is("null") || !value.name.0.is_empty() || value.items.len() != 3 {
+        if !value.class_id.is("null") || !value.name.0.is_empty() || !matches!(value.items.len(), 3 | 4) {
             return Err("invalid legacy Actions origin".into());
         }
         let field = |key: &str| {
@@ -173,7 +194,15 @@ impl LegacyOrigin {
         if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
             return Err("invalid legacy origin digest".into());
         }
-        Ok(Self { bytes, digest })
+        let function_keys_pending = if value.items.len() == 4 {
+            let D::Boolean(pending) = field("functionKeysPending")? else {
+                return Err("invalid legacy function-key initialization marker".into());
+            };
+            *pending
+        } else {
+            false
+        };
+        Ok(Self { bytes, digest, function_keys_pending })
     }
 }
 
@@ -587,6 +616,16 @@ fn field(out: &mut Vec<u8>, canonical: &[u8], new: Range<usize>, source: Option<
 /// Canonical encoding supplies boundaries; unchanged original fields/events are then spliced back.
 /// No second ATN grammar or persisted shadow registry is involved.
 pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<Vec<u8>> {
+    encode_with_legacy(state, keys, state.library.legacy.as_ref())
+}
+
+/// Only a prefs-aware write can initialize migrated function-key headers.
+pub(crate) fn encode_initialized(state: &ActionState, keys: &[(String, String)]) -> Result<Vec<u8>> {
+    let origin = state.library.legacy.as_ref().map(LegacyOrigin::initialized);
+    encode_with_legacy(state, keys, origin.as_ref())
+}
+
+fn encode_with_legacy(state: &ActionState, keys: &[(String, String)], legacy: Option<&LegacyOrigin>) -> Result<Vec<u8>> {
     let mut text_bytes = 0usize;
     for text in state
         .sets
@@ -676,7 +715,7 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
     } else {
         None
     };
-    let outer = sidecar::append_library(&mut files, &selected, state.library.sidecar.clone(), state.library.legacy.as_ref(), identities.as_deref())?;
+    let outer = sidecar::append_library(&mut files, &selected, state.library.sidecar.clone(), legacy, identities.as_deref())?;
     let canonical = atn::write_sets(&files).map_err(|error| error.to_string())?;
     if canonical.len() > MAX_BYTES {
         return Err("Actions library exceeds byte limit".into());
