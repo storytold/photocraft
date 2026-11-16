@@ -601,7 +601,16 @@ fn new_group(app: &mut PhotocraftApp) -> Result<Value, String> {
 fn start_preview(app: &mut PhotocraftApp, draft: u64, from: usize) -> Result<Value, String> {
     let (action, owner) = actions_cmds::playback::preview(&mut app.session, draft, from).map_err(|error| error.to_string())?;
     let target = actions_cmds::playback_snapshot_target(&app.session, &action);
-    let frame = Frame { action, target, from, source: Source::Draft(draft), take: app.session.actions.take, admitted: false, pending_call: false, legacy_occurrence: None };
+    let frame = Frame {
+        action,
+        target,
+        from,
+        source: Source::Draft(draft),
+        take: app.session.actions.take,
+        admitted: false,
+        pending_call: false,
+        legacy_occurrence: None,
+    };
     let gate = effective_gate(app);
     queue(app, frame, owner, Vec::new(), gate)
 }
