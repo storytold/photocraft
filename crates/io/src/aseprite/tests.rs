@@ -212,11 +212,11 @@ fn profiles_are_preserved_or_generated_for_the_actual_color_model() {
         for linear in [false, true] {
             let p = profile(1, u16::from(linear), if linear { 65536 } else { 0 }, &[]);
             let doc = read(&sprite(depth, 1, &[layer("L", 0, 0, 3, 0, 255), p])).unwrap().document;
-            let p = photocraft_cms::Profile::parse(doc.icc_profile.as_ref().unwrap()).unwrap();
-            assert_eq!(p.color_space, if depth == 16 { photocraft_cms::ColorSpace::Gray } else { photocraft_cms::ColorSpace::Rgb });
+            let p = craft_cms::Profile::parse(doc.icc_profile.as_ref().unwrap()).unwrap();
+            assert_eq!(p.color_space, if depth == 16 { craft_cms::ColorSpace::Gray } else { craft_cms::ColorSpace::Rgb });
         }
     }
-    let icc = photocraft_cms::Builtin::DisplayP3.profile().to_bytes();
+    let icc = craft_cms::Builtin::DisplayP3.profile().to_bytes();
     let chunks = [layer("L", 0, 0, 3, 0, 255), profile(2, 0, 0, &icc)];
     assert_eq!(read(&sprite(32, 1, &chunks)).unwrap().document.icc_profile.unwrap().as_slice(), icc.as_slice());
     assert!(read(&sprite(16, 1, &chunks)).is_err());
@@ -653,7 +653,7 @@ fn export_refuses_a_group_owning_a_retained_cel() {
 #[test]
 fn exported_icc_profiles_are_validated_before_a_file_is_written() {
     let original = read(include_bytes!("../../tests/fixtures/aseprite/layers.aseprite")).unwrap().document;
-    for icc in [Arc::new(b"bad ICC".to_vec()), photocraft_cms::Builtin::SGray.profile().to_bytes()] {
+    for icc in [Arc::new(b"bad ICC".to_vec()), craft_cms::Builtin::SGray.profile().to_bytes()] {
         let mut doc = original.clone();
         doc.sprite.as_mut().unwrap().profile = None;
         doc.icc_profile = Some(icc);
@@ -663,7 +663,7 @@ fn exported_icc_profiles_are_validated_before_a_file_is_written() {
     }
     let mut doc = original;
     doc.sprite.as_mut().unwrap().profile = None;
-    doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+    doc.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
     let out = crate::export(&doc, "aseprite", &Default::default()).unwrap();
     assert_eq!(read(&out.bytes).unwrap().document.icc_profile, doc.icc_profile);
 }

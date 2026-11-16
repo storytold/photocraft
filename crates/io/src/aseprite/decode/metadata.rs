@@ -144,7 +144,7 @@ impl Decoder<'_> {
 
 /// Validate ICC/model compatibility and map explicit sRGB or fixed gamma without assuming a profile.
 pub(in super::super) fn color_profile(r: &mut Reader<'_>, gray: bool) -> Result<Option<Arc<Vec<u8>>>> {
-    use photocraft_cms::{Builtin, ColorSpace, Curve, Profile};
+    use craft_cms::{Builtin, ColorSpace, Curve, Profile};
     let (kind, flags, gamma) = (r.u16()?, r.u16()?, r.u32()? as i32);
     r.take(8)?;
     if flags & !1 != 0 || (flags & 1 != 0 && gamma <= 0) {
