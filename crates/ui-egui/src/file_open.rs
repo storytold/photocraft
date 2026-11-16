@@ -532,8 +532,8 @@ impl PhotocraftApp {
             match placed {
                 // Running in the background: Free Transform starts when the layer has landed.
                 Ok(started) if crate::jobs_ui::track_place(self, &name, &started) => return,
+                // `run` and `place_bytes_with` have already reported the place's warnings.
                 Ok(result) => {
-                    crate::notices::io_result_warnings(self, &result, &name);
                     if result.get("frame").and_then(serde_json::Value::as_u64).is_some() {
                         continue;
                     }

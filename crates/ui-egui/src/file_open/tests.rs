@@ -2074,3 +2074,29 @@ fn synchronous_svg_place_displays_omitted_image_warning() {
     app.place_next_dropped(&egui::Context::default());
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line.contains("embedded") && line.contains("omitted"))));
 }
+
+/// A file dropped on the canvas and placed synchronously reports its import warnings in one
+/// notice, whether it is placed from its bytes or from its path on disk.
+#[test]
+fn synchronous_drop_place_reports_its_warnings_once() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="#ff0000"/><image width="2" height="2" href="data:image/png,broken"/></svg>"##;
+    let dir = std::env::temp_dir().join(format!("photocraft-drop-warn-once-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("omitted.svg");
+    std::fs::write(&path, svg).unwrap();
+    let drops = [
+        crate::file_open::DropPlace::Bytes("omitted.svg".into(), svg.to_vec()),
+        crate::file_open::DropPlace::File(dropped(path, Err("egui's reader must not be used".into()))),
+    ];
+    for drop in drops {
+        let mut app = app_with_canvas();
+        app.background_jobs = false;
+        app.ui.notices.clear();
+        let doc = app.session.active().unwrap().doc.id;
+        app.drop_places.push_back((doc, drop));
+        app.place_next_dropped(&egui::Context::default());
+        let reported = app.ui.notices.iter().filter(|notice| notice.lines.iter().any(|line| line.contains("embedded") && line.contains("omitted"))).count();
+        assert_eq!(reported, 1, "{:?}", app.ui.notices.iter().map(|n| &n.title).collect::<Vec<_>>());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
