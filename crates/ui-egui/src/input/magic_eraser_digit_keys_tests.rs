@@ -54,18 +54,30 @@ fn magic_eraser_digits_leave_tolerance_layer_and_brush_alone() {
     assert_eq!(a.ui.tool_options.magic_eraser_opacity, 100.0, "unmeasured 00 keeps the first zero's value");
 }
 #[test]
-fn digits_do_not_pair_across_tools() {
-    let mut brush_to_magic = app(Tool::Brush);
-    press(&mut brush_to_magic, 4, false, 0.0);
-    brush_to_magic.ui.tool = Tool::MagicEraser;
-    press(&mut brush_to_magic, 5, false, 300.0);
-    assert_eq!(brush_to_magic.session.tools.brush.opacity, 0.4);
-    assert_eq!(brush_to_magic.ui.tool_options.magic_eraser_opacity, 50.0);
+fn digit_pairs_preserve_the_existing_shared_cross_tool_sequence() {
+    // The new target inherits the same pending-digit sequence as Main's existing tools.
+    let mut brush_to_selected = app(Tool::Brush);
+    press(&mut brush_to_selected, 4, false, 0.0);
+    brush_to_selected.ui.tool = Tool::MagicEraser;
+    press(&mut brush_to_selected, 5, false, 300.0);
+    assert_eq!(brush_to_selected.session.tools.brush.opacity, 0.4);
+    assert_eq!(brush_to_selected.ui.tool_options.magic_eraser_opacity, 45.0);
 
-    let mut magic_to_brush = app(Tool::MagicEraser);
-    press(&mut magic_to_brush, 4, false, 0.0);
-    magic_to_brush.ui.tool = Tool::Brush;
-    press(&mut magic_to_brush, 5, false, 300.0);
-    assert_eq!(magic_to_brush.ui.tool_options.magic_eraser_opacity, 40.0);
-    assert_eq!(magic_to_brush.session.tools.brush.opacity, 0.5);
+    // A selected-tool digit still contributes to the unchanged legacy Brush sequence.
+    let mut selected_to_brush = app(Tool::MagicEraser);
+    press(&mut selected_to_brush, 4, false, 0.0);
+    selected_to_brush.ui.tool = Tool::Brush;
+    press(&mut selected_to_brush, 5, false, 300.0);
+    assert_eq!(selected_to_brush.ui.tool_options.magic_eraser_opacity, 40.0);
+    assert_eq!(selected_to_brush.session.tools.brush.opacity, 0.45);
+
+    // Consuming the first pair must also leave the next legacy digit unpaired.
+    let mut through_selected = app(Tool::Brush);
+    press(&mut through_selected, 4, false, 0.0);
+    through_selected.ui.tool = Tool::MagicEraser;
+    press(&mut through_selected, 5, false, 300.0);
+    through_selected.ui.tool = Tool::Brush;
+    press(&mut through_selected, 6, false, 400.0);
+    assert_eq!(through_selected.ui.tool_options.magic_eraser_opacity, 45.0);
+    assert_eq!(through_selected.session.tools.brush.opacity, 0.6);
 }
