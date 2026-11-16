@@ -1502,11 +1502,14 @@ fn migration_key_marker_keeps_old_receipts_and_rejects_malformed_state() {
     let mut files = craft_psd::atn::parse_sets(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap()).unwrap();
     let wrapper = files.last_mut().unwrap().actions[0].items[0].descriptor.as_mut().unwrap();
     let D::RawData(payload) = &mut wrapper.items.iter_mut().find(|(id, _)| id.is("modernizedActionData")).unwrap().1 else { panic!("missing native sidecar") };
-    let mut outer = craft_psd::descriptor::Descriptor::from_bytes(payload).unwrap();
+    assert!(payload.starts_with(&16u32.to_be_bytes()));
+    let mut outer = craft_psd::descriptor::Descriptor::from_bytes(&payload[4..]).unwrap();
     let D::Descriptor(origin) = &mut outer.items.iter_mut().find(|(id, _)| id.is("photocraftLegacyJsonV1")).unwrap().1 else { panic!("missing origin") };
     origin.items.iter_mut().find(|(id, _)| id.is("functionKeysPending")).unwrap().1 = D::Integer(1);
-    *payload = outer.to_bytes();
+    *payload = 16u32.to_be_bytes().to_vec();
+    payload.extend(outer.to_bytes());
     let corrupt = craft_psd::atn::write_sets(&files).unwrap();
+    assert!(library::decode(&corrupt).err().unwrap().contains("invalid legacy function-key initialization marker"));
     mem.write(ACTIONS_FILE, &corrupt).unwrap();
     let opened = open(Box::new(mem.clone()));
     assert!(matches!(opened.actions, LoadedActions::Failed));
