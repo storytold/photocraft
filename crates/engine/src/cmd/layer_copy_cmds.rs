@@ -209,6 +209,35 @@ pub(crate) fn translate_copies(copies: &mut Document, destination: &Document, dx
     }
 }
 
+/// Resolve a recorded destination by its exact name rather than capturing a session tab index.
+pub(crate) fn named_duplicate_document(s: &Session, selector: &Value) -> Result<usize> {
+    let bad = || EngineError::BadParams { cmd: "layer.duplicate".into(), msg: "`document` needs one nonempty, unambiguous name of an open document".into() };
+    let object = selector.as_object().filter(|object| object.len() == 1).ok_or_else(bad)?;
+    let name = object.get("name").and_then(Value::as_str).filter(|name| !name.trim().is_empty() && !name.contains('\0')).ok_or_else(bad)?;
+    let mut matches = s.documents().iter().enumerate().filter(|(_, state)| state.doc.name == name);
+    let (index, _) = matches.next().ok_or_else(bad)?;
+    if matches.next().is_some() {
+        return Err(bad());
+    }
+    Ok(index)
+}
+
+/// Duplicate Layer's other-document destination keeps the source active for the next action step.
+pub(crate) fn duplicate_into_document(s: &mut Session, p: &Value, destination: usize) -> Result<Value> {
+    let source = s.active_index().ok_or(EngineError::NoDocument)?;
+    // Only Duplicate Layer's fields may reach the more general drag/copy command.
+    let mut params = json!({"document":destination});
+    if let Some(name) = p.get("name").filter(|value| !value.is_null()) {
+        params["name"] = name.clone();
+    }
+    if let Some(layer) = crate::commands::explicit_layer(s, p)? {
+        params["layers"] = json!([layer.0]);
+    }
+    let result = copy_to_document(s, &params);
+    s.set_active(source);
+    result
+}
+
 /// `layer.copyToDocument`.
 fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     let dest = doc_index(s, p, "document")?.ok_or_else(|| bad("missing `document` (the destination's index)"))?;

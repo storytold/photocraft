@@ -1798,6 +1798,171 @@ fn recorded_web_slice_output_keeps_incomplete_or_unrepresented_output_choices() 
     }
 }
 
+fn duplicate_into_document(source: ReferenceItem, name: &str) -> Descriptor {
+    Descriptor::new("Dplc")
+        .with("null", D::Reference(vec![source]))
+        .with("T   ", D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul(name) }]))
+        .with("Vrsn", D::Integer(5))
+        .with("Idnt", D::List(vec![D::Integer(42)]))
+}
+
+#[test]
+fn recorded_duplicate_destination_keeps_names_and_layer_reference_forms() {
+    for source in [
+        ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") },
+        ReferenceItem::Index { class: class("Lyr "), index: 1 },
+        ReferenceItem::Name { class: class("Lyr "), name: UnicodeString::new_nul("Ink") },
+        ReferenceItem::Property { class: class("Lyr "), key: Id::new("Bckg") },
+    ] {
+        for event in [AtnEvent::Code(*b"Dplc"), AtnEvent::name("duplicate")] {
+            let d = duplicate_into_document(source.clone(), "目标.psd").with("Nm  ", D::Text(UnicodeString::new_nul("Copy"))).with("MkVs", D::Boolean(false));
+            let action = recorded(event, d.clone());
+            assert_eq!(action.steps[0].0, "layer.duplicate");
+            assert_eq!(action.steps[0].1["document"], json!({"name":"目标.psd"}));
+            assert_eq!(action.steps[0].1["name"], "Copy");
+            let back = saved(&action).descriptor.unwrap();
+            for key in ["null", "T   ", "Nm  "] {
+                assert_eq!(back.get(key), d.get(key));
+            }
+            assert_eq!(recorded(AtnEvent::Code(*b"Dplc"), back).steps, action.steps);
+        }
+    }
+}
+
+#[test]
+fn recorded_duplicate_destination_preserves_legacy_same_document_recordings() {
+    let source = ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") };
+    let d = Descriptor::new("Dplc").with("null", D::Reference(vec![source])).with("Vrsn", D::Integer(2));
+    let action = recorded(AtnEvent::Code(*b"Dplc"), d);
+    assert_eq!(action.steps, [("layer.duplicate".into(), json!({}))]);
+    let empty = Action::new("Recorded", vec![("layer.duplicate".into(), serde_json::Value::Null)]);
+    assert_eq!(saved(&empty).event, AtnEvent::Code(*b"Dplc"));
+}
+
+#[test]
+fn recorded_duplicate_destination_replays_without_switching_the_parent_document() {
+    for depth in [8, 16, 32] {
+        for reference_kind in ["target", "name", "index"] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":24,"height":20,"name":"Source.psd","depth":depth,"background":"transparent"})).unwrap();
+            s.execute("select.rect", json!({"x":2,"y":3,"width":4,"height":5})).unwrap();
+            s.execute("edit.fill", json!({"contents":"color","color":"#ff0000"})).unwrap();
+            s.execute("select.deselect", json!({})).unwrap();
+            s.execute("layer.setProps", json!({"name":"Ink"})).unwrap();
+            s.execute("layer.new.layer", json!({"name":"Other"})).unwrap();
+            if reference_kind == "target" {
+                s.execute("layer.select", json!({"name":"Ink"})).unwrap();
+            }
+            let source = s.active().unwrap().doc.clone();
+            let source_history = s.active().unwrap().history.past_len();
+            s.execute("file.new", json!({"width":32,"height":28,"name":"Target.psd","depth":depth})).unwrap();
+            let dest_history = s.active().unwrap().history.past_len();
+            s.set_active(0);
+            let reference = match reference_kind {
+                "name" => ReferenceItem::Name { class: class("Lyr "), name: UnicodeString::new_nul("Ink") },
+                "index" => ReferenceItem::Index { class: class("Lyr "), index: 1 },
+                _ => ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") },
+            };
+            let action =
+                recorded(AtnEvent::name("duplicate"), duplicate_into_document(reference, "Target.psd").with("Nm  ", D::Text(UnicodeString::new_nul("Copy"))));
+            replay_saved(&mut s, &action);
+            assert_eq!(s.active_index(), Some(0), "the parent must keep acting on the source");
+            assert_eq!(s.documents()[0].doc, source);
+            assert_eq!(s.documents()[0].history.past_len(), source_history);
+            let dest = &s.documents()[1];
+            let copy = dest.doc.layers.iter().find(|layer| layer.name == "Copy").unwrap();
+            assert_eq!(copy.surface().unwrap().content_bounds(), photocraft_geom::Rect::from_xywh(2, 3, 4, 5));
+            assert_eq!(dest.history.past_len(), dest_history + 1);
+            assert_ne!(copy.id, source.layers[0].id);
+            s.set_active(1);
+            s.execute("edit.undo", json!({})).unwrap();
+            assert!(s.active().unwrap().doc.layers.iter().all(|layer| layer.name != "Copy"));
+        }
+    }
+}
+
+#[test]
+fn recorded_duplicate_destination_copies_the_selection_and_continues_in_the_source() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":16,"height":16,"name":"Target.psd"})).unwrap();
+    s.execute("file.new", json!({"width":16,"height":16,"name":"Source.psd","background":"transparent"})).unwrap();
+    s.execute("layer.setProps", json!({"name":"First"})).unwrap();
+    s.execute("layer.new.layer", json!({"name":"Second"})).unwrap();
+    s.execute("layer.select", json!({"name":"First","mode":"add"})).unwrap();
+    assert_eq!(s.active().unwrap().selected_layers().len(), 2);
+    let source_ids = s.active().unwrap().selected_layers();
+    let reference = ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") };
+    let mut action = recorded(AtnEvent::name("duplicate"), duplicate_into_document(reference, "Target.psd"));
+    action.steps.push(("layer.new.layer".into(), json!({"name":"After"})));
+    let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+    let imported = atn_cmds::import(&bytes).unwrap();
+    assert!(imported.unsupported.is_empty());
+    s.actions.list = imported.actions;
+    let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+    assert_eq!(result["ran"], 2);
+    assert_eq!(s.active_index(), Some(1));
+    assert!(s.documents()[1].doc.layers.iter().any(|layer| layer.name == "After"));
+    let dest = &s.documents()[0];
+    assert_eq!(dest.doc.layers.len(), 3);
+    assert_eq!(dest.doc.layers.iter().skip(1).map(|layer| layer.name.as_str()).collect::<Vec<_>>(), ["First", "Second"]);
+    assert!(dest.doc.layers.iter().all(|layer| !source_ids.contains(&layer.id)));
+}
+
+#[test]
+fn recorded_duplicate_destination_rejects_ambiguous_and_unknown_forms() {
+    let source = ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") };
+    let base = duplicate_into_document(source, "Target.psd");
+    for (key, value) in [
+        ("T   ", D::Reference(vec![ReferenceItem::Identifier { class: class("Dcmn"), id: 42 }])),
+        ("T   ", D::Reference(vec![ReferenceItem::Name { class: class("Lyr "), name: UnicodeString::new_nul("Target.psd") }])),
+        ("T   ", D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString(vec![0xd800]) }])),
+        ("T   ", D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("") }])),
+        ("T   ", D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("bad\0name") }])),
+        ("Vrsn", D::Integer(6)),
+        ("MkVs", D::Boolean(true)),
+        ("Idnt", D::List(vec![D::Text(UnicodeString::new_nul("wrong"))])),
+        ("Nm  ", D::Integer(1)),
+        ("unknown", D::Boolean(true)),
+    ] {
+        let mut d = base.clone();
+        d.items.retain(|(k, _)| !k.is(key));
+        d.items.push((Id::new(key), value));
+        let action = recorded(AtnEvent::name("duplicate"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    for p in [
+        json!({"document":{"name":"Target.psd"},"inPlace":true}),
+        json!({"document":1}),
+        json!({"document":{"name":"Target.psd","index":1}}),
+        json!({"document":{"name":""}}),
+        json!({"document":{"name":"Target.psd"},"mergedOnly":true}),
+    ] {
+        let action = Action::new("Recorded", vec![("layer.duplicate".into(), p.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&action], &[], false).is_err(), "{p}");
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":8,"height":8,"name":"Source.psd"})).unwrap();
+    s.execute("file.new", json!({"width":8,"height":8,"name":"Target.psd"})).unwrap();
+    s.execute("file.new", json!({"width":8,"height":8,"name":"Target.psd"})).unwrap();
+    s.set_active(0);
+    for name in ["Missing.psd", "Target.psd"] {
+        let before: Vec<_> = s.documents().iter().map(|d| (d.doc.clone(), d.history.past_len())).collect();
+        assert!(s.execute("layer.duplicate", json!({"document":{"name":name}})).is_err());
+        assert_eq!(s.active_index(), Some(0));
+        assert_eq!(s.documents().iter().map(|d| (d.doc.clone(), d.history.past_len())).collect::<Vec<_>>(), before);
+    }
+    s.close(2);
+    s.set_active(0);
+    for extra in [json!({"source":1}), json!({"offset":[10,20]}), json!({"documentName":"Wrong"}), json!({"name":1}), json!({"inPlace":true})] {
+        let mut p = json!({"document":{"name":"Target.psd"}});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        assert!(s.execute("layer.duplicate", p.clone()).is_err(), "{p}");
+        assert_eq!(s.active_index(), Some(0));
+        assert_eq!(s.documents()[1].doc.layers.len(), 1);
+    }
+}
+
 fn history_offset(offset: i32) -> Descriptor {
     Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("HstS"), offset }]))
 }

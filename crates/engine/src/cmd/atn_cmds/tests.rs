@@ -968,6 +968,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("image.mode.grayscale", json!({})),
         ("image.mode.bits16", json!({})),
         ("layer.duplicate", json!({"name": "copy"})),
+        ("layer.duplicate", json!({"layer":{"index":1}, "document":{"name":"Destination.psd"}, "name":"copy"})),
         // Duplicate into a new document is a `Mk`, not a `Dplc` (the three shapes of
         // a recorded Duplicate Layer with Destination: New, plus a named layer).
         ("layer.duplicate", json!({"document": "new"})),

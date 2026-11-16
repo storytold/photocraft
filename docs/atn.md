@@ -559,6 +559,11 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   folder output maps to `dir` and `slices: "all"`, including auto slices. `ovSF`/`ovSN` keep images
   beside the destination or in a validated relative subfolder. Partial output blocks, other slice
   choices, HTML, background and unrepresented naming settings remain kept steps.
+- Duplicate Layer retains a named `T` document destination and resolves it against open documents
+  at playback, refusing absent or ambiguous names. It copies the referenced layer, or the selected
+  layers for `Trgt`, at their existing canvas positions and leaves the source active. Stack indexes
+  and ordinals retain their reference form; recording-session output ids are not reused. Other
+  destination forms, unknown options and malformed hints remain kept steps.
 - Photo Filter converts recorded Lab colours through `craft-cms`.
 - Direct Vibrance and Gradient Map save as the string events `vibrance` and `gradientMapEvent`.
   Stroke Outside uses `StrL.Otsd`, group Pass Through uses `BlnM.passThrough`, Canvas Size extension
