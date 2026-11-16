@@ -14,14 +14,15 @@ pub(crate) fn min_max_preserve(src: &Image, out: Rect, radius: f32, max: bool, p
     }
 }
 
-/// Minimum or Maximum over a disc (Preserve: Roundness): every offset with
-/// `dx² + dy² ≤ radius²`, so corners and straight edges move by the same distance. Each row of
-/// the disc is a horizontal window, taken with the van Herk / Gil-Werman running extreme
-/// (constant work per pixel whatever the window), so the cost is O(radius) per pixel.
+/// Minimum or Maximum over a disc (Preserve: Roundness): the whole-pixel radius `r` reaches `r`
+/// pixels along each axis, and the disc has radius `r + 0.5` like the reference application's
+/// (every offset with `dx² + dy² ≤ r² + r`; radius 5 gives half-widths 5, 5, 5, 4, 3, 2), so
+/// corners and straight edges move by the same distance. Each row of the disc is a horizontal
+/// window, taken with the van Herk / Gil-Werman running extreme (constant work per pixel whatever
+/// the window), so the cost is O(radius) per pixel.
 pub(crate) fn min_max_round(src: &Image, out: Rect, radius: f32, max: bool) -> Vec<f32> {
     let n = src.ch;
-    let r = radius.max(0.0);
-    let ri = r.floor() as i32;
+    let ri = radius.max(0.0).floor() as i32;
     if ri == 0 {
         return src.crop(out);
     }
@@ -30,8 +31,7 @@ pub(crate) fn min_max_round(src: &Image, out: Rect, radius: f32, max: bool) -> V
     let mut res = vec![if max { f32::MIN } else { f32::MAX }; w * out.height() as usize * n];
     let (mut row, mut ext) = (Vec::new(), Vec::new());
     for dy in -ri..=ri {
-        // Half-width of the disc on this row (the epsilon keeps exact squares, e.g. r 5, dy 3 → 4).
-        let hw = ((r * r - (dy * dy) as f32).max(0.0).sqrt() + 1e-4).floor() as i32;
+        let hw = (ri * ri + ri - dy * dy).isqrt();
         for y in out.y0..out.y1 {
             let o = (y - out.y0) as usize * w * n;
             for c in 0..n {
