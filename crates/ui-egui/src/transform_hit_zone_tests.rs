@@ -288,9 +288,9 @@ fn outside_reference_point_owns_the_pointer_only_when_shown() {
     }
 }
 
-/// Compare unopened controls with an active session at identical points, including a free interior.
+/// Compare the visible handles and active rotation band with an already open session.
 #[test]
-fn unopened_move_controls_share_hover_but_keep_the_move_press_band() {
+fn unopened_move_controls_advertise_only_their_rotation_band() {
     let app = app(QUAD, 1.0);
     let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(500.0, 300.0));
     for (p, starts_transform) in [
@@ -306,9 +306,11 @@ fn unopened_move_controls_share_hover_but_keep_the_move_press_band() {
         (pos2(-20.0, -20.0), false),
     ] {
         let d = [f64::from(p.x), f64::from(p.y)];
-        assert_eq!(transform_controls_cursor(r, p), cursor(&app, &view(1.0), d, Modifiers::NONE), "{p:?}");
         assert_eq!(transform_controls_hit(r, p), starts_transform, "{p:?}");
-        match (transform_controls_turn(r, p), rotate_cursor_dir(&app, d)) {
+        let expected = if starts_transform || r.contains(p) { cursor(&app, &view(1.0), d, Modifiers::NONE) } else { None };
+        assert_eq!(transform_controls_cursor(r, p), expected, "{p:?}");
+        let direction = rotate_cursor_dir(&app, d).filter(|_| starts_transform);
+        match (transform_controls_turn(r, p), direction) {
             (None, None) => {}
             (Some(a), Some(b)) => near(Some([f64::from(a.x) / 16.0, f64::from(a.y) / 16.0]), b),
             pair => panic!("unopened/open rotation disagreement: {pair:?}"),
@@ -318,10 +320,10 @@ fn unopened_move_controls_share_hover_but_keep_the_move_press_band() {
     assert!(!transform_controls_hit(r, r.center()), "inside remains an ordinary Move drag");
 }
 
-fn move_controls_fixture() -> (Harness<'static, PhotocraftApp>, [LayerId; 2]) {
+fn move_controls_fixture(first: [i32; 4]) -> (Harness<'static, PhotocraftApp>, [LayerId; 2]) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300, "background": "transparent"})).unwrap();
-    let layers = [[60, 60, 80, 60], [230, 150, 40, 40]].map(|rect| {
+    let layers = [first, [230, 150, 40, 40]].map(|rect| {
         app.run("shape.create", json!({"kind": "rect", "rect": rect, "fill": "#ff0000"})).unwrap();
         app.session.active().unwrap().active_layer.unwrap()
     });
@@ -364,9 +366,37 @@ fn move_pointer(h: &mut Harness<'static, PhotocraftApp>, control: bool, kind: &s
 }
 
 #[test]
+fn move_controls_do_not_show_a_rotate_cursor_over_another_layer() {
+    let (mut h, layers) = move_controls_fixture([60, 60, 120, 6]);
+    // The report showed a thin framed layer and a turn cursor well beyond the frame.
+    let far = [250.0, 170.0];
+    move_pointer(&mut h, false, "move", far);
+    assert_ne!(h.output().platform_output.cursor_icon, CursorIcon::None, "a Move press must not be advertised as rotation");
+
+    move_pointer(&mut h, false, "down", far);
+    move_pointer(&mut h, false, "move", [270.0, 175.0]);
+    move_pointer(&mut h, false, "up", [270.0, 175.0]);
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.selected_layers(), [layers[1]]);
+    assert!(h.state().ui.transform.is_none());
+    assert_eq!(photocraft_engine::transform_cmds::transform_bounds(&st.doc, st.doc.layer(layers[1]).unwrap()), photocraft_geom::Rect::new(250, 155, 290, 195));
+
+    // Within the band, the arc signals a real rotation of the thin layer.
+    h.state_mut().run("layer.select", json!({"layer": layers[0].0, "mode": "replace"})).unwrap();
+    let near = [90.0, 45.0];
+    move_pointer(&mut h, false, "move", near);
+    assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::None);
+    move_pointer(&mut h, false, "down", near);
+    move_pointer(&mut h, false, "move", [100.0, 38.0]);
+    move_pointer(&mut h, false, "up", [100.0, 38.0]);
+    let turned = h.state().ui.transform.as_ref().expect("dragging from the rotation band starts Free Transform");
+    assert!((turned.quad[1][1] - turned.quad[0][1]).abs() > 1.0, "the top edge rotated");
+}
+
+#[test]
 fn move_controls_allow_auto_select_on_another_layer_outside_the_press_band() {
     for control in [false, true] {
-        let (mut h, layers) = move_controls_fixture();
+        let (mut h, layers) = move_controls_fixture([60, 60, 80, 60]);
         let at = [250.0, 170.0];
         let xf = ViewXform::active(h.state()).unwrap();
         let frame = transform_controls_rect(h.state(), &xf).expect("the first layer has visible transform controls");
@@ -385,7 +415,7 @@ fn move_controls_allow_auto_select_on_another_layer_outside_the_press_band() {
 #[test]
 fn move_controls_allow_a_layer_marquee_from_empty_canvas_outside_the_press_band() {
     for control in [false, true] {
-        let (mut h, layers) = move_controls_fixture();
+        let (mut h, layers) = move_controls_fixture([60, 60, 80, 60]);
         let start = [190.0, 125.0];
         let end = [285.0, 210.0];
         let xf = ViewXform::active(h.state()).unwrap();
