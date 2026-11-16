@@ -31,6 +31,13 @@ pub struct ToolOptions {
     pub gradient_classic: bool,
     /// Blend mode used by both live and classic gradient drags.
     pub gradient_blend_mode: photocraft_color::BlendMode,
+    /// Gradient tool › Method (#12004): perceptual | linear | classic | smooth | stripes, as
+    /// `paint.gradient` takes it. Smooth by default and after Reset Tool.
+    #[serde(default = "default_gradient_method")]
+    pub gradient_method: String,
+    /// Classic gradient › Transparency (#12009): the gradient's opacity stops apply. On by default
+    /// and after Reset Tool.
+    pub gradient_transparency: bool,
     pub fill_opacity: f32,
     /// Paint Bucket fill source: false = Foreground colour, true = Pattern (Patterns panel selection).
     pub bucket_fill_pattern: bool,
@@ -489,6 +496,8 @@ impl Default for ToolOptions {
             gradient_dither: true,
             gradient_classic: false,
             gradient_blend_mode: photocraft_color::BlendMode::Normal,
+            gradient_method: default_gradient_method(),
+            gradient_transparency: true,
             fill_opacity: 100.0,
             bucket_fill_pattern: false,
             bucket_blend_mode: photocraft_color::BlendMode::Normal,
@@ -622,3 +631,8 @@ impl Default for ToolOptions {
 #[cfg(test)]
 #[path = "../cam_transform_on_drop_default_tests.rs"]
 mod cam_transform_on_drop_default_tests;
+
+/// The Gradient tool's Method after Reset Tool: Smooth, as measured (#12004).
+fn default_gradient_method() -> String {
+    "smooth".into()
+}

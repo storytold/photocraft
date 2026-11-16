@@ -598,6 +598,19 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             }
             widgets::checkbox(ui, &mut app.ui.tool_options.gradient_reverse, tl!("Reverse"));
             widgets::checkbox(ui, &mut app.ui.tool_options.gradient_dither, tl!("Dither"));
+            // Classic gradient only (the effective mode: a fill layer is live): Transparency, between
+            // Dither and Method (#12009).
+            if classic {
+                widgets::checkbox(ui, &mut app.ui.tool_options.gradient_transparency, tl!("Transparency")).on_hover_text(tl!("Toggle gradient transparency"));
+            }
+            // Method: the interpolation, in both modes, Smooth by default (#12004).
+            opt_label(ui, tl!("Method:"));
+            let methods: Vec<(String, &str)> =
+                [("perceptual", "Perceptual"), ("linear", "Linear"), ("classic", "Classic"), ("smooth", "Smooth"), ("stripes", "Stripes")]
+                    .iter()
+                    .map(|(id, l)| (id.to_string(), *l))
+                    .collect();
+            widgets::dropdown(ui, "gradient-method", tl!("Method:"), &mut app.ui.tool_options.gradient_method, &methods, 96.0);
             // Live mode: the options also change a selected gradient fill layer.
             crate::gradient_ui::options_changed(app, &before);
         }
@@ -1056,6 +1069,14 @@ fn hint(ui: &mut egui::Ui, s: &str) {
 #[cfg(test)]
 #[path = "../eraser_range_alert_tests.rs"]
 mod eraser_range_alert_tests;
+
+#[cfg(test)]
+#[path = "../tools/gradient_method_dropdown_tests.rs"]
+mod gradient_method_dropdown_tests;
+
+#[cfg(test)]
+#[path = "../tools/gradient_transparency_ui_tests.rs"]
+mod gradient_transparency_ui_tests;
 
 #[cfg(test)]
 #[path = "../blur_strength_alert_tests.rs"]
