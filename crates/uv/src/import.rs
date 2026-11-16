@@ -132,44 +132,63 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
                 uvs.push([*u, *v]);
             }
             "mtllib" => {
-                let path = normalize_library_path(line.strip_prefix(kind).unwrap_or("").trim().trim_matches('"'));
-                if !loaded_mtl_paths.insert(path.clone()) {
+                let raw_record = line.strip_prefix(kind).unwrap_or("").trim();
+                let explicitly_quoted = raw_record.starts_with('"') && raw_record.ends_with('"') && raw_record.len() >= 2;
+                let record = if explicitly_quoted { &raw_record[1..raw_record.len() - 1] } else { raw_record };
+                let path = normalize_library_path(&record);
+                // If `..` crosses a whitespace token boundary, normalizing the complete record
+                // can erase an earlier library name. Preserve the full-name lookup for paths
+                // with spaces, then still try the original tokens in this ambiguous case.
+                let token_fallback_after_full_match =
+                    !explicitly_quoted && record.split_whitespace().count() > 1 && record.replace('\\', "/").split('/').any(|part| part == "..");
+                let combined_is_new = loaded_mtl_paths.insert(path.clone());
+                if !combined_is_new && !token_fallback_after_full_match {
                     continue;
                 }
-                match resolve(&path) {
-                    Ok(bytes) => {
-                        load_mtl(&path, &bytes, &mut scene, &mut material_names, &mut mtl_work)?;
-                        if let Some(index) = material_name.as_ref().and_then(|name| material_names.get(name)).copied() {
-                            material = index;
+                let combined_error = if combined_is_new {
+                    match resolve(&path) {
+                        Ok(bytes) => {
+                            load_mtl(&path, &bytes, &mut scene, &mut material_names, &mut mtl_work)?;
+                            if let Some(index) = material_name.as_ref().and_then(|name| material_names.get(name)).copied() {
+                                material = index;
+                            }
+                            None
+                        }
+                        Err(error) => Some(error),
+                    }
+                } else {
+                    None
+                };
+                let combined_succeeded = combined_is_new && combined_error.is_none();
+                let mut loaded_any = combined_error.is_none();
+                let should_try_tokens = !explicitly_quoted && (token_fallback_after_full_match || combined_error.is_some());
+                let candidates: Vec<_> = if should_try_tokens {
+                    record.split_whitespace().map(|name| name.trim_matches('"')).filter(|name| !name.is_empty()).collect()
+                } else {
+                    Vec::new()
+                };
+                if candidates.len() > 1 {
+                    for candidate in candidates {
+                        let candidate = normalize_library_path(candidate);
+                        if !loaded_mtl_paths.insert(candidate.clone()) {
+                            continue;
+                        }
+                        match resolve(&candidate) {
+                            Ok(bytes) => {
+                                load_mtl(&candidate, &bytes, &mut scene, &mut material_names, &mut mtl_work)?;
+                                if let Some(index) = material_name.as_ref().and_then(|name| material_names.get(name)).copied() {
+                                    material = index;
+                                }
+                                loaded_any = true;
+                            }
+                            Err(error) if !combined_succeeded => scene.warnings.push(format!("MTL {candidate}: {error}; assign textures manually")),
+                            Err(_) => {}
                         }
                     }
-                    Err(whole_error) => {
-                        // OBJ allows more than one library after `mtllib`. Some exporters emit
-                        // one filename per token, while filenames containing spaces need the
-                        // complete remainder. Prefer the complete path above, then try tokens.
-                        let candidates: Vec<_> = path.split_whitespace().map(|name| name.trim_matches('"')).filter(|name| !name.is_empty()).collect();
-                        let mut loaded_any = false;
-                        if candidates.len() > 1 {
-                            for candidate in candidates {
-                                let candidate = normalize_library_path(candidate);
-                                if !loaded_mtl_paths.insert(candidate.clone()) {
-                                    continue;
-                                }
-                                match resolve(&candidate) {
-                                    Ok(bytes) => {
-                                        load_mtl(&candidate, &bytes, &mut scene, &mut material_names, &mut mtl_work)?;
-                                        if let Some(index) = material_name.as_ref().and_then(|name| material_names.get(name)).copied() {
-                                            material = index;
-                                        }
-                                        loaded_any = true;
-                                    }
-                                    Err(error) => scene.warnings.push(format!("MTL {candidate}: {error}; assign textures manually")),
-                                }
-                            }
-                        }
-                        if !loaded_any {
-                            scene.warnings.push(format!("MTL {path}: {whole_error}; assign textures manually"));
-                        }
+                }
+                if !loaded_any {
+                    if let Some(error) = combined_error {
+                        scene.warnings.push(format!("MTL {path}: {error}; assign textures manually"));
                     }
                 }
             }
@@ -426,6 +445,63 @@ mod tests {
         });
         assert!(result.is_ok());
         assert_eq!(resolve_calls, 1);
+    }
+
+    #[test]
+    fn token_boundaries_survive_combined_path_normalization() {
+        let source = b"mtllib second.mtl\nmtllib first.mtl nested/../second.mtl\n";
+        let mut resolved = BTreeSet::new();
+        let result = obj(source, &mut |path| {
+            resolved.insert(path.to_owned());
+            match path {
+                "first.mtl" => Ok(b"newmtl first\n".to_vec()),
+                "second.mtl" => Ok(b"newmtl second\n".to_vec()),
+                _ => Err(Error("not found".into())),
+            }
+        })
+        .unwrap();
+        assert!(resolved.contains("first.mtl"));
+        assert!(resolved.contains("second.mtl"));
+        assert!(result.materials.iter().any(|material| material.name == "first"));
+        assert!(result.materials.iter().any(|material| material.name == "second"));
+    }
+
+    #[test]
+    fn one_mtllib_record_still_loads_tokens_erased_by_combined_normalization() {
+        let source = b"mtllib first.mtl nested/../second.mtl\n";
+        let result = obj(source, &mut |path| match path {
+            "first.mtl" => Ok(b"newmtl first\n".to_vec()),
+            "second.mtl" => Ok(b"newmtl second\n".to_vec()),
+            _ => Err(Error("not found".into())),
+        })
+        .unwrap();
+        assert!(result.materials.iter().any(|material| material.name == "first"));
+        assert!(result.materials.iter().any(|material| material.name == "second"));
+    }
+
+    #[test]
+    fn complete_mtl_filename_with_spaces_is_tried_before_tokens() {
+        let source = b"mtllib my materials.mtl\n";
+        let mut resolved = Vec::new();
+        let result = obj(source, &mut |path| {
+            resolved.push(path.to_owned());
+            if path == "my materials.mtl" { Ok(b"newmtl full\n".to_vec()) } else { Err(Error("not found".into())) }
+        });
+        assert!(result.is_ok());
+        assert_eq!(resolved, ["my materials.mtl"]);
+    }
+
+    #[test]
+    fn quoted_mtl_filename_is_not_split_after_lookup_failure() {
+        let source = b"mtllib \"my materials.mtl\"\n";
+        let mut resolved = Vec::new();
+        let result = obj(source, &mut |path| {
+            resolved.push(path.to_owned());
+            Err(Error("not found".into()))
+        })
+        .unwrap();
+        assert_eq!(resolved, ["my materials.mtl"]);
+        assert!(result.warnings.iter().any(|warning| warning.contains("MTL my materials.mtl: not found")));
     }
 
     #[test]

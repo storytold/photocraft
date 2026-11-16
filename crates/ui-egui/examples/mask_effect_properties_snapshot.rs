@@ -97,17 +97,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Fill Properties did not expose Blend mode".into());
     }
     let fill_row_y = fill_row.y;
-    let opacity_button = harness
-        .query_all_by_label("Непрозрачность")
-        .find(|node| node.accesskit_node().role() == Role::Button && (node.rect().center().y - fill_row_y).abs() < 80.0)
-        .ok_or("Fill Opacity popup button was not exposed")?;
-    click(&mut harness, opacity_button.rect().center());
+    let opacity_button_center = {
+        let opacity_button = harness
+            .query_all_by_label("Непрозрачность")
+            .find(|node| node.accesskit_node().role() == Role::Button && (node.rect().center().y - fill_row_y).abs() < 80.0)
+            .ok_or("Fill Opacity popup button was not exposed")?;
+        opacity_button.rect().center()
+    };
+    click(&mut harness, opacity_button_center);
     harness.run_steps(2);
-    let popup = harness
-        .query_all_by_label("Непрозрачность")
-        .find(|node| node.accesskit_node().role() == Role::Slider)
-        .ok_or("Fill Opacity popup slider was not exposed")?;
-    if popup.rect().center().distance(opacity_button.rect().center()) > 260.0 {
+    let popup_slider_center = {
+        let popup = harness
+            .query_all_by_label("Непрозрачность")
+            .find(|node| node.accesskit_node().role() == Role::Slider)
+            .ok_or("Fill Opacity popup slider was not exposed")?;
+        popup.rect().center()
+    };
+    if popup_slider_center.distance(opacity_button_center) > 260.0 {
         return Err("Fill Opacity slider is outside its popup".into());
     }
     harness.render()?.save(std::path::Path::new(&output_dir).join("fill-properties-ru.png"))?;

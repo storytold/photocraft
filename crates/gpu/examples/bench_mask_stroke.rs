@@ -58,6 +58,19 @@ struct ResultSet {
 
 type RenderCapture = (Vec<[f32; 4]>, Stats, f64);
 
+#[derive(Clone, Copy)]
+enum RenderMode {
+    Full,
+    Dirty,
+}
+
+struct PairedSample {
+    frame: usize,
+    order: &'static str,
+    full_ms: f64,
+    dirty_ms: f64,
+}
+
 fn render_capture(
     comp: &mut Compositor,
     device: &wgpu::Device,
@@ -131,6 +144,24 @@ fn render_capture(
     Ok((pixels, stats, render_ms))
 }
 
+fn render_timed(
+    comp: &mut Compositor,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    doc: &Document,
+    render_region: Rect,
+    capture_region: Option<Rect>,
+) -> Result<(Option<Vec<[f32; 4]>>, Stats, f64), Box<dyn Error>> {
+    if let Some(capture_region) = capture_region {
+        let (pixels, stats, elapsed_ms) = render_capture(comp, device, queue, doc, render_region, capture_region)?;
+        return Ok((Some(pixels), stats, elapsed_ms));
+    }
+    let start = Instant::now();
+    let stats = comp.render(device, queue, doc, render_region, |_, _| {})?;
+    poll(device)?;
+    Ok((None, stats, start.elapsed().as_secs_f64() * 1000.0))
+}
+
 fn run(masked: bool, device: &wgpu::Device, queue: &wgpu::Queue, acc_format: wgpu::TextureFormat) -> Result<ResultSet, Box<dyn Error>> {
     let base = document(masked);
     let mut full = Compositor::try_new_with_format(device, acc_format)?;
@@ -141,6 +172,7 @@ fn run(masked: bool, device: &wgpu::Device, queue: &wgpu::Queue, acc_format: wgp
 
     let mut full_ms = Vec::with_capacity(FRAMES);
     let mut dirty_ms = Vec::with_capacity(FRAMES);
+    let mut paired_samples = Vec::with_capacity(FRAMES);
     let mut final_doc = None;
     let mut full_stats = Default::default();
     let mut dirty_stats = Default::default();
@@ -148,30 +180,46 @@ fn run(masked: bool, device: &wgpu::Device, queue: &wgpu::Queue, acc_format: wgp
     let mut dirty_pixels = Vec::new();
     for frame in 0..FRAMES {
         let current = edited(&base, frame)?;
-        if frame + 1 == FRAMES {
-            let ms;
-            (full_pixels, full_stats, ms) = render_capture(&mut full, device, queue, &current, current.bounds(), brush_rect())?;
-            full_ms.push(ms);
-        } else {
-            let start = Instant::now();
-            full_stats = full.render(device, queue, &current, current.bounds(), |_, _| {})?;
-            poll(device)?;
-            full_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+        let capture_region = (frame + 1 == FRAMES).then_some(brush_rect());
+        let full_first = frame % 2 == 0;
+        let order: &[RenderMode] = if full_first { &[RenderMode::Full, RenderMode::Dirty] } else { &[RenderMode::Dirty, RenderMode::Full] };
+        let (mut frame_full_ms, mut frame_dirty_ms) = (0.0, 0.0);
+        for mode in order {
+            let (pixels, stats, elapsed_ms) = match mode {
+                RenderMode::Full => render_timed(&mut full, device, queue, &current, current.bounds(), capture_region)?,
+                RenderMode::Dirty => render_timed(&mut dirty, device, queue, &current, brush_rect(), capture_region)?,
+            };
+            match mode {
+                RenderMode::Full => {
+                    full_stats = stats;
+                    frame_full_ms = elapsed_ms;
+                    if let Some(pixels) = pixels {
+                        full_pixels = pixels;
+                    }
+                }
+                RenderMode::Dirty => {
+                    dirty_stats = stats;
+                    frame_dirty_ms = elapsed_ms;
+                    if let Some(pixels) = pixels {
+                        dirty_pixels = pixels;
+                    }
+                }
+            }
         }
-
-        if frame + 1 == FRAMES {
-            let ms;
-            (dirty_pixels, dirty_stats, ms) = render_capture(&mut dirty, device, queue, &current, brush_rect(), brush_rect())?;
-            dirty_ms.push(ms);
-        } else {
-            let start = Instant::now();
-            dirty_stats = dirty.render(device, queue, &current, brush_rect(), |_, _| {})?;
-            poll(device)?;
-            dirty_ms.push(start.elapsed().as_secs_f64() * 1000.0);
-        }
+        full_ms.push(frame_full_ms);
+        dirty_ms.push(frame_dirty_ms);
+        paired_samples.push(PairedSample {
+            frame,
+            order: if full_first { "full-then-dirty" } else { "dirty-then-full" },
+            full_ms: frame_full_ms,
+            dirty_ms: frame_dirty_ms,
+        });
         final_doc = Some(current);
     }
     let _final_doc = final_doc.ok_or("no measured frames")?;
+    for sample in &paired_samples {
+        println!("sample frame={} order={} full_ms={:.3} dirty_ms={:.3}", sample.frame, sample.order, sample.full_ms, sample.dirty_ms);
+    }
     full_ms.sort_by(f64::total_cmp);
     dirty_ms.sort_by(f64::total_cmp);
     println!(

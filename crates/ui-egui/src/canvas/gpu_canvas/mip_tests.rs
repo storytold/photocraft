@@ -274,6 +274,36 @@ fn blurred_mask_canvas_transfer_matches_cpu_across_chunk_boundary() {
 
     let reference = doc.id.0 ^ (1u64 << 62);
     gpu.upload_composite(reference, &doc, None);
+    let (_, _, before_refresh) = gpu.read_texels(doc.id.0).expect("CPU-rendered canvas before GPU readiness");
+
+    // Exercise the first partial GPU update while the target still contains the full CPU render.
+    // The changed raster patch straddles the chunk boundary and overlaps the mask's Blur impulse.
+    let mut changed = doc.clone();
+    let patch = Rect::from_xywh(photocraft_gpu::CHUNK as i32 - 2, 10, 4, 4);
+    let pixels = (0..patch.width() * patch.height()).flat_map(|_| [0.8, 0.1, 0.2, 1.0]).collect::<Vec<_>>();
+    changed.layers[0].surface_mut().unwrap().write_region(patch, &pixels);
+    gpu.upload_composite(reference, &changed, None);
+    let (_, _, expected_partial) = gpu.read_texels(reference).expect("changed CPU reference before partial refresh");
+    assert!(
+        expected_partial.iter().zip(&before_refresh).any(|(after, before)| (0..4).any(|channel| (after[channel] - before[channel]).abs() > 2.0 / 255.0)),
+        "the partial CPU reference must change at least one pixel"
+    );
+    let refreshed = gpu.refresh(doc.id.0, &changed, Some(patch), None);
+    assert_eq!(refreshed.kind, "gpu-rect", "the ready compositor performs the first partial refresh: {refreshed:?}");
+    let (_, _, actual_partial) = gpu.read_texels(doc.id.0).expect("partial GPU refresh readback");
+    for (index, (actual, expected)) in actual_partial.iter().zip(&expected_partial).enumerate() {
+        for channel in 0..4 {
+            assert!(
+                (actual[channel] - expected[channel]).abs() <= 2.0 / 255.0,
+                "CPU-to-GPU partial refresh mismatch at pixel {index} channel {channel}: {} != {}",
+                actual[channel],
+                expected[channel]
+            );
+        }
+    }
+
+    // Separately compare the complete padded Blur transfer across the chunk boundary.
+    gpu.upload_composite(reference, &doc, None);
     let stats = gpu.composite(&doc, bounds, false).expect("2D GPU canvas must encode the padded Blur chunks");
     assert!(stats.chunks >= 2, "fixture must cross the compositor chunk boundary: {stats:?}");
     let (_, size, actual) = gpu.read_texels(doc.id.0).expect("GPU canvas texture readback");
@@ -294,24 +324,4 @@ fn blurred_mask_canvas_transfer_matches_cpu_across_chunk_boundary() {
     }
     let boundary = height as usize / 2 * width as usize + photocraft_gpu::CHUNK as usize;
     assert!(expected[boundary][3] > 0.0, "Blur energy must reach the first pixel of the next compositor chunk");
-
-    let mut changed = doc.clone();
-    let patch = Rect::from_xywh(2, 2, 4, 4);
-    let pixels = (0..patch.width() * patch.height()).flat_map(|_| [0.8, 0.1, 0.2, 1.0]).collect::<Vec<_>>();
-    changed.layers[0].surface_mut().unwrap().write_region(patch, &pixels);
-    gpu.upload_composite(reference, &changed, None);
-    let refreshed = gpu.refresh(doc.id.0, &changed, Some(patch), None);
-    assert_eq!(refreshed.kind, "gpu-rect", "the ready compositor performs the partial refresh: {refreshed:?}");
-    let (_, _, actual) = gpu.read_texels(doc.id.0).expect("partial GPU refresh readback");
-    let (_, _, expected) = gpu.read_texels(reference).expect("partial CPU reference readback");
-    for (index, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
-        for channel in 0..4 {
-            assert!(
-                (actual[channel] - expected[channel]).abs() <= 2.0 / 255.0,
-                "CPU-to-GPU partial refresh mismatch at pixel {index} channel {channel}: {} != {}",
-                actual[channel],
-                expected[channel]
-            );
-        }
-    }
 }

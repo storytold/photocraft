@@ -4,7 +4,7 @@ use fbxcel::{
     low::v7400::AttributeValue as A,
     tree::{any::AnyTree, v7400::NodeHandle},
 };
-use glam::{DMat4, DQuat, DVec3, EulerRot};
+use glam::{DMat3, DMat4, DQuat, DVec3, EulerRot};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
@@ -266,6 +266,60 @@ fn transform(n: NodeHandle<'_>, geometric: bool) -> DMat4 {
         * t(-sp)
 }
 
+/// Extract a proper orthonormal rotation from an affine parent matrix while leaving its
+/// scale and shear in the residual. Column normalization alone is not valid when the parent
+/// contains shear (for example, a rotated child under a nonuniformly scaled grandparent).
+fn parent_rotation(parent: DMat4) -> Result<DMat4> {
+    let mut rotation = DMat3::from_cols(parent.x_axis.truncate(), parent.y_axis.truncate(), parent.z_axis.truncate());
+    if !rotation.is_finite() {
+        return Err(Error("FBX parent transform is singular".into()));
+    }
+    // Scale first so the determinant threshold detects relative degeneracy, not a valid
+    // uniformly tiny parent scale. The polar factor is unchanged by positive normalization.
+    let magnitude = rotation.x_axis.abs().max_element().max(rotation.y_axis.abs().max_element()).max(rotation.z_axis.abs().max_element());
+    if !magnitude.is_finite() || magnitude == 0.0 {
+        return Err(Error("FBX parent transform is singular".into()));
+    }
+    rotation /= magnitude;
+    if rotation.determinant().abs() <= 1e-24 {
+        return Err(Error("FBX parent transform is singular or too close to singular".into()));
+    }
+    for _ in 0..64 {
+        let next = (rotation + rotation.inverse().transpose()) * 0.5;
+        if !next.is_finite() {
+            return Err(Error("FBX parent rotation decomposition failed".into()));
+        }
+        let delta = (next.x_axis - rotation.x_axis)
+            .length_squared()
+            .max((next.y_axis - rotation.y_axis).length_squared())
+            .max((next.z_axis - rotation.z_axis).length_squared());
+        rotation = next;
+        if delta <= 1e-24 {
+            break;
+        }
+    }
+    // A quaternion represents only proper rotations. Keep reflections in the scale/shear
+    // residual by flipping one axis of the orthogonal factor when necessary.
+    if rotation.determinant() < 0.0 {
+        rotation.x_axis = -rotation.x_axis;
+    }
+    let orthogonality_error = (rotation.x_axis.length_squared() - 1.0)
+        .abs()
+        .max((rotation.y_axis.length_squared() - 1.0).abs())
+        .max((rotation.z_axis.length_squared() - 1.0).abs())
+        .max(rotation.x_axis.dot(rotation.y_axis).abs())
+        .max(rotation.x_axis.dot(rotation.z_axis).abs())
+        .max(rotation.y_axis.dot(rotation.z_axis).abs());
+    if !orthogonality_error.is_finite() || orthogonality_error > 1e-10 {
+        return Err(Error("FBX parent rotation is too ill-conditioned to decompose safely".into()));
+    }
+    let quaternion = DQuat::from_mat3(&rotation).normalize();
+    if !quaternion.is_finite() {
+        return Err(Error("FBX parent rotation decomposition failed".into()));
+    }
+    Ok(DMat4::from_quat(quaternion))
+}
+
 /// Evaluate one FBX model transform using its parent's global rotation and scale/shear.
 /// FBX's default RrSs order places the child's local rotation before inherited parent scale.
 fn inherited_transform(n: NodeHandle<'_>, parent: DMat4, parent_local_scale: DVec3) -> Result<DMat4> {
@@ -276,7 +330,7 @@ fn inherited_transform(n: NodeHandle<'_>, parent: DMat4, parent_local_scale: DVe
         * rotate(v("Lcl Rotation", DVec3::ZERO), integer(n, "RotationOrder"))
         * rotate(v("PostRotation", DVec3::ZERO), 0).inverse();
     let local_scale = DMat4::from_scale(v("Lcl Scaling", DVec3::ONE));
-    let parent_rotation = DMat4::from_quat(parent.to_scale_rotation_translation().1);
+    let parent_rotation = parent_rotation(parent)?;
     let parent_translation = DMat4::from_translation(parent.w_axis.truncate());
     let parent_scale_shear = parent_rotation.inverse() * parent_translation.inverse() * parent;
     let inherit_type = integer(n, "InheritType");
@@ -646,6 +700,15 @@ mod preflight_tests {
     }
 
     fn indexed_uv_fbx_with_inheritance(reference: &str, inherit_type: i32) -> Vec<u8> {
+        indexed_uv_fbx_with_modes(reference, inherit_type, false)
+    }
+
+    fn indexed_uv_fbx_with_modes(reference: &str, inherit_type: i32, mixed_shear: bool) -> Vec<u8> {
+        let (parent_scale, grandparent_scale, parent_rotation, parent_inherit, child_rotation) = if mixed_shear {
+            ([1.0, 1.0, 1.0], [2.0, 1.0, 1.0], [0.0, 0.0, 45.0], 1, [90.0, 0.0, 0.0])
+        } else {
+            ([2.0, 1.0, 1.0], [3.0, 1.0, 1.0], [0.0, 0.0, 0.0], 0, [0.0, 0.0, 90.0])
+        };
         let mut version = vec![b'I'];
         version.extend_from_slice(&101_i32.to_le_bytes());
         let uv_layer = fbx_node(
@@ -677,18 +740,26 @@ mod preflight_tests {
                     vec![fbx_node(
                         "Properties70",
                         vec![],
-                        vec![fbx_vector_property("Lcl Rotation", [0.0, 0.0, 90.0]), fbx_integer_property("InheritType", inherit_type)],
+                        vec![fbx_vector_property("Lcl Rotation", child_rotation), fbx_integer_property("InheritType", inherit_type)],
                     )],
                 ),
                 fbx_node(
                     "Model",
                     vec![fbx_i64(3), fbx_string("Model::Parent"), fbx_string("Null")],
-                    vec![fbx_node("Properties70", vec![], vec![fbx_vector_property("Lcl Scaling", [2.0, 1.0, 1.0])])],
+                    vec![fbx_node(
+                        "Properties70",
+                        vec![],
+                        vec![
+                            fbx_vector_property("Lcl Scaling", parent_scale),
+                            fbx_vector_property("Lcl Rotation", parent_rotation),
+                            fbx_integer_property("InheritType", parent_inherit),
+                        ],
+                    )],
                 ),
                 fbx_node(
                     "Model",
                     vec![fbx_i64(4), fbx_string("Model::Grandparent"), fbx_string("Null")],
-                    vec![fbx_node("Properties70", vec![], vec![fbx_vector_property("Lcl Scaling", [3.0, 1.0, 1.0])])],
+                    vec![fbx_node("Properties70", vec![], vec![fbx_vector_property("Lcl Scaling", grandparent_scale)])],
                 ),
             ],
         );
@@ -736,6 +807,30 @@ mod preflight_tests {
     fn unsupported_inheritance_modes_are_rejected() {
         let error = load(&indexed_uv_fbx_with_inheritance("Index", 3), 0).unwrap_err();
         assert!(error.to_string().contains("Unsupported FBX transform inheritance type"));
+    }
+
+    #[test]
+    fn mixed_inheritance_keeps_rotation_orthonormal_under_parent_shear() {
+        let scene = load(&indexed_uv_fbx_with_modes("Index", 0, true), 0).unwrap();
+        let point = scene.positions[2];
+        assert!((point[0] + 0.3535533905932738).abs() < 1e-8);
+        assert!((point[1] + 0.3535533905932738).abs() < 1e-8);
+        assert!((point[2] - 1.5).abs() < 1e-8);
+    }
+
+    #[test]
+    fn parent_rotation_keeps_signed_scale_in_the_residual_and_rejects_near_singular_basis() {
+        let affine = DMat4::from_scale(DVec3::new(-2.0, 1.0, 0.5)) * rotate(DVec3::new(0.0, 25.0, 0.0), 0);
+        let rotation = parent_rotation(affine).unwrap();
+        let residual = rotation.inverse() * DMat4::from_translation(affine.w_axis.truncate()).inverse() * affine;
+        assert!((rotation.determinant() - 1.0).abs() < 1e-10);
+        let reconstructed = rotation * residual;
+        assert!((reconstructed.x_axis - affine.x_axis).length() < 1e-10);
+        assert!((reconstructed.y_axis - affine.y_axis).length() < 1e-10);
+        assert!((reconstructed.z_axis - affine.z_axis).length() < 1e-10);
+
+        let almost_flat = DMat4::from_scale(DVec3::new(1.0, 1.0, 1e-30));
+        assert!(parent_rotation(almost_flat).is_err());
     }
 
     fn file_with_attributes(attribute_count: u32, declared_attribute_bytes: u32, attributes: &[u8]) -> Vec<u8> {
