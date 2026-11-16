@@ -365,7 +365,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
     // is open cannot change which layers get exported.
     let docs = exportable_layers(&st.doc, &layers)?;
     if let [only] = docs.as_slice() {
-        let suggested = format!("{}.png", layer_file_stem(&only.name));
+        let suggested = generated_export_name(&layer_file_stem(&only.name), "png", None);
         return app.pick_export(&suggested, move |app, path| {
             if !path.to_ascii_lowercase().ends_with(".png") {
                 return Err("Quick Export as PNG writes .png files".into());
@@ -429,6 +429,22 @@ fn layer_export_name(name: &str) -> String {
     if name.chars().all(|c| c.is_whitespace() || c == '.') { "layer".into() } else { name }
 }
 
+/// Leave room within a 255-byte filename component for the atomic writer's temporary suffix.
+const MAX_GENERATED_EXPORT_NAME_BYTES: usize = 200;
+
+fn generated_export_name(stem: &str, ext: &str, number: Option<u64>) -> String {
+    let suffix = number.map_or_else(String::new, |number| format!("-{number}"));
+    let limit = MAX_GENERATED_EXPORT_NAME_BYTES.saturating_sub(ext.len()).saturating_sub(1 + suffix.len());
+    let name_at = |limit| {
+        let stem = stem.get(..stem.floor_char_boundary(limit)).unwrap_or_default();
+        let stem = if stem.chars().all(|c| c.is_whitespace() || c == '.') { "layer" } else { stem };
+        photocraft_engine::file_cmds::portable_device_name(format!("{stem}{suffix}.{ext}"))
+    };
+    let name = name_at(limit);
+    // Truncation can expose a Windows device name. Its escape adds one byte.
+    if name.len() > MAX_GENERATED_EXPORT_NAME_BYTES { name_at(limit.saturating_sub(1)) } else { name }
+}
+
 /// The files a multi-layer export writes: the chosen path, then numbered siblings named after
 /// each layer, in the chosen path's format.
 fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
@@ -457,13 +473,13 @@ fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
 /// Keep existing entries, including links (even dangling ones), when choosing an output path.
 #[cfg(not(target_arch = "wasm32"))]
 fn unused_export_path(dir: &std::path::Path, stem: &str, ext: &str, reserved: impl Fn(&str) -> bool) -> std::path::PathBuf {
-    let candidate = dir.join(format!("{stem}.{ext}"));
+    let candidate = dir.join(generated_export_name(stem, ext, None));
     if candidate.symlink_metadata().is_err() {
         return candidate;
     }
     let mut suffix = 1u64;
     loop {
-        let name = format!("{stem}-{suffix}.{ext}");
+        let name = generated_export_name(stem, ext, Some(suffix));
         let candidate = dir.join(&name);
         if !reserved(&name) && candidate.symlink_metadata().is_err() {
             return candidate;
@@ -1252,13 +1268,14 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
     // A layer's name may hold characters a file name can't (#14810): `a/b:c*?` suggests
     // `a_b_c__`. Unlike the multi-layer export's `export_name`, boundary spaces and dots stay.
-    let stem = if f.get("__layer").and_then(Value::as_u64).is_some() { layer_export_name(&stem) } else { stem };
+    let is_layer = f.get("__layer").and_then(Value::as_u64).is_some();
+    let stem = if is_layer { layer_export_name(&stem) } else { stem };
     let ext = s_fmt(f);
     let rows = scale_rows(f);
     if rows.len() > 1 {
         return confirm_sizes(app, f, doc, source_profile, &stem, rows);
     }
-    let suggested = format!("{stem}.{ext}");
+    let suggested = if is_layer { generated_export_name(&stem, &ext, None) } else { format!("{stem}.{ext}") };
     let f = scaled_fields(f, scale_factor(&rows[0].0));
     app.pick_export(&suggested, move |app, path| {
         let r = write_export(app, &doc, &f, &path, &source_profile)?;
@@ -1400,7 +1417,7 @@ fn confirm_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[photoc
     }
     // One file: the save dialog, named after the layer. The web downloads each file as before.
     let suggested = match docs.as_slice() {
-        [one] => format!("{}.{ext}", layer_file_stem(&one.name)),
+        [one] => generated_export_name(&layer_file_stem(&one.name), &ext, None),
         _ => format!("{}.{ext}", export_name(st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a))),
     };
     app.pick_export(&suggested, move |app, path| {
@@ -1458,10 +1475,10 @@ fn layer_file_names(docs: &[Document], ext: &str) -> Vec<String> {
     let mut names = vec![String::new(); docs.len()];
     for (i, doc) in docs.iter().enumerate().rev() {
         let stem = layer_file_stem(&doc.name);
-        let mut name = format!("{stem}.{ext}");
+        let mut name = generated_export_name(&stem, ext, None);
         let mut n = 1u64;
         while taken(&used, &name) {
-            name = format!("{stem}-{n}.{ext}");
+            name = generated_export_name(&stem, ext, Some(n));
             n = n.saturating_add(1);
         }
         used.insert(name.to_uppercase());

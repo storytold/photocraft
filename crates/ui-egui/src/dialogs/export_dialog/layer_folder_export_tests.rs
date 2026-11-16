@@ -134,6 +134,60 @@ fn quick_export_numbers_outputs_around_existing_files() {
     assert_eq!(std::fs::read(existing).unwrap(), b"keep");
 }
 
+#[test]
+fn quick_export_writes_long_layer_names_with_distinct_suffixes() {
+    for (character, repeats) in [("a", 300), ("é", 150), ("猫", 100), ("🙂", 75)] {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path();
+        let prefix = character.repeat(196 / character.len());
+        let occupied = out.join(format!("{prefix}.png"));
+        std::fs::write(&occupied, b"keep").unwrap();
+        let (mut app, ids, _, written, _) = app(crate::FileDialogAnswer::FolderTo(out.to_string_lossy().into_owned()));
+        let files = written.clone();
+        app.services.write = Some(Box::new(move |path, bytes| {
+            photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string())?;
+            files.borrow_mut().push(path.to_string());
+            Ok(())
+        }));
+        for (label, id) in [" left", " right"].into_iter().zip(&ids) {
+            let name = character.repeat(repeats) + label;
+            app.run("layer.renameLayer", json!({"layer": id.0, "name": name})).unwrap();
+        }
+        app.session.active_mut().unwrap().selected_layers = ids;
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "layer.quickExportAsPng", Value::Null).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(!app.ui.status_error, "{character}: {}", app.ui.status);
+        assert_eq!(std::fs::read(occupied).unwrap(), b"keep");
+        let numbered_prefix = character.repeat(194 / character.len());
+        for (i, expected) in [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]].into_iter().enumerate() {
+            let name = format!("{numbered_prefix}-{}.png", i + 1);
+            let bytes = std::fs::read(out.join(&name)).unwrap();
+            let doc = photocraft_io::import(&name, &bytes).unwrap().document;
+            assert_eq!(doc.layers[0].surface().unwrap().rgba(0, 0), expected, "{name}");
+        }
+        assert_eq!(written.borrow().len(), 3);
+    }
+}
+
+#[test]
+fn layer_file_names_reserve_space_for_multi_digit_suffixes() {
+    let stem = "a".repeat(300);
+    let docs: Vec<_> = (0..11).map(|i| named(&format!("{stem}{i}"))).collect();
+    let names = layer_file_names(&docs, "png");
+    assert!(names.iter().all(|name| name.len() <= 200));
+    assert!(names[0].ends_with("-10.png"));
+    assert_eq!(names.iter().collect::<std::collections::HashSet<_>>().len(), docs.len());
+
+    let docs = [named(&format!("{}Artwork", " ".repeat(250))), named("layer")];
+    assert_eq!(layer_file_names(&docs, "png"), ["layer-1.png", "layer.png"]);
+
+    let docs = [named(&format!("CON{}Artwork", " ".repeat(250)))];
+    let names = layer_file_names(&docs, "png");
+    assert!(names[0].ends_with("_.png"));
+    assert!(names[0].len() <= 200);
+}
+
 #[cfg(unix)]
 #[test]
 fn quick_export_chooses_a_new_name_beside_a_dangling_link() {
