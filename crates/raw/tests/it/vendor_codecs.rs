@@ -93,6 +93,9 @@ fn craw_unusual_variants_are_unsupported() {
     let codes32 = vec![300u16; 32 * h];
     let ok = sony_craw(32, h, &codes32, CURVE);
     assert!(decode(&ok, &Limits::default()).is_ok());
+    // A non-increasing tone curve is not guessed at.
+    let bad_curve = sony_craw(32, h, &codes32, [9000, 8000, 12000, 13000]);
+    assert!(matches!(decode(&bad_curve, &Limits::default()), Err(RawError::Unsupported(_))));
     // Truncated strip.
     let cut = &ok[..ok.len() - 20];
     assert!(decode(cut, &Limits::default()).is_err());
@@ -152,8 +155,7 @@ fn rw2_round_trip_12_and_14_bit() {
         assert_eq!(s.data, data, "{bits}-bit");
         assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), [0, 1, 1, 2]);
         assert_eq!(s.black.values, vec![128.0, 129.0, 129.0, 130.0]);
-        // craft-raw takes the white level from the data: the saturation plateau of the scene, else the full range.
-        assert!(s.white[0] > 0.0 && s.white[0] <= f32::from(max), "{:?}", s.white);
+        assert_eq!(s.white, [f32::from(max); 3]);
         assert_eq!(s.camera_wb, Some([2.0, 1.0, 1.5]));
         assert_eq!(s.crop, Rect::new(2, 2, w - 4, h - 4));
         let d = develop_sensor(&s, &DevelopOptions::default()).unwrap();
@@ -235,6 +237,9 @@ fn rw2_format4_preserves_samples_with_a_partial_final_block() {
 fn rw2_undecoded_formats_fall_back() {
     let data = vec![200u16; 20 * 4];
     let mut b = rw2(20, 4, &data, 12);
+    assert!(decode(&b, &Limits::default()).is_ok());
+    // Format 6 is supported by the shared reader.
+    patch_ifd0_short(&mut b, 0x002D, 6);
     assert!(decode(&b, &Limits::default()).is_ok());
     patch_ifd0_short(&mut b, 0x002D, 9);
     match decode(&b, &Limits::default()) {

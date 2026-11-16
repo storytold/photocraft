@@ -13,10 +13,12 @@ fn floats(s: &Sensor) -> &[f32] {
     s.float_data.as_deref().expect("floating-point samples")
 }
 
+/// `data` as the 0..=1 floats a JPEG XL codestream of those 16-bit values decodes to.
 fn unit(data: &[u16]) -> Vec<f32> {
     data.iter().map(|&v| f32::from(v) / 65535.0).collect()
 }
 
+/// Whether `got` equals `want` to within float rounding.
 fn near(got: &[f32], want: &[f32]) -> bool {
     got.len() == want.len() && got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-6)
 }
@@ -199,9 +201,8 @@ fn broken_monochrome_linear_raw_errors() {
     }
     let first: Vec<u8> = spec.data[..4].iter().flat_map(|v| v.to_le_bytes()).collect();
     let strip = b.windows(first.len()).position(|win| win == first.as_slice()).expect("strip data");
-    // Uncompressed rows missing from a cut strip are zero-filled (craft-raw's choice); a strip holding
-    // under 1/64 of its samples is no picture.
-    assert!(decode(&b[..strip + 2], &Limits::default()).is_err(), "truncated strip");
+    assert!(decode(&b[..strip + w], &Limits::default()).is_err(), "truncated strip");
+    assert!(decode(&b[..strip + 2], &Limits::default()).is_err(), "short truncated strip");
     // Two samples per pixel is no LinearRaw layout.
     let two = DngSpec { samples: 2, data: ramp(2 * w, h, 100, 4000), ..spec.clone() };
     let err = decode(&two.build(), &Limits::default()).unwrap_err().to_string();
@@ -571,8 +572,8 @@ fn deflate_strips_round_trip() {
     for (name, bits, storage, be) in [
         ("deflate 16-bit", 16, DngStorage::DeflateStrips { rows: 16, predictor: 1 }, false),
         ("deflate 16-bit predictor 2", 16, DngStorage::DeflateStrips { rows: 16, predictor: 2 }, false),
-        // (No 12-bit predictor 2: libtiff applies the predictor to 8, 16, 32 and 64-bit samples only.)
         ("deflate 12-bit", 12, DngStorage::DeflateStrips { rows: 12, predictor: 1 }, false),
+        ("deflate 12-bit predictor 2", 12, DngStorage::DeflateStrips { rows: 12, predictor: 2 }, false),
         ("deflate 16-bit predictor 2 BE", 16, DngStorage::DeflateStrips { rows: 16, predictor: 2 }, true),
         ("deflate LinearRaw predictor 2", 16, DngStorage::DeflateStrips { rows: 40, predictor: 2 }, false),
     ] {
@@ -610,11 +611,11 @@ fn deflate_hostile_fails_cleanly() {
 /// stream (not in 16-bit containers), as the testgen writes them.
 #[test]
 fn deflate_8_bit_predictor_and_packed_12_bit() {
-    use std::io::Write;
+    use std::io::Write as _;
     let zlib = |bytes: &[u8]| {
-        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-        encoder.write_all(bytes).unwrap();
-        encoder.finish().unwrap()
+        let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(bytes).unwrap();
+        e.finish().unwrap()
     };
     let (w, h) = (16usize, 4usize);
     // 8-bit, predictor 2: a row falling from 250 to 10 has deltas that wrap mod 256.
@@ -833,6 +834,13 @@ fn map_polynomial_maps_each_plane_of_floating_point_data() {
     let want: Vec<f32> = data.iter().enumerate().map(|(i, &v)| poly(&planes[i % 3], f64::from(f32::from(v) / 65535.)) as f32).collect();
     assert!(near(floats(&s), &unit(&data)), "stored float values stay unprocessed until development");
     assert_polynomial_development(&s, want);
+    assert_eq!(s.polynomials.len(), planes.len());
+    for (p, c) in s.polynomials.iter().zip(&planes) {
+        assert_eq!(&p.coefficients, c);
+        for x in [0.0, 0.2, 0.5, 1.0] {
+            assert!((p.eval(x) - poly(c, x)).abs() < 1e-12);
+        }
+    }
     assert!(s.warnings.iter().all(|w| !w.contains("MapPolynomial")), "{:?}", s.warnings);
     let d = develop(&bytes, &DevelopOptions::default()).unwrap();
     assert!(d.warnings.iter().all(|w| !w.contains("MapPolynomial")), "{:?}", d.warnings);
@@ -855,6 +863,7 @@ fn map_polynomial_follows_the_linearization_table() {
     assert_eq!(s.data, data.iter().map(|&value| table[usize::from(value)]).collect::<Vec<_>>());
     let want: Vec<f32> = data.iter().map(|&v| poly(&[0.0, 0.0, 1.0], f64::from(f32::from(table[usize::from(v)]) / 8190.)) as f32).collect();
     assert_polynomial_development(&s, want);
+    assert_eq!(s.polynomials.len(), 1);
 }
 
 /// A LinearizationTable maps integer samples: floating-point data ignores one.
@@ -985,7 +994,7 @@ fn jpeg_xl_mismatches_are_errors() {
 
 #[test]
 fn profile_gain_table_map_is_reported() {
-    let gain_table = |s: &Sensor| s.warnings.iter().any(|w| w.contains("gain table map"));
+    let gain_table = |s: &Sensor| s.warnings.iter().any(|w| w.contains("ProfileGainTableMap") || w.contains("gain table map"));
     let mut spec = DngSpec::cfa(8, 8, vec![500; 64]);
     assert!(!gain_table(&sensor(&spec.build())));
     // A well-formed ProfileGainTableMap (version 1, little-endian): one table of one gain. craft-raw
@@ -1005,7 +1014,7 @@ fn profile_gain_table_map_is_reported() {
     assert!(gain_table(&s));
     let d = develop_sensor(&s, &DevelopOptions::default()).unwrap();
     for warnings in [&s.warnings, &d.warnings] {
-        assert!(warnings.iter().any(|w| w.contains("gain table map") && w.contains("not applied")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("ProfileGainTableMap") && w.contains("not applied")), "{warnings:?}");
         assert!(!warnings.iter().any(|w| w.contains("gain table map") && w.contains("omitted")), "{warnings:?}");
     }
 }
@@ -1177,7 +1186,7 @@ fn lossy_jpeg_tile_dimension_mismatch_errors() {
         assert_eq!((s.width, s.height, s.data.len()), (w, h, w * h));
         assert!(s.data.iter().all(|&v| v.abs_diff(100) <= 2), "{tw}x{th}: visible source pixels survive padding");
     }
-    for (tw, th) in [(16, 11), (15, 16), (12, 16), (16, 33), (33, 16)] {
+    for (tw, th) in [(16, 11), (15, 16), (12, 16), (16, 10), (10, 10), (16, 33), (33, 16)] {
         spec.lossy_segments = vec![baseline_jpeg(&vec![100u8; tw * th], tw, th, 1)];
         assert!(matches!(decode(&spec.build(), &Limits::default()), Err(RawError::Malformed(_))), "{tw}x{th}");
     }
