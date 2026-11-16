@@ -109,6 +109,11 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
 }
 
 pub(crate) fn set(app: &mut PhotocraftApp, family: String) {
+    // A caret's font formats subsequent typing, not the existing layer's pixels.
+    if app.ui.text_edit.as_ref().is_some_and(|ed| ed.caret == ed.anchor) {
+        clear(app);
+        return;
+    }
     let Some((layer, range)) = crate::type_tool::target(app) else {
         clear(app);
         return;
@@ -193,7 +198,10 @@ mod tests {
         // Families the host serves but hasn't sent (own names: the served catalog is process-wide).
         let (a, b) = ("Served Hover Rest A", "Served Hover Rest B");
         let (fonts, _) = photocraft_text::served::parse_manifest(&format!("{a} | Regular | fonts/a/A.ttf\n{b} | Regular | fonts/b/B.ttf\n"));
-        photocraft_text::served::add_fonts(&fonts);
+        {
+            let _catalog = crate::served_fonts::changing_catalog();
+            photocraft_text::served::add_fonts(&fonts);
+        }
         let mut app = app_with_type_layer();
         let ctx = egui::Context::default();
 

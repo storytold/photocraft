@@ -3,6 +3,12 @@
 //! - The wheel scrolls up and down; ⇧ or ⌘/Ctrl + wheel scrolls sideways.
 //! - ⌥/Alt + wheel zooms around the pointer, 10% per wheel notch (eased or instant, see below).
 //!   ⇧/Shift + ⌥/Alt + wheel snaps to the next zoom ladder level instead.
+//!   On Windows and Linux Ctrl + ⌥/Alt + wheel (no ⇧) is the same zoom gesture (`alt_gesture`,
+//!   #10488): the windowing layer reports a held Ctrl as both `ctrl` and `command`, and Ctrl + Alt +
+//!   wheel was doing nothing before. Ctrl + Alt + ⇧ + wheel is deliberately left exactly as it was
+//!   before #10488 (a plain scroll with Zoom with Scroll Wheel off, nothing with it on; pinned by a
+//!   test in `wheel_nav/tests.rs`). Which Photoshop behaviour it should have is open on #10488:
+//!   there is no measured Photoshop evidence for the combination.
 //! - Preferences › General › Zoom with Scroll Wheel swaps the two: the wheel zooms and
 //!   ⌥/Alt + wheel scrolls; ⇧/Shift + wheel snaps to the next zoom ladder level.
 //! - Preferences › General › Zoom with Ctrl + Scroll Wheel (`general.ctrlWheelZooms`, off by
@@ -37,8 +43,9 @@
 //!   (the Photoshop behaviour, measured frame by frame on a screen recording). Zooming reads the
 //!   wheel events themselves and ignores egui's smoothed tail.
 //!
-//! In both modes panning keeps the smoothed delta, and ⇧/Shift snap zoom reads the wheel events
-//! and stays instant. The Alt state is taken from the wheel events (and the Alt key's own press
+//! In both modes the canvas pans by this frame's wheel events, the whole notch at once with no
+//! glide, as in Photoshop (#9479), while [`read`] keeps egui's smoothed delta; ⇧/Shift snap zoom
+//! reads the wheel events and stays instant. The Alt state is taken from the wheel events (and the Alt key's own press
 //! and release, `wheel_events`) and kept until the next wheel event: releasing Alt while the tail
 //! is still settling must not turn it into a pan.
 
@@ -90,6 +97,10 @@ pub struct Input {
     /// is on. The smoothed tail must not pan. ⇧ + Ctrl is a snap zoom and leaves this false.
     pub ctrl_zoom: bool,
 }
+
+/// Screen points one wheel notch (a line) pans the canvas: Photoshop's 16 px (#12028). Panels and
+/// other scroll areas keep egui's `line_scroll_speed`, and so does the wheel zoom's notch.
+pub const CANVAS_PAN_PER_LINE: f32 = 16.0;
 
 /// The view change for one frame of wheel input, if any.
 pub fn classify(i: Input) -> Option<Wheel> {
@@ -252,6 +263,21 @@ fn snap_residual_id(owner: Id) -> Id {
     Id::unique("pc-wheel-snap-residual").with(owner)
 }
 
+fn snap_kind_id(owner: Id) -> Id {
+    Id::unique("pc-wheel-snap-kind").with(owner)
+}
+
+/// Which snap gesture owns `owner`'s residual: 1 ⌥, 2 plain ⇧, 3 ⇧+Ctrl.
+fn snap_kind(ctrl_snap: bool, alt: bool) -> u8 {
+    if ctrl_snap {
+        3
+    } else if alt {
+        1
+    } else {
+        2
+    }
+}
+
 fn snap_time_id(owner: Id) -> Id {
     Id::unique("pc-wheel-snap-time").with(owner)
 }
@@ -392,9 +418,31 @@ pub fn read(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, animated_zo
     read_with(ctx, zoom_with_wheel, pinch_zooms, animated_zoom, owner, hovered, true, true, false)
 }
 
-/// [`read`], choosing how a plain wheel scroll pans: `smooth` glides it over a few frames (egui's
-/// smoothed delta); off, as with Interface › Enable Animations off, the view moves the whole notch
-/// in the frame the wheel turns and stops there (#5721), as scroll areas already do.
+/// Is this wheel event part of the ⌥/Alt zoom gesture (#10488)?
+///
+/// winit reports a held Ctrl on Windows (and Linux) as BOTH `ctrl` and `command`, so a plain
+/// `!command` test excluded Ctrl + Alt + wheel there and left it doing nothing. `command` is only
+/// forgiven together with `ctrl`, without `mac_cmd` and without ⇧: Ctrl + Alt + ⇧ + wheel keeps
+/// the behaviour it had before #10488 (it is not an Alt gesture). On macOS egui-winit sets
+/// `command` and `mac_cmd` from the Command key and `ctrl` from Control, so ⌘ + ⌥ and ⌘ + ⌃ + ⌥
+/// both stay out of the zoom gesture and are left to egui's own scroll handling; on Windows and
+/// Linux `mac_cmd` is never set.
+///
+/// AltGr: on Windows, winit (`get_agnostic_mods`) removes ctrl and alt from the modifier state
+/// while AltGr is down on a layout that has one, and on X11/Wayland AltGr is `ISO_Level3_Shift`
+/// (Mod5), which is neither; so AltGr does not arrive as Ctrl + Alt. It is not excluded here
+/// though: egui-winit also turns the physical AltRight key into a `Key::AltRight` event, and
+/// `wheel_events` sets `alt` from it (the #8049 fallback), so AltGr + wheel can reach this
+/// function with `alt` set and `command` clear and zoom like ⌥. Not verified on a physical AltGr
+/// keyboard; behaviour deliberately unchanged.
+fn alt_gesture(m: &Modifiers) -> bool {
+    m.alt && (!m.command || (m.ctrl && !m.mac_cmd && !m.shift))
+}
+
+/// [`read`], choosing how a wheel scroll pans: `smooth` glides it over a few frames (egui's
+/// smoothed delta, as in the Liquify and Camera Raw previews); off, the view moves the whole notch
+/// in the frame the wheel turns and stops there (#5721). The canvas pans with it off, as Photoshop
+/// does (#9479).
 /// `touch_gestures` is Preferences › Enhanced Controls › Enable Gestures: off, a touch screen's
 /// two-finger pinch doesn't zoom ([`pinch_factor`]).
 /// `animated_zoom` is Preferences › General › Animated Zoom: on, the wheel zoom is eased over the
@@ -414,15 +462,33 @@ pub fn read_with(
     touch_gestures: bool,
     ctrl_wheel_zooms: bool,
 ) -> Option<Wheel> {
-    let notch = ctx.options(|o| o.input_options.line_scroll_speed);
+    let options = ctx.options(|o| o.input_options);
+    let notch = options.line_scroll_speed;
 
     // --- Modifier tracking (always runs for all callers) ---
-    let (scroll, zoom_delta, latest_alt, latest_shift, wheel, page) = ctx.input(|i| {
+    let (smoothed, zoom_delta, latest_alt, latest_shift, wheel, page) = ctx.input(|i| {
         let wheel = wheel_events(i);
-        let latest_alt = wheel.last().map(|(_, _, m, _)| m.alt && !m.command && !m.ctrl);
-        let latest_shift = wheel.last().map(|(_, _, m, _)| m.shift && !m.command && !m.ctrl);
+        let latest_alt = wheel.last().map(|(_, _, m, _)| gesture_mode(m).0);
+        let latest_shift = wheel.last().map(|(_, _, m, _)| gesture_mode(m).1);
         (i.smooth_scroll_delta, pinch_factor(i, touch_gestures), latest_alt, latest_shift, wheel, i.content_rect().height())
     });
+    let alt = match latest_alt {
+        Some(a) => {
+            ctx.data_mut(|d| d.insert_temp(alt_id(), a));
+            a
+        }
+        None => ctx.data(|d| d.get_temp::<bool>(alt_id())).unwrap_or(false),
+    };
+    let shift = match latest_shift {
+        Some(s) => {
+            ctx.data_mut(|d| d.insert_temp(shift_id(), s));
+            s
+        }
+        None => ctx.data(|d| d.get_temp::<bool>(shift_id())).unwrap_or(false),
+    };
+    let scroll = if smooth { smoothed } else { unsmoothed_scroll(&wheel, (alt, shift), &options, page, options.line_scroll_speed) };
+    // The canvas pans [`CANVAS_PAN_PER_LINE`] points per notch; zoom steps keep egui's notch.
+    let pan = (!smooth).then(|| unsmoothed_scroll(&wheel, (alt, shift), &options, page, CANVAS_PAN_PER_LINE));
     let wheel = mark_unsmoothed(ctx, wheel);
     // Held until the next wheel event, so the smoothed tail of a Ctrl notch does not pan and
     // releasing Ctrl during that tail does not turn it into one. Off, neither flag is stored.
@@ -439,20 +505,6 @@ pub fn read_with(
     };
     let ctrl_zoom = sticky_flag(ctx, ctrl_id(), latest_ctrl_zoom, ctrl_wheel_zooms);
     let ctrl_snap = sticky_flag(ctx, ctrl_snap_id(), latest_ctrl_snap, ctrl_wheel_zooms);
-    let alt = match latest_alt {
-        Some(a) => {
-            ctx.data_mut(|d| d.insert_temp(alt_id(), a));
-            a
-        }
-        None => ctx.data(|d| d.get_temp::<bool>(alt_id())).unwrap_or(false),
-    };
-    let shift = match latest_shift {
-        Some(s) => {
-            ctx.data_mut(|d| d.insert_temp(shift_id(), s));
-            s
-        }
-        None => ctx.data(|d| d.get_temp::<bool>(shift_id())).unwrap_or(false),
-    };
 
     if !hovered {
         return None;
@@ -462,6 +514,11 @@ pub fn read_with(
     // The wheel events that belong to the gesture in progress: ⇧+Ctrl (snap, opt-in), Ctrl notch
     // (continuous ×1.1, opt-in), Shift+Alt (snap zoom), Alt-only (continuous zoom), Shift-only
     // (snap zoom with zoom_with_wheel), or plain (scroll/zoom).
+    // The Alt branches take [`alt_gesture`], so Ctrl + Alt (Windows' ctrl + command mirror) counts
+    // as Alt here too. Ctrl + Alt + ⇧ does not (`alt_gesture` refuses it, `latest_shift` keeps its
+    // strict test): it is neither alt nor shift here, as before #10488, so the notch is a plain
+    // scroll with Zoom with Scroll Wheel off and nothing with it on. Pinned in `wheel_nav/tests.rs`;
+    // which Photoshop gesture it should be is open on #10488.
     // `instant`: the part of `raw` egui leaves unsmoothed (a trackpad; see `wheel_events`).
     let (raw, instant) = wheel
         .iter()
@@ -471,9 +528,9 @@ pub fn read_with(
             } else if ctrl_zoom {
                 ctrl_mouse_notch(*unit, *delta, *m) && !m.shift
             } else if alt && shift {
-                m.alt && m.shift && !m.command && !m.ctrl
+                alt_gesture(m) && m.shift
             } else if alt {
-                m.alt && !m.shift && !m.command && !m.ctrl
+                alt_gesture(m) && !m.shift
             } else if shift {
                 m.shift && !m.alt && !m.command && !m.ctrl
             } else {
@@ -516,13 +573,19 @@ pub fn read_with(
             ctx.data_mut(|d| {
                 d.remove::<f32>(snap_residual_id(old));
                 d.remove::<f64>(snap_time_id(old));
+                d.remove::<u8>(snap_kind_id(old));
             });
         }
         ctx.data_mut(|d| d.insert_temp(active_snap_owner_id(), owner));
 
         let now = ctx.input(|i| i.time);
         let last_time = ctx.data(|d| d.get_temp::<f64>(snap_time_id(owner)));
-        let prev = if last_time.is_some_and(|t| now - t < SNAP_IDLE_TIMEOUT && (now - t).is_finite()) {
+        let kind = snap_kind(ctrl_snap, alt);
+        // A half-notch left by ⇧+⌥ must not cancel the first ⇧+Ctrl step.
+        let switching_to_ctrl = kind == 3 && ctx.data(|d| d.get_temp::<u8>(snap_kind_id(owner))) != Some(3);
+        let prev = if switching_to_ctrl {
+            0.0
+        } else if last_time.is_some_and(|t| now - t < SNAP_IDLE_TIMEOUT && (now - t).is_finite()) {
             ctx.data(|d| d.get_temp::<f32>(snap_residual_id(owner))).unwrap_or(0.0)
         } else {
             0.0
@@ -534,6 +597,7 @@ pub fn read_with(
         let steps = n.clamp(-10.0, 10.0) as i32;
         ctx.data_mut(|d| {
             d.insert_temp(snap_residual_id(owner), if remainder.is_finite() { remainder } else { 0.0 });
+            d.insert_temp(snap_kind_id(owner), kind);
             d.insert_temp(snap_time_id(owner), now);
             d.insert_temp(snap_frame_result_id(owner), (frame_nr, steps));
         });
@@ -543,6 +607,7 @@ pub fn read_with(
             ctx.data_mut(|d| {
                 d.remove::<f32>(snap_residual_id(owner));
                 d.remove::<f64>(snap_time_id(owner));
+                d.remove::<u8>(snap_kind_id(owner));
             });
         }
         // Zoom-mode input: ⌥ + wheel, or the plain wheel with Zoom with Scroll Wheel. With Animated
@@ -555,15 +620,61 @@ pub fn read_with(
             let eased = ease_zoom_delta(ctx, owner, along(raw - instant)) + along(instant);
             // The plain wheel zooms through `y`; its sideways part (⌘/Ctrl + wheel, a trackpad's
             // horizontal scroll) is not a zoom event, so it pans like any scroll: smoothed, or
-            // with Enable Animations off at once (#5721).
-            if alt { Vec2::new(0.0, eased) } else { Vec2::new(if smooth { scroll.x } else { raw.x }, eased) }
+            // unsmoothed at once (#5721, #9479).
+            if alt { Vec2::new(0.0, eased) } else { Vec2::new(scroll.x, eased) }
         } else {
             ctx.data_mut(|d| d.remove::<ZoomEase>(zoom_ease_id(owner)));
-            // Unsmoothed, a plain scroll pans by this frame's own wheel events (none: no tail).
-            if smooth || alt || shift { scroll } else { raw }
+            // Unsmoothed, a scroll pans by this frame's own wheel events (none: no tail).
+            scroll
         };
-        classify(Input { scroll, raw, zoom_delta, alt, shift, zoom_with_wheel, pinch_zooms, animated_zoom, notch, ctrl_zoom })
+        match (classify(Input { scroll, raw, zoom_delta, alt, shift, zoom_with_wheel, pinch_zooms, animated_zoom, notch, ctrl_zoom }), pan) {
+            // The canvas notch only along the axes egui's pan moves: a zoom's wheel delta never
+            // leaks into it, and a pan that cancels out at the canvas notch stays still.
+            (Some(Wheel::Pan(s)), Some(p)) => {
+                let p = Vec2::new(if s.x != 0.0 { p.x } else { 0.0 }, if s.y != 0.0 { p.y } else { 0.0 });
+                (p != Vec2::ZERO).then_some(Wheel::Pan(p))
+            }
+            (wheel, _) => wheel,
+        }
     }
+}
+
+/// The ⌥/Alt and ⇧/Shift gesture a wheel event belongs to: ⌥ as [`alt_gesture`] decides; ⇧ with
+/// ⌘/Ctrl is not one (it scrolls sideways, [`configure`]), so it belongs to the plain wheel.
+fn gesture_mode(m: &Modifiers) -> (bool, bool) {
+    (alt_gesture(m), m.shift && !m.command && !m.ctrl)
+}
+
+/// This frame's wheel scroll without egui's smoothing (points, content direction): what egui's
+/// smoothed delta spreads over the next frames, all of it now and no tail after. ⇧ or ⌘/Ctrl fold
+/// it sideways as egui does ([`configure`]), so every pan, plain or sideways, moves at once.
+/// Only the wheel events of the gesture in progress (`mode`, the ⌥ and ⇧ of [`gesture_mode`])
+/// count: a ⌥ zoom notch in the same frame as a plain pan notch doesn't pan too.
+fn unsmoothed_scroll(wheel: &[(MouseWheelUnit, Vec2, Modifiers, TouchPhase)], mode: (bool, bool), options: &egui::InputOptions, page: f32, line: f32) -> Vec2 {
+    wheel.iter().fold(Vec2::ZERO, |sum, (unit, delta, modifiers, phase)| {
+        // egui scrolls only by `Move` events; a trackpad's `Start`, `End` or `Cancel` delta
+        // (`WheelState::on_wheel_event`) is not a scroll.
+        if *phase != TouchPhase::Move || gesture_mode(modifiers) != mode {
+            return sum;
+        }
+        // egui turns these into its own zoom, not a scroll.
+        if modifiers.matches_any(options.zoom_modifier) {
+            return sum;
+        }
+        let d = *delta
+            * match unit {
+                MouseWheelUnit::Point => 1.0,
+                MouseWheelUnit::Line => line,
+                MouseWheelUnit::Page => page,
+            };
+        let sideways = modifiers.matches_any(options.horizontal_scroll_modifier);
+        let upright = modifiers.matches_any(options.vertical_scroll_modifier);
+        sum + match (sideways, upright) {
+            (true, false) => Vec2::new(d.x + d.y, 0.0),
+            (false, true) => Vec2::new(0.0, d.x + d.y),
+            _ => d,
+        }
+    })
 }
 
 fn is_alt_key(key: Key) -> bool {
@@ -615,5 +726,7 @@ pub fn pinch_factor(i: &InputState, touch_gestures: bool) -> f32 {
         .product()
 }
 
+#[cfg(test)]
+mod scroll_step_tests;
 #[cfg(test)]
 mod tests;

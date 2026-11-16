@@ -170,11 +170,25 @@ fn list_system_printers(s: &Session) -> Vec<craft_print::Printer> {
         Some(source) => source(),
         None => {
             SYSTEM_LISTINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            craft_print::printers()
+            system_printers_now()
         }
     };
     keep(&LAST_PRINTERS, s.printer_source.as_ref(), list.clone());
     list
+}
+
+/// The system's printers. craft-print asks each Windows driver about two-sided printing through
+/// prntvpt.dll; without it, list the spooler's printers through GDI instead (#8272). Like
+/// `craft_print::printers`, a listing that fails is an empty list.
+fn system_printers_now() -> Vec<craft_print::Printer> {
+    if require_print_tickets().is_ok() {
+        return craft_print::printers();
+    }
+    craft_print::rgb::printers()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| craft_print::Printer { name: p.name, description: String::new(), default: p.default, two_sided: None })
+        .collect()
 }
 
 /// `file.printers`' stand-in: the session's outside the browser, and `None` in the browser, where
@@ -250,8 +264,8 @@ enum SpoolError {
 
 /// Sends the job and says where it went and through what. A named print server takes the IPP
 /// route. Otherwise: the app's spooler when it is preferred; else `craft-print` (`lp`, or the
-/// Windows spooler) when it is there; else CUPS over IPP; and the app's spooler when that had
-/// no route either. A route that exists but fails (an unknown printer, a refused job) is an
+/// Windows spooler) when it is there, or the app's spooler when CUPS lists no printer for `lp`;
+/// else CUPS over IPP; and the app's spooler when that had no route either. A route that exists but fails (an unknown printer, a refused job) is an
 /// error, never a fall-through.
 fn spool_job(spooler: Option<&Spooler>, job: &PrintJob, lp: &craft_print::Job) -> Result<(String, String)> {
     let app = |sp: &Spooler| (sp.run)(job).map(|m| (m, sp.name.to_string())).map_err(other);
@@ -261,7 +275,19 @@ fn spool_job(spooler: Option<&Spooler>, job: &PrintJob, lp: &craft_print::Job) -
         }
         if let Some(name) = system_spooler() {
             require_windows_pdf()?;
-            return with_spooler(|| craft_print::submit(&job.pdf, lp)).map(|m| (m, name.to_string())).map_err(other);
+            // lpstat is CUPS, not a Windows driver, so it runs outside SPOOLER. A listing that
+            // can't finish in time can't tell, so lp gets the job as it did before the check.
+            let route = match name {
+                "lp" => lp_printers(LP_LISTING_TIMEOUT).map_or_else(|| Some(lp.clone()), |list| lp_route(lp, &list)),
+                _ => Some(lp.clone()),
+            };
+            return match (route, spooler) {
+                (Some(lp), _) => with_spooler(|| craft_print::submit(&job.pdf, &lp)).map(|m| (m, name.to_string())).map_err(other),
+                // CUPS lists no printer. IPP would ask the same CUPS, or (it ignores client.conf)
+                // another server whose printer the user never chose, so only the portal is left.
+                (None, Some(sp)) => app(sp),
+                (None, None) => Err(other("no printers found; set one up in the system's printer settings, or print to PDF")),
+            };
         }
     }
     match cups_spool(job) {
@@ -272,6 +298,78 @@ fn spool_job(spooler: Option<&Spooler>, job: &PrintJob, lp: &craft_print::Job) -
         },
         Err(SpoolError::Failed(why)) => Err(other(why)),
     }
+}
+
+/// How long a print job waits for CUPS' printer list (`lpstat`, whose `-e` browses the network).
+const LP_LISTING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The most a printer listing may print; a longer one counts as no answer.
+const LP_LISTING_CAP: u64 = 1 << 20;
+
+/// CUPS' printers as `craft_print::printers` lists them, or `None` when that can't be told: an
+/// `lpstat` can't start, outlasts `timeout`, prints more than `LP_LISTING_CAP`, or `lpstat -e`
+/// fails (CUPS unreachable, or listing forbidden by policy). `lpstat -p -d`'s own status is not
+/// a failure: it exits 1 whenever there are no queues, as on a host with only driverless
+/// printers. Each `lpstat` is killed and reaped at the deadline, so a hung one never outlives
+/// the job.
+fn lp_printers(timeout: std::time::Duration) -> Option<Vec<craft_print::Printer>> {
+    let deadline = std::time::Instant::now() + timeout;
+    let (_, queues) = output_by(craft_print::lpstat_command(), deadline)?;
+    // `lpstat -e`, as craft-print runs it (its builder is private): the driverless printers.
+    let mut driverless = std::process::Command::new("lpstat");
+    driverless.arg("-e").env("LC_ALL", "C").env("LANG", "C").env("SOFTWARE", "Craft");
+    let (listed, available) = output_by(driverless, deadline)?;
+    listed.then(|| craft_print::printers_parsed(&queues, Some(&available)))
+}
+
+/// Whether `command` succeeded, and its standard output; `None` when it can't start, prints more
+/// than `LP_LISTING_CAP`, or is still running at `deadline`, when it is killed and reaped. The
+/// output is read on its own thread, so a full pipe can't stall the wait, and that thread ends
+/// when the process does.
+fn output_by(mut command: std::process::Command, deadline: std::time::Instant) -> Option<(bool, String)> {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let reader = std::thread::Builder::new().name("print-listing".into()).spawn(move || {
+        let mut out = Vec::new();
+        // One byte over the cap tells an oversized listing apart; stopping closes the pipe.
+        let _ = sender.send((&mut stdout).take(LP_LISTING_CAP + 1).read_to_end(&mut out).map(|_| out));
+    });
+    let status = reader.ok().and_then(|_| {
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+                _ => break None,
+            }
+        }
+    });
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let out = receiver.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).ok()?.ok()?;
+    let fits = u64::try_from(out.len()).is_ok_and(|n| n <= LP_LISTING_CAP);
+    fits.then(|| (status.success(), String::from_utf8_lossy(&out).into_owned()))
+}
+
+/// The job for `lp`, or `None` when no printer was asked for and CUPS lists none: `lp` has
+/// nowhere to send it, and the portal still may (a Flatpak bundles `lp`). A printer asked for by
+/// name always goes to `lp`, which knows it even where CUPS won't list it, and the portal could
+/// not honour the name. With no printer asked for, no default and one printer, that printer, as
+/// `resolve_printer` picks for IPP.
+fn lp_route(lp: &craft_print::Job, printers: &[craft_print::Printer]) -> Option<craft_print::Job> {
+    let mut lp = lp.clone();
+    if lp.printer.is_none()
+        && !printers.iter().any(|p| p.default)
+        && let [only] = printers
+    {
+        lp.printer = Some(only.name.clone());
+    }
+    (lp.printer.is_some() || !printers.is_empty()).then_some(lp)
 }
 
 /// The spooler `craft-print` can talk to, as the job's `backend` name: `lp` when CUPS' command
@@ -392,8 +490,9 @@ fn system_printers(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- PDF ----------
 
-/// Paper sizes in points (portrait).
-pub const PAPERS: [(&str, f64, f64); 8] = [
+/// Paper sizes in points (portrait). The original list keeps its order and sizes; the Japanese
+/// photo, postcard and JIS sizes follow it (millimetres × 72/25.4).
+pub const PAPERS: &[(&str, f64, f64)] = &[
     ("letter", 612.0, 792.0),
     ("legal", 612.0, 1008.0),
     ("tabloid", 792.0, 1224.0),
@@ -402,7 +501,75 @@ pub const PAPERS: [(&str, f64, f64); 8] = [
     ("a5", 419.53, 595.28),
     ("4x6", 288.0, 432.0),
     ("5x7", 360.0, 504.0),
+    // Japanese postcards (はがき and 往復はがき), the JIS B series that Japanese printing and
+    // Excel use (B5 182×257, B4 257×364 mm), A6 and the photo sizes L判, 2L判, KG判, 六切, 四切.
+    ("postcard", 283.46, 419.53),
+    ("double-postcard", 419.53, 566.93),
+    ("b5", 515.91, 728.50),
+    ("b4", 728.50, 1031.81),
+    ("a6", 297.64, 419.53),
+    ("l", 252.28, 360.00),
+    ("2l", 360.00, 504.57),
+    ("kg", 289.13, 430.87),
+    ("6cut", 575.43, 720.00),
+    ("4cut", 720.00, 864.57),
 ];
+
+/// Japanese customary names and other spellings for the papers in [`PAPERS`], matched after
+/// [`normalize_paper`]: `はがき` is `postcard`, `L判` is `l`, `JIS B5` is `b5`, and so on.
+const PAPER_ALIASES: &[(&str, &str)] = &[
+    ("はがき", "postcard"),
+    ("ハガキ", "postcard"),
+    ("葉書", "postcard"),
+    ("ポストカード", "postcard"),
+    ("往復はがき", "double-postcard"),
+    ("往復ハガキ", "double-postcard"),
+    ("JIS B5", "b5"),
+    ("B5 (JIS)", "b5"),
+    ("JIS B4", "b4"),
+    ("B4 (JIS)", "b4"),
+    ("L判", "l"),
+    ("Lサイズ", "l"),
+    ("L-size", "l"),
+    ("2L判", "2l"),
+    ("2Lサイズ", "2l"),
+    ("KG判", "kg"),
+    ("KGサイズ", "kg"),
+    ("六切", "6cut"),
+    ("6切", "6cut"),
+    ("四切", "4cut"),
+    ("4切", "4cut"),
+];
+
+/// The form [`paper_size`] matches names in: lower case, with whitespace and punctuation ignored
+/// and `×`/`*` read as `x`, so `L判`, `l-size` and `l` are one name, `4 × 6` is `4x6`, and
+/// `B5（JIS）` and `JIS B5.` are `b5`.
+fn normalize_paper(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '×' | '*' => 'x',
+            c => c,
+        })
+        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation() && !matches!(c, '（' | '）' | '、' | '。' | '，' | '．'))
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// The portrait size in points of a named paper, `None` for unknown names. Case, spaces and
+/// punctuation don't matter, and the Japanese customary names (`はがき`, `L判`, `六切`, …) and the
+/// JIS spelling (`JIS B5`) are aliases of the papers above.
+pub fn paper_size(name: &str) -> Option<(f64, f64)> {
+    let n = normalize_paper(name);
+    if n.is_empty() {
+        return None;
+    }
+    let canonical = PAPERS
+        .iter()
+        .find(|p| normalize_paper(p.0) == n)
+        .map(|p| p.0)
+        .or_else(|| PAPER_ALIASES.iter().find(|(alias, _)| normalize_paper(alias) == n).map(|(_, name)| *name))?;
+    PAPERS.iter().find(|p| p.0 == canonical).map(|p| (p.1, p.2))
+}
 
 /// The image placed on a print page.
 pub struct PrintImage {
@@ -686,11 +853,9 @@ fn print_image(doc: &Document, p: &Value, cmd: &str) -> Result<(PrintImage, Valu
 fn paper(p: &Value, cmd: &str) -> Result<(f64, f64)> {
     let (w, h) = match p.get("paper") {
         None => (612.0, 792.0),
-        Some(Value::String(name)) => PAPERS
-            .iter()
-            .find(|(n, _, _)| n.eq_ignore_ascii_case(name))
-            .map(|(_, w, h)| (*w, *h))
-            .ok_or_else(|| bad(cmd, format!("unknown paper `{name}` ({})", PAPERS.map(|p| p.0).join("|"))))?,
+        Some(Value::String(name)) => {
+            paper_size(name).ok_or_else(|| bad(cmd, format!("unknown paper `{name}` ({})", PAPERS.iter().map(|p| p.0).collect::<Vec<_>>().join("|"))))?
+        }
         Some(Value::Array(a)) if a.len() == 2 => (a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)),
         _ => return Err(bad(cmd, "paper is a name or [width, height] in points")),
     };
@@ -905,17 +1070,19 @@ fn with_driver_printable(p: &Value) -> Value {
 
 fn driver_printable(p: &Value) -> Option<Value> {
     let printer = printer_name(p).ok()?;
-    let settings = printer_settings(p).ok()?;
-    let pg = with_spooler(|| craft_print::rgb::page(&printer, settings.as_ref())).ok()?;
-    // Only for the paper the driver is set to: a print laid out on another paper keeps the
-    // fixed margin (and `print_windows` refuses it), as before.
     let (pw, ph) = paper(p, "file.print").ok()?;
+    // The page `print_windows` prints on, turned as it turns it for the layout's orientation.
+    let (_, pg) = settings_for_layout(&printer, printer_settings(p).ok()?, (pw, ph)).ok()?;
+    // Only for the paper the driver is set to, either way round: a print laid out on another
+    // paper keeps the fixed margin (and `print_windows` refuses it), as before.
     if (pg.paper.0 - pw).abs() > 2.0 || (pg.paper.1 - ph).abs() > 2.0 {
         return None;
     }
     Some(json!([pg.printable.0, pg.printable.1, pg.printable.2, pg.printable.3]))
 }
 
+/// Lays out and renders the print page as a PDF for `cmd` and, when the params ask for it, sends
+/// it to the printer through `spooler`; returns the job summary (paper, image rect, spooler).
 fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spooler>) -> Result<Value> {
     let fit = p.get("scaleToFit").and_then(Value::as_bool).unwrap_or(false);
     let driver = (fit && native_route(p, spooler)).then(|| with_driver_printable(p));
@@ -992,31 +1159,67 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     )
 }
 
-/// Windows prints a PDF through Windows.Data.Pdf.dll, which the apps delay-load (see their
-/// `build.rs`) so a Windows image without it still starts. Calling into it when it cannot load
-/// would abort the process, so check that it loads first (#5884).
+/// Windows prints a PDF through Windows.Data.Pdf.dll and sets its options through the Print
+/// Ticket API in prntvpt.dll, which the apps delay-load (see their `build.rs`) so a Windows image
+/// without them still starts. Calling into one that cannot load would abort the process, so check
+/// that both load first (#5884, #8272).
 fn require_windows_pdf() -> Result<()> {
     #[cfg(target_os = "windows")]
-    {
-        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| std::ffi::OsString::from(r"C:\Windows"));
-        if !windows_pdf_loads(&windows_pdf_dll(std::path::Path::new(&root))) {
-            return Err(other(
-                "printing this page needs the Windows PDF component (Windows.Data.Pdf.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
-            ));
-        }
+    require_windows_pdf_at(&system_root())?;
+    Ok(())
+}
+
+/// `craft-print` reads and sets Windows printer options through prntvpt.dll (the Print Ticket
+/// API), which stripped Windows images can lack; the apps delay-load it (#8272).
+fn require_print_tickets() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    require_print_tickets_at(&system_root())?;
+    Ok(())
+}
+
+/// [`require_windows_pdf`] against the Windows directory `system_root` (tests pass a fixture).
+#[cfg(target_os = "windows")]
+fn require_windows_pdf_at(system_root: &std::path::Path) -> Result<()> {
+    if !dll_loads(&system_dll(system_root, WINDOWS_PDF_DLL)) {
+        return Err(other(
+            "printing this page needs the Windows PDF component (Windows.Data.Pdf.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
+        ));
+    }
+    require_print_tickets_at(system_root)
+}
+
+/// [`require_print_tickets`] against the Windows directory `system_root` (tests pass a fixture).
+#[cfg(target_os = "windows")]
+fn require_print_tickets_at(system_root: &std::path::Path) -> Result<()> {
+    if !dll_loads(&system_dll(system_root, PRINT_TICKET_DLL)) {
+        return Err(other(
+            "printing this page needs the Windows Print Ticket component (prntvpt.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
+        ));
     }
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn windows_pdf_dll(system_root: &std::path::Path) -> std::path::PathBuf {
-    system_root.join("System32").join("Windows.Data.Pdf.dll")
+const WINDOWS_PDF_DLL: &str = "Windows.Data.Pdf.dll";
+#[cfg(target_os = "windows")]
+const PRINT_TICKET_DLL: &str = "prntvpt.dll";
+
+/// The running Windows directory (`%SystemRoot%`), `C:\Windows` if the variable is unset.
+#[cfg(target_os = "windows")]
+fn system_root() -> std::path::PathBuf {
+    std::env::var_os("SystemRoot").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from)
+}
+
+/// Where the system DLL `name` lives under the Windows directory `system_root`.
+#[cfg(target_os = "windows")]
+fn system_dll(system_root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    system_root.join("System32").join(name)
 }
 
 /// Loads the DLL rather than checking the file exists: one that is present but cannot load (a
 /// dependency stripped too) would still abort at the delay-load stub.
 #[cfg(target_os = "windows")]
-fn windows_pdf_loads(dll: &std::path::Path) -> bool {
+fn dll_loads(dll: &std::path::Path) -> bool {
     dll.to_str().is_some_and(|p| winsafe::HINSTANCE::LoadLibrary(p).is_ok())
 }
 
@@ -1334,10 +1537,15 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                             .any(|entry| entry.file_name().to_string_lossy().to_lowercase() == n.to_lowercase())
                 };
                 let mut fname = base.clone();
-                let mut k = copied.len();
+                // A clash is `<stem>_<n>.<ext>` (`<name>_<n>` without an extension), n = 1, 2, ...
+                let (clash_stem, clash_ext) = match std::path::Path::new(&base).extension().and_then(|e| e.to_str()) {
+                    Some(e) if base.len() > e.len() + 1 => (&base[..base.len() - e.len() - 1], format!(".{e}")),
+                    _ => (base.as_str(), String::new()),
+                };
+                let mut n = 1usize;
                 while taken(&fname) {
-                    fname = format!("{k}-{base}");
-                    k += 1;
+                    fname = format!("{clash_stem}_{n}{clash_ext}");
+                    n += 1;
                 }
                 let t = join(&links_dir, &fname);
                 // A path that is not followed is packaged as missing, like a file that is gone.
@@ -1374,26 +1582,34 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- Paths to Illustrator ----------
 
-/// The document's paths as an Illustrator 3 PostScript file. `which`: "all", "work" or a path
-/// name. Coordinates are points (pixels at the document resolution), y up.
+/// `s` with line terminators and other control characters replaced by spaces, so a name stays
+/// inside its one PostScript comment line instead of ending it and adding instructions.
+fn ps_comment_text(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+}
+
+/// The document's paths as an Illustrator 3 PostScript file. `which`: "documentBounds" (the
+/// frame alone, no path: header, bounding box and trailer), "all", "work" or a path name.
+/// Coordinates are points (pixels at the document resolution), y up.
 pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let k = 72.0 / dpi;
     let (w, h) = (f64::from(doc.size.width) * k, f64::from(doc.size.height) * k);
-    let mut chosen: Vec<(String, &photocraft_doc::Path)> = Vec::new();
+    let mut chosen: Vec<&photocraft_doc::Path> = Vec::new();
     match which {
         "all" => {
-            chosen.extend(doc.paths.iter().map(|p| (p.name.clone(), &p.path)));
+            chosen.extend(doc.paths.iter().map(|p| &p.path));
             if let Some(wp) = &doc.work_path {
-                chosen.push(("Work Path".into(), wp));
+                chosen.push(wp);
             }
         }
-        "work" => chosen.extend(doc.work_path.iter().map(|wp| ("Work Path".to_string(), wp))),
-        name => chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| (p.name.clone(), &p.path))),
+        "work" => chosen.extend(doc.work_path.iter()),
+        "documentBounds" => {}
+        name => chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| &p.path)),
     }
     let mut s = String::new();
     s.push_str("%!PS-Adobe-2.0 EPSF-1.2\n%%Creator: PhotoCraft\n");
-    s.push_str(&format!("%%Title: ({})\n", doc.name.replace([')', '('], "_")));
+    s.push_str(&format!("%%Title: ({})\n", ps_comment_text(&doc.name).replace([')', '('], "_")));
     s.push_str(&format!(
         "%%BoundingBox: 0 0 {} {}\n%%HiResBoundingBox: 0 0 {w:.4} {h:.4}\n%AI3_Cropmarks: 0 0 {w:.4} {h:.4}\n",
         w.ceil() as i64,
@@ -1402,18 +1618,28 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
     s.push_str("%%DocumentProcessColors: Black\n%%EndComments\n%%EndProlog\n%%BeginSetup\n%%EndSetup\n");
     let pt = |x: f64, y: f64| (x * k, h - y * k);
     let mut n = 0;
-    for (name, path) in &chosen {
+    for path in &chosen {
         let subs: Vec<_> = path.subpaths.iter().filter(|sp| !sp.knots.is_empty()).collect();
         if subs.is_empty() {
             continue;
         }
         n += 1;
-        s.push_str(&format!("%%Note: {name}\n"));
-        let compound = subs.len() > 1;
-        if compound {
-            s.push_str("*u\n");
-        }
+        // One marked block per path, one group per subpath. A `Join` subpath belongs to the
+        // component before it, so it writes that component's note (union when none precedes).
+        s.push_str("%Adobe_Photoshop_Path_Begin:<< /defaultFill false >>\n");
+        let mut component_op = photocraft_doc::PathOp::Combine;
         for sp in subs {
+            if sp.op != photocraft_doc::PathOp::Join {
+                component_op = sp.op;
+            }
+            s.push_str("*u\n");
+            s.push_str(match component_op {
+                photocraft_doc::PathOp::Exclude => "%AI3_Note:<< /operation /xor /defaultFill false >>\n",
+                photocraft_doc::PathOp::Subtract => "%AI3_Note:<< /operation /subtract >>\n",
+                photocraft_doc::PathOp::Intersect => "%AI3_Note:<< /operation /intersect >>\n",
+                photocraft_doc::PathOp::Combine | photocraft_doc::PathOp::Join => "%AI3_Note:<< /operation /union >>\n",
+            });
+            s.push_str("1 XR\n");
             let (x, y) = pt(sp.knots[0].anchor.x, sp.knots[0].anchor.y);
             s.push_str(&format!("{x:.4} {y:.4} m\n"));
             for seg in sp.segments() {
@@ -1430,10 +1656,9 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
             }
             // Unpainted: `n` closes the path, `N` leaves it open.
             s.push_str(if sp.closed { "n\n" } else { "N\n" });
-        }
-        if compound {
             s.push_str("*U\n");
         }
+        s.push_str("%Adobe_Photoshop_Path_End\n");
     }
     s.push_str("%%PageTrailer\n%%Trailer\n%%EOF\n");
     Ok((s, n))
@@ -1444,7 +1669,8 @@ fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let which = p.get("paths").and_then(Value::as_str).unwrap_or("all");
     let (text, n) = paths_to_ai(&d.doc, which)?;
-    if n == 0 {
+    // Document Bounds writes the frame alone (#13771); any other choice must match a path.
+    if n == 0 && which != "documentBounds" {
         return Err(bad(cmd, format!("no paths match `{which}`")));
     }
     match p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()) {
@@ -1456,9 +1682,9 @@ fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
-fn has_paths(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document open")?;
-    if d.doc.paths.is_empty() && d.doc.work_path.is_none() { Err("the document has no paths".into()) } else { Ok(()) }
+/// Enabled for every open document, with or without paths: Document Bounds needs none (#13771).
+fn has_document(s: &Session) -> std::result::Result<(), String> {
+    s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -1524,8 +1750,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paths to Illustrator…",
             &["File", "Export"],
             None,
-            r##"{"path":str? (.ai; omit to return the text),"paths":"all|work|<path name>"="all"} → {path, paths}"##,
-            has_paths,
+            r##"{"path":str? (.ai; omit to return the text),"paths":"documentBounds|all|work|<path name>"="all" (documentBounds: the file frame with the canvas as bounding box and no path)} → {path, paths}"##,
+            has_document,
             paths_to_illustrator
         ),
     ]
@@ -1534,3 +1760,15 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "print_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "print_cmds/paths_export_document_bounds_tests.rs"]
+mod paths_export_document_bounds_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/paths_export_path_blocks_tests.rs"]
+mod paths_export_path_blocks_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/package_clash_name_tests.rs"]
+mod package_clash_name_tests;

@@ -15,7 +15,7 @@
 //! - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
 //! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], tool?, modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu (the pasteboard colour menu outside the image) or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
 //! - `ui.click {x, y, button?, count?}` / `ui.move {x, y}`: synthetic pointer input in screen points
-//!   (`count` at most [`MAX_CLICKS`])
+//!   (`count` at most [`MAX_CLICKS`], `x` and `y` within ±[`MAX_SCREEN_POINT`])
 //! - `ui.key {key, command?, shift?, alt?, ctrl?}` / `ui.type {text}`: synthetic keyboard input
 //! - The synthetic input methods reject unknown fields, wrong types, unknown enum values and
 //!   out-of-range numbers before acting, naming the parameter (#2449)
@@ -51,7 +51,7 @@ use dispatch::dispatch;
 pub use inspect::{inspect, save_screenshot, save_screenshot_rgba};
 #[cfg(test)]
 use params::screen_point;
-pub use params::{MAX_CLICKS, UI_SET_FIELDS};
+pub use params::{MAX_CLICKS, MAX_SCREEN_POINT, UI_SET_FIELDS};
 use params::{err, ok};
 
 pub type ControlResponse = Value;
@@ -170,6 +170,7 @@ fn run_waiting(app: &mut PhotocraftApp, wait: bool, run: impl FnOnce(&mut Photoc
 const SHELL_DIALOG: &str = "shell";
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    app.frame_tool_ctx = Some(ctx.clone());
     let saved = app.session.authorize;
     if let Some(gate) = app.services.automation_authorize {
         app.session.authorize = Some(gate);
@@ -181,3 +182,34 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
 
 #[cfg(test)]
 mod tests;
+
+pub(super) const METHODS: &[&str] = &[
+    "app.open",
+    "app.quit",
+    "app.save",
+    "engine.commands",
+    "engine.execute",
+    "jobs.cancel",
+    "jobs.list",
+    "ui.click",
+    "ui.context.choose",
+    "ui.dialog.apply",
+    "ui.dialog.cancel",
+    "ui.dialog.confirm",
+    "ui.dialog.open",
+    "ui.dialog.set",
+    "ui.focus",
+    "ui.gpu.simulateLoss",
+    "ui.inspect",
+    "ui.key",
+    "ui.menu.invoke",
+    "ui.menu.list",
+    "ui.move",
+    "ui.pointer",
+    "ui.resize",
+    "ui.screenshot",
+    "ui.set",
+    "ui.type",
+    "ui.window.close",
+    "ui.window.open",
+];
