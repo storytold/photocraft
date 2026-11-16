@@ -397,3 +397,23 @@ fn a_pending_key_equal_to_the_saved_override_still_takes_the_key_on_ok() {
         assert_ne!(p.shortcuts.get("edit.copy").map(String::as_str), Some(FREE_TEXT), "further {further}: Copy lost it");
     }
 }
+
+/// CodeRabbit on #14838: OK with a further key pending on a command that already has as many as it may saves the rest and
+/// says the key was not taken, as Enter and Accept do; it was dropped without a word.
+#[test]
+fn ok_at_capacity_says_the_pending_key_was_not_taken() {
+    let (mut h, id) = dialog("edit.cut");
+    let full: Vec<String> = (0..photocraft_engine::prefs::MAX_ALTERNATES).map(|k| format!("Cmd+Alt+Shift+F{}", k + 1)).collect();
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("alternates".into(), json!({ "edit.cut": full }));
+    h.run_steps(3);
+    click(&mut h, "Add Shortcut");
+    press(&mut h, FREE.0, FREE.1);
+    assert_eq!(field(&h, id, super::PENDING), json!(FREE_TEXT));
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+    h.run_steps(4);
+    assert!(!open(&h, id), "OK closed the dialog");
+    assert_eq!(h.state().ui.status, "This command can't take another shortcut; the key stays where it is.");
+    assert!(h.state().ui.status_error);
+    let keys = h.state().session.prefs().alternates("edit.cut", Some("Cmd+X"));
+    assert!(!keys.iter().any(|k| k == FREE_TEXT), "the key was not added");
+}

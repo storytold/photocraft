@@ -352,11 +352,15 @@ fn commit_message(message: &mut String, warning: &mut bool, conflict: Option<&mu
 /// A key pressed into a field that is still open when OK is clicked joins the set as Enter would
 /// have put it there: the dialog keeps the field's row (`selected`), whether it was one more key
 /// (`captureAlt`) and the key (`PENDING`).
+///
+/// A further key the command cannot take (it has as many as it may) is not added: `refused` says so, for the caller to tell the user,
+/// as Enter and Accept do in the field.
 pub(super) fn settle_pending(
     f: &Map<String, Value>,
     items: &[(String, String, Vec<String>, Option<String>)],
     overrides: &mut BTreeMap<String, String>,
     alternates: &mut BTreeMap<String, Vec<String>>,
+    refused: &mut bool,
 ) -> Option<(String, String, bool)> {
     let open = f.get("capture").and_then(Value::as_bool).unwrap_or(false) && f.get("tab").and_then(Value::as_u64).unwrap_or(0) == 0;
     let (Some(sc), Some(command)) = (f.get(PENDING).and_then(Value::as_str), f.get("selected").and_then(Value::as_str).filter(|c| !c.is_empty())) else {
@@ -384,8 +388,12 @@ pub(super) fn settle_pending(
             return Some((command.to_string(), sc.to_string(), false));
         }
         let mut keys = p.alternates(command, main.as_deref());
-        if !keys.iter().any(|k| k == sc) && keys.len() < prefs::MAX_ALTERNATES {
-            keys.push(sc.to_string());
+        if !keys.iter().any(|k| k == sc) {
+            if keys.len() < prefs::MAX_ALTERNATES {
+                keys.push(sc.to_string());
+            } else {
+                *refused = true;
+            }
         }
         alternates.insert(command.to_string(), keys);
     } else {
@@ -396,9 +404,14 @@ pub(super) fn settle_pending(
 
 /// A committed key the command couldn't take (it has as many further keys as it may): there is no
 /// conflict to accept, since the key stays with the commands that hold it, and a warning says why.
+/// The warning a refused key shows.
+pub(super) fn refused_text() -> String {
+    tl!("This command can't take another shortcut; the key stays where it is.").into()
+}
+
 fn refused(message: &mut String, warning: &mut bool, conflict: &mut Option<Value>) {
     *conflict = None;
-    *message = tl!("This command can't take another shortcut; the key stays where it is.").into();
+    *message = refused_text();
     *warning = true;
 }
 

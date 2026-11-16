@@ -356,7 +356,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                 serde_json::from_value(alternates).map_err(|e| format!("alternates must map command IDs to lists of shortcuts: {e}"))?;
             let items = shortcut_items(app);
             // A key pressed into a field still open joins the set first, as Enter would put it.
-            let pending = super::shortcuts::settle_pending(f, &items, &mut ov, &mut alt);
+            let mut refused = false;
+            let pending = super::shortcuts::settle_pending(f, &items, &mut ov, &mut alt, &mut refused);
             // Newly assigned shortcuts are checked first and take theirs from any holder, custom
             // overrides included; unchanged overrides only take theirs from defaults. A
             // command's further keys (#3665) take and lose keys the same way.
@@ -427,7 +428,14 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                 "edit.keyboardShortcuts",
                 json!({"reset": true, "set": ov, "alternates": alt, "allowUnknown": true, "removeConflicts": false, "sets": sets, "activeSet": active}),
             )?;
-            app.run("prefs.set", json!({"values": {"menus": {"hidden": hidden, "colors": colors}, "toolbar": {"hidden": toolbar}}}))
+            let saved = app.run("prefs.set", json!({"values": {"menus": {"hidden": hidden, "colors": colors}, "toolbar": {"hidden": toolbar}}}));
+            // The key still pending in the field was one more than the command may have: the rest is saved, and the
+            // status bar says the key was not taken, as the field's warning does for Enter and Accept.
+            if saved.is_ok() && refused {
+                app.ui.status = super::shortcuts::refused_text();
+                app.ui.status_error = true;
+            }
+            saved
         }
         "presets" => Ok(Value::Null),
         "presetsIO" => {
