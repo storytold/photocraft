@@ -749,7 +749,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         .and_then(|mask| mask.paint.as_ref())
         .and_then(|stack| stack.layers.get(p.index))
         .is_some_and(|effect| matches!(effect.kind, photocraft_doc::mask_paint::EffectKind::Fill { .. }));
-    if is_fill {
+    if is_fill && (p.bounds.is_some() || p.rotation.is_some()) {
         // A Fill manipulator is drawn from raw parameters separately. No full-resolution compose
         // runs on the UI thread or in a per-pointer worker job.
         return Some((source, 0));
@@ -832,16 +832,15 @@ pub(crate) fn cancel(app: &mut PhotocraftApp) {
 }
 
 fn preview_key(revision: u64, layer: LayerId, index: usize, opacity: f32, bounds: Option<[i32; 4]>, rotation: Option<f32>) -> u64 {
-    let bounds_key = bounds.map_or(0, |b| b.into_iter().fold(0_u64, |key, value| key.rotate_left(13) ^ value as u32 as u64));
-    let rotation_key = rotation.map_or(0, f32::to_bits) as u64;
-    let opacity_key = if opacity.is_finite() { u64::from(opacity.to_bits()) } else { 0 };
-    let seed = revision.wrapping_mul(0x9e37_79b9_7f4a_7c15)
-        ^ layer.0.rotate_left(19)
-        ^ (index as u64).rotate_left(37)
-        ^ opacity_key
-        ^ bounds_key.rotate_left(9)
-        ^ rotation_key.rotate_left(29);
-    (seed & (KEY_BASE - 1)) | KEY_BASE
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    revision.hash(&mut hasher);
+    layer.0.hash(&mut hasher);
+    index.hash(&mut hasher);
+    (if opacity.is_finite() { opacity.to_bits() } else { 0 }).hash(&mut hasher);
+    bounds.hash(&mut hasher);
+    rotation.map(f32::to_bits).hash(&mut hasher);
+    hasher.finish() | KEY_BASE
 }
 
 #[cfg(test)]

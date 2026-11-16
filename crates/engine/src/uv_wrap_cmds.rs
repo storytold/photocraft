@@ -239,13 +239,10 @@ fn stamp(s: &mut Session, p: &Value) -> Result<Value> {
         materials.push(material);
     }
     let size = [st.doc.size.width, st.doc.size.height];
-    let (doc_id, active_layer, revision) = (st.doc.id, st.active_layer, st.revision);
+    let (doc_id, revision) = (st.doc.id, st.revision);
+    let requested_layer = if crate::channel_cmds::is_channel_target(p) { None } else { Some(crate::commands::layer_param(s, p)?) };
     let mut stroke = if let Some(stroke) = s.uv.wrapped_stroke.take().filter(|old| {
-        old.doc == doc_id
-            && old.layer == if crate::channel_cmds::is_channel_target(p) { None } else { active_layer }
-            && old.revision == revision
-            && old.key == key
-            && old.target.get("target") == p.get("target")
+        old.doc == doc_id && old.layer == requested_layer && old.revision == revision && old.key == key && old.target.get("target") == p.get("target")
     }) {
         stroke
     } else {

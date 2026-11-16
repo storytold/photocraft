@@ -61,9 +61,30 @@ fn inverse(p: DVec3, camera: Camera) -> DVec3 {
 
 /// Closest point on a triangle and its barycentric weights. Degenerate triangles fall back to
 /// their three edges so malformed or collapsed geometry cannot introduce NaNs into picking.
+fn closest_point_on_edges(point: DVec3, a: DVec3, b: DVec3, c: DVec3) -> (DVec3, DVec3) {
+    let closest_on_segment = |start: DVec3, end: DVec3, start_weight: DVec3, end_weight: DVec3| {
+        let edge = end - start;
+        let length_squared = edge.length_squared();
+        let t = if length_squared > 1e-30 { ((point - start).dot(edge) / length_squared).clamp(0.0, 1.0) } else { 0.0 };
+        (start + edge * t, start_weight.lerp(end_weight, t))
+    };
+    let candidates = [
+        closest_on_segment(a, b, DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 1.0, 0.0)),
+        closest_on_segment(b, c, DVec3::new(0.0, 1.0, 0.0), DVec3::new(0.0, 0.0, 1.0)),
+        closest_on_segment(c, a, DVec3::new(0.0, 0.0, 1.0), DVec3::new(1.0, 0.0, 0.0)),
+    ];
+    candidates
+        .into_iter()
+        .min_by(|left, right| point.distance_squared(left.0).total_cmp(&point.distance_squared(right.0)))
+        .unwrap_or((a, DVec3::new(1.0, 0.0, 0.0)))
+}
+
 fn closest_point_on_triangle(point: DVec3, a: DVec3, b: DVec3, c: DVec3) -> (DVec3, DVec3) {
     let ab = b - a;
     let ac = c - a;
+    if ab.cross(ac).length_squared() <= 1e-30 {
+        return closest_point_on_edges(point, a, b, c);
+    }
     let ap = point - a;
     let d1 = ab.dot(ap);
     let d2 = ac.dot(ap);
@@ -111,20 +132,7 @@ fn closest_point_on_triangle(point: DVec3, a: DVec3, b: DVec3, c: DVec3) -> (DVe
         return (a + ab * v + ac * w, DVec3::new(1.0 - v - w, v, w));
     }
 
-    let closest_on_segment = |start: DVec3, end: DVec3, start_weight: DVec3, end_weight: DVec3| {
-        let edge = end - start;
-        let t = if edge.length_squared() > 1e-30 { ((point - start).dot(edge) / edge.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
-        (start + edge * t, start_weight.lerp(end_weight, t))
-    };
-    let candidates = [
-        closest_on_segment(a, b, DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 1.0, 0.0)),
-        closest_on_segment(b, c, DVec3::new(0.0, 1.0, 0.0), DVec3::new(0.0, 0.0, 1.0)),
-        closest_on_segment(c, a, DVec3::new(0.0, 0.0, 1.0), DVec3::new(1.0, 0.0, 0.0)),
-    ];
-    candidates
-        .into_iter()
-        .min_by(|left, right| point.distance_squared(left.0).total_cmp(&point.distance_squared(right.0)))
-        .unwrap_or((a, DVec3::new(1.0, 0.0, 0.0)))
+    closest_point_on_edges(point, a, b, c)
 }
 impl Geometry {
     pub fn new(scene: &Scene, topology: &Topology) -> Result<Self> {
@@ -434,6 +442,14 @@ mod symmetry_tests {
 
     fn triangle(corners: [usize; 3]) -> SceneTriangle {
         SceneTriangle { corners: corners.map(|vertex| Corner { vertex, uv: [0.5, 0.5], normal: None }), material: 0 }
+    }
+
+    #[test]
+    fn repeated_vertex_degeneracy_uses_remaining_segment() {
+        let (point, weights) = closest_point_on_triangle(DVec3::new(0.0, 0.5, 0.0), DVec3::ZERO, DVec3::ZERO, DVec3::Y);
+        assert_eq!(point, DVec3::new(0.0, 0.5, 0.0));
+        assert!(weights.is_finite());
+        assert!((weights.x + weights.y + weights.z - 1.0).abs() < 1e-12);
     }
 
     fn symmetric_scene() -> Scene {

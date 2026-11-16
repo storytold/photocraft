@@ -116,6 +116,20 @@ def make_stroke(control: Control, x: int, y: int, moves: int, previous: Any, aft
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         snapshot = control.inspect()
+        timings = snapshot.get("perf", {}).get("timings", {})
+        current_refresh_seq = int(timings.get("refreshSeq", last_refresh_seq))
+        events = [event for event in timings.get("refreshEvents", []) if int(event.get("refreshSeq", 0)) > last_refresh_seq]
+        events.sort(key=lambda event: int(event["refreshSeq"]))
+        expected = current_refresh_seq - last_refresh_seq
+        if expected > len(events) or (events and int(events[-1]["refreshSeq"]) != current_refresh_seq):
+            raise RuntimeError("canvas refresh event history overflowed while profiling a stroke")
+        for event in events:
+            event_seq = int(event["refreshSeq"])
+            if event_seq != last_refresh_seq + 1:
+                raise RuntimeError("canvas refresh event sequence has a gap while profiling a stroke")
+            last_refresh_seq = event_seq
+            if event.get("lastRefreshPx", 0) > 0:
+                refreshes.append({key: event.get(key) for key in ("lastRefresh", "lastRefreshPx", "gpuUploadBytes", "gpuPasses", "gpuFallback")})
         summary = snapshot.get("perf", {}).get("strokeTrace")
         if summary and summary.get("frames", 0) > 0 and summary != previous:
             return snapshot, refreshes

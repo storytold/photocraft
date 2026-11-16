@@ -532,10 +532,14 @@ fn read(path: &str) -> Result<Vec<u8>> {
 const MAX_PROJECT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_limited(path: &str, limit: u64) -> Result<Vec<u8>> {
-    if !std::fs::metadata(path).map_err(|e| err(e.to_string()))?.is_file() {
-        return Err(err("UV input must be a regular file"));
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
     }
-    let file = std::fs::File::open(path).map_err(|e| err(format!("{path}: {e}")))?;
+    let file = options.open(path).map_err(|e| err(format!("{path}: {e}")))?;
     read_opened_file(file, limit)
 }
 #[cfg(not(target_arch = "wasm32"))]

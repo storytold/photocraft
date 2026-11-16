@@ -36,6 +36,7 @@ pub(crate) struct ClonePreviewCache {
     pub(super) texture: egui::TextureHandle,
 }
 
+#[cfg(feature = "uv-workbench")]
 fn same_source_document(a: &Option<std::sync::Weak<photocraft_doc::Document>>, b: &Option<std::sync::Weak<photocraft_doc::Document>>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => std::sync::Weak::ptr_eq(a, b),
@@ -1023,6 +1024,7 @@ pub(crate) fn multiple_color_target(app: &PhotocraftApp) -> bool {
         && photocraft_engine::color_channels::selected(&app.session).is_some_and(|colors| colors.len() > 1)
 }
 
+#[cfg(feature = "uv-workbench")]
 pub(crate) fn clone_preview_texture(
     app: &mut PhotocraftApp,
     painter: &egui::Painter,
@@ -1138,6 +1140,18 @@ pub(crate) fn break_live_stroke_path(app: &mut PhotocraftApp) -> bool {
     if let Some(stroke) = app.live_stroke.as_mut().and_then(|live| live.native_mask_gpu.as_mut()).and_then(|bridge| bridge.gpu_stroke.as_mut()) {
         let Ok(damage) = stroke.break_path() else { return false };
         if let Some(live) = app.live_stroke.as_mut() {
+            if let Some(bridge) = live.native_mask_gpu.as_mut()
+                && !bridge.gpu_stroke.as_ref().is_some_and(|stroke| stroke.native_mask_gpu_brush_active())
+            {
+                // Engine replay has already switched to CPU and returned its full damage. Stop
+                // the GPU renderer from applying queued Dabs or returning patches from the old
+                // preview texture.
+                bridge.failed.store(true, Ordering::Release);
+                bridge.fallback_applied = true;
+                if let Ok(mut queue) = bridge.pending_dabs.lock() {
+                    queue.clear();
+                }
+            }
             live.damage.push(damage);
         }
         return true;
@@ -1147,15 +1161,23 @@ pub(crate) fn break_live_stroke_path(app: &mut PhotocraftApp) -> bool {
 
 #[cfg(feature = "uv-workbench")]
 pub(crate) fn break_native_uv_mask_segment(app: &mut PhotocraftApp) -> bool {
-    let Some(bridge) = app.live_stroke.as_mut().and_then(|live| live.native_mask_gpu.as_mut()) else { return false };
+    let Some(live) = app.live_stroke.as_mut() else { return false };
+    let Some(bridge) = live.native_mask_gpu.as_mut() else { return false };
     let Some(stroke) = bridge.gpu_stroke.as_mut() else { return false };
     if !stroke.supports_mask_segments() {
         return false;
     }
     let Ok(damage) = stroke.break_segment() else { return false };
-    if let Some(live) = app.live_stroke.as_mut() {
-        live.damage.push(damage);
+    if !bridge.gpu_stroke.as_ref().is_some_and(|stroke| stroke.native_mask_gpu_brush_active()) {
+        // The engine has already replayed all submitted points on CPU. Invalidate the preview
+        // mailbox now so a late GPU frame cannot restore the superseded texture state.
+        bridge.failed.store(true, Ordering::Release);
+        bridge.fallback_applied = true;
+        if let Ok(mut queue) = bridge.pending_dabs.lock() {
+            queue.clear();
+        }
     }
+    live.damage.push(damage);
     true
 }
 

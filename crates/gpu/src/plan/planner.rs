@@ -124,7 +124,7 @@ pub const F_TEXT_GAMMA: u32 = 8192;
 /// `INIT_ALPHA` in the merge, for a layer with no interior effects between them.
 pub const F_LAYER_SHAPE: u32 = 1_048_576;
 
-pub const F_MASK_SLOT: u32 = 2_097_152;
+pub const F_MASK_SLOT: u32 = 268_435_456;
 pub const F_MASK_FILL: u32 = 4_194_304;
 pub const F_MASK_FILL_REPEAT_U: u32 = 8_388_608;
 pub const F_MASK_FILL_REPEAT_V: u32 = 16_777_216;
@@ -410,6 +410,15 @@ impl<'a> Planner<'a> {
                         if *radius == 0 {
                             continue;
                         }
+                        let lut_count = self
+                            .luts
+                            .get()
+                            .checked_add(2)
+                            .ok_or_else(|| Unsupported("too many mask Blur passes to plan for the GPU (composited on the CPU)".into()))?;
+                        if lut_count > MAX_PLAN_LUTS {
+                            return Err(Unsupported("too many mask Blur passes to plan for the GPU (composited on the CPU)".into()));
+                        }
+                        self.luts.set(lut_count);
                         // Keep the unblurred center value alive while the two convolution
                         // passes allocate and recycle planner slots.
                         let below = self.retain(coverage);

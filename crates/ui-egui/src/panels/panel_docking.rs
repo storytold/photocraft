@@ -1514,7 +1514,7 @@ fn group_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Strin
             }
         }
         "up" | "down" => {
-            let groups = root_groups(&workspace.layout);
+            let groups = root_groups(&scoped_layout(app, workspace.layout.clone()));
             let index = groups.iter().position(|g| g.contains(&panel.to_owned())).ok_or("floating groups cannot move within the dock")?;
             let neighbor = if operation == "up" { index.checked_sub(1) } else { index.checked_add(1).filter(|i| *i < groups.len()) };
             let anchor = neighbor.and_then(|i| groups.get(i)).and_then(|g| g.first()).ok_or("group is already at the edge")?;

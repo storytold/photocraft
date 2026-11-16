@@ -93,10 +93,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     harness.run_steps(2);
     let fill_row = harness.get_by_label("Fill").rect().center();
     click(&mut harness, fill_row);
-    if harness.query_all_by_label("Режим наложения").all(|node| node.accesskit_node().role() != Role::ComboBox)
-        || harness.query_all_by_label("Непрозрачность").all(|node| node.accesskit_node().role() != Role::Slider)
-    {
-        return Err("Fill Properties did not expose Blend mode and Opacity".into());
+    if harness.query_all_by_label("Режим наложения").all(|node| node.accesskit_node().role() != Role::ComboBox) {
+        return Err("Fill Properties did not expose Blend mode".into());
+    }
+    let fill_row_y = fill_row.y;
+    let opacity_button = harness
+        .query_all_by_label("Непрозрачность")
+        .find(|node| node.accesskit_node().role() == Role::Button && (node.rect().center().y - fill_row_y).abs() < 80.0)
+        .ok_or("Fill Opacity popup button was not exposed")?;
+    click(&mut harness, opacity_button.rect().center());
+    harness.run_steps(2);
+    let popup = harness
+        .query_all_by_label("Непрозрачность")
+        .find(|node| node.accesskit_node().role() == Role::Slider)
+        .ok_or("Fill Opacity popup slider was not exposed")?;
+    if popup.rect().center().distance(opacity_button.rect().center()) > 260.0 {
+        return Err("Fill Opacity slider is outside its popup".into());
     }
     harness.render()?.save(std::path::Path::new(&output_dir).join("fill-properties-ru.png"))?;
 

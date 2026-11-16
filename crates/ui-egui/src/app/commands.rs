@@ -102,6 +102,10 @@ impl PhotocraftApp {
         if !skip_command {
             result = self.run_command(id, params);
         }
+        if skip_command && let Err(error) = &result {
+            self.ui.status = error.clone();
+            self.ui.status_error = true;
+        }
         if gate.is_some() {
             self.session.authorize = None;
         }

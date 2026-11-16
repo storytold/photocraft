@@ -189,7 +189,7 @@ impl MaterialColor {
     fn key(&self) -> Key {
         match self {
             Self::Owned(map) => map.key,
-            Self::Shared(map) => map.key,
+            Self::Shared(map) => material_map_key(map.key, map.size),
             Self::Surface { key, .. } => *key,
         }
     }
@@ -835,6 +835,10 @@ impl Renderer {
                                 // Unsupported GPU features and transient device errors keep a
                                 // complete CPU map available; never expose a partially written
                                 // destination or leave the previous revision active.
+                                let size = [request.doc.size.width, request.doc.size.height];
+                                if uv_map_mip_bytes(size, 8).is_none_or(|bytes| bytes > MAX_UV_GPU_MAP_BYTES) {
+                                    return Err("Material texture and mipmaps exceed the 512 MiB GPU limit".into());
+                                }
                                 let fallback_doc = crate::gpu_canvas::materialize_paint_masks(&request.doc);
                                 let rendered = photocraft_compose::render(&fallback_doc, fallback_doc.bounds());
                                 let pixels = rendered.into_px();

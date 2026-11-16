@@ -630,6 +630,7 @@ impl Compositor {
         self.residents.clear();
         self.fx.clear();
         self.patterns.clear();
+        self.mask_fills.clear();
         self.prefix.clear();
     }
 

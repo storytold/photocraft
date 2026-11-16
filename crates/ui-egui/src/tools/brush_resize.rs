@@ -196,12 +196,6 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) -> boo
         crate::canvas::draw_readout(painter.ctx(), "brush-resize-readout", at, [tl!("Diameter:")], [format!("{} px", b.size.round() as i64)]);
         return true;
     }
-    let (label, value) = if app.session.prefs().tools.vary_round_brush_hardness_on_hud {
-        (tl!("Hardness:"), format!("{}%", (b.hardness * 100.0).round() as i64))
-    } else {
-        (tl!("Opacity:"), format!("{}%", (b.opacity * 100.0).round() as i64))
-    };
-    crate::canvas::draw_readout(painter.ctx(), "brush-resize-readout", at, [tl!("Diameter:"), label], [format!("{} px", b.size.round() as i64), value]);
     let percent = |v: f32| format!("{}%", (v * 100.0).round() as i64);
     let labels = [readout_label(tl!("Diameter:")), readout_label(tl!("Hardness:")), readout_label(tl!("Opacity:"))];
     let values = [format!("{} px", b.size.round() as i64), percent(b.hardness), percent(b.opacity)];

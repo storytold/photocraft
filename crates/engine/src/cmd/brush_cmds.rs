@@ -1235,6 +1235,7 @@ impl LiveCommit {
         if let Some(o) = p.as_object_mut() {
             o.remove("points");
             o.remove("seed");
+            o.remove("coalesce");
         }
         p
     }
@@ -1484,24 +1485,15 @@ impl LiveStroke {
         if self.points.is_empty() || self.segment_break_pending {
             return Ok(Rect::EMPTY);
         }
-        if let Some(generator) = self.native_mask_gpu_generator.as_mut() {
-            // A UV seam or reflected symmetry pass is a discontinuity in texture space. Flush
-            // the current smoothing tail and restart the GPU dab walker so it cannot stamp a
-            // connecting segment across unrelated UV islands.
-            let (mut dabs, mut dual) = (Vec::new(), Vec::new());
-            generator.finish(&mut dabs, &mut dual);
-            if !dual.is_empty() {
-                self.segment_break_pending = true;
-                return self.fallback_native_mask_gpu_to_cpu();
-            }
-            let Some(damage) = self.append_native_mask_gpu_dabs(&dabs) else {
-                self.segment_break_pending = true;
-                return self.fallback_native_mask_gpu_to_cpu();
-            };
-            self.native_mask_gpu_damage = self.native_mask_gpu_damage.union(&damage);
-            self.native_mask_gpu_generator = Some(DabGenerator::new(&self.brush, self.zoom));
+        if self.native_mask_gpu_generator.is_some() {
+            // A UV seam or reflected symmetry pass is a discontinuity in texture space. The
+            // GPU preview cannot rebase coverage at this boundary, so replay on the CPU route.
             self.segment_break_pending = true;
-            return Ok(damage);
+            // The GPU compositor stores one coverage ceiling for the whole gesture. A broken
+            // path must rebase that coverage before overlapping stamps can accumulate, which
+            // this preview path cannot do incrementally. Replay the original points through the
+            // CPU route, which commits each completed segment onto its base surface.
+            return self.fallback_native_mask_gpu_to_cpu();
         }
         let cmyk = self.cmyk.clone();
         photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {

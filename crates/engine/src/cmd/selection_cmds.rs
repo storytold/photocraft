@@ -688,6 +688,9 @@ fn uv_polygons(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(feature = "uv-workbench")]
 fn uv_polygons_active(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "select.uvPolygons";
+    if let Some(reason) = s.job_conflict(CMD, true) {
+        return Err(EngineError::Disabled(CMD.into(), reason));
+    }
     let polygons = p.get("polygons").and_then(Value::as_array).ok_or_else(|| bad(CMD, "`polygons` must be an array of triangles"))?;
     if polygons.len() > 100_000 {
         return Err(bad(CMD, "too many UV polygons"));

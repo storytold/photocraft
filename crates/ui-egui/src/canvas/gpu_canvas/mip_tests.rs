@@ -264,6 +264,14 @@ fn blurred_mask_canvas_transfer_matches_cpu_across_chunk_boundary() {
     let mut doc = Document::new("2D mask Blur chunk transfer", Size::new(width, height), ColorMode::Rgb, SampleType::U8);
     doc.layers.push(layer);
 
+    // The first display texture can be filled through the CPU compositor while GPU pipelines
+    // are still building. Keep that texture, then ensure a later partial GPU refresh updates the
+    // same allocation without disturbing the CPU-rendered pixels outside its damage.
+    gpu.simulate_compositor_build();
+    let initial = gpu.refresh(doc.id.0, &doc, None, None);
+    assert_eq!(initial.kind, "full", "a not-yet-ready compositor falls back to the CPU full render: {initial:?}");
+    assert!(gpu.simulate_compositor_completion(true), "the adapter can build the compositor");
+
     let reference = doc.id.0 ^ (1u64 << 62);
     gpu.upload_composite(reference, &doc, None);
     let stats = gpu.composite(&doc, bounds, false).expect("2D GPU canvas must encode the padded Blur chunks");
@@ -286,4 +294,24 @@ fn blurred_mask_canvas_transfer_matches_cpu_across_chunk_boundary() {
     }
     let boundary = height as usize / 2 * width as usize + photocraft_gpu::CHUNK as usize;
     assert!(expected[boundary][3] > 0.0, "Blur energy must reach the first pixel of the next compositor chunk");
+
+    let mut changed = doc.clone();
+    let patch = Rect::from_xywh(2, 2, 4, 4);
+    let pixels = (0..patch.width() * patch.height()).flat_map(|_| [0.8, 0.1, 0.2, 1.0]).collect::<Vec<_>>();
+    changed.layers[0].surface_mut().unwrap().write_region(patch, &pixels);
+    gpu.upload_composite(reference, &changed, None);
+    let refreshed = gpu.refresh(doc.id.0, &changed, Some(patch), None);
+    assert_eq!(refreshed.kind, "gpu-rect", "the ready compositor performs the partial refresh: {refreshed:?}");
+    let (_, _, actual) = gpu.read_texels(doc.id.0).expect("partial GPU refresh readback");
+    let (_, _, expected) = gpu.read_texels(reference).expect("partial CPU reference readback");
+    for (index, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+        for channel in 0..4 {
+            assert!(
+                (actual[channel] - expected[channel]).abs() <= 2.0 / 255.0,
+                "CPU-to-GPU partial refresh mismatch at pixel {index} channel {channel}: {} != {}",
+                actual[channel],
+                expected[channel]
+            );
+        }
+    }
 }

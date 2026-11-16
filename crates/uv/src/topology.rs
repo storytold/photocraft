@@ -803,7 +803,7 @@ mod import_budget_tests {
         // A long strip has two triangles per cell and manifold shared edges. Give each
         // triangle its own UVs so every shared edge is a seam and every triangle a shell.
         // This remains below MAX_TRIANGLES while exceeding the old seam-count budget.
-        let cells = 220_000usize;
+        let cells = 260_000usize;
         let positions = (0..=cells).flat_map(|x| [[x as f64, 0.0, 0.0], [x as f64, 1.0, 0.0]]).collect();
         let mut triangles = Vec::with_capacity(cells * 2);
         for x in 0..cells {

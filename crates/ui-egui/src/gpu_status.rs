@@ -396,7 +396,8 @@ mod tests {
         assert!(app.uv_mask_paint_preview.is_some());
         assert!(!app.session.active().unwrap().is_dirty(), "transient opacity alone is not canonical document state");
 
-        save_for_recovery(&mut app).unwrap();
+        let error = save_for_recovery(&mut app).unwrap_err();
+        assert!(error.contains("unsaved 3D project changes"), "{error}");
 
         assert!(app.uv_mask_paint_preview.is_none(), "recovery must commit and clear the transient preview");
         let state = app.session.active().unwrap();
@@ -473,7 +474,8 @@ mod tests {
         let mut app = PhotocraftApp::new(session, services);
         let revisions = recovery_documents(&app).into_iter().map(|state| (state.doc.id.0, state.revision, state.history.past_len())).collect::<Vec<_>>();
 
-        save_for_recovery(&mut app).unwrap();
+        let error = save_for_recovery(&mut app).unwrap_err();
+        assert!(error.contains("unsaved 3D project changes"), "{error}");
 
         let mut written = snapshots.borrow().iter().map(|(id, _)| *id).collect::<Vec<_>>();
         written.sort_unstable();

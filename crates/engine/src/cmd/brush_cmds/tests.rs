@@ -276,7 +276,7 @@ fn cadence_mask_preview_tracks_blur_expanded_commit_damage_on_cpu_route() {
     })
     .unwrap();
     let params = json!({"target":"mask","points":[[8.5,8.5,1.0]],"size":8,"color":"#ffffff","brush":{"hardness":0.5,"opacity":1.0,"flow":1.0}});
-    let live = LiveStroke::begin_with(&s, "paint.stroke", &params).unwrap();
+    let mut live = LiveStroke::begin_with(&s, "paint.stroke", &params).unwrap();
     live.mask_preview_cadence = Some(std::time::Duration::from_secs(10));
     let changed = live.push(&[StrokePoint::new(32.5, 32.5, 1.0)]).unwrap();
     let expected = changed.inflate(4).intersect(&Rect::new(0, 0, 64, 64));

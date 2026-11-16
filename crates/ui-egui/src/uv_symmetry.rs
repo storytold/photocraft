@@ -91,7 +91,9 @@ fn plane_corners_in_bounds(bounds: [[f64; 2]; 3], settings: Settings) -> Option<
 pub(crate) fn menu(ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let mut settings = get(&ctx);
-    ui.checkbox(&mut settings.enabled, tl!("Enable 3D symmetry"));
+    if ui.checkbox(&mut settings.enabled, tl!("Enable 3D symmetry")).changed() && !settings.enabled {
+        settings.snap_pending = false;
+    }
     ui.horizontal(|ui| {
         ui.label(tl!("Mirror axis"));
         ui.selectable_value(&mut settings.axis, Axis::X, "X");
@@ -239,6 +241,13 @@ mod tests {
         harness.get_by_label(tl!("Enable 3D symmetry")).click();
         harness.run_steps(4);
         assert!(get(&harness.ctx).enabled);
+        let mut settings = get(&harness.ctx);
+        settings.snap_pending = true;
+        put(&harness.ctx, settings);
+        harness.get_by_label(tl!("Enable 3D symmetry")).click();
+        harness.run_steps(4);
+        assert!(!get(&harness.ctx).enabled);
+        assert!(!get(&harness.ctx).snap_pending, "disabling symmetry cancels the pending vertex snap");
     }
 
     #[test]

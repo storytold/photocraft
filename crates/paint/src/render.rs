@@ -1072,6 +1072,7 @@ impl StrokeRenderer {
             if let Some(target) = &mut self.dual {
                 target.accumulate(dual_rect, dual_cov, 1.0, None, None);
             }
+            self.mark_dirty(dual_rect);
         }
     }
 
@@ -1147,6 +1148,7 @@ impl StrokeRenderer {
             // Bounds track the full dab rectangle (even fully transparent parts), like the damage.
             self.cov.bounds = self.cov.bounds.union(&rect);
         }
+        let mut dual_damage = Vec::with_capacity(duals.len());
         if let Some(dm) = self.dual.as_mut() {
             for d in &duals {
                 let rect = self.ctx.dab_rect(d, true);
@@ -1155,7 +1157,11 @@ impl StrokeRenderer {
                 }
                 self.ctx.rasterize(d, true, rect, &mut self.scratch);
                 dm.accumulate(rect, &self.scratch, 1.0, None, None);
+                dual_damage.push(rect);
             }
+        }
+        for rect in dual_damage {
+            self.mark_dirty(rect);
         }
         self.dabs_done += dabs.len();
         if let Some(all) = self.all_dabs.as_mut() {

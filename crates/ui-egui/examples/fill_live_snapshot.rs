@@ -63,6 +63,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // is still exercised by the in-process unit test.
     h.event(Event::WindowFocused(true));
     h.step();
+    let Some((mask_thumbnails, _)) = photocraft_ui_egui::mask_thumbs_ui::recorded(&h.ctx, layer_id.0) else {
+        return Err("Layer mask thumbnail was not drawn".into());
+    };
+    let mask_thumb = mask_thumbnails.first().map(|(_, rect)| rect.center()).ok_or("No pixel mask thumbnail")?;
+    h.hover_at(mask_thumb);
+    h.step();
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: mask_thumb, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.step();
+    }
+    h.run_steps(4);
     if h.query_by_label("Live Fill").is_none() {
         return Err("Mask Paint effects or the uniquely named Fill row were not visible".into());
     }

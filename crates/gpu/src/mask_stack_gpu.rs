@@ -464,7 +464,12 @@ impl MaskStackRenderer {
             });
         }
         drop(send);
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let status = device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(super::readback::READBACK_WAIT_TIMEOUT) })
+            .map_err(|error| format!("GPU device poll failed: {error}"))?;
+        if !status.wait_finished() {
+            return Err(format!("GPU readback did not finish within {} s", super::readback::READBACK_WAIT_TIMEOUT.as_secs()));
+        }
         for _ in 0..buffers.len() {
             receive.recv().map_err(|error| error.to_string())?.map_err(|error| error.to_string())?;
         }

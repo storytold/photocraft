@@ -379,6 +379,11 @@ pub(crate) fn select_environment(app: &mut PhotocraftApp, path: String) -> Resul
         return Ok(serde_json::Value::Null);
     }
     if app.uv_cache.lighting.path == path && app.uv_cache.lighting.environment.is_some() {
+        app.uv_cache.lighting.pending_path.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.uv_cache.lighting.pending = None;
+        }
         return Ok(serde_json::Value::Null);
     }
     #[cfg(not(target_arch = "wasm32"))]

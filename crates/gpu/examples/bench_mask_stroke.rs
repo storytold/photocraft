@@ -56,7 +56,7 @@ struct ResultSet {
     dirty_pixels: Vec<[f32; 4]>,
 }
 
-type RenderCapture = (Vec<[f32; 4]>, Stats);
+type RenderCapture = (Vec<[f32; 4]>, Stats, f64);
 
 fn render_capture(
     comp: &mut Compositor,
@@ -75,6 +75,7 @@ fn render_capture(
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
+    let start = Instant::now();
     let stats = comp.render(device, queue, doc, render_region, |encoder, out| {
         let overlap = out.rect.intersect(&capture_region);
         if overlap.width() == 0 || overlap.height() == 0 {
@@ -99,6 +100,8 @@ fn render_capture(
         );
         copied = true;
     })?;
+    poll(device)?;
+    let render_ms = start.elapsed().as_secs_f64() * 1000.0;
     if !copied {
         return Err("compositor emitted no pixels for the capture region".into());
     }
@@ -125,7 +128,7 @@ fn render_capture(
     }
     drop(mapped);
     buffer.unmap();
-    Ok((pixels, stats))
+    Ok((pixels, stats, render_ms))
 }
 
 fn run(masked: bool, device: &wgpu::Device, queue: &wgpu::Queue, acc_format: wgpu::TextureFormat) -> Result<ResultSet, Box<dyn Error>> {
@@ -145,23 +148,27 @@ fn run(masked: bool, device: &wgpu::Device, queue: &wgpu::Queue, acc_format: wgp
     let mut dirty_pixels = Vec::new();
     for frame in 0..FRAMES {
         let current = edited(&base, frame)?;
-        let start = Instant::now();
         if frame + 1 == FRAMES {
-            (full_pixels, full_stats) = render_capture(&mut full, device, queue, &current, current.bounds(), brush_rect())?;
+            let ms;
+            (full_pixels, full_stats, ms) = render_capture(&mut full, device, queue, &current, current.bounds(), brush_rect())?;
+            full_ms.push(ms);
         } else {
+            let start = Instant::now();
             full_stats = full.render(device, queue, &current, current.bounds(), |_, _| {})?;
             poll(device)?;
+            full_ms.push(start.elapsed().as_secs_f64() * 1000.0);
         }
-        full_ms.push(start.elapsed().as_secs_f64() * 1000.0);
 
-        let start = Instant::now();
         if frame + 1 == FRAMES {
-            (dirty_pixels, dirty_stats) = render_capture(&mut dirty, device, queue, &current, brush_rect(), brush_rect())?;
+            let ms;
+            (dirty_pixels, dirty_stats, ms) = render_capture(&mut dirty, device, queue, &current, brush_rect(), brush_rect())?;
+            dirty_ms.push(ms);
         } else {
+            let start = Instant::now();
             dirty_stats = dirty.render(device, queue, &current, brush_rect(), |_, _| {})?;
             poll(device)?;
+            dirty_ms.push(start.elapsed().as_secs_f64() * 1000.0);
         }
-        dirty_ms.push(start.elapsed().as_secs_f64() * 1000.0);
         final_doc = Some(current);
     }
     let _final_doc = final_doc.ok_or("no measured frames")?;

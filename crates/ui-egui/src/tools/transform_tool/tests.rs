@@ -1111,6 +1111,8 @@ fn mask_fill_transform_commands_preserve_parent_and_do_not_open_apply_session() 
     app.ui.mask_target = true;
     crate::uv_mask_paint::select_effect(&ctx, app.session.active().unwrap().doc.id.0, layer.0, 0);
     for command in ["edit.freeTransform", "edit.transform.rotate", "edit.transform.scale", "edit.freeTransformCopy", "edit.transform.warp"] {
+        begin(&mut app, &ctx).unwrap();
+        assert!(app.ui.transform.is_some(), "{command} starts with an existing transform session");
         crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
         assert!(app.ui.transform.is_none(), "{command} opened a native Apply session");
         assert!(app.transform_preview.is_none());

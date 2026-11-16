@@ -207,11 +207,9 @@ mod tests {
 
         assert!(session.execute("uv.project.close", json!({"discard":false})).is_err());
         assert!(!session.uv_workspace.active, "a rejected close returns to the previously active ordinary workspace");
-        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.documents().len(), 2, "a refused headless close leaves the mixed bank unchanged");
         assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
-        assert_eq!(session.uv_documents().len(), 1);
-        assert_eq!(session.uv_documents()[0].doc.id, texture_id);
-        assert!(session.uv_documents()[0].is_dirty());
+        assert!(session.uv_documents().iter().any(|state| state.doc.id == texture_id && state.is_dirty()));
 
         session.execute("uv.project.close", json!({"discard":true})).expect("explicit discard closes the dirty UV project");
         assert!(!session.uv_workspace.active);

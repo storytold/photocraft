@@ -249,8 +249,8 @@ impl Perf {
             refresh_seq: self.refresh_seq,
             last_refresh: kind,
             last_refresh_px: px,
-            gpu_upload_bytes: self.gpu_upload_bytes,
-            gpu_passes: self.gpu_passes,
+            gpu_upload_bytes: if kind.starts_with("gpu") { self.gpu_upload_bytes } else { 0 },
+            gpu_passes: if kind.starts_with("gpu") { self.gpu_passes } else { 0 },
             gpu_fallback: self.gpu_fallback.clone(),
         });
         while self.refresh_events.len() > MAX_REFRESH_EVENTS {

@@ -590,7 +590,11 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     // Dialogs (and Liquify's panel while one of its controls has focus) keep canvas zoom; a
     // focused text field keeps its keys.
     let liquify_focus = (app.distort.liquify.is_some() || app.distort.caf.is_some() || app.distort.select_mask.is_some()) && focus != Focus::None;
-    if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() || app.smart_svg.modal_open() || app.save_options_open() {
+    #[cfg(feature = "uv-workbench")]
+    let uv_project_prompt = crate::uv_project::prompt_open(app);
+    #[cfg(not(feature = "uv-workbench"))]
+    let uv_project_prompt = false;
+    if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() || uv_project_prompt || app.smart_svg.modal_open() || app.save_options_open() {
         if focus != Focus::Text {
             nav_keys(app, ctx);
         }

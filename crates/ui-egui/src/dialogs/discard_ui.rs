@@ -154,7 +154,7 @@ pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     #[cfg(feature = "uv-workbench")]
-    if !app.allow_close && crate::uv_project::guard_exit(app) {
+    if !app.allow_close && !app.window_lost && crate::uv_project::guard_exit(app) {
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         return;

@@ -165,6 +165,7 @@ fn an_unmodified_set_switches_at_once() {
 fn an_action_function_key_is_no_edit() {
     let (mut h, first) = dialog();
     h.state_mut().ui.dialogs.retain(|d| d.id != first);
+    h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Sepia", Vec::new()));
     let sepia = h.state().session.actions.list.iter().position(|action| action.name == "Sepia").unwrap();
     crate::actions::assign_shortcut(h.state_mut(), sepia, "F2").unwrap();
     let ctx = h.ctx.clone();

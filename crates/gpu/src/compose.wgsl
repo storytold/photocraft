@@ -42,7 +42,7 @@ struct Op {
 
 const F_MASK: u32 = 1u;          // layer has an enabled mask
 const F_MASK_TEX: u32 = 2u;      // mask pixels live in `mask_tex`
-const F_MASK_SLOT: u32 = 2097152u; // flattened editable Paint mask lives in a planner slot
+const F_MASK_SLOT: u32 = 268435456u; // flattened editable Paint mask lives in a planner slot
 const F_MASK_FILL: u32 = 4194304u;
 const F_MASK_FILL_REPEAT_U: u32 = 8388608u;
 const F_MASK_FILL_REPEAT_V: u32 = 16777216u;

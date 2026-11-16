@@ -266,6 +266,41 @@ fn transform(n: NodeHandle<'_>, geometric: bool) -> DMat4 {
         * t(-sp)
 }
 
+/// Evaluate one FBX model transform using its parent's global rotation and scale/shear.
+/// FBX's default RrSs order places the child's local rotation before inherited parent scale.
+fn inherited_transform(n: NodeHandle<'_>, parent: DMat4, parent_local_scale: DVec3) -> Result<DMat4> {
+    let local = transform(n, false);
+    let local_translation = local.w_axis.truncate();
+    let v = |name, default| vector(n, name, default);
+    let local_rotation = rotate(v("PreRotation", DVec3::ZERO), 0)
+        * rotate(v("Lcl Rotation", DVec3::ZERO), integer(n, "RotationOrder"))
+        * rotate(v("PostRotation", DVec3::ZERO), 0).inverse();
+    let local_scale = DMat4::from_scale(v("Lcl Scaling", DVec3::ONE));
+    let parent_rotation = DMat4::from_quat(parent.to_scale_rotation_translation().1);
+    let parent_translation = DMat4::from_translation(parent.w_axis.truncate());
+    let parent_scale_shear = parent_rotation.inverse() * parent_translation.inverse() * parent;
+    let inherit_type = integer(n, "InheritType");
+    let global_rs = match inherit_type {
+        0 => parent_rotation * local_rotation * parent_scale_shear * local_scale,
+        1 => parent_rotation * parent_scale_shear * local_rotation * local_scale,
+        2 => {
+            let parent_local = DMat4::from_scale(parent_local_scale);
+            if parent_local_scale.abs().min_element() <= f64::EPSILON {
+                return Err(Error("FBX Rrs inheritance cannot invert a zero parent scale".into()));
+            }
+            parent_rotation * local_rotation * parent_scale_shear * parent_local.inverse() * local_scale
+        }
+        _ => return Err(Error("Unsupported FBX transform inheritance type".into())),
+    };
+    let global_translation = parent.transform_point3(local_translation);
+    let mut result = global_rs;
+    result.w_axis = global_translation.extend(1.0);
+    if !result.is_finite() {
+        return Err(Error("FBX has a non-finite mesh transform".into()));
+    }
+    Ok(result)
+}
+
 type Connection = (i64, i64, String);
 type ConnectionIndex = HashMap<i64, Vec<usize>>;
 
@@ -403,7 +438,7 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
         }
         for model in models {
             let mid = id(model).ok_or_else(|| Error("Missing model id".into()))?;
-            let mut matrix = transform(model, false);
+            let mut hierarchy = vec![model];
             let mut current = mid;
             let mut seen = BTreeSet::new();
             seen.insert(mid);
@@ -412,16 +447,19 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
                 if seen.len() >= 128 || !seen.insert(current) {
                     return Err(Error("Cyclic or overly deep FBX hierarchy".into()));
                 }
-                matrix = transform(parent, false) * matrix;
+                hierarchy.push(parent);
+            }
+            let mut matrix = DMat4::IDENTITY;
+            let mut parent_local_scale = DVec3::ONE;
+            for node in hierarchy.iter().rev() {
+                matrix = inherited_transform(*node, matrix, parent_local_scale)?;
+                parent_local_scale = vector(*node, "Lcl Scaling", DVec3::ONE);
             }
             matrix *= transform(model, true);
             let reflected = matrix.determinant() < 0.0;
             let normal_matrix = matrix.inverse().transpose();
             if !normal_matrix.is_finite() {
                 return Err(Error("FBX has a singular mesh transform; freeze transforms before importing".into()));
-            }
-            if integer(model, "InheritType") != 0 {
-                scene.warnings.push("FBX nondefault transform inheritance is approximated; freeze mesh transforms for exact placement".into());
             }
             let attached: Vec<usize> = connected(&connections, &incoming, mid).filter_map(|(from, _, _)| materials.get(from).copied()).collect();
             let offset = scene.positions.len();
@@ -533,6 +571,30 @@ mod preflight_tests {
         out
     }
 
+    fn fbx_i32(value: i32) -> Vec<u8> {
+        let mut out = vec![b'I'];
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn fbx_f64(value: f64) -> Vec<u8> {
+        let mut out = vec![b'D'];
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn fbx_vector_property(name: &str, value: [f64; 3]) -> FbxNode {
+        fbx_node(
+            "P",
+            vec![fbx_string(name), fbx_string("Vector3D"), fbx_string("Vector"), fbx_string(""), fbx_f64(value[0]), fbx_f64(value[1]), fbx_f64(value[2])],
+            vec![],
+        )
+    }
+
+    fn fbx_integer_property(name: &str, value: i32) -> FbxNode {
+        fbx_node("P", vec![fbx_string(name), fbx_string("enum"), fbx_string(""), fbx_string(""), fbx_i32(value)], vec![])
+    }
+
     fn fbx_array<T>(tag: u8, values: &[T], encode: impl Fn(&T, &mut Vec<u8>)) -> Vec<u8> {
         let mut data = Vec::new();
         for value in values {
@@ -580,6 +642,10 @@ mod preflight_tests {
     }
 
     fn indexed_uv_fbx(reference: &str) -> Vec<u8> {
+        indexed_uv_fbx_with_inheritance(reference, 0)
+    }
+
+    fn indexed_uv_fbx_with_inheritance(reference: &str, inherit_type: i32) -> Vec<u8> {
         let mut version = vec![b'I'];
         version.extend_from_slice(&101_i32.to_le_bytes());
         let uv_layer = fbx_node(
@@ -605,10 +671,36 @@ mod preflight_tests {
                     vec![fbx_i64(1), fbx_string("Geometry::Triangle"), fbx_string("Mesh")],
                     vec![fbx_node("Vertices", vec![vertices], vec![]), fbx_node("PolygonVertexIndex", vec![polygons], vec![]), uv_layer],
                 ),
-                fbx_node("Model", vec![fbx_i64(2), fbx_string("Model::Triangle"), fbx_string("Mesh")], vec![]),
+                fbx_node(
+                    "Model",
+                    vec![fbx_i64(2), fbx_string("Model::Triangle"), fbx_string("Mesh")],
+                    vec![fbx_node(
+                        "Properties70",
+                        vec![],
+                        vec![fbx_vector_property("Lcl Rotation", [0.0, 0.0, 90.0]), fbx_integer_property("InheritType", inherit_type)],
+                    )],
+                ),
+                fbx_node(
+                    "Model",
+                    vec![fbx_i64(3), fbx_string("Model::Parent"), fbx_string("Null")],
+                    vec![fbx_node("Properties70", vec![], vec![fbx_vector_property("Lcl Scaling", [2.0, 1.0, 1.0])])],
+                ),
+                fbx_node(
+                    "Model",
+                    vec![fbx_i64(4), fbx_string("Model::Grandparent"), fbx_string("Null")],
+                    vec![fbx_node("Properties70", vec![], vec![fbx_vector_property("Lcl Scaling", [3.0, 1.0, 1.0])])],
+                ),
             ],
         );
-        let connections = fbx_node("Connections", vec![], vec![fbx_node("C", vec![fbx_string("OO"), fbx_i64(1), fbx_i64(2)], vec![])]);
+        let connections = fbx_node(
+            "Connections",
+            vec![],
+            vec![
+                fbx_node("C", vec![fbx_string("OO"), fbx_i64(1), fbx_i64(2)], vec![]),
+                fbx_node("C", vec![fbx_string("OO"), fbx_i64(2), fbx_i64(3)], vec![]),
+                fbx_node("C", vec![fbx_string("OO"), fbx_i64(3), fbx_i64(4)], vec![]),
+            ],
+        );
         let mut bytes = b"Kaydara FBX Binary  \0\x1a\0".to_vec();
         bytes.extend_from_slice(&7400_u32.to_le_bytes());
         append_fbx_node(&mut bytes, &objects);
@@ -629,6 +721,21 @@ mod preflight_tests {
         let scene = load(&bytes, 0).unwrap();
         let uvs = scene.triangles[0].corners.map(|corner| corner.uv);
         assert_eq!(uvs, [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]);
+    }
+
+    #[test]
+    fn default_inheritance_rotates_before_nonuniform_parent_scale() {
+        let scene = load(&indexed_uv_fbx("Index"), 0).unwrap();
+        let p = scene.positions[1];
+        assert!(p[0].abs() < 1e-10);
+        assert!((p[1] - 6.0).abs() < 1e-10);
+        assert!(p[2].abs() < 1e-10);
+    }
+
+    #[test]
+    fn unsupported_inheritance_modes_are_rejected() {
+        let error = load(&indexed_uv_fbx_with_inheritance("Index", 3), 0).unwrap_err();
+        assert!(error.to_string().contains("Unsupported FBX transform inheritance type"));
     }
 
     fn file_with_attributes(attribute_count: u32, declared_attribute_bytes: u32, attributes: &[u8]) -> Vec<u8> {

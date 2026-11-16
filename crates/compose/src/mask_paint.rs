@@ -55,12 +55,10 @@ pub fn refresh_changes(mask: &mut LayerMask, old: Option<&Stack>) {
 /// Keep procedural Fill cache work inside the document even when its transform extends far
 /// beyond the canvas. Source Paint surfaces remain intact and retain their sparse edit path.
 pub fn refresh_changes_in_canvas(mask: &mut LayerMask, old: Option<&Stack>, canvas: Rect) {
-    let needs_canvas = mask
-        .paint
-        .iter()
-        .chain(old)
-        .flat_map(|stack| &stack.layers)
-        .any(|layer| (layer.fill_bounds.is_some() && matches!(&layer.kind, EffectKind::Fill { .. })) || matches!(layer.kind, EffectKind::Blur { .. }));
+    let needs_canvas = mask.paint.iter().chain(old).flat_map(|stack| &stack.layers).any(|layer| {
+        (matches!(&layer.kind, EffectKind::Fill { .. }) && (layer.fill_bounds.is_some() || layer.fill_map.is_some()))
+            || matches!(layer.kind, EffectKind::Blur { .. })
+    });
     let _ = refresh_changes_bounded(mask, old, needs_canvas.then_some(canvas), None);
 }
 

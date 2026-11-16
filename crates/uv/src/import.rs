@@ -10,6 +10,40 @@ use std::path::Path;
 // multiply that work across an otherwise valid model.
 const MAX_FACE_CORNERS: usize = 4_096;
 const MAX_TRIANGULATION_WORK: usize = 64 * 1024 * 1024;
+const MAX_MTL_DEPENDENCY_BYTES: u64 = MAX_FILE_BYTES;
+
+#[derive(Default)]
+struct MtlWorkBudget {
+    bytes: u64,
+}
+
+impl MtlWorkBudget {
+    fn account(&mut self, bytes: usize) -> Result<()> {
+        self.bytes = self.bytes.checked_add(bytes as u64).ok_or_else(|| Error("Material-library work budget overflow".into()))?;
+        if self.bytes > MAX_MTL_DEPENDENCY_BYTES {
+            return Err(Error(format!("OBJ material libraries exceed the {MAX_MTL_DEPENDENCY_BYTES}-byte cumulative import limit")));
+        }
+        Ok(())
+    }
+}
+
+fn normalize_library_path(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let mut result = std::path::PathBuf::new();
+    for component in std::path::Path::new(&normalized).components() {
+        use std::path::Component;
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !result.pop() && !result.has_root() {
+                    result.push("..");
+                }
+            }
+            other => result.push(other.as_os_str()),
+        }
+    }
+    result.to_string_lossy().replace('\\', "/")
+}
 
 #[derive(Default)]
 pub(super) struct TriangulationBudget {
@@ -61,9 +95,11 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
     scene.materials.push(Material::default());
     let mut material_names = BTreeMap::new();
     let mut loaded_mtl_paths = BTreeSet::new();
+    let mut mtl_work = MtlWorkBudget::default();
     let mut uvs: Vec<[f64; 2]> = Vec::new();
     let mut normals = Vec::new();
     let mut material = 0;
+    let mut material_name: Option<String> = None;
     let mut triangulation_budget = TriangulationBudget::default();
     for (line_number, line) in text.lines().enumerate() {
         let line = line.split('#').next().unwrap_or("").trim();
@@ -96,12 +132,17 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
                 uvs.push([*u, *v]);
             }
             "mtllib" => {
-                let path = line.strip_prefix(kind).unwrap_or("").trim().trim_matches('"').to_owned();
+                let path = normalize_library_path(line.strip_prefix(kind).unwrap_or("").trim().trim_matches('"'));
                 if !loaded_mtl_paths.insert(path.clone()) {
                     continue;
                 }
                 match resolve(&path) {
-                    Ok(bytes) => load_mtl(&path, &bytes, &mut scene, &mut material_names)?,
+                    Ok(bytes) => {
+                        load_mtl(&path, &bytes, &mut scene, &mut material_names, &mut mtl_work)?;
+                        if let Some(index) = material_name.as_ref().and_then(|name| material_names.get(name)).copied() {
+                            material = index;
+                        }
+                    }
                     Err(whole_error) => {
                         // OBJ allows more than one library after `mtllib`. Some exporters emit
                         // one filename per token, while filenames containing spaces need the
@@ -110,13 +151,16 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
                         let mut loaded_any = false;
                         if candidates.len() > 1 {
                             for candidate in candidates {
-                                let candidate = candidate.to_owned();
+                                let candidate = normalize_library_path(candidate);
                                 if !loaded_mtl_paths.insert(candidate.clone()) {
                                     continue;
                                 }
                                 match resolve(&candidate) {
                                     Ok(bytes) => {
-                                        load_mtl(&candidate, &bytes, &mut scene, &mut material_names)?;
+                                        load_mtl(&candidate, &bytes, &mut scene, &mut material_names, &mut mtl_work)?;
+                                        if let Some(index) = material_name.as_ref().and_then(|name| material_names.get(name)).copied() {
+                                            material = index;
+                                        }
                                         loaded_any = true;
                                     }
                                     Err(error) => scene.warnings.push(format!("MTL {candidate}: {error}; assign textures manually")),
@@ -131,6 +175,7 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
             }
             "usemtl" => {
                 let name = parts.collect::<Vec<_>>().join(" ");
+                material_name = Some(name.clone());
                 if let Some(index) = material_names.get(&name).copied() {
                     material = index;
                 } else {
@@ -170,18 +215,23 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
     Ok(scene)
 }
 
-fn load_mtl(path: &str, bytes: &[u8], scene: &mut Scene, material_names: &mut BTreeMap<String, usize>) -> Result<()> {
+fn load_mtl(path: &str, bytes: &[u8], scene: &mut Scene, material_names: &mut BTreeMap<String, usize>, work: &mut MtlWorkBudget) -> Result<()> {
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(Error("Material library exceeds 256 MiB".into()));
     }
+    work.account(bytes.len())?;
     check_mtl_material_budget(bytes)?;
     let (materials, _) = tobj::load_mtl_buf(&mut std::io::BufReader::new(bytes)).map_err(|e| Error(e.to_string()))?;
+    // FBX/OBJ paths are accepted with either separator independent of the host OS. In
+    // particular, Path::parent on Unix treats a backslash as an ordinary filename byte.
+    let library_path = path.replace('\\', "/");
+    let library_parent = Path::new(&library_path).parent().unwrap_or(Path::new(""));
     for m in materials {
         if m.normal_texture.is_some() {
             scene.warnings.push(format!("{}: MTL bump/height map is not a tangent-space normal map; assign a normal map manually", m.name));
         }
         let c = m.diffuse.unwrap_or([1.0; 3]);
-        let texture = m.diffuse_texture.map(|s| Path::new(path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned());
+        let texture = m.diffuse_texture.map(|s| library_parent.join(s).to_string_lossy().into_owned());
         let index = if let Some(index) = material_names.get(&m.name).copied() {
             index
         } else {
@@ -198,7 +248,7 @@ fn load_mtl(path: &str, bytes: &[u8], scene: &mut Scene, material_names: &mut BT
             color: [c[0], c[1], c[2], m.dissolve.unwrap_or(1.0)],
             base_color: texture,
             embedded: None,
-            normal_map: m.unknown_param.get("norm").map(|s| Path::new(path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned()),
+            normal_map: m.unknown_param.get("norm").map(|s| library_parent.join(s).to_string_lossy().into_owned()),
             embedded_normal: None,
             maps: [
                 (crate::preview::Channel::Emissive, "map_Ke"),
@@ -206,9 +256,7 @@ fn load_mtl(path: &str, bytes: &[u8], scene: &mut Scene, material_names: &mut BT
                 (crate::preview::Channel::Roughness, "map_Pr"),
             ]
             .into_iter()
-            .filter_map(|(kind, key)| {
-                m.unknown_param.get(key).map(|s| (kind, Path::new(path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned()))
-            })
+            .filter_map(|(kind, key)| m.unknown_param.get(key).map(|s| (kind, library_parent.join(s).to_string_lossy().into_owned())))
             .collect(),
         };
         if let Some(slot) = scene.materials.get_mut(index) {
@@ -365,6 +413,37 @@ mod tests {
         });
         assert!(result.is_ok());
         assert_eq!(resolve_calls, 1);
+    }
+
+    #[test]
+    fn normalized_mtl_aliases_are_resolved_once() {
+        let source = b"mtllib data/large.mtl\nmtllib data/./large.mtl\n";
+        let mut resolve_calls = 0;
+        let result = obj(source, &mut |path| {
+            assert_eq!(path, "data/large.mtl");
+            resolve_calls += 1;
+            Ok(b"newmtl fabric\n".to_vec())
+        });
+        assert!(result.is_ok());
+        assert_eq!(resolve_calls, 1);
+    }
+
+    #[test]
+    fn cumulative_mtl_work_budget_covers_all_libraries() {
+        let mut budget = MtlWorkBudget::default();
+        assert!(budget.account(MAX_MTL_DEPENDENCY_BYTES as usize).is_ok());
+        assert!(budget.account(1).is_err());
+    }
+
+    #[test]
+    fn mtl_map_paths_use_normalized_library_parent() {
+        let source = b"mtllib materials\\paint.mtl\n";
+        let result = obj(source, &mut |path| {
+            assert_eq!(path, "materials/paint.mtl");
+            Ok(b"newmtl fabric\nmap_Kd lacquer.png\n".to_vec())
+        })
+        .unwrap();
+        assert_eq!(result.materials[1].base_color.as_deref(), Some(std::path::Path::new("materials").join("lacquer.png").to_string_lossy().as_ref()));
     }
 
     #[test]

@@ -108,7 +108,7 @@ pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::break_live_stroke_path;
 #[cfg(feature = "uv-workbench")]
 pub(crate) use strokes::break_native_uv_mask_segment;
-#[cfg(any(feature = "uv-workbench", test))]
+#[cfg(feature = "uv-workbench")]
 pub(crate) use strokes::clone_preview_texture;
 #[cfg(feature = "uv-workbench")]
 pub(crate) use strokes::feed_live_stroke;
@@ -2408,7 +2408,7 @@ fn handle_canvas_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, response: &e
         if response.hovered()
             && let Some(p) = ui.input(|i| i.pointer.hover_pos())
         {
-            if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+            if precise_other_cursor(app) {
                 ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
             } else {
                 ctx.set_cursor_icon(pipette_cursor(&ctx, p));

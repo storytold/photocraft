@@ -341,6 +341,18 @@ fn fill_bounds_preview_uses_low_res_proxy_and_commits_once_on_release() {
 }
 
 #[test]
+fn opacity_only_fill_preview_uses_live_display_and_preserves_every_bound_coordinate_in_key() {
+    let (mut app, layer) = fill_app();
+    set(&mut app, layer, 0, 0.35);
+    let (shown, key) = display_doc(&mut app, 0).expect("opacity-only Fill preview is displayed");
+    assert_ne!(key, 0, "opacity-only Fill uses a transient display snapshot");
+    assert_eq!(shown.layer(layer).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].opacity, 0.35);
+    let first = super::preview_key(1, layer, 0, 0.35, Some([4, 4, 20, 16]), Some(0.0));
+    let moved = super::preview_key(1, layer, 0, 0.35, Some([5, 4, 20, 16]), Some(0.0));
+    assert_ne!(first, moved, "an x0-only bounds change must invalidate the preview key");
+}
+
+#[test]
 fn opacity_and_fill_transform_previews_preserve_each_other_and_commit_as_one_undo_step() {
     let (mut app, layer) = fill_app();
     let next_bounds = [3, 4, 21, 18];
