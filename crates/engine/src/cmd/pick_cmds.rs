@@ -3,7 +3,7 @@
 //! canvas right-click layer list). Like Photoshop, Auto-Select hits a type layer anywhere inside its
 //! text's bounds, so a click between letters picks the type rather than the layer under it (#2370).
 
-use photocraft_doc::{Document, LayerContent, LayerId};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -53,27 +53,47 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool) -> Vec<LayerId>
         if matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_)) {
             continue;
         }
-        let alpha = match &l.content {
-            // Fill layers cover the canvas (their mask limits them).
-            LayerContent::Fill(_) => 1.0,
-            // The text's pixel bounds (in document space, so they follow the layer's transform).
-            LayerContent::Text(t) if type_bounds && t.cache.as_ref().is_some_and(|c| c.content_bounds().contains(x, y)) => 1.0,
-            _ => match l.surface() {
-                Some(s) => {
-                    let mut px = [[0.0f32; 4]; 1];
-                    s.read_rgba_into(Rect::from_xywh(x, y, 1, 1), &mut px);
-                    px[0][3]
-                }
-                None => 0.0,
-            },
-        };
-        // As the compositor sees it: density applied, all ones when the mask is disabled.
-        let mask = l.mask.as_ref().map_or(1.0, |m| m.value(x, y));
-        if alpha * mask > 0.0 {
+        if coverage(l, x, y, type_bounds) > 0.0 && clip_base_shows(doc, path, x, y) {
             out.push(l.id);
         }
     }
     out
+}
+
+/// How much of `l` shows at (x, y) as the compositor sees it: content alpha times the mask.
+fn coverage(l: &Layer, x: i32, y: i32, type_bounds: bool) -> f32 {
+    let alpha = match &l.content {
+        // Fill layers cover the canvas (their mask limits them).
+        LayerContent::Fill(_) => 1.0,
+        // The text's pixel bounds (in document space, so they follow the layer's transform).
+        LayerContent::Text(t) if type_bounds && t.cache.as_ref().is_some_and(|c| c.content_bounds().contains(x, y)) => 1.0,
+        _ => match l.surface() {
+            Some(s) => {
+                let mut px = [[0.0f32; 4]; 1];
+                s.read_rgba_into(Rect::from_xywh(x, y, 1, 1), &mut px);
+                px[0][3]
+            }
+            None => 0.0,
+        },
+    };
+    // Density applied, all ones when the mask is disabled.
+    alpha * l.mask.as_ref().map_or(1.0, |m| m.value(x, y))
+}
+
+/// Whether the clip base of the layer at `path` lets it show at (x, y). A clipped layer is drawn
+/// only where its base (the nearest unclipped layer below it in the same list) has pixels, and
+/// not at all when the base is hidden, so a click there must reach the layer below (#15263).
+/// Group and adjustment bases keep the plain visibility check.
+fn clip_base_shows(doc: &Document, path: &[usize], x: i32, y: i32) -> bool {
+    let Some((&k, parent)) = path.split_last() else { return true };
+    let siblings = if parent.is_empty() { Some(&doc.layers[..]) } else { doc.layer_at(parent).and_then(Layer::children) };
+    let Some(siblings) = siblings else { return true };
+    if !siblings.get(k).is_some_and(|l| l.clipped) {
+        return true;
+    }
+    // A clipped run at the bottom of its list has no base: the compositor draws it unclipped.
+    let Some(base) = siblings.get(..k).and_then(|below| below.iter().rev().find(|l| !l.clipped)) else { return true };
+    base.visible && (matches!(base.content, LayerContent::Group(_) | LayerContent::Adjustment(_)) || coverage(base, x, y, false) > 0.0)
 }
 
 /// The outermost group containing `id` (the layer itself when it isn't in a group). An artboard
@@ -268,6 +288,32 @@ mod tests {
         }
         s.execute("select.deselect", json!({})).unwrap();
         (s, ids[0], ids[1])
+    }
+
+    #[test]
+    fn a_clipped_layer_is_hit_only_where_its_base_shows_it() {
+        // #15263: a large layer clipped to A's small square was picked over B, where the
+        // clipping mask cuts it away and B is what shows.
+        let (mut s, a, b) = two_squares();
+        s.execute("layer.arrange.bringToFront", json!({"layer": a.0})).unwrap();
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "Clipped"})).unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let c = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.setProps", json!({"layer": c.0, "clipped": true})).unwrap();
+        let pick = |s: &mut Session, x: i32, y: i32| s.execute("layer.pickAt", json!({"x": x, "y": y, "select": false})).unwrap()["layer"].clone();
+        let bg = s.active().unwrap().doc.layers[0].id;
+        assert_eq!(pick(&mut s, 5, 5), c.0, "the clipped layer shows over its base");
+        assert_eq!(pick(&mut s, 25, 25), b.0, "B shows where the base is empty");
+        assert_eq!(pick(&mut s, 35, 5), bg.0);
+        let list = s.execute("layer.pickAt", json!({"x": 25, "y": 25, "list": true})).unwrap();
+        assert_eq!(list["layers"].as_array().unwrap().len(), 2, "B and the Background only");
+        assert_eq!(move_auto_select_target(&s.active().unwrap().doc, 25, 25, false), Some(b));
+        // A hidden base hides the whole clipping group.
+        s.execute("layer.setProps", json!({"layer": a.0, "visible": false})).unwrap();
+        assert_eq!(pick(&mut s, 5, 5), bg.0);
     }
 
     #[test]
