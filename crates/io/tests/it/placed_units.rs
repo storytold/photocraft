@@ -4,10 +4,10 @@
 //! fix the source pixels were fed to them as if they were the same space, dropping the warp's
 //! shape and placing the contents `src / Sz` times too large.
 
+use craft_psd::descriptor::{Descriptor, ObjectArray, Value, VersionedDescriptor};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_geom::Rect;
 use photocraft_io::blocks::{parse_placed_size, parse_placed_warp, parse_smart};
-use photocraft_psd::descriptor::{Descriptor, ObjectArray, Value, VersionedDescriptor};
 use photocraft_raster::Surface;
 
 /// A `SoLd` block: `soLD`, version, the versioned descriptor of `size`, `corners` and `warp`.
@@ -45,10 +45,7 @@ fn warp_desc_orders(bounds: [f64; 4], points: Vec<[f64; 2]>, u_order: f64, v_ord
     Descriptor::new("warp")
         .with("uOrder", Value::Double(u_order))
         .with("vOrder", Value::Double(v_order))
-        .with(
-            "warpStyle",
-            Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new("warpStyle"), value: photocraft_psd::descriptor::Id::new("warpCustom") },
-        )
+        .with("warpStyle", Value::Enumerated { type_id: craft_psd::descriptor::Id::new("warpStyle"), value: craft_psd::descriptor::Id::new("warpCustom") })
         .with("warpValue", Value::Double(0.0))
         .with(
             "bounds",
@@ -72,10 +69,7 @@ fn warp_desc_orders(bounds: [f64; 4], points: Vec<[f64; 2]>, u_order: f64, v_ord
 fn warp_none(bounds: [f64; 4]) -> Descriptor {
     let [x0, y0, x1, y1] = bounds;
     Descriptor::new("warp")
-        .with(
-            "warpStyle",
-            Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new("warpStyle"), value: photocraft_psd::descriptor::Id::new("warpNone") },
-        )
+        .with("warpStyle", Value::Enumerated { type_id: craft_psd::descriptor::Id::new("warpStyle"), value: craft_psd::descriptor::Id::new("warpNone") })
         .with("warpValue", Value::Double(0.0))
         .with(
             "bounds",

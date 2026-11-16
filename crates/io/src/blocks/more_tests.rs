@@ -498,7 +498,7 @@ fn tysh_garbage_is_none() {
 /// A `SoLd` whose warp is a custom envelope of `nu` × `nv` stored points (`pts`, u fastest) over
 /// the 50 × 25 source, placed by the corners `trnf`: how Photoshop saves presets like Inflate.
 fn sold_with_envelope(trnf: [f64; 8], nu: i32, nv: i32, pts: &[[f64; 2]]) -> Vec<u8> {
-    use photocraft_psd::descriptor::ObjectArray;
+    use craft_psd::descriptor::ObjectArray;
     let e = |t: &str, v: &str| Value::Enumerated { type_id: Id::new(t), value: Id::new(v) };
     let bounds = Descriptor::new("Rctn")
         .with("Top ", Value::Double(0.0))

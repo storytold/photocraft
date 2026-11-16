@@ -868,7 +868,7 @@ fn replace_contents_keeps_the_warp_and_frame() {
     }
 
     // The silhouette (alpha > 0) position is unchanged: same warp, same frame.
-    let flat = |d: &Document| photocraft_compose::flatten(d).px;
+    let flat = |d: &Document| photocraft_compose::flatten(d).into_px();
     let (a, b) = (flat(&before), flat(&after));
     let covered = a.iter().zip(&b).filter(|(p, q)| (p[3] > 0.5) != (q[3] > 0.5)).count();
     assert_eq!(covered, 0, "{covered} px changed coverage");
