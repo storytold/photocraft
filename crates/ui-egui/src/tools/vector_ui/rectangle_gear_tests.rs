@@ -12,13 +12,13 @@ use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{Tool, ToolOptions};
 
-const GEAR: &str = "Set additional shape and path options";
+pub(super) const GEAR: &str = "Set additional shape and path options";
 const RADIOS: [&str; 4] = ["Unconstrained", "Square", "Fixed Size", "Proportional"];
-const FIXED: [&str; 2] = ["Fixed Size W:", "Fixed Size H:"];
-const RATIO: [&str; 2] = ["Proportional W:", "Proportional H:"];
+pub(super) const FIXED: [&str; 2] = ["Fixed Size W:", "Fixed Size H:"];
+pub(super) const RATIO: [&str; 2] = ["Proportional W:", "Proportional H:"];
 
 /// An 800 × 600 document with `tool` active and its options set by `set`.
-fn app(tool: Tool, set: impl FnOnce(&mut ToolOptions)) -> PhotocraftApp {
+pub(super) fn app(tool: Tool, set: impl FnOnce(&mut ToolOptions)) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
@@ -29,7 +29,7 @@ fn app(tool: Tool, set: impl FnOnce(&mut ToolOptions)) -> PhotocraftApp {
 
 /// A canvas drag from `from` to `to`, pressed with `press` held and moved and released with `held`
 /// (a key pressed after the drag starts), as the canvas sends it.
-fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], press: Modifiers, held: Modifiers) {
+pub(super) fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], press: Modifiers, held: Modifiers) {
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, press);
     tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, held);
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, held);
@@ -47,7 +47,8 @@ fn drawn(tool: Tool, set: impl FnOnce(&mut ToolOptions), from: [f64; 2], to: [f6
     [r[0], r[1], r[0] + r[2], r[1] + r[3]]
 }
 
-fn layer_count(app: &PhotocraftApp) -> usize {
+/// The active document's layer count.
+pub(super) fn layer_count(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().doc.layers.len()
 }
 
@@ -156,7 +157,7 @@ fn fonts_ready(ui: &egui::Ui) -> bool {
 }
 
 /// The options bar with `tool` active.
-fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
+pub(super) fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(2400.0, 400.0)).build_ui_state(
         |ui, app| {
             if fonts_ready(ui) {
@@ -170,34 +171,36 @@ fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-/// The Rectangle tool's options bar with its gear popup open.
-fn gear() -> Harness<'static, PhotocraftApp> {
-    let mut h = bar(Tool::Rectangle);
+/// `tool`'s options bar with its gear popup open.
+pub(super) fn gear(tool: Tool) -> Harness<'static, PhotocraftApp> {
+    let mut h = bar(tool);
     h.get_by_label(GEAR).click();
     h.run_steps(4);
     h
 }
 
-fn spin<'a>(h: &'a Harness<'static, PhotocraftApp>, label: &str) -> egui_kittest::Node<'a> {
+/// The number field labelled `label`.
+pub(super) fn spin<'a>(h: &'a Harness<'static, PhotocraftApp>, label: &str) -> egui_kittest::Node<'a> {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some(label)).unwrap_or_else(|| panic!("the {label} field"))
 }
 
-fn checked(h: &Harness<'static, PhotocraftApp>, label: &str) -> bool {
+/// Whether the radio or checkbox labelled `label` is checked.
+pub(super) fn checked(h: &Harness<'static, PhotocraftApp>, label: &str) -> bool {
     h.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True)
 }
 
 /// Whether each of `labels`' fields can be edited.
-fn enabled(h: &Harness<'static, PhotocraftApp>, labels: [&str; 2]) -> [bool; 2] {
+pub(super) fn enabled(h: &Harness<'static, PhotocraftApp>, labels: [&str; 2]) -> [bool; 2] {
     labels.map(|l| !spin(h, l).accesskit_node().is_disabled())
 }
 
 /// What `label`'s field shows as a number (None when empty).
-fn shown(h: &Harness<'static, PhotocraftApp>, label: &str) -> Option<f64> {
+pub(super) fn shown(h: &Harness<'static, PhotocraftApp>, label: &str) -> Option<f64> {
     spin(h, label).accesskit_node().numeric_value().filter(|_| spin(h, label).accesskit_node().value().as_deref() != Some(""))
 }
 
 /// Types `text` into `label`'s field, then Tabs out of it.
-fn type_into(h: &mut Harness<'static, PhotocraftApp>, label: &str, text: &str) {
+pub(super) fn type_into(h: &mut Harness<'static, PhotocraftApp>, label: &str, text: &str) {
     spin(h, label).click();
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
@@ -208,11 +211,12 @@ fn type_into(h: &mut Harness<'static, PhotocraftApp>, label: &str, text: &str) {
 }
 
 #[test]
-fn only_the_rectangle_has_the_gear_after_its_path_arrangement() {
+fn the_rectangle_has_the_gear_after_its_path_arrangement() {
     let h = bar(Tool::Rectangle);
     let (gear, arrange) = (h.get_by_label(GEAR).rect(), h.get_by_label("Path arrangement").rect());
     assert!(arrange.right() <= gear.left() && (gear.center().y - arrange.center().y).abs() < 4.0, "{gear:?} after {arrange:?}");
-    for tool in [Tool::EllipseShape, Tool::Triangle, Tool::Polygon] {
+    // The Triangle's is #13361's (`triangle_gear_tests`).
+    for tool in [Tool::EllipseShape, Tool::Polygon] {
         assert!(bar(tool).query_by_label(GEAR).is_none(), "{tool:?}");
     }
 }
@@ -221,7 +225,7 @@ fn only_the_rectangle_has_the_gear_after_its_path_arrangement() {
 fn the_popup_shows_the_controls_with_their_defaults() {
     let h = bar(Tool::Rectangle);
     assert!(h.query_by_label("From Center").is_none(), "only in the gear's popup");
-    let h = gear();
+    let h = gear(Tool::Rectangle);
     let radios: Vec<_> = RADIOS.iter().map(|l| h.get_by_role_and_label(Role::RadioButton, l).rect()).collect();
     assert!(radios.windows(2).all(|w| w[0].top() < w[1].top()), "top to bottom: {radios:?}");
     assert!(h.get_by_label("From Center").rect().top() > radios[3].top(), "From Center comes last");
@@ -235,7 +239,7 @@ fn the_popup_shows_the_controls_with_their_defaults() {
 
 #[test]
 fn a_radio_enables_its_own_fields_and_they_take_typed_sizes() {
-    let mut h = gear();
+    let mut h = gear(Tool::Rectangle);
     h.get_by_role_and_label(Role::RadioButton, "Fixed Size").click();
     h.run_steps(3);
     assert_eq!(h.state().ui.tool_options.rect_constraint, "fixedSize");
@@ -261,7 +265,7 @@ fn a_radio_enables_its_own_fields_and_they_take_typed_sizes() {
 
 #[test]
 fn escape_closes_the_popup_and_keeps_the_change() {
-    let mut h = gear();
+    let mut h = gear(Tool::Rectangle);
     h.get_by_role_and_label(Role::RadioButton, "Square").click();
     h.run_steps(3);
     assert!(h.query_by_label("From Center").is_some(), "a radio click leaves the popup open");

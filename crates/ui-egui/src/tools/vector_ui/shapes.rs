@@ -128,7 +128,7 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             // Settings saved with the old 0..100 range draw at the nearest value (#13258).
             "arrowConcavity": if o.arrow_concavity.is_finite() { o.arrow_concavity.round().clamp(-50.0, 50.0) } else { 0.0 }})
     } else {
-        let [x0, y0, w, h] = drag_box(o, tool, start, end, mods);
+        let ([x0, y0, w, h], squared) = drag_box(o, tool, start, end, mods);
         let rect = [x0.min(x0 + w), y0.min(y0 + h), w.abs(), h.abs()];
         // Align Edges (#13370) is the Triangle tool's option, and only in Shape mode, where its
         // checkbox is enabled. The other shape tools, and a greyed checkbox, still snap.
@@ -141,10 +141,10 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             Tool::Rectangle if o.corner_radius > 0.0 => json!({"kind": "roundedRect", "rect": rect, "radii": vec![o.corner_radius; 4]}),
             Tool::Rectangle | Tool::CustomShape => json!({"kind": "rect", "rect": rect}),
             Tool::EllipseShape => json!({"kind": "ellipse", "rect": rect}),
-            // Shift: the equilateral triangle in the circle of the constrained square, as before the
-            // plain drag filled its box (#13350), sent as its tight box. Which side sizes the square
-            // is #13351's.
-            Tool::Triangle if mods.shift => {
+            // Shift, or the gear's Equilateral (#13361): the equilateral triangle in the circle of
+            // the constrained square, as before the plain drag filled its box (#13350), sent as its
+            // tight box. Which side sizes the square is #13351's.
+            Tool::Triangle if squared => {
                 let r = rect[2] / 2.0;
                 let half_base = r * 3f64.sqrt() / 2.0;
                 json!({"kind": "triangle", "rect": [rect[0] + r - half_base, rect[1], 2.0 * half_base, 1.5 * r]})
@@ -157,36 +157,68 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
     })
 }
 
+/// A shape tool's gear settings (#13343, #13361): the constraint ("unconstrained", "square",
+/// "fixedSize" or "proportional"), Fixed Size W × H, Proportional W : H and From Center.
+struct Gear<'a> {
+    constraint: &'a str,
+    fixed: (f32, f32),
+    ratio: (f32, f32),
+    from_center: bool,
+}
+
+/// `tool`'s gear, for the tools that have one (the Rectangle and the Triangle).
+fn gear(o: &ToolOptions, tool: Tool) -> Option<Gear<'_>> {
+    Some(match tool {
+        Tool::Rectangle => Gear {
+            constraint: &o.rect_constraint,
+            fixed: (o.rect_fixed_width, o.rect_fixed_height),
+            ratio: (o.rect_ratio_width, o.rect_ratio_height),
+            from_center: o.rect_from_center,
+        },
+        Tool::Triangle => Gear {
+            constraint: &o.triangle_constraint,
+            fixed: (o.triangle_fixed_width, o.triangle_fixed_height),
+            ratio: (o.triangle_ratio_width, o.triangle_ratio_height),
+            from_center: o.triangle_from_center,
+        },
+        _ => return None,
+    })
+}
+
 /// The box `[x, y, w, h]` of a Shape-tool drag from `start` to `end`, before it is snapped, with
-/// `w` and `h` signed the way the drag went. ⇧ squares it from the drag's shorter side, as in the
-/// reference application (#13222), and ⌥ draws it from the centre. The Rectangle tool's gear
-/// (#13343) can keep either on, and then ⇧ turns Square off and ⌥ From Center, as in the
-/// reference. Fixed Size puts the gear's W × H with its top-left corner at the release point;
-/// Proportional draws the largest box of the gear's W : H inside the dragged one, from the press
-/// point. A Fixed Size or Proportional field left empty draws as Unconstrained.
-fn drag_box(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> [f64; 4] {
-    let gear = tool == Tool::Rectangle;
-    let constraint = if gear { o.rect_constraint.as_str() } else { "unconstrained" };
-    let from_center = mods.alt != (gear && o.rect_from_center);
+/// `w` and `h` signed the way the drag went, and whether it is the square ⇧ or the gear's Square
+/// made (the Triangle tool draws its equilateral triangle in it). ⇧ squares it from the drag's
+/// shorter side, as in the reference application (#13222), and ⌥ draws it from the centre. The
+/// Rectangle and Triangle tools' gears (#13343, #13361) can keep either on, and then ⇧ turns
+/// Square (Equilateral) off and ⌥ From Center, as in the reference. Fixed Size puts the gear's
+/// W × H with its top-left corner at the release point; Proportional draws the largest box of the
+/// gear's W : H inside the dragged one, from the press point. A Fixed Size or Proportional field
+/// left empty draws as Unconstrained.
+fn drag_box(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> ([f64; 4], bool) {
+    let gear = gear(o, tool);
+    let constraint = gear.as_ref().map_or("unconstrained", |g| g.constraint);
+    let from_center = mods.alt != gear.as_ref().is_some_and(|g| g.from_center);
     if constraint == "fixedSize"
-        && let Some((fw, fh)) = positive_pair(o.rect_fixed_width, o.rect_fixed_height)
+        && let Some((fw, fh)) = gear.as_ref().and_then(|g| positive_pair(g.fixed.0, g.fixed.1))
     {
         // From Center with Fixed Size is not measured: the size is centred on the release point.
         let (x, y) = if from_center { (end[0] - fw / 2.0, end[1] - fh / 2.0) } else { (end[0], end[1]) };
-        return [x, y, fw, fh];
+        return ([x, y, fw, fh], false);
     }
     let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
-    if mods.shift != (constraint == "square") {
+    let mut squared = mods.shift != (constraint == "square");
+    if squared {
         let m = w.abs().min(h.abs());
         (w, h) = (m * w.signum(), m * h.signum());
     }
     if constraint == "proportional"
-        && let Some((rw, rh)) = positive_pair(o.rect_ratio_width, o.rect_ratio_height)
+        && let Some((rw, rh)) = gear.as_ref().and_then(|g| positive_pair(g.ratio.0, g.ratio.1))
     {
         let s = (w.abs() / rw).min(h.abs() / rh);
         (w, h) = (rw * s * w.signum(), rh * s * h.signum());
+        squared = false;
     }
-    if from_center { [start[0] - w, start[1] - h, 2.0 * w, 2.0 * h] } else { [start[0], start[1], w, h] }
+    (if from_center { [start[0] - w, start[1] - h, 2.0 * w, 2.0 * h] } else { [start[0], start[1], w, h] }, squared)
 }
 
 /// `(w, h)` in f64 when both are finite and above zero (gear fields that are not empty).

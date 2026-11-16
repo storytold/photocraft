@@ -185,6 +185,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             if let Some(kind) = f.get(MARK).and_then(Value::as_str) {
                 let saved: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
                 app.session.prefs.edit(|p| p.dialogs.insert(pref_key(kind), Value::Object(saved)));
+                if kind == "triangle" {
+                    triangle_gear_from(&mut app.ui.tool_options, f);
+                }
             }
         }
         Err(e) => {
@@ -193,6 +196,19 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         }
     }
     result
+}
+
+/// Create Triangle's OK with Equilateral (#13357's checkbox, `equilateral`) or From Center checked
+/// turns that setting on in the Triangle tool's gear, as in the reference application (#13361).
+/// Only the checked boxes were measured: an unchecked one leaves the gear as it is.
+fn triangle_gear_from(o: &mut crate::state::ToolOptions, f: &Map<String, Value>) {
+    let checked = |key: &str| f.get(key).and_then(Value::as_bool).unwrap_or(false);
+    if checked("equilateral") {
+        o.triangle_constraint = "square".into();
+    }
+    if checked("fromCenter") {
+        o.triangle_from_center = true;
+    }
 }
 
 /// Returns whether a size warning is owed, blocking creation until it has been acknowledged.
