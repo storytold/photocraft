@@ -1105,6 +1105,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if r.changed() {
                 o.strength = s;
             }
+            let smudge_angle = if tool == Tool::Smudge {
+                let before = app.session.tools.brush.clone();
+                let mut brush = before.clone();
+                let alert = crate::eraser_ui::angle_field(ui, &mut brush);
+                Some((before, brush, alert))
+            } else {
+                None
+            };
             if let Some(all) = o.sample_all.slot(tool) {
                 crate::widgets::checkbox(ui, all, tl!("Sample All Layers"));
             }
@@ -1113,6 +1121,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             if tool == Tool::Smudge {
                 crate::widgets::checkbox(ui, &mut o.finger_painting, tl!("Finger Painting"));
+            }
+            if let Some((before, brush, alert)) = smudge_angle {
+                crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
+                if alert {
+                    app.ui.open_dialog(
+                        crate::state::DialogKind::Error,
+                        json!({"message": tl!(crate::eraser_ui::ANGLE_RANGE_MESSAGE)}).as_object().cloned().unwrap_or_default(),
+                    );
+                }
             }
             if out_of_range {
                 crate::eraser_ui::open_range_alert(app);
@@ -1310,3 +1327,7 @@ mod remove_options_bar_labels_tests;
 #[cfg(test)]
 #[path = "../burn_exposure_field_tests.rs"]
 mod burn_exposure_field_tests;
+
+#[cfg(test)]
+#[path = "../smudge_bar_angle_tests.rs"]
+mod smudge_bar_angle_tests;
