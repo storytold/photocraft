@@ -86,6 +86,7 @@ fn main() {
         }
         let mut samples = Vec::new();
         let mut peak = None;
+        let mut failed = false;
         for _ in 0..reps {
             sampler.reset();
             let t = Instant::now();
@@ -96,6 +97,7 @@ fn main() {
                     println!("{name:<44} {ms:>9.0} ms   peak RSS {:>6} MB{}", sampler.peak().unwrap_or(0) >> 20, if ok { "" } else { "   WRONG PIXELS" });
                     if !ok {
                         errors.push(json!({"name": name, "error": "the opened document's pixels don't match the fixture"}));
+                        failed = true;
                         break;
                     }
                     samples.push(ms);
@@ -104,11 +106,14 @@ fn main() {
                 Err(e) => {
                     println!("{name}: {e}");
                     errors.push(json!({"name": name, "error": e}));
+                    failed = true;
                     break;
                 }
             }
         }
-        if !samples.is_empty() {
+        // A case that failed in any repetition has no timing row, only its error: `cargo xtask
+        // perf` takes a row over an error of the same name.
+        if !failed && !samples.is_empty() {
             rows.push(row(name, &samples, peak, None));
         }
         if clean {
