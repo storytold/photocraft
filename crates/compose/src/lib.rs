@@ -192,6 +192,7 @@ pub(crate) trait BufferAlloc {
     type Error: Send;
     fn filled(&self, rect: Rect, color: [f32; 4]) -> Result<Buffer, Self::Error>;
     fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error>;
+    fn scalar_filled(&self, rect: Rect, value: f32) -> Result<Vec<f32>, Self::Error>;
 }
 
 pub(crate) struct InfallibleBufferAlloc;
@@ -203,6 +204,9 @@ impl BufferAlloc for InfallibleBufferAlloc {
     fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error> {
         Ok(buffer.clone())
     }
+    fn scalar_filled(&self, rect: Rect, value: f32) -> Result<Vec<f32>, Self::Error> {
+        Ok(photocraft_raster::scratch::take(rect.width() as usize * rect.height() as usize, value))
+    }
 }
 
 pub(crate) struct FallibleBufferAlloc;
@@ -213,6 +217,14 @@ impl BufferAlloc for FallibleBufferAlloc {
     }
     fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error> {
         buffer.try_clone()
+    }
+    fn scalar_filled(&self, rect: Rect, value: f32) -> Result<Vec<f32>, Self::Error> {
+        let width = usize::try_from(rect.width()).map_err(|_| photocraft_raster::AllocationError::SizeOverflow)?;
+        let height = usize::try_from(rect.height()).map_err(|_| photocraft_raster::AllocationError::SizeOverflow)?;
+        let len = width.checked_mul(height).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+        let bytes = len.checked_mul(std::mem::size_of::<f32>()).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+        photocraft_raster::scratch::try_take(len, value)
+            .ok_or(photocraft_raster::AllocationError::NotEnoughMemory { bytes })
     }
 }
 

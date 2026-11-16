@@ -634,16 +634,20 @@ impl<'a> EffectPass<'a> {
         let (w, h) = (self.w, self.h);
         let base = alloc.clone(work)?;
         let mut acc = alloc.filled(self.big, [0.0; 4])?; // premultiplied Σ share·blended
-        let mut cover = vec![0.0f32; w * h];
+        let mut cover = alloc.scalar_filled(self.big, 0.0)?;
         for st in strokes.iter().copied() {
             let (_, out_w) = stroke_widths(st);
             if out_w <= 0.0 {
                 continue;
             }
-            let share = self.outside_share(st, out_w, shape, lay, fields, &mut cover);
+            let share = self.outside_share(st, shape, lay, fields, &mut cover, alloc)?;
             // The stroke blended over the backdrop at full coverage.
             let mut blended = alloc.clone(&base)?;
-            let ones = Map { w, h, v: share.iter().map(|&s| if s > 0.0 { 1.0 } else { 0.0 }).collect() };
+            let mut ones = alloc.scalar_filled(self.big, 0.0)?;
+            for (one, &s) in ones.iter_mut().zip(&share) {
+                if s > 0.0 { *one = 1.0; }
+            }
+            let ones = Map { w, h, v: ones };
             // The share already carries the Dissolve choice, so the paint itself composites as Normal.
             let paint_blend = if st.common.blend == BlendMode::Dissolve { BlendMode::Normal } else { st.common.blend };
             paint_fx(&mut blended, &ones, &st.paint, self.stroke_frame(st), self.anchor, self.big, paint_blend, 1.0, self.patterns);
@@ -671,7 +675,16 @@ impl<'a> EffectPass<'a> {
 
     /// The share of each pixel an outside stroke `st` (outside width `out_w`) takes: its coverage
     /// × opacity not yet taken by the strokes above, which `cover` accumulates.
-    fn outside_share(&self, st: &photocraft_doc::StrokeFx, out_w: f32, shape: &Map, lay: &Buffer, fields: &StrokeFields, cover: &mut [f32]) -> Vec<f32> {
+    fn outside_share<A: BufferAlloc>(
+        &self,
+        st: &photocraft_doc::StrokeFx,
+        shape: &Map,
+        lay: &Buffer,
+        fields: &StrokeFields,
+        cover: &mut [f32],
+        alloc: &A,
+    ) -> Result<Vec<f32>, A::Error> {
+        let (_, out_w) = stroke_widths(st);
         let (w, big) = (self.w, self.big);
         // Shape layers without a filled outline stroke their vector outline, estimated from local
         // coverage; every other layer strokes its shape. The width then picks the field.
@@ -688,7 +701,7 @@ impl<'a> EffectPass<'a> {
             (false, false) => fields.dout.as_deref(),
         }
         .unwrap_or_default();
-        let mut share = vec![0.0f32; w * self.h];
+        let mut share = alloc.scalar_filled(self.big, 0.0)?;
         for (i, sh) in share.iter_mut().enumerate() {
             let band = (out_w + 0.5 - d[i]).clamp(0.0, 1.0);
             let k = if inside(shape.v[i]) { if vector_outline { 0.0 } else { band * outline_share(shape.v[i], lay.px[i][3]) } } else { band };
@@ -700,7 +713,7 @@ impl<'a> EffectPass<'a> {
             *sh = k * (1.0 - cover[i]);
             cover[i] += *sh;
         }
-        share
+        Ok(share)
     }
 
     /// Writes the finished stack `work` into `backdrop` (over `before`) at layer opacity.
@@ -796,6 +809,7 @@ mod outside_stroke_allocation_tests {
     use super::*;
     use photocraft_color::{Color, PixelFormat};
     use photocraft_doc::{FxCommon, StrokeFx};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct RejectFilled;
 
@@ -808,6 +822,75 @@ mod outside_stroke_allocation_tests {
 
         fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error> {
             buffer.try_clone().map_err(|_| "clone allocation")
+        }
+
+        fn scalar_filled(&self, _rect: Rect, _value: f32) -> Result<Vec<f32>, Self::Error> {
+            Err("outside stroke scalar allocation")
+        }
+    }
+
+    struct FailScalarAt {
+        fail_at: usize,
+        attempts: AtomicUsize,
+    }
+
+    impl BufferAlloc for FailScalarAt {
+        type Error = usize;
+
+        fn filled(&self, rect: Rect, color: [f32; 4]) -> Result<Buffer, Self::Error> {
+            Ok(Buffer::filled(rect, color))
+        }
+
+        fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error> {
+            Ok(buffer.clone())
+        }
+
+        fn scalar_filled(&self, rect: Rect, value: f32) -> Result<Vec<f32>, Self::Error> {
+            let attempt = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+            if attempt == self.fail_at {
+                return Err(attempt);
+            }
+            Ok(photocraft_raster::scratch::take(rect.width() as usize * rect.height() as usize, value))
+        }
+    }
+
+    #[test]
+    fn enabled_outside_stroke_scalar_allocation_failures_preserve_pixels() {
+        let rect = Rect::new(0, 0, 4, 4);
+        let mut layer = Layer::raster("outside stroke", PixelFormat::RGBA8);
+        layer.effects.items.push(Effect::Stroke(StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            size: 1.0,
+            position: StrokePosition::Outside,
+            paint: FxPaint::Color(Color::rgb(0.0, 0.0, 1.0)),
+            overprint: false,
+        }));
+        let mut shape = Map::new(4, 4, 0.0);
+        for (index, value) in shape.v.iter_mut().enumerate() {
+            if matches!(index, 5 | 6 | 9 | 10) { *value = 1.0; }
+        }
+        let patterns = PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES);
+        let texture = TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
+        let maps = build_maps(&layer, shape.v.clone(), rect, &GlobalLight::default(), &texture);
+        let pass = EffectPass::new(&layer, &maps, rect, rect, &patterns, None);
+        let strokes: Vec<_> = layer.effects.items.iter().filter_map(|effect| if let Effect::Stroke(stroke) = effect { Some(stroke) } else { None }).collect();
+        assert!(strokes.iter().any(|stroke| stroke_widths(stroke).1 > 0.0));
+        let fields = pass.stroke_fields(true);
+        let mut lay = Buffer::filled(rect, [0.0; 4]);
+        for (pixel, alpha) in lay.px.iter_mut().zip(&shape.v) { pixel[3] = *alpha; }
+        let original = Buffer::filled(rect, [1.0; 4]);
+
+        // The three scalar allocations are the accumulated cover, this stroke's share, and the
+        // paint-coverage map. Each failure is returned before any work pixels are written back.
+        for fail_at in 1..=3 {
+            let allocator = FailScalarAt { fail_at, attempts: AtomicUsize::new(0) };
+            let mut work = original.clone();
+            assert_eq!(
+                pass.paint_outside_strokes_with(&mut work, &lay, &shape, &strokes, &fields, &allocator),
+                Err(fail_at),
+            );
+            assert_eq!(allocator.attempts.load(Ordering::Relaxed), fail_at);
+            assert_eq!(work, original, "a rejected scalar scratch buffer cannot publish partial stroke pixels");
         }
     }
 

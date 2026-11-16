@@ -470,6 +470,12 @@ mod fallible_bands_tests {
             self.attempt()?;
             buffer.try_clone().map_err(|_| usize::MAX)
         }
+
+        fn scalar_filled(&self, rect: Rect, value: f32) -> Result<Vec<f32>, Self::Error> {
+            self.attempt()?;
+            let len = (rect.width() as usize).checked_mul(rect.height() as usize).ok_or(usize::MAX)?;
+            photocraft_raster::scratch::try_take(len, value).ok_or(usize::MAX)
+        }
     }
 
     fn nested_document() -> Document {
