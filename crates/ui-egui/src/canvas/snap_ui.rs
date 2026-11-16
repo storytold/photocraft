@@ -415,7 +415,16 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2
     }
     let (out, lines) = match &snap.gesture {
         // A Shift-drawn frame ends where the squared drag does, not where the pointer is (#13865).
-        Gesture::Point if snap.frame && mods.shift => square_corner(&snap.targets, snap.start, p, tol),
+        Gesture::Point if snap.frame && mods.shift => {
+            // Square from the corner the Frame tool holds, not the raw press: a snapped press moves
+            // it, and Space carries it with the pointer.
+            let start = match &app.ui.frame_tool.drag {
+                Some(crate::frame_tool::FrameDrag::New { start, .. }) => *start,
+                _ => snap.start,
+            };
+            // The press itself (nothing drawn yet) is one point, not the end of a squared drag.
+            if p == start { snap.targets.snap_point(p, tol) } else { square_corner(&snap.targets, start, p, tol) }
+        }
         Gesture::Point => crop_handle(app, p, mods, &snap.targets, tol).unwrap_or_else(|| snap.targets.snap_point(p, tol)),
         Gesture::TransformCorner { point, .. } if corner_distorts(app, &snap.gesture, mods) => {
             let proposed = [point[0] + p[0] - snap.start[0], point[1] + p[1] - snap.start[1]];
@@ -474,10 +483,14 @@ fn square_corner(targets: &SnapTargets, start: [f64; 2], p: [f64; 2], tol: f64) 
     let corner = [start[0] + sx * side, start[1] + sy * side];
     let (snapped, lines) = targets.snap_point(corner, tol);
     let (ax, ay) = (snapped[0] - corner[0], snapped[1] - corner[1]);
-    let by_x = ax != 0.0 && (ay == 0.0 || ax.abs() <= ay.abs());
-    if !by_x && ay == 0.0 {
-        return (p, Vec::new());
-    }
+    // A target hit on an axis is told by its line, not by a correction: a corner already on a target
+    // has a zero correction and is the nearest alignment there is.
+    let by_x = match (lines.iter().any(|l| l.vertical), lines.iter().any(|l| !l.vertical)) {
+        (false, false) => return (p, Vec::new()),
+        (true, false) => true,
+        (false, true) => false,
+        (true, true) => ax.abs() <= ay.abs(),
+    };
     let side = (side + if by_x { ax * sx } else { ay * sy }).max(0.0);
     let lines = lines.into_iter().filter(|l| l.vertical == by_x).collect();
     ([start[0] + sx * side, start[1] + sy * side], lines)
