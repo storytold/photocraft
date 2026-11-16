@@ -356,7 +356,8 @@ mod tests {
     fn swatches_touch_without_a_gap() {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let second = app.session.presets.swatches.first().and_then(|g| g.items.get(1)).map(|s| s.name.clone()).unwrap();
-        let mut h = Harness::builder().with_size(vec2(300.0, 300.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
+        // Narrow enough that the first group wraps, so the selected swatch has one below it too.
+        let mut h = Harness::builder().with_size(vec2(120.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
         h.run_steps(2);
         assert_eq!(h.state().ui.presets_ui.selected.get(PANEL), None);
         let p = first_cell(&h);
@@ -364,14 +365,15 @@ mod tests {
         assert_eq!(h.state().ui.presets_ui.selected.get(PANEL), Some(&second), "the second swatch, not a gap");
     }
 
-    /// #15328: the selected swatch's outline lies over its neighbours; the swatches after it were
-    /// filled on top and hid its right and bottom edges.
+    /// #15328: the selected swatch's outline lies over its neighbours; the swatches after it (to its
+    /// right and in the next row) were filled on top and hid its right and bottom edges.
     #[test]
     fn the_selection_outline_is_painted_over_the_next_swatches() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let first = app.session.presets.swatches[0].items[0].name.clone();
         app.ui.presets_ui.selected.insert(PANEL.into(), first);
-        let mut h = Harness::builder().with_size(vec2(300.0, 300.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
+        // Narrow enough that the first group wraps, so the selected swatch has one below it too.
+        let mut h = Harness::builder().with_size(vec2(120.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
         h.run_steps(2);
         let rects: Vec<egui::epaint::RectShape> = h
             .output()
@@ -383,7 +385,12 @@ mod tests {
             })
             .collect();
         let at = rects.iter().position(|r| r.stroke.width == 2.0).expect("the selected swatch is outlined");
-        let outline = rects[at].rect.expand(2.0);
+        let cell = rects[at].rect;
+        let outline = cell.expand(2.0);
+        let filled = |r: &&egui::epaint::RectShape| r.fill != Color32::TRANSPARENT;
+        let right = rects.iter().filter(filled).any(|r| (r.rect.min.x - cell.max.x).abs() <= 2.0 && r.rect.y_range().contains(cell.center().y));
+        let below = rects.iter().filter(filled).any(|r| (r.rect.min.y - cell.max.y).abs() <= 2.0 && r.rect.x_range().contains(cell.center().x));
+        assert!(right && below, "the selected swatch has neighbours to its right and below");
         let covering = rects[at + 1..].iter().filter(|r| r.fill != Color32::TRANSPARENT && r.rect.intersects(outline)).count();
         assert_eq!(covering, 0, "no swatch is filled over the selection outline");
     }
@@ -409,7 +416,8 @@ mod tests {
         });
         // Recolour with a visible colour: put Red first.
         app.run("swatches.move", json!({"swatch": "Red", "to": "Grays", "position": 0})).unwrap();
-        let mut h = Harness::builder().with_size(vec2(300.0, 300.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
+        // Narrow enough that the first group wraps, so the selected swatch has one below it too.
+        let mut h = Harness::builder().with_size(vec2(120.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
         h.run_steps(2);
         let p = first_cell(&h);
         click(&mut h, p, Modifiers::NONE);
@@ -444,7 +452,8 @@ mod tests {
     fn alt_click_sets_the_background_and_selects() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.tools.background = [0.0, 0.0, 1.0, 1.0];
-        let mut h = Harness::builder().with_size(vec2(300.0, 300.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
+        // Narrow enough that the first group wraps, so the selected swatch has one below it too.
+        let mut h = Harness::builder().with_size(vec2(120.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
         h.run_steps(2);
         let p = first_cell(&h);
         click(&mut h, p, Modifiers::ALT);
