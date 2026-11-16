@@ -5,8 +5,10 @@ use super::*;
 
 const KIND: &str = "patternOverlay";
 
-/// Type `text` into the Angle field of the open dialog and tab out of it.
-fn type_angle(kind: &str, text: &str) -> Value {
+type Dialog = egui_kittest::Harness<'static, (PhotocraftApp, Map<String, Value>)>;
+
+/// The open dialog with `text` typed into its Angle field and tabbed out of.
+fn typed_dialog(kind: &str, text: &str) -> Dialog {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -31,6 +33,12 @@ fn type_angle(kind: &str, text: &str) -> Value {
     harness.run_steps(1);
     harness.key_press(egui::Key::Tab);
     harness.run_steps(3);
+    harness
+}
+
+/// Type `text` into the Angle field of the open dialog, tab out of it and press OK.
+fn type_angle(kind: &str, text: &str) -> Value {
+    let mut harness = typed_dialog(kind, text);
     let (app, fields) = harness.state_mut();
     confirm(app, fields).unwrap();
     let state = app.session.active().unwrap();
@@ -56,6 +64,8 @@ fn find_angle(v: &Value) -> Option<f64> {
 fn typed_angles_up_to_360_are_kept_and_360_is_stored_as_0() {
     assert_eq!(angle(KIND, "270"), 270.0);
     assert_eq!(angle(KIND, "-270"), -270.0);
+    assert_eq!(angle(KIND, "-90"), -90.0);
+    assert_eq!(angle(KIND, "-360"), -360.0);
     assert_eq!(angle(KIND, "360"), 0.0);
 }
 
@@ -69,4 +79,22 @@ fn values_past_the_range_are_clamped() {
 fn other_effects_keep_the_180_range() {
     assert_eq!(angle("dropShadow", "270"), 180.0);
     assert_eq!(angle("dropShadow", "-270"), -180.0);
+}
+
+/// What Make Default stores for a typed `text`: the dialog's own copy and the session's.
+fn made_default_angle(kind: &str, text: &str) -> (f64, f64) {
+    let mut harness = typed_dialog(kind, text);
+    harness.get_by_label("Make Default").click();
+    harness.run_steps(3);
+    let (app, fields) = harness.state_mut();
+    let dialog = fields[USER_DEFAULTS][kind]["angle"].as_f64().unwrap_or(f64::NAN);
+    let session = app.session.presets.layer_defaults.get(kind).and_then(|p| p["angle"].as_f64()).unwrap_or(f64::NAN);
+    (dialog, session)
+}
+
+#[test]
+fn make_default_stores_360_as_0_like_ok_does() {
+    assert_eq!(made_default_angle(KIND, "360"), (0.0, 0.0));
+    assert_eq!(made_default_angle(KIND, "-360"), (-360.0, -360.0));
+    assert_eq!(made_default_angle(KIND, "270"), (270.0, 270.0));
 }

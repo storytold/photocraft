@@ -15,6 +15,19 @@ pub fn angle_dial_row(ui: &mut Ui, label: &str, angle: &mut f32, range: std::ops
 /// [`angle_dial_row`] with its label right-aligned in a `label_w` column ([`row_label`]) when
 /// given, lined up with the [`slider_line`] rows around it (Layer Style).
 pub fn angle_dial_line(ui: &mut Ui, label: &str, label_w: Option<f32>, angle: &mut f32, range: std::ops::RangeInclusive<f32>) -> Response {
+    let wraps = *range.start() >= -180.0 && *range.end() <= 180.0;
+    angle_dial_impl(ui, label, label_w, angle, range, wraps)
+}
+
+/// [`angle_dial_line`] whose dial keeps its own half turn (-180..=180) although the typed field
+/// takes the wider `range`: the arrow keys wrap past 180 (Layer Style's Pattern and Gradient
+/// Overlay, whose field takes -360..=360). A value already past the half turn (a typed 270)
+/// steps on instead of jumping back into it.
+pub fn angle_dial_line_wrapping(ui: &mut Ui, label: &str, label_w: Option<f32>, angle: &mut f32, range: std::ops::RangeInclusive<f32>) -> Response {
+    angle_dial_impl(ui, label, label_w, angle, range, true)
+}
+
+fn angle_dial_impl(ui: &mut Ui, label: &str, label_w: Option<f32>, angle: &mut f32, range: std::ops::RangeInclusive<f32>, wraps: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     // The dial clamps with max/min, not `f32::clamp`, which panics if a malformed spec
     // reverses the range.
@@ -56,7 +69,7 @@ pub fn angle_dial_line(ui: &mut Ui, label: &str, label_w: Option<f32>, angle: &m
             if step != 0.0 {
                 // Wrap round the circle only when the range is the dial's own half turn each
                 // way; a wider range (Motion Blur's -360..360) steps on, so 270° goes to 271°.
-                let stepped = if lo >= -180.0 && hi <= 180.0 { (*angle + step + 180.0).rem_euclid(360.0) - 180.0 } else { *angle + step };
+                let stepped = if wraps && (-180.0..=180.0).contains(&*angle) { (*angle + step + 180.0).rem_euclid(360.0) - 180.0 } else { *angle + step };
                 *angle = stepped.max(lo).min(hi);
                 dial.mark_changed();
             }
@@ -133,6 +146,24 @@ mod tests {
         h.run();
         press_on_dial(&mut h, egui::Key::ArrowRight);
         assert_eq!(*h.state(), -179.0, "Drop Shadow's dial still wraps past 180°");
+    }
+
+    #[test]
+    fn the_wrapping_dial_keeps_its_half_turn_on_a_wide_field() {
+        let wrapping = |start: f32, key: egui::Key| {
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 100.0)).build_ui_state(
+                |ui, angle| {
+                    angle_dial_line_wrapping(ui, "Angle", None, angle, -360.0..=360.0);
+                },
+                start,
+            );
+            h.run();
+            press_on_dial(&mut h, key);
+            *h.state()
+        };
+        assert_eq!(wrapping(180.0, egui::Key::ArrowRight), -179.0, "Layer Style's dial wraps at 180 like Drop Shadow's");
+        assert_eq!(wrapping(-180.0, egui::Key::ArrowLeft), 179.0);
+        assert_eq!(wrapping(270.0, egui::Key::ArrowRight), 271.0, "a typed 270 steps on, not back into the half turn");
     }
 
     #[test]
