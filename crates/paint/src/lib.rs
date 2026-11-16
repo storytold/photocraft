@@ -32,6 +32,7 @@ pub mod render;
 pub mod replace;
 pub mod retouch;
 pub mod rng;
+pub mod surface;
 pub mod symmetry;
 pub mod tile;
 
@@ -43,6 +44,7 @@ pub use curve::ResponseCurve;
 pub use mip_cache::{mip_cache_bytes, purge_mip_cache};
 pub use mixer::MixerSettings;
 pub use render::{BrushContext, StrokeRenderer, UnionLive, grid_center, grid_square, render_stroke, render_stroke_clipped};
+pub use surface::{Local, SampleMode, ShadeSource, SurfaceMap, SurfaceOptions, apply_strength, surface_dab_shape};
 pub use tile::{GrayTile, StoredTile};
 
 /// One input sample. Missing stylus data defaults to "mouse": full pressure, no tilt/rotation.

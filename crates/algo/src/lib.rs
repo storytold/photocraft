@@ -87,6 +87,7 @@ mod square_dilate;
 pub mod stack;
 mod stylize;
 mod stylize2;
+pub mod surface;
 pub mod tone;
 pub mod transform;
 pub mod trap;

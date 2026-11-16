@@ -267,6 +267,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 range_alert(&mut app.ui, ZERO_TO_100);
             }
             smoothing_options(ui, b, brush);
+            if brush {
+                super::brush_controls::surface_options(app, ui, b);
+            }
             if app.ui.tool == Tool::Eraser {
                 widgets::checkbox(ui, &mut app.ui.tool_options.erase_to_history, tl!("Erase to History"));
             }
@@ -299,6 +302,7 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             }
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
+            super::brush_controls::surface_options(app, ui, b);
             widgets::vline(ui, 22.0);
             widgets::checkbox(ui, &mut app.ui.tool_options.pencil_auto_erase, tl!("Auto Erase"))
                 .on_hover_text(tl!("Draws background color over foreground colors"));
@@ -351,6 +355,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             tip(flow, tl!("Set flow rate for stroke"));
             opt_label(ui, tl!("Smoothing"));
             tip(smoothing_field(ui, b, 66.0), tl!("Set smoothing for stroke\nUse higher values to reduce the shakiness of brush strokes"));
+            if brush {
+                super::brush_controls::surface_options(app, ui, b);
+            }
             if app.ui.tool == Tool::Eraser {
                 widgets::checkbox(ui, &mut app.ui.tool_options.erase_to_history, tl!("Erase to History"));
             }

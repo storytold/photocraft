@@ -129,6 +129,7 @@ pub use cmd::paint_cmds;
 use cmd::path_edit_cmds;
 pub use cmd::pattern_cmds;
 pub use cmd::pattern_fill_cmds;
+pub use cmd::perspective_cmds;
 pub use cmd::perspective_crop_cmds;
 pub use cmd::photo_cmds;
 pub use cmd::pick_cmds;
@@ -323,6 +324,8 @@ pub struct Session {
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,
+    /// Surface Color's shading fields and Follow Perspective's plane map ([`brush_cmds::surface_wire`]).
+    pub(crate) surface_cache: brush_cmds::surface_wire::SurfaceCache,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].

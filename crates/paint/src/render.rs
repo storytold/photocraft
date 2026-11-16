@@ -20,6 +20,7 @@ use crate::brush::{BrushSettings, MaskMode, Pattern, TipShape};
 use crate::dynamics::{DabGenerator, grid_cell};
 use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
+use crate::surface::{Shade, ShadeSource, SurfaceMap, apply_strength};
 use crate::tile::{Mips, PatternImage};
 use crate::{Dab, StrokePoint, TipProfile};
 
@@ -769,6 +770,8 @@ pub struct StrokeRenderer {
     dual_area_left: u64,
     /// A dab was left out for want of budget.
     refused: bool,
+    /// Surface Color: the paint's colour is scaled per pixel by the photo's shading.
+    shade: Option<Shade>,
 }
 
 /// Most dab-rectangle pixels one stroke rasterizes: past it the stroke stops painting, so a very
@@ -902,6 +905,7 @@ impl StrokeRenderer {
                         area_left: p.area_left,
                         dual_area_left: p.dual_area_left,
                         refused: p.refused,
+                        shade: p.shade.clone(),
                     })
                 }
                 Some(m) => {
@@ -958,7 +962,22 @@ impl StrokeRenderer {
             area_left: MAX_STROKE_DAB_AREA,
             dual_area_left: MAX_STROKE_DAB_AREA,
             refused: false,
+            shade: None,
         }
+    }
+
+    /// Surface Color: scale the paint's colour per pixel by `source`'s shading at `strength`
+    /// (see [`apply_strength`]). Not for erasing. `None`, a zero or a non-finite strength paints as
+    /// without. The live preview and the commit use the same pixels.
+    pub fn with_shade(mut self, source: Option<Arc<dyn ShadeSource>>, strength: f32) -> Self {
+        self.shade = source.filter(|_| strength.is_finite() && strength != 0.0).map(|source| Shade { source, strength });
+        self
+    }
+
+    /// Follow Perspective: see [`DabGenerator::with_surface`]. Call it before the first point.
+    pub fn with_surface(mut self, map: Option<Arc<dyn SurfaceMap>>) -> Self {
+        self.generator = self.generator.with_surface(map);
+        self
     }
 
     /// Only paint where a dab can reach inside `clip` (the target's paintable area): a dab whose
@@ -1120,6 +1139,7 @@ impl StrokeRenderer {
             area_left: self.area_left,
             dual_area_left: self.dual_area_left,
             refused: self.refused,
+            shade: self.shade.clone(),
         };
         t.raster_pending();
         // Tiles whose coverage the tail doesn't change still composite the same: redraw them all.
@@ -1291,6 +1311,9 @@ impl StrokeRenderer {
         // gradient to band and are not dithered: a Pencil line at partial opacity is one flat
         // colour, as in Photoshop, not grain that a tolerance-0 Magic Wand or Paint Bucket trips on.
         let dither = fmt.sample == SampleType::U8 && !b.aliased;
+        // Surface Color applies to paint, not to erasing.
+        let shade = self.shade.as_ref().filter(|_| !b.erase);
+        let hdr = fmt.sample == SampleType::F32;
         let mut dmg = Rect::EMPTY;
         // Each tile composites into a buffer of its own (a large stroke's tiles in parallel, to
         // the same pixels); the writes to the target go one by one, in order. Batches keep the
@@ -1323,6 +1346,13 @@ impl StrokeRenderer {
                 // intended reading.)
                 let mut src = src;
                 let w = tr.width() as usize;
+                // The photo's shading over the tile, fetched once.
+                let mut shade_tile: Vec<f32> = Vec::new();
+                if let Some(sh) = shade {
+                    shade_tile.resize(w * tr.height() as usize, 1.0);
+                    sh.source.shade(tr, &mut shade_tile);
+                }
+                let mut shaded = [0.0f32; 8];
                 for y in tr.y0..tr.y1 {
                     for x in tr.x0..tr.x1 {
                         let ti = ((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize;
@@ -1362,25 +1392,34 @@ impl StrokeRenderer {
                                 src[ch] = p[ch] / c;
                             }
                         }
+                        // Surface Color: the colour scaled by the shading, before the blend.
+                        let mut sp: &[f32] = &src;
+                        if let Some(sh) = shade {
+                            let f = apply_strength(shade_tile.get(i).copied().unwrap_or(1.0), sh.strength);
+                            if f != 1.0 {
+                                shade_src(&fmt, &src[..n], f, hdr, &mut shaded);
+                                sp = &shaded;
+                            }
+                        }
                         if b.behind {
                             let Some(a) = a_idx else { continue };
                             let da = px[a];
                             if lock_transparency || da >= 1.0 {
                                 continue;
                             }
-                            let underneath = src[a] * k * (1.0 - da);
+                            let underneath = sp[a] * k * (1.0 - da);
                             let alpha = da + underneath;
                             if alpha > 0.0 {
                                 for channel in 0..a {
-                                    px[channel] = (px[channel] * da + src[channel] * underneath) / alpha;
+                                    px[channel] = (px[channel] * da + sp[channel] * underneath) / alpha;
                                 }
                                 px[a] = alpha;
                             }
                         } else if matches!(b.mode, BlendMode::Normal | BlendMode::Dissolve) {
-                            over_native(&fmt, px, &src[..n], k, lock_transparency);
+                            over_native(&fmt, px, &sp[..n], k, lock_transparency);
                         } else {
                             let d = to_rgba(&fmt, px);
-                            let sr = to_rgba(&fmt, &src[..n]);
+                            let sr = to_rgba(&fmt, &sp[..n]);
                             let o = if lock_transparency {
                                 photocraft_color::blend::composite_atop(b.mode, d, sr, k)
                             } else {
@@ -1410,6 +1449,29 @@ impl StrokeRenderer {
         }
         self.regions.0 = pool;
         if all { bounds } else { dmg }
+    }
+}
+
+/// `src` (the stroke's colour in native channels, alpha last) with its colour scaled by the shading
+/// factor `f`, into `out`. Grayscale and RGB scale their channels; other modes scale in RGB.
+/// Integer formats stay within 0..=1; 32-bit float may exceed 1.
+fn shade_src(fmt: &PixelFormat, src: &[f32], f: f32, hdr: bool, out: &mut [f32; 8]) {
+    let n = src.len().min(8);
+    out[..n].copy_from_slice(&src[..n]);
+    let limit = |v: f32| if hdr { v.max(0.0) } else { v.clamp(0.0, 1.0) };
+    match fmt.mode {
+        ColorMode::Rgb | ColorMode::Grayscale => {
+            for v in out.iter_mut().take(fmt.mode.color_channels().min(n)) {
+                *v = limit(*v * f);
+            }
+        }
+        _ => {
+            let mut c = to_rgba(fmt, &src[..n]);
+            for v in &mut c[..3] {
+                *v = limit(*v * f);
+            }
+            from_rgba_into(fmt, c, out);
+        }
     }
 }
 
@@ -1702,3 +1764,6 @@ mod budget_tests;
 #[cfg(test)]
 #[path = "mip_cache_render_tests.rs"]
 mod mip_cache_tests;
+
+#[cfg(test)]
+mod surface_tests;
