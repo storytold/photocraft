@@ -362,7 +362,7 @@ fn warp_layer(
                 }
                 _ => plain,
             };
-            sm.warp = src_warp.filter(|w| !w.is_identity());
+            sm.warp = src_warp.filter(|w| !w.is_plain_identity());
             // Fallback appearance for sources that can't be re-rendered.
             if let Some(c) = &mut sm.cache {
                 *c = warp_mesh_surface_with(c, rect, &map, Fold::IN_PLACE, interp, ctl).ok_or(EngineError::Cancelled)?;
@@ -617,7 +617,7 @@ fn contents_warp(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         }
     };
     let bounds = w.bounds;
-    let new_warp = Some(w).filter(|w| !w.is_identity());
+    let new_warp = Some(w).filter(|w| !w.is_plain_identity());
     let old = crate::smart_cmds::placement(sm);
     if new_warp == sm.warp && placement.is_none_or(|h| h.0 == old.0) {
         return Ok(json!({"layer": id.0, "changed": false}));

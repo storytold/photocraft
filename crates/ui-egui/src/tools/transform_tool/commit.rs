@@ -74,7 +74,7 @@ pub fn commit(app: &mut PhotocraftApp) {
     let r = if let Some(w) = &t.warp {
         // Type with a Warp Text can be warped back to None; the engine skips an unchanged style.
         // A smart object's untouched warp can still carry the box's move (`warp_place`).
-        if w.is_identity() && !type_layer && t.warp_place.is_none() {
+        if w.is_plain_identity() && !type_layer && t.warp_place.is_none() {
             return;
         }
         match t.warp_place {

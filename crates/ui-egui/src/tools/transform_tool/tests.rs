@@ -2913,14 +2913,15 @@ fn warp_mode_drags_anchor_with_handles_splits_and_commits() {
     begin_warp(&mut app, &ctx).unwrap();
     let w = app.ui.transform.as_ref().unwrap().warp.clone().unwrap();
     assert!(w.is_identity());
-    // Drag the bottom-right anchor (point 15) by (+10, +6): its two handles follow.
+    // Drag the bottom-right corner (point 15) by (+10, +6): on the unsplit Default grid every
+    // point is free, as in the reference application, so its handles stay.
     warp_pointer(&mut app, ToolEvent::Down { x: 32.0, y: 32.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
     warp_pointer(&mut app, ToolEvent::Up { x: 42.0, y: 38.0 }, 2.0, egui::Modifiers::NONE);
     let m = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.clone().unwrap();
     assert_eq!(m.points[15], [42.0, 38.0]);
     let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
-    assert!(near(m.points[14], [24.0 + 10.0, 38.0]), "{:?}", m.points[14]);
-    assert!(near(m.points[11], [42.0, 24.0 + 6.0]), "{:?}", m.points[11]);
+    assert!(near(m.points[14], [24.0, 32.0]), "{:?}", m.points[14]);
+    assert!(near(m.points[11], [32.0, 24.0]), "{:?}", m.points[11]);
     split(&mut app, "edit.transform.splitWarpCrosswise", None).unwrap();
     let split_m = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.as_ref().unwrap();
     assert_eq!(split_m.points.last().copied(), Some([42.0, 38.0]), "the corner survives the cut");

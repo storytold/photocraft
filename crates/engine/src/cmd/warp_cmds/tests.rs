@@ -735,3 +735,22 @@ fn an_unchanged_warp_leaves_what_lies_outside_it_in_place() {
         assert!((q.0 - p.0).abs() < 1e-6 && (q.1 - p.1).abs() < 1e-6, "{p:?} moved to {q:?}");
     }
 }
+
+/// A smart object warped with a split grid that is still flat keeps that grid, as the reference
+/// application does (its lines come back in Warp); a plain flat grid leaves no warp.
+#[test]
+fn a_flat_split_grid_is_kept_on_a_smart_object() {
+    for split in [false, true] {
+        let mut s = session(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let rect = [10.0, 10.0, 60.0, 40.0];
+        let mut mesh = BezierMesh::identity(rect, 1, 1);
+        if split {
+            assert!(mesh.split_u(0.4));
+        }
+        s.execute("edit.transform.warp", json!({"rect": rect, "warp": Warp::custom(mesh, rect)})).unwrap();
+        let st = s.active().unwrap();
+        let LayerContent::Smart(sm) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("smart object") };
+        assert_eq!(sm.warp.is_some(), split, "split {split}: {:?}", sm.warp);
+    }
+}

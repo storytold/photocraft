@@ -405,6 +405,21 @@ fn preset_grid(style: WarpStyle, b: f64, hd: f64, vd: f64, vertical: bool, aspec
     g
 }
 
+/// The one-patch pull's shares of a grab at `s` (0..1) for the four control lines of a patch:
+/// the two lines bounding its third share it by where it is between them; an end line takes
+/// [`ONE_PATCH_BORDER`] of its share, and the next line inward [`ONE_PATCH_SPILL`] of its
+/// neighbour's.
+fn one_patch_share(s: f64) -> [f64; 4] {
+    let s = s.clamp(0.0, 1.0);
+    let third = ((s * 3.0) as usize).min(2);
+    let x = s * 3.0 - third as f64;
+    match third {
+        0 => [ONE_PATCH_BORDER * (1.0 - x), x, ONE_PATCH_SPILL * x, 0.0],
+        1 => [0.0, 1.0 - x, x, 0.0],
+        _ => [0.0, ONE_PATCH_SPILL * (1.0 - x), 1.0 - x, ONE_PATCH_BORDER * x],
+    }
+}
+
 /// One-patch pull: the share a border line takes of a grab in its outer third (measured: 0.455).
 const ONE_PATCH_BORDER: f64 = 0.455;
 /// One-patch pull: the share of its neighbour's pull the next line inward takes (measured: 0.024).
@@ -899,17 +914,7 @@ impl BezierMesh {
     /// inside of the picture and leaves its frame alone, and one near an edge or corner bows that
     /// edge or moves that corner too.
     fn pull_one_patch(&mut self, s: f64, t: f64, d: [f64; 2]) {
-        let share = |s: f64| -> [f64; 4] {
-            let s = s.clamp(0.0, 1.0);
-            let third = ((s * 3.0) as usize).min(2);
-            let x = s * 3.0 - third as f64;
-            match third {
-                0 => [ONE_PATCH_BORDER * (1.0 - x), x, ONE_PATCH_SPILL * x, 0.0],
-                1 => [0.0, 1.0 - x, x, 0.0],
-                _ => [0.0, ONE_PATCH_SPILL * (1.0 - x), 1.0 - x, ONE_PATCH_BORDER * x],
-            }
-        };
-        let (ws, wt, bs, bt) = (share(s), share(t), bernstein(s), bernstein(t));
+        let (ws, wt, bs, bt) = (one_patch_share(s), one_patch_share(t), bernstein(s), bernstein(t));
         // The grabbed point's move per unit of pull: the axes are independent, so it factors.
         let dot = |w: [f64; 4], b: [f64; 4]| w.iter().zip(b).map(|(w, b)| w * b).sum::<f64>();
         let at_grab = dot(ws, bs) * dot(wt, bt);
@@ -923,25 +928,27 @@ impl BezierMesh {
         }
     }
 
-    /// Pulls the surface point at normalised `(s, t)` by `d`, as dragging the grid anywhere inside
-    /// a patch does in other editors. `base` is the control grid at the start of the drag.
-    ///
-    /// The one-patch Default grid pulls as the reference application does (`pull_one_patch`).
-    /// On a split grid, two parts. The surrounding grid follows loosely: every interior anchor within about two cells
-    /// moves by a share of `d` that fades with distance. The picture's outer border stays pinned
-    /// (the picture keeps filling its frame) unless the grab is within a
-    /// few percent of it, and then it follows more and more. Each anchor
-    /// takes its whole 3 x 3 block of control points along, so every grid line stays smooth through
-    /// its anchors and the neighbouring cells and dividers bend with the pull. Then the four inner
-    /// control points of the grabbed patch make up the rest, so the grabbed point lands exactly at
-    /// its start + `d`. Grabbing near an anchor moves that anchor more, and the inner points less.
+    /// Pulls the surface point at normalised `(s, t)` by `d`. `base` is the control grid at the
+    /// start of the drag. A press that is not near a grid line: see [`Self::pull_at`].
     pub fn pull(&mut self, base: &[[f64; 2]], s: f64, t: f64, d: [f64; 2]) {
-        /// Within this distance of the mesh border (in 0..1 box units) a grab starts to drag the
-        /// border with it; further in, the border stays exactly where it is.
-        const BORDER_ZONE: f64 = 0.12;
-        /// Falloff radius, in the grabbed patch's size.
-        const REACH: f64 = 1.8;
-        if base.len() != self.points.len() || !d.iter().all(|v| v.is_finite()) {
+        let press = Self::eval_points(&self.us, &self.vs, base, s, t);
+        self.pull_at(base, s, t, press, d, 0.0);
+    }
+
+    /// Pulls the surface grabbed at `press` (its grid parameters `(s, t)`) by `d`, as dragging
+    /// the warp grid does in the reference application (measured from its saved meshes).
+    /// `base` is the control grid at the start of the drag; `reach` how close (in the mesh's
+    /// units) a press must be to a grid line to pull that line.
+    /// - The unsplit Default grid bends smoothly ([`Self::pull_one_patch`]).
+    /// - On a split grid, a press within `reach` of an anchor line (a split line or the border)
+    ///   pulls that line: its segment bends by the one-patch rule along it, and its nearest point
+    ///   lands on the pointer. A moved anchor takes the points around it along; a moved handle
+    ///   turns its anchor's frame, as dragging that handle does.
+    /// - Anywhere else on a split grid, the grab moves part of the grid rigidly by `d`, chosen per
+    ///   axis by where in its patch the press is: the near third moves the nearest anchor line with
+    ///   its handles, the middle third the patch's two anchor lines and all between them.
+    pub fn pull_at(&mut self, base: &[[f64; 2]], s: f64, t: f64, press: [f64; 2], d: [f64; 2], reach: f64) {
+        if base.len() != self.points.len() || !d.iter().all(|v| v.is_finite()) || !press.iter().all(|v| v.is_finite()) {
             return;
         }
         self.points.copy_from_slice(base);
@@ -950,182 +957,128 @@ impl BezierMesh {
             self.pull_one_patch(s, t, d);
             return;
         }
-        let (pi, a) = Self::locate(&self.us, s);
-        let (pj, b) = Self::locate(&self.vs, t);
-        let (ba, bb) = (bernstein(a), bernstein(b));
-        let nx = self.nx();
-        let anchor = |ai: usize, aj: usize| base.get(3 * aj * nx + 3 * ai).copied().unwrap_or([0.0; 2]);
-        let at0 = self.eval(s, t);
-        let target = [at0[0] + d[0], at0[1] + d[1]];
-        // The grabbed patch's size and its "interior-ness": 1 in the middle, 0 on its edges.
-        let mut size = 1.0f64;
-        for k in 0..2 {
-            let vals = [anchor(pi, pj)[k], anchor(pi + 1, pj)[k], anchor(pi, pj + 1)[k], anchor(pi + 1, pj + 1)[k]];
-            let (lo, hi) = vals.iter().fold((f64::MAX, f64::MIN), |m, v| (m.0.min(*v), m.1.max(*v)));
-            size = size.max(hi - lo);
+        if reach > 0.0
+            && let Some(line) = self.nearest_anchor_line(base, press, s, t, reach)
+        {
+            self.pull_line(base, line, press, d);
+            return;
         }
-        let radius = REACH * size;
-        let inner_w = (ba[1] + ba[2]) * (bb[1] + bb[2]);
-        let interior = (inner_w / 0.5625).clamp(0.0, 1.0);
-        let to_border = s.min(1.0 - s).min(t.min(1.0 - t));
-        let near_border = (1.0 - to_border / BORDER_ZONE).clamp(0.0, 1.0);
-        // How much of the pull each corner of the grabbed patch is responsible for.
-        // A corner on the picture's border only takes part once the grab is near that border.
-        // The picture's four corners never move in a pull (a grab near the border bends the
-        // border through its handles instead).
-        let mesh_corner = |ai: usize, aj: usize| (ai == 0 || ai == cols) && (aj == 0 || aj == rows);
-        let reach = |ai: usize, aj: usize, wa: f64, wb: f64| {
-            let border = ai == 0 || ai == cols || aj == 0 || aj == rows;
-            if mesh_corner(ai, aj) { 0.0 } else { wa * wb * if border { near_border } else { 1.0 } }
+        let (nx, ny) = (self.nx(), self.ny());
+        let (x0, x1) = Self::cell_range(&self.us, nx, s);
+        let (y0, y1) = Self::cell_range(&self.vs, ny, t);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if let Some(p) = self.points.get_mut(y * nx + x) {
+                    p[0] += d[0];
+                    p[1] += d[1];
+                }
+            }
+        }
+    }
+
+    /// The control lines (first and last index) a grab at `s` moves rigidly along one axis of a
+    /// split grid: by the third of its patch it is in, the nearer anchor line with its two handle
+    /// lines, or (the middle third) both anchor lines and everything between, with their handles.
+    fn cell_range(knots: &[f64], n: usize, s: f64) -> (usize, usize) {
+        let (m, a) = Self::locate(knots, s);
+        let (lo, hi) = (3 * m, 3 * m + 3);
+        let (first, last) = if a < 1.0 / 3.0 {
+            (lo.saturating_sub(1), lo + 1)
+        } else if a > 2.0 / 3.0 {
+            (hi - 1, hi + 1)
+        } else {
+            (lo.saturating_sub(1), hi + 1)
         };
-        let corner = [
-            (pi, pj, reach(pi, pj, ba[0] + ba[1], bb[0] + bb[1])),
-            (pi + 1, pj, reach(pi + 1, pj, ba[2] + ba[3], bb[0] + bb[1])),
-            (pi, pj + 1, reach(pi, pj + 1, ba[0] + ba[1], bb[2] + bb[3])),
-            (pi + 1, pj + 1, reach(pi + 1, pj + 1, ba[2] + ba[3], bb[2] + bb[3])),
-        ];
-        // Share of `d` for each anchor.
-        let mut share = vec![0.0f64; (cols + 1) * (rows + 1)];
-        for aj in 0..=rows {
-            for ai in 0..=cols {
-                let p = anchor(ai, aj);
-                let x = ((p[0] - at0[0]).hypot(p[1] - at0[1]) / radius).clamp(0.0, 1.0);
-                let fall = 0.5 * (1.0 + (std::f64::consts::PI * x).cos());
-                let border = ai == 0 || ai == cols || aj == 0 || aj == rows;
-                let edge = if mesh_corner(ai, aj) {
-                    0.0
-                } else if border {
-                    near_border
-                } else {
-                    1.0
-                };
-                share[aj * (cols + 1) + ai] = fall * edge;
+        (first, last.min(n - 1))
+    }
+
+    /// The anchor line (column `true` or row `false`, and its knot index) nearest `press`, if it
+    /// is within `reach`, with the parameter along it of its point nearest the press.
+    fn nearest_anchor_line(&self, base: &[[f64; 2]], press: [f64; 2], s: f64, t: f64, reach: f64) -> Option<(bool, usize, f64)> {
+        let mut best: Option<(f64, (bool, usize, f64))> = None;
+        for (column, knots, along) in [(true, &self.us, t), (false, &self.vs, s)] {
+            for (k, &knot) in knots.iter().enumerate() {
+                // The point of this line nearest the press: a short search around the press's own
+                // parameter along it.
+                let at =
+                    |v: f64| if column { Self::eval_points(&self.us, &self.vs, base, knot, v) } else { Self::eval_points(&self.us, &self.vs, base, v, knot) };
+                let (mut v, mut dist) = (along, f64::MAX);
+                for step in 0..=40 {
+                    let w = (along - 0.1 + 0.2 * step as f64 / 40.0).clamp(0.0, 1.0);
+                    let q = at(w);
+                    let e = (q[0] - press[0]).hypot(q[1] - press[1]);
+                    if e < dist {
+                        (v, dist) = (w, e);
+                    }
+                }
+                if dist <= reach && best.is_none_or(|b| dist < b.0) {
+                    best = Some((dist, (column, k, v)));
+                }
             }
         }
-        // The grabbed patch's own corners: near one, that corner follows the pointer.
-        for (ai, aj, w) in corner {
-            let f = &mut share[aj * (cols + 1) + ai];
-            *f = f.max((1.0 - interior) * w);
+        best.map(|b| b.1)
+    }
+
+    /// Pulls anchor line `(column, k, v)` so that its point at `v` lands on `press + d`.
+    fn pull_line(&mut self, base: &[[f64; 2]], (column, k, v): (bool, usize, f64), press: [f64; 2], d: [f64; 2]) {
+        let (nx, ny) = (self.nx(), self.ny());
+        let knots = if column { &self.vs } else { &self.us };
+        let (m, a) = Self::locate(knots, v);
+        let w = one_patch_share(a);
+        let b = bernstein(a);
+        let at_grab: f64 = w.iter().zip(b).map(|(w, b)| w * b).sum();
+        if at_grab <= 1e-12 {
+            return;
         }
-        // Every control point moves with the anchor it is closest to.
-        let ny = self.ny();
-        move_control_points(&mut self.points, nx, ny, cols, rows, &share, d);
-        // Close the gap exactly, with three groups of control points that share the work:
-        // - the four inner points of the grabbed patch (all of it in the middle of the patch,
-        //   little near a grid line, where they barely reach the surface);
-        // - the corner blocks (an anchor with its handles, moving as a whole so lines stay smooth);
-        // - when the grab is near the picture's border, that border's own handles: the border
-        //   bends into a curve and its corners stay put.
-        // Closing nudges the tangents across the grid lines, so they are evened out again and the
-        // gap re-closed.
-        let norm: f64 = [1, 2].iter().flat_map(|j| [1, 2].iter().map(move |i| (ba[*i] * bb[*j]).powi(2))).sum();
-        let corner_norm: f64 = corner.iter().map(|c| c.2 * c.2).sum();
-        // With no free corner to help (a one-patch grid, grabbed away from its border) the four
-        // inner points do all of it.
-        let inner_part = if corner_norm > 1e-12 { (inner_w / 0.15).min(1.0) } else { 1.0 };
-        // Handles along the sides of the grabbed patch that lie on the picture's border.
-        let mut edge: Vec<(usize, f64)> = Vec::new();
-        for k in [1usize, 2] {
-            if pi == 0 {
-                edge.push(((3 * pj + k) * nx + 3 * pi, ba[0] * bb[k]));
+        let knot = if column { self.us.get(k).copied() } else { self.vs.get(k).copied() };
+        let Some(knot) = knot else { return };
+        let on_line = if column { Self::eval_points(&self.us, &self.vs, base, knot, v) } else { Self::eval_points(&self.us, &self.vs, base, v, knot) };
+        // The line's nearest point goes to the pointer.
+        let target = [press[0] + d[0] - on_line[0], press[1] + d[1] - on_line[1]];
+        let index = |r: usize| if column { (3 * k, r) } else { (r, 3 * k) };
+        let moves: Vec<((usize, usize), [f64; 2])> = (0..4).map(|q| (index(3 * m + q), [target[0] * w[q] / at_grab, target[1] * w[q] / at_grab])).collect();
+        // The anchors first, with the points around them; then the segment's own handles.
+        for &((x, y), mv) in [moves[0], moves[3]].iter() {
+            if mv == [0.0, 0.0] {
+                continue;
             }
-            if pi + 1 == cols {
-                edge.push(((3 * pj + k) * nx + 3 * pi + 3, ba[3] * bb[k]));
-            }
-            if pj == 0 {
-                edge.push((3 * pj * nx + 3 * pi + k, ba[k] * bb[0]));
-            }
-            if pj + 1 == rows {
-                edge.push(((3 * pj + 3) * nx + 3 * pi + k, ba[k] * bb[3]));
-            }
-        }
-        let edge_norm: f64 = edge.iter().map(|e| e.1 * e.1).sum();
-        let edge_part = if edge_norm > 1e-12 { near_border } else { 0.0 };
-        let (inner_share, corner_share) = ((1.0 - edge_part) * inner_part, (1.0 - edge_part) * (1.0 - inner_part));
-        for _ in 0..60 {
-            let now = self.eval(s, t);
-            let rem = [target[0] - now[0], target[1] - now[1]];
-            if rem[0].hypot(rem[1]) < 1e-9 {
-                break;
-            }
-            if inner_share > 0.0 && norm > 0.0 {
-                for j in [1usize, 2] {
-                    for i in [1usize, 2] {
-                        let k = ba[i] * bb[j] / norm * inner_share;
-                        let p = &mut self.points[(3 * pj + j) * nx + 3 * pi + i];
-                        p[0] += rem[0] * k;
-                        p[1] += rem[1] * k;
+            for yy in y.saturating_sub(1)..=(y + 1).min(ny - 1) {
+                for xx in x.saturating_sub(1)..=(x + 1).min(nx - 1) {
+                    if let Some(p) = self.points.get_mut(yy * nx + xx) {
+                        p[0] += mv[0];
+                        p[1] += mv[1];
                     }
                 }
             }
-            if edge_part > 0.0 {
-                for (idx, w) in &edge {
-                    if let Some(p) = self.points.get_mut(*idx) {
-                        let k = w / edge_norm * edge_part;
-                        p[0] += rem[0] * k;
-                        p[1] += rem[1] * k;
-                    }
-                }
+        }
+        for &((x, y), mv) in [moves[1], moves[2]].iter() {
+            if let (Some(q), Some(b)) = (self.points.get_mut(y * nx + x), base.get(y * nx + x)) {
+                *q = [b[0] + mv[0], b[1] + mv[1]];
             }
-            if corner_share > 0.0 && corner_norm > 0.0 {
-                for (ai, aj, w) in corner {
-                    let k = w / corner_norm * corner_share;
-                    for dj in -1..=1isize {
-                        for di in -1..=1isize {
-                            let (i, j) = ((3 * ai) as isize + di, (3 * aj) as isize + dj);
-                            if i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < self.ny() {
-                                let p = &mut self.points[j as usize * nx + i as usize];
-                                p[0] += rem[0] * k;
-                                p[1] += rem[1] * k;
-                            }
-                        }
-                    }
-                }
-            }
-            for _ in 0..3 {
-                self.smooth_lines((3 * pi).saturating_sub(3), 3 * pi + 7, (3 * pj).saturating_sub(3), 3 * pj + 7);
+        }
+        for &((x, y), mv) in [moves[1], moves[2]].iter() {
+            if mv != [0.0, 0.0] {
+                self.turn_frame(base, x, y);
             }
         }
     }
 
-    /// Makes the tangent equal on both sides of every interior grid line, for the control points
-    /// in columns `i0..i1` and rows `j0..j1` (exclusive ends, clamped to the grid): each pair of
-    /// handles takes the average of the two tangents it had.
-    fn smooth_lines(&mut self, i0: usize, i1: usize, j0: usize, j1: usize) {
-        let nx = self.nx();
-        let (i1, j1) = (i1.min(nx), j1.min(self.ny()));
-        let hu = |k: usize| self.us[k + 1] - self.us[k];
-        let hv = |k: usize| self.vs[k + 1] - self.vs[k];
-        // (left, centre, right, span left, span right)
-        let mut triples = Vec::new();
-        for a in 1..self.us.len() - 1 {
-            if 3 * a >= i0 && 3 * a < i1 {
-                for j in j0..j1 {
-                    triples.push((j * nx + 3 * a - 1, j * nx + 3 * a, j * nx + 3 * a + 1, hu(a - 1), hu(a)));
-                }
-            }
-        }
-        for b in 1..self.vs.len() - 1 {
-            if 3 * b >= j0 && 3 * b < j1 {
-                for i in i0..i1 {
-                    triples.push(((3 * b - 1) * nx + i, 3 * b * nx + i, (3 * b + 1) * nx + i, hv(b - 1), hv(b)));
-                }
-            }
-        }
-        for (l, c, r, hl, hr) in triples {
-            let (pl, pc, pr) = (self.points[l], self.points[c], self.points[r]);
-            let tan = [((pc[0] - pl[0]) / hl + (pr[0] - pc[0]) / hr) / 2.0, ((pc[1] - pl[1]) / hl + (pr[1] - pc[1]) / hr) / 2.0];
-            self.points[l] = [pc[0] - tan[0] * hl, pc[1] - tan[1] * hl];
-            self.points[r] = [pc[0] + tan[0] * hr, pc[1] + tan[1] * hr];
-        }
+    /// The point at `(s, t)` of the surface with control points `points` on these knots.
+    fn eval_points(us: &[f64], vs: &[f64], points: &[[f64; 2]], s: f64, t: f64) -> [f64; 2] {
+        let mesh = BezierMesh { us: us.to_vec(), vs: vs.to_vec(), points: points.to_vec() };
+        mesh.eval(s, t)
     }
 
-    /// Drags control point `index` by `d` from the grid `base` it had when the drag began, keeping
-    /// the surface smooth across the grid lines:
-    /// - an anchor moves with the eight points around it, as one block;
-    /// - a handle moves with the two points beside it across its line, and the handle opposite
-    ///   it on the same anchor turns the other way (with its two neighbours), so the line keeps
-    ///   passing straight through the anchor instead of creasing there.
+    /// Drags control point `index` by `d` from the grid `base` it had when the drag began, as the
+    /// reference application does (measured from its saved meshes):
+    /// - on the unsplit Default grid every control point is free: the point moves alone;
+    /// - on a split grid an anchor moves with the points around it (its handles and the twists
+    ///   between them), as one block;
+    /// - an interior anchor's handle goes where it is dragged and turns the anchor's whole frame
+    ///   with it: the other handles and the twists turn by the same angle, keeping their lengths,
+    ///   so every line stays smooth through the anchor;
+    /// - an edge anchor's handle along the edge turns the opposite handle (and the twist beside
+    ///   it); its handle into the picture, and a mesh corner's handles, move alone.
     pub fn drag_point(&mut self, base: &[[f64; 2]], index: usize, d: [f64; 2]) {
         if base.len() != self.points.len() || index >= base.len() || !d.iter().all(|v| v.is_finite()) {
             return;
@@ -1133,69 +1086,116 @@ impl BezierMesh {
         self.points.copy_from_slice(base);
         let (nx, ny) = (self.nx(), self.ny());
         let (i, j) = (index % nx, index / nx);
-        let mut shift = |i: isize, j: isize, d: [f64; 2]| {
-            if i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny {
-                let p = &mut self.points[j as usize * nx + i as usize];
-                p[0] += d[0];
-                p[1] += d[1];
-            }
-        };
-        let (ii, jj) = (i as isize, j as isize);
-        // Spans either side of interior knot `k`.
-        let span = |knots: &[f64], k: usize| (k > 0 && k + 1 < knots.len()).then(|| (knots[k] - knots[k - 1], knots[k + 1] - knots[k]));
+        let unsplit = self.us.len() == 2 && self.vs.len() == 2;
         match (i % 3, j % 3) {
-            (0, 0) => {
-                for dj in -1..=1 {
-                    for di in -1..=1 {
-                        shift(ii + di, jj + dj, d);
+            (0, 0) if !unsplit => {
+                for y in j.saturating_sub(1)..=(j + 1).min(ny - 1) {
+                    for x in i.saturating_sub(1)..=(i + 1).min(nx - 1) {
+                        if let Some(p) = self.points.get_mut(y * nx + x) {
+                            p[0] += d[0];
+                            p[1] += d[1];
+                        }
                     }
                 }
             }
-            // A handle along a vertical line: it takes the two points beside it across the line.
-            (0, r) => {
-                for di in -1..=1 {
-                    shift(ii + di, jj, d);
+            (0, _) | (_, 0) if !unsplit => self.drag_handle(base, i, j, d),
+            _ => {
+                if let Some(p) = self.points.get_mut(index) {
+                    p[0] += d[0];
+                    p[1] += d[1];
                 }
-                // The opposite handle of the same anchor turns the other way.
-                if let Some((hl, hr)) = span(&self.vs, j / 3 + usize::from(r == 2)) {
-                    let (other, k) = if r == 1 { (jj - 2, hl / hr) } else { (jj + 2, hr / hl) };
-                    for di in -1..=1 {
-                        shift(ii + di, other, [-d[0] * k, -d[1] * k]);
+            }
+        }
+    }
+
+    /// The handle at column `i`, row `j` of a split grid, dragged by `d` (see [`Self::drag_point`]).
+    fn drag_handle(&mut self, base: &[[f64; 2]], i: usize, j: usize, d: [f64; 2]) {
+        let nx = self.nx();
+        if let (Some(p), Some(b)) = (self.points.get_mut(j * nx + i), base.get(j * nx + i)) {
+            *p = [b[0] + d[0], b[1] + d[1]];
+        }
+        self.turn_frame(base, i, j);
+    }
+
+    /// After the handle at column `i`, row `j` has moved (and perhaps its anchor), turns the rest
+    /// of its anchor's frame by the angle the handle turned through, measured from `base`:
+    /// an interior anchor's other handles turn (keeping their lengths) and each twist moves by
+    /// both its handles' moves; an edge anchor's handle along the edge turns the opposite handle
+    /// and the twist beside it; an edge anchor's handle into the picture, and a mesh corner's
+    /// handles, turn nothing.
+    fn turn_frame(&mut self, base: &[[f64; 2]], i: usize, j: usize) {
+        let (nx, ny) = (self.nx(), self.ny());
+        let near = |k: usize| if k % 3 == 1 { k - 1 } else { k + 1 };
+        let (ai, aj) = if i.is_multiple_of(3) { (i, near(j)) } else { (near(i), j) };
+        let get = |pts: &[[f64; 2]], x: usize, y: usize| pts.get(y * nx + x).copied();
+        let (Some(a0), Some(a1), Some(h0), Some(h1)) = (get(base, ai, aj), get(&self.points, ai, aj), get(base, i, j), get(&self.points, i, j)) else {
+            return;
+        };
+        let (on_x, on_y) = (ai == 0 || ai == nx - 1, aj == 0 || aj == ny - 1);
+        if on_x && on_y {
+            return;
+        }
+        let (v0, v1) = ([h0[0] - a0[0], h0[1] - a0[1]], [h1[0] - a1[0], h1[1] - a1[1]]);
+        if v0[0].hypot(v0[1]) < 1e-9 || v1[0].hypot(v1[1]) < 1e-9 {
+            return;
+        }
+        let angle = (v0[0] * v1[1] - v0[1] * v1[0]).atan2(v0[0] * v1[0] + v0[1] * v1[1]);
+        let (sin, cos) = angle.sin_cos();
+        // Where a point of the frame goes: turned about the anchor, wherever the anchor now is.
+        let turn = |p: [f64; 2]| {
+            let (x, y) = (p[0] - a0[0], p[1] - a0[1]);
+            [a1[0] + x * cos - y * sin, a1[1] + x * sin + y * cos]
+        };
+        if on_x || on_y {
+            let along = if on_x { i == ai } else { j == aj };
+            if !along {
+                return;
+            }
+            let (oi, oj) = (2 * ai as isize - i as isize, 2 * aj as isize - j as isize);
+            let inward = |k: usize, last: usize| {
+                if k == 0 {
+                    1isize
+                } else if k == last {
+                    -1
+                } else {
+                    0
+                }
+            };
+            let (ti, tj) = if on_x { (oi + inward(ai, nx - 1), oj) } else { (oi, oj + inward(aj, ny - 1)) };
+            for (x, y) in [(oi, oj), (ti, tj)] {
+                if x >= 0 && y >= 0 && (x as usize) < nx && (y as usize) < ny {
+                    let (x, y) = (x as usize, y as usize);
+                    if let (Some(b), Some(p)) = (get(base, x, y), self.points.get_mut(y * nx + x)) {
+                        *p = turn(b);
                     }
                 }
             }
-            // A handle along a horizontal line, likewise.
-            (r, 0) => {
-                for dj in -1..=1 {
-                    shift(ii, jj + dj, d);
-                }
-                if let Some((hl, hr)) = span(&self.us, i / 3 + usize::from(r == 2)) {
-                    let (other, k) = if r == 1 { (ii - 2, hl / hr) } else { (ii + 2, hr / hl) };
-                    for dj in -1..=1 {
-                        shift(other, jj + dj, [-d[0] * k, -d[1] * k]);
-                    }
-                }
+            return;
+        }
+        // An interior anchor: the other handles turn; each twist moves by its two handles' moves
+        // (relative to the anchor).
+        let handles = [(ai - 1, aj), (ai + 1, aj), (ai, aj - 1), (ai, aj + 1)];
+        let mut rel = [[0.0f64; 2]; 4];
+        for (k, &(x, y)) in handles.iter().enumerate() {
+            let Some(b) = get(base, x, y) else { continue };
+            let new = if (x, y) == (i, j) { h1 } else { turn(b) };
+            rel[k] = [new[0] - a1[0] - (b[0] - a0[0]), new[1] - a1[1] - (b[1] - a0[1])];
+            if let Some(p) = self.points.get_mut(y * nx + x) {
+                *p = new;
             }
-            // An inner point of a patch has no handle of its own.
-            _ => shift(ii, jj, d),
+        }
+        for (hx, hy) in [(0, 2), (1, 2), (0, 3), (1, 3)] {
+            let (x, y) = (handles[hx].0, handles[hy].1);
+            if let Some(p) = self.points.get_mut(y * nx + x) {
+                p[0] += rel[hx][0] + rel[hy][0];
+                p[1] += rel[hx][1] + rel[hy][1];
+            }
         }
     }
 
     /// Bounding box of the control points (the surface lies inside it).
     pub fn control_bounds(&self) -> [f64; 4] {
         self.points.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
-    }
-}
-
-fn move_control_points(points: &mut [[f64; 2]], nx: usize, ny: usize, cols: usize, rows: usize, shares: &[f64], delta: [f64; 2]) {
-    for j in 0..ny {
-        for i in 0..nx {
-            let (ai, aj) = (((i + 1) / 3).min(cols), ((j + 1) / 3).min(rows));
-            let share = shares[aj * (cols + 1) + ai];
-            let point = &mut points[j * nx + i];
-            point[0] += delta[0] * share;
-            point[1] += delta[1] * share;
-        }
     }
 }
 
@@ -1322,6 +1322,13 @@ impl Warp {
             },
             _ => self.style_warp().is_none(),
         }
+    }
+
+    /// An identity warp with nothing to keep: no splits either. A split grid that is still flat
+    /// renders as no warp, but the reference application keeps it (its lines come back when Warp
+    /// is chosen again), so it is stored.
+    pub fn is_plain_identity(&self) -> bool {
+        self.is_identity() && self.mesh.as_ref().is_none_or(|m| m.us.len() <= 2 && m.vs.len() <= 2)
     }
 
     /// True when every control point of `m` sits where the box's own grid puts it.

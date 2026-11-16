@@ -27,6 +27,29 @@ fn tangent_defect(m: &BezierMesh) -> f64 {
     worst
 }
 
+/// Largest angle (radians) between the tangents either side of an interior anchor line.
+fn direction_defect(m: &BezierMesh) -> f64 {
+    let (nx, ny) = (m.nx(), m.ny());
+    let mut worst = 0.0f64;
+    let mut check = |l: [f64; 2], c: [f64; 2], r: [f64; 2]| {
+        let (a, b) = ([c[0] - l[0], c[1] - l[1]], [r[0] - c[0], r[1] - c[1]]);
+        if a[0].hypot(a[1]) > 1e-9 && b[0].hypot(b[1]) > 1e-9 {
+            worst = worst.max((a[0] * b[1] - a[1] * b[0]).atan2(a[0] * b[0] + a[1] * b[1]).abs());
+        }
+    };
+    for a in 1..m.us.len() - 1 {
+        for j in 0..ny {
+            check(m.points[j * nx + 3 * a - 1], m.points[j * nx + 3 * a], m.points[j * nx + 3 * a + 1]);
+        }
+    }
+    for b in 1..m.vs.len() - 1 {
+        for i in 0..nx {
+            check(m.points[(3 * b - 1) * nx + i], m.points[3 * b * nx + i], m.points[(3 * b + 1) * nx + i]);
+        }
+    }
+    worst
+}
+
 #[test]
 fn dragging_an_anchor_or_handle_keeps_the_surface_smooth_across_the_lines() {
     let mut base = BezierMesh::identity([0.0, 0.0, 300.0, 300.0], 1, 1);
@@ -40,7 +63,9 @@ fn dragging_an_anchor_or_handle_keeps_the_surface_smooth_across_the_lines() {
         let mut m = base.clone();
         m.drag_point(&base.points, j * nx + i, [23.0, -31.0]);
         assert_eq!(m.points[j * nx + i], [base.points[j * nx + i][0] + 23.0, base.points[j * nx + i][1] - 31.0], "({i}, {j}) lands on the pointer");
-        assert!(tangent_defect(&m) < 1e-6, "({i}, {j}): {}", tangent_defect(&m));
+        // The reference application turns a frame keeping its handles' lengths: every line stays
+        // smooth in direction through its anchors (G1), not in speed.
+        assert!(direction_defect(&m) < 1e-6, "({i}, {j}): {}", direction_defect(&m));
     }
 }
 
@@ -100,15 +125,13 @@ fn a_pull_in_the_middle_leaves_the_border_where_it_is() {
 
 #[test]
 fn a_pull_anywhere_away_from_the_border_never_moves_the_border() {
-    // The default one-patch grid and a cut one; grabs all over, none within 12% of an edge.
+    // The default one-patch grid: only a grab in its middle third (both ways) leaves the frame
+    // alone; in an outer third the reference application bows that edge too. (A split grid moves
+    // part of itself rigidly, border included: see
+    // `a_split_grid_pull_moves_its_cells_as_the_reference_application_does`.)
     let one = BezierMesh::identity([0.0, 0.0, 600.0, 800.0], 1, 1);
-    let mut cut = one.clone();
-    assert!(cut.split_u(0.4) && cut.split_u(0.7) && cut.split_v(0.35) && cut.split_v(0.8));
-    // On the one-patch grid only a grab in its middle third (both ways) leaves the frame alone:
-    // in an outer third the reference application bows that edge too.
     let grabs_one: &[(f64, f64)] = &[(0.5, 0.5), (0.4, 0.6), (0.62, 0.36)];
-    let grabs_cut: &[(f64, f64)] = &[(0.5, 0.5), (0.2, 0.5), (0.8, 0.3), (0.3, 0.85), (0.14, 0.14), (0.86, 0.5)];
-    for (base, grabs) in [(one, grabs_one), (cut, grabs_cut)] {
+    for (base, grabs) in [(one, grabs_one)] {
         let (nx, ny) = (base.nx(), base.ny());
         for &(s, t) in grabs {
             for d in [[-400.0, 0.0], [250.0, -90.0], [0.0, 300.0]] {
@@ -168,33 +191,90 @@ fn pull_keeps_the_surface_smooth_across_the_grid_lines() {
     for (s, t, d) in [(0.42, 0.42, [60.0, -35.0]), (0.75, 0.2, [-40.0, 50.0]), (0.1, 0.95, [30.0, 30.0])] {
         let mut m = base.clone();
         m.pull(&base.points, s, t, d);
+        // A split grid's pull moves whole lines with their handles: every line stays smooth.
         assert!(tangent_defect(&m) < 1e-6, "({s}, {t}): {}", tangent_defect(&m));
-        let before = base.eval(s, t);
-        let after = m.eval(s, t);
-        assert!((after[0] - before[0] - d[0]).abs() < 1e-4 && (after[1] - before[1] - d[1]).abs() < 1e-4, "{after:?}");
     }
 }
 
+/// The reference application's pull on a split grid (crosswise split of its Default grid, the
+/// saved meshes): away from the lines, the grab moves part of the grid rigidly by the drag,
+/// chosen per axis by the third of its patch it is in.
 #[test]
-fn pull_moves_the_grabbed_surface_point_exactly_and_stays_local() {
-    let base = BezierMesh::identity(B, 3, 2);
-    for (s, t) in [(0.5, 0.5), (0.1, 0.9), (0.4, 0.25), (0.0, 0.5), (1.0, 0.3)] {
-        let mut m = base.clone();
-        let before = base.eval(s, t);
-        m.pull(&base.points, s, t, [7.0, -4.5]);
-        let after = m.eval(s, t);
-        assert!((after[0] - before[0] - 7.0).abs() < 1e-4 && (after[1] - before[1] + 4.5).abs() < 1e-4, "({s}, {t}): {after:?}");
-    }
-    // The pull stays near the grabbed patch: the far end of the grid does not move.
-    let mut m = base.clone();
-    m.pull(&base.points, 0.1, 0.25, [5.0, 5.0]);
+fn a_split_grid_pull_moves_its_cells_as_the_reference_application_does() {
+    let mut base = BezierMesh::identity([0.0, 0.0, 302.0, 202.0], 1, 1);
+    assert!(base.split_u(120.0 / 302.0) && base.split_v(80.0 / 202.0));
     let nx = base.nx();
-    let moved = |k: usize| (m.points[k][0] - base.points[k][0]).abs() > 1e-6 || (m.points[k][1] - base.points[k][1]).abs() > 1e-6;
-    assert!((0..base.ny()).all(|j| !moved(j * nx + nx - 1)), "last column stays put");
-    assert!((0..nx).any(moved), "something moved");
+    let d = [0.0, -25.0];
+    // (grab, the columns and rows that move): the middle of the bottom-right patch moves that
+    // patch with the shared lines' far handles; next to the split lines, the anchor with its
+    // handles; next to the border, the border line with its handle.
+    let cases = [
+        ((0.7, 0.7), (2, 6), (2, 6)),
+        ((0.45, 0.48), (2, 4), (2, 4)),
+        ((0.45, 0.7), (2, 4), (2, 6)),
+        ((0.9, 0.7), (5, 6), (2, 6)),
+        ((0.9, 0.9), (5, 6), (5, 6)),
+    ];
+    for ((s, t), (x0, x1), (y0, y1)) in cases {
+        let mut m = base.clone();
+        m.pull(&base.points, s, t, d);
+        for (k, (p, b)) in m.points.iter().zip(&base.points).enumerate() {
+            let (x, y) = (k % nx, k / nx);
+            let want = if (x0..=x1).contains(&x) && (y0..=y1).contains(&y) { d } else { [0.0, 0.0] };
+            assert!(
+                (p[0] - b[0] - want[0]).abs() < 1e-9 && (p[1] - b[1] - want[1]).abs() < 1e-9,
+                "grab ({s}, {t}): point ({x}, {y}) moved {:?}",
+                [p[0] - b[0], p[1] - b[1]]
+            );
+        }
+    }
     // Pulling again from the same base replaces the pull (a drag is not cumulative).
-    m.pull(&base.points, 0.5, 0.25, [0.0, 0.0]);
-    assert!(m.points.iter().zip(&base.points).all(|(a, b)| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9));
+    let mut m = base.clone();
+    m.pull(&base.points, 0.7, 0.7, d);
+    m.pull(&base.points, 0.7, 0.7, [0.0, 0.0]);
+    assert_eq!(m.points, base.points);
+}
+
+/// The reference application's pull near a line of a split grid (vertical split of its Default
+/// grid at 0.3949, pressed 10 px right of the split line near the top, dragged 30 px up; the saved
+/// mesh): the line bends by the one-patch rule along it and its nearest point lands on the pointer;
+/// the top anchor takes the points around it along.
+#[test]
+fn a_pull_near_a_split_line_bends_that_line_as_the_reference_application_does() {
+    let mut base = BezierMesh::identity([0.0, 0.0, 302.0, 202.0], 1, 1);
+    assert!(base.split_u(0.394_948_672_493_403_6));
+    let nx = base.nx();
+    let press = [129.5, 14.25];
+    let (s, t) = base.param_at(press);
+    let mut m = base.clone();
+    m.pull_at(&base.points, s, t, press, [0.0, -30.0], 23.0);
+    let moved = |x: usize, y: usize| {
+        let (p, b) = (m.points[y * nx + x], base.points[y * nx + x]);
+        [p[0] - b[0], p[1] - b[1]]
+    };
+    let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) < 2.0;
+    // The top anchor and the points around it; the handle down the line; the next one, a little.
+    for (x, y) in [(2, 0), (3, 0), (4, 0), (2, 1), (4, 1)] {
+        assert!(near(moved(x, y), [11.2, -32.9]), "({x}, {y}): {:?}", moved(x, y));
+    }
+    assert!(near(moved(3, 1), [6.8, -20.0]), "{:?}", moved(3, 1));
+    assert!(near(moved(3, 2), [0.0, -0.5]), "{:?}", moved(3, 2));
+    // Nothing else.
+    for y in 0..m.ny() {
+        for x in 0..nx {
+            if !(2..=4).contains(&x) || y > 2 {
+                assert_eq!(moved(x, y), [0.0, 0.0], "({x}, {y})");
+            }
+        }
+    }
+    // Farther than `reach` from any line: the cell rule instead.
+    let far = [200.0, 101.0];
+    let (s, t) = base.param_at(far);
+    let mut c = base.clone();
+    c.pull_at(&base.points, s, t, far, [0.0, -30.0], 23.0);
+    let mut cell = base.clone();
+    cell.pull(&base.points, s, t, [0.0, -30.0]);
+    assert_eq!(c.points, cell.points);
 }
 
 fn close(a: (f64, f64), b: (f64, f64), eps: f64) -> bool {
@@ -600,4 +680,18 @@ fn a_one_patch_pull_moves_the_grid_as_the_reference_application_does() {
         let (before, after) = (base.eval(s, t), m.eval(s, t));
         assert!((after[0] - before[0] - d[0]).abs() < 1e-6 && (after[1] - before[1] - d[1]).abs() < 1e-6, "the grabbed point follows");
     }
+}
+
+/// A split grid that is still flat renders as no warp but is kept, as the reference application
+/// keeps it (its lines come back when Warp is chosen again); an unsplit flat grid is not.
+#[test]
+fn a_flat_split_grid_is_identity_but_not_plain() {
+    let b = [0.0, 0.0, 302.0, 202.0];
+    let mut mesh = BezierMesh::identity(b, 1, 1);
+    let plain = Warp::custom(mesh.clone(), b);
+    assert!(plain.is_identity() && plain.is_plain_identity());
+    assert!(mesh.split_u(0.4));
+    let split = Warp::custom(mesh, b);
+    assert!(split.is_identity(), "renders as no warp");
+    assert!(!split.is_plain_identity(), "but is kept");
 }

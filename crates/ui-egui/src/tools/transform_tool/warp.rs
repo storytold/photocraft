@@ -122,6 +122,11 @@ fn split_gesture(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) 
     }
 }
 
+/// How close (in document pixels, at any zoom) a press on a split warp grid must be to a split
+/// line or the border to pull that line, as in the reference application (measured: 22 px pulls
+/// the line, 24 px doesn't, at 100 % and at 50 %).
+const LINE_REACH_PX: f64 = 23.0;
+
 /// Drags the warp grid. A press on an anchor or handle moves that point (an anchor carries its
 /// handles along); a press anywhere else inside the grid pulls the surface under the pointer.
 /// Preset warps turn into a custom mesh when the press grabs something. An armed split tool, or
@@ -171,7 +176,7 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
         ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
             match (&pv.warp_drag, w.mesh.as_mut()) {
                 (Some(WarpDrag::Point { index, start, pts0 }), Some(m)) => m.drag_point(pts0, *index, [x - start[0], y - start[1]]),
-                (Some(WarpDrag::Surface { s, t, start, pts0 }), Some(m)) => m.pull(pts0, *s, *t, [x - start[0], y - start[1]]),
+                (Some(WarpDrag::Surface { s, t, start, pts0 }), Some(m)) => m.pull_at(pts0, *s, *t, *start, [x - start[0], y - start[1]], LINE_REACH_PX * unit),
                 _ => {}
             }
             if matches!(ev, ToolEvent::Up { .. }) {
