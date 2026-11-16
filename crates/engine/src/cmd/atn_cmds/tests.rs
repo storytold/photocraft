@@ -4874,6 +4874,25 @@ fn make_document_duplicate_name_must_round_trip() {
     }
 }
 
+/// A recorded Make whose `Nm  ` name equals a document that is already open duplicates under
+/// that name: the command takes the recorded name as it is and never picks the source by
+/// name, so nothing is guessed from a spelling (pattern 9, the fail-closed lesson of #11565).
+#[test]
+fn make_document_duplicate_name_may_collide_with_an_open_document() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6, "name": "Mattifier copy"})).unwrap();
+    s.execute("file.new", json!({"width": 8, "height": 6, "name": "Source"})).unwrap();
+    let items = vec![item("Mk  ", "Make", Some(desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy"))))];
+    let r = s.execute("actions.load", json!({"data": set_of("Dup", vec![("A", items)])})).unwrap();
+    assert_eq!(r["unsupported"], json!([]), "{r}");
+    let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+    assert_eq!(s.documents().len(), 3, "the Make duplicated the active document");
+    assert_eq!(s.active().unwrap().doc.name, "Mattifier copy", "the recorded name is used unchanged");
+    assert_eq!(s.documents().iter().filter(|d| d.doc.name == "Mattifier copy").count(), 2, "no numbered rename");
+    assert_eq!(s.documents().iter().filter(|d| d.doc.name == "Source").count(), 1, "the other document keeps its name");
+}
+
 /// Every other Make aimed at a document keeps today's behaviour: a complete kept step; the
 /// `Usng` layer form keeps its existing Duplicate Layer mapping.
 #[test]
