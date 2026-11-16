@@ -528,6 +528,15 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.ui.stroke_editor.is_some() && !ctx.input(|i| i.modifiers.command || i.modifiers.ctrl) {
         return false;
     }
+    // Check Spelling owns a plain Esc and ↵ (Done, #14179), as Photoshop's modal dialog does: in a
+    // frame with either, no shortcut below runs, so neither commits or cancels a crop, a polygon, a
+    // Pen path or a shape under the dialog, nor resets the view. The dialog, drawn later, reads them.
+    if app.ui.type_panels.spell.is_some() {
+        let plain = |e: &egui::Event| matches!(e, egui::Event::Key { key: Key::Escape | Key::Enter, pressed: true, modifiers, .. } if modifiers.is_none());
+        if ctx.input(|i| i.events.iter().any(plain)) {
+            return false;
+        }
+    }
     // So does the right-click menu of text being edited: Esc closes only it, and keys typed while
     // it is open don't reach the text beneath. The crop menu's likewise: Esc and ↵ don't cancel or
     // commit the crop under it (#6561).
@@ -913,13 +922,14 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Esc with no active operation leaves a full screen mode, else deselects (#2674), like ⌘D.
     // The key is never taken from a state that handles Esc itself: menus, dialogs, text fields
     // and inline type returned above, transform, pen, lasso and crop consumed it, and these own
-    // theirs later in the frame: the palette, the canvas and layer menus, the brush picker,
+    // theirs later in the frame: Check Spelling (Esc is its Done), the palette, the canvas and layer menus, the brush picker,
     // Rotate View, Adaptive Wide Angle, the Filter Gallery, the TIFF prompt, any open egui popup
     // and the toolbar tool and "…" flyouts. A canvas drag in progress (a marquee being drawn) keeps it too.
     let esc_taken = app.drag.is_some()
         // A Direct Selection drag (a Cmd-drag on an anchor) never reaches `app.drag`: Esc must not
         // leave full screen or deselect pixels while its release is still to come (#13072).
         || (app.ui.tool == Tool::DeleteAnchorPoint && app.ui.direct_selection.drag.is_some())
+        || app.ui.type_panels.spell.is_some()
         || app.ui.palette_open
         || app.ui.canvas_tool_menu.is_some()
         || app.ui.layer_menu.is_some()
