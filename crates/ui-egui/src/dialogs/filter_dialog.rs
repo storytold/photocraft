@@ -1214,6 +1214,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if crate::select_mask_view::owns(f) {
         crate::select_mask_view::controls(ui, f);
     }
+    let scale_key_fresh = cmd == SCALE_EFFECTS_FIELD.0 && scale_effects_keys(ui, f);
     for p in parse_spec(&spec) {
         if cmd == "image.mode.indexedColor" && p.key == "matte" {
             indexed_matte_row(ui, f);
@@ -1266,6 +1267,8 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 } else {
                     ""
                 };
+                let scale_effects = cmd == SCALE_EFFECTS_FIELD.0 && p.key == SCALE_EFFECTS_FIELD.1;
+                let mut scale_alert = false;
                 ui.scope(|ui| {
                     if !enabled {
                         ui.disable();
@@ -1280,12 +1283,20 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                             let name = label(&p.key);
                             ui.label(egui::RichText::new(&name).color(t.text_dim));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                crate::widgets::value_field(ui, &mut v, min..=max, unit, 74.0).accessible_name(name);
+                                if scale_effects {
+                                    scale_alert = scale_effects_field(ui, &name, &mut v, min..=max);
+                                } else {
+                                    crate::widgets::value_field(ui, &mut v, min..=max, unit, 74.0).accessible_name(name);
+                                }
                             });
                         });
                         let mut lv = v.clamp(min, max).ln();
                         if crate::widgets::slider(ui, &mut lv, min.ln()..=max.ln(), None).changed() {
                             v = lv.exp();
+                        }
+                        // Scale Effects takes whole percents only, from its slider too (#14995).
+                        if scale_effects {
+                            v = whole_in(f64::from(v), f64::from(min), f64::from(max)) as f32;
                         }
                         ui.add_space(4.0);
                     } else {
@@ -1300,11 +1311,15 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 // 32.1199989 and OK sends that to the command (#13067). A value the user typed or
                 // dragged this frame is the widget's f32, so it rounds from that.
                 let w = match (wide_decimals, src) {
+                    _ if scale_effects => scale_effects_json(v, min, max),
                     (true, Some(rounded)) if !edited => json!(rounded),
                     (true, _) => json!(round64(f64::from(v))),
                     (false, _) => json!((v * scale).round() / scale),
                 };
                 f.insert(p.key, w);
+                if scale_effects {
+                    scale_effects_alert(ui, f, scale_alert, scale_key_fresh);
+                }
             }
             Kind::Choice { options, default } => {
                 ui.horizontal(|ui| {
@@ -1844,6 +1859,204 @@ impl FilterPreviewKey {
     }
 }
 
+/// Scale Effects' Scale: the command and key whose field takes whole percents (#14995).
+const SCALE_EFFECTS_FIELD: (&str, &str) = ("layer.layerStyle.scaleEffects", "scale");
+/// In the dialog's fields while the Scale field's alert is up.
+const SCALE_ALERT: &str = "__scaleAlert";
+const SCALE_ALERT_TITLE: &str = "Scale Layer Effects";
+const SCALE_ALERT_TEXT: &str = "An integer between 1 and 1000 is required. Closest value inserted.";
+
+/// The closest whole number to `x` in `lo..=hi`: `lo` for a non-finite `x`, and for bounds the wrong way
+/// round or NaN, so no input can panic (a NaN or reversed bound gives `lo`, or 0 when `lo` is not finite either).
+fn whole_in(x: f64, lo: f64, hi: f64) -> f64 {
+    if !x.is_finite() || lo.is_nan() || hi.is_nan() || lo > hi {
+        return if lo.is_finite() { lo } else { 0.0 };
+    }
+    x.round().clamp(lo, hi)
+}
+
+/// What the Scale field stores: its value as whole percents in range.
+fn scale_effects_json(v: f32, min: f32, max: f32) -> Value {
+    json!(whole_in(f64::from(v), f64::from(min), f64::from(max)) as i64)
+}
+
+/// Scale Effects' Scale field, as the reference was measured (#14995): whole percents in `range`.
+/// A typed "." is ignored (`33.6` reads 336), and a value typed past the range or with decimals
+/// (`33,6`, read as 33.6) becomes the closest whole number in range; once the value is committed (the field
+/// is left, or Enter, Ctrl+Enter or Cmd+Enter is pressed in it) after such a value, this returns true so the
+/// alert shows. While the field has the keyboard it keeps the typed text. An arrow-key or wheel step stops at
+/// the ends and says nothing.
+fn scale_effects_field(ui: &mut egui::Ui, name: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>) -> bool {
+    let (lo, hi) = (*range.start(), *range.end());
+    let fit = |x: f32| whole_in(f64::from(x), f64::from(lo), f64::from(hi)) as f32;
+    *v = fit(*v);
+    let mem = ui.make_persistent_id("scale-effects-field");
+    let (field_id, draft_id, wrong_id) = (mem.with("field"), mem.with("draft"), mem.with("wrong"));
+    // The field's id is known once it is drawn: last frame's.
+    let focused = ui.data(|d| d.get_temp::<egui::Id>(field_id)).is_some_and(|id| ui.memory(|m| m.has_focus(id)));
+    if focused {
+        ui.input_mut(|i| {
+            for e in &mut i.events {
+                if let egui::Event::Text(text) = e {
+                    text.retain(|c| c != '.');
+                }
+            }
+        });
+    }
+    // Esc gives the entry up with no message (as the zoom field does).
+    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    // What was typed, while the field still has the keyboard and nothing else changed the value.
+    let draft = ui.data(|d| d.get_temp::<(f32, f32)>(draft_id)).filter(|(_, stored)| focused && *stored == *v);
+    let mut typed = draft.map_or(*v, |(typed, _)| typed);
+    // The field's own range is wide, so the typed value reaches here unclamped.
+    let r = crate::widgets::value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, "", 74.0);
+    ui.data_mut(|d| d.insert_temp(field_id, r.id));
+    // Only a step the field itself took (arrow or wheel notch) is no typed value, as in the other whole fields.
+    let stepped = crate::widgets::stepped_this_pass(ui.ctx(), r.id);
+    if r.gained_focus() {
+        ui.data_mut(|d| d.remove_temp::<bool>(wrong_id));
+    }
+    if r.changed() && typed.is_finite() {
+        *v = fit(typed);
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none() && !stepped;
+        ui.data_mut(|d| d.insert_temp(wrong_id, typing && *v != typed));
+        if typing && r.has_focus() {
+            ui.data_mut(|d| d.insert_temp(draft_id, (typed, *v)));
+        } else {
+            ui.data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
+        }
+    }
+    if !r.has_focus() {
+        ui.data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
+    }
+    // The text edit reports leaving the field a frame after an Enter, but the dialog's OK reads that Enter at once
+    // (Ctrl/Cmd+Enter included, with any modifiers): each commits the typed value, so the alert is judged now. Such a
+    // commit also leaves the field (the text edit surrenders focus a frame later), so it is judged once, now, and not
+    // again by that late lost-focus frame. Key repeats are not commits.
+    let enter_commit =
+        r.has_focus() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat: false, .. })));
+    let wrong = (r.lost_focus() || enter_commit) && ui.data_mut(|d| d.remove_temp::<bool>(wrong_id)).unwrap_or(false);
+    wrong && !esc
+}
+
+/// Enter and Esc as far as they are held down; their repeats are nobody's (not the alert's OK, not
+/// the dialog's) until the key is released, even after the alert has closed.
+#[derive(Clone, Copy, Default)]
+struct Held {
+    enter: bool,
+    esc: bool,
+}
+
+/// Drops the Scale Effects dialog's held-key repeats and the alert's keys from this frame's input. It
+/// must run before anything in the dialog body reads input: the Scale field and the Esc check would
+/// otherwise see a repeat the alert has already claimed. A fresh press while the alert is up is the
+/// alert's and closes it (told to [`scale_effects_alert`] through `fresh`).
+fn scale_effects_keys(ui: &egui::Ui, f: &Map<String, Value>) -> bool {
+    let ctx = ui.ctx().clone();
+    let seen_id = ui.make_persistent_id(SCALE_ALERT);
+    let hold_id = seen_id.with("hold");
+    let mut held = ctx.data(|d| d.get_temp::<Held>(hold_id)).unwrap_or_default();
+    // A release this frame never showed us (the window lost focus, the dialog was closed) must not
+    // leave the key held for good.
+    held.enter &= ctx.input(|i| i.key_down(egui::Key::Enter));
+    held.esc &= ctx.input(|i| i.key_down(egui::Key::Escape));
+    let up = f.get(SCALE_ALERT).and_then(Value::as_bool) == Some(true);
+    if !up && !held.enter && !held.esc {
+        ctx.data_mut(|d| d.remove_temp::<Held>(hold_id));
+        return false;
+    }
+    // One rule for Enter and Esc, as `consume_key` had it: Shift or Alt do not change them, and neither
+    // do Ctrl or Cmd. A held key's repeats come first: they reach nobody whatever the modifiers. While
+    // the alert is up every other Enter or Esc is the alert's (the dialog's OK must not see it) and
+    // only a fresh press closes it.
+    let mut fresh = false;
+    ctx.input_mut(|i| {
+        i.events.retain(|e| {
+            let egui::Event::Key { key: key @ (egui::Key::Enter | egui::Key::Escape), pressed, repeat, .. } = e else { return true };
+            let is_enter = *key == egui::Key::Enter;
+            let bit = if is_enter { &mut held.enter } else { &mut held.esc };
+            // A release is nobody's to drop; the key_down guard above ends its hold.
+            if !*pressed {
+                return true;
+            }
+            if *repeat && *bit {
+                return false;
+            }
+            if up {
+                if !*repeat {
+                    fresh = true;
+                    *bit = true;
+                }
+                false
+            } else {
+                if !*repeat {
+                    *bit = false;
+                }
+                true
+            }
+        });
+    });
+    ctx.data_mut(|d| {
+        if held.enter || held.esc {
+            d.insert_temp(hold_id, held);
+        } else {
+            d.remove_temp::<Held>(hold_id);
+        }
+    });
+    fresh
+}
+
+/// The Scale field's alert, titled as the reference titles it, over the dialog: raised when
+/// `raised`, and up until OK, Enter or Esc closes it. The dialog stays open. The keys are handled
+/// before the body by [`scale_effects_keys`].
+fn scale_effects_alert(ui: &egui::Ui, f: &mut Map<String, Value>, raised: bool, fresh: bool) {
+    let ctx = ui.ctx().clone();
+    // Scoped to this dialog: its ui id, not a global one.
+    let seen_id = ui.make_persistent_id(SCALE_ALERT);
+    let hold_id = seen_id.with("hold");
+    if raised {
+        f.insert(SCALE_ALERT.into(), json!(true));
+        // The Enter that left the field raises the alert: it must not press the dialog's OK too, and
+        // its repeats are held back until it is released.
+        // Every Enter press of this frame goes, whatever its modifiers: the dialog's OK reads Enter
+        // without looking at them.
+        let took_enter = ctx.input_mut(|i| {
+            let before = i.events.len();
+            i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. }));
+            i.events.len() != before
+        });
+        if took_enter {
+            ctx.data_mut(|d| {
+                let mut held = d.get_temp::<Held>(hold_id).unwrap_or_default();
+                held.enter = true;
+                d.insert_temp(hold_id, held);
+            });
+        }
+        ctx.data_mut(|d| d.remove_temp::<bool>(seen_id));
+    }
+    if f.get(SCALE_ALERT).and_then(Value::as_bool) != Some(true) {
+        return;
+    }
+    let seen = ctx.data(|d| d.get_temp::<bool>(seen_id)).unwrap_or(false);
+    ctx.data_mut(|d| d.insert_temp(seen_id, true));
+    let t = Tokens::get(&ctx);
+    let modal = egui::Modal::new(seen_id.with("modal")).show(&ctx, |ui| {
+        ui.set_max_width(360.0);
+        ui.label(egui::RichText::new(tl!(SCALE_ALERT_TITLE)).font(crate::theme::semibold(15.0)).color(t.text));
+        ui.add_space(4.0);
+        crate::widgets::hairline(ui);
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(tl!(SCALE_ALERT_TEXT)).color(t.text));
+        ui.add_space(12.0);
+        let ok = crate::widgets::DialogButton::new(crate::widgets::ButtonRole::Default, tl!("OK"), 84.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| crate::widgets::dialog_buttons(ui, &[ok]).is_some()).inner
+    });
+    if modal.inner || (seen && fresh) {
+        f.remove(SCALE_ALERT);
+        ctx.data_mut(|d| d.remove_temp::<bool>(seen_id));
+    }
+}
+
 #[cfg(test)]
 mod global_light_angle_range_tests;
 #[cfg(test)]
@@ -1942,3 +2155,7 @@ mod multi_channel_dialog_tests {
         assert_eq!(preview.layer(layer).unwrap().surface(), app.session.active().unwrap().doc.layer(layer).unwrap().surface());
     }
 }
+
+#[cfg(test)]
+#[path = "scale_effects_field_tests.rs"]
+mod scale_effects_field_tests;
