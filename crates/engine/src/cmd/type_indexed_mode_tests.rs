@@ -265,14 +265,14 @@ fn an_uncoalesced_edit_between_typing_and_the_commit_splits_the_states() {
         // The stand-in for that kerning press: a real edit under no coalesce key.
         s.execute("type.edit", json!({"layer": layer, "antialias": "sharp"})).unwrap();
         let before = history(&s);
-        assert_eq!(before.last().map(String::as_str), Some("Edit Type"), "{name}: the unkeyed edit is a state of its own");
+        assert_eq!(before.last().map(String::as_str), Some("Edit Type Layer"), "{name}: the unkeyed edit is a state of its own");
 
         commit(&mut s, layer);
 
         let h = history(&s);
         assert_eq!(h.len(), before.len() + 1, "{name}: the commit is a further state once the group ended: {h:?}");
         assert_eq!(h.last().map(String::as_str), Some("New Type Layer"), "{name}: named for the type layer either way");
-        assert_eq!(h[h.len() - 2].as_str(), "Edit Type", "{name}: the edit between them keeps its own name");
+        assert_eq!(h[h.len() - 2].as_str(), "Edit Type Layer", "{name}: the edit between them keeps its own name");
         assert_eq!(text_layers(&s), 0, "{name}: still no type layer is left");
         assert!(s.active().unwrap().doc.selection.is_some(), "{name}: still the glyphs are selected");
 

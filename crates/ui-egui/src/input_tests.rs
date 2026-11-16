@@ -893,7 +893,7 @@ fn type_tool_format_keys_toggle_character_styles() {
         assert!(!has(&char_style(&h, id, 6)), "{key:?} leaves the unselected characters");
         let steps = history(&h);
         assert_eq!(steps.len(), before + 1, "{key:?}: one history step");
-        assert_eq!(steps.last().map(String::as_str), Some("Set Type Style"), "{key:?}");
+        assert_eq!(steps.last().map(String::as_str), Some("Set Character Style"), "{key:?}");
         assert!(h.state().ui.dialogs.is_empty(), "{key:?} must not open Color Settings");
         assert!(h.state().ui.text_edit.is_some());
     }
