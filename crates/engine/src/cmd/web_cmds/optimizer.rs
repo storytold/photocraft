@@ -664,7 +664,6 @@ fn quantize_rows(px: &mut [[f32; 4]], w: usize, pal: &[[u8; 3]], dither: Dither,
 #[path = "png_embed_icc_tests.rs"]
 mod png_embed_icc_tests;
 #[cfg(test)]
-
 mod tests {
     use super::*;
 

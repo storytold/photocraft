@@ -205,7 +205,6 @@ fn composite(doc: &Document, opaque: bool) -> Vec<[f32; 4]> {
     if opaque { buf.over_background([1.0, 1.0, 1.0]).into_px() } else { buf.into_px() }
 }
 
-
 /// Replace the document's layers by one 8-bit layer holding `px` in `mode`'s storage format.
 fn single_layer(doc: &mut Document, active: &mut Option<LayerId>, mode: ColorMode, px: &[[f32; 4]], name: &str, background: bool) {
     let fmt = storage_format(mode);
