@@ -328,7 +328,8 @@ fn decode_environment(path: &str, bytes: &[u8]) -> Result<(String, Environment),
         ..Default::default()
     };
     let decoded = photocraft_codecs::decode_with(bytes, &opts).map_err(|e| e.to_string())?;
-    let rgba = decoded.to_rgba_f32().as_chunks::<4>().0.iter().map(|p| p.map(|x| if x.is_finite() { x.clamp(0.0, 65504.0) } else { 0.0 })).collect();
+    let pixels = decoded.to_rgba_f32(&opts.limits).map_err(|e| e.to_string())?;
+    let rgba = pixels.as_chunks::<4>().0.iter().map(|p| p.map(|x| if x.is_finite() { x.clamp(0.0, 65504.0) } else { 0.0 })).collect();
     let source = Image { width: decoded.width() as usize, height: decoded.height() as usize, rgba };
     let env = Environment::prepare(&source).map_err(|e| e.to_string())?;
     let name = std::path::Path::new(path).file_name().map_or_else(|| "HDR".into(), |s| s.to_string_lossy().into_owned());

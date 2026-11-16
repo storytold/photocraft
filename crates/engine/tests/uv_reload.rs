@@ -116,6 +116,29 @@ fn reimport_retains_documents_layers_history_and_maps_reordered_materials_by_nam
 }
 
 #[test]
+fn reimport_keeps_detached_texture_documents_in_the_saved_uv_project() {
+    let (_temp, path) = file();
+    let mut s = Session::new();
+    s.execute("uv.model.import", json!({"path":path})).unwrap();
+    let material_a = s.uv.scene.as_ref().unwrap().materials.iter().position(|m| m.name == "A").unwrap();
+    s.execute("uv.texture.create", json!({"material":material_a,"width":16,"height":16})).unwrap();
+    let detached = s.uv.bindings[material_a].unwrap();
+
+    rewrite_with_different_size(&path, obj("B", "B", 2.5));
+    s.execute("uv.model.reimport", json!({})).unwrap();
+    assert!(!s.uv.all_bindings().flatten().any(|id| *id == detached));
+
+    s.execute("uv.workspace.activate", json!({"active":true})).unwrap();
+    assert!(s.uv_documents().iter().any(|document| document.doc.id == detached));
+    let project = _temp.path().join("detached.pcuv");
+    s.execute("uv.project.save", json!({"path":project})).unwrap();
+    let bytes = std::fs::read(project).unwrap();
+    let zip = photocraft_format::zip::ZipReader::new(&bytes).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&zip.read_by_name("project.json", 128 * 1024 * 1024).unwrap()).unwrap();
+    assert_eq!(manifest["loose_documents"].as_array().map_or(0, Vec::len), 1, "detached bound texture is serialized as a loose UV document");
+}
+
+#[test]
 fn reimport_rebuilds_bound_blur_cache_for_new_topology_without_adding_history() {
     let (_temp, path) = file();
     let mut s = Session::new();

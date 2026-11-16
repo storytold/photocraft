@@ -220,6 +220,8 @@ pub struct UvState {
     pub assets: Vec<crate::uv_asset_cmds::Asset>,
     pub environment: Option<crate::uv_asset_cmds::Resource>,
     pub(crate) exported_revisions: std::collections::HashMap<DocId, u64>,
+    /// Export-visible changes to flattened UV mask caches that do not dirty document content.
+    pub(crate) mask_cache_export_revisions: std::collections::HashMap<DocId, u64>,
     pub(crate) saved_revisions: std::collections::HashMap<DocId, u64>,
     pub(crate) saved_generation: u64,
     /// Documents detached from a material slot remain owned by the UV project as loose docs.
@@ -428,8 +430,15 @@ impl UvState {
 }
 
 impl UvState {
+    pub(crate) fn export_revision(&self, doc: &crate::DocState) -> u64 {
+        doc.revision.saturating_sub(doc.view_revision).saturating_add(self.mask_cache_export_revisions.get(&doc.doc.id).copied().unwrap_or(0))
+    }
+
     pub fn needs_export(&self, doc: &crate::DocState) -> bool {
-        self.exported_revisions.get(&doc.doc.id).map_or_else(|| doc.is_dirty(), |revision| doc.revision.saturating_sub(doc.view_revision) != *revision)
+        self.exported_revisions.get(&doc.doc.id).map_or_else(
+            || doc.is_dirty() || self.mask_cache_export_revisions.get(&doc.doc.id).copied().unwrap_or(0) > 0,
+            |revision| self.export_revision(doc) != *revision,
+        )
     }
     pub fn has_unsaved_project(&self, docs: &[crate::DocState]) -> bool {
         self.scene.is_some()
@@ -1645,6 +1654,9 @@ fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.uv.saved_revisions.clear();
     for (id, exported_revision, revision) in saved_state {
+        // Saving the project container does not write external texture files. If this doc has
+        // no export checkpoint yet, keep the checkpoint at document content only so a pending
+        // cache-only pixel change still requires explicit texture export.
         s.uv.exported_revisions.entry(id).or_insert(exported_revision);
         s.uv.saved_revisions.insert(id, revision);
     }
@@ -1741,16 +1753,25 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
     let mut entries: Vec<_> = project.documents.iter().chain(&project.normal_documents).chain(project.map_documents.values().flatten()).cloned().collect();
     let bound_count = entries.len();
     entries.extend(project.loose_documents.iter().cloned().map(Some));
-    let mut decoded_bytes = library_bytes;
+    let mut decoded_bytes = library_bytes as u64;
     for entry in &entries {
         documents.push(if let Some(name) = entry {
             if decoded.insert(name.clone()) {
                 let bytes = zip.read_by_name(name, MAX_PROJECT_BYTES as usize).map_err(|e| err(e.to_string()))?;
-                decoded_bytes = decoded_bytes.saturating_add(bytes.len());
-                if decoded_bytes as u64 > MAX_PROJECT_BYTES {
+                decoded_bytes = decoded_bytes.saturating_add(bytes.len() as u64);
+                if decoded_bytes > MAX_PROJECT_BYTES {
                     return Err(err("Expanded project exceeds 2 GiB"));
                 }
-                Some(photocraft_format::load_from_bytes(&bytes).map_err(|e| err(e.to_string()))?)
+                let remaining = MAX_PROJECT_BYTES.saturating_sub(decoded_bytes);
+                let mut load_options = photocraft_format::LoadOptions::default();
+                load_options.max_total_bytes = load_options.max_total_bytes.min(remaining);
+                load_options.max_blob_bytes = load_options.max_blob_bytes.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+                let (document, decoded_size) = photocraft_format::load_from_bytes_measured(&bytes, &load_options).map_err(|e| err(e.to_string()))?;
+                decoded_bytes = decoded_bytes.saturating_add(decoded_size);
+                if decoded_bytes > MAX_PROJECT_BYTES {
+                    return Err(err("Expanded project exceeds 2 GiB"));
+                }
+                Some(document)
             } else {
                 // Repeated material bindings restore the same document below. Decode
                 // it once so a small project cannot multiply a large image in memory.
@@ -1827,6 +1848,7 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
         assets,
         environment,
         exported_revisions,
+        mask_cache_export_revisions: Default::default(),
         saved_revisions,
         saved_generation: s.uv.generation.wrapping_add(1),
         wrap_mesh,

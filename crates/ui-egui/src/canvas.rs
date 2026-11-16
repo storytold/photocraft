@@ -108,6 +108,8 @@ pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::break_live_stroke_path;
 #[cfg(feature = "uv-workbench")]
 pub(crate) use strokes::break_native_uv_mask_segment;
+#[cfg(any(feature = "uv-workbench", test))]
+pub(crate) use strokes::clone_preview_texture;
 #[cfg(feature = "uv-workbench")]
 pub(crate) use strokes::feed_live_stroke;
 #[cfg(not(feature = "uv-workbench"))]
@@ -116,8 +118,6 @@ pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 #[cfg(feature = "uv-workbench")]
 pub(crate) use strokes::remove_native_mask_gpu_renderer;
-#[cfg(any(feature = "uv-workbench", test))]
-pub(crate) use strokes::clone_preview_texture;
 pub(crate) use strokes::{
     ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live, unsmoothed_line,
 };

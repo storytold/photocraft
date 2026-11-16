@@ -19,7 +19,6 @@ pub(crate) fn mask_fill_source_bytes([width, height]: [u32; 2], max_side: u32) -
     }
 }
 
-
 /// Classification of a synchronous compositor pipeline build failure.
 ///
 /// Only a recognized shader compiler diagnostic is considered deterministic. Every other
@@ -292,6 +291,7 @@ impl Compositor {
         self.prefix.set_step(self.chunk);
         self.pool.clear();
         self.residents.clear();
+        self.mask_fills.clear();
         self.fx.clear();
         self.temps.clear();
         self.prefix.clear();

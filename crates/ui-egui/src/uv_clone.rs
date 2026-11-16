@@ -83,23 +83,7 @@ pub(crate) fn preview(
         }
         for i in 1..poly.len() - 1 {
             let triangle = [poly[0], poly[i], poly[i + 1]].map(|p| [f64::from(p.x), f64::from(p.y)]);
-            emit_visible_triangle(
-                triangle,
-                uv,
-                t.positions,
-                id,
-                g,
-                scene,
-                camera,
-                maps,
-                size,
-                viewport,
-                patch,
-                tint,
-                &mut sample_budget,
-                0,
-                &mut mesh,
-            );
+            emit_visible_triangle(triangle, uv, t.positions, id, g, scene, camera, maps, size, viewport, patch, tint, &mut sample_budget, 0, &mut mesh);
             if sample_budget == 0 {
                 break;
             }
@@ -132,14 +116,12 @@ fn emit_visible_triangle(
     if *sample_budget == 0 {
         return;
     }
-    let Some(projected) = points.map(|point| project_uv_point(point, uv, positions, geometry, camera, size)).into_iter().collect::<Option<Vec<_>>>()
-    else {
+    let Some(projected) = points.map(|point| project_uv_point(point, uv, positions, geometry, camera, size)).into_iter().collect::<Option<Vec<_>>>() else {
         return;
     };
-    let screen: Vec<_> = projected.iter().map(|point| viewport.min + egui::vec2(point[0] as f32 * viewport.width(), point[1] as f32 * viewport.height())).collect();
-    let longest_edge = (0..3)
-        .map(|index| screen[index].distance(screen[(index + 1) % 3]))
-        .fold(0.0f32, f32::max);
+    let screen: Vec<_> =
+        projected.iter().map(|point| viewport.min + egui::vec2(point[0] as f32 * viewport.width(), point[1] as f32 * viewport.height())).collect();
+    let longest_edge = (0..3).map(|index| screen[index].distance(screen[(index + 1) % 3])).fold(0.0f32, f32::max);
     if longest_edge > OCCLUSION_CELL_PIXELS && depth < MAX_SUBDIVISION_DEPTH {
         let midpoint = |a: [f64; 2], b: [f64; 2]| [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5];
         let [a, b, c] = points;

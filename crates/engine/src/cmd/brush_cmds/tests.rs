@@ -281,6 +281,17 @@ fn cadence_mask_preview_tracks_blur_expanded_commit_damage_on_cpu_route() {
     assert!(committed.x0 <= expected.x0 && committed.y0 <= expected.y0 && committed.x1 >= expected.x1 && committed.y1 >= expected.y1);
 }
 
+#[test]
+fn live_cpu_path_break_reapplies_the_paintable_clip() {
+    let s = session(16, 16);
+    let params = json!({"points":[[4.5,4.5,1.0],[100.5,100.5,1.0]],"breaks":[1],"size":4,"color":"#ffffff","brush":{"hardness":1.0,"opacity":1.0,"flow":1.0}});
+    let mut live = LiveStroke::begin_with(&s, "paint.stroke", &params).unwrap();
+    assert_eq!(live.segment_breaks(), &[1]);
+    live.break_path().unwrap();
+    live.push(&[StrokePoint::new(200.5, 200.5, 1.0)]).unwrap();
+    assert!(live.bounds().x1 <= 16 && live.bounds().y1 <= 16, "rebuilt preview renderer must retain the canvas clip: {:?}", live.bounds());
+}
+
 fn surface(s: &Session) -> Surface {
     let d = s.active().unwrap();
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().clone()
@@ -851,6 +862,7 @@ fn throttled_live_mask_cache_coalesces_damage_and_commit_flushes_blur_halos() {
     assert_mask_preview_failure_paths(&mut s, id, &params);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn assert_mask_preview_failure_paths(s: &mut Session, id: photocraft_doc::LayerId, params: &Value) {
     use std::time::Duration;
 

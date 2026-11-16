@@ -18,8 +18,7 @@ use photocraft_paint::mixer::{MixerSettings, MixerState};
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
 use photocraft_paint::{
-    BrushPreset, BrushSettings, Dab, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape,
-    render_stroke_clipped,
+    BrushPreset, BrushSettings, Dab, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke_clipped,
 };
 use photocraft_raster::Surface;
 #[cfg(not(target_arch = "wasm32"))]
@@ -630,6 +629,7 @@ pub struct LiveStroke {
     native_mask_gpu_patch_applied: bool,
     brush: BrushSettings,
     zoom: f32,
+    clip: Rect,
     symmetry: Option<crate::symmetry_cmds::PaintingSymmetry>,
     mirrors: Vec<StrokeRenderer>,
     mirror_distinct: Vec<bool>,
@@ -1332,6 +1332,7 @@ impl LiveStroke {
         let p = &captured;
         has_paintable(s).map_err(EngineError::Other)?;
         let pts = parse_points(p, cmd)?;
+        let initial_breaks = parse_breaks(p, pts.len(), cmd)?;
         let pencil = match cmd {
             "paint.stroke" => false,
             "paint.pencil" => true,
@@ -1375,6 +1376,7 @@ impl LiveStroke {
             native_mask_gpu_patch_applied: false,
             brush: renderer_brush,
             zoom,
+            clip,
             symmetry,
             mirrors,
             mirror_distinct,
@@ -1422,7 +1424,14 @@ impl LiveStroke {
         if let Some(cadence) = worker_cadence {
             let _ = live.set_mask_preview_worker(cadence);
         }
-        live.push(&pts)?;
+        let mut start = 0;
+        for end in initial_breaks.iter().copied().chain(std::iter::once(pts.len())) {
+            live.push(&pts[start..end])?;
+            start = end;
+            if start < pts.len() {
+                live.break_path()?;
+            }
+        }
         Ok(live)
     }
 
@@ -1519,9 +1528,9 @@ impl LiveStroke {
                     self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, true)
                 };
                 self.pre = surf.clone();
-                self.renderer = StrokeRenderer::new(&self.brush, Some(surf.format()), self.zoom);
+                self.renderer = StrokeRenderer::new(&self.brush, Some(surf.format()), self.zoom).with_clip(self.clip);
                 self.mirrors = (0..self.symmetry.as_ref().map_or(0, |s| s.mirror_count()))
-                    .map(|_| StrokeRenderer::new(&self.brush, Some(surf.format()), self.zoom))
+                    .map(|_| StrokeRenderer::new(&self.brush, Some(surf.format()), self.zoom).with_clip(self.clip))
                     .collect();
                 damage
             };
@@ -2034,7 +2043,7 @@ impl LiveStroke {
             let mut damage = Rect::EMPTY;
             for end in ends {
                 let segment = self.points.get(start..end).ok_or_else(|| bad(&self.cmd, "invalid live stroke segment boundary"))?;
-                let mut renderer = StrokeRenderer::new(&self.brush, Some(self.pre.format()), self.zoom);
+                let mut renderer = StrokeRenderer::new(&self.brush, Some(self.pre.format()), self.zoom).with_clip(self.clip);
                 renderer.push(segment);
                 renderer.finish();
                 let segment_bounds = renderer.bounds();
@@ -2046,7 +2055,7 @@ impl LiveStroke {
             }
             let break_requested = self.segment_break_pending;
             let active_segment = self.points.get(start..).ok_or_else(|| bad(&self.cmd, "invalid live stroke segment boundary"))?;
-            self.renderer = StrokeRenderer::new(&self.brush, Some(self.pre.format()), self.zoom);
+            self.renderer = StrokeRenderer::new(&self.brush, Some(self.pre.format()), self.zoom).with_clip(self.clip);
             self.renderer.push(active_segment);
             self.tail = Rect::EMPTY;
             if break_requested {
@@ -2056,7 +2065,7 @@ impl LiveStroke {
                 self.finished_bounds = self.finished_bounds.union(&segment_bounds).union(&segment_damage);
                 damage = damage.union(&segment_damage);
                 self.pre = surface.clone();
-                self.renderer = StrokeRenderer::new(&self.brush, Some(self.pre.format()), self.zoom);
+                self.renderer = StrokeRenderer::new(&self.brush, Some(self.pre.format()), self.zoom).with_clip(self.clip);
             } else {
                 damage = damage.union(&self.renderer.composite(&self.pre, surface, self.sel.as_ref(), self.lock, false));
                 if let Some(mut tail) = self.renderer.tail_preview() {
@@ -2067,7 +2076,7 @@ impl LiveStroke {
             self.union_live = None;
             self.mirror_distinct.fill(false);
             self.mirrors = (0..self.symmetry.as_ref().map_or(0, |s| s.mirror_count()))
-                .map(|_| StrokeRenderer::new(&self.brush, Some(self.pre.format()), self.zoom))
+                .map(|_| StrokeRenderer::new(&self.brush, Some(self.pre.format()), self.zoom).with_clip(self.clip))
                 .collect();
             self.refresh_mask_preview(damage);
             Ok(damage)

@@ -287,7 +287,19 @@ impl MaskStackRenderer {
         let output = Arc::new(rgba16_texture(device, size, "pc_mask_brush_preview"));
         let dummy_shell = rgba32u_texture(device, [1, 1], "pc_mask_brush_dummy_shell");
         let dummy = rgba16_texture(device, [1, 1], "pc_mask_brush_dummy");
-        let preview = MaskBrushPreview { owner_key, size, paint_layer_index, base, coverage, output, dummy_shell, dummy, settings, dirty: Vec::new(), stroke_dirty: Vec::new() };
+        let preview = MaskBrushPreview {
+            owner_key,
+            size,
+            paint_layer_index,
+            base,
+            coverage,
+            output,
+            dummy_shell,
+            dummy,
+            settings,
+            dirty: Vec::new(),
+            stroke_dirty: Vec::new(),
+        };
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_mask_brush_begin") });
         encoder.clear_buffer(&preview.coverage, 0, None);
         let base_view = preview.base.texture.create_view(&Default::default());

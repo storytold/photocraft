@@ -561,7 +561,13 @@ impl CoverageMap {
         // Iterate directly for small dabs: no work-list allocations or removing existing tiles.
         let keys = (t0y..=t1y).flat_map(|ty| {
             (t0x..=t1x).map(move |tx| {
-                let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&rect);
+                let tr = Rect::new(
+                    tx.saturating_mul(COV_TILE),
+                    ty.saturating_mul(COV_TILE),
+                    tx.saturating_add(1).saturating_mul(COV_TILE),
+                    ty.saturating_add(1).saturating_mul(COV_TILE),
+                )
+                .intersect(&rect);
                 ((tx, ty), tr)
             })
         });
@@ -1000,7 +1006,7 @@ impl StrokeRenderer {
         if !Self::mapped_input_valid(rect, coverage, dual, depth, dab) {
             return false;
         }
-        self.accumulate_mapped_validated(rect, coverage, dual, depth, dab);
+        self.accumulate_mapped_admitted(rect, coverage, dual, depth, dab);
         true
     }
 
@@ -1010,9 +1016,52 @@ impl StrokeRenderer {
             return false;
         }
         for batch in batches {
-            self.accumulate_mapped_validated(batch.rect, batch.coverage, batch.dual_coverage, batch.depth, batch.dab);
+            self.accumulate_mapped_admitted(batch.rect, batch.coverage, batch.dual_coverage, batch.depth, batch.dab);
         }
         true
+    }
+
+    fn accumulate_mapped_admitted(&mut self, rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) {
+        let mut main_rect = rect;
+        let mut main_cov = coverage;
+        let mut main_depth = depth;
+        let mut main_storage = None;
+        if !admit(self.clip, &mut self.area_left, &mut self.refused, rect) {
+            return;
+        }
+        if let Some(clip) = self.clip {
+            let clipped = rect.intersect(&clip);
+            if clipped != rect {
+                let Some((cov, dep)) = Self::crop_mapped(rect, clipped, coverage, depth) else { return };
+                main_storage = Some((cov, dep));
+                main_rect = clipped;
+                if let Some((cov, dep)) = main_storage.as_ref() {
+                    main_cov = cov;
+                    main_depth = dep;
+                }
+            }
+        }
+        self.accumulate_mapped_validated(main_rect, main_cov, &[], main_depth, dab);
+        let dual_allowed = self.dual.is_some() && admit(self.clip, &mut self.dual_area_left, &mut self.refused, rect);
+        if dual_allowed {
+            let mut dual_rect = rect;
+            let mut dual_cov = dual;
+            let mut dual_storage = None;
+            if let Some(clip) = self.clip {
+                let clipped = rect.intersect(&clip);
+                if clipped != rect {
+                    let Some(cov) = Self::crop_mapped_plane(rect, clipped, dual) else { return };
+                    dual_storage = Some(cov);
+                    dual_rect = clipped;
+                    if let Some(cov) = dual_storage.as_ref() {
+                        dual_cov = cov;
+                    }
+                }
+            }
+            if let Some(target) = &mut self.dual {
+                target.accumulate(dual_rect, dual_cov, 1.0, None, None);
+            }
+        }
     }
 
     fn mapped_input_valid(rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) -> bool {
@@ -1028,6 +1077,24 @@ impl StrokeRenderer {
             || !(0.0..=1.0).contains(&dab.opacity))
     }
 
+    fn crop_mapped_plane(rect: Rect, clipped: Rect, plane: &[f32]) -> Option<Vec<f32>> {
+        let src_width = rect.width() as usize;
+        let dst_width = clipped.width() as usize;
+        let x = (clipped.x0 - rect.x0) as usize;
+        let y = (clipped.y0 - rect.y0) as usize;
+        let mut out = Vec::new();
+        out.try_reserve_exact(dst_width.checked_mul(clipped.height() as usize)?).ok()?;
+        for row in 0..clipped.height() as usize {
+            let start = (y + row) * src_width + x;
+            out.extend_from_slice(&plane[start..start + dst_width]);
+        }
+        Some(out)
+    }
+
+    fn crop_mapped(rect: Rect, clipped: Rect, coverage: &[f32], depth: &[f32]) -> Option<(Vec<f32>, Vec<f32>)> {
+        Some((Self::crop_mapped_plane(rect, clipped, coverage)?, Self::crop_mapped_plane(rect, clipped, depth)?))
+    }
+
     fn accumulate_mapped_validated(&mut self, rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) {
         let mut native = [0.0; 8];
         let color = match (self.per_dab_color, self.fmt) {
@@ -1038,9 +1105,7 @@ impl StrokeRenderer {
             _ => None,
         };
         self.cov.accumulate(rect, coverage, dab.opacity, color, self.ctx.brush.wet_edges.then_some(depth));
-        if let Some(target) = &mut self.dual {
-            target.accumulate(rect, dual, 1.0, None, None);
-        }
+        let _ = dual;
     }
     /// Union of the dab rectangles so far.
     pub fn bounds(&self) -> Rect {

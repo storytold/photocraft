@@ -912,3 +912,21 @@ fn small_feathered_tools_work_on_large_sparse_documents_at_every_depth() {
         assert!(coverage(&s, 3025, 2025) > 0.95);
     }
 }
+
+#[cfg(feature = "uv-workbench")]
+#[test]
+fn uv_polygon_selection_rejects_an_invalid_explicit_document() {
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for document in [json!("not-an-id"), json!(-1), json!(null)] {
+        let result = session.execute(
+            "select.uvPolygons",
+            json!({
+                "document": document,
+                "polygons": [[[1.0, 1.0], [6.0, 1.0], [1.0, 6.0]]],
+            }),
+        );
+        assert!(result.is_err(), "invalid explicit document should be rejected");
+        assert!(session.active().unwrap().doc.selection.is_none());
+    }
+}

@@ -47,7 +47,7 @@ fn converted_native_groups_masks_off_canvas_pixels_and_report_survive_at_every_d
         raster.surface_mut().unwrap().write_pixel(-2, 1, &[if depth == SampleType::F32 { 1.5 } else { 0.75 }, 0.25, 0.5, 0.8]);
         let mut coverage = photocraft_raster::Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, depth, false));
         coverage.write_pixel(-2, 1, &[0.5]);
-        raster.mask = Some(photocraft_doc::LayerMask { surface: coverage, enabled: true, linked: true, density: 0.8, feather: 1.25 });
+        raster.mask = Some(photocraft_doc::LayerMask { surface: coverage, enabled: true, linked: true, density: 0.8, feather: 1.25, paint: None });
         let child = raster.id;
         let group = Layer::group("Native group", vec![raster]);
         let group_id = group.id;
@@ -756,6 +756,9 @@ fn directory_save_rejects_manifest_symlink_without_overwriting_target() {
 
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("symlink-manifest");
+    // The fixture inspects this directory even when preflight refuses the save before any
+    // object is written; empty bundles no longer create object directories eagerly.
+    std::fs::create_dir(dir.join("tiles")).unwrap();
     let outside = temp_dir("symlink-manifest-outside");
     let external_manifest = outside.join("external.json");
     std::fs::write(&external_manifest, b"keep manifest").unwrap();

@@ -46,6 +46,7 @@ fn save(s: &mut Session, _: &Value) -> Result<Value> {
                 warnings.extend(w);
                 let saved_revision = s.uv_documents_mut().get_mut(index).map(|st| (st.doc.id, st.revision.saturating_sub(st.view_revision)));
                 if let Some((id, revision)) = saved_revision {
+                    let revision = revision.saturating_add(s.uv.mask_cache_export_revisions.get(&id).copied().unwrap_or(0));
                     s.uv.exported_revisions.insert(id, revision);
                 }
                 saved += 1;

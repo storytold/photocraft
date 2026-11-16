@@ -547,11 +547,7 @@ fn sample_fill_mask(job: FillMaskJob, cancel_epoch: &AtomicU64) -> Option<FillMa
     // the bounded 256² proxy would repeat tens of millions of taps. The compose API scales the
     // blur kernel to the proxy grid, which is sufficient for this deliberately low-resolution
     // transient preview.
-    let values = if let Some(shell_ids) = job
-        .shell_ids
-        .as_deref()
-        .and_then(|ids| photocraft_compose::mask_paint::ShellIdMap::new(job.canvas, ids))
-    {
+    let values = if let Some(shell_ids) = job.shell_ids.as_deref().and_then(|ids| photocraft_compose::mask_paint::ShellIdMap::new(job.canvas, ids)) {
         photocraft_compose::mask_paint::sample_stack_resampled_with_shell_ids(&job.stack, job.canvas, job.size, shell_ids)?
     } else {
         photocraft_compose::mask_paint::sample_stack_resampled(&job.stack, job.canvas, job.size)?

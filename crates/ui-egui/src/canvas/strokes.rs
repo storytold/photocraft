@@ -271,6 +271,13 @@ impl EngineStroke {
         }
     }
 
+    pub(super) fn break_path(&mut self) -> Option<DRect> {
+        match self {
+            Self::Brush(stroke) => stroke.break_path().ok(),
+            _ => None,
+        }
+    }
+
     /// The jitter seed the commit must reuse (the Clone Stamp's comes from the session brush).
     fn seed(&self) -> Option<u64> {
         match self {
@@ -374,6 +381,10 @@ pub(super) fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke
 pub(super) fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) -> serde_json::Value {
     let tool = d.tool;
     let mut p = json!({ "points": points, "erase": d.erase, "zoom": app.point_zoom(), "target": paint_target(app) });
+    let breaks: Vec<_> = d.breaks.iter().copied().filter(|index| *index < points.len()).collect();
+    if !breaks.is_empty() {
+        p["breaks"] = json!(breaks);
+    }
     unsmoothed_line(&mut p, d.line);
     if d.clear {
         p["mode"] = json!("clear");
@@ -587,7 +598,17 @@ pub(crate) fn cancel_mixer_on_context_change(app: &mut PhotocraftApp, ctx: &egui
 /// rotation the commit's `paint.stroke` gets for them.
 pub(crate) fn feed_live_stroke(app: &mut PhotocraftApp) -> bool {
     feed_live_stroke_waiting(app, LIVE_STROKE_WAIT);
-    live_stroke_busy(app) || poll_native_mask_gpu(app)
+    let gpu_busy = {
+        #[cfg(feature = "uv-workbench")]
+        {
+            poll_native_mask_gpu(app)
+        }
+        #[cfg(not(feature = "uv-workbench"))]
+        {
+            false
+        }
+    };
+    live_stroke_busy(app) || gpu_busy
 }
 
 /// [`feed_live_stroke`], waiting at most `wait` for the stroke to paint (tests: not at all, to
@@ -1110,9 +1131,14 @@ pub(crate) fn clone_preview_texture(
 /// the next repaint catch the complete live path.
 #[cfg(feature = "uv-workbench")]
 pub(crate) fn break_live_stroke_path(app: &mut PhotocraftApp) -> bool {
-    let Some(bridge) = app.live_stroke.as_mut().and_then(|live| live.native_mask_gpu.as_mut()) else { return false };
-    let Some(stroke) = bridge.gpu_stroke.as_mut() else { return false };
-    let Ok(damage) = stroke.break_path() else { return false };
+    if let Some(stroke) = app.live_stroke.as_mut().and_then(|live| live.native_mask_gpu.as_mut()).and_then(|bridge| bridge.gpu_stroke.as_mut()) {
+        let Ok(damage) = stroke.break_path() else { return false };
+        if let Some(live) = app.live_stroke.as_mut() {
+            live.damage.push(damage);
+        }
+        return true;
+    }
+    let Some(damage) = app.live_stroke.as_mut().and_then(|live| live.paint.break_path()) else { return false };
     if let Some(live) = app.live_stroke.as_mut() {
         live.damage.push(damage);
     }

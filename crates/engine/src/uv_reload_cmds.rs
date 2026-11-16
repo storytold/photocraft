@@ -92,10 +92,14 @@ pub(crate) fn refresh_bound_mask_cache_for_document(
 
 pub(crate) fn apply_bound_mask_cache_updates(s: &mut Session, updates: Vec<(DocId, Document)>) {
     let mut published = Vec::new();
+    let mut export_changed = Vec::new();
     {
         let docs = s.uv_documents_mut();
         for (id, document) in updates {
             if let Some(state) = docs.iter_mut().find(|state| state.doc.id == id) {
+                if mask_cache_pixels_changed(&state.doc, &document) {
+                    export_changed.push(id);
+                }
                 state.doc = Arc::new(document);
                 // The cache refresh changes the rendered pixels without making the document
                 // content dirty or adding an undo step. Move the UI revision and its view-only
@@ -111,11 +115,22 @@ pub(crate) fn apply_bound_mask_cache_updates(s: &mut Session, updates: Vec<(DocI
             }
         }
     }
+    for id in export_changed {
+        let revision = s.uv.mask_cache_export_revisions.entry(id).or_default();
+        *revision = revision.wrapping_add(1);
+    }
     for document in published {
         if let Some(context) = s.uv.mask_cache_context(&document) {
             context.remember(&document);
         }
     }
+}
+
+fn mask_cache_pixels_changed(before: &Document, after: &Document) -> bool {
+    after.walk().iter().any(|(_, _, layer)| {
+        let Some(after_mask) = layer.mask.as_ref().filter(|mask| mask.paint.is_some()) else { return false };
+        before.layer(layer.id).and_then(|old| old.mask.as_ref()).is_some_and(|before_mask| before_mask.surface != after_mask.surface)
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,8 +200,10 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     let bindings: Vec<_> = mapping.iter().map(|id| id.and_then(|i| s.uv.bindings.get(i).copied().flatten())).collect();
     let normal_bindings: Vec<_> = mapping.iter().map(|id| id.and_then(|i| s.uv.normal_bindings.get(i).copied().flatten())).collect();
-    let map_bindings =
+    let map_bindings: BTreeMap<photocraft_uv::preview::Channel, Vec<Option<DocId>>> =
         s.uv.map_bindings.iter().map(|(kind, slots)| (*kind, mapping.iter().map(|id| id.and_then(|i| slots.get(i).copied().flatten())).collect())).collect();
+    let old_bound: std::collections::HashSet<_> = s.uv.all_bindings().flatten().copied().collect();
+    let new_bound: std::collections::HashSet<_> = bindings.iter().chain(&normal_bindings).chain(map_bindings.values().flatten()).flatten().copied().collect();
     let hidden_materials = mapping.iter().enumerate().filter_map(|(new, old)| old.filter(|old| s.uv.hidden_materials.contains(old)).map(|_| new)).collect();
     let material = mapping.iter().position(|old| *old == Some(s.uv.material)).unwrap_or(0);
     for (id, old) in mapping.iter().enumerate() {
@@ -214,6 +231,7 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     s.uv.bindings = bindings;
     s.uv.normal_bindings = normal_bindings;
     s.uv.map_bindings = map_bindings;
+    s.uv.replaced_document_ids.extend(old_bound.difference(&new_bound).copied());
     s.uv.hidden_materials = hidden_materials;
     s.uv.material = material;
     s.uv.uv_set = uv_set;
@@ -272,6 +290,14 @@ mod tests {
         session.execute("file.new", json!({"width":32,"height":32})).unwrap();
         let id = session.active().unwrap().doc.id;
 
+        let mut initial = (*session.active().unwrap().doc).clone();
+        let layer_id = initial.top_layer().unwrap();
+        let mask = photocraft_doc::LayerMask::hide_all();
+        let base = mask.surface.clone();
+        let layer = initial.layer_mut(layer_id).unwrap();
+        layer.mask = Some(photocraft_doc::LayerMask { paint: Some(photocraft_doc::mask_paint::Stack { base, layers: Vec::new(), active: 0 }), ..mask });
+        session.active_mut().unwrap().doc = Arc::new(initial);
+
         let initial_content_revision = {
             let state = session.active().unwrap();
             state.revision.saturating_sub(state.view_revision)
@@ -298,6 +324,16 @@ mod tests {
         assert!(!session.uv.needs_export(clean), "view revision is excluded from texture export state");
         assert!(!session.uv.has_unsaved_project(session.uv_documents()), "view revision is excluded from project save state");
         assert!(!clean.history.can_undo(), "cache-only refresh does not add an undo step");
+
+        let mut refreshed = (*clean.doc).clone();
+        let mask = refreshed.layer_mut(layer_id).unwrap().mask.as_mut().unwrap();
+        mask.surface.write_region(photocraft_geom::Rect::new(0, 0, 1, 1), &[1.0]);
+        apply_bound_mask_cache_updates(&mut session, vec![(id, refreshed)]);
+        let changed = session.active().unwrap();
+        assert!(!changed.is_dirty(), "a derived cache pixel change does not dirty document content");
+        assert!(!session.uv.has_unsaved_project(session.uv_documents()), "a derived cache pixel change does not dirty the project container");
+        assert!(session.uv.needs_export(changed), "a changed flattened mask cache requires texture export");
+        assert!(!changed.history.can_undo());
 
         let state = session.active_mut().unwrap();
         state.revision += 1;

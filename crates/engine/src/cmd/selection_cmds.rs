@@ -669,7 +669,8 @@ fn history_name(n: &str) -> Option<&str> {
 fn uv_polygons(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "select.uvPolygons";
     let previous = s.active_index();
-    if let Some(document) = p.get("document").and_then(Value::as_u64) {
+    if let Some(value) = p.get("document") {
+        let document = value.as_u64().ok_or_else(|| bad(CMD, "`document` must be an unsigned document id"))?;
         let target = s.documents().iter().position(|st| st.doc.id.0 == document).ok_or_else(|| bad(CMD, "the texture document is unavailable"))?;
         if previous != Some(target) && !s.set_active(target) {
             return Err(bad(CMD, "the texture document is unavailable"));

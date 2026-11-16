@@ -184,6 +184,16 @@ impl PaintThread {
         }
     }
 
+    /// Finish the queued path before the next disconnected UV segment is submitted.
+    pub(super) fn break_path(&mut self) -> Option<Rect> {
+        let mut st = self.wait_idle(Duration::MAX);
+        let stroke = st.stroke.as_mut()?;
+        let damage = stroke.break_path()?;
+        st.shown = Shown::of(stroke);
+        st.steps.push(Ok(damage));
+        Some(damage)
+    }
+
     /// Wait up to `wait` for everything handed over to be painted; returns the steps painted since
     /// the last call, oldest first, and updates what `shown` shows.
     pub(super) fn catch_up(&mut self, wait: Duration) -> Vec<Step> {
