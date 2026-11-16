@@ -323,3 +323,25 @@ fn a_wheel_notch_steps_the_stored_value_not_the_draft() {
     wheel_up(&mut h);
     assert_eq!(opacity(&h, id), json!(5));
 }
+
+/// CodeRabbit on #15099: an assistive technology that sets the focused field's number (here 37.5) after `50` was
+/// typed gets 38, not the cached text 50 and not 375: it changed the number without the text changing.
+#[test]
+fn an_accessibility_set_value_after_typing_is_the_number_not_the_cached_text() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "50");
+    let (target_node, target_tree) = h
+        .query_all_by_role(Role::SpinButton)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Opacity"))
+        .expect("an Opacity field")
+        .accesskit_node()
+        .locate();
+    h.input_mut().events.push(Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+        target_node,
+        target_tree,
+        action: egui::accesskit::Action::SetValue,
+        data: Some(egui::accesskit::ActionData::NumericValue(37.5)),
+    }));
+    h.run_steps(3);
+    assert_eq!(opacity(&h, id), json!(38));
+}
