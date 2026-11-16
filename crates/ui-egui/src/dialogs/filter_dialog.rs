@@ -1244,7 +1244,10 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
     if r.changed() && typed.is_finite() {
         // Typed text is read without its dot; a scrub drag, whose fractions come from the drag speed, is
         // only rounded, as every other field's drag is (a drag to 37.5 is 38, not 375).
-        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
+        // ⌘/Ctrl held is never typed text: it is the arrow step by 0.1 (the field has already consumed the arrow key),
+        // and 50.1 stays 50, not 501.
+        let stepped = ui.input(|i| i.modifiers.command);
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none() && !stepped;
         let whole = read_fade_opacity(typed, typing);
         v = whole.round().clamp(0.0, 100.0);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, typing && !(0.0..=100.0).contains(&whole)));
