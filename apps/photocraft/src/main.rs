@@ -571,6 +571,10 @@ fn main() -> eframe::Result {
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
             services.preset_store = presets;
+            // The file this instance's logger opened, for Help › System Info.
+            if let Some(install) = services.install.as_mut() {
+                install.log_file = logger.and_then(logging::AppLogger::path);
+            }
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);
             #[cfg(target_os = "linux")]

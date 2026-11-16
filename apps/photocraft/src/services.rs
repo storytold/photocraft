@@ -413,15 +413,17 @@ fn recovery_dir() -> Option<PathBuf> {
 }
 
 /// What kind of install this is and where it keeps its files (Help › System Info).
-fn install_info() -> photocraft_ui_egui::system_info::InstallInfo {
+/// `recovery_dir` is the folder the recovery service uses. `main` fills in the log file from the
+/// logger: an instance started beside a running one writes `photocraft-<pid>.log`.
+fn install_info(recovery_dir: Option<PathBuf>) -> photocraft_ui_egui::system_info::InstallInfo {
     let data = crate::app_dirs::current();
     let exe = std::env::current_exe().ok();
     let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
     photocraft_ui_egui::system_info::InstallInfo {
         kind: install_kind(data.mode, exe.as_deref(), set("APPIMAGE"), set("FLATPAK_ID"), set("SNAP")),
         settings_dir: data.dir.clone(),
-        log_file: data.dir.as_ref().map(|d| d.join("logs").join(crate::logging::LOG_FILE)),
-        recovery_dir: recovery_dir(),
+        log_file: None,
+        recovery_dir,
     }
 }
 
@@ -798,6 +800,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
     let clip_unreadable: Rc<Cell<bool>> = Rc::default();
     let automation = self::automation(automation);
+    // Resolved once: it moves an earlier version's autosaves and may take the migration lock.
+    let recovery = recovery_dir();
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             crate::crash_guard::guard("Open", || {
@@ -914,8 +918,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         // Set by main, which starts loading the store before the window opens.
         preset_store: None,
         is_wayland: false,
-        install: Some(install_info()),
-        ..recovery_services(recovery_dir())
+        install: Some(install_info(recovery.clone())),
+        ..recovery_services(recovery)
     }
 }
 
