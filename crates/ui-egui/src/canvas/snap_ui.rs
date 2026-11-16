@@ -54,6 +54,9 @@ pub struct ActiveSnap {
     /// Layer alignments only (smart guides), when View › Snap and Smart Guides are on.
     pub smart: SnapTargets,
     pub disabled: bool,
+    /// A Frame-tool press (drawing a frame, or moving an empty one): it snaps to other layers' edges only,
+    /// a moved frame by its edges and never by its centre, and a click that does not drag moves nothing.
+    pub frame: bool,
 }
 
 /// Snap To options from the View menu and the Guides/Grid preferences.
@@ -222,6 +225,8 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     let moves_layer = crate::canvas::command_moves_layer(app, tool, p, mods);
     let crop_tol = crate::crop_ui::tolerance(app);
     let straightens = tool == Tool::Crop && app.crop.drag.is_none() && (app.crop.straighten.armed || mods.command);
+    // Set by the Frame branch below: only a press the Frame tool takes gets its snapping rules.
+    let mut frame_press = false;
     let gesture = if let Some(t) = &app.ui.transform {
         use crate::transform_tool::Hit;
         let h = crate::transform_tool::box_hit(app, t, p, crate::transform_tool::handle_tolerance(app));
@@ -306,6 +311,15 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         crate::type_tool::box_handle_at(app, layer, p[0], p[1]).map(|_| (Gesture::Point, vec![layer]))
     } else if is_point_tool(tool) {
         Some((Gesture::Point, Vec::new()))
+    } else if tool == Tool::Frame {
+        // A frame being drawn snaps its corners; an empty frame being moved snaps its edges, not to
+        // itself (#13871).
+        let press = crate::frame_tool::snap_press(app, p);
+        frame_press = press.is_some();
+        press.map(|(moved, exclude)| match moved {
+            Some(rect) => (Gesture::Move { rect }, exclude),
+            None => (Gesture::Point, exclude),
+        })
     } else {
         None
     };
@@ -319,6 +333,11 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         // A guide never snaps to itself (or other guides).
         targets = targets.filtered(|k| k != SnapKind::Guide);
     }
+    // The Frame tool snaps to other layers' edges only, the case measured (#13871): guides, the
+    // grid and the document keep today's behaviour of not snapping it.
+    if frame_press {
+        targets = targets.filtered(|k| k == SnapKind::LayerEdge);
+    }
     if matches!(gesture, Gesture::SelectionMove { .. })
         || (matches!(gesture, Gesture::TransformMove { .. }) && app.ui.transform.as_ref().is_some_and(|t| crate::transform_tool::moves_selection(app, t)))
         || (matches!(gesture, Gesture::Move { .. }) && crate::move_ui::moves_selected_pixels_with(app, tool))
@@ -328,14 +347,16 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         targets = targets.filtered(|k| k != SnapKind::Selection);
     }
     let smart = if snap_on(app) && matches!(gesture, Gesture::Move { .. } | Gesture::CropImage) && smart_on(app) {
-        build(app, &exclude, true)
+        let smart = build(app, &exclude, true);
+        if frame_press { smart.filtered(|k| k == SnapKind::LayerEdge) } else { smart }
     } else {
         SnapTargets::default()
     };
     // Windows Ctrl both starts a straighten line and is held while it is drawn: the override then
-    // covers the press too, or the line's start would snap and its end not.
-    let disabled = straightens && override_held(mods);
-    app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled });
+    // covers the press too, or the line's start would snap and its end not. The Frame tool has no
+    // use for Ctrl at the press either, so a frame drawn with Ctrl held never snaps its first corner.
+    let disabled = (straightens || frame_press) && override_held(mods);
+    app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled, frame: frame_press });
 }
 
 /// Snap a guide drag that ⌘ with a selection tool starts at `p` (`canvas::command_guide_at`,
@@ -343,7 +364,7 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
 pub fn begin_guide(app: &mut PhotocraftApp, p: [f64; 2]) {
     app.prefs_rt.snap_lines.clear();
     let targets = if snap_on(app) { build(app, &[], false).filtered(|k| k != SnapKind::Guide) } else { SnapTargets::default() };
-    app.prefs_rt.snap = Some(ActiveSnap { gesture: Gesture::Guide, start: p, targets, smart: SnapTargets::default(), disabled: false });
+    app.prefs_rt.snap = Some(ActiveSnap { gesture: Gesture::Guide, start: p, targets, smart: SnapTargets::default(), disabled: false, frame: false });
 }
 
 /// Snap `p` as a point press does (`Gesture::Point`), for a press that began as a selection move
@@ -393,6 +414,17 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2
         return p;
     }
     let (out, lines) = match &snap.gesture {
+        // A Shift-drawn frame ends where the squared drag does, not where the pointer is (#13865).
+        Gesture::Point if snap.frame && mods.shift => {
+            // Square from the corner the Frame tool holds, not the raw press: a snapped press moves
+            // it, and Space carries it with the pointer.
+            let start = match &app.ui.frame_tool.drag {
+                Some(crate::frame_tool::FrameDrag::New { start, .. }) => *start,
+                _ => snap.start,
+            };
+            // The press itself (nothing drawn yet) is one point, not the end of a squared drag.
+            if p == start { snap.targets.snap_point(p, tol) } else { square_corner(&snap.targets, start, p, tol) }
+        }
         Gesture::Point => crop_handle(app, p, mods, &snap.targets, tol).unwrap_or_else(|| snap.targets.snap_point(p, tol)),
         Gesture::TransformCorner { point, .. } if corner_distorts(app, &snap.gesture, mods) => {
             let proposed = [point[0] + p[0] - snap.start[0], point[1] + p[1] - snap.start[1]];
@@ -404,11 +436,30 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2
         // Handled above.
         Gesture::Pivot { .. } => (p, Vec::new()),
         Gesture::Move { rect } | Gesture::TransformMove { rect } | Gesture::SelectionMove { rect } | Gesture::DrawMove { rect } => {
-            let d = [p[0] - snap.start[0], p[1] - snap.start[1]];
+            let mut d = [p[0] - snap.start[0], p[1] - snap.start[1]];
+            // A frame moved with Shift goes along one axis, the one the raw drag is longer on (the
+            // Frame tool's own rule): snap that axis only, and hand back a pointer that stays on it,
+            // so the tool sees the same axis once the pointer is corrected.
+            let horizontal = (snap.frame && mods.shift && matches!(snap.gesture, Gesture::Move { .. })).then(|| d[0].abs() > d[1].abs());
+            match horizontal {
+                Some(true) => d[1] = 0.0,
+                Some(false) => d[0] = 0.0,
+                None => {}
+            }
             let moved = [rect[0] + d[0], rect[1] + d[1], rect[2] + d[0], rect[3] + d[1]];
             let set = if snap.targets.is_empty() { &snap.smart } else { &snap.targets };
-            let (adj, lines) = set.snap_rect(moved, tol);
-            ([p[0] + adj[0], p[1] + adj[1]], lines)
+            let (adj, mut lines) =
+                if snap.frame && matches!(snap.gesture, Gesture::Move { .. }) { set.snap_rect_edges(moved, tol) } else { set.snap_rect(moved, tol) };
+            match horizontal {
+                Some(horizontal) => {
+                    lines.retain(|l| l.vertical == horizontal);
+                    let along = if horizontal { 0 } else { 1 };
+                    let mut q = snap.start;
+                    q[along] = p[along] + adj[along];
+                    (q, lines)
+                }
+                None => ([p[0] + adj[0], p[1] + adj[1]], lines),
+            }
         }
         Gesture::CropImage => {
             // Smart guides still snap when nothing in View › Snap To is within reach: the
@@ -419,6 +470,36 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2
     };
     app.prefs_rt.snap_lines = lines;
     out
+}
+
+/// Snap the end of a Shift-drawn frame: Shift squares the drag from its shorter side, so the frame's
+/// corner is at the squared end, and that corner is what snaps. The corner slides along the drag's
+/// diagonal, so one axis decides, the nearer snap; only that alignment is shown, since the other
+/// edge of the frame does not reach its target. Returns the pointer that squares to the snapped corner.
+fn square_corner(targets: &SnapTargets, start: [f64; 2], p: [f64; 2], tol: f64) -> ([f64; 2], Vec<SnapLine>) {
+    let (dx, dy) = (p[0] - start[0], p[1] - start[1]);
+    let side = dx.abs().min(dy.abs());
+    let (sx, sy) = (if dx < 0.0 { -1.0 } else { 1.0 }, if dy < 0.0 { -1.0 } else { 1.0 });
+    let corner = [start[0] + sx * side, start[1] + sy * side];
+    let (snapped, lines) = targets.snap_point(corner, tol);
+    let (ax, ay) = (snapped[0] - corner[0], snapped[1] - corner[1]);
+    // A target hit on an axis is told by its line, not by a correction: a corner already on a target
+    // has a zero correction and is the nearest alignment there is.
+    let by_x = match (lines.iter().any(|l| l.vertical), lines.iter().any(|l| !l.vertical)) {
+        (false, false) => return (p, Vec::new()),
+        (true, false) => true,
+        (false, true) => false,
+        (true, true) => ax.abs() <= ay.abs(),
+    };
+    let snapped_side = side + if by_x { ax * sx } else { ay * sy };
+    // An edge behind the start (Ctrl released mid-drag, so the start itself was not snapped) would fold the frame
+    // onto its start: keep the unsnapped square and show no line the frame does not reach.
+    if snapped_side < 0.0 {
+        return (p, Vec::new());
+    }
+    let side = snapped_side;
+    let lines = lines.into_iter().filter(|l| l.vertical == by_x).collect();
+    ([start[0] + sx * side, start[1] + sy * side], lines)
 }
 
 /// A corner stopped by the transform's convexity constraint is not aligned to the proposed
@@ -640,7 +721,10 @@ pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifier
             if let Some(s) = app.prefs_rt.snap.as_mut() {
                 s.disabled = disabled;
             }
-            let q = apply(app, [x, y], mods);
+            // A click on an empty frame that does not drag moves nothing: the release stays the press, however
+            // near another layer's edge the frame lies.
+            let click = app.prefs_rt.snap.as_ref().is_some_and(|s| s.frame && matches!(s.gesture, Gesture::Move { .. }) && s.start == [x, y]);
+            let q = if click { [x, y] } else { apply(app, [x, y], mods) };
             let p = pixel_round(app, q);
             app.prefs_rt.snap = None;
             app.prefs_rt.snap_lines.clear();
