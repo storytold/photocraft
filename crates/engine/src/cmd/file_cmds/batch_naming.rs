@@ -203,7 +203,9 @@ fn parse(template: &str) -> Result<Vec<Part<'_>>> {
     Ok(parts)
 }
 
-fn expand(parts: &[Part<'_>], name: &str, ext: &str, serial: u32, date: Date) -> String {
+/// `letter` is the serial letter's number (1 is `a`): the serial, or one past it when the batch
+/// starts at serial 0, which has no letter of its own (#13662).
+fn expand(parts: &[Part<'_>], name: &str, ext: &str, serial: u32, letter: u64, date: Date) -> String {
     let mut out = String::new();
     for (index, part) in parts.iter().enumerate() {
         match part {
@@ -218,7 +220,7 @@ fn expand(parts: &[Part<'_>], name: &str, ext: &str, serial: u32, date: Date) ->
                 }
             }
             Part::Serial(width) => out.push_str(&format!("{serial:0width$}")),
-            Part::Letter(upper) => out.push_str(&letters(u64::from(serial), *upper)),
+            Part::Letter(upper) => out.push_str(&letters(letter, *upper)),
             Part::Date(kind) => out.push_str(&date.format(*kind)),
             Part::Ext(upper) => {
                 // The reference app adds the separator only for the final extension component.
@@ -250,11 +252,11 @@ pub fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -
     if flat && structured.is_none() {
         return Err(bad("flatOutput needs namingComponents"));
     }
+    // Starting Serial # takes 0 as the reference's Batch does (serial 0 with 3 Digit Serial
+    // Number is `000`, #13662); the dialog keeps its field to 0..9999.
     let start = match params.get("startingSerial") {
         None => 1,
-        Some(n) => {
-            n.as_u64().and_then(|n| u32::try_from(n).ok()).filter(|&n| n > 0).ok_or_else(|| bad("startingSerial must be an integer from 1 to 4294967295"))?
-        }
+        Some(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad("startingSerial must be an integer from 0 to 4294967295"))?,
     };
     let template = match params.get("naming") {
         None => "",
@@ -296,7 +298,8 @@ pub fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -
         let name = if let (Some(components), Some(calendar)) = (structured, calendar) {
             expand_components(components, &stem(path), serial, index, &ext, calendar)?
         } else {
-            expand(&parts, &stem(path), &ext, serial, date)
+            // From serial 0, letters count from `a` as the structured `letter` component does.
+            expand(&parts, &stem(path), &ext, serial, u64::from(serial) + u64::from(start == 0), date)
         };
         if name.is_empty() || name.ends_with(['.', ' ']) {
             return Err(bad("naming must produce a nonempty filename stem without a trailing dot or space"));
@@ -419,10 +422,10 @@ mod tests {
     fn substituted_names_are_literal_and_serials_do_not_wrap_or_truncate() {
         let parts = parse("{date}_{name}_{serial}").unwrap();
         let date = Date { year: 2026, month: 10, day: 13 };
-        assert_eq!(expand(&parts, "photo{serial}", "png", 7, date), "2026-10-13_photo{serial}_007");
-        assert_eq!(expand(&parts, "photo", "png", 1000, date), "2026-10-13_photo_1000");
+        assert_eq!(expand(&parts, "photo{serial}", "png", 7, 7, date), "2026-10-13_photo{serial}_007");
+        assert_eq!(expand(&parts, "photo", "png", 1000, 1000, date), "2026-10-13_photo_1000");
         let parts = parse("{NAME}_{Name}_{serial:1}_{letter}{LETTER}_{date:mmddyy}.{EXT}").unwrap();
-        assert_eq!(expand(&parts, "my Photo", "png", 27, date), "MY PHOTO_My photo_27_aaAA_101326.PNG");
+        assert_eq!(expand(&parts, "my Photo", "png", 27, 27, date), "MY PHOTO_My photo_27_aaAA_101326.PNG");
     }
 
     #[test]
@@ -430,7 +433,11 @@ mod tests {
         let date = Date { year: 2026, month: 11, day: 1 };
         for (template, expected) in [("{name}{ext}", "a.png"), ("{name}{ext}{serial}", "apng001"), ("{name}{serial}", "a001"), ("{name}{ext}{ext}", "apng.png")]
         {
-            assert_eq!(expand(&parse(template).unwrap(), "a", "png", 1, date), expected, "{template}");
+            assert_eq!(expand(&parse(template).unwrap(), "a", "png", 1, 1, date), expected, "{template}");
         }
     }
 }
+
+#[cfg(test)]
+#[path = "batch_serial_range_tests.rs"]
+mod batch_serial_range_tests;
