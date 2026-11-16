@@ -56,7 +56,7 @@ mod render;
 pub use composite::{adjustment_quantum, blend_if_active, occludes_below, text_gamma};
 #[cfg(test)]
 use composite::{blend_into_fill, blend_into_g, branchless_floor, composite_layer_plain, composite_pixel_layer, pixel_surface, quantize};
-use composite::{composite_atop, composite_layer, composite_stack_at, dissolve_noise};
+use composite::{composite_stack_at, dissolve_noise};
 #[cfg(test)]
 use content::render_fill;
 pub use content::{RENDER_TILE, channel_weights, fill_frame, layer_shape, render_fill_content, stroke_frame, surface_to_buffer};
