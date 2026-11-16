@@ -452,6 +452,20 @@ pub(super) fn mask(sel: &Surface, rect: Rect) -> Vec<bool> {
     coverage(sel, rect).into_iter().map(|c| c > 0.0).collect()
 }
 
+/// [`mask`] over `rect`, but only inside `area` (the selected area): past it the selection's
+/// default pixel says nothing, and for an inverted selection it reads as selected.
+fn mask_within(sel: &Surface, rect: Rect, area: Rect) -> Vec<bool> {
+    let w = (rect.width() as usize).max(1);
+    mask(sel, rect)
+        .into_iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let (x, y) = (rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32);
+            m && x >= area.x0 && x < area.x1 && y >= area.y0 && y < area.y1
+        })
+        .collect()
+}
+
 /// Fill options: the fill's own colour adaptation (Edit › Content-Aware Fill's default), seeded so
 /// the result is reproducible.
 pub(super) fn fill_options() -> FillOptions {
@@ -637,7 +651,7 @@ fn run_move(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, ctx: &cra
         None => {
             let mut content = read(doc, plan.target, p, win.translate(-dx, -dy))?;
             content.rect = win;
-            (content, mask(sel, win.translate(-dx, -dy)))
+            (content, mask_within(sel, win.translate(-dx, -dy), plan.area))
         }
         Some(inv) => {
             // Only the content and a ring around it (the colour fit's reference) matter: read
@@ -657,7 +671,7 @@ fn run_move(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, ctx: &cra
         let (w, h) = (win.width() as usize, win.height() as usize);
         let img = read(doc, plan.target, p, win)?;
         let landed = match &inv {
-            None => mask(sel, win.translate(-dx, -dy)),
+            None => mask_within(sel, win.translate(-dx, -dy), plan.area),
             Some(inv) => landed_mask(&cov, plan.area, inv, win),
         };
         let hole: Vec<bool> = mask(sel, win).iter().zip(&landed).map(|(s, l)| *s && !*l).collect();

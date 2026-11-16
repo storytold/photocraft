@@ -3593,3 +3593,21 @@ fn stroke_brush_takes_the_smoothing_param() {
     assert_eq!(stroke_brush(&base, &json!({"smoothing": 1e9})).smoothing.amount, 1.0);
     assert_eq!(stroke_brush(&base, &json!({"smoothing": -5})).smoothing.amount, 0.0);
 }
+
+#[test]
+fn content_aware_move_of_an_inverted_selection_fills_the_strip_it_vacates_at_the_canvas_edge() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    // The whole canvas selected through the default pixel alone (an inverted empty selection).
+    let st = s.active_mut().unwrap();
+    std::sync::Arc::make_mut(&mut st.doc).selection = Some(photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]));
+    let strip: Vec<(i32, i32)> = (0..20).flat_map(|x| (0..64).map(move |y| (x, y))).collect();
+    let before: Vec<_> = strip.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    // The canvas moves 20 px right: its left 20 px are vacated (the old content past the left
+    // edge does not exist, so the selection's default pixel there must not count as landed).
+    let r = s.execute("paint.contentAwareMove", json!({"offset": [20, 0]}));
+    assert!(r.is_ok(), "{r:?}");
+    let after: Vec<_> = strip.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    let stale = before.iter().zip(&after).filter(|(b, a)| b == a).count();
+    assert!(stale * 4 < strip.len(), "the vacated strip is filled, not left as it was ({stale} of {} unchanged)", strip.len());
+}
