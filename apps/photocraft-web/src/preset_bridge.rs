@@ -118,7 +118,7 @@ pub struct ActionWrite {
 #[derive(Clone)]
 pub enum Batch {
     Files(BTreeMap<String, Option<Arc<[u8]>>>),
-    Actions(ActionWrite),
+    Actions(Box<ActionWrite>),
 }
 
 #[derive(Clone, Debug)]
@@ -335,7 +335,7 @@ impl Bridge {
                 s.dirty.insert(ACTIONS_FILE.into());
             }
         }
-        Some(Batch::Actions(ActionWrite { base: s.action_revision, revision, definitions, keys, migration }))
+        Some(Batch::Actions(Box::new(ActionWrite { base: s.action_revision, revision, definitions, keys, migration })))
     }
 
     pub fn finish(&self, batch: Batch, result: Result<(), WriteError>) {
