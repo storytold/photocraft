@@ -264,6 +264,9 @@ mod pen_mode_menu_tests;
 mod ellipse_path_menus_tests;
 
 #[cfg(test)]
+mod rectangle_align_edges_tests;
+
+#[cfg(test)]
 mod triangle_align_edges_tests;
 
 #[cfg(test)]
