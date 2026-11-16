@@ -859,6 +859,10 @@ fn twist_test(sub: &Net, rules: &Rules, whole: bool, full_height: bool, goes_acr
         (false, false) if rules.twist_spreads && full_height => sub.twist_along(du),
         (false, _) if rules.twist_spreads && whole && !goes_across => sub.twist_across_rows(du, dv, 2.0, usize::MAX),
         (false, _) if rules.twist_spreads && !whole => (0.9 * sub.twist_along(dv)).max(sub.twist_along(du)),
+        // A one-patch full mesh's cell splits down for the twist of its top edge, as it splits
+        // down past FULL_TOP_TWIST_TOL when it splits across: a scaled wave's top side cells are
+        // cut down, their bottom mirrors (as twisted in all, less along their top edges) not.
+        (false, false) if rules.force_down && !rules.twist_spreads => sub.twist_top(),
         (false, _) => sub.twist(),
     };
     // A whole quilt patch splits for its twist only past WHOLE_PATCH_TWIST_TOL (FIRST_ROW_TWIST_TOL
@@ -1701,6 +1705,20 @@ mod tests {
         assert!(leaf([0.0, 0.0625, 0.75, 0.875]), "bottom: whole down");
     }
 
+    /// A wave ±50 net scaled to 0.7: the corner cell at the top (u 0..⅛, v 0..⅛, twist 1.12 on its
+    /// top edge) splits down for its twist, its mirror at the bottom (as twisted in all, 0.84 on
+    /// its top edge) stays whole down.
+    #[test]
+    fn a_full_mesh_cell_splits_down_for_the_twist_of_its_top_edge() {
+        let rows = [[83.2, 83.2, 83.2, 83.2], [134.4, 206.08, 62.72, 134.4], [185.6, 257.28, 113.92, 185.6], [236.8, 236.8, 236.8, 236.8]];
+        let p = (0..16).map(|k| [96.0 + 128.0 * (k % 4) as f64 / 3.0, rows[k / 4][k % 4]]).collect();
+        let net = Net { nu: 4, nv: 4, p };
+        let (leaves, _) = cells(&net, true, &one_patch_rules(&net, true));
+        let leaf = |c: Cell| leaves.iter().any(|l| (0..4).all(|k| (l[k] - c[k]).abs() < EPS));
+        assert!(leaf([0.0, 0.125, 0.0, 0.0625]), "top: cut down");
+        assert!(leaf([0.0, 0.125, 0.875, 1.0]), "bottom: whole down");
+    }
+
     /// A full mesh's cell that splits across splits down too where its top edge twists past
     /// FULL_TOP_TWIST_TOL, though its whole twist stays under ACROSS_TWIST_TOL and its columns are
     /// straight.
@@ -2272,8 +2290,6 @@ mod tests {
         let (leaves, _) = cells(&net, true, &full);
         let tall = |ls: &[Cell]| ls.iter().any(|c| c[0] >= 0.5 - 1e-9 && c[1] <= 0.75 + 1e-9 && c[2].abs() < 1e-9 && (c[3] - 0.25).abs() < 1e-9);
         assert!(tall(&leaves), "a quarter-tall cell stays at the top, right of the middle");
-        let (old, _) = cells(&net, true, &Rules { across_twist: TWIST_TOL, ..full });
-        assert!(!tall(&old), "with the twist it would split down");
         // Pulled 55 px instead of 48, the same cell's twist is 1.22: past the limit, it splits down.
         let far = corner_out_by(55.0);
         let (leaves, _) = cells(&net_of(&far, true), true, &full);
