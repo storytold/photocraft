@@ -1313,6 +1313,55 @@ fn layer_export_as_prepares_and_writes_in_the_background() {
     assert!(noticed(h.state(), "a warning"), "the export warnings are shown");
 }
 
+/// Several selected layers, one of them empty: the prepare leaves the empty one out on its worker
+/// (#14806), and the others go into the chosen folder as `<layer name>.png` (#14808), written by
+/// the worker save. Nothing is kept once they are written.
+#[test]
+fn layer_export_as_of_several_layers_skips_an_empty_one_and_writes_in_the_background() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().to_string_lossy().into_owned();
+    let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::FolderTo(folder))]);
+    let mut h = app_harness_with(crate::Services { file_dialog: Some(show), ..Default::default() });
+    let gates = Gates::open();
+    h.state_mut().services.save_file = Some(gates.save(None));
+    let active = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().active_layer.unwrap();
+    let filled = active(&h);
+    h.state_mut().run("layer.new.layer", json!({"name": "Empty"})).unwrap();
+    let empty = active(&h);
+    h.state_mut().run("layer.new.layer", json!({"name": "Top"})).unwrap();
+    h.state_mut().run("edit.fill", json!({"color": "#cc3366"})).unwrap();
+    let top = active(&h);
+    h.state_mut().session.active_mut().unwrap().selected_layers = vec![filled, empty, top];
+    let st = h.state().session.active().unwrap();
+    let (doc, filled_name) = (st.doc.clone(), st.doc.layer(filled).unwrap().name.clone());
+    let ctx = h.ctx.clone();
+    let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    assert_eq!(r["pending"], true, "the layers are composited on a worker: {r}");
+    step_until(&mut h, |a| !a.ui.dialogs.is_empty());
+    let fields = h.state().ui.dialogs.last().expect("the dialog opens once the layers are ready").fields.clone();
+    assert_eq!(fields["__layers"], json!([filled.0, top.0]), "the empty layer is left out");
+    h.state_mut().ui.dialogs.clear();
+    crate::export_dialog::confirm(h.state_mut(), &fields).unwrap();
+    step_until(&mut h, |a| a.ui.status.starts_with("Exported"));
+    let want: Vec<String> = [format!("{filled_name}.png"), "Top.png".to_string()].iter().map(|n| dir.path().join(n).to_string_lossy().into_owned()).collect();
+    assert_eq!(gates.written(), want, "written by the worker save");
+    assert!(!crate::export_dialog::layer_composite_kept(&doc, filled), "let go once written");
+}
+
+/// Cancelling a layer's Export As dialog lets go of the layers composited for it.
+#[test]
+fn cancelling_a_layers_export_as_lets_go_of_its_composites() {
+    let mut h = app_harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    step_until(&mut h, |a| !a.ui.dialogs.is_empty());
+    let st = h.state().session.active().unwrap();
+    let (doc, layer) = (st.doc.clone(), st.active_layer.unwrap());
+    let id = h.state().ui.dialogs.last().unwrap().id;
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    assert!(!crate::export_dialog::layer_composite_kept(&doc, layer), "let go with the dialog");
+}
+
 /// Without background jobs Export As composites and writes on this thread, as before, and lets
 /// go of the layer it composited before writing: nothing keeps it (gigabytes for a storyboard).
 #[test]

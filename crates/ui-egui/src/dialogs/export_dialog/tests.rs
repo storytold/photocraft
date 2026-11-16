@@ -1070,7 +1070,7 @@ fn applying_a_preset_restores_its_size_mode() {
 fn only_a_composite_of_another_document_is_released() {
     let new = || Arc::new(Document::new("d", photocraft_doc::Size::new(2, 2), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8));
     let (old, active) = (new(), new());
-    let kept: LayerSource = (old.clone(), photocraft_doc::LayerId(1), old.clone());
+    let kept: LayerSource = (old.clone(), vec![(photocraft_doc::LayerId(1), old.clone())]);
     assert!(kept_for_another_document(&kept, Some(&active)));
     assert!(kept_for_another_document(&kept, None));
     assert!(!kept_for_another_document(&kept, Some(&old)));
