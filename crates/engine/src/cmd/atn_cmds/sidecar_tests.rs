@@ -440,7 +440,7 @@ fn clone_and_rename_keep_action_entry_and_assign_set_rebinds_only_set_metadata()
 
     // Import and confirmed replacement each bind action provenance and its physical row from
     // the same decoded archive. Action-only and full exports retain B's set metadata and bytes.
-    let imported = fixture(&["A", "B"], false, "Note\0");
+    let imported = self::fixture(&["A", "B"], false, "Note\0");
     for replace in [false, true] {
         let mut roundtrip = Session::new();
         let data = photocraft_paint::tile::b64_encode(&imported.bytes);
