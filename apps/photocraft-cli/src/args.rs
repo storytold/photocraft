@@ -79,10 +79,17 @@ pub(crate) struct ExportArgs {
     #[arg(long)]
     pub(crate) dds_mipmaps: bool,
     /// A JPEG's scans, as JPEG Options picks them: baseline (the default), optimized (Huffman
-    /// tables fitted to the image; RGB is written 4:2:0 and keeps the standard tables, so only Gray
-    /// and CMYK shrink) or progressive
+    /// tables fitted to the image; RGB written 4:2:0 keeps the standard tables, so only Gray, CMYK
+    /// and 4:4:4 RGB shrink) or progressive
     #[arg(long, value_name = "baseline|optimized|progressive", value_parser = jpeg_format)]
     pub(crate) jpeg_format: Option<JpegFormat>,
+    // No colons in the value name: clap_complete writes it unescaped into zsh's `_arguments`
+    // spec, where each colon starts another field.
+    /// A JPEG's chroma sampling: 4:2:0 (the default for RGB) or 4:4:4, which keeps the colour of
+    /// fine detail such as saturated text and line art in a larger file. Gray and CMYK JPEGs have
+    /// no subsampled chroma either way
+    #[arg(long, value_name = "SAMPLING", value_parser = jpeg_subsampling)]
+    pub(crate) jpeg_subsampling: Option<bool>,
     /// Request the flattened document at its canvas size in .pcraft output as
     /// composite/full.png; it may be omitted. Check the manifest's full_composite member.
     #[arg(long)]
@@ -339,6 +346,8 @@ enum ValueError {
     TiffCompression,
     #[error("expected baseline, optimized or progressive")]
     JpegFormat,
+    #[error("expected 4:2:0 or 4:4:4")]
+    JpegSubsampling,
     #[error("expected none or all")]
     Metadata,
     #[error("expected on or off")]
@@ -433,6 +442,15 @@ fn pdf_dpi(s: &str) -> Result<f32, ValueError> {
 
 fn jpeg_format(s: &str) -> Result<JpegFormat, ValueError> {
     JpegFormat::parse(s).ok_or(ValueError::JpegFormat)
+}
+
+/// `--jpeg-subsampling`: whether the chroma is subsampled (`true` is 4:2:0, `false` 4:4:4).
+fn jpeg_subsampling(s: &str) -> Result<bool, ValueError> {
+    match s {
+        "4:2:0" => Ok(true),
+        "4:4:4" => Ok(false),
+        _ => Err(ValueError::JpegSubsampling),
+    }
 }
 
 fn metadata(s: &str) -> Result<XmpEmbed, ValueError> {

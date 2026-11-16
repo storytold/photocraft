@@ -29,6 +29,9 @@ impl From<&ExportArgs> for ExportOptions {
         if let Some(f) = a.jpeg_format {
             o.encode.jpeg_format = f;
         }
+        if let Some(sub) = a.jpeg_subsampling {
+            o.encode.jpeg_chroma_subsampling = sub;
+        }
         if let Some(c) = a.dds_compression {
             o.encode.dds.compression = c;
         }

@@ -303,6 +303,50 @@ fn doc_save_rejects_a_bad_quality_instead_of_ignoring_or_clamping_it() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The (horizontal, vertical) sampling factors in a JPEG's frame header, one per component,
+/// found by walking the segments.
+fn jpeg_sampling_factors(bytes: &[u8]) -> Vec<(u8, u8)> {
+    let mut i = 2;
+    while i + 4 <= bytes.len() {
+        let marker = bytes[i + 1];
+        let len = usize::from(u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]));
+        if (0xC0..=0xCF).contains(&marker) && ![0xC4, 0xC8, 0xCC].contains(&marker) {
+            let n = usize::from(bytes[i + 9]);
+            return (0..n).map(|c| bytes[i + 11 + 3 * c]).map(|hv| (hv >> 4, hv & 0x0F)).collect();
+        }
+        i += 2 + len;
+    }
+    panic!("no frame header");
+}
+
+/// `doc.save` takes `jpegSubsampling`: "4:4:4" keeps the chroma at full resolution, "4:2:0" and
+/// no choice subsample it; any other value is refused and writes nothing.
+#[test]
+fn doc_save_takes_jpeg_subsampling() {
+    let dir = std::env::temp_dir().join(format!("pc-rpc-save-subsampling-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = Headless::trusted_local();
+    h.handle("doc.new", json!({"width": 32, "height": 16})).unwrap();
+    for (name, params, factors) in [
+        ("default.jpg", json!({"quality": 95}), vec![(2, 2), (1, 1), (1, 1)]),
+        ("420.jpg", json!({"jpegSubsampling": "4:2:0"}), vec![(2, 2), (1, 1), (1, 1)]),
+        ("444.jpg", json!({"jpegSubsampling": "4:4:4", "quality": 95}), vec![(1, 1), (1, 1), (1, 1)]),
+    ] {
+        let path = dir.join(name);
+        let mut p = params.clone();
+        p["path"] = json!(path.to_string_lossy());
+        h.handle("doc.save", p).unwrap();
+        assert_eq!(jpeg_sampling_factors(&std::fs::read(&path).unwrap()), factors, "{params}");
+    }
+    let bad = dir.join("bad.jpg");
+    for v in [json!("444"), json!("4:2:2"), json!(true)] {
+        let err = h.handle("doc.save", json!({"path": bad.to_string_lossy(), "jpegSubsampling": v})).unwrap_err().to_string();
+        assert!(err.contains("jpegSubsampling"), "{v}: {err}");
+        assert!(!bad.exists(), "{v}: a bad value writes nothing");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// #8064: `doc.save` takes `maximizeCompatibility` for a layered PSD's merged image (false: the
 /// placeholder, flagged in resource 1057); anything but a boolean writes nothing.
 #[test]

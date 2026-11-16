@@ -15,7 +15,8 @@
 //!   `doc.exportLayers {dir, format?, prefix?, visibleOnly?, quality?, index?}`,
 //!   `doc.exportDataSets {dir, format?, dataSets?, naming?, index?}`,
 //!   `doc.importDataSets {path, delimiter?, index?}` (#3216: the same treatment for the export
-//!   and CSV half of #2810), `doc.save {path?, format?, quality?, index?}`, `doc.inspect {index?}`,
+//!   and CSV half of #2810), `doc.save {path?, format?, quality?, jpegSubsampling?, index?}`,
+//!   `doc.inspect {index?}`,
 //!   `doc.render {index?, maxSide?, path?}` (writes a PNG to `path`, else
 //!   returns it base64-encoded; adds `warnings` when a renderer fell back), `doc.select {index}`, `doc.close {index?}`
 //! - `batch {steps: [{command, params?, wait?} | {method, params?}], stopOnError?}`
@@ -188,6 +189,9 @@ impl Headless {
                 opts.encode.tiff_pyramid = tiff_bool("tiffPyramid")?.unwrap_or(false);
                 if let Some(maximize) = photocraft_engine::file_cmds::maximize_compatibility_param(&p, "doc.save").map_err(|e| bad(e.to_string()))? {
                     opts.psd_maximize_compatibility = maximize;
+                }
+                if let Some(sub) = photocraft_engine::file_cmds::jpeg_subsampling_param(&p, "doc.save").map_err(|e| bad(e.to_string()))? {
+                    opts.encode.jpeg_chroma_subsampling = sub;
                 }
                 match p.get("quality") {
                     None | Some(Value::Null) => {}
