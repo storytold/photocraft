@@ -318,3 +318,83 @@ fn a_group_layer_png_stores_the_same_pixels_whatever_the_band_size() {
         assert_eq!(px(&band, w, 4, 50, 59), vec![0, 255, 255, 255], "{rows} rows at a time keeps the child's colour");
     }
 }
+
+/// #14816 review: a group's own bounds are the union of its children's, so a nested group paints
+/// nothing of its own - the leaf boxes decide which pixels nothing ever painted. Wrapping that group
+/// in a second group must therefore not stop its empty corner from being stored white, in either
+/// encoder.
+#[test]
+fn a_nested_group_layer_png_whites_the_corner_its_leaves_never_painted() {
+    let (mut app, _written, _open) = app(70, 60);
+    painted(&mut app, "Yellow", "#ffff00", Some((0, 0, 40, 40)));
+    painted(&mut app, "Cyan", "#00ffff", Some((30, 30, 40, 30)));
+    app.run("select.allLayers", json!({})).unwrap();
+    app.run("layer.new.groupFromLayers", json!({"name": "Pair"})).unwrap();
+    let inner = active(&app);
+    app.run("layer.new.groupFromLayers", json!({"layer": inner, "name": "Outer"})).unwrap();
+    let outer = active(&app);
+    let doc = source_document(&app, &fields(Some(outer))).unwrap();
+    let opts = photocraft_io::ExportOptions { layer_alpha: true, ..Default::default() };
+    let buffered = photocraft_io::export_flat(&doc, photocraft_codecs::Format::Png, &opts).unwrap();
+    let (w, h, layout, whole) = png(&buffered.bytes);
+    assert_eq!((w, h, layout), (70, 60, ChannelLayout::Rgba), "the outer group's bounds are its leaves' union");
+    assert_eq!(px(&whole, w, 4, 0, 59), vec![255, 255, 255, 0], "the corner no leaf of the nested group ever painted");
+    assert_eq!(px(&whole, w, 4, 50, 59), vec![0, 255, 255, 255], "where the cyan leaf paints, its colour stays");
+    let ctl = photocraft_raster::Interrupt::NONE;
+    for rows in [1, 7] {
+        let streamed = photocraft_io::export_png_streamed_with_renderer(&doc, &opts, &ctl, rows, None).unwrap();
+        let (_bw, _bh, _blayout, band) = png(&streamed.bytes);
+        assert_eq!(band, whole, "{rows} rows at a time stores different RGBA bytes");
+    }
+}
+
+/// A 70 x 60 document holding one group of two offset children, so its bottom row is clear up to
+/// x=30; `paints` are the two children's pixel values in the document's own channel order.
+fn group_document(
+    mode: photocraft_doc::ColorMode,
+    depth: photocraft_doc::SampleType,
+    paints: [&[f32]; 2],
+) -> (photocraft_doc::Document, photocraft_doc::LayerId) {
+    let mut doc = photocraft_doc::Document::new("Unmeasured", photocraft_doc::Size::new(70, 60), mode, depth);
+    let fmt = doc.pixel_format();
+    let leaves = [(photocraft_doc::Rect::new(0, 0, 40, 40), paints[0]), (photocraft_doc::Rect::new(30, 30, 70, 60), paints[1])].map(|(r, px)| {
+        let mut s = photocraft_raster::Surface::new(fmt);
+        s.fill_rect(r, px);
+        photocraft_doc::Layer::new("Leaf", photocraft_doc::LayerContent::Raster(s))
+    });
+    let group = photocraft_doc::Layer::group("Pair", leaves.into());
+    let id = group.id;
+    doc.layers = vec![group];
+    (doc, id)
+}
+
+/// The reference application was measured for the clear-pixel colour of a group export on an RGB
+/// document at 8 bits (#14816, #14990), so a 16-bit or a grayscale document keeps the colours its
+/// layers left instead of storing the never-painted area as white.
+#[test]
+fn a_group_export_in_an_unmeasured_mode_or_depth_keeps_its_clear_pixels() {
+    let opts = photocraft_io::ExportOptions { layer_alpha: true, ..Default::default() };
+    let magenta16 = [0.9, 0.0, 0.9, 1.0];
+    let teal16 = [0.0, 0.6, 0.6, 1.0];
+    let light8 = [0.9, 1.0];
+    let dark8 = [0.2, 1.0];
+    let cases: [(&str, photocraft_doc::ColorMode, photocraft_doc::SampleType, [&[f32]; 2]); 2] = [
+        ("16-bit RGB", photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U16, [&magenta16, &teal16]),
+        ("8-bit grayscale", photocraft_doc::ColorMode::Grayscale, photocraft_doc::SampleType::U8, [&light8, &dark8]),
+    ];
+    for (label, mode, depth, paints) in cases {
+        let (doc, id) = group_document(mode, depth, paints);
+        let alone = photocraft_engine::layer_menu_cmds::layer_document(&doc, id).unwrap();
+        let out = photocraft_io::export_flat(&alone, photocraft_codecs::Format::Png, &opts).unwrap();
+        let img = photocraft_codecs::decode(&out.bytes).unwrap();
+        let (w, h) = img.dimensions();
+        let channels = img.layout().channels();
+        let bytes = img.data().len() / (w as usize * h as usize * channels);
+        let at = ((h - 1) as usize * w as usize) * channels * bytes;
+        assert_eq!(
+            img.data()[at..at + channels * bytes].to_vec(),
+            vec![0u8; channels * bytes],
+            "{label}: a clear pixel of the bottom row keeps its colour, it is not turned white"
+        );
+    }
+}
