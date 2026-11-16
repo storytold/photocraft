@@ -470,9 +470,10 @@ fn batch_menu_requires_a_recorded_action() {
     let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let fields = &app.ui.dialog_mut(dialog).unwrap().fields;
     assert_eq!(fields["action"], "Invert");
-    // Folder is the safe default: Save and Close overwrites every source and must be chosen.
-    assert_eq!(fields["destination"], "folder");
-    assert_eq!(fields["__choices"]["destination"], json!(["folder", "saveAndClose"]));
+    // Photoshop defaults to None; Folder and Save and Close are explicit choices.
+    assert_eq!(fields["destination"], "none");
+    assert_eq!(fields["__choices"]["destination"], json!(["none", "folder", "saveAndClose"]));
+    assert_eq!(fields["__labels"]["none"], "None");
     assert_eq!(fields["__labels"]["saveAndClose"], "Save and Close");
 }
 
@@ -492,6 +493,18 @@ fn normalize_batch_destination_forces_source_format_for_save_and_close() {
     assert_eq!(cleaned["input"], "/tmp/in");
     for key in ["output", "naming", "startingSerial", "quality"] {
         assert!(cleaned.get(key).is_none(), "{key} must drop for Save and Close: {cleaned}");
+    }
+    let none = normalize_batch_destination(json!({
+        "destination": "none",
+        "format": "jpg",
+        "output": "/tmp/out",
+        "naming": "{name}",
+        "quality": 8,
+    }));
+    assert_eq!(none["destination"], "none");
+    assert_eq!(none["format"], "jpg", "None does not force format");
+    for key in ["output", "naming", "quality"] {
+        assert!(none.get(key).is_none(), "{key} must drop for None: {none}");
     }
     let folder = normalize_batch_destination(json!({"destination": "folder", "format": "jpg", "output": "/tmp/out"}));
     assert_eq!(folder["format"], "jpg");
@@ -515,7 +528,7 @@ fn batch_dialog_save_and_close_overwrites_the_folder() {
     ));
     let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
-    assert_eq!(fields["destination"], "folder");
+    assert_eq!(fields["destination"], "none");
     fields.insert("destination".into(), json!("saveAndClose"));
     fields.insert("format".into(), json!("jpg")); // must be ignored / forced to same
     fields.insert("input".into(), json!(dir.path().to_string_lossy()));
@@ -529,6 +542,32 @@ fn batch_dialog_save_and_close_overwrites_the_folder() {
         assert!(data[2] > 200, "inverted red is cyan: {}", path.display());
         assert!(!path.with_extension("jpg").exists(), "Save and Close must not write a sibling format");
     }
+}
+
+/// Destination None runs the action without writing sources or a Batch output folder.
+#[test]
+fn batch_dialog_destination_none_leaves_sources_untouched() {
+    let (mut app, ctx) = app_with(1);
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.png");
+    app.run("file.saveACopy", json!({"path": a.to_string_lossy()})).unwrap();
+    let before = std::fs::read(&a).unwrap();
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new(
+        "Invert",
+        vec![("image.adjustments.invert".into(), json!({}))],
+    ));
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    assert_eq!(fields["destination"], "none");
+    fields.insert("input".into(), json!(dir.path().to_string_lossy()));
+    // Stale Folder fields must be dropped so None does not write under output.
+    fields.insert("output".into(), json!(dir.path().join("batch").to_string_lossy()));
+    let r = crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(std::fs::read(&a).unwrap(), before, "None must not overwrite the source");
+    assert!(!dir.path().join("batch").exists(), "None must not create a destination folder");
 }
 
 /// A folder with no images must not close the Batch dialog as if the run succeeded.
@@ -571,6 +610,7 @@ fn batch_menu_runs_the_selected_sets_action_among_same_named_ones() {
     assert_eq!(fields["__choices"]["action"], json!(["Retouch"]));
     assert_eq!(fields["__choices"]["set"], json!(["A", "B"]));
     assert_eq!((&fields["action"], &fields["set"]), (&json!("Retouch"), &json!("B")));
+    fields.insert("destination".into(), json!("folder"));
     fields.insert("input".into(), json!([input.clone()]));
     fields.insert("output".into(), json!(output));
     crate::dialogs::confirm(&mut app, id).unwrap();
@@ -715,6 +755,7 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     let id = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
     assert!(!fields.contains_key("steps"));
+    fields.insert("destination".into(), json!("folder"));
     fields.insert("input".into(), json!([input]));
     fields.insert("output".into(), json!(output));
     h.run_steps(4);
@@ -920,6 +961,9 @@ fn batch_dialogs_include_all_subfolders() {
         fields.insert("input".into(), json!(input));
         fields.insert("output".into(), json!(dir.join(out).to_string_lossy()));
         fields.insert("includeSubfolders".into(), json!(true));
+        if id == "file.automate.batch" {
+            fields.insert("destination".into(), json!("folder"));
+        }
         let r = crate::dialogs::confirm(&mut app, d).unwrap();
         assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{id}: {r}");
         if id == "file.automate.batch" {
@@ -955,6 +999,7 @@ fn batch_runs_an_action_recorded_with_the_type_tool() {
     assert_eq!(crate::actions::selected_action(&app).and_then(|a| a.steps.first()).map(|(_, p)| p["text"].clone()), Some(json!("Hi")));
     let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    fields.insert("destination".into(), json!("folder"));
     fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
     fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
     let r = crate::dialogs::confirm(&mut app, d).unwrap();
@@ -993,6 +1038,7 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
         .push(photocraft_engine::actions_cmds::Action::new("Stale", vec![("layer.setProps".into(), json!({"layer": 424_242, "opacity": 50}))]));
     let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    fields.insert("destination".into(), json!("folder"));
     fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
     fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
     let notices = app.ui.notices.len();
