@@ -217,6 +217,42 @@ fn a_step_targeting_a_layer_mask_stays_available_and_answers_at_apply() {
 }
 
 #[test]
+fn a_channel_target_with_no_layer_selected_still_edits_the_channel() {
+    // Review #14485 round 2: the apply check must not resolve a layer for a channel target. A
+    // document with no layer selected (`select.deselectLayers`) and the Channels panel on an alpha
+    // channel: the menu accepts the step, so apply must not answer `no active layer` before the
+    // channel branch runs - the step edited the channel there before #14429.
+    let mut s = session(ColorMode::Rgb);
+    s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+    s.execute("select.deselectLayers", json!({})).unwrap();
+    assert!(s.active().unwrap().active_layer.is_none(), "no layer is selected");
+    assert!(s.is_enabled("image.adjustments.colorLookup"), "a channel edit with no selected layer stays enabled");
+    let past = s.active().unwrap().history.past_len();
+    s.execute("image.adjustments.colorLookup", json!({"lut": "warm"})).expect("the alpha channel is edited, no layer is involved");
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
+}
+
+#[test]
+fn a_channel_target_only_in_the_params_still_needs_a_selected_layer_as_on_main() {
+    // The same document with the Channels panel put back on the composite: the params-level channel
+    // target has no selected layer to check, and main refused it in the plain adjustability check.
+    // It keeps that answer and text, and does not pick up Color Lookup's own refusal.
+    let mut s = session(ColorMode::Rgb);
+    s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    s.execute("select.deselectLayers", json!({})).unwrap();
+    assert!(s.active().unwrap().active_layer.is_none(), "no layer is selected");
+    let step = json!({"lut": "warm", "target": {"channel": 0}});
+    assert!(!s.is_enabled_with("image.adjustments.colorLookup", &step), "the plain adjustability check still needs a layer here");
+    let got = match s.execute("image.adjustments.colorLookup", step) {
+        Ok(v) => panic!("the step ran anyway: {v}"),
+        Err(EngineError::Disabled(_, why)) | Err(EngineError::Other(why)) => why,
+        Err(e) => panic!("wrong error kind: {e}"),
+    };
+    assert_eq!(got, "no active layer", "the same answer as before #14429");
+}
+
+#[test]
 fn an_explicit_channel_target_still_answers_the_document_mode_refusal() {
     // The channel exemption is a rule about the target, not a licence to edit a document the
     // reference marks unavailable: the mode refusals come first, whether the Channels panel or the

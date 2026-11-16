@@ -361,9 +361,10 @@ pub(crate) const COLOR_LOOKUP_EMPTY_LAYER: &str = "Could not complete the Color 
 
 /// The layer-content, document-mode and visibility half of the Color Lookup checks, shared by
 /// the menu and by apply (#14429). `layer` is the layer the step edits: `None` (the menu, which
-/// has no params) means the active layer, apply passes the one the params resolve to. `channel`
-/// says the step edits an alpha channel or the Quick Mask instead of a layer: the menu learns
-/// that from the Channels panel, apply also from a `"target"` in its own params.
+/// has no params, or a step editing a channel instead of a layer) means the active layer, apply
+/// otherwise passes the one the params resolve to. `channel` says the step edits an alpha channel
+/// or the Quick Mask instead of a layer: the menu learns that from the Channels panel, apply also
+/// from a `"target"` in its own params.
 fn color_lookup_target_ok(s: &Session, layer: Option<photocraft_doc::LayerId>, channel: bool) -> std::result::Result<(), String> {
     adjustable_layer_ok(s, layer)?;
     let d = s.active().ok_or("no document open")?;
@@ -402,9 +403,12 @@ pub(crate) fn color_lookup_applicable(s: &Session, p: &Value) -> std::result::Re
     // A step naming its channel target in the params edits that channel, exactly as a Channels
     // panel target does: the layer the params resolve to is not what changes.
     let channel = crate::channel_cmds::edits_channel(s) || crate::channel_cmds::is_channel_target(p);
-    // The layer the edit and the smart-filter path act on (`layer` param, else the active one).
-    let target = crate::commands::layer_param(s, p).map_err(|e| e.to_string())?;
-    color_lookup_target_ok(s, Some(target), channel)?;
+    // A channel edit involves no layer, so resolve none for it: with no layer selected (the Layers
+    // panel's "Deselect Layers") the step still edits the channel, as it did before #14429. The
+    // plain adjustability rule below still asks for a selected layer when only the params name the
+    // channel, which is what `has_adjustable` did on main.
+    let target = if channel { None } else { Some(crate::commands::layer_param(s, p).map_err(|e| e.to_string())?) };
+    color_lookup_target_ok(s, target, channel)?;
     if crate::commands::is_mask_target(p) {
         return Err(COLOR_LOOKUP_UNAVAILABLE.into());
     }
@@ -415,7 +419,8 @@ pub(crate) fn color_lookup_applicable(s: &Session, p: &Value) -> std::result::Re
     if channel {
         return Ok(());
     }
-    if let Some(l) = d.doc.layer(target)
+    // Not a channel edit, so the layer the step resolves to is the one the edit writes.
+    if let Some(l) = target.and_then(|id| d.doc.layer(id))
         && let LayerContent::Raster(surf) = &l.content
         && surf.content_bounds().is_empty()
     {
