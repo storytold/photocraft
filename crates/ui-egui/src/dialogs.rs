@@ -929,7 +929,8 @@ pub fn title(d: &Dialog) -> String {
         DialogKind::About => "About PhotoCraft".into(),
         DialogKind::LayerStyle => "Layer Style".into(),
         DialogKind::Command => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command").trim_end_matches('…').to_string(),
-        DialogKind::Error => "Error".into(),
+        // An alert may carry its own title, such as Batch's for a missing folder (#13669).
+        DialogKind::Error => d.fields.get("__title").and_then(Value::as_str).unwrap_or("Error").into(),
     }
 }
 
@@ -1121,6 +1122,8 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
     }
+    // Batch without a source or destination folder stays open under its alert (#13669).
+    crate::view_cmds::batch_preflight(app, id)?;
     // A control request installs the session gate; synthetic input sets `automation_input`.
     // Either way the handler's own file access is judged before it runs, as its command would be.
     if (app.automation_input || app.session.authorize.is_some())
