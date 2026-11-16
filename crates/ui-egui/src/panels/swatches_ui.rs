@@ -17,7 +17,7 @@ use egui::{Color32, CornerRadius, Rect};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::preset_panels::{Ev, GroupView, ItemView, Place, browser, run};
+use crate::preset_panels::{Ev, GroupView, ItemView, Place, RenameTarget, browser, run};
 
 /// The browser's panel key (selection, folder state and thumbnail size live under it).
 pub const PANEL: &str = "swatches";
@@ -94,7 +94,7 @@ fn handle(app: &mut PhotocraftApp, e: Ev, background: bool) {
         }
         Ev::Activate(k) => {
             sel(app, &k);
-            app.ui.presets_ui.renaming = Some((PANEL.into(), k.clone(), k));
+            app.ui.presets_ui.renaming = Some((PANEL.into(), RenameTarget::Preset(k.clone()), k));
         }
         // Swatches don't drop onto the canvas.
         Ev::Drop(..) => {}
@@ -129,14 +129,14 @@ fn new_swatch(app: &mut PhotocraftApp) {
     if let Some(r) = run(app, "swatches.add", p) {
         let name = r["name"].as_str().unwrap_or_default().to_string();
         app.ui.presets_ui.selected.insert(PANEL.into(), name.clone());
-        app.ui.presets_ui.renaming = Some((PANEL.into(), name.clone(), name));
+        app.ui.presets_ui.renaming = Some((PANEL.into(), RenameTarget::Preset(name.clone()), name));
     }
 }
 
 fn new_group(app: &mut PhotocraftApp) {
     if let Some(r) = run(app, "swatches.newGroup", json!({"name": "Group"})) {
         let g = r["group"].as_str().unwrap_or_default().to_string();
-        app.ui.presets_ui.renaming = Some((PANEL.into(), format!("group:{g}"), g));
+        app.ui.presets_ui.renaming = Some((PANEL.into(), RenameTarget::Group(g.clone()), g));
     }
 }
 

@@ -279,7 +279,7 @@ fn a_menu_key_typed_in_a_panel_windows_text_field_goes_to_the_field() {
     desktop.steps(3);
     let viewport = desktop.window_of("gradients").unwrap();
     desktop.host.borrow_mut().focus = Some(viewport);
-    desktop.h.state_mut().ui.presets_ui.renaming = Some(("gradients".into(), "key".into(), "Name".into()));
+    desktop.h.state_mut().ui.presets_ui.renaming = Some(("gradients".into(), crate::preset_panels::RenameTarget::Preset("key".into()), "Name".into()));
     desktop.steps(3);
 
     let layers = |desktop: &Desktop| desktop.h.state().session.active().unwrap().doc.layers.len();
@@ -324,7 +324,7 @@ fn keys_held_in_a_panel_window_count_as_released_once_it_loses_the_keyboard() {
     desktop.host.borrow_mut().focus = Some(viewport);
     desktop.send(viewport, vec![space(true)]);
     assert_eq!(held(&mut desktop), [Key::Space]);
-    desktop.h.state_mut().ui.presets_ui.renaming = Some(("gradients".into(), "key".into(), "Name".into()));
+    desktop.h.state_mut().ui.presets_ui.renaming = Some(("gradients".into(), crate::preset_panels::RenameTarget::Preset("key".into()), "Name".into()));
     desktop.steps(3);
     assert_eq!(held(&mut desktop), [], "released once a field of the window takes keyboard focus");
 }

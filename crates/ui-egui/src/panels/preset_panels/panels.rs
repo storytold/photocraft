@@ -1,6 +1,6 @@
 use super::{
-    Align2, Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, Sense, Stroke, TextureHandle, Tokens, Tool, Value,
-    browser, canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
+    Align2, Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, RenameTarget, Sense, Stroke, TextureHandle, Tokens,
+    Tool, Value, browser, canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
 };
 
 // ------------------------------------------------------------------ Gradients
@@ -469,7 +469,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut action: Option<(String, Value)> = None;
     let mut pick: Option<String> = None;
     // Rename field.
-    if let Some((_, key, mut text)) = app.ui.presets_ui.renaming.clone().filter(|r| r.0 == "toolPresets") {
+    if let Some((_, RenameTarget::Preset(key), mut text)) = app.ui.presets_ui.renaming.clone().filter(|r| r.0 == "toolPresets") {
         ui.horizontal(|ui| {
             let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
             let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
@@ -482,7 +482,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     action = Some(("tool.presets.edit".into(), json!({"action": "rename", "preset": key, "name": text.trim()})));
                 }
             } else {
-                app.ui.presets_ui.renaming = Some(("toolPresets".into(), key.clone(), text.clone()));
+                app.ui.presets_ui.renaming = Some(("toolPresets".into(), RenameTarget::Preset(key.clone()), text.clone()));
             }
         });
     }
@@ -506,7 +506,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             resp.context_menu(|ui| {
                 if ui.button(tl!("Rename Tool Preset…")).clicked() {
-                    app.ui.presets_ui.renaming = Some(("toolPresets".into(), name.clone(), name.clone()));
+                    app.ui.presets_ui.renaming = Some(("toolPresets".into(), RenameTarget::Preset(name.clone()), name.clone()));
                     ui.close();
                 }
                 if ui.button(tl!("Delete Tool Preset")).clicked() {
@@ -542,7 +542,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         {
             let n = r["name"].as_str().unwrap_or_default().to_string();
             app.ui.presets_ui.selected.insert("toolPresets".into(), n.clone());
-            app.ui.presets_ui.renaming = Some(("toolPresets".into(), n.clone(), n));
+            app.ui.presets_ui.renaming = Some(("toolPresets".into(), RenameTarget::Preset(n.clone()), n));
         }
     }
 }
