@@ -230,9 +230,14 @@ pub(super) fn blends_inside(layer: &Layer) -> bool {
 /// The issue measured a solid-colour stroke over an RGB pixel layer at full fill, on an opaque
 /// backdrop; gradient and pattern paint, a layer that is not pixels, a Fill below 100 %, and a
 /// CMYK or Lab document are not measured and keep today's behaviour, where neither compositor
-/// reads the flag. The GPU planner calls this too, so the two agree on which rule applies.
+/// reads the flag. So is a layer with more than one stroke reaching inside it: the issue measured
+/// one stroke, and an upper stroke blending over a lower one's knocked-out band is a rule it did
+/// not measure (`stacked_inside_strokes_keep_today_s_pixels`). The GPU planner calls this too, so
+/// the two agree on which rule applies.
 pub fn stroke_overprint_shown(layer: &Layer, st: &photocraft_doc::StrokeFx) -> bool {
+    let inside_strokes = layer.effects.items.iter().filter(|e| e.enabled() && matches!(e, Effect::Stroke(s) if stroke_widths(s).0 > 0.0)).count();
     matches!(st.paint, FxPaint::Color(_))
+        && inside_strokes == 1
         && layer.fill_opacity >= 1.0
         && matches!(&layer.content, photocraft_doc::LayerContent::Raster(_))
         && layer.surface().is_some_and(|s| s.format().mode == photocraft_color::ColorMode::Rgb)
@@ -288,7 +293,7 @@ pub(crate) fn composite_with_effects_prepared(
     let fields = pass.stroke_fields(!strokes.is_empty());
     pass.paint_interior(&mut lay, &shape);
     pass.paint_vector_stroke(&mut lay, &shape);
-    pass.paint_inside_strokes(&mut lay, &mut work, &shape, &strokes, &fields);
+    pass.paint_inside_strokes(&mut lay, &mut work, content, &shape, &strokes, &fields);
     pass.paint_bevel(&mut lay, BevelPaint::Inner, Some(&shape));
     // The shape's own alpha.
     for (p, a) in lay.px.iter_mut().zip(&shape.v) {
@@ -560,7 +565,15 @@ impl<'a> EffectPass<'a> {
     /// 0.0.0. Overprint on paints those latter two: the stroke blends over the layer's own pixels.
     /// [`stroke_overprint_shown`] and [`OPAQUE_EPS`] hold the configurations the issue measured;
     /// every other pixel of the band keeps today's behaviour ([`EffectPass::paint_band_over_layer`]).
-    fn paint_inside_strokes(&self, lay: &mut Buffer, work: &mut Buffer, shape: &Map, strokes: &[&photocraft_doc::StrokeFx], fields: &StrokeFields) {
+    fn paint_inside_strokes(
+        &self,
+        lay: &mut Buffer,
+        work: &mut Buffer,
+        content: &Buffer,
+        shape: &Map,
+        strokes: &[&photocraft_doc::StrokeFx],
+        fields: &StrokeFields,
+    ) {
         for st in strokes.iter().rev().copied() {
             let (in_w, _) = stroke_widths(st);
             if in_w <= 0.0 {
@@ -581,12 +594,16 @@ impl<'a> EffectPass<'a> {
             // stroke into the backdrop and compositing the rest of the layer over it is not
             // (`inside_stroke_respects_partial_edge_coverage`).
             // (`lay` is no use for the opacity test: a layer merged into its backdrop before its
-            // interior effects paints opaque there even with half-transparent pixels.)
-            // `m`, `shown` and `rest` are all `self.w` x `self.h`, so one `i` indexes the three.
+            // interior effects paints opaque there even with half-transparent pixels.) `shape` is
+            // not enough either: with Transparency Shapes Layer off it is the whole layer, so the
+            // content's own alpha decides
+            // (`half_transparent_pixels_without_transparency_shapes_layer_ignore_overprint`).
+            // `m`, `shown`, `rest` and `content` are all `self.w` x `self.h`, so one `i` indexes them.
             let (mut shown, mut rest) = (Map::new(self.w, self.h, 0.0), Map::new(self.w, self.h, 0.0));
             for (i, cov) in m.v.iter().enumerate() {
                 let whole = *cov >= 1.0 - OPAQUE_EPS
                     && shape.v.get(i).is_some_and(|a| *a >= 1.0 - OPAQUE_EPS)
+                    && content.px.get(i).is_some_and(|p| p[3] >= 1.0 - OPAQUE_EPS)
                     && work.px.get(i).is_some_and(|p| p[3] >= 1.0 - OPAQUE_EPS);
                 if whole {
                     shown.v[i] = *cov;

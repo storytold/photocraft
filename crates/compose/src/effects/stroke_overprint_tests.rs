@@ -10,7 +10,7 @@
 
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::vector::{Path, ShapeLayer, Subpath};
-use photocraft_doc::{Effect, Fill, FxCommon, FxPaint, Gradient, Layer, LayerContent, StrokeFx, StrokePosition};
+use photocraft_doc::{Effect, Fill, FxCommon, FxPaint, Gradient, Layer, LayerContent, LayerMask, StrokeFx, StrokePosition};
 use photocraft_geom::{Rect, Size};
 
 use crate::{Buffer, Document, render};
@@ -123,13 +123,16 @@ fn center_stroke_with_overprint_paints_its_two_halves_differently() {
 #[test]
 fn outside_strokes_ignore_overprint() {
     for (blend, opacity, want) in [(BlendMode::Normal, 0.5, [64.0, 64.0, 192.0]), (BlendMode::Multiply, 1.0, [0.0, 0.0, 128.0])] {
-        let mut off = measured(vec![stroke(10.0, StrokePosition::Outside, blend, opacity, false, blue_paint())]);
+        let off = measured(vec![stroke(10.0, StrokePosition::Outside, blend, opacity, false, blue_paint())]);
         let on = measured(vec![stroke(10.0, StrokePosition::Outside, blend, opacity, true, blue_paint())]);
-        // The two documents differ only in the flag.
-        if let Effect::Stroke(s) = &mut off.layers[1].effects.items[0] {
+        // The two documents differ only in the flag: a copy of `off` with the flag set equals
+        // `on`, and `off` itself is rendered with Overprint off.
+        let mut flipped = off.clone();
+        if let Effect::Stroke(s) = &mut flipped.layers[1].effects.items[0] {
             s.overprint = true;
         }
-        assert_eq!(on.layers[1].effects.items, off.layers[1].effects.items);
+        assert_eq!(on.layers[1].effects.items, flipped.layers[1].effects.items);
+        assert!(matches!(&off.layers[1].effects.items[0], Effect::Stroke(s) if !s.overprint));
         let (before, after) = (flatten(&off), flatten(&on));
         assert_band(&before, 65..=74, want);
         assert_band(&after, 65..=74, want);
@@ -206,4 +209,49 @@ fn unmeasured_configurations_keep_ignoring_overprint() {
         assert_px(&before, 18, 14, want);
         assert_eq!(before.px, after.px, "{mode:?} document: Overprint changed a pixel the issue did not measure");
     }
+}
+
+/// Not measured: half-transparent layer pixels with Transparency Shapes Layer off. There the
+/// effect shape is the whole layer, so the shape alone does not tell an opaque layer pixel from
+/// a half-transparent one; the pixel's own alpha does. Those pixels keep today's path, where
+/// the flag changes nothing (a Multiply stroke blends over the layer's own pixels).
+#[test]
+fn half_transparent_pixels_without_transparency_shapes_layer_ignore_overprint() {
+    let build = |overprint: bool| {
+        let mut d = measured(vec![stroke(10.0, StrokePosition::Inside, BlendMode::Multiply, 1.0, overprint, blue_paint())]);
+        let layer = &mut d.layers[1];
+        layer.advanced.transparency_shapes = false;
+        layer.surface_mut().unwrap().fill_rect(Rect::new(100, 75, 300, 225), &[ORANGE[0], ORANGE[1], ORANGE[2], 0.5]);
+        // A layer mask showing the rectangle: with Transparency Shapes Layer off the effects
+        // take it as the layer's shape, so the band lies on the half-transparent pixels.
+        let mut m = photocraft_raster::Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+        m.fill_rect(Rect::new(100, 75, 300, 225), &photocraft_raster::from_rgba(&m.format(), [1.0; 4]));
+        layer.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        d
+    };
+    let (before, after) = (flatten(&build(false)), flatten(&build(true)));
+    // Today's path: blue multiplied over the half-transparent orange in the band, not blue
+    // multiplied with the grey under the layer (0.0.128).
+    assert_px(&before, 200, 77, [0.0, 0.0, 63.7]);
+    assert_eq!(before.px, after.px, "Transparency Shapes Layer off: Overprint changed a half-transparent pixel");
+}
+
+/// Not measured: more than one inside stroke on a layer. A lower red Normal stroke with Overprint
+/// off and an upper blue Multiply stroke with Overprint on keep today's pixels: the upper stroke
+/// multiplies the lower one (0.0.0), it does not land on a knocked-out layer and show plain blue.
+/// Swapping the two flags changes nothing either.
+#[test]
+fn stacked_inside_strokes_keep_today_s_pixels() {
+    let red = FxPaint::Color(Color::rgb(1.0, 0.0, 0.0));
+    let build = |upper_overprint: bool, lower_overprint: bool| {
+        measured(vec![
+            stroke(10.0, StrokePosition::Inside, BlendMode::Multiply, 1.0, upper_overprint, blue_paint()),
+            stroke(10.0, StrokePosition::Inside, BlendMode::Normal, 1.0, lower_overprint, red.clone()),
+        ])
+    };
+    let (asked, swapped) = (flatten(&build(true, false)), flatten(&build(false, true)));
+    assert_band(&asked, INSIDE_BAND, [0.0, 0.0, 0.0]);
+    assert_eq!(asked.px, swapped.px, "stacked inside strokes: Overprint changed a pixel the issue did not measure");
+    // Past the band the layer's own pixels are untouched.
+    assert_px(&asked, 200, 150, ORANGE.map(|v| v * 255.0));
 }
