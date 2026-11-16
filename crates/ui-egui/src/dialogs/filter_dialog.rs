@@ -1206,8 +1206,14 @@ pub(crate) const FADE_OPACITY_RANGE_ALERT: &str = "An integer between 0 and 100 
 /// A value the Fade Opacity field holds, read as the reference application reads it: typed text loses
 /// its dot (`12.3` is 123, `0.4` is 4); anything else, a scrub drag's fractions included (`37.5`), is
 /// the number itself, rounded by the caller.
-fn read_fade_opacity(value: f32, typing: bool) -> f32 {
-    if value.fract() == 0.0 || !typing { value } else { format!("{value}").replace('.', "").parse::<f32>().unwrap_or(value) }
+fn read_fade_opacity(value: f32, text: Option<&str>, typing: bool) -> f32 {
+    if value.fract() == 0.0 || !typing {
+        return value;
+    }
+    // From the text as it was typed, so `0.40` is 40 and `0.4` is 4; the number's own formatting has lost
+    // its trailing zeros.
+    let digits = text.map_or_else(|| format!("{value}"), str::to_owned).replace('.', "");
+    digits.parse::<f32>().unwrap_or(value)
 }
 
 /// Edit › Fade's Opacity (#13811): whole percents 0..=100, a field with `%` and a slider. A typed
@@ -1231,6 +1237,9 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
     }
     let draft = draft.filter(|(_, kept, field)| *kept == stored && field.is_some_and(|f| ui.ctx().memory(|m| m.has_focus(f))));
     let (mut typed, mut v) = (draft.map_or(stored, |(typed, _, _)| typed), stored);
+    // An arrow key steps the value (⌘/Ctrl by 0.1), which is not typed text (50.1 stays 50, not 501): read before the
+    // field, which consumes the key. Holding ⌘/Ctrl is not the test, a pasted value is typed too.
+    let arrow = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown));
     let r = ui
         .horizontal(|ui| {
             ui.label(egui::RichText::new(name).color(t.text_dim));
@@ -1238,17 +1247,32 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
         })
         .inner;
     let out_id = r.id.with(OUT_OF_RANGE);
+    // The typed text, which changes without the number changing (`0.4` then `0` is `0.40`: 0.4 both
+    // times): the entry is read again when either changed. What was typed before the field had the
+    // focus is not an entry, so the text it held on gaining it is the starting point.
+    let text_id = r.id.with("fade-opacity-text");
+    let text = crate::widgets::typed_text(ui.ctx(), r.id);
     if r.gained_focus() {
         ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+        ui.ctx().data_mut(|d| d.insert_temp(text_id, text.clone()));
     }
-    if r.changed() && typed.is_finite() {
+    let text_changed = r.has_focus() && ui.ctx().data(|d| d.get_temp::<Option<String>>(text_id)).is_some_and(|before| before != text);
+    if text_changed {
+        ui.ctx().data_mut(|d| d.insert_temp(text_id, text.clone()));
+    }
+    // A text change the number did not follow is an entry only when the text is a number: after `0.4`,
+    // replacing it with `abc` leaves the parser's draft at 0.4, which is not to be read again (0.4 rounds
+    // to 0), so the value stays.
+    let reads_text = text_changed && crate::widgets::typed_text_parses(ui.ctx(), r.id) != Some(false);
+    // Text that is not a number takes back an out-of-range mark an earlier entry left (`150`, then `abc`).
+    if text_changed && !reads_text {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+    }
+    if (r.changed() || reads_text) && typed.is_finite() {
         // Typed text is read without its dot; a scrub drag, whose fractions come from the drag speed, is
         // only rounded, as every other field's drag is (a drag to 37.5 is 38, not 375).
-        // ⌘/Ctrl held is never typed text: it is the arrow step by 0.1 (the field has already consumed the arrow key),
-        // and 50.1 stays 50, not 501.
-        let stepped = ui.input(|i| i.modifiers.command);
-        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none() && !stepped;
-        let whole = read_fade_opacity(typed, typing);
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none() && !arrow;
+        let whole = read_fade_opacity(typed, text.as_deref(), typing);
         v = whole.round().clamp(0.0, 100.0);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, typing && !(0.0..=100.0).contains(&whole)));
         if typing && r.has_focus() {
