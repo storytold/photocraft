@@ -679,6 +679,27 @@ fn picking_custom_clears_the_preview_while_a_superseded_one_still_runs() {
     assert!(pv.running.is_some(), "the superseded worker is still winding down");
 }
 
+/// CodeRabbit on #10624: Custom with nothing to sample clears the preview, but a worker for the current generation
+/// that finishes in that frame (an erasing drag leaves the generation as it was) must not have its fill stored and
+/// drawn for a frame: the guard moves to a new generation, so the result is dropped.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_worker_finishing_while_custom_has_nothing_to_sample_is_dropped() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    control(&mut app, &json!({"waitPreview": true})).unwrap();
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let w = app.distort.caf.as_mut().unwrap();
+    assert!(w.awaiting_custom_area(), "Custom with nothing painted");
+    w.preview.running = Some((w.preview.want, rx, photocraft_engine::jobs::JobCtx::new()));
+    tx.send(Ok((Rect::new(0, 0, 1, 1), egui::ColorImage::filled([1, 1], egui::Color32::RED)))).unwrap();
+    preview::drive_preview(&mut app, &egui::Context::default(), false);
+    let pv = &ws(&app).preview;
+    assert!(pv.pending_image.is_none() && pv.tex.is_none() && pv.error.is_none(), "the stale fill is not shown");
+    assert_eq!(pv.shown, pv.want, "the image stays unfilled");
+}
+
 /// Custom's "nothing painted yet" follows what the fill samples, the full-resolution area,
 /// not the proxy (2 document px per proxy px here): a 1 px stroke on the fill area's left edge
 /// keeps a column outside it that the proxy, sampling every other column, doesn't see, and one

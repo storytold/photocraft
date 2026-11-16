@@ -336,6 +336,12 @@ pub(super) fn drive_preview(app: &mut PhotocraftApp, ctx: &egui::Context, draggi
     // Custom with nothing to sample shows the image unfilled straight away, also while a
     // superseded preview winds down (its result is for an older generation and is dropped).
     if w.awaiting_custom_area() {
+        // A worker for this very generation may still finish (an erasing drag does not change `want`): its
+        // result would be accepted and drawn for a frame. A new generation makes it fail the check and be
+        // dropped, and the cancel below stops it.
+        if w.preview.running.as_ref().is_some_and(|(generation, _, _)| *generation == w.preview.want) {
+            w.preview.want = w.preview.want.wrapping_add(1);
+        }
         w.preview.clear(w.preview.want);
     }
     let pv = &mut w.preview;
