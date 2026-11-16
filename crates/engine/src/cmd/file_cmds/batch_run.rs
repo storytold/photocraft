@@ -165,8 +165,9 @@ pub(crate) fn process_tree(
 
 /// The extension a batch output takes with Format "Same": the input's own, except for formats
 /// PhotoCraft opens but can't write, camera raws above all (#5799: a folder of ARWs failed on
-/// every file), GIMP files (`gz` is the last extension of `.xcf.gz`), Photoshop templates and the
-/// codec formats without a writer in this build. Those are saved as PSD, the format Photoshop's
+/// every file), GIMP files (`gz` is the last extension of `.xcf.gz`), Photoshop templates, the
+/// codec formats without a writer in this build, and codec formats such as JPEG-LS that are missing
+/// from the format registry export uses. Those are saved as PSD, the format Photoshop's
 /// Save As offers for a raw. An input whose file name has no extension (a dot in a folder name
 /// doesn't count) is saved as PNG.
 /// The format Batch's "Save in the same format" writes for `path`: its own, or PSD for a file
@@ -175,7 +176,10 @@ pub fn same_format(path: &str) -> String {
     const IMPORT_ONLY: &[&str] =
         &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt"];
     let ext = extension(path).unwrap_or_else(|| "png".into());
-    let no_writer = photocraft_formats::from_extension(&ext).is_some_and(|f| f.capabilities().write != photocraft_formats::Availability::Available);
+    let no_writer = match photocraft_formats::from_extension(&ext) {
+        Some(f) => f.capabilities().write != photocraft_formats::Availability::Available,
+        None => photocraft_codecs::from_extension(&ext).is_some(),
+    };
     if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer { "psd".into() } else { ext }
 }
 
@@ -199,6 +203,8 @@ fn same_format_takes_the_file_names_extension() {
             assert_eq!(same_format(&format!("/in/a.{ext}")), "psd", "{f:?} .{ext}");
         }
     }
+    // A folder batch opens JPEG-LS through the codecs, but export has no JPEG-LS entry to write.
+    assert_eq!(same_format("/in/scan.jls"), "psd");
     assert_eq!(same_format("/in/a.pam"), "pam");
     assert_eq!(same_format("/in/a.dds"), "dds");
     // No extension in the file name: PNG, not the path after a dot in a folder name.
