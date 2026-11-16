@@ -520,6 +520,15 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
         patch_hint(app);
         return;
     }
+    if crate::rasterize_prompt::intercept_content_aware_move(app, off) {
+        return;
+    }
+    apply_content_aware_move(app, off);
+}
+
+/// Complete a Content-Aware Move drop of `off`: open the Transform On Drop box when enabled,
+/// otherwise run `paint.contentAwareMove` directly (#12187).
+pub fn apply_content_aware_move(app: &mut PhotocraftApp, off: [i32; 2]) {
     if app.ui.tool_options.cam_transform_on_drop && crate::cam_transform::begin(app, off) {
         return;
     }

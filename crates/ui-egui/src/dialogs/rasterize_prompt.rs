@@ -119,6 +119,32 @@ pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure: 
     true
 }
 
+/// A Content-Aware Move drag released with non-zero `offset`: when Sample All Layers is off and
+/// the active type layer must be rasterized first, open the prompt and return true (#12187).
+pub fn intercept_content_aware_move(app: &mut PhotocraftApp, offset: [i32; 2]) -> bool {
+    if app.ui.tool_options.sample_all.content_aware_move {
+        return false;
+    }
+    let Some((kind @ Kind::Type, layer)) = needed(app) else { return false };
+    let Some(sel) = app.session.active().and_then(|st| st.doc.selection.as_ref()).map(crate::surface_fingerprint) else { return false };
+    let at = [f64::from(offset[0]), f64::from(offset[1]), 1.0];
+    if let Some(d) = app.ui.dialogs.iter_mut().find(|d| owns(&d.fields)) {
+        if d.fields.get("tool").and_then(Value::as_str).and_then(Tool::from_name) != Some(Tool::ContentAwareMove) {
+            return false;
+        }
+        d.fields.insert("layer".into(), json!(layer.0));
+        d.fields.insert("at".into(), json!(at));
+        d.fields.insert("selection".into(), json!(sel));
+        d.fields.remove("__error");
+        return true;
+    }
+    let id = open(app, kind, layer, Tool::ContentAwareMove, at);
+    if let Some(d) = app.ui.dialog_mut(id) {
+        d.fields.insert("selection".into(), json!(sel));
+    }
+    true
+}
+
 /// Open the prompt for `layer`; OK rasterizes it. `tool` and `at` (x, y, pressure) only record the press that opened it.
 pub fn open(app: &mut PhotocraftApp, kind: Kind, layer: photocraft_doc::LayerId, tool: Tool, at: [f64; 3]) -> u64 {
     let mut f = Map::new();
@@ -196,6 +222,10 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
 /// The prompt's body: the question, with a caution mark.
 pub fn body(ui: &mut egui::Ui, f: &Map<String, Value>) {
     let t = crate::theme::Tokens::get(ui.ctx());
+    if let Some(error) = f.get("__error").and_then(Value::as_str) {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+        ui.add_space(4.0);
+    }
     let text = f.get("message").and_then(Value::as_str).unwrap_or("This layer must be rasterized before proceeding.");
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
@@ -205,12 +235,51 @@ pub fn body(ui: &mut egui::Ui, f: &Map<String, Value>) {
     });
 }
 
+fn reopen_with_error(app: &mut PhotocraftApp, f: &Map<String, Value>, error: &str) -> Result<Value, String> {
+    let mut again = f.clone();
+    again.insert("__error".into(), json!(error));
+    app.ui.open_dialog(DialogKind::Command, again);
+    Err(error.to_string())
+}
+
 /// OK: rasterize the layer. The click that opened the prompt does not paint.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let kind = f.get(MARK).and_then(Value::as_str).and_then(Kind::from_key).ok_or("not a rasterize prompt")?;
     let layer = f.get("layer").and_then(Value::as_u64).ok_or("the prompt has no layer")?;
     if let Some(filter) = f.get("filter").and_then(Value::as_str) {
         return confirm_filter(app, f, filter, layer);
+    }
+    if f.get("tool").and_then(Value::as_str).and_then(Tool::from_name) == Some(Tool::ContentAwareMove) {
+        let at: Vec<f64> = f.get("at").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+        let (Some(&x), Some(&y)) = (at.first(), at.get(1)) else {
+            return reopen_with_error(app, f, "the prompt has no valid move offset");
+        };
+        if !x.is_finite() || !y.is_finite() {
+            return reopen_with_error(app, f, "the prompt has no valid move offset");
+        }
+        if app.session.active().and_then(|st| st.active_layer) != Some(photocraft_doc::LayerId(layer)) {
+            return reopen_with_error(app, f, "the active layer changed");
+        }
+        let Some(sel) = f.get("selection").and_then(Value::as_u64) else {
+            return reopen_with_error(app, f, "the selection changed");
+        };
+        if app.session.active().and_then(|st| st.doc.selection.as_ref()).map(crate::surface_fingerprint) != Some(sel) {
+            return reopen_with_error(app, f, "the selection changed");
+        }
+        let r = app.run(kind.command(), json!({ "layer": layer }))?;
+        app.ui.tool = Tool::ContentAwareMove;
+        let before = app.session.active().map(|st| st.history.past_len());
+        let off = [x.round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32, y.round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32];
+        crate::retouch_ui::apply_content_aware_move(app, off);
+        let painted = app.session.active().map(|st| st.history.past_len()) != before;
+        if !app.ui.tool_options.cam_transform_on_drop && !painted && app.ui.status_error {
+            let err = app.ui.status.clone();
+            app.session.undo();
+            app.ui.status = err.clone();
+            app.ui.status_error = true;
+            return Err(err);
+        }
+        return Ok(json!({ "rasterized": r, "painted": painted }));
     }
     let revision = app.session.active().map(|st| st.revision);
     let r = app.run(kind.command(), json!({ "layer": layer }))?;
@@ -252,6 +321,10 @@ pub fn run_pending(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../cam_rasterize_prompt_tests.rs"]
+mod cam_rasterize_prompt_tests;
 
 #[cfg(test)]
 #[path = "../rasterize_prompt_text_tests.rs"]
