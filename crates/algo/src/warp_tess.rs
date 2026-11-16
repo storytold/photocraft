@@ -117,17 +117,6 @@ const UNEVEN_FULL_HEIGHT_TWIST_TOL: f64 = 1.15;
 /// split from 0.9972 (and stay whole at 0.9900), while cells measured by their top or bottom row
 /// stay whole up to 0.9999.
 const INNER_ROW_WEIGHT: f64 = 1.005;
-/// The twist past which a one-patch full mesh's cell that already splits across splits down too:
-/// a corner pulled out keeps its cell at (½..¾, 0..¼) whole up to a twist of 1.16 and splits it
-/// from 1.22 (a sweep of pulls), and an arc stored as a full mesh splits at 1.39.
-const ACROSS_TWIST_TOL: f64 = 1.2;
-/// The twist along a cell's top edge (its net's first row of quads, document px) past which a
-/// one-patch full mesh's cell that splits across splits down too. Only the top edge counts: with
-/// an inner control point moved 18 px across, the reference application cuts the quarter cell
-/// whose top edge twists 1.125 px into eighths down, but not the mirror cell twisted as much
-/// along its bottom edge; at 14 px (0.875) it cuts neither, and a threshold of 0.9 cuts cells of
-/// one-sided bends the reference keeps whole.
-const FULL_TOP_TWIST_TOL: f64 = 1.0;
 /// A cell of a one-patch full mesh twisted past this splits both ways (probes with one inner
 /// control point moved: cells at 2.25 px split across and down, at 1.75 px only the one way).
 const BOTH_WAYS_TWIST_TOL: f64 = 2.0;
@@ -598,7 +587,6 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             fixed_level: 1,
             mid_row_level: 1,
             cut_sides: false,
-            across_twist: ACROSS_TWIST_TOL,
             twist_by_side: false,
             square_twist: None,
             column_chords: None,
@@ -615,7 +603,6 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             fixed_level: 2,
             mid_row_level: 1,
             cut_sides: !tall,
-            across_twist: TWIST_TOL,
             twist_by_side: true,
             square_twist: tall.then_some(TALL_SQUARE_TWIST_TOL),
             column_chords: tall.then_some(TALL_COLUMN_LEVEL),
@@ -664,7 +651,6 @@ fn patch_rules(seams: Seams) -> Rules {
         fixed_level: 0,
         mid_row_level: 0,
         cut_sides: false,
-        across_twist: TWIST_TOL,
         twist_by_side: false,
         square_twist: None,
         column_chords: None,
@@ -698,9 +684,6 @@ struct Rules {
     /// (envelopes that aren't tall); otherwise it stays whole and those points sit on its side's
     /// chord.
     cut_sides: bool,
-    /// The twist past which a cell that already splits across splits down too: [`TWIST_TOL`],
-    /// as for any cell, but [`ACROSS_TWIST_TOL`] in a one-patch full mesh.
-    across_twist: f64,
     /// A twist split is measured on one side of the cell's control net only, as how unevenly its
     /// quads are stretched (the reference's envelopes): a split across on its left column of
     /// quads (Arc Lower's mirror-image corner cells split on the left, not on the right), a split
@@ -841,9 +824,9 @@ fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
     if full { cubic } else { stored_net(&cubic) }
 }
 
-/// A cell's twist as `rules` measure it, with the tolerances it must pass to split (alone, and
-/// when the cell already splits across): `(twist, tolerance, tolerance when across)`.
-fn twist_test(sub: &Net, rules: &Rules, whole: bool, full_height: bool, goes_across: bool) -> (f64, f64, f64) {
+/// A cell's twist as `rules` measure it, with the tolerance it must pass to split:
+/// `(twist, tolerance)`.
+fn twist_test(sub: &Net, rules: &Rules, whole: bool, full_height: bool, goes_across: bool) -> (f64, f64) {
     let (p00, p10, p01) = (sub.at(0, 0), sub.at(sub.nu.saturating_sub(1), 0), sub.at(0, sub.nv.saturating_sub(1)));
     let (du, dv) = ([p10[0] - p00[0], p10[1] - p00[1]], [p01[0] - p00[0], p01[1] - p00[1]]);
     let first_row = rules.uneven_quilt && rules.twist_spreads && whole && !goes_across;
@@ -859,22 +842,25 @@ fn twist_test(sub: &Net, rules: &Rules, whole: bool, full_height: bool, goes_acr
         (false, false) if rules.twist_spreads && full_height => sub.twist_along(du),
         (false, _) if rules.twist_spreads && whole && !goes_across => sub.twist_across_rows(du, dv, 2.0, usize::MAX),
         (false, _) if rules.twist_spreads && !whole => (0.9 * sub.twist_along(dv)).max(sub.twist_along(du)),
-        // A one-patch full mesh's cell splits down for the twist of its top edge, as it splits
-        // down past FULL_TOP_TWIST_TOL when it splits across: a scaled wave's top side cells are
-        // cut down, their bottom mirrors (as twisted in all, less along their top edges) not.
+        // A one-patch full mesh's cell splits down for the twist of its top edge (its net's first
+        // row of quads), split across or not. The reference application is not mirror-symmetric
+        // here: a scaled wave's top side cells are cut down, their bottom mirrors (as twisted in
+        // all, less along their top edges) not; with an inner control point moved 18 px across,
+        // the quarter cell whose top edge twists 1.125 px is cut into eighths down, its mirror
+        // twisted as much along its bottom edge stays whole, and at 14 px (0.875) neither is.
         (false, false) if rules.force_down && !rules.twist_spreads => sub.twist_top(),
         (false, _) => sub.twist(),
     };
     // A whole quilt patch splits for its twist only past WHOLE_PATCH_TWIST_TOL (FIRST_ROW_TWIST_TOL
     // for its first row), a full-height cell of an uneven quilt past UNEVEN_FULL_HEIGHT_TWIST_TOL.
     if first_row {
-        (tw, FIRST_ROW_TWIST_TOL, FIRST_ROW_TWIST_TOL)
+        (tw, FIRST_ROW_TWIST_TOL)
     } else if rules.twist_spreads && rules.uneven_quilt && full_height && !goes_across {
-        (tw, UNEVEN_FULL_HEIGHT_TWIST_TOL, UNEVEN_FULL_HEIGHT_TWIST_TOL)
+        (tw, UNEVEN_FULL_HEIGHT_TWIST_TOL)
     } else if rules.twist_spreads && whole {
-        (tw, WHOLE_PATCH_TWIST_TOL, WHOLE_PATCH_TWIST_TOL)
+        (tw, WHOLE_PATCH_TWIST_TOL)
     } else {
-        (tw, TWIST_TOL, rules.across_twist)
+        (tw, TWIST_TOL)
     }
 }
 
@@ -918,8 +904,8 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             if twisty {
                 let whole = lu > 1.0 - EPS && lv > 1.0 - EPS;
                 let full_height = !whole && lv > 1.0 - EPS;
-                let (tw, tol, across_tol) = twist_test(sub(), rules, whole, full_height, goes_across);
-                if tw > tol + EPS && (!across || tw > across_tol + EPS) {
+                let (tw, tol) = twist_test(sub(), rules, whole, full_height, goes_across);
+                if tw > tol + EPS {
                     if goes_across {
                         across = true;
                     } else {
@@ -935,7 +921,7 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
                 let h = 2.0 * lv;
                 let top = (v0 / h + EPS).floor() * h;
                 let tw = net.sub([u0, u1, top, top + lv]).left_legs_longer().max(net.sub([u0, u1, top + lv, top + h]).left_legs_longer());
-                if tw > TWIST_TOL + EPS && (!across || tw > rules.across_twist + EPS) {
+                if tw > TWIST_TOL + EPS {
                     across = true;
                 }
             }
@@ -958,12 +944,6 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             // Forced down at the second split across: a cell half as wide as a first cell and as tall as one.
             if rules.force_down && across && (u1 - u0 - first / 2.0).abs() < EPS && (v1 - v0 - first).abs() < EPS {
                 down = true;
-            }
-            // In a one-patch full mesh, also where its top edge twists past FULL_TOP_TWIST_TOL; that
-            // cut counts as one for twist, so it spreads to the cell's siblings in its row.
-            if full_one && twisty && across && !down && sub().twist_top() > FULL_TOP_TWIST_TOL + EPS {
-                down = true;
-                twist_down = true;
             }
             if across || down {
                 log.push(Split { cell: c, across, down });
@@ -1361,7 +1341,6 @@ mod tests {
                 fixed_level: 1,
                 mid_row_level: 1,
                 cut_sides: false,
-                across_twist: ACROSS_TWIST_TOL,
                 twist_by_side: false,
                 square_twist: None,
                 column_chords: None,
@@ -1587,7 +1566,6 @@ mod tests {
             fixed_level: 0,
             mid_row_level: 0,
             cut_sides: false,
-            across_twist: TWIST_TOL,
             twist_by_side: false,
             square_twist: None,
             column_chords: None,
@@ -1631,7 +1609,6 @@ mod tests {
             fixed_level: 0,
             mid_row_level: 0,
             cut_sides: false,
-            across_twist: TWIST_TOL,
             twist_by_side: false,
             square_twist: None,
             column_chords: None,
@@ -1720,16 +1697,13 @@ mod tests {
     }
 
     /// A full mesh's cell that splits across splits down too where its top edge twists past
-    /// FULL_TOP_TWIST_TOL, though its whole twist stays under ACROSS_TWIST_TOL and its columns are
-    /// straight.
+    /// TWIST_TOL, though its columns are straight.
     #[test]
     fn a_full_mesh_cell_split_across_splits_down_for_its_top_edge_alone() {
         let at = |u: f64, v: f64| [128.0 * u, 128.0 * v + 20.0 * u * u * v];
         let net = cubic_net(&at);
         let (_, log) = cells(&net, true, &one_patch_rules(&net, true));
         let cell = [0.5, 1.0, 0.5, 1.0];
-        let sub = net.sub(cell);
-        assert!(sub.twist() < ACROSS_TWIST_TOL, "{}", sub.twist());
         let split = log.iter().find(|s| s.cell.iter().zip(&cell).all(|(a, b)| (a - b).abs() < 1e-9));
         assert!(split.is_some_and(|s| s.across && s.down), "the cell didn't split both ways: {:?}", split.map(|s| (s.across, s.down)));
     }
@@ -2264,9 +2238,9 @@ mod tests {
         }
     }
 
-    /// In a full mesh, a cell that splits across for its rows splits down for its twist only past
-    /// [`ACROSS_TWIST_TOL`]: the reference keeps the cell at (½..¾, 0..¼) of a corner pulled out
-    /// 48 px a quarter tall (twist 1.06), and splits it pulled 55 px (1.22).
+    /// In a full mesh, a cell that splits across for its rows splits down for its twist only where
+    /// its top edge twists past TWIST_TOL: the reference keeps the cell at (½..¾, 0..¼) of a corner
+    /// pulled out 48 px a quarter tall, and splits it pulled 55 px.
     #[test]
     fn a_full_mesh_cell_split_across_ignores_its_twist() {
         let at = corner_out();
@@ -2279,7 +2253,6 @@ mod tests {
             fixed_level: 1,
             mid_row_level: 1,
             cut_sides: false,
-            across_twist: ACROSS_TWIST_TOL,
             twist_by_side: false,
             square_twist: None,
             column_chords: None,
@@ -2311,7 +2284,6 @@ mod tests {
             fixed_level: 1,
             mid_row_level: 1,
             cut_sides: false,
-            across_twist: ACROSS_TWIST_TOL,
             twist_by_side: false,
             square_twist: None,
             column_chords: None,
@@ -2421,7 +2393,7 @@ mod tests {
         let rules = one_patch_rules(&net, false);
         let (leaves, _) = cells(&net, twisty_net(&net), &rules);
         assert!(leaves.contains(&[0.0, 0.125, 0.1875, 0.25]), "a twist under 2.0 leaves the cell an eighth wide");
-        let (low, _) = cells(&net, twisty_net(&net), &Rules { square_twist: Some(ACROSS_TWIST_TOL), ..rules });
+        let (low, _) = cells(&net, twisty_net(&net), &Rules { square_twist: Some(1.2), ..rules });
         assert!(low.contains(&[0.0, 0.0625, 0.1875, 0.25]), "a tolerance of 1.2 would split it");
         // A wide envelope has no such rule.
         let wide = net_of(&|u: f64, v: f64| at(v, u), false);
