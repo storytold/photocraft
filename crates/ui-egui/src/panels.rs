@@ -63,6 +63,7 @@ pub(crate) mod title_bar;
 pub(super) mod titlebar;
 pub(crate) mod toolbar;
 pub mod type_panels_ui;
+pub mod typer;
 pub(super) mod variables_ui;
 
 #[cfg(test)]

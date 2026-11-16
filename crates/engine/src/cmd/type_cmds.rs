@@ -909,7 +909,7 @@ fn info(s: &Session, p: &Value) -> Result<Value> {
 /// A type layer (not yet rendered or added) from `type.create`'s params: text, point `x`/`y` or
 /// paragraph `box`, `orientation`, character and paragraph keys, starting from the default type
 /// styles in the foreground colour. Shared with the Type Mask tools' `type.createSelection`.
-pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLayer> {
+pub fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLayer> {
     crate::commands::check_f32_values(cmd, p)?;
     let orientation = match p.get("orientation") {
         None => Orientation::Horizontal,

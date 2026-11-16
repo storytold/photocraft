@@ -805,6 +805,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Window"], "Swatches", None, "window.panel.swatches"),
     (&["Window"], "Timeline", None, "window.panel.timeline"),
     (&["Window"], "Tool Presets", None, "window.panel.toolPresets"),
+    (&["Window"], "TypeR", None, "window.panel.typer"),
     (&["Window"], "---", None, "---"),
     (&["Window"], "Options", None, "window.panel.options"),
     (&["Window"], "Tools", None, "window.panel.tools"),
