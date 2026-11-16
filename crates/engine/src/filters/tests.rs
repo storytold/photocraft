@@ -594,7 +594,7 @@ fn filter_diagnostics_legacy_geometry_failure() {
     let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA32F);
     surface.write_pixel(0, 0, &[0.5, 0.5, 0.5, 1.]);
     let oversized = photocraft_geom::Rect::new(0, 0, 1_000_001, 1);
-    let error = apply_filter_to_surface("filter.sharpen.unsharpMask", &json!({}), &surface, oversized, None, oversized).unwrap_err();
+    let error = apply_filter_to_surface("filter.sharpen.unsharpMask", &json!({}), &surface, oversized, None, oversized, &|| false).unwrap_err();
     assert!(!matches!(error, EngineError::Cancelled));
     assert!(error.to_string().contains("could not prepare"), "{error}");
 }

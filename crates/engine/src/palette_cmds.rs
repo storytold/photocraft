@@ -567,7 +567,7 @@ pub(crate) fn run_filter(s: &mut Session, p: &Value) -> Result<Value> {
                             opacity: 1.0,
                             visible: true,
                         };
-                        crate::smart_cmds::add_smart_filter_in(doc, layer, sf, selection.as_ref(), ctx)
+                        crate::smart_cmds::add_smart_filter(doc, layer, sf, selection.as_ref(), Some(ctx))
                     }
                     _ => Err(EngineError::Other("Palette Map needs a pixel layer".into())),
                 }
