@@ -214,10 +214,25 @@ fn rectangular_fill_keeps_the_band_and_stripe_phase_across_the_whole_hole() {
     assert_eq!((within, n), (10_000, 10_000), "{within} of {n} hole pixels carry the document's own colour within 12 levels (worst {worst})");
 }
 
+/// Per-channel slack for the unmeasured pins below. The exact values hold bit for bit on Windows
+/// (also at RAYON_NUM_THREADS 4, 2 and 1), but not on every C library: the vote that blends the
+/// seams between the copied pieces weights the patches with `(-cost / (2 sigma2)).exp()` of the
+/// host C library (`inpaint/solver.rs`), and a filled pixel sitting right on a level boundary
+/// rounds one level apart between glibc and the Windows runtime. CI run 43833457124 on
+/// ubuntu-24.04 showed (300,180) under colour adaptation High at 64 instead of 65, and (285,220)
+/// under rotation Low at 118 instead of 119, while all other 52 channels matched exactly. Nothing
+/// on main changed these fills: between f143ce5849 and the branch parent eea585958 no commit
+/// touches `content_aware` or `inpaint`. 2 levels is still a hard pin against what the guards
+/// guard against: if the new patch radius leaked into one of these option sets, its fill would
+/// move the way the measured set moves, and at (300,165) alone that is 60 levels (the None pin
+/// 60,120,200 against the 120,170,230 the measured fill gives there).
+const UNMEASURED_TOLERANCE: i32 = 2;
+
 /// The option sets #14191 marks *not measured* on this document keep today's fill: these are the
 /// nine samples as main f143ce5849 (and as this branch without the change) gives them. Guard
 /// tests: they pass before and after the change and pin it, so widening the new patch radius later
-/// has to say what these settings now do.
+/// has to say what these settings now do. Compared within [`UNMEASURED_TOLERANCE`] levels per
+/// channel, see there for why.
 fn unmeasured_colour_adaptation() -> Vec<(&'static str, FillOptions, [i32; 27])> {
     let at = |level: &str| FillOptions { color_adaptation: color_level(level), rotations: Vec::new(), scale: false, mirror: false, seed: 1 };
     vec![
@@ -260,7 +275,20 @@ fn unmeasured_geometric_adaptation() -> Vec<(&'static str, FillOptions, [i32; 27
 fn check_unmeasured(what: &str, opts: &FillOptions, want: &[i32; 27]) {
     let out = fill_measured_document("auto", opts);
     let got: Vec<i32> = SAMPLES.iter().flat_map(|((x, y), _)| filled_at(&out, *x, *y)).collect();
-    assert_eq!(got.as_slice(), &want[..], "{what}: the nine samples changed, although #14191 marks that case not measured");
+    let off: Vec<String> = SAMPLES
+        .iter()
+        .enumerate()
+        .filter_map(|(k, ((x, y), _))| {
+            let (g, w) = (&got[k * 3..k * 3 + 3], &want[k * 3..k * 3 + 3]);
+            let dev = (0..3).map(|c| (g[c] - w[c]).abs()).max().unwrap_or(0);
+            (dev > UNMEASURED_TOLERANCE).then(|| format!("({x},{y}) -> {g:?}, today's fill {w:?}, off by {dev}"))
+        })
+        .collect();
+    assert!(
+        off.is_empty(),
+        "{what}: the nine samples moved by more than {UNMEASURED_TOLERANCE} levels, although #14191 marks that case not measured\n{}",
+        off.join("\n")
+    );
 }
 
 #[test]
