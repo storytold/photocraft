@@ -5924,6 +5924,7 @@ dependencies = [
  "base64 0.23.1",
  "craft-plist",
  "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=2284a6bf76b3d629b5e5bb2ca71e1c319d8dae5f)",
+ "encoding_rs",
  "flate2",
  "parley",
  "photocraft-color",

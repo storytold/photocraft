@@ -176,17 +176,68 @@ fn localized_font(source: &[u8], english: &str, japanese: &str) -> Vec<u8> {
     bytes
 }
 
-/// Show Font Names in English off: a font that names its family in Japanese is listed by that
-/// name, keyed by the English family the menus and documents keep; English-only fonts are not.
+/// A copy of `source` whose family names are `family` (ID 16) and `legacy` (ID 1), with its own
+/// PostScript name so two of them can sit in one collection.
+fn two_family_names(source: &[u8], family: &str, legacy: &str, ps: &str) -> Vec<u8> {
+    let mut bytes = source.to_vec();
+    let count = u16::from_be_bytes(bytes[4..6].try_into().unwrap()) as usize;
+    let name_record = (0..count).map(|i| 12 + i * 16).find(|r| &bytes[*r..r + 4] == b"name").unwrap();
+    let names = [(0x409u16, 1u16, legacy), (0x409, 2, "Regular"), (0x409, 6, ps), (0x409, 16, family), (0x409, 17, "Regular")];
+    let mut table = Vec::new();
+    let mut strings = Vec::new();
+    for value in [0u16, names.len() as u16, (6 + names.len() * 12) as u16] {
+        table.extend(value.to_be_bytes());
+    }
+    for (lang, id, value) in names {
+        let encoded: Vec<_> = value.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for n in [3, 1, lang, id, encoded.len() as u16, strings.len() as u16] {
+            table.extend(n.to_be_bytes());
+        }
+        strings.extend(encoded);
+    }
+    table.extend(strings);
+    let offset = bytes.len() as u32;
+    bytes[name_record + 8..name_record + 12].copy_from_slice(&offset.to_be_bytes());
+    bytes[name_record + 12..name_record + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+    bytes.extend(table);
+    bytes
+}
+
+/// An extended family (one ID 16, several ID 1 names) is listed by the representative face's name,
+/// but every face's names are searchable.
 #[test]
-fn localized_family_names_map_english_families_to_native_names() {
+fn the_menu_searches_the_names_of_every_face_of_a_family() {
+    let faces = [
+        two_family_names(&INTER_REGULAR, "Shared Test", "Shared Test A", "SharedTestA-Regular"),
+        two_family_names(&INTER_SEMIBOLD, "Shared Test", "Shared Test B", "SharedTestB-Bold"),
+    ];
+    let mut db = FontDb::new();
+    db.register_font_data(collection(&faces));
+    let info = db.menu_info("Shared Test").expect("one family of two faces");
+    assert_eq!(info.faces, 2);
+    for name in ["Shared Test", "Shared Test A", "Shared Test B"] {
+        assert!(info.search_names.iter().any(|listed| listed == name), "{name} among {:?}", info.search_names);
+    }
+    assert!(info.names.iter().all(|(_, name)| name == "Shared Test"), "the labels stay the representative face's: {:?}", info.names);
+}
+
+/// A font that names its family in English and Japanese: the family is keyed by the English
+/// name (what documents and commands keep) and its menu entry carries both names, so a Japanese
+/// interface lists it as "ゴシック テスト" and any other as the first non-English name.
+#[test]
+fn a_fonts_own_names_are_in_its_menu_info() {
     let mut db = FontDb::new();
     assert_eq!(db.register_font_data(localized_font(&INTER_REGULAR, "Gothic Test", "ゴシック テスト")), ["Gothic Test"]);
     assert!(db.families().iter().any(|f| f == "Gothic Test"));
-    let local = db.localized_family_names();
-    assert_eq!(local.get("Gothic Test").map(String::as_str), Some("ゴシック テスト"));
-    assert!(!local.contains_key(DEFAULT_FAMILY));
-    assert!(local.values().all(|v| !v.is_empty()));
+    let info = db.menu_info("Gothic Test").expect("every registered family has menu information");
+    let name = |script| crate::font_menu::display_name("Gothic Test", &info.names, script);
+    assert_eq!(name(Some(crate::cjk::CjkScript::Japanese)).as_deref(), Some("ゴシック テスト"));
+    assert_eq!(name(Some(crate::cjk::CjkScript::SimplifiedChinese)).as_deref(), Some("ゴシック テスト"), "no Chinese name: the first non-English one");
+    assert_eq!(name(None).as_deref(), Some("ゴシック テスト"), "English interface with names off");
+    assert!(db.menu_index().contains_key("Gothic Test"));
+    assert!(db.menu_info("No Such Family").is_none());
+    // The bundled fonts have no other names.
+    assert!(db.menu_index()["Inter"].names.iter().all(|(lang, name)| lang.starts_with("en") || name == "Inter"));
 }
 
 /// A craft-fonts manifest entry for `bytes`, as `build.rs` writes one per manifest line.

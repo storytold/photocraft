@@ -2,8 +2,8 @@ use super::ime::interrupt_incoming;
 use super::ime_edit::note_ime_application_change;
 use super::layout::{hit_layer, hit_offset, shows_own_layout};
 use super::{
-    Arc, FontFieldEdit, HashMap, LayerId, PhotocraftApp, TextEdit, TextLayer, accept_row, active_doc_id, apply, byte_range, current_text, families,
-    font_labels_id, font_menu_rows, insertion_style, json, selected_range, session_key, text_layer,
+    Arc, FontFieldEdit, FontMenuModel, LayerId, PhotocraftApp, TextEdit, TextLayer, accept_row, active_doc_id, apply, byte_range, current_text,
+    families, font_menu_id, font_menu_rows, insertion_style, json, selected_range, session_key, text_layer,
 };
 
 /// Start editing an existing type layer. Like Photoshop, editing shows the text as the type
@@ -379,11 +379,11 @@ pub(crate) fn commit_shortcut(app: &mut PhotocraftApp, ctx: &egui::Context) -> b
     }
     if let Some(edit) = font_edit.filter(|e| !e.accepted && !e.text.trim().is_empty() && !e.query.is_empty()) {
         let families = families();
-        let labels: Option<Arc<HashMap<String, String>>> = ctx.data(|d| d.get_temp(font_labels_id()));
-        let (rows, _) = font_menu_rows(&families, labels.as_deref(), &edit.query, &edit.recents);
+        let model: Option<Arc<FontMenuModel>> = ctx.data(|d| d.get_temp(font_menu_id()));
+        let (rows, _, _) = font_menu_rows(&families, model.as_deref(), &edit.query, &edit.recents);
         let selected =
             edit.row.filter(|&i| rows.get(i).is_some_and(|(f, _)| **f == edit.current)).or_else(|| rows.iter().position(|(f, _)| **f == edit.current));
-        let family = accept_row(&rows, &edit.text, selected).and_then(|i| rows.get(i)).map(|(f, _)| (*f).clone());
+        let family = accept_row(&rows, &edit.text, selected, model.as_deref()).and_then(|i| rows.get(i)).map(|(f, _)| (*f).clone());
         if let Some(family) = family {
             photocraft_text::served::request(&family);
             app.note_recent_font(&family);

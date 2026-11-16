@@ -28,6 +28,18 @@ pub enum CjkChar {
     Bopomofo,
 }
 
+impl CjkScript {
+    /// The ISO 15924 code the craft-fonts font manifest and OpenType script tags use.
+    pub const fn iso_code(self) -> &'static str {
+        match self {
+            CjkScript::Japanese => "Jpan",
+            CjkScript::SimplifiedChinese => "Hans",
+            CjkScript::TraditionalChinese => "Hant",
+            CjkScript::Korean => "Kore",
+        }
+    }
+}
+
 impl CjkChar {
     /// The script whose fonts should be tried first for this character.
     pub fn preferred(self, order: &[CjkScript; 4]) -> CjkScript {
