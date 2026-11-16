@@ -69,6 +69,13 @@ fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path
     }
 }
 
+/// Whether a click at `p` with Add Anchor Point (`tool`) would add an anchor: the pointer is over
+/// a segment of the targeted path that the tool may edit. Read-only; the cursor and its badge
+/// (#12729) ask it, so they show the pen with "+" only where a click does something.
+pub(crate) fn adds_anchor_at(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> bool {
+    tool == Tool::AddAnchorPoint && target(app, tool, p).is_some()
+}
+
 /// The Pen's Auto Add/Delete (#4144): what a Pen click at `p` does to the active path instead of
 /// starting a new one, as the anchor tool that does it (Add Anchor Point on a segment, Delete
 /// Anchor Point on an anchor), the path and the hit. While a path is being drawn it edits that
