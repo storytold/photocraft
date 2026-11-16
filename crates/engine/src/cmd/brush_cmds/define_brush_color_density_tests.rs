@@ -80,10 +80,8 @@ fn tip(s: &Session) -> &GrayTile {
     tip
 }
 
-fn define_square(s: &mut Session, command: &str, selected: bool) -> f32 {
-    if selected {
-        s.execute("select.rect", json!({"x": 8, "y": 8, "width": 24, "height": 24})).unwrap();
-    }
+fn define_square(s: &mut Session, command: &str) -> f32 {
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 24, "height": 24})).unwrap();
     let doc = s.active().unwrap().doc.clone();
     let history = s.active().unwrap().history.past_len();
     let presets = s.tools.presets.len();
@@ -94,7 +92,7 @@ fn define_square(s: &mut Session, command: &str, selected: bool) -> f32 {
     assert_eq!(s.tools.current_preset.as_deref(), Some("Colour density"));
     assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
     assert_eq!(s.active().unwrap().history.past_len(), history);
-    assert_eq!(s.active().unwrap().doc.selection.is_some(), selected);
+    assert!(s.active().unwrap().doc.selection.is_some());
     tip(s).get(10, 10)
 }
 
@@ -102,8 +100,7 @@ fn define_square(s: &mut Session, command: &str, selected: bool) -> f32 {
 fn defined_tips_match_the_six_measured_density_targets_at_all_depths() {
     for command in COMMANDS {
         for depth in [8, 16, 32] {
-            for selected in [false, true] {
-                for (name, rgb, expected, tolerance) in [
+            for (name, rgb, expected, tolerance) in [
                     ("red", [255u8, 0, 0], 0.49f32, 0.03f32),
                     ("green", [0, 255, 0], 0.14, 0.03),
                     ("blue", [0, 0, 255], 0.72, 0.03),
@@ -113,9 +110,8 @@ fn defined_tips_match_the_six_measured_density_targets_at_all_depths() {
                 ] {
                     let [r, g, b] = rgb.map(|v| f32::from(v) / 255.0);
                     let mut s = rgb_source(depth, [r, g, b, 1.0]);
-                    let actual = define_square(&mut s, command, selected);
-                    assert!((actual - expected).abs() <= tolerance, "{command}, {name}, depth {depth}, selected {selected}: {actual}");
-                }
+                    let actual = define_square(&mut s, command);
+                    assert!((actual - expected).abs() <= tolerance, "{command}, {name}, depth {depth}: {actual}");
             }
         }
     }
@@ -140,11 +136,12 @@ fn command_density_applies_alpha_before_gray_and_selection_once() {
         // same colour; this is an ordering control, not a new reference target.
         let mut half_red = rgb_source(32, [1.0, 0.0, 0.0, 0.5]);
         let mut over_white = rgb_source(32, [1.0, 0.5, 0.5, 1.0]);
-        let half = define_square(&mut half_red, command, false);
-        let opaque = define_square(&mut over_white, command, false);
+        let half = define_square(&mut half_red, command);
+        let opaque = define_square(&mut over_white, command);
         assert!((half - opaque).abs() <= 1.0 / 65535.0);
 
         let mut transparent = rgb_source(32, [0.0, 0.0, 1.0, 0.0]);
+        transparent.execute("select.rect", json!({"x": 8, "y": 8, "width": 24, "height": 24})).unwrap();
         let brush = transparent.tools.brush.clone();
         let presets = transparent.tools.presets.clone();
         let err = transparent.execute(command, json!({"name": "Transparent colour"})).unwrap_err();
@@ -167,11 +164,11 @@ fn tagged_rgb_uses_the_document_encoding() {
         let explicit = craft_cms::cached(Builtin::LinearSrgb.profile(), Builtin::SGray.profile(), TransformOptions::default()).unwrap();
         let mut gray = [0.0f32; 16];
         explicit.eval(&[0.5, 0.5, 0.5], &mut gray).unwrap();
-        let actual = define_square(&mut tagged, command, false);
+        let actual = define_square(&mut tagged, command);
         assert!((actual - (1.0 - gray[0])).abs() <= 1.0 / 65535.0);
 
         let mut srgb = rgb_source(32, [0.5, 0.5, 0.5, 1.0]);
-        let untagged = define_square(&mut srgb, command, false);
+        let untagged = define_square(&mut srgb, command);
         assert!((actual - untagged).abs() > 0.1, "the fixture must distinguish profile encoding");
     }
 }
@@ -190,7 +187,7 @@ fn native_gray_keeps_numeric_density_in_its_existing_rgb_view() {
                         Ok(())
                     })
                     .unwrap();
-                    let actual = define_square(&mut s, command, false);
+                    let actual = define_square(&mut s, command);
                     assert!((actual - (1.0 - value)).abs() <= 0.0001, "{command}, depth {depth}, profile {profile:?}, value {value}: {actual}");
                 }
             }
@@ -231,6 +228,8 @@ fn zero_alpha_and_zero_selection_skip_hidden_colour() {
                     // The hole stays inside the sampled area, rather than being
                     // removed by selection bounds before the per-pixel check.
                     assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), photocraft_geom::Rect::new(10, 10, 30, 30));
+                } else {
+                    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
                 }
                 let doc = s.active().unwrap().doc.clone();
                 let history = s.active().unwrap().history.past_len();
@@ -267,17 +266,16 @@ fn sampled_trcs_cannot_hide_non_finite_contributing_channels() {
     assert!(converted[0].is_finite(), "the sampled-TRC fixture must expose clamping before the command's gray check");
 
     for command in COMMANDS {
-        for selected in [false, true] {
-            let mut finite = rgb_source(32, [1.0, 0.0, 0.0, 1.0]);
-            finite
-                .edit("Assign sampled sRGB", |doc, _| {
-                    doc.icc_profile = Some(icc.clone());
-                    Ok(())
-                })
-                .unwrap();
-            assert!((define_square(&mut finite, command, selected) - 0.49).abs() <= 0.03);
+        let mut finite = rgb_source(32, [1.0, 0.0, 0.0, 1.0]);
+        finite
+            .edit("Assign sampled sRGB", |doc, _| {
+                doc.icc_profile = Some(icc.clone());
+                Ok(())
+            })
+            .unwrap();
+        assert!((define_square(&mut finite, command) - 0.49).abs() <= 0.03);
 
-            for rgba in [
+        for rgba in [
                 [f32::INFINITY, 0.0, 0.0, 1.0],
                 [0.0, f32::INFINITY, 0.0, 1.0],
                 [0.0, 0.0, f32::INFINITY, 1.0],
@@ -291,9 +289,7 @@ fn sampled_trcs_cannot_hide_non_finite_contributing_channels() {
                     Ok(())
                 })
                 .unwrap();
-                if selected {
-                    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 24, "height": 24})).unwrap();
-                }
+                s.execute("select.rect", json!({"x": 8, "y": 8, "width": 24, "height": 24})).unwrap();
                 // An accepted invalid source would replace this existing preset.
                 s.execute("brush.presets.save", json!({"name": "Kept preset"})).unwrap();
                 let active = s.active().unwrap().active_layer.unwrap();
@@ -313,7 +309,7 @@ fn sampled_trcs_cannot_hide_non_finite_contributing_channels() {
                 assert!(Arc::ptr_eq(&doc, &s.active().unwrap().doc));
                 assert_eq!(s.active().unwrap().history.past_len(), history);
                 assert_eq!(s.active().unwrap().active_layer, Some(active));
-                assert_eq!(s.active().unwrap().doc.selection.is_some(), selected);
+                assert!(s.active().unwrap().doc.selection.is_some());
                 assert_eq!(s.active().unwrap().doc.icc_profile.as_ref(), Some(&icc));
                 assert_eq!(s.active().unwrap().doc.layer(active).unwrap().surface().unwrap().rgba(20, 20).map(f32::to_bits), stored);
                 assert_eq!(s.tools.brush, brush);
@@ -321,7 +317,6 @@ fn sampled_trcs_cannot_hide_non_finite_contributing_channels() {
                 assert_eq!(s.tools.current_preset, current);
                 assert_eq!(s.tools.brush_rev, revision);
                 assert_eq!(s.journal, journal);
-            }
         }
     }
 }
