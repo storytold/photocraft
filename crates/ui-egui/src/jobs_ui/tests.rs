@@ -1425,3 +1425,15 @@ fn a_prepare_for_a_document_no_longer_active_keeps_nothing_of_it() {
     assert!(h.state().ui.dialogs.is_empty(), "no dialog for the old document");
     assert!(!crate::export_dialog::layer_composite_kept(&first, layer), "the old document's composite is let go");
 }
+
+#[test]
+fn asynchronous_place_completion_displays_result_warnings() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    let warning = "SVG: 1 embedded image was omitted";
+    let place = super::PlaceJob { job: JobId(1), name: "omitted.svg".into(), doc };
+    // A frame placement bypasses transform startup but must still display its warnings.
+    super::finish_place(&mut app, &egui::Context::default(), place, photocraft_engine::jobs::JobOutcome::Done(json!({"frame":1,"warnings":[warning]})));
+    assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == warning)));
+}
