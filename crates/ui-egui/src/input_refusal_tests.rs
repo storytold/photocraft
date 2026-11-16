@@ -108,12 +108,13 @@ fn a_disabled_menu_shortcut_replies_with_why() {
 #[test]
 fn a_refused_dialog_ok_replies_with_the_refusal() {
     let (mut h, tx) = harness(deny_files(), true);
-    // A dialog whose OK exports a file: the policy refuses it in `confirm_preflight`.
+    // A dialog whose OK prints: the policy refuses it in `confirm_preflight`. (Not Export As:
+    // Enter there leaves the dialog open, #13740.)
     let dialog = {
         let app = h.state_mut();
         let mut fixed = serde_json::Map::new();
-        fixed.insert("__export".into(), json!(true));
-        crate::filter_dialog::open_with_spec(app, "file.export.exportAs", "Export", r#"{"width":1..300000=100}"#, fixed)
+        fixed.insert("__print".into(), json!(true));
+        crate::filter_dialog::open_with_spec(app, "file.print", "Print", r#"{"copies":1..99=1}"#, fixed)
     };
     pump(&mut h, 4);
     let rx = send(&tx, "ui.key", json!({"key": "Enter"}));
