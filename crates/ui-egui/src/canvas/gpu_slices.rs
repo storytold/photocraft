@@ -1,9 +1,13 @@
 //! A full GPU refresh of a very large canvas, a slice per frame. Compositing a 1.1 GP storyboard
 //! in one frame took 1.0–1.9 s (on opening it, on switching back to its tab, after moving layers
 //! or undoing), and the desktop's compositor closes a window that stops answering for about
-//! 1.5–2 s: the app was closed right after opening the file. From [`SLICE_FROM_PX`] up, the canvas
-//! is composited in bands of about [`BAND_PX`], the bands the view shows first, spending about
-//! [`FRAME_MS`] a frame; the rest follow on the next frames while the window keeps answering.
+//! 1.5–2 s: the app was closed while it reopened the file after a crash. From [`SLICE_FROM_PX`] up,
+//! the canvas is composited in bands of about [`BAND_PX`], the bands the view shows first, until a
+//! frame has spent [`FRAME_MS`]; the rest follow on the next frame while the window keeps
+//! answering. The budget is large on purpose: a frame's bands cost about 100 ms before their pixels,
+//! and small bands at 120 ms a frame took 4–6 s to fill the storyboard the compositor drew in one
+//! 1.0–1.6 s frame. Now a refresh the compositor finished in one frame under the budget still does,
+//! and a longer one takes two frames of about a second, close to its old speed.
 
 use std::collections::VecDeque;
 
@@ -15,10 +19,12 @@ use crate::gpu_canvas::GpuCanvas;
 
 /// Canvases of this many pixels or more refresh in slices (about 134 MP).
 pub(crate) const SLICE_FROM_PX: u64 = 1 << 27;
-/// About this many pixels a band (about 16.8 MP).
-const BAND_PX: u64 = 1 << 24;
-/// Bands are composited until a frame has spent this long on them (at least one band a frame).
-const FRAME_MS: f64 = 120.0;
+/// About this many pixels a band (about 134 MP, some 150 ms on the storyboard).
+const BAND_PX: u64 = 1 << 27;
+/// Bands are composited until a frame has spent this long on them (at least one band a frame): with
+/// the band that crosses it, a frame stays near a second, short of the 1.5–2 s after which the
+/// desktop closes a window that isn't answering.
+const FRAME_MS: f64 = 800.0;
 
 /// The bands of `bounds`, full rows of about [`BAND_PX`] each: those meeting `visible` first, the
 /// nearest to its middle first, then the rest by their distance from it.
@@ -123,7 +129,7 @@ mod tests {
         let one = bands(Rect::new(0, 0, 100, 100), Rect::new(0, 0, 100, 100));
         assert_eq!(Vec::from(one), [Rect::new(0, 0, 100, 100)]);
         // Wider than a band: one row at a time.
-        let wide = bands(Rect::new(0, 0, 20_000_000, 3), Rect::new(0, 0, 10, 1));
+        let wide = bands(Rect::new(0, 0, 200_000_000, 3), Rect::new(0, 0, 10, 1));
         assert_eq!(wide.len(), 3);
     }
 }
