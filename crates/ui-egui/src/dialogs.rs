@@ -941,7 +941,8 @@ pub fn title(d: &Dialog) -> String {
         DialogKind::About => "About PhotoCraft".into(),
         DialogKind::LayerStyle => "Layer Style".into(),
         DialogKind::Command => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command").trim_end_matches('…').to_string(),
-        DialogKind::Error => "Error".into(),
+        // An alert that isn't an error names itself (Artboards To PDF's "was successful").
+        DialogKind::Error => d.fields.get("__title").and_then(Value::as_str).unwrap_or("Error").into(),
     }
 }
 
@@ -1157,6 +1158,8 @@ pub(crate) fn artboards_to_pdf_done(app: &mut PhotocraftApp, result: &Value) {
     let Some(path) = result.get("path").and_then(Value::as_str) else { return };
     let mut fields = serde_json::Map::new();
     fields.insert("message".into(), json!(format!("{}\n{path}", tl!("Artboards To PDF was successful."))));
+    // Not titled "Error": it says the export worked.
+    fields.insert("__title".into(), json!("Artboards To PDF"));
     app.ui.open_dialog(DialogKind::Error, fields);
 }
 

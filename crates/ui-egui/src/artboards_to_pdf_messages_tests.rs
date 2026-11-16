@@ -49,4 +49,6 @@ fn a_finished_export_says_it_was_successful_with_the_path() {
     assert!(app.ui.dialogs.iter().all(|d| d.id != id), "the dialog closes");
     assert!(std::fs::read(&path).unwrap().starts_with(b"%PDF"));
     assert_eq!(alerts(&app), [format!("Artboards To PDF was successful.\n{path}")]);
+    let alert = app.ui.dialogs.iter().find(|d| d.kind == DialogKind::Error).unwrap();
+    assert_eq!(crate::dialogs::title(alert), "Artboards To PDF", "a success isn't titled Error");
 }
