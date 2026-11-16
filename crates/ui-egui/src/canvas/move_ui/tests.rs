@@ -960,9 +960,27 @@ fn a_reduced_drag_snapshot_comes_from_a_proxy_and_matches_the_full_reduction() {
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
     let doc = s.active().unwrap().doc.clone();
     let rect = Rect::new(256, 256, 1280, 768);
-    let fast = super::snapshot_picture(&doc, rect, 64, 32);
+    let fast = super::snapshot_picture(&doc, rect, (64, 32), 8);
     let full = photocraft_compose::render_reduced_rect(&doc, rect, 64, 32);
     assert_eq!((fast.rect.width(), fast.rect.height()), (full.rect.width(), full.rect.height()));
     let worst = fast.px.iter().zip(&full.px).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (a - b).abs())).fold(0.0_f32, f32::max);
     assert!(worst < 0.02, "the proxy's snapshot differs by {worst}");
+}
+
+/// A snapshot made from a proxy covers the proxy's pixel grid exactly: its rect grows to that
+/// grid, so the picture is drawn where the layers are, not up to a proxy pixel off.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_proxied_snapshot_lies_on_the_proxy_grid() {
+    let rect = Rect::new(1003, 7, 41_011, 20_005);
+    let (grid, w, h, proxy) = super::snapshot_plan(rect);
+    assert_eq!(proxy, 10, "a 40 000 px area reduced 20×, from a proxy 10× smaller");
+    let p = proxy as i32;
+    assert!(grid.contains_rect(&rect), "{grid:?} holds {rect:?}");
+    assert!([grid.x0, grid.y0, grid.x1, grid.y1].iter().all(|v| v.rem_euclid(p) == 0), "{grid:?} on the grid");
+    assert!(grid.x0 > rect.x0 - p && grid.x1 < rect.x1 + p, "grown by less than a proxy pixel");
+    assert!(w <= super::SNAPSHOT_SIDE && h <= super::SNAPSHOT_SIDE);
+    // A small area isn't proxied, and keeps its rect.
+    let small = Rect::new(3, 5, 1_000, 900);
+    assert_eq!(super::snapshot_plan(small), (small, 1_000 - 3, 900 - 5, 0));
 }

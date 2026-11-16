@@ -226,16 +226,14 @@ fn start_snapshot_thread(doc: &Document, moving: &[LayerId], rect: Rect) -> Opti
             l.mask = None;
         }
     }
-    let longest = rect.width().max(rect.height()).max(1);
-    let k = longest.div_ceil(SNAPSHOT_SIDE).max(1);
-    let (w, h) = (rect.width().div_ceil(k).max(1), rect.height().div_ceil(k).max(1));
+    let (rect, w, h, proxy) = snapshot_plan(rect);
     let (tx, rx) = std::sync::mpsc::channel();
     let started = std::thread::Builder::new().name("photocraft-drag-snapshot".into()).spawn(move || {
         // On a small pool of its own: in the shared one its tiles queued ahead of the redraw
         // thread's uploads, and the canvas blocks drawn meanwhile took 100–260 ms each.
         let picture = match snapshot_pool() {
-            Some(pool) => pool.install(|| snapshot_picture(&only, rect, w, h)),
-            None => snapshot_picture(&only, rect, w, h),
+            Some(pool) => pool.install(|| snapshot_picture(&only, rect, (w, h), proxy)),
+            None => snapshot_picture(&only, rect, (w, h), proxy),
         };
         // Freed once rendered, whether or not its drag still wants it.
         drop(slot);
@@ -245,21 +243,40 @@ fn start_snapshot_thread(doc: &Document, moving: &[LayerId], rect: Rect) -> Opti
     Some(Snapshot { rect, rx: Some(rx), picture: None, textures: Vec::new() })
 }
 
+/// Where a snapshot of `rect` is made and how large: `(rect, w, h, proxy)`, no side over
+/// [`SNAPSHOT_SIDE`]. A reduction of 4× or more is made from a proxy scaled down `proxy`× first
+/// ([`snapshot_picture`]), whose pixels each cover `proxy` × `proxy` document pixels from the
+/// document's origin: the rect grows to that grid, so the picture covers it exactly. Drawn over the
+/// rect as it was, the picture sat up to `proxy` document pixels off the layers, and a storyboard
+/// dragged back into place by its picture landed that far off, leaving a white stripe.
+#[cfg(not(target_arch = "wasm32"))]
+fn snapshot_plan(rect: Rect) -> (Rect, u32, u32, u32) {
+    let longest = rect.width().max(rect.height()).max(1);
+    let k = longest.div_ceil(SNAPSHOT_SIDE).max(1);
+    let proxy = k / 2;
+    let rect = if proxy >= 2 {
+        let p = proxy as i32;
+        let down = |v: i32| v.div_euclid(p) * p;
+        let up = |v: i32| (v + p - 1).div_euclid(p) * p;
+        Rect::new(down(rect.x0), down(rect.y0), up(rect.x1), up(rect.y1))
+    } else {
+        rect
+    };
+    (rect, rect.width().div_ceil(k).max(1), rect.height().div_ceil(k).max(1), proxy)
+}
+
 /// The snapshot's pixels, `rect` of `only` reduced to `w`×`h`: from a proxy of the layers scaled
-/// down first (as thumbnails are made) when the reduction is at least 4× and the proxy composites
+/// down `proxy`× first (as thumbnails are made) when `proxy` is 2 or more and the proxy composites
 /// faithfully (no layer effects or vector masks, whose sizes are in document pixels). Averaging
 /// every document pixel of 18 storyboard boards took longer than the drag itself, and the drag
-/// showed nothing until the snapshot arrived. The proxy's pixels are up to `k` document pixels
-/// off, which a reduced picture can't show.
+/// showed nothing until the snapshot arrived. `rect` lies on the proxy's grid ([`snapshot_plan`]).
 #[cfg(not(target_arch = "wasm32"))]
-fn snapshot_picture(only: &Document, rect: Rect, w: u32, h: u32) -> photocraft_compose::Buffer {
-    let longest = rect.width().max(rect.height()).max(1);
-    let k = longest / w.max(h).max(1).saturating_mul(2);
-    if k >= 2 && photocraft_compose::proxy::proxy_faithful(only) {
-        let proxy = photocraft_compose::proxy::proxy_document(only, k);
-        let k = k as i32;
-        let r = Rect::new(rect.x0.div_euclid(k), rect.y0.div_euclid(k), (rect.x1 + k - 1).div_euclid(k), (rect.y1 + k - 1).div_euclid(k));
-        return photocraft_compose::render_reduced_rect(&proxy, r, w, h);
+fn snapshot_picture(only: &Document, rect: Rect, (w, h): (u32, u32), proxy: u32) -> photocraft_compose::Buffer {
+    if proxy >= 2 && photocraft_compose::proxy::proxy_faithful(only) {
+        let shrunk = photocraft_compose::proxy::proxy_document(only, proxy);
+        let p = proxy as i32;
+        let r = Rect::new(rect.x0.div_euclid(p), rect.y0.div_euclid(p), rect.x1.div_euclid(p), rect.y1.div_euclid(p));
+        return photocraft_compose::render_reduced_rect(&shrunk, r, w, h);
     }
     photocraft_compose::render_reduced_rect(only, rect, w, h)
 }
