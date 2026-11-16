@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
-use photocraft_algo::palette_map::{self, AlphaMode, Method, Palette, Settings};
 use craft_cms::{Builtin, Profile};
+use photocraft_algo::palette_map::{self, AlphaMode, Method, Palette, Settings};
 use photocraft_doc::{ColorTable, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -474,7 +474,8 @@ pub(crate) fn render_surface(
             }
             if let Some((_, from)) = &transforms {
                 let mut native = [0.0f32; 16];
-                from.eval(&rgba[..3], &mut native).map_err(|error| bad(FILTER_ID, format!("could not convert mapped sRGB samples to the source profile: {error}")))?;
+                from.eval(&rgba[..3], &mut native)
+                    .map_err(|error| bad(FILTER_ID, format!("could not convert mapped sRGB samples to the source profile: {error}")))?;
                 out[..colour_channels].copy_from_slice(&native[..colour_channels]);
             } else {
                 out[..3].copy_from_slice(&rgba[..3]);
@@ -688,12 +689,7 @@ mod tests {
             };
 
             assert!(!session.is_enabled(FILTER_ID), "{mode:?}");
-            assert!(
-                session
-                    .execute(FILTER_ID, json!({"paletteSnapshot": {"name": "two", "colors": [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]}}))
-                    .is_err(),
-                "{mode:?}"
-            );
+            assert!(session.execute(FILTER_ID, json!({"paletteSnapshot": {"name": "two", "colors": [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]}})).is_err(), "{mode:?}");
             let active = session.active().unwrap();
             assert_eq!(active.doc, before_doc, "{mode:?}: failed Palette Map leaves the document unchanged");
             assert_eq!(active.history.past_len(), before_history, "{mode:?}: failed Palette Map adds no history step");

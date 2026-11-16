@@ -679,8 +679,8 @@ fn review_palette_map_command_preserves_display_p3_selection_holes_at_all_depths
 
 #[test]
 fn review_palette_map_render_surface_preserves_cmyk_selection_holes() {
-    use photocraft_algo::palette_map::{Method, Palette, Settings};
     use craft_cms::Builtin;
+    use photocraft_algo::palette_map::{Method, Palette, Settings};
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
     use photocraft_geom::Rect;
     use photocraft_raster::Surface;

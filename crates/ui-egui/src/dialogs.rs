@@ -1579,12 +1579,12 @@ pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
+pub mod palette_map_ui;
+mod palette_pattern_ui;
 #[cfg(test)]
 mod paths_export_default_tests;
 #[cfg(test)]
 mod paths_export_document_bounds_tests;
-pub mod palette_map_ui;
-mod palette_pattern_ui;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
