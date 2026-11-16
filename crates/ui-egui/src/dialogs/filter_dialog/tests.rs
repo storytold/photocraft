@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn a_typed_minimum_survives_the_field_rounding() {
+    // Lighting Effects' radius minimum 0.01: rounded in f32 it widens to 0.009999999776
+    // and the engine's range check refuses it before the command ever runs.
+    assert_eq!(round_field(0.01f32, 100.0), 0.01);
+    // Ordinary values still round to the field's scale.
+    assert_eq!(round_field(32.1249, 100.0), 32.12);
+    assert_eq!(round_field(1.234, 10.0), 1.2);
+}
+
+#[test]
 fn a_unit_after_a_range_bound_does_not_reset_the_range_to_its_fallback() {
     // #7598: `0.5..5000 px?` fell back to a maximum of 100, so the Mixer Brush's Size slider
     // (and every range documented with a px or % suffix) topped out at 100.

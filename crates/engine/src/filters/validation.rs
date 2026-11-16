@@ -34,10 +34,14 @@ pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
     for (key, value) in map {
         let (valid, expected) = match (schema.param(key), key.as_str()) {
             (Some(p), _) if DIALOG_RANGES.contains(&(id, key.as_str())) => (value.is_number() || (value.is_null() && p.optional()), "a number".into()),
-            (Some(_), "shapeId" | "shapeName") if id == "filter.blur.shapeBlur" => (value.as_str().is_some_and(|s| !s.is_empty()), "a nonempty string".into()),
-            (Some(_), "shapePath") if id == "filter.blur.shapeBlur" => {
-                (crate::vector_cmds::parse_path(value).is_ok_and(|path| !path.is_empty() && path.control_bounds().is_some()), "a nonempty vector path".into())
+            (Some(p), "shapeId" | "shapeName") if id == "filter.blur.shapeBlur" => {
+                ((value.is_null() && p.optional()) || value.as_str().is_some_and(|s| !s.is_empty()), "a nonempty string".into())
             }
+            (Some(p), "shapePath") if id == "filter.blur.shapeBlur" => (
+                (value.is_null() && p.optional())
+                    || crate::vector_cmds::parse_path(value).is_ok_and(|path| !path.is_empty() && path.control_bounds().is_some()),
+                "a nonempty vector path".into(),
+            ),
             (Some(p), _) => (p.accepts(value), p.expected()),
             (None, "layer") => (value.as_u64().is_some() || value.is_string(), "an unsigned layer id or layer name".into()),
             (None, "coalesce") => (value.is_string(), "a string".into()),

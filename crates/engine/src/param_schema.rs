@@ -49,10 +49,12 @@ pub enum Ty {
     Text,
     /// Any finite number (`number`, `f64`, or a bare unit like `px`).
     Number,
-    /// An integer (`int`, `i32`, `index`…).
+    /// An integer (`int`, `index`…).
     Int,
     /// An unsigned 32-bit integer (`u32`, a seed).
     U32,
+    /// A signed 32-bit integer (`i32`, a seed recorded as its 32-bit pattern).
+    I32,
     /// A layer, document or other object reference (`id`).
     Id,
     Color,
@@ -69,8 +71,9 @@ impl Ty {
             "bool" | "boolean" | "true" | "false" => Ty::Bool,
             "text" | "str" | "string" | "name" | "path" | "folder" | "hex" | "base64" => Ty::Text,
             "number" | "num" | "float" | "f32" | "f64" | "px" | "pt" | "deg" | "degrees" | "%" | "ppi" | "mm" | "in" => Ty::Number,
-            "int" | "integer" | "i32" | "i64" | "u8" | "u16" | "u64" | "usize" | "uint" | "index" | "i" | "j" | "n" | "char" | "row" | "len" => Ty::Int,
+            "int" | "integer" | "i64" | "u8" | "u16" | "u64" | "usize" | "uint" | "index" | "i" | "j" | "n" | "char" | "row" | "len" => Ty::Int,
             "u32" => Ty::U32,
+            "i32" => Ty::I32,
             "id" => Ty::Id,
             "color" | "colour" => Ty::Color,
             "json" => Ty::Json,
@@ -78,6 +81,21 @@ impl Ty {
             "null" => Ty::Null,
             _ => return None,
         })
+    }
+
+    /// Whether `v` has this shape. Shapes the grammar leaves untyped (objects, arrays,
+    /// references, prose) accept any value: only what the doc states is checked.
+    fn accepts(self, v: &Value) -> bool {
+        match self {
+            Ty::Bool => v.is_boolean(),
+            Ty::Text => v.is_string(),
+            Ty::Number => v.as_f64().is_some_and(f64::is_finite),
+            Ty::Int => v.as_i64().is_some() || v.as_f64().is_some_and(|n| n.is_finite() && n.fract() == 0.0),
+            Ty::U32 => v.as_f64().is_some_and(|n| n.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&n)),
+            Ty::I32 => v.as_f64().is_some_and(|n| n.fract() == 0.0 && (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&n)),
+            Ty::Null => v.is_null(),
+            Ty::Id | Ty::Color | Ty::Json | Ty::Doc => true,
+        }
     }
 }
 
@@ -282,16 +300,9 @@ impl Kind {
             Kind::Range { min, max, .. } => v.as_f64().is_some_and(|n| n.is_finite() && *min <= n && n <= *max),
             Kind::Number { value, .. } => v.as_f64() == Some(*value),
             Kind::Choice(options) => v.as_str().is_some_and(|s| options.iter().any(|o| o == s || pattern_accepts(o, s))),
-            Kind::Type { ty, .. } => match ty {
-                Ty::Bool => v.is_boolean(),
-                Ty::Text => v.is_string(),
-                Ty::Number => v.as_f64().is_some_and(f64::is_finite),
-                Ty::Int => v.as_i64().is_some() || v.as_f64().is_some_and(|n| n.is_finite() && n.fract() == 0.0),
-                Ty::U32 => v.as_f64().is_some_and(|n| n.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&n)),
-                Ty::Null => v.is_null(),
-                Ty::Id | Ty::Color | Ty::Json | Ty::Doc => true,
-            },
-            Kind::Sized { .. } | Kind::Array(_) => v.is_array(),
+            Kind::Type { ty, .. } => ty.accepts(v),
+            Kind::Sized { ty, len, .. } => v.as_array().is_some_and(|a| a.len() == *len && a.iter().all(|e| ty.accepts(e))),
+            Kind::Array(_) => v.is_array(),
             Kind::Object(_) => v.is_object(),
             Kind::Free(_) => true,
         }
@@ -308,6 +319,7 @@ impl Kind {
             Kind::Type { ty: Ty::Number, .. } => "a finite number".into(),
             Kind::Type { ty: Ty::Int, .. } => "an integer".into(),
             Kind::Type { ty: Ty::U32, .. } => format!("an integer in 0..{}", u32::MAX),
+            Kind::Type { ty: Ty::I32, .. } => format!("an integer in {}..{}", i32::MIN, i32::MAX),
             Kind::Type { ty: Ty::Null, .. } => "null".into(),
             other => {
                 let mut s = String::new();
@@ -446,6 +458,8 @@ fn item_starts(inner: &str) -> Vec<usize> {
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut in_str = false;
+    // Byte where the current item starts: 0, or the last separator pushed.
+    let mut item_start = 0usize;
     for (i, c) in inner.char_indices() {
         if in_str {
             in_str = c != '"';
@@ -471,7 +485,17 @@ fn item_starts(inner: &str) -> Vec<usize> {
         let next = after.trim_start();
         let keyed = quoted_key(next).is_some_and(|n| if or { next[n..].starts_with(':') || next[n..].starts_with("?:") } else { true });
         if keyed || (!or && starts_open(next)) {
+            // `"a","b":value` is one parameter whose keys share a value: a comma directly
+            // after a bare key joins the group instead of starting a new item.
+            if c == ',' {
+                let seg = inner[item_start..i].trim();
+                let seg = seg.strip_prefix(',').or_else(|| seg.strip_prefix(" or ")).unwrap_or(seg).trim();
+                if quoted_key(seg).is_some_and(|n| n == seg.len()) {
+                    continue;
+                }
+            }
             out.push(i);
+            item_start = i;
         }
     }
     out
