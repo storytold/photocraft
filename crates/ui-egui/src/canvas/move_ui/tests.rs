@@ -984,3 +984,27 @@ fn a_proxied_snapshot_lies_on_the_proxy_grid() {
     let small = Rect::new(3, 5, 1_000, 900);
     assert_eq!(super::snapshot_plan(small), (small, 1_000 - 3, 900 - 5, 0));
 }
+
+/// A drag snapshot of layers on an artboard is of the layers wherever they reach: the board
+/// holding them doesn't clip them or paint its background into the picture. A board that moves
+/// itself keeps both.
+#[test]
+fn a_drag_snapshot_of_layers_on_a_board_is_not_clipped_by_the_board() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 32})).unwrap();
+    let board = photocraft_doc::LayerId(s.execute("layer.new.artboard", json!({"rect": [0, 0, 16, 16]})).unwrap()["layer"].as_u64().unwrap());
+    let mut doc = (*s.active().unwrap().doc).clone();
+    let mut layer = photocraft_doc::Layer::raster("half off the board", doc.pixel_format());
+    layer.surface_mut().unwrap().fill_rect(Rect::new(8, 4, 24, 12), &[1.0, 0.0, 0.0, 1.0]);
+    let id = layer.id;
+    let Some(photocraft_doc::LayerContent::Group(g)) = doc.layer_mut(board).map(|l| &mut l.content) else { panic!("an artboard group") };
+    g.children.push(layer);
+    let only = super::snapshot_document(&doc, &[id]);
+    let photocraft_doc::LayerContent::Group(g) = &only.layer(board).unwrap().content else { panic!() };
+    assert!(g.artboard.is_none(), "the board holding the layer doesn't clip the picture");
+    let off_board = photocraft_compose::render(&only, Rect::new(16, 4, 24, 12));
+    assert!(off_board.px.iter().all(|p| p[3] > 0.99), "the layer's part beyond the board is in the picture");
+    let with_board = super::snapshot_document(&doc, &[board, id]);
+    let photocraft_doc::LayerContent::Group(g) = &with_board.layer(board).unwrap().content else { panic!() };
+    assert!(g.artboard.is_some(), "a board that moves keeps its frame");
+}

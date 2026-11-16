@@ -209,23 +209,7 @@ fn start_snapshot_thread(doc: &Document, moving: &[LayerId], rect: Rect) -> Opti
         return None;
     }
     let slot = SnapshotSlot::take()?;
-    // The moving layers and the groups holding them stay visible; every other layer is hidden.
-    let walk = doc.walk();
-    let paths: Vec<_> = walk.iter().filter(|(_, _, l)| moving.contains(&l.id)).map(|(p, _, _)| p.clone()).collect();
-    let keep = |path: &[usize]| paths.iter().any(|m| m.starts_with(path) || path.starts_with(m));
-    let hide: Vec<LayerId> = walk.iter().filter(|(p, _, _)| !keep(p)).map(|(_, _, l)| l.id).collect();
-    let mut only = doc.clone();
-    let format = doc.pixel_format();
-    for id in hide {
-        if let Some(l) = only.layer_mut(id) {
-            l.visible = false;
-            // Hidden, it draws nothing: emptied, the proxy (`snapshot_picture`) skips its pixels.
-            if !matches!(l.content, photocraft_doc::LayerContent::Group(_)) {
-                l.content = photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(format));
-            }
-            l.mask = None;
-        }
-    }
+    let only = snapshot_document(doc, moving);
     let (rect, w, h, proxy) = snapshot_plan(rect);
     let (tx, rx) = std::sync::mpsc::channel();
     let started = std::thread::Builder::new().name("photocraft-drag-snapshot".into()).spawn(move || {
@@ -241,6 +225,39 @@ fn start_snapshot_thread(doc: &Document, moving: &[LayerId], rect: Rect) -> Opti
     });
     started.ok()?;
     Some(Snapshot { rect, rx: Some(rx), picture: None, textures: Vec::new() })
+}
+
+/// What a drag snapshot of the layers `moving` renders: `doc` with every other layer hidden (and
+/// emptied, so the proxy in [`snapshot_picture`] skips its pixels), keeping the groups that hold
+/// them. An artboard holding them but not moving with them neither clips them nor paints its
+/// background into the picture: the picture is of the layers, wherever they reach. With the
+/// board's clip a storyboard dragged while partly off its board showed the board's empty area
+/// moving and left its own off-board part behind.
+fn snapshot_document(doc: &Document, moving: &[LayerId]) -> Document {
+    let walk = doc.walk();
+    let paths: Vec<_> = walk.iter().filter(|(_, _, l)| moving.contains(&l.id)).map(|(p, _, _)| p.clone()).collect();
+    let keep = |path: &[usize]| paths.iter().any(|m| m.starts_with(path) || path.starts_with(m));
+    let hide: Vec<LayerId> = walk.iter().filter(|(p, _, _)| !keep(p)).map(|(_, _, l)| l.id).collect();
+    let holders: Vec<LayerId> = walk.iter().filter(|(p, _, l)| keep(p) && !moving.contains(&l.id)).map(|(_, _, l)| l.id).collect();
+    let mut only = doc.clone();
+    let format = doc.pixel_format();
+    for id in hide {
+        if let Some(l) = only.layer_mut(id) {
+            l.visible = false;
+            if !matches!(l.content, photocraft_doc::LayerContent::Group(_)) {
+                l.content = photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(format));
+            }
+            l.mask = None;
+        }
+    }
+    for id in holders {
+        if let Some(l) = only.layer_mut(id)
+            && let photocraft_doc::LayerContent::Group(g) = &mut l.content
+        {
+            g.artboard = None;
+        }
+    }
+    only
 }
 
 /// Where a snapshot of `rect` is made and how large: `(rect, w, h, proxy)`, no side over
