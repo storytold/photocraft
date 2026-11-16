@@ -53,7 +53,8 @@ pub struct ExportPresetSettings {
     pub lock_aspect: bool,
     /// `"scale"` uses [`Self::scale`] on the current document; `"pixels"` uses width and height.
     pub sizing: String,
-    /// `"none"` drops XMP and EXIF/resolution, `"exif"` keeps EXIF and resolution, `"all"` keeps both.
+    /// `"none"` drops XMP and EXIF, `"exif"` keeps EXIF, `"all"` keeps both. The resolution is
+    /// always written to JPEG, PNG and TIFF.
     pub metadata: String,
     /// `"document"` keeps the document profile; `"srgb"` converts to sRGB before export.
     pub profile: String,
