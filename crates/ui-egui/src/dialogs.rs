@@ -376,6 +376,12 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
             } else {
                 crate::view_cmds::form_body(ui, fields);
             }
+            // A form's static help text at the bottom (`__help`, already translated): Layers to
+            // Files (#13971).
+            if let Some(help) = fields.get("__help").and_then(Value::as_str) {
+                ui.add_space(8.0);
+                ui.label(help.to_owned());
+            }
         }
         _ => {}
     }
@@ -572,7 +578,7 @@ fn button_row(
 
 /// The default button's label: what OK means for this dialog.
 fn ok_label(d: &Dialog) -> &'static str {
-    if image_processor_ui::owns(&d.fields) {
+    if image_processor_ui::owns(&d.fields) || d.fields.get("__command").and_then(Value::as_str) == Some("file.export.layersToFiles") {
         tl!("Run")
     } else if d.kind == DialogKind::NewDocument {
         tl!("Create")
@@ -1011,6 +1017,23 @@ fn file_command(fields: &Fields) -> Option<&'static str> {
 /// in their result's `errors`; the status bar and a notice say which files failed and why, so a run
 /// that fails on every file isn't silent (#10682). Each file is named by its whole path: files of
 /// the same name in different subfolders are told apart.
+/// Layers to Files refused its destination (#13969): the dialog back with every value, under the
+/// reference's alert.
+pub(crate) fn layers_to_files_destination_alert(app: &mut PhotocraftApp, d: &Dialog, result: &Result<Value, String>) {
+    let message = match result {
+        Err(e) if e == "Please specify destination." => tl!("Please specify destination."),
+        Err(e) if e.starts_with("Destination does not exist:") => tl!("Destination does not exist."),
+        _ => return,
+    };
+    // The refusal ends a playing action (`confirm_generic_command` abandons its paused entry), so the dialog
+    // comes back as an ordinary one: with the paused token a corrected retry would be refused for belonging
+    // to an action that is gone.
+    let mut restored = d.clone();
+    restored.fields.remove(crate::actions::RESUME);
+    app.ui.dialogs.push(restored);
+    app.ui.open_dialog(DialogKind::Error, Fields::from_iter([("message".into(), json!(message))]));
+}
+
 fn report_file_errors(app: &mut PhotocraftApp, d: &Dialog, r: &Value) {
     let Some(errors) = r.get("errors").and_then(Value::as_array).filter(|e| !e.is_empty()) else { return };
     let lines: Vec<String> = errors
@@ -1099,6 +1122,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     }
     if result.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
+    }
+    if cmd == "file.export.layersToFiles" {
+        layers_to_files_destination_alert(app, &d, &result);
     }
     if result.is_ok() {
         if crate::adjust_dialog::owns(&d.fields) {

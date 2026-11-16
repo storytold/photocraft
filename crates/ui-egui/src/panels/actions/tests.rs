@@ -3501,3 +3501,25 @@ fn dragging_uses_the_displayed_folder_occurrence() {
     assert_eq!(app.session.actions.list[1].name, "A");
     assert_eq!(app.session.actions.list[1].set_slot, Some(0));
 }
+
+/// CodeRabbit on #15241 and #15242: a Layers to Files step of a playing action whose destination is refused ends
+/// the action (the refusal abandons its paused entry). The dialog comes back without the paused token, so the
+/// corrected destination runs as an ordinary command instead of failing for belonging to an action that is gone.
+#[test]
+fn the_refused_layers_to_files_dialog_comes_back_without_the_paused_token() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let id = crate::dialogs::open_command_dialog(&mut app, "file.export.layersToFiles", "Export Layers To Files…");
+    let dialog = {
+        let d = app.ui.dialog_mut(id).unwrap();
+        d.fields.insert("dir".into(), json!("/nowhere/at/all"));
+        d.fields.insert(RESUME.into(), json!(7));
+        d.clone()
+    };
+    app.ui.close_dialog(id); // as `confirm` does before the command runs
+    crate::dialogs::layers_to_files_destination_alert(&mut app, &dialog, &Err("Destination does not exist: /nowhere/at/all".into()));
+    let back: Vec<_> = app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Command && d.fields.contains_key("dir")).collect();
+    assert!(!back.is_empty(), "the dialog is back");
+    assert!(back.iter().all(|d| !d.fields.contains_key(RESUME)), "no paused token on the restored dialog");
+    assert!(back.iter().all(|d| d.fields.get("dir") == Some(&json!("/nowhere/at/all"))), "with its values");
+}
