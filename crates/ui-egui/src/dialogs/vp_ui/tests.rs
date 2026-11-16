@@ -547,6 +547,22 @@ fn a_focal_length_saved_with_no_planes_survives_reopening_and_a_paste_commit() {
 }
 
 #[test]
+fn the_dialog_ignores_a_saved_focal_length_the_camera_would_ignore() {
+    let (ctx, mut app) = app_with_layer();
+    for (f, kept) in [(0.5, None), (1.0, None), (1.5, Some(1.5))] {
+        app.session
+            .edit("focal", move |doc, _| {
+                doc.perspective = photocraft_doc::PerspectivePlanes { planes: Vec::new(), focal: Some(f), size: None };
+                Ok(())
+            })
+            .unwrap();
+        crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+        assert_eq!(app.distort.vanishing.as_ref().unwrap().focal, kept, "saved focal {f}");
+        app.distort.vanishing = None;
+    }
+}
+
+#[test]
 fn the_stamp_preview_shades_the_paste_like_ok_and_repaints_when_the_shade_changes() {
     let (ctx, mut app) = app_with_layer();
     copy_red_square(&mut app);
