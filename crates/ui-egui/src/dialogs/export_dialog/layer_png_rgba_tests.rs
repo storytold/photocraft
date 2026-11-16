@@ -472,3 +472,38 @@ fn a_group_export_in_an_unmeasured_mode_or_depth_keeps_its_clear_pixels() {
         );
     }
 }
+
+/// A document in `mode` at 8 bits with one layer opaque over the whole 30 x 20 canvas, added as
+/// the app's active document; the new layer's id.
+fn opaque_layer_in(app: &mut PhotocraftApp, mode: photocraft_doc::ColorMode, paint: &[f32]) -> photocraft_doc::LayerId {
+    let mut doc = photocraft_doc::Document::new("Opaque", photocraft_doc::Size::new(30, 20), mode, photocraft_doc::SampleType::U8);
+    let fmt = doc.pixel_format();
+    let mut s = photocraft_raster::Surface::new(fmt);
+    s.fill_rect(photocraft_doc::Rect::new(0, 0, 30, 20), paint);
+    let layer = photocraft_doc::Layer::new("Opaque", photocraft_doc::LayerContent::Raster(s));
+    let id = layer.id;
+    doc.layers = vec![layer];
+    app.session.add_document(doc, None);
+    id
+}
+
+/// #14968 review: under the dialog's default "Convert to sRGB", `export_document` converts a
+/// grayscale or CMYK document into an RGB 8-bit one before the encoder applies the kept-alpha
+/// rule - and that rule was measured for RGB 8-bit sources. It must follow the source document,
+/// not the converted copy: an opaque layer of a grayscale or CMYK source keeps the RGB file
+/// (alpha dropped) it had before #14816, as those modes are marked unmeasured.
+#[test]
+fn an_opaque_layer_of_an_unmeasured_source_mode_keeps_todays_file_under_srgb() {
+    let (mut app, written, _open) = app(40, 30);
+    let cases: [(&str, photocraft_doc::ColorMode, &[f32]); 2] =
+        [("grayscale 8-bit", photocraft_doc::ColorMode::Grayscale, &[0.5, 1.0]), ("CMYK 8-bit", photocraft_doc::ColorMode::Cmyk, &[0.2, 0.7, 0.1, 0.05, 1.0])];
+    for (label, mode, paint) in cases {
+        let id = opaque_layer_in(&mut app, mode, paint);
+        let mut f = fields(Some(id.0));
+        f.insert("profile".into(), json!("srgb"));
+        let (w, h, layout, data) = png(&export_as(&mut app, &written, &f));
+        assert_eq!((w, h), (30, 20), "{label}");
+        assert_eq!(layout, ChannelLayout::Rgb, "{label}: unmeasured by #14816, so an opaque layer export still drops its alpha, as before the change");
+        assert_eq!(data.len(), 30 * 20 * 3, "{label}: the sRGB dialog still wrote an RGB file");
+    }
+}

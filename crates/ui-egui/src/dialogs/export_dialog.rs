@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use craft_cms::Profile;
-use photocraft_doc::{ColorMode, Document};
+use photocraft_doc::{ColorMode, Document, SampleType};
 use serde_json::{Map, Value, json};
 
 use photocraft_engine::export_preset_cmds::{DEFAULT_RESAMPLE, RESAMPLE, export_resample};
@@ -655,6 +655,17 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         layer_alpha: f.contains_key("__layer") || f.contains_key("__layers"),
         ..Default::default()
     }
+}
+
+/// `settings` with the layer branches' kept alpha checked against the source document: the kept
+/// alpha is measured only for an RGB document at 8 bits (#14816), and under the dialog's default
+/// "Convert to sRGB" `export_document` converts a grayscale or CMYK source into an RGB 8-bit copy
+/// before the encoder runs - so the decision happens here, on the source, not on that copy
+/// (#14968 review).
+fn source_scoped_settings(doc: &Document, f: &Map<String, Value>) -> ExportSettings {
+    let mut s = settings(f);
+    s.layer_alpha &= doc.mode == ColorMode::Rgb && doc.depth == SampleType::U8;
+    s
 }
 
 /// The preview and size estimate share a single reduced document. Resizing every layer twice is
@@ -1313,7 +1324,7 @@ fn write_export(app: &mut PhotocraftApp, doc: &Document, f: &Map<String, Value>,
     let out = export_document(doc, f, None, source_profile)?;
     crate::app::ensure_memory_to_save(&out, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
-    let (bytes, warnings) = export(&out, path, &settings(f))?;
+    let (bytes, warnings) = export(&out, path, &source_scoped_settings(doc, f))?;
     let write = app.services.write.as_mut().ok_or("no writer configured")?;
     write(path, &bytes)?;
     let template = "Exported {path} ({size})";
@@ -1354,7 +1365,7 @@ fn confirm_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[photoc
     }
     let docs = exportable_layers(&st.doc, ids)?;
     let ext = s_fmt(f);
-    let (f, settings) = (f.clone(), settings(f));
+    let (f, settings) = (f.clone(), source_scoped_settings(&st.doc, f));
     // Several files on the desktop: a folder, then `<layer name>.<ext>` per layer there (#14808).
     if docs.len() > 1 && !cfg!(target_arch = "wasm32") {
         let names = layer_file_names(&docs, &ext);
