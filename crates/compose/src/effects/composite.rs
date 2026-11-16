@@ -243,7 +243,7 @@ pub(crate) fn composite_with_effects_prepared(
     patterns: &PreparedPatterns<'_>,
     vstroke: Option<VectorStroke<'_>>,
 ) {
-    match composite_with_effects_prepared_with(layer, content, backdrop, maps, layer_bounds, patterns, vstroke, &InfallibleBufferAlloc) {
+    match composite_with_effects_prepared_with(layer, content, backdrop, (maps, vstroke), layer_bounds, patterns, &InfallibleBufferAlloc) {
         Ok(()) => {}
         Err(never) => match never {},
     }
@@ -253,12 +253,12 @@ pub(crate) fn composite_with_effects_prepared_with<A: BufferAlloc>(
     layer: &Layer,
     content: &Buffer,
     backdrop: &mut Buffer,
-    maps: &FxMaps,
+    prepared: (&FxMaps, Option<VectorStroke<'_>>),
     layer_bounds: Rect,
     patterns: &PreparedPatterns<'_>,
-    vstroke: Option<VectorStroke<'_>>,
     alloc: &A,
 ) -> Result<(), A::Error> {
+    let (maps, vstroke) = prepared;
     let pass = EffectPass::new(layer, maps, content.rect, layer_bounds, patterns, vstroke.as_ref());
     let big = pass.big;
     let shape = pass.effect_shape(content);

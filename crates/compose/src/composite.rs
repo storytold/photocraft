@@ -453,8 +453,7 @@ fn composite_layer_plain_with<A: BufferAlloc>(
         // them, each placed over the original backdrop) is added to the
         // pass-through result. Exact when the children blend Normal, close
         // otherwise (matches psd-tools clipping-mask3/4/5).
-        if has_clipped {
-            if let (Some(before), Some(iso)) = (before, render_content_with(layer, rect, cx, alloc)?) {
+        if has_clipped && let (Some(before), Some(iso)) = (before, render_content_with(layer, rect, cx, alloc)?) {
                 let mut clipped_iso = alloc.clone(&iso)?;
                 advanced::composite_clipped_with(clipped, &mut clipped_iso, cx, alloc)?;
                 let mut without = alloc.clone(&before)?;
@@ -471,7 +470,6 @@ fn composite_layer_plain_with<A: BufferAlloc>(
                     let a = pm[3].clamp(0.0, 1.0);
                     *p = if a > 0.0 { [(pm[0] / a).clamp(0.0, 1.0), (pm[1] / a).clamp(0.0, 1.0), (pm[2] / a).clamp(0.0, 1.0), a] } else { [0.0; 4] };
                 }
-            }
         }
         return Ok(());
     }
@@ -589,7 +587,7 @@ fn composite_layer_effects_with<A: BufferAlloc>(layer: &Layer, clipped: &[Layer]
     advanced::composite_clipped_with(clipped, &mut content, cx, alloc)?;
     let vstroke = parts.as_ref().map(|(s, m)| effects::VectorStroke { stroke: s, mask: m.as_deref() });
     let maps = effect_maps_with(layer, rect, cx, alloc)?;
-    effects::composite_with_effects_prepared_with(layer, &content, backdrop, &maps, effects_frame(layer, cx.canvas), cx.patterns, vstroke, alloc)?;
+    effects::composite_with_effects_prepared_with(layer, &content, backdrop, (&maps, vstroke), effects_frame(layer, cx.canvas), cx.patterns, alloc)?;
     if let Some((_, mask)) = parts {
         recycle_mask(mask);
     }
@@ -602,6 +600,9 @@ pub fn text_gamma(layer: &Layer) -> f32 {
     if matches!(layer.content, LayerContent::Text(_)) { psblend::text_gamma() } else { 1.0 }
 }
 
+/// Unmasked shape fill, vector stroke and shared mask values.
+type ShapeParts = (Buffer, Buffer, Option<Vec<f32>>);
+
 /// A stroked shape layer with visible clipped layers: Photoshop draws the shape's vector stroke
 /// above the clipped layers, so the base content is the fill alone and the stroke is laid on top
 /// after clipping. See [`split_parts_with`].
@@ -611,7 +612,7 @@ fn shape_parts_with<A: BufferAlloc>(
     rect: Rect,
     cx: &Ctx,
     alloc: &A,
-) -> Result<Option<(Buffer, Buffer, Option<Vec<f32>>)>, A::Error> {
+) -> Result<Option<ShapeParts>, A::Error> {
     if !clipped.iter().any(|c| c.visible) {
         return Ok(None);
     }
@@ -622,7 +623,7 @@ fn shape_parts_with<A: BufferAlloc>(
 /// layers. Fill and stroke are unmasked: the mask applies to them together. Layer effects paint
 /// the fill's interior effects beneath the vector stroke (psd-tools stroke-composite: a colour
 /// overlay leaves the stroke, the stroke effect covers it).
-fn split_parts_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx: &Ctx, alloc: &A) -> Result<Option<(Buffer, Buffer, Option<Vec<f32>>)>, A::Error> {
+fn split_parts_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx: &Ctx, alloc: &A) -> Result<Option<ShapeParts>, A::Error> {
     let LayerContent::Shape(sh) = &layer.content else { return Ok(None) };
     if sh.stroke.is_none() {
         return Ok(None);
@@ -703,7 +704,7 @@ fn composite_atop_any_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx:
             p[3] = 1.0;
         }
         let maps = effect_maps_with(layer, rect, cx, alloc)?;
-        effects::composite_with_effects_prepared_with(layer, &content, &mut opaque, &maps, effects_frame(layer, cx.canvas), cx.patterns, vstroke, alloc)?;
+        effects::composite_with_effects_prepared_with(layer, &content, &mut opaque, (&maps, vstroke), effects_frame(layer, cx.canvas), cx.patterns, alloc)?;
         if let Some((_, mask)) = parts {
             recycle_mask(mask);
         }
