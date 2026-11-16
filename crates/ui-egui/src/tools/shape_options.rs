@@ -120,6 +120,13 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             let label = tl!("Sides:");
             lbl(ui, label);
             sides_alert = sides_field(ui, label, &mut o.polygon_sides);
+            // The tool's own corner radius for the next polygon (#13302); the active shape is not touched.
+            crate::widgets::vline(ui, 22.0);
+            let label = tl!("Radius:");
+            lbl(ui, label);
+            let no_number;
+            (radius_alert, no_number) = polygon_radius_field(ui, label, &mut o.polygon_corner_radius);
+            range_alert(app, no_number, POLYGON_RADIUS_INVALID_ALERT);
         }
         Tool::Triangle => {
             crate::widgets::vline(ui, 22.0);
@@ -223,6 +230,46 @@ fn sides_field(ui: &mut egui::Ui, label: &str, sides: &mut u32) -> bool {
 /// The reference's alert for a Polygon Sides value typed past 3..100 (#13304).
 pub(crate) const SIDES_RANGE_ALERT: &str = "An integer between 3 and 100 is required. Closest value inserted.";
 
+/// The Polygon tool's Radius in px (#13302), in [`RADIUS_RANGE`]. Returns whether the field owes
+/// [`RADIUS_RANGE_ALERT`] (a value typed past the range, which takes the closest one) and whether
+/// it was left with text that is not a number, which keeps `radius` and owes
+/// [`POLYGON_RADIUS_INVALID_ALERT`].
+fn polygon_radius_field(ui: &mut egui::Ui, label: &str, radius: &mut f32) -> (bool, bool) {
+    let mut r = *radius;
+    let (resp, out_of_range) = crate::widgets::value_field_alerting(ui, label, &mut r, RADIUS_RANGE, "px", 62.0);
+    if resp.changed() {
+        *radius = r;
+    }
+    (out_of_range, left_without_a_number(ui, &resp))
+}
+
+/// True on the pass the field `resp` is left with text in it that is not a number (`abc`). A
+/// number typed after it, before the field is left, takes that back.
+fn left_without_a_number(ui: &egui::Ui, resp: &egui::Response) -> bool {
+    let no_number = resp.id.with("no-number-typed");
+    if resp.has_focus() {
+        match crate::widgets::typed_text_parses(ui.ctx(), resp.id) {
+            Some(false) => ui.ctx().data_mut(|d| {
+                d.insert_temp(no_number, true);
+            }),
+            Some(true) => ui.ctx().data_mut(|d| {
+                d.remove_temp::<bool>(no_number);
+            }),
+            None => {}
+        }
+        return false;
+    }
+    let owed = ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number)).unwrap_or(false);
+    // Complete arithmetic (`50/2`) is held, and its text no longer read, until the field is left:
+    // the pass that leaves it can be the first to read text spoilt after it (`50/2x`).
+    resp.lost_focus() && crate::widgets::typed_text_parses(ui.ctx(), resp.id).map_or(owed, |p| !p)
+}
+
+/// The reference's alert for text that is not a number left in the Polygon tool's Radius; the
+/// field keeps its previous value (#13302, worded as the Triangle tool's measured one, #13355).
+pub(crate) const POLYGON_RADIUS_INVALID_ALERT: &str =
+    "Invalid numeric entry. A number between 0.000 pixel and 150000.000 Pixels is required. Restored last valid value.";
+
 /// Shows `alert` ([`RADIUS_RANGE_ALERT`], [`SIDES_RANGE_ALERT`]) as a modal with OK when `owed`,
 /// once even if more than one pass asks.
 fn range_alert(app: &mut PhotocraftApp, owed: bool, alert: &str) {
@@ -247,6 +294,10 @@ mod rectangle_radius_target_tests;
 #[cfg(test)]
 #[path = "polygon_sides_alert_tests.rs"]
 mod polygon_sides_alert_tests;
+
+#[cfg(test)]
+#[path = "polygon_corner_radius_field_tests.rs"]
+mod polygon_corner_radius_field_tests;
 
 /// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.
 pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: PaintChange) -> Result<(), String> {

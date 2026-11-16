@@ -389,6 +389,7 @@ pub(crate) fn sanitize(o: &mut ToolOptions) {
     fit(&mut o.red_eye_pupil_size, 1.0, 100.0, d.red_eye_pupil_size);
     fit(&mut o.red_eye_darken, 0.0, 100.0, d.red_eye_darken);
     o.polygon_sides = o.polygon_sides.clamp(3, 100);
+    fit(&mut o.polygon_corner_radius, *crate::shape_options::RADIUS_RANGE.start(), *crate::shape_options::RADIUS_RANGE.end(), d.polygon_corner_radius);
     if o.crop_overlay_orientation > 3 {
         o.crop_overlay_orientation = d.crop_overlay_orientation;
     }
