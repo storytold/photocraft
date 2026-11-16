@@ -20,7 +20,7 @@ use photocraft_doc::{AlphaChannel, ColorMode, Document};
 use photocraft_engine::channel_cmds::{ChannelView, color_count};
 use photocraft_engine::mask_view_cmds::MaskViewMode;
 use photocraft_geom::Rect;
-use photocraft_raster::{Surface, from_rgba, to_rgba};
+use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 
 use crate::PhotocraftApp;
 
@@ -444,11 +444,25 @@ fn render_with_source(
         // The inks show through the document's own CMYK profile, as in its composite.
         let space = photocraft_compose::cmyk_space(doc);
         photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
+            // One stack buffer for every sample: `from_rgba` would allocate a Vec per pixel,
+            // which is 12 M allocations on a 12 MP channel view. `from_rgba_into` writes the same
+            // values, alpha and CMYK included.
+            let mut native = [0.0f32; 5];
             pixels
                 .iter()
                 .map(|&px| {
                     // CMYK samples are inks already (opaque: flattened onto paper).
-                    let mut native = if ink { px.into_iter().chain(fmt.alpha.then_some(1.0)).collect() } else { from_rgba(&fmt, px) };
+                    let n = if ink {
+                        native[..colors].copy_from_slice(&px[..colors]);
+                        if fmt.alpha {
+                            native[colors] = 1.0;
+                            colors + 1
+                        } else {
+                            colors
+                        }
+                    } else {
+                        from_rgba_into(&fmt, px, &mut native)
+                    };
                     if shown.len() == 1 && !in_color {
                         let x = native[shown[0]];
                         // Ink channels read dark where there is ink.
@@ -463,7 +477,7 @@ fn render_with_source(
                             *x = if mode == ColorMode::Lab && (k > 0 || in_color) { 0.5 } else { 0.0 };
                         }
                     }
-                    let c = to_rgba(&fmt, &native);
+                    let c = to_rgba(&fmt, &native[..n]);
                     [c[0], c[1], c[2], 1.0]
                 })
                 .collect()

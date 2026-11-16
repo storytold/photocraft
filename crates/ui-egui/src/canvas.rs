@@ -151,6 +151,12 @@ pub struct CanvasCache {
     /// `revision`, so the Navigator never shows a stale CPU image after GPU-path edits.
     pub tex_revision: u64,
     pub tex_preview_key: u64,
+    /// The revision these pixels were drawn from without the steps `DocState::view_revision`
+    /// counts (Channels-panel targets and eyes): those move the revision without moving a pixel, so
+    /// a canvas whose `content` still matches keeps its composite instead of compositing the
+    /// document again. `tex_revision` and the raw revision still drive `damage_since` and every
+    /// preview path, so an edit's own damage is untouched.
+    pub content: u64,
     /// All uploaded texels are opaque. Screen coverage is checked separately before omitting
     /// the checker. Updated with uploads, never by scanning during an unchanged frame.
     pub texture_opaque: bool,
@@ -3556,3 +3562,6 @@ fn polygon_edge_scroll(app: &PhotocraftApp, ctx: &egui::Context, idx: usize, rec
     view.center[0] += delta.x;
     view.center[1] += delta.y;
 }
+
+#[cfg(test)]
+mod textures_view_tests;

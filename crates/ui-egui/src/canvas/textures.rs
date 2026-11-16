@@ -120,9 +120,14 @@ pub(crate) fn ensure_texture_in_view(
     view: Option<InView>,
 ) -> Option<CpuTextures> {
     let output = display;
-    let (revision, last_damage, id) = {
+    let (revision, view_revision, last_damage, id) = {
         let st = app.session.documents().get(idx)?;
-        (st.revision, (st.damage_from(), st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) })), st.doc.id)
+        (
+            st.revision,
+            st.view_revision,
+            (st.damage_from(), st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) })),
+            st.doc.id,
+        )
     };
     let (mut doc, mut preview_key) = display_doc(app, idx);
     // A filter dialog's live preview: the GPU canvas draws it from its own texture, but this CPU
@@ -153,6 +158,15 @@ pub(crate) fn ensure_texture_in_view(
     let (display, display_key) = canvas_display(app, &doc, output);
     let seen = app.canvases.get(&cache_key(id, output)).map(|c| (c.tex_revision, c.tex_preview_key));
     let damage = seen.and_then(|seen| damage_since(app, idx, seen, (revision, preview_key), display_key, last_damage)).filter(|_| !reduced);
+    // A revision that moved only what `DocState::view_revision` counts (a Channels-panel target or
+    // eye) changed no pixel: the texture the cache already holds is what this frame draws, so its
+    // damage is empty and nothing is composited. Only the committed document takes this path
+    // (`preview_key == 0`): a filter or adjustment preview keeps its own damage handling. The raw
+    // revision still drives `damage_since` above, so an edit's own damage is never narrowed here.
+    let content = revision.wrapping_sub(view_revision);
+    let view_only =
+        preview_key == 0 && app.canvases.get(&cache_key(id, output)).is_some_and(|c| c.content == content && c.tex_preview_key == (preview_key ^ display_key));
+    let damage = if view_only && !reduced { Some(DRect::EMPTY) } else { damage };
     // The detail texture can lag the whole-document one (made or moved later): its own damage.
     let detail_seen = view.and_then(|v| {
         let c = app.canvases.get(&cache_key(id, output))?;
@@ -172,6 +186,7 @@ pub(crate) fn ensure_texture_in_view(
         on_gpu: false,
         tex_revision: 0,
         tex_preview_key: 0,
+        content: 0,
         texture_opaque: false,
         grid: None,
         detail: Vec::new(),
@@ -182,19 +197,23 @@ pub(crate) fn ensure_texture_in_view(
         let (w, h) = ((doc.size.width / factor).max(1), (doc.size.height / factor).max(1));
         let current = cache.texture.as_mut().filter(|t| t.size() == [w as usize, h as usize]);
         if let (Some(d), Some(t)) = (damage, current) {
-            // Only what the edit or stroke touched: the reduced texture's pixels over it, with the
-            // values the whole reduction gives them (factor 1 is the plain composite of `d`).
-            let buf = photocraft_compose::render_reduced_damage(&doc, w, h, d);
-            let r = buf.rect;
-            if !r.is_empty() {
-                let t1 = crate::gpu_canvas::now_ms();
-                let image = display_image(display.as_deref(), &buf);
-                // Partial uploads can disprove opacity. Once transparent, conservatively keep
-                // the checker until a full upload proves the whole texture opaque again.
-                cache.texture_opaque &= image.pixels.iter().all(|p| p.is_opaque());
-                t.set_partial([r.x0 as usize, r.y0 as usize], image, canvas_texture_options(factor));
-                let px = (r.width() as u64 * r.height() as u64).saturating_mul(u64::from(factor).pow(2));
-                app.perf.record("rect", px, t1 - t0, crate::gpu_canvas::now_ms() - t1);
+            // An empty damage rect (a view-only revision drew nothing) has nothing to draw: skip the
+            // call, which would composite nothing and return an empty buffer anyway.
+            if !d.is_empty() {
+                // Only what the edit or stroke touched: the reduced texture's pixels over it, with
+                // the values the whole reduction gives them (factor 1 is the plain composite of `d`).
+                let buf = photocraft_compose::render_reduced_damage(&doc, w, h, d);
+                let r = buf.rect;
+                if !r.is_empty() {
+                    let t1 = crate::gpu_canvas::now_ms();
+                    let image = display_image(display.as_deref(), &buf);
+                    // Partial uploads can disprove opacity. Once transparent, conservatively keep
+                    // the checker until a full upload proves the whole texture opaque again.
+                    cache.texture_opaque &= image.pixels.iter().all(|p| p.is_opaque());
+                    t.set_partial([r.x0 as usize, r.y0 as usize], image, canvas_texture_options(factor));
+                    let px = (r.width() as u64 * r.height() as u64).saturating_mul(u64::from(factor).pow(2));
+                    app.perf.record("rect", px, t1 - t0, crate::gpu_canvas::now_ms() - t1);
+                }
             }
         } else {
             // Reduced in bands straight from the compositor: no full-size composite in memory.
@@ -211,6 +230,7 @@ pub(crate) fn ensure_texture_in_view(
         }
         cache.tex_revision = revision;
         cache.tex_preview_key = preview_key;
+        cache.content = content;
     }
     let texture = cache.texture.as_ref()?.id();
     let scale = cache.scale;
@@ -482,11 +502,14 @@ pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
 /// Returns false if there is no GPU canvas.
 pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, visible: DRect) -> bool {
     let Some(gpu) = app.gpu.clone() else { return false };
-    let Some((revision, last_damage, id)) =
-        app.session.documents().get(idx).map(|st| {
-            (st.revision, (st.damage_from(), st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) })), st.doc.id)
-        })
-    else {
+    let Some((revision, view_revision, last_damage, id)) = app.session.documents().get(idx).map(|st| {
+        (
+            st.revision,
+            st.view_revision,
+            (st.damage_from(), st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) })),
+            st.doc.id,
+        )
+    }) else {
         return false;
     };
     let (doc, raw_key) = display_doc(app, idx);
@@ -497,6 +520,12 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     // The texture is shared by every display: only what it stores counts, not the monitor.
     let display_key = texture_key(display.as_deref(), &doc);
     let seen = app.canvases.get(&(id, GPU_OUTPUT)).map(|c| (c.revision, c.preview_key));
+    // The pixels this texture holds, without the view-only steps: a Channels-panel click must not
+    // make the compositor draw the whole document again (see `CanvasCache::content`). Only for the
+    // committed document (`raw_key == 0`): adjustment, filter and blend previews keep their own
+    // uncovered-region handling below, which this shorthand must not bypass.
+    let content = revision.wrapping_sub(view_revision);
+    let view_only = raw_key == 0 && app.canvases.get(&(id, GPU_OUTPUT)).is_some_and(|c| c.content == content && c.preview_key == (raw_key ^ display_key));
     let damage_start = crate::gpu_canvas::now_ms();
     let mut damage = seen.and_then(|seen| damage_since(app, idx, seen, (revision, raw_key), display_key, last_damage));
     if let Some(region) = damage {
@@ -516,6 +545,10 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         damage = Some(crate::adjust_preview::live_switch_damage(app, raw_key, r, visible));
     }
     let preview_key = raw_key ^ display_key;
+    if view_only {
+        // Nothing about the pixels changed: the texture already holds this composite.
+        damage = Some(DRect::EMPTY);
+    }
     // The Navigator may draw this texture while it holds the plain document or a drag preview
     // that updates the full texture (not an adjustment preview composited only where the view is).
     if raw_key == 0 || navigator_waits_for_drag(app, idx) {
@@ -535,6 +568,7 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         on_gpu: false,
         tex_revision: 0,
         tex_preview_key: 0,
+        content: 0,
         texture_opaque: false,
         grid: None,
         detail: Vec::new(),
@@ -625,6 +659,7 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     }
     let Some(cache) = app.canvases.get_mut(&(id, GPU_OUTPUT)) else { return true };
     cache.revision = revision;
+    cache.content = content;
     cache.preview_key = preview_key;
     cache.on_gpu = true;
     cache.texture = None;
