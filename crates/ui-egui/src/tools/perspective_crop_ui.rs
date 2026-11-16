@@ -109,6 +109,23 @@ fn inside(q: &[[f64; 2]; 4], p: [f64; 2]) -> bool {
     })
 }
 
+/// Whether a double-click at `p` commits the pending quad (#11806): inside it, off its corner
+/// handles (a double-click on a handle or outside keeps today's behaviour, nothing).
+pub fn commits_at(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    let tol = crate::distort_ui::tolerance(app);
+    app.ui.perspective_crop.is_some_and(|q| inside(&q, p) && q.iter().all(|c| (c[0] - p[0]).hypot(c[1] - p[1]) > tol))
+}
+
+/// The release ending the press is a click: a quad move it started puts the quad back (#11806).
+/// egui starts a drag as soon as the pointer leaves the canvas, even within the click distance,
+/// and still reports the click when it comes back; that small move would shift the crop.
+pub fn click_released(app: &mut PhotocraftApp) {
+    if let Some(Drag::Move { quad, .. }) = app.pcrop.drag {
+        app.ui.perspective_crop = Some(quad);
+        app.pcrop.drag = None;
+    }
+}
+
 /// What a press at a point does, which the hover cursor shows (#11974).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Zone {
@@ -876,3 +893,7 @@ mod tests {
         assert!(app.pcrop.drag.is_none() && app.pcrop.clicks.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "perspective_crop_double_click_tests.rs"]
+mod perspective_crop_double_click_tests;
