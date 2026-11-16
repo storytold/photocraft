@@ -193,3 +193,14 @@ fn replacing_a_fraction_with_text_that_is_not_a_number_keeps_the_value() {
     assert_eq!(opacity(&h, id), json!(4), "once the field is left");
     assert_eq!(alerts(&h), 0);
 }
+
+/// A ⌘/Ctrl arrow step on the focused Opacity field moves it by 0.1, which is not typed text: 50 stays 50 (it was read
+/// without its dot as 501 and clamped to 100).
+#[test]
+fn a_command_arrow_step_does_not_read_its_fraction_as_typed_text() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "50");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(opacity(&h, id), json!(50));
+}
