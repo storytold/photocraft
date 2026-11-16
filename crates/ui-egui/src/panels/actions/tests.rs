@@ -1298,6 +1298,7 @@ fn imported_save_as_to_a_file_without_an_extension_stops_before_writing() {
     assert!(written.is_empty(), "{written:?}");
 }
 
+/// Folder disclosure preserves grouping and survives a preferences save and fresh app.
 #[test]
 fn imported_save_as_into_a_folder_saves_each_document_under_its_own_name() {
     // #5305: Photoshop's "save in directory" Save As, played on two documents, writes one file
@@ -1355,7 +1356,20 @@ fn recorded_save_as_with_the_suggested_name_saves_each_document_under_its_own() 
 #[test]
 fn set_folders_group_actions_and_collapse() {
     use egui_kittest::{Harness, kittest::Queryable};
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let saved = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
+    let (load, save) = (saved.clone(), saved.clone());
+    let services = crate::Services {
+        load_prefs: Some(Box::new(move || load.borrow().clone())),
+        save_prefs: Some(Box::new(move |text| {
+            *save.borrow_mut() = Some(text.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.session.prefs.edit(|p| {
+        p.collapsed_action_sets.insert("Portrait".into(), false);
+    });
     let mut sharpen = Action::new("Sharpen", vec![("filter.sharpen.sharpen".into(), json!({}))]);
     sharpen.set = Some("Retouch".into());
     let mut soften = Action::new("Soften", vec![("filter.blur.blur".into(), json!({}))]);
@@ -1376,11 +1390,32 @@ fn set_folders_group_actions_and_collapse() {
     // Clicking the folder's triangle collapses it; its actions disappear and the state is remembered.
     click_set_triangle(&mut h, "Retouch");
     assert_eq!(h.state().ui.actions.collapsed_sets, ["Retouch"]);
+    assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Portrait"), Some(&false));
     assert!(h.query_by_label("Sharpen").is_none());
     assert!(h.query_by_label("Loose").is_some());
+    crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
+    let load = saved.clone();
+    let mut restarted = PhotocraftApp::new(
+        photocraft_engine::Session::new(),
+        crate::Services { load_prefs: Some(Box::new(move || load.borrow().clone())), ..Default::default() },
+    );
+    restarted.session.actions.list = h.state().session.actions.list.clone();
+    let mut restarted = Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), restarted);
+    restarted.run_steps(3);
+    assert_eq!(restarted.state().ui.actions.collapsed_sets, ["Retouch"]);
+    assert!(restarted.query_by_label("Sharpen").is_none());
+    assert!(restarted.query_by_label("Loose").is_some());
     click_set_triangle(&mut h, "Retouch");
     assert!(h.state().ui.actions.collapsed_sets.is_empty());
+    assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Retouch"), Some(&false));
+    assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Portrait"), Some(&false));
     assert!(h.query_by_label("Sharpen").is_some());
+    crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
+    let expanded = PhotocraftApp::new(
+        photocraft_engine::Session::new(),
+        crate::Services { load_prefs: Some(Box::new(move || saved.borrow().clone())), ..Default::default() },
+    );
+    assert!(expanded.ui.actions.collapsed_sets.is_empty());
 }
 
 /// Two sets, Web listed first: "Resize" (Web) adds a layer "w", "Sharpen" and "Soften" (Retouch)
@@ -1840,8 +1875,93 @@ fn start_recording_with_a_set_selected_records_a_new_action_into_it() {
     assert_eq!(list[1].set.as_deref(), Some("Web"));
 }
 
-/// Recording into a collapsed, selected set (New Action or Start Recording) expands the set
-/// again, so the new action and its steps show.
+/// Drive real recording, preference synchronization and panel rendering across the same frames.
+fn recording_folder_survives_preference_sync(entry: &str) {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for (name, set) in [("Record target", "Retouch"), ("Ordinary", "Portrait")] {
+        let mut action = Action::new(name, vec![]);
+        action.set = Some(set.into());
+        app.session.actions.list.push(action);
+    }
+    app.run("prefs.set", json!({"path": "collapsedActionSets", "value": {"Retouch": true, "Portrait": false}})).unwrap();
+    app.ui.actions.select(0, None);
+    let mut h = Harness::builder().with_size(vec2(420.0, 640.0)).build_ui_state(
+        |ui, app| {
+            crate::prefs_ui::tick(app, ui.ctx());
+            panel_menu(app, ui);
+            panel(app, ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    assert!(h.query_by_label("Record target").is_none());
+    assert!(h.query_by_label("Ordinary").is_some());
+    match entry {
+        "panel" => h.get_by_label("Start Recording").click(),
+        "direct" => {
+            h.state_mut().run("actions.record", json!({"action": 0})).unwrap();
+        }
+        "dialog" => {
+            let app = h.state_mut();
+            let id = crate::dialogs::open_command_dialog(app, "actions.record", "New Action");
+            let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+            fields.insert("name".into(), json!("Dialog target"));
+            fields.insert("set".into(), json!("Retouch"));
+            crate::dialogs::confirm(app, id).unwrap();
+        }
+        _ => panic!("unknown recording entry point"),
+    }
+    h.run_steps(3);
+    let index = h.state().session.actions.recording.unwrap().1;
+    let name = h.state().session.actions.list[index].name.clone();
+    assert!(h.query_by_label(&name).is_some(), "{entry}: the recording row is initially revealed");
+    let reveal = h.state().ui.actions.reveal_recording;
+    let saved = h.state().session.prefs().collapsed_action_sets.clone();
+    assert_eq!(saved.get("Retouch"), Some(&true));
+    for (command, params) in [("prefs.set", json!({"path": "general.beepWhenDone", "value": true})), ("prefs.reset", json!({"path": "general.beepWhenDone"}))] {
+        h.state_mut().run(command, params).unwrap();
+        h.run_steps(3);
+        assert_eq!(h.state().session.actions.recording.map(|(_, i)| i), Some(index));
+        assert_eq!(h.state().ui.actions.reveal_recording, reveal, "no new recording step caused the reveal");
+        assert_eq!(h.state().session.prefs().collapsed_action_sets, saved, "temporary reveal must not save an expansion");
+        assert!(h.query_by_label(&name).is_some(), "{entry}: recording row survives {command} and preference sync");
+        assert!(h.query_by_label("Ordinary").is_some(), "an unrelated open folder stays open");
+    }
+    let revision = h.state().session.prefs.rev();
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().session.actions.recording.is_none());
+    assert_eq!(h.state().session.prefs.rev(), revision, "stop restores disclosure without an unrelated preference change");
+    assert!(h.query_by_label(&name).is_none(), "stop alone restores the saved collapse");
+    assert!(h.query_by_label("Ordinary").is_some(), "an unrelated open folder stays open after stop");
+    assert_eq!(h.state().session.prefs().collapsed_action_sets, saved);
+    h.state_mut().run("prefs.set", json!({"path": "collapsedActionSets.Retouch", "value": false})).unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label(&name).is_some(), "a nonrecording expansion remains legitimate");
+    h.state_mut().run("prefs.reset", json!({"path": "collapsedActionSets.Retouch"})).unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label(&name).is_some());
+    assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Portrait"), Some(&false));
+}
+
+#[test]
+fn recording_folder_reveal_survives_panel_recording_preference_sync() {
+    recording_folder_survives_preference_sync("panel");
+}
+
+#[test]
+fn recording_folder_reveal_survives_direct_recording_preference_sync() {
+    recording_folder_survives_preference_sync("direct");
+}
+
+#[test]
+fn recording_folder_reveal_survives_dialog_recording_preference_sync() {
+    recording_folder_survives_preference_sync("dialog");
+}
+
+/// Recording into a collapsed, selected set expands it so its new action and steps show.
 #[test]
 fn recording_into_a_collapsed_set_expands_it() {
     use egui_kittest::{Harness, kittest::Queryable};
@@ -1869,6 +1989,13 @@ fn recording_into_a_collapsed_set_expands_it() {
         assert!(h.state().ui.actions.collapsed_sets.is_empty(), "{label}");
         assert_eq!(h.state().ui.actions.selected, Some(1), "{label}");
         assert!(h.query_by_label("Action 2").is_some(), "{label}");
+        // An explicit manual collapse remains valid, including when another step is recorded.
+        click_set_triangle(&mut h, "Retouch");
+        assert!(h.query_by_label("Action 2").is_none(), "{label}");
+        h.state_mut().run("layer.new.layer", json!({"name": "Recorded edit"})).unwrap();
+        h.run_steps(2);
+        assert!(h.query_by_label("Action 2").is_none(), "{label}: new steps must respect manual collapse");
+        assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Retouch"), Some(&true));
         h.state_mut().run("actions.stop", json!({})).unwrap();
     }
 }
@@ -3500,4 +3627,142 @@ fn dragging_uses_the_displayed_folder_occurrence() {
     move_row(&mut app, DragRow { action: 0, step: None }, 1, 2);
     assert_eq!(app.session.actions.list[1].name, "A");
     assert_eq!(app.session.actions.list[1].set_slot, Some(0));
+}
+
+/// Physical occurrences share captions, not saved disclosures. Exercise the preferences wire
+/// format and a fresh app rather than just comparing the map the click wrote.
+#[test]
+fn physical_folder_disclosures_restart_independently() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.actions.set_rows = vec!["Same".into(), "Same".into()];
+    app.session.prefs.edit(|prefs| {
+        prefs.collapsed_action_sets.insert("Same".into(), true);
+        prefs.collapsed_action_set_rows.insert(0, ("Same".into(), false));
+        prefs.collapsed_action_set_rows.insert(1, ("Same".into(), true));
+    });
+    let saved = app.session.prefs_to_json();
+    let mut restarted = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    assert!(restarted.session.load_prefs_json(&saved).unwrap().is_empty());
+    restarted.session.actions.set_rows = app.session.actions.set_rows.clone();
+    sync_physical_disclosures(&mut restarted, true);
+    assert_eq!(restarted.ui.actions.collapsed_set_slots, [1]);
+    assert_eq!(restarted.session.prefs().collapsed_action_sets.get("Same"), Some(&true));
+    restarted.session.actions.set_rows.insert(1, "Inserted".into());
+    restarted.session.actions.set_rows_revision = restarted.session.actions.set_rows_revision.wrapping_add(1);
+    library_slot_inserted(&mut restarted, 1);
+    assert_eq!(restarted.session.prefs().collapsed_action_set_rows.get(&2), Some(&("Same".into(), true)));
+    assert_eq!(restarted.ui.actions.collapsed_set_slots, [2]);
+}
+
+#[test]
+fn physical_folder_disclosures_ignore_stale_captions_and_keep_legacy_fallback() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.actions.set_rows = vec!["New".into(), "Legacy.Set".into(), "Explicit".into()];
+    app.session.prefs.edit(|prefs| {
+        prefs.collapsed_action_sets.insert("Legacy.Set".into(), true);
+        prefs.collapsed_action_sets.insert("Explicit".into(), true);
+        prefs.collapsed_action_set_rows.insert(0, ("Old".into(), true));
+        prefs.collapsed_action_set_rows.insert(2, ("Explicit".into(), false));
+        prefs.collapsed_action_set_rows.insert(9, ("Gone".into(), true));
+    });
+    sync_physical_disclosures(&mut app, true);
+    assert_eq!(app.ui.actions.collapsed_set_slots, [1]);
+    app.session.actions.set_rows[2] = "Renamed".into();
+    sync_physical_disclosures(&mut app, true);
+    assert_eq!(app.ui.actions.collapsed_set_slots, [1]);
+}
+
+#[test]
+fn physical_recording_reveal_restores_only_its_saved_occurrence() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
+    app.session.actions.set_rows = vec!["Same".into(), "Same".into()];
+    app.session.actions.list = [("Record here", 0), ("Other occurrence", 1)]
+        .into_iter()
+        .map(|(name, slot)| Action { set: Some("Same".into()), set_slot: Some(slot), ..Action::new(name, vec![]) })
+        .collect();
+    app.session.prefs.edit(|prefs| {
+        prefs.collapsed_action_set_rows.insert(0, ("Same".into(), true));
+        prefs.collapsed_action_set_rows.insert(1, ("Same".into(), true));
+    });
+    let mut h = Harness::builder().with_size(vec2(420.0, 640.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    h.run_steps(2);
+    assert!(h.query_by_label("Record here").is_none());
+    assert!(h.query_by_label("Other occurrence").is_none());
+    h.state_mut().run("actions.record", json!({"action":0})).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Record here").is_some());
+    assert!(h.query_by_label("Other occurrence").is_none());
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Record here").is_none());
+    assert!(h.query_by_label("Other occurrence").is_none());
+    assert_eq!(h.state().session.prefs().collapsed_action_set_rows.get(&0), Some(&("Same".into(), true)));
+}
+
+/// Same-caption implicit and physical folders have separate disclosure containers.
+fn recording_reveals_only_its_folder_identity(panel_entry: bool) {
+    use egui_kittest::{Harness, kittest::Queryable};
+    for target in [0, 1] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":8,"height":8})).unwrap();
+        app.session.actions.set_rows = vec!["Same".into()];
+        app.session.actions.list = [
+            Action { set: Some("Same".into()), set_slot: Some(0), ..Action::new("Physical target", vec![]) },
+            Action { set: Some("Same".into()), ..Action::new("Implicit target", vec![]) },
+        ]
+        .into();
+        app.session.prefs.edit(|prefs| {
+            prefs.collapsed_action_sets.insert("Same".into(), true);
+            prefs.collapsed_action_set_rows.insert(0, ("Same".into(), true));
+        });
+        app.ui.actions.collapsed_sets.push("Same".into());
+        app.ui.actions.select(target, None);
+        let mut h = Harness::builder().with_size(vec2(420.0, 640.0)).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(2);
+        let names = ["Physical target", "Implicit target"];
+        for name in names {
+            assert!(h.query_by_label(name).is_none());
+        }
+        if panel_entry {
+            begin_recording(h.state_mut(), true);
+        } else {
+            h.state_mut().run("actions.record", json!({"action":target})).unwrap();
+        }
+        h.run_steps(2);
+        assert_eq!(h.state().session.actions.recording.unwrap().1, target);
+        assert!(h.query_by_label(names[target]).is_some());
+        assert!(h.query_by_label(names[1 - target]).is_none(), "the namesake folder must stay collapsed");
+        assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Same"), Some(&true));
+        assert_eq!(h.state().session.prefs().collapsed_action_set_rows.get(&0), Some(&("Same".into(), true)));
+        // A user collapse during this take must not be undone by subsequent recorded steps.
+        if target == 0 {
+            h.state_mut().ui.actions.collapsed_set_slots.push(0);
+        } else {
+            h.state_mut().ui.actions.collapsed_sets.push("Same".into());
+        }
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.run_steps(2);
+        for name in names {
+            assert!(h.query_by_label(name).is_none(), "a continuing take respects manual collapse");
+        }
+        h.state_mut().run("actions.stop", json!({})).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.actions.collapsed_sets, ["Same"]);
+        assert_eq!(h.state().ui.actions.collapsed_set_slots, [0]);
+        for name in names {
+            assert!(h.query_by_label(name).is_none(), "stop restores both saved disclosures");
+        }
+    }
+}
+
+#[test]
+fn panel_recording_reveals_only_the_resolved_folder_identity() {
+    recording_reveals_only_its_folder_identity(true);
+}
+
+#[test]
+fn direct_recording_reveals_only_the_resolved_folder_identity() {
+    recording_reveals_only_its_folder_identity(false);
 }

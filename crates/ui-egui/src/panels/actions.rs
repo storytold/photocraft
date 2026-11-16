@@ -27,6 +27,7 @@ pub(crate) fn library_selection_changed(app: &mut PhotocraftApp) {
     ui.selected_set_slot = None;
     ui.slot_revision = app.session.actions.set_rows_revision;
     ui.collapsed_set_slots.clear();
+    ui.physical_prefs_ready = false;
     ui.expanded.clear();
     ui.renaming = None;
     ui.reveal_recording = None;
@@ -38,6 +39,7 @@ pub(crate) fn library_slots_changed(app: &mut PhotocraftApp) {
     }
     app.ui.actions.slot_revision = app.session.actions.set_rows_revision;
     app.ui.actions.collapsed_set_slots.clear();
+    app.ui.actions.physical_prefs_ready = false;
 }
 
 /// Preserve selection and disclosure for the existing physical folders after inserting a row.
@@ -47,6 +49,11 @@ pub(crate) fn library_slot_inserted(app: &mut PhotocraftApp, slot: usize) {
         library_slots_changed(app);
         return;
     }
+    app.session.prefs.edit(|prefs| {
+        let previous = std::mem::take(&mut prefs.collapsed_action_set_rows);
+        prefs.collapsed_action_set_rows =
+            previous.into_iter().map(|(existing, state)| (if existing >= slot { existing.saturating_add(1) } else { existing }, state)).collect();
+    });
     let ui = &mut app.ui.actions;
     ui.slot_revision = revision;
     for existing in ui.selected_set_slot.iter_mut().chain(&mut ui.collapsed_set_slots) {
@@ -54,6 +61,32 @@ pub(crate) fn library_slot_inserted(app: &mut PhotocraftApp, slot: usize) {
             *existing = existing.saturating_add(1);
         }
     }
+}
+
+/// Apply saved physical disclosures only to the same slot and caption. A false value is an
+/// explicit expansion, including when a legacy preference collapses every matching name.
+pub(crate) fn sync_physical_disclosures(app: &mut PhotocraftApp, force: bool) {
+    let prefs = app.session.prefs();
+    let ui = &mut app.ui.actions;
+    if !force && ui.physical_prefs_ready && ui.physical_prefs == prefs.collapsed_action_set_rows && ui.physical_legacy_prefs == prefs.collapsed_action_sets {
+        return;
+    }
+    for (slot, name) in app.session.actions.set_rows.iter().enumerate() {
+        let choice = |rows: &BTreeMap<usize, (String, bool)>, names: &BTreeMap<String, bool>| {
+            rows.get(&slot).filter(|(caption, _)| caption == name).map_or_else(|| names.get(name).copied().unwrap_or(false), |(_, collapsed)| *collapsed)
+        };
+        let collapsed = choice(&prefs.collapsed_action_set_rows, &prefs.collapsed_action_sets);
+        let saved = prefs.collapsed_action_set_rows.get(&slot).is_some_and(|(caption, _)| caption == name) || prefs.collapsed_action_sets.contains_key(name);
+        if force || (!ui.physical_prefs_ready && saved) || (ui.physical_prefs_ready && collapsed != choice(&ui.physical_prefs, &ui.physical_legacy_prefs)) {
+            ui.collapsed_set_slots.retain(|&value| value != slot);
+            if collapsed {
+                ui.collapsed_set_slots.push(slot);
+            }
+        }
+    }
+    ui.physical_prefs.clone_from(&prefs.collapsed_action_set_rows);
+    ui.physical_legacy_prefs.clone_from(&prefs.collapsed_action_sets);
+    ui.physical_prefs_ready = true;
 }
 
 /// Which row is selected and which rows are expanded. The action list itself is
@@ -80,7 +113,13 @@ pub struct ActionsUi {
     #[serde(skip)]
     collapsed_set_slots: Vec<usize>,
     #[serde(skip)]
-    reveal_recording: Option<(usize, usize)>,
+    reveal_recording: Option<(u64, usize, usize)>,
+    #[serde(skip)]
+    physical_prefs: BTreeMap<usize, (String, bool)>,
+    #[serde(skip)]
+    physical_legacy_prefs: BTreeMap<String, bool>,
+    #[serde(skip)]
+    physical_prefs_ready: bool,
     /// The action whose name is being edited in place (double-click on its name).
     #[serde(skip)]
     renaming: Option<RenameAction>,
@@ -1040,11 +1079,10 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     }
     app.ui.actions.expanded[i] = true;
     // Its set too, in case its folder is collapsed.
-    if let Some(set) = app.session.actions.list.get(i).and_then(|a| a.set.as_ref()) {
-        app.ui.actions.collapsed_sets.retain(|c| c != set);
-    }
     if let Some(slot) = app.session.actions.list.get(i).and_then(|a| a.set_slot) {
         app.ui.actions.collapsed_set_slots.retain(|&value| value != slot);
+    } else if let Some(set) = app.session.actions.list.get(i).and_then(|a| a.set.as_ref()) {
+        app.ui.actions.collapsed_sets.retain(|c| c != set);
     }
 }
 
@@ -1483,7 +1521,7 @@ fn restore_recording(app: &mut PhotocraftApp, owner: Option<&SuspendedRecording>
 }
 
 /// Whether a paused playback holds a suspended recording.
-fn suspended(app: &PhotocraftApp) -> bool {
+pub(crate) fn suspended(app: &PhotocraftApp) -> bool {
     app.paused_playbacks.paused.values().any(|p| p.record.is_some())
 }
 
@@ -2403,10 +2441,13 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
     });
 }
 
+/// Draws the Actions panel and remembers set-folder disclosure changes.
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if app.ui.actions.slot_revision != app.session.actions.set_rows_revision {
+    let slots_changed = app.ui.actions.slot_revision != app.session.actions.set_rows_revision;
+    if slots_changed {
         library_slots_changed(app);
     }
+    sync_physical_disclosures(app, slots_changed);
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
     let shortcuts: Vec<_> = actions_cmds::action_shortcuts(&app.session).into_iter().map(|key| key.map(str::to_owned)).collect();
@@ -2450,8 +2491,27 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut play_idx: Option<Vec<usize>> = None;
     let mut moved = None;
     let recording_row = recording.and_then(|(_, i)| rows.get(i).map(|r| (i, r.steps.len())));
-    let reveal = recording_row.filter(|row| app.ui.actions.reveal_recording != Some(*row));
-    app.ui.actions.reveal_recording = recording_row;
+    let take = app.session.actions.take;
+    let recording_key = recording_row.map(|(i, steps)| (take, i, steps));
+    let started = recording_key.is_some_and(|(take, _, _)| app.ui.actions.reveal_recording.is_none_or(|(previous, _, _)| previous != take));
+    let reveal = recording_row.filter(|(i, steps)| app.ui.actions.reveal_recording != Some((take, *i, *steps)));
+    // Keep the take across suspension: resuming a call must not undo a manual folder collapse.
+    if let Some(key) = recording_key {
+        app.ui.actions.reveal_recording = Some(key);
+    }
+    // A completed take restores saved disclosures; a paused call still owns its temporary reveal.
+    if recording.is_none() && !suspended(app) && app.ui.actions.reveal_recording.take().is_some() {
+        app.ui.actions.collapsed_sets =
+            app.session.prefs().collapsed_action_sets.iter().filter(|(_, collapsed)| **collapsed).map(|(name, _)| name.clone()).collect();
+        sync_physical_disclosures(app, true);
+    }
+    if started && let Some(row) = recording_row.and_then(|(i, _)| rows.get(i)) {
+        if let Some(slot) = row.set_slot {
+            app.ui.actions.collapsed_set_slots.retain(|&value| value != slot);
+        } else if let Some(set) = &row.set {
+            app.ui.actions.collapsed_sets.retain(|name| name != set);
+        }
+    }
     if let Some((i, _)) = reveal {
         app.ui.actions.expanded.resize(rows.len(), false);
         if let Some(expanded) = app.ui.actions.expanded.get_mut(i) {
@@ -2597,16 +2657,28 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         // The disclosure triangle collapses or expands the set and leaves the selection alone.
         if toggle {
-            if let Some(slot) = set.slot {
-                if let Some(index) = app.ui.actions.collapsed_set_slots.iter().position(|&value| value == slot) {
-                    app.ui.actions.collapsed_set_slots.remove(index);
-                } else {
+            let collapsed = if let Some(slot) = set.slot {
+                let collapsed = !app.ui.actions.collapsed_set_slots.contains(&slot);
+                app.ui.actions.collapsed_set_slots.retain(|&value| value != slot);
+                if collapsed {
                     app.ui.actions.collapsed_set_slots.push(slot);
                 }
-            } else if let Some(index) = app.ui.actions.collapsed_sets.iter().position(|name| *name == set.name) {
-                app.ui.actions.collapsed_sets.remove(index);
+                app.session.prefs.edit(|p| {
+                    p.collapsed_action_set_rows.insert(slot, (set.name.clone(), collapsed));
+                });
+                collapsed
             } else {
-                app.ui.actions.collapsed_sets.push(set.name);
+                let collapsed = !app.ui.actions.collapsed_sets.contains(&set.name);
+                app.ui.actions.collapsed_sets.retain(|name| name != &set.name);
+                if collapsed {
+                    app.ui.actions.collapsed_sets.push(set.name.clone());
+                }
+                collapsed
+            };
+            if set.slot.is_none() {
+                app.session.prefs.edit(|p| {
+                    p.collapsed_action_sets.insert(set.name, collapsed);
+                });
             }
         }
     }

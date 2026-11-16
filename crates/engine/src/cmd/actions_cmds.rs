@@ -1257,8 +1257,12 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("actions.delete", "stop recording before deleting an action"));
     }
     remove_shortcuts(s, |row, _| row == idx);
-    let name = s.actions.list.remove(idx).name;
+    let action = s.actions.list.remove(idx);
     s.actions.touch();
+    if let Some(set) = action.set.as_deref() {
+        s.prune_action_set_preferences(Some(set));
+    }
+    let name = action.name;
     Ok(json!({"deleted": name}))
 }
 

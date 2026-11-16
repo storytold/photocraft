@@ -295,10 +295,13 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let slot = assignment_slot(s, p, set.as_deref(), cmd)?;
     let action = &mut s.actions.list[idx];
-    action.set = set;
+    let previous_set = std::mem::replace(&mut action.set, set);
     action.set_slot = slot;
     let result = json!({"action": action.name, "set": action.set});
     s.actions.touch();
+    if let Some(set) = previous_set.as_deref() {
+        s.prune_action_set_preferences(Some(set));
+    }
     Ok(result)
 }
 
