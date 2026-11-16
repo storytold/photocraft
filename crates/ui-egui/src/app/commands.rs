@@ -93,6 +93,18 @@ impl PhotocraftApp {
         if let Some(result) = smart_svg_ui::intercept(self, id, &params) {
             return result;
         }
+        // Document exports read committed pixels, not the pending Free Transform preview.
+        // Check on execution (also dialog OK and automation), leaving Folder processing usable.
+        if id == "file.scripts.imageProcessor"
+            && self.ui.transform.is_some()
+            && match params.get("source").and_then(Value::as_str) {
+                Some("open") => true,
+                Some("current") => self.transform_preview.as_ref().is_none_or(|preview| self.session.active().is_some_and(|st| st.doc.id == preview.doc.id)),
+                _ => false,
+            }
+        {
+            return Err("Commit or cancel the transform first".into());
+        }
         if let Some(r) = transform_tool::intercept(self, id) {
             return r;
         }
