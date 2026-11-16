@@ -48,7 +48,6 @@ const INCOMPLETE: &[&str] = &[
     "image.adjustments.hdrToning",
     "image.adjustments.levels",
     "image.adjustments.replaceColor",
-    "image.adjustments.selectiveColor",
     "image.adjustments.shadowsHighlights",
     "image.analysis.recordMeasurements",
     "image.applyImage",

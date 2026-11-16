@@ -107,7 +107,7 @@ fn mixed_forms_method_precedence_nulls_and_clamping_keep_their_effect() {
         json!({"method": "absolute", "relative": true, "colors": "neutrals", "black": 15}),
         json!({"colors": "blues", "magenta": -25}),
         json!({"method": null, "relative": null, "reds": null, "colors": "reds", "cyan": 35, "black": null}),
-        json!({"method": "absolute", "colors": "reds", "cyan": 175, "magenta": -150}),
+        json!({"method": "absolute", "colors": "reds", "cyan": 100, "magenta": -100}),
         json!({"method": "absolute", "reds": [175, -150, 0, 0]}),
         json!({"method": "absolute", "reds": [10, 20, 30, 40], "colors": "reds", "cyan": null}),
         json!({}),
@@ -116,6 +116,11 @@ fn mixed_forms_method_precedence_nulls_and_clamping_keep_their_effect() {
     for id in COMMANDS {
         check_cases(id, &cases, false);
     }
+    // Out-of-range scalars are refused at dispatch (the documented bounds gate new calls);
+    // the array case above still exercises the run-path clamp for stored values.
+    let mut s = fixture(8);
+    let err = s.execute("image.adjustments.selectiveColor", json!({"colors": "reds", "cyan": 175})).expect_err("cyan 175 is outside -100..100");
+    assert!(err.to_string().contains("cyan"), "{err}");
 }
 
 #[test]

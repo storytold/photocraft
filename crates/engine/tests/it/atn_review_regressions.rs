@@ -894,7 +894,7 @@ fn batch_save_close_preserves_additional_images_and_allows_single_images() {
         let input = dir.path().join(format!("source.{extension}"));
         for steps in [
             json!([]),
-            json!([{"command":"file.openAs","params":{"path":"recorded.png"}},{"command":"file.saveAs","params":{}},{"command":"file.close","params":{"force":true}}]),
+            json!([{"command":"file.openAs","params":{"path":"recorded.png"}},{"command":"file.saveAs","params":{}},{"command":"file.close","params":{"save":"discard"}}]),
         ] {
             std::fs::write(&input, &multiple).unwrap();
             let override_open = !steps.as_array().unwrap().is_empty();

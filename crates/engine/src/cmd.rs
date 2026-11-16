@@ -1259,7 +1259,7 @@ fn build() -> Vec<CommandSpec> {
         (
             "selectiveColor",
             "Selective Color…",
-            r##"{"method":"relative|absolute"="relative","colors":"reds|yellows|greens|cyans|blues|magentas|whites|neutrals|blacks"="reds","cyan":-100..100=0,"magenta":-100..100=0,"yellow":-100..100=0,"black":-100..100=0,"reds":json} (per-range [c,m,y,k] arrays: reds yellows greens cyans blues magentas whites neutrals blacks)"##,
+            r##"{"method":"relative|absolute"?="relative","relative":bool? (older spelling of the method: true = relative),"colors":"reds|yellows|greens|cyans|blues|magentas|whites|neutrals|blacks"?="reds","cyan":-100..100?=0,"magenta":-100..100?=0,"yellow":-100..100?=0,"black":-100..100?=0,"reds","yellows","greens","cyans","blues","magentas","whites","neutrals","blacks":json?} (per-range [c,m,y,k] arrays: reds yellows greens cyans blues magentas whites neutrals blacks; null on any control leaves it unspecified)"##,
         ),
         (
             "colorLookup",

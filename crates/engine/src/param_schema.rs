@@ -220,7 +220,7 @@ impl Object {
 /// (a new adjustment layer's options), and the notes after them (prose, `→ {result}`).
 #[derive(Clone, PartialEq, Debug)]
 pub struct Params {
-    /// The input objects with the text before each (`""` for the first, ` + ` after).
+    /// The input objects with the text before each (`""` for the first, ` (note) + ` after).
     pub objects: Vec<(String, Object)>,
     /// Everything after the input objects, verbatim. Not parameters.
     pub notes: String,
@@ -231,13 +231,10 @@ impl Params {
     pub fn parse(doc: &str) -> Option<Params> {
         let (first, mut rest) = object_at(doc)?;
         let mut objects = vec![(String::new(), first)];
-        loop {
-            let t = rest.trim_start();
-            let Some(after) = t.strip_prefix('+') else { break };
-            let lead_len = rest.len() - after.len();
+        while let Some((plus, after)) = compose_marker(rest) {
             let ws = after.len() - after.trim_start().len();
             let Some((obj, r)) = object_at(&after[ws..]) else { break };
-            objects.push((rest[..lead_len + ws].to_string(), obj));
+            objects.push((rest[..plus + 1 + ws].to_string(), obj));
             rest = r;
         }
         Some(Params { objects, notes: rest.to_string() })
@@ -450,6 +447,24 @@ fn object_at(s: &str) -> Option<(Object, &str)> {
 
 fn starts_open(s: &str) -> bool {
     s.starts_with('…') || s.starts_with("...")
+}
+
+/// Where a ` + {…}` composition starts in the text after an object: the byte offset of the `+`
+/// and the text after it. A parenthesised note may sit between (`{…} (note) + {…}`, a new
+/// adjustment layer's own options after its kind's note); anything else after the object ends
+/// the input objects.
+fn compose_marker(rest: &str) -> Option<(usize, &str)> {
+    let mut off = rest.len() - rest.trim_start().len();
+    let mut t = &rest[off..];
+    if t.starts_with('(') {
+        let len = group_len(t)?;
+        off += len;
+        t = &rest[off..];
+        off += t.len() - t.trim_start().len();
+        t = &rest[off..];
+    }
+    let after = t.strip_prefix('+')?;
+    Some((off, after))
 }
 
 /// Byte offsets where an item separator starts: a `,` or ` or ` outside quotes and groups that

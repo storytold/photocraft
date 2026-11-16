@@ -124,6 +124,13 @@ fn input_keys_are_the_top_level_ones_of_the_input_objects() {
     assert_eq!(keys(r#"{"a":{"b":0..1},"c":bool} (per channel {"hue","saturation"}) → {"d":id}"#), ["a", "c"]);
     // A composed object (` + {…}`) adds its keys.
     assert_eq!(keys(r#"{"x":bool} + {"opacity":0..1=1,"name":str?}"#), ["x", "opacity", "name"]);
+    // …even when a note sits between the objects, as it does for every new adjustment layer
+    // (the kind's own doc, its note, then the layer options composed with ` + {…}`).
+    assert_eq!(keys(r##"{"stops":json} (stops [[0, "#rrggbb"], …]) + {"opacity":0..1=1,"name":str?}"##), ["stops", "opacity", "name"]);
+    let composed = parse(r##"{"stops":json} (stops [[0, "#rrggbb"], …]) + {"opacity":0..1=1,"name":str?} → {"layer":id}"##);
+    assert!(composed.param("opacity").unwrap().accepts(&json!(0.7)));
+    assert!(!composed.param("opacity").unwrap().accepts(&json!(1.5)));
+    assert_eq!(composed.render(), r##"{"stops":json} (stops [[0, "#rrggbb"], …]) + {"opacity":0..1=1,"name":str?} → {"layer":id}"##);
     // `"all","pixels":bool`, `"quad"|"corners":…`, `"key"?:…`, a bare `"key"?` and ` or "key":` alternatives.
     assert_eq!(
         keys(r#"{"locks":{"all","pixels":bool}?,"all","pixels":bool,"quad"|"corners":json?,"historyName"?:text,"stops"?,"layer":id? or "layers":[id,…]?}"#),

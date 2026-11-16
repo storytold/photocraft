@@ -16,13 +16,16 @@ fn camera_raw_clamps_exposure() {
 }
 
 #[test]
-fn camera_raw_out_of_range_exposure_keeps_32_bit_layer_finite() {
+fn camera_raw_out_of_range_exposure_is_refused_and_leaves_the_layer_finite() {
+    // New calls are bounded by the documented range at dispatch (`validate_params`); the
+    // clamp in `raw_params` above still protects records that stored an out-of-range value.
     for exposure in [255.0, -255.0] {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 8, "height": 8, "depth": 32})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
-        s.execute("filter.cameraRaw", json!({"exposure": exposure})).unwrap();
+        let err = s.execute("filter.cameraRaw", json!({"exposure": exposure})).expect_err("out-of-range exposure must be refused");
+        assert!(err.to_string().contains("exposure"), "{err}");
         let st = s.active().unwrap();
         let layer = st.active_layer.and_then(|id| st.doc.layer(id)).unwrap();
         let surf = layer.surface().unwrap();

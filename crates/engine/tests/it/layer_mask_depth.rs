@@ -35,7 +35,10 @@ fn newly_created_layer_masks_follow_document_depth() {
                 }
                 let before = s.active().unwrap().doc.clone();
                 let history = s.active().unwrap().history.past_len();
-                s.execute(command, json!({"color": "#000000"})).unwrap();
+                // Only the solid-colour fill takes a `color`; the others would reject it as an
+                // undocumented key (dispatch checks params against each command's schema).
+                let params = if command.starts_with("layer.newFillLayer") { json!({"color": "#000000"}) } else { json!({}) };
+                s.execute(command, params).unwrap();
                 let d = s.active().unwrap();
                 let m = mask(&d.doc);
                 assert_eq!(m.surface.format(), PixelFormat::new(ColorMode::Grayscale, sample, false), "{command}, {depth}-bit {mode}");
@@ -127,7 +130,10 @@ fn mask_creation_preserves_selection_coverage_and_existing_masks() {
             })
             .unwrap();
             let before = s.active().unwrap().doc.clone();
-            s.execute(command, json!({"from": [0, 0], "to": [64, 48]})).unwrap();
+            // Only the gradient takes `from`/`to`; the mask commands would reject them as
+            // undocumented keys (dispatch checks params against each command's schema).
+            let params = if command.starts_with("gradient.") { json!({"from": [0, 0], "to": [64, 48]}) } else { json!({}) };
+            s.execute(command, params).unwrap();
             let after = &s.active().unwrap().doc;
             let added = after.layer(s.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
             assert_eq!(
