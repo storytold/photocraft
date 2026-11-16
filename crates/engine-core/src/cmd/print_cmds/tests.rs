@@ -332,6 +332,27 @@ fn native_rgb_route_preserves_pdf_only_color_and_page_content() {
     assert!(native_rgb_compatible(&page_of(1, vec![0; 2], false), "noColorManagement"));
 }
 
+/// #10067: an ordinary RGB document tagged sRGB, with Printer Manages Colors and driver settings,
+/// was refused ("requires PDF printing"). A Windows driver reads untagged RGB as sRGB, so an sRGB
+/// page goes to the native route; any other source profile still keeps the PDF route.
+#[test]
+fn printer_manages_srgb_page_takes_the_native_route() {
+    use craft_cms::Builtin;
+    let tagged = |channels, data: Vec<u8>, b: Builtin| {
+        let mut page = page_of(channels, data, false);
+        page.image.icc = Some(b.profile().to_bytes().to_vec());
+        page
+    };
+    assert!(native_rgb_compatible(&tagged(3, vec![0; 6], Builtin::Srgb), "printerManages"));
+    assert!(!native_rgb_compatible(&tagged(3, vec![0; 6], Builtin::AdobeRgbCompat), "printerManages"), "Adobe RGB keeps the PDF route");
+    assert!(!native_rgb_compatible(&tagged(3, vec![0; 6], Builtin::DisplayP3), "printerManages"), "Display P3 keeps the PDF route");
+    assert!(!native_rgb_compatible(&tagged(3, vec![0; 6], Builtin::LinearSrgb), "printerManages"), "linear sRGB is not sRGB");
+    assert!(!native_rgb_compatible(&tagged(1, vec![0; 2], Builtin::SGray), "printerManages"), "gray profiles keep the PDF route");
+    let mut labelled = tagged(3, vec![0; 6], Builtin::Srgb);
+    labelled.label = Some("Print Me".into());
+    assert!(!native_rgb_compatible(&labelled, "printerManages"), "page text still needs the PDF route");
+}
+
 /// Two printers, the second the default, in place of the system spooler's.
 fn test_printers() -> PrinterSource {
     std::sync::Arc::new(|| {
