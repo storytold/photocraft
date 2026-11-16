@@ -370,12 +370,12 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
             if !path.to_ascii_lowercase().ends_with(".png") {
                 return Err("Quick Export as PNG writes .png files".into());
             }
-            write_quick_pngs(app, &docs, [path])
+            write_quick_pngs(app, &docs, [path], false)
         });
     }
     let names = layer_file_names(&docs, "png");
     #[cfg(target_arch = "wasm32")]
-    return write_quick_pngs(app, &docs, names);
+    return write_quick_pngs(app, &docs, names, false);
     #[cfg(not(target_arch = "wasm32"))]
     app.pick_export_folder(move |app, dir| {
         let dir = std::path::Path::new(&dir);
@@ -389,17 +389,22 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
                 .to_string_lossy()
                 .into_owned()
         });
-        write_quick_pngs(app, &docs, paths)
+        write_quick_pngs(app, &docs, paths, true)
     })
 }
 
-fn write_quick_pngs(app: &mut PhotocraftApp, docs: &[Document], paths: impl IntoIterator<Item = String>) -> Result<Value, String> {
+fn write_quick_pngs(app: &mut PhotocraftApp, docs: &[Document], paths: impl IntoIterator<Item = String>, new_files_only: bool) -> Result<Value, String> {
     let mut exported = Vec::new();
     for (doc, path) in docs.iter().zip(paths) {
         crate::app::ensure_memory_to_save(doc, &path)?;
         let export = app.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(doc, &path, &ExportSettings { xmp_all: false, ..Default::default() })?;
-        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        // A file may have appeared at a generated path while the encoder was running.
+        let write = if new_files_only {
+            app.services.write_new.as_mut().ok_or("no exclusive export writer configured")?
+        } else {
+            app.services.write.as_mut().ok_or("no writer configured")?
+        };
         write(&path, &bytes)?;
         crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
         exported.push(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}));

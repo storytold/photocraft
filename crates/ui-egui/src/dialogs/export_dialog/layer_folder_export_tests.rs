@@ -45,17 +45,20 @@ fn names_keep_spaces_replace_illegal_characters_and_number_duplicates_downwards(
 /// an empty layer.
 fn app(answer: crate::FileDialogAnswer) -> (PhotocraftApp, Vec<photocraft_doc::LayerId>, photocraft_doc::LayerId, Written, Asked) {
     let written = Written::default();
-    let capture = written.clone();
+    let record = |capture: Written| -> crate::services::WriteFn {
+        Box::new(move |path, _| {
+            capture.borrow_mut().push(path.to_string());
+            Ok(())
+        })
+    };
     let (picker, asked) = crate::file_dialog::fake(vec![Some(answer)]);
     let services = crate::Services {
         file_dialog: Some(picker),
         export: Some(Box::new(|doc, path, settings| {
             photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
-        write: Some(Box::new(move |path, _| {
-            capture.borrow_mut().push(path.to_string());
-            Ok(())
-        })),
+        write: Some(record(written.clone())),
+        write_new: Some(record(written.clone())),
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
@@ -144,8 +147,8 @@ fn quick_export_writes_long_layer_names_with_distinct_suffixes() {
         std::fs::write(&occupied, b"keep").unwrap();
         let (mut app, ids, _, written, _) = app(crate::FileDialogAnswer::FolderTo(out.to_string_lossy().into_owned()));
         let files = written.clone();
-        app.services.write = Some(Box::new(move |path, bytes| {
-            photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string())?;
+        app.services.write_new = Some(Box::new(move |path, bytes| {
+            photocraft_format::write_noreplace(std::path::Path::new(path), bytes).map_err(|e| e.to_string())?;
             files.borrow_mut().push(path.to_string());
             Ok(())
         }));
@@ -203,4 +206,54 @@ fn quick_export_chooses_a_new_name_beside_a_dangling_link() {
     assert!(written.borrow().contains(&out.join("Dup-2.png").to_string_lossy().into_owned()));
     assert_eq!(std::fs::read_link(link).unwrap(), victim);
     assert!(!victim.exists());
+}
+
+#[test]
+fn quick_export_preserves_a_file_created_during_encoding() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path();
+    let destination = out.join("a_b_c__.png");
+    let (mut app, ids, _, _, _) = app(crate::FileDialogAnswer::FolderTo(out.to_string_lossy().into_owned()));
+    let encode = app.services.export.take().unwrap();
+    let occupied = destination.clone();
+    app.services.export = Some(Box::new(move |doc, path, settings| {
+        if std::path::Path::new(path) == occupied {
+            assert!(!occupied.exists());
+            std::fs::write(&occupied, b"created during encoding").unwrap();
+        }
+        encode(doc, path, settings)
+    }));
+    app.services.write = Some(Box::new(|path, bytes| photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string())));
+    app.services.write_new =
+        Some(Box::new(|path, bytes| photocraft_format::write_noreplace(std::path::Path::new(path), bytes).map_err(|e| format!("{path}: {e}"))));
+    app.session.active_mut().unwrap().selected_layers = ids;
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "layer.quickExportAsPng", Value::Null).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(std::fs::read(&destination).unwrap() == b"created during encoding", "Quick Export replaced the other file");
+    assert!(app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("a_b_c__.png"), "{}", app.ui.status);
+    assert_eq!(std::fs::read_dir(out).unwrap().count(), 1);
+}
+
+#[test]
+fn quick_export_can_replace_a_file_confirmed_in_the_save_dialog() {
+    for include_empty_layer in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("chosen.png");
+        std::fs::write(&destination, b"previous file").unwrap();
+        let (mut app, ids, empty, _, asked) = app(crate::FileDialogAnswer::SaveTo(destination.to_string_lossy().into_owned()));
+        app.services.write = Some(Box::new(|path, bytes| photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string())));
+        app.services.write_new = Some(Box::new(|path, bytes| photocraft_format::write_noreplace(std::path::Path::new(path), bytes).map_err(|e| e.to_string())));
+        let selected = if include_empty_layer { vec![empty, ids[2]] } else { vec![ids[2]] };
+        app.session.active_mut().unwrap().selected_layers = selected;
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "layer.quickExportAsPng", Value::Null).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(matches!(asked.borrow().as_slice(), [crate::FileDialogRequest::Save { .. }]));
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let bytes = std::fs::read(destination).unwrap();
+        let doc = photocraft_io::import("chosen.png", &bytes).unwrap().document;
+        assert_eq!(doc.layers[0].surface().unwrap().rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
+    }
 }

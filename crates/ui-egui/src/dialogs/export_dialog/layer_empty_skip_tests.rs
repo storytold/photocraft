@@ -92,6 +92,7 @@ fn the_dialog_opens_on_the_first_layer_with_pixels_and_exports_only_those() {
 fn quick_export_skips_the_same_layers() {
     let dir = tempfile::tempdir().unwrap();
     let (mut app, l, written) = app_answering(crate::FileDialogAnswer::FolderTo(dir.path().to_string_lossy().into_owned()));
+    app.services.write_new = app.services.write.take();
     app.session.active_mut().unwrap().selected_layers = vec![l.empty, l.red, l.adjustment, l.blue, l.gone];
     quick_export_selected_layers_png(&mut app).unwrap();
     poll(&mut app);

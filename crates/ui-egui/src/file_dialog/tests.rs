@@ -1146,7 +1146,7 @@ fn quick_export_groups_use_their_own_names() {
         let result = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
         Ok((result.bytes, result.warnings))
     }));
-    app.services.write = Some(Box::new(|path, data| std::fs::write(path, data).map_err(|e| e.to_string())));
+    app.services.write_new = Some(Box::new(|path, data| photocraft_format::write_noreplace(std::path::Path::new(path), data).map_err(|e| e.to_string())));
     let mut layers = Vec::new();
     for color in ["#ff0000", "#00ff00"] {
         app.run("layer.new.layer", json!({})).unwrap();
@@ -1180,6 +1180,7 @@ fn quick_export_groups_use_their_own_names() {
 #[test]
 fn quick_export_selected_layers_writes_separate_pngs_with_one_prompt() {
     let (mut app, open, written) = app();
+    app.services.write_new = app.services.write.take();
     let remembered = tempfile::tempdir().unwrap();
     let destination = tempfile::tempdir().unwrap();
     let remembered_path = remembered.path().to_str().unwrap().to_string();
