@@ -167,12 +167,28 @@ pub(crate) fn move_gray_selected(
     warp: &dyn Fn(&Surface, Rect) -> Result<Surface>,
     whole: &dyn Fn(&Surface) -> Result<Surface>,
 ) -> Result<Surface> {
-    let Some((lifted, mut out)) = split_gray_selected(s, sel)? else { return whole(s) };
+    let Some((lifted, out)) = split_gray_selected(s, sel)? else { return whole(s) };
+    lay_moved(out, &lifted, warp)
+}
+
+/// A lone mask or channel as Free Transform leaves it, for the live preview of the box: `rest`
+/// with `lifted` moved through `h` laid over it (both from [`split_gray_selected`]). Refused
+/// past the transform budget, as the commit is, and stopped with [`EngineError::Cancelled`] once
+/// `cancel` says so (the box closed while a worker built its frame).
+pub fn moved_gray(rest: &Surface, lifted: &Surface, h: &Homography, interp: Interp, cancel: &(dyn Fn() -> bool + Sync)) -> Result<Surface> {
+    check_budget(lifted.content_bounds(), h, "mask or channel", rest.format())?;
+    let ignore = |_: f32| {};
+    let ctl = Interrupt::new(cancel, &ignore);
+    lay_moved(rest.clone(), lifted, &|l, src| warp_surface_with(l, src, h, interp, &ctl)?.ok_or(EngineError::Cancelled))
+}
+
+/// `out` with the grey + alpha values of `lifted`, moved by `warp`, laid over it.
+fn lay_moved(mut out: Surface, lifted: &Surface, warp: &dyn Fn(&Surface, Rect) -> Result<Surface>) -> Result<Surface> {
     let src = lifted.content_bounds();
     if src.is_empty() {
         return Ok(out);
     }
-    let w = warp(&lifted, src)?;
+    let w = warp(lifted, src)?;
     let b = w.content_bounds();
     if !b.is_empty() {
         let moved = crate::allocation::read_region(&w, b, "compositing transformed mask pixels")?;
