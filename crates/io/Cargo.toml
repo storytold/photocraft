@@ -36,6 +36,7 @@ craft-psd-channels = { package = "craft-psd", git = "https://github.com/storytol
 craft-psd-duotone = { package = "craft-psd", version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "b9c22554ce0fd2caccdb53b417082a2ff2ef178f" }
 craft-psd-guides = { package = "craft-psd", version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "589842f0da5c5a11e71f39b70092dcb918b92f39" }
 photocraft-codecs = { workspace = true }
+craft-exr = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a", features = ["decode"] }
 photocraft-formats = { workspace = true }
 photocraft-raw = { workspace = true }
 craft-affinity = { workspace = true }

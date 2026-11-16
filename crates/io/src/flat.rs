@@ -120,8 +120,16 @@ fn import_flat_impl_with_options(
         Some(r) => (r, None),
         None => {
             let limits = decode_limits(opts);
-            let img = codecs::decode_as_with(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes, &codecs::DecodeOptions { limits, ..Default::default() })?;
+            let mut img =
+                codecs::decode_as_with(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes, &codecs::DecodeOptions { limits, ..Default::default() })?;
             ctl.check().map_err(|_| IoError::Cancelled)?;
+            if format == Some(Format::OpenExr)
+                && img.layout().has_alpha()
+                && img.sample_type() == CSample::F32
+                && crate::exr_alpha::ordinary_import(&crate::exr_alpha::parts(bytes))
+            {
+                crate::exr_alpha::unpremultiply_image(&mut img);
+            }
             ctl.progress(0.6);
             (image_to_document_with(name, &img, ctl)?, Some(img))
         }
@@ -1859,6 +1867,9 @@ fn prepare_flat(mut img: Image, format: Format, warnings: &mut Vec<String>) -> R
             img = linear;
         } else if let Some(linear) = convert_gray(&img, craft_cms::builtin::linear_gray(), CSample::F32)? {
             img = linear;
+        }
+        if format == Format::OpenExr {
+            crate::exr_alpha::premultiply_image(&mut img);
         }
     } else if !format.caps().icc || (img.layout().is_gray() && !format.caps().layouts.iter().any(|l| l.is_gray())) {
         // Untagged files read back as sRGB/sGray. Even an ICC-capable format like WebP loses a
