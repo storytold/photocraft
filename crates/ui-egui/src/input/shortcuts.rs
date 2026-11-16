@@ -510,6 +510,9 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         return false;
     }
     crate::menu_keys::close_for_shortcut(ctx);
+    // In an open right-click or button menu, ↑ / ↓ stop at its ends and Home / End go to them
+    // (#15227, #15219): ahead of the page keys below, which take Home and End to scroll the canvas.
+    crate::menus::popup_keys::handle(ctx);
     if crate::menu_nav::is_open(ctx) || crate::menu_keys::is_focused(ctx) || crate::widgets::dropdown_list_open(ctx) {
         return false;
     }
