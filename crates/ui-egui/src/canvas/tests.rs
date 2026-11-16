@@ -407,12 +407,14 @@ fn gated_palette_map_preview(
     let key = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: crate::filter_dialog::preview_source_revisions(&app.session, command, &params),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
         command: command.into(),
         params,
         k: 1,
+        tool_colors: (app.session.tools.foreground, app.session.tools.background),
     };
     let doc = app.session.documents()[0].doc.clone();
     let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
@@ -436,6 +438,7 @@ fn gated_palette_map_preview(
                 task.target,
                 &documents,
                 &Default::default(),
+                Some(task.tool_colors),
             )
             .map(|d| {
                 let buffer = photocraft_compose::flatten(&d);

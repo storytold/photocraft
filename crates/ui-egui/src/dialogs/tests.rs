@@ -128,7 +128,7 @@ fn indexed_color_uses_stock_dialog_controls_and_commits() {
     let table = doc.color_table.as_ref().unwrap();
     assert_eq!(table.transparent, None, "disabling Transparency must not reserve a palette entry");
     let pixels = photocraft_compose::flatten(doc);
-    for pixel in pixels.px {
+    for pixel in pixels.px.iter() {
         let rgb = pixel[..3].iter().map(|value| (value * 255.0).round() as u8).collect::<Vec<_>>();
         assert!(table.colors.iter().any(|entry| entry.as_slice() == rgb), "committed pixel is outside the Color Table");
     }
@@ -161,7 +161,7 @@ fn palette_map_owns_library_preview_and_apply_controls() {
     assert_eq!(doc.mode, photocraft_color::ColorMode::Rgb);
     let after = photocraft_compose::flatten(doc);
     assert_ne!(after, before, "applying the selected library must remap the source");
-    for pixel in after.px {
+    for pixel in after.px.iter() {
         assert!(palette.colors.iter().any(|color| color.iter().zip(pixel).all(|(expected, actual)| (expected - actual).abs() <= 1.0 / 255.0)));
     }
 }
