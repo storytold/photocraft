@@ -204,3 +204,33 @@ fn a_command_arrow_step_does_not_read_its_fraction_as_typed_text() {
     h.run_steps(3);
     assert_eq!(opacity(&h, id), json!(50));
 }
+
+/// CodeRabbit on #15106: a pasted value is typed text whatever modifier was held for the paste: `150` is clamped to
+/// 100 and the range alert comes once the field is left.
+#[test]
+fn a_pasted_value_past_the_range_raises_the_alert() {
+    let (mut h, id) = open();
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Opacity")).expect("an Opacity field");
+    field.click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Paste("150".into()));
+    h.run_steps(2);
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(100));
+    assert_eq!(alerts(&h), 1, "the range alert");
+}
+
+/// CodeRabbit on #15099: after `150` set the out-of-range mark, replacing the text with something that is not a number
+/// takes the mark back: leaving the field raises no alert.
+#[test]
+fn text_that_is_not_a_number_clears_an_earlier_range_mark() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "150");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Text("abc".into()));
+    h.run_steps(1);
+    leave(&mut h);
+    assert_eq!(alerts(&h), 0, "no range alert");
+    assert_eq!(opacity(&h, id), json!(100), "the clamped value stays");
+}
