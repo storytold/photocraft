@@ -454,22 +454,22 @@ fn composite_layer_plain_with<A: BufferAlloc>(
         // pass-through result. Exact when the children blend Normal, close
         // otherwise (matches psd-tools clipping-mask3/4/5).
         if has_clipped && let (Some(before), Some(iso)) = (before, render_content_with(layer, rect, cx, alloc)?) {
-                let mut clipped_iso = alloc.clone(&iso)?;
-                advanced::composite_clipped_with(clipped, &mut clipped_iso, cx, alloc)?;
-                let mut without = alloc.clone(&before)?;
-                blend_into(&mut without, &iso, BlendMode::Normal, opacity);
-                let mut with = before;
-                blend_into(&mut with, &clipped_iso, BlendMode::Normal, opacity);
-                for ((p, w), wo) in backdrop.px.iter_mut().zip(&with.px).zip(&without.px) {
-                    let pa = p[3];
-                    let mut pm = [p[0] * pa, p[1] * pa, p[2] * pa, pa];
-                    for c in 0..3 {
-                        pm[c] += w[c] * w[3] - wo[c] * wo[3];
-                    }
-                    pm[3] += w[3] - wo[3];
-                    let a = pm[3].clamp(0.0, 1.0);
-                    *p = if a > 0.0 { [(pm[0] / a).clamp(0.0, 1.0), (pm[1] / a).clamp(0.0, 1.0), (pm[2] / a).clamp(0.0, 1.0), a] } else { [0.0; 4] };
+            let mut clipped_iso = alloc.clone(&iso)?;
+            advanced::composite_clipped_with(clipped, &mut clipped_iso, cx, alloc)?;
+            let mut without = alloc.clone(&before)?;
+            blend_into(&mut without, &iso, BlendMode::Normal, opacity);
+            let mut with = before;
+            blend_into(&mut with, &clipped_iso, BlendMode::Normal, opacity);
+            for ((p, w), wo) in backdrop.px.iter_mut().zip(&with.px).zip(&without.px) {
+                let pa = p[3];
+                let mut pm = [p[0] * pa, p[1] * pa, p[2] * pa, pa];
+                for c in 0..3 {
+                    pm[c] += w[c] * w[3] - wo[c] * wo[3];
                 }
+                pm[3] += w[3] - wo[3];
+                let a = pm[3].clamp(0.0, 1.0);
+                *p = if a > 0.0 { [(pm[0] / a).clamp(0.0, 1.0), (pm[1] / a).clamp(0.0, 1.0), (pm[2] / a).clamp(0.0, 1.0), a] } else { [0.0; 4] };
+            }
         }
         return Ok(());
     }
@@ -606,13 +606,7 @@ type ShapeParts = (Buffer, Buffer, Option<Vec<f32>>);
 /// A stroked shape layer with visible clipped layers: Photoshop draws the shape's vector stroke
 /// above the clipped layers, so the base content is the fill alone and the stroke is laid on top
 /// after clipping. See [`split_parts_with`].
-fn shape_parts_with<A: BufferAlloc>(
-    layer: &Layer,
-    clipped: &[Layer],
-    rect: Rect,
-    cx: &Ctx,
-    alloc: &A,
-) -> Result<Option<ShapeParts>, A::Error> {
+fn shape_parts_with<A: BufferAlloc>(layer: &Layer, clipped: &[Layer], rect: Rect, cx: &Ctx, alloc: &A) -> Result<Option<ShapeParts>, A::Error> {
     if !clipped.iter().any(|c| c.visible) {
         return Ok(None);
     }
