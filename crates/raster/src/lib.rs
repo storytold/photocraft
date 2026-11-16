@@ -22,6 +22,18 @@ use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
 use photocraft_color::{ColorMode, PixelFormat, SampleType, read_sample, read_samples, write_sample};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 
+/// The bytes a surface in `fmt` keeps for pixels written over `rect`: every tile the rect
+/// touches, whole. Importers admit decoded pixels by their logical size; a narrow or scattered
+/// rect stores up to `TILE_SIZE` times more, so admission charges this instead.
+pub fn tile_storage_bytes(rect: Rect, fmt: &PixelFormat) -> u64 {
+    stored_tiles_bytes(rect.tile_count(), fmt)
+}
+
+/// The bytes `tiles` whole tiles take in `fmt`.
+pub fn stored_tiles_bytes(tiles: u64, fmt: &PixelFormat) -> u64 {
+    tiles.saturating_mul((TILE_SIZE as u64).pow(2)).saturating_mul(fmt.bytes_per_pixel() as u64)
+}
+
 /// A checked surface allocation could not be represented or reserved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AllocationError {

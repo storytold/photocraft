@@ -155,6 +155,10 @@ fn a_sponge_click_uses_the_bar_flow() {
     for f in [10.0, 50.0, 100.0] {
         let mut clicked = red_app();
         clicked.ui.tool = Tool::Sponge;
+        // The Sponge's first pick brings its own soft tip (#13029): give it the 40 px hard one at
+        // the default 10 % spacing, as `paint.sponge` paints below.
+        crate::paint_mouse::sync_tool_brush(&mut clicked);
+        clicked.run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0, "spacing": 0.1}})).unwrap();
         clicked.ui.tool_options.sponge_mode = "desaturate".into();
         clicked.ui.tool_options.vibrance = true;
         clicked.ui.tool_options.sponge_flow = f;

@@ -888,7 +888,8 @@ fn alt_right_drag_resizes_the_workspace_brush() {
     let w = h.state().distort.select_mask.as_ref().unwrap();
     let want = (30.0 + 2.0 * f64::from(40.0 / zoom)).round();
     assert_eq!(w.brush_size, want, "horizontal motion sets the diameter (zoom {zoom})");
-    assert_eq!(w.hardness, 70.0, "upward motion softens the brush, 200 points for 100 %");
+    let soft = (100.0 - 60.0 * 100.0 / crate::brush_resize::HARDNESS_TRAVEL).round();
+    assert_eq!(w.hardness, soft, "upward motion softens the brush, at the canvas HUD's rate");
     assert_eq!((w.quick_size, w.refine_size), (30.0, 30.0), "the other tools keep their sizes");
     assert!(w.strokes.is_empty() && w.edits.is_empty() && w.undo.is_empty(), "resizing selected nothing");
     assert!(w.resize.is_none(), "the gesture ends with the button");
@@ -904,7 +905,7 @@ fn alt_right_drag_resizes_the_workspace_brush() {
     pointer_drag(&mut h, over, PointerButton::Primary, Modifiers::CTRL | Modifiers::ALT, vec2(-10.0, 0.0));
     let w = h.state().distort.select_mask.as_ref().unwrap();
     assert_eq!(w.quick_size, (30.0 - 2.0 * f64::from(10.0 / zoom)).round().max(1.0));
-    assert_eq!((w.brush_size, w.hardness), (want, 70.0), "the Brush keeps its size and hardness");
+    assert_eq!((w.brush_size, w.hardness), (want, soft), "the Brush keeps its size and hardness");
     assert!(w.strokes.is_empty() && w.edits.len() == 1, "resizing Quick Selection selected nothing");
 }
 

@@ -6,6 +6,7 @@ mod actions_record_again;
 mod actions_single_history;
 mod affinity;
 mod artboard_export_names;
+mod artboard_move_overflow;
 mod atn_adjustment_make_props;
 mod atn_calculations;
 mod atn_classic_gradient;

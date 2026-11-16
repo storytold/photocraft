@@ -454,7 +454,7 @@ fn printer_profile_can_be_an_installed_icc_file() {
     let dir = tmp("icc");
     let icc = format!("{dir}/My Paper.icc");
     let output = format!("{dir}/managed.pdf");
-    std::fs::write(&icc, photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes().as_slice()).unwrap();
+    std::fs::write(&icc, craft_cms::Builtin::CoatedCmyk.profile().to_bytes().as_slice()).unwrap();
     let mut s = session("rgb", 16);
     let r = s
         .execute("file.print", json!({"output": output, "dryRun": true, "colorHandling": "photocraftManages", "printerProfile": icc, "emulsionDown": true}))
@@ -613,7 +613,7 @@ fn package_keeps_files_already_in_links() {
     let second = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
     let second = second["links"][0].as_str().unwrap();
     assert_ne!(second, first);
-    assert!(second.ends_with("Links/0-art.png"), "{second}");
+    assert!(second.ends_with("Links/art_1.png"), "{second}");
     assert_eq!(std::fs::read(&first).unwrap(), kept);
     assert_eq!(std::fs::read(second).unwrap(), kept);
     let _ = std::fs::remove_dir_all(&dir);
@@ -639,7 +639,8 @@ fn package_lists_a_missing_link_once() {
 #[test]
 fn paths_export_as_illustrator_postscript() {
     let mut s = session("rgb", 8);
-    assert!(!s.is_enabled("file.export.pathsToIllustrator"));
+    // Enabled without paths too: Document Bounds needs none (#13771).
+    assert!(s.is_enabled("file.export.pathsToIllustrator"));
     s.edit("paths", |d, _| {
         let tri = Subpath::polygon(&[(10.0, 10.0), (100.0, 10.0), (50.0, 90.0)]);
         let mut curve = Subpath::polyline(&[(0.0, 0.0), (300.0, 150.0)]);
@@ -652,8 +653,8 @@ fn paths_export_as_illustrator_postscript() {
     let ai = r["ai"].as_str().unwrap();
     assert!(ai.starts_with("%!PS-Adobe-2.0 EPSF-1.2"));
     assert!(ai.contains("%%BoundingBox: 0 0 300 150"));
-    assert!(ai.contains("*u\n10.0000 140.0000 m\n100.0000 140.0000 L\n"), "{ai}");
-    assert!(ai.contains("\nn\n") && ai.contains("\nN\n*U\n"));
+    assert!(ai.contains("1 XR\n10.0000 140.0000 m\n100.0000 140.0000 L\n"), "{ai}");
+    assert!(ai.contains("\nn\n*U\n") && ai.contains("\nN\n*U\n"));
     assert!(ai.contains(" C\n"), "curve segment");
     let dir = tmp("ai");
     let r = s.execute("file.export.pathsToIllustrator", json!({"path": format!("{dir}/p.ai"), "paths": "Shapes"})).unwrap();
@@ -1309,28 +1310,44 @@ mod cups {
     }
 }
 
+/// #5884, #8272: a Windows image without a loadable Windows.Data.Pdf.dll or prntvpt.dll reports
+/// an error instead of aborting at the delay-load stub. The checks run against a fixture
+/// `System32`, so they don't depend on what the host has installed.
 #[cfg(target_os = "windows")]
 #[test]
-fn windows_pdf_component_is_detected_by_loading_its_dll() {
-    // #5884: a Windows image without a loadable Windows.Data.Pdf.dll reports an error instead of
-    // aborting at the delay-load stub.
+fn windows_print_components_are_detected_by_loading_their_dlls() {
+    let system_dll_loads = |name| dll_loads(&system_dll(&system_root(), name));
     let dir = tempfile::tempdir().unwrap();
-    let dll = windows_pdf_dll(dir.path());
-    assert!(!windows_pdf_loads(&dll));
-    // Present but not loadable counts as missing.
     std::fs::create_dir(dir.path().join("System32")).unwrap();
-    std::fs::write(&dll, b"MZ").unwrap();
-    assert!(!windows_pdf_loads(&dll));
-    let root = std::env::var_os("SystemRoot").unwrap();
-    // The real DLL may be missing or unloadable on a stripped image; the check follows the loader.
-    let system = windows_pdf_dll(std::path::Path::new(&root));
-    assert_eq!(require_windows_pdf().is_ok(), windows_pdf_loads(&system));
+    for name in [WINDOWS_PDF_DLL, PRINT_TICKET_DLL] {
+        let dll = system_dll(dir.path(), name);
+        assert!(!dll_loads(&dll), "{name}: missing");
+        // Present but not loadable counts as missing.
+        std::fs::write(&dll, b"MZ").unwrap();
+        assert!(!dll_loads(&dll), "{name}: not loadable");
+    }
+    // Both stubs fail to load, so both checks report the missing component.
+    assert!(require_print_tickets_at(dir.path()).is_err());
+    assert!(require_windows_pdf_at(dir.path()).is_err());
+    // With a loadable prntvpt.dll (the host's, copied in) only the PDF check still fails: it
+    // checks Windows.Data.Pdf.dll itself, not just the Print Ticket API.
+    let tickets = system_dll(dir.path(), PRINT_TICKET_DLL);
+    if system_dll_loads(PRINT_TICKET_DLL) && std::fs::copy(system_dll(&system_root(), PRINT_TICKET_DLL), &tickets).is_ok() {
+        assert_eq!(require_print_tickets_at(dir.path()).is_ok(), dll_loads(&tickets));
+        assert!(require_windows_pdf_at(dir.path()).is_err(), "Windows.Data.Pdf.dll is still a stub");
+    }
+    // The wrappers follow the loader on the real Windows directory (a stripped image may lack either).
+    let host_tickets = system_dll_loads(PRINT_TICKET_DLL);
+    assert_eq!(require_print_tickets().is_ok(), host_tickets);
+    assert_eq!(require_windows_pdf().is_ok(), system_dll_loads(WINDOWS_PDF_DLL) && host_tickets);
 }
 
+/// Off Windows there are no Windows print components to check, so both checks pass.
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn the_windows_pdf_check_is_a_no_op_elsewhere() {
     assert!(require_windows_pdf().is_ok());
+    assert!(require_print_tickets().is_ok());
 }
 
 /// A 500 × 1000 pt document (72 ppi) on A3 (841.89 × 1190.55 pt): its height sets the fit.
@@ -1560,4 +1577,9 @@ fn printed_pdf_uses_winansi_for_labels_and_descriptions() {
     assert!(content.contains(r"(Caf\351 \226 r\351sum\351.psd) Tj"), "{content}");
     assert!(content.contains(r"(Price: \20020 \(proof\)) Tj"), "{content}");
     assert!(content.is_ascii(), "encoded bytes are escaped, never UTF-8 text operands");
+}
+
+#[test]
+fn postscript_comment_text_cannot_end_its_line() {
+    assert_eq!(ps_comment_text("a\nshowpage\r%x"), "a showpage %x");
 }

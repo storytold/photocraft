@@ -7,12 +7,12 @@
 //! alpha channels of every other mode (max = selected). Channel names come from resources 1006 /
 //! 1045 and ink colours from DisplayInfo (1077), exactly as for spot channels in the other modes.
 
+use craft_psd::file::{GlobalLayerMask, LayerInfoPlacement};
+use craft_psd::resources::{ImageResource, ResolutionInfo, ids, version_info_resource};
+use craft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, PsdFile, TaggedBlock};
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document};
 use photocraft_geom::Rect;
-use photocraft_psd::file::{GlobalLayerMask, LayerInfoPlacement};
-use photocraft_psd::resources::{ImageResource, ResolutionInfo, ids, version_info_resource};
-use photocraft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, PsdFile, TaggedBlock};
 use photocraft_raster::Surface;
 
 use crate::pixels::{encode_be, psd_depth};
@@ -48,6 +48,7 @@ pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[St
         return Err(crate::IoError::Unsupported("multichannel channel depth does not match its pixel layout".into()));
     }
     let fmt = PixelFormat::new(ColorMode::Grayscale, depth, false);
+    // The PSD preflight (`psd_budget`) already admitted these channels' tile storage, at whatever limit it was given.
     for k in 0..usize::from(h.channels) {
         let start = k.checked_mul(plane).ok_or_else(invalid)?;
         let end = start.checked_add(plane).ok_or_else(invalid)?;
@@ -101,7 +102,7 @@ pub(crate) fn document_to_psd(
     force_psb: bool,
     size_limit: Option<u64>,
     patterns: Option<&[photocraft_doc::PsdGlobalBlock]>,
-) -> (PsdFile, Vec<String>) {
+) -> Result<(PsdFile, Vec<String>), crate::IoError> {
     let mut warnings = Vec::new();
     // Photoshop's Multichannel mode is 8 or 16 bits per channel.
     let sample = match doc.depth {
@@ -157,9 +158,9 @@ pub(crate) fn document_to_psd(
     }
     // Alpha identifiers: one u32 per channel, only while they still match the channels.
     let keep = |id: u16, data: &[u8]| id != ALPHA_IDENTIFIERS || data.len() == channels.len().saturating_mul(4);
-    let color_mode_data = photocraft_psd::hdr::color_mode_data_for_depth(header.depth);
-    let file = layerless_file(doc, header, image_data, color_mode_data, resources, keep, size_limit, &mut warnings, patterns);
-    (file, warnings)
+    let color_mode_data = craft_psd::hdr::color_mode_data_for_depth(header.depth);
+    let file = layerless_file(doc, header, image_data, color_mode_data, resources, keep, size_limit, &mut warnings, patterns)?;
+    Ok((file, warnings))
 }
 
 /// A PSD without layers around `image_data`: `resources` (the mode's own) plus the paths, XMP,
@@ -178,7 +179,7 @@ pub(crate) fn layerless_file(
     size_limit: Option<u64>,
     warnings: &mut Vec<String>,
     patterns: Option<&[photocraft_doc::PsdGlobalBlock]>,
-) -> PsdFile {
+) -> Result<PsdFile, crate::IoError> {
     resources.extend(crate::psd_export::path_resources(doc, warnings));
     // The XMP and EXIF resolution follow the ResolutionInfo resource, so no copy contradicts it.
     let ppi = Some((doc.resolution_dpi, doc.resolution_dpi)).filter(|d| d.0 > 0.0);
@@ -208,7 +209,7 @@ pub(crate) fn layerless_file(
     // kept layer block would describe layers the document doesn't have. Their signatures follow
     // the version the file is written as, known once its size is.
     let patterns = patterns.map_or_else(|| crate::pattern_map::export_global_blocks_with_warnings(doc, warnings), <[_]>::to_vec);
-    let global_blocks: Vec<TaggedBlock> = crate::annotations_map::export_blocks(doc, patterns)
+    let global_blocks: Vec<TaggedBlock> = crate::annotations_map::export_blocks(doc, patterns)?
         .into_iter()
         .filter(|(_, key, _)| !matches!(key, b"Layr" | b"Lr16" | b"Lr32"))
         .map(|(sig, key, data)| crate::psd_export::global_block(sig, key, &data))
@@ -231,7 +232,7 @@ pub(crate) fn layerless_file(
         warnings.push(warning);
     }
     crate::psd_export::sign_global_blocks(&mut file);
-    file
+    Ok(file)
 }
 
 #[cfg(test)]
@@ -240,7 +241,7 @@ mod import_allocation_tests {
 
     #[test]
     fn missing_planes_remain_recoverable_without_reading_past_input() {
-        let file = photocraft_psd::testgen::merged_only(photocraft_psd::Version::Psd, PsdMode::Multichannel, 8, Compression::Raw, 3, 2);
+        let file = craft_psd::testgen::merged_only(craft_psd::Version::Psd, PsdMode::Multichannel, 8, Compression::Raw, 3, 2);
         let mut doc = Document::new("Partial", photocraft_geom::Size::new(3, 2), ColorMode::Multichannel, SampleType::U8);
         let mut warnings = Vec::new();
         import(&file, &[0; 6], &mut doc, &[], &mut warnings).unwrap();
