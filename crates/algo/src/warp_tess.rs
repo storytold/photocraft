@@ -64,6 +64,12 @@ type P = [f64; 2];
 const PERP_TOL: f64 = 1.0;
 /// Mean deviation along the chord (document px) of the inner control points that splits it.
 const TANG_TOL: f64 = 0.5;
+/// How far (document px) a row segment's first and last inner control points drift apart along
+/// its chord (one ahead of its even spacing, the other behind) before a new point on that row
+/// keeps its place on the surface instead of dropping onto the chord. The reference application's
+/// lumpy edges keep the point from a difference of about 0.5 px and drop it at 0.33 px or less,
+/// whatever the segment's sideways bow below [`PERP_TOL`].
+const UNEVEN_TOL: f64 = 0.4;
 /// Distance (document px) of an inner control point before its chord's start that splits a
 /// segment, as the reference application's creases show (rows pulled back over themselves split
 /// later there than past the chord's end).
@@ -390,6 +396,23 @@ fn segment(mut c: Vec<P>, t0: f64, t1: f64) -> Vec<P> {
 /// segment turns back only a little), and is left out of the mean along the chord.
 fn need(c: &[P]) -> f64 {
     need_weighing_first(c, 0.0)
+}
+
+/// How unevenly a curve segment's inner control points drift along its chord: the first one's
+/// drift from its even spacing minus the last one's (document px, unsigned). Drifts the same way
+/// cancel, so this measures a segment that speeds up and slows down along a nearly straight
+/// chord. Zero for a segment with fewer than two inner points.
+fn uneven_drift(c: &[P]) -> f64 {
+    let n = c.len().saturating_sub(1);
+    let (Some(&a), Some(&b)) = (c.first(), c.last()) else { return 0.0 };
+    let ch = [b[0] - a[0], b[1] - a[1]];
+    let len = ch[0].hypot(ch[1]);
+    if n < 3 || len <= 0.0 {
+        return 0.0;
+    }
+    let drift = |k: usize| c.get(k).map_or(0.0, |p| ((p[0] - a[0]) * ch[0] + (p[1] - a[1]) * ch[1]) / len - len * k as f64 / n as f64);
+    let d = (drift(1) - drift(n - 1)).abs();
+    if d.is_finite() { d } else { 0.0 }
 }
 
 /// [`need`], with the first inner control point's own drift along the chord, counted
@@ -1081,7 +1104,8 @@ fn own_points(
     for p in keys {
         own.insert(key(p[0], p[1]), surf(p[0], p[1]));
     }
-    // A new vertex on a row the row didn't need is dropped onto that row segment's chord.
+    // A new vertex on a row the row didn't need is dropped onto that row segment's chord, unless
+    // the segment's inner points drift unevenly along it.
     let mut order = keys.to_vec();
     order.sort_by_cached_key(|p| level(p[0]));
     for &[u, v] in &order {
@@ -1106,7 +1130,8 @@ fn own_points(
         }) {
             continue;
         }
-        if need(&segment(net.row(v), a, b)) < 1.0 - EPS {
+        let seg = segment(net.row(v), a, b);
+        if need(&seg) < 1.0 - EPS && uneven_drift(&seg) < UNEVEN_TOL {
             let m = onto_chord(place(&own, a, v), place(&own, b, v), surf(u, v));
             own.insert(key(u, v), m);
         }
@@ -1439,6 +1464,18 @@ mod tests {
         // Both inner points half a px along the chord split; a quarter doesn't.
         assert!(need(&[[0.0, 0.0], [1.5, 0.0], [2.5, 0.0], [3.0, 0.0]]) >= 1.0);
         assert!(need(&[[0.0, 0.0], [1.25, 0.0], [2.25, 0.0], [3.0, 0.0]]) < 1.0);
+    }
+
+    /// Inner points drifting apart along the chord count as uneven; drifting together, they don't.
+    #[test]
+    fn uneven_drift_takes_the_first_drift_against_the_last() {
+        let row = |d1: f64, d2: f64| [[0.0, 0.0], [1.0 + d1, 0.0], [2.0 + d2, 0.0], [3.0, 0.0]];
+        assert!((uneven_drift(&row(0.3, -0.2)) - 0.5).abs() < 1e-12);
+        assert!(uneven_drift(&row(-0.5, -0.45)) < 0.1);
+        // Opposite drifts too small to split by the mean still keep the point on the surface.
+        assert!(need(&row(0.3, -0.2)) < 1.0 && uneven_drift(&row(0.3, -0.2)) >= UNEVEN_TOL);
+        assert!(uneven_drift(&[[0.0, 0.0], [1.0, 0.4], [2.0, 0.0]]) == 0.0);
+        assert!(uneven_drift(&[[0.0, 0.0], [0.5, 0.0], [0.5, 0.0], [0.0, 0.0]]) == 0.0);
     }
 
     /// A control point outside its chord's span (a row turning back on itself in a crease) counts
