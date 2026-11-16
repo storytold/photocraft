@@ -5,6 +5,7 @@
 
 use egui::Modifiers;
 use egui::accesskit::Role;
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 use super::rectangle_gear_tests::{FIXED, GEAR, RATIO, app, bar, checked, drag, enabled, gear, layer_count, shown, type_into};
@@ -157,7 +158,7 @@ fn the_popup_shows_equilateral_and_the_defaults() {
     assert_eq!(RATIO.map(|l| shown(&h, l)), [None, None], "Proportional is empty while greyed out");
     assert_eq!((enabled(&h, FIXED), enabled(&h, RATIO)), ([false, false], [false, false]), "greyed unless chosen");
     for label in ["Sides", "Star Ratio", "Smooth Corners"] {
-        assert!(h.query_all_by_label_contains(label).next().is_none(), "no {label} in the Triangle's gear");
+        assert!(h.query_by_label_contains(label).is_none(), "no {label} in the Triangle's gear");
     }
 }
 
