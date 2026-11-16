@@ -831,3 +831,27 @@ fn a_copy_job_takes_the_destinations_resolution_as_it_lands() {
     assert!(close(text(&s, 1, id).runs[0].style.size_pt, 11.52), "run {} pt", text(&s, 1, id).runs[0].style.size_pt);
     assert_eq!(ink(&s, 1, id).0, ink(&s, 0, t).0, "the copy keeps its pixels");
 }
+
+/// A copy job's shapes are rendered for the destination as it is when they land: a shape beyond
+/// the edge of a 60-pixel canvas that grew to 120 pixels meanwhile shows, rather than staying
+/// clipped away until it is edited.
+#[test]
+fn a_copy_job_renders_its_shapes_for_the_destination_as_it_lands() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 120, "height": 50})).unwrap();
+    s.execute("shape.create", json!({"kind": "rect", "rect": [70, 10, 20, 20], "fill": "#ff0000"})).unwrap();
+    s.execute("file.new", json!({"width": 60, "height": 50})).unwrap();
+    s.set_active(0);
+    let event = copy_as_job_while(&mut s, |s| {
+        s.set_active(1);
+        s.edit("Canvas Size", |doc, _| {
+            doc.size = photocraft_geom::Size::new(120, 50);
+            Ok(())
+        })
+        .unwrap();
+    });
+    assert!(matches!(event.outcome, crate::jobs::JobOutcome::Done(_)), "{:?}", event.outcome);
+    let LayerContent::Shape(sh) = &doc(&s, 1).layers.last().unwrap().content else { panic!("the copy is a shape") };
+    let painted = photocraft_compose::bounds::content_bounds(sh.cache.as_ref().expect("a rendered shape"));
+    assert!(!painted.is_empty() && painted.x0 >= 70 && painted.x1 <= 90, "the shape shows where it is: {painted:?}");
+}

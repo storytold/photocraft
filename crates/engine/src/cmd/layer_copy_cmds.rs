@@ -379,6 +379,11 @@ fn land_copies(
     // one the destination has added since.
     crate::canvas_geom::retarget_type_resolution(&mut copies, live.resolution_dpi);
     adopt_text_styles(&mut copies, &live.text_styles)?;
+    // Shape caches are clipped to the canvas they were rendered for: a canvas resized meanwhile
+    // gets them rendered again for its size, or a shape beyond the old edge would stay hidden.
+    if live.bounds() != ddoc.bounds() {
+        prepare_shapes(&mut copies.layers, live, true);
+    }
     // Link groups the destination took meanwhile stay its own.
     remap_link_groups(&mut copies, live)?;
     let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !live.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
