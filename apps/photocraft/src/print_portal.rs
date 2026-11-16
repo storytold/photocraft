@@ -320,6 +320,9 @@ mod tests {
             paper: (612.0, 792.0),
             landscape: false,
             driver_options: vec![("InputSlot".into(), "Tray2".into()), ("media".into(), "ignored".into())],
+            driver_settings: None,
+            grayscale: false,
+            raster_dpi: 300.0,
         };
         let values = system_settings(&settings);
         assert!(values.contains(&("printer".into(), text("Studio"))));

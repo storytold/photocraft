@@ -82,9 +82,10 @@ fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<Sy
         .args(["-a", "Preview"])
         .arg(path)
         .status()
-        .map_err(|e| format!("could not hand the print document to macOS: {e}"))?;
+        .map_err(|_| "macOS could not start Preview for print confirmation".to_string());
+    let Ok(opened) = opened else { return Ok(SystemPrintOutcome::Unavailable) };
     if !opened.success() {
-        return Err("macOS could not open the temporary print document in Preview".into());
+        return Ok(SystemPrintOutcome::Unavailable);
     }
     let name = path.file_name().and_then(std::ffi::OsStr::to_str).ok_or("the temporary print document has no valid file name")?;
 
@@ -97,7 +98,11 @@ fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<Sy
         .output()
         .map_err(|e| format!("could not open the macOS print dialog: {e}"))?;
     if !result.status.success() {
-        return Err(format!("macOS print dialog failed: {}", String::from_utf8_lossy(&result.stderr).trim()));
+        let error = String::from_utf8_lossy(&result.stderr);
+        if error.contains("-1743") || error.contains("not authorized") || error.contains("Not authorized") {
+            return Ok(SystemPrintOutcome::Unavailable);
+        }
+        return Err(format!("macOS print dialog failed: {}", error.trim()));
     }
     if String::from_utf8_lossy(&result.stdout).trim() == "cancelled" { Ok(SystemPrintOutcome::Cancelled) } else { Ok(SystemPrintOutcome::Printed) }
 }
@@ -117,6 +122,9 @@ mod tests {
             paper: (612.0, 792.0),
             landscape: false,
             driver_options: Vec::new(),
+            driver_settings: None,
+            grayscale: false,
+            raster_dpi: 300.0,
         };
         assert_eq!(mac_print_arguments(&settings), ["3", "false", "Studio"]);
     }
@@ -125,20 +133,36 @@ mod tests {
 #[cfg(target_os = "linux")]
 /// Opens the desktop's XDG Print portal confirmation.
 fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
-    crate::print_portal::confirm(path, settings)
+    match crate::print_portal::confirm(path, settings) {
+        Ok(outcome) => Ok(outcome),
+        Err(error) => {
+            log::warn!("native print portal unavailable; falling back to the regular spooler: {error}");
+            Ok(SystemPrintOutcome::Unavailable)
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
 /// Opens the native Windows print dialog through the bundled PowerShell adapter.
 fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     let script = include_str!("system_print_windows.ps1");
-    let result = std::process::Command::new("powershell.exe")
+    let mut command = std::process::Command::new("powershell.exe");
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let result = command
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
         .env("PHOTOCRAFT_PRINT_FILE", path)
         .env("PHOTOCRAFT_PRINT_TITLE", &settings.title)
         .env("PHOTOCRAFT_PRINT_PRINTER", settings.printer.as_deref().unwrap_or(""))
         .env("PHOTOCRAFT_PRINT_COPIES", settings.copies.to_string())
         .env("PHOTOCRAFT_PRINT_COLLATE", if settings.collate { "1" } else { "0" })
+        .env("PHOTOCRAFT_PRINT_GRAYSCALE", if settings.grayscale { "1" } else { "0" })
+        .env("PHOTOCRAFT_PRINT_RASTER_DPI", settings.raster_dpi.round().to_string())
+        .env("PHOTOCRAFT_PRINT_DRIVER_SETTINGS", settings.driver_settings.as_deref().unwrap_or(""))
         .env(
             "PHOTOCRAFT_PRINT_DUPLEX",
             match settings.duplex {
@@ -148,8 +172,8 @@ fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<Sy
                 Some(SystemPrintDuplex::ShortEdge) => "short-edge",
             },
         )
-        .output()
-        .map_err(|e| format!("could not open the Windows print dialog: {e}"))?;
+        .output();
+    let Ok(result) = result else { return Ok(SystemPrintOutcome::Unavailable) };
     if !result.status.success() {
         return Err(format!("Windows print dialog failed: {}", String::from_utf8_lossy(&result.stderr).trim()));
     }
