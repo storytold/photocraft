@@ -82,3 +82,24 @@ impl From<&PathSelection> for PathSelection {
         target.clone()
     }
 }
+
+/// Runtime ownership of an open path menu. Reopened files can reuse IDs and revision numbers.
+/// Keep a weak snapshot so an old allocation cannot be reused, without retaining document pixels.
+#[derive(Clone, Debug)]
+pub struct PathMenuSource {
+    document: std::sync::Weak<Document>,
+    revision: u64,
+    saved_paths_revision: u64,
+}
+
+impl PartialEq for PathMenuSource {
+    fn eq(&self, other: &Self) -> bool {
+        self.document.ptr_eq(&other.document) && self.revision == other.revision && self.saved_paths_revision == other.saved_paths_revision
+    }
+}
+
+impl PathMenuSource {
+    pub(crate) fn capture(st: &photocraft_engine::DocState) -> Self {
+        Self { document: std::sync::Arc::downgrade(&st.doc), revision: st.revision, saved_paths_revision: st.saved_paths_revision() }
+    }
+}

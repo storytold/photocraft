@@ -172,6 +172,15 @@ pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let resp = icons::button_with_icon_size_tip(ui, "painting-symmetry", 24.0, 14.0, current.is_some(), tl!("Set painting symmetry options"), !brush);
     let resp = if brush { resp.on_hover_text(tl!("Set symmetry options for Painting")) } else { resp };
     let resp = crate::brush_picker::named(resp, "Set painting symmetry options");
+    let popup_id = egui::Popup::menu(&resp).get_id();
+    let source = app.session.active().map(|st| (crate::state::PathMenuSource::capture(st), st.active_layer));
+    let key = resp.id.with("path-source");
+    if resp.clicked() {
+        ui.ctx().data_mut(|d| d.insert_temp(key, source));
+    } else if egui::Popup::is_id_open(ui.ctx(), popup_id) && ui.ctx().data(|d| d.get_temp(key)) != Some(source) {
+        // Row indices and temporary layer paths must not change under an already-open menu.
+        egui::Popup::close_id(ui.ctx(), popup_id);
+    }
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(220.0);
         widgets::menu_scroll(ui, |ui| {
@@ -201,14 +210,18 @@ pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     ui.separator();
                 }
                 for row in rows {
-                    let (name, text) = match row.kind {
-                        PathRow::Saved(_) => (row.name.clone(), row.name),
-                        PathRow::Work => ("work".into(), tl!("Work Path").into()),
-                        PathRow::Layer => ("layer".into(), row.name),
+                    use crate::state::PathSelection;
+                    let (target, text) = match row.kind {
+                        PathRow::Saved(index) => (PathSelection::Saved { index }, row.name),
+                        PathRow::Work => (PathSelection::Name("work".into()), tl!("Work Path").into()),
+                        PathRow::Layer => (PathSelection::Name("layer".into()), row.name),
                     };
-                    let checked = current.as_ref().and_then(PaintingSymmetry::path_source) == Some(name.as_str());
+                    let checked = current.as_ref().is_some_and(|symmetry| match &target {
+                        PathSelection::Saved { index } => symmetry.saved_path_source() == Some((*index, st.saved_paths_revision())),
+                        PathSelection::Name(name) => symmetry.saved_path_source().is_none() && symmetry.path_source() == Some(name.as_str()),
+                    });
                     if ui.add_enabled(crate::menus::is_enabled(app, "paint.symmetryFromPath"), egui::Button::selectable(checked, text)).clicked() {
-                        run = Some(("paint.symmetryFromPath", json!({"name":name})));
+                        run = Some(("paint.symmetryFromPath", target.params()));
                         ui.close();
                     }
                 }

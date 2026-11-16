@@ -18,7 +18,7 @@ pub use panel_state::{
     CameraRawPreviewState, CameraRawScopeState, CurvesEditorState, LayerThumbnailContents, LayerThumbnailSize, LayersPanelDialog, LayersPanelOptions,
     PointCurveDrag, PointCurveState,
 };
-pub use path_selection::PathSelection;
+pub use path_selection::{PathMenuSource, PathSelection};
 pub use tool::Tool;
 pub use tool_options::{SampleAllLayers, ToolOptions};
 use tool_options::{default_brush_tool, default_layer_filter_mode, layer_filter_mode_or_normal, yes};
@@ -170,6 +170,9 @@ pub struct Dialog {
     pub kind: DialogKind,
     /// Field values by name. Dialog widgets read and write these; so can automation.
     pub fields: serde_json::Map<String, serde_json::Value>,
+    /// A path dialog cannot restore its live source from serialized document IDs alone.
+    #[serde(skip)]
+    pub path_source: Option<PathMenuSource>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -761,7 +764,7 @@ impl UiState {
 
     pub fn open_dialog(&mut self, kind: DialogKind, fields: serde_json::Map<String, serde_json::Value>) -> u64 {
         let id = self.alloc_id();
-        self.dialogs.push(Dialog { id, kind, fields });
+        self.dialogs.push(Dialog { id, kind, fields, path_source: None });
         id
     }
 

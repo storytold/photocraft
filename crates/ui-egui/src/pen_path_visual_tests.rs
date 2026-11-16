@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
-use crate::state::Tool;
+use crate::state::{PathSelection, Tool};
 
 fn path(app: &PhotocraftApp, name: &str) -> Path {
     let doc = &app.session.active().unwrap().doc;
@@ -66,7 +66,7 @@ fn saved_path_drag_visual_fixture() {
     h.run_steps(8);
     h.get_by_label("Saved drawing").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("Saved drawing"), "the Paths panel row selects the saved path");
+    assert_eq!(h.state().ui.selected_path, Some(PathSelection::Saved { index: 0 }), "the Paths panel row selects the saved path");
     let (work, saved) = (path(h.state(), "work"), path(h.state(), "Saved drawing"));
     let history = h.state().session.active().unwrap().history.past_len();
     let mode = if baseline { "baseline" } else { "fixed" };

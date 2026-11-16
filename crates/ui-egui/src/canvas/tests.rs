@@ -3993,3 +3993,33 @@ fn an_armed_eyedropper_hides_no_cursor_on_a_secondary_canvas() {
     assert_eq!(cursor(&mut app, true), egui::CursorIcon::None, "the primary canvas hides the icon under the pipette it draws");
     assert_ne!(cursor(&mut app, false), egui::CursorIcon::None, "a secondary canvas keeps a cursor");
 }
+
+#[test]
+fn stale_saved_path_dialog_cannot_preview_a_reopened_document() {
+    use crate::state::{PathSelection, Tool};
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.background_jobs = false;
+    app.run("file.new", json!({"width":64,"height":64,"background":"white"})).unwrap();
+    app.run("path.set", json!({"name":"A","path":{"subpaths":[{"closed":true,"knots":[[10,10],[30,10],[30,30],[10,30]]}]}})).unwrap();
+    let doc = app.session.active().unwrap().doc.as_ref().clone();
+    app.session.close(0);
+    app.session.add_document(doc.clone(), None);
+    app.sync_views();
+    app.ui.tool = Tool::Pen;
+    app.ui.selected_path = Some(PathSelection::Saved { index: 0 });
+    let ctx = egui::Context::default();
+    assert!(crate::canvas_tool_menu::open(&mut app, &ctx, Tool::Pen, [10., 10.]));
+    crate::canvas_tool_menu::choose(&mut app, &ctx, "path.transform");
+    // Automation can request preview even though the path dialog does not show a Preview checkbox.
+    let d = app.ui.dialogs.last_mut().unwrap();
+    d.fields.insert("__preview".into(), json!(true));
+    d.fields.insert("translateX".into(), json!(5.));
+    super::ensure_filter_preview(&mut app, 0, &ctx);
+    assert!(app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()), "the fresh dialog can preview");
+    app.filter_preview = None;
+    app.session.close(0);
+    app.session.add_document(doc, None);
+    app.sync_views();
+    super::ensure_filter_preview(&mut app, 0, &ctx);
+    assert!(app.filter_preview.is_none(), "an old path dialog must not preview a replacement document");
+}

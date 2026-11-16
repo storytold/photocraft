@@ -2,7 +2,7 @@
 //! and Hand tools, an active Free Transform box, text being edited with a Type tool, committed type
 //! under a Type tool, the pasteboard (outside the image), a guide and a pending crop.
 
-use crate::state::PathSelection;
+use crate::state::{PathMenuSource, PathSelection};
 use egui::Context;
 use photocraft_doc::{ColorMode, LayerContent};
 use photocraft_engine::prefs::{self, CanvasColor};
@@ -22,6 +22,9 @@ pub struct CanvasToolMenu {
     pub has_path: bool,
     #[serde(default)]
     pub path_name: Option<PathSelection>,
+    /// Saved indices belong to one document state, including direct control-channel menu picks.
+    #[serde(skip)]
+    pub path_source: Option<PathMenuSource>,
     /// Opened over a Free Transform box: its modes instead of the tool's actions.
     #[serde(default)]
     pub transform: bool,
@@ -377,6 +380,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         has_selection: false,
         has_path: false,
         path_name: None,
+        path_source: None,
         transform: false,
         pasteboard: false,
         anchor: None,
@@ -941,8 +945,21 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
     }
 }
 
+fn path_menu_source(app: &PhotocraftApp) -> Option<PathMenuSource> {
+    app.session.active().map(PathMenuSource::capture)
+}
+
+fn path_menu_current(app: &PhotocraftApp, menu: &CanvasToolMenu) -> bool {
+    !(path_menu(menu.tool) || shape_tool_menu(menu.tool))
+        || !matches!(menu.path_name, Some(PathSelection::Saved { .. }))
+        || (menu.path_source.is_some() && menu.path_source == path_menu_source(app))
+}
+
 /// Is `command` one of the open menu's rows, and enabled?
 pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if !path_menu_current(app, menu) {
+        return false;
+    }
     (is_point(menu, command) && point_current(app, menu))
         || ((rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command) || is_crop(menu, command))
             && entry_enabled(app, menu, command))
@@ -1100,6 +1117,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         has_selection: false,
         has_path: false,
         path_name: None,
+        path_source: None,
         transform: true,
         pasteboard: false,
         anchor: None,
@@ -1188,6 +1206,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         has_selection: false,
         has_path: false,
         path_name: None,
+        path_source: None,
         transform: false,
         pasteboard: true,
         anchor: None,
@@ -1228,6 +1247,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         has_selection: false,
         has_path: false,
         path_name: None,
+        path_source: None,
         transform: false,
         pasteboard: false,
         anchor: None,
@@ -1341,7 +1361,7 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     let saved = menu.path_name.as_ref().is_some_and(|n| n.name() != Some("work") && n.name() != Some("layer"));
     let has_path = menu.has_path;
     let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
-    let pending_layer = pending && (app.ui.tool_options.vector_mode == "shape" || app.ui.vector_mask_target);
+    let pending_layer = pending && crate::vector_ui::pen_draft_targets_layer(app);
     match command {
         "layer.vectorMask.fromPath" => has_path && can_mask && !pending_layer,
         "path.delete" => has_path && !pending_layer && (pending || menu.path_name.as_ref().and_then(|p| p.name()) != Some("layer")),
@@ -1427,6 +1447,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         tool,
         has_selection,
         has_path,
+        path_source: matches!(path_name, Some(PathSelection::Saved { .. })).then(|| path_menu_source(app)).flatten(),
         path_name,
         transform: false,
         pasteboard: false,
@@ -1463,6 +1484,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         has_selection: false,
         has_path: false,
         path_name: None,
+        path_source: None,
         transform: false,
         pasteboard: false,
         anchor: Some(doc),
@@ -1700,7 +1722,11 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &PathSe
         // Pressure is remembered; the tool stays on the spec's default (#10527).
         fields.insert("simulatePressure".into(), json!(remembered_simulate_pressure(app)));
     }
+    let source = matches!(name, PathSelection::Saved { .. }).then(|| path_menu_source(app)).flatten();
     spec_dialog(app, command, label, spec, fields);
+    if let Some(dialog) = app.ui.dialogs.last_mut() {
+        dialog.path_source = source;
+    }
 }
 
 /// Marks the Make Selection dialog [`pen_dialog`] opens. It keeps the schema dialog's fields, so OK
@@ -1763,18 +1789,27 @@ pub(crate) fn name_make_selection_step(app: &mut PhotocraftApp, fields: &serde_j
 /// The Pen options bar's Make Selection (Path mode, #5703): the canvas menu's Make Selection…
 /// dialog for the path being drawn (committed first, as the menu does) or the active path.
 pub(crate) fn make_selection(app: &mut PhotocraftApp) -> Result<(), String> {
-    let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
-    // Where `pen_commit` puts the path being drawn: a shape layer or the targeted vector mask,
-    // else the Paths panel path it adds to (a selected saved path, or the Work Path), which it
-    // selects so it is the active path.
-    let pending_layer = pending && (app.ui.tool_options.vector_mode == "shape" || crate::vector_ui::targeted_vector_mask(app).is_some());
-    if pending && !crate::vector_ui::pen_commit(app, false) {
-        return Err(app.ui.status.clone());
-    }
-    let name = if pending_layer { Some("layer".into()) } else { crate::vector_ui::active_path_name(app) }
+    let name = commit_pending_pen_target(app)?
+        .or_else(|| crate::vector_ui::active_path_name(app))
         .ok_or_else(|| "No path is available for this action".to_string())?;
     pen_dialog(app, "path.toSelection", "Make Selection…", &name);
     Ok(())
+}
+
+/// Commit to the draft's captured owner, then use the selection that commit actually produced.
+fn commit_pending_pen_target(app: &mut PhotocraftApp) -> Result<Option<PathSelection>, String> {
+    if !app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2) {
+        return Ok(None);
+    }
+    // Ordinary reconciliation may cancel a stale draft and report success. A menu action must
+    // refuse instead of treating the surviving Work Path or another row as that draft's target.
+    if !crate::vector_ui::pen_draft_is_current(app) {
+        return Err("Pen draft target is stale; no path was changed".into());
+    }
+    if !crate::vector_ui::pen_commit(app, false) {
+        return Err(app.ui.status.clone());
+    }
+    crate::vector_ui::active_path_name(app).map(Some).ok_or_else(|| "No path is available for this action".into())
 }
 
 fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
@@ -1786,13 +1821,7 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
         app.run(command, json!({}))?;
         return Ok(());
     }
-    let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
-    let pending_layer = pending && (app.ui.tool_options.vector_mode == "shape" || app.ui.vector_mask_target);
-    if pending && !crate::vector_ui::pen_commit(app, false) {
-        return Err(app.ui.status.clone());
-    }
-    let name = if pending { Some(if pending_layer { "layer" } else { "work" }.into()) } else { menu.path_name.clone() }
-        .ok_or_else(|| "No path is available for this action".to_string())?;
+    let name = commit_pending_pen_target(app)?.or_else(|| menu.path_name.clone()).ok_or_else(|| "No path is available for this action".to_string())?;
     match command {
         "edit.defineCustomShape" | "path.toSelection" | "path.fill" | "path.stroke" | "path.clippingPath.set" | "path.transform" => {
             let label = PEN_MENU.iter().flatten().find(|(_, id)| *id == command).map_or(command, |(label, _)| *label);
@@ -1811,7 +1840,11 @@ fn menu_id() -> egui::Id {
 
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let Some(mut menu) = app.ui.canvas_tool_menu.clone() else { return };
-    if matches!(menu.path_name, Some(PathSelection::Saved { .. })) && menu.path_name != crate::vector_ui::active_path_name(app) {
+    // Point menus keep their expired anchor entry visible but disabled; available() still
+    // rejects every stale path action, including direct control-channel picks.
+    if (!path_menu_current(app, &menu) && menu.point.is_none())
+        || (matches!(menu.path_name, Some(PathSelection::Saved { .. })) && menu.path_name != crate::vector_ui::active_path_name(app))
+    {
         app.ui.canvas_tool_menu = None;
         return;
     }

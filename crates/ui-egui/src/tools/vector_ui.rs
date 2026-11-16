@@ -332,6 +332,16 @@ pub(crate) fn capture_pen_owner(app: &PhotocraftApp) -> Option<PenOwner> {
     })
 }
 
+/// Explicit menu actions must not continue on another path when reconciliation cancels a draft.
+pub(crate) fn pen_draft_is_current(app: &PhotocraftApp) -> bool {
+    app.ui.pen.as_ref().and_then(|pen| pen.owner.as_ref()).is_some_and(|owner| owner.valid(app))
+}
+
+/// Menu restrictions follow the captured draft target even after tool options change.
+pub(crate) fn pen_draft_targets_layer(app: &PhotocraftApp) -> bool {
+    app.ui.pen.as_ref().and_then(|pen| pen.owner.as_ref()).is_some_and(|owner| matches!(owner.target, PenTarget::Shape { .. } | PenTarget::VectorMask(_)))
+}
+
 impl PenOwner {
     fn valid(&self, app: &PhotocraftApp) -> bool {
         app.session.active().is_some_and(|st| st.doc.id == self.document && st.revision == self.revision && self.source.ptr_eq(&Arc::downgrade(&st.doc)))

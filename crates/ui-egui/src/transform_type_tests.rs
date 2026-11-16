@@ -48,6 +48,7 @@ fn type_layers_offer_free_transform_but_not_distort_or_perspective() {
         has_selection: true,
         has_path: false,
         path_name: None,
+        path_source: None,
         transform: false,
         pasteboard: false,
         anchor: None,

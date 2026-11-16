@@ -43,6 +43,9 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     let dialog = app.ui.dialogs.iter().position(|d| d.fields.contains_key("__filter"))?;
     crate::filter_dialog::refresh_match_color_sources(&app.session, &mut app.ui.dialogs[dialog].fields);
     let d = &app.ui.dialogs[dialog];
+    if !crate::dialogs::path_source_current(app, d) {
+        return None;
+    }
     crate::filter_dialog::validate_match_color_destination(app, &d.fields).ok()?;
     if d.fields.get("__preview").and_then(serde_json::Value::as_bool) != Some(true) {
         return None;

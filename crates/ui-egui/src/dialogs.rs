@@ -1018,12 +1018,19 @@ fn report_file_errors(app: &mut PhotocraftApp, d: &Dialog, r: &Value) {
     crate::notices::file_failures(app, &what, &lines);
 }
 
+/// The menu has already closed. Both preview and confirmation must retain its runtime source,
+/// including reopen/history cycles; old serialized dialogs cannot recover that ownership.
+pub(crate) fn path_source_current(app: &PhotocraftApp, d: &Dialog) -> bool {
+    if d.path_source.is_none() && !d.fields.contains_key("__pathSource") {
+        return true;
+    }
+    d.path_source.is_some() && d.path_source == app.session.active().map(crate::state::PathMenuSource::capture)
+}
+
 /// Confirm a command dialog no specific handler owns: run its `__command` with the dialog's
 /// parameters, then settle the filter preview and the playing action.
 fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Value, String> {
-    if let Some(source) = d.fields.get("__pathSource")
-        && app.session.active().is_none_or(|st| *source != json!([st.doc.id.0, st.revision]))
-    {
+    if !path_source_current(app, &d) {
         return Err(tl!("The path changed while the dialog was open; select it again.").into());
     }
     crate::filter_dialog::refresh_match_color_sources(&app.session, &mut d.fields);

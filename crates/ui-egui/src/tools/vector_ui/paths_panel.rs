@@ -1,7 +1,7 @@
 use super::overlay::path_lines;
 use super::shapes::hex;
 use super::{Color32, Document, LayerContent, Path, PhotocraftApp, Rect, Sense, Stroke, Tokens, Value, json, pos2, vec2};
-use crate::state::PathSelection;
+use crate::state::{PathMenuSource, PathSelection};
 
 // ---------------------------------------------------------------------------------------------
 // Paths panel
@@ -78,6 +78,30 @@ struct PathDrag {
 
 fn path_drag_key() -> egui::Id {
     egui::Id::unique("paths-drag")
+}
+
+/// A row popup uses a positional widget ID. Never let it follow another path into that slot.
+#[derive(Clone)]
+struct PathMenu {
+    popup: egui::Id,
+    source: PathMenuSource,
+    layer: Option<photocraft_doc::LayerId>,
+}
+
+fn path_menu_key() -> egui::Id {
+    egui::Id::unique("paths-row-menu")
+}
+
+fn close_stale_path_menu(app: &PhotocraftApp, ctx: &egui::Context) {
+    let Some(menu) = ctx.data(|d| d.get_temp::<PathMenu>(path_menu_key())) else { return };
+    let current = app.session.active().is_some_and(|st| PathMenuSource::capture(st) == menu.source && st.active_layer == menu.layer);
+    if !current {
+        // Close only our popup: another panel may have opened a menu since this one closed.
+        egui::Popup::close_id(ctx, menu.popup);
+    }
+    if !current || !egui::Popup::is_id_open(ctx, menu.popup) {
+        ctx.data_mut(|d| d.remove::<PathMenu>(path_menu_key()));
+    }
 }
 
 fn ctx_data_footer(ctx: &egui::Context, r: Rect) {
@@ -161,6 +185,7 @@ pub(super) fn path_context_actions(entry: &PathEntry, doc: &Document, layer: Opt
 }
 
 pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    close_stale_path_menu(app, ui.ctx());
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         ui.label(egui::RichText::new(tl!("No document")).color(t.text_faint));
@@ -169,6 +194,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let doc = st.doc.clone();
     let st_layer = st.active_layer;
     let revision = st.revision;
+    let source = PathMenuSource::capture(st);
     let rows = path_rows(&doc, st_layer);
     let has_layer_path = rows.iter().any(|r| r.kind == PathRow::Layer);
     let mut action: Option<(&str, Value)> = None;
@@ -299,6 +325,11 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     && let Some(text) = proposed
                 {
                     ui.ctx().data_mut(|d| d.insert_temp(rename_id, PathRename { key: key.clone(), revision, text, focused: false }));
+                }
+                if resp.secondary_clicked() {
+                    ctx.data_mut(|d| {
+                        d.insert_temp(path_menu_key(), PathMenu { popup: egui::Popup::default_response_id(&resp), source: source.clone(), layer: st_layer })
+                    });
                 }
                 resp.context_menu(|ui| {
                     crate::widgets::menu_scroll(ui, |ui| {

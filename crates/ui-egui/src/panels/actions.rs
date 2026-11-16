@@ -1628,7 +1628,8 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let path_selected = app.ui.selected_path.as_ref().is_some_and(|target| {
         app.session.active().is_some_and(|st| target.path(&st.doc).is_some())
-            || target.name().is_some_and(|name| photocraft_engine::actions_edit_cmds::selected_recording_path(&app.session, name).is_ok())
+            // Only the temporary layer path needs session-based lookup; a legacy saved name may be ambiguous.
+            || (target.name() == Some("layer") && photocraft_engine::actions_edit_cmds::selected_recording_path(&app.session, "layer").is_ok())
     });
     if ui.add_enabled(selected && path_selected, egui::Button::new(tl!("Insert Path"))).clicked() {
         act = Some("insertPath");
