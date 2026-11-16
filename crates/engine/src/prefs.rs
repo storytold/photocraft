@@ -526,11 +526,11 @@ mod cmds;
 mod customize;
 mod files;
 #[cfg(test)]
-mod menus_hideable_tests;
-#[cfg(test)]
 mod legacy_channel_tests;
 #[cfg(test)]
 mod legacy_undo_tests;
+#[cfg(test)]
+mod menus_hideable_tests;
 mod shortcuts;
 mod store;
 mod validate;
