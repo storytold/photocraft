@@ -196,3 +196,40 @@ fn a_shift_moved_frame_keeps_the_axis_of_the_raw_drag() {
     assert_eq!(frames(&app), vec![[140, 102, 190, 132]], "moved down by 2 only");
     assert!(lines.is_empty(), "no alignment on the axis the frame did not move on: {lines:?}");
 }
+
+/// CodeRabbit on #15141 (and #15164, #15174): the press with Shift held is one point, not the end of a
+/// squared drag. At (135, 100), 2 px from the layer's edge at x 137, the corner takes x 137 and keeps
+/// y 100; squaring a zero-length drag turned the 2 px x correction into a 2 px y move too.
+#[test]
+fn a_shift_press_snaps_as_a_point_not_as_a_squared_drag() {
+    let mut app = app(true);
+    shift_drag(&mut app, [135.0, 100.0], [237.0, 200.0]);
+    assert_eq!(frames(&app), vec![[137, 100, 237, 200]], "the start is (137, 100), not (137, 102)");
+}
+
+/// CodeRabbit on #15141 and #15155: a snapped press moves the frame's start corner, and the squaring
+/// starts from that corner, not from the raw press. Pressed at (130, 200) the start takes x 137; a
+/// Shift drag to (250, 50) squares to (247, 90) from there, so the corner reaches the layer's bottom
+/// edge at y 90 that the alignment line shows.
+#[test]
+fn a_shift_drawn_frame_squares_from_the_snapped_press() {
+    let mut app = app(true);
+    let lines = shift_drag(&mut app, [130.0, 200.0], [250.0, 50.0]);
+    assert_eq!(frames(&app), vec![[137, 90, 247, 200]]);
+    assert_eq!(lines, vec![(false, 90.0)]);
+}
+
+/// CodeRabbit on #15160: a squared corner already on a target is nearer than one that needs a
+/// correction. At (140, 90) the y alignment is exact while x 137 is 3 px away, so y wins and the
+/// frame is not pushed to (137, 87); the other way round, an exact x beats a y 3 px away.
+#[test]
+fn an_exact_alignment_of_the_squared_corner_beats_a_correction_on_the_other_axis() {
+    let mut app = app(true);
+    let lines = shift_drag(&mut app, [200.0, 150.0], [140.0, 60.0]);
+    assert_eq!(frames(&app), vec![[140, 90, 200, 150]], "stays on y 90");
+    assert_eq!(lines, vec![(false, 90.0)]);
+    let mut app = self::app(true);
+    let lines = shift_drag(&mut app, [200.0, 150.0], [137.0, 40.0]);
+    assert_eq!(frames(&app), vec![[137, 87, 200, 150]], "stays on x 137");
+    assert_eq!(lines, vec![(true, 137.0)]);
+}
