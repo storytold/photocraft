@@ -243,7 +243,7 @@ fn freeform_polygon(o: &ToolOptions, start: [f64; 2], end: [f64; 2], mods: egui:
     let centre = if mods.alt != o.polygon_from_center { start } else { [(start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0] };
     let (dx, dy) = (end[0] - centre[0], end[1] - centre[1]);
     let reach = dx.hypot(dy);
-    if !(reach >= 0.5) {
+    if reach.is_nan() || reach < 0.5 {
         return None;
     }
     let radius = match positive_pair(o.polygon_freeform_radius, 1.0) {
@@ -265,7 +265,7 @@ fn freeform_polygon(o: &ToolOptions, start: [f64; 2], end: [f64; 2], mods: egui:
     let (xs, ys) = (pts.iter().map(|p| p.0), pts.iter().map(|p| p.1));
     let (x0, y0) = (xs.clone().fold(f64::INFINITY, f64::min), ys.clone().fold(f64::INFINITY, f64::min));
     let (x1, y1) = (xs.fold(f64::NEG_INFINITY, f64::max), ys.fold(f64::NEG_INFINITY, f64::max));
-    if !(x1 - x0 >= 1.0 && y1 - y0 >= 1.0) {
+    if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
         return None;
     }
     let path = photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polygon(&pts)]);

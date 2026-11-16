@@ -114,9 +114,9 @@ fn a_freeform_radius_sets_the_circumradius() {
 
 #[test]
 fn a_freeform_polygon_is_a_polygon_layer_and_works_in_path_mode() {
-    let mut app = app(Tool::Polygon, |o| (o.polygon_constraint, o.polygon_sides) = ("freeform".into(), 6));
-    drag(&mut app, D, [600.0, 400.0], NONE, NONE);
-    let st = app.session.active().unwrap();
+    let mut shape = app(Tool::Polygon, |o| (o.polygon_constraint, o.polygon_sides) = ("freeform".into(), 6));
+    drag(&mut shape, D, [600.0, 400.0], NONE, NONE);
+    let st = shape.session.active().unwrap();
     let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
     assert!(layer.name.starts_with("Polygon "), "{}", layer.name);
 

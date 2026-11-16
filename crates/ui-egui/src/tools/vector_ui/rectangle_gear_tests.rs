@@ -216,9 +216,7 @@ fn the_rectangle_has_the_gear_after_its_path_arrangement() {
     let (gear, arrange) = (h.get_by_label(GEAR).rect(), h.get_by_label("Path arrangement").rect());
     assert!(arrange.right() <= gear.left() && (gear.center().y - arrange.center().y).abs() < 4.0, "{gear:?} after {arrange:?}");
     // The Triangle's is #13361's (`triangle_gear_tests`), the Polygon's #13306's (`polygon_gear_tests`).
-    for tool in [Tool::EllipseShape] {
-        assert!(bar(tool).query_by_label(GEAR).is_none(), "{tool:?}");
-    }
+    assert!(bar(Tool::EllipseShape).query_by_label(GEAR).is_none(), "the Ellipse has no gear");
 }
 
 #[test]
