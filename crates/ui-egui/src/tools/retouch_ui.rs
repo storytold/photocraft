@@ -1113,6 +1113,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             if tool == Tool::Smudge {
                 crate::widgets::checkbox(ui, &mut o.finger_painting, tl!("Finger Painting"));
+                let before = app.session.tools.brush.clone();
+                let mut brush = before.clone();
+                if crate::eraser_ui::pressure_size_button(ui, brush.pressure_size).clicked() {
+                    brush.pressure_size = !brush.pressure_size;
+                }
+                crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
             }
             if out_of_range {
                 crate::eraser_ui::open_range_alert(app);
@@ -1310,3 +1316,7 @@ mod remove_options_bar_labels_tests;
 #[cfg(test)]
 #[path = "../burn_exposure_field_tests.rs"]
 mod burn_exposure_field_tests;
+
+#[cfg(test)]
+#[path = "../smudge_bar_pressure_size_tests.rs"]
+mod smudge_bar_pressure_size_tests;

@@ -189,6 +189,13 @@ fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> b
 /// How far the Angle field lets a typed number through before [`angle_field`] clamps it.
 const ANGLE_TYPED_MAX: f32 = 1.0e6;
 
+/// The options-bar pressure-for-size toggle, bound to the active tool's brush.
+pub(crate) fn pressure_size_button(ui: &mut egui::Ui, on: bool) -> egui::Response {
+    let name = tl!("Always use pressure for size");
+    icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), on, name, false)
+        .on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure"))
+}
+
 /// Options bar for the Magic Eraser and Background Eraser. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     let o = &mut app.ui.tool_options;
@@ -242,9 +249,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             widgets::checkbox(ui, &mut app.ui.tool_options.bg_protect_fg, tl!("Protect Foreground Color"))
                 .on_hover_text(tl!("Do not erase the foreground swatch color"));
-            let name = tl!("Always use pressure for size");
-            let pressure = icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), brush.pressure_size, name, false);
-            if pressure.on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
+            if pressure_size_button(ui, brush.pressure_size).clicked() {
                 brush.pressure_size = !brush.pressure_size;
             }
             crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
