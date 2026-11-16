@@ -5,12 +5,18 @@ use photocraft_ui_egui::{PhotocraftApp, file_ui::open_print};
 use serde_json::{Map, Value, json};
 
 fn app() -> (PhotocraftApp, u64) {
+    app_with_document(json!({"width": 120, "height": 80, "name": "Custom paper"}))
+}
+
+/// The real Print dialog, open over a new document made with the `file.new` params `doc`, with a
+/// stand-in printer so no test asks the system spooler. Returns the app and the dialog's ID.
+pub(super) fn app_with_document(doc: Value) -> (PhotocraftApp, u64) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
     // Print lists this printer and does not ask the spooler.
     app.session.printer_source = Some(std::sync::Arc::new(|| {
         vec![craft_print::Printer { name: "Test native printer".into(), default: true, two_sided: None, description: String::new() }]
     }));
-    app.run("file.new", json!({"width": 120, "height": 80, "name": "Custom paper"})).unwrap();
+    app.run("file.new", doc).unwrap();
     let id = photocraft_engine::print_cmds::with_spooler(|| open_print(&mut app));
     assert_no_system_listing();
     let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
@@ -24,7 +30,7 @@ fn app() -> (PhotocraftApp, u64) {
 }
 
 /// No test in this binary asks the system spooler for its printers.
-fn assert_no_system_listing() {
+pub(super) fn assert_no_system_listing() {
     assert_eq!(photocraft_engine::print_cmds::system_printer_listings(), 0, "a test asked the system spooler for its printers");
 }
 
@@ -34,7 +40,8 @@ fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     }
 }
 
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+/// The Print dialog drawn at the standard display scale.
+pub(super) fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     harness_at_scale(app, 1.0)
 }
 
@@ -47,7 +54,8 @@ fn harness_at_scale(app: PhotocraftApp, pixels_per_point: f32) -> Harness<'stati
     h
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+/// Clicks the control named `label`, or else the one showing `label` as its value.
+pub(super) fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
     if let Some(node) = h.query_by_label(label) {
         node.click();
     } else {
@@ -71,7 +79,8 @@ fn shown(h: &Harness<'_, PhotocraftApp>, text: &str) -> bool {
     h.query_all_by_label(text).next().is_some() || h.query_all_by_value(text).next().is_some()
 }
 
-fn enter_length(h: &mut Harness<'_, PhotocraftApp>, label: &str, value: &str) {
+/// Types `value` into the length field named `label` and leaves it with Tab.
+pub(super) fn enter_length(h: &mut Harness<'_, PhotocraftApp>, label: &str, value: &str) {
     // The caption is a separate Label node with the same text; use the accessible SpinButton.
     let pos = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, label).rect().center();
     h.event(Event::PointerMoved(pos));
@@ -86,7 +95,8 @@ fn enter_length(h: &mut Harness<'_, PhotocraftApp>, label: &str, value: &str) {
     h.run_steps(3);
 }
 
-fn fields(h: &Harness<'_, PhotocraftApp>, id: u64) -> Map<String, Value> {
+/// The fields of dialog `id` as they are now.
+pub(super) fn fields(h: &Harness<'_, PhotocraftApp>, id: u64) -> Map<String, Value> {
     h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone()
 }
 

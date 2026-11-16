@@ -157,11 +157,14 @@ pub(super) fn driver_page(f: &mut Map<String, Value>) -> bool {
     true
 }
 
-/// Points per unit for the Position and Size fields.
+/// Points per unit for the Position and Size fields: 72 points to the inch and 12 to the pica,
+/// as in Photoshop's Print dialog. Any other value is centimeters.
 fn unit_pt(units: &str) -> f64 {
     match units {
         "mm" => 72.0 / 25.4,
         "in" => 72.0,
+        "pt" => 1.0,
+        "pica" => 12.0,
         _ => 72.0 / 2.54,
     }
 }
@@ -594,7 +597,9 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                 }
             }
             head(ui, tl!("Position and Size"));
-            dropdown_str(ui, "print-units", tl!("Units"), f, "units", &[("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("in", tl!("Inches"))], 130.0);
+            // Photoshop's order; the suffixes "pt" and "pica" also read as those units when typed.
+            let unit_options = [("in", tl!("Inches")), ("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("pt", tl!("Points")), ("pica", tl!("Picas"))];
+            dropdown_str(ui, "print-units", tl!("Units"), f, "units", &unit_options, 130.0);
             let units = s(f, "units", "cm");
             check(ui, f, "center", tl!("Center"), true);
             let centered = b(f, "center", true);
