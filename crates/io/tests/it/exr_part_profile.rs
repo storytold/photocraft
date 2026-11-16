@@ -62,10 +62,11 @@ fn selected_gray_exr_part_keeps_linear_profile_and_float_samples() {
             let profile = Profile::parse(doc.icc_profile.as_deref().unwrap()).unwrap();
             assert_eq!(profile.color_space, ColorSpace::Gray);
             let transform = Transform::new(&profile, Builtin::SGray.profile(), Intent::RelativeColorimetric, false).unwrap();
-            let mut display = samples(doc);
+            let linear = samples(doc);
+            let mut display = linear.clone();
             transform.apply(&mut display, 2).unwrap();
             for i in [1, 2] {
-                let expected_gray = photocraft_color::convert::linear_to_srgb(samples(doc)[i * 2]);
+                let expected_gray = photocraft_color::convert::linear_to_srgb(linear[i * 2]);
                 assert!((display[i * 2] - expected_gray).abs() < 1e-4, "{layout:?} {depth:?}: display gray");
                 assert_eq!(display[i * 2 + 1], expected[i * 2 + 1], "alpha is not gamma encoded");
             }
@@ -98,7 +99,7 @@ fn selected_gray_exr_part_exports_like_ordinary_import() {
                     }
                 } else {
                     for i in [1, 2] {
-                        let expected = photocraft_color::convert::linear_to_srgb(original[i * 2]);
+                        let expected = photocraft_color::convert::linear_to_srgb(original[i * 2]).clamp(0.0, 1.0);
                         assert!((output[i * 2] - expected).abs() <= 1.0 / 255.0, "TGA uses display-encoded gray");
                         assert!((output[i * 2 + 1] - original[i * 2 + 1]).abs() <= 1.0 / 255.0, "TGA preserves alpha");
                     }
