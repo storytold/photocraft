@@ -181,7 +181,7 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
             let o = app.ui.tool_options.clone();
             let _ = app.run(
                 "paint.gradient",
-                json!({"from": [d.start[0], d.start[1]], "to": [end[0], end[1]], "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "opacity": o.fill_opacity, "mode": o.gradient_blend_mode.label(), "target": paint_target(app)}),
+                json!({"from": [d.start[0], d.start[1]], "to": [end[0], end[1]], "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "method": drag_method(app), "opacity": o.fill_opacity, "mode": o.gradient_blend_mode.label(), "target": paint_target(app)}),
             );
         }
         Tool::Move => {
@@ -190,6 +190,15 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
         }
         _ => {}
     }
+}
+
+/// The `method` a gradient drag sends. Only a gradient with no transparency, or Smooth (whose opacity
+/// curve was measured), is baked by a method: Photoshop's transparency under the other methods was not
+/// measured, so there the drag sends none and keeps today's straight stops (#12004).
+fn drag_method(app: &PhotocraftApp) -> serde_json::Value {
+    let o = &app.ui.tool_options;
+    let transparent = app.session.presets.gradient.opacity.iter().any(|(_, a)| *a < 1.0 - 1e-6);
+    if transparent && o.gradient_method != "smooth" { serde_json::Value::Null } else { json!(o.gradient_method) }
 }
 
 /// The release of selection drag `d` at `end` (`click`: see [`finish`]). A Single Row / Single

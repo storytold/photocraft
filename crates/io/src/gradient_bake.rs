@@ -21,16 +21,20 @@ pub enum Method {
     Perceptual,
     Linear,
     Smooth,
+    /// No interpolation: each stop's colour holds up to the next stop (#12004).
+    Stripes,
 }
 
 impl Method {
-    /// The method a command names (`classic`, `perceptual`, `linear`, `smooth`); `None` otherwise.
+    /// The method a command names (`classic`, `perceptual`, `linear`, `smooth`, `stripes`);
+    /// `None` otherwise.
     pub fn from_name(name: &str) -> Option<Method> {
         match name.to_ascii_lowercase().as_str() {
             "classic" => Some(Method::Classic),
             "perceptual" => Some(Method::Perceptual),
             "linear" => Some(Method::Linear),
             "smooth" => Some(Method::Smooth),
+            "stripes" => Some(Method::Stripes),
             _ => None,
         }
     }
@@ -78,7 +82,7 @@ fn from_oklab(p: [f32; 3]) -> [f32; 3] {
 
 fn into_space(m: Method, rgb: [f32; 3]) -> [f32; 3] {
     match m {
-        Method::Classic => rgb,
+        Method::Classic | Method::Stripes => rgb,
         Method::Linear => rgb.map(lin),
         Method::Perceptual | Method::Smooth => to_oklab(rgb),
     }
@@ -86,7 +90,7 @@ fn into_space(m: Method, rgb: [f32; 3]) -> [f32; 3] {
 
 fn out_of_space(m: Method, p: [f32; 3]) -> [f32; 3] {
     match m {
-        Method::Classic => p.map(|v| v.clamp(0.0, 1.0)),
+        Method::Classic | Method::Stripes => p.map(|v| v.clamp(0.0, 1.0)),
         Method::Linear => p.map(enc),
         Method::Perceptual | Method::Smooth => from_oklab(p),
     }
@@ -160,13 +164,15 @@ impl Method {
             Method::Perceptual => "perceptual",
             Method::Linear => "linear",
             Method::Smooth => "smooth",
+            Method::Stripes => "stripes",
         }
     }
 
     /// Its four-character code in a PSD gradient (`None` for Classic, which older blocks imply).
+    /// Stripes has no known code, so a file keeps it as Classic.
     pub(crate) fn code(self) -> Option<&'static [u8; 4]> {
         match self {
-            Method::Classic => None,
+            Method::Classic | Method::Stripes => None,
             Method::Perceptual => Some(b"Perc"),
             Method::Linear => Some(b"Lnr "),
             Method::Smooth => Some(b"Smoo"),
@@ -190,6 +196,11 @@ pub fn bake_source(src: &photocraft_doc::adjust::GradientSource) -> Vec<(f32, [f
 /// Dense linear stops reproducing Photoshop's interpolation. Returns the input unchanged when it
 /// already interpolates linearly in sRGB.
 pub fn bake(stops: Vec<(f32, Color)>, midpoints: &[f32], smoothness: f32, method: Method) -> Vec<(f32, Color)> {
+    if method == Method::Stripes {
+        // Only two opaque colour stops are the measured case (#12004); more colours, or opacity merged
+        // into the stops, were not and keep the straight stops.
+        return if stops.len() == 2 && stops.iter().all(|(_, c)| c.alpha >= 1.0) { stripes(stops) } else { stops };
+    }
     let plain_mids = midpoints.iter().all(|m| (m - 0.5).abs() < 1e-3);
     // Classic interpolates in the stops' own model: Lab stops (Lab documents) blend in L*a*b*, which the
     // compositors' sRGB interpolation can't reproduce (psd-tools 4x4_16bit_lab).
@@ -220,6 +231,29 @@ pub fn bake(stops: Vec<(f32, Color)>, midpoints: &[f32], smoothness: f32, method
     out
 }
 
+/// How far before the next stop a Stripes step lands: past every pixel inside the segment (a
+/// 600 px drag's last pixel is at t = 0.9992), so the next colour starts after the segment's end.
+const STRIPE_STEP: f32 = 1e-4;
+
+/// Stripes (#12004): each stop's colour, alpha included, holds up to the next stop and only then
+/// gives way, as hard steps. Black to white over 100..700 px: 0 at x 99 to 700, 255 from x 701.
+fn stripes(stops: Vec<(f32, Color)>) -> Vec<(f32, Color)> {
+    let mut s: Vec<(f32, Color)> = stops.into_iter().filter(|(t, _)| t.is_finite()).collect();
+    s.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if s.len() < 2 {
+        return s;
+    }
+    let mut out = Vec::with_capacity(s.len() * 2);
+    for w in s.windows(2) {
+        out.push(w[0]);
+        out.push(((w[1].0 - STRIPE_STEP).max(w[0].0), w[0].1));
+    }
+    if let Some(&(t, c)) = s.last() {
+        out.push(((t - STRIPE_STEP).max(0.0), c));
+    }
+    out
+}
+
 /// Exponent of Photoshop's opacity response for Perceptual and Linear gradients: the opacity
 /// stops enter the method's space as if they were sRGB grey levels (Linear: linear light;
 /// Perceptual: Oklab L), and the interpolated linear-light value `y` comes out as opacity
@@ -233,7 +267,8 @@ const OPACITY_RESPONSE: f32 = 0.65;
 /// unchanged when it already interpolates linearly. Smooth keeps Classic's opacity curve here: it
 /// was measured only in the Gradient tool at 100 % Smoothness ([`bake_smooth_opacity`]).
 pub fn bake_opacity(stops: Vec<(f32, f32)>, midpoints: &[f32], smoothness: f32, method: Method) -> Vec<(f32, f32)> {
-    let method = if method == Method::Smooth { Method::Classic } else { method };
+    // Stripes' transparency is not measured: it keeps Classic's curve, as Smooth does here.
+    let method = if matches!(method, Method::Smooth | Method::Stripes) { Method::Classic } else { method };
     let plain_mids = midpoints.iter().all(|m| (m - 0.5).abs() < 1e-3);
     let smoothness = if smoothness.is_finite() { smoothness.clamp(0.0, 1.0) } else { 0.0 };
     if stops.len() < 2 || (smoothness <= 0.0 && method == Method::Classic && plain_mids) {
@@ -244,7 +279,7 @@ pub fn bake_opacity(stops: Vec<(f32, f32)>, midpoints: &[f32], smoothness: f32, 
         match method {
             Method::Linear => lin(o),
             Method::Perceptual => lin(o).cbrt(),
-            Method::Classic | Method::Smooth => o,
+            Method::Classic | Method::Smooth | Method::Stripes => o,
         }
     };
     let out = |v: f32| -> f32 {
@@ -252,7 +287,7 @@ pub fn bake_opacity(stops: Vec<(f32, f32)>, midpoints: &[f32], smoothness: f32, 
         let y = match method {
             Method::Linear => v,
             Method::Perceptual => v.max(0.0).powi(3),
-            Method::Classic | Method::Smooth => return v.clamp(0.0, 1.0),
+            Method::Classic | Method::Smooth | Method::Stripes => return v.clamp(0.0, 1.0),
         };
         y.clamp(0.0, 1.0).powf(OPACITY_RESPONSE)
     };

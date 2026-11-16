@@ -152,6 +152,9 @@ fn classic_drag_preserves_preset_transparency_at_all_depths() {
             app.ui.tool_options.gradient_classic = true;
             app.ui.tool_options.gradient_reverse = reverse;
             app.ui.tool_options.gradient_dither = false;
+            // Classic's straight transparency ramp: Smooth, the default since #12004, follows the
+            // reference's own measured curve (#12010).
+            app.ui.tool_options.gradient_method = "classic".into();
             app.ui.tool_options.fill_opacity = 50.0;
             app.session.tools.foreground = [1.0, 0.0, 0.0, 1.0];
             app.run("gradient.presets.select", json!({"preset": "Foreground to Transparent"})).unwrap();
@@ -187,6 +190,8 @@ fn sidebar_transparent_preset_reaches_classic_canvas_over_existing_art() {
     app.run("layer.new.layer", json!({})).unwrap();
     app.ui.tool_options.gradient_classic = true;
     app.ui.tool_options.gradient_dither = false;
+    // Classic's straight ramp (Smooth, the default since #12004, has its own measured curve).
+    app.ui.tool_options.gradient_method = "classic".into();
     let mut h = Harness::builder().with_size(vec2(420.0, 600.0)).build_ui_state(|ui, app| crate::preset_panels::gradients_panel(app, ui), app);
     h.get_by_label("Foreground to Transparent").click();
     h.run();
