@@ -222,7 +222,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                         app.ui.perspective_crop = Some(ordered([a, b, c, d]));
                         app.pcrop.clicks.clear();
                     }
-                } else if let Some(quad) = new_box(start, cur, square, centred) {
+                } else if let Some(quad) = snapped_box(app, start, cur, square, centred) {
                     // Only a drag that built a box replaces the corners clicked so far. One that
                     // made none (a start the snap moved onto its release point) leaves them, so the
                     // next click still finishes the quad (#13065).
@@ -234,6 +234,48 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         }
     }
     true
+}
+
+/// The box a new-quad drag from `start` to `cur` makes ([`new_box`]), its start snapped
+/// ([`snap_start`]).
+fn snapped_box(app: &PhotocraftApp, start: [f64; 2], cur: [f64; 2], square: bool, centred: bool) -> Option<[[f64; 2]; 4]> {
+    new_box(snap_start(app, start), cur, square, centred)
+}
+
+/// The quad the overlay draws: while a new box is being dragged, the box its release would make
+/// (so a snapped start shows during the drag, not only after it; a press still within click
+/// distance shows its raw box); otherwise the current quad.
+fn shown_quad(app: &PhotocraftApp) -> Option<[[f64; 2]; 4]> {
+    match app.pcrop.drag {
+        Some(Drag::New { start, cur, square, centred }) if is_click(app, start, cur) => new_box(start, cur, square, centred),
+        Some(Drag::New { start, cur, square, centred }) => snapped_box(app, start, cur, square, centred),
+        _ => app.ui.perspective_crop,
+    }
+}
+
+/// Where a new quad's drag starts, with View › Snap and Snap To › Document Bounds on (#11803): a
+/// press on the pasteboard beyond a canvas corner (outside on both axes) starts at that corner,
+/// and one within the snap distance of a canvas edge starts on it. Clicked corners keep their place.
+fn snap_start(app: &PhotocraftApp, p: [f64; 2]) -> [f64; 2] {
+    let Some(size) = app.session.active().map(|s| s.doc.size) else { return p };
+    if !(app.ui.extras.snap && crate::snap_ui::options(app).document) {
+        return p;
+    }
+    let tol = crate::snap_ui::tolerance(app);
+    let (w, h) = (f64::from(size.width), f64::from(size.height));
+    let corner = !(0.0..=w).contains(&p[0]) && !(0.0..=h).contains(&p[1]);
+    let snap = |v: f64, max: f64| {
+        if corner {
+            v.clamp(0.0, max)
+        } else if v.abs() <= tol {
+            0.0
+        } else if (v - max).abs() <= tol {
+            max
+        } else {
+            v
+        }
+    };
+    [snap(p[0], w), snap(p[1], h)]
 }
 
 fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
@@ -421,10 +463,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
     let scr = |p: [f64; 2]| xf.to_screen(p[0] as f32, p[1] as f32);
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
-    let quad = match app.pcrop.drag {
-        Some(Drag::New { start, cur, square, centred }) => new_box(start, cur, square, centred),
-        _ => app.ui.perspective_crop,
-    };
+    let quad = shown_quad(app);
     if let Some(q) = quad.filter(|q| q.iter().flatten().all(|v| v.is_finite())) {
         // A quad flipped on one axis is wound counter-clockwise and commits mirrored (#12489).
         let ok = convex_quad_any_winding(&q);
@@ -876,3 +915,7 @@ mod tests {
         assert!(app.pcrop.drag.is_none() && app.pcrop.clicks.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "perspective_crop_snap_tests.rs"]
+mod perspective_crop_snap_tests;
