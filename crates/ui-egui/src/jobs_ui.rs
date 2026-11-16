@@ -617,6 +617,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             true
         }
     });
+    crate::caf_ui::on_job_event(app, &e);
     if crate::dialogs::historical_replace::on_event(app, &e) {
         return;
     }
