@@ -72,18 +72,30 @@ fn modifiers_and_double_zero_preserve_color_replacement_and_layer_state() {
     assert_eq!(a.ui.tool_options.bg_tolerance, bg_tolerance);
 }
 #[test]
-fn digits_do_not_pair_across_tools() {
-    let mut brush_to_color = app(Tool::Brush);
-    press(&mut brush_to_color, 4, false, 0.0);
-    brush_to_color.ui.tool = Tool::ColorReplacement;
-    press(&mut brush_to_color, 5, false, 300.0);
-    assert_eq!(brush_to_color.session.tools.brush.opacity, 0.4);
-    assert_eq!(brush_to_color.ui.tool_options.cr_tolerance, 50.0);
+fn digit_pairs_preserve_the_existing_shared_cross_tool_sequence() {
+    // The new target inherits the same pending-digit sequence as Main's existing tools.
+    let mut brush_to_selected = app(Tool::Brush);
+    press(&mut brush_to_selected, 4, false, 0.0);
+    brush_to_selected.ui.tool = Tool::ColorReplacement;
+    press(&mut brush_to_selected, 5, false, 300.0);
+    assert_eq!(brush_to_selected.session.tools.brush.opacity, 0.4);
+    assert_eq!(brush_to_selected.ui.tool_options.cr_tolerance, 45.0);
 
-    let mut color_to_brush = app(Tool::ColorReplacement);
-    press(&mut color_to_brush, 4, false, 0.0);
-    color_to_brush.ui.tool = Tool::Brush;
-    press(&mut color_to_brush, 5, false, 300.0);
-    assert_eq!(color_to_brush.ui.tool_options.cr_tolerance, 40.0);
-    assert_eq!(color_to_brush.session.tools.brush.opacity, 0.5);
+    // A selected-tool digit still contributes to the unchanged legacy Brush sequence.
+    let mut selected_to_brush = app(Tool::ColorReplacement);
+    press(&mut selected_to_brush, 4, false, 0.0);
+    selected_to_brush.ui.tool = Tool::Brush;
+    press(&mut selected_to_brush, 5, false, 300.0);
+    assert_eq!(selected_to_brush.ui.tool_options.cr_tolerance, 40.0);
+    assert_eq!(selected_to_brush.session.tools.brush.opacity, 0.45);
+
+    // Consuming the first pair must also leave the next legacy digit unpaired.
+    let mut through_selected = app(Tool::Brush);
+    press(&mut through_selected, 4, false, 0.0);
+    through_selected.ui.tool = Tool::ColorReplacement;
+    press(&mut through_selected, 5, false, 300.0);
+    through_selected.ui.tool = Tool::Brush;
+    press(&mut through_selected, 6, false, 400.0);
+    assert_eq!(through_selected.ui.tool_options.cr_tolerance, 45.0);
+    assert_eq!(through_selected.session.tools.brush.opacity, 0.6);
 }
