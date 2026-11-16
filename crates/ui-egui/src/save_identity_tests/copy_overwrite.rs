@@ -135,18 +135,40 @@ fn selected_layer_exports_over_the_own_file_keep_the_document_unsaved() {
     for quick in [false, true] {
         let mut app = app_at("own.png");
         app.run("edit.fill", json!({"color": "#3366cc"})).unwrap();
-        let layers: Vec<_> = app.session.active().unwrap().doc.layers.iter().map(|layer| layer.id).collect();
+        // `app_at` builds a white Background and an empty `Layer 1`; the fill lands on the active top
+        // layer. Selecting only that one keeps this a single-file export instead of the folder batch,
+        // so the save dialog below is the dialog this case actually asks for.
+        let filled = app.session.active().unwrap().doc.layers.last().unwrap().id;
         let st = app.session.active_mut().unwrap();
-        st.selected_layers = layers.clone();
+        st.selected_layers = vec![filled];
         st.saved_to("own.png".into());
+        let written = Rc::new(std::cell::RefCell::new(Vec::<(String, Vec<u8>)>::new()));
+        let capture = written.clone();
+        app.services.write = Some(Box::new(move |path, bytes| {
+            capture.borrow_mut().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
         app.services.file_dialog = Some(crate::file_dialog::fake(vec![Some(crate::FileDialogAnswer::SaveTo("own.png".into()))]).0);
         if quick {
             crate::export_dialog::quick_export_selected_layers_png(&mut app).unwrap();
         } else {
-            let fields = json!({"format": "png", "scale": 50, "__layers": layers.iter().map(|id| id.0).collect::<Vec<_>>()});
+            let fields = json!({"format": "png", "scale": 50, "__layers": [filled.0]});
             crate::export_dialog::confirm(&mut app, fields.as_object().unwrap()).unwrap();
         }
         app.poll_file_dialog(&egui::Context::default(), None);
+        let calls = written.borrow();
+        assert_eq!(calls.len(), 1, "quick={quick}: one selected layer is one file, so the writer is reached once");
+        assert_eq!(calls[0].0, "own.png", "quick={quick}: the export replaces the document's own file");
+        let png = &calls[0].1;
+        assert!(png.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]), "quick={quick}: a PNG, not an empty buffer");
+        let side = if quick { 4 } else { 2 };
+        assert_eq!(
+            (u32::from_be_bytes(png[16..20].try_into().unwrap()), u32::from_be_bytes(png[20..24].try_into().unwrap())),
+            (side, side),
+            "quick={quick}: {}% of 4x4",
+            if quick { 100 } else { 50 }
+        );
+        assert!(!app.ui.status_error, "quick={quick}: {}", app.ui.status);
         assert!(app.session.active().unwrap().is_dirty(), "quick={quick}: one layer replaced the whole document's file");
         assert_eq!(app.session.active().unwrap().path.as_deref(), Some("own.png"));
     }
