@@ -2,6 +2,7 @@
 //! bottom; the last file gives the stack its mode, depth, resolution and profile. The order holds
 //! inside the smart object and with auto-align.
 
+use super::processing::align_reference;
 use super::*;
 
 /// Saves a `w` x `h` document filled with `color` as `<dir>/<name>`; `gray` makes it Grayscale
@@ -98,4 +99,15 @@ fn auto_align_keeps_the_first_file_on_top() {
     let mut s = Session::new();
     s.execute("file.scripts.loadFilesIntoStack", json!({"paths": files, "align": true})).unwrap();
     assert_eq!(top_down(&s.active().unwrap().doc.layers), ["n_base.png", "n_shift.png"]);
+}
+
+/// CodeRabbit on #15208: with three or more files (not measured, so unchanged) the first file stays Auto-Align's
+/// reference, as it was when it was the bottom layer; with two the default, the bottom layer, is the measured one.
+#[test]
+fn auto_align_keeps_the_first_file_as_its_reference() {
+    let first = Some(LayerId(7));
+    assert_eq!(align_reference(first, 2), Value::Null, "two files: Auto-Align's own default");
+    assert_eq!(align_reference(first, 3), json!(7));
+    assert_eq!(align_reference(first, 8), json!(7));
+    assert_eq!(align_reference(None, 3), Value::Null);
 }
