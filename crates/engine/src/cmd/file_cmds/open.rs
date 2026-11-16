@@ -473,6 +473,8 @@ impl PlaceInput {
 
 /// A place decoded, flattened and fitted, ready to be inserted by [`apply_place`].
 pub(crate) struct Prepared {
+    /// What the import left out, such as artboards or artwork, reported with the place.
+    pub(super) warnings: Vec<String>,
     pub(super) content: LayerContent,
     pub(super) layer_name: String,
     /// The history step's name.
@@ -480,15 +482,13 @@ pub(crate) struct Prepared {
     pub(super) scale: f64,
     pub(super) bounds: [f64; 4],
     pub(super) smart: bool,
-    /// What the import left out, such as artboards or artwork, reported with the place.
-    pub(super) warnings: Vec<String>,
     /// The frame the layer fills, if any (it becomes the frame's content instead of a new layer).
     pub(super) frame: Option<LayerId>,
 }
 
 /// Insert the prepared layer as one undo step and report the place. Runs on the session's thread.
 pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
-    let Prepared { content, layer_name, label, scale, bounds, smart, warnings, frame } = p;
+    let Prepared { warnings, content, layer_name, label, scale, bounds, smart, frame } = p;
     let layer = Layer::new(layer_name, content);
     let id = layer.id;
     s.edit(label, move |doc, active| {

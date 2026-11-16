@@ -250,7 +250,6 @@ impl PlaceSteps {
     /// Wraps the pixels, already in place, in the layer's content.
     fn finish(&mut self, px: Option<Surface>, ctx: &JobCtx) -> Result<Prepared> {
         let Plan { w, h, scale, dx, dy } = self.plan;
-        let warnings = std::mem::take(&mut self.warnings);
         let input = &self.input;
         let (cw, ch) = input.canvas;
         let placement = input.frame.as_ref().map_or(Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, |(_, f)| {
@@ -277,7 +276,13 @@ impl PlaceSteps {
             if let Some(doc) = &input.doc {
                 ctx.progress(0.9, "Rendering");
                 ctx.check()?;
-                if let Some(sharp) = crate::smart_cmds::render(doc, &so)? {
+                let (sharp, warnings) = crate::smart_cmds::render_with_warnings(doc, &so)?;
+                for warning in warnings {
+                    if !self.warnings.contains(&warning) {
+                        self.warnings.push(warning);
+                    }
+                }
+                if let Some(sharp) = sharp {
                     so.cache = Some(sharp);
                 }
             }
@@ -289,8 +294,16 @@ impl PlaceSteps {
             let px = px.ok_or_else(|| EngineError::Other(format!("{}: a frame's image must be a smart object", input.name)))?;
             LayerContent::Raster(px)
         };
-        let frame = input.frame.as_ref().map(|(id, _)| *id);
-        Ok(Prepared { content, layer_name: stem(&input.name), label, scale, bounds, smart, warnings, frame })
+        Ok(Prepared {
+            warnings: std::mem::take(&mut self.warnings),
+            content,
+            layer_name: stem(&input.name),
+            label,
+            scale,
+            bounds,
+            smart,
+            frame: input.frame.as_ref().map(|(id, _)| *id),
+        })
     }
 }
 
