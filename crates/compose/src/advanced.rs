@@ -137,7 +137,9 @@ pub(crate) fn needs_floor(layers: &[Layer]) -> bool {
 fn knockout_shape_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx: &Ctx, alloc: &A) -> Result<Vec<f32>, A::Error> {
     let n = rect.width() as usize * rect.height() as usize;
     let masks = || mask_vals(layer, rect, cx).unwrap_or_else(|| vec![1.0; n]);
-    if !layer.advanced.transparency_shapes { return Ok(masks()) }
+    if !layer.advanced.transparency_shapes {
+        return Ok(masks());
+    }
     match render_content_with(layer, rect, cx, alloc)? {
         Some(b) => Ok(b.px.iter().map(|p| p[3]).collect()),
         None => Ok(masks()),
@@ -209,7 +211,9 @@ pub(crate) fn composite_clipped_with<A: BufferAlloc>(clipped: &[Layer], base: &m
     let floor = if clipped.iter().any(|c| c.visible && c.advanced.knockout != Knockout::None) { Some(alloc.clone(base)?) } else { None };
     for c in clipped.iter().filter(|c| c.visible) {
         match &floor {
-            Some(f) if c.advanced.knockout != Knockout::None => knockout_with(c, base, f, true, cx, alloc, |b| crate::composite::composite_atop_with(c, b, cx, alloc))?,
+            Some(f) if c.advanced.knockout != Knockout::None => {
+                knockout_with(c, base, f, true, cx, alloc, |b| crate::composite::composite_atop_with(c, b, cx, alloc))?
+            }
             _ => crate::composite::composite_atop_with(c, base, cx, alloc)?,
         }
     }
@@ -249,13 +253,17 @@ pub(crate) fn composite_clipped_individually_with<A: BufferAlloc>(
             clip
         }
     };
-    if clip.len() != n { return Ok(()) }
+    if clip.len() != n {
+        return Ok(());
+    }
     for c in clipped.iter().filter(|c| c.visible) {
         let before = alloc.clone(backdrop)?;
         let t = knockout_target_with(c, floor.as_ref(), rect, cx, Scope { root: false, ..scope }, alloc)?;
         crate::composite::composite_layer_with(c, &[], backdrop, cx, t.as_deref(), scope, alloc)?;
         for ((p, b), k) in backdrop.px.iter_mut().zip(&before.px).zip(&clip) {
-            if *k < 1.0 { *p = mix(*b, *p, k.max(0.0)); }
+            if *k < 1.0 {
+                *p = mix(*b, *p, k.max(0.0));
+            }
         }
     }
     Ok(())

@@ -2,10 +2,7 @@ use super::content::{channel_weights, empty_in, render_content_with, restore_cha
 use super::ctx::Ctx;
 use super::extents::{effects_frame, mask_k, mask_vals, recycle_mask, shapeless_stroke_bounds};
 use super::fx_cache::effect_maps_with;
-use super::{
-    BlendMode, Buffer, BufferAlloc, Fill, InfallibleBufferAlloc, Layer, LayerContent, Rect, Surface, advanced, blend, effects,
-    psblend, shape_split,
-};
+use super::{BlendMode, Buffer, BufferAlloc, Fill, InfallibleBufferAlloc, Layer, LayerContent, Rect, Surface, advanced, blend, effects, psblend, shape_split};
 
 /// Composite a sibling list (bottom→top) onto `backdrop`; `scope` says where the stack sits (see
 /// [`advanced::Scope`]: it decides what knockouts reveal).
@@ -295,7 +292,14 @@ pub(crate) fn composite_layer_with<A: BufferAlloc>(
     Ok(())
 }
 
-fn composite_layer_any_with<A: BufferAlloc>(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope, alloc: &A) -> Result<(), A::Error> {
+fn composite_layer_any_with<A: BufferAlloc>(
+    layer: &Layer,
+    clipped: &[Layer],
+    backdrop: &mut Buffer,
+    cx: &Ctx,
+    scope: advanced::Scope,
+    alloc: &A,
+) -> Result<(), A::Error> {
     if let LayerContent::Group(g) = &layer.content
         && let Some(ab) = &g.artboard
     {
@@ -460,7 +464,9 @@ fn composite_layer_plain_with<A: BufferAlloc>(
                 for ((p, w), wo) in backdrop.px.iter_mut().zip(&with.px).zip(&without.px) {
                     let pa = p[3];
                     let mut pm = [p[0] * pa, p[1] * pa, p[2] * pa, pa];
-                    for c in 0..3 { pm[c] += w[c] * w[3] - wo[c] * wo[3]; }
+                    for c in 0..3 {
+                        pm[c] += w[c] * w[3] - wo[c] * wo[3];
+                    }
                     pm[3] += w[3] - wo[3];
                     let a = pm[3].clamp(0.0, 1.0);
                     *p = if a > 0.0 { [(pm[0] / a).clamp(0.0, 1.0), (pm[1] / a).clamp(0.0, 1.0), (pm[2] / a).clamp(0.0, 1.0), a] } else { [0.0; 4] };
@@ -616,12 +622,7 @@ fn shape_parts_with<A: BufferAlloc>(
 /// layers. Fill and stroke are unmasked: the mask applies to them together. Layer effects paint
 /// the fill's interior effects beneath the vector stroke (psd-tools stroke-composite: a colour
 /// overlay leaves the stroke, the stroke effect covers it).
-fn split_parts_with<A: BufferAlloc>(
-    layer: &Layer,
-    rect: Rect,
-    cx: &Ctx,
-    alloc: &A,
-) -> Result<Option<(Buffer, Buffer, Option<Vec<f32>>)>, A::Error> {
+fn split_parts_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx: &Ctx, alloc: &A) -> Result<Option<(Buffer, Buffer, Option<Vec<f32>>)>, A::Error> {
     let LayerContent::Shape(sh) = &layer.content else { return Ok(None) };
     if sh.stroke.is_none() {
         return Ok(None);
@@ -698,7 +699,9 @@ fn composite_atop_any_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx:
         };
         let vstroke = parts.as_ref().map(|(s, m)| effects::VectorStroke { stroke: s, mask: m.as_deref() });
         let mut opaque = alloc.clone(base)?;
-        for p in &mut opaque.px { p[3] = 1.0; }
+        for p in &mut opaque.px {
+            p[3] = 1.0;
+        }
         let maps = effect_maps_with(layer, rect, cx, alloc)?;
         effects::composite_with_effects_prepared_with(layer, &content, &mut opaque, &maps, effects_frame(layer, cx.canvas), cx.patterns, vstroke, alloc)?;
         if let Some((_, mask)) = parts {
@@ -706,7 +709,9 @@ fn composite_atop_any_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx:
         }
         if let Some(m) = &hide {
             let mut plain = alloc.clone(base)?;
-            for p in &mut plain.px { p[3] = 1.0; }
+            for p in &mut plain.px {
+                p[3] = 1.0;
+            }
             advanced::apply_hiding_mask(&mut opaque, &plain, m);
         }
         recycle_mask(hide);

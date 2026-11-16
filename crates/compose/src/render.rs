@@ -2,8 +2,8 @@ use super::composite::{composite_stack_at, composite_stack_at_with};
 use super::content::RENDER_TILE;
 use super::ctx::{Ctx, RenderVectorMasks, prepare_effects_with, prepare_tones};
 use super::{
-    Buffer, BufferAlloc, Document, FallibleBufferAlloc, InfallibleBufferAlloc, Layer, Rect, Surface, adjust, advanced, cmyk, multichannel, native,
-    native_lab, pattern, psblend,
+    Buffer, BufferAlloc, Document, FallibleBufferAlloc, InfallibleBufferAlloc, Layer, Rect, Surface, adjust, advanced, cmyk, multichannel, native, native_lab,
+    pattern, psblend,
 };
 
 /// Every layer the compositor draws, groups before their children: hidden layers and everything
@@ -80,9 +80,7 @@ fn render_tiled_with_alloc<A: BufferAlloc + Sync>(doc: &Document, rect: Rect, ti
         });
     }
     // Effect maps are built once, here, before any tile needs them (#276).
-    prepare_effects_with(&doc.layers, rect, cx, alloc, |f| {
-        photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f))
-    })?;
+    prepare_effects_with(&doc.layers, rect, cx, alloc, |f| photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f)))?;
     let run = |t: Rect| {
         photocraft_color::convert::with_cmyk_space(cmyk, || -> Result<_, A::Error> {
             let mut b = multichannel::backdrop_with(doc, t, alloc)?;
@@ -194,7 +192,10 @@ mod fallible_bands_tests {
     use photocraft_geom::Size;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    struct FailBufferAt { fail_at: usize, attempts: AtomicUsize }
+    struct FailBufferAt {
+        fail_at: usize,
+        attempts: AtomicUsize,
+    }
 
     impl FailBufferAt {
         fn attempt(&self) -> Result<(), usize> {
@@ -337,9 +338,17 @@ mod fallible_bands_tests {
     fn legacy_and_fallible_band_apis_deliver_the_same_pixels() {
         let doc = nested_document();
         let mut legacy = Vec::new();
-        render_bands(&doc, doc.bounds(), 8, |band| { legacy.push(band); Ok::<(), ()>(()) }).unwrap();
+        render_bands(&doc, doc.bounds(), 8, |band| {
+            legacy.push(band);
+            Ok::<(), ()>(())
+        })
+        .unwrap();
         let mut fallible = Vec::new();
-        try_render_bands(&doc, doc.bounds(), 8, |band| { fallible.push(band); Ok::<(), ()>(()) }).unwrap();
+        try_render_bands(&doc, doc.bounds(), 8, |band| {
+            fallible.push(band);
+            Ok::<(), ()>(())
+        })
+        .unwrap();
         assert_eq!(legacy, fallible);
     }
 }
@@ -362,12 +371,7 @@ pub fn render_bands<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink: imp
 }
 
 /// Fallible `render_bands` variant that reports compositor-owned RGBA buffer allocation failures.
-pub fn try_render_bands<E>(
-    doc: &Document,
-    rect: Rect,
-    band_rows: i32,
-    mut sink: impl FnMut(Buffer) -> Result<(), E>,
-) -> Result<(), RenderBandsError<E>> {
+pub fn try_render_bands<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink: impl FnMut(Buffer) -> Result<(), E>) -> Result<(), RenderBandsError<E>> {
     match render_bands_with_alloc(doc, rect, band_rows, &FallibleBufferAlloc, &mut sink) {
         Ok(()) => Ok(()),
         Err(RenderBandsCoreError::Allocation(error)) => Err(RenderBandsError::Allocation(error)),
@@ -392,8 +396,7 @@ fn render_bands_with_alloc<A: BufferAlloc + Sync, E>(
     let mut y = rect.y0;
     while y < rect.y1 {
         let y1 = y.saturating_add(rows).min(rect.y1);
-        let band = render_tiled_with_alloc(doc, Rect::new(rect.x0, y, rect.x1, y1), RENDER_TILE, &cx, alloc)
-            .map_err(RenderBandsCoreError::Allocation)?;
+        let band = render_tiled_with_alloc(doc, Rect::new(rect.x0, y, rect.x1, y1), RENDER_TILE, &cx, alloc).map_err(RenderBandsCoreError::Allocation)?;
         sink(band).map_err(RenderBandsCoreError::Sink)?;
         y = y1;
     }

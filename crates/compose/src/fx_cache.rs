@@ -213,12 +213,7 @@ pub(crate) fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc
     }
 }
 
-pub(crate) fn effect_maps_with<A: BufferAlloc>(
-    layer: &Layer,
-    rect: Rect,
-    cx: &Ctx,
-    alloc: &A,
-) -> Result<std::sync::Arc<effects::FxMaps>, A::Error> {
+pub(crate) fn effect_maps_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx: &Ctx, alloc: &A) -> Result<std::sync::Arc<effects::FxMaps>, A::Error> {
     use std::hash::{Hash, Hasher};
     let (mut region, clipped) = effect_region(layer, rect, cx);
     // Non-local effects keep their whole source region, which a few distant pixels stretch over

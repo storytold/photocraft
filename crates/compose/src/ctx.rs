@@ -196,22 +196,14 @@ pub(crate) fn prepare_effects(layers: &[Layer], rect: Rect, cx: &Ctx, setting: i
 }
 
 /// Fallible counterpart of [`prepare_effects`], used by the compositor before it starts tiles.
-pub(crate) fn prepare_effects_with<A, F>(
-    layers: &[Layer],
-    rect: Rect,
-    cx: &Ctx,
-    alloc: &A,
-    setting: F,
-) -> Result<(), A::Error>
+pub(crate) fn prepare_effects_with<A, F>(layers: &[Layer], rect: Rect, cx: &Ctx, alloc: &A, setting: F) -> Result<(), A::Error>
 where
     A: BufferAlloc + Sync,
     F: Fn(&mut dyn FnMut() -> Result<(), A::Error>) -> Result<(), A::Error> + Sync,
 {
     let mut todo = Vec::new();
     effect_layers(layers, rect, 0, &mut todo);
-    let build = |l: &std::borrow::Cow<Layer>| {
-        setting(&mut || effect_maps_with(l, rect, cx, alloc).map(|_| ()))
-    };
+    let build = |l: &std::borrow::Cow<Layer>| setting(&mut || effect_maps_with(l, rect, cx, alloc).map(|_| ()));
     #[cfg(not(target_arch = "wasm32"))]
     if todo.len() > 1 {
         use rayon::prelude::*;

@@ -57,12 +57,12 @@ pub use composite::{adjustment_quantum, blend_if_active, occludes_below, text_ga
 #[cfg(test)]
 use composite::{blend_into_fill, blend_into_g, branchless_floor, composite_layer_plain, composite_pixel_layer, pixel_surface, quantize};
 use composite::{composite_stack_at, dissolve_noise};
-#[cfg(test)]
-use content::render_fill;
-pub use content::{RENDER_TILE, channel_weights, fill_frame, layer_shape, render_fill_content, stroke_frame, surface_to_buffer};
 use content::empty_in;
 #[cfg(test)]
 use content::render_content;
+#[cfg(test)]
+use content::render_fill;
+pub use content::{RENDER_TILE, channel_weights, fill_frame, layer_shape, render_fill_content, stroke_frame, surface_to_buffer};
 use ctx::{Ctx, prepare_effects};
 #[cfg(test)]
 use ctx::{LayerKeys, PREPARE_DEPTH, effect_layers, prepare_tones};
@@ -138,8 +138,7 @@ impl Buffer {
     /// Fallibly clone the pixel storage while keeping the same rectangle.
     pub fn try_clone(&self) -> Result<Self, photocraft_raster::AllocationError> {
         let bytes = self.px.len().checked_mul(std::mem::size_of::<[f32; 4]>()).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
-        let mut px = photocraft_raster::scratch::try_take(self.px.len(), [0.0; 4])
-            .ok_or(photocraft_raster::AllocationError::NotEnoughMemory { bytes })?;
+        let mut px = photocraft_raster::scratch::try_take(self.px.len(), [0.0; 4]).ok_or(photocraft_raster::AllocationError::NotEnoughMemory { bytes })?;
         px.copy_from_slice(&self.px);
         Ok(Self { rect: self.rect, px })
     }
