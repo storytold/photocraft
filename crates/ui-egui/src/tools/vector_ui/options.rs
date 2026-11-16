@@ -459,6 +459,31 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 }
             }
             photocraft_doc::vector::LiveShape::Polygon { sides, star_ratio, corner_radius, .. } => {
+                // The reference lists a polygon's Sides first, as a slider with its field, then
+                // Corner radius, then Star ratio (#13316).
+                ui.horizontal(|ui| {
+                    const SIDES: std::ops::RangeInclusive<f32> = 3.0..=100.0;
+                    const FIELD_W: f32 = 64.0;
+                    let label = tl!("Sides");
+                    ui.label(egui::RichText::new(label).color(t.text_dim).size(12.0));
+                    let mut n = *sides as f32;
+                    let w = (ui.available_width() - FIELD_W - ui.spacing().item_spacing.x).max(60.0);
+                    let slider = ui
+                        .allocate_ui_with_layout(egui::vec2(w, crate::widgets::VALUE_FIELD_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            crate::widgets::slider(ui, &mut n, SIDES, None)
+                        })
+                        .inner;
+                    // Whole sides only. The shape follows each step of a drag, and the drag's
+                    // steps share its press's gesture key, so one drag is one History state.
+                    n = n.round();
+                    slider.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(n), label));
+                    if slider.changed() && n as u32 != *sides {
+                        edit = Some(json!({"sides": n as u32, "coalesce": coalesce("sides-slider")}));
+                    }
+                    if crate::widgets::value_field(ui, &mut n, SIDES, "", FIELD_W).accessible_name(label).changed() {
+                        edit = Some(json!({"sides": n.round() as u32, "coalesce": key("sides")}));
+                    }
+                });
                 // One radius rounds every vertex of a triangle or polygon, or a star's outer points, as in Photoshop.
                 ui.horizontal(|ui| {
                     let mut r = *corner_radius as f32;
@@ -467,10 +492,6 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     }
                 });
                 ui.horizontal(|ui| {
-                    let mut n = *sides as f32;
-                    if num(ui, tl!("Sides"), &mut n, 3.0..=100.0, "") {
-                        edit = Some(json!({"sides": n.round() as u32, "coalesce": key("sides")}));
-                    }
                     let mut sr = (*star_ratio * 100.0) as f32;
                     if num(ui, tl!("Star ratio"), &mut sr, 1.0..=100.0, "%") {
                         edit = Some(json!({"starRatio": sr as f64 / 100.0, "coalesce": key("star")}));
@@ -603,6 +624,9 @@ mod line_arrow_concavity_field_tests;
 #[cfg(test)]
 #[path = "pen_make_mask_tests.rs"]
 mod pen_make_mask_tests;
+#[cfg(test)]
+#[path = "polygon_properties_sides_slider_tests.rs"]
+mod polygon_properties_sides_slider_tests;
 #[cfg(test)]
 #[path = "rectangle_path_make_tests.rs"]
 mod rectangle_path_make_tests;
