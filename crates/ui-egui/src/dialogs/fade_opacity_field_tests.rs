@@ -151,3 +151,15 @@ fn the_opacity_slider_resets_to_100_on_a_double_click() {
     assert_eq!(g.reset, Some(100.0));
     assert_eq!(g.wheel_step, None, "nothing else changes about the slider");
 }
+
+/// CodeRabbit on #15106: a ⌘/Ctrl arrow step on the focused Opacity field moves it by 0.1, which is not typed text: 50
+/// stays 50 (it was read without its dot as 501, clamped to 100, with the range alert).
+#[test]
+fn a_command_arrow_step_does_not_read_its_fraction_as_typed_text() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "50");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(opacity(&h, id), json!(50));
+    assert_eq!(alerts(&h), 0, "no range alert");
+}
