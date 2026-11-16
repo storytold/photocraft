@@ -598,3 +598,47 @@ fn a_failed_copy_over_a_hard_link_leaves_the_other_documents_file_alone() {
         }
     }
 }
+
+/// Layer › Export As writes each layer's file through `write_exported`, so a layer export that
+/// published its bytes and then failed still costs the other open document its savepoint: its file
+/// now holds a layer, not that document. The `published = false` half is the control that a failure
+/// before the rename leaves the other tab alone, and A itself is never saved by an export.
+/// Expected from source; not an executed result until hosted CI runs it.
+#[test]
+fn a_layer_export_that_published_before_failing_keeps_the_other_documents_file() {
+    for published in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let own = dir.path().join("a.tif").to_string_lossy().into_owned();
+        let target = dir.path().join("layer.png").to_string_lossy().into_owned();
+        std::fs::write(&target, b"saved original").unwrap();
+        let mut app = app_at(&own);
+        real_stamps(&mut app);
+        // B holds the file the layer export is about to write; A is the document being exported.
+        app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        let b = app.session.active().unwrap().doc.id;
+        app.session.active_mut().unwrap().saved_to(target.clone());
+        app.remember_stamp(b, &target);
+        app.session.set_active(0);
+        let a = app.session.documents()[0].doc.id;
+        let layer = app.session.active().unwrap().doc.layers.last().unwrap().id;
+        app.services.write = Some(Box::new(failing_after_write(published)));
+        app.services.file_dialog = Some(crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(target.clone()))]).0);
+        let fields = json!({"format": "png", "scale": 100, "__layers": [layer.0]});
+        crate::export_dialog::confirm(&mut app, fields.as_object().unwrap()).unwrap();
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            app.poll_file_dialog(&ctx, None);
+        }
+        let b_state = app.session.documents().iter().find(|st| st.doc.id == b).unwrap();
+        assert_eq!(b_state.path.as_deref(), Some(target.as_str()), "published={published}: B keeps its path");
+        assert_eq!(b_state.is_dirty(), published, "published={published}: B is unsaved once its file holds a layer");
+        assert_eq!(
+            std::fs::read(&target).unwrap() != b"saved original",
+            published,
+            "published={published}: the file holds the layer only when the write published"
+        );
+        let a_state = app.session.documents().iter().find(|st| st.doc.id == a).unwrap();
+        assert!(!a_state.is_dirty(), "published={published}: exporting a layer does not save the document");
+        assert_eq!(a_state.path.as_deref(), Some(own.as_str()), "published={published}: A keeps its own file");
+    }
+}
