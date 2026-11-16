@@ -502,6 +502,181 @@ fn saved(action: &Action) -> AtnItem {
     file.actions[0].items[0].clone()
 }
 
+const LAYERS_TO_FILES_EVENT: &str = "6f1c2cf5-4a97-4e32-8f59-f5d7a087adef";
+
+/// Settings-shaped script descriptor; the message belongs to the recording's locale.
+fn recorded_layer_export(quality: u8) -> Descriptor {
+    Descriptor::new("cjsp")
+        .with("Msge", D::Text(UnicodeString::new("Recorded script settings")))
+        .with("destination", D::Text(UnicodeString::new("output")))
+        .with("fileNamePrefix", D::Text(UnicodeString::new("Proof")))
+        .with("visibleOnly", D::Boolean(true))
+        .with("FlTy", D::Double(1.0))
+        .with("icc", D::Boolean(true))
+        .with("jpegQuality", D::Text(UnicodeString::new(&quality.to_string())))
+        .with("psdMaxComp", D::Boolean(true))
+        .with("tiffCompression", D::Text(UnicodeString::new("TIFFEncoding.NONE")))
+        .with("tiffJpegQuality", D::Text(UnicodeString::new("8")))
+        .with("pdfEncoding", D::Text(UnicodeString::new("PDFEncoding.JPEG")))
+        .with("pdfJpegQuality", D::Text(UnicodeString::new("8")))
+        .with("targaDepth", D::Text(UnicodeString::new("TargaBitsPerPixels.TWENTYFOUR")))
+        .with("bmpDepth", D::Text(UnicodeString::new("BMPDepthType.TWENTYFOUR")))
+        .with("png24Transparency", D::Boolean(true))
+        .with("png24Interlaced", D::Boolean(false))
+        .with("png24Trim", D::Boolean(true))
+        .with("png8Transparency", D::Boolean(true))
+        .with("png8Interlaced", D::Boolean(false))
+        .with("png8Trim", D::Boolean(true))
+}
+
+#[test]
+fn recorded_layers_to_files_maps_jpeg_settings_and_preserves_descriptor_bytes() {
+    for quality in 0..=12 {
+        let d = recorded_layer_export(quality);
+        let action = recorded(AtnEvent::Name(LAYERS_TO_FILES_EVENT.into()), d.clone());
+        let (id, p) = &action.steps[0];
+        assert_eq!(id, "file.export.layersToFiles");
+        for (key, value) in [
+            ("dir", json!("output")),
+            ("prefix", json!("Proof")),
+            ("format", json!("jpg")),
+            ("quality", json!(quality)),
+            ("visibleOnly", json!(true)),
+            ("groups", json!("recursive")),
+            ("trim", json!(false)),
+            ("jpegFormat", json!("baseline")),
+        ] {
+            assert_eq!(p[key], value, "{key}");
+        }
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+}
+
+#[test]
+fn recorded_layers_to_files_edits_keep_locale_message_and_inactive_settings() {
+    let d = recorded_layer_export(8);
+    let mut action = recorded(AtnEvent::Name(LAYERS_TO_FILES_EVENT.into()), d.clone());
+    let p = &mut action.steps[0].1;
+    p["dir"] = json!("another-output");
+    p["prefix"] = json!("Edited");
+    p["quality"] = json!(4);
+    p["visibleOnly"] = json!(false);
+    let back = saved(&action).descriptor.unwrap();
+    for key in ["Msge", "psdMaxComp", "tiffCompression", "png24Trim"] {
+        assert_eq!(back.get(key), d.get(key), "{key} must remain attached to its recording");
+    }
+    let replay = recorded(AtnEvent::Name(LAYERS_TO_FILES_EVENT.into()), back);
+    for key in ["dir", "prefix", "quality", "visibleOnly"] {
+        assert_eq!(replay.steps[0].1[key], action.steps[0].1[key]);
+    }
+}
+
+#[test]
+fn recorded_layers_to_files_keeps_unknown_or_unrepresented_settings() {
+    for (key, value) in [
+        ("FlTy", D::Double(2.0)),
+        ("FlTy", D::Integer(1)),
+        ("icc", D::Boolean(false)),
+        ("jpegQuality", D::Text(UnicodeString::new("13"))),
+        ("jpegQuality", D::Text(UnicodeString::new("1.5"))),
+        ("jpegQuality", D::Integer(8)),
+        ("visibleOnly", D::Integer(1)),
+        ("destination", D::Boolean(true)),
+        ("futureSetting", D::Boolean(true)),
+        ("png8Trim", D::Integer(1)),
+        ("Msge", D::Boolean(true)),
+    ] {
+        let mut d = recorded_layer_export(8);
+        if let Some((_, v)) = d.items.iter_mut().find(|(k, _)| k.is(key)) {
+            *v = value;
+        } else {
+            d = d.with(key, value);
+        }
+        let action = recorded(AtnEvent::Name(LAYERS_TO_FILES_EVENT.into()), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{key}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    let mut repeated = recorded_layer_export(8);
+    repeated.items.push((Id::new("jpegQuality"), D::Text(UnicodeString::new("4"))));
+    let action = recorded(AtnEvent::Name(LAYERS_TO_FILES_EVENT.into()), repeated.clone());
+    assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+    assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), repeated.to_bytes());
+    for key in ["Msge", "destination", "fileNamePrefix", "visibleOnly", "FlTy", "icc", "jpegQuality"] {
+        let mut d = recorded_layer_export(8);
+        d.items.retain(|(k, _)| !k.is(key));
+        let action = recorded(AtnEvent::Name(LAYERS_TO_FILES_EVENT.into()), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "missing {key}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    let mut d = recorded_layer_export(8);
+    for (key, value) in &mut d.items {
+        if key.is("destination") {
+            *value = D::Text(UnicodeString(vec![0xd800]));
+        }
+    }
+    let action = recorded(AtnEvent::Name(LAYERS_TO_FILES_EVENT.into()), d.clone());
+    assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "invalid UTF-16 must not become a different path");
+    assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+}
+
+#[test]
+fn recorded_layers_to_files_refuses_native_options_the_script_cannot_represent() {
+    let action = recorded(AtnEvent::Name(LAYERS_TO_FILES_EVENT.into()), recorded_layer_export(8));
+    for (key, value) in [
+        ("groups", json!("merged")),
+        ("trim", json!(true)),
+        ("format", json!("png")),
+        ("jpegFormat", json!("progressive")),
+        ("quality", json!(1.5)),
+        ("futureSetting", json!(true)),
+        ("_atnExportLayersDescriptor", json!("broken")),
+    ] {
+        let mut edited = action.clone();
+        edited.steps[0].1[key] = value;
+        assert!(atn_cmds::export("Proof", &[&edited], &[], false).is_err(), "{key}");
+    }
+}
+
+/// Import, save, load and playback must actually write JPEGs with stable leaf numbering.
+#[test]
+fn recorded_layers_to_files_replays_saved_settings_into_a_temporary_directory() {
+    let output = tempfile::tempdir().unwrap();
+    let mut d = recorded_layer_export(8);
+    for (key, value) in &mut d.items {
+        if key.is("destination") {
+            *value = D::Text(UnicodeString::new(output.path().to_str().unwrap()));
+        }
+    }
+    let action = recorded(AtnEvent::Name(LAYERS_TO_FILES_EVENT.into()), d);
+    let mut s = sized_document(4, 4, 72);
+    s.edit("Nested", |doc, _| {
+        doc.layers[0].surface_mut().unwrap().write_region(photocraft_geom::Rect::new(0, 0, 4, 4), &[1.0, 0.0, 0.0, 1.0].repeat(16));
+        let mut hidden = doc.layers[0].clone();
+        hidden.id = photocraft_doc::LayerId::fresh();
+        hidden.name = "Hidden".into();
+        hidden.visible = false;
+        let mut child = doc.layers[0].clone();
+        child.id = photocraft_doc::LayerId::fresh();
+        child.name = "Child".into();
+        doc.layers.push(hidden);
+        doc.layers.push(photocraft_doc::Layer::group("Group", vec![child]));
+        Ok(())
+    })
+    .unwrap();
+    let before = s.active().unwrap().doc.clone();
+    replay_saved(&mut s, &action);
+    let mut files: Vec<_> = std::fs::read_dir(output.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    files.sort();
+    assert_eq!(files, ["Proof_0000s_0000_Child.jpg", "Proof_0001_Background.jpg"]);
+    for file in files {
+        let image = photocraft_codecs::decode(&std::fs::read(output.path().join(file)).unwrap()).unwrap();
+        assert_eq!(image.dimensions(), (4, 4));
+        let rgba = image.to_rgba8();
+        assert!(rgba[0] > 150 && rgba[1] < 120 && rgba[2] < 120, "the isolated red mark must be exported");
+    }
+    assert_eq!(s.active().unwrap().doc, before);
+}
+
 /// Check the enum type and value in saved bytes independently of the command parameters.
 fn enum_value<'a>(d: &'a Descriptor, key: &str, ty: &str) -> &'a Id {
     let Some(D::Enumerated { type_id, value }) = d.get(key) else { panic!("missing {key} enumeration") };

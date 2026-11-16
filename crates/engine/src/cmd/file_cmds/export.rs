@@ -24,7 +24,7 @@ pub fn export_layers_with(s: &Session, p: &Value, write: impl FnMut(&str, &[u8])
     export_layers_report_with(s, p, write).map(|report| report.files)
 }
 
-/// A top-level layer omitted from a successful Layers to Files export.
+/// A layer omitted from a successful Layers to Files export.
 #[derive(Debug, serde::Serialize)]
 pub struct SkippedExportLayer {
     /// Session layer id (names need not be unique).
@@ -43,8 +43,9 @@ pub struct LayerExportReport {
 }
 
 /// The same export as [`export_layers_with`], with an explanation for every omitted top-level
-/// layer. Groups export merged, so their children are not separate exports or skips. Encoding
-/// and write failures remain errors, never successful skips. Existing numbering is preserved.
+/// layer. Groups export merged by default; `groups: "recursive"` exports their individual art
+/// layers with separate art/group counters at each level. Encoding and write failures remain
+/// errors, never successful skips. Existing default numbering is preserved.
 pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<LayerExportReport> {
     let cmd = "file.export.layersToFiles";
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
@@ -54,6 +55,12 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     }
     let trim = p.get("trim").and_then(Value::as_bool).unwrap_or(false);
     let visible_only = p.get("visibleOnly").and_then(Value::as_bool).unwrap_or(true);
+    let recursive = match p.get("groups") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(mode)) if mode == "merged" => false,
+        Some(Value::String(mode)) if mode == "recursive" => true,
+        _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "`groups` must be merged or recursive".into() }),
+    };
     // Callers outside `Session::execute` (headless workspace exports) carry the session's gate
     // into `encode`, so a PSD embeds no file a linked smart object names.
     let _authorization = crate::jobs::render_authorization_scope(s.authorize);
@@ -62,22 +69,48 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
     let mut report = LayerExportReport::default();
-    // Every layer takes its panel-order index, even one skipped as hidden or as an adjustment,
-    // so a file keeps the same number whether Visible Layers Only is on or off (#13959).
-    for (index, l) in doc.layers.iter().rev().enumerate() {
-        if !l.visible && visible_only {
-            report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" });
-            continue;
+    let mut exports = Vec::new();
+    if recursive {
+        // Validate even hidden subtrees before cloning or writing: hostile nesting must not
+        // overflow the stack, and a later bad branch must not leave a partial export.
+        check_export_tree(&doc.layers)?;
+        recursive_exports(&doc.layers, &prefix, &format, visible_only, &mut exports, &mut report)?;
+        let mut names = std::collections::HashSet::new();
+        for (_, name) in &exports {
+            // The recorded script truncates names. Long prefixes can hide the serial number;
+            // never let one output overwrite another, including on a case-insensitive system.
+            if !names.insert(name.to_lowercase()) {
+                return Err(EngineError::BadParams { cmd: cmd.into(), msg: "recursive export filenames collide after truncation".into() });
+            }
         }
-        if matches!(l.content, LayerContent::Adjustment(_)) {
-            report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "adjustment layer has no pixels of its own" });
-            continue;
+    } else {
+        // Every layer takes its panel-order index, even one skipped as hidden or as an adjustment,
+        // so a file keeps the same number whether Visible Layers Only is on or off (#13959).
+        for (index, l) in doc.layers.iter().rev().enumerate() {
+            if !l.visible && visible_only {
+                report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" });
+                continue;
+            }
+            if matches!(l.content, LayerContent::Adjustment(_)) {
+                report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "adjustment layer has no pixels of its own" });
+                continue;
+            }
+            let name = format!("{}_{:04}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, index, sanitize(&l.name));
+            exports.push((l, name));
         }
+    }
+    for (l, name) in exports {
         let mut one = (*doc).clone();
-        let mut only = l.clone();
-        only.visible = true;
-        only.clipped = false;
-        one.layers = vec![only];
+        if recursive {
+            // Keep the actual tree: parent masks/opacity/effects and hidden clipping bases
+            // affect an isolated leaf, unlike exporting a detached, unclipped layer.
+            isolate_export(&mut one.layers, l.id);
+        } else {
+            let mut only = l.clone();
+            only.visible = true;
+            only.clipped = false;
+            one.layers = vec![only];
+        }
         if trim {
             let mut bounds = Rect::EMPTY;
             let _ = photocraft_compose::render_bands(&one, one.bounds(), 0, |band| -> std::result::Result<(), ()> {
@@ -96,13 +129,94 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
             }
         }
 
-        // The prefix is optional; only the layer name needs the empty-name fallback.
-        let name = format!("{}_{:04}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, index, sanitize(&l.name));
         let (bytes, _warnings) = encode(&one, &name, save)?;
         write(&name, &bytes)?;
         report.files.push(name);
     }
     Ok(report)
+}
+
+fn check_export_tree(layers: &[Layer]) -> Result<()> {
+    let mut pending = vec![(layers, 0usize)];
+    let mut count = 0usize;
+    while let Some((siblings, depth)) = pending.pop() {
+        count = count.saturating_add(siblings.len());
+        if depth > 64 || count > 100_000 {
+            return Err(EngineError::BadParams {
+                cmd: "file.export.layersToFiles".into(),
+                msg: "recursive export exceeds 64 group levels or 100000 layers".into(),
+            });
+        }
+        for l in siblings {
+            if let Some(children) = l.children() {
+                pending.push((children, depth + 1));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The recorded script visits art layers first, then groups; hidden siblings still take a number.
+fn recursive_exports<'a>(
+    layers: &'a [Layer],
+    prefix: &str,
+    format: &str,
+    visible_only: bool,
+    exports: &mut Vec<(&'a Layer, String)>,
+    report: &mut LayerExportReport,
+) -> Result<()> {
+    for (index, l) in layers.iter().rev().filter(|l| !l.is_group()).enumerate() {
+        if visible_only && !l.visible {
+            report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" });
+        } else {
+            // Adjustment and empty art layers also produce a file (transparent, or white for JPEG).
+            exports.push((l, recursive_filename(prefix, index, &l.name, format)?));
+        }
+    }
+    for (index, l) in layers.iter().rev().filter(|l| l.is_group()).enumerate() {
+        if visible_only && !l.visible {
+            report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" });
+        } else if let Some(children) = l.children() {
+            recursive_exports(children, &format!("{prefix}_{index:04}s"), format, visible_only, exports, report)?;
+        }
+    }
+    Ok(())
+}
+
+/// Measured script names keep punctuation and spaces, replace filesystem separators/reserved
+/// punctuation, and limit the whole stem (including prefix and serials) to 120 UTF-16 units.
+fn recursive_filename(prefix: &str, index: usize, layer: &str, extension: &str) -> Result<String> {
+    let serial = format!("_{index:04}_");
+    let mut name = String::new();
+    let mut units = 0;
+    for c in prefix.chars().chain(serial.chars()).chain(layer.chars()) {
+        if units + c.len_utf16() > 120 {
+            break;
+        }
+        units += c.len_utf16();
+        if c.is_control() {
+            return Err(EngineError::BadParams {
+                cmd: "file.export.layersToFiles".into(),
+                msg: "recursive export filename contains a control character".into(),
+            });
+        }
+        name.push(if matches!(c, ':' | '/' | '\\' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c });
+    }
+    if super::paths::is_windows_device_name(&name) {
+        return Err(EngineError::BadParams { cmd: "file.export.layersToFiles".into(), msg: "recursive export filename is a reserved device name".into() });
+    }
+    Ok(format!("{name}.{extension}"))
+}
+
+/// Only the chosen leaf and its ancestors are visible; the other layers remain as clipping bases.
+fn isolate_export(layers: &mut [Layer], target: LayerId) -> bool {
+    let mut found = false;
+    for l in layers {
+        let child = l.children_mut().is_some_and(|children| isolate_export(children, target));
+        l.visible = l.id == target || child;
+        found |= l.visible;
+    }
+    found
 }
 
 /// Adjustment layers that can be represented as an RGB-only LUT, in document stack order.

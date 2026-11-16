@@ -242,6 +242,7 @@ row; the action still adds only one Undo entry.
 | (string ID only) | recordMeasurements | Record Measurements | `image.analysis.recordMeasurements` |
 | (string ID only) | CropPhotosAuto0001 | Crop and Straighten Photos | `file.automate.cropAndStraightenPhotos` |
 | (string ID only) | 3caa3434-cb67-11d1-bc43-0060b0a13dc4 | Fit Image (script event; pixel box sides) | `file.automate.fitImage` |
+| (string ID only) | 6f1c2cf5-4a97-4e32-8f59-f5d7a087adef | Export Layers to Files (recorded JPEG settings with ICC) | `file.export.layersToFiles` |
 | (string ID only) | placedLayerExportContents | Export Contents | `layer.smartObjects.exportContents` |
 | (string ID only) | placedLayerConvertToLinked | Convert to Linked | `layer.smartObjects.convertToLinked` |
 | (string ID only) | placedLayerRelinkToFile | Relink to File | `layer.smartObjects.relinkToFile` |
@@ -511,6 +512,14 @@ including their four-character space padding. `SRGB` (Document Profile Is sRGB) 
 condition IDs remain kept Photoshop steps with their original descriptors.
 
 ### Settings retained by mapped events
+
+- Export Layers to Files maps recorded JPEG (`FlTy` double 1) destinations, prefixes, Visible
+  Layers Only and text quality 0–12 when ICC embedding is enabled. It exports individual art
+  layers recursively, retains parent effects and clipping, and numbers art layers and groups
+  independently, including hidden siblings. The original script message and inactive file-type
+  settings survive saving and parameter edits. Other formats, ICC suppression and unknown fields
+  stay kept steps. Saving a native step to this event requires its valid recorded descriptor;
+  the locale-sensitive script message is never invented.
 
 - Transform keeps its recorded `FTcs` reference point. Exact zero offsets in points (`#Rlt`)
   normalize to zero pixels on export. Nonzero layer offsets keep points as `offsetUnits: "pt"`

@@ -51,6 +51,7 @@ mod steps_gradient;
 mod steps_image;
 mod steps_layer;
 mod steps_layer_style;
+mod steps_layers_to_files;
 mod steps_lookup;
 mod steps_make;
 mod steps_measurement;

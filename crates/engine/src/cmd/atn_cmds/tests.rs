@@ -796,7 +796,19 @@ fn settings_at_the_value_the_event_plays_still_export() {
 #[test]
 /// Each mapped command retains its parameters through its corresponding ATN descriptor.
 fn every_mapped_command_exports_and_imports_back() {
+    let layer_export = desc("cjsp")
+        .with("Msge", text("Recorded script settings"))
+        .with("destination", text("output"))
+        .with("fileNamePrefix", text("Proof"))
+        .with("visibleOnly", D::Boolean(true))
+        .with("FlTy", D::Double(1.0))
+        .with("icc", D::Boolean(true))
+        .with("jpegQuality", text("8"));
+    let Mapped::Steps(layer_export) = super::steps_layers_to_files::from(&layer_export) else {
+        panic!("layer export fixture must map");
+    };
     let cases: Vec<(&str, Value)> = vec![
+        ("file.export.layersToFiles", layer_export[0].1.clone()),
         (
             "edit.perspectiveWarp",
             json!({"planes":[{"src":[[4,4],[16,4],[16,20],[4,20]],"dst":[[5,5],[17,4],[18,20],[4,19]]}],

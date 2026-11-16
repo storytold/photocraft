@@ -1209,6 +1209,14 @@ pub(super) const EVENTS: &[Event] = &[
     // File and actions.
     Event { code: "Cls ", name: "close", label: "Close", ids: &["file.close"], from: close_from, to: close_to },
     Event { code: "Expr", name: "export", label: "Export", ids: &["file.export.saveForWebLegacy"], from: export_from, to: export_to },
+    Event {
+        code: "",
+        name: super::steps_layers_to_files::EVENT,
+        label: "Export Layers to Files",
+        ids: &[super::steps_layers_to_files::COMMAND],
+        from: super::steps_layers_to_files::from,
+        to: super::steps_layers_to_files::to,
+    },
     Event { code: "Plc ", name: "placeEvent", label: "Place", ids: &["file.placeEmbedded", "file.placeLinked"], from: place_from, to: place_to },
     Event { code: "Opn ", name: "open", label: "Open", ids: &["file.openAs"], from: open_from, to: open_to },
     Event { code: "", name: "conditional", label: "If", ids: &["actions.conditional"], from: conditional_from, to: conditional_to },
