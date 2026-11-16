@@ -457,7 +457,10 @@ fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
     } else {
         first_field_focused(ui, id, |ui| body(ui, fields));
     }
-    if let Some(Value::String(msg)) = fields.remove("__rangeAlert") {
+    // Fade's Opacity alert is raised by `show`, which also keeps the Enter that left the field from confirming (#13811).
+    if !crate::filter_dialog::buttons_in_column(fields)
+        && let Some(Value::String(msg)) = fields.remove("__rangeAlert")
+    {
         crate::panels::options_bar::range_alert(&mut app.ui, &msg);
     }
 }
