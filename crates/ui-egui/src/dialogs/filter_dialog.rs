@@ -1799,10 +1799,10 @@ const SCALE_ALERT_TITLE: &str = "Scale Layer Effects";
 const SCALE_ALERT_TEXT: &str = "An integer between 1 and 1000 is required. Closest value inserted.";
 
 /// The closest whole number to `x` in `lo..=hi`: `lo` for a non-finite `x`, and for bounds the wrong way
-/// round, so no input can panic.
+/// round or NaN, so no input can panic (a NaN or reversed bound gives `lo`, or 0 when `lo` is not finite either).
 fn whole_in(x: f64, lo: f64, hi: f64) -> f64 {
-    if !x.is_finite() || lo > hi {
-        return lo;
+    if !x.is_finite() || lo.is_nan() || hi.is_nan() || lo > hi {
+        return if lo.is_finite() { lo } else { 0.0 };
     }
     x.round().clamp(lo, hi)
 }
@@ -1943,7 +1943,14 @@ fn scale_effects_alert(ui: &egui::Ui, f: &mut Map<String, Value>, raised: bool, 
         f.insert(SCALE_ALERT.into(), json!(true));
         // The Enter that left the field raises the alert: it must not press the dialog's OK too, and
         // its repeats are held back until it is released.
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+        // Every Enter press of this frame goes, whatever its modifiers: the dialog's OK reads Enter
+        // without looking at them.
+        let took_enter = ctx.input_mut(|i| {
+            let before = i.events.len();
+            i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. }));
+            i.events.len() != before
+        });
+        if took_enter {
             ctx.data_mut(|d| {
                 let mut held = d.get_temp::<Held>(hold_id).unwrap_or_default();
                 held.enter = true;

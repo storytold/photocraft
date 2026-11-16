@@ -316,6 +316,8 @@ fn whole_in_gives_the_closest_whole_number_in_range() {
     assert_eq!(whole_in(f64::INFINITY, 1.0, 1000.0), 1.0);
     assert_eq!(whole_in(1.5, 1.0, 1000.0), 2.0);
     assert_eq!(whole_in(10.0, 1000.0, 1.0), 1000.0, "reversed bounds do not panic");
+    assert_eq!(whole_in(10.0, f64::NAN, 1000.0), 0.0, "a NaN lower bound does not panic");
+    assert_eq!(whole_in(10.0, 1.0, f64::NAN), 1.0, "a NaN upper bound does not panic");
 }
 
 #[test]
@@ -323,4 +325,22 @@ fn the_serialized_scale_is_held_in_range() {
     assert_eq!(scale_effects_json(5000.0, 1.0, 1000.0), json!(1000));
     assert_eq!(scale_effects_json(0.0, 1.0, 1000.0), json!(1));
     assert_eq!(scale_effects_json(f32::NAN, 1.0, 1000.0), json!(1));
+}
+
+#[test]
+fn a_ctrl_enter_in_the_frame_that_raises_the_alert_does_not_confirm() {
+    let mut h = harness(scale_fields());
+    field(&h, "Scale").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("1001".into()));
+    h.run_steps(1);
+    // Ctrl+Enter alone does not leave the field (the text edit only takes a plain Enter), so a plain Enter
+    // raises the alert and a Ctrl+Enter arrives in that same frame.
+    h.event(key(egui::Key::Enter, true, false, egui::Modifiers::NONE));
+    h.event(key(egui::Key::Enter, true, false, egui::Modifiers::COMMAND));
+    h.run_steps(3);
+    assert!(alert_up(&h), "the plain Enter that left the field raised the alert");
+    assert!(!h.state().1, "and did not confirm the dialog in the same frame");
+    assert!(!h.state().2);
 }
