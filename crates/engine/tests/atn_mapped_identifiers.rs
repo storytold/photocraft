@@ -1826,14 +1826,7 @@ fn recorded_web_jpeg_pass_preserves_other_scans_conflicts_and_unrepresented_sett
         settings.items.iter_mut().find(|(key, _)| key.is("Pass")).unwrap().1 = value;
         cases.push(d);
     }
-    for (key, value) in [
-        ("Prgr", D::Boolean(false)),
-        ("Prgr", D::Boolean(true)),
-        ("Pass", D::Integer(3)),
-        ("blur", D::Double(0.0)),
-        ("blur", D::Double(1.0)),
-        ("QChS", D::Integer(0)),
-    ] {
+    for (key, value) in [("Prgr", D::Boolean(false)), ("Prgr", D::Boolean(true)), ("Pass", D::Integer(3)), ("blur", D::Double(1.0)), ("QChS", D::Integer(1))] {
         let mut d = base.clone();
         let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
         settings.items.push((Id::new(key), value));
@@ -1878,6 +1871,80 @@ fn web_jpeg_frame_marker(bytes: &[u8]) -> Option<u8> {
         }
         rest = rest.get(2 + len..)?;
     }
+}
+
+fn web_neutral_jpeg_recording() -> Descriptor {
+    let mut d = web_jpeg_recording("proof.jpg", 1);
+    let Some(D::Descriptor(u)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else {
+        panic!("SaveForWeb");
+    };
+    u.items.extend([
+        (Id::new("blur"), D::Double(0.0)),
+        (Id::new("QChS"), D::Integer(0)),
+        (Id::new("QCUI"), D::Integer(0)),
+        (Id::new("QChT"), D::Boolean(false)),
+        (Id::new("QChV"), D::Boolean(false)),
+    ]);
+    d
+}
+
+#[test]
+fn recorded_web_neutral_jpeg_options_map_and_keep_the_recorded_descriptor() {
+    let d = web_neutral_jpeg_recording();
+    let action = recorded(AtnEvent::name("export"), d.clone());
+    assert_eq!(action.steps[0].0, "file.export.saveForWebLegacy");
+    assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    let mut edited = action.clone();
+    edited.steps[0].1["quality"] = json!(37);
+    let back = saved(&edited).descriptor.unwrap();
+    let Some(D::Descriptor(u)) = back.get("Usng") else {
+        panic!("SaveForWeb");
+    };
+    for (key, value) in [("blur", D::Double(0.0)), ("QChS", D::Integer(0)), ("QCUI", D::Integer(0)), ("QChT", D::Boolean(false)), ("QChV", D::Boolean(false))] {
+        assert_eq!(u.get(key), Some(&value));
+    }
+    assert_eq!(u.get("Qlty"), Some(&D::Integer(37)));
+}
+
+#[test]
+fn recorded_web_neutral_jpeg_options_export_explicit_resets_for_native_steps() {
+    let action = Action::new("Recorded", vec![("file.export.saveForWebLegacy".into(), json!({"path":"proof.jpg","format":"jpeg"}))]);
+    let back = saved(&action).descriptor.unwrap();
+    let Some(D::Descriptor(u)) = back.get("Usng") else {
+        panic!("SaveForWeb");
+    };
+    assert_eq!(u.get("blur"), Some(&D::Double(0.0)));
+    assert_eq!(u.get("QChS"), Some(&D::Integer(0)));
+    assert_eq!(u.get("QCUI"), Some(&D::Integer(0)));
+    assert_eq!(u.get("QChT"), Some(&D::Boolean(false)));
+    assert_eq!(u.get("QChV"), Some(&D::Boolean(false)));
+}
+
+#[test]
+fn recorded_web_neutral_jpeg_options_keep_active_malformed_and_other_format_forms() {
+    for (key, value) in [
+        ("blur", D::Double(0.5)),
+        ("blur", D::Integer(0)),
+        ("QChS", D::Integer(1)),
+        ("QChS", D::Double(0.0)),
+        ("QCUI", D::Integer(1)),
+        ("QChT", D::Boolean(true)),
+        ("QChV", D::Boolean(true)),
+        ("Fmt ", enm("IRFm", "PN24")),
+    ] {
+        let mut d = web_neutral_jpeg_recording();
+        let Some(D::Descriptor(u)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else {
+            panic!("SaveForWeb");
+        };
+        *u.items.iter_mut().find(|(k, _)| k.is(key)).unwrap() = (Id::new(key), value);
+        let action = recorded(AtnEvent::name("export"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{key}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    let action = recorded(AtnEvent::name("export"), web_neutral_jpeg_recording());
+    let mut edited = action.clone();
+    edited.steps[0].1["_atnWebDescriptor"] = json!("broken");
+    assert!(atn_cmds::export("Proof", &[&edited], &[], false).is_err());
 }
 
 #[test]

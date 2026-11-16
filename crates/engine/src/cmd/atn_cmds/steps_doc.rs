@@ -226,6 +226,8 @@ fn web_path(v: &D) -> Option<String> {
 }
 
 const WEB_SLICE_OUTPUT_KEYS: &[&str] = &["SWsl", "SImg", "SHTM", "ovSF", "ovSN"];
+const WEB_NEUTRAL_JPEG_KEYS: &[&str] = &["blur", "QChS", "QCUI", "QChT", "QChV"];
+const WEB_SOURCE: &str = "_atnWebDescriptor";
 
 /// An explicit all-slices/images-only folder export, including its relative image subfolder.
 fn web_slice_images_folder(u: &Descriptor) -> Option<String> {
@@ -255,7 +257,7 @@ fn web_slice_images_folder(u: &Descriptor) -> Option<String> {
 fn web_settings_supported(u: &Descriptor) -> bool {
     const KEYS: &[&str] = &[
         "In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Pass", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB", "SWch", "SWmd", "SWsl",
-        "SImg", "SHTM", "ovSF", "ovSN",
+        "SImg", "SHTM", "ovSF", "ovSN", "blur", "QChS", "QCUI", "QChT", "QChV",
     ];
     if !u.class_id.is("SaveForWeb") || !web_keys(u, KEYS) {
         return false;
@@ -293,6 +295,18 @@ fn web_settings_supported(u: &Descriptor) -> bool {
         && (!matches!(pass, D::Integer(1) | D::Integer(3)) || get_enum(u, "Fmt ").as_deref() != Some("JPEG") || u.get("Prgr").is_some())
     {
         return false;
+    }
+    if WEB_NEUTRAL_JPEG_KEYS.iter().any(|key| u.get(key).is_some()) {
+        // Only disabled options have an equivalent today. Keeping the active forms prevents
+        // an imported action from silently losing blur or a quality-modulation mask.
+        if get_enum(u, "Fmt ").as_deref() != Some("JPEG") || u.get("blur").is_some_and(|v| !matches!(v,D::Double(n) if *n==0.0)) {
+            return false;
+        }
+        if ["QChS", "QCUI"].iter().any(|key| !matches!(u.get(key), None | Some(D::Integer(0))))
+            || ["QChT", "QChV"].iter().any(|key| !matches!(u.get(key), None | Some(D::Boolean(false))))
+        {
+            return false;
+        }
     }
     for (key, min, max) in [("Qlty", 0.0, 100.0), ("NCol", 2.0, 256.0), ("MttR", 0.0, 255.0), ("MttG", 0.0, 255.0), ("MttB", 0.0, 255.0)] {
         if let Some(v) = u.get(key) {
@@ -367,10 +381,32 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
         p["matte"] =
             json!(format!("#{:02x}{:02x}{:02x}", r.round().clamp(0.0, 255.0) as u8, g.round().clamp(0.0, 255.0) as u8, b.round().clamp(0.0, 255.0) as u8));
     }
+    if WEB_NEUTRAL_JPEG_KEYS.iter().any(|key| u.get(key).is_some()) && web_descriptor(&p).as_ref() != Some(d) {
+        p[WEB_SOURCE] = photocraft_paint::tile::b64_encode(&d.to_bytes()).into();
+    }
     step("file.export.saveForWebLegacy", p)
 }
 
 pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let mut current = p.clone();
+    let source = current.as_object_mut()?.remove(WEB_SOURCE);
+    let canonical = web_descriptor(&current)?;
+    let Some(source) = source else {
+        return Some(canonical);
+    };
+    let source = Descriptor::from_bytes(&photocraft_paint::tile::b64_decode(source.as_str()?)?).ok()?;
+    let Mapped::Steps(original) = export_from(&source) else {
+        return None;
+    };
+    let mut original = original.first()?.1.clone();
+    original.as_object_mut()?.remove(WEB_SOURCE);
+    let old = web_descriptor(&original)?;
+    // Unknown/malformed carried data must not be silently discarded. Supported edits write
+    // their current settings, including explicit neutral resets for Photoshop's sticky options.
+    Some(if old == canonical { source } else { canonical })
+}
+
+fn web_descriptor(p: &Value) -> Option<Descriptor> {
     const KEYS: &[&str] = &[
         "path",
         "folder",
@@ -486,6 +522,16 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
                 .with("MttG", get_num(&c, "Grn ").map(long)?)
                 .with("MttB", get_num(&c, "Bl  ").map(long)?);
         }
+    }
+    if jstr(p, "format") == Some("jpeg") {
+        // Photoshop remembers these options across exports; omission can inherit an old blur
+        // or mask even though native Save for Web does not apply one.
+        u = u
+            .with("blur", D::Double(0.0))
+            .with("QChS", D::Integer(0))
+            .with("QCUI", D::Integer(0))
+            .with("QChT", D::Boolean(false))
+            .with("QChV", D::Boolean(false));
     }
     Some(desc("null").with("Usng", D::Descriptor(u.with("In  ", path_value(path)))))
 }

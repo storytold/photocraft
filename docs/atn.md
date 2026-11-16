@@ -566,6 +566,10 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   progressive modes and export in that form. The existing `Prgr` flag still imports; simultaneous
   `Pass`/`Prgr`, other pass values and unrepresented JPEG settings remain kept steps. The native
   encoder determines the progressive scan layout; this mapping does not add a custom scan count.
+- Save for Web JPEG accepts disabled blur (`blur` double 0) and quality-mask options (`QChS`
+  and `QCUI` integer 0, `QChT` and `QChV` false). Saving native JPEG steps explicitly resets
+  these remembered options. Unchanged recordings retain their descriptor; active options,
+  malformed values and these fields on other formats remain kept steps.
 - Save for Web's explicit All Slices (`SWsl.STsl.SLAl`), Images Only (`SImg` true, `SHTM` false)
   folder output maps to `dir` and `slices: "all"`, including auto slices. `ovSF`/`ovSN` keep images
   beside the destination or in a validated relative subfolder. Partial output blocks, other slice
