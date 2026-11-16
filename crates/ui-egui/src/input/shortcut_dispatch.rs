@@ -312,10 +312,14 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         _ => None,
     };
     let mut ran = false;
+    // Presses before this index were already resolved (and left to other handlers) against the table of their time: a
+    // table built after a document switch only reads the presses after the one that ran, never the earlier ones again.
+    let mut from = 0;
     loop {
         let next = ctx.input_mut(|i| {
-            let (at, hit) = i.events.iter().enumerate().find_map(|(at, e)| Some((at, command(&table, e)?)))?;
+            let (at, hit) = i.events.iter().enumerate().skip(from).find_map(|(at, e)| Some((at, command(&table, e)?)))?;
             i.events.remove(at);
+            from = at;
             Some(hit)
         });
         let Some((id, tab, last)) = next else { break };

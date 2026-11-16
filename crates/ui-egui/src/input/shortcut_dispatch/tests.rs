@@ -1363,3 +1363,35 @@ fn a_press_after_a_document_switch_uses_the_new_documents_keys() {
     let ran: Vec<String> = take_log(&ctx).into_iter().map(|(id, _)| id).collect();
     assert_eq!(ran, ["window.nextDocument", "channel.target.slot3"], "⌘1 is Red in the RGB document: {ran:?}");
 }
+
+/// CodeRabbit on #14859: a press before F6 that matched nothing in the document it was made in is not read again against the
+/// next document's keys once F6 has switched. With ⌘1 unbound in the RGB document (the legacy table takes the key and Red
+/// is left without one), ⌘1 queued before F6 stays unhandled; in the Grayscale document ⌘1 would be View › 100 %.
+#[test]
+fn a_press_before_the_switch_is_not_read_against_the_new_documents_keys() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 16, "height": 16, "mode": "grayscale"})).unwrap();
+    app.session.execute("file.new", json!({"width": 16, "height": 16, "mode": "rgb"})).unwrap();
+    app.run("prefs.set", json!({"path": "useLegacyChannelShortcuts", "value": true})).unwrap();
+    app.run("edit.keyboardShortcuts", json!({"set": {"window.nextDocument": "F6", "channel.target.slot3": ""}})).unwrap();
+    app.sync_views();
+    assert_eq!(app.session.active().unwrap().doc.mode, photocraft_doc::ColorMode::Rgb);
+    let modifiers = platform(Modifiers::COMMAND);
+    let input = egui::RawInput {
+        events: vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::Key { key: egui::Key::Num1, physical_key: None, pressed: true, repeat: false, modifiers },
+            egui::Event::ModifiersChanged(Modifiers::NONE),
+            egui::Event::Key { key: egui::Key::F6, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        ],
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(input, |ui| {
+        super::dispatch_pressed(&mut app, ui.ctx(), Focus::None, false);
+    });
+    output.textures_delta.clear();
+    assert_eq!(app.session.active().unwrap().doc.mode, photocraft_doc::ColorMode::Grayscale, "F6 switched to the Grayscale document");
+    let ran: Vec<String> = take_log(&ctx).into_iter().map(|(id, _)| id).collect();
+    assert_eq!(ran, ["window.nextDocument"], "the earlier ⌘1 did not run in the new document: {ran:?}");
+}
