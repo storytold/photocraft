@@ -308,24 +308,27 @@ pub(super) fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> 
     let mut e = Edit::default();
     let mut changed = false;
     // An imported monochrome CMYK mixer is edited only by turning Monochrome off (#8047): the
-    // engine refuses any other edit while it is on.
+    // engine refuses any other edit while it is on. One scope around all the rows keeps their
+    // spacing (a scope per row would add item spacing after each one).
     let editable = !(cmyk && mono);
-    for (value, (text, c)) in row.iter_mut().zip(sources) {
-        let r = ui.add_enabled_ui(editable, |ui| gradient_slider(ui, text, value, -200.0..=200.0, "%", [track_start, *c], cx.dynamic_color_sliders)).inner;
-        changed |= r.changed;
-        e.add(r);
-    }
-    let total: f32 = row.iter().take(n).sum();
-    ui.horizontal(|ui| {
-        label(ui, tl!("Total:"));
-        let warn = total > 100.0;
-        ui.label(RichText::new(format!("{total:+.0}%")).font(crate::theme::mono(12.0)).color(if warn { t.warning } else { t.text }));
+    ui.add_enabled_ui(editable, |ui| {
+        for (value, (text, c)) in row.iter_mut().zip(sources) {
+            let r = gradient_slider(ui, text, value, -200.0..=200.0, "%", [track_start, *c], cx.dynamic_color_sliders);
+            changed |= r.changed;
+            e.add(r);
+        }
+        let total: f32 = row.iter().take(n).sum();
+        ui.horizontal(|ui| {
+            label(ui, tl!("Total:"));
+            let warn = total > 100.0;
+            ui.label(RichText::new(format!("{total:+.0}%")).font(crate::theme::mono(12.0)).color(if warn { t.warning } else { t.text }));
+        });
+        if let Some(constant) = row.get_mut(n) {
+            let r = widgets::slider_row(ui, tl!("Constant"), constant, -200.0..=200.0, "%", None);
+            changed |= r.changed();
+            e.add(Edit::of(&r));
+        }
     });
-    if let Some(constant) = row.get_mut(n) {
-        let r = ui.add_enabled_ui(editable, |ui| widgets::slider_row(ui, tl!("Constant"), constant, -200.0..=200.0, "%", None)).inner;
-        changed |= r.changed();
-        e.add(Edit::of(&r));
-    }
     if changed {
         v[key] = json!(row.iter().map(|x| x.round()).collect::<Vec<_>>());
     }

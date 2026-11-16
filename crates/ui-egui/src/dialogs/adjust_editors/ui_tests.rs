@@ -944,10 +944,12 @@ fn properties_white_point_eyedropper_edits_the_layer(kind: &str) {
     assert_eq!(layer(&h).1, before);
 }
 
-/// A bare `kind` editor over `params`, as the Properties panel and the dialog host it.
+/// A bare `kind` editor over `params`, as the Properties panel and the dialog host it. Tall
+/// enough for every control to be clickable: a CMYK Channel Mixer's Monochrome checkbox sits
+/// about 400 points down, below four ink sliders and the Constant.
 fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'static, serde_json::Value> {
     use crate::adjust_editors::{EditorCx, editor};
-    let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(300.0, 520.0)).build_ui_state(
         move |ui, values: &mut serde_json::Value| {
             let cx = EditorCx {
                 mem: egui::Id::unique("precision"),
