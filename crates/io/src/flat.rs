@@ -294,7 +294,8 @@ fn png_color_indices(bytes: &[u8], doc: &Document) -> Option<ColorIndices> {
     let width = usize::try_from(w).ok()?;
     let rows = usize::try_from(TILE_SIZE).ok()?;
     let band_len = width.checked_mul(rows)?;
-    let needed = u64::from(w).checked_mul(u64::from(h))?.checked_add(u64::try_from(band_len).ok()?)?;
+    // The index surface's whole tiles, the band, and the row of the layer read beside it.
+    let needed = tile_bytes(w, h, 1).saturating_add(u64::from(w).saturating_mul(rows as u64 + 4));
     crate::memory::check_fits(w, h, needed, crate::memory::available()).ok()?;
     let mut band = Vec::new();
     band.try_reserve_exact(band_len).ok()?;
