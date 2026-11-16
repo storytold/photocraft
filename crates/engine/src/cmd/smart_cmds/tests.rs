@@ -1147,6 +1147,40 @@ fn convert_to_layers_applies_the_placement() {
     assert!(mean_diff(&flat(&s), &before) < 2e-3);
 }
 
+/// The `Sz` an imported `SoLd` stores can differ from the source's pixels: Convert to Layers
+/// must scale the unpacked layers by that stretch too, not just the transform (#10207).
+#[test]
+fn convert_to_layers_applies_the_placed_size_stretch() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    let b = crate::smart_cmds::source_box(&s.active().unwrap().doc, &active_smart(&s)).unwrap();
+    s.edit("props", |doc, _| {
+        let LayerContent::Smart(sm) = &mut doc.layer_mut(LayerId(id)).unwrap().content else { panic!("smart") };
+        sm.placed_size = Some(((b[2] - b[0]) / 2.0, (b[3] - b[1]) / 2.0));
+        crate::smart_cmds::refresh(doc, LayerId(id)).map(|_| ())
+    })
+    .unwrap();
+    let before = flat(&s);
+    convert_to_layers(&mut s);
+    assert!(mean_diff(&flat(&s), &before) < 2e-3, "{}", mean_diff(&flat(&s), &before));
+    // And again with a non-uniform `Sz` on top of a scaled transform.
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    let b = crate::smart_cmds::source_box(&s.active().unwrap().doc, &active_smart(&s)).unwrap();
+    s.execute("edit.transform", json!({"layer": id, "matrix": [0.5, 0, 0, 0.5, 10.25, 3]})).unwrap();
+    s.edit("props", |doc, _| {
+        let LayerContent::Smart(sm) = &mut doc.layer_mut(LayerId(id)).unwrap().content else { panic!("smart") };
+        sm.placed_size = Some(((b[2] - b[0]) / 3.0, b[3] - b[1]));
+        crate::smart_cmds::refresh(doc, LayerId(id)).map(|_| ())
+    })
+    .unwrap();
+    let before = flat(&s);
+    convert_to_layers(&mut s);
+    assert!(mean_diff(&flat(&s), &before) < 2e-3, "{}", mean_diff(&flat(&s), &before));
+}
+
 #[test]
 fn convert_to_layers_rejects_what_it_cannot_unpack() {
     let mut s = session(8);
@@ -1584,6 +1618,18 @@ fn native_digest_cache_misses_after_copy_on_write_and_keeps_recently_used_source
     let weak = Arc::downgrade(&newest);
     drop(newest);
     assert!(weak.upgrade().is_none());
+}
+
+/// `Sz` is part of the rasterisation scale: the transform alone would render an SVG at the
+/// wrong resolution for a placement stretched onto a different box (#10207 review).
+#[test]
+fn vector_scale_counts_the_placed_size_stretch() {
+    let mut sm =
+        SmartObject::new(SmartSource::Embedded { file_name: "a.svg".into(), bytes: Arc::new(vec![]) }, Affine { m: [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] }, None);
+    sm.placed_size = Some((10.0, 20.0));
+    let b = Rect::new(0, 0, 40, 40);
+    assert_eq!(vector_scale(&sm, Some(b)), 1.0, "stretch (0.25, 0.5) on scale 2 tops out at 1");
+    assert_eq!(vector_scale(&sm, None), 2.0, "unknown bounds keep the transform's own scale");
 }
 
 /// `replace` makes `params` the filter's whole settings, so a key the edit left out stops
