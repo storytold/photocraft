@@ -1268,7 +1268,6 @@ fn tip_adapter_matches_shared_codec_and_keeps_preview_limit() {
     }
 }
 
-
 fn migration_key_fixture() -> (MemBackend, Vec<u8>) {
     let mem = MemBackend::default();
     let legacy = br#" {"version":1,"actions":[{"name":"Legacy","steps":[]}]} "#.to_vec();
@@ -1277,13 +1276,7 @@ fn migration_key_fixture() -> (MemBackend, Vec<u8>) {
 }
 
 fn migration_keys_pending(mem: &MemBackend) -> bool {
-    crate::actions_cmds::library::decode(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap())
-        .unwrap()
-        .library
-        .legacy
-        .as_ref()
-        .unwrap()
-        .function_keys_pending()
+    crate::actions_cmds::library::decode(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap()).unwrap().library.legacy.as_ref().unwrap().function_keys_pending()
 }
 
 fn legacy_function_key(mem: &MemBackend) -> u16 {
@@ -1354,14 +1347,20 @@ fn migration_reopen_before_attachment_preserves_preference_owned_function_keys()
     assert!(session.action_definitions_written());
     assert_eq!(legacy_function_key(&mem), 4);
     assert!(!migration_keys_pending(&mem));
-    assert!(crate::actions_cmds::matches_library_definition(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), &session.actions), "the browser's definition matcher accepts the initialized live receipt");
+    assert!(
+        crate::actions_cmds::matches_library_definition(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), &session.actions),
+        "the browser's definition matcher accepts the initialized live receipt"
+    );
     assert_eq!(mem.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), legacy);
     assert!(mem.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).is_err());
 }
 
 #[test]
 fn pending_migration_definition_commit_does_not_acknowledge_empty_keys() {
-    use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
     let (mem, legacy) = migration_key_fixture();
     drop(open(Box::new(mem.clone())));
     let pending = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
@@ -1416,7 +1415,9 @@ fn initialized_migration_headers_apply_intentional_clears_after_restart() {
     assert!(matches!(opened.actions, LoadedActions::Loaded(_)));
     assert!(reopened.attach_preset_store(opened).is_empty());
     assert_eq!(reopened.prefs().shortcuts["actions.play:Legacy"], "F4", "initialized headers remain authoritative despite migration origin");
-    reopened.edit_prefs(|prefs| { prefs.shortcuts.insert("actions.play:Legacy".into(), String::new()); });
+    reopened.edit_prefs(|prefs| {
+        prefs.shortcuts.insert("actions.play:Legacy".into(), String::new());
+    });
     reopened.sync_preset_store();
     assert!(reopened.action_definitions_written());
     assert_eq!(legacy_function_key(&mem), 0);
@@ -1432,7 +1433,10 @@ fn initialized_migration_headers_apply_intentional_clears_after_restart() {
 
 #[test]
 fn pending_migration_function_keys_survive_a_rejected_initialization_write() {
-    use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
     let (mem, legacy) = migration_key_fixture();
     drop(open(Box::new(mem.clone())));
     let pending = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();

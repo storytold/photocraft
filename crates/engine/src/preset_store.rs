@@ -1473,7 +1473,9 @@ impl Session {
                 }
             }
             let actions_written = st.sync_actions(&self.actions, &action_keys);
-            if st.actions_keys_initialized && let Some(origin) = self.actions.library.legacy.as_mut() {
+            if st.actions_keys_initialized
+                && let Some(origin) = self.actions.library.legacy.as_mut()
+            {
                 origin.initialize_function_keys();
             }
             st.sync_patterns(&self.patterns);
