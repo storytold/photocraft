@@ -344,3 +344,20 @@ fn a_ctrl_enter_in_the_frame_that_raises_the_alert_does_not_confirm() {
     assert!(!h.state().1, "and did not confirm the dialog in the same frame");
     assert!(!h.state().2);
 }
+
+#[test]
+fn command_enter_alone_commits_an_invalid_draft_and_raises_the_alert() {
+    for modifiers in [egui::Modifiers::COMMAND, egui::Modifiers::CTRL, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT] {
+        let mut h = harness(scale_fields());
+        field(&h, "Scale").click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("1001".into()));
+        h.run_steps(1);
+        h.event(key(egui::Key::Enter, true, false, modifiers));
+        h.run_steps(3);
+        assert!(alert_up(&h), "{modifiers:?}+Enter alone reports the invalid draft");
+        assert!(!h.state().1, "{modifiers:?}+Enter alone does not confirm the dialog");
+        assert_eq!(scale(&h), 1000.0);
+    }
+}

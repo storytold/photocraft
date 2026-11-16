@@ -1860,7 +1860,10 @@ fn scale_effects_field(ui: &mut egui::Ui, name: &str, v: &mut f32, range: std::o
     if !r.has_focus() {
         ui.data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
     }
-    let wrong = r.lost_focus() && ui.data_mut(|d| d.remove_temp::<bool>(wrong_id)).unwrap_or(false);
+    // The field's text edit only leaves on a plain Enter, but the dialog's OK reads an Enter with any modifiers
+    // (Ctrl/Cmd+Enter included): each of those commits the typed value too, so the alert is judged now.
+    let enter_commit = r.has_focus() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. })));
+    let wrong = (r.lost_focus() || enter_commit) && ui.data_mut(|d| d.remove_temp::<bool>(wrong_id)).unwrap_or(false);
     wrong && !esc
 }
 
