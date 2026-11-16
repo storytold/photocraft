@@ -260,8 +260,11 @@ pub(crate) fn render_lab_with<A: crate::BufferAlloc>(doc: &Document, rect: Rect,
         out.px.par_chunks_mut(chunk_len).enumerate().for_each(|(i, px)| band(i, px));
     }
     #[cfg(target_arch = "wasm32")]
-    for (i, px) in out.px.chunks_mut(w.saturating_mul(rows).min(out.px.len()).max(1)).enumerate() {
-        band(i, px);
+    {
+        let chunk_len = w.saturating_mul(rows).min(out.px.len()).max(1);
+        for (i, px) in out.px.chunks_mut(chunk_len).enumerate() {
+            band(i, px);
+        }
     }
     Ok(Some(out))
 }
