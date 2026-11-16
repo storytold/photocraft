@@ -120,6 +120,10 @@ struct Ex<'c> {
     /// `TextIndex`, others get the next free number; see `photocraft_text::psd::build_txt2`),
     /// written into the `TySh` data this export re-serializes.
     text_index: std::collections::HashMap<photocraft_doc::LayerId, i32>,
+    /// The file's `Txt2` no longer matches its type layers (one was edited or added): every type
+    /// layer gets a generated `TySh` and the old `Txt2` is dropped. Photoshop refuses a file that
+    /// mixes its own `Txt2` with `TySh` data written here.
+    regen_text: bool,
     canvas: photocraft_geom::Rect,
     records: Vec<LayerRecord>,
     warnings: Vec<String>,
@@ -443,9 +447,11 @@ impl Ex<'_> {
 
     /// The `TySh` block to write for type layer `t` of `l`, or `None` to write it as pixels.
     fn type_tysh(&self, l: &Layer, t: &photocraft_doc::TextLayer) -> Option<std::sync::Arc<Vec<u8>>> {
-        // Text layers without PSD data (created here) get a generated TySh.
-        let generated = t.psd_raw.is_none().then(|| photocraft_text::psd::build_tysh(t, self.dpi, None)).flatten().map(std::sync::Arc::new);
-        let src = t.psd_raw.as_ref().or(generated.as_ref())?;
+        // Text layers without PSD data (created here) get a generated TySh, and so does every
+        // type layer once the file's `Txt2` is not kept (`regen_text`).
+        let generated =
+            (t.psd_raw.is_none() || self.regen_text).then(|| photocraft_text::psd::build_tysh(t, self.dpi, None)).flatten().map(std::sync::Arc::new);
+        let src = if self.regen_text { generated.as_ref()? } else { t.psd_raw.as_ref().or(generated.as_ref())? };
         // Character/paragraph style sheets from the document's styles.
         let styled = crate::text_styles_map::export_tysh(src, t, &self.text_styles, self.dpi).map(std::sync::Arc::new);
         // `TextIndex` names the layer's object in the document's `Txt2` (where the
@@ -843,8 +849,13 @@ impl Ex<'_> {
         use photocraft_doc::SmartSource;
         let preview = self.smart.vector_preview(sm).and_then(|preview| Some((preview.document.clone(), preview.frame?)));
         let mut source = match &sm.source {
-            // A file of the imported document, or one its placed-layer data names (a missing
-            // link stays a smart object, as in Photoshop).
+            // Placed-layer data naming a file the document has no record of (not even an external
+            // link): Photoshop opens such a file but fails to save it ("disk error", -32005), so
+            // the layer is written as the pixels it shows.
+            SmartSource::Linked { path } if !path.is_empty() && !self.smart.known.contains(path) && template.is_some_and(|t| t.idnt == *path) => {
+                Err(format!("its source file {path} is missing from the document, and Photoshop can't save such a smart object"))
+            }
+            // A file of the imported document, or one its placed-layer data names.
             SmartSource::Linked { path } if self.smart.known.contains(path) || template.is_some_and(|t| t.idnt == *path) => {
                 let stored = template.filter(|t| t.idnt == *path).and_then(|t| crate::smart_map::stored_size(&t.descriptor));
                 let geometry = stored.map(|size| (size, f64::from(self.dpi))).or_else(|| {
