@@ -589,7 +589,10 @@ fn empty_wire_category_and_legacy_none_share_one_group_and_export_empty_name() {
 
     // A copied physical row can share raw provenance with its source without sharing identity.
     let mut copied = loaded(&fixture(&[""], false, "Copied empty row\0").bytes);
-    copied.execute("actions.duplicate", json!({"set":super::super::UNGROUPED_SET,"setSlot":0})).unwrap();
+    // Use the canonical folder-copy fixture to retain the same default caption. The public
+    // duplicate command deliberately gives its copy a different, unique caption.
+    crate::actions_cmds::library::insert_folder(&mut copied.actions, 1, super::super::UNGROUPED_SET, Some(0));
+    assert_eq!(copied.actions.set_rows, [super::super::UNGROUPED_SET, super::super::UNGROUPED_SET]);
     copied.actions.list.push(Action::new("Loose", vec![]));
     let copied_groups = groups(&copied.actions, None).unwrap();
     assert_eq!(copied_groups.len(), 3, "keep both physical occurrences and the fresh loose group");
