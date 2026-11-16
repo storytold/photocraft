@@ -28,6 +28,7 @@ mod gesture;
 pub mod gpu_canvas;
 pub mod guide_select;
 pub mod layer_pick_ui;
+pub mod middle_pick;
 pub mod move_ui;
 mod navigator;
 pub mod outline;
@@ -2524,6 +2525,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let temporary = crate::hold_keys::for_frame(app, &ctx, drawing || crate::type_transform::active(app));
     let space_pan = temporary == Some(crate::hold_keys::Temporary::Hand);
     let middle = ui.input(|i| i.pointer.middle_down());
+    // Alt + middle-click picks the layer under the pointer, allowing you to switch your editing layer.
+    let middle_pick = crate::middle_pick::frame(app, &ctx, &response, &xf, primary && temporary.is_none() && !stroke_dismissal);
     let tool = match temporary {
         Some(t) => t.tool(),
         None if middle => Tool::Hand,
@@ -2580,7 +2583,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // (Space) and a middle-button drag still pan, and a secondary window's Hand never stops, as the
     // box is only drawn and driven on the primary canvas.
     let transform_owns_pointer = primary && app.ui.transform.is_some() && temporary.is_none() && !middle;
-    let hand_pan = tool == Tool::Hand && !transform_owns_pointer;
+    let hand_pan = tool == Tool::Hand && !transform_owns_pointer && !middle_pick;
     // A press outside an open canvas tool menu dismisses it (`canvas_tool_menu::show`, after this
     // input pass) and the whole gesture is consumed until its release, as in Photoshop: no tool
     // press, stroke, drag, pan or zoom step. The menu closes mid-frame (after this input pass), so
@@ -2649,7 +2652,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         ctx.set_cursor_icon(crate::tool_cursor::hand(&ctx, true));
     } else if primary && !stroke_dismissal && temporary.is_none() && !middle && crate::layer_picker::armed(app).is_some() {
         layer_picker_eyedropper(app, ui, &ctx, &response, &xf);
-    } else if primary && !stroke_dismissal {
+    } else if primary && !stroke_dismissal && !middle_pick {
+        // `!middle_pick`: an Alt + middle press picked a layer above, and the tools never see it.
         let input = CanvasToolInput {
             ctx: &ctx,
             response: &response,
