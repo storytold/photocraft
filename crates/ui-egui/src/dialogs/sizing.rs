@@ -269,6 +269,61 @@ fn from_unit(v: f64, unit: &str, orig: f64, res: f64, ppi: f64) -> f64 {
     }
 }
 
+/// Keep absolute percentage dimensions in a recorded Canvas Size command. The dialog itself
+/// stores pixels so its readouts and unit picker share a single representation.
+pub(crate) fn preserve_canvas_size_percent(fields: &Map<String, Value>, params: &mut Map<String, Value>) {
+    if !fields.contains_key("__sizing")
+        || params.contains_key("units")
+        || fields.get("__command").and_then(Value::as_str) != Some("image.canvasSize")
+        || fields.get("relative").and_then(Value::as_bool) == Some(true)
+        || fields.get("__unit").and_then(Value::as_str) != Some("percent")
+        || fields.get("__unitW").and_then(Value::as_str) == Some(COLUMNS.0)
+    {
+        return;
+    }
+    let (w, h) = (num(fields, "width") / (num(fields, "__origW") / 100.0), num(fields, "height") / (num(fields, "__origH") / 100.0));
+    if [w, h].into_iter().all(|v| v.is_finite() && v > 0.0) {
+        params.insert("width".into(), json!(w));
+        params.insert("height".into(), json!(h));
+        params.insert("units".into(), json!("percent"));
+    }
+}
+
+/// Load a recorded Canvas Size step into the dialog's pixel fields, using the current canvas
+/// dimensions as the base for percentages.
+pub(crate) fn restore_canvas_size_units(fields: &mut Map<String, Value>, recorded: &Map<String, Value>) {
+    match recorded.get("units") {
+        None => {}
+        Some(Value::String(unit)) if unit == "px" => {}
+        Some(Value::String(unit)) if unit == "percent" => {
+            restore_canvas_size_percent(fields, recorded);
+            return;
+        }
+        _ => return,
+    }
+    fields.remove("units");
+    // A legacy step with fixed dimensions should keep them even when the ruler preference
+    // would otherwise display (and record) absolute percentages.
+    if fields.get("__unit").and_then(Value::as_str) == Some("percent") {
+        set_unit(fields, "width", "px");
+    }
+}
+
+fn restore_canvas_size_percent(fields: &mut Map<String, Value>, recorded: &Map<String, Value>) {
+    if fields.get("relative").and_then(Value::as_bool) == Some(true) {
+        return;
+    }
+    let pixels = |key: &str, original: f64| match recorded.get(key) {
+        None | Some(Value::Null) => Some(original),
+        Some(value) => value.as_f64().map(|v| v * (original / 100.0)).filter(|v| v.is_finite() && *v > 0.0),
+    };
+    let (Some(w), Some(h)) = (pixels("width", num(fields, "__origW")), pixels("height", num(fields, "__origH"))) else { return };
+    fields.insert("width".into(), json!(w));
+    fields.insert("height".into(), json!(h));
+    fields.remove("units");
+    set_unit(fields, "width", "percent");
+}
+
 pub fn human_bytes(b: f64) -> String {
     if b >= 1024.0 * 1024.0 * 1024.0 {
         format!("{:.2}G", b / (1024.0 * 1024.0 * 1024.0))
