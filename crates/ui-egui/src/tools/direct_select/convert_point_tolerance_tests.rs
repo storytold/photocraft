@@ -126,6 +126,45 @@ fn a_shown_handle_keeps_its_6_points() {
     assert_eq!(steps(&app), n + 1);
 }
 
+/// Not measured, so as today: below display scale 0.835 the 5 px anchor reach is wider than 6
+/// points (4.5 px at display scale 0.75), and shown handles keep their 6 points there.
+#[test]
+fn at_display_scale_0_75_a_shown_handle_keeps_its_6_points() {
+    for (dx, moves) in [(4.8, false), (4.4, true)] {
+        let mut app = app(Tool::ConvertPoint, 1.0, 0.75);
+        drag(&mut app, [100.0, 300.0], [100.0, 340.0], Modifiers::NONE);
+        assert_eq!(app.ui.direct_selection.anchors, vec![[0, 0]], "the converted anchor's handles show");
+        let (before, n) = (work(&app), steps(&app));
+        drag(&mut app, [100.0 + dx, 340.0], [140.0, 340.0], Modifiers::NONE);
+        let out = work(&app).subpaths[0].knots[0].out_ctrl;
+        if moves {
+            assert!((out.x - (140.0 - dx)).abs() < 1e-9 && out.y == 340.0, "{dx} px away: the handle moved with the drag, {out:?}");
+        } else {
+            assert_eq!(work(&app), before, "{dx} px away: nothing moved");
+        }
+        assert_eq!(steps(&app), n + usize::from(moves), "{dx} px away");
+    }
+}
+
+/// As the shown handles: a straight segment 4.8 px away (6.4 points) at display scale 0.75 is out
+/// of reach, so the press doesn't drag it; 4.4 px away it does.
+#[test]
+fn at_display_scale_0_75_a_segment_keeps_its_6_points() {
+    for (dy, drags) in [(4.8, false), (4.4, true)] {
+        let mut app = app(Tool::ConvertPoint, 1.0, 0.75);
+        let (before, n) = (work(&app), steps(&app));
+        drag(&mut app, [200.0, 300.0 - dy], [200.0, 260.0], Modifiers::NONE);
+        let after = work(&app);
+        if drags {
+            let top: Vec<f64> = after.subpaths[0].knots[..2].iter().map(|k| k.anchor.y).collect();
+            assert!(top.iter().all(|y| (y - (260.0 + dy)).abs() < 1e-9), "{dy} px away: the top edge moved with the drag, {top:?}");
+        } else {
+            assert_eq!(after, before, "{dy} px away: nothing moved");
+        }
+        assert_eq!(steps(&app), n + usize::from(drags), "{dy} px away");
+    }
+}
+
 #[test]
 fn direct_selection_keeps_its_6_points() {
     for (ppp, dx) in [(1.0, 6.0), (2.0, 12.0)] {
