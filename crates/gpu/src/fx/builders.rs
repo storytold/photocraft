@@ -54,7 +54,14 @@ impl B {
             }
             GlowTechnique::Softer => {
                 // Inner glows spread 1 - alpha.
-                let src = if inner { self.shift(In::Shape, 0.0, 0.0, 0.0, true) } else { In::Shape };
+                // #14951: an Anti-aliased Outer Glow takes the CPU's sub-pixel source offset
+                // (outer Softer path and the Gaussian contour, `fx::aa_shift`; a zero offset adds
+                // no stage), and the Inner Glow (#14927) keeps today's map. With Spread above 0
+                // the CPU recomputes its dilation distance on the offset map while this path does
+                // not, so the compositors are pinned equal at the measured Spread 0 by
+                // `anti_aliased_outer_glow_matches_the_cpu_ramps`.
+                let aa = fx::aa_shift(!inner && g.anti_alias, &g.contour);
+                let src = if inner { self.shift(In::Shape, 0.0, 0.0, 0.0, true) } else { self.shift(In::Shape, aa, aa, 0.0, false) };
                 self.spread_blur(src, (g.size, g.spread), inner, 0.0, 0.0)
             }
         };

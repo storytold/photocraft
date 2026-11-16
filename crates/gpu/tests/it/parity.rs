@@ -3471,3 +3471,113 @@ fn sibling_compositors_have_independent_residency_and_configuration() {
     assert!(g.comp.resident_bytes() > 0);
     assert_ne!(g.comp.resident_budget(), sibling.resident_budget());
 }
+
+// ---------------------------------------------------------------------------------------------
+// #14951: the Outer Glow's Anti-aliased checkbox has to reach the GPU map program too.
+
+/// The Gaussian contour as the built-in preset carries it - the contour #14951 measures with.
+fn gaussian_contour() -> Contour {
+    let pts: [(f32, f32); 11] = [
+        (0.0, 0.0),
+        (0.117, 0.023),
+        (0.172, 0.055),
+        (0.234, 0.117),
+        (0.305, 0.234),
+        (0.383, 0.414),
+        (0.523, 0.688),
+        (0.617, 0.812),
+        (0.703, 0.891),
+        (0.805, 0.953),
+        (1.0, 1.0),
+    ];
+    Contour::Custom {
+        name: "Gaussian".into(),
+        points: pts.iter().map(|(input, output)| Cp { input: *input, output: *output }).collect(),
+        corners: (0..pts.len()).map(|i| i > 0 && i < pts.len() - 1).collect(),
+    }
+}
+
+/// The issue's test document: 400 x 300 px, 72 ppi, RGB 8 bit, white Background, a pixel layer
+/// with an orange (255, 128, 0) rectangle at x 100..=299, y 75..=224 carrying a black Outer Glow
+/// (Normal, Opacity 100 %, Noise 0, Technique Softer, Spread 0, Size 10, Range 50 %, Jitter 0,
+/// Contour Gaussian) with the Anti-aliased checkbox as given.
+fn outer_glow_issue_doc(anti_aliased: bool) -> Document {
+    let (w, h) = (400u32, 300u32);
+    let mut d = Document::new("14951", Size::new(w, h), ColorMode::Rgb, SampleType::U8);
+    let area = Rect::from_xywh(0, 0, w, h);
+    let mut bg = Layer::raster("Background", PixelFormat::RGBA8);
+    let white: Vec<f32> = (0..(w * h)).flat_map(|_| [1.0f32, 1.0, 1.0, 1.0]).collect();
+    bg.surface_mut().unwrap().write_region(area, &white);
+    let mut px = Layer::raster("pixels", PixelFormat::RGBA8);
+    let orange: Vec<f32> = (0..h)
+        .flat_map(|y| (0..w).map(move |x| if (75..225).contains(&y) && (100..300).contains(&x) { [1.0f32, 0.501_960_8, 0.0, 1.0] } else { [0.0; 4] }))
+        .flatten()
+        .collect();
+    px.surface_mut().unwrap().write_region(area, &orange);
+    px.effects.items = vec![Effect::OuterGlow(Glow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        paint: FxPaint::Color(Color::BLACK),
+        technique: GlowTechnique::Softer,
+        spread: 0.0,
+        size: 10.0,
+        contour: gaussian_contour(),
+        anti_alias: anti_aliased,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    })];
+    d.layers = vec![bg, px];
+    d
+}
+
+/// The ten R levels outwards from each of the issue's four edges of a 400 x 300 flatten.
+fn outer_glow_ramps(px: &[[f32; 4]]) -> [Vec<f32>; 4] {
+    let r = |x: i32, y: i32| px[(y * 400 + x) as usize][0] * 255.0;
+    let line = |first: (i32, i32), step: (i32, i32)| (0..10).map(|k| r(first.0 + k * step.0, first.1 + k * step.1)).collect();
+    [line((200, 74), (0, -1)), line((99, 150), (-1, 0)), line((200, 225), (0, 1)), line((300, 150), (1, 0))]
+}
+
+/// Done when (#14951): the GPU map program honours the Anti-aliased checkbox like the CPU. The
+/// whole document (400 x 300 also runs the paged 256 px compositor, where the sub-pixel shift has
+/// to inflate the map windows) matches the CPU reference within one 8-bit step, and the GPU's four
+/// edge ramps land on the issue's measured profile within 5 levels - the bar the compose-side test
+/// states, where 14 of the 18 measured pixels reach 3. The Anti-aliased-off render does not reach
+/// these ramps at all, at either the top or the bottom edge.
+#[test]
+fn anti_aliased_outer_glow_matches_the_cpu_ramps() {
+    let Some(mut g) = gpu() else { return };
+    let on = outer_glow_issue_doc(true);
+    let off = outer_glow_issue_doc(false);
+    check(&mut g, &on, "#14951 outer glow, Anti-aliased");
+    check(&mut g, &off, "#14951 outer glow, Anti-aliased off");
+    let gpu_on = render_to_vec(&mut g.comp, &g.device, &g.queue, &on, on.bounds()).expect("gpu render, Anti-aliased");
+    let gpu_off = render_to_vec(&mut g.comp, &g.device, &g.queue, &off, off.bounds()).expect("gpu render, Anti-aliased off");
+    let tl: &[f32] = &[2.0, 17.0, 51.0, 108.0, 175.0, 223.0, 245.0, 252.0, 254.0, 255.0];
+    let br: &[f32] = &[11.0, 37.0, 86.0, 153.0, 210.0, 240.0, 251.0, 254.0];
+    for ((side, got), want) in ["top", "left", "bottom", "right"].iter().zip(outer_glow_ramps(&gpu_on)).zip([tl, tl, br, br]) {
+        for (d, (got, want)) in got.iter().zip(want).enumerate() {
+            assert!((got - want).abs() <= 5.0, "GPU {side} edge, {d} px out: {got:.1} vs measured {want}");
+        }
+    }
+    let ramps_on = outer_glow_ramps(&gpu_on);
+    let ramps_off = outer_glow_ramps(&gpu_off);
+    assert!(
+        (ramps_on[0][0] - ramps_off[0][0]).abs() > 3.0,
+        "Anti-aliased moved nothing on the GPU's top edge: on {:.1}, off {:.1}",
+        ramps_on[0][0],
+        ramps_off[0][0]
+    );
+    assert!(
+        (ramps_on[2][0] - ramps_off[2][0]).abs() > 3.0,
+        "Anti-aliased moved nothing on the GPU's bottom edge: on {:.1}, off {:.1}",
+        ramps_on[2][0],
+        ramps_off[2][0]
+    );
+    // The layer itself is never covered: both compositors still show the layer's own orange at the
+    // issue's spot (200,75).
+    for px in [&gpu_on, &gpu_off] {
+        let p = px[(75 * 400 + 200) as usize];
+        assert!(p[0] > 0.99 && (p[1] - 0.501_960_8).abs() < 0.01, "the glow covered the layer at (200,75): {p:?}");
+    }
+}

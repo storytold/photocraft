@@ -317,3 +317,72 @@ fn bands_end_at_the_coordinate_ceiling() {
     assert_eq!((bands[0].y0, bands[0].y1, bands[1].y1), (i32::MAX - 100, i32::MAX - 36, i32::MAX));
     assert_eq!(super::bands(Rect::new(0, 0, 8, 10), 0).len(), 10, "a zero step still makes progress");
 }
+
+/// #14951: the GPU's Outer Glow program takes the same sub-pixel source offset as the CPU's
+/// `glow_map` - without a device, by asking what stages the effect builds. Only the measured gate
+/// (Anti-aliased on, Gaussian contour, the outer Softer path) adds the stage; the Precise
+/// technique, the Inner Glow (#14927) and an unmeasured contour keep today's stages.
+#[test]
+fn anti_aliased_outer_glow_shifts_the_map_stage() {
+    use photocraft_doc::{Contour, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique};
+    let pts: [(f32, f32); 11] = [
+        (0.0, 0.0),
+        (0.117, 0.023),
+        (0.172, 0.055),
+        (0.234, 0.117),
+        (0.305, 0.234),
+        (0.383, 0.414),
+        (0.523, 0.688),
+        (0.617, 0.812),
+        (0.703, 0.891),
+        (0.805, 0.953),
+        (1.0, 1.0),
+    ];
+    let gaussian = Contour::Custom {
+        name: "Gaussian".into(),
+        points: pts.iter().map(|(input, output)| photocraft_doc::adjust::CurvePoint { input: *input, output: *output }).collect(),
+        corners: (0..pts.len()).map(|i| i > 0 && i < pts.len() - 1).collect(),
+    };
+    let glow = |anti_aliased: bool, contour: Contour, technique: GlowTechnique| Glow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        paint: FxPaint::Color(photocraft_color::Color::BLACK),
+        technique,
+        spread: 0.0,
+        size: 10.0,
+        contour,
+        anti_alias: anti_aliased,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    };
+    fn shift_stages(p: &MapProgram) -> Vec<&Stage> {
+        p.stages.iter().filter(|s| s.kernel == Kernel::MShift).collect()
+    }
+    let light = GlobalLight::default();
+    let aa = photocraft_compose::effects::aa_shift(true, &gaussian);
+    assert_eq!(aa, -1.0 / 3.0, "the CPU offset the GPU has to copy");
+    // An outer Softer glow at Spread 0 normally builds no shift stage at all.
+    let off = program(&Effect::OuterGlow(glow(false, gaussian.clone(), GlowTechnique::Softer)), &light, false);
+    assert_eq!(shift_stages(&off).len(), 0, "an outer glow without Anti-aliased takes no shift stage");
+    let on = program(&Effect::OuterGlow(glow(true, gaussian.clone(), GlowTechnique::Softer)), &light, false);
+    assert_eq!(shift_stages(&on).len(), 1, "the Anti-aliased outer glow adds exactly its sub-pixel shift stage");
+    assert_eq!(shift_stages(&on)[0].p0, [aa, aa, 0.0, 0.0], "the shift stage must carry the CPU's sub-pixel source offset (no invert, 0 outside)");
+    assert!(
+        shift_stages(&on)[0].radius >= 1,
+        "a sub-pixel shift reads the tap beyond its base, so the stage radius must cover it: {}",
+        shift_stages(&on)[0].radius
+    );
+    assert_ne!(on.key, off.key, "the flag has to invalidate the cached program");
+    // Unmeasured cases keep today's stages.
+    let linear = program(&Effect::OuterGlow(glow(true, Contour::Linear, GlowTechnique::Softer)), &light, false);
+    assert_eq!(shift_stages(&linear).len(), 0, "a Linear-contour outer glow still ignores Anti-aliased (#14951 leaves that contour unmeasured)");
+    let precise_on = program(&Effect::OuterGlow(glow(true, gaussian.clone(), GlowTechnique::Precise)), &light, false);
+    let precise_off = program(&Effect::OuterGlow(glow(false, gaussian.clone(), GlowTechnique::Precise)), &light, false);
+    assert_eq!(precise_on.key, precise_off.key, "the Precise technique still ignores Anti-aliased (#14951 leaves it unmeasured)");
+    let inner_on = program(&Effect::InnerGlow(glow(true, gaussian.clone(), GlowTechnique::Softer)), &light, false);
+    let inner_off = program(&Effect::InnerGlow(glow(false, gaussian, GlowTechnique::Softer)), &light, false);
+    assert_eq!(inner_on.key, inner_off.key, "the Inner Glow still ignores Anti-aliased (#14927 is its own item)");
+    assert_eq!(shift_stages(&inner_on).len(), 1, "the inner glow keeps its one (invert) stage");
+    assert_eq!(shift_stages(&inner_on)[0].p0, [0.0, 0.0, 0.0, 1.0], "and that stage stays the identity shift");
+}
