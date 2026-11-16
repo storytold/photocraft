@@ -27,8 +27,21 @@ fn size_range_alert() -> String {
 }
 /// Set in the dialog's fields by [`body`] when a typed size was out of range; [`open_owed_alert`] takes it.
 const ALERT_OWED: &str = "__sizeRangeAlert";
-/// Remembered values (document pixels; sides and radii come from the options bar).
+/// Remembered values (document pixels; sides and radii come from the options bar), for the
+/// shapes that [remember](remembers) them.
 const KEYS: [&str; 4] = ["width", "height", "fromCenter", "starRatio"];
+
+/// Whether the dialog of `kind` opens with the values of its last OK. Create Rectangle opens with
+/// 100 × 100 px and From Center off every time, as in the reference (#13339).
+fn remembers(kind: &str) -> bool {
+    kind != "rectangle"
+}
+
+/// Whether the side `key` of the dialog of `kind` also takes 0 px: Create Rectangle's Width does,
+/// and OK then creates nothing (#13339). Every other side takes 1 to [`MAX_PX`] px.
+fn takes_zero(kind: &str, key: &str) -> bool {
+    kind == "rectangle" && key == "width"
+}
 
 pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
@@ -123,7 +136,9 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) -> Option<u64> {
         }
         _ => {}
     }
-    if let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(&pref_key(kind)) {
+    if remembers(kind)
+        && let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(&pref_key(kind))
+    {
         for key in KEYS {
             if f.contains_key(key)
                 && let Some(v) = saved.get(key).filter(|v| valid(key, v))
@@ -139,7 +154,8 @@ fn num(f: &Map<String, Value>, key: &str) -> Option<f64> {
     f.get(key).and_then(Value::as_f64).filter(|v| v.is_finite())
 }
 
-/// `shape.create` geometry for the dialog's values (no fill or stroke).
+/// `shape.create` geometry for the dialog's values (no fill or stroke). `Null` for Create
+/// Rectangle with Width 0, which creates nothing.
 pub fn geometry(f: &Map<String, Value>) -> Result<Value, String> {
     let kind = f.get(MARK).and_then(Value::as_str).ok_or("not a Create Shape dialog")?;
     let at = f.get("__at").and_then(Value::as_array).ok_or("the dialog has no position")?;
@@ -147,12 +163,17 @@ pub fn geometry(f: &Map<String, Value>) -> Result<Value, String> {
         return Err("the dialog has no position".into());
     };
     let side = |key: &str, label: &str| -> Result<f64, String> {
-        num(f, key).filter(|v| (1.0..=MAX_PX).contains(v)).ok_or_else(|| format!("{label} must be between 1 and {MAX_PX} pixels"))
+        num(f, key)
+            .filter(|v| (1.0..=MAX_PX).contains(v) || (*v == 0.0 && takes_zero(kind, key)))
+            .ok_or_else(|| format!("{label} must be between 1 and {MAX_PX} pixels"))
     };
     let (w, h) = (side("width", "Width")?, side("height", "Height")?);
     let center = f.get("fromCenter").and_then(Value::as_bool).unwrap_or(false);
     if !(x.abs() <= MAX_PX && y.abs() <= MAX_PX) {
         return Err("the shape's position is out of range".into());
+    }
+    if w == 0.0 {
+        return Ok(Value::Null);
     }
     let (x0, y0) = if center { (x - w / 2.0, y - h / 2.0) } else { (x, y) };
     let rect = json!([x0, y0, w, h]);
@@ -177,12 +198,13 @@ pub fn geometry(f: &Map<String, Value>) -> Result<Value, String> {
     })
 }
 
-/// OK: create the shape and remember the values for the next click.
+/// OK: create the shape (nothing for Create Rectangle's Width 0) and, for the shapes that
+/// [remember](remembers) them, keep the values for the next click.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let result = geometry(f).and_then(|g| crate::vector_ui::create_shape(app, g));
+    let result = geometry(f).and_then(|g| if g.is_null() { Ok(Value::Null) } else { crate::vector_ui::create_shape(app, g) });
     match &result {
         Ok(_) => {
-            if let Some(kind) = f.get(MARK).and_then(Value::as_str) {
+            if let Some(kind) = f.get(MARK).and_then(Value::as_str).filter(|kind| remembers(kind)) {
                 let saved: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
                 app.session.prefs.edit(|p| p.dialogs.insert(pref_key(kind), Value::Object(saved)));
             }
@@ -239,6 +261,8 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             let px = num(f, key).unwrap_or(100.0);
             let to_unit = |px: f64| unit.from_px(px, dpi, extent, ppi) as f32;
             let mut v = to_unit(px);
+            // Create Rectangle's Width goes down to 0 (#13339); the other sides keep their 1 px minimum.
+            let zero = takes_zero(&kind, key);
             let places = unit.decimals() as u32;
             let range = to_unit(1.0)..=to_unit(MAX_PX);
             // Create Triangle's pixel fields say when a typed size was out of range (#13358); the other
@@ -246,14 +270,16 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             let (resp, out_of_range) = if unit == Unit::Pixels && kind == "triangle" {
                 crate::widgets::value_field_alerting_prec(ui, text, &mut v, range, unit.suffix(), 110.0, places)
             } else {
-                (crate::widgets::value_field_prec(ui, &mut v, range, unit.suffix(), 110.0, places), false)
+                (crate::widgets::value_field_prec(ui, &mut v, if zero { 0.0..=*range.end() } else { range }, unit.suffix(), 110.0, places), false)
             };
             let resp = resp.accessible_name(text);
             if out_of_range {
                 f.insert(ALERT_OWED.into(), Value::Bool(true));
             }
             if resp.changed() {
-                let px = unit.to_px(f64::from(v), dpi, extent, ppi).clamp(1.0, MAX_PX);
+                // 0 stays 0 where the side takes it; anything else keeps the 1 px minimum.
+                let px = unit.to_px(f64::from(v), dpi, extent, ppi);
+                let px = if zero && px <= 0.0 { 0.0 } else { px.clamp(1.0, MAX_PX) };
                 f.insert(key.into(), json!((px * 1000.0).round() / 1000.0));
             }
             // Right-click: the length units for this field (the sizes stay in pixels).
@@ -332,6 +358,9 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
         }
     });
 }
+
+#[cfg(test)]
+mod create_rectangle_defaults_tests;
 
 #[cfg(test)]
 mod tests;
