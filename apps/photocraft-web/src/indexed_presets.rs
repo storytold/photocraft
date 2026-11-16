@@ -182,11 +182,17 @@ pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     }
 }
 
-/// A malformed retained migration backup must not invalidate the published Actions library.
-fn record_action_issue(name: &str, error: String, action_issue: &mut Option<String>, warnings: &mut Vec<String>) {
+/// Retained migration errors must not invalidate the published Actions library.
+fn record_action_issue(name: &str, error: String, action_issue: &mut Option<String>, warnings: &mut Vec<String>, unreadable: &mut Vec<String>) {
     if name == MIGRATED_ACTIONS_FILE {
         if warnings.len() < 8 {
             warnings.push(format!("Browser Actions recovery backup was skipped: {error}"));
+        }
+    } else if name == LEGACY_ACTIONS_FILE {
+        // Keep its presence visible: the engine prefers valid ATN, but rejects unreadable legacy without it.
+        unreadable.push(name.into());
+        if warnings.len() < 8 {
+            warnings.push(format!("Browser Actions legacy input was skipped: {error}"));
         }
     } else {
         *action_issue = Some(error);
@@ -221,7 +227,7 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         if matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) && !stored.is_instance_of::<Blob>() {
             match paired_actions(&stored) {
                 Ok(record) => action_records.push((name, record)),
-                Err(error) => record_action_issue(&name, error, &mut action_issue, &mut warnings),
+                Err(error) => record_action_issue(&name, error, &mut action_issue, &mut warnings, &mut unreadable),
             }
             next = request(&req);
             cursor.continue_().map_err(js)?;
@@ -260,14 +266,11 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         cursor.continue_().map_err(js)?;
     }
     let bridge = Bridge::default();
-    for name in unreadable {
-        bridge.load(&name, Vec::new())?;
-    }
     for (name, blob) in records {
         let result = before(&blob.array_buffer(), deadline).await.and_then(|buffer| bridge.load(&name, Uint8Array::new(&buffer).to_vec()));
         if let Err(error) = result {
-            if name == ACTIONS_FILE || name == MIGRATED_ACTIONS_FILE {
-                record_action_issue(&name, error, &mut action_issue, &mut warnings);
+            if matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) {
+                record_action_issue(&name, error, &mut action_issue, &mut warnings, &mut unreadable);
             } else {
                 return Err(error);
             }
@@ -294,8 +297,11 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         }
         .await;
         if let Err(error) = result {
-            record_action_issue(&name, error, &mut action_issue, &mut warnings);
+            record_action_issue(&name, error, &mut action_issue, &mut warnings, &mut unreadable);
         }
+    }
+    for name in unreadable {
+        bridge.load(&name, Vec::new())?;
     }
     if let Some(error) = action_issue {
         // A placeholder tells the engine that this file exists and must be left unchanged.
