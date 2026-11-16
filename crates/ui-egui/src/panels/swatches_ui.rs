@@ -364,6 +364,30 @@ mod tests {
         assert_eq!(h.state().ui.presets_ui.selected.get(PANEL), Some(&second), "the second swatch, not a gap");
     }
 
+    /// #15328: the selected swatch's outline lies over its neighbours; the swatches after it were
+    /// filled on top and hid its right and bottom edges.
+    #[test]
+    fn the_selection_outline_is_painted_over_the_next_swatches() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let first = app.session.presets.swatches[0].items[0].name.clone();
+        app.ui.presets_ui.selected.insert(PANEL.into(), first);
+        let mut h = Harness::builder().with_size(vec2(300.0, 300.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
+        h.run_steps(2);
+        let rects: Vec<egui::epaint::RectShape> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) => Some(r.clone()),
+                _ => None,
+            })
+            .collect();
+        let at = rects.iter().position(|r| r.stroke.width == 2.0).expect("the selected swatch is outlined");
+        let outline = rects[at].rect.expand(2.0);
+        let covering = rects[at + 1..].iter().filter(|r| r.fill != Color32::TRANSPARENT && r.rect.intersects(outline)).count();
+        assert_eq!(covering, 0, "no swatch is filled over the selection outline");
+    }
+
     /// Clicking a swatch while characters are selected recolours them, not just the foreground.
     #[test]
     fn clicking_a_swatch_recolours_selected_type() {
