@@ -198,6 +198,13 @@ impl JobCtx {
             .map_err(|_| EngineError::Cancelled)
     }
 
+    /// The irreversible step [`Self::commit`] guarded is done (one file of several written): a
+    /// cancel can stop the job again, before the next one. A job that writes several files
+    /// commits and ends a commit for each.
+    pub fn end_commit(&self) {
+        self.shared.state.fetch_and(!COMMITTED, Ordering::AcqRel);
+    }
+
     /// Has the job passed [`Self::commit`]?
     pub fn committed(&self) -> bool {
         self.shared.state.load(Ordering::Acquire) & COMMITTED != 0
@@ -1474,6 +1481,18 @@ impl Session {
                 Ok(Started::Job(id))
             }
             (Ok(v), None) => Ok(Started::Done(v)),
+        }
+    }
+
+    /// Give job `id`, started with [`Session::start_job`], to the action recording active now, as
+    /// a command's job is (`recorded_by`): steps its apply records (Export As's) then land in that
+    /// recording instead of being treated as another recording's. Other `start_job` callers keep
+    /// their jobs out of recordings.
+    pub fn record_job_in_take(&mut self, id: JobId) {
+        let take = self.actions.recording.map(|_| self.actions.take);
+        if let Some(job) = self.jobs.running.iter_mut().find(|j| j.id == id) {
+            job.started_in_take = take;
+            job.recorded_by = take;
         }
     }
 

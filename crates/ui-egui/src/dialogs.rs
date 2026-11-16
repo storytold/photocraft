@@ -1253,6 +1253,8 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     dont_show_again::closed(app, &closed);
+    // A layer's Export As lets go of the layers composited for it.
+    crate::export_dialog::closed(&closed.fields);
     crate::guide_edit::cancel(app, id);
     // A Color Picker puts back what its live preview showed in its target.
     crate::color_picker_ui::live_preview::end(app, id);
