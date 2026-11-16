@@ -321,6 +321,28 @@ pub fn resize_surface_in_canvas(s: &Surface, sx: f64, sy: f64, filter: Resample,
     resize(s, sx, sy, filter, Some(canvas))
 }
 
+/// Resize only the source rectangle, repeating its edge samples during filtering.
+pub(crate) fn resize_surface_in_source_rect(s: &Surface, scale: f64, filter: Resample, source: Rect, ctl: &photocraft_raster::Interrupt) -> Surface {
+    resize_controlled(s, scale, scale, filter, Bounds::Source(source), READ_BUDGET, ctl)
+}
+
+#[derive(Clone, Copy)]
+enum Bounds {
+    Content,
+    Canvas(Rect),
+    Source(Rect),
+}
+
+impl Bounds {
+    fn scaled(self, sx: f64, sy: f64) -> Self {
+        match self {
+            Self::Content => Self::Content,
+            Self::Canvas(r) => Self::Canvas(scaled_rect(r, sx, sy)),
+            Self::Source(r) => Self::Source(scaled_rect(r, sx, sy)),
+        }
+    }
+}
+
 /// Samples one source read may hold (64 MB of `f32`); larger windows are read in row chunks.
 const READ_BUDGET: usize = 1 << 24;
 
@@ -368,7 +390,7 @@ fn resize(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>)
 /// the intermediate image is never larger than the result when an axis grows, but is when both
 /// shrink ([`largest_resize_rect`]).
 fn resize_with_budget(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>, budget: usize) -> Surface {
-    resize_controlled(s, sx, sy, filter, canvas, budget, &photocraft_raster::Interrupt::NONE)
+    resize_controlled(s, sx, sy, filter, canvas.map_or(Bounds::Content, Bounds::Canvas), budget, &photocraft_raster::Interrupt::NONE)
 }
 
 /// Resize with cancellation between passes and bounded groups of output bands.
@@ -381,20 +403,19 @@ pub fn resize_surface_with_interrupt(
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<Surface, photocraft_raster::Cancelled> {
     ctl.check()?;
-    let out = resize_controlled(s, sx, sy, filter, None, READ_BUDGET, ctl);
+    let out = resize_controlled(s, sx, sy, filter, Bounds::Content, READ_BUDGET, ctl);
     ctl.check()?;
     Ok(out)
 }
 
-fn resize_controlled(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>, budget: usize, ctl: &photocraft_raster::Interrupt) -> Surface {
+fn resize_controlled(s: &Surface, sx: f64, sy: f64, filter: Resample, mut bounds: Bounds, budget: usize, ctl: &photocraft_raster::Interrupt) -> Surface {
     let mut cur: Option<Surface> = None;
-    let mut canvas = canvas;
     for p in plan(filter, sx, sy) {
         if ctl.cancelled() {
             return Surface::new(s.format());
         }
-        let next = resize_pass(cur.as_ref().unwrap_or(s), p, canvas, budget, ctl);
-        canvas = canvas.map(|c| scaled_rect(c, p.sx, p.sy));
+        let next = resize_pass(cur.as_ref().unwrap_or(s), p, bounds, budget, ctl);
+        bounds = bounds.scaled(p.sx, p.sy);
         cur = Some(next);
     }
     let mut out = preserve_details(cur.unwrap_or_else(|| s.clone()), filter, sx, sy);
@@ -425,7 +446,7 @@ struct PassState {
     alpha: bool,
     /// The output extent.
     dst: Rect,
-    /// The area every tap is clamped into (the source's content, or with a canvas that and the canvas).
+    /// Rectangle that bounds the source taps.
     area: Rect,
     hx: Vec<Taps>,
     vy: Vec<Taps>,
@@ -438,13 +459,16 @@ struct PassState {
 }
 
 impl PassState {
-    /// Prepares `pass` over `s`; `None` when the output is empty. With `canvas`, the content and
-    /// the canvas repeat their edge outwards (see [`resize_surface_in_canvas`]).
-    fn new(s: &Surface, pass: Pass, canvas: Option<Rect>, budget: usize) -> Option<Self> {
+    /// Prepares `pass` over `s`; `None` when the output is empty.
+    fn new(s: &Surface, pass: Pass, bounds: Bounds, budget: usize) -> Option<Self> {
         let Pass { sx, sy, kx, ky } = pass;
-        let edge = canvas.map(|c| s.content_bounds().union(&c)).filter(|a| !a.is_empty());
+        let content = s.content_bounds();
+        let (src, edge) = match bounds {
+            Bounds::Content => (content, None),
+            Bounds::Canvas(canvas) => (content, Some(content.union(&canvas))),
+            Bounds::Source(source) => (content.intersect(&source), Some(source)),
+        };
         let fmt = s.format();
-        let src = s.content_bounds();
         let dst = scaled_rect(src, sx, sy);
         if dst.is_empty() {
             return None;
@@ -564,11 +588,9 @@ impl PassState {
     }
 }
 
-/// One pass. With `canvas`, the content and the canvas repeat their edge outwards (see
-/// [`resize_surface_in_canvas`]).
-fn resize_pass(s: &Surface, pass: Pass, canvas: Option<Rect>, budget: usize, ctl: &photocraft_raster::Interrupt) -> Surface {
+fn resize_pass(s: &Surface, pass: Pass, bounds: Bounds, budget: usize, ctl: &photocraft_raster::Interrupt) -> Surface {
     let mut out = Surface::with_default(s.format(), &s.default_pixel());
-    let Some(st) = PassState::new(s, pass, canvas, budget) else { return out };
+    let Some(st) = PassState::new(s, pass, bounds, budget) else { return out };
     let bands: Vec<usize> = (0..st.bands()).collect();
     // Bands go into the output a group at a time, so the `f32` rows held at once are bounded by
     // the group, not by the whole destination (#1544).
@@ -604,7 +626,7 @@ pub struct ResizeSteps {
     src: Surface,
     passes: std::vec::IntoIter<Pass>,
     total: usize,
-    canvas: Option<Rect>,
+    bounds: Bounds,
     filter: Resample,
     scale: (f64, f64),
     run: Option<PassRun>,
@@ -625,7 +647,8 @@ impl ResizeSteps {
     /// or [`resize_surface_in_canvas`] does.
     pub fn new(src: Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>) -> Self {
         let passes = plan(filter, sx, sy);
-        Self { src, total: passes.len(), passes: passes.into_iter(), canvas, filter, scale: (sx, sy), run: None, prune: None }
+        let bounds = canvas.map_or(Bounds::Content, Bounds::Canvas);
+        Self { src, total: passes.len(), passes: passes.into_iter(), bounds, filter, scale: (sx, sy), run: None, prune: None }
     }
 
     /// How far along it is, `0.0..=1.0`: whole passes plus the bands done of the current one.
@@ -643,7 +666,7 @@ impl ResizeSteps {
                 None => {
                     if let Some(pass) = self.passes.next() {
                         let out = Surface::with_default(self.src.format(), &self.src.default_pixel());
-                        match PassState::new(&self.src, pass, self.canvas, READ_BUDGET) {
+                        match PassState::new(&self.src, pass, self.bounds, READ_BUDGET) {
                             Some(state) => self.run = Some(PassRun { pass, state, out, next: 0 }),
                             None => self.advance(out, pass),
                         }
@@ -667,7 +690,7 @@ impl ResizeSteps {
 
     /// The next pass reads this one's output.
     fn advance(&mut self, out: Surface, pass: Pass) {
-        self.canvas = self.canvas.map(|c| scaled_rect(c, pass.sx, pass.sy));
+        self.bounds = self.bounds.scaled(pass.sx, pass.sy);
         self.src = out;
     }
 

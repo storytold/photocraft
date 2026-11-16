@@ -12,7 +12,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface};
 use serde::{Deserialize, Serialize};
 
-use crate::resample::{Resample, resize_surface};
+use crate::resample::{Resample, resize_surface_in_source_rect};
 
 /// 3×3 projective matrix, row-major: `[x', y', w'] = H · [x, y, 1]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -393,6 +393,7 @@ fn warp(
     }
     let mut h = *h;
     let mut src_rect = src_rect;
+    let mut edges = [src_rect.x0, src_rect.y0, src_rect.x1, src_rect.y1].map(f64::from);
     // Pre-reduce for large downscales (bicubic alone aliases below ~50%). With a clip, the scale
     // that matters is the one at the source point landing in the clip's centre.
     let (cx, cy) = match clip.and_then(|c| Some((c, h.inverse()?))) {
@@ -407,11 +408,15 @@ fn warp(
     // Bilinear samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
     if interp == Interp::Bicubic && scale < 0.999 && scale > 0.0 {
         let f = scale.max(1.0 / 64.0);
-        reduced = resize_surface(src, f, f, Resample::Bicubic);
+        // Prefilter with the same edge samples as the warp. Transparency outside the quad
+        // belongs to the final coverage calculation.
+        reduced = resize_surface_in_source_rect(src, f, Resample::Bicubic, src_rect, ctl);
         src = &reduced;
         h = h.mul(&Homography([1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0]));
         src_rect = crate::resample::scaled_rect(src_rect, f, f);
+        edges = edges.map(|edge| edge * f);
     }
+    let [left, top, right, bottom] = edges;
     let Some(inv) = h.inverse() else { return Ok(out) };
     // Destination bounds: the warped corners (plus a pixel for filter support).
     let corners = [(src_rect.x0, src_rect.y0), (src_rect.x1, src_rect.y0), (src_rect.x1, src_rect.y1), (src_rect.x0, src_rect.y1)]
@@ -575,8 +580,9 @@ fn warp(
                 if interp != Interp::Nearest {
                     // How much of this pixel the warped source rect covers, per axis.
                     let (uc, vc) = (u + 0.5, v + 0.5);
-                    let cu = ((uc - src_rect.x0 as f64).min(src_rect.x1 as f64 - uc) / foot_u + 0.5).clamp(0.0, 1.0);
-                    let cv = ((vc - src_rect.y0 as f64).min(src_rect.y1 as f64 - vc) / foot_v + 0.5).clamp(0.0, 1.0);
+                    // Prefilter storage rounds out to whole pixels. Keep fractional geometric edges.
+                    let cu = ((uc - left).min(right - uc) / foot_u + 0.5).clamp(0.0, 1.0);
+                    let cv = ((vc - top).min(bottom - vc) / foot_v + 0.5).clamp(0.0, 1.0);
                     for s in acc.iter_mut().take(n) {
                         *s *= cu * cv;
                     }
