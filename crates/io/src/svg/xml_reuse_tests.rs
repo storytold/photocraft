@@ -79,17 +79,32 @@ fn original_xml_guards_run_before_repair_or_conversion() {
     .unwrap();
 }
 
-// Retain the previous public-library sequence solely as a timing control. It
-// uses the same resolver/validation implementations, not a copied decoder.
-fn prior_parse(text: &str) -> Result<svg::usvg::Tree, IoError> {
+// Retain the previous public-library sequence solely as a timing control. Its
+// outer inflate/depth/font/resolver setup, worker entry and usage snapshot match
+// parse_with; only repair + check_document + shared parse_text differ.
+fn prior_parse(bytes: &[u8]) -> Result<svg::Parsed, IoError> {
+    let xml = svg::inflate(bytes)?;
+    let depth = svg::nesting_depth(&xml, svg::MAX_XML_DEPTH)?;
+    if depth > svg::MAX_XML_DEPTH {
+        return Err(IoError::Svg(format!("elements are nested more than {} levels deep", svg::MAX_XML_DEPTH)));
+    }
+    let has_text = xml.windows(4).any(|w| w == b"text");
+    let fontdb = empty_fonts();
+    let fontless_text = has_text && fontdb.faces().next().is_none();
+    let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
     let limits = svg::tree_limits(svg::MAX_XML_DEPTH, svg::MAX_RASTER_PIXELS);
     let resolver = Arc::new(craft_svg::tree::ImageResolver::new(limits));
-    resolver.set_document_depth(svg::nesting_depth(text.as_bytes(), svg::MAX_XML_DEPTH)?);
     let state = Arc::new(std::sync::Mutex::new(svg::image_integrity::Integrity::new(svg::MAX_RASTER_PIXELS)));
-    let options = svg::options_with_isolation(empty_fonts(), svg::MAX_XML_DEPTH, false, Arc::clone(&resolver), state);
-    let repaired = repair(text, &limits)?;
-    resolver.check_document(&repaired).map_err(svg::svg_parse_error)?;
-    craft_svg::tree::parse_text(&repaired, &limits, &options).map_err(svg::svg_parse_error)
+    resolver.set_document_depth(depth);
+    svg::parse_at_depth(depth, false, |isolated| {
+        let options = svg::options_with_isolation(fontdb, svg::MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&resolver), Arc::clone(&state));
+        let repaired = repair(text, &limits)?;
+        resolver.check_document(&repaired).map_err(svg::svg_parse_error)?;
+        let tree = svg::guarded_parse(|| craft_svg::tree::parse_text(&repaired, &limits, &options))?.map_err(svg::svg_parse_error)?;
+        let image_usage = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).usage(resolver.usage())?;
+        Ok(svg::Parsed { tree, fontless_text, image_usage })
+    })
+    .map_err(IoError::from)
 }
 
 #[test]
@@ -114,9 +129,12 @@ fn xml_reuse_and_24mp_source_timing() {
         let mut expected = None;
         for old in [false, true, false] {
             let started = Instant::now();
-            let tree = if old { prior_parse(&text).unwrap() } else { svg::parse_with(text.as_bytes(), empty_fonts).unwrap().tree };
+            let parsed = if old { prior_parse(text.as_bytes()).unwrap() } else { svg::parse_with(text.as_bytes(), empty_fonts).unwrap() };
             let elapsed = started.elapsed();
-            let rendered = svg::render(&tree, 1.).unwrap();
+            assert!(!parsed.fontless_text);
+            assert_eq!(svg::omitted_image_count(parsed.image_usage), 0);
+            assert_eq!(parsed.image_usage.raster_pixels, if name == "png-24mp" { 24_000_000 } else { 0 });
+            let rendered = svg::render(&parsed.tree, 1.).unwrap();
             let checksum: u64 = rendered.data().iter().map(|b| u64::from(*b)).sum();
             if let Some(previous) = expected {
                 assert_eq!(checksum, previous);
