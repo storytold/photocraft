@@ -65,3 +65,22 @@ fn a_hidden_adjustment_layer_counts_and_the_export_runs() {
     let r = s.execute(CMD, json!({"size": 3})).unwrap();
     assert!(r["cube"].as_str().unwrap().contains("0.500000 0.500000 0.500000"), "the identity table");
 }
+
+/// CodeRabbit on #15046: a CMYK or Lab document whose only adjustment layer is hidden exports the identity table, as an
+/// RGB one does; only an explicit list or selection with nothing visible to export is refused.
+#[test]
+fn a_hidden_only_adjustment_stack_exports_the_identity_in_cmyk_and_lab() {
+    for mode in ["cmyk", "lab"] {
+        let mut s = doc(mode, "white", true);
+        let id = s.active().unwrap().active_layer.unwrap();
+        {
+            let st = s.active_mut().unwrap();
+            std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().visible = false;
+        }
+        let r = s.execute(CMD, json!({"size": 3})).unwrap_or_else(|e| panic!("{mode}: {e}"));
+        assert!(r["cube"].as_str().unwrap().contains("0.500000 0.500000 0.500000"), "{mode}: the identity table");
+        assert_eq!(r["layerCount"], json!(0), "{mode}");
+        let e = s.execute(CMD, json!({"size": 3, "layers": [id.0]})).unwrap_err().to_string();
+        assert!(e.contains("hidden") || e.contains("no visible"), "{mode}: an explicit hidden layer is still refused: {e}");
+    }
+}

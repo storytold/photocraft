@@ -142,7 +142,9 @@ fn lut_layers<'a>(doc: &'a Document, ids: Option<&[LayerId]>) -> Result<Vec<&'a 
             layers.push(l);
         }
     }
-    if layers.is_empty() {
+    // An explicit list or the selection must name something to export; the default export of a document whose
+    // adjustment layers are all hidden is the identity table (#13743), as in RGB.
+    if layers.is_empty() && ids.is_some() {
         return Err(EngineError::BadParams { cmd: CMD.into(), msg: "no visible adjustment layers to export".into() });
     }
     Ok(layers)
