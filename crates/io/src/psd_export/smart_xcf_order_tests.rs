@@ -56,7 +56,7 @@ fn embedded_and_linked_historical_sources_keep_order_bytes_and_geometry_through_
         ] {
             let doc = document(source, Some(order));
             for force_psb in [false, true] {
-                let (file, warnings) = document_to_psd_with(&doc, &PsdExportOptions { force_psb, read_linked_files: true, ..Default::default() });
+                let (file, warnings) = document_to_psd_with(&doc, &PsdExportOptions { force_psb, read_linked_files: true, ..Default::default() }).unwrap();
                 assert!(!warnings.iter().any(|warning| warning.contains("written as pixels")), "{warnings:?}");
                 let record = &file.layer_info.as_ref().unwrap().layers[0];
                 assert_eq!(record.block(&crate::smart_xcf_order::PSD_KEY).unwrap().data, crate::smart_xcf_order::encode(order));
