@@ -337,6 +337,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // Width in Columns is a physical size, so it stays editable while Height (in pixels) isn't.
     let editable = |f: &Map<String, Value>, key: &str| resampling || !matches!(field_unit(f, key).as_str(), "px" | "percent");
     let w_row = ui.horizontal(|ui| {
+        ui.add_space(20.0);
         label(ui, tl!("Width:"), 90.0);
         let editable = editable(f, "width");
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w")).inner;
@@ -344,6 +345,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         c
     });
     let h_row = ui.horizontal(|ui| {
+        ui.add_space(20.0);
         label(ui, tl!("Height:"), 90.0);
         let editable = editable(f, "height");
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h")).inner;
@@ -370,26 +372,6 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert(key.into(), json!(1.0));
         }
     }
-    // Photoshop's chain bracket linking width and height (right of the unit dropdowns).
-    let x0 = w_row.response.rect.right().max(h_row.response.rect.right()) + 4.0;
-    let bracket = Rect::from_min_max(pos2(x0, w_row.response.rect.center().y), pos2(x0 + 14.0, h_row.response.rect.center().y));
-    let link = ui.interact(bracket.expand(2.0), ui.scope_id().with("constrain"), Sense::click());
-    let col = if constrain { t.text } else { t.text_faint };
-    if constrain {
-        let p = ui.painter();
-        let x = bracket.left() + 8.0;
-        p.line_segment([pos2(bracket.left(), bracket.top()), pos2(x, bracket.top())], Stroke::new(1.0, col));
-        p.line_segment([pos2(x, bracket.top()), pos2(x, bracket.center().y - 8.0)], Stroke::new(1.0, col));
-        p.line_segment([pos2(x, bracket.center().y + 8.0), pos2(x, bracket.bottom())], Stroke::new(1.0, col));
-        p.line_segment([pos2(x, bracket.bottom()), pos2(bracket.left(), bracket.bottom())], Stroke::new(1.0, col));
-    }
-    let chain = Rect::from_center_size(pos2(bracket.left() + 8.0, bracket.center().y), vec2(14.0, 14.0));
-    ui.painter().rect_filled(chain, 2.0, if link.hovered() { t.hover } else { Color32::TRANSPARENT });
-    crate::icons::paint(ui, chain, if constrain { "link" } else { "unlink" }, 11.0, col);
-    if link.on_hover_text(tl!("Constrain proportions")).clicked() && resampling {
-        constrain = !constrain;
-        f.insert("__constrain".into(), json!(constrain));
-    }
     if constrain && resampling {
         if w_changed {
             f.insert("height".into(), json!((num(f, "width") * oh / ow.max(1.0)).round().max(1.0)));
@@ -397,7 +379,8 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert("width".into(), json!((num(f, "height") * ow / oh.max(1.0)).round().max(1.0)));
         }
     }
-    ui.horizontal(|ui| {
+    let res_row = ui.horizontal(|ui| {
+        ui.add_space(20.0);
         label(ui, tl!("Resolution:"), 90.0);
         let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
         if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).accessible_name(tl!("Resolution")).changed() {
@@ -426,6 +409,31 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         ui.label(egui::RichText::new(tl!("Pixels/Inch")).color(t.text_dim).size(12.0));
     });
+    // Chain bracket left of Width/Height (toggleable) or Width/Height/Resolution (fixed when Resample is off).
+    let x0 = w_row.response.rect.left();
+    let bottom_y = if resampling { h_row.response.rect.center().y } else { res_row.response.rect.center().y };
+    let bracket = Rect::from_min_max(pos2(x0 + 2.0, w_row.response.rect.center().y), pos2(x0 + 16.0, bottom_y));
+    let link = resampling.then(|| ui.interact(bracket.expand(2.0), ui.scope_id().with("constrain"), Sense::click()));
+    let active = !resampling || constrain;
+    let col = if active { t.text } else { t.text_faint };
+    let x = bracket.left() + 6.0;
+    if active {
+        let p = ui.painter();
+        p.line_segment([pos2(bracket.right(), bracket.top()), pos2(x, bracket.top())], Stroke::new(1.0, col));
+        p.line_segment([pos2(x, bracket.top()), pos2(x, bracket.center().y - 8.0)], Stroke::new(1.0, col));
+        p.line_segment([pos2(x, bracket.center().y + 8.0), pos2(x, bracket.bottom())], Stroke::new(1.0, col));
+        p.line_segment([pos2(x, bracket.bottom()), pos2(bracket.right(), bracket.bottom())], Stroke::new(1.0, col));
+    }
+    let chain = Rect::from_center_size(pos2(x, bracket.center().y), vec2(14.0, 14.0));
+    if let Some(link) = link {
+        link.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, constrain, tl!("Constrain proportions")));
+        ui.painter().rect_filled(chain, 2.0, if link.hovered() { t.hover } else { Color32::TRANSPARENT });
+        if link.on_hover_text(tl!("Constrain proportions")).clicked() {
+            constrain = !constrain;
+            f.insert("__constrain".into(), json!(constrain));
+        }
+    }
+    crate::icons::paint(ui, chain, if active { "link" } else { "unlink" }, 11.0, col);
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         label(ui, "", 90.0);
@@ -580,5 +588,8 @@ fn anchor_grid(ui: &mut egui::Ui, current: &str, dw: f64, dh: f64) -> Option<&'s
     picked
 }
 
+#[cfg(test)]
+#[path = "image_size_chain_layout_tests.rs"]
+mod image_size_chain_layout_tests;
 #[cfg(test)]
 mod tests;
