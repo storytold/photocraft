@@ -1335,10 +1335,12 @@ fn build() -> Vec<CommandSpec> {
                 // A smart filter replays its params with the rules for adjustments a file carries,
                 // so it records the Levels or Curves the command read (whole levels, at most 16
                 // points), not the raw params: otherwise the replay keeps points the command merged.
+                // The curves it read are already smoothed, so `smooth` is not stored again.
                 let recorded = recorded.or_else(|| {
                     matches!(kind.as_str(), "levels" | "curves").then(|| {
                         let mut q = p.clone();
                         if let (Value::Object(q), Value::Object(read)) = (&mut q, crate::adjust_params::to_params(&adj)) {
+                            q.remove("smooth");
                             q.extend(read);
                         }
                         q
