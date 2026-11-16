@@ -99,7 +99,9 @@ pub(super) fn prepare_library(s: &mut Session, params: &Value, shell: bool) -> R
     }
     super::flush_recording(s)?;
     let (row, mut action, from) = super::playback_plan_at(s, params)?;
-    if s.actions.recording_active() && s.actions.list.iter().filter(|candidate| candidate.name == action.name).take(2).count() > 1 {
+    // A draft retains its exact numeric/scoped target under the opening revision guard.
+    // Only Classic capture publishes an ID here; draft recording stays unpublished until Save.
+    if s.actions.recording.is_some() && s.actions.list.iter().filter(|candidate| candidate.name == action.name).take(2).count() > 1 {
         let id = super::prepare_action_id(&s.actions.list, row)?;
         super::commit_action_id(s, row, id.clone())?;
         action.action_id = Some(id);

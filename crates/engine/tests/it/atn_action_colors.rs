@@ -75,7 +75,14 @@ fn recorded_red_survives_public_load_and_save_without_other_edits() {
     let expected = recorded(1);
     assert_eq!(output, expected);
     same_step_wire(&output.actions[0].items[0], &expected.actions[0].items[0]);
-    assert_eq!(atn_cmds::import(&atn::write(&output).unwrap()).unwrap().actions, actions);
+    let mut portable = atn_cmds::import(&atn::write(&output).unwrap()).unwrap().actions;
+    assert_eq!(portable[0].set_slot, None, "portable import has no installed physical row");
+    assert!(portable[0].library_origin.is_none());
+    assert_eq!(actions[0].set_slot, Some(0));
+    assert!(actions[0].library_origin.is_some());
+    // Compare every serialized definition field after normalizing only destination placement.
+    portable[0].set_slot = Some(0);
+    assert_eq!(serde_json::to_value(&portable).unwrap(), serde_json::to_value(&actions).unwrap());
     assert_eq!(s.actions.list, actions);
     assert_eq!(s.actions.rev, revision);
     assert_eq!(s.prefs().shortcuts, shortcuts);

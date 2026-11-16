@@ -249,7 +249,12 @@ fn retain_action_scopes(d: &Descriptor, id: &str, params: &mut Value) {
         {
             match set {
                 ReferenceItem::Name { class, name } if class.class_id.is("ASet") => {
-                    params[*scope] = json!(clip_name(&name.to_string_lossy()));
+                    let name = clip_name(&name.to_string_lossy());
+                    // Preserve the canonical shared named scope emitted by Conditional import.
+                    // Indexed, differing and absent shared scopes still need their branch field.
+                    if id != "actions.conditional" || params.get("set").and_then(Value::as_str) != Some(name.as_str()) {
+                        params[*scope] = json!(name);
+                    }
                 }
                 // An indexed set is explicit, but its archive occurrence is unknown.
                 ReferenceItem::Index { class, index } if class.class_id.is("ASet") => {

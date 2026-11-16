@@ -75,7 +75,9 @@ fn action_count_admission_reserves_the_metadata_carrier_before_publication() {
     for metadata in [false, true] {
         for operation in ["action", "set", "editor"] {
             let mut s = Session::new();
-            let capacity = craft_psd::atn::MAX_TOTAL_ACTIONS - usize::from(metadata);
+            // The named, nonphysical Source group itself needs an identity carrier,
+            // even when no description metadata is present.
+            let capacity = craft_psd::atn::MAX_TOTAL_ACTIONS - 1;
             s.actions.list = (0..capacity - 1).map(|index| Action::new(format!("Action {index}"), vec![])).collect();
             s.actions.list[0].set = Some("Source".into());
             if metadata {
@@ -105,6 +107,14 @@ fn action_count_admission_reserves_the_metadata_carrier_before_publication() {
             }
         }
     }
+    // A genuinely loose, metadata-free action archive can use the final real action slot.
+    let mut s = Session::new();
+    s.actions.list = (0..craft_psd::atn::MAX_TOTAL_ACTIONS - 1).map(|index| Action::new(format!("Loose {index}"), vec![])).collect();
+    s.execute("actions.duplicate", json!({"action":0})).unwrap();
+    assert_eq!(s.actions.list.len(), craft_psd::atn::MAX_TOTAL_ACTIONS);
+    let before = s.actions.clone();
+    assert!(s.execute("actions.duplicate", json!({"action":0})).is_err());
+    assert_eq!(s.actions, before);
 }
 
 /// Copies retain metadata and call targets without taking the original function key.

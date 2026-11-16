@@ -67,14 +67,31 @@ fn recorded_self_calls_use_definition_identity_before_any_playback_effect() {
         }
     }
     // The first namesake is a distinct definition when this draft edits the second row.
-    let (mut s, _) = session();
-    s.actions.list.insert(1, s.actions.list[0].clone());
-    let draft = open(&mut s, json!({"action":1}));
-    editor(&mut s, "record", draft, json!({})).unwrap();
-    s.execute("actions.play", json!({"action":0})).unwrap();
-    editor(&mut s, "stop", draft, json!({})).unwrap();
-    editor(&mut s, "save", draft, json!({})).unwrap();
-    assert_eq!(s.actions.list[1].steps.last().unwrap(), &("actions.play".into(), json!({"action":0,"set":photocraft_engine::atn_cmds::UNGROUPED_SET})));
+    for bound in [false, true] {
+        let (mut s, store) = session();
+        s.actions.list.insert(1, s.actions.list[0].clone());
+        let id = "0123456789abcdef0123456789abcdef";
+        if bound {
+            s.actions.list[0].action_id = Some(id.into());
+        }
+        let draft = open(&mut s, json!({"action":1}));
+        editor(&mut s, "record", draft, json!({})).unwrap();
+        let (list, rev, prefs) = (s.actions.list.clone(), s.actions.rev, s.prefs().clone());
+        let bytes = store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+        s.execute("actions.play", json!({"action":0})).unwrap();
+        assert_eq!(s.actions.list, list, "draft capture must not publish a child identity");
+        assert_eq!(s.actions.rev, rev);
+        assert_eq!(s.prefs(), &prefs);
+        assert_eq!(store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), bytes);
+        editor(&mut s, "stop", draft, json!({})).unwrap();
+        editor(&mut s, "save", draft, json!({})).unwrap();
+        let params = if bound {
+            json!({"action":"Original","actionId":id,"set":photocraft_engine::atn_cmds::UNGROUPED_SET})
+        } else {
+            json!({"action":0,"set":photocraft_engine::atn_cmds::UNGROUPED_SET})
+        };
+        assert_eq!(s.actions.list[1].steps.last().unwrap(), &("actions.play".into(), params));
+    }
 }
 
 /// An encoder refusal retains the dirty capture and both in-memory and stored definitions.
@@ -203,6 +220,9 @@ fn save_commits_one_definition_and_its_dependent_references() {
     assert_eq!(s.actions.list[1].steps[0], ("actions.play".into(), json!({"action":"Renamed"})));
     assert!(!s.prefs().shortcuts.contains_key("actions.play:Original"));
     assert_eq!(s.prefs().shortcuts["actions.play:Renamed"], "F7");
+    let id = s.actions.list[0].action_id.as_deref().unwrap();
+    assert_eq!(s.prefs().shortcuts[&photocraft_engine::actions_cmds::occurrence_key(id)], "F7");
+    assert_eq!(photocraft_engine::actions_cmds::action_shortcut(&s, 0), Some("F7"));
     assert_eq!(s.prefs().shortcuts["actions.play:Other"], "");
     assert_eq!(s.prefs().shortcuts["edit.undo"], "F7");
     assert_eq!(s.prefs().alternate_shortcuts["actions.play:Other"], ["F7"]);

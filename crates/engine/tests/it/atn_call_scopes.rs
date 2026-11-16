@@ -27,8 +27,16 @@ fn row(name: &str, mut actions: Vec<Action>) -> AtnFile {
     session.sync_preset_store();
     let bytes = store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
     let mut rows = atn::parse_sets(&bytes).unwrap();
-    assert_eq!(rows.len(), 1, "metadata-free fixture has exactly its real set row");
-    rows.remove(0)
+    // The public importer recognizes and validates the final native identity carrier.
+    let imported = photocraft_engine::atn_cmds::import(&bytes).unwrap();
+    assert_eq!(imported.sets.len(), 1);
+    assert_eq!(imported.sets[0].name, name);
+    assert_eq!(imported.sets[0].actions, 0..session.actions.list.len());
+    assert_eq!(rows.len(), imported.sets.len() + 1);
+    assert_eq!(rows.last().unwrap().name.to_string_lossy(), "Action sidecar");
+    let matches: Vec<_> = rows.iter().enumerate().filter(|(_, row)| row.name.to_string_lossy() == name).map(|(index, _)| index).collect();
+    assert_eq!(matches.len(), 1, "fixture selects its exact real row, not arbitrary extra records");
+    rows.remove(matches[0])
 }
 
 fn finish(marker: &str) -> Action {

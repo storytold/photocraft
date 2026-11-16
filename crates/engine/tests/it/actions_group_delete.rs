@@ -47,6 +47,51 @@ fn deleting_a_namesake_keeps_named_calls_and_keys_until_the_last_target_is_gone(
         assert!(!s.prefs().shortcuts.contains_key("actions.play:Duplicate"));
         assert!(!s.prefs().alternate_shortcuts.contains_key("actions.play:Duplicate"));
     }
+    // Durable occurrence keys and explicitly pinned legacy aliases do not transfer ownership.
+    for pinned in [false, true] {
+        let mut s = Session::new();
+        s.actions.list = vec![grouped("Duplicate", "First"), grouped("Duplicate", "Second")];
+        let key = if pinned {
+            s.actions.list[0].legacy_shortcut_owner = true;
+            "actions.play:Duplicate".to_string()
+        } else {
+            let id = "0123456789abcdef0123456789abcdef";
+            s.actions.list[0].action_id = Some(id.into());
+            photocraft_engine::actions_cmds::occurrence_key(id)
+        };
+        s.edit_prefs(|prefs| {
+            prefs.shortcuts.insert(key.clone(), "F5".into());
+            prefs.alternate_shortcuts.insert(key.clone(), vec!["F6".into()]);
+        });
+        s.execute("actions.delete", json!({"action":0})).unwrap();
+        assert_eq!(s.actions.list[0].name, "Duplicate");
+        assert!(!s.prefs().shortcuts.contains_key(&key));
+        assert!(!s.prefs().alternate_shortcuts.contains_key(&key));
+        assert_eq!(photocraft_engine::actions_cmds::action_shortcut(&s, 0), None);
+    }
+    // Set replacement shares the same removal helper and keeps only an unpinned name fallback.
+    for ownership in ["legacy", "pinned", "id"] {
+        let mut s = Session::new();
+        s.actions.list = vec![grouped("Duplicate", "First"), grouped("Duplicate", "Second")];
+        let key = if ownership == "id" {
+            let id = "0123456789abcdef0123456789abcdef";
+            s.actions.list[0].action_id = Some(id.into());
+            photocraft_engine::actions_cmds::occurrence_key(id)
+        } else {
+            s.actions.list[0].legacy_shortcut_owner = ownership == "pinned";
+            "actions.play:Duplicate".to_string()
+        };
+        s.edit_prefs(|prefs| {
+            prefs.shortcuts.insert(key.clone(), "F5".into());
+            prefs.alternate_shortcuts.insert(key.clone(), vec!["F6".into()]);
+        });
+        let replacement = Action::new("Replacement", Vec::new());
+        let bytes = photocraft_engine::atn_cmds::export("First", &[&replacement], &[], false).unwrap().0;
+        s.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes),"replace":true})).unwrap();
+        assert_eq!(s.actions.list[0].name, "Duplicate");
+        assert_eq!(s.prefs().shortcuts.get(&key).map(String::as_str), (ownership == "legacy").then_some("F5"));
+        assert_eq!(s.prefs().alternate_shortcuts.contains_key(&key), ownership == "legacy");
+    }
 }
 
 fn grouped(name: &str, set: &str) -> Action {

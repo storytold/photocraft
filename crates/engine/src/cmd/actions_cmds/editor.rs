@@ -504,6 +504,9 @@ fn bindings(s: &Session, draft: &Draft, value: &Action) -> Bindings {
                 }
             }
         }
+        if owns_legacy && keys.contains_key(&new_legacy) {
+            keys.insert(new_legacy, draft.shortcut.clone());
+        }
         keys.insert(new, draft.shortcut.clone());
     }
     (keys, alternates)
@@ -698,6 +701,11 @@ mod identity_bridge_tests {
         assert_eq!(session.actions.list[0].name, "Same");
         assert_eq!(session.prefs().shortcuts.get(&super::super::occurrence_key(id)).map(String::as_str), Some("F6"));
         assert_eq!(session.prefs().alternate_shortcuts.get(&super::super::occurrence_key(id)).unwrap(), &["F7"]);
+        session.execute("actions.editor.update", json!({"draft":draft,"shortcut":"F8"})).unwrap();
+        session.execute("actions.editor.save", json!({"draft":draft})).unwrap();
+        assert_eq!(session.prefs().shortcuts.get(&super::super::occurrence_key(id)).map(String::as_str), Some("F8"));
+        assert!(!session.prefs().shortcuts.contains_key("actions.play:Renamed"), "an ID-only binding does not invent a legacy alias");
+        assert_eq!(session.prefs().alternate_shortcuts.get(&super::super::occurrence_key(id)).unwrap(), &["F7"]);
     }
     #[test]
     fn a_new_editor_draft_keeps_the_selected_same_caption_folder_occurrence() {
@@ -735,5 +743,10 @@ mod legacy_id_alias_tests {
         assert_eq!(session.prefs().shortcuts.get("actions.play:After").map(String::as_str), Some("F6"));
         assert_eq!(session.prefs().alternate_shortcuts.get("actions.play:After").unwrap(), &["F7"]);
         assert!(!session.prefs().shortcuts.contains_key("actions.play:Before"));
+        session.execute("actions.editor.update", json!({"draft":draft,"shortcut":"F8"})).unwrap();
+        session.execute("actions.editor.save", json!({"draft":draft})).unwrap();
+        assert_eq!(session.prefs().shortcuts.get("actions.play:After").map(String::as_str), Some("F8"));
+        assert_eq!(session.prefs().shortcuts.get(&super::super::occurrence_key(id)).map(String::as_str), Some("F8"));
+        assert_eq!(session.prefs().alternate_shortcuts.get("actions.play:After").unwrap(), &["F7"]);
     }
 }

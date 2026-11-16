@@ -17,9 +17,15 @@ pub fn preserved(set: &str, action: &Action) -> Vec<AtnItem> {
     assert!(session.attach_preset_store(preset_store::open(Box::new(store.clone()))).is_empty());
     let mut stored = action.clone();
     stored.set = Some(set.into());
+    // A foreign physical slot belongs to the source Session, not this fresh logical group.
+    // Keep its raw origin and step provenance while explicitly rebinding destination placement.
+    stored.set_slot = None;
     session.actions.list.push(stored);
     session.actions.rev += 1;
     session.sync_preset_store();
+    assert!(session.preset_store.as_mut().unwrap().take_warnings().is_empty(), "native fixture write must succeed");
+    assert_eq!(session.actions.list[0].set.as_deref(), Some(set));
+    assert_eq!(session.actions.list[0].set_slot, None);
     let bytes = store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
     let mut loaded = Session::new();
     assert!(loaded.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
