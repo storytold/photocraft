@@ -102,6 +102,16 @@ fn fresh_params(kind: &str, light: f32, user: Option<&Value>) -> Value {
     p
 }
 
+/// Photoshop's titled groups on an effect page: for each kind, the title above the row that
+/// starts a group (#14977: the Satin page's one Structure group, and no Quality group). Only
+/// the pages Photoshop groups are listed; the others stay one flat list.
+const GROUP_TITLES: &[(&str, &[(&str, &str)])] = &[("satin", &[("Structure", "blend")])];
+
+/// The group title the page shows above the row `key`, for the effect kind `kind`.
+fn group_title(kind: &str, key: &str) -> Option<&'static str> {
+    GROUP_TITLES.iter().find(|(k, _)| *k == kind).and_then(|(_, titles)| titles.iter().find(|(_, start)| *start == key)).map(|(title, _)| *title)
+}
+
 fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
     const POS: &[(&str, &str)] = &[("outside", "Outside"), ("inside", "Inside"), ("center", "Center")];
     const GSTYLE: &[(&str, &str)] = &[("linear", "Linear"), ("radial", "Radial"), ("angle", "Angle"), ("reflected", "Reflected"), ("diamond", "Diamond")];
@@ -210,6 +220,8 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
             ("contourName", "", P::Contour(Some("contourAntiAlias"))),
             ("contourRange", "Range", P::Slider(1.0, 100.0, "%")),
         ],
+        // #14977: these rows sit under one titled group, Structure (GROUP_TITLES); the page has
+        // no Quality group.
         "satin" => &[
             ("blend", "Blend Mode", P::Blend),
             ("color", "Color", P::Color),
@@ -1644,6 +1656,11 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
         }
     }
     for &(key, label, kind_p) in spec(&sel_kind) {
+        // Photoshop's group title, above the row that starts each block (#14977).
+        if let Some(title) = group_title(&sel_kind, key) {
+            widgets::section_label(ui, title);
+            ui.add_space(2.0);
+        }
         match kind_p {
             P::Angle => {
                 let mut v = disp.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
