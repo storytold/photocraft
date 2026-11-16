@@ -118,12 +118,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // The grips are laid out after the canvases, so egui gives them the press (#10101).
         let grips: Vec<Rect> = border_grips(app, rect).into_iter().map(|(_, grip)| grip).collect();
         // Where the frame's last press landed: the pointer may have moved on since, in the same frame.
-        let press = ui.input(|i| {
-            i.events.iter().rev().find_map(|e| match e {
-                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
-                _ => None,
-            })
-        });
+        let press = primary_press_pos(ui);
         for (d, cell) in shown {
             let cell = cell.shrink(1.0);
             let view = app.ui.views[d].clone();
@@ -143,11 +138,29 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         drag_borders(app, ui, rect);
         return;
     }
-    if idx != active_doc && main_focused && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
+    if idx != active_doc && main_focused && pressed_on_canvas(ui, rect) {
         app.session.set_active(idx);
     }
     let view = app.ui.views[idx].clone();
     canvas_view(app, ui, idx, rect, view, app.session.active_index() == Some(idx));
+}
+
+/// Where this frame's last primary press landed: the pointer may have moved on since, in the same
+/// frame (onto a popup, say), so `interact_pos` would name the wrong place.
+fn primary_press_pos(ui: &egui::Ui) -> Option<egui::Pos2> {
+    ui.input(|i| {
+        i.events.iter().rev().find_map(|e| match e {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+            _ => None,
+        })
+    })
+}
+
+/// Whether a primary press landed inside `rect` with nothing floating over it: a press on a dialog or
+/// menu lying over a canvas is not a click into that canvas (#11612).
+fn pressed_on_canvas(ui: &egui::Ui, rect: Rect) -> bool {
+    let press = primary_press_pos(ui);
+    press.is_some_and(|p| rect.contains(p) && ui.ctx().layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background))
 }
 
 /// Window › Arrange: the borders between the documents are dragged to give one more room, as in
