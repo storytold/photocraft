@@ -412,7 +412,14 @@ fn ok_at_capacity_says_the_pending_key_was_not_taken() {
     assert_eq!(field(&h, id, super::PENDING), json!(FREE_TEXT));
     h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
     h.run_steps(4);
-    assert!(!open(&h, id), "OK closed the dialog");
+    assert!(
+        !open(&h, id),
+        "OK closed the dialog: status {:?}, error {}, alternates {:?}, pending {:?}",
+        h.state().ui.status,
+        h.state().ui.status_error,
+        field(&h, id, "alternates"),
+        field(&h, id, super::PENDING)
+    );
     assert_eq!(h.state().ui.status, "This command can't take another shortcut; the key stays where it is.");
     assert!(h.state().ui.status_error);
     let keys = h.state().session.prefs().alternates("edit.cut", Some("Cmd+X"));
