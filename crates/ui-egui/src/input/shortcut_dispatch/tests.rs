@@ -1332,3 +1332,34 @@ fn legacy_channel_keys_do_not_restore_a_shortcut_the_user_removed() {
     assert!(!bound(&app, "channel.target.slot3", "Cmd+1"), "slot 3 stays without a key");
     assert!(bound(&app, "channel.target.slot4", "Cmd+2"), "the other legacy keys still apply");
 }
+
+/// CodeRabbit on #14859: F6 (Next Document) followed by ⌘1 in one frame, with Legacy Channel Shortcuts on, a Grayscale
+/// document active and an RGB one next: ⌘1 means "Red" in the document F6 switched to, not View › 100 % (the
+/// Grayscale document's meaning, the table built before F6).
+#[test]
+fn a_press_after_a_document_switch_uses_the_new_documents_keys() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 16, "height": 16, "mode": "rgb"})).unwrap();
+    app.session.execute("file.new", json!({"width": 16, "height": 16, "mode": "grayscale"})).unwrap();
+    app.run("prefs.set", json!({"path": "useLegacyChannelShortcuts", "value": true})).unwrap();
+    app.run("edit.keyboardShortcuts", json!({"set": {"window.nextDocument": "F6"}})).unwrap();
+    app.sync_views();
+    assert_eq!(app.session.active().unwrap().doc.mode, photocraft_doc::ColorMode::Grayscale);
+    let modifiers = platform(Modifiers::COMMAND);
+    let input = egui::RawInput {
+        events: vec![
+            egui::Event::Key { key: egui::Key::F6, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::Key { key: egui::Key::Num1, physical_key: None, pressed: true, repeat: false, modifiers },
+        ],
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(input, |ui| {
+        super::dispatch_pressed(&mut app, ui.ctx(), Focus::None, false);
+    });
+    output.textures_delta.clear();
+    assert_eq!(app.session.active().unwrap().doc.mode, photocraft_doc::ColorMode::Rgb, "F6 switched to the RGB document");
+    let ran: Vec<String> = take_log(&ctx).into_iter().map(|(id, _)| id).collect();
+    assert_eq!(ran, ["window.nextDocument", "channel.target.slot3"], "⌘1 is Red in the RGB document: {ran:?}");
+}

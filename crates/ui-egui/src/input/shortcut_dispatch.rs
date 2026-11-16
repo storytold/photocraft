@@ -287,9 +287,14 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         return false;
     }
     const TEXT_OWNED: [&str; 6] = ["edit.copy", "edit.cut", "edit.paste", "edit.copyMerged", "select.all", "edit.pasteSpecial.pasteInPlace"];
-    let table: Vec<(String, KeyboardShortcut)> =
-        bindings(app).into_iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).collect();
-    let command = |e: &egui::Event| match e {
+    let build = |app: &PhotocraftApp| -> Vec<(String, KeyboardShortcut)> {
+        bindings(app).into_iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).collect()
+    };
+    // What the table depends on besides the preferences: the active document and its mode (the legacy channel keys follow it).
+    let context = |app: &PhotocraftApp| app.session.active().map(|st| (st.doc.id, st.doc.mode));
+    let mut table = build(app);
+    let mut at_table = context(app);
+    let command = |table: &Vec<(String, KeyboardShortcut)>, e: &egui::Event| match e {
         egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
             let by_position = physical_key
                 .filter(|p| POSITIONAL.contains(p))
@@ -309,7 +314,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
     let mut ran = false;
     loop {
         let next = ctx.input_mut(|i| {
-            let (at, hit) = i.events.iter().enumerate().find_map(|(at, e)| Some((at, command(e)?)))?;
+            let (at, hit) = i.events.iter().enumerate().find_map(|(at, e)| Some((at, command(&table, e)?)))?;
             i.events.remove(at);
             Some(hit)
         });
@@ -325,6 +330,11 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         ran = true;
         if key_owner(app, ctx) != owner {
             break;
+        }
+        // A command that switched the document (or its mode) changes what the next press means: build the table again.
+        if context(app) != at_table {
+            table = build(app);
+            at_table = context(app);
         }
     }
     ran
