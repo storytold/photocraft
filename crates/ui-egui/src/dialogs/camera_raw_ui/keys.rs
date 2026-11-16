@@ -130,7 +130,7 @@ pub(super) fn handle(d: &mut CameraRawDialog, view: View<'_>, ctx: &egui::Contex
         Action::AutoMask => brush,
         // O shows / hides the mask overlay while masking (Lightroom's key); elsewhere it is the
         // highlight clipping warning's, as in Camera Raw
-        Action::MaskOverlay => masking,
+        Action::MaskOverlay | Action::MaskOverlayColor => masking,
         Action::HighlightClipping => !masking,
         Action::SelectAllRaws => view.filmstrip,
         // (nor while a field is being typed in: its Esc leaves the field)
@@ -186,7 +186,11 @@ fn perform(d: &mut CameraRawDialog, action: Action, nav: &mut CameraRawPreviewSt
         Action::MaskOverlay => {
             // a view setting, not an edit; the preview renders the mask's alpha when it shows
             d.local.overlay = !d.local.overlay;
-            d.dirty = true;
+        }
+        Action::MaskOverlayColor => {
+            // the next colour, shown (a colour of a hidden overlay would change nothing seen)
+            d.local.overlay_view.next_color();
+            d.local.overlay = true;
         }
         Action::Undo => {
             undo_edit(d);

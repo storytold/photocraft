@@ -53,6 +53,121 @@ impl Brush {
     }
 }
 
+/// How the selected mask's overlay shows it (LightCraft's overlay modes, Lightroom's set): a
+/// tint over the photo, a tint over a black-and-white photo, the photo where the mask is on
+/// black or on white, or the mask itself, white on black. Each is drawn over the frame already on
+/// screen from the mask's alpha alone, so choosing one renders nothing again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OverlayMode {
+    #[default]
+    Color,
+    ColorOnBw,
+    ImageOnBlack,
+    ImageOnWhite,
+    WhiteOnBlack,
+}
+
+impl OverlayMode {
+    pub(crate) const ALL: [OverlayMode; 5] =
+        [OverlayMode::Color, OverlayMode::ColorOnBw, OverlayMode::ImageOnBlack, OverlayMode::ImageOnWhite, OverlayMode::WhiteOnBlack];
+
+    /// Its id (the preference and the control channel).
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            OverlayMode::Color => "color",
+            OverlayMode::ColorOnBw => "colorOnBw",
+            OverlayMode::ImageOnBlack => "imageOnBlack",
+            OverlayMode::ImageOnWhite => "imageOnWhite",
+            OverlayMode::WhiteOnBlack => "whiteOnBlack",
+        }
+    }
+
+    pub(crate) fn from_id(id: &str) -> Option<OverlayMode> {
+        OverlayMode::ALL.into_iter().find(|m| m.id() == id)
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            OverlayMode::Color => "Color Overlay",
+            OverlayMode::ColorOnBw => "Color Overlay on B&W",
+            OverlayMode::ImageOnBlack => "Image on Black",
+            OverlayMode::ImageOnWhite => "Image on White",
+            OverlayMode::WhiteOnBlack => "White on Black",
+        }
+    }
+
+    /// Whether the overlay's colour and opacity apply (the tinted modes).
+    pub(crate) fn tinted(self) -> bool {
+        matches!(self, OverlayMode::Color | OverlayMode::ColorOnBw)
+    }
+}
+
+/// The overlay colours offered (⇧O cycles them while masking): red first, as Lightroom's.
+pub(crate) const OVERLAY_COLORS: [([u8; 3], &str); 5] =
+    [([0xe6, 0x1e, 0x28], "Red"), ([0x28, 0xc8, 0x46], "Green"), ([0x28, 0x6e, 0xf0], "Blue"), ([0xfa, 0xd2, 0x1e], "Yellow"), ([0xff, 0xff, 0xff], "White")];
+
+/// How the overlay shows: its mode, colour and opacity (0..100, the tinted modes). The
+/// preferences remember it (`rawDefaults.maskOverlayMode`, `…Color`, `…Opacity`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct OverlayView {
+    pub mode: OverlayMode,
+    pub color: [u8; 3],
+    pub opacity: f64,
+}
+
+impl Default for OverlayView {
+    fn default() -> Self {
+        OverlayView { mode: OverlayMode::Color, color: OVERLAY_COLORS[0].0, opacity: 50.0 }
+    }
+}
+
+impl OverlayView {
+    /// The next of [`OVERLAY_COLORS`] (from a colour not among them: the first).
+    pub(crate) fn next_color(&mut self) {
+        let i = OVERLAY_COLORS.iter().position(|(c, _)| *c == self.color).map_or(0, |i| (i + 1) % OVERLAY_COLORS.len());
+        if let Some((c, _)) = OVERLAY_COLORS.get(i) {
+            self.color = *c;
+        }
+    }
+
+    /// What is drawn under the overlay's colour layer.
+    pub(crate) fn base(self) -> OverlayBase {
+        match self.mode {
+            OverlayMode::ColorOnBw => OverlayBase::Gray,
+            OverlayMode::WhiteOnBlack => OverlayBase::Black,
+            _ => OverlayBase::Photo,
+        }
+    }
+
+    /// The colour layer's pixel where the mask's alpha is `a` (0..255). Over the base it gives
+    /// each mode: a tint of `opacity`, black or white where the mask isn't, white where it is.
+    pub(crate) fn pixel(self, a: u8) -> Color32 {
+        let a = u16::from(a);
+        let inv = (255 - a) as u8;
+        match self.mode {
+            OverlayMode::Color | OverlayMode::ColorOnBw => {
+                let k = (self.opacity.clamp(0.0, 100.0) * 2.55).round() as u16;
+                let [r, g, b] = self.color;
+                Color32::from_rgba_unmultiplied(r, g, b, (a * k / 255) as u8)
+            }
+            OverlayMode::ImageOnBlack => Color32::from_black_alpha(inv),
+            OverlayMode::ImageOnWhite => Color32::from_white_alpha(inv),
+            OverlayMode::WhiteOnBlack => Color32::from_white_alpha(a as u8),
+        }
+    }
+}
+
+/// What an overlay mode draws over the image before its colour layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OverlayBase {
+    /// The photo as shown.
+    Photo,
+    /// The photo as shown, in black and white.
+    Gray,
+    /// Black.
+    Black,
+}
+
 /// The settings a new spot takes (Heal's Size, Feather, Opacity and mode).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Heal {
@@ -94,11 +209,20 @@ pub(crate) struct LocalTools {
     pub component: usize,
     pub draw: Draw,
     pub brush: Brush,
-    /// Show the selected mask's red overlay. As in Lightroom it comes and goes by itself: an
-    /// effect slider of the mask hides it (to judge the effect on the photo), and making or
-    /// picking a mask, adding to it, painting or dragging its geometry shows it again
-    /// ([`Self::show_overlay`], [`Self::hide_overlay`]); its eye button (and O) toggle it.
+    /// Show Overlay: the selected mask's overlay is drawn. One switch for the dialog, as
+    /// LightCraft's, that also comes and goes by itself:
+    ///
+    /// - an effect slider of the mask (a drag, a typed value, a reset; the control channel's
+    ///   `adjust`) hides it, so the effect shows on the photo;
+    /// - making a mask, or picking one (the list, its pin, `selectMask`), shows it;
+    /// - adding a component shows it only while the mask has no effects yet (with effects the
+    ///   photo already shows what the new part does);
+    /// - painting, drawing a gradient or dragging a handle leave it as it is: once hidden it stays
+    ///   hidden while the mask is painted on;
+    /// - the eye button, O and the control channel's `overlay` set it outright.
     pub overlay: bool,
+    /// How the overlay shows ([`OverlayView`]).
+    pub overlay_view: OverlayView,
     /// A mask being renamed, and the name typed so far.
     pub renaming: Option<(u32, String)>,
     pub heal: Heal,
@@ -121,6 +245,16 @@ pub(crate) struct LocalTools {
     pub view_map: Option<ViewMap>,
     /// The overlay of the shown frame, and the mask it shows.
     pub(super) overlay_tex: Option<(egui::TextureHandle, u32)>,
+    /// The alpha the overlay was made from, `w`×`h` (the proxy's size), its mask and a number that
+    /// changes with each new alpha; the overlay is remade from it when the view changes.
+    pub(super) overlay_alpha: Option<OverlayAlpha>,
+    /// The alpha and view [`Self::overlay_tex`] was made from.
+    pub(super) overlay_tex_key: Option<(u64, OverlayView)>,
+    /// The overlay view last read from or written to the preferences (`None`: not read yet).
+    pub(super) overlay_synced: Option<OverlayView>,
+    /// What a stroke being painted changed since the preview last took it: a rectangle of the shown
+    /// frame (0..1 across it).
+    dirty: Option<Rect>,
     /// The Auto Mask setting last read from or written to the preferences (`None`: not read yet).
     pub(super) auto_mask_synced: Option<bool>,
 }
@@ -144,7 +278,12 @@ impl Default for LocalTools {
             gesture: None,
             view_map: None,
             overlay_tex: None,
+            overlay_alpha: None,
+            overlay_tex_key: None,
+            overlay_synced: None,
             auto_mask_synced: None,
+            overlay_view: OverlayView::default(),
+            dirty: None,
         }
     }
 }
@@ -187,6 +326,22 @@ impl LocalTools {
         self.gesture.is_some()
     }
 
+    /// A gesture on the selected mask's geometry is going on (a stroke, a gradient, a handle).
+    pub(crate) fn mask_gesture(&self) -> bool {
+        matches!(self.gesture, Some(Gesture::Stroke(_) | Gesture::Shape(_) | Gesture::Handle { .. }))
+    }
+
+    /// A brush stroke is being painted.
+    pub(crate) fn stroking(&self) -> bool {
+        matches!(self.gesture, Some(Gesture::Stroke(_)))
+    }
+
+    /// What the stroke being painted changed since this was last taken, as a rectangle of the
+    /// shown frame (0..1 across it).
+    pub(crate) fn take_dirty(&mut self) -> Option<Rect> {
+        self.dirty.take()
+    }
+
     /// Masking was picked: ready to paint at once. The selected mask stays selected (a drag does
     /// what its selected component's kind does: paints on a brush); with none, the Brush is armed
     /// as the new mask's kind, and the mask is made by the first stroke ([`Self::armed`]), so
@@ -200,7 +355,7 @@ impl LocalTools {
         };
     }
 
-    /// The mask's geometry is being made or edited: the overlay shows (again).
+    /// A mask was made or picked: the overlay shows (again).
     pub(crate) fn show_overlay(&mut self) {
         self.overlay = true;
     }
@@ -307,11 +462,20 @@ pub(crate) fn add_component(st: &mut LocalTools, s: &mut DevelopSettings, kind: 
     let shape = new_shape(kind).ok_or_else(|| format!("unknown mask kind {kind}"))?;
     let m = st.selected.and_then(|id| s.masks.iter_mut().find(|m| m.id == id)).ok_or("no mask is selected")?;
     m.components.push(MaskComponent { name: None, op, invert: false, shape });
+    let effects = has_effects(m);
     st.component = m.components.len() - 1;
     st.draw = draw_for(kind);
     st.paused = false;
-    st.show_overlay();
+    // with effects the photo shows what the new part does; without, only the overlay can
+    if !effects {
+        st.show_overlay();
+    }
     Ok(())
+}
+
+/// Whether mask `m` has an effect (one of its sliders off its default).
+pub(crate) fn has_effects(m: &Mask) -> bool {
+    m.adjust != LocalAdjustments::default()
 }
 
 pub(crate) fn selected_mask<'a>(st: &LocalTools, s: &'a mut DevelopSettings) -> Option<&'a mut Mask> {
@@ -511,21 +675,46 @@ fn draw_shape(p: &egui::Painter, c: &Canvas, on_photo: bool, shape: &MaskShape) 
     }
 }
 
-/// Paints the selected mask's red overlay over the image rect `r`.
-pub(crate) fn paint_overlay(ui: &egui::Ui, st: &LocalTools, r: Rect, tool: Tool, s: &DevelopSettings) {
-    if let (Some((tex, id)), Some(shown)) = (&st.overlay_tex, st.overlay_mask(tool, s))
-        && *id == shown
-    {
-        ui.painter().image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+/// Paints the selected mask's overlay over the image rect `r`, as its view says: first the base
+/// (`gray`: the shown photo in black and white, each texture where it is on screen; black), then
+/// the colour layer. Says whether it drew.
+pub(crate) fn paint_overlay(ui: &egui::Ui, st: &LocalTools, r: Rect, tool: Tool, s: &DevelopSettings, gray: &[(egui::TextureId, Rect)]) -> bool {
+    let Some(shown) = st.overlay_mask(tool, s) else { return false };
+    let Some((tex, _)) = st.overlay_tex.as_ref().filter(|(_, id)| *id == shown) else { return false };
+    let unit = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    match st.overlay_view.base() {
+        OverlayBase::Photo => {}
+        OverlayBase::Gray => {
+            for (t, at) in gray {
+                ui.painter().image(*t, *at, unit, Color32::WHITE);
+            }
+        }
+        OverlayBase::Black => {
+            ui.painter().rect_filled(r, 0.0, Color32::BLACK);
+        }
     }
+    ui.painter().image(tex.id(), r, unit, Color32::WHITE);
+    true
 }
 
-/// The overlay image of a mask alpha (`w`×`h`, 0..255): LightCraft's red tint at half strength.
-pub(crate) fn overlay_image(alpha: &[u8], w: usize, h: usize) -> Option<egui::ColorImage> {
+/// A mask's alpha for the overlay: `w`×`h` (0..255, row by row) of mask `id`, `generation`
+/// telling one alpha from the next.
+#[derive(Clone)]
+pub(crate) struct OverlayAlpha {
+    pub id: u32,
+    pub w: usize,
+    pub h: usize,
+    pub alpha: std::sync::Arc<Vec<u8>>,
+    pub generation: u64,
+}
+
+/// The overlay's colour layer of a mask alpha (`w`×`h`, 0..255) as `view` shows it
+/// ([`OverlayView::pixel`]).
+pub(crate) fn overlay_image(alpha: &[u8], w: usize, h: usize, view: OverlayView) -> Option<egui::ColorImage> {
     if alpha.len() != w.checked_mul(h)? {
         return None;
     }
-    let px = alpha.iter().map(|a| Color32::from_rgba_unmultiplied(0xe0, 0x20, 0x30, (u16::from(*a) * 110 / 255) as u8)).collect();
+    let px = alpha.iter().map(|a| view.pixel(*a)).collect();
     Some(egui::ColorImage { size: [w, h], source_size: vec2(w as f32, h as f32), pixels: px })
 }
 
@@ -665,18 +854,16 @@ fn masking(
             && let Some((h, _)) = handles(c, &shape).into_iter().find(|(_, n)| c.mask_to_screen(on_photo, *n).is_some_and(|q| q.distance(at) <= grabbed))
         {
             st.gesture = Some(Gesture::Handle { comp, handle: h, shape });
-            st.show_overlay();
         } else {
             match draw {
                 Draw::Linear | Draw::Radial => {
                     st.gesture = Some(Gesture::Shape(mask_at));
-                    st.show_overlay();
                 }
                 Draw::Brush => {
                     if let Some(MaskShape::Brush { strokes }) = m.components.get_mut(comp).map(|k| &mut k.shape) {
                         strokes.push(brush.stroke(vec![mask_at], erase));
                         st.gesture = Some(Gesture::Stroke(strokes.len() - 1));
-                        st.show_overlay();
+                        st.dirty = dab_rect(c, on_photo, brush, None, mask_at);
                         out.edited = true;
                     }
                 }
@@ -732,13 +919,35 @@ fn masking(
                     (a.x - b.x).hypot(a.y - b.y) >= spacing
                 });
                 if far && stroke.points.len() < 4096 {
+                    let last = stroke.points.last().copied();
                     stroke.points.push(mask_at);
+                    let dab = dab_rect(c, on_photo, brush, last, mask_at);
+                    st.dirty = match (st.dirty, dab) {
+                        (Some(a), Some(b)) => Some(a.union(b)),
+                        (a, b) => a.or(b),
+                    };
                     out.edited = true;
                 }
             }
         }
         _ => {}
     }
+}
+
+/// What a dab of `brush` at mask point `at` changes on the shown frame (0..1 across it), with the
+/// segment from the stroke's previous point `from` (dabs are laid between the two): the dabs'
+/// circles with a margin for the stroke's smoothing. `None` where the frame can't place them.
+fn dab_rect(c: &Canvas, on_photo: bool, brush: Brush, from: Option<Point>, at: Point) -> Option<Rect> {
+    let (w, h) = c.map.size();
+    let r = brush.size * c.map.px_per_long() * 1.25 + 2.0;
+    let (rx, ry) = ((r / w.max(1) as f64) as f32, (r / h.max(1) as f64) as f32);
+    let mut out: Option<Rect> = None;
+    for p in from.into_iter().chain([at]) {
+        let u = c.map.from_mask(on_photo, p)?;
+        let dab = Rect::from_center_size(pos2(u.x as f32, u.y as f32), vec2(2.0 * rx, 2.0 * ry));
+        out = Some(out.map_or(dab, |o| o.union(dab)));
+    }
+    out
 }
 
 /// The brush's size and feather drawn under the pointer at `at`, with a + (it adds to the mask)
@@ -986,7 +1195,6 @@ pub(crate) fn paint_stroke(st: &mut LocalTools, s: &mut DevelopSettings, points:
     match m.components.get_mut(comp).map(|k| &mut k.shape) {
         Some(MaskShape::Brush { strokes }) => {
             strokes.push(brush.stroke(points, brush.erase));
-            st.show_overlay();
             Ok(())
         }
         _ => Err("the selected mask component is not a brush".into()),
@@ -1022,12 +1230,77 @@ mod tests {
         *local_field(&mut a, "exposure").unwrap() = 0.5;
         assert_eq!(a.exposure, 0.5);
         assert!(local_field(&mut a, "nope").is_none());
-        assert!(overlay_image(&[0, 255], 2, 1).is_some());
-        assert!(overlay_image(&[0, 255], 3, 1).is_none(), "a wrong size is no image, never a panic");
+        assert!(overlay_image(&[0, 255], 2, 1, OverlayView::default()).is_some());
+        assert!(overlay_image(&[0, 255], 3, 1, OverlayView::default()).is_none(), "a wrong size is no image, never a panic");
         // Delete takes the selected one of the tool's
         add_spot(&mut st, &mut s, Point::new(0.5, 0.5), None);
         assert!(delete_selected(&mut st, Tool::Heal, &mut s) && s.spots.is_empty());
         assert!(!delete_selected(&mut st, Tool::Heal, &mut s), "nothing selected");
         assert!(delete_selected(&mut st, Tool::Masking, &mut s) && s.masks.is_empty() && st.selected.is_none());
+    }
+
+    /// The overlay switch's transitions: shown by a new mask and by picking one, hidden by an
+    /// effect, kept as it is by strokes; a component added shows it only on a mask without effects.
+    #[test]
+    fn the_overlay_stays_hidden_while_a_mask_with_effects_is_painted() {
+        let mut st = LocalTools::default();
+        let mut s = DevelopSettings::default();
+        let stroke = |st: &mut LocalTools, s: &mut DevelopSettings| paint_stroke(st, s, vec![Point::new(0.2, 0.2), Point::new(0.3, 0.2)]).unwrap();
+        let a = add_mask(&mut st, &mut s, "brush").unwrap();
+        stroke(&mut st, &mut s);
+        assert!(st.overlay, "a new mask shows it");
+        st.hide_overlay();
+        stroke(&mut st, &mut s);
+        assert!(!st.overlay, "adjust → paint again: still hidden");
+        st.overlay = true;
+        stroke(&mut st, &mut s);
+        assert!(st.overlay, "painting leaves a shown overlay shown");
+        // a component on a mask with effects leaves it hidden; on one without, shows it
+        selected_mask(&st, &mut s).unwrap().adjust.exposure = 1.0;
+        st.hide_overlay();
+        add_component(&mut st, &mut s, "brush", MaskOp::Add).unwrap();
+        assert!(!st.overlay);
+        let b = add_mask(&mut st, &mut s, "radial").unwrap();
+        assert!(st.overlay, "a new mask shows it");
+        st.hide_overlay();
+        add_component(&mut st, &mut s, "linear", MaskOp::Subtract).unwrap();
+        assert!(st.overlay, "only the overlay shows the new part of a mask without effects");
+        // picking another mask shows it
+        st.hide_overlay();
+        select(&mut st, &s, Some(a));
+        assert!(st.overlay && st.selected == Some(a));
+        st.hide_overlay();
+        select(&mut st, &s, None);
+        assert!(!st.overlay, "picking none leaves it");
+        select(&mut st, &s, Some(b));
+        assert!(st.overlay);
+    }
+
+    /// Each overlay mode's colour layer over its base gives LightCraft's look: a tint at the
+    /// opacity, black or white where the mask isn't, white where it is.
+    #[test]
+    fn overlay_modes_compose_over_the_frame() {
+        let v = |mode| OverlayView { mode, ..OverlayView::default() };
+        let tint = v(OverlayMode::Color).pixel(255);
+        assert!(tint.a().abs_diff(128) <= 1 && v(OverlayMode::Color).pixel(0).a() == 0, "half strength where the mask is, none elsewhere: {tint:?}");
+        let mut quarter = v(OverlayMode::ColorOnBw);
+        quarter.opacity = 25.0;
+        assert!(quarter.pixel(255).a().abs_diff(64) <= 1);
+        assert_eq!(quarter.base(), OverlayBase::Gray);
+        assert_eq!((v(OverlayMode::ImageOnBlack).pixel(255).a(), v(OverlayMode::ImageOnBlack).pixel(0)), (0, Color32::BLACK));
+        assert_eq!(v(OverlayMode::ImageOnWhite).pixel(0), Color32::WHITE);
+        assert_eq!((v(OverlayMode::WhiteOnBlack).pixel(255), v(OverlayMode::WhiteOnBlack).base()), (Color32::WHITE, OverlayBase::Black));
+        assert!(OverlayMode::ALL.iter().all(|m| OverlayMode::from_id(m.id()) == Some(*m)));
+        let mut c = OverlayView::default();
+        let seen: Vec<[u8; 3]> = (0..OVERLAY_COLORS.len())
+            .map(|_| {
+                c.next_color();
+                c.color
+            })
+            .collect();
+        assert_eq!(seen.last(), Some(&OVERLAY_COLORS[0].0), "⇧O comes round to red");
+        c.color = [1, 2, 3];
+        c.next_color();
+        assert_eq!(c.color, OVERLAY_COLORS[0].0);
     }
 }

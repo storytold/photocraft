@@ -248,11 +248,28 @@ fn frame_point(v: &Value) -> Option<craft_geom::Point> {
     (x.is_finite() && y.is_finite()).then(|| craft_geom::Point::new(x, y))
 }
 
+/// An overlay colour: `"#rrggbb"` or `[r, g, b]` (0..255).
+fn overlay_color(v: &Value) -> Option<[u8; 3]> {
+    if let Some(hex) = v.as_str() {
+        let hex = hex.strip_prefix('#').unwrap_or(hex);
+        if hex.len() != 6 || !hex.is_ascii() {
+            return None;
+        }
+        let c = |i: usize| hex.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok());
+        return Some([c(0)?, c(2)?, c(4)?]);
+    }
+    let a = v.as_array().filter(|a| a.len() == 3)?;
+    let c = |i: usize| a.get(i).and_then(Value::as_u64).and_then(|n| u8::try_from(n).ok());
+    Some([c(0)?, c(1)?, c(2)?])
+}
+
 /// The control channel's `local`: the develop view's tools, as the rail and their panels and
 /// gestures drive them. `tool` ("edit", "heal", "masking", "redEye"), `sections` (the Edit panel's
 /// open sections and flyouts), `newMask` (a kind: brush, linear, radial, luminanceRange,
 /// colorRange), `addComponent` ({kind, op: add | subtract}), `selectMask` (an id, or null),
-/// `overlay` (show the selected mask's overlay), `adjust` ({slider: value}: the selected mask's
+/// `overlay` (show the selected mask's overlay), `overlayMode` (color, colorOnBw, imageOnBlack,
+/// imageOnWhite, whiteOnBlack), `overlayColor` ("#rrggbb" or [r, g, b]), `overlayOpacity`
+/// (0..100), `adjust` ({slider: value}: the selected mask's
 /// effects, as its sliders set them; hides the overlay as they do), `brush` ({points: [[x, y]…] on the shown frame,
 /// size, feather, flow, erase, autoMask}: a stroke painted into the selected brush component, or
 /// with the Brush armed and no mask selected into a new brush mask; without points only the
@@ -300,6 +317,15 @@ fn local_update(d: &mut super::CameraRawDialog, v: &Value) -> Result<(), String>
                     local::select(&mut st, &settings, id);
                 }
                 "overlay" => st.overlay = value.as_bool().ok_or("overlay must be a boolean")?,
+                "overlayMode" => {
+                    let ids: Vec<&str> = local::OverlayMode::ALL.iter().map(|m| m.id()).collect();
+                    st.overlay_view.mode =
+                        value.as_str().and_then(local::OverlayMode::from_id).ok_or(format!("overlayMode must be one of {}", ids.join(", ")))?;
+                }
+                "overlayColor" => st.overlay_view.color = overlay_color(value).ok_or("overlayColor must be \"#rrggbb\" or [r, g, b]")?,
+                "overlayOpacity" => {
+                    st.overlay_view.opacity = value.as_f64().filter(|v| v.is_finite()).ok_or("overlayOpacity must be a number")?.clamp(0.0, 100.0);
+                }
                 "adjust" => {
                     // the selected mask's effect sliders, as the panel's set them: the overlay
                     // hides (as Lightroom's mask.adjust)
@@ -371,7 +397,6 @@ fn local_update(d: &mut super::CameraRawDialog, v: &Value) -> Result<(), String>
         Ok(())
     })();
     result?;
-    let overlay_was = d.overlay_mask();
     d.local = st;
     if tool != d.tool {
         let was = d.tool;
@@ -387,9 +412,6 @@ fn local_update(d: &mut super::CameraRawDialog, v: &Value) -> Result<(), String>
             e.settings = settings;
             d.params = e.camera_raw(&d.params);
         }
-        d.dirty = true;
-    }
-    if d.overlay_mask() != overlay_was {
         d.dirty = true;
     }
     Ok(())

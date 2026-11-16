@@ -246,6 +246,7 @@ pub(super) fn open_pixels(
         tool: Default::default(),
         keymap: Default::default(),
         local: Default::default(),
+        live: Default::default(),
         pending: None,
         pending_since: 0.0,
         dirty_since: None,

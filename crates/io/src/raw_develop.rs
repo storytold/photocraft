@@ -299,6 +299,34 @@ impl DevelopSource {
     }
 }
 
+impl DevelopSource {
+    /// `region` (`x, y` inside `view`'s window, `w × h`) of [`Self::develop_view`]'s render of
+    /// `view`: the stages before the per-pixel finish from that render's cache, only `region`
+    /// finished, the same pixels as the whole render's. A mask brush's stroke changes only round
+    /// its new dabs, so the shown window is patched there as it paints. Straight RGBA, `w × h`.
+    pub fn develop_region(&self, s: &DevelopSettings, view: ViewWindow, quality: Quality, region: ViewWindow) -> Result<Vec<[f32; 4]>, IoError> {
+        let (w, h) = view.size;
+        craft_develop::check_output_size(w, h).map_err(engine_error)?;
+        if view.w == 0 || view.h == 0 || view.x.saturating_add(view.w) > w || view.y.saturating_add(view.h) > h {
+            return Err(engine_error(format!("the window {view:?} is not inside the {w}×{h} frame")));
+        }
+        let full = self.full.get_or_init(|| load(&self.bytes, usize::MAX).map(|l| (Arc::new(l.image), l.info)).map_err(|e| e.to_string()));
+        let (src, info) = full.as_ref().map_err(engine_error)?;
+        let window = Some(craft_develop::PixelWindow { x: view.x, y: view.y, w: view.w, h: view.h });
+        let req = RenderRequest { space: OutputSpace::ProPhoto, depth: OutputDepth::U16, quality, window, ..RenderRequest::exact(w, h) };
+        let at = craft_develop::PixelWindow { x: region.x, y: region.y, w: region.w, h: region.h };
+        let deep = craft_develop::render_region_cached(src, info, s, &req, &self.full_cache, at)
+            .ok_or_else(|| engine_error(format!("the region {region:?} is not inside the window {view:?}")))?;
+        if (deep.width, deep.height) != (region.w, region.h) {
+            return Err(engine_error(format!("rendered {}×{}, not the {}×{} region asked for", deep.width, deep.height, region.w, region.h)));
+        }
+        match deep.samples {
+            DeepSamples::U16(v) if v.len() == region.w * region.h * 3 => Ok(rgba(&v)),
+            _ => Err(engine_error("the render's samples are not 16-bit RGB of its size")),
+        }
+    }
+}
+
 /// How the preview of a develop maps to the coordinates its settings store: points on the shown
 /// frame (0..1 across its width and height) to a mask's coordinates ([`craft_develop_model::Mask::on_photo`]:
 /// on the photo before lens corrections, Upright and Transform, or an old mask's on the corrected

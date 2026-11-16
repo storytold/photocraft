@@ -1122,6 +1122,12 @@ pub struct RawDefaults {
     /// the colour under the brush and stops at edges); the dialog's checkbox changes this, so the
     /// choice is remembered from one session to the next.
     pub brush_auto_mask: bool,
+    /// How the Camera Raw dialog's mask overlay shows the selected mask: `color` (a tint over the
+    /// photo), `colorOnBw`, `imageOnBlack`, `imageOnWhite` or `whiteOnBlack`; the tint's colour
+    /// and opacity (0..100). The Masking panel and ⇧O change them.
+    pub mask_overlay_mode: String,
+    pub mask_overlay_color: [u8; 3],
+    pub mask_overlay_opacity: f64,
 }
 
 impl RawColorSpace {
@@ -1174,6 +1180,9 @@ impl Default for RawDefaults {
             demosaic: RawDemosaic::Ahd,
             write_xmp_sidecars: true,
             brush_auto_mask: true,
+            mask_overlay_mode: "color".into(),
+            mask_overlay_color: [0xe6, 0x1e, 0x28],
+            mask_overlay_opacity: 50.0,
         }
     }
 }

@@ -657,8 +657,8 @@ fn draw_thumb(job: ThumbJob) -> Option<(std::sync::Arc<ThumbSource>, egui::Color
         display: job.display,
         gpu: None,
         source_key: 0,
-        overlay: None,
         draft: false,
+        seq: 0,
     }
     .run();
     Some((source, frame.image))

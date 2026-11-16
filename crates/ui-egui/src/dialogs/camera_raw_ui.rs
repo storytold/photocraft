@@ -36,6 +36,7 @@ mod filmstrip;
 mod keymap;
 mod keys;
 pub(crate) mod lc;
+mod live;
 mod local;
 mod local_panels;
 mod menu;
@@ -140,6 +141,8 @@ pub struct CameraRawDialog {
     pub(crate) keymap: keymap::Keymap,
     /// The local tools' selection and settings (masks, spots, red eyes).
     pub(crate) local: local::LocalTools,
+    /// What the preview shows while a mask is painted.
+    pub(crate) live: live::Live,
     /// The proxy develop running on a worker ([`Self::request_render`]), and since when the
     /// settings it develops were waiting to be shown (`now_ms`).
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
@@ -204,19 +207,25 @@ impl CameraRawDialog {
         result["maskComponent"] = json!(self.local.component);
         result["maskDraw"] = json!(format!("{:?}", self.local.draw).to_lowercase());
         result["maskOverlay"] = json!(self.local.overlay);
+        let v = self.local.overlay_view;
+        result["maskOverlayView"] =
+            json!({"mode": v.mode.id(), "color": format!("#{:02x}{:02x}{:02x}", v.color[0], v.color[1], v.color[2]), "opacity": v.opacity});
         result["discardPrompt"] = json!(self.confirm_discard);
         // the Hand or Zoom has the preview, the local tool waiting until it is picked again
         result["toolPaused"] = json!(self.local.paused);
         // the mask brush's ring under the pointer this frame: whether it erases (its −)
         result["brushCursor"] = json!(self.local.cursor_shown.map(|erase| json!({"erase": erase})));
         result["maskOverlayShown"] = json!(self.local.overlay_tex.as_ref().map(|(_, id)| *id));
+        result["live"] = self.live.describe();
+        result["live"]["patchMs"] = json!(self.detail.patch_ms.0);
+        result["live"]["patchPixels"] = json!(self.detail.patch_ms.1);
         result["selectedSpot"] = json!(self.local.spot);
         result["selectedEye"] = json!(self.local.eye);
         result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id()})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
         result["guidedUprightTool"] = json!({"active": self.guides.active, "selected": self.guides.selected});
-        result["previewPending"] = json!(self.render_pending());
+        result["previewPending"] = json!(self.render_pending() || self.live.overlay_pending.is_some());
         result["previewAgeMs"] = json!(self.preview_age_ms);
         result["previewDraft"] = json!(self.shown_draft);
         result["detailMs"] = json!(self.detail.window_ms());
@@ -325,9 +334,117 @@ impl CameraRawDialog {
             display: self.display.clone(),
             gpu: self.gpu.clone(),
             source_key: self.source_key,
-            overlay: self.overlay_mask(),
             draft: self.interactive,
+            seq: self.live.edit_seq,
         }
+    }
+
+    /// Whether a gesture on a mask holds the photo on screen: with the overlay showing the mask,
+    /// or when the full-resolution render is what shows (the proxy would be softer).
+    fn holds_photo(&self) -> bool {
+        self.develop.is_some()
+            && self.tool == rail::Tool::Masking
+            && self.local.mask_gesture()
+            && (self.overlay_mask().is_some() || self.live.shown.starts_with("window"))
+    }
+
+    /// Starts rendering the overlay's mask alpha for the current settings on a worker, unless it
+    /// is shown already or one is running: a stroke's overlay follows the brush without the
+    /// photo developing again.
+    fn request_overlay(&mut self, ctx: &egui::Context) {
+        self.poll_overlay();
+        let (Some(id), Some(e), Some(source)) = (self.overlay_mask(), self.develop.as_ref(), self.develop_source.clone()) else { return };
+        if self.live.overlay_pending.is_some() || self.live.overlay_for.as_ref().is_some_and(|(i, s)| *i == id && *s == e.settings) {
+            return;
+        }
+        let settings = e.settings.clone();
+        self.live.overlay_for = Some((id, settings.clone()));
+        let (pw, ph, seq, repaint) = (self.pw, self.ph, self.live.edit_seq, ctx.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let work = move || {
+            let alpha = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.mask_alpha(&settings, id, pw, ph))).ok().and_then(Result::ok);
+            if tx.send((id, seq, alpha)).is_ok() {
+                repaint.request_repaint();
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::thread::Builder::new().name("camera-raw-overlay".into()).spawn(work).is_ok() {
+            self.live.overlay_pending = Some(rx);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            work();
+            self.live.overlay_pending = Some(rx);
+            self.poll_overlay();
+        }
+    }
+
+    /// Takes in a finished overlay alpha.
+    fn poll_overlay(&mut self) {
+        let Some(rx) = &self.live.overlay_pending else { return };
+        let (id, seq, alpha) = match rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => (0, 0, None),
+        };
+        self.live.overlay_pending = None;
+        match alpha {
+            Some(alpha) => {
+                self.local.overlay_alpha =
+                    Some(local::OverlayAlpha { id, w: self.pw, h: self.ph, alpha: std::sync::Arc::new(alpha), generation: self.live.overlay_generation });
+                self.live.overlay_generation = self.live.overlay_generation.wrapping_add(1);
+                self.live.overlay_seq = seq;
+            }
+            None => {
+                self.local.overlay_alpha = None;
+                self.live.overlay_for = None;
+            }
+        }
+    }
+
+    /// The overlay's texture for this frame, made again when its alpha or view changed (a mode,
+    /// colour or opacity changes only it). None while the overlay doesn't show.
+    pub(crate) fn refresh_overlay(&mut self, ctx: &egui::Context) {
+        let shown = self.overlay_mask();
+        let Some(a) = self.local.overlay_alpha.as_ref().filter(|a| Some(a.id) == shown) else {
+            self.local.overlay_tex = None;
+            self.local.overlay_tex_key = None;
+            return;
+        };
+        let key = (a.generation, self.local.overlay_view);
+        if self.local.overlay_tex.is_some() && self.local.overlay_tex_key == Some(key) {
+            return;
+        }
+        let Some(img) = local::overlay_image(&a.alpha, a.w, a.h, self.local.overlay_view) else { return };
+        let id = a.id;
+        let tex = match self.local.overlay_tex.take() {
+            Some((mut t, _)) => {
+                t.set(img, egui::TextureOptions::LINEAR);
+                t
+            }
+            None => ctx.load_texture("camera-raw-mask-overlay", img, egui::TextureOptions::LINEAR),
+        };
+        self.local.overlay_tex = Some((tex, id));
+        self.local.overlay_tex_key = Some(key);
+    }
+
+    /// The proxy in black and white, for Color Overlay on B&W where the proxy shows.
+    pub(crate) fn gray_proxy(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
+        if self.live.gray_proxy.as_ref().is_none_or(|(_, r)| *r != self.preview_revision) {
+            if self.processed.len() != self.pw * self.ph {
+                return None;
+            }
+            let img = crate::camera_raw_detail_ui::gray_image(Self::image(&self.processed, self.pw, self.ph, &self.display));
+            let tex = match self.live.gray_proxy.take() {
+                Some((mut t, _)) => {
+                    t.set(img, egui::TextureOptions::LINEAR);
+                    t
+                }
+                None => ctx.load_texture("camera-raw-gray", img, egui::TextureOptions::LINEAR),
+            };
+            self.live.gray_proxy = Some((tex, self.preview_revision));
+        }
+        self.live.gray_proxy.as_ref().map(|(t, _)| t.id())
     }
 
     /// The mask whose overlay the preview shows (Masking, a mask selected, the overlay on).
@@ -353,6 +470,7 @@ impl CameraRawDialog {
 
     fn publish(&mut self, ctx: &egui::Context, frame: ProxyFrame) {
         let frame_draft = frame.draft;
+        self.live.tex_seq = frame.seq;
         match &mut self.tex {
             Some(t) => t.set(frame.image, egui::TextureOptions::LINEAR),
             None => self.tex = Some(ctx.load_texture("camera-raw-after", frame.image, egui::TextureOptions::LINEAR)),
@@ -368,19 +486,6 @@ impl CameraRawDialog {
         if frame.view_map.is_some() {
             self.local.view_map = frame.view_map;
         }
-        self.local.overlay_tex = match (frame.mask_alpha, self.overlay_mask()) {
-            (Some(alpha), Some(id)) => local::overlay_image(&alpha, self.pw, self.ph).map(|img| {
-                let tex = match self.local.overlay_tex.take() {
-                    Some((mut t, _)) => {
-                        t.set(img, egui::TextureOptions::LINEAR);
-                        t
-                    }
-                    None => ctx.load_texture("camera-raw-mask-overlay", img, egui::TextureOptions::LINEAR),
-                };
-                (tex, id)
-            }),
-            _ => None,
-        };
         self.after_histogram = frame.histogram;
         self.histogram_ms = frame.histogram_ms;
         self.processed = frame.px;
@@ -399,6 +504,16 @@ impl CameraRawDialog {
     /// Shadows or Highlights set (#5964); the preview shows the latest finished frame.
     fn request_render(&mut self, ctx: &egui::Context) {
         self.sync_develop();
+        self.request_overlay(ctx);
+        self.refresh_overlay(ctx);
+        // a mask being painted or dragged: the photo on screen stays (or is patched where the
+        // brush goes) and the proxy develops once the gesture ends
+        if self.dirty && self.holds_photo() {
+            if self.dirty_since.is_none() {
+                self.dirty_since = Some(crate::gpu_canvas::now_ms());
+            }
+            return;
+        }
         // the drag that drafted the shown frame is over: the same settings in full
         if !self.interactive && self.shown_draft && self.pending.is_none() {
             self.dirty = true;

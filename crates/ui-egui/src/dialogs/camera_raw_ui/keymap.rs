@@ -27,6 +27,8 @@ pub(crate) enum Action {
     AutoMask,
     /// The selected mask's overlay shown / hidden (Masking only).
     MaskOverlay,
+    /// The overlay's next colour, the overlay shown (Masking only).
+    MaskOverlayColor,
     /// Edit › Geometry › Upright › Guided and its tool (a second press puts the tool down).
     GuidedUpright,
     /// Opens (or folds) the Edit panel's nth section, 1-based, in panel order.
@@ -71,6 +73,7 @@ impl Action {
             Action::FeatherMore => "brush.featherMore".into(),
             Action::AutoMask => "brush.autoMask".into(),
             Action::MaskOverlay => "mask.overlay".into(),
+            Action::MaskOverlayColor => "mask.overlayColor".into(),
             Action::GuidedUpright => "geometry.guidedUpright".into(),
             Action::Section(n) => format!("edit.section.{n}"),
             Action::DeleteSelected => "selection.delete".into(),
@@ -122,6 +125,7 @@ impl Action {
             "brush.featherMore" => Action::FeatherMore,
             "brush.autoMask" => Action::AutoMask,
             "mask.overlay" => Action::MaskOverlay,
+            "mask.overlayColor" => Action::MaskOverlayColor,
             "geometry.guidedUpright" => Action::GuidedUpright,
             "selection.delete" => Action::DeleteSelected,
             "edit.undo" => Action::Undo,
@@ -146,7 +150,7 @@ impl Action {
 /// Adobe Camera Raw's keys for what the develop view has: E Edit, B Heal (Camera Raw's Remove),
 /// K or M Masking (K is listed first, so it is the one tooltips show), ⇧E Red Eye; `[` `]` brush size and ⇧`[` ⇧`]` feather; A
 /// the mask brush's Auto Mask (Lightroom's key for it; free in Camera Raw's table); O the mask overlay while masking
-/// (elsewhere O stays the highlight clipping warning's); ⇧T Guided Upright; ⌘1 … ⌘9
+/// (elsewhere O stays the highlight clipping warning's) and ⇧O its next colour (LightCraft's); ⇧T Guided Upright; ⌘1 … ⌘9
 /// the Edit sections; Delete the selection. And the dialog's own, in both views: ⌘Z ⇧⌘Z its undo and redo,
 /// ⌘0 fit, ⌥⌘0 100 %, ⌘+ (⌘=) and ⌘− zoom, H the Hand and Z the Zoom tool, Y before / after, U and O the
 /// shadow and highlight clipping warnings, S the Color Sampler, ⌘A every raw in the filmstrip, Esc
@@ -163,6 +167,7 @@ pub(crate) const CAMERA_RAW: &[(&str, &str)] = &[
     ("brush.featherMore", "Shift+]"),
     ("brush.autoMask", "A"),
     ("mask.overlay", "O"),
+    ("mask.overlayColor", "Shift+O"),
     ("geometry.guidedUpright", "Shift+T"),
     ("edit.section.1", "Cmd+1"),
     ("edit.section.2", "Cmd+2"),
@@ -304,6 +309,7 @@ mod tests {
             (Key::CloseCurlyBracket, Modifiers::SHIFT, Action::FeatherMore),
             (Key::A, Modifiers::NONE, Action::AutoMask),
             (Key::O, Modifiers::NONE, Action::MaskOverlay),
+            (Key::O, Modifiers::SHIFT, Action::MaskOverlayColor),
             (Key::T, Modifiers::SHIFT, Action::GuidedUpright),
             (Key::Num1, Modifiers::COMMAND, Action::Section(1)),
             (Key::Num9, Modifiers::COMMAND, Action::Section(9)),

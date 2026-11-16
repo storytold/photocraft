@@ -62,13 +62,108 @@ pub(crate) struct DetailPreview {
     win_overlay_key: Option<(u64, ViewWindow, bool, crate::camera_raw_scope_ui::ClippingMode, crate::theme::ThemeKind)>,
     /// Where the shown windowed render is on screen.
     win_shown: Option<Rect>,
+    /// The edit the dialog's settings are at ([`Self::settings`]): a windowed render started now
+    /// carries it, so the dialog can say which edit the pixels on screen show.
+    pub(crate) seq: u64,
+    /// What this frame's [`Self::paint`] drew: `"window"`, `"windowDraft"` or nothing (`""`).
+    pub(crate) shown: &'static str,
+    /// The edit the shown windowed render is of.
+    pub(crate) shown_seq: u64,
+    /// What a gesture on a mask going on asks of the windowed render (the dialog sets it each
+    /// frame).
+    pub(crate) hold: Hold,
+    /// Whether [`Self::hold`] was set last frame.
+    held: bool,
+    /// A gesture ended: the frame on screen stays until a render of the settings after it lands.
+    settling: bool,
+    /// When the running windowed render started (`now_ms`).
+    win_since: f64,
+    /// The texture options of the windowed render's texture.
+    win_options: TextureOptions,
+    /// What the brush changed that no patch has rendered yet (0..1 across the frame).
+    patch_dirty: Option<Rect>,
+    patch_pending: Option<Receiver<PatchResult>>,
+    gray_texture: Option<TextureHandle>,
+    gray_key: Option<(u64, ViewWindow, u64, u64)>,
+    /// How long the last patch took to render, in ms, and its size in pixels.
+    pub(crate) patch_ms: (f64, usize),
+}
+
+/// What a gesture on a mask asks of the windowed render while it goes on. In each the frame on
+/// screen stays rather than giving way to the (softer) proxy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Hold {
+    /// No gesture: renders follow the settings.
+    #[default]
+    None,
+    /// The overlay shows the mask: the photo under it doesn't change until the gesture ends.
+    Freeze,
+    /// A brush paints with the overlay hidden: the frame is patched where its dabs went
+    /// ([`DetailPreview::add_dirty`]).
+    Patch,
+    /// A gradient or a handle is dragged with the overlay hidden: the visible window renders again
+    /// at full quality, the last one showing meanwhile.
+    Rerender,
+}
+
+/// How long a render runs before the preview says it is busy, in ms.
+const BUSY_AFTER_MS: f64 = 400.0;
+
+/// A patch of a windowed render: `inner` of the frame (`px`, `image`) under `settings`, for the
+/// render of `for_view`, finished from that render's stages.
+struct Patch {
+    seq: u64,
+    settings: craft_develop_model::DevelopSettings,
+    for_view: ViewWindow,
+    inner: ViewWindow,
+    px: Vec<[f32; 4]>,
+    image: ColorImage,
+    display_key: u64,
+    ms: f64,
+    pixels: usize,
+}
+
+type PatchResult = Result<Patch, String>;
+
+/// A number for each new or patched windowed render (its texture's key).
+fn next_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The part of the shown window `view` a patch for `dirty` (0..1 across the frame) replaces (in
+/// the frame's pixels). `None` when `dirty` is off `view`.
+fn patch_window(view: ViewWindow, dirty: Rect) -> Option<ViewWindow> {
+    let (fw, fh) = (view.size.0 as f32, view.size.1 as f32);
+    if !dirty.is_finite() {
+        return None;
+    }
+    let x0 = ((dirty.min.x * fw).floor().max(0.0) as usize).max(view.x);
+    let y0 = ((dirty.min.y * fh).floor().max(0.0) as usize).max(view.y);
+    let x1 = ((dirty.max.x * fw).ceil().max(0.0) as usize).min(view.x + view.w);
+    let y1 = ((dirty.max.y * fh).ceil().max(0.0) as usize).min(view.y + view.h);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(ViewWindow { size: view.size, x: x0, y: y0, w: x1 - x0, h: y1 - y0 })
+}
+
+/// `image` in black and white (its luma, as the display shows it).
+pub(crate) fn gray_image(mut image: ColorImage) -> ColorImage {
+    for p in &mut image.pixels {
+        let l = ((u32::from(p.r()) * 54 + u32::from(p.g()) * 183 + u32::from(p.b()) * 19) >> 8) as u8;
+        *p = Color32::from_gray(l);
+    }
+    image
 }
 
 use photocraft_io::raw_develop::ViewWindow;
 
-/// A windowed render by the shared engine: `view` of the settings of preview revision
-/// `revision`, a draft or not; `px` is `view.w × view.h`, row by row.
+/// A windowed render by the shared engine: `view` of `settings`, a draft or not; `px` is
+/// `view.w × view.h`, row by row.
 struct Windowed {
+    /// The preview revision when it was asked for: until the proxy shows newer settings, it is
+    /// no older than the proxy.
     revision: u64,
     view: ViewWindow,
     draft: bool,
@@ -78,6 +173,13 @@ struct Windowed {
     image: Option<ColorImage>,
     display_key: u64,
     ms: f64,
+    /// The dialog's edit these settings were at ([`DetailPreview::seq`]).
+    seq: u64,
+    settings: craft_develop_model::DevelopSettings,
+    /// Patched while a brush painted ([`Hold::Patch`]): the render after the stroke replaces it.
+    patched: bool,
+    /// Tells this render (and each patch of it) from the others: its texture's key.
+    generation: u64,
 }
 
 type WindowedResult = Result<Windowed, String>;
@@ -200,6 +302,19 @@ impl DetailPreview {
             win_key: None,
             win_overlay_key: None,
             win_shown: None,
+            seq: 0,
+            shown: "",
+            shown_seq: 0,
+            hold: Hold::None,
+            held: false,
+            settling: false,
+            win_since: 0.0,
+            win_options: TextureOptions::LINEAR,
+            patch_dirty: None,
+            patch_pending: None,
+            gray_texture: None,
+            gray_key: None,
+            patch_ms: (0.0, 0),
         }
     }
 
@@ -212,7 +327,14 @@ impl DetailPreview {
     }
 
     pub(crate) fn pending(&self) -> bool {
-        self.pending.is_some() || self.win_pending.is_some()
+        self.pending.is_some() || self.win_pending.is_some() || self.patch_pending.is_some()
+    }
+
+    /// A render has been running for longer than [`BUSY_AFTER_MS`]: the preview says it is busy
+    /// (a quick one, or a patch of a brush's dabs, says nothing).
+    pub(crate) fn busy(&self) -> bool {
+        let now = crate::gpu_canvas::now_ms();
+        self.pending.is_some() || self.win_pending.is_some() && now - self.win_since > BUSY_AFTER_MS
     }
 
     /// How long the last windowed render took, in ms (0 before one).
@@ -220,29 +342,39 @@ impl DetailPreview {
         self.windowed.as_ref().map_or(0.0, |w| w.ms)
     }
 
+    /// The settings the windowed render shows now ([`Self::settings`]).
+    fn target(&self) -> Option<&craft_develop_model::DevelopSettings> {
+        self.settings.as_ref().map(|(s, _)| s)
+    }
+
     /// Takes in a finished windowed render.
-    fn poll_windowed(&mut self, revision: u64) {
-        let Some((requested, view, rx)) = &self.win_pending else { return };
-        let (requested, view) = (*requested, *view);
+    fn poll_windowed(&mut self) {
+        let Some((_, view, rx)) = &self.win_pending else { return };
+        let view = *view;
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return,
             Err(TryRecvError::Disconnected) => Err("RAW Develop detail preview worker stopped".into()),
         };
-        self.win_pending = None;
+        let requested = self.win_pending.take().map(|(r, _, _)| r);
         match result {
             Ok(w) => {
-                if w.revision == revision {
+                // a render started before the frame on screen was patched would take the
+                // patches back off (a stroke goes on meanwhile): the frame stays
+                if self.windowed.as_ref().is_some_and(|s| s.view == w.view && s.seq > w.seq) {
+                    return;
+                }
+                if Some(&w.settings) == self.target() {
                     self.refined = self.refined.saturating_add(1);
                     self.error = None;
                 }
                 self.windowed = Some(w);
             }
             Err(e) => {
-                if requested == revision {
-                    self.error = Some(e);
+                self.error = Some(e);
+                if let Some(r) = requested {
+                    self.win_failed = Some((r, view));
                 }
-                self.win_failed = Some((requested, view));
             }
         }
     }
@@ -265,6 +397,7 @@ impl DetailPreview {
         let cancel = self.cancel.clone();
         let ctx = ctx.clone();
         let display = display.clone();
+        let seq = self.seq;
         let (tx, rx) = std::sync::mpsc::channel::<WindowedResult>();
         let quality = if draft { photocraft_io::raw_develop::Quality::Draft } else { photocraft_io::raw_develop::Quality::Full };
         let work = move || {
@@ -277,7 +410,19 @@ impl DetailPreview {
                 .and_then(|r| r.map_err(|e| e.to_string()))
                 .map(|px| {
                     let image = window_image(&px, view, &display);
-                    Windowed { revision, view, draft, px: Arc::new(px), image: Some(image), display_key: display.key, ms: crate::gpu_canvas::now_ms() - t0 }
+                    Windowed {
+                        revision,
+                        view,
+                        draft,
+                        px: Arc::new(px),
+                        image: Some(image),
+                        display_key: display.key,
+                        ms: crate::gpu_canvas::now_ms() - t0,
+                        seq,
+                        settings,
+                        patched: false,
+                        generation: next_generation(),
+                    }
                 });
             if !cancel.load(Ordering::Relaxed) {
                 let _ = tx.send(result);
@@ -291,7 +436,10 @@ impl DetailPreview {
                 let _guard = WORKER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 work();
             }) {
-                Ok(_) => self.win_pending = Some((revision, view, rx)),
+                Ok(_) => {
+                    self.win_pending = Some((revision, view, rx));
+                    self.win_since = crate::gpu_canvas::now_ms();
+                }
                 Err(e) => {
                     self.error = Some(format!("Cannot start RAW Develop preview: {e}"));
                     self.win_failed = Some((revision, view));
@@ -307,27 +455,168 @@ impl DetailPreview {
         }
     }
 
+    /// Adds `dirty` (a rectangle of the frame, 0..1 across it) to what the next patch renders
+    /// ([`Hold::Patch`]).
+    pub(crate) fn add_dirty(&mut self, dirty: Rect) {
+        self.patch_dirty = Some(self.patch_dirty.map_or(dirty, |d| d.union(dirty)));
+    }
+
+    /// Starts rendering what changed ([`Self::add_dirty`]) of the shown windowed render (the
+    /// shared engine finishes only that part, from the render's own stages), unless a patch is
+    /// running: what changes meanwhile goes next.
+    fn request_patch(&mut self, ctx: &Context, display: &Arc<photocraft_engine::display_color::CanvasDisplay>) {
+        if self.patch_pending.is_some() {
+            return;
+        }
+        let (Some(engine), Some((settings, _)), Some(w)) = (self.develop.clone(), self.settings.as_ref(), self.windowed.as_ref()) else { return };
+        let Some(dirty) = self.patch_dirty else { return };
+        // already shown: nothing to do
+        if w.settings == *settings {
+            self.patch_dirty = None;
+            return;
+        }
+        let Some(inner) = patch_window(w.view, dirty) else {
+            // the change is off screen: the frame shows these settings as they are
+            self.patch_dirty = None;
+            return;
+        };
+        self.patch_dirty = None;
+        let settings = settings.clone();
+        let (cancel, ctx, display, seq, for_view) = (self.cancel.clone(), ctx.clone(), display.clone(), self.seq, w.view);
+        let quality = if w.draft { photocraft_io::raw_develop::Quality::Draft } else { photocraft_io::raw_develop::Quality::Full };
+        let region = ViewWindow { x: inner.x - for_view.x, y: inner.y - for_view.y, ..inner };
+        let (tx, rx) = std::sync::mpsc::channel::<PatchResult>();
+        let work = move || {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            let t0 = crate::gpu_canvas::now_ms();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.develop_region(&settings, for_view, quality, region)))
+                .map_err(|_| "RAW Develop preview failed".to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()))
+                .map(|px| {
+                    let image = window_image(&px, inner, &display);
+                    Patch {
+                        seq,
+                        settings,
+                        for_view,
+                        inner,
+                        px,
+                        image,
+                        display_key: display.key,
+                        ms: crate::gpu_canvas::now_ms() - t0,
+                        pixels: inner.w * inner.h,
+                    }
+                });
+            if !cancel.load(Ordering::Relaxed) {
+                let _ = tx.send(result);
+                ctx.request_repaint();
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            static PATCHER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            if std::thread::Builder::new()
+                .name("camera-raw-patch".into())
+                .spawn(move || {
+                    let _guard = PATCHER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    work();
+                })
+                .is_ok()
+            {
+                self.patch_pending = Some(rx);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            drop(work);
+            drop(rx);
+        }
+    }
+
+    /// Puts a finished patch into the shown windowed render, its pixels and its texture.
+    fn poll_patch(&mut self, display: &Arc<photocraft_engine::display_color::CanvasDisplay>) {
+        let Some(rx) = &self.patch_pending else { return };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("RAW Develop preview worker stopped".into()),
+        };
+        self.patch_pending = None;
+        let Ok(p) = result else { return };
+        self.patch_ms = (p.ms, p.pixels);
+        let Some(w) = self.windowed.as_mut().filter(|w| w.view == p.for_view && w.seq <= p.seq) else { return };
+        let (ox, oy) = (p.inner.x - w.view.x, p.inner.y - w.view.y);
+        let px = Arc::make_mut(&mut w.px);
+        for y in 0..p.inner.h {
+            let at = (oy + y) * w.view.w + ox;
+            if let (Some(dst), Some(src)) = (px.get_mut(at..at + p.inner.w), p.px.get(y * p.inner.w..(y + 1) * p.inner.w)) {
+                dst.copy_from_slice(src);
+            }
+        }
+        (w.seq, w.settings, w.patched) = (p.seq, p.settings, true);
+        let was = (w.generation, w.view, w.draft, display.key);
+        w.generation = next_generation();
+        // the texture, where it shows this render: only the patch is uploaded
+        if self.win_key == Some(was)
+            && p.display_key == display.key
+            && let Some(t) = &mut self.win_texture
+        {
+            t.set_partial([ox, oy], p.image, self.win_options);
+            self.win_key = Some((w.generation, w.view, w.draft, display.key));
+        }
+    }
+
     /// The shared engine's preview of the current settings over `image` (a raw it develops):
     /// the visible part at the screen's resolution, rendered on a worker, drafts while a control
-    /// is dragged, the proxy showing until the current settings' render is in. Says whether it
-    /// drew.
+    /// is dragged, the proxy showing until the current settings' render is in. While a mask is
+    /// painted ([`Self::hold`]) and until the render that follows it lands, the frame on screen
+    /// stays (patched where the brush went, [`Hold::Patch`]) rather than the proxy. Says whether
+    /// it drew.
     fn paint_windowed(&mut self, ui: &egui::Ui, image: Rect, revision: u64, display: &Arc<photocraft_engine::display_color::CanvasDisplay>) -> bool {
         self.win_shown = None;
-        self.poll_windowed(revision);
+        self.poll_windowed();
+        self.poll_patch(display);
         let ppp = ui.ctx().pixels_per_point();
         let Some((shown, render)) = view_window(image, ui.clip_rect(), self.area, ppp) else { return false };
-        let draft = self.interactive;
-        let fits = |w: &Windowed| w.view.covers(&shown);
-        let current = self.windowed.as_ref().is_some_and(|w| w.revision == revision && fits(w) && (!w.draft || draft));
-        // (while a control is dragged, a draft only once the proxy has caught up: the drag paused)
-        if !current && !(draft && self.proxy_busy) {
-            self.request_windowed(ui.ctx(), revision, render, draft, display);
-            self.poll_windowed(revision);
+        // a gesture ended: what it left stays on screen until the render after it lands
+        if self.hold == Hold::None && self.held {
+            self.settling = true;
         }
-        // a render of older settings would hide the proxy's of the current ones; one of the
-        // current settings shows while a pan or zoom waits for its own (the proxy round it)
-        let Some(w) = self.windowed.as_mut().filter(|w| w.revision == revision) else { return false };
-        let key = (w.revision, w.view, w.draft, display.key);
+        self.held = self.hold != Hold::None;
+        let draft = self.interactive && self.hold == Hold::None;
+        let fits = |w: &Windowed| w.view.covers(&shown);
+        let target = self.target().cloned();
+        let current = self.windowed.as_ref().is_some_and(|w| Some(&w.settings) == target.as_ref() && fits(w) && !w.patched && (!w.draft || draft));
+        match self.hold {
+            // the photo stays as it is while the overlay shows the mask
+            Hold::Freeze => {}
+            Hold::Patch => self.request_patch(ui.ctx(), display),
+            // (while a control is dragged, a draft only once the proxy has caught up: the drag
+            // paused)
+            Hold::Rerender | Hold::None => {
+                if !current && !(draft && self.proxy_busy) {
+                    self.request_windowed(ui.ctx(), revision, render, draft, display);
+                    self.poll_windowed();
+                }
+            }
+        }
+        if current && self.windowed.as_ref().is_some_and(|w| !w.draft) {
+            self.settling = false;
+        }
+        // a render of older settings than the proxy's would hide the proxy's of the current ones,
+        // except while a mask is painted and until the render after it is in (the proxy would be
+        // softer)
+        let keep = self.hold != Hold::None || self.settling;
+        let Some(w) = self
+            .windowed
+            .as_mut()
+            .filter(|w| Some(&w.settings) == target.as_ref() || w.revision == revision || keep && w.view.size == shown.size && w.view.covers(&shown))
+        else {
+            self.settling = false;
+            return false;
+        };
+        let key = (w.generation, w.view, w.draft, display.key);
         if self.win_key != Some(key) {
             let color = match w.image.take().filter(|_| w.display_key == display.key) {
                 Some(color) => color,
@@ -342,20 +631,41 @@ impl DetailPreview {
                 Some(t) => t.set(color, options),
                 None => self.win_texture = Some(ui.ctx().load_texture("cr-view-preview", color, options)),
             }
-            self.win_key = Some(key);
+            self.win_options = options;
         }
+        self.win_key = Some(key);
         let screen = view_rect(image, w.view);
         if let Some(texture) = &self.win_texture {
             ui.painter().image(texture.id(), screen, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
         }
         self.win_shown = Some(screen);
-        self.ready = fits(w) && !w.draft;
+        let is_current = Some(&w.settings) == target.as_ref();
+        self.ready = fits(w) && !w.draft && is_current;
+        self.shown = if w.draft { "windowDraft" } else { "window" };
+        self.shown_seq = w.seq;
         true
     }
 
-    /// The windowed render's pixel at `p` (0..1 across the image), when it is of `revision`.
-    fn windowed_sample(&self, p: [f32; 2], revision: u64) -> Option<[f32; 4]> {
-        let w = self.windowed.as_ref().filter(|w| w.revision == revision)?;
+    /// The shown windowed render in black and white, and where it is on screen: the base of the
+    /// mask overlay's Color Overlay on B&W. Made once per frame shown.
+    pub(crate) fn gray_layer(&mut self, ctx: &Context, display: &photocraft_engine::display_color::CanvasDisplay) -> Option<(egui::TextureId, Rect)> {
+        let (screen, w) = (self.win_shown?, self.windowed.as_ref()?);
+        let key = (w.generation, w.view, w.seq, display.key);
+        if self.gray_key != Some(key) {
+            let image = gray_image(window_image(&w.px, w.view, display));
+            match &mut self.gray_texture {
+                Some(t) => t.set(image, self.win_options),
+                None => self.gray_texture = Some(ctx.load_texture("cr-view-gray", image, self.win_options)),
+            }
+            self.gray_key = Some(key);
+        }
+        self.gray_texture.as_ref().map(|t| (t.id(), screen))
+    }
+
+    /// The windowed render's pixel at `p` (0..1 across the image), when it shows the current
+    /// settings.
+    fn windowed_sample(&self, p: [f32; 2]) -> Option<[f32; 4]> {
+        let w = self.windowed.as_ref().filter(|w| Some(&w.settings) == self.target())?;
         let (vw, vh) = (w.view.size.0 as f32, w.view.size.1 as f32);
         let (x, y) = ((p[0] * vw) as usize, (p[1] * vh) as usize);
         let (x, y) = (x.checked_sub(w.view.x)?, y.checked_sub(w.view.y)?);
@@ -369,7 +679,7 @@ impl DetailPreview {
     fn windowed_overlay(&mut self, ui: &egui::Ui, mode: crate::camera_raw_scope_ui::ClippingMode) -> bool {
         let (Some(screen), Some(w)) = (self.win_shown, self.windowed.as_ref()) else { return false };
         let t = crate::theme::Tokens::get(ui.ctx());
-        let key = (w.revision, w.view, w.draft, mode, t.kind);
+        let key = (w.generation, w.view, w.draft, mode, t.kind);
         if self.win_overlay_key != Some(key) {
             let pixels: Vec<Color32> = w.px.iter().map(|p| clipping_color(*p, mode, &t)).collect();
             let color = ColorImage::new([w.view.w, w.view.h], pixels);
@@ -497,6 +807,7 @@ impl DetailPreview {
     ) -> bool {
         self.ready = false;
         self.win_shown = None;
+        self.shown = "";
         self.poll(revision);
         if !needed {
             return false;
@@ -546,7 +857,7 @@ impl DetailPreview {
             return None;
         }
         if self.win_shown.is_some() {
-            return self.windowed_sample(p, revision);
+            return self.windowed_sample(p);
         }
         let source = if before || self.unedited(params) {
             &self.source

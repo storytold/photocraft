@@ -324,15 +324,10 @@ fn develop_props(ui: &mut egui::Ui, d: &mut CameraRawDialog, sampler: &mut bool)
         tool => {
             super::lc::style(ui);
             ui.spacing_mut().item_spacing.y = 0.0;
-            let overlay_was = d.local.overlay_mask(tool, &edit.settings);
             match tool {
-                super::rail::Tool::Masking => super::local_panels::masking(ui, &mut d.local, &mut edit.settings),
+                super::rail::Tool::Masking => super::local_panels::masking(ui, &mut d.local, &mut edit.settings, &d.keymap),
                 super::rail::Tool::Heal => super::local_panels::heal(ui, &mut d.local, &mut edit.settings),
                 _ => super::local_panels::red_eye(ui, &mut d.local, &mut edit.settings),
-            }
-            // another mask selected, or the overlay switched: the preview renders its alpha
-            if d.local.overlay_mask(tool, &edit.settings) != overlay_was {
-                d.dirty = true;
             }
         }
     }
@@ -542,6 +537,7 @@ fn forwarded_keys(ctx: &egui::Context) -> Vec<egui::Event> {
 /// dialog starts from the preference, a change in the dialog (its checkbox, the A key, the control
 /// channel) is saved there, and a change of the preference elsewhere reaches the dialog.
 pub(super) fn sync_auto_mask(app: &mut PhotocraftApp) {
+    sync_overlay_view(app);
     let pref = app.session.prefs().raw_defaults.brush_auto_mask;
     let Some(d) = app.camera_raw.as_mut() else { return };
     let st = &mut d.local;
@@ -559,6 +555,60 @@ pub(super) fn sync_auto_mask(app: &mut PhotocraftApp) {
     }
 }
 
+/// The mask overlay's mode, colour and opacity from the preferences (`rawDefaults.maskOverlay…`)
+/// the first time, and into them when the panel, ⇧O or the control channel change them.
+fn sync_overlay_view(app: &mut PhotocraftApp) {
+    use super::local::{OverlayMode, OverlayView};
+    let r = &app.session.prefs().raw_defaults;
+    let pref = OverlayView {
+        mode: OverlayMode::from_id(&r.mask_overlay_mode).unwrap_or_default(),
+        color: r.mask_overlay_color,
+        opacity: r.mask_overlay_opacity.clamp(0.0, 100.0),
+    };
+    let Some(d) = app.camera_raw.as_mut() else { return };
+    let st = &mut d.local;
+    match st.overlay_synced {
+        Some(was) if st.overlay_view != was => {
+            let v = st.overlay_view;
+            st.overlay_synced = Some(v);
+            app.session.edit_prefs(|p| {
+                p.raw_defaults.mask_overlay_mode = v.mode.id().to_string();
+                p.raw_defaults.mask_overlay_color = v.color;
+                p.raw_defaults.mask_overlay_opacity = v.opacity;
+            });
+        }
+        Some(was) if was == pref => {}
+        _ => {
+            st.overlay_view = pref;
+            st.overlay_synced = Some(pref);
+        }
+    }
+}
+
+/// The full-resolution preview over the image rect `r` (`needed`: the proxy is smaller than the
+/// screen), held while a mask is painted or dragged ([`crate::camera_raw_detail_ui::Hold`]), and
+/// what it drew ([`super::live::Live`]).
+fn paint_detail(preview: &egui::Ui, d: &mut CameraRawDialog, r: ERect, needed: bool, lc_view: bool) {
+    use crate::camera_raw_detail_ui::Hold;
+    d.detail.seq = d.live.edit_seq;
+    // a gesture on a mask: the photo on screen stays rather than the softer proxy
+    let gesture = lc_view && d.tool == super::rail::Tool::Masking && !d.show_before && d.local.mask_gesture();
+    d.detail.hold = match (gesture, d.overlay_mask().is_some(), d.local.stroking()) {
+        (false, _, _) => Hold::None,
+        (true, true, _) => Hold::Freeze,
+        (true, false, true) => Hold::Patch,
+        (true, false, false) => Hold::Rerender,
+    };
+    if let Some(dirty) = d.local.take_dirty()
+        && d.detail.hold == Hold::Patch
+    {
+        d.detail.add_dirty(dirty);
+    }
+    let sharp = d.detail.paint(preview, r, d.preview_revision, d.show_before, &d.params, needed, &d.display);
+    (d.live.shown, d.live.photo_seq) =
+        if sharp { (d.detail.shown, d.detail.shown_seq) } else { (if needed { "proxyEnlarged" } else { "proxy" }, d.live.tex_seq) };
+}
+
 /// The develop view's Heal, Masking and Red Eye on the preview's image rect `r`: the mask
 /// overlay, the tool's outlines and handles, and its gestures.
 fn local_preview(preview: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, response: &egui::Response, panning: bool) {
@@ -566,9 +616,20 @@ fn local_preview(preview: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, resp
     if d.show_before || d.tool == super::rail::Tool::Edit {
         return;
     }
+    d.refresh_overlay(preview.ctx());
+    // Color Overlay on B&W: the photo as shown, in black and white, under the tint
+    let mut gray = Vec::new();
+    if d.local.overlay_view.base() == super::local::OverlayBase::Gray && d.local.overlay_tex.is_some() {
+        if let Some(t) = d.gray_proxy(preview.ctx()) {
+            gray.push((t, r));
+        }
+        if d.live.shown.starts_with("window") {
+            let display = d.display.clone();
+            gray.extend(d.detail.gray_layer(preview.ctx(), &display));
+        }
+    }
     let Some(e) = d.develop.as_mut() else { return };
-    super::local::paint_overlay(preview, &d.local, r, d.tool, &e.settings);
-    let overlay_was = d.local.overlay_mask(d.tool, &e.settings);
+    super::local::paint_overlay(preview, &d.local, r, d.tool, &e.settings, &gray);
     let source = d.develop_source.clone();
     let (pw, ph) = (d.pw, d.ph);
     let sample = move |s: &craft_develop_model::DevelopSettings, n: craft_geom::Point| source.as_ref().and_then(|src| src.color_range_sample(s, n, pw, ph));
@@ -576,10 +637,7 @@ fn local_preview(preview: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, resp
     if out.edited {
         d.params = e.camera_raw(&d.params);
         d.dirty = true;
-    }
-    // a press on the mask's geometry brought its overlay back: the preview renders its alpha
-    if d.local.overlay_mask(d.tool, &e.settings) != overlay_was {
-        d.dirty = true;
+        d.live.edit_seq = d.live.edit_seq.wrapping_add(1);
     }
 }
 
@@ -848,7 +906,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             // a control being dragged: drafts, and none while the proxy is still catching up
             d.detail.interactive = pointer;
             d.detail.proxy_busy = d.render_pending() || d.dirty;
-            d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed, &d.display);
+            paint_detail(&preview, d, r, detail_needed, lc_view);
             if d.detail.pending() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }
@@ -882,7 +940,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 d.local.end_gesture();
             }
         }
-        if d.detail.pending() {
+        // only a render that takes a while says so (a stroke's patches never do)
+        d.live.spinner = d.detail.busy();
+        if d.live.spinner {
             nav_ui.spinner();
         }
         if let Some(error) = &d.detail.error {

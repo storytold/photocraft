@@ -7,10 +7,11 @@ use craft_develop_model::{DevelopSettings, MaskOp, MaskShape, SpotMode};
 use egui::{Rect, Sense, Stroke, pos2, vec2};
 
 use super::develop_panel::tr;
+use super::keymap::{Action, Keymap};
 use super::lc::icons::{Icon, paint};
 use super::lc::widgets::{self as w, divider, padded, slider, sub_title, text_button, title};
 use super::lc::{self, Lc};
-use super::local::{self, Draw, LocalTools, kind_label};
+use super::local::{self, Draw, LocalTools, OVERLAY_COLORS, OverlayMode, kind_label};
 
 /// A slider of the panels' own: `(min, max, default)`, its step and decimals.
 const fn spec(id: &'static str, label: &'static str, (min, max, default): (f64, f64, f64), step: f64, decimals: u8, track: Track) -> ControlSpec {
@@ -74,8 +75,17 @@ fn component_menu(ui: &mut egui::Ui, st: &mut LocalTools, s: &mut DevelopSetting
     }
 }
 
-/// The Masking panel.
-pub(crate) fn masking(ui: &mut egui::Ui, st: &mut LocalTools, s: &mut DevelopSettings) {
+/// The Masking panel (`keys`: the dialog's shortcuts, for the tooltips).
+pub(crate) fn masking(ui: &mut egui::Ui, st: &mut LocalTools, s: &mut DevelopSettings, keys: &Keymap) {
+    let overlay_was = (st.overlay, st.overlay_view);
+    masking_panel(ui, st, s, keys);
+    // the preview, drawn before the panel, shows the overlay as now set on the next frame
+    if (st.overlay, st.overlay_view) != overlay_was {
+        ui.ctx().request_repaint();
+    }
+}
+
+fn masking_panel(ui: &mut egui::Ui, st: &mut LocalTools, s: &mut DevelopSettings, keys: &Keymap) {
     let t = Lc::get(ui.ctx());
     st.validate(s);
     title(ui, tr("Masking"));
@@ -107,7 +117,7 @@ pub(crate) fn masking(ui: &mut egui::Ui, st: &mut LocalTools, s: &mut DevelopSet
             ui.label(egui::RichText::new(tr("Masks")).font(t.semibold(13.0)).color(t.text_label));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let on = st.overlay;
-                if w::icon_button(ui, Icon::Eye, vec2(24.0, 24.0), on, true, tr("Show Overlay")).clicked() {
+                if w::icon_button(ui, Icon::Eye, vec2(24.0, 24.0), on, true, &keys.tip(tr("Show Overlay"), Action::MaskOverlay)).clicked() {
                     st.overlay = !on;
                 }
             });
@@ -202,6 +212,10 @@ pub(crate) fn masking(ui: &mut egui::Ui, st: &mut LocalTools, s: &mut DevelopSet
             s.masks.retain(|m| m.id != id);
             st.validate(s);
         }
+        if !s.masks.is_empty() {
+            ui.add_space(6.0);
+            overlay_options(ui, st, keys);
+        }
     });
     let Some(id) = st.selected else {
         // the Brush armed: its settings, for the stroke that makes the mask
@@ -240,6 +254,53 @@ pub(crate) fn masking(ui: &mut egui::Ui, st: &mut LocalTools, s: &mut DevelopSet
         m.refine = v;
     }
     ui.add_space(30.0);
+}
+
+/// How the selected mask's overlay shows (LightCraft's overlay options): Show Overlay, the mode,
+/// the colour swatches and the opacity of the tinted modes.
+fn overlay_options(ui: &mut egui::Ui, st: &mut LocalTools, keys: &Keymap) {
+    let t = Lc::get(ui.ctx());
+    let mut on = st.overlay;
+    if ui.checkbox(&mut on, tr("Show Overlay")).on_hover_text(keys.tip(tr("Show Overlay"), Action::MaskOverlay)).changed() {
+        st.overlay = on;
+    }
+    let view = &mut st.overlay_view;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tr("Overlay")).color(t.text_dim));
+        let r = w::dropdown(ui, tr(view.mode.label()), t.font(12.5), t.text_label);
+        egui::Popup::menu(&r).show(|ui| {
+            lc::style(ui);
+            for mode in OverlayMode::ALL {
+                if w::menu_item(ui, tr(mode.label()), view.mode == mode) {
+                    view.mode = mode;
+                    // choosing how it shows shows it
+                    st.overlay = true;
+                }
+            }
+        });
+    });
+    let tinted = view.mode.tinted();
+    if tinted {
+        ui.horizontal(|ui| {
+            for (c, name) in OVERLAY_COLORS {
+                let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                let tip = keys.tip(tr(name), Action::MaskOverlayColor);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, view.color == c, tr(name)));
+                ui.painter().rect_filled(r.shrink(2.0), 3.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
+                if view.color == c {
+                    ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
+                }
+                if resp.on_hover_text(tip).clicked() {
+                    view.color = c;
+                    st.overlay = true;
+                }
+            }
+        });
+    }
+    let opacity = spec("overlayOpacity", "Overlay Opacity", (0.0, 100.0, 50.0), 1.0, 0, Track::Plain);
+    if let Some(v) = slider(ui, &opacity, st.overlay_view.opacity, tinted, tr("Overlay Opacity")).value {
+        st.overlay_view.opacity = v.clamp(0.0, 100.0);
+    }
 }
 
 /// The selected mask's components, the selected one's own controls, and Add / Subtract / Invert /
