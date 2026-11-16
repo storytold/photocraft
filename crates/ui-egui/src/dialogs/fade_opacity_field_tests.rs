@@ -268,3 +268,34 @@ fn a_number_set_without_typed_text_keeps_its_dot() {
     assert_eq!(read_fade_opacity(37.5, None, true), 37.5);
     assert_eq!(read_fade_opacity(1.0, Some("1.0"), true), 10.0);
 }
+
+fn wheel_up(h: &mut Harness<'static, PhotocraftApp>) {
+    h.event(Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(3);
+}
+
+/// CodeRabbit on #15099: a wheel notch after typing `50` steps the field to 51; the cached text `50` is not read back as
+/// if it had been typed again.
+#[test]
+fn a_wheel_notch_after_typing_is_not_the_cached_text() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "50");
+    wheel_up(&mut h);
+    assert_eq!(opacity(&h, id), json!(51));
+}
+
+/// CodeRabbit on #15099: a wheel notch after `0.4` (stored 4) steps the stored percent: 5, not 1.
+#[test]
+fn a_wheel_notch_steps_the_stored_value_not_the_draft() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "0.4");
+    assert_eq!(opacity(&h, id), json!(4));
+    wheel_up(&mut h);
+    assert_eq!(opacity(&h, id), json!(5));
+}
