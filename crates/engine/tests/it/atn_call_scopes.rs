@@ -43,6 +43,22 @@ fn finish(marker: &str) -> Action {
     Action::new("Finish", vec![("layer.new.layer".into(), json!({"name":marker}))])
 }
 
+fn assert_missing_scope_refusal(session: &mut Session, conditional: bool, command: &str) {
+    let caller = session.actions.list.iter().find(|action| action.name == "Caller").unwrap();
+    assert_eq!(caller.steps[0].1[if conditional { "then" } else { "action" }], "Finish");
+    assert_eq!(caller.steps[0].1["set"], "Missing", "deferred external reference stays unrewritten");
+    assert!(
+        caller.steps[0].1.get(if conditional { "thenActionId" } else { "actionId" }).is_none(),
+        "an unresolved scope must not bind a local namesake"
+    );
+    let played = session.execute("actions.play", json!({"action":"Caller"})).unwrap();
+    assert!(played["failed"]["error"].as_str().unwrap().contains("no action in the named set"), "{played}");
+    assert_eq!(played["failed"]["id"], command);
+    assert_eq!(played["failed"]["step"], 0);
+    assert_eq!(played["ran"], 0);
+    assert!(!session.active().unwrap().doc.layers.iter().any(|layer| layer.name.starts_with("From ")));
+}
+
 /// Explicit scopes never fall through; unscoped calls retain caller-local resolution.
 #[test]
 fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming() {
@@ -78,19 +94,7 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                 let result = session.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes),"replace":false}));
                 if scope == Some("Missing") {
                     result.unwrap();
-                    let caller = session.actions.list.iter().find(|action| action.name == "Caller").unwrap();
-                    assert_eq!(caller.steps[0].1[if conditional { "then" } else { "action" }], "Finish");
-                    assert_eq!(caller.steps[0].1["set"], "Missing", "deferred external reference stays unrewritten");
-                    assert!(
-                        caller.steps[0].1.get(if conditional { "thenActionId" } else { "actionId" }).is_none(),
-                        "an unresolved scope must not bind a local namesake"
-                    );
-                    let played = session.execute("actions.play", json!({"action":"Caller"})).unwrap();
-                    assert!(played["failed"]["error"].as_str().unwrap().contains("no action in the named set"), "{played}");
-                    assert_eq!(played["failed"]["id"], command);
-                    assert_eq!(played["failed"]["step"], 0);
-                    assert_eq!(played["ran"], 0);
-                    assert!(!session.active().unwrap().doc.layers.iter().any(|layer| layer.name.starts_with("From ")));
+                    assert_missing_scope_refusal(&mut session, conditional, command);
                     let later = atn::write(&row("Missing", vec![finish("From later-loaded set")])).unwrap();
                     let store = MemBackend::default();
                     store.write(ACTIONS_FILE, &later).unwrap();
