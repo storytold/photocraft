@@ -612,3 +612,20 @@ fn closing_a_capturing_dialog_restores_the_normal_keys() {
     h.run_steps(2);
     assert_ne!(document_state(&h).1, zoom, "⌘= zooms again");
 }
+
+/// CodeRabbit on #14859: Use Legacy Channel Shortcuts is part of the dialog's pending state. It
+/// takes effect with OK, and Cancel leaves the stored choice as it was.
+#[test]
+fn the_legacy_channel_checkbox_is_applied_by_ok_and_discarded_by_cancel() {
+    for confirm in [false, true] {
+        let (mut h, id) = dialog(1.0, "edit.cut", "edit.cut");
+        assert!(!h.state().session.prefs().use_legacy_channel_shortcuts);
+        h.get_by_label("Use Legacy Channel Shortcuts").click();
+        h.run_steps(3);
+        assert!(!h.state().session.prefs().use_legacy_channel_shortcuts, "ticking alone changes nothing yet");
+        h.get_by_role_and_label(egui::accesskit::Role::Button, if confirm { "OK" } else { "Cancel" }).click();
+        h.run_steps(4);
+        assert!(!h.state().ui.dialogs.iter().any(|d| d.id == id), "the dialog closed");
+        assert_eq!(h.state().session.prefs().use_legacy_channel_shortcuts, confirm, "OK applies it, Cancel doesn't");
+    }
+}

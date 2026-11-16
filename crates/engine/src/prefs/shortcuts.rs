@@ -145,6 +145,50 @@ pub const ALTERNATE_SHORTCUTS: &[(&str, &str)] = &[
     ("file.close", "Cmd+F4"),
 ];
 
+/// Use Legacy Undo Shortcuts (#14319): the undo keys of a run started with it on, as the
+/// reference application documents them. ⌘Z toggles Undo/Redo (Toggle Last State), ⌥⌘Z is Step
+/// Backward and ⇧⌘Z Step Forward; Undo and Redo themselves have no key then. `Cmd` is Ctrl off
+/// the Mac, as everywhere.
+pub const LEGACY_UNDO_SHORTCUTS: &[(&str, Option<&str>)] = &[
+    ("edit.undo", None),
+    ("edit.redo", None),
+    ("edit.toggleLastState", Some("Cmd+Z")),
+    ("history.stepBackward", Some("Cmd+Alt+Z")),
+    ("history.stepForward", Some("Cmd+Shift+Z")),
+];
+
+/// The default key of `id` in this run: [`LEGACY_UNDO_SHORTCUTS`] when the run started with Use
+/// Legacy Undo Shortcuts on and `id` is one of them, else `default`.
+pub fn undo_key<'a>(id: &str, default: Option<&'a str>, legacy: bool) -> Option<&'a str> {
+    match LEGACY_UNDO_SHORTCUTS.iter().find(|(c, _)| legacy && *c == id) {
+        Some((_, key)) => *key,
+        None => default,
+    }
+}
+
+/// Use Legacy Channel Shortcuts (#14325): in an RGB document each colour or alpha channel moves
+/// one key lower than with the box off. ⌘1 targets the first colour channel (Red), ⌘2 Green, ⌘3
+/// Blue, ⌘4 the first alpha channel, up to ⌘7 (the ninth slot, the last a key targets). ⌘1 then
+/// no longer zooms to 100% and ⌘2 no longer targets the composite, though the View menu and Edit
+/// › Keyboard Shortcuts still show ⌘1 beside 100% (measured). Dispatch only: the commands keep
+/// their keys everywhere they are shown.
+pub const LEGACY_CHANNEL_SHORTCUTS: &[(&str, &str)] = &[
+    ("Cmd+1", "channel.target.slot3"),
+    ("Cmd+2", "channel.target.slot4"),
+    ("Cmd+3", "channel.target.slot5"),
+    ("Cmd+4", "channel.target.slot6"),
+    ("Cmd+5", "channel.target.slot7"),
+    ("Cmd+6", "channel.target.slot8"),
+    ("Cmd+7", "channel.target.slot9"),
+];
+
+/// Commands whose default ⌘-digit key [`LEGACY_CHANNEL_SHORTCUTS`] takes over in an RGB document:
+/// View › 100% (⌘1), the composite (⌘2) and the channel slots (⌘3…⌘9; ⌘8 and ⌘9 then target
+/// nothing, since slots 10 and 11 have no command).
+pub fn replaced_by_legacy_channel_keys(id: &str) -> bool {
+    id == "view.actualPixels" || id == "channel.target.composite" || id.starts_with("channel.target.slot")
+}
+
 /// A command's default alternate keys ([`ALTERNATE_SHORTCUTS`]).
 pub fn default_alternates(id: &str) -> impl Iterator<Item = &'static str> + '_ {
     ALTERNATE_SHORTCUTS.iter().filter(move |(c, _)| *c == id).map(|(_, sc)| *sc)

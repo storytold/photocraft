@@ -290,7 +290,9 @@ fn slot_ok<const N: usize>(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     let colors = color_count(&d.doc);
     let shown = if colors > 1 { colors } else { 0 };
-    if N - 3 < shown + d.doc.channels.len() { Ok(()) } else { Err(format!("no channel for {SLOT_KEY}{N}")) }
+    // With Use Legacy Channel Shortcuts on, an RGB document reaches slot N with ⌘(N−2) (#14325).
+    let key = if s.prefs().use_legacy_channel_shortcuts && d.doc.mode == ColorMode::Rgb { N - 2 } else { N };
+    if N - 3 < shown + d.doc.channels.len() { Ok(()) } else { Err(format!("no channel for {SLOT_KEY}{key}")) }
 }
 
 fn has_apply_target(s: &Session) -> std::result::Result<(), String> {

@@ -417,6 +417,10 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                 "edit.keyboardShortcuts",
                 json!({"reset": true, "set": ov, "alternates": alt, "allowUnknown": true, "removeConflicts": false, "sets": sets, "activeSet": active}),
             )?;
+            // Use Legacy Channel Shortcuts is stored with the set, on OK only.
+            if let Some(on) = f.get(super::shortcuts::LEGACY_CHANNEL).and_then(Value::as_bool) {
+                app.session.edit_prefs(|p| p.use_legacy_channel_shortcuts = on);
+            }
             app.run("prefs.set", json!({"values": {"menus": {"hidden": hidden, "colors": colors}, "toolbar": {"hidden": toolbar}}}))
         }
         "presets" => Ok(Value::Null),

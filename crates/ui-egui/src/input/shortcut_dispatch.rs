@@ -125,8 +125,39 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
             all.push((id.to_string(), sc));
         }
     }
+    legacy_channel_keys(app, &mut all);
     all.sort_by_key(|(_, sc)| std::cmp::Reverse(sc.modifiers.shift as u8 + sc.modifiers.alt as u8 + sc.modifiers.command as u8));
     all
+}
+
+/// Use Legacy Channel Shortcuts (#14325): in an RGB document ⌘1…⌘7 target the channels one key
+/// lower ([`photocraft_engine::prefs::LEGACY_CHANNEL_SHORTCUTS`]). They take the ⌘-digit keys of
+/// 100%, the composite and the channel slots, never a key the user gave another command; ⌥⌘0
+/// still zooms to 100%. Only dispatch changes: the menus and Edit › Keyboard Shortcuts show the
+/// commands' own keys, as the reference application does.
+fn legacy_channel_keys(app: &PhotocraftApp, all: &mut Vec<(String, KeyboardShortcut)>) {
+    use photocraft_engine::prefs::{LEGACY_CHANNEL_SHORTCUTS, replaced_by_legacy_channel_keys};
+    let rgb = app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Rgb);
+    if !app.session.prefs().use_legacy_channel_shortcuts || !rgb {
+        return;
+    }
+    let prefs = app.session.prefs();
+    // A key the user gave the command (main or further) is theirs, not a default the table replaces.
+    let explicit = |id: &str, sc: &KeyboardShortcut| {
+        prefs.shortcuts.get(id).and_then(|k| parse(k)).is_some_and(|k| k == *sc)
+            || prefs.alternate_shortcuts.get(id).is_some_and(|keys| keys.iter().any(|k| parse(k).is_some_and(|k| k == *sc)))
+    };
+    let digits: Vec<KeyboardShortcut> = (1..=9).filter_map(|n| parse(&format!("Cmd+{n}"))).collect();
+    all.retain(|(id, sc)| !(replaced_by_legacy_channel_keys(id) && digits.contains(sc) && !explicit(id, sc)));
+    for (key, id) in LEGACY_CHANNEL_SHORTCUTS {
+        // A command the user left without a key stays without one.
+        if prefs.shortcuts.get(*id).is_some_and(String::is_empty) {
+            continue;
+        }
+        if let Some(sc) = parse(key).filter(|sc| !all.iter().any(|(_, b)| b == sc)) {
+            all.push((id.to_string(), sc));
+        }
+    }
 }
 
 /// Where keyboard focus is: nowhere (the canvas), on a widget (a slider, the Curves graph, a
@@ -256,9 +287,14 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         return false;
     }
     const TEXT_OWNED: [&str; 6] = ["edit.copy", "edit.cut", "edit.paste", "edit.copyMerged", "select.all", "edit.pasteSpecial.pasteInPlace"];
-    let table: Vec<(String, KeyboardShortcut)> =
-        bindings(app).into_iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).collect();
-    let command = |e: &egui::Event| match e {
+    let build = |app: &PhotocraftApp| -> Vec<(String, KeyboardShortcut)> {
+        bindings(app).into_iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).collect()
+    };
+    // What the table depends on besides the preferences: the active document and its mode (the legacy channel keys follow it).
+    let context = |app: &PhotocraftApp| app.session.active().map(|st| (st.doc.id, st.doc.mode));
+    let mut table = build(app);
+    let mut at_table = context(app);
+    let command = |table: &Vec<(String, KeyboardShortcut)>, e: &egui::Event| match e {
         egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
             let by_position = physical_key
                 .filter(|p| POSITIONAL.contains(p))
@@ -276,10 +312,14 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         _ => None,
     };
     let mut ran = false;
+    // Presses before this index were already resolved (and left to other handlers) against the table of their time: a
+    // table built after a document switch only reads the presses after the one that ran, never the earlier ones again.
+    let mut from = 0;
     loop {
         let next = ctx.input_mut(|i| {
-            let (at, hit) = i.events.iter().enumerate().find_map(|(at, e)| Some((at, command(e)?)))?;
+            let (at, hit) = i.events.iter().enumerate().skip(from).find_map(|(at, e)| Some((at, command(&table, e)?)))?;
             i.events.remove(at);
+            from = at;
             Some(hit)
         });
         let Some((id, tab, last)) = next else { break };
@@ -294,6 +334,11 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         ran = true;
         if key_owner(app, ctx) != owner {
             break;
+        }
+        // A command that switched the document (or its mode) changes what the next press means: build the table again.
+        if context(app) != at_table {
+            table = build(app);
+            at_table = context(app);
         }
     }
     ran

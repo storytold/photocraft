@@ -1301,3 +1301,97 @@ fn alt_choosing_an_adjustment_from_the_menu_reopens_the_last_settings() {
     choose(&mut h, Modifiers::ALT);
     assert_eq!(crate::palette::recent_ids(&h.ctx).first().map(String::as_str), Some("image.adjustments.levels"), "Edit › Search's most recent");
 }
+
+/// An RGB document with Use Legacy Channel Shortcuts on (#14325), and the bindings it leaves.
+fn legacy_channel_app(set: serde_json::Value) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("edit.keyboardShortcuts", json!({"set": set})).unwrap();
+    app.session.edit_prefs(|p| p.use_legacy_channel_shortcuts = true);
+    app
+}
+
+fn bound(app: &PhotocraftApp, id: &str, key: &str) -> bool {
+    bindings(app).iter().any(|(i, sc)| i == id && *sc == parse(key).unwrap())
+}
+
+/// CodeRabbit on #14859: the legacy keys replace only the default ⌘-digit keys. A key the user
+/// assigned to one of those commands stays that command's.
+#[test]
+fn legacy_channel_keys_keep_an_explicit_assignment_to_a_channel_command() {
+    let app = legacy_channel_app(json!({"channel.target.slot3": "Cmd+7"}));
+    assert!(bound(&app, "channel.target.slot3", "Cmd+7"), "the user's Cmd+7 stays with slot 3");
+    assert!(!bound(&app, "channel.target.slot9", "Cmd+7"), "and the legacy table doesn't take it");
+}
+
+/// CodeRabbit on #14859: a key the user removed from a channel command is not given back by the
+/// legacy table.
+#[test]
+fn legacy_channel_keys_do_not_restore_a_shortcut_the_user_removed() {
+    let app = legacy_channel_app(json!({"channel.target.slot3": ""}));
+    assert!(!bound(&app, "channel.target.slot3", "Cmd+1"), "slot 3 stays without a key");
+    assert!(bound(&app, "channel.target.slot4", "Cmd+2"), "the other legacy keys still apply");
+}
+
+/// CodeRabbit on #14859: F6 (Next Document) followed by ⌘1 in one frame, with Legacy Channel Shortcuts on, a Grayscale
+/// document active and an RGB one next: ⌘1 means "Red" in the document F6 switched to, not View › 100 % (the
+/// Grayscale document's meaning, the table built before F6).
+#[test]
+fn a_press_after_a_document_switch_uses_the_new_documents_keys() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 16, "height": 16, "mode": "rgb"})).unwrap();
+    app.session.execute("file.new", json!({"width": 16, "height": 16, "mode": "grayscale"})).unwrap();
+    app.run("prefs.set", json!({"path": "useLegacyChannelShortcuts", "value": true})).unwrap();
+    app.run("edit.keyboardShortcuts", json!({"set": {"window.nextDocument": "F6"}})).unwrap();
+    app.sync_views();
+    assert_eq!(app.session.active().unwrap().doc.mode, photocraft_doc::ColorMode::Grayscale);
+    let modifiers = platform(Modifiers::COMMAND);
+    let input = egui::RawInput {
+        events: vec![
+            egui::Event::Key { key: egui::Key::F6, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::Key { key: egui::Key::Num1, physical_key: None, pressed: true, repeat: false, modifiers },
+        ],
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(input, |ui| {
+        super::dispatch_pressed(&mut app, ui.ctx(), Focus::None, false);
+    });
+    output.textures_delta.clear();
+    assert_eq!(app.session.active().unwrap().doc.mode, photocraft_doc::ColorMode::Rgb, "F6 switched to the RGB document");
+    let ran: Vec<String> = take_log(&ctx).into_iter().map(|(id, _)| id).collect();
+    assert_eq!(ran, ["window.nextDocument", "channel.target.slot3"], "⌘1 is Red in the RGB document: {ran:?}");
+}
+
+/// CodeRabbit on #14859: a press before F6 that matched nothing in the document it was made in is not read again against the
+/// next document's keys once F6 has switched. With ⌘1 unbound in the RGB document (the legacy table takes the key and Red
+/// is left without one), ⌘1 queued before F6 stays unhandled; in the Grayscale document ⌘1 would be View › 100 %.
+#[test]
+fn a_press_before_the_switch_is_not_read_against_the_new_documents_keys() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 16, "height": 16, "mode": "grayscale"})).unwrap();
+    app.session.execute("file.new", json!({"width": 16, "height": 16, "mode": "rgb"})).unwrap();
+    app.run("prefs.set", json!({"path": "useLegacyChannelShortcuts", "value": true})).unwrap();
+    app.run("edit.keyboardShortcuts", json!({"set": {"window.nextDocument": "F6", "channel.target.slot3": ""}})).unwrap();
+    app.sync_views();
+    assert_eq!(app.session.active().unwrap().doc.mode, photocraft_doc::ColorMode::Rgb);
+    let modifiers = platform(Modifiers::COMMAND);
+    let input = egui::RawInput {
+        events: vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::Key { key: egui::Key::Num1, physical_key: None, pressed: true, repeat: false, modifiers },
+            egui::Event::ModifiersChanged(Modifiers::NONE),
+            egui::Event::Key { key: egui::Key::F6, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        ],
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(input, |ui| {
+        super::dispatch_pressed(&mut app, ui.ctx(), Focus::None, false);
+    });
+    output.textures_delta.clear();
+    assert_eq!(app.session.active().unwrap().doc.mode, photocraft_doc::ColorMode::Grayscale, "F6 switched to the Grayscale document");
+    let ran: Vec<String> = take_log(&ctx).into_iter().map(|(id, _)| id).collect();
+    assert_eq!(ran, ["window.nextDocument"], "the earlier ⌘1 did not run in the new document: {ran:?}");
+}
