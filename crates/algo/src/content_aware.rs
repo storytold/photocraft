@@ -244,6 +244,21 @@ pub fn fill_owned(
     fill_cow(w, h, ch, Cow::Owned(img), hole, source, opts, ctl)
 }
 
+/// The patch radius of the fill for the option set #14191 measured (Default colour adaptation,
+/// no rotation, no scale, no mirror). The straight features of its document are 10 px bands and
+/// 20 px stripes: the default 7x7 patch fits inside one stripe or inside one band gap, so it
+/// carries no phase information and the completion decides from colour alone and runs one region
+/// into the other. An 11x11 patch covers a feature and the one next to it, which is what keeps
+/// their phase through the hole. Every other option set is marked "not measured" in #14191 and
+/// keeps [`CompleteParams`]' default radius.
+const MEASURED_STRUCTURE_PATCH_RADIUS: usize = 5;
+
+/// Whether `opts` holds the option set #14191 measured on its test document: Default colour
+/// adaptation, no rotation, no scale and no mirror.
+fn structure_measured(opts: &FillOptions) -> bool {
+    opts.color_adaptation == color_level("default") && opts.rotations.is_empty() && !opts.scale && !opts.mirror
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fill_cow(
     w: usize,
@@ -261,7 +276,10 @@ fn fill_cow(
     if !hole.iter().any(|h| *h) {
         return Ok(img.into_owned());
     }
-    let params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+    let mut params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+    if structure_measured(opts) {
+        params.patch_radius = MEASURED_STRUCTURE_PATCH_RADIUS;
+    }
     let gap = 2 * params.patch_radius + 2;
     let ok: Vec<bool> = par::map(w * h, true, |i| !hole[i] && source[i]);
     let src = Src { w, h, ch, img: &img, ok: &ok };
@@ -722,5 +740,7 @@ pub fn default_brush_size(hole: Rect) -> f64 {
     (0.4 * (w * h).sqrt()).round()
 }
 
+#[cfg(test)]
+mod structure_continue_tests;
 #[cfg(test)]
 mod tests;
