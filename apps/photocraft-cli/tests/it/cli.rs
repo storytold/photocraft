@@ -2185,7 +2185,7 @@ fn serve_refuses_bad_color_settings() {
     let missing = tmp("serve-color-settings-bad").join("missing.icc");
     let missing = json!({"workingCmyk": missing.to_str().unwrap()}).to_string();
     // Bad JSON, not an object, a misspelt key, a value of the wrong type, an unreadable profile.
-    for bad in ["{not json", "[1]", r#"{"workingCmyc":"swop.icc"}"#, r#"{"workingCmyk":5}"#, r#"{"bpc":"true"}"#, missing.as_str()] {
+    for bad in ["{not json", "[1]", r#"{"workingCmyc":"swop.icc"}"#, r#"{"workingCmyk":5}"#, r#"{"bpc":"true"}"#, r#"{"spotDotGain":"20"}"#, missing.as_str()] {
         let o = bin().args(["serve", "--color-settings", bad]).stdin(Stdio::null()).output().unwrap();
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success() && err.contains("--color-settings"), "{bad}: exit {:?}, stderr {err}", o.status);

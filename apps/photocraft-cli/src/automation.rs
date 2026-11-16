@@ -41,6 +41,8 @@ enum SettingType {
     Flag,
     /// `blendTextGamma`: a gamma, or a bool for the default or none.
     FlagOrNumber,
+    /// A number (`spotDotGain`, a dot gain in %).
+    Number,
 }
 
 /// The `edit.colorSettings` keys `--color-settings` takes, with their types, as
@@ -63,6 +65,7 @@ const COLOR_SETTINGS_KEYS: &[(&str, SettingType)] = &[
     ("dither", SettingType::Flag),
     ("intent", SettingType::Text),
     ("blendTextGamma", SettingType::FlagOrNumber),
+    ("spotDotGain", SettingType::Number),
 ];
 
 /// Err naming the problem when `v` isn't an object of [`COLOR_SETTINGS_KEYS`] with values of
@@ -78,6 +81,7 @@ fn check_color_settings(v: &serde_json::Value) -> std::result::Result<(), String
             SettingType::Text => (val.is_string(), "a string"),
             SettingType::Flag => (val.is_boolean(), "true or false"),
             SettingType::FlagOrNumber => (val.is_boolean() || val.is_number(), "a number or a bool"),
+            SettingType::Number => (val.is_number(), "a number"),
         };
         if !ok {
             return Err(format!("`{k}` must be {want}, not {val}"));
@@ -198,7 +202,7 @@ mod tests {
 
     /// `--color-settings` takes exactly the keys `edit.colorSettings` documents in its params,
     /// each with the type documented there (a quoted value is a string, `bool` a flag, a range or
-    /// `bool` a number or flag). A key added to the command without being added here fails this
+    /// `bool` a number or flag, a range alone a number). A key added to the command without being added here fails this
     /// test, instead of being refused only when an operator first passes it.
     #[test]
     fn color_settings_keys_match_the_command_params_doc() {
@@ -216,6 +220,8 @@ mod tests {
                     SettingType::Flag
                 } else if v.contains("bool") {
                     SettingType::FlagOrNumber
+                } else if v.starts_with(|c: char| c.is_ascii_digit()) {
+                    SettingType::Number
                 } else {
                     panic!("{k}: no rule for `{v}`")
                 };
