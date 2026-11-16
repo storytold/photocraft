@@ -265,42 +265,44 @@ impl<'a> Outcomes<'a> {
         Ok(())
     }
 
-    /// Skip already handled parasites and queue unknown records as inert data; malformed tails receive an invalid-optional-data reason.
+    /// Test compatibility; production callers share the import's scan allowance.
+    #[cfg(test)]
     pub(super) fn parasites(&mut self, owner: usize, offset: usize, bytes: &'a [u8], handled: &[&str]) -> Result<()> {
+        self.parasites_with_work(owner, offset, bytes, handled, &mut super::wire::ParasiteWork::default(), &photocraft_raster::Interrupt::NONE).map(|_| ())
+    }
+
+    /// Skip handled names without copying them and retain unknown records as inert data.
+    /// Work exhaustion is separate from malformed framing and never refunds scan work.
+    pub(super) fn parasites_with_work(
+        &mut self,
+        owner: usize,
+        offset: usize,
+        bytes: &'a [u8],
+        handled: &[&str],
+        work: &mut super::wire::ParasiteWork,
+        ctl: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<bool> {
+        ctl.check().map_err(|_| super::IoError::Cancelled)?;
         self.entry(owner)?;
         if self.truncated {
-            return Ok(());
+            return Ok(false);
         }
-        let mut cursor = super::Cursor { b: bytes, pos: 0, wide: false };
-        while cursor.pos < bytes.len() {
-            if self.truncated {
-                break;
+        let scan = super::wire::scan_parasites_with_work(bytes, work, ctl, |record| {
+            if !handled.iter().any(|name| record.name == name.as_bytes()) {
+                self.property(owner, 21, offset.saturating_add(8).saturating_add(record.start), record.raw)?;
             }
-            let start = cursor.pos;
-            let record = (|| {
-                let name = cursor.string()?;
-                cursor.u32()?; // Inert source flags, never permissions.
-                let length = cursor.u32()? as usize;
-                cursor.take(length)?;
-                Ok::<_, super::IoError>(name)
-            })();
-            let offset = offset.saturating_add(8).saturating_add(start);
-            match record {
-                Ok(name) if handled.contains(&name.as_str()) => {}
-                Ok(_) => self.property(owner, 21, offset, bytes.get(start..cursor.pos).ok_or_else(|| invalid("invalid source configuration bounds"))?)?,
-                Err(_) => {
-                    self.property_with_reason(
-                        owner,
-                        21,
-                        offset,
-                        bytes.get(start..).ok_or_else(|| invalid("invalid source configuration bounds"))?,
-                        ConversionReason::InvalidOptionalData,
-                    )?;
-                    break;
-                }
-            }
+            Ok(!self.truncated)
+        })?;
+        if scan.limited || scan.malformed {
+            self.property_with_reason(
+                owner,
+                21,
+                offset.saturating_add(8).saturating_add(scan.stopped_at),
+                bytes.get(scan.stopped_at..).ok_or_else(|| invalid("invalid source configuration bounds"))?,
+                if scan.limited { ConversionReason::RetentionLimit } else { ConversionReason::InvalidOptionalData },
+            )?;
         }
-        Ok(())
+        Ok(scan.limited)
     }
 
     /// Validate mandatory outcomes, retain only optional attachments that fit both limits, and validate the final durable report.

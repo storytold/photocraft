@@ -223,6 +223,7 @@ fn repeated_point_layers_exhaust_only_layout_work_and_report_raster_fallback() {
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
+        parasite_work: Default::default(),
         text_decode_work: Default::default(),
         point_text_work_left: 0,
         warnings: Warnings::default(),

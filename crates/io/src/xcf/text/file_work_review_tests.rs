@@ -20,7 +20,10 @@ fn counts() -> (usize, usize, usize) {
     )
 }
 fn quota(source: usize, visits: usize, bytes: usize) -> DecodeWork {
-    DecodeWork { config_bytes_left: source, attributes: AttributeWork { visits_left: visits, bytes_left: bytes } }
+    DecodeWork {
+        config_bytes_left: source,
+        attributes: AttributeWork { visits_left: visits, bytes_left: bytes, copies_left: DecodeWork::default().attributes.copies_left },
+    }
 }
 fn config(letter: char, leaves: usize) -> Vec<u8> {
     // A fixed box avoids making font availability or origin layout the oracle.
@@ -58,6 +61,7 @@ fn image(bytes: &[u8], work: DecodeWork) -> Image<'_> {
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
+        parasite_work: Default::default(),
         text_decode_work: work,
         point_text_work_left: POINT_LAYOUT_WORK_UNITS,
         warnings: Warnings::default(),

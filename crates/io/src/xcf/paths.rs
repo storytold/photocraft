@@ -17,6 +17,39 @@ const MAX_COORD: f64 = 10_000_000.0;
 
 #[cfg(test)]
 mod review_tests;
+#[cfg(test)]
+mod work_review_tests;
+
+/// Nonrefundable source work shared by every saved-path record in one import.
+/// Successful native storage has a separate budget; malformed aliases still
+/// spend strings/geometry work and cannot restart this 32 MiB allowance.
+pub(super) struct DecodeWork {
+    bytes_left: usize,
+}
+
+impl Default for DecodeWork {
+    fn default() -> Self {
+        Self { bytes_left: super::MAX_METADATA_BYTES }
+    }
+}
+
+impl DecodeWork {
+    fn admit(&mut self, bytes: usize, ctl: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
+        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+        let Some(remaining) = self.bytes_left.checked_sub(bytes) else { return Ok(false) };
+        self.bytes_left = remaining;
+        #[cfg(test)]
+        PATH_DECODES.with(|count| count.set(count.get().saturating_add(1)));
+        Ok(true)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static PATH_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PATH_STRINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PATH_POINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 pub(super) struct DecodedPath {
     pub named: NamedPath,
@@ -151,6 +184,8 @@ fn string(c: &mut Cursor<'_>) -> Result<String> {
     }
     let raw = c.take(length)?;
     let raw = raw.strip_suffix(&[0]).ok_or_else(|| invalid("path string lacks its NUL terminator"))?;
+    #[cfg(test)]
+    PATH_STRINGS.with(|count| count.set(count.get().saturating_add(1)));
     std::str::from_utf8(raw).map(str::to_owned).map_err(|_| invalid("invalid UTF-8 path name"))
 }
 
@@ -191,11 +226,12 @@ struct Geometry {
     complete: bool,
 }
 
-fn strokes(c: &mut Cursor<'_>, n: usize, budget: &mut usize) -> Result<Geometry> {
+fn strokes(c: &mut Cursor<'_>, n: usize, budget: &mut usize, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Geometry> {
     let mut out = Vec::new();
     let mut source_only = false;
     let mut complete = true;
     for _ in 0..n {
+        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         let kind = c.u32()?;
         let closed = c.u32()?;
         let axes = count(c, 6, "path axis")?;
@@ -220,8 +256,11 @@ fn strokes(c: &mut Cursor<'_>, n: usize, budget: &mut usize) -> Result<Geometry>
         let mut p = Cursor { b: raw, pos: 0, wide: false };
         let mut knots = Vec::new();
         for _ in 0..points / 3 {
+            ctl.check().map_err(|_| crate::IoError::Cancelled)?;
             let mut triple = [Point::new(0.0, 0.0); 3];
             for (i, point) in triple.iter_mut().enumerate() {
+                #[cfg(test)]
+                PATH_POINTS.with(|count| count.set(count.get().saturating_add(1)));
                 if p.u32()? != if i == 1 { 0 } else { 1 } {
                     return Err(invalid("invalid cubic path anchor ordering"));
                 }
@@ -245,7 +284,21 @@ fn strokes(c: &mut Cursor<'_>, n: usize, budget: &mut usize) -> Result<Geometry>
 }
 
 /// The pre-version-18 image PROP_VECTORS payload.
+#[cfg(test)]
 pub(super) fn vectors(data: &[u8]) -> Result<Vec<DecodedPath>> {
+    vectors_with_work(data, &mut DecodeWork::default(), &photocraft_raster::Interrupt::NONE)?
+        .ok_or_else(|| crate::IoError::Unsupported("saved-path source-work allowance exhausted".into()))
+}
+
+/// None declines optional geometry before allocation once file work is spent.
+pub(super) fn vectors_with_work(data: &[u8], work: &mut DecodeWork, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<Vec<DecodedPath>>> {
+    if !work.admit(data.len(), ctl)? {
+        return Ok(None);
+    }
+    vectors_inner(data, ctl).map(Some)
+}
+
+fn vectors_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<DecodedPath>> {
     let mut c = Cursor { b: data, pos: 0, wide: false };
     if c.u32()? != 1 {
         return Err(invalid("unsupported saved-vector record version"));
@@ -255,6 +308,7 @@ pub(super) fn vectors(data: &[u8]) -> Result<Vec<DecodedPath>> {
     let mut budget = MAX_POINTS;
     let mut out = Vec::new();
     for i in 0..n {
+        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         let name = string(&mut c)?;
         let tattoo = c.u32()?;
         let visible = c.u32()?;
@@ -267,7 +321,7 @@ pub(super) fn vectors(data: &[u8]) -> Result<Vec<DecodedPath>> {
             let bytes = count(&mut c, super::MAX_PAYLOAD, "path parasite byte")?;
             c.take(bytes)?;
         }
-        let Geometry { path, source_only, complete } = strokes(&mut c, n, &mut budget)?;
+        let Geometry { path, source_only, complete } = strokes(&mut c, n, &mut budget, ctl)?;
         out.push(DecodedPath {
             named: NamedPath { name, path, psd_raw: None },
             tattoo: (tattoo != 0).then_some(tattoo),
@@ -285,13 +339,28 @@ pub(super) fn vectors(data: &[u8]) -> Result<Vec<DecodedPath>> {
 /// The oldest PROP_PATHS records. Coordinates are signed integers in record
 /// version 1 and IEEE binary32 in versions 2/3 (the historical comment calling
 /// them doubles does not match the on-disk float reader/writer).
+#[cfg(test)]
 pub(super) fn legacy(data: &[u8]) -> Result<Vec<DecodedPath>> {
+    legacy_with_work(data, &mut DecodeWork::default(), &photocraft_raster::Interrupt::NONE)?
+        .ok_or_else(|| crate::IoError::Unsupported("saved-path source-work allowance exhausted".into()))
+}
+
+/// None declines optional geometry before allocation once file work is spent.
+pub(super) fn legacy_with_work(data: &[u8], work: &mut DecodeWork, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<Vec<DecodedPath>>> {
+    if !work.admit(data.len(), ctl)? {
+        return Ok(None);
+    }
+    legacy_inner(data, ctl).map(Some)
+}
+
+fn legacy_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<DecodedPath>> {
     let mut c = Cursor { b: data, pos: 0, wide: false };
     let active = c.u32()? as usize;
     let n = count(&mut c, MAX_PATHS, "legacy path")?;
     let mut budget = MAX_POINTS;
     let mut out = Vec::new();
     for index in 0..n {
+        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         let name = string(&mut c)?;
         let linked = c.u32()?;
         let state = c.take(1)?.first().copied().unwrap_or(0);
@@ -319,6 +388,9 @@ pub(super) fn legacy(data: &[u8]) -> Result<Vec<DecodedPath>> {
         let raw = c.take(points.checked_mul(12).ok_or_else(|| invalid("legacy path size overflow"))?)?;
         let mut p = Cursor { b: raw, pos: 0, wide: false };
         for _ in 0..points {
+            ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+            #[cfg(test)]
+            PATH_POINTS.with(|count| count.set(count.get().saturating_add(1)));
             let kind = p.u32()?;
             let point = if version == 1 {
                 Point::new(f64::from(p.u32()? as i32), f64::from(p.u32()? as i32))
@@ -380,7 +452,33 @@ pub(super) fn legacy(data: &[u8]) -> Result<Vec<DecodedPath>> {
 }
 
 /// A standalone version-18+ path, bounded by its declared payload length.
+#[cfg(test)]
 pub(super) fn standalone(c: &Cursor<'_>, offset: usize) -> Result<DecodedPath> {
+    standalone_with_work(c, offset, &mut DecodeWork::default(), &photocraft_raster::Interrupt::NONE)?
+        .ok_or_else(|| crate::IoError::Unsupported("saved-path source-work allowance exhausted".into()))
+}
+
+/// Inspect only borrowed outer framing before charging; no name is cloned and
+/// no properties or strokes are decoded until the complete source cost fits.
+pub(super) fn standalone_with_work(
+    c: &Cursor<'_>,
+    offset: usize,
+    work: &mut DecodeWork,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<DecodedPath>> {
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+    let mut frame = c.at(offset);
+    frame.string_bytes()?;
+    let length = count(&mut frame, super::MAX_PAYLOAD, "path payload byte")?;
+    frame.take(length)?;
+    let bytes = frame.pos.checked_sub(offset).ok_or_else(|| invalid("saved path source-work range"))?;
+    if !work.admit(bytes, ctl)? {
+        return Ok(None);
+    }
+    standalone_inner(c, offset, ctl).map(Some)
+}
+
+fn standalone_inner(c: &Cursor<'_>, offset: usize, ctl: &photocraft_raster::Interrupt<'_>) -> Result<DecodedPath> {
     let mut c = c.at(offset);
     let name = string(&mut c)?;
     let length = count(&mut c, super::MAX_PAYLOAD, "path payload byte")?;
@@ -402,7 +500,7 @@ pub(super) fn standalone(c: &Cursor<'_>, offset: usize) -> Result<DecodedPath> {
     }
     let n = count(&mut p, MAX_POINTS, "path stroke")?;
     let mut budget = MAX_POINTS;
-    let Geometry { path, source_only: extra, complete } = strokes(&mut p, n, &mut budget)?;
+    let Geometry { path, source_only: extra, complete } = strokes(&mut p, n, &mut budget, ctl)?;
     if p.pos != raw.len() {
         return Err(invalid("standalone path payload length mismatch"));
     }

@@ -146,6 +146,8 @@ struct Image<'a> {
     effect_decode_work: effects::DecodeWork,
     /// Nonrefundable configuration and inherited attribute work across all text owners.
     text_decode_work: text::DecodeWork,
+    /// Borrowed optional metadata scans share work across image, layer and report passes.
+    parasite_work: wire::ParasiteWork,
     /// Cumulative optional point-origin shaping work; independent of retained metadata.
     point_text_work_left: usize,
     warnings: Warnings,
@@ -847,15 +849,29 @@ struct ImageMetadata<'a> {
     compression: Compression,
     colormap: Vec<[u8; 3]>,
     icc: Option<Vec<u8>>,
+    parasite_work: wire::ParasiteWork,
+    parasites_limited: bool,
 }
 
 /// Decode only drawable prerequisites here; native metadata conversion consumes the retained properties later.
+#[cfg(test)]
 fn read_image_metadata<'a>(c: &mut Cursor<'a>, version: u32, ctl: &Interrupt<'_>) -> Result<ImageMetadata<'a>> {
+    read_image_metadata_with_work(c, version, wire::ParasiteWork::default(), ctl)
+}
+
+/// An incomplete last-wins scan cannot certify a prefix profile as the final assignment.
+fn read_image_metadata_with_work<'a>(
+    c: &mut Cursor<'a>,
+    version: u32,
+    mut parasite_work: wire::ParasiteWork,
+    ctl: &Interrupt<'_>,
+) -> Result<ImageMetadata<'a>> {
     // Image properties.
     let image_props = wire::props_version_with_interrupt(c, Some(version), ctl)?;
     let mut compression = Compression::None;
     let mut colormap = Vec::new();
     let mut selected_icc = None;
+    let mut parasites_limited = false;
     for p in &image_props {
         match p.kind {
             1 => {
@@ -877,11 +893,13 @@ fn read_image_metadata<'a>(c: &mut Cursor<'a>, version: u32, ctl: &Interrupt<'_>
             }
             21 => {
                 let mut last = None;
-                wire::scan_parasites(p.data, ctl, |name, data| {
-                    if name == b"icc-profile" {
-                        last = Some(data);
+                let scan = wire::scan_parasites_with_work(p.data, &mut parasite_work, ctl, |record| {
+                    if record.name == b"icc-profile" {
+                        last = Some(record.payload);
                     }
+                    Ok(true)
                 })?;
+                parasites_limited |= scan.limited;
                 if let Some(data) = last.filter(|data| !data.is_empty()) {
                     selected_icc = Some(data);
                 }
@@ -892,9 +910,9 @@ fn read_image_metadata<'a>(c: &mut Cursor<'a>, version: u32, ctl: &Interrupt<'_>
     // The property allowance is also the fixed prerequisite-profile copy bound. Scan every
     // record first so only the final assignment is copied, never unused parasites/profiles.
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let icc = selected_icc.filter(|data| data.len() <= MAX_PAYLOAD).map(<[u8]>::to_vec);
+    let icc = selected_icc.filter(|data| !parasites_limited && data.len() <= MAX_PAYLOAD).map(<[u8]>::to_vec);
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    Ok(ImageMetadata { properties: image_props, compression, colormap, icc })
+    Ok(ImageMetadata { properties: image_props, compression, colormap, icc, parasite_work, parasites_limited })
 }
 
 pub(crate) fn source_geometry(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<((f64, f64), f64)>> {
@@ -907,6 +925,17 @@ pub(crate) fn import_with_sample_order(
     name: &str,
     bytes: &[u8],
     selected_order: Option<crate::HistoricalXcfSampleOrder>,
+    ctl: &Interrupt<'_>,
+) -> Result<ImportResult> {
+    import_with_sample_order_and_parasite_work(name, bytes, selected_order, wire::ParasiteWork::default(), ctl)
+}
+
+/// Keep the same scan allowance from prerequisite color selection through all owner/report scans.
+fn import_with_sample_order_and_parasite_work(
+    name: &str,
+    bytes: &[u8],
+    selected_order: Option<crate::HistoricalXcfSampleOrder>,
+    parasite_work: wire::ParasiteWork,
     ctl: &Interrupt<'_>,
 ) -> Result<ImportResult> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -944,9 +973,14 @@ pub(crate) fn import_with_sample_order(
         warnings.note("64-bit floating-point samples open as native F32 with reduced precision");
     }
 
-    let ImageMetadata { properties: image_props, compression, colormap, icc } = read_image_metadata(&mut c, version, ctl)?;
+    let ImageMetadata { properties: image_props, compression, colormap, icc, parasite_work, parasites_limited } =
+        read_image_metadata_with_work(&mut c, version, parasite_work, ctl)?;
     let assigned_profile = icc.is_some();
-    let color::ProfileSelection { bytes: native_profile, fallback_reason, tag_document } = color::select_profile(mode, precision, icc)?;
+    let color::ProfileSelection { bytes: native_profile, mut fallback_reason, mut tag_document } = color::select_profile(mode, precision, icc)?;
+    if parasites_limited {
+        fallback_reason = Some("Image parasite scan work was exhausted before the final ICC assignment could be established".into());
+        tag_document = true;
+    }
     if let Some(reason) = &fallback_reason {
         warnings.note(&format!(
             "The assigned ICC profile could not be used: {reason}. Original samples use the implicit {} profile for their encoding; assigned colorants could not be preserved",
@@ -1009,6 +1043,7 @@ pub(crate) fn import_with_sample_order(
         meta_budget: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
+        parasite_work,
         point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings,
         outcomes: conversion::Outcomes::new(version)?,
@@ -1032,6 +1067,13 @@ pub(crate) fn import_with_sample_order(
         native_description: "Native document canvas dimensions".into(),
         attachments: Vec::new(),
     })?;
+    if parasites_limited {
+        image.metadata_limit(
+            image_outcome,
+            "xcf.parasite_work",
+            "Image parasite scan work exceeded its file allowance; incomplete selections were not applied",
+        )?;
+    }
     if base_type == 2 {
         image.outcomes.detail(
             image_outcome,
@@ -1062,7 +1104,9 @@ pub(crate) fn import_with_sample_order(
     for property in &image_props {
         if property.kind == 21 {
             let handled: &[&str] = if fallback_reason.is_some() { &[] } else { &["icc-profile"] };
-            image.outcomes.parasites(image_outcome, property.offset, property.data, handled)?;
+            if image.outcomes.parasites_with_work(image_outcome, property.offset, property.data, handled, &mut image.parasite_work, ctl)? {
+                image.warnings.note("Image parasite scan work exceeded its file allowance; optional source records were omitted; see the conversion report");
+            }
         } else if !matches!(property.kind, 1 | 17) {
             let reason = match property.kind {
                 18 | 19 => ConversionReason::NativePolicy,
@@ -1084,7 +1128,7 @@ pub(crate) fn import_with_sample_order(
     document.layers = layers;
     document.channels = channels;
     document.selection = selection;
-    metadata::image(
+    metadata::image_with_work(
         &mut document,
         &image_props,
         version,
@@ -1093,10 +1137,16 @@ pub(crate) fn import_with_sample_order(
         image_outcome,
         &mut image.meta_budget,
         &mut image.warnings,
+        &mut image.parasite_work,
         ctl,
     )?;
     document.icc_profile = tag_document.then(|| native_profile.clone());
-    image.outcomes.push(color_encoding_outcome(assigned_profile, precision, fallback_reason, tag_document))?;
+    let mut color_outcome = color_encoding_outcome(assigned_profile, precision, fallback_reason, tag_document);
+    if parasites_limited {
+        color_outcome.source_description = "Image parasite scan was incomplete; the final source ICC assignment is unknown".into();
+        color_outcome.reason = ConversionReason::RetentionLimit;
+    }
+    image.outcomes.push(color_outcome)?;
     import_paths(&mut document, &mut image, &image_props, &path_ptrs, omitted_paths, ctl)?;
     import_vectors(&mut document, &mut image, ctl)?;
     text::convert_colors(&mut document, &native_profile)?;
@@ -1294,6 +1344,20 @@ fn import_paths<'a>(
     omitted_standalone: Option<(usize, usize)>,
     ctl: &Interrupt<'_>,
 ) -> Result<()> {
+    import_paths_with_work(document, image, properties, pointers, omitted_standalone, &mut paths::DecodeWork::default(), ctl)
+}
+
+/// Preserve saved pixels when optional path source work cannot be admitted. Successful
+/// and rejected records share this nonrefundable file allowance, independently of storage.
+fn import_paths_with_work<'a>(
+    document: &mut Document,
+    image: &mut Image<'a>,
+    properties: &[Prop<'a>],
+    pointers: &[usize],
+    omitted_standalone: Option<(usize, usize)>,
+    work: &mut paths::DecodeWork,
+    ctl: &Interrupt<'_>,
+) -> Result<()> {
     let mut records: Vec<SavedPathRecord<'a>> = Vec::new();
     let mut ordinal = 0usize;
     let mut limit = None;
@@ -1302,13 +1366,23 @@ fn import_paths<'a>(
         for property in properties.iter().filter(|p| matches!(p.kind, 23 | 25)) {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             // Source slices remain borrowed and have a separate inert-report allowance.
-            // Use their size to bound decoding work, but charge only retained native storage.
+            // Source bytes debit nonrefundable decoding work; retained native storage
+            // has its own allowance and never refunds failed parsing work.
             if records.len() >= MAX_CHANNELS || property.data.len() > image.meta_budget {
                 limit = Some((ordinal, property.offset, "saved-path count or remaining document metadata allowance"));
                 break 'admission;
             }
-            let paths = match if property.kind == 23 { paths::legacy(property.data) } else { paths::vectors(property.data) } {
-                Ok(paths) => paths,
+            let paths = match if property.kind == 23 {
+                paths::legacy_with_work(property.data, work, ctl)
+            } else {
+                paths::vectors_with_work(property.data, work, ctl)
+            } {
+                Ok(Some(paths)) => paths,
+                Ok(None) => {
+                    limit = Some((ordinal, property.offset, "saved-path decoding work allowance"));
+                    break 'admission;
+                }
+                Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                 Err(error) => {
                     incomplete_identity = true;
                     unavailable_path(image, ordinal, property.offset, "", &error, None)?;
@@ -1358,14 +1432,19 @@ fn import_paths<'a>(
                 break 'admission;
             }
             let name = std::str::from_utf8(name).unwrap_or("Invalid UTF-8 path name");
-            match paths::standalone(&image.c, offset) {
-                Ok(path) => {
+            match paths::standalone_with_work(&image.c, offset, work, ctl) {
+                Ok(Some(path)) => {
                     if admit_path(&mut image.meta_budget, &path).is_err() {
                         limit = Some((ordinal, offset, "remaining document metadata allowance"));
                         break 'admission;
                     }
                     records.push((ordinal, offset, path, Some(raw)));
                 }
+                Ok(None) => {
+                    limit = Some((ordinal, offset, "saved-path decoding work allowance"));
+                    break 'admission;
+                }
+                Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                 Err(error) => {
                     incomplete_identity = true;
                     unavailable_path(image, ordinal, offset, name, &error, Some(raw))?;

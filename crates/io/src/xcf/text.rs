@@ -28,6 +28,9 @@ thread_local! {
     static MARKUP_ATTRIBUTE_BYTE_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static MARKUP_ATTRIBUTE_VISITS_DONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MARKUP_ATTRIBUTE_BYTES_DONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MARKUP_FORMATTING_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static MARKUP_STYLE_COPY_BYTES_DONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FILE_STYLE_COPY_BYTE_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 // A file may contain many aliases of the same optional configuration. Failed
 // translations still spent parse/attribute work, independently of report storage.
@@ -40,6 +43,8 @@ const FILE_TEXT_CONFIG_BYTES: usize = super::MAX_METADATA_BYTES;
 struct AttributeWork {
     visits_left: usize,
     bytes_left: usize,
+    // Owned style copies are work even when overwritten or a later owner fails.
+    copies_left: usize,
 }
 
 pub(super) struct DecodeWork {
@@ -49,9 +54,12 @@ pub(super) struct DecodeWork {
 
 impl Default for DecodeWork {
     fn default() -> Self {
+        let copies_left = 8 * super::MAX_METADATA_BYTES;
+        #[cfg(test)]
+        let copies_left = FILE_STYLE_COPY_BYTE_LIMIT.with(|limit| limit.take().unwrap_or(copies_left));
         Self {
             config_bytes_left: FILE_TEXT_CONFIG_BYTES,
-            attributes: AttributeWork { visits_left: 8 * MARKUP_ATTRIBUTE_VISITS, bytes_left: 8 * MARKUP_ATTRIBUTE_BYTES },
+            attributes: AttributeWork { visits_left: 8 * MARKUP_ATTRIBUTE_VISITS, bytes_left: 8 * MARKUP_ATTRIBUTE_BYTES, copies_left },
         }
     }
 }
@@ -103,6 +111,8 @@ mod review_round2_tests;
 mod review_tests;
 #[cfg(test)]
 mod spacing_review_tests;
+#[cfg(test)]
+mod style_copy_review_tests;
 #[cfg(test)]
 mod xml_parse_work_review_tests;
 
@@ -737,6 +747,7 @@ pub(super) fn decode_with_work(
                 return Err(invalid("invalid markup font resource"));
             }
             let fields = font.get(1..).unwrap_or(&[]);
+            charge_style_copy(style_allocation(&style), &mut font_allowance, Some(&mut decode_work.attributes))?;
             let mut requested = style.clone();
             requested_font(fields, &mut requested)?;
             font_allowance = font_allowance
@@ -1193,6 +1204,30 @@ impl<'a> MarkupWork<'a> {
     }
 }
 
+/// Pay before cloning, independently of retained runs and attribute source bytes.
+/// A failed owner cannot refund prior copies for the next alias of its source.
+fn charge_style_copy(bytes: usize, allowance: &mut usize, shared: Option<&mut AttributeWork>) -> Result<()> {
+    let Some(local_left) = allowance.checked_sub(bytes) else {
+        *allowance = 0;
+        return Err(crate::IoError::Unsupported("native text style copies exceed the bounded formatting allowance".into()));
+    };
+    if let Some(shared) = shared {
+        let Some(left) = shared.copies_left.checked_sub(bytes) else {
+            shared.copies_left = 0;
+            return Err(crate::IoError::Unsupported("document text style-copy work allowance exhausted".into()));
+        };
+        shared.copies_left = left;
+    }
+    *allowance = local_left;
+    #[cfg(test)]
+    MARKUP_STYLE_COPY_BYTES_DONE.with(|count| count.set(count.get().saturating_add(bytes)));
+    Ok(())
+}
+
+fn font_resource_copy_bytes(font: &CharStyle) -> usize {
+    font.font_family.capacity().saturating_add(font.font_style.capacity()).saturating_add(font.postscript_name.as_ref().map_or(0, String::capacity))
+}
+
 fn charge_markup_attribute(attribute: &roxmltree::Attribute<'_, '_>, work: &mut MarkupWork<'_>) -> Result<()> {
     let visits_left = work
         .visits_left
@@ -1359,8 +1394,15 @@ fn markup_runs_with_attribute_allowance(
     // A short ancestor style can otherwise multiply a long font name/feature
     // list across thousands of leaf runs. Bound materialized native data, too.
     let mut allowance = markup.len().saturating_mul(8).saturating_add(65_536).min(super::MAX_METADATA_BYTES);
+    #[cfg(test)]
+    MARKUP_FORMATTING_LIMIT.with(|limit| {
+        if let Some(limit) = limit.take() {
+            allowance = limit;
+        }
+    });
     for node in xml.descendants().filter(roxmltree::Node::is_text) {
         let value = node.text().unwrap_or("");
+        charge_style_copy(style_allocation(base), &mut allowance, work.shared.as_deref_mut())?;
         let mut style = base.clone();
         // Pango selects size and scale independently. Nested percentages replace
         // the active scale; an absolute size does not discard inherited scale.
@@ -1377,6 +1419,7 @@ fn markup_runs_with_attribute_allowance(
             let inherited = inspect_markup_attributes(*ancestor, work)?;
             if let Some(requested) = inherited.font {
                 if let Some(font) = fonts.get(requested) {
+                    charge_style_copy(font_resource_copy_bytes(font), &mut allowance, work.shared.as_deref_mut())?;
                     style.font_family = font.font_family.clone();
                     style.font_style = font.font_style.clone();
                     style.postscript_name = font.postscript_name.clone();

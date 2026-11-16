@@ -6,6 +6,8 @@ use super::{MAX_PAYLOAD, MAX_STRING, Read, Result, invalid};
 
 #[cfg(test)]
 mod parasite_review_tests;
+#[cfg(test)]
+mod parasite_work_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Compression {
@@ -187,22 +189,124 @@ pub(super) fn be_f32(b: &[u8]) -> Option<f32> {
 
 /// Parse optional records without copying names or unused payloads. A malformed tail leaves
 /// its valid prefix available; cancellation is always an import failure, never optional data.
+#[cfg(test)]
 pub(super) fn scan_parasites<'a>(data: &'a [u8], ctl: &photocraft_raster::Interrupt<'_>, mut visit: impl FnMut(&'a [u8], &'a [u8])) -> Result<bool> {
+    let status = scan_parasites_with_work(data, &mut ParasiteWork::default(), ctl, |record| {
+        visit(record.name, record.payload);
+        Ok(true)
+    })?;
+    Ok(status.malformed)
+}
+
+/// File-wide scan work is independent of storage refunds and of individual owner offsets.
+pub(super) struct ParasiteWork {
+    remaining: usize,
+}
+
+impl Default for ParasiteWork {
+    fn default() -> Self {
+        // Room for ordinary prerequisite, native-metadata, flag and text-selection
+        // passes over the shared metadata allowance, while aliases remain bounded.
+        Self { remaining: super::MAX_METADATA_BYTES.saturating_mul(4) }
+    }
+}
+
+impl ParasiteWork {
+    fn charge(&mut self, bytes: usize) -> bool {
+        match self.remaining.checked_sub(bytes) {
+            Some(remaining) => {
+                self.remaining = remaining;
+                true
+            }
+            None => {
+                self.remaining = 0;
+                false
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_limit(remaining: usize) -> Self {
+        Self { remaining }
+    }
+
+    #[cfg(test)]
+    pub(super) fn remaining(&self) -> usize {
+        self.remaining
+    }
+}
+
+pub(super) struct ParasiteRecord<'a> {
+    pub(super) name: &'a [u8],
+    pub(super) payload: &'a [u8],
+    pub(super) raw: &'a [u8],
+    pub(super) start: usize,
+}
+
+#[derive(Debug)]
+pub(super) struct ParasiteScan {
+    pub(super) malformed: bool,
+    pub(super) limited: bool,
+    pub(super) stopped_at: usize,
+}
+
+#[cfg(test)]
+thread_local! { pub(super) static PARASITE_RECORD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+/// Debit framing, names and payloads before parsing or visiting. A false callback
+/// stops an unnecessary report scan; selectors return true to preserve final-value order.
+pub(super) fn scan_parasites_with_work<'a>(
+    data: &'a [u8],
+    work: &mut ParasiteWork,
+    ctl: &photocraft_raster::Interrupt<'_>,
+    mut visit: impl FnMut(ParasiteRecord<'a>) -> Result<bool>,
+) -> Result<ParasiteScan> {
     let mut c = Cursor { b: data, pos: 0, wide: false };
     while c.pos < data.len() {
         ctl.check().map_err(|_| super::IoError::Cancelled)?;
+        let start = c.pos;
+        if !work.charge(24) {
+            return Ok(ParasiteScan { malformed: false, limited: true, stopped_at: start });
+        }
+        #[cfg(test)]
+        PARASITE_RECORD_READS.with(|count| count.set(count.get().saturating_add(1)));
         let record = (|| {
-            let name = c.string_bytes()?;
+            let length = c.u32()? as usize;
+            if length > MAX_STRING {
+                return Err(invalid("parasite name exceeds the string limit"));
+            }
+            if length > data.len().saturating_sub(c.pos) {
+                return Err(invalid("truncated parasite name"));
+            }
+            if !work.charge(length) {
+                return Ok(None);
+            }
+            let name = c.take(length)?;
+            let name = name.strip_suffix(&[0]).unwrap_or(name);
             c.u32()?; // Inert flags never grant authority.
             let length = c.u32()? as usize;
-            Ok::<_, super::IoError>((name, c.take(length)?))
+            if length > data.len().saturating_sub(c.pos) {
+                return Err(invalid("truncated parasite payload"));
+            }
+            if !work.charge(length) {
+                return Ok(None);
+            }
+            Ok::<_, super::IoError>(Some((name, c.take(length)?)))
         })();
         match record {
-            Ok((name, payload)) => visit(name, payload),
-            Err(_) => return Ok(true),
+            Ok(Some((name, payload))) => {
+                let raw = data.get(start..c.pos).ok_or_else(|| invalid("parasite record bounds"))?;
+                if !visit(ParasiteRecord { name, payload, raw, start })? {
+                    return Ok(ParasiteScan { malformed: false, limited: false, stopped_at: c.pos });
+                }
+            }
+            Ok(None) => return Ok(ParasiteScan { malformed: false, limited: true, stopped_at: start }),
+            Err(_) => return Ok(ParasiteScan { malformed: true, limited: false, stopped_at: start }),
         }
     }
-    Ok(false)
+    // Even an empty/spent scan must still respect cancellation.
+    ctl.check().map_err(|_| super::IoError::Cancelled)?;
+    Ok(ParasiteScan { malformed: false, limited: false, stopped_at: c.pos })
 }
 
 #[cfg(test)]

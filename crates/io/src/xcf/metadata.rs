@@ -100,23 +100,33 @@ struct MetadataParasite<'a> {
 
 /// Resolve only supported names without an owned name index. Keep first-seen processing
 /// order and final duplicate values, even after arbitrarily many unused bounded records.
-fn metadata_parasites<'a>(data: &'a [u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<([MetadataParasite<'a>; 4], bool)> {
+fn metadata_parasites<'a>(
+    data: &'a [u8],
+    work: &mut super::wire::ParasiteWork,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<([MetadataParasite<'a>; 4], super::wire::ParasiteScan)> {
     let mut selected =
         ["gimp-comment", "exif-data", "gimp-image-metadata", "gimp-metadata"].map(|name| MetadataParasite { name, ordinal: usize::MAX, data: None });
     let mut ordinal = 0usize;
-    let malformed = super::wire::scan_parasites(data, ctl, |name, data| {
+    let scan = super::wire::scan_parasites_with_work(data, work, ctl, |record| {
         for slot in &mut selected {
-            if name == slot.name.as_bytes() {
+            if record.name == slot.name.as_bytes() {
                 if slot.data.is_none() {
                     slot.ordinal = ordinal;
                 }
-                slot.data = Some(data);
+                slot.data = Some(record.payload);
             }
         }
         ordinal = ordinal.saturating_add(1);
+        Ok(true)
     })?;
     selected.sort_by_key(|slot| slot.ordinal);
-    Ok((selected, malformed))
+    if scan.limited {
+        for slot in &mut selected {
+            slot.data = None;
+        }
+    }
+    Ok((selected, scan))
 }
 
 fn image_guides(
@@ -216,6 +226,7 @@ fn push_guide(target: &mut Vec<f64>, value: f64, charged: &mut usize, budget: &m
 
 /// Map native document metadata without changing native DPI, unit, guide or sampler semantics.
 #[allow(clippy::too_many_arguments)] // One reader-owned set of bounded outputs, without a new persistent model.
+#[cfg(test)]
 pub(super) fn image<'a>(
     doc: &mut Document,
     props: &[Prop<'a>],
@@ -225,6 +236,22 @@ pub(super) fn image<'a>(
     owner: usize,
     budget: &mut usize,
     warnings: &mut crate::ora::Warnings,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<()> {
+    image_with_work(doc, props, version, view, outcomes, owner, budget, warnings, &mut super::wire::ParasiteWork::default(), ctl)
+}
+
+#[allow(clippy::too_many_arguments)] // One reader-owned set of bounded outputs, without a new persistent model.
+pub(super) fn image_with_work<'a>(
+    doc: &mut Document,
+    props: &[Prop<'a>],
+    version: u32,
+    view: &mut NativeInitialView,
+    outcomes: &mut conversion::Outcomes<'a>,
+    owner: usize,
+    budget: &mut usize,
+    warnings: &mut crate::ora::Warnings,
+    parasite_work: &mut super::wire::ParasiteWork,
     ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<()> {
     use photocraft_doc::import_conversion::ConversionReason as Reason;
@@ -275,8 +302,23 @@ pub(super) fn image<'a>(
                 )?;
             }
             21 => {
-                let (selected, malformed) = metadata_parasites(p.data, ctl)?;
-                if malformed {
+                let (selected, scan) = metadata_parasites(p.data, parasite_work, ctl)?;
+                if scan.limited {
+                    metadata_incomplete = true;
+                    retention_limited = true;
+                    outcomes.notice(
+                        owner,
+                        "xcf.parasite_work",
+                        Reason::RetentionLimit,
+                        (
+                            "Image metadata parasite selection exceeded the shared scan-work allowance".into(),
+                            "Incomplete final-value selection omitted; usable image pixels retained".into(),
+                        ),
+                        Some("reached the shared parasite scan-work allowance; usable image content was preserved"),
+                        warnings,
+                    )?;
+                }
+                if scan.malformed {
                     outcomes.notice(
                         owner,
                         "xcf.parasite_framing",

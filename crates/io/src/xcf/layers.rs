@@ -362,12 +362,22 @@ impl<'a> Image<'a> {
         for property in properties.iter().filter(|p| p.kind == 21) {
             let mut native = None;
             let mut dynamic = None;
-            let malformed = super::wire::scan_parasites(property.data, ctl, |name, data| match name {
-                b"gimp-text-layer" => native = Some(data),
-                b"plug_in_gdyntext/data" => dynamic = Some(data),
-                _ => {}
+            let scan = super::wire::scan_parasites_with_work(property.data, &mut self.parasite_work, ctl, |record| {
+                match record.name {
+                    b"gimp-text-layer" => native = Some(record.payload),
+                    b"plug_in_gdyntext/data" => dynamic = Some(record.payload),
+                    _ => {}
+                }
+                Ok(true)
             })?;
-            if malformed {
+            if scan.limited {
+                return self.metadata_limit(
+                    outcome,
+                    "xcf.parasite_work",
+                    "Text parasite selection exceeded the shared scan-work allowance; saved pixels retained instead of choosing incomplete configuration",
+                );
+            }
+            if scan.malformed {
                 self.outcomes.notice(
                     outcome,
                     "xcf.parasite_framing",
@@ -508,10 +518,12 @@ impl<'a> Image<'a> {
     }
 
     /// Retain only unmapped layer records with their original policy/error classifications and shared retention budget.
-    pub(super) fn retain_layer_properties(&mut self, outcome: usize, properties: &[Prop<'a>]) -> Result<()> {
+    pub(super) fn retain_layer_properties(&mut self, outcome: usize, properties: &[Prop<'a>], ctl: &Interrupt<'_>) -> Result<()> {
         for property in properties {
             if property.kind == 21 {
-                self.outcomes.parasites(outcome, property.offset, property.data, &["gimphoto-clipped"])?;
+                if self.outcomes.parasites_with_work(outcome, property.offset, property.data, &["gimphoto-clipped"], &mut self.parasite_work, ctl)? {
+                    self.metadata_limit(outcome, "xcf.parasite_work", "Layer parasite reporting exceeded the shared scan-work allowance")?;
+                }
             } else if !matches!(property.kind, 6 | 7 | 8 | 9 | 10 | 11 | 15 | 20 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37) {
                 let reason = match property.kind {
                     5 => {
@@ -640,6 +652,7 @@ impl<'a> Image<'a> {
         let mut floating = false;
         let mut legacy_linked = false;
         let mut clipped = false;
+        let mut parasites_limited = false;
         let mut composite_mode = 0i32;
         let mut composite_space = 0i32;
         let mut blend_space = 0i32;
@@ -679,11 +692,15 @@ impl<'a> Image<'a> {
                 47 => vector = true,
                 48 => link = true,
                 21 => {
-                    super::wire::scan_parasites(p.data, ctl, |name, _| match name {
-                        b"gimphoto-clipped" => clipped = true,
-                        b"gimp-text-layer" | b"plug_in_gdyntext/data" => text = true,
-                        _ => {}
+                    let scan = super::wire::scan_parasites_with_work(p.data, &mut self.parasite_work, ctl, |record| {
+                        match record.name {
+                            b"gimphoto-clipped" => clipped = true,
+                            b"gimp-text-layer" | b"plug_in_gdyntext/data" => text = true,
+                            _ => {}
+                        }
+                        Ok(true)
                     })?;
+                    parasites_limited |= scan.limited;
                 }
                 _ => {}
             }
@@ -722,6 +739,13 @@ impl<'a> Image<'a> {
             attachments: Vec::new(),
         })?;
         self.layer_metadata_limits(outcome, name_limited, path_limited, effects_limited)?;
+        if parasites_limited {
+            self.metadata_limit(
+                outcome,
+                "xcf.parasite_work",
+                "Layer parasite flags exceeded the shared scan-work allowance; unknown text configuration was not guessed",
+            )?;
+        }
         self.layer_identity_notices(outcome, &lprops, floating, gray_floating, legacy_linked)?;
         if link {
             self.layer_link(outcome, &lprops, hptr)?;
@@ -793,10 +817,10 @@ impl<'a> Image<'a> {
                 )?,
             }
         }
-        if text && !group {
+        if text && !group && !parasites_limited {
             self.layer_text(&mut layer, &lprops, (x, y), outcome, ctl)?;
         }
-        self.retain_layer_properties(outcome, &lprops)?;
+        self.retain_layer_properties(outcome, &lprops, ctl)?;
         if mptr != 0 {
             let Channel { name: mname, properties: mprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } = self.channel(mptr, ctl)?;
             let mut surface = Surface::new(mask_fmt);
