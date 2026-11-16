@@ -5696,6 +5696,7 @@ dependencies = [
  "craft-print",
  "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eafb50aff3c6b1acc14dff53060157877e3e4fce)",
  "craft-xml",
+ "dirs",
  "exr",
  "flate2",
  "getrandom 0.3.4",

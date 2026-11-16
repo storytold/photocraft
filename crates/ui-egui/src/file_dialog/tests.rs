@@ -1188,21 +1188,22 @@ fn same_folder_quick_export_asks_before_replacing_the_documents_own_file() {
     app.run("prefs.set", json!({"path": "export.quickExportLocation", "value": "sameFolder"})).unwrap();
     app.session.active_mut().unwrap().path = Some(own.clone());
     let ctx = egui::Context::default();
-    menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    assert_eq!(open.borrow().len(), 1, "the save dialog asks");
-    assert_eq!(std::fs::read(&own).unwrap(), b"original", "nothing written before the answer");
-    answer(&open, Some(FileDialogAnswer::SaveTo(own.clone())));
-    app.poll_file_dialog(&ctx, None);
-    assert!(std::fs::read(&own).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"), "replaced once confirmed: {}", app.ui.status);
-
-    // Beside a PSD, Same Folder still writes without a prompt.
-    app.session.active_mut().unwrap().path = Some(dir.join("photo.psd").to_string_lossy().into_owned());
-    std::fs::write(&own, b"earlier export").unwrap();
+    // The assets folder location (#13794) writes `photo-assets/photo.png` without a dialog and
+    // never touches the document's own file.
     menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
     app.poll_file_dialog(&ctx, None);
     assert!(open.borrow().is_empty(), "no dialog");
-    assert!(std::fs::read(&own).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(std::fs::read(&own).unwrap(), b"original", "the source is untouched");
+    let asset = dir.join("photo-assets").join("photo.png");
+    assert!(std::fs::read(&asset).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"), "{}", app.ui.status);
+
+    // Beside a PSD, too, it writes into the assets folder without a prompt.
+    app.session.active_mut().unwrap().path = Some(dir.join("photo.psd").to_string_lossy().into_owned());
+    std::fs::write(&asset, b"earlier export").unwrap();
+    menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(open.borrow().is_empty(), "no dialog");
+    assert!(std::fs::read(&asset).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"), "a repeat replaces it");
     std::fs::remove_dir_all(&dir).ok();
 }
 
