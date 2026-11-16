@@ -82,7 +82,7 @@ pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) 
 
 /// [`adapt_copies`] with Color Settings' intent and black point compensation passed in, so it
 /// can run on a worker.
-fn adapt_copies_with(copies: &mut Document, dest: &Document, intent: photocraft_cms::Intent, bpc: bool) -> Result<()> {
+fn adapt_copies_with(copies: &mut Document, dest: &Document, intent: craft_cms::Intent, bpc: bool) -> Result<()> {
     remap_link_groups(copies, dest)?;
     let mut contents = HashMap::new();
     let smart_ids: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| matches!(l.content, LayerContent::Smart(_)).then_some(l.id)).collect();
@@ -127,7 +127,7 @@ fn remap_link_groups(copies: &mut Document, dest: &Document) -> Result<()> {
 
 /// The copies' pixels in `dest`'s colour profile and bit depth, type at its resolution, and their
 /// text styles and shapes made ready for it (the rest of [`adapt_copies_with`]).
-fn convert_copies(copies: &mut Document, dest: &Document, intent: photocraft_cms::Intent, bpc: bool) -> Result<()> {
+fn convert_copies(copies: &mut Document, dest: &Document, intent: craft_cms::Intent, bpc: bool) -> Result<()> {
     if (copies.mode, &copies.icc_profile) != (dest.mode, &dest.icc_profile) {
         let profile = crate::color_cmds::document_profile(dest);
         crate::color_cmds::convert_document(copies, &profile, intent, bpc)?;
