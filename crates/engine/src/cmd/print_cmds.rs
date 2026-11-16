@@ -408,6 +408,9 @@ fn resolve_printer(requested: Option<&str>, default: Option<&str>, printers: &[c
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+const LOCAL_CUPS_CANDIDATES: [&str; 5] = ["/run/cups/cups.sock", "/var/run/cups/cups.sock", "/private/var/run/cupsd", "localhost:631", "127.0.0.1:631"];
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
 fn cups_server(named: Option<&str>) -> std::result::Result<craft_print::cups::Server, SpoolError> {
     use craft_print::cups::{Server, reachable};
     let explicit = named.map(str::to_owned).or_else(|| std::env::var_os("CUPS_SERVER").filter(|v| !v.is_empty()).map(|v| v.to_string_lossy().into_owned()));
@@ -423,7 +426,7 @@ fn cups_server(named: Option<&str>) -> std::result::Result<craft_print::cups::Se
         return Ok(ep);
     }
     // Keep PhotoCraft's local route preference; the shared transport owns connection and wire IO.
-    ["/run/cups/cups.sock", "/var/run/cups/cups.sock", "/private/var/run/cupsd", "localhost:631"]
+    LOCAL_CUPS_CANDIDATES
         .into_iter()
         .filter_map(|candidate| Server::parse(candidate).ok())
         .find(reachable)

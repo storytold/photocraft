@@ -1588,3 +1588,11 @@ fn printed_pdf_uses_winansi_for_labels_and_descriptions() {
 fn postscript_comment_text_cannot_end_its_line() {
     assert_eq!(ps_comment_text("a\nshowpage\r%x"), "a showpage %x");
 }
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+#[test]
+fn local_cups_routes_keep_ipv4_fallback_after_localhost() {
+    assert_eq!(LOCAL_CUPS_CANDIDATES, ["/run/cups/cups.sock", "/var/run/cups/cups.sock", "/private/var/run/cupsd", "localhost:631", "127.0.0.1:631"]);
+    let endpoint = craft_print::cups::Server::parse(LOCAL_CUPS_CANDIDATES[4]).unwrap();
+    assert_eq!(cups_server_name(&endpoint), "127.0.0.1:631");
+}
