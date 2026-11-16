@@ -1497,7 +1497,11 @@ fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context
     }
     // Right-click with the Move tool, or ⌘/Ctrl+right-click: list the layers there.
     let held = held_tool(app, ctx, g);
-    if crate::layer_pick_ui::is_gesture(held, g.mods) {
+    // The Frame tool's right-click over no layer (the pasteboard) is the pasteboard colour menu's, as on the
+    // canvas and as before the Frame picker: it falls through to `secondary_canvas_menu_took`. The Move tool and
+    // ⌘/Ctrl+right-click keep taking the click.
+    let frame_over_nothing = held == Tool::Frame && !g.mods.command && crate::layer_pick_ui::layers_at(app, x, y).is_empty();
+    if crate::layer_pick_ui::is_gesture(held, g.mods) && !frame_over_nothing {
         if down {
             app.ui.canvas_tool_menu = None;
             crate::layer_pick_ui::open(app, ctx, screen_point(app, x, y), x, y);

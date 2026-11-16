@@ -2735,3 +2735,26 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     shift_right(&mut app, &ctx, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
 }
+
+/// CodeRabbit on #15229: with the Frame tool an agent's right-click outside the document, over no layer, opens the
+/// pasteboard colour menu as before the Frame picker (it is the canvas path's fallback too); over a layer it opens
+/// the picker.
+#[test]
+fn agent_frame_right_click_outside_the_document_keeps_the_pasteboard_menu() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
+    app.sync_views();
+    app.ui.tool = crate::state::Tool::Frame;
+    let click = |app: &mut PhotocraftApp, at: [i32; 2]| {
+        let events = json!([{"kind":"down","x":at[0],"y":at[1]},{"kind":"up","x":at[0],"y":at[1]}]);
+        assert_eq!(call(app, &ctx, "ui.pointer", json!({"tool": "Frame", "button": "secondary", "events": events}))["ok"], true);
+    };
+    click(&mut app, [-8, -8]);
+    assert!(app.ui.canvas_tool_menu.is_some(), "the pasteboard colour menu");
+    assert!(app.ui.layer_menu.is_none(), "no layer picker over nothing");
+    app.ui.canvas_tool_menu = None;
+    click(&mut app, [8, 8]);
+    assert!(app.ui.layer_menu.is_some(), "over a layer the picker opens");
+    assert!(app.ui.canvas_tool_menu.is_none());
+}
