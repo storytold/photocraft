@@ -154,10 +154,13 @@ fn write_stream_seeks_back_and_keeps_the_original_on_failure() {
 
 /// #14355: files PhotoCraft can read but never writes (notes, data, rich text, read-only image
 /// formats such as XPM or DICOM) are not "a kind PhotoCraft writes", by name or by their bytes (#9439).
+/// JPEG-LS has an encoder in the codecs but no export entry, so it is read-only too.
 #[test]
 fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
     let (inside, _, workspace) = roots("read-only-kinds");
-    let files: [(&str, &[u8]); 7] = [
+    let files: [(&str, &[u8]); 9] = [
+        ("scan.jls", b"keep"),
+        ("LOG", b"\xFF\xD8\xFF\xF7 keep"),
         ("notes.md", b"# keep"),
         ("data.csv", b"a,b\n1,2\n"),
         ("letter.rtf", b"{\\rtf1 keep}"),

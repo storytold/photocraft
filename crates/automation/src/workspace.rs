@@ -248,25 +248,31 @@ impl Drop for TempRemoval<'_> {
     }
 }
 
-/// Whether `name`'s extension is one of the formats PhotoCraft saves or exports. The image codec
-/// registry, not `photocraft_formats`: that one also names text and office files PhotoCraft only
-/// reads (`txt`, `md`, `csv`, `rtf`…), and notes must never be replaced (#14355). A codec counts
-/// only if this build writes it: PCX, XPM, DICOM and HEIF are read-only.
+/// Whether `name`'s extension is one of the formats PhotoCraft saves or exports. Only the
+/// `photocraft_formats` entries with a raster codec count: that registry also names text and office
+/// files PhotoCraft only reads (`txt`, `md`, `csv`, `rtf`…), and notes must never be replaced
+/// (#14355). A codec counts only if this build writes it: PCX, XPM, DICOM and HEIF are read-only.
 fn written_kind(name: &str) -> bool {
     let Some((_, ext)) = name.rsplit_once('.') else { return false };
     let ext = ext.to_ascii_lowercase();
-    ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str())
-        || photocraft_codecs::from_extension(&ext).is_some_and(|format| format.caps().write)
+    ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str()) || exported_codec(&ext)
 }
 
-/// Whether the file at `relative` starts like an image PhotoCraft writes (PSD/PSB or a writable
+/// Whether export writes files with extension `ext` through an image codec. Export looks the
+/// extension up in `photocraft_formats` and takes that format's raster codec, so a codec the
+/// registry has no entry for (JPEG-LS) is not written even when the codec can encode it.
+fn exported_codec(ext: &str) -> bool {
+    photocraft_formats::from_extension(ext).and_then(photocraft_formats::Format::raster_codec).is_some_and(|format| format.caps().write)
+}
+
+/// Whether the file at `relative` starts like an image PhotoCraft writes (PSD/PSB or a written
 /// codec's magic). Containers that also hold other things (zip, PDF) are judged by name only.
 fn holds_image(dir: &Dir, relative: &Path) -> bool {
     let mut head = [0u8; 64];
     let Ok(mut file) = dir.open(relative) else { return false };
     let Ok(n) = file.read(&mut head) else { return false };
     let head = &head[..n];
-    head.starts_with(b"8BPS") || photocraft_codecs::detect(head).is_some_and(|format| format.caps().write)
+    head.starts_with(b"8BPS") || photocraft_codecs::detect(head).is_some_and(|format| format.extensions().iter().any(|ext| exported_codec(ext)))
 }
 
 fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
