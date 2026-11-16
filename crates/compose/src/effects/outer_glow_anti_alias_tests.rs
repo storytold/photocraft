@@ -248,3 +248,78 @@ fn the_off_path_is_bit_for_bit_unchanged() {
     }
     assert_eq!(bit_hash(&map(10.0, 0.5, gaussian(), false, GlowTechnique::Softer)), 0x6f66_b0f8_7026_fd31, "the Size 10 Spread 50 % outer glow map moved");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Independent review of this PR: the offset was a constant applied at every Size and Spread with
+// the flag on, and only Size 10 / Spread 0 was measured. The four probes below are the review's
+// break inputs, written before the code changed.
+
+/// The review's first break: the issue's document with SIZE 1 (Technique Softer, Spread 0, Range
+/// 50 %, Gaussian, Anti-aliased on). `spread_split(1, 0)` is `(0, 1)`, so `dilate` no-ops at a
+/// radius of 0 and `blur(m, 1.0)` is the identity (`tent_kernel(1).0 == 0`): the map is the shifted
+/// alpha and nothing else. Coverage 1/3 then sits one pixel outside the top and left - through the
+/// 50 % Range and the Gaussian contour about 0.86, R 36 - while the bottom and right stay at the
+/// backdrop's 255, and the reach cap no-ops because a single-tap kernel has no falloff
+/// (`softer_full_coverage` returns 0 when `tent_kernel(bw).0 < 1`). A glowing edge on two sides of
+/// a Size 1 glow only, which no measurement shows: Size 1 was never measured with the flag on.
+#[test]
+fn anti_aliased_size_one_keeps_todays_map() {
+    let off = map(1.0, 0.0, gaussian(), false, GlowTechnique::Softer);
+    for (side, x, y) in [("top", 200i64, 74), ("left", 99, 150), ("bottom", 200, 225), ("right", 300, 150)] {
+        assert_eq!(r(off.get(x, y)).round() as i32, 255, "today's Size 1 outer glow paints the {side} edge one pixel out: R {}", r(off.get(x, y)));
+    }
+    let on = map(1.0, 0.0, gaussian(), true, GlowTechnique::Softer);
+    for (side, x, y) in [("top", 200i64, 74), ("left", 99, 150), ("bottom", 200, 225), ("right", 300, 150)] {
+        assert_eq!(r(on.get(x, y)).round() as i32, 255, "Anti-aliased Size 1 painted the {side} edge one pixel out: R {}", r(on.get(x, y)));
+    }
+    assert_eq!(bit_hash(&on), bit_hash(&off), "the Size 1 outer glow map moved with Anti-aliased on");
+}
+
+/// The second degeneracy the review names: Size 2 with Spread 50 %. `spread_split(2, 0.5)` is
+/// `(1, 1.0)` - a 1 px dilation plus a blur of width exactly 1, the identity again - so the offset
+/// would be the only soft thing in the map. That neighbour keeps today's output.
+#[test]
+fn anti_aliased_size_two_spread_half_keeps_todays_map() {
+    let off = map(2.0, 0.5, gaussian(), false, GlowTechnique::Softer);
+    let on = map(2.0, 0.5, gaussian(), true, GlowTechnique::Softer);
+    assert_eq!(bit_hash(&on), bit_hash(&off), "the Size 2 Spread 50 % outer glow map moved with Anti-aliased on (its blur width is 1, the identity)");
+}
+
+/// The parity finding: with Spread above 0 the CPU dilates the offset map and recomputes its
+/// chamfer distance on it (`blur::dilate`), while the GPU dilates with a whole-pixel `StrokeOutside`
+/// field of the unshifted shape and no field shift at all (`fx::builders::spread_blur`), so the two
+/// compositors part by exactly the third of a pixel the offset adds. #14951 measured Spread 0, so
+/// every Spread that dilates keeps today's map. The boundary is the map both compositors can build
+/// alike: no dilation (`spread_split`'s radius 0) and a blur wider than the identity.
+#[test]
+fn anti_aliased_spread_keeps_todays_map() {
+    let off = map(10.0, 0.5, gaussian(), false, GlowTechnique::Softer);
+    assert_eq!(bit_hash(&off), 0x6f66_b0f8_7026_fd31, "the Size 10 Spread 50 % outer glow map (Anti-aliased off) moved");
+    assert_eq!(
+        bit_hash(&map(10.0, 0.5, gaussian(), true, GlowTechnique::Softer)),
+        0x6f66_b0f8_7026_fd31,
+        "Anti-aliased moved the Size 10 Spread 50 % map, where CPU and GPU cannot be made equal"
+    );
+    // Spread 5 % dilates too (spread_split(10, 0.05) = (1, 9.5)) and stays on today's map.
+    assert_eq!(
+        bit_hash(&map(10.0, 0.05, gaussian(), true, GlowTechnique::Softer)),
+        bit_hash(&map(10.0, 0.05, gaussian(), false, GlowTechnique::Softer)),
+        "Anti-aliased moved the Size 10 Spread 5 % map"
+    );
+}
+
+/// Pattern 13 the other way round: the rule may not be keyed on the one measured document's
+/// Size 10 either. Every Size whose blur is wider than the identity takes the offset at Spread 0 -
+/// the offset is a rule in the inputs. Guard test: green before and after, it states where the
+/// boundary must NOT sit.
+#[test]
+fn the_offset_follows_the_inputs_not_the_measured_size() {
+    for size in [1.5, 2.0, 3.0, 6.0, 20.0, 250.0] {
+        let off = bit_hash(&map(size, 0.0, gaussian(), false, GlowTechnique::Softer));
+        assert_ne!(
+            bit_hash(&map(size, 0.0, gaussian(), true, GlowTechnique::Softer)),
+            off,
+            "Anti-aliased did nothing at Size {size}, Spread 0: the rule would be keyed on the measured Size 10"
+        );
+    }
+}
