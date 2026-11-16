@@ -135,11 +135,18 @@ mod tests {
 fn platform(path: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
     match crate::print_portal::confirm(path, settings) {
         Ok(outcome) => Ok(outcome),
-        Err(error) => {
+        Err(crate::print_portal::ConfirmError::Unavailable(error)) => {
             log::warn!("native print portal unavailable; falling back to the regular spooler: {error}");
             Ok(SystemPrintOutcome::Unavailable)
         }
+        Err(crate::print_portal::ConfirmError::Active(error)) => Err(error),
     }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+/// Leaves unsupported desktop targets on the engine's regular spooler path.
+fn platform(_path: &std::path::Path, _settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
+    Ok(SystemPrintOutcome::Unavailable)
 }
 
 #[cfg(target_os = "windows")]

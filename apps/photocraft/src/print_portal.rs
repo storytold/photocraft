@@ -44,6 +44,7 @@ fn print(job: &PrintJob) -> Result<String, String> {
             match outcome {
                 Ok(SystemPrintOutcome::Printed) => log::info!("print portal (v{version}): printed through the system print dialog"),
                 Ok(SystemPrintOutcome::Cancelled) => log::info!("print portal (v{version}): cancelled in the print dialog"),
+                Ok(SystemPrintOutcome::Unavailable) => log::warn!("print portal (v{version}): became unavailable while the print dialog was open"),
                 Err(e) => log::warn!("print portal (v{version}): {e}"),
             }
         })
@@ -51,17 +52,30 @@ fn print(job: &PrintJob) -> Result<String, String> {
     Ok("the system print dialog".into())
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) enum ConfirmError {
+    /// No session bus or print portal was available before any dialog request was submitted.
+    Unavailable(String),
+    /// A portal request had started; falling back could submit the same job a second time.
+    Active(String),
+}
+
 /// Shows the portal's confirmation dialog and waits for its final print/cancel result.
 #[cfg(target_os = "linux")]
-pub(crate) fn confirm(pdf: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, String> {
+pub(crate) fn confirm(pdf: &std::path::Path, settings: &SystemPrintSettings) -> Result<SystemPrintOutcome, ConfirmError> {
     let conn = zbus::blocking::connection::Builder::session()
         // Portal methods return request handles immediately; the separate Response signal owns
         // the long user-interaction wait. Keep calls (including Request.Close on timeout) short.
         .and_then(|builder| builder.method_timeout(std::time::Duration::from_secs(5)).build())
-        .map_err(|e| format!("no session bus for the print portal ({e})"))?;
+        .map_err(|e| ConfirmError::Unavailable(format!("no session bus for the print portal ({e})")))?;
+    // Establish that the portal exists before entering the active request path. From this point
+    // onward an error must be reported, not converted to a spooler fallback: PreparePrint or
+    // Print may already have reached the desktop and retrying could duplicate the job.
+    let proxy = portal(&conn).map_err(ConfirmError::Unavailable)?;
+    let _: u32 = proxy.get_property("version").map_err(|e| ConfirmError::Unavailable(format!("no print portal on this desktop ({e})")))?;
     let values = system_settings(settings);
     let page_setup = page_setup_for(settings.paper, settings.landscape);
-    dialog(&conn, &settings.title, &values, &page_setup, pdf)
+    dialog(&conn, &settings.title, &values, &page_setup, pdf).map_err(ConfirmError::Active)
 }
 
 #[cfg(target_os = "linux")]

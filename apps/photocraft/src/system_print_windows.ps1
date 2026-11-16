@@ -34,8 +34,13 @@ try {
     $width = [int][Math]::Max(1, [Math]::Round($page.Size.Width * 100.0 / 96.0))
     $height = [int][Math]::Max(1, [Math]::Round($page.Size.Height * 100.0 / 96.0))
     $renderDpi = [Math]::Max(96.0, [Math]::Min(600.0, [double]$env:PHOTOCRAFT_PRINT_RASTER_DPI))
-    $renderWidth = [uint32][Math]::Max(1, [Math]::Min(32768, [Math]::Round($page.Size.Width * $renderDpi / 96.0)))
-    $renderHeight = [uint32][Math]::Max(1, [Math]::Min(32768, [Math]::Round($page.Size.Height * $renderDpi / 96.0)))
+    $uncappedWidth = [Math]::Max(1.0, [Math]::Round($page.Size.Width * $renderDpi / 96.0))
+    $uncappedHeight = [Math]::Max(1.0, [Math]::Round($page.Size.Height * $renderDpi / 96.0))
+    # GDI+ cannot create a bitmap wider or taller than 32768 pixels. Reduce both dimensions by
+    # the same factor so an oversized sheet retains its aspect ratio instead of being stretched.
+    $reduction = [Math]::Min(1.0, 32768.0 / [Math]::Max($uncappedWidth, $uncappedHeight))
+    $renderWidth = [uint32][Math]::Max(1, [Math]::Round($uncappedWidth * $reduction))
+    $renderHeight = [uint32][Math]::Max(1, [Math]::Round($uncappedHeight * $reduction))
     $options = [Windows.Data.Pdf.PdfPageRenderOptions]::new()
     $options.DestinationWidth = $renderWidth
     $options.DestinationHeight = $renderHeight
