@@ -47,9 +47,17 @@ fn artboard_exports_refuse_unreadable_scratch_tiles() {
         std::fs::remove_file(entry.unwrap().path()).unwrap();
     }
 
-    // Force every tile to disk, then damage only this test's scratch file.
-    spill::configure(Some(&scratch), 1).unwrap();
-    spill::settle();
+    // Force every tile to disk, then damage only this test's scratch file. The session's memory
+    // worker refreshes the budget from the preferences every two seconds; a refresh between
+    // `configure` and `settle` would leave tiles resident, so set the one-byte budget again until
+    // a settle has emptied memory (bounded).
+    for _ in 0..20 {
+        spill::configure(Some(&scratch), 1).unwrap();
+        spill::settle();
+        if spill::stats().resident_bytes == 0 {
+            break;
+        }
+    }
     assert_eq!(spill::stats().resident_bytes, 0);
     let mut file = spill::scratch_handle_for_tests().unwrap();
     file.seek(SeekFrom::Start(0)).unwrap();
