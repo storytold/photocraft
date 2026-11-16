@@ -1,4 +1,5 @@
 use super::*;
+use photocraft_color::SampleType;
 use photocraft_engine::Session;
 use photocraft_engine::channel_cmds::ChannelTarget;
 use serde_json::json;
@@ -877,5 +878,23 @@ fn solo_spot_wins_over_an_unrelated_layer_mask() {
         // A revealed layer mask is all white; the spot has ink on the left half only.
         assert_eq!(px[0], Color32::WHITE, "{mode}: inked half");
         assert_eq!(px[7], Color32::BLACK, "{mode}: uninked half shows the spot, not the mask");
+    }
+}
+
+/// The overlay's stack buffer conversion writes exactly the values the allocating `from_rgba`
+/// collected, for every colour mode with and without alpha: the same pixels reach the screen.
+#[test]
+fn from_rgba_into_matches_from_rgba_for_every_mode() {
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Grayscale] {
+        for alpha in [false, true] {
+            let fmt = PixelFormat::new(mode, SampleType::U8, alpha);
+            for px in [[0.0, 0.0, 0.0, 0.5], [0.25, 0.5, 0.75, 1.0], [1.0, 0.0, 0.5, 0.25], [0.5, 0.5, 0.5, 0.0]] {
+                let want = photocraft_raster::from_rgba(&fmt, px);
+                let mut got = [0.0f32; 5];
+                let n = photocraft_raster::from_rgba_into(&fmt, px, &mut got);
+                assert_eq!(n, want.len(), "{mode:?} alpha={alpha}: channel count");
+                assert_eq!(&got[..n], &want[..], "{mode:?} alpha={alpha} {px:?}");
+            }
+        }
     }
 }
