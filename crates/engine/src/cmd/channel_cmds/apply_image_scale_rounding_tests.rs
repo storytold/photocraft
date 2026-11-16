@@ -189,6 +189,32 @@ fn scale_two_with_a_non_zero_offset_keeps_todays_rounding() {
 }
 
 #[test]
+fn a_full_weight_selection_keeps_todays_rounding() {
+    // Review #14634 (calc.rs:90): inside a selection that covers the pixel the blend's effective
+    // weight is still 1, but #14490 lists "a mask or a selection" as not measured, so a run with
+    // an active selection keeps Blending::apply's rounding: target 50, source 255, Add at Scale 2
+    // stays (50 + 255) / 2 = 152.5 -> 153 inside the selection, and the unselected left half is
+    // untouched.
+    let mut s = pair(8, "#c86432", "#3296fa");
+    s.execute("select.rect", json!({"x": 3, "y": 0, "width": 3, "height": 4, "mode": "replace"})).unwrap();
+    apply(&mut s, json!({"source": {"document": 1}, "blending": "add", "scale": 2, "offset": 0}));
+    assert_eq!(levels(&s, RIGHT, 1), [153, 203, 253], "right half inside the full-weight selection");
+    assert_eq!(levels(&s, LEFT, 1), [200, 100, 50], "the unselected left half stays as it was");
+}
+
+#[test]
+fn an_all_one_mask_keeps_todays_rounding() {
+    // Review #14634 (calc.rs:90), same finding through the mask parameter: a mask with value 1
+    // at the pixel leaves the weight at 1, yet #14490 marks a masked run as not measured. Apply
+    // Image with the source document's all-opaque transparency as a mask (value 1 everywhere)
+    // must still round: (50 + 255) / 2 = 152.5 stays 153, and the whole left half stays 164/114/89.
+    let mut s = pair(8, "#c86432", "#3296fa");
+    apply(&mut s, json!({"source": {"document": 1}, "blending": "add", "scale": 2, "offset": 0, "mask": {"document": 1, "channel": "transparency"}}));
+    assert_eq!(levels(&s, RIGHT, 1), [153, 203, 253], "right half through the all-one mask");
+    assert_eq!(levels(&s, LEFT, 1), [164, 114, 89], "left half through the all-one mask");
+}
+
+#[test]
 fn an_eight_bit_grayscale_target_keeps_todays_rounding() {
     // Only RGB is measured (#14490), so another colour mode keeps rounding to the nearest level:
     // (50 + 255) / 2 = 152.5 lands on 153 in a Grayscale target.
