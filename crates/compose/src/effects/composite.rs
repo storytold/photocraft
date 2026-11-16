@@ -3,8 +3,9 @@ use super::distance::{INSIDE_EPS, Metric, dist_inside_by, dist_outside_by, local
 use super::paint::{dissolves_in, glow_map, paint_color, paint_fx, paint_glow, paint_pattern, rgb, shadow_map};
 use super::{
     Bevel, BevelStyle, BlendMode, Buffer, Effect, FxMaps, FxPaint, GlobalLight, Layer, MAX_REACH, Map, PREPARED_PATTERN_BYTES, Pattern, Placement,
-    BufferAlloc, InfallibleBufferAlloc, PreparedPatterns, Rect, StrokePosition, psblend,
+    PreparedPatterns, Rect, StrokePosition, psblend,
 };
+use crate::{BufferAlloc, InfallibleBufferAlloc};
 
 /// Build every effect map for `layer` from its alpha `shape` over `rect`.
 pub fn build_maps(layer: &Layer, shape: Vec<f32>, rect: Rect, light: &GlobalLight, tex: &TextureCtx) -> FxMaps {

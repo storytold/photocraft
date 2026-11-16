@@ -7,11 +7,6 @@ use super::{
     psblend, shape_split,
 };
 
-/// Composite an isolated group's sibling list (bottom→top) onto `backdrop` (its own buffer).
-pub(crate) fn composite_stack(layers: &[Layer], backdrop: &mut Buffer, cx: &Ctx) {
-    composite_stack_at(layers, backdrop, cx, advanced::Scope::ISOLATED);
-}
-
 /// Composite a sibling list (bottom→top) onto `backdrop`; `scope` says where the stack sits (see
 /// [`advanced::Scope`]: it decides what knockouts reveal).
 pub(crate) fn composite_stack_at(layers: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope) {
@@ -225,13 +220,6 @@ thread_local! {
 /// is mixed back towards `before` (the backdrop without it) where the ranges hide the layer.
 /// Mixing premultiplied colour by `k` equals compositing the layer at `k` × its alpha, since
 /// every blend mode's source-over result is linear in the source alpha.
-fn apply_blend_if(layer: &Layer, before: &Buffer, out: &mut Buffer, cx: &Ctx) {
-    match apply_blend_if_with(layer, before, out, cx, &InfallibleBufferAlloc) {
-        Ok(()) => {}
-        Err(never) => match never {},
-    }
-}
-
 fn apply_blend_if_with<A: BufferAlloc>(layer: &Layer, before: &Buffer, out: &mut Buffer, cx: &Ctx, alloc: &A) -> Result<(), A::Error> {
     // "This Layer" is the layer's own colour. An adjustment layer (no content of its own) is
     // judged by its result at full strength, before Opacity and its mask mix it in, as Photoshop
@@ -275,13 +263,6 @@ fn apply_blend_if_with<A: BufferAlloc>(layer: &Layer, before: &Buffer, out: &mut
 
 /// Composite `layer` (plus its clipping group) onto `backdrop`, honouring its channel restrictions
 /// and Blend If, and knocking out to `ko` when it has a knockout (see [`advanced`]).
-pub(crate) fn composite_layer(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer, cx: &Ctx, ko: Option<&Buffer>, scope: advanced::Scope) {
-    match composite_layer_with(layer, clipped, backdrop, cx, ko, scope, &InfallibleBufferAlloc) {
-        Ok(()) => {}
-        Err(never) => match never {},
-    }
-}
-
 pub(crate) fn composite_layer_with<A: BufferAlloc>(
     layer: &Layer,
     clipped: &[Layer],
@@ -393,6 +374,7 @@ pub(crate) fn composite_pixel_layer(layer: &Layer, surf: &Surface, backdrop: &mu
     recycle_mask(mv);
 }
 
+#[cfg(test)]
 pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope) {
     match composite_layer_plain_with(layer, clipped, backdrop, cx, scope, &InfallibleBufferAlloc) {
         Ok(()) => {}
@@ -669,13 +651,6 @@ pub(crate) fn texture_ctx<'a>(layer: &Layer, region: Rect, cx: &Ctx<'a>) -> effe
 
 /// Composite `layer` onto `base` restricted to the base's alpha (clipping mask semantics),
 /// honouring its channel restrictions and Blend If.
-pub(crate) fn composite_atop(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
-    match composite_atop_with(layer, base, cx, &InfallibleBufferAlloc) {
-        Ok(()) => {}
-        Err(never) => match never {},
-    }
-}
-
 pub(crate) fn composite_atop_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx: &Ctx, alloc: &A) -> Result<(), A::Error> {
     let w = channel_weights(layer, cx.mode);
     let blend_if = blend_if_active(layer, cx.mode);

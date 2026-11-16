@@ -138,6 +138,7 @@ fn render_fill_with<A: BufferAlloc>(
     }
 }
 
+#[cfg(test)]
 fn surface_to_scratch(s: &Surface, rect: Rect) -> Buffer {
     let mut buf = Buffer::transparent(rect);
     s.read_rgba_into(rect, &mut buf.px);
