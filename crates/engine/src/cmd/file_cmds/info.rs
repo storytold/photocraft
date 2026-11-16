@@ -340,9 +340,11 @@ fn rdf_end_scan(x: &str) -> Option<(usize, usize, bool)> {
     // One entry per open element: the `(prefix, binds the RDF namespace)` pairs its start tag
     // declares; the default namespace is the empty prefix.
     let mut scopes: Vec<Vec<(String, bool)>> = Vec::new();
+    // The innermost open element that declares the prefix decides (Namespaces in XML 1.0,
+    // section 6): search the scopes from the innermost outwards, never the flattened list backwards.
     let resolves_to_rdf = |scopes: &[Vec<(String, bool)>], name: &str| {
         let (prefix, local) = name.split_once(':').unwrap_or(("", name));
-        local == "RDF" && scopes.iter().rev().flatten().rev().find(|(p, _)| p == prefix).is_some_and(|(_, rdf)| *rdf)
+        local == "RDF" && scopes.iter().rev().flat_map(|scope| scope.iter().rev()).find(|(p, _)| p == prefix).is_some_and(|(_, rdf)| *rdf)
     };
     let mut found: Option<(usize, usize, bool)> = None;
     let mut i = 0usize;

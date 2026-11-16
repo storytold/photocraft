@@ -2355,6 +2355,39 @@ fn file_info_binds_rdf_for_the_description_from_the_open_element_scope() {
     assert_eq!(out.matches(&format!("xmlns:rdf=\"{NS}\"")).count(), 1, "{out}");
 }
 
+/// A prefix that an ancestor binds and an inner element rebinds resolves to the INNER binding
+/// (Namespaces in XML 1.0, section 6): the innermost open scope is searched first (#11116,
+/// review of 952741fe). Both outputs are parsed as namespace-aware XML.
+#[test]
+fn file_info_resolves_a_prefix_in_the_innermost_scope_that_binds_it() {
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    let rdf_descriptions = |out: &str| {
+        let namespaces = [("rdf", NS), ("xmp", "http://ns.adobe.com/xap/1.0/"), ("photoshop", "http://ns.adobe.com/photoshop/1.0/"), ("x", "adobe:ns:meta/")];
+        let canonical = craft_xml::Canonical::new(&namespaces);
+        let doc = craft_xml::Options::canonical(&canonical).parse(out.as_bytes()).expect("the output is well-formed XML");
+        let names: Vec<String> = doc.descendants().filter(|e| e.name.ends_with("Description")).map(|e| e.name.clone()).collect();
+        names
+    };
+    // The ancestor binds `rdf` to the RDF namespace, the element the edit lands in rebinds it to a
+    // foreign one: the inserted description must declare `rdf` itself.
+    let shadowed = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="{NS}"><q:RDF xmlns:q="{NS}" xmlns:rdf="urn:other"><q:Description q:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></q:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&shadowed), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the packet is kept: {out}");
+    assert_eq!(rdf_descriptions(&out), ["rdf:Description", "rdf:Description"], "the inserted description belongs to the RDF namespace: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // The ancestor binds `r` to the RDF namespace; a later element rebinds `r` and holds its own
+    // `</r:RDF>`: that closing tag names a foreign element and is not the RDF end tag.
+    let shadowed_end = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:r="{NS}"><r:RDF><r:Description r:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF><w xmlns:r="urn:other"><r:RDF></r:RDF></w></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&shadowed_end), &json!({"authorTitle": "Artist"}));
+    let (edit, real, foreign) = (out.find("AuthorsPosition").unwrap(), out.find("</r:RDF>").unwrap(), out.rfind("</r:RDF>").unwrap());
+    assert!(edit < real && real < foreign, "the edit lands in the RDF element, not in the shadowed one: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+}
+
 /// A prefix bound to the RDF namespace in one element and rebound to another namespace in a later
 /// sibling is two different names: only the closing tag that resolves to the RDF namespace in its
 /// own scope is the RDF end tag, so the edit never lands in the foreign element (#11116).
