@@ -154,6 +154,24 @@ fn indexed_png_keeps_the_document_resolution() {
 }
 
 #[test]
+fn bmp_keeps_the_document_resolution_with_metadata_off() {
+    // #13630: a BMP export left the header's pixels-per-metre fields 0, so it reopened at 72 ppi.
+    // RGB goes through the codec's encoder, Indexed Color through the palette BMP writer.
+    for mode in [ColorMode::Rgb, ColorMode::Indexed] {
+        let mut d = doc(mode);
+        d.resolution_dpi = 300.0;
+        d.color_table = Some(ColorTable { colors: vec![[0, 0, 0], [255, 0, 0]], transparent: None });
+        let encode = photocraft_codecs::EncodeOptions { embed_metadata: false, ..Default::default() };
+        let opts = photocraft_io::ExportOptions { encode, ..Default::default() };
+        let r = photocraft_io::export(&d, "x.bmp", &opts).unwrap();
+        let ppm = |at: usize| i32::from_le_bytes([r.bytes[at], r.bytes[at + 1], r.bytes[at + 2], r.bytes[at + 3]]);
+        assert_eq!((ppm(38), ppm(42)), (11811, 11811), "{mode:?}");
+        let back = photocraft_io::import("x.bmp", &r.bytes).unwrap().document;
+        assert_eq!(back.resolution_dpi, 300.0, "{mode:?}");
+    }
+}
+
+#[test]
 fn indexed_bmp_is_palette_bmp() {
     // The BMP export wrote an Indexed Color document as 24-bit RGB, so reopening it lost the mode (#3869 follow-up).
     let mut d = doc(ColorMode::Indexed);
