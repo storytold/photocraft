@@ -355,7 +355,7 @@ fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::syn
             )
             .map(|d| {
                 let buffer = photocraft_compose::flatten(&d);
-                (std::sync::Arc::new(d), buffer)
+                (std::sync::Arc::new(d), Some(buffer))
             });
             crate::dialogs::filter_preview_worker::Computed { result, ms: 0.0 }
         })
@@ -539,7 +539,7 @@ fn cross_scale_indexed_matte_preview_rejects_old_tool_colors_from_cached_and_wor
                 Some(old_worker.tool_colors),
             )
             .map(|doc| {
-                let buffer = photocraft_compose::flatten(&doc);
+                let buffer = Some(photocraft_compose::flatten(&doc));
                 (std::sync::Arc::new(doc), buffer)
             });
             crate::dialogs::filter_preview_worker::Computed { result, ms: 0.0 }
@@ -598,7 +598,7 @@ fn match_color_preview_rejects_cached_and_late_frames_from_an_old_source_layer_o
                 .start(old.clone(), ctx.clone(), move |_| {
                     wait.recv_timeout(std::time::Duration::from_secs(60)).expect("the test releases the job");
                     let buffer = photocraft_compose::flatten(&doc);
-                    Computed { result: Some((doc, buffer)), ms: 0.0 }
+                    Computed { result: Some((doc, Some(buffer))), ms: 0.0 }
                 })
                 .unwrap()
         );

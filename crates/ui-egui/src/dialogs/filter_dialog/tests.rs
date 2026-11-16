@@ -892,7 +892,7 @@ fn match_color_source_layer_preview_and_ok_edit_only_the_target() {
             }
             let params = params_of(fields);
             let preview = preview_document_for_target(
-                &target,
+                &documents[1],
                 Some(target.layers[0].id),
                 command,
                 &params,
