@@ -128,7 +128,10 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             // Settings saved with the old 0..100 range draw at the nearest value (#13258).
             "arrowConcavity": if o.arrow_concavity.is_finite() { o.arrow_concavity.round().clamp(-50.0, 50.0) } else { 0.0 }})
     } else {
-        let [x0, y0, w, h] = drag_box(o, tool, start, end, mods);
+        if tool == Tool::Polygon && o.polygon_constraint == "freeform" {
+            return freeform_polygon(o, start, end, mods);
+        }
+        let ([x0, y0, w, h], squared) = drag_box(o, tool, start, end, mods);
         let rect = [x0.min(x0 + w), y0.min(y0 + h), w.abs(), h.abs()];
         // Align Edges (#13370) is the Triangle tool's option, and only in Shape mode, where its
         // checkbox is enabled. The other shape tools, and a greyed checkbox, still snap.
@@ -141,10 +144,10 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             Tool::Rectangle if o.corner_radius > 0.0 => json!({"kind": "roundedRect", "rect": rect, "radii": vec![o.corner_radius; 4]}),
             Tool::Rectangle | Tool::CustomShape => json!({"kind": "rect", "rect": rect}),
             Tool::EllipseShape => json!({"kind": "ellipse", "rect": rect}),
-            // Shift: the equilateral triangle in the circle of the constrained square, as before the
-            // plain drag filled its box (#13350), sent as its tight box. Which side sizes the square
-            // is #13351's.
-            Tool::Triangle if mods.shift => {
+            // Shift, or the gear's Equilateral (#13361): the equilateral triangle in the circle of
+            // the constrained square, as before the plain drag filled its box (#13350), sent as its
+            // tight box. Which side sizes the square is #13351's.
+            Tool::Triangle if squared => {
                 let r = rect[2] / 2.0;
                 let half_base = r * 3f64.sqrt() / 2.0;
                 json!({"kind": "triangle", "rect": [rect[0] + r - half_base, rect[1], 2.0 * half_base, 1.5 * r]})
@@ -157,36 +160,116 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
     })
 }
 
+/// A shape tool's gear settings (#13343, #13361, #13306): the constraint ("unconstrained",
+/// "square", "fixedSize" or "proportional"; the Polygon's "freeform" is [`freeform_polygon`]'s),
+/// Fixed Size W × H, Proportional W : H and From Center.
+struct Gear<'a> {
+    constraint: &'a str,
+    fixed: (f32, f32),
+    ratio: (f32, f32),
+    from_center: bool,
+}
+
+/// `tool`'s gear, for the tools that have one (the Rectangle, the Triangle and the Polygon).
+fn gear(o: &ToolOptions, tool: Tool) -> Option<Gear<'_>> {
+    Some(match tool {
+        Tool::Rectangle => Gear {
+            constraint: &o.rect_constraint,
+            fixed: (o.rect_fixed_width, o.rect_fixed_height),
+            ratio: (o.rect_ratio_width, o.rect_ratio_height),
+            from_center: o.rect_from_center,
+        },
+        Tool::Triangle => Gear {
+            constraint: &o.triangle_constraint,
+            fixed: (o.triangle_fixed_width, o.triangle_fixed_height),
+            ratio: (o.triangle_ratio_width, o.triangle_ratio_height),
+            from_center: o.triangle_from_center,
+        },
+        Tool::Polygon => Gear {
+            constraint: &o.polygon_constraint,
+            fixed: (o.polygon_fixed_width, o.polygon_fixed_height),
+            ratio: (o.polygon_ratio_width, o.polygon_ratio_height),
+            from_center: o.polygon_from_center,
+        },
+        _ => return None,
+    })
+}
+
 /// The box `[x, y, w, h]` of a Shape-tool drag from `start` to `end`, before it is snapped, with
-/// `w` and `h` signed the way the drag went. ⇧ squares it from the drag's shorter side, as in the
-/// reference application (#13222), and ⌥ draws it from the centre. The Rectangle tool's gear
-/// (#13343) can keep either on, and then ⇧ turns Square off and ⌥ From Center, as in the
-/// reference. Fixed Size puts the gear's W × H with its top-left corner at the release point;
-/// Proportional draws the largest box of the gear's W : H inside the dragged one, from the press
-/// point. A Fixed Size or Proportional field left empty draws as Unconstrained.
-fn drag_box(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> [f64; 4] {
-    let gear = tool == Tool::Rectangle;
-    let constraint = if gear { o.rect_constraint.as_str() } else { "unconstrained" };
-    let from_center = mods.alt != (gear && o.rect_from_center);
+/// `w` and `h` signed the way the drag went, and whether it is the square ⇧ or the gear's Square
+/// made (the Triangle tool draws its equilateral triangle in it). ⇧ squares it from the drag's
+/// shorter side, as in the reference application (#13222), and ⌥ draws it from the centre. The
+/// Rectangle and Triangle tools' gears (#13343, #13361) can keep either on, and then ⇧ turns
+/// Square (Equilateral) off and ⌥ From Center, as in the reference. Fixed Size puts the gear's
+/// W × H with its top-left corner at the release point; Proportional draws the largest box of the
+/// gear's W : H inside the dragged one, from the press point. A Fixed Size or Proportional field
+/// left empty draws as Unconstrained.
+fn drag_box(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> ([f64; 4], bool) {
+    let gear = gear(o, tool);
+    let constraint = gear.as_ref().map_or("unconstrained", |g| g.constraint);
+    let from_center = mods.alt != gear.as_ref().is_some_and(|g| g.from_center);
     if constraint == "fixedSize"
-        && let Some((fw, fh)) = positive_pair(o.rect_fixed_width, o.rect_fixed_height)
+        && let Some((fw, fh)) = gear.as_ref().and_then(|g| positive_pair(g.fixed.0, g.fixed.1))
     {
         // From Center with Fixed Size is not measured: the size is centred on the release point.
         let (x, y) = if from_center { (end[0] - fw / 2.0, end[1] - fh / 2.0) } else { (end[0], end[1]) };
-        return [x, y, fw, fh];
+        return ([x, y, fw, fh], false);
     }
     let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
-    if mods.shift != (constraint == "square") {
+    let mut squared = mods.shift != (constraint == "square");
+    if squared {
         let m = w.abs().min(h.abs());
         (w, h) = (m * w.signum(), m * h.signum());
     }
     if constraint == "proportional"
-        && let Some((rw, rh)) = positive_pair(o.rect_ratio_width, o.rect_ratio_height)
+        && let Some((rw, rh)) = gear.as_ref().and_then(|g| positive_pair(g.ratio.0, g.ratio.1))
     {
         let s = (w.abs() / rw).min(h.abs() / rh);
         (w, h) = (rw * s * w.signum(), rh * s * h.signum());
+        squared = false;
     }
-    if from_center { [start[0] - w, start[1] - h, 2.0 * w, 2.0 * h] } else { [start[0], start[1], w, h] }
+    (if from_center { [start[0] - w, start[1] - h, 2.0 * w, 2.0 * h] } else { [start[0], start[1], w, h] }, squared)
+}
+
+/// The Polygon tool's Freeform drag (#13306): a regular polygon of the options bar's sides,
+/// centred on the middle of the drag (on the press point with ⌥ or From Center, each turning the
+/// other off), with one vertex at the release point and the others clockwise from it, as in the
+/// reference application. Not measured, so chosen here: ⇧ turns the polygon so that this vertex
+/// lies at a multiple of 45° from the centre, at the same radius (the measured 21.8° drag lies
+/// flat to the right), and a Radius above 0 sets the circumradius, the drag then only placing and
+/// turning the polygon. Sent as a path, since a live polygon has no rotation, with its tight box
+/// as `rect`. None when too small to draw.
+fn freeform_polygon(o: &ToolOptions, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
+    let centre = if mods.alt != o.polygon_from_center { start } else { [(start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0] };
+    let (dx, dy) = (end[0] - centre[0], end[1] - centre[1]);
+    let reach = dx.hypot(dy);
+    if reach.is_nan() || reach < 0.5 {
+        return None;
+    }
+    let radius = match positive_pair(o.polygon_freeform_radius, 1.0) {
+        Some((r, _)) => r,
+        None => reach,
+    };
+    let mut angle = dy.atan2(dx);
+    if mods.shift {
+        let step = std::f64::consts::FRAC_PI_4;
+        angle = (angle / step).round() * step;
+    }
+    let sides = o.polygon_sides.clamp(3, 100);
+    let pts: Vec<(f64, f64)> = (0..sides)
+        .map(|i| {
+            let a = angle + std::f64::consts::TAU * f64::from(i) / f64::from(sides);
+            (centre[0] + radius * a.cos(), centre[1] + radius * a.sin())
+        })
+        .collect();
+    let (xs, ys) = (pts.iter().map(|p| p.0), pts.iter().map(|p| p.1));
+    let (x0, y0) = (xs.clone().fold(f64::INFINITY, f64::min), ys.clone().fold(f64::INFINITY, f64::min));
+    let (x1, y1) = (xs.fold(f64::NEG_INFINITY, f64::max), ys.fold(f64::NEG_INFINITY, f64::max));
+    if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+        return None;
+    }
+    let path = photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polygon(&pts)]);
+    Some(json!({"kind": "path", "path": photocraft_engine::vector_cmds::path_json(&path), "rect": [x0, y0, x1 - x0, y1 - y0]}))
 }
 
 /// `(w, h)` in f64 when both are finite and above zero (gear fields that are not empty).
@@ -275,6 +358,12 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         return;
     }
     p["historyName"] = json!(line_history_name(tool));
+    // A Freeform polygon comes as its path (#13306); its layer is still named as a polygon.
+    if p["kind"] == "path"
+        && let Some(st) = app.session.active()
+    {
+        p["name"] = json!(st.doc.next_layer_name("Polygon"));
+    }
     // With an operation other than New Layer the drag joins the active shape layer.
     if let Some(op) = drag_path_op(app)
         && let Some(id) = super::options::selected_shape(&app.session)
@@ -376,6 +465,9 @@ fn shape_outline(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2]
         let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
         let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
         Some(photocraft_engine::presets::shapes::fit(&shape.path, rect, mods.shift))
+    } else if geometry["kind"] == "path" {
+        // A Freeform polygon (#13306) comes as its path.
+        photocraft_engine::vector_cmds::parse_path(&geometry["path"]).ok()
     } else {
         photocraft_engine::vector_cmds::shape_path(&geometry).ok()
     }

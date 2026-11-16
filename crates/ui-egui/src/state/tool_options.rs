@@ -146,6 +146,31 @@ pub struct ToolOptions {
     pub rect_ratio_height: f32,
     /// Rectangle tool › gear › From Center: every drag draws from its centre. Off to start.
     pub rect_from_center: bool,
+    /// Triangle tool › gear (#13361), as the Rectangle's: "unconstrained" (the default),
+    /// "square" (shown as Equilateral), "fixedSize" or "proportional".
+    pub triangle_constraint: String,
+    /// Triangle tool › gear › Fixed Size W and H in px; 0 is an empty field, as they start.
+    pub triangle_fixed_width: f32,
+    pub triangle_fixed_height: f32,
+    /// Triangle tool › gear › Proportional W : H, 1 : 1 once Proportional is chosen.
+    pub triangle_ratio_width: f32,
+    pub triangle_ratio_height: f32,
+    /// Triangle tool › gear › From Center: every drag draws from its centre. Off to start.
+    pub triangle_from_center: bool,
+    /// Polygon tool › gear (#13306), as the Rectangle's: "unconstrained" (the default), "square"
+    /// (shown as Symmetric), "fixedSize", "proportional" or "freeform".
+    pub polygon_constraint: String,
+    /// Polygon tool › gear › Fixed Size W and H in px; 0 is an empty field, as they start.
+    pub polygon_fixed_width: f32,
+    pub polygon_fixed_height: f32,
+    /// Polygon tool › gear › Proportional W : H, 1 : 1 to start.
+    pub polygon_ratio_width: f32,
+    pub polygon_ratio_height: f32,
+    /// Polygon tool › gear › Freeform › Radius in px; 0 is the empty field it starts as, and the
+    /// drag then sets the radius.
+    pub polygon_freeform_radius: f32,
+    /// Polygon tool › gear › From Center: every drag draws from its centre. Off to start.
+    pub polygon_from_center: bool,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -550,6 +575,19 @@ impl Default for ToolOptions {
             rect_ratio_width: 1.0,
             rect_ratio_height: 1.0,
             rect_from_center: false,
+            triangle_constraint: "unconstrained".into(),
+            triangle_fixed_width: 0.0,
+            triangle_fixed_height: 0.0,
+            triangle_ratio_width: 1.0,
+            triangle_ratio_height: 1.0,
+            triangle_from_center: false,
+            polygon_constraint: "unconstrained".into(),
+            polygon_fixed_width: 0.0,
+            polygon_fixed_height: 0.0,
+            polygon_ratio_width: 1.0,
+            polygon_ratio_height: 1.0,
+            polygon_freeform_radius: 0.0,
+            polygon_from_center: false,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
             pen_rubber_band: false,
