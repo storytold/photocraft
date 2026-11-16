@@ -182,7 +182,17 @@ fn convert_point(s: &mut Session, p: &Value) -> Result<Value> {
         return edit_path(s, CMD, p, label, |path| edit::toggle_curvature_point(path, k));
     }
     let out = point(CMD, p, "out")?;
-    edit_path(s, CMD, p, label, |path| edit::convert_point(path, k, out))
+    let independent = match p.get("independent") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(CMD, "`independent` must be true or false")),
+    };
+    // `independent` only changes a drag with `out`; a click leaves a corner with retracted handles
+    // either way, so it goes through the plain edit.
+    edit_path(s, CMD, p, label, |path| match (out, independent) {
+        (Some(o), true) => edit::convert_point_independent(path, k, o),
+        (o, _) => edit::convert_point(path, k, o),
+    })
 }
 
 fn add_anchor(s: &mut Session, p: &Value) -> Result<Value> {
@@ -338,7 +348,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "path.convertPoint",
             "Convert Point",
-            r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror),"curvature":bool=false (the Curvature Pen's double-click: toggles smooth/corner and reflows the smooth knots of the subpath; out ignored),"stepName":"Change Anchor Point"? (History step name; the Convert Point tool sends it; default "Convert Point"; any other value is refused)"#.into(),
+            r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror),"independent":bool=false (with "out": the Convert Point tool's ⌥-drag: only the out handle comes out, the in-handle stays retracted on the anchor and the point stays a corner),"curvature":bool=false (the Curvature Pen's double-click: toggles smooth/corner and reflows the smooth knots of the subpath; out ignored),"stepName":"Change Anchor Point"? (History step name; the Convert Point tool sends it; default "Convert Point"; any other value is refused)"#.into(),
             convert_point,
         ),
         spec(

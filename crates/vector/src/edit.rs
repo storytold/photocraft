@@ -179,6 +179,16 @@ pub fn convert_point(path: &mut Path, knot: [usize; 2], out: Option<Point>) -> R
     Ok(())
 }
 
+/// Convert Point with ⌥ held: the drag pulls out only the `out` handle and leaves the in-handle
+/// retracted on the anchor, so the knot stays a corner whose handles move apart (#12740, measured
+/// on a corner anchor of a closed subpath).
+pub fn convert_point_independent(path: &mut Path, knot: [usize; 2], out: Point) -> Result<(), String> {
+    let k = knot_mut(path, knot)?;
+    let a = k.anchor;
+    *k = Knot { out_ctrl: out, ..Knot::corner(a.x, a.y) };
+    Ok(())
+}
+
 /// Drags the segment leaving `knot` at curve parameter `t` by `d`. A straight segment (both
 /// handles retracted) moves with its two anchors; a curve reshapes so the point at `t` follows
 /// the pointer exactly, with the nearer handle moving more. Smooth end knots stay smooth.
@@ -576,6 +586,24 @@ mod tests {
         move_handle(&mut p, [0, 1], Handle::In, Point::new(40.0, 20.0), true).unwrap();
         let k = at(&p, 0, 1);
         assert_eq!((k.in_ctrl, k.out_ctrl, k.smooth), (Point::new(40.0, 20.0), Point::new(70.0, 0.0), false));
+    }
+
+    #[test]
+    fn convert_point_independent_pulls_out_only_the_out_handle() {
+        // The measured ⌥-drag of #12740: a corner anchor at (300, 300) dragged by (+50, +30).
+        let square = || Path::new(vec![Subpath::polygon(&[(100.0, 300.0), (300.0, 300.0), (300.0, 500.0), (100.0, 500.0)])]);
+        let mut p = square();
+        convert_point_independent(&mut p, [0, 1], Point::new(350.0, 330.0)).unwrap();
+        let k = at(&p, 0, 1);
+        assert_eq!((k.anchor, k.out_ctrl, k.in_ctrl, k.smooth), (Point::new(300.0, 300.0), Point::new(350.0, 330.0), Point::new(300.0, 300.0), false));
+        assert_eq!((at(&p, 0, 0), at(&p, 0, 2)), (at(&square(), 0, 0), at(&square(), 0, 2)), "the neighbours stay");
+        // Not smooth: either handle moves alone afterwards.
+        move_handle(&mut p, [0, 1], Handle::Out, Point::new(360.0, 340.0), false).unwrap();
+        assert_eq!((at(&p, 0, 1).out_ctrl, at(&p, 0, 1).in_ctrl), (Point::new(360.0, 340.0), Point::new(300.0, 300.0)));
+        move_handle(&mut p, [0, 1], Handle::In, Point::new(280.0, 300.0), false).unwrap();
+        assert_eq!((at(&p, 0, 1).out_ctrl, at(&p, 0, 1).in_ctrl), (Point::new(360.0, 340.0), Point::new(280.0, 300.0)));
+        assert!(convert_point_independent(&mut p, [0, 9], Point::new(1.0, 1.0)).is_err());
+        assert!(convert_point_independent(&mut p, [4, 0], Point::new(1.0, 1.0)).is_err());
     }
 
     #[test]

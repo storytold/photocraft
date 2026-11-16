@@ -280,6 +280,9 @@ pub enum Edit {
     Path(Vec<[usize; 2]>),
     /// Pen + ⌥ on an anchor: a click makes a corner, a drag pulls out smooth handles.
     Convert([usize; 2]),
+    /// The Convert Point tool's own ⌥ on a corner anchor: the drag pulls out only the out handle
+    /// and leaves the in-handle retracted on the anchor, so the point stays a corner (#12740).
+    ConvertOne([usize; 2]),
     /// ⌥-drag on a segment: a moved copy of the subpath of these anchors (all of them) goes last.
     Duplicate(Vec<[usize; 2]>),
 }
@@ -306,6 +309,7 @@ impl Edit {
             Edit::Segment([s, k], t) => ("path.bendSegment", json!({"subpath": s, "knot": k, "t": t, "move": d})),
             Edit::Path(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "stepName": "Drag Path"})),
             Edit::Convert([s, k]) => ("path.convertPoint", json!({"subpath": s, "knot": k, "out": end})),
+            Edit::ConvertOne([s, k]) => ("path.convertPoint", json!({"subpath": s, "knot": k, "out": end, "independent": true})),
             Edit::Duplicate(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "duplicate": true, "stepName": "Drag Path"})),
         }
     }
@@ -320,6 +324,7 @@ impl Edit {
             Edit::Handle(k, h, from, independent) => edit::move_handle(&mut p, *k, *h, Point::new(from.x + d[0], from.y + d[1]), *independent),
             Edit::Segment(k, t) => edit::bend_segment(&mut p, *k, *t, d),
             Edit::Convert(k) => edit::convert_point(&mut p, *k, Some(Point::new(end[0], end[1]))),
+            Edit::ConvertOne(k) => edit::convert_point_independent(&mut p, *k, Point::new(end[0], end[1])),
             Edit::Duplicate(a) => {
                 p.subpaths.push(p.subpaths.get(a.first()?[0])?.clone());
                 let last = p.subpaths.len() - 1;
@@ -692,7 +697,13 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
                 ds.segment = None;
                 ds.anchors = vec![k];
             }
-            Edit::Convert(k)
+            // ⌥ with the tool's own press pulls out only the out handle (#12740), measured on a
+            // corner anchor of a closed subpath. The Pen's ⌥ (the same conversion by another route),
+            // ⇧ with ⌥, an anchor that is already smooth and an open subpath's end anchor were not
+            // measured, so they keep the mirrored pair.
+            let pressed = base.subpaths.get(k[0]);
+            let one_handle = own_tool && mods.alt && !mods.shift && pressed.is_some_and(|sp| sp.closed && sp.knots.get(k[1]).is_some_and(|kn| !kn.smooth));
+            if one_handle { Edit::ConvertOne(k) } else { Edit::Convert(k) }
         }
         // Pen + ⌥ on a segment does nothing; so does the tool where the reference was not
         // measured: with ⇧ or ⌥, on a curve, or with part of the path selected.
@@ -850,7 +861,7 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
     let moved = moved(app, start, end);
     if target == PathRef::Pen {
         let edited = match edit {
-            Edit::Convert(k) if !moved => {
+            Edit::Convert(k) | Edit::ConvertOne(k) if !moved => {
                 let mut p = base.clone();
                 edit::convert_point(&mut p, *k, None).ok().map(|_| p)
             }
@@ -863,7 +874,7 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
         return;
     }
     let (id, mut params) = match edit {
-        Edit::Convert([s, k]) if !moved => ("path.convertPoint", json!({"subpath": s, "knot": k})),
+        Edit::Convert([s, k]) | Edit::ConvertOne([s, k]) if !moved => ("path.convertPoint", json!({"subpath": s, "knot": k})),
         _ if !moved => return,
         e => e.command(start, end),
     };
@@ -871,7 +882,7 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
     // Selection (Convert Point with ⌘ too) keep the commands' own names.
     let convert_tool = app.ui.tool == Tool::ConvertPoint && !direct(app.ui.tool, mods);
     let step_name = match edit {
-        Edit::Convert(_) if convert_tool => Some("Change Anchor Point"),
+        Edit::Convert(_) | Edit::ConvertOne(_) if convert_tool => Some("Change Anchor Point"),
         Edit::Handle(.., true) if convert_tool => Some("Corner Drag"),
         _ => None,
     };
@@ -1031,6 +1042,9 @@ mod convert_point_tolerance_tests;
 
 #[cfg(test)]
 mod convert_point_drag_segment_tests;
+
+#[cfg(test)]
+mod convert_point_alt_drag_tests;
 
 #[cfg(test)]
 mod delete_key_tests;
