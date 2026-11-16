@@ -999,7 +999,10 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A layer's warp held in document space (the contents couldn't be read when it was made)
     // carries on there.
     let held_in_doc = t.held_warp.is_some() && t.held_place.is_none();
-    let existing = app.session.active().filter(|_| plain && !held_in_doc && !in_doc).and_then(|d| {
+    // An upright smart object whose box hasn't moved was handled above; once the box has moved (a
+    // Perspective or Distort not yet applied), its warp is edited here like any other, in the
+    // contents' space and shown through the box, so the move stays exact.
+    let existing = app.session.active().filter(|_| plain && !held_in_doc && !(in_doc && untouched)).and_then(|d| {
         let layer = d.doc.layer(id)?;
         let (w, place) = photocraft_engine::warp_cmds::smart_warp_source(&d.doc, layer)?;
         // The preview reads the contents unplaced: the layer's own pixels would be placed twice.

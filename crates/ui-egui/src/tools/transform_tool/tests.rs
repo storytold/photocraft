@@ -4370,6 +4370,38 @@ fn warp_after_distort_keeps_the_smart_objects_distort() {
     );
 }
 
+/// An upright smart object's box dragged into a perspective and switched to Warp without
+/// applying: the warp is edited in the contents' space and shown through the perspective, so the
+/// picture keeps its foreshortening (its middle stays near the narrow side). A mesh built by
+/// sending a flat grid through the perspective put the middle back near the box's centre.
+#[test]
+fn warp_after_an_unapplied_perspective_keeps_it() {
+    use photocraft_algo::transform::Homography;
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(100, photocraft_geom::Rect::new(20, 30, 80, 70));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    let quad = [[42.0, 30.0], [58.0, 30.0], [80.0, 70.0], [20.0, 70.0]];
+    let (rect, h) = {
+        let t = app.ui.transform.as_mut().unwrap();
+        t.mode = TransformMode::Perspective;
+        t.quad = quad;
+        (t.rect, Homography::rect_to_quad(t.rect, quad).unwrap())
+    };
+    enter_warp(&mut app, &ctx);
+    let t = app.ui.transform.as_ref().unwrap();
+    let mesh = t.warp.as_ref().unwrap().mesh.clone().unwrap();
+    for (s, u) in [(0.5, 0.5), (0.25, 0.25), (0.75, 0.6)] {
+        let got = t.warp_to_doc(mesh.eval(s, u));
+        let want = h.apply(rect[0] + s * (rect[2] - rect[0]), rect[1] + u * (rect[3] - rect[1]));
+        assert!((got[0] - want.0).abs() < 1e-6 && (got[1] - want.1).abs() < 1e-6, "at ({s}, {u}): {got:?}, the perspective puts it at {want:?}");
+    }
+    // Applied from Warp with the mesh untouched, the smart object keeps the perspective.
+    commit(&mut app);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(near_quad(smart_corners(&app), quad, 1e-6), "{:?}", smart_corners(&app));
+}
+
 /// A smart object in a 100 px document, its 40×20 contents at (30, 40), with `place` applied.
 fn placed_smart(place: serde_json::Value) -> PhotocraftApp {
     let mut app = app_with_square(100, photocraft_geom::Rect::new(30, 40, 70, 60));
