@@ -26,6 +26,8 @@ fn command() -> std::process::Command {
     cmd.env("PHOTOCRAFT_CONFIG_DIR", &settings)
         .env("CRAFT_MCP_DIR", base.join("launcher"))
         .env("CRAFT_FLAGS_FILE", base.join("flags.toml"))
+        // Never this machine's own AI settings: Estimate Depth reads them.
+        .env("CRAFT_AI_DIR", base.join("ai"))
         .env_remove("CRAFT_FLAGS");
     cmd
 }

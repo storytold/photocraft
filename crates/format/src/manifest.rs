@@ -79,6 +79,9 @@ pub struct DocM {
     /// The JPEG quality / WebP encoding File › Save reuses.
     #[serde(default, skip_serializing_if = "photocraft_doc::FileEncoding::is_empty")]
     pub file_encoding: photocraft_doc::FileEncoding,
+    /// Vanishing Point planes.
+    #[serde(default, skip_serializing_if = "photocraft_doc::PerspectivePlanes::is_empty")]
+    pub perspective: photocraft_doc::PerspectivePlanes,
     /// Image › Analysis: measurement scale, count groups, ruler.
     #[serde(default)]
     pub measurement: photocraft_doc::Measurement,

@@ -1359,6 +1359,7 @@ pub mod count_group_name_ui;
 pub mod credits;
 pub mod dds_options_ui;
 pub mod delete_layer_prompt;
+pub(crate) mod depth_ui;
 pub mod dialog_alt_reset;
 pub mod dialog_blend_ui;
 pub mod discard_ui;

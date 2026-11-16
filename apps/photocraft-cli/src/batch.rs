@@ -118,7 +118,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
         // Without --format, a file PhotoCraft only opens (.kra, raw, …) is saved as PSD, the
         // same format `--naming`'s {ext} plans.
         let ext = format.map_or_else(|| photocraft_engine::file_cmds::batch_same_format(&input.to_string_lossy()), str::to_owned);
-        let mut h = Headless::trusted_local();
+        let mut h = Headless::trusted_local().with_ai_tools();
         h.set_renderer(renderer.take());
         let r = (|| -> Result<Vec<String>> {
             if let Some(parent) = target.parent() {
@@ -197,6 +197,7 @@ pub(crate) fn droplet(a: &DropletArgs, out: &mut dyn Write, err: &mut dyn Write)
         p["output"] = json!(o);
     }
     let mut s = photocraft_engine::Session::new();
+    let _ = s.depth.ai.use_standard_host();
     let r = s.execute("file.automate.runDroplet", p)?;
     for f in r["files"].as_array().into_iter().flatten() {
         let _ = writeln!(out, "ok    {}", f.as_str().unwrap_or_default());
@@ -338,7 +339,7 @@ mod tests {
         let opts = ExportOptions::default();
 
         for (idx, input) in inputs.iter().enumerate() {
-            let mut h = Headless::trusted_local();
+            let mut h = Headless::trusted_local().with_ai_tools();
             h.set_renderer(renderer.take());
             let r = (|| -> Result<Vec<String>> {
                 h.open(input)?;

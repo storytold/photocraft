@@ -412,3 +412,184 @@ fn selecting_another_layer_keeps_the_stamp_preview() {
     assert!(Arc::ptr_eq(&after.0, &before.0));
     assert_eq!(after.1, before.1);
 }
+
+#[test]
+fn begin_loads_the_planes_saved_in_the_document() {
+    let (ctx, mut app) = app_with_layer();
+    let floor = [[70.0, 60.0], [170.0, 60.0], [220.0, 150.0], [20.0, 150.0]];
+    let id = app.session.active().unwrap().doc.id;
+    app.session
+        .edit("planes", |doc, _| {
+            // One good plane, one bow-tie and one with a NaN corner: the last two are skipped.
+            doc.perspective.planes =
+                vec![floor, [[0.0, 0.0], [100.0, 100.0], [100.0, 0.0], [0.0, 100.0]], [[f64::NAN, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]];
+            Ok(())
+        })
+        .unwrap();
+    app.sync_views();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    let s = app.distort.vanishing.as_ref().unwrap();
+    assert_eq!(s.document, id);
+    assert_eq!(s.planes.len(), 1);
+    assert_eq!(s.planes[0].corners, floor);
+    assert_eq!(s.torn, vec![None]);
+    assert_eq!(s.tool, VpTool::EditPlane);
+}
+
+#[test]
+fn ok_with_only_planes_saves_them_and_a_canvas_resize_makes_them_stale() {
+    let (ctx, mut app) = app_with_layer();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    for (x, y) in [(20.0, 150.0), (220.0, 150.0), (170.0, 60.0), (70.0, 60.0)] {
+        crate::distort_ui::pointer(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+        crate::distort_ui::pointer(&mut app, ToolEvent::Up { x, y }, egui::Modifiers::NONE);
+    }
+    let steps = app.session.active().unwrap().history.past_len();
+    let r = commit(&mut app).unwrap();
+    assert_eq!(r["committed"], true, "{r}");
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    let pp = app.session.active().unwrap().doc.perspective.clone();
+    assert_eq!(pp.planes, vec![[[70.0, 60.0], [170.0, 60.0], [220.0, 150.0], [20.0, 150.0]]]);
+    assert_eq!(pp.size, Some([240, 160]));
+    // Reopening and pressing OK again changes nothing.
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().planes.len(), 1);
+    assert_eq!(commit(&mut app).unwrap()["committed"], false);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    // A Canvas Size carries the saved planes along with the picture, so they are loaded still.
+    app.session.execute("image.canvasSize", json!({"width": 300, "height": 160, "anchor": "topLeft"})).unwrap();
+    app.sync_views();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().planes.len(), 1);
+    // Planes saved for another canvas no longer fit and are not loaded.
+    app.session
+        .edit("stale planes", |doc, _| {
+            doc.perspective.size = Some([999, 999]);
+            Ok(())
+        })
+        .unwrap();
+    app.sync_views();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    assert!(app.distort.vanishing.as_ref().unwrap().planes.is_empty());
+}
+
+#[test]
+fn paste_shade_is_sent_only_when_set_and_steps_with_undo() {
+    let (ctx, mut app) = app_with_layer();
+    copy_red_square(&mut app);
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    control(&mut app, &json!({"planes": [{"corners": [[70, 60], [170, 60], [220, 150], [20, 150]]}]})).unwrap();
+    let s = app.distort.vanishing.as_ref().unwrap();
+    assert!(s.params()["paste"][0].get("shade").is_none(), "off by default: the entry is unchanged");
+    control(&mut app, &json!({"pasteShade": 0.6})).unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().params()["paste"][0]["shade"], json!(0.6));
+    // Out of range or non-numeric values are clamped or ignored.
+    control(&mut app, &json!({"pasteShade": 7})).unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().paste_shade, 1.0);
+    app.distort.vanishing.as_mut().unwrap().step(Step::Undo);
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().paste_shade, 0.6);
+}
+
+#[test]
+fn the_saved_focal_length_survives_reopening_and_ok() {
+    let (ctx, mut app) = app_with_layer();
+    copy_red_square(&mut app);
+    let floor = [[70.0, 60.0], [170.0, 60.0], [220.0, 150.0], [20.0, 150.0]];
+    app.session
+        .edit("planes", |doc, _| {
+            doc.perspective = photocraft_doc::PerspectivePlanes { planes: vec![floor], focal: Some(500.0), size: Some([240, 160]) };
+            Ok(())
+        })
+        .unwrap();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    let s = app.distort.vanishing.as_ref().unwrap();
+    assert_eq!(s.focal, Some(500.0));
+    assert_eq!(s.params()["focalLength"], json!(500.0), "the commit sends the saved focal length");
+    // The session's scene uses it: another camera gives other plane geometry.
+    let with_saved = s.frame(0).unwrap().1;
+    let sess = app.distort.vanishing.as_mut().unwrap();
+    sess.focal = Some(5000.0);
+    let other = sess.frame(0).unwrap().1;
+    assert_ne!(with_saved, other);
+    sess.focal = Some(500.0);
+    // OK with a paste keeps the focal length with the document.
+    let r = commit(&mut app).unwrap();
+    assert_eq!(r["committed"], true, "{r}");
+    assert_eq!(app.session.active().unwrap().doc.perspective.focal, Some(500.0));
+}
+
+#[test]
+fn a_focal_length_saved_with_no_planes_survives_reopening_and_a_paste_commit() {
+    let (ctx, mut app) = app_with_layer();
+    copy_red_square(&mut app);
+    app.session.execute("perspective.setPlanes", json!({"planes": [], "focal": 500})).unwrap();
+    assert!(app.session.active().unwrap().doc.perspective.planes.is_empty());
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    let s = app.distort.vanishing.as_ref().unwrap();
+    assert!(s.planes.is_empty());
+    assert_eq!(s.focal, Some(500.0), "no planes does not drop the saved focal length");
+    assert_eq!(s.params()["focalLength"], json!(500.0));
+    // A plane drawn now and pasted onto keeps the focal length with the document.
+    control(&mut app, &json!({"planes": [{"corners": [[70, 60], [170, 60], [220, 150], [20, 150]]}]})).unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().params()["focalLength"], json!(500.0));
+    let r = commit(&mut app).unwrap();
+    assert_eq!(r["committed"], true, "{r}");
+    assert_eq!(app.session.active().unwrap().doc.perspective.focal, Some(500.0));
+    // A focal length saved for another canvas size is still dropped.
+    app.session
+        .edit("other canvas", |doc, _| {
+            doc.perspective = photocraft_doc::PerspectivePlanes { planes: Vec::new(), focal: Some(500.0), size: Some([999, 999]) };
+            Ok(())
+        })
+        .unwrap();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    assert_eq!(app.distort.vanishing.as_ref().unwrap().focal, None);
+}
+
+#[test]
+fn the_dialog_ignores_a_saved_focal_length_the_camera_would_ignore() {
+    let (ctx, mut app) = app_with_layer();
+    for (f, kept) in [(0.5, None), (1.0, None), (1.5, Some(1.5))] {
+        app.session
+            .edit("focal", move |doc, _| {
+                doc.perspective = photocraft_doc::PerspectivePlanes { planes: Vec::new(), focal: Some(f), size: None };
+                Ok(())
+            })
+            .unwrap();
+        crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+        assert_eq!(app.distort.vanishing.as_ref().unwrap().focal, kept, "saved focal {f}");
+        app.distort.vanishing = None;
+    }
+}
+
+#[test]
+fn the_stamp_preview_shades_the_paste_like_ok_and_repaints_when_the_shade_changes() {
+    let (ctx, mut app) = app_with_layer();
+    copy_red_square(&mut app);
+    // Fine stripes in the photo under the plane: the paste takes them on when shaded.
+    app.session
+        .edit("stripes", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            for x in 60..240 {
+                let v = if x % 2 == 0 { 0.2 } else { 0.8 };
+                surf.fill_rect(Rect::new(x, 0, x + 1, 160), &[v, v, v, 1.0]);
+            }
+            Ok(())
+        })
+        .unwrap();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    control(
+        &mut app,
+        &json!({"planes": [{"corners": [[10, 10], [230, 10], [230, 150], [10, 150]]}], "clone": [{"source": [100, 60], "points": [[40, 120]], "size": 8, "hardness": 80}]}),
+    )
+    .unwrap();
+    let shown = |app: &PhotocraftApp| photocraft_compose::flatten(&app.distort.vanishing.as_ref().unwrap().shown().unwrap().0).into_px();
+    let unshaded = shown(&app);
+    control(&mut app, &json!({"pasteShade": 1.0})).unwrap();
+    sync_preview(&mut app);
+    let shaded = shown(&app);
+    assert_ne!(unshaded, shaded, "changing the shade repaints the preview");
+    // What the preview shows is what OK commits.
+    commit(&mut app).unwrap();
+    assert_eq!(photocraft_compose::flatten(&app.session.active().unwrap().doc).px, shaded);
+}

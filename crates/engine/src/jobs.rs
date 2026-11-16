@@ -106,6 +106,19 @@ struct Shared {
     batch_decision: Condvar,
     batch_preview: Mutex<Option<BatchPreview>>,
     batch_preview_generation: std::sync::atomic::AtomicU64,
+    /// The job this context was derived from ([`JobCtx::child`]): its cancel is this one's too.
+    parent: Option<Arc<Shared>>,
+}
+
+impl Shared {
+    fn cancelled(&self) -> bool {
+        let state = self.state.load(Ordering::Acquire);
+        // A committed context is past the point of no return: a cancel (its own or its parent's) no longer applies.
+        if state & COMMITTED != 0 {
+            return false;
+        }
+        state & CANCEL_REQUESTED != 0 || self.parent.as_ref().is_some_and(|parent| parent.cancelled())
+    }
 }
 
 /// The current folder Batch input, published as an immutable snapshot for the desktop canvas.
@@ -167,7 +180,14 @@ impl JobCtx {
 
     /// Has the job been cancelled? Long loops check this and stop early.
     pub fn cancelled(&self) -> bool {
-        self.shared.state.load(Ordering::Acquire) & CANCEL_REQUESTED != 0
+        self.shared.cancelled()
+    }
+
+    /// A context of its own (progress, commit and Batch state are not shared) that is cancelled
+    /// when this one is. For nested work run on this job's behalf, such as the commands of a Batch
+    /// input: it must stop with the Batch but must not report progress or commit for it.
+    pub fn child(&self) -> JobCtx {
+        JobCtx { shared: Arc::new(Shared { parent: Some(self.shared.clone()), ..Shared::default() }) }
     }
 
     /// Ask the job to stop (idempotent). Does nothing once it has [committed](Self::commit).

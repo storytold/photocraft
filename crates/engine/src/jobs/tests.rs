@@ -191,6 +191,17 @@ fn a_panic_in_a_command_becomes_an_error_and_the_document_is_unchanged() {
 }
 
 #[test]
+fn a_committed_child_ignores_its_parents_cancel() {
+    let parent = JobCtx::new();
+    let committed = parent.child();
+    let running = parent.child();
+    committed.commit().unwrap();
+    parent.cancel();
+    assert!(!committed.cancelled(), "past its point of no return");
+    assert!(running.cancelled(), "an uncommitted child still follows its parent");
+}
+
+#[test]
 fn progress_is_monotonic_and_reaches_one() {
     let ctx = JobCtx::new();
     ctx.progress(0.5, "half");
