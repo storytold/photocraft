@@ -12,6 +12,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 #[cfg(test)]
+mod open_psb_filter_tests;
+#[cfg(test)]
 mod recovery_tests;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
@@ -41,7 +43,8 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 /// [`OPEN_EXTS`]. An explicit SVG filter also keeps vector artwork discoverable when a native
 /// picker defaults to another filter.
 const OPEN_FILTERS: &[(&str, &[&str])] = &[
-    ("Photoshop", &["psd", "psb", "psdt"]),
+    ("Photoshop", &["psd", "psdt"]),
+    ("Large Document Format", &["psb"]),
     ("PhotoCraft", &["pcraft"]),
     ("Affinity", &["af", "afdesign", "afphoto", "afpub"]),
     ("Amiga IFF", &["iff", "lbm", "ilbm"]),
