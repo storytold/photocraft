@@ -707,7 +707,7 @@ impl<'a> ExportTargets<'a> {
             scopes: Default::default(),
             wire_sets: groups
                 .iter()
-                .flat_map(|(name, group)| group.actions.iter().map(move |action| (std::ptr::from_ref(*action), super::wire_set_name(*name))))
+                .flat_map(|(name, group)| group.actions.iter().map(move |action| (std::ptr::from_ref(*action), super::wire_set_name(name))))
                 .collect(),
         };
         for (index, action) in actions.iter().enumerate() {
