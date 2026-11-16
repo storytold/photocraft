@@ -44,9 +44,6 @@ flate2 = { workspace = true }
 getrandom = { workspace = true, features = ["wasm_js"] }
 craft-print = { workspace = true }
 
-# Release tags use the same semantic versions as Cargo.
-semver = "1"
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tempfile = "3"
 # `clock`: the local time that names History Options' snapshot on save (#2966); already in the
