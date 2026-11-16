@@ -88,6 +88,22 @@ fn stepped_png_import_keeps_a_palette_as_indexed_colour() {
     assert_stepped_equals_import("p.png", &bytes, "palette");
 }
 
+/// A palette whose entries share a colour is read again for its indices a band of rows per step,
+/// and gives the indices the one-shot import gives (#14342).
+#[test]
+fn a_palette_png_is_read_for_its_indices_a_band_of_rows_per_step() {
+    let (w, h) = (3, photocraft_geom::TILE_SIZE as u32 * 3 + 5);
+    let idx: Vec<u8> = (0..w * h).map(|i| (i % 2) as u8).collect();
+    let shared = photocraft_codecs::encode_png_indexed(w, h, &idx, &[[255; 3], [255; 3]], None, None, None).unwrap();
+    let distinct = photocraft_codecs::encode_png_indexed(w, h, &idx, &[[255; 3], [0; 3]], None, None, None).unwrap();
+    assert!(whole("p.png", &shared).document.color_indices.is_some(), "the one-shot import records them");
+    assert_stepped_equals_import("p.png", &shared, "entries sharing a colour");
+    let (_, with) = stepped_zero_budget("p.png", &shared);
+    let (_, without) = stepped_zero_budget("p.png", &distinct);
+    // Four bands of rows, each a call of its own with an empty budget.
+    assert_eq!(with, without + 4);
+}
+
 #[test]
 fn stepped_png_import_takes_a_step_per_row_and_bounded_steps_to_build_the_document() {
     let bytes = encode(&noise(8, 20, ChannelLayout::Rgba, SampleType::U8), Format::Png, &EncodeOptions::default()).unwrap();
