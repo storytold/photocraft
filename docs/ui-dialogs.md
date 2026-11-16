@@ -60,6 +60,7 @@ Dispatch order matches `dialogs::show` in `dialogs.rs` (check earlier rows befor
 | `__web` / `__print` | `file_ui.rs` | Save for Web (reopens on the preview tab chosen last, #9174), Print |
 | `__colorPicker` | `color_picker_ui.rs` | Foreground/background, nested field/command pickers (see nested keys below) |
 | `__colorRange` | `color_range_ui.rs` | Select › Color Range… |
+| `__selectionChannel` | `selection_channel_ui.rs` | Select › Save Selection… / Load Selection…: Document (same-size open images; New for Save), Channel, Name / Invert, Operation |
 | `__prefsui` | `prefs_ui.rs` | Edit › Preferences… and related preset/import subdialogs |
 | `__export` | `export_dialog.rs` | Export As (document or layer) |
 | `__sizing` | `sizing.rs` | Image › Image Size… / Canvas Size… |

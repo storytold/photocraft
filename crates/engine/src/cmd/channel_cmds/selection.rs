@@ -1,13 +1,19 @@
 use super::planes::{channel_format, next_alpha_name, plane_surface, read_plane};
 use super::refs::{ChanRef, bad, doc_index, parse_ref, source};
 use super::view::{ChannelTarget, QuickMaskOptions};
-use super::{AlphaChannel, ColorIndicates, Document, EngineError, PixelFormat, Rect, Result, SelectionMode, Session, Surface, Value, json, operation, sel};
+use super::{
+    AlphaChannel, Color, ColorIndicates, ColorMode, Document, EngineError, PixelFormat, Rect, Result, SelectionMode, Session, Surface, Value, json, operation,
+    sel,
+};
 
 pub(super) fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "select.saveSelection";
     let op = p.get("operation").and_then(Value::as_str).unwrap_or("new").to_string();
     if !matches!(op.as_str(), "new" | "replace" | "add" | "subtract" | "intersect") {
         return Err(bad(cmd, format!("unknown operation `{op}`")));
+    }
+    if p.get("document").and_then(Value::as_str) == Some("new") {
+        return save_to_new_document(s, p, &op);
     }
     let di = doc_index(s, p, "document")?;
     let src = s.active().ok_or(EngineError::NoDocument)?;
@@ -37,14 +43,17 @@ pub(super) fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
                 Ok(doc.channels.len() - 1)
             }
             (Some(i), op) => {
-                let old = read_plane(&doc.channels[i].surface, area);
+                // A spot channel stores ink (1 = solid) but reads as its tone, as Load Selection
+                // reads it: the selection combines with the tone and is stored back as ink.
+                let ink = doc.channels[i].spot.is_some();
+                let old = tone_of(read_plane(&doc.channels[i].surface, area), ink);
                 let vals: Vec<f32> = match op {
                     "add" => old.iter().zip(&selection).map(|(a, b)| a.max(*b)).collect(),
                     "subtract" => old.iter().zip(&selection).map(|(a, b)| (a - b).max(0.0)).collect(),
                     "intersect" => old.iter().zip(&selection).map(|(a, b)| a.min(*b)).collect(),
                     _ => selection.clone(),
                 };
-                doc.channels[i].surface = plane_surface(&vals, area, fmt);
+                doc.channels[i].surface = plane_surface(&tone_of(vals, ink), area, fmt);
                 if let Some(n) = &name {
                     doc.channels[i].name = n.clone();
                 }
@@ -58,6 +67,43 @@ pub(super) fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let i = r?;
     let name = s.documents()[di].doc.channels[i].name.clone();
     Ok(json!({ "channel": i, "name": name, "document": di }))
+}
+
+/// A channel's values as its tone, or a tone as the channel's values: the values themselves, and
+/// for an `ink` (spot) channel, which stores density, their complement.
+fn tone_of(plane: Vec<f32>, ink: bool) -> Vec<f32> {
+    if ink { plane.into_iter().map(|v| 1.0 - v).collect() } else { plane }
+}
+
+/// Save Selection with Document: New. As in Photoshop the selection goes to a new Multichannel
+/// document ("Untitled-N", the source's size, depth and resolution) as its only channel, named as
+/// typed or "Alpha 1". PhotoCraft draws a Multichannel image from its ink channels, so the
+/// channel is kept the way a converted Lab image keeps its "Alpha" channels: a black ink whose
+/// density is the unselected amount. The image then shows the selection white on black, and Load
+/// Selection reads the channel back as the selection (a spot channel reads as its tone). A new
+/// document has no channel to replace or combine with, so only `channel: "new"` and
+/// `operation: "new"` are accepted. The new document becomes the active one.
+fn save_to_new_document(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
+    let cmd = "select.saveSelection";
+    match p.get("channel") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(c)) if c == "new" => {}
+        Some(_) => return Err(bad(cmd, "a new document has no channel to save into: `channel` must be \"new\"")),
+    }
+    if op != "new" {
+        return Err(bad(cmd, format!("a new document has no channel to {op}: `operation` must be \"new\"")));
+    }
+    let src = s.active().ok_or(EngineError::NoDocument)?;
+    let area = src.doc.bounds();
+    let ink: Vec<f32> = sel::mask_from_surface(src.doc.selection.as_ref(), area).into_iter().map(|v| 1.0 - v).collect();
+    let name = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Alpha 1").to_string();
+    let doc_name = crate::file_cmds::untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
+    let mut doc = Document::new(doc_name, src.doc.size, ColorMode::Multichannel, src.doc.depth);
+    doc.resolution_dpi = src.doc.resolution_dpi;
+    let surface = plane_surface(&ink, area, channel_format(&doc));
+    doc.channels.push(AlphaChannel { spot: Some((Color::BLACK, 0.0)), ..AlphaChannel::new(name.clone(), surface) });
+    let di = s.add_document(doc, None);
+    Ok(json!({ "channel": 0, "name": name, "document": di }))
 }
 
 pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {

@@ -645,8 +645,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             crate::actions::bind_batch_dialog(app, dialog, row);
             Some(Ok(json!({"dialog": dialog})))
         }
+        // Save Selection and Load Selection have their own dialog, with the Document.
+        "select.saveSelection" | "select.loadSelection" => Some(crate::selection_channel_ui::open(app, id)),
         // Channel workflow dialogs (see channels_panel.rs for the channel references).
-        "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => {
+        "image.applyImage" | "image.calculations" => {
             let st = app.session.active()?;
             let d = &st.doc;
             let mode = d.pixel_format().mode;
@@ -655,7 +657,6 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 chans.extend(photocraft_engine::channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
             }
             chans.extend(d.channels.iter().map(|c| c.name.clone()));
-            let alphas: Vec<String> = std::iter::once("new".to_string()).chain(d.channels.iter().map(|c| c.name.clone())).collect();
             let blends = [
                 "multiply",
                 "screen",
@@ -685,19 +686,6 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             }
             load.push("selection".into());
             match id {
-                "select.saveSelection" => dialog(
-                    app,
-                    json!({"channel": "new", "name": "", "operation": "new"}),
-                    json!({"channel": alphas, "operation": ["new", "replace", "add", "subtract", "intersect"]}),
-                ),
-                "select.loadSelection" => {
-                    let first = d.channels.first().map_or_else(|| chans[0].clone(), |c| c.name.clone());
-                    dialog(
-                        app,
-                        json!({"channel": first, "invert": false, "operation": "new"}),
-                        json!({"channel": load, "operation": ["new", "add", "subtract", "intersect"]}),
-                    )
-                }
                 "image.applyImage" => {
                     let mut masks = vec!["none".to_string()];
                     masks.extend(load.iter().cloned());
