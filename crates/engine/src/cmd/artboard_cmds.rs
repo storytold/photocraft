@@ -893,7 +893,7 @@ fn check_folder(_: &str) -> Result<()> {
 
 /// Where Artboards to PDF writes `path`: `~` expanded, and `<document name>.pdf` inside it when it
 /// names a folder (`~/`). Its folder must exist ([`check_folder`]).
-fn pdf_destination(path: &str, doc_name: &str) -> Result<String> {
+pub fn pdf_destination(path: &str, doc_name: &str) -> Result<String> {
     let path = expand_home(path);
     let folder = path.ends_with(['/', '\\']) || (cfg!(not(target_arch = "wasm32")) && std::path::Path::new(&path).is_dir());
     let path = if folder { join(&path, &format!("{}.pdf", stem(doc_name))) } else { path };
@@ -995,6 +995,9 @@ mod file_names_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_destination_tests.rs"]
+mod pdf_destination_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_page_order_tests.rs"]
 mod pdf_page_order_tests;

@@ -1086,6 +1086,10 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     let result = crate::actions::run_step_dialog(app, &d.fields, &cmd, params.clone());
     if let Ok(r) = &result {
         report_file_errors(app, &d, r);
+        // Run on this thread (no background jobs): the export is over.
+        if cmd == "file.export.artboardsToPdf" {
+            artboards_to_pdf_done(app, r);
+        }
     }
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
@@ -1126,6 +1130,36 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     result
 }
 
+/// Artboards to PDF with a destination folder that doesn't exist stays open with its values and
+/// says so in an alert, as the reference application does (#13657). The engine refuses it too,
+/// for scripts; here the dialog isn't closed first.
+fn artboards_to_pdf_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
+    let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id) else { return Ok(()) };
+    if d.fields.get("__command").and_then(Value::as_str) != Some("file.export.artboardsToPdf") {
+        return Ok(());
+    }
+    let path = d.fields.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
+    let name = app.session.active().map(|st| st.doc.name.clone()).unwrap_or_default();
+    if let Err(e) = photocraft_engine::artboard_cmds::pdf_destination(&path, &name) {
+        let message = e.to_string();
+        let mut fields = serde_json::Map::new();
+        fields.insert("message".into(), json!(message));
+        app.ui.open_dialog(DialogKind::Error, fields);
+        return Err(message);
+    }
+    Ok(())
+}
+
+/// The alert a finished Artboards to PDF shows (#13657): "Artboards To PDF was successful." with
+/// the PDF's path on a second line. `result` is the command's; a pending job reports it when it
+/// lands (`jobs_ui`).
+pub(crate) fn artboards_to_pdf_done(app: &mut PhotocraftApp, result: &Value) {
+    let Some(path) = result.get("path").and_then(Value::as_str) else { return };
+    let mut fields = serde_json::Map::new();
+    fields.insert("message".into(), json!(format!("{}\n{path}", tl!("Artboards To PDF was successful."))));
+    app.ui.open_dialog(DialogKind::Error, fields);
+}
+
 /// Check child pickers, file access and dialog-specific inputs before removing the dialog.
 /// Equalize checks its document, layer and selection. A rejected preset choice leaves the prompt
 /// and its pending import available for retry.
@@ -1161,6 +1195,7 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     }
     // Merge Channels with too few, repeated, closed or changed documents stays open (#11451).
     merge_channels_ui::preflight(app, id)?;
+    artboards_to_pdf_preflight(app, id)?;
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::preset_group_prompt::owns(&d.fields)) {
         crate::preset_group_prompt::replace_choice(&d.fields)?;
     }
