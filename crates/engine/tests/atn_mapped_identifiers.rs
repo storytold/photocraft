@@ -769,10 +769,85 @@ fn recorded_transform_zero_points_replay_independently_of_depth_and_resolution()
 }
 
 #[test]
-fn recorded_transform_zero_points_keep_nonzero_or_unrepresentable_offsets() {
+fn recorded_transform_nonzero_points_keep_their_units_and_precision() {
+    for (ux, dx, uy, dy) in [
+        (*b"#Rlt", 0.36, *b"#Rlt", -1.08),
+        (*b"#Rlt", -2.842_170_943_040_401e-14, *b"#Rlt", -2.842_170_943_040_401e-14),
+        (*b"#Rlt", 1.0, *b"#Rlt", 0.0),
+        (*b"#Rlt", 1.0, *b"#Pxl", 0.0),
+        (*b"#Pxl", 0.0, *b"#Rlt", -1.0),
+    ] {
+        for event in [AtnEvent::Code(*b"Trnf"), AtnEvent::name("transform")] {
+            let action = recorded(event, relative_transform(D::UnitFloat { unit: ux, value: dx }, D::UnitFloat { unit: uy, value: dy }));
+            assert_eq!(action.steps[0].0, "edit.transform");
+            assert_eq!(action.steps[0].1["offsetUnits"], "pt");
+            assert_eq!(action.steps[0].1["dx"].as_f64(), Some(dx));
+            assert_eq!(action.steps[0].1["dy"].as_f64(), Some(dy));
+            let back = saved(&action).descriptor.unwrap();
+            let Some(D::Descriptor(offset)) = back.get("Ofst") else { panic!("offset") };
+            for (key, value) in [("Hrzn", dx), ("Vrtc", dy)] {
+                assert_eq!(offset.get(key), Some(&D::UnitFloat { unit: *b"#Rlt", value }));
+            }
+            assert_eq!(recorded(AtnEvent::Code(*b"Trnf"), back).steps, action.steps);
+        }
+    }
+}
+
+#[test]
+fn recorded_transform_nonzero_points_resolve_against_the_playback_dpi() {
+    let setup = |depth, dpi| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":32,"height":32,"depth":depth,"resolution":dpi,"background":"transparent"})).unwrap();
+        s.execute("select.rect", json!({"x":8,"y":10,"width":8,"height":8})).unwrap();
+        s.execute("edit.fill", json!({"contents":"color","color":"#ff0000"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s
+    };
+    let action =
+        recorded(AtnEvent::Code(*b"Trnf"), relative_transform(D::UnitFloat { unit: *b"#Rlt", value: 1.0 }, D::UnitFloat { unit: *b"#Rlt", value: -1.0 }));
+    for depth in [8, 16, 32] {
+        for dpi in [72, 144, 300] {
+            let mut actual = setup(depth, dpi);
+            let mut expected = setup(depth, dpi);
+            let before = actual.active().unwrap().doc.clone();
+            replay_saved(&mut actual, &action);
+            expected
+                .execute("edit.transform", json!({"scaleX":50,"scaleY":50,"dx":f64::from(dpi)/72.0,"dy":-f64::from(dpi)/72.0,"interpolation":"nearest"}))
+                .unwrap();
+            let pixels = |s: &Session| s.active().unwrap().doc.layers[0].surface().unwrap().read_region(s.active().unwrap().doc.bounds());
+            assert_eq!(pixels(&actual), pixels(&expected), "{depth} bits, {dpi} dpi");
+            assert_ne!(actual.active().unwrap().doc, before);
+            actual.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(actual.active().unwrap().doc, before);
+        }
+    }
+}
+
+#[test]
+fn recorded_transform_nonzero_points_reject_invalid_native_units_and_values() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":8,"height":8,"resolution":300,"background":"transparent"})).unwrap();
+    s.execute("edit.fill", json!({"contents":"color","color":"#ff0000"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    for p in [
+        json!({"dx":1,"offsetUnits":"in"}),
+        json!({"dx":1,"offsetUnits":true}),
+        json!({"dx":"wrong","offsetUnits":"pt"}),
+        json!({"matrix":[1,0,0,1,2,3],"offsetUnits":"pt"}),
+    ] {
+        assert!(s.execute("edit.transform", p.clone()).is_err(), "{p}");
+        assert_eq!(s.active().unwrap().doc, before);
+        let action = Action::new("Recorded", vec![("edit.transform".into(), p.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&action], &[], false).is_err(), "{p}");
+    }
+    assert!(s.execute("edit.transform", json!({"dx":1e308,"offsetUnits":"pt"})).is_err());
+    assert_eq!(s.active().unwrap().doc, before);
+    s.execute("edit.transform", json!({"dx":1,"offsetUnits":"pt"})).unwrap();
+}
+
+#[test]
+fn recorded_transform_points_keep_unrepresentable_offsets() {
     for value in [
-        D::UnitFloat { unit: *b"#Rlt", value: 1.0 },
-        D::UnitFloat { unit: *b"#Rlt", value: -2.842_170_943_040_401e-14 },
         D::UnitFloat { unit: *b"#Rlt", value: f64::NAN },
         D::UnitFloat { unit: *b"#Pxl", value: f64::INFINITY },
         D::UnitFloat { unit: *b"#Prc", value: 0.0 },
@@ -785,6 +860,30 @@ fn recorded_transform_zero_points_keep_nonzero_or_unrepresentable_offsets() {
             assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{value:?}");
             assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
         }
+    }
+    let mut selection = relative_transform(D::UnitFloat { unit: *b"#Rlt", value: 1.0 }, D::UnitFloat { unit: *b"#Rlt", value: 0.0 });
+    selection.items.iter_mut().find(|(key, _)| key.is("null")).unwrap().1 =
+        D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]);
+    let mixed = relative_transform(D::UnitFloat { unit: *b"#Rlt", value: 1.0 }, D::UnitFloat { unit: *b"#Pxl", value: 2.0 });
+    for d in [selection, mixed] {
+        let action = recorded(AtnEvent::Code(*b"Trnf"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    for offset in [
+        D::Integer(0),
+        D::Descriptor(
+            Descriptor::new("Ofst")
+                .with("Hrzn", D::UnitFloat { unit: *b"#Rlt", value: 1.0 })
+                .with("Vrtc", D::UnitFloat { unit: *b"#Rlt", value: 0.0 })
+                .with("unknown", D::Boolean(true)),
+        ),
+    ] {
+        let mut d = relative_transform(D::UnitFloat { unit: *b"#Pxl", value: 0.0 }, D::UnitFloat { unit: *b"#Pxl", value: 0.0 });
+        d.items.iter_mut().find(|(key, _)| key.is("Ofst")).unwrap().1 = offset;
+        let action = recorded(AtnEvent::name("transform"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
     }
 }
 

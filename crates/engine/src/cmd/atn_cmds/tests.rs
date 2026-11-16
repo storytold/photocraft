@@ -1078,6 +1078,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("select.editInQuickMaskMode", json!({"on": true})),
         ("select.editInQuickMaskMode", json!({"on": false})),
         ("edit.transform", json!({"dx": 10, "dy": -5, "scaleX": 50, "scaleY": 75, "rotate": 12.5, "interpolation": "bicubic"})),
+        ("edit.transform", json!({"dx":0.36,"dy":-1.08,"offsetUnits":"pt","scaleX":50,"scaleY":75,"reference":"topLeft","interpolation":"nearest"})),
         ("edit.transform", json!({"layer": "Shadow", "dx": 0, "dy": 0, "scaleX": 200})),
         ("select.transformSelection", json!({"dx": 3, "dy": 4, "scaleX": 110, "scaleY": 110, "rotate": -30})),
         (
