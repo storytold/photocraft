@@ -142,6 +142,8 @@ struct Image<'a> {
     /// offsets referencing one record with a large name would otherwise allocate an owned
     /// copy per reference, multiplying a small file into gigabytes of retained metadata.
     meta_budget: usize,
+    /// Nonrefundable effect decoding work shared across all drawable/coverage owners.
+    effect_decode_work: effects::DecodeWork,
     /// Cumulative optional point-origin shaping work; independent of retained metadata.
     point_text_work_left: usize,
     warnings: Warnings,
@@ -405,13 +407,21 @@ impl<'a> Image<'a> {
     /// pointer is read as inert data and is never followed or materialized.
     fn coverage_mask_header(&mut self, offset: usize, ctl: &Interrupt<'_>) -> Result<CoverageMaskHeader<'a>> {
         ctl.check().map_err(|_| IoError::Cancelled)?;
+        self.effect_decode_work.charge(64)?;
         let mut c = self.c.at(offset);
         let (width, height) = (c.u32()?, c.u32()?);
         validate_canvas(width, height)?;
+        // Admit UTF-8 name validation even when storage admission substitutes a
+        // short fallback; repeated mask references must not rescan an uncharged name.
+        let mut name_cursor = c.at(c.pos);
+        self.effect_decode_work.charge(name_cursor.string_bytes()?.len().saturating_add(4))?;
         let (name, name_limited) = self.metadata_name(&mut c, "Mask")?;
+        let properties_start = c.pos;
         let properties = props(&mut c)?;
+        self.effect_decode_work.charge(c.pos.saturating_sub(properties_start))?;
         let _hierarchy = c.ptr()?;
         let children = if self.version >= 26 { effects::read_pointers(&mut c, &mut self.meta_budget, ctl)? } else { Vec::new() };
+        self.effect_decode_work.charge(children.len().saturating_mul(8).saturating_add(16))?;
         // metadata_name already charged the admitted name allocation. The fallback
         // is bounded; never materialize a source-sized name before checking its allowance.
         let bytes = std::mem::size_of::<CoverageMaskHeader<'_>>().saturating_add(properties.len().saturating_mul(std::mem::size_of::<Prop<'_>>()));
@@ -478,12 +488,12 @@ impl<'a> Image<'a> {
             };
             self.meta_budget = remaining;
             let before_effect = self.meta_budget;
-            let effect = match effects::decode(&self.c, pointer, self.version, &mut self.meta_budget, ctl) {
+            let effect = match effects::decode_with_work(&self.c, pointer, self.version, &mut self.meta_budget, &mut self.effect_decode_work, ctl) {
                 Ok(effect) => effect,
                 Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                 Err(IoError::XcfMetadataLimit) => {
                     self.meta_budget = before_effect;
-                    return self.metadata_limit(owner, "xcf.coverage_effect", "Coverage-effect configuration exceeds the remaining metadata allowance");
+                    return self.metadata_limit(owner, "xcf.coverage_effect", "Coverage-effect configuration exceeds the metadata or decode-work allowance");
                 }
                 Err(error) => {
                     // Failed decoding retains no effect allocation; preserve only the caller's traversal charges.
@@ -557,7 +567,7 @@ impl<'a> Image<'a> {
                     Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                     Err(IoError::XcfMetadataLimit) => {
                         self.meta_budget = before_mask;
-                        self.metadata_limit(outcome, "xcf.coverage_effect_mask", "Auxiliary mask configuration exceeds the remaining metadata allowance")?;
+                        self.metadata_limit(outcome, "xcf.coverage_effect_mask", "Auxiliary mask configuration exceeds the metadata or decode-work allowance")?;
                         continue;
                     }
                     Err(error) => {
@@ -996,6 +1006,7 @@ pub(crate) fn import_with_sample_order(
         colormap,
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
+        effect_decode_work: Default::default(),
         point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings,
         outcomes: conversion::Outcomes::new(version)?,
@@ -1166,12 +1177,12 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
             source.record_offset = Some(pointer as u64);
             ordinal = ordinal.checked_add(1).ok_or_else(|| invalid("effect ordinal overflow"))?;
             let before_effect = image.meta_budget;
-            let effect = match effects::decode(&image.c, pointer, image.version, &mut image.meta_budget, ctl) {
+            let effect = match effects::decode_with_work(&image.c, pointer, image.version, &mut image.meta_budget, &mut image.effect_decode_work, ctl) {
                 Ok(effect) => effect,
                 Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                 Err(IoError::XcfMetadataLimit) => {
                     image.meta_budget = before_effect;
-                    image.metadata_limit(pending.owner, "xcf.layer_effect", "Layer-effect configuration exceeds the remaining metadata allowance")?;
+                    image.metadata_limit(pending.owner, "xcf.layer_effect", "Layer-effect configuration exceeds the metadata or decode-work allowance")?;
                     break;
                 }
                 Err(error) => {

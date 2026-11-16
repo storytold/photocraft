@@ -8,6 +8,50 @@ use crate::xcf::{Cursor, MAX_PAYLOAD, MAX_STRING, Result, invalid};
 const MAX_EFFECTS: usize = 1024;
 const MAX_PROPERTIES: usize = 4096;
 
+/// File-wide byte-work admission, independent of refundable retained metadata.
+/// Charge before scanning or parsing so rejected/overlapping records cannot amplify work.
+pub(in crate::xcf) struct DecodeWork {
+    remaining: usize,
+    #[cfg(test)]
+    config_bytes: usize,
+}
+
+impl Default for DecodeWork {
+    fn default() -> Self {
+        // Four times the 32 MiB metadata allowance accommodates ordinary quoted
+        // configuration framing, UTF-8 validation and parsing. Successful inventory
+        // and materialization both retain their storage charges against that same
+        // metadata allowance; rejected trees refund storage, never this work.
+        // Verbose/overlapping input still has an independent finite CPU allowance.
+        Self {
+            remaining: crate::xcf::MAX_METADATA_BYTES.saturating_mul(4),
+            #[cfg(test)]
+            config_bytes: 0,
+        }
+    }
+}
+
+impl DecodeWork {
+    pub(in crate::xcf) fn charge(&mut self, bytes: usize) -> Result<()> {
+        let Some(remaining) = self.remaining.checked_sub(bytes) else {
+            self.remaining = 0;
+            return Err(crate::IoError::XcfMetadataLimit);
+        };
+        self.remaining = remaining;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(in crate::xcf) fn with_limit(remaining: usize) -> Self {
+        Self { remaining, config_bytes: 0 }
+    }
+
+    #[cfg(test)]
+    pub(in crate::xcf) fn stats(&self) -> (usize, usize) {
+        (self.remaining, self.config_bytes)
+    }
+}
+
 /// Debits effect metadata before allocation, rejecting requests that exceed the document's remaining allowance.
 fn charge(budget: &mut usize, bytes: usize) -> Result<()> {
     *budget = budget.checked_sub(bytes).ok_or(crate::IoError::XcfMetadataLimit)?;
@@ -51,17 +95,31 @@ pub(in crate::xcf) fn read_pointers(cursor: &mut Cursor<'_>, budget: &mut usize,
 
 /// Decode one bounded record. Malformed optional argument values remain inert
 /// Invalid variants; truncated framing never becomes a successful import.
+#[cfg(test)]
 pub(in crate::xcf) fn decode<'a>(base: &Cursor<'a>, offset: usize, version: u32, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<StoredEffect<'a>> {
+    decode_with_work(base, offset, version, budget, &mut DecodeWork::default(), ctl)
+}
+
+/// Decode with the import's nonrefundable work allowance, shared across all owners.
+pub(in crate::xcf) fn decode_with_work<'a>(
+    base: &Cursor<'a>,
+    offset: usize,
+    version: u32,
+    budget: &mut usize,
+    work: &mut DecodeWork,
+    ctl: &Interrupt<'_>,
+) -> Result<StoredEffect<'a>> {
     ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     if version < 20 {
         return Err(invalid("stored effect envelopes are not defined before XCF 20"));
     }
     charge(budget, 2 * std::mem::size_of::<StoredEffect<'a>>())?;
     let mut cursor = base.at(offset);
-    let name = string(&mut cursor)?;
-    let icon = string(&mut cursor)?;
-    let operation = string(&mut cursor)?;
-    let stored_version = if version >= 22 { Some(string(&mut cursor)?) } else { None };
+    work.charge(64)?;
+    let name = string(&mut cursor, work)?;
+    let icon = string(&mut cursor, work)?;
+    let operation = string(&mut cursor, work)?;
+    let stored_version = if version >= 22 { Some(string(&mut cursor, work)?) } else { None };
     charge(budget, name.len().saturating_add(icon.len()).saturating_add(operation.len()).saturating_add(stored_version.map_or(0, str::len)))?;
     let mut effect = StoredEffect {
         name,
@@ -86,6 +144,7 @@ pub(in crate::xcf) fn decode<'a>(base: &Cursor<'a>, offset: usize, version: u32,
     let mut count = 0usize;
     loop {
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+        work.charge(8)?;
         let property_offset = cursor.pos;
         let kind = cursor.u32()?;
         let length = cursor.u32()? as usize;
@@ -102,17 +161,18 @@ pub(in crate::xcf) fn decode<'a>(base: &Cursor<'a>, offset: usize, version: u32,
         if length > MAX_PAYLOAD {
             return Err(invalid("stored effect property exceeds 64 MiB"));
         }
+        work.charge(length)?;
         let bytes = cursor.take(length)?;
         match kind {
             45 => {
                 charge(budget, 2 * std::mem::size_of::<Argument<'a>>())?;
                 let mut argument_cursor = Cursor { b: bytes, pos: 0, wide: base.wide };
-                let argument_name = string(&mut argument_cursor)?;
+                let argument_name = string(&mut argument_cursor, work)?;
                 charge(budget, argument_name.len())?;
                 let value_kind = argument_cursor.u32()?;
                 let value_bytes = bytes.get(argument_cursor.pos..).ok_or_else(|| invalid("effect argument framing"))?;
                 let before_value = *budget;
-                let value = match argument(&mut argument_cursor, value_kind, budget) {
+                let value = match argument(&mut argument_cursor, value_kind, budget, work) {
                     Ok(value) => value,
                     Err(error @ (crate::IoError::XcfMetadataLimit | crate::IoError::Cancelled)) => return Err(error),
                     Err(error) => {
@@ -171,7 +231,8 @@ pub(in crate::xcf) fn decode<'a>(base: &Cursor<'a>, offset: usize, version: u32,
 }
 
 /// Reads a bounded NUL-terminated UTF-8 effect string and rejects embedded NULs or truncated framing.
-fn string<'a>(cursor: &mut Cursor<'a>) -> Result<&'a str> {
+fn string<'a>(cursor: &mut Cursor<'a>, work: &mut DecodeWork) -> Result<&'a str> {
+    work.charge(4)?;
     let count = cursor.u32()? as usize;
     if count == 0 {
         return Ok("");
@@ -179,6 +240,7 @@ fn string<'a>(cursor: &mut Cursor<'a>) -> Result<&'a str> {
     if count > MAX_STRING {
         return Err(invalid("effect string exceeds 1 MiB"));
     }
+    work.charge(count)?;
     let bytes = cursor.take(count)?;
     let bytes = bytes.strip_suffix(&[0]).ok_or_else(|| invalid("effect string is missing its NUL terminator"))?;
     if bytes.contains(&0) {
@@ -188,7 +250,7 @@ fn string<'a>(cursor: &mut Cursor<'a>) -> Result<&'a str> {
 }
 
 /// Decodes one exactly consumed typed payload, retaining unknown bytes and rejecting malformed finite/scalar/color framing.
-fn argument<'a>(cursor: &mut Cursor<'a>, kind: u32, budget: &mut usize) -> Result<ArgumentValue<'a>> {
+fn argument<'a>(cursor: &mut Cursor<'a>, kind: u32, budget: &mut usize, work: &mut DecodeWork) -> Result<ArgumentValue<'a>> {
     let value = match kind {
         0 => {
             let bytes = cursor.take(cursor.b.len().saturating_sub(cursor.pos))?;
@@ -207,15 +269,20 @@ fn argument<'a>(cursor: &mut Cursor<'a>, kind: u32, budget: &mut usize) -> Resul
             }
             ArgumentValue::Float(value)
         }
-        4 => ArgumentValue::String(string(cursor)?),
+        4 => ArgumentValue::String(string(cursor, work)?),
         5 => ArgumentValue::Enum(cursor.u32()? as i32),
         6 => {
-            let raw = string(cursor)?;
+            let raw = string(cursor, work)?;
+            work.charge(raw.len())?;
+            #[cfg(test)]
+            {
+                work.config_bytes = work.config_bytes.saturating_add(raw.len());
+            }
             ArgumentValue::Config(parse_config(raw, budget).map_err(crate::IoError::from)?)
         }
         7 => ArgumentValue::UInt(cursor.u32()?),
         8 => {
-            let encoding = string(cursor)?;
+            let encoding = string(cursor, work)?;
             if encoding.is_empty() {
                 ArgumentValue::Color(None)
             } else {

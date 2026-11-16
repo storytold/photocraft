@@ -1,5 +1,6 @@
 use super::tests::{W, hierarchy};
 use super::*;
+mod work_tests;
 use photocraft_doc::import_conversion::ImportConversion;
 
 const OWNERS: usize = 6;
@@ -17,6 +18,7 @@ fn image(bytes: &[u8], metadata: usize) -> Image<'_> {
         colormap: Vec::new(),
         budget: 16 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &PixelFormat::RGBA8)).unwrap(),
         meta_budget: metadata,
+        effect_decode_work: Default::default(),
         point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings: Warnings::default(),
         outcomes: conversion::Outcomes::new(26).unwrap(),

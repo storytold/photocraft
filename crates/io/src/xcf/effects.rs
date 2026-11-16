@@ -8,7 +8,9 @@ mod resources;
 
 pub(super) use config::parse_config;
 
-pub(super) use envelope::{decode, read_pointers};
+#[cfg(test)]
+pub(super) use envelope::decode;
+pub(super) use envelope::{DecodeWork, decode_with_work, read_pointers};
 
 pub(super) use resources::{LiteralColorError, literal_rgb};
 

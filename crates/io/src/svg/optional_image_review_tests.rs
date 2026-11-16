@@ -459,3 +459,45 @@ fn malformed_data_urls_and_broken_pixel_payloads_are_disclosed_before_rendering(
         assert!(import_svg_preview_with_work("strict.svg", text.as_bytes(), MAX_RASTER_PIXELS).is_err());
     }
 }
+
+#[test]
+fn excessive_mime_parameters_are_disclosed_only_for_used_image_resources() {
+    let parameters = (0..65).map(|index| format!(";p{index}=x")).collect::<String>();
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    for essence in ["image/png", "text/plain", ""] {
+        let href = url(&format!("{essence}{parameters}"), &png);
+        let text = drawing(&href);
+        assert_incomplete_image_is_disclosed(&text);
+        for child in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+            assert_incomplete_image_is_disclosed(&drawing(&url("image/svg+xml", &child)));
+        }
+    }
+    let href = format!("data:application/octet-stream{parameters};base64,AA==");
+    assert_ignored_data_image_stays_quiet(&drawing(&href));
+    let image = url(&format!("image/png{parameters}"), &png);
+    for content in [
+        format!("<defs><image id='unused' href='{image}'/></defs>"),
+        format!("<image display='none' width='2' height='2' href='{image}'/>"),
+        format!("<foreign:image xmlns:foreign='urn:unrelated' width='2' height='2' href='{image}'/>"),
+        format!("<image width='2' height='2' xmlns:x='http://www.w3.org/1999/xlink' x:href='{image}' href='{href}'/>"),
+    ] {
+        let text = format!("<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='red'/>{content}</svg>");
+        assert_ignored_data_image_stays_quiet(&text);
+    }
+}
+
+#[test]
+fn valid_image_at_the_mime_parameter_boundary_keeps_its_pixels() {
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    // 63 MIME parameters plus the base64 marker hit the admitted 64-separator boundary.
+    let parameters = (0..63).map(|index| format!(";p{index}=x")).collect::<String>();
+    let text = drawing(&url(&format!("image/png{parameters}"), &png));
+    for bytes in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+        let imported = crate::import("valid.svg", &bytes).unwrap();
+        assert_eq!(imported.warnings, vec!["SVG: embedded images are pixel layers"]);
+        assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [0., 1., 0., 1.]);
+        assert_eq!(rasterize(&bytes, 1.).unwrap().get(1, 1), [0., 1., 0., 1.]);
+    }
+}

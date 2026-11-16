@@ -106,9 +106,52 @@ pub(super) fn repair<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>,
     Ok(Cow::Owned(result))
 }
 
+// The pinned MIME parser searches all earlier parameters for each new name.
+// Cap even quoted semicolons before invoking it: source-byte work is already
+// charged, so at most this constant times the bounded XML work reaches MIME
+// parsing. Bodies can remain large without acquiring MIME parameter records.
+const MAX_MIME_SEPARATORS: usize = 64;
+
+fn mime_header_admitted(value: &str) -> bool {
+    let trimmed = value.trim_start_matches(|ch| ch <= ' ');
+    let mut bytes = trimmed.bytes();
+    for expected in b"data:" {
+        let Some(actual) = bytes.by_ref().find(|&byte| !matches!(byte, b'\t' | b'\n' | b'\r')) else { return true };
+        if !actual.eq_ignore_ascii_case(expected) {
+            return true; // Not a data URL: preserve external/fragment handling.
+        }
+    }
+    let mut separators = 0;
+    for byte in bytes {
+        if matches!(byte, b',' | b'#') {
+            break;
+        }
+        if byte == b';' {
+            separators += 1;
+            if separators > MAX_MIME_SEPARATORS {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn malformed_data_url_replacement(value: &str, work: &mut usize) -> Result<Option<&'static str>, IoError> {
+    malformed_data_url_replacement_with(value, work, data_url::DataUrl::process)
+}
+
+fn malformed_data_url_replacement_with<'a>(
+    value: &'a str,
+    work: &mut usize,
+    parse: impl FnOnce(&'a str) -> Result<data_url::DataUrl<'a>, data_url::DataUrlError>,
+) -> Result<Option<&'static str>, IoError> {
     *work = work.checked_sub(value.len()).ok_or_else(|| invalid("SVG data-URL validation work exceeds its limit"))?;
-    let url = match data_url::DataUrl::process(value) {
+    if !mime_header_admitted(value) {
+        // Strip parameters before recovering MIME disposition; no original
+        // parameter list reaches either our parser or shared whole-DOM preflight.
+        return missing_comma_replacement(value, work).map(Some);
+    }
+    let url = match parse(value) {
         Ok(url) => url,
         Err(data_url::DataUrlError::NoComma) => return missing_comma_replacement(value, work).map(Some),
         Err(data_url::DataUrlError::NotADataUrl) => return Ok(None),
@@ -150,6 +193,11 @@ fn missing_comma_replacement(value: &str, work: &mut usize) -> Result<&'static s
     candidate.try_reserve_exact(length).map_err(|_| invalid("could not allocate bounded SVG data-URL header"))?;
     candidate.push_str(essence);
     candidate.push(',');
+    // This candidate has no MIME parameters, including for oversized original
+    // lists. Its byte scan/allocation is charged above before the linear parse.
+    if !mime_header_admitted(&candidate) {
+        return Err(invalid("SVG data-URL MIME header exceeds its limit"));
+    }
     let url = data_url::DataUrl::process(&candidate).map_err(|_| invalid("invalid SVG data-URL header framing"))?;
     Ok(replacement_for_mime(url.mime_type()))
 }
@@ -316,3 +364,7 @@ mod tests {
         assert!(matches!(repair(text, &Limits { bytes: text.len(), ..limits() }), Err(IoError::Svg(message)) if message.contains("byte limit")));
     }
 }
+
+#[cfg(test)]
+#[path = "mime_header_review_tests.rs"]
+mod mime_header_review_tests;

@@ -16,6 +16,14 @@ use super::{Result, invalid};
 const MAX_NODES: usize = 65_536;
 const MAX_DEPTH: usize = 32;
 const MAX_FEATURE_SETTINGS: usize = 64;
+// One markup's inherited attribute processing across every text descendant.
+// Count inspection and application separately; retained diagnostics are not work bounds.
+const MARKUP_ATTRIBUTE_VISITS: usize = 1 << 20;
+#[cfg(test)]
+thread_local! {
+    static MARKUP_ATTRIBUTE_VISIT_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static MARKUP_ATTRIBUTE_VISITS_DONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 // Shared across all optional point-origin layouts in one import. Costs are
 // scalars + 16 per style run + 32 per logical line, never refunded after work.
 pub(super) const POINT_LAYOUT_WORK_UNITS: usize = 1 << 20;
@@ -28,6 +36,8 @@ thread_local! {
     static ORIGIN_LAYOUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+mod attribute_visit_review_tests;
 #[cfg(test)]
 mod diagnostic_review_tests;
 #[cfg(test)]
@@ -1087,9 +1097,65 @@ fn font_description(source: &str, style: &mut CharStyle, dpi: f64, apply_size: b
     Ok(())
 }
 
+struct InheritedMarkupAttributes<'a> {
+    font: Option<&'a str>,
+    overrides_face: bool,
+}
+
+fn charge_markup_attribute(visits_left: &mut usize) -> Result<()> {
+    *visits_left =
+        visits_left.checked_sub(1).ok_or_else(|| crate::IoError::Unsupported("source text markup exceeds the bounded attribute-visit allowance".into()))?;
+    #[cfg(test)]
+    MARKUP_ATTRIBUTE_VISITS_DONE.with(|count| count.set(count.get().saturating_add(1)));
+    Ok(())
+}
+
+/// Fold the preparatory namespace/font/face lookups into one charged scan.
+/// Otherwise their repeated `.any`/`.attribute` walks bypass the application budget.
+fn inspect_markup_attributes<'a, 'input: 'a>(ancestor: roxmltree::Node<'a, 'input>, visits_left: &mut usize) -> Result<InheritedMarkupAttributes<'a>> {
+    let unsupported_namespace = || crate::IoError::Unsupported("namespaced markup does not have an admitted native text-formatting meaning".into());
+    if ancestor.tag_name().namespace().is_some() {
+        return Err(unsupported_namespace());
+    }
+    let mut font = None;
+    let mut description = None;
+    let mut overrides_face = matches!(ancestor.tag_name().name(), "b" | "i" | "tt");
+    for attribute in ancestor.attributes() {
+        charge_markup_attribute(visits_left)?;
+        if attribute.namespace().is_some() {
+            return Err(unsupported_namespace());
+        }
+        match attribute.name() {
+            "font" => font = Some(attribute.value()),
+            "font_desc" => description = Some(attribute.value()),
+            "font_family" | "face" | "weight" | "font_weight" | "style" | "font_style" => overrides_face = true,
+            _ => {}
+        }
+    }
+    Ok(InheritedMarkupAttributes { font: font.or(description), overrides_face })
+}
+
 /// Translate bounded XML markup into UTF-8 text and native style runs.
 /// DTD, namespaced reinterpretation and materialized style amplification are rejected.
 fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle>, dpi: f64, notes: &mut Vec<String>) -> Result<(String, Vec<TextRun>)> {
+    let mut visits_left = MARKUP_ATTRIBUTE_VISITS;
+    #[cfg(test)]
+    MARKUP_ATTRIBUTE_VISIT_LIMIT.with(|limit| {
+        if let Some(limit) = limit.take() {
+            visits_left = limit;
+        }
+    });
+    markup_runs_with_attribute_allowance(markup, base, fonts, dpi, notes, &mut visits_left)
+}
+
+fn markup_runs_with_attribute_allowance(
+    markup: &str,
+    base: &CharStyle,
+    fonts: &HashMap<String, CharStyle>,
+    dpi: f64,
+    notes: &mut Vec<String>,
+    visits_left: &mut usize,
+) -> Result<(String, Vec<TextRun>)> {
     let xml =
         roxmltree::Document::parse_with_options(markup, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES as u32, ..Default::default() })
             .map_err(|e| invalid(format!("invalid source text markup: {e}")))?;
@@ -1113,10 +1179,8 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
         }
         for ancestor in ancestors.iter().rev() {
             style.size_pt = unscaled_size;
-            if ancestor.tag_name().namespace().is_some() || ancestor.attributes().any(|attribute| attribute.namespace().is_some()) {
-                return Err(crate::IoError::Unsupported("namespaced markup does not have an admitted native text-formatting meaning".into()));
-            }
-            if let Some(requested) = ancestor.attribute("font").or_else(|| ancestor.attribute("font_desc")) {
+            let inherited = inspect_markup_attributes(*ancestor, visits_left)?;
+            if let Some(requested) = inherited.font {
                 if let Some(font) = fonts.get(requested) {
                     style.font_family = font.font_family.clone();
                     style.font_style = font.font_style.clone();
@@ -1128,9 +1192,7 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
                 }
             }
             unscaled_size = style.size_pt;
-            if matches!(ancestor.tag_name().name(), "b" | "i" | "tt")
-                || ancestor.attributes().any(|a| matches!(a.name(), "font_family" | "face" | "weight" | "font_weight" | "style" | "font_style"))
-            {
+            if inherited.overrides_face {
                 // Native layout resolves a PostScript identity before a family/style
                 // request; an overriding request must not retain the old exact face.
                 style.postscript_name = None;
@@ -1150,6 +1212,7 @@ fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle
             }
             let mut explicit_alpha = None;
             for a in ancestor.attributes() {
+                charge_markup_attribute(visits_left)?;
                 match a.name() {
                     "font" | "font_desc" => {}
                     "font_family" | "face" => {
