@@ -1620,7 +1620,29 @@ dependencies = [
 [[package]]
 name = "craft-psd"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=589842f0da5c5a11e71f39b70092dcb918b92f39#589842f0da5c5a11e71f39b70092dcb918b92f39"
+dependencies = [
+ "encoding_rs",
+ "flate2",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-psd"
+version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=828b07f3c9f3f6a2e935087b859016a5e46b1c31#828b07f3c9f3f6a2e935087b859016a5e46b1c31"
+dependencies = [
+ "encoding_rs",
+ "flate2",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-psd"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=b9c22554ce0fd2caccdb53b417082a2ff2ef178f#b9c22554ce0fd2caccdb53b417082a2ff2ef178f"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -5559,7 +5581,7 @@ dependencies = [
  "craft-ai-agents",
  "craft-flags",
  "craft-image-codecs",
- "craft-psd",
+ "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=828b07f3c9f3f6a2e935087b859016a5e46b1c31)",
  "getrandom 0.3.4",
  "hmac",
  "photocraft-color",
@@ -5593,7 +5615,7 @@ dependencies = [
  "clap_mangen",
  "craft-cms",
  "craft-image-codecs",
- "craft-psd",
+ "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=828b07f3c9f3f6a2e935087b859016a5e46b1c31)",
  "photocraft-automation",
  "photocraft-doc",
  "photocraft-engine",
@@ -5658,7 +5680,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-pcraft-format",
  "craft-print",
- "craft-psd",
+ "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=828b07f3c9f3f6a2e935087b859016a5e46b1c31)",
  "craft-xml",
  "exr",
  "flate2",
@@ -5762,7 +5784,9 @@ dependencies = [
  "craft-ora",
  "craft-pdf",
  "craft-pdn",
- "craft-psd",
+ "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=589842f0da5c5a11e71f39b70092dcb918b92f39)",
+ "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=828b07f3c9f3f6a2e935087b859016a5e46b1c31)",
+ "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=b9c22554ce0fd2caccdb53b417082a2ff2ef178f)",
  "craft-raster-codecs",
  "craft-svg",
  "craft-tiff",
@@ -5901,7 +5925,7 @@ version = "0.23.1"
 dependencies = [
  "base64 0.23.1",
  "craft-plist",
- "craft-psd",
+ "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=828b07f3c9f3f6a2e935087b859016a5e46b1c31)",
  "flate2",
  "parley",
  "photocraft-color",
@@ -5923,7 +5947,7 @@ dependencies = [
  "craft-i18n",
  "craft-image-codecs",
  "craft-print",
- "craft-psd",
+ "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=828b07f3c9f3f6a2e935087b859016a5e46b1c31)",
  "craft-ui",
  "craft-update",
  "eframe",
@@ -5978,7 +6002,7 @@ name = "photocraft-web"
 version = "0.23.1"
 dependencies = [
  "craft-image-codecs",
- "craft-psd",
+ "craft-psd 0.1.0 (git+https://github.com/storytold/craft-libs?rev=828b07f3c9f3f6a2e935087b859016a5e46b1c31)",
  "eframe",
  "egui",
  "js-sys",
