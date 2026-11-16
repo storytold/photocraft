@@ -321,11 +321,8 @@ impl Edit {
             Edit::Handle(k, h, from, independent) => edit::move_handle(&mut p, *k, *h, Point::new(from.x + d[0], from.y + d[1]), *independent),
             Edit::Segment(k, t) => edit::bend_segment(&mut p, *k, *t, d),
             Edit::Convert(k) => edit::convert_point(&mut p, *k, Some(Point::new(end[0], end[1]))),
-            Edit::Duplicate(a) => {
-                p.subpaths.push(p.subpaths.get(a.first()?[0])?.clone());
-                let last = p.subpaths.len() - 1;
-                edit::move_anchors(&mut p, &a.iter().map(|&[_, k]| [last, k]).collect::<Vec<_>>(), d)
-            }
+            // As `path.moveAnchors` with `duplicate`: the copy takes its component's operation.
+            Edit::Duplicate(a) => edit::duplicate_subpaths(&mut p, a, d).map(|_| ()),
         }
         .ok()?;
         Some(p)

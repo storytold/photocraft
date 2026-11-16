@@ -123,10 +123,11 @@ pub fn move_anchors(path: &mut Path, anchors: &[[usize; 2]], d: [f64; 2]) -> Res
 }
 
 /// Add Anchor Point's ⌥-drag on a segment, as in Photoshop: the subpaths holding `anchors` are
-/// copied to the end of the path, in order, and the copies move by `d`; the originals stay. A
-/// copy takes the operation its component draws with (the first component always combines), so it
-/// stands on its own and cuts nothing out of the original.
-/// Returns the copies' anchors.
+/// copied to the end of the path, in order, and the copies move by `d`; the originals stay. A copy
+/// keeps its source's operation, as measured in the reference (#13211: a copy of the first
+/// subpath, stored Exclude, stays Exclude). A copy of a joined subpath takes its component's
+/// stored operation instead, so it stands on its own rather than joining whichever component is
+/// last. Returns the copies' anchors.
 pub fn duplicate_subpaths(path: &mut Path, anchors: &[[usize; 2]], d: [f64; 2]) -> Result<Vec<[usize; 2]>, String> {
     let mut subs = Vec::with_capacity(anchors.len());
     for &[s, k] in anchors {
@@ -138,12 +139,10 @@ pub fn duplicate_subpaths(path: &mut Path, anchors: &[[usize; 2]], d: [f64; 2]) 
     let mut copies = Vec::new();
     for s in subs {
         let Some(mut sp) = path.subpaths.get(s).cloned() else { continue };
-        // The component's first subpath, and the operation it is folded in with (`Path::effective_op`).
-        let head = (0..=s).rev().find(|&i| path.subpaths.get(i).is_some_and(|h| h.op != PathOp::Join)).unwrap_or(0);
-        sp.op = match path.subpaths.get(head) {
-            Some(h) if head > 0 => h.op,
-            _ => PathOp::Combine,
-        };
+        if sp.op == PathOp::Join {
+            // The operation stored on the component's first subpath (`Path::components`).
+            sp.op = path.subpaths.get(..s).unwrap_or_default().iter().rev().map(|h| h.op).find(|&op| op != PathOp::Join).unwrap_or(PathOp::Combine);
+        }
         let at = path.subpaths.len();
         copies.extend((0..sp.knots.len()).map(|k| [at, k]));
         path.subpaths.push(sp);
@@ -957,9 +956,9 @@ mod tests {
 
     #[test]
     fn duplicated_subpaths_go_to_the_end_and_a_joined_one_stands_alone() {
-        // Subpath 0 stores Subtract but, being first, combines; 1 joins it; 2 subtracts, 3 joins 2.
+        // Subpath 0 stores Exclude (being first, it draws as Combine); 1 joins it; 2 subtracts, 3 joins 2.
         let mut p = tri();
-        p.subpaths[0].op = PathOp::Subtract;
+        p.subpaths[0].op = PathOp::Exclude;
         let joined = Subpath { op: PathOp::Join, ..p.subpaths[0].clone() };
         p.subpaths.push(joined.clone());
         p.subpaths.push(Subpath { op: PathOp::Subtract, ..p.subpaths[0].clone() });
@@ -968,10 +967,10 @@ mod tests {
         let copies = duplicate_subpaths(&mut p, &[[1, 0], [1, 2]], [5.0, -5.0]).unwrap();
         assert_eq!(copies, vec![[4, 0], [4, 1], [4, 2]]);
         assert_eq!(p.subpaths[..4], before.subpaths[..], "the originals stay");
-        assert_eq!(p.subpaths[4].op, PathOp::Combine, "a copy of the first component combines, it cuts no hole in the original");
+        assert_eq!(p.subpaths[4].op, PathOp::Exclude, "a joined subpath's copy takes its component's stored operation");
         assert_eq!(p.subpaths[4].knots[0].anchor, add(before.subpaths[1].knots[0].anchor, [5.0, -5.0]));
         duplicate_subpaths(&mut p, &[[0, 0]], [5.0, 0.0]).unwrap();
-        assert_eq!(p.subpaths[5].op, PathOp::Combine, "nor does a copy of the first subpath itself");
+        assert_eq!(p.subpaths[5].op, PathOp::Exclude, "a copy of the first subpath keeps its stored operation, as measured (#13211)");
         duplicate_subpaths(&mut p, &[[3, 1]], [5.0, 0.0]).unwrap();
         assert_eq!(p.subpaths[6].op, PathOp::Subtract, "a later joined subpath takes its component's operation");
         assert!(duplicate_subpaths(&mut p, &[[9, 0]], [1.0, 1.0]).is_err());
