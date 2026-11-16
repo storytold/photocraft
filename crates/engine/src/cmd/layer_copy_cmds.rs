@@ -52,7 +52,7 @@ fn point(p: &Value, key: &str) -> Result<Option<[f64; 2]>> {
 }
 
 /// Modes whose layers convert through the colour engine.
-pub(crate) fn layered(mode: ColorMode) -> bool {
+pub fn layered(mode: ColorMode) -> bool {
     matches!(mode, ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab)
 }
 

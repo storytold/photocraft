@@ -36,8 +36,23 @@ pub fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(json!({"dialog": id}))
 }
 
+/// The Destination › Document entries before New: the open documents in tab order, keyed by
+/// their index, without those `layer.copyToDocument` refuses (Indexed Color and the other modes
+/// outside `layered`), as Photoshop leaves them out (#14612). The source stays: copying within it
+/// is a plain duplicate.
+pub(crate) fn destinations(app: &PhotocraftApp) -> Vec<(String, String)> {
+    let source = app.session.active_index();
+    app.session
+        .documents()
+        .iter()
+        .enumerate()
+        .filter(|(i, d)| Some(*i) == source || photocraft_engine::layer_copy_cmds::layered(d.doc.mode))
+        .map(|(i, d)| (i.to_string(), d.doc.name.clone()))
+        .collect()
+}
+
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
-    let documents: Vec<(String, String)> = app.session.documents().iter().enumerate().map(|(i, d)| (i.to_string(), d.doc.name.clone())).collect();
+    let documents = destinations(app);
     let mut options: Vec<(String, &str)> = documents.iter().map(|(k, n)| (k.clone(), n.as_str())).collect();
     options.push(("new".to_string(), tl!("New")));
     let mut destination = match fields.get("destination") {
@@ -198,3 +213,7 @@ mod tests {
         assert_eq!(app.session.active().unwrap().doc.layer_count(), 4);
     }
 }
+
+#[cfg(test)]
+#[path = "duplicate_layer_indexed_tests.rs"]
+mod duplicate_layer_indexed_tests;
