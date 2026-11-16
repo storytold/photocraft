@@ -386,6 +386,11 @@ pub enum XmpEmbed {
     /// Leave the document's own XMP packet and free-form text out. Metadata a format writes
     /// about the file itself, such as a PDF's spot-plate description, is still written.
     None,
+    /// Export As's Copyright and Contact Info: a packet holding only the document's title,
+    /// author, copyright notice and copyright URL, an empty usage-terms entry and the document and
+    /// instance ids. Keywords, descriptions, layer text and document ancestors are left out, and
+    /// so is the free-form text. Flat formats only; the others treat it as [`XmpEmbed::None`].
+    Contact,
 }
 
 /// Export options.

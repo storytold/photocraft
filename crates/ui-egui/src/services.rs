@@ -118,6 +118,9 @@ pub struct ExportSettings {
     /// Export As starts at Metadata: None, since the packet can carry the text of every type
     /// layer and one id per placed document (#647).
     pub xmp_all: bool,
+    /// Export As's Metadata: Copyright and Contact Info. Without `xmp_all`, embeds only the
+    /// packet's copyright and contact fields ([`photocraft_io::XmpEmbed::Contact`]).
+    pub xmp_contact: bool,
     /// Targa: bits per pixel from Targa Options or Export As (`None`: 32 with an alpha channel or
     /// transparency, else 24).
     pub tga_bits: Option<photocraft_io::TgaBits>,
@@ -162,6 +165,7 @@ impl Default for ExportSettings {
             tiff_transparency: None,
             tiff_pyramid: false,
             xmp_all: true,
+            xmp_contact: false,
             tga_bits: None,
             dds: photocraft_io::DdsOptions::default(),
             image_previews: true,
@@ -196,7 +200,11 @@ impl ExportSettings {
         opts.tiff_transparency = self.tiff_transparency;
         opts.encode.tiff_compression = self.tiff_compression;
         opts.encode.tiff_pyramid = self.tiff_pyramid;
-        opts.xmp = if self.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
+        opts.xmp = match (self.xmp_all, self.xmp_contact) {
+            (true, _) => photocraft_io::XmpEmbed::All,
+            (false, true) => photocraft_io::XmpEmbed::Contact,
+            (false, false) => photocraft_io::XmpEmbed::None,
+        };
         opts.tga_bits = self.tga_bits;
         opts.encode.dds = self.dds;
         opts.image_previews = self.image_previews;

@@ -1832,9 +1832,92 @@ pub fn export_flat_with_renderer(
 /// one id per placed document (#647), and the free-form descriptions, which can hold the same
 /// sensitive text.
 fn strip_xmp(meta: &mut codecs::Metadata, opts: &ExportOptions) {
-    if opts.xmp == XmpEmbed::None {
-        meta.xmp = None;
-        meta.text.clear();
+    match opts.xmp {
+        XmpEmbed::All => {}
+        XmpEmbed::None => {
+            meta.xmp = None;
+            meta.text.clear();
+        }
+        XmpEmbed::Contact => {
+            meta.xmp = meta.xmp.as_deref().and_then(contact_xmp);
+            meta.text.clear();
+        }
+    }
+}
+
+const XMP_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const XMP_DC: &str = "http://purl.org/dc/elements/1.1/";
+const XMP_RIGHTS: &str = "http://ns.adobe.com/xap/1.0/rights/";
+const XMP_MM: &str = "http://ns.adobe.com/xap/1.0/mm/";
+
+/// What Copyright and Contact Info keeps of a packet, as measured in the reference application.
+const CONTACT_PROPS: [&str; 6] = ["dc:title", "dc:creator", "dc:rights", "xmpRights:WebStatement", "xmpMM:DocumentID", "xmpMM:InstanceID"];
+
+/// The packet [`XmpEmbed::Contact`] writes for the document's `xmp`: [`CONTACT_PROPS`], from
+/// elements or `rdf:Description` attributes, whatever prefixes the packet binds them to, plus an
+/// empty `xmpRights:UsageTerms`. `None` when the packet can't be read or holds none of them.
+fn contact_xmp(xmp: &str) -> Option<String> {
+    let canon = craft_xml::Canonical::new(&[("rdf", XMP_RDF), ("dc", XMP_DC), ("xmpRights", XMP_RIGHTS), ("xmpMM", XMP_MM)]);
+    let root = craft_xml::Options::canonical(&canon).parse(xmp.trim_start_matches('\u{feff}').as_bytes()).ok()?;
+    // The document's own descriptions: a standalone `rdf:Description`, or the ones directly under the
+    // packet's `rdf:RDF`. Never a description nested in another property (an ancestor's, say), whose
+    // title or id is not the document's.
+    let descriptions: Vec<&craft_xml::El> = if root.is("rdf:Description") {
+        vec![&root]
+    } else {
+        let rdf = if root.is("rdf:RDF") { Some(&root) } else { root.find("rdf:RDF") };
+        rdf.map(|r| r.children("rdf:Description").collect()).unwrap_or_default()
+    };
+    let mut body = String::new();
+    for prop in CONTACT_PROPS {
+        let el = descriptions
+            .iter()
+            .find_map(|d| d.child(prop).map(|e| contact_value(prop, e)).or_else(|| d.attr(prop).map(|v| craft_xml::El::new(prop).with_text(v))));
+        if let Some(el) = el {
+            body.push_str("   ");
+            el.write_xml(&mut body);
+            body.push('\n');
+        }
+    }
+    if body.is_empty() {
+        return None;
+    }
+    body.push_str("   <xmpRights:UsageTerms><rdf:Alt><rdf:li xml:lang=\"x-default\"/></rdf:Alt></xmpRights:UsageTerms>\n");
+    Some(format!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"{XMP_RDF}\">\n  <rdf:Description rdf:about=\"\" xmlns:dc=\"{XMP_DC}\" xmlns:xmpRights=\"{XMP_RIGHTS}\" xmlns:xmpMM=\"{XMP_MM}\">\n{body}  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+    ))
+}
+
+/// The allowed property `prop` rebuilt from its value alone: its text, or its `rdf:Alt` / `rdf:Seq` /
+/// `rdf:Bag` of `rdf:li` texts with their `xml:lang`. A qualified value (`rdf:value` beside other
+/// elements) keeps only the value; qualifiers and any other attribute or child are left out.
+fn contact_value(prop: &str, el: &craft_xml::El) -> craft_xml::El {
+    use craft_xml::El;
+    // A qualified value is written either as `rdf:parseType="Resource"` or as a nested
+    // `rdf:Description` holding the `rdf:value` and its qualifiers; the value is read the same.
+    let inner = |e: &'_ El| -> El { e.child("rdf:Description").cloned().unwrap_or_else(|| e.clone()) };
+    let value_of = |e: &El| -> String {
+        let e = inner(e);
+        e.child("rdf:value").map_or_else(|| e.text().trim().to_string(), |v| v.text().trim().to_string())
+    };
+    let with_lang = |mut out: El, from: &El| {
+        if let Some(l) = from.attr("xml:lang") {
+            out.set_attr("xml:lang", l);
+        }
+        out
+    };
+    let el_inner = inner(el);
+    let holder = el_inner.child("rdf:value").cloned().unwrap_or_else(|| el_inner.clone());
+    let out = with_lang(El::new(prop), el);
+    match holder.elements().find(|c| c.is("rdf:Alt") || c.is("rdf:Seq") || c.is("rdf:Bag")) {
+        Some(array) => {
+            let mut a = El::new(array.name.clone());
+            for li in array.children("rdf:li") {
+                a.push(with_lang(El::new("rdf:li"), li).with_text(value_of(li)));
+            }
+            out.with_child(a)
+        }
+        None => out.with_text(value_of(el)),
     }
 }
 
