@@ -17,6 +17,72 @@ pub fn is_identity_curve(points: &[CurvePoint]) -> bool {
     }
 }
 
+/// A 3D LUT file format (Photoshop's `LUTFormat`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LutFormat {
+    #[serde(rename = "cube")]
+    Cube,
+    #[serde(rename = "3dl")]
+    ThreeDl,
+    #[serde(rename = "look")]
+    Look,
+}
+
+/// A Color Lookup's LUT file as loaded: its format and bytes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LutSource {
+    pub format: LutFormat,
+    pub bytes: Arc<Vec<u8>>,
+}
+
+/// Entries in a pencil-drawn Curves map (one per 8-bit level, as in PSD `curv` maps).
+pub const CURVE_MAP_LEN: usize = 256;
+
+/// A pencil-mode curve from its map: `outputs[k]` (0..=1) is the output at input `k / 255`.
+/// Missing entries repeat the last one; extra entries are ignored.
+pub fn curve_map(outputs: &[f32]) -> Vec<CurvePoint> {
+    let last = (CURVE_MAP_LEN - 1) as f32;
+    let mut prev = 0.0;
+    (0..CURVE_MAP_LEN)
+        .map(|k| {
+            let out = outputs.get(k).copied().filter(|v| v.is_finite()).map_or(prev, |v| v.clamp(0.0, 1.0));
+            prev = out;
+            CurvePoint { input: k as f32 / last, output: out }
+        })
+        .collect()
+}
+
+/// The [`CURVE_MAP_LEN`] outputs (0..=1) of `points` read as a pencil-mode curve: straight
+/// segments between the points, constant outside the first/last (identity without two points).
+pub fn curve_map_outputs(points: &[CurvePoint]) -> Vec<f32> {
+    let mut pts: Vec<(f32, f32)> = points.iter().filter(|p| p.input.is_finite() && p.output.is_finite()).map(|p| (p.input, p.output)).collect();
+    pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let last = (CURVE_MAP_LEN - 1) as f32;
+    (0..CURVE_MAP_LEN)
+        .map(|k| {
+            let x = k as f32 / last;
+            let y = match (pts.first(), pts.last()) {
+                (Some(a), Some(b)) if pts.len() >= 2 => {
+                    if x <= a.0 {
+                        a.1
+                    } else if x >= b.0 {
+                        b.1
+                    } else {
+                        let i = pts.partition_point(|p| p.0 < x);
+                        match (pts.get(i.wrapping_sub(1)), pts.get(i)) {
+                            (Some(p0), Some(p1)) if p1.0 > p0.0 => p0.1 + (p1.1 - p0.1) * (x - p0.0) / (p1.0 - p0.0),
+                            (_, Some(p1)) => p1.1,
+                            _ => b.1,
+                        }
+                    }
+                }
+                _ => x,
+            };
+            y.clamp(0.0, 1.0)
+        })
+        .collect()
+}
+
 /// Number of values in the table of a `size`³ Color Lookup (`size³ × 3`). `None` for a size
 /// below 2 or one whose table length overflows: a stored document's size is untrusted.
 pub fn lut3d_len(size: u32) -> Option<usize> {
@@ -128,6 +194,22 @@ fn default_hue_ranges() -> [HueRange; 6] {
     HueRange::defaults()
 }
 
+/// A gradient as Photoshop's Gradient Editor holds it (#8351): a few colour stops, a midpoint
+/// on each segment, Smoothness and the interpolation method, which renderers bake into dense
+/// linear stops.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GradientSource {
+    /// Colour stops (location 0..1, sRGB), in location order.
+    pub stops: Vec<(f32, [f32; 3])>,
+    /// Where each segment's halfway colour sits, as a fraction of it (0.5 = the middle): one per
+    /// segment, `stops.len() - 1`.
+    pub midpoints: Vec<f32>,
+    /// Photoshop's Smoothness, 0..1.
+    pub smoothness: f32,
+    /// `classic`, `perceptual`, `linear` or `smooth`.
+    pub method: String,
+}
+
 /// Photoshop adjustment layers (Layer → New Adjustment Layer).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Adjustment {
@@ -157,6 +239,11 @@ pub enum Adjustment {
         /// The black ink curve when `space` is [`ToneSpace::Cmyk`] (empty = identity).
         #[serde(default)]
         black: Vec<CurvePoint>,
+        /// Drawn with the pencil (Photoshop's "Draw to modify the curve", PSD `curv` map form):
+        /// every curve is a [`CURVE_MAP_LEN`]-entry map (see [`curve_map`]) evaluated
+        /// piecewise-linearly instead of a spline through its points.
+        #[serde(default)]
+        pencil: bool,
     },
     Exposure {
         exposure: f32,
@@ -207,6 +294,11 @@ pub enum Adjustment {
         /// Ordered dither of ±½ an 8-bit step to hide banding (Photoshop's "Dither").
         #[serde(default)]
         dither: bool,
+        /// The LUT file `lut` was read from, embedded unchanged on PSD save as Photoshop does.
+        /// None for a table made in PhotoCraft (a built-in look); a save also ignores it when
+        /// it no longer parses to `lut`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<LutSource>,
     },
     Invert,
     Posterize {
@@ -216,11 +308,17 @@ pub enum Adjustment {
         level: f32,
     },
     GradientMap {
+        /// The gradient as rendered: linear sRGB stops.
         stops: Vec<(f32, [f32; 3])>,
         reverse: bool,
         /// Ordered dither of ±½ an 8-bit step to hide banding.
         #[serde(default)]
         dither: bool,
+        /// The gradient as Photoshop's Gradient Editor holds it, when the map has one (#8351):
+        /// `stops` is it baked for rendering. The editor shows these stops, and a PSD save writes
+        /// them, not the dense baked ones.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<GradientSource>,
     },
     /// Per range (reds, yellows, greens, cyans, blues, magentas, whites, neutrals, blacks) the
     /// cyan, magenta, yellow and black change in percent (-100..=100), as in Photoshop.
@@ -228,10 +326,11 @@ pub enum Adjustment {
         relative: bool,
         adjustments: [[f32; 4]; 9],
     },
-    /// A PSD adjustment we can't evaluate yet; preserved raw for round-trip.
+    /// A PSD adjustment we can't evaluate yet; preserved raw for round-trip, shared between
+    /// document snapshots (#4535).
     Unsupported {
         psd_key: String,
-        raw: Vec<u8>,
+        raw: std::sync::Arc<[u8]>,
     },
 }
 
@@ -264,7 +363,7 @@ impl Adjustment {
 
     pub fn identity_curves() -> Self {
         let line = || vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }];
-        Adjustment::Curves { master: line(), per_channel: [line(), line(), line()], space: ToneSpace::Rgb, black: Vec::new() }
+        Adjustment::Curves { master: line(), per_channel: [line(), line(), line()], space: ToneSpace::Rgb, black: Vec::new(), pencil: false }
     }
 
     pub fn identity_levels() -> Self {
@@ -300,7 +399,7 @@ mod tests {
         let a: Adjustment = serde_json::from_str(r#"{"HueSaturation":{"hue":1.0,"saturation":2.0,"lightness":3.0,"colorize":false}}"#).unwrap();
         assert!(matches!(a, Adjustment::HueSaturation { ranges, .. } if ranges == HueRange::defaults()));
         let c: Adjustment = serde_json::from_str(r#"{"Curves":{"master":[],"per_channel":[[],[],[]]}}"#).unwrap();
-        assert!(matches!(c, Adjustment::Curves { space: ToneSpace::Rgb, .. }));
+        assert!(matches!(c, Adjustment::Curves { space: ToneSpace::Rgb, pencil: false, .. }));
         let g: Adjustment = serde_json::from_str(r#"{"GradientMap":{"stops":[],"reverse":true}}"#).unwrap();
         assert!(matches!(g, Adjustment::GradientMap { dither: false, .. }));
     }

@@ -59,6 +59,22 @@ fn main() {
         prev = p;
     }
     println!("forward-warp segment (600 px brush, 25 px moves) + proxy update: mean {:.2} ms, worst {:.2} ms", total / n as f64, worst);
+    // One 3000 px drag with a 200 px brush (a straight leg, then a diagonal one), as a slow
+    // (every 2 px) and a fast (every 60 px) pointer reports it: the field cost of the whole
+    // stroke, and how far the two results differ.
+    let mut drag = LiquifyStroke::new(LiquifyTool::ForwardWarp, 200.0);
+    let mut fields = Vec::new();
+    let along = |d: f64| if d <= 1500.0 { vec![1500.0 + d, 2000.0] } else { vec![3000.0 + (d - 1500.0) * 0.6, 2000.0 + (d - 1500.0) * 0.8] };
+    for step in [2.0, 60.0] {
+        drag.points = (0..=(3000.0 / step) as usize).map(|k| along(k as f64 * step)).collect();
+        let t = Instant::now();
+        let mut f = LiquifyField::new(b, cell);
+        f.apply_stroke(&drag);
+        println!("forward-warp 3000 px drag (200 px brush), an event every {step} px: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+        fields.push(f);
+    }
+    let diff = fields[0].d.iter().zip(&fields[1].d).map(|(p, q)| (p[0] - q[0]).abs().max((p[1] - q[1]).abs())).fold(0.0f32, f32::max);
+    println!("  slow vs fast pointer: fields differ by at most {diff:.3} px (max displacement {:.1} px)", fields[0].max_displacement());
     st.tool = LiquifyTool::Bloat;
     let t = Instant::now();
     let mut d = Rect::EMPTY;
@@ -111,10 +127,23 @@ fn main() {
         photocraft_algo::puppet::ITERATIONS,
         t.elapsed().as_secs_f64() * 1e3
     );
-    let dst: Vec<[f64; 2]> = pw.pins.iter().map(|p| p.dst).collect();
-    let t = Instant::now();
-    let _ = solver.solve(&dst, &[None; 3], PuppetMode::Normal, 4, Some(&v));
-    println!("puppet interactive re-solve (4 warm rounds): {:.2} ms", t.elapsed().as_secs_f64() * 1e3);
+    // Compare the old path-dependent preview with the command-equivalent drag solve, using
+    // changing destinations and the same cached factorization (no remeshing per event).
+    for (label, rounds, warm) in [("6 warm rounds", 6, true), ("canonical cold solve", photocraft_algo::puppet::ITERATIONS, false)] {
+        let mut previous = v.clone();
+        let mut times = Vec::new();
+        for step in 1..=60 {
+            let mut dst: Vec<[f64; 2]> = pw.pins.iter().map(|p| p.dst).collect();
+            dst[1][0] -= f64::from(step) * 10.0;
+            dst[1][1] += (f64::from(step) * 0.1).sin() * 400.0;
+            let t = Instant::now();
+            let (next, _) = solver.solve(&dst, &[None; 3], pw.mode, rounds, warm.then_some(previous.as_slice()));
+            times.push(t.elapsed().as_secs_f64() * 1e3);
+            previous = std::hint::black_box(next);
+        }
+        times.sort_by(f64::total_cmp);
+        println!("puppet drag ({label}, 60 moves): median {:.2} ms, p95 {:.2} ms, max {:.2} ms", times[30], times[56], times[59]);
+    }
     let t = Instant::now();
     let _ = render(&s, b, &solver.mesh, &v, &order, Interp::Bicubic);
     println!("puppet render 24 MP: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);

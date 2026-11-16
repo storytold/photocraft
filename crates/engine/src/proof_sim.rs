@@ -16,8 +16,9 @@
 //!   display unchanged: the canvas texture is clamped to 0–1, so there is nothing above white
 //!   to compress.
 
-use photocraft_cms::{Builtin, Intent, Lut3d, Transform};
+use craft_cms::{Builtin, Intent, Lut3d, Transform};
 use photocraft_color::SampleType;
+use photocraft_color::convert::{linear_to_srgb, srgb_to_linear};
 use photocraft_doc::Document;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -91,14 +92,16 @@ impl Default for HdrPreview {
 }
 
 impl HdrPreview {
+    /// Whether the preview passes values through unchanged.
     pub fn is_identity(&self) -> bool {
         self.highlight_compression || (self.exposure == 0.0 && self.gamma == 1.0)
     }
+    /// One encoded channel value through the 32-bit preview's exposure and gamma.
     fn apply(&self, v: f32) -> f32 {
         if self.is_identity() {
             return v;
         }
-        let lin = srgb_decode(v) * 2f32.powf(self.exposure);
+        let lin = srgb_to_linear(v) * 2f32.powf(self.exposure);
         srgb_encode(lin.max(0.0).powf(1.0 / self.gamma).min(1.0))
     }
 }
@@ -115,13 +118,9 @@ pub fn signature(c: &ColorState, doc: &Document) -> String {
     format!("{:?} {:?}", pv.setup.kind, h)
 }
 
-fn srgb_decode(v: f32) -> f32 {
-    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
-}
-
+/// sRGB-encodes linear light after clamping it to 0..=1.
 fn srgb_encode(v: f32) -> f32 {
-    let v = v.clamp(0.0, 1.0);
-    if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+    linear_to_srgb(v.clamp(0.0, 1.0))
 }
 
 /// Viénot et al. (1999): linear RGB → LMS.
@@ -158,7 +157,7 @@ pub fn display_lut_with(c: &ColorState, doc: &Document, size: usize, include_hdr
     if kind == ProofKind::Profile && hdr.is_none() {
         return Ok(None);
     }
-    let err = |e: photocraft_cms::CmsError| EngineError::Other(format!("colour management: {e}"));
+    let err = |e: craft_cms::CmsError| EngineError::Other(format!("colour management: {e}"));
     let src = c.canvas_display_for(doc, display)?.source.clone();
     let mon = c.monitor_for(display);
     let srgb = Builtin::Srgb.profile();
@@ -182,7 +181,8 @@ pub fn display_lut_with(c: &ColorState, doc: &Document, size: usize, include_hdr
             let print = Transform::new(&setup.profile, &mon, Intent::RelativeColorimetric, true).map_err(err)?;
             Box::new(move |v| {
                 let mut ink = [0.0f32; 16];
-                sep.eval(&v, &mut ink);
+                // RGB into a separation: never refused; were it, the plate shows no ink.
+                let _ = sep.eval(&v, &mut ink);
                 let shown = match kind {
                     ProofKind::Plate(p) => [0.0, 0.0, 0.0, ink[usize::from(p.min(3))]],
                     _ => [ink[0], ink[1], ink[2], 0.0],
@@ -201,32 +201,24 @@ pub fn display_lut_with(c: &ColorState, doc: &Document, size: usize, include_hdr
             let protan = kind == ProofKind::Protanopia;
             Box::new(move |v| {
                 let s = eval3(&to_srgb, &v);
-                let sim = dichromat(s.map(srgb_decode), protan).map(srgb_encode);
+                let sim = dichromat(s.map(srgb_to_linear), protan).map(srgb_encode);
                 eval3(&to_mon, &sim)
             })
         }
     };
-    let n = size.max(2);
-    let sc = (n - 1) as f32;
-    let mut data = vec![[0.0f32, 0.0, 0.0, 1.0]; n * n * n];
-    for b in 0..n {
-        for g in 0..n {
-            for r in 0..n {
-                let mut v = [r as f32 / sc, g as f32 / sc, b as f32 / sc];
-                if let Some(h) = hdr {
-                    v = v.map(|x| h.apply(x));
-                }
-                let o = base(v);
-                data[r + g * n + b * n * n] = [o[0], o[1], o[2], 1.0];
-            }
+    let lut = Lut3d::from_fn(size.max(2), |mut v| {
+        if let Some(h) = hdr {
+            v = v.map(|x| h.apply(x));
         }
-    }
-    Ok(Some(Lut3d { size: n, data }))
+        base(v)
+    });
+    lut.map(Some).map_err(err)
 }
 
 fn eval3(t: &Transform, v: &[f32]) -> [f32; 3] {
     let mut out = [0.0f32; 16];
-    t.eval(v, &mut out);
+    // Callers pass RGB to transforms built from RGB; a refusal leaves black.
+    let _ = t.eval(v, &mut out);
     if t.outputs() == 1 { [out[0]; 3] } else { [out[0], out[1], out[2]] }
 }
 
@@ -262,6 +254,7 @@ fn run_kind(s: &mut Session, id: &str) -> Result<Value> {
     set_kind(s, kind)
 }
 
+/// View › 32-bit Preview Options for the active document.
 fn preview_32(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "view.thirtyTwoBitPreviewOptions";
     let id = s.active().ok_or(EngineError::NoDocument)?.doc.id;
@@ -298,16 +291,17 @@ macro_rules! kind_spec {
     };
 }
 
+/// The View › Proof Setup commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         kind_spec!("view.proofSetup.workingCyanPlate", "Working Cyan Plate"),
         kind_spec!("view.proofSetup.workingMagentaPlate", "Working Magenta Plate"),
         kind_spec!("view.proofSetup.workingYellowPlate", "Working Yellow Plate"),
         kind_spec!("view.proofSetup.workingBlackPlate", "Working Black Plate"),
-        kind_spec!("view.proofSetup.workingCmyPlate", "Working CMY Plate"),
-        kind_spec!("view.proofSetup.legacyMacintoshRgb", "Legacy Macintosh RGB"),
-        kind_spec!("view.proofSetup.colorBlindnessProtanopia", "Color Blindness — Protanopia-type"),
-        kind_spec!("view.proofSetup.colorBlindnessDeuteranopia", "Color Blindness — Deuteranopia-type"),
+        kind_spec!("view.proofSetup.workingCmyPlate", "Working CMY Plates"),
+        kind_spec!("view.proofSetup.legacyMacintoshRgb", "Legacy Macintosh RGB (Gamma 1.8)"),
+        kind_spec!("view.proofSetup.colorBlindnessProtanopia", "Color Blindness - Protanopia-type"),
+        kind_spec!("view.proofSetup.colorBlindnessDeuteranopia", "Color Blindness - Deuteranopia-type"),
         CommandSpec {
             id: "view.thirtyTwoBitPreviewOptions",
             label: "32-bit Preview Options…",
@@ -325,6 +319,21 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
 
+    /// The shared sRGB functions match the removed copies bit for bit.
+    #[test]
+    fn srgb_transfer_output_is_unchanged() {
+        let decode = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        let encode = |v: f32| {
+            let v = v.clamp(0.0, 1.0);
+            if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+        };
+        for i in -2000..=6000 {
+            let v = i as f32 / 4000.0;
+            assert_eq!(srgb_to_linear(v).to_bits(), decode(v).to_bits(), "decode {v}");
+            assert_eq!(srgb_encode(v).to_bits(), encode(v).to_bits(), "encode {v}");
+        }
+    }
+
     fn session(mode: &str, depth: u32) -> Session {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 8, "height": 8, "mode": mode, "depth": depth})).unwrap();
@@ -332,8 +341,8 @@ mod tests {
     }
 
     fn sample(lut: &Lut3d, idx: [usize; 3]) -> [f32; 3] {
-        let n = lut.size;
-        let v = lut.data[idx[0] + idx[1] * n + idx[2] * n * n];
+        let n = lut.size();
+        let v = lut.data()[idx[0] + idx[1] * n + idx[2] * n * n];
         [v[0], v[1], v[2]]
     }
 
@@ -374,7 +383,7 @@ mod tests {
                 let pv = s.color.proof(d.id);
                 assert_eq!(pv.setup.kind.id(), id.trim_start_matches("view.proofSetup."));
                 let lut = s.color.display_lut(&d, 5).unwrap();
-                assert_eq!(lut.data.len(), 125);
+                assert_eq!(lut.data().len(), 125);
                 let bytes = s.color.canvas_lut(&d, 5).unwrap().unwrap();
                 assert_eq!(bytes.len(), 125 * 4);
             }

@@ -23,6 +23,12 @@ const INF_DIST: u32 = u32::MAX;
 /// Residual capacities at or below this count as saturated (guards against float round-off
 /// leaving tiny positive residuals that would cause long chains of negligible augmentations).
 const EPS: f32 = 1e-5;
+/// How many steps the max-flow loops take between asks whether to stop.
+const CANCEL_EVERY: u32 = 1024;
+
+fn never() -> bool {
+    false
+}
 
 /// A directed graph with source/sink terminal capacities.
 #[derive(Clone, Debug, Default)]
@@ -110,24 +116,46 @@ impl Graph {
 
     /// Computes the maximum flow (= minimum cut capacity).
     pub fn maxflow(&mut self) -> f64 {
+        self.maxflow_with(&never).unwrap_or(self.flow)
+    }
+
+    /// [`Graph::maxflow`] that stops when `cancel` returns true (asked every few thousand steps):
+    /// `None` then, and the cut is meaningless. Not cancelled, it does exactly what
+    /// [`Graph::maxflow`] does.
+    pub fn maxflow_with(&mut self, cancel: &dyn Fn() -> bool) -> Option<f64> {
         if self.node_count() >= 4096 {
             let mut source = false;
             let mut sink = false;
             for &capacity in &self.tr_cap {
                 if !capacity.is_finite() {
-                    return self.maxflow_bk();
+                    return self.bk(cancel);
                 }
                 source |= capacity > EPS;
                 sink |= capacity < -EPS;
             }
             if source && sink && self.r_cap.iter().all(|v| v.is_finite() && *v >= 0.0) {
-                return self.maxflow_push_relabel();
+                return self.push_relabel(cancel);
             }
         }
-        self.maxflow_bk()
+        self.bk(cancel)
+    }
+
+    /// [`Graph::maxflow_with`] that always runs Boykov–Kolmogorov. It is the faster solver on
+    /// the 8-connected colour-model grids of GrabCut (about 2.3x on a 107k-pixel working image);
+    /// push/relabel wins on Quick Selection's many area-cost terminals, which keep
+    /// [`Graph::maxflow_with`].
+    pub fn maxflow_bk_with(&mut self, cancel: &dyn Fn() -> bool) -> Option<f64> {
+        self.bk(cancel)
     }
 
     pub(super) fn maxflow_bk(&mut self) -> f64 {
+        self.bk(&never).unwrap_or(self.flow)
+    }
+
+    fn bk(&mut self, cancel: &dyn Fn() -> bool) -> Option<f64> {
+        if cancel() {
+            return None;
+        }
         let n = self.node_count();
         let mut queue: VecDeque<u32> = VecDeque::new();
         let mut orphans: VecDeque<u32> = VecDeque::new();
@@ -145,7 +173,12 @@ impl Graph {
             }
         }
         let mut time = 0u32;
+        let mut steps = 0u32;
         while let Some(i) = queue.pop_front() {
+            steps = steps.wrapping_add(1);
+            if steps.is_multiple_of(CANCEL_EVERY) && cancel() {
+                return None;
+            }
             let i = i as usize;
             self.active[i] = false;
             if self.parent[i] == NONE {
@@ -197,7 +230,7 @@ impl Graph {
                 self.adopt(o as usize, time, &mut queue, &mut orphans);
             }
         }
-        self.flow
+        if cancel() { None } else { Some(self.flow) }
     }
 
     fn augment(&mut self, m: usize, orphans: &mut VecDeque<u32>) {
@@ -384,5 +417,53 @@ impl Graph {
             }
         }
         s
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::{CANCEL_EVERY, Graph};
+    use std::cell::Cell;
+
+    #[test]
+    fn bk_checks_cancellation_on_short_runs() {
+        let mut graph = Graph::with_capacity(2, 0);
+        graph.add_tweights(0, 1.0, 0.0);
+        graph.add_tweights(1, 0.0, 1.0);
+        assert!(graph.maxflow_bk_with(&|| true).is_none());
+
+        let calls = Cell::new(0);
+        assert!(
+            graph
+                .maxflow_bk_with(&|| {
+                    calls.set(calls.get() + 1);
+                    calls.get() == 2
+                })
+                .is_none()
+        );
+        assert_eq!(calls.get(), 2, "short run must check before returning");
+    }
+
+    #[test]
+    fn bk_checks_cancellation_during_a_long_run() {
+        let mut graph = Graph::with_capacity(CANCEL_EVERY as usize + 1, 0);
+        for i in 0..graph.node_count() {
+            graph.add_tweights(i, 1.0, 0.0);
+        }
+        let calls = Cell::new(0);
+        assert!(
+            graph
+                .maxflow_bk_with(&|| {
+                    calls.set(calls.get() + 1);
+                    calls.get() == 2
+                })
+                .is_none()
+        );
+        // The first check is at entry; more than CANCEL_EVERY active nodes ensure the
+        // second is the periodic poll, before the solver can finish.
+        assert_eq!(calls.get(), 2);
+        // Without the periodic poll the final check would be the second call. The poll stops the
+        // run with the last queued node unprocessed, still marked active.
+        assert!(graph.active[CANCEL_EVERY as usize], "periodic cancel must stop before the last queued node is processed");
     }
 }

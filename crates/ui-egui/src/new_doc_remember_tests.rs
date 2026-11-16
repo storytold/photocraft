@@ -76,3 +76,27 @@ fn a_corrupt_remembered_value_is_ignored() {
     let _ = crate::dialogs::confirm(&mut app, id);
     assert_eq!(app.session.prefs().dialogs["file.new"]["height"], json!(600), "unchanged");
 }
+
+/// #3131: File › New › Recent lists the documents created with the dialog, newest first, with
+/// every setting restored by a click, and survives a restart.
+#[test]
+fn created_documents_fill_the_recent_category() {
+    let mut app = app();
+    create(&mut app, json!({"width": 640, "height": 480, "resolution": 300.0, "mode": "cmyk", "depth": 16, "background": "transparent", "__unit": "in"}));
+    create(&mut app, json!({"width": 1920, "height": 1080, "resolution": 72.0, "mode": "rgb", "depth": 8, "background": "white", "__unit": "px"}));
+    let recent = app.session.presets.recent_documents.clone();
+    assert_eq!(recent.iter().map(|r| (r.width, r.unit.as_str())).collect::<Vec<_>>(), [(1920, "px"), (640, "in")]);
+    // The settings are kept with the preferences.
+    let mut restarted = photocraft_engine::Session::new();
+    restarted.load_prefs_json(&app.session.prefs_to_json()).unwrap();
+    assert_eq!(restarted.presets.recent_documents, recent);
+    // A recent card restores all of its settings but keeps the new document's name.
+    let mut f = app.new_document_fields();
+    f.insert("name".into(), json!("Next"));
+    crate::new_doc_ui::apply_settings(&mut f, &recent[1]);
+    let p = crate::new_doc_ui::command_params(&f);
+    assert_eq!(
+        (&p["width"], &p["height"], &p["mode"], &p["depth"], &p["background"], &p["name"], &f["__unit"]),
+        (&json!(640), &json!(480), &json!("cmyk"), &json!(16), &json!("transparent"), &json!("Next"), &json!("in"))
+    );
+}

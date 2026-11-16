@@ -9,6 +9,7 @@ use crate::PhotocraftApp;
 pub const DISCORD: &str = "https://discord.gg/artcraft";
 pub const ARTCRAFT_WEBSITE: &str = "https://getartcraft.com";
 pub const APP_PAGE: &str = "https://getartcraft.com/apps/photocraft";
+pub const TUTORIALS: &str = "https://getartcraft.com/tutorials";
 pub const GITHUB: &str = "https://github.com/storytold/photocraft";
 pub const ISSUES: &str = "https://github.com/storytold/photocraft/issues";
 
@@ -27,7 +28,8 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context, url: &str) -> Value {
     if !opened {
         ctx.open_url(egui::OpenUrl::new_tab(url));
     }
-    app.ui.status = format!("Opened {url}");
+    let template = "Opened {url}";
+    app.ui.status = crate::i18n::fmt(tl!(template), &[("url", url)]);
     json!({"url": url})
 }
 
@@ -101,7 +103,20 @@ mod tests {
     fn help_menu_lists_links_then_separator_then_system_info_and_about() {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         let help: Vec<String> = crate::menus::menu_items(&app).into_iter().filter(|i| i.path == ["Help"]).map(|i| i.id).collect();
-        assert_eq!(help, ["help.discord", "help.website", "help.artcraftWebsite", "help.github", "help.reportIssue", "---", "help.systemInfo", "help.about"]);
+        assert_eq!(
+            help,
+            [
+                "help.discord",
+                "help.website",
+                "help.artcraftWebsite",
+                "help.github",
+                "help.reportIssue",
+                "help.checkForUpdates",
+                "---",
+                "help.systemInfo",
+                "help.about"
+            ]
+        );
         for (id, _) in COMMANDS {
             assert!(crate::menus::is_live(id) && crate::menus::is_enabled(&app, id), "{id}");
         }

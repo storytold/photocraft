@@ -4,7 +4,7 @@
 //! white underbase does not peek past the colour. Photoshop's recorded action loads transparency,
 //! contracts by 1px without treating the canvas edge as a selection edge, then makes a spot
 //! channel named "Spot Color 1" (RGB red, solidity 60). [`run`] does that as one history step.
-//! The Actions panel preset is that same command, in a folder also named "DTF", so the step's
+//! The Actions panel preset is that same command, filed in the action set "DTF", so the step's
 //! numbers and text can be edited. The last successful settings are stored with the other
 //! remembered dialogs and become the next dialog's defaults and, while the preset is still that
 //! one step, the values Play uses.
@@ -20,7 +20,7 @@ use crate::{EngineError, Result, Session};
 
 /// Name of the built-in action in the Actions panel.
 pub const ACTION_NAME: &str = "DTF";
-/// Folder the built-in action is filed under.
+/// Action set the built-in action is filed under.
 pub const SET_NAME: &str = "DTF";
 /// `source` value: transparency of the active layer.
 pub const SOURCE_LAYER: &str = "layer";
@@ -173,7 +173,7 @@ fn composite_alpha(doc: &photocraft_doc::Document, n: usize) -> Result<Vec<f32>>
     if buf.px.len() != n {
         return Err(bad("the composite does not cover the canvas"));
     }
-    Ok(buf.px.into_iter().map(|p| p[3]).collect())
+    Ok(buf.px.iter().map(|p| p[3]).collect())
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
@@ -198,11 +198,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let mut mask = if composite {
             composite_alpha(doc, n)?
         } else {
-            let id = active.ok_or_else(|| EngineError::Other("transparency needs a layer".into()))?;
+            let id = (*active).ok_or_else(|| EngineError::Other("transparency needs a layer".into()))?;
             transparency(doc, id, n)?
         };
         if contract > 0.0 {
-            mask = crate::selection_cmds::modify_mask(&mask, w, h, "contract", contract, at_bounds).map_err(bad)?;
+            mask = crate::selection_cmds::contract_mask(&mask, w, h, contract, at_bounds).map_err(bad)?;
         }
         if mask.len() != n {
             return Err(bad("the contracted selection does not cover the canvas"));
@@ -211,7 +211,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let fmt = crate::channel_cmds::channel_format(doc);
         let surface = crate::channel_cmds::plane_surface(&mask, area, fmt);
         doc.channels.push(AlphaChannel { spot: Some((color, solidity)), ..AlphaChannel::new(name.clone(), surface) });
-        Ok(doc.channels.len() - 1)
+        Ok(doc.channels.len().saturating_sub(1))
     })?;
     if let Some(st) = s.active_mut() {
         st.channel_view.set_alpha_visible(i, true);
@@ -263,9 +263,11 @@ fn params_for_preset(s: &Session) -> Value {
     dialog_fields(s.prefs().dialogs.get(CMD))
 }
 
-/// The one-step action, with the screenshot's values, filed in the DTF folder.
+/// The one-step action, with the default values, filed in the DTF action set.
 pub fn builtin_action() -> Action {
-    Action::new(ACTION_NAME, vec![(CMD.into(), default_params())])
+    let mut action = Action::new(ACTION_NAME, vec![(CMD.into(), default_params())]);
+    action.set = Some(SET_NAME.into());
+    action
 }
 
 /// The previous preset was the three Photoshop commands. Fold those into one `image.dtf` step,
@@ -297,37 +299,59 @@ fn legacy_params(action: &Action) -> Option<Value> {
     Some(params)
 }
 
-/// Append the built-in DTF action when the list doesn't already contain that name.
-/// A saved three-step DTF preset becomes the one `image.dtf` step, in the DTF folder.
+/// Install the built-in DTF action when the user asks. A list that already has an action
+/// named DTF is left as the user kept it, except the old three-command recording, which
+/// becomes the one `image.dtf` step. Startup does not call this.
 pub fn ensure_preset(s: &mut Session) {
-    s.actions.align_folders();
     if let Some(idx) = s.actions.list.iter().position(|a| a.name == ACTION_NAME) {
-        if let Some(params) = legacy_params(&s.actions.list[idx]) {
-            s.actions.list[idx].steps = vec![(CMD.into(), params)];
-            if s.actions.folder(idx).is_empty() {
-                s.actions.folders[idx] = SET_NAME.into();
+        if let Some(params) = legacy_params(&s.actions.list[idx])
+            && let Some(action) = s.actions.list.get_mut(idx)
+        {
+            action.steps = vec![(CMD.into(), params)];
+            if action.set.is_none() {
+                action.set = Some(SET_NAME.into());
             }
-            let _ = crate::actions_cmds::ensure_set(&mut s.actions, SET_NAME);
             s.actions.touch();
         }
         return;
     }
     let params = params_for_preset(s);
-    let action = Action::new(ACTION_NAME, vec![(CMD.into(), params)]);
-    let _ = crate::actions_cmds::push_action(s, action, SET_NAME);
+    let mut action = Action::new(ACTION_NAME, vec![(CMD.into(), params)]);
+    action.set = Some(SET_NAME.into());
+    s.actions.list.push(action);
+    s.actions.touch();
+}
+
+fn install_action(s: &mut Session, _p: &Value) -> Result<Value> {
+    let had = s.actions.list.iter().any(|a| a.name == ACTION_NAME);
+    let legacy = s.actions.list.iter().any(|a| a.name == ACTION_NAME && legacy_params(a).is_some());
+    ensure_preset(s);
+    Ok(json!({"installed": !had || legacy, "name": ACTION_NAME, "set": SET_NAME}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec {
-        id: CMD,
-        label: "DTF Spot Channel…",
-        menu: &["Image"],
-        shortcut: None,
-        params: r##"{"source":"layer"|"composite"="layer","contract":0..500=1,"name":str="Spot Color 1","color":"#rrggbb"|[r,g,b]="#ff0000","solidity":0..100=60,"applyAtCanvasBounds":bool=false} → {channel,name,solidity,selected,source}. source "layer" is the active layer; "composite" is every visible layer. The values used are remembered for the next dialog and, while the DTF preset is still this one step, for Actions playback."##,
-        enabled,
-        journal: true,
-        run,
-    }]
+    vec![
+        CommandSpec {
+            id: CMD,
+            label: "DTF Spot Channel…",
+            menu: &["Image"],
+            shortcut: None,
+            params: r##"{"source":"layer"|"composite"="layer","contract":0..500=1,"name":str="Spot Color 1","color":"#rrggbb"|[r,g,b]="#ff0000","solidity":0..100=60,"applyAtCanvasBounds":bool=false} → {channel,name,solidity,selected,source}. source "layer" is the active layer; "composite" is every visible layer. The values used are remembered for the next dialog and, while the DTF preset is still this one step, for Actions playback."##,
+            enabled,
+            run,
+            journal: true,
+        },
+        CommandSpec {
+            id: "image.installDtfAction",
+            label: "Install DTF Action",
+            menu: &["Image"],
+            shortcut: None,
+            params: r##"{} → {installed:bool,name,set}. Adds the DTF action to the Actions panel. An action already named DTF is left as the user kept it, except the old three-command recording, which becomes this one step. Loading PhotoCraft does not install it."##,
+            enabled: |_| Ok(()),
+            run: install_action,
+            journal: false,
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -337,7 +361,7 @@ mod tests {
 
     fn paint_rect(s: &mut Session, rect: Rect) {
         s.edit("paint", |doc, active| {
-            let id = active.ok_or(EngineError::NoDocument)?;
+            let id = (*active).ok_or(EngineError::NoDocument)?;
             let fmt = doc.pixel_format();
             let px = photocraft_raster::from_rgba(&fmt, [0.2, 0.4, 0.6, 1.0]);
             doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.surface_mut().ok_or_else(|| EngineError::Other("no pixels".into()))?.fill_rect(rect, &px);
@@ -457,7 +481,7 @@ mod tests {
         let mut via_action = Session::new();
         prep(&mut via_action);
         ensure_preset(&mut via_action);
-        assert_eq!(via_action.actions.folder(0), SET_NAME);
+        assert_eq!(via_action.actions.list[0].set.as_deref(), Some(SET_NAME));
         assert_eq!(via_action.actions.list[0].steps.len(), 1);
         assert_eq!(via_action.actions.list[0].steps[0].0, CMD);
         via_action.execute("actions.play", json!({"action": ACTION_NAME})).unwrap();
@@ -562,13 +586,15 @@ mod tests {
         // Contract 0 on a full-canvas opaque layer keeps the edge.
         assert_eq!(channel_at(&s, 0, 0), 1.0);
 
-        s.execute("actions.setStep", json!({"action": ACTION_NAME, "step": 0, "params": {"contract": 2, "name": "Gloss", "source": "layer", "solidity": 60, "color": "#ff0000", "applyAtCanvasBounds": false}})).unwrap();
+        // The Actions panel stores a new step, then tells the dialog to follow it.
+        s.actions.list[0].steps[0].1 = json!({"contract": 2, "name": "Gloss", "source": "layer", "solidity": 60, "color": "#ff0000", "applyAtCanvasBounds": false});
+        note_edited_step(&mut s, 0);
         assert_eq!(s.prefs().dialogs.get(CMD).unwrap()["name"], "Gloss");
         assert_eq!(s.actions.list[0].steps[0].1["contract"], json!(2));
     }
 
     #[test]
-    fn a_saved_three_step_preset_becomes_one_dtf_step_in_the_folder() {
+    fn a_saved_three_step_preset_becomes_one_dtf_step_in_the_set() {
         let mut s = Session::new();
         s.actions.list.push(Action::new(
             ACTION_NAME,
@@ -580,8 +606,7 @@ mod tests {
         ));
         ensure_preset(&mut s);
         assert_eq!(s.actions.list.len(), 1);
-        assert_eq!(s.actions.folder(0), SET_NAME);
-        assert!(s.actions.sets.iter().any(|n| n == SET_NAME));
+        assert_eq!(s.actions.list[0].set.as_deref(), Some(SET_NAME));
         assert_eq!(s.actions.list[0].steps.len(), 1);
         assert_eq!(s.actions.list[0].steps[0].0, CMD);
         assert_eq!(s.actions.list[0].steps[0].1["name"], "White");
@@ -589,9 +614,25 @@ mod tests {
         assert_eq!(s.actions.list[0].steps[0].1["applyAtCanvasBounds"], json!(true));
         // A customized action that is no longer those three commands is left in place.
         s.actions.list[0].steps.push(("layer.new.layer".into(), json!({})));
-        s.actions.folders[0].clear();
+        s.actions.list[0].set = None;
         ensure_preset(&mut s);
         assert_eq!(s.actions.list[0].steps.len(), 2);
-        assert!(s.actions.folder(0).is_empty());
+        assert!(s.actions.list[0].set.is_none());
+    }
+
+    #[test]
+    fn the_dtf_action_is_installed_only_when_asked() {
+        let mut s = Session::new();
+        assert!(s.actions.list.iter().all(|a| a.name != ACTION_NAME), "startup does not install the action");
+        let added = s.execute("image.installDtfAction", json!({})).unwrap();
+        assert_eq!(added["installed"], json!(true));
+        assert_eq!(s.actions.list.len(), 1);
+        assert_eq!(s.actions.list[0].set.as_deref(), Some(SET_NAME));
+        let again = s.execute("image.installDtfAction", json!({})).unwrap();
+        assert_eq!(again["installed"], json!(false), "a second install leaves the existing action");
+        assert_eq!(s.actions.list.len(), 1);
+        s.actions.list[0].steps[0].1["contract"] = json!(4);
+        s.execute("image.installDtfAction", json!({})).unwrap();
+        assert_eq!(s.actions.list[0].steps[0].1["contract"], json!(4), "a customized action is not replaced");
     }
 }

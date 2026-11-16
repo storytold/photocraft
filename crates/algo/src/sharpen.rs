@@ -6,6 +6,17 @@ use crate::Ctx;
 use crate::blur::{conv_sep, gaussian_kernel};
 use crate::image::Image;
 
+pub(crate) mod exact;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod fft;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod fft_bench;
+
 fn with_blur(src: &Image, out: Rect, ctx: &Ctx, radius: f32, mut f: impl FnMut(f32, f32) -> f32) -> Vec<f32> {
     let k = gaussian_kernel(radius);
     let blurred = conv_sep(src, out, &k, &k, ctx.alpha);
@@ -24,12 +35,7 @@ fn with_blur(src: &Image, out: Rect, ctx: &Ctx, radius: f32, mut f: impl FnMut(f
 }
 
 pub(crate) fn unsharp(src: &Image, out: Rect, ctx: &Ctx, amount: f32, radius: f32, threshold: f32) -> Vec<f32> {
-    let k = amount / 100.0;
-    let t = threshold / 255.0;
-    with_blur(src, out, ctx, radius, |o, b| {
-        let d = o - b;
-        if d.abs() + 1e-6 >= t { o + k * d } else { o }
-    })
+    exact::run(src, out, ctx, amount, radius, threshold, &photocraft_raster::Interrupt::NONE).unwrap_or_default()
 }
 
 pub(crate) fn smart(src: &Image, out: Rect, ctx: &Ctx, amount: f32, radius: f32, reduce_noise: f32) -> Vec<f32> {

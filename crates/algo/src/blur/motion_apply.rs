@@ -169,7 +169,7 @@ fn apply_inner(
             return None;
         }
         if let Some(selection) = selection {
-            crate::mix_selection(&mut data, output, selection, &src);
+            crate::mix_selection(&mut data, output, selection, &src, fmt.alpha);
         }
         if ctl.cancelled() {
             return None;

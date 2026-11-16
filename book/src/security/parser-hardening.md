@@ -6,7 +6,7 @@ Parser safety is broader than “does not crash.” A parser must also bound mem
 
 ### PSD/PSB
 
-`photocraft-psd` enforces maximum document dimensions and channel counts, bounds decoded channel data, limits ActionDescriptor nesting and pattern edges, and uses checked arithmetic for key decoded-size calculations. Tests cover malformed headers, truncation, property-generated inputs, and dedicated fuzz targets.
+`craft-psd` enforces maximum document dimensions and channel counts, bounds decoded channel data, limits ActionDescriptor nesting and pattern edges, and uses checked arithmetic for key decoded-size calculations. Tests cover malformed headers, truncation, property-generated inputs, and dedicated fuzz targets.
 
 ### Raster codecs
 
@@ -14,7 +14,7 @@ Parser safety is broader than “does not crash.” A parser must also bound mem
 
 ### Native format
 
-`photocraft-format` bounds manifest, blob, and total decompressed bytes; validates ZIP structure and decompressed size; verifies CRCs and content hashes; rejects unsupported versions; and property-tests random bundles/manifests.
+`photocraft-format` bounds manifest, blob, and total decompressed bytes; admits the declared canvas (by default at most 300000 pixels per side, the largest canvas `file.new`, Canvas Size and PSB import create, so whatever saves reopens; `LoadOptions::max_canvas_side` / `max_canvas_pixels` let a caller lower it) before decoding anything for it; validates ZIP structure and decompressed size; verifies CRCs and content hashes; rejects unsupported versions; and property-tests random bundles/manifests.
 
 ## Review checklist
 

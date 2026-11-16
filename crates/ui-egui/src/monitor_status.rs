@@ -36,6 +36,8 @@ pub const REREAD_SECS: f64 = 30.0;
 #[derive(Default)]
 pub struct State {
     pending: Option<Receiver<Detection>>,
+    #[cfg(target_os = "linux")]
+    root_output_name: Option<String>,
     /// Another reading is wanted once the pending one is done or the interval has passed.
     again: bool,
     /// A reading is wanted at once (ignores the interval).
@@ -64,6 +66,22 @@ pub fn pending(app: &mut PhotocraftApp, rx: Receiver<Detection>) {
 /// Per-frame (main window): apply a reading that arrived, track the main window's display, and
 /// start a new reading when the displays may have changed.
 pub fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    poll_with_output_name(app, ctx, None);
+}
+
+#[cfg(target_os = "linux")]
+pub fn poll_frame(app: &mut PhotocraftApp, ctx: &egui::Context, frame: &eframe::Frame) {
+    let output_name = frame.winit_window().and_then(|window| window.current_monitor()).and_then(|monitor| monitor.name());
+    poll_with_output_name(app, ctx, output_name);
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn poll_frame(app: &mut PhotocraftApp, ctx: &egui::Context, _frame: &eframe::Frame) {
+    poll(app, ctx);
+}
+
+fn poll_with_output_name(app: &mut PhotocraftApp, ctx: &egui::Context, output_name: Option<String>) {
+    set_root_output_name(app, output_name);
     if let Some(rx) = &app.monitors.pending {
         let r = match rx.try_recv() {
             Ok(r) => Some(r),
@@ -135,14 +153,35 @@ pub fn read_now(app: &mut PhotocraftApp) {
 /// now (the dialog asks again each time it draws).
 pub fn note(app: &PhotocraftApp) -> String {
     let st = app.session.color.monitor_status();
-    let on = st.display.as_ref().map(|d| format!(" on {d}")).unwrap_or_default();
-    format!("Monitor profile in use{on}: {}{}", st.summary(), retained(app).map(|r| format!(" ({r})")).unwrap_or_default())
+    let template = if st.display.is_some() { "Monitor profile in use on {display}: {profile}" } else { "Monitor profile in use: {profile}" };
+    let profile = profile_summary(&st);
+    let mut note = crate::i18n::fmt(tl!(template), &[("display", st.display.as_deref().unwrap_or_default()), ("profile", &profile)]);
+    if let Some(reason) = retained(app) {
+        note.push_str(&format!(" ({reason})"));
+    }
+    note
+}
+
+/// Display-only counterpart of the engine's English monitor summary.
+fn profile_summary(st: &photocraft_engine::display_color::MonitorStatus) -> String {
+    let name = match (&st.profile_name, st.source) {
+        (Some(name), "auto") => name.as_str(),
+        _ => st.profile.as_str(),
+    };
+    let source = tl!(st.source);
+    match &st.reason {
+        Some(reason) => format!("{name} ({source}: {reason})"),
+        None => format!("{name} ({source})"),
+    }
 }
 
 /// When the last re-read failed and an earlier reading is shown: why.
 fn retained(app: &PhotocraftApp) -> Option<String> {
     match &app.session.color.monitor_detection {
-        MonitorDetection::Retained { reason } => Some(format!("previous reading kept; the last re-read failed: {reason}")),
+        MonitorDetection::Retained { reason } => Some({
+            let template = "previous reading kept; the last re-read failed: {reason}";
+            crate::i18n::fmt(tl!(template), &[("reason", reason)])
+        }),
         _ => None,
     }
 }
@@ -179,15 +218,24 @@ pub fn apply(app: &mut PhotocraftApp, r: Detection) {
             })
             .collect()
     };
-    for (id, name, reason) in fallbacks {
-        if app.monitors.reported.iter().any(|(i, r)| *i == id && *r == reason) {
-            continue;
-        }
-        app.monitors.reported.push((id, reason.clone()));
-        let on = if name.is_empty() { String::new() } else { format!(" on {name}") };
-        let lines = vec![reason, format!("The canvas{on} is shown as sRGB. Choose a monitor profile in Edit › Color Settings.")];
-        crate::notices::post(app, FALLBACK_TITLE, lines, true, None);
+    let fresh: Vec<_> = fallbacks.into_iter().filter(|(id, _, reason)| !app.monitors.reported.iter().any(|(i, r)| i == id && r == reason)).collect();
+    if fresh.is_empty() {
+        return;
     }
+    app.monitors.reported.extend(fresh.iter().map(|(id, _, reason)| (*id, reason.clone())));
+    // One notice per reading, not one per display: two profile-less monitors (common on Linux
+    // desks) gave two cards saying the same thing at every launch. Each display keeps its own
+    // reason line; the names share the existing template, so no catalog change is needed.
+    let names: Vec<&str> = fresh.iter().map(|(_, name, _)| name.as_str()).filter(|n| !n.is_empty()).collect();
+    let template = if names.is_empty() {
+        "The canvas is shown as sRGB. Choose a monitor profile in Edit › Color Settings."
+    } else {
+        "The canvas on {display} is shown as sRGB. Choose a monitor profile in Edit › Color Settings."
+    };
+    let advice = crate::i18n::fmt(tl!(template), &[("display", &names.join(", "))]);
+    let mut lines: Vec<String> = fresh.into_iter().map(|(_, _, reason)| reason).collect();
+    lines.push(advice);
+    crate::notices::post(app, FALLBACK_TITLE, lines, true, None);
 }
 
 /// The frame of the window `ctx` draws, in OS points (as `Display::frame`). egui reports it in
@@ -203,7 +251,46 @@ fn window_frame(ctx: &egui::Context) -> Option<[f64; 4]> {
 /// The display showing most of the window `ctx` draws (`None`: unknown, e.g. no displays read
 /// or no window position, as on Wayland).
 pub fn view_display(app: &PhotocraftApp, ctx: &egui::Context) -> Option<u32> {
+    display_for_view(app, ctx)
+}
+
+fn display_for_view(app: &PhotocraftApp, ctx: &egui::Context) -> Option<u32> {
+    if let Some(display) = root_output_display(app, ctx) {
+        return display;
+    }
     display_at(&app.session.color.displays, window_frame(ctx)?)
+}
+
+#[cfg(target_os = "linux")]
+fn set_root_output_name(app: &mut PhotocraftApp, name: Option<String>) {
+    app.monitors.root_output_name = name;
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_root_output_name(_app: &mut PhotocraftApp, _name: Option<String>) {}
+
+#[cfg(target_os = "linux")]
+fn root_output_display(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Option<u32>> {
+    if ctx.viewport_id() != egui::ViewportId::ROOT {
+        return None;
+    }
+    let name = app.monitors.root_output_name.as_deref()?;
+    Some(app.session.color.displays.iter().find(|display| display.name == name).map(|display| display.id))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn root_output_display(_app: &PhotocraftApp, _ctx: &egui::Context) -> Option<Option<u32>> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn root_output_name_known(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    ctx.viewport_id() == egui::ViewportId::ROOT && app.monitors.root_output_name.is_some()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn root_output_name_known(_app: &PhotocraftApp, _ctx: &egui::Context) -> bool {
+    false
 }
 
 /// The window is on no display we know, or on one whose size differs from what was read.
@@ -212,8 +299,12 @@ fn displays_changed(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
     if c.displays.is_empty() || !matches!(c.monitor_detection, MonitorDetection::Found | MonitorDetection::Retained { .. }) {
         return false;
     }
-    let Some(frame) = window_frame(ctx) else { return false };
-    let Some(d) = display_at(&c.displays, frame).and_then(|id| c.displays.iter().find(|d| d.id == id)) else { return true };
+    let Some(d) = display_for_view(app, ctx).and_then(|id| c.displays.iter().find(|d| d.id == id)) else {
+        if root_output_name_known(app, ctx) {
+            return true;
+        }
+        return window_frame(ctx).is_some();
+    };
     // egui's monitor size is the window's display (winit's rule, AppKit's on macOS).
     let size = ctx.input(|i| i.viewport().monitor_size);
     let native = ctx.input(|i| i.viewport().native_pixels_per_point).filter(|n| *n > 0.0);
@@ -230,17 +321,24 @@ fn displays_changed(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
 pub fn summary_lines(app: &PhotocraftApp) -> Vec<String> {
     let c = &app.session.color;
     if c.displays.is_empty() {
-        return vec![format!("Monitor profile: {}", c.monitor_status().summary())];
+        return vec![{
+            let template = "Monitor profile: {profile}";
+            crate::i18n::fmt(tl!(template), &[("profile", &profile_summary(&c.monitor_status()))])
+        }];
     }
     let mut lines: Vec<String> = c
         .displays
         .iter()
         .map(|d| {
-            let main = if c.main_display == Some(d.id) { " (main window)" } else { "" };
-            format!("Monitor profile on {}{main}: {}", d.name, c.monitor_status_for(Some(d.id)).summary())
+            let template =
+                if c.main_display == Some(d.id) { "Monitor profile on {display} (main window): {profile}" } else { "Monitor profile on {display}: {profile}" };
+            crate::i18n::fmt(tl!(template), &[("display", &d.name), ("profile", &profile_summary(&c.monitor_status_for(Some(d.id))))])
         })
         .collect();
-    lines.extend(retained(app).map(|r| format!("Display profiles: {r}")));
+    lines.extend(retained(app).map(|r| {
+        let template = "Display profiles: {reason}";
+        crate::i18n::fmt(tl!(template), &[("reason", &r)])
+    }));
     lines
 }
 
@@ -332,6 +430,29 @@ mod tests {
         let lines = summary_lines(&app);
         assert_eq!(lines[1], "Monitor profile on ROG PG32UQX (main window): Apple_Display (auto)", "{lines:?}");
         assert!(lines[0].starts_with("Monitor profile on Built-in Retina Display: sRGB"), "{lines:?}");
+    }
+
+    #[test]
+    fn displays_without_profiles_share_one_notice() {
+        // Two profile-less monitors (a Linux desk: DP-4 and DP-5) gave two identical cards.
+        let mut app = app();
+        let desk = |id, name: &str, x| Display { id, name: name.into(), frame: [x, 0.0, 1920.0, 1080.0], profile_name: None, icc: None };
+        apply(&mut app, Ok(vec![desk(1, "DP-4", 0.0), desk(2, "DP-5", 1920.0)]));
+        assert_eq!(app.ui.notices.len(), 1);
+        let lines = &app.ui.notices[0].lines;
+        assert_eq!(lines[0], "DP-4 has no ICC profile");
+        assert_eq!(lines[1], "DP-5 has no ICC profile");
+        assert!(lines[2].starts_with("The canvas on DP-4, DP-5 is shown as sRGB."), "{lines:?}");
+        // The same reading again: nothing new to say.
+        apply(&mut app, Ok(vec![desk(1, "DP-4", 0.0), desk(2, "DP-5", 1920.0)]));
+        assert_eq!(app.ui.notices.len(), 1);
+        // A third display plugged in later: a card for it alone.
+        apply(&mut app, Ok(vec![desk(1, "DP-4", 0.0), desk(2, "DP-5", 1920.0), desk(3, "HDMI-A-1", 3840.0)]));
+        assert_eq!(app.ui.notices.len(), 2);
+        let lines = &app.ui.notices[1].lines;
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "HDMI-A-1 has no ICC profile");
+        assert!(lines[1].starts_with("The canvas on HDMI-A-1 is shown"), "{lines:?}");
     }
 
     #[test]
@@ -498,5 +619,21 @@ mod tests {
         apply(&mut app, Ok(displays(Some(Arc::new(vec![0u8; 200])))));
         assert!(app.ui.notices.is_empty());
         assert!(summary_lines(&app).iter().all(|l| l.contains("(manual)")), "{:?}", summary_lines(&app));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn root_window_uses_winit_monitor_name_to_select_its_profile() {
+        let mut app = app();
+        app.session.color.set_displays(Ok(vec![
+            Display { id: 1, name: "DP-1".into(), frame: [0.0, 0.0, 1920.0, 1080.0], profile_name: None, icc: None },
+            Display { id: 2, name: "HDMI-1".into(), frame: [1920.0, 0.0, 1920.0, 1080.0], profile_name: None, icc: None },
+        ]));
+        app.monitors.root_output_name = Some("HDMI-1".into());
+        let ctx = egui::Context::default();
+
+        assert_eq!(view_display(&app, &ctx), Some(2));
+        app.monitors.root_output_name = Some("DP-3".into());
+        assert_eq!(view_display(&app, &ctx), None);
     }
 }

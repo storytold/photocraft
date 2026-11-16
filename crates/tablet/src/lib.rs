@@ -4,9 +4,16 @@
 //! - **macOS** ([`macos::Monitor`]): an AppKit local event monitor reads the tablet fields of
 //!   each `NSEvent` (`pressure`, `tilt`, `rotation`, `subtype`, and `pointingDeviceType` from
 //!   proximity events) before winit sees the event, so every pointer event the UI handles already
-//!   has its pen sample. AppKit's block-based monitor API needs Objective-C interop, so
-//!   `macos.rs` is the only module in the workspace that allows `unsafe` (craftrules
-//!   never-crash: an isolated, tested helper crate).
+//!   has its pen sample.
+//! - **Windows** ([`windows::Monitor`]): thread-local message hooks inspect `WM_POINTER*`
+//!   messages on the UI thread to read `PEN_FLAG_BARREL` and the eraser end (`PEN_FLAG_INVERTED`)
+//!   from `GetPointerPenInfo`, which winit 0.30 drops by mapping pen inputs to touch events.
+//! - **Windows WinTab** ([`wintab`]): with Windows Ink disabled for the tablet, a WinTab 1.4
+//!   system context on PhotoCraft's window supplies pressure, tilt, rotation and the eraser end.
+//!   The vendor driver still moves the cursor; [`wintab::poll`] is called once per frame.
+//!   AppKit's monitor API and Windows' thread hooks need OS interop, so `macos.rs` and `windows.rs`
+//!   allow `unsafe` (an isolated, tested helper crate with `SAFETY:`
+//!   comments on every block).
 //! - **Linux X11** ([`x11::spawn`]): a second, pure-Rust X connection (x11rb) selects XInput2
 //!   raw events on the root window and maps the tablet device's valuators ("Abs Pressure",
 //!   "Abs Tilt X/Y", "Abs Rotary Z") to samples. Raw events reach every client that asks, also
@@ -31,6 +38,10 @@ pub mod xi;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod windows;
+#[cfg(target_os = "windows")]
+pub mod wintab;
 #[cfg(target_os = "linux")]
 pub mod x11;
 

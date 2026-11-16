@@ -6,7 +6,12 @@
 //! AppleScriptObjC) so the app needs no `unsafe` FFI. A read takes about 0.4 s on a background
 //! thread; the shell starts one at launch and again when the displays may have changed
 //! (`photocraft_ui_egui::monitor_status`), and each window then uses the profile of the display
-//! it is on. Other platforms report no displays (sRGB, or the profile chosen in Color Settings).
+//! it is on. Linux X11: RandR output names and CRTC frames are matched to colord display devices
+//! by the exact `XRANDR_name` metadata; cloned outputs get a profile only when every output has
+//! the same ICC bytes. Native Wayland, including Xwayland windows opened from a Wayland session,
+//! reports no display profiles: eframe/winit has no safe way to set the app surface's Wayland
+//! image description, so applying the output ICC in PhotoCraft could double-transform it.
+//! Other platforms report no displays (sRGB, or the profile chosen in Color Settings).
 
 use std::sync::mpsc::Receiver;
 
@@ -16,15 +21,33 @@ use photocraft_engine::display_color::Display;
 pub type Detection = Result<Vec<Display>, String>;
 
 /// Starts reading the displays in the background; `None` when the platform has no reader.
+#[cfg(not(target_os = "linux"))]
 pub fn detect_async() -> Option<Receiver<Detection>> {
-    if !cfg!(target_os = "macos") {
-        return None;
+    #[cfg(target_os = "macos")]
+    {
+        Some(spawn_reader(detect))
     }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// Linux display profile reads are supported only for an X11 session. In particular, an app
+/// window opened through Xwayland still belongs to the Wayland desktop and must not apply a
+/// compositor-managed output profile a second time.
+#[cfg(target_os = "linux")]
+pub fn detect_async_for_session(session: crate::linux_libs::DisplaySession) -> Option<Receiver<Detection>> {
+    (session == crate::linux_libs::DisplaySession::X11).then(|| spawn_reader(detect))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn spawn_reader(detect: fn() -> Detection) -> Receiver<Detection> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(detect());
     });
-    Some(rx)
+    rx
 }
 
 /// One line per screen, primary (menu-bar) screen first: id, frame (x, y, width, height in
@@ -110,9 +133,225 @@ fn run_helper(cmd: &mut std::process::Command, timeout: std::time::Duration) -> 
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn detect() -> Detection {
-    Err("this platform doesn't report display profiles".into())
+    linux::detect()
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::collections::{BTreeMap, HashMap};
+    use std::io::Read as _;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use photocraft_engine::display_color::Display;
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::randr;
+    use zbus::blocking::{connection::Builder, proxy::Proxy};
+    use zbus::zvariant::OwnedObjectPath;
+
+    use super::Detection;
+
+    const MAX_ICC_BYTES: usize = 64 * 1024 * 1024;
+    const COLORD: &str = "org.freedesktop.ColorManager";
+    const COLORD_ROOT: &str = "/org/freedesktop/ColorManager";
+    const COLORD_MANAGER: &str = "org.freedesktop.ColorManager";
+    const COLORD_DEVICE: &str = "org.freedesktop.ColorManager.Device";
+    const COLORD_PROFILE: &str = "org.freedesktop.ColorManager.Profile";
+
+    struct IccProfile {
+        name: String,
+        bytes: Arc<Vec<u8>>,
+    }
+
+    pub(super) fn detect() -> Detection {
+        let (connection, screen) = x11rb::connect(None).map_err(|e| format!("couldn't connect to the X11 display: {e}"))?;
+        let root = connection.setup().roots.get(screen).ok_or_else(|| "the X11 server didn't provide a screen".to_string())?.root;
+        let resources = randr::get_screen_resources_current(&connection, root)
+            .map_err(|e| format!("couldn't request XRandR outputs: {e}"))?
+            .reply()
+            .map_err(|e| format!("couldn't read XRandR outputs: {e}"))?;
+
+        let mut output_names = HashMap::new();
+        let mut active_crtcs = BTreeMap::new();
+        for output in resources.outputs {
+            let info = match randr::get_output_info(&connection, output, resources.config_timestamp) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(info) => info,
+                    Err(e) => {
+                        log::debug!("couldn't read one XRandR output: {e}");
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    log::debug!("couldn't request one XRandR output: {e}");
+                    continue;
+                }
+            };
+            if info.connection != randr::Connection::CONNECTED || info.crtc == 0 {
+                continue;
+            }
+            let Ok(name) = String::from_utf8(info.name) else {
+                log::debug!("skipping an XRandR output with a non-UTF-8 name");
+                continue;
+            };
+            if !name.is_empty() {
+                output_names.insert(output, name);
+                active_crtcs.insert(info.crtc, ());
+            }
+        }
+
+        let profiles = match colord_profiles() {
+            Ok(profiles) => profiles,
+            Err(e) => {
+                log::warn!("couldn't read X11 display profiles from colord: {e}");
+                HashMap::new()
+            }
+        };
+        let mut displays = Vec::with_capacity(active_crtcs.len());
+        for crtc in active_crtcs.into_keys() {
+            let crtc_info = match randr::get_crtc_info(&connection, crtc, resources.config_timestamp) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(info) if info.status == randr::SetConfig::SUCCESS && info.width > 0 && info.height > 0 => info,
+                    Ok(_) => continue,
+                    Err(e) => {
+                        log::debug!("couldn't read XRandR CRTC {crtc}: {e}");
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    log::debug!("couldn't request XRandR CRTC {crtc}: {e}");
+                    continue;
+                }
+            };
+            let Some(output_names) = crtc_info.outputs.iter().map(|output| output_names.get(output).cloned()).collect::<Option<Vec<_>>>() else { continue };
+            let Some(primary_name) = output_names.first() else { continue };
+            let profile = unambiguous_clone_profile(&output_names, &profiles);
+            displays.push(Display {
+                id: crtc,
+                name: primary_name.clone(),
+                frame: [f64::from(crtc_info.x), f64::from(crtc_info.y), f64::from(crtc_info.width), f64::from(crtc_info.height)],
+                profile_name: profile.as_ref().map(|p| p.name.clone()),
+                icc: profile.map(|p| p.bytes),
+            });
+        }
+        if displays.is_empty() {
+            return Err("X11 reported no active RandR outputs".into());
+        }
+        Ok(displays)
+    }
+
+    fn colord_profiles() -> Result<HashMap<String, Vec<IccProfile>>, String> {
+        let connection = Builder::system()
+            .map_err(|e| format!("couldn't connect to the system bus: {e}"))?
+            .method_timeout(Duration::from_secs(2))
+            .build()
+            .map_err(|e| format!("couldn't connect to the system bus: {e}"))?;
+        let manager = Proxy::new(&connection, COLORD, COLORD_ROOT, COLORD_MANAGER).map_err(|e| format!("couldn't access colord: {e}"))?;
+        let devices: Vec<OwnedObjectPath> =
+            manager.call("GetDevicesByKind", &("display",)).map_err(|e| format!("colord couldn't list display devices: {e}"))?;
+        let mut profiles: HashMap<String, Vec<IccProfile>> = HashMap::new();
+        for device_path in devices {
+            let device = Proxy::new(&connection, COLORD, &device_path, COLORD_DEVICE).map_err(|e| format!("couldn't access a colord display device: {e}"))?;
+            let metadata: HashMap<String, String> = device.get_property("Metadata").map_err(|e| format!("couldn't read colord display metadata: {e}"))?;
+            let Some(output_name) = metadata.get("XRANDR_name").filter(|name| !name.is_empty()) else { continue };
+            // `*` is colord's default profile qualifier. A display without one is kept, with no
+            // ICC, so the engine reports the normal sRGB fallback.
+            let profile_path: OwnedObjectPath = match device.call("GetProfileForQualifiers", &(vec!["*"],)) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
+            let profile = Proxy::new(&connection, COLORD, &profile_path, COLORD_PROFILE).map_err(|e| format!("couldn't access a colord ICC profile: {e}"))?;
+            let filename: String = match profile.get_property::<String>("Filename") {
+                Ok(filename) if !filename.is_empty() => filename,
+                _ => continue,
+            };
+            let Some(profile) = read_icc(Path::new(&filename)) else {
+                log::warn!("couldn't read a valid ICC profile assigned to X11 output {output_name}");
+                continue;
+            };
+            profiles.entry(output_name.clone()).or_default().push(profile);
+        }
+        Ok(profiles)
+    }
+
+    fn read_icc(path: &Path) -> Option<IccProfile> {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path).ok()?.take((MAX_ICC_BYTES + 1) as u64).read_to_end(&mut bytes).ok()?;
+        let bytes = checked_icc_bytes(bytes)?;
+        let name = path.file_name()?.to_str()?.to_owned();
+        Some(IccProfile { name, bytes: Arc::new(bytes) })
+    }
+
+    fn checked_icc_bytes(mut bytes: Vec<u8>) -> Option<Vec<u8>> {
+        if bytes.len() > MAX_ICC_BYTES || bytes.len() < 132 || bytes.get(36..40) != Some(b"acsp") {
+            return None;
+        }
+        let declared = u32::from_be_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
+        if declared < 132 || declared > bytes.len() {
+            return None;
+        }
+        bytes.truncate(declared);
+        let profile = craft_cms::Profile::parse(&bytes).ok()?;
+        (profile.color_space == craft_cms::ColorSpace::Rgb).then_some(bytes)
+    }
+
+    fn unambiguous_clone_profile(output_names: &[String], profiles: &HashMap<String, Vec<IccProfile>>) -> Option<IccProfile> {
+        let mut selected: Option<&IccProfile> = None;
+        for output in output_names {
+            let candidates = profiles.get(output)?;
+            let first = candidates.first()?;
+            if candidates.iter().any(|candidate| candidate.bytes != first.bytes) {
+                return None;
+            }
+            if selected.is_some_and(|profile| profile.bytes != first.bytes) {
+                return None;
+            }
+            selected = Some(first);
+        }
+        selected.map(|profile| IccProfile { name: profile.name.clone(), bytes: profile.bytes.clone() })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn checked_icc_bytes_require_a_bounded_parseable_rgb_profile() {
+            let rgb = craft_cms::Builtin::Srgb.profile().to_bytes();
+            let bytes = rgb.as_ref().clone();
+            assert_eq!(checked_icc_bytes(bytes.clone()), Some(bytes));
+
+            let cmyk = craft_cms::Builtin::CoatedCmyk.profile().to_bytes();
+            assert!(checked_icc_bytes(cmyk.as_ref().clone()).is_none());
+            assert!(checked_icc_bytes(vec![0; 132]).is_none());
+            assert!(checked_icc_bytes(vec![0; MAX_ICC_BYTES + 1]).is_none());
+        }
+
+        #[test]
+        fn cloned_outputs_use_only_one_unambiguous_profile() {
+            let srgb = craft_cms::Builtin::Srgb.profile().to_bytes();
+            let p3 = craft_cms::Builtin::DisplayP3.profile().to_bytes();
+            let profile = |name: &str, bytes: std::sync::Arc<Vec<u8>>| IccProfile { name: name.into(), bytes };
+            let outputs = ["DP-1".to_owned(), "HDMI-1".to_owned()];
+
+            let matching =
+                HashMap::from([("DP-1".to_owned(), vec![profile("sRGB", srgb.clone())]), ("HDMI-1".to_owned(), vec![profile("sRGB", srgb.clone())])]);
+            assert_eq!(unambiguous_clone_profile(&outputs, &matching).map(|p| p.name), Some("sRGB".into()));
+
+            let differing =
+                HashMap::from([("DP-1".to_owned(), vec![profile("sRGB", srgb.clone())]), ("HDMI-1".to_owned(), vec![profile("Display P3", p3.clone())])]);
+            assert!(unambiguous_clone_profile(&outputs, &differing).is_none());
+
+            let missing = HashMap::from([("DP-1".to_owned(), vec![profile("sRGB", srgb.clone())])]);
+            assert!(unambiguous_clone_profile(&outputs, &missing).is_none());
+
+            let conflicting = HashMap::from([("DP-1".to_owned(), vec![profile("sRGB", srgb), profile("Display P3", p3)])]);
+            assert!(unambiguous_clone_profile(&["DP-1".to_owned()], &conflicting).is_none());
+        }
+    }
 }
 
 /// The helper's reply ([`SCRIPT`]) → displays, frames flipped to a top-left origin with y down
@@ -133,7 +372,8 @@ fn parse_reply(out: &str) -> Detection {
         let b64 = b64.trim();
         // An ICC profile starts with its size and carries `acsp` at offset 36; anything else is
         // treated as no profile (the engine then says the display has none).
-        let icc = (!b64.is_empty()).then(|| base64_decode(b64)).flatten().filter(|b| b.len() >= 132 && b.get(36..40) == Some(b"acsp"));
+        let icc =
+            (!b64.is_empty()).then(|| photocraft_engine::paint::tile::b64_decode(b64)).flatten().filter(|b| b.len() >= 132 && b.get(36..40) == Some(b"acsp"));
         let profile_name = Some(profile_name.trim().to_string()).filter(|n| !n.is_empty());
         displays.push(Display { id, name, frame: [x, top, w, h], profile_name, icc: icc.map(std::sync::Arc::new) });
     }
@@ -161,50 +401,9 @@ fn display_id(s: &str) -> Option<u32> {
     })
 }
 
-/// Standard base64 (RFC 4648, with padding) → bytes; `None` on any invalid character.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    let val = |c: u8| -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        } as u32)
-    };
-    let s = s.trim_end_matches('=').as_bytes();
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    for chunk in s.chunks(4) {
-        let mut acc = 0u32;
-        for (i, c) in chunk.iter().enumerate() {
-            acc |= val(*c)? << (18 - 6 * i);
-        }
-        let n = match chunk.len() {
-            4 => 3,
-            3 => 2,
-            2 => 1,
-            _ => return None,
-        };
-        out.extend_from_slice(&acc.to_be_bytes()[1..1 + n]);
-    }
-    Some(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base64() {
-        assert_eq!(base64_decode("aGVsbG8=").as_deref(), Some(&b"hello"[..]));
-        assert_eq!(base64_decode("aGVsbG8h").as_deref(), Some(&b"hello!"[..]));
-        assert_eq!(base64_decode("aGk=").as_deref(), Some(&b"hi"[..]));
-        assert_eq!(base64_decode("").as_deref(), Some(&b""[..]));
-        assert!(base64_decode("a").is_none());
-        assert!(base64_decode("a$==").is_none());
-    }
 
     #[test]
     fn helper_replies() {
@@ -256,6 +455,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_hung_helper_is_stopped_and_big_replies_dont_block() {
+        let _spawns = crate::CHILD_SPAWNS.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let t0 = std::time::Instant::now();
         let e = run_helper(std::process::Command::new("sleep").arg("30"), std::time::Duration::from_millis(300)).unwrap_err();
         assert!(e.contains("took longer than"), "{e}");
@@ -270,21 +470,11 @@ mod tests {
     }
 
     fn base64_encode(b: &[u8]) -> String {
-        const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut s = String::new();
-        for c in b.chunks(3) {
-            let n = c.iter().enumerate().fold(0u32, |n, (i, v)| n | u32::from(*v) << (16 - 8 * i));
-            for i in 0..=c.len() {
-                s.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
-            }
-        }
-        while !s.len().is_multiple_of(4) {
-            s.push('=');
-        }
-        s
+        photocraft_engine::paint::tile::b64_encode(b)
     }
 
     /// On a Mac, every display is read, and the profiles parse as RGB profiles.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn detected_displays_parse() {
         if let Ok(displays) = detect() {

@@ -16,6 +16,15 @@
 //!   source (the usual case), the vote copies the source pixels exactly; only along the seams
 //!   between copied pieces does it blend.
 //!
+//!   A thin hole (a selected wire, string or hair: long, but only a few patches thick) is
+//!   measured by its thickness, not its bounds (#1366): the pyramid stops where it is still about
+//!   two patches thick. That level is big, so the onion peel starts it only where its exhaustive
+//!   search stays affordable; otherwise a membrane across the hole does, which over so short a
+//!   distance is the surroundings themselves. Shrunk to where its bounds are four patches across,
+//!   a long thin hole swallows its surroundings, the matches found there copy whatever happens to
+//!   look like the blur (a dark blotch, or a piece of another string), and the finer levels,
+//!   which only refine those matches, keep them: the removed object's outline stays visible.
+//!
 //!   This is what Photoshop's Content-Aware Fill does, measured as a black box on Photoshop 25.4
 //!   (see `content_aware`): with colour adaptation off its fill is pieces of the image copied pixel
 //!   for pixel, typically 15–40 px across, joined by seams a few pixels wide; with colour
@@ -34,61 +43,33 @@
 //! `w × h` hole mask, and return a full buffer equal to the input outside the hole. They are
 //! deterministic (fixed-seed hash RNG, results independent of thread count).
 
+use std::borrow::Cow;
+
+use crate::par;
 use crate::poisson::membrane_fill;
 
 mod proximity_integral;
 use proximity_integral::HoleIntegral;
 
-/// Below this many grid cells a level runs single-threaded (thread hand-off costs more than it saves).
-#[cfg(not(target_arch = "wasm32"))]
-const PAR_MIN: usize = 128 * 128;
+mod common;
+mod solver;
+mod sources;
+mod synthesis;
 
-/// SplitMix64: tiny deterministic RNG.
-#[derive(Clone)]
-pub(crate) struct Rng(u64);
-impl Rng {
-    pub(crate) fn new(seed: u64) -> Self {
-        Rng(seed ^ 0x9E37_79B9_7F4A_7C15)
-    }
-    pub(crate) fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    /// Uniform integer in `lo..=hi`.
-    pub(crate) fn range(&mut self, lo: i32, hi: i32) -> i32 {
-        if hi <= lo {
-            return lo;
-        }
-        lo + (self.next() % (hi - lo + 1) as u64) as i32
-    }
-}
-
-/// How far a copied patch may be adjusted to its target, per channel: `gain · source + bias`, the
-/// gain within `gain` and the bias within `±bias` (Image Melding's photometric transform). The
-/// gain is the ratio of the patches' standard deviations, the bias what then matches their means.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Adapt {
-    pub gain: (f32, f32),
-    pub bias: f32,
-}
-
-impl Adapt {
-    /// Copies are taken as they are.
-    pub const NONE: Adapt = Adapt { gain: (1.0, 1.0), bias: 0.0 };
-
-    pub fn is_none(&self) -> bool {
-        self.gain == (1.0, 1.0) && self.bias == 0.0
-    }
-}
-
-impl Default for Adapt {
-    fn default() -> Self {
-        Self::NONE
-    }
-}
+#[cfg(test)]
+use common::Bounds;
+pub(crate) use common::Rng;
+pub use common::{Adapt, Px};
+use common::{Level, SOURCE_MOMENTS_MAX};
+use solver::Solver;
+pub(crate) use solver::fit;
+#[cfg(test)]
+use solver::least_sum;
+use sources::{Coarser, Sources, THIN_RATIO, downsample, hole_bounds, hole_thickness, peel_affordable, targets_around, valid_sources, window_count};
+#[cfg(test)]
+use sources::{hole_bbox, integral};
+use synthesis::onion_peel;
+pub use synthesis::{best_offset, synthesize};
 
 /// Parameters for [`complete`].
 #[derive(Clone, Debug, PartialEq)]
@@ -115,634 +96,6 @@ impl Default for CompleteParams {
     }
 }
 
-/// What a pixel is to [`complete_masked`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Px {
-    /// Not part of the image (a gap, or outside a transformed copy): ignored.
-    Void,
-    /// Known, part of the context the fill must agree with, but not copied from.
-    Known,
-    /// Known and may be copied from.
-    Source,
-    /// To be filled.
-    Hole,
-}
-
-/// One pyramid level.
-#[derive(Clone)]
-struct Level {
-    w: usize,
-    h: usize,
-    img: Vec<f32>,
-    px: Vec<Px>,
-}
-
-/// Half-size level: a cell is a hole if any of its pixels is; else it averages its non-void
-/// pixels, and may be copied from only if all of them may.
-fn downsample(l: &Level, ch: usize) -> Level {
-    let (w, h) = (l.w.div_ceil(2), l.h.div_ceil(2));
-    let mut img = vec![0.0f32; w * h * ch];
-    let mut px = vec![Px::Void; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            let mut n = 0.0f32;
-            let o = (y * w + x) * ch;
-            let (mut hole, mut all_source, mut any) = (false, true, false);
-            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let (sx, sy) = (x * 2 + dx, y * 2 + dy);
-                if sx >= l.w || sy >= l.h {
-                    continue;
-                }
-                let si = sy * l.w + sx;
-                match l.px[si] {
-                    Px::Hole => hole = true,
-                    Px::Void => all_source = false,
-                    k => {
-                        any = true;
-                        all_source &= k == Px::Source;
-                        for c in 0..ch {
-                            img[o + c] += l.img[si * ch + c];
-                        }
-                        n += 1.0;
-                    }
-                }
-            }
-            if n > 0.0 {
-                for c in 0..ch {
-                    img[o + c] /= n;
-                }
-            }
-            px[y * w + x] = if hole {
-                Px::Hole
-            } else if !any {
-                Px::Void
-            } else if all_source {
-                Px::Source
-            } else {
-                Px::Known
-            };
-        }
-    }
-    Level { w, h, img, px }
-}
-
-/// Summed-area table of a boolean grid (`(w+1) × (h+1)`).
-fn integral(w: usize, h: usize, m: &[bool]) -> Vec<u32> {
-    let mut s = vec![0u32; (w + 1) * (h + 1)];
-    for y in 0..h {
-        let mut row = 0u32;
-        for x in 0..w {
-            row += u32::from(m[y * w + x]);
-            s[(y + 1) * (w + 1) + x + 1] = s[y * (w + 1) + x + 1] + row;
-        }
-    }
-    s
-}
-
-/// Count of set cells in the clipped window `[x0, x1) × [y0, y1)`.
-fn window_count(s: &[u32], gw: usize, gh: usize, x0: i32, y0: i32, x1: i32, y1: i32) -> u32 {
-    let (x0, y0) = (x0.max(0) as usize, y0.max(0) as usize);
-    let (x1, y1) = ((x1.max(0) as usize).min(gw), (y1.max(0) as usize).min(gh));
-    if x1 <= x0 || y1 <= y0 {
-        return 0;
-    }
-    let w1 = gw + 1;
-    s[y1 * w1 + x1] + s[y0 * w1 + x0] - s[y0 * w1 + x1] - s[y1 * w1 + x0]
-}
-
-fn hole_bbox(w: usize, h: usize, hole: &[bool]) -> Option<(usize, usize, usize, usize)> {
-    let mut b: Option<(usize, usize, usize, usize)> = None;
-    for y in 0..h {
-        for x in 0..w {
-            if hole[y * w + x] {
-                b = Some(match b {
-                    None => (x, y, x + 1, y + 1),
-                    Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1)),
-                });
-            }
-        }
-    }
-    b
-}
-
-/// A finished coarser level: width, height, pixels and match field (source centre per target,
-/// `i32::MIN` where there is none).
-type Coarser = (usize, usize, Vec<f32>, Vec<(i32, i32)>);
-
-/// Per-level PatchMatch/EM state.
-struct Solver<'a> {
-    w: usize,
-    h: usize,
-    ch: usize,
-    r: i32,
-    img: &'a mut Vec<f32>,
-    px: &'a [Px],
-    /// Valid source centres: the whole patch is inside the grid and may be copied from.
-    valid: Vec<bool>,
-    valid_list: Vec<(i32, i32)>,
-    /// Target centres (patch overlaps the hole), row-major.
-    targets: Vec<bool>,
-    /// No pixel of the level is [`Px::Void`] (patches inside the grid need no per-pixel check).
-    no_void: bool,
-    adapt: Adapt,
-    /// Cancellation: checked per row band; a cancelled solve's output is discarded.
-    ctl: photocraft_raster::Interrupt<'a>,
-}
-
-/// Gain and bias of one channel for target moments `(Σt, Σt²)` and source moments `(Σs, Σs²)`
-/// over `n` samples, within the limits.
-#[inline]
-pub(crate) fn fit(a: Adapt, n: f32, st: f32, stt: f32, ss: f32, sss: f32) -> (f32, f32) {
-    let (mt, ms) = (st / n, ss / n);
-    let vt = (stt / n - mt * mt).max(0.0);
-    let vs = (sss / n - ms * ms).max(0.0);
-    let g = if vs > 1e-10 { (vt / vs).sqrt() } else { 1.0 };
-    let g = g.clamp(a.gain.0, a.gain.1);
-    let b = (mt - g * ms).clamp(-a.bias, a.bias);
-    (g, b)
-}
-
-impl Solver<'_> {
-    #[inline]
-    fn is_valid(&self, x: i32, y: i32) -> bool {
-        x >= 0 && y >= 0 && (x as usize) < self.w && (y as usize) < self.h && self.valid[y as usize * self.w + x as usize]
-    }
-
-    /// Distance between the target patch at `t` (its pixels inside the grid and not void) and the
-    /// source patch at `s`, per sample; with colour adaptation the source is fitted first.
-    fn dist(&self, t: (i32, i32), s: (i32, i32), cutoff: f32) -> f32 {
-        if !self.adapt.is_none() {
-            return self.dist_adapted(t, s);
-        }
-        let (w, h, ch, r) = (self.w as i32, self.h as i32, self.ch, self.r);
-        let full = ((2 * r + 1) * (2 * r + 1)) as f32 * ch as f32;
-        let mut sum = 0.0f32;
-        // The usual case: the whole target patch is image. The same sums in the same order as
-        // below, a row at a time.
-        if self.no_void && t.0 >= r && t.1 >= r && t.0 + r < w && t.1 + r < h {
-            let len = (2 * r + 1) as usize * ch;
-            for dy in -r..=r {
-                let ti = ((t.1 + dy) as usize * self.w + (t.0 - r) as usize) * ch;
-                let si = ((s.1 + dy) as usize * self.w + (s.0 - r) as usize) * ch;
-                for (a, b) in self.img[ti..ti + len].iter().zip(&self.img[si..si + len]) {
-                    let d = a - b;
-                    sum += d * d;
-                }
-                if sum > cutoff * full {
-                    return f32::INFINITY;
-                }
-            }
-            return sum / full;
-        }
-        let mut n = 0usize;
-        for dy in -r..=r {
-            let ty = t.1 + dy;
-            if ty < 0 || ty >= h {
-                continue;
-            }
-            let sy = s.1 + dy;
-            for dx in -r..=r {
-                let tx = t.0 + dx;
-                if tx < 0 || tx >= w || self.px[ty as usize * self.w + tx as usize] == Px::Void {
-                    continue;
-                }
-                let ti = (ty as usize * self.w + tx as usize) * ch;
-                let si = (sy as usize * self.w + (s.0 + dx) as usize) * ch;
-                for c in 0..ch {
-                    let d = self.img[ti + c] - self.img[si + c];
-                    sum += d * d;
-                }
-                n += ch;
-            }
-            // Early out: the mean can only be ≥ sum / (full patch size).
-            if sum > cutoff * full {
-                return f32::INFINITY;
-            }
-        }
-        if n == 0 { f32::INFINITY } else { sum / n as f32 }
-    }
-
-    /// Moments of the target patch at `t` and the source patch at `s` per channel:
-    /// `[Σt, Σt², Σs, Σs², Σts]`, and the sample count.
-    fn moments(&self, t: (i32, i32), s: (i32, i32), m: &mut [[f32; 5]]) -> usize {
-        let (w, h, ch, r) = (self.w as i32, self.h as i32, self.ch, self.r);
-        m.iter_mut().for_each(|v| *v = [0.0; 5]);
-        let mut n = 0usize;
-        for dy in -r..=r {
-            let ty = t.1 + dy;
-            if ty < 0 || ty >= h {
-                continue;
-            }
-            let sy = s.1 + dy;
-            for dx in -r..=r {
-                let tx = t.0 + dx;
-                if tx < 0 || tx >= w || self.px[ty as usize * self.w + tx as usize] == Px::Void {
-                    continue;
-                }
-                let ti = (ty as usize * self.w + tx as usize) * ch;
-                let si = (sy as usize * self.w + (s.0 + dx) as usize) * ch;
-                for (c, mc) in m.iter_mut().enumerate().take(ch) {
-                    let (a, b) = (self.img[ti + c], self.img[si + c]);
-                    mc[0] += a;
-                    mc[1] += a * a;
-                    mc[2] += b;
-                    mc[3] += b * b;
-                    mc[4] += a * b;
-                }
-                n += 1;
-            }
-        }
-        n
-    }
-
-    fn dist_adapted(&self, t: (i32, i32), s: (i32, i32)) -> f32 {
-        let mut m = [[0.0f32; 5]; 8];
-        let ch = self.ch.min(8);
-        let n = self.moments(t, s, &mut m[..ch]);
-        if n == 0 {
-            return f32::INFINITY;
-        }
-        let nf = n as f32;
-        let mut sum = 0.0f32;
-        for mc in &m[..ch] {
-            let (g, b) = fit(self.adapt, nf, mc[0], mc[1], mc[2], mc[3]);
-            // Σ (t − g s − b)², expanded.
-            sum += mc[1] + g * g * mc[3] + nf * b * b - 2.0 * g * mc[4] - 2.0 * b * mc[0] + 2.0 * g * b * mc[2];
-        }
-        sum.max(0.0) / (nf * ch as f32)
-    }
-
-    /// Gain and bias per channel for the match `t → s` (identity without adaptation).
-    fn transform(&self, t: (i32, i32), s: (i32, i32), out: &mut [(f32, f32)]) {
-        if self.adapt.is_none() {
-            out.iter_mut().for_each(|v| *v = (1.0, 0.0));
-            return;
-        }
-        let mut m = [[0.0f32; 5]; 8];
-        let ch = self.ch.min(8);
-        let n = self.moments(t, s, &mut m[..ch]);
-        for (c, o) in out.iter_mut().enumerate() {
-            *o = if n == 0 || c >= ch { (1.0, 0.0) } else { fit(self.adapt, n as f32, m[c][0], m[c][1], m[c][2], m[c][3]) };
-        }
-    }
-
-    /// One PatchMatch pass over all target rows, in parallel bands (each band propagates within itself).
-    fn patchmatch(&self, nnf: &mut [(i32, i32)], cost: &mut [f32], pass: usize, seed: u64, search_radius: i32) {
-        const BAND: usize = 16;
-        let w = self.w;
-        let reverse = pass % 2 == 1;
-        let band_fn = |bi: usize, nn: &mut [(i32, i32)], co: &mut [f32]| {
-            if self.ctl.cancelled() {
-                return;
-            }
-            let mut rng = Rng::new(seed ^ (bi as u64).wrapping_mul(0x2545_F491_4F6C_DD1D) ^ ((pass as u64) << 40));
-            let y0 = bi * BAND;
-            let rows = nn.len() / w;
-            let step: i32 = if reverse { -1 } else { 1 };
-            for ry in 0..rows {
-                let ly = if reverse { rows - 1 - ry } else { ry };
-                let y = y0 + ly;
-                for rx in 0..w {
-                    let x = if reverse { w - 1 - rx } else { rx };
-                    let li = ly * w + x;
-                    if !self.targets[y * w + x] {
-                        continue;
-                    }
-                    let t = (x as i32, y as i32);
-                    let (mut best, mut bc) = (nn[li], co[li]);
-                    // Propagation from the already-visited neighbours (within this band).
-                    let nx = x as i32 - step;
-                    if nx >= 0 && (nx as usize) < w {
-                        let c = nn[ly * w + nx as usize];
-                        let cand = (c.0 + step, c.1);
-                        if self.is_valid(cand.0, cand.1) && cand != best {
-                            let d = self.dist(t, cand, bc);
-                            if d < bc {
-                                (best, bc) = (cand, d);
-                            }
-                        }
-                    }
-                    let nly = ly as i32 - step;
-                    if nly >= 0 && (nly as usize) < rows {
-                        let c = nn[nly as usize * w + x];
-                        let cand = (c.0, c.1 + step);
-                        if self.is_valid(cand.0, cand.1) && cand != best {
-                            let d = self.dist(t, cand, bc);
-                            if d < bc {
-                                (best, bc) = (cand, d);
-                            }
-                        }
-                    }
-                    // Random search in exponentially shrinking windows.
-                    let mut rad = search_radius;
-                    while rad >= 1 {
-                        let cand = (best.0 + rng.range(-rad, rad), best.1 + rng.range(-rad, rad));
-                        if self.is_valid(cand.0, cand.1) && cand != best {
-                            let d = self.dist(t, cand, bc);
-                            if d < bc {
-                                (best, bc) = (cand, d);
-                            }
-                        }
-                        rad /= 2;
-                    }
-                    nn[li] = best;
-                    co[li] = bc;
-                }
-            }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        if w * self.h >= PAR_MIN {
-            use rayon::prelude::*;
-            nnf.par_chunks_mut(BAND * w).zip(cost.par_chunks_mut(BAND * w)).enumerate().for_each(|(bi, (nn, co))| band_fn(bi, nn, co));
-            return;
-        }
-        for (bi, (nn, co)) in nnf.chunks_mut(BAND * w).zip(cost.chunks_mut(BAND * w)).enumerate() {
-            band_fn(bi, nn, co);
-        }
-    }
-
-    /// Recompute every target's match cost (hole pixels change between iterations).
-    fn costs(&self, nnf: &[(i32, i32)], cost: &mut [f32]) -> Result<(), photocraft_raster::Cancelled> {
-        let w = self.w;
-        let row = |(y, co): (usize, &mut [f32])| {
-            if self.ctl.cancelled() {
-                return;
-            }
-            for (x, c) in co.iter_mut().enumerate() {
-                let i = y * w + x;
-                if self.targets[i] {
-                    *c = self.dist((x as i32, y as i32), nnf[i], f32::INFINITY);
-                }
-            }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        if w * self.h >= PAR_MIN {
-            use rayon::prelude::*;
-            cost.par_chunks_mut(w).enumerate().for_each(row);
-            return self.ctl.check();
-        }
-        cost.chunks_mut(w).enumerate().for_each(row);
-        self.ctl.check()
-    }
-
-    /// Re-estimate hole pixels by a similarity-weighted vote of all overlapping patch matches
-    /// (each copy adjusted by its gain and bias).
-    fn vote(&mut self, nnf: &[(i32, i32)], cost: &[f32]) {
-        let (w, h, ch, r) = (self.w, self.h, self.ch, self.r);
-        // σ² from the 75th percentile of match costs (Wexler et al. use a robust scale like this).
-        let mut cs: Vec<f32> = cost.iter().zip(&self.targets).filter(|(c, t)| **t && c.is_finite()).map(|(c, _)| *c).collect();
-        let sigma2 = if cs.is_empty() {
-            1.0
-        } else {
-            let k = (cs.len() * 3 / 4).min(cs.len() - 1);
-            let (_, v, _) = cs.select_nth_unstable_by(k, |a, b| a.total_cmp(b));
-            v.max(1e-6)
-        };
-        // Each target's photometric transform (computed once, used by every pixel it covers).
-        let adapted = !self.adapt.is_none();
-        let gb: Vec<(f32, f32)> = if adapted {
-            let mut gb = vec![(1.0f32, 0.0f32); w * h * ch];
-            let this = &*self;
-            let row = |(y, out): (usize, &mut [(f32, f32)])| {
-                for x in 0..w {
-                    let i = y * w + x;
-                    if this.targets[i] && cost[i].is_finite() {
-                        this.transform((x as i32, y as i32), nnf[i], &mut out[x * ch..(x + 1) * ch]);
-                    }
-                }
-            };
-            #[cfg(not(target_arch = "wasm32"))]
-            if w * h >= PAR_MIN {
-                use rayon::prelude::*;
-                gb.par_chunks_mut(w * ch).enumerate().for_each(row);
-            } else {
-                gb.chunks_mut(w * ch).enumerate().for_each(row);
-            }
-            #[cfg(target_arch = "wasm32")]
-            gb.chunks_mut(w * ch).enumerate().for_each(row);
-            gb
-        } else {
-            Vec::new()
-        };
-        // Each target's vote weight, computed once rather than for every pixel it covers.
-        let weight: Vec<f32> =
-            cost.iter().zip(&self.targets).map(|(c, t)| if *t && c.is_finite() { (-*c / (2.0 * sigma2)).exp().max(1e-8) } else { 0.0 }).collect();
-        let img = &*self.img;
-        let row = |y: usize| -> Vec<(usize, Vec<f32>)> {
-            let mut out = Vec::new();
-            if self.ctl.cancelled() {
-                return out;
-            }
-            for x in 0..w {
-                if self.px[y * w + x] != Px::Hole {
-                    continue;
-                }
-                let mut acc = vec![0.0f32; ch];
-                let mut wsum = 0.0f32;
-                for dy in -r..=r {
-                    let ty = y as i32 + dy;
-                    if ty < 0 || ty as usize >= h {
-                        continue;
-                    }
-                    for dx in -r..=r {
-                        let tx = x as i32 + dx;
-                        if tx < 0 || tx as usize >= w {
-                            continue;
-                        }
-                        let ti = ty as usize * w + tx as usize;
-                        if !self.targets[ti] || !cost[ti].is_finite() {
-                            continue;
-                        }
-                        let s = nnf[ti];
-                        let (sx, sy) = (s.0 - dx, s.1 - dy);
-                        let wt = weight[ti];
-                        let si = (sy as usize * w + sx as usize) * ch;
-                        for c in 0..ch {
-                            let v = if adapted {
-                                let (g, b) = gb[ti * ch + c];
-                                g * img[si + c] + b
-                            } else {
-                                img[si + c]
-                            };
-                            acc[c] += v * wt;
-                        }
-                        wsum += wt;
-                    }
-                }
-                if wsum > 0.0 {
-                    acc.iter_mut().for_each(|v| *v /= wsum);
-                    out.push((x, acc));
-                }
-            }
-            out
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        let rows: Vec<Vec<(usize, Vec<f32>)>> = if w * h >= PAR_MIN {
-            use rayon::prelude::*;
-            (0..h).into_par_iter().map(row).collect()
-        } else {
-            (0..h).map(row).collect()
-        };
-        #[cfg(target_arch = "wasm32")]
-        let rows: Vec<Vec<(usize, Vec<f32>)>> = (0..h).map(row).collect();
-        for (y, r) in rows.into_iter().enumerate() {
-            for (x, v) in r {
-                self.img[(y * w + x) * ch..(y * w + x + 1) * ch].copy_from_slice(&v);
-            }
-        }
-    }
-}
-
-/// Fill the hole from its edge inwards, one ring at a time: each pixel takes the centre of the
-/// source patch that best matches what is already known around it (the first such patch in
-/// `sources` order on ties).
-///
-/// The search is exhaustive, but most candidates are rejected early (#2771): the patch's known
-/// offsets and pixels are gathered once per front pixel, the filled neighbours' sources (shifted
-/// the same way, as in PatchMatch propagation; every 16th source where no neighbour is filled yet)
-/// give an upper bound on the best error before the scan, and a candidate's sum of squares is
-/// abandoned as soon as it can no longer win. The sum is accumulated in the same order as the
-/// full one and only grows, so the chosen source, and the fill, are exactly those of the plain
-/// scan.
-fn onion_peel(w: usize, h: usize, ch: usize, r: i32, img: &mut [f32], px: &[Px], sources: &[(i32, i32)]) {
-    if ch == 0 {
-        return;
-    }
-    let mut known: Vec<bool> = px.iter().map(|k| matches!(k, Px::Known | Px::Source)).collect();
-    // Which source each filled pixel copied (`NONE` until it has been filled), and each valid
-    // source's index by position, to seed a pixel's search from its filled neighbours.
-    const NONE: u32 = u32::MAX;
-    let mut picked = vec![NONE; w * h];
-    let mut source_at = vec![NONE; w * h];
-    for (k, &(sx, sy)) in sources.iter().enumerate() {
-        if let Some(slot) = source_at.get_mut(sy as usize * w + sx as usize) {
-            *slot = u32::try_from(k).unwrap_or(NONE);
-        }
-    }
-    let side = (2 * r + 1) as usize;
-    loop {
-        let front: Vec<usize> = (0..w * h)
-            .filter(|&i| {
-                if known[i] || px[i] != Px::Hole {
-                    return false;
-                }
-                let (x, y) = ((i % w) as i32, (i / w) as i32);
-                (-1..=1).any(|dy: i32| {
-                    (-1..=1).any(|dx: i32| {
-                        let (nx, ny) = (x + dx, y + dy);
-                        nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h && known[ny as usize * w + nx as usize]
-                    })
-                })
-            })
-            .collect();
-        if front.is_empty() {
-            break;
-        }
-        let (img_ro, known_ro, picked_ro) = (&*img, &known, &picked);
-        // The index of the best source for front pixel `i`, or `None` when no pixel around it is
-        // known (then pixel 0 is copied, as the plain scan did).
-        let best = |&i: &usize| -> Option<usize> {
-            let (x, y) = ((i % w) as i32, (i / w) as i32);
-            // The known pixels of the target patch: their offset (in pixels) and their samples, in
-            // the plain scan's order.
-            let mut offs: Vec<isize> = Vec::with_capacity(side * side);
-            let mut tv: Vec<f32> = Vec::with_capacity(side * side * ch);
-            for dy in -r..=r {
-                for dx in -r..=r {
-                    let (tx, ty) = (x + dx, y + dy);
-                    if tx < 0 || ty < 0 || tx as usize >= w || ty as usize >= h || !known_ro[ty as usize * w + tx as usize] {
-                        continue;
-                    }
-                    let ti = (ty as usize * w + tx as usize) * ch;
-                    offs.push(dy as isize * w as isize + dx as isize);
-                    tv.extend_from_slice(&img_ro[ti..ti + ch]);
-                }
-            }
-            if offs.is_empty() {
-                return None;
-            }
-            let n = offs.len() as f32;
-            // Mean square difference against the source patch centred at `base`, abandoned
-            // (`None`) as soon as the mean so far exceeds `bound` or reaches `best` (the final
-            // mean can only be larger).
-            let ssd = |base: isize, bound: f32, best: f32| -> Option<f32> {
-                let mut e = 0.0f32;
-                for (j, (o, t)) in offs.iter().zip(tv.chunks_exact(ch)).enumerate() {
-                    let si = (base + o) as usize * ch;
-                    for (tc, sc) in t.iter().zip(&img_ro[si..si + ch]) {
-                        let d = tc - sc;
-                        e += d * d;
-                    }
-                    if j % 4 == 3 {
-                        let m = e / n;
-                        if m > bound || m >= best {
-                            return None;
-                        }
-                    }
-                }
-                Some(e / n)
-            };
-            // An upper bound on the best mean (any candidate's mean is one): the best of the filled
-            // neighbours' sources, each shifted with its neighbour, or, at the hole's edge where no
-            // neighbour is filled yet, of every 16th source.
-            let mut bound = f32::INFINITY;
-            for dy in -1..=1i32 {
-                for dx in -1..=1i32 {
-                    let (nx, ny) = (x + dx, y + dy);
-                    if nx < 0 || ny < 0 || nx as usize >= w || ny as usize >= h {
-                        continue;
-                    }
-                    let Some(&(sx, sy)) = sources.get(picked_ro[ny as usize * w + nx as usize] as usize) else { continue };
-                    let (cx, cy) = (sx - dx, sy - dy);
-                    if cx < 0 || cy < 0 || cx as usize >= w || cy as usize >= h || source_at[cy as usize * w + cx as usize] == NONE {
-                        continue;
-                    }
-                    if let Some(e) = ssd(cy as isize * w as isize + cx as isize, f32::INFINITY, bound) {
-                        bound = e;
-                    }
-                }
-            }
-            if bound == f32::INFINITY {
-                for &(sx, sy) in sources.iter().step_by(16) {
-                    if let Some(e) = ssd(sy as isize * w as isize + sx as isize, f32::INFINITY, bound) {
-                        bound = e;
-                    }
-                }
-            }
-            // The plain scan, in order, keeping the first strictly smaller mean: a candidate is
-            // abandoned once its mean exceeds the bound (the best is at most the bound) or reaches
-            // the best so far (a tie would not replace it).
-            let mut best = (f32::INFINITY, None);
-            for (k, &(sx, sy)) in sources.iter().enumerate() {
-                if let Some(e) = ssd(sy as isize * w as isize + sx as isize, bound, best.0)
-                    && e < best.0
-                {
-                    best = (e, Some(k));
-                }
-            }
-            best.1
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        let found: Vec<Option<usize>> = {
-            use rayon::prelude::*;
-            front.par_iter().map(best).collect()
-        };
-        #[cfg(target_arch = "wasm32")]
-        let found: Vec<Option<usize>> = front.iter().map(best).collect();
-        // Pixel 0 as it was before this ring (what a pixel with nothing known around it copies).
-        let first = img[..ch].to_vec();
-        for (&i, k) in front.iter().zip(found) {
-            match k.and_then(|k| sources.get(k)) {
-                // Sources are never hole pixels, so none of them changes during the ring.
-                Some(&(sx, sy)) => img.copy_within((sy as usize * w + sx as usize) * ch..(sy as usize * w + sx as usize + 1) * ch, i * ch),
-                None => img[i * ch..(i + 1) * ch].copy_from_slice(&first),
-            }
-            known[i] = true;
-            picked[i] = k.and_then(|k| u32::try_from(k).ok()).unwrap_or(NONE);
-        }
-    }
-}
-
 /// Content-aware completion of `hole` (see module docs), copying from any pixel outside it. Returns
 /// `None` when there is no fully-known patch to copy from (the caller can fall back to
 /// [`membrane_fill`]).
@@ -762,7 +115,7 @@ pub fn complete_with(
     p: &CompleteParams,
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<Option<Vec<f32>>, photocraft_raster::Cancelled> {
-    assert_eq!(hole.len(), w * h);
+    assert_eq!(w.checked_mul(h), Some(hole.len()));
     let px: Vec<Px> = hole.iter().map(|h| if *h { Px::Hole } else { Px::Source }).collect();
     complete_masked(w, h, ch, img, &px, p, ctl)
 }
@@ -778,133 +131,122 @@ pub fn complete_masked(
     p: &CompleteParams,
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<Option<Vec<f32>>, photocraft_raster::Cancelled> {
-    assert_eq!(img.len(), w * h * ch);
-    assert_eq!(px.len(), w * h);
-    let hole: Vec<bool> = px.iter().map(|k| *k == Px::Hole).collect();
-    let Some((bx0, by0, bx1, by1)) = hole_bbox(w, h, &hole) else { return Ok(Some(img.to_vec())) };
-    drop(hole);
+    Ok(complete_cow(w, h, ch, Cow::Borrowed(img), px, p, ctl)?.ok())
+}
+
+/// [`complete_masked`] that fills `img` itself instead of a copy of it (only the hole changes):
+/// `Err(img)`, untouched, when there is nothing to copy from.
+pub fn complete_masked_owned(
+    w: usize,
+    h: usize,
+    ch: usize,
+    img: Vec<f32>,
+    px: &[Px],
+    p: &CompleteParams,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Result<Vec<f32>, Vec<f32>>, photocraft_raster::Cancelled> {
+    Ok(complete_cow(w, h, ch, Cow::Owned(img), px, p, ctl)?.map_err(Cow::into_owned))
+}
+
+/// The completion, on the caller's pixels or a copy of them: `Err` gives them back when there is
+/// nothing to copy from.
+fn complete_cow<'a>(
+    w: usize,
+    h: usize,
+    ch: usize,
+    img: Cow<'a, [f32]>,
+    px: &'a [Px],
+    p: &CompleteParams,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Result<Vec<f32>, Cow<'a, [f32]>>, photocraft_raster::Cancelled> {
+    // Checked: wrapped products must not let tiny buffers pass for a huge `h`.
+    assert_eq!(w.checked_mul(h), Some(px.len()));
+    assert_eq!(w.checked_mul(h).and_then(|n| n.checked_mul(ch)), Some(img.len()));
+    if w == 0 || h == 0 {
+        // Nothing to fill; no per-row tables for a zero-width image of any height.
+        return Ok(Ok(img.into_owned()));
+    }
+    let Some(hb0) = hole_bounds(w, h, px) else { return Ok(Ok(img.into_owned())) };
+    if ch == 0 {
+        return Ok(Ok(Vec::new()));
+    }
     let r = p.patch_radius.max(1);
     let psz = 2 * r + 1;
-    // Pyramid: shrink until the hole is about four patches across (a deeper pyramid decides the
-    // structure where the texture has averaged out, and fills flat).
-    let mut levels = vec![Level { w, h, img: img.to_vec(), px: px.to_vec() }];
-    let mut ext = (bx1 - bx0).max(by1 - by0);
-    let mut exts = vec![ext];
-    while let Some(l) = levels.last() {
-        ctl.check()?;
-        if ext <= 4 * psz || l.w / 2 < 3 * psz || l.h / 2 < 3 * psz {
-            break;
-        }
-        let d = downsample(l, ch);
-        levels.push(d);
-        ext = ext.div_ceil(2);
-        exts.push(ext);
-    }
+    let Pyramid { mut levels, boxes, exts, thin } = build_pyramid(Level { w, h, img, px: Cow::Borrowed(px) }, ch, hb0, psz, ctl)?;
     let nlev = levels.len();
-    // The coarser level's result: its size, pixels and match field (empty when it had nothing to
-    // copy).
+    // The coarser level's result.
     let mut prev: Option<Coarser> = None;
     let total_px: usize = levels.iter().map(|l| l.w * l.h).sum();
     let mut done_px = 0usize;
     let ri = r as i32;
     for li in (0..nlev).rev() {
         ctl.check()?;
-        let Level { w: lw, h: lh, img: mut limg, px: lpx } = std::mem::replace(&mut levels[li], Level { w: 0, h: 0, img: Vec::new(), px: Vec::new() });
-        let lhole: Vec<bool> = lpx.iter().map(|k| *k == Px::Hole).collect();
-        let source: Vec<bool> = lpx.iter().map(|k| *k == Px::Source).collect();
-        let hs = integral(lw, lh, &lhole);
-        let ss = integral(lw, lh, &source);
-        let full = (psz * psz) as u32;
-        let mut valid = vec![false; lw * lh];
-        let mut valid_list = Vec::new();
-        let mut targets = vec![false; lw * lh];
-        for y in 0..lh as i32 {
-            if y % 32 == 0 {
-                ctl.check()?;
-            }
-            for x in 0..lw as i32 {
-                let i = y as usize * lw + x as usize;
-                let inside = x >= ri && y >= ri && x + ri < lw as i32 && y + ri < lh as i32;
-                if inside && window_count(&ss, lw, lh, x - ri, y - ri, x + ri + 1, y + ri + 1) == full {
-                    valid[i] = true;
-                    valid_list.push((x, y));
-                }
-                targets[i] = window_count(&hs, lw, lh, x - ri, y - ri, x + ri + 1, y + ri + 1) > 0;
-            }
+        let Level { w: lw, h: lh, img: limg, px: lpx } = std::mem::replace(&mut levels[li], Level::EMPTY);
+        let hb = boxes[li];
+        let tb = hb.grow(r, lw, lh);
+        let valid = valid_sources(lw, lh, r, &lpx, ctl).ok_or(photocraft_raster::Cancelled)?;
+        let sources = Sources::new(&valid, lw);
+        // Nothing to copy from at the finest level: the caller falls back (and gets its pixels
+        // back as they were).
+        if li == 0 && sources.len() == 0 {
+            return Ok(Err(limg));
         }
+        // The level's own pixels to fill (at level 0 the caller's, or a copy made in parallel).
+        let mut limg = into_owned_pixels(limg);
+        let targets = targets_around(lw, r, &lpx, hb, tb);
+        ctl.check()?;
         // Initialise the hole: at the coarsest level peeled from its edge inwards (or a membrane
         // where nothing can be copied), else the coarser level's pixels, refined below by a vote of
         // its scaled-up matches.
-        match &prev {
-            Some((pw, ph, pimg, _)) => {
-                for y in 0..lh {
-                    for x in 0..lw {
-                        if lhole[y * lw + x] {
-                            let (sx, sy) = ((x / 2).min(pw - 1), (y / 2).min(ph - 1));
-                            let (d, s) = ((y * lw + x) * ch, (sy * pw + sx) * ch);
-                            limg[d..d + ch].copy_from_slice(&pimg[s..s + ch]);
-                        }
-                    }
-                }
+        let coarser = prev.take();
+        match &coarser {
+            Some(c) => copy_up_coarser(&mut limg, &lpx, lw, ch, hb, c),
+            // A thin hole, when peeling it would take too long, takes the membrane below: a few
+            // patches thick here, a membrane across it is its surroundings.
+            None if sources.len() > 0 && (!thin || peel_affordable(lw, &lpx, hb, sources.len())) => {
+                onion_peel(lw, lh, ch, ri, &mut limg, &lpx, hb, &sources.all(&valid, lw), ctl)?
             }
-            None if !valid_list.is_empty() => onion_peel(lw, lh, ch, ri, &mut limg, &lpx, &valid_list),
-            None => {
-                let unknown: Vec<bool> = lpx.iter().map(|k| matches!(k, Px::Hole | Px::Void)).collect();
-                let m = membrane_fill(lw, lh, ch, &limg, &unknown);
-                for (i, hl) in lhole.iter().enumerate() {
-                    if *hl {
-                        limg[i * ch..(i + 1) * ch].copy_from_slice(&m[i * ch..(i + 1) * ch]);
-                    }
-                }
-            }
+            None => fill_hole_with_membrane(&mut limg, &lpx, (lw, lh, ch), r, thin),
         }
-        if valid_list.is_empty() {
-            if li == 0 {
-                return Ok(None);
-            }
-            prev = Some((lw, lh, limg, Vec::new()));
+        if sources.len() == 0 {
+            prev = Some(Coarser { w: lw, h: lh, img: limg, field: Vec::new(), tbox: tb });
             continue;
         }
-        let no_void = !lpx.contains(&Px::Void);
-        let mut solver = Solver { w: lw, h: lh, ch, r: ri, img: &mut limg, px: &lpx, valid, valid_list, targets, no_void, adapt: p.adapt, ctl: *ctl };
+        let refine_only = li + 1 < nlev && exts[li] > p.refine_extent;
+        let n_targets = targets.iter().filter(|t| **t).count();
+        // Source moments are worth keeping when there are few sources for the matches tried.
+        let keep_source_moments = lw * lh <= SOURCE_MOMENTS_MAX && sources.len() <= n_targets.saturating_mul(if refine_only { 4 } else { 64 });
+        let mut solver = Solver {
+            w: lw,
+            h: lh,
+            ch,
+            r: ri,
+            img: &mut limg,
+            px: &lpx,
+            valid,
+            targets,
+            hole_box: hb,
+            tbox: tb,
+            full: Vec::new(),
+            tmom: Vec::new(),
+            smom: Vec::new(),
+            adapt: p.adapt,
+            ctl: *ctl,
+        };
+        solver.prepare(keep_source_moments);
+        ctl.check()?;
         // NNF init: the coarser level's matches scaled up where they land on a valid source,
         // random otherwise.
         let mut rng = Rng::new(p.seed ^ (li as u64) << 20);
-        let mut nnf = vec![(0i32, 0i32); lw * lh];
-        let mut upsampled = false;
-        for y in 0..lh {
-            if y % 32 == 0 {
-                ctl.check()?;
-            }
-            for x in 0..lw {
-                if !solver.targets[y * lw + x] {
-                    continue;
-                }
-                let mut cand = None;
-                if let Some((pw, ph, _, old)) = &prev
-                    && !old.is_empty()
-                {
-                    let (cx, cy) = ((x / 2).min(pw - 1), (y / 2).min(ph - 1));
-                    let (sx, sy) = old[cy * pw + cx];
-                    if sx != i32::MIN {
-                        // The same displacement, twice as long.
-                        let c = (x as i32 + 2 * (sx - cx as i32), y as i32 + 2 * (sy - cy as i32));
-                        if solver.is_valid(c.0, c.1) {
-                            cand = Some(c);
-                        }
-                    }
-                }
-                upsampled |= cand.is_some();
-                nnf[y * lw + x] = cand.unwrap_or_else(|| solver.valid_list[(rng.next() % solver.valid_list.len() as u64) as usize]);
-            }
-        }
-        let mut cost = vec![f32::INFINITY; lw * lh];
+        let (mut nnf, upsampled) = seed_matches(&solver, coarser.as_ref(), &sources, &mut rng, lw, tb, ctl)?;
+        // The coarser level has given all it had.
+        drop(coarser);
+        let mut cost = vec![f32::INFINITY; tb.area()];
         // A finer level starts from the coarse matches voted with its own (sharp) pixels.
         if upsampled {
             solver.costs(&nnf, &mut cost)?;
             solver.vote(&nnf, &cost);
         }
-        let refine_only = li + 1 < nlev && exts[li] > p.refine_extent;
         let em = if li + 1 == nlev {
             p.em_iters
         } else if refine_only {
@@ -934,411 +276,151 @@ pub fn complete_masked(
             solver.vote(&nnf, &cost);
             ctl.check()?;
         }
-        // Keep the match field (unmatched cells marked) for the next level.
-        let field: Vec<(i32, i32)> = nnf.iter().zip(&solver.targets).map(|(n, t)| if *t { *n } else { (i32::MIN, i32::MIN) }).collect();
+        // A vote that saw the cancellation stopped part-way: never hand its pixels on.
+        ctl.check()?;
+        // Keep the match field (unmatched cells marked) for the next level (none after the last).
+        let field: Vec<(i32, i32)> =
+            if li == 0 { Vec::new() } else { nnf.iter().zip(&solver.targets).map(|(n, t)| if *t { *n } else { (i32::MIN, i32::MIN) }).collect() };
         // Finer levels cost ~4× the previous one: weight progress by pixel count.
         done_px += lw * lh;
         ctl.progress(done_px as f32 / total_px.max(1) as f32);
-        prev = Some((lw, lh, limg, field));
+        prev = Some(Coarser { w: lw, h: lh, img: limg, field, tbox: tb });
     }
-    Ok(prev.map(|(_, _, img, _)| img))
+    Ok(prev.map(|c| c.img).ok_or(Cow::Owned(Vec::new())))
 }
 
-/// Proximity match: the displacement `(dx, dy)` (within `max_radius`) whose surroundings best match the
-/// ring of `ring` pixels around the hole, with the displaced hole fully inside the grid and outside the
-/// hole. `None` if no displacement fits.
-pub fn best_offset(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool], ring: usize, max_radius: i32) -> Option<(i32, i32)> {
-    let (bx0, by0, bx1, by1) = hole_bbox(w, h, hole)?;
-    // No valid translation can move farther than the source image's extent.
-    // Bound arbitrary public API inputs before constructing i32 search ranges:
-    // usize -> i32 truncation and signed increments otherwise overflow or hang.
-    let extent = w.max(h).min((i32::MAX / 4) as usize) as i32;
-    let max_radius = max_radius.max(0).min(extent);
-    if max_radius == 0 {
+/// The levels of the completion, finest first, with the hole's bounds and extent at each.
+struct Pyramid<'a> {
+    levels: Vec<Level<'a>>,
+    boxes: Vec<common::Bounds>,
+    exts: Vec<usize>,
+    /// The hole is a thin one: its thickness, not its length, decides how deep to go.
+    thin: bool,
+}
+
+/// Shrinks the image until the hole is about four patches across (a deeper pyramid decides the
+/// structure where the texture has averaged out, and fills flat). A thin hole stops while it is
+/// still about two patches thick: through it, not along it, is what counts (#1366).
+fn build_pyramid<'a>(
+    first: Level<'a>,
+    ch: usize,
+    hb0: common::Bounds,
+    psz: usize,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Pyramid<'a>, photocraft_raster::Cancelled> {
+    let thickness = hole_thickness(first.w, hb0, &first.px);
+    let mut levels = vec![first];
+    let mut boxes = vec![hb0];
+    let mut ext = hb0.width().max(hb0.height());
+    let thin = thickness.saturating_mul(THIN_RATIO) <= ext;
+    if thin {
+        ext = thickness;
+    }
+    let mut exts = vec![ext];
+    while let Some(l) = levels.last() {
+        ctl.check()?;
+        if ext <= if thin { 2 * psz } else { 4 * psz } || l.w / 2 < 3 * psz || l.h / 2 < 3 * psz {
+            break;
+        }
+        let d = downsample(l, ch);
+        levels.push(d);
+        boxes.push(boxes[boxes.len() - 1].half());
+        ext = ext.div_ceil(2);
+        exts.push(ext);
+    }
+    Ok(Pyramid { levels, boxes, exts, thin })
+}
+
+/// The level's own pixels to fill: the caller's, or a copy made in parallel.
+fn into_owned_pixels(img: Cow<'_, [f32]>) -> Vec<f32> {
+    match img {
+        Cow::Owned(v) => v,
+        Cow::Borrowed(b) => {
+            const CHUNK: usize = 1 << 16;
+            let mut v = vec![0.0f32; b.len()];
+            par::chunks_mut(&mut v, CHUNK, true, |i, d| d.copy_from_slice(&b[i * CHUNK..i * CHUNK + d.len()]));
+            v
+        }
+    }
+}
+
+/// Starts the hole from the coarser level's pixels, scaled up.
+fn copy_up_coarser(img: &mut [f32], px: &[Px], w: usize, ch: usize, hb: common::Bounds, c: &Coarser) {
+    let (pw, ph) = (c.w, c.h);
+    for y in hb.y0..hb.y1 {
+        for x in hb.x0..hb.x1 {
+            if px[y * w + x] == Px::Hole {
+                let (sx, sy) = ((x / 2).min(pw - 1), (y / 2).min(ph - 1));
+                let (d, s) = ((y * w + x) * ch, (sy * pw + sx) * ch);
+                img[d..d + ch].copy_from_slice(&c.img[s..s + ch]);
+            }
+        }
+    }
+}
+
+/// Starts the hole as a membrane over its surroundings, for where nothing can be copied. `dims`
+/// is the level's width, height and channel count.
+fn fill_hole_with_membrane(img: &mut [f32], px: &[Px], dims: (usize, usize, usize), r: usize, thin: bool) {
+    let (w, h, ch) = dims;
+    let mut unknown: Vec<bool> = px.iter().map(|k| matches!(k, Px::Hole | Px::Void)).collect();
+    // Across a thin hole the membrane starts a patch radius out, past the
+    // anti-aliased fringe or halo that a selection drawn close to the object leaves.
+    if thin {
+        let hole: Vec<bool> = px.iter().map(|k| *k == Px::Hole).collect();
+        for (u, d) in unknown.iter_mut().zip(crate::selection::edt(&hole, w, h)) {
+            *u |= d <= r as f32;
+        }
+    }
+    let m = membrane_fill(w, h, ch, img, &unknown);
+    for (i, k) in px.iter().enumerate() {
+        if *k == Px::Hole {
+            img[i * ch..(i + 1) * ch].copy_from_slice(&m[i * ch..(i + 1) * ch]);
+        }
+    }
+}
+
+/// The coarser level's match for `(x, y)`, scaled up, where it lands on a valid source.
+fn upscaled_match(solver: &Solver, c: &Coarser, x: usize, y: usize) -> Option<(i32, i32)> {
+    let (cx, cy) = ((x / 2).min(c.w - 1), (y / 2).min(c.h - 1));
+    let (sx, sy) = c.field_at(cx, cy);
+    if sx == i32::MIN {
         return None;
     }
-    let ring = ring.max(1).min(extent as usize) as i32;
-    // Every set cell lies in the hole bounds. Counts outside that rectangle are zero,
-    // so source rejection needs a table for the hole, not for the whole photo.
-    let hs = HoleIntegral::new(w, hole, (bx0, by0, bx1, by1))?;
-    // Sample points: the hole's ring (dilated minus hole), subsampled for speed.
-    let mut pts = Vec::new();
-    let (x0, y0) = (bx0 as i32 - ring, by0 as i32 - ring);
-    let (x1, y1) = (bx1 as i32 + ring, by1 as i32 + ring);
-    for y in y0.max(0)..y1.min(h as i32) {
-        for x in x0.max(0)..x1.min(w as i32) {
-            if hole[y as usize * w + x as usize] {
+    // The same displacement, twice as long.
+    let m = (x as i32 + 2 * (sx - cx as i32), y as i32 + 2 * (sy - cy as i32));
+    solver.is_valid(m.0, m.1).then_some(m)
+}
+
+/// NNF init: the coarser level's matches scaled up where they land on a valid source, random
+/// otherwise. Also says whether any came from the coarser level.
+fn seed_matches(
+    solver: &Solver,
+    coarser: Option<&Coarser>,
+    sources: &Sources,
+    rng: &mut Rng,
+    lw: usize,
+    tb: common::Bounds,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<(Vec<(i32, i32)>, bool), photocraft_raster::Cancelled> {
+    let tw = tb.width();
+    let mut nnf = vec![(0i32, 0i32); tb.area()];
+    let mut upsampled = false;
+    for y in tb.y0..tb.y1 {
+        if y % 32 == 0 {
+            ctl.check()?;
+        }
+        for x in tb.x0..tb.x1 {
+            let k = (y - tb.y0) * tw + (x - tb.x0);
+            if !solver.targets[k] {
                 continue;
             }
-            if hs.count(x - ring, y - ring, x + ring + 1, y + ring + 1) > 0 {
-                pts.push((x, y));
-            }
+            let cand = coarser.filter(|c| !c.field.is_empty()).and_then(|c| upscaled_match(solver, c, x, y));
+            upsampled |= cand.is_some();
+            nnf[k] = cand.unwrap_or_else(|| sources.nth((rng.next() % sources.len() as u64) as usize, &solver.valid, lw));
         }
     }
-    let stride = (pts.len() / 2000).max(1);
-    let pts: Vec<(i32, i32)> = pts.into_iter().step_by(stride).collect();
-    let eval = |dx: i32, dy: i32, cutoff: f32| -> Option<f32> {
-        let (hx0, hy0, hx1, hy1) = (x0 + dx, y0 + dy, x1 + dx, y1 + dy);
-        let inside = hx0 >= 0 && hy0 >= 0 && hx1 <= w as i32 && hy1 <= h as i32;
-        if (dx, dy) == (0, 0) || !inside || hs.count(hx0, hy0, hx1, hy1) != 0 {
-            return None;
-        }
-        let mut e = 0.0f32;
-        let n = pts.len().max(1) as f32;
-        let penalty = 1.0 + 1e-3 * ((dx as f32).hypot(dy as f32) / max_radius as f32);
-        for (i, &(x, y)) in pts.iter().enumerate() {
-            let (a, b) = ((y as usize * w + x as usize) * ch, ((y + dy) as usize * w + (x + dx) as usize) * ch);
-            for c in 0..ch {
-                let d = img[a + c] - img[b + c];
-                e += d * d;
-            }
-            // SSD terms are nonnegative. The partial score is a lower bound on the
-            // final score; use the same division and penalty to keep float rounding
-            // and strict tie ordering unchanged. Check in batches to keep this cheap.
-            if i % 32 == 31 && cutoff.is_finite() && e / n * penalty >= cutoff {
-                return None;
-            }
-        }
-        // Mild preference for nearer sources on ties.
-        Some(e / n * penalty)
-    };
-    // Coarse grid over the search window, then a full-resolution refinement around the winner.
-    let step = (max_radius / 24).max(1);
-    let mut best: Option<((i32, i32), f32)> = None;
-    let consider = |dx: i32, dy: i32, best: &mut Option<((i32, i32), f32)>| {
-        if let Some(e) = eval(dx, dy, best.map_or(f32::INFINITY, |(_, error)| error))
-            && best.is_none_or(|(_, be)| e < be)
-        {
-            *best = Some(((dx, dy), e));
-        }
-    };
-    let mut dy = -max_radius;
-    while dy <= max_radius {
-        let mut dx = -max_radius;
-        while dx <= max_radius {
-            consider(dx, dy, &mut best);
-            dx += step;
-        }
-        dy += step;
-    }
-    if step > 1
-        && let Some(((bx, by), _)) = best
-    {
-        for dy in (by - step)..=(by + step) {
-            for dx in (bx - step)..=(bx + step) {
-                consider(dx, dy, &mut best);
-            }
-        }
-    }
-    best.map(|b| b.0)
-}
-
-/// Create texture: fill the hole with blocks of surrounding texture (see module docs).
-pub fn synthesize(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool], block: usize, seed: u64) -> Vec<f32> {
-    let mut out = img.to_vec();
-    let Some((bx0, by0, bx1, by1)) = hole_bbox(w, h, hole) else { return out };
-    let b = block.max(4) as i32;
-    let ov = (b / 3).max(1);
-    let hs = integral(w, h, hole);
-    // Candidate block origins: whole block (with overlap) inside the grid and outside the hole.
-    let mut cands = Vec::new();
-    for y in ov..(h as i32 - b - ov) {
-        for x in ov..(w as i32 - b - ov) {
-            if window_count(&hs, w, h, x - ov, y - ov, x + b + ov, y + b + ov) == 0 {
-                cands.push((x, y));
-            }
-        }
-    }
-    if cands.is_empty() {
-        return membrane_fill(w, h, ch, img, hole);
-    }
-    let mut filled: Vec<bool> = hole.iter().map(|x| !x).collect();
-    let mut rng = Rng::new(seed);
-    let mut by = by0 as i32;
-    while by < by1 as i32 {
-        let mut bx = bx0 as i32;
-        while bx < bx1 as i32 {
-            if window_count(&hs, w, h, bx, by, bx + b, by + b) > 0 {
-                // Pick the candidate whose block best agrees with already-known pixels around/inside.
-                let mut best = (cands[0], f32::INFINITY);
-                for _ in 0..48 {
-                    let c = cands[(rng.next() % cands.len() as u64) as usize];
-                    let (mut e, mut n) = (0.0f32, 0u32);
-                    for y in (by - ov)..(by + b + ov) {
-                        for x in (bx - ov)..(bx + b + ov) {
-                            if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 || !filled[y as usize * w + x as usize] {
-                                continue;
-                            }
-                            let (a, s) = ((y as usize * w + x as usize) * ch, ((y - by + c.1) as usize * w + (x - bx + c.0) as usize) * ch);
-                            for k in 0..ch {
-                                let d = out[a + k] - img[s + k];
-                                e += d * d;
-                            }
-                            n += 1;
-                        }
-                    }
-                    let e = if n == 0 { 0.0 } else { e / n as f32 };
-                    if e < best.1 {
-                        best = (c, e);
-                    }
-                }
-                let c = best.0;
-                let (x0, y0) = ((bx - ov).max(0), (by - ov).max(0));
-                let (x1, y1) = ((bx + b + ov).min(w as i32), (by + b + ov).min(h as i32));
-                let src = |x: i32, y: i32| ((y - by + c.1) as usize * w + (x - bx + c.0) as usize) * ch;
-                // Squared difference between what is there and the block, where both exist.
-                let err = |x: i32, y: i32| {
-                    let i = y as usize * w + x as usize;
-                    if !(hole[i] && filled[i]) {
-                        return 0.0;
-                    }
-                    let (a, s) = (i * ch, src(x, y));
-                    (0..ch).map(|q| (out[a + q] - img[s + q]).powi(2)).sum::<f32>()
-                };
-                // Minimum-error boundary cuts through the overlaps with the blocks to the left and
-                // above: the block is copied right of and below them, untouched pixels are kept
-                // on the other side. Copying (rather than averaging) keeps the texture's grain.
-                let left = min_cut((x0..(bx + ov).min(x1)).len(), (y0..y1).len(), |u, v| err(x0 + u as i32, y0 + v as i32));
-                let top = min_cut((y0..(by + ov).min(y1)).len(), (x0..x1).len(), |u, v| err(x0 + v as i32, y0 + u as i32));
-                for y in y0..y1 {
-                    for x in x0..x1 {
-                        let i = y as usize * w + x as usize;
-                        if !hole[i] {
-                            continue;
-                        }
-                        let (u, v) = ((x - x0) as usize, (y - y0) as usize);
-                        let keep = filled[i] && (left.get(v).is_some_and(|s| u < *s) || top.get(u).is_some_and(|s| v < *s));
-                        if !keep {
-                            let (a, s) = (i * ch, src(x, y));
-                            out[a..a + ch].copy_from_slice(&img[s..s + ch]);
-                        }
-                        filled[i] = true;
-                    }
-                }
-            }
-            bx += b;
-        }
-        by += b;
-    }
-    out
-}
-
-/// The minimum-error cut through a band `across` wide and `along` long (Efros & Freeman's
-/// boundary cut, by dynamic programming): for each step along the band, the offset across it
-/// where the cut runs (`err(across, along)` is the cost of a pixel). Pixels before the cut keep
-/// what is there. Empty when there is no cost anywhere (nothing to cut through).
-fn min_cut(across: usize, along: usize, err: impl Fn(usize, usize) -> f32) -> Vec<usize> {
-    if across == 0 || along == 0 {
-        return Vec::new();
-    }
-    // Cumulative cost, step by step along the band; the cut may move by one pixel per step.
-    let mut acc: Vec<f32> = (0..along).flat_map(|v| (0..across).map(move |u| (u, v))).map(|(u, v)| err(u, v)).collect();
-    if acc.iter().all(|x| *x == 0.0) {
-        return Vec::new();
-    }
-    for v in 1..along {
-        for u in 0..across {
-            let lo = u.saturating_sub(1);
-            let hi = (u + 1).min(across - 1);
-            let m = (lo..=hi).map(|k| acc[(v - 1) * across + k]).fold(f32::INFINITY, f32::min);
-            acc[v * across + u] += m;
-        }
-    }
-    let argmin = |v: usize, lo: usize, hi: usize| (lo..=hi).min_by(|a, b| acc[v * across + a].total_cmp(&acc[v * across + b])).unwrap_or(lo);
-    let mut cut = vec![0; along];
-    let mut u = argmin(along - 1, 0, across - 1);
-    for v in (0..along).rev() {
-        if v + 1 < along {
-            u = argmin(v, u.saturating_sub(1), (u + 1).min(across - 1));
-        }
-        cut[v] = u;
-    }
-    cut
+    Ok((nnf, upsampled))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Smooth gradient plus deterministic fine noise.
-    fn texture(w: usize, h: usize) -> Vec<f32> {
-        let mut rng = Rng::new(7);
-        (0..w * h)
-            .flat_map(|i| {
-                let (x, y) = ((i % w) as f32, (i / w) as f32);
-                let n = (rng.next() % 1000) as f32 / 1000.0 * 0.04 - 0.02;
-                [0.3 + 0.004 * x + n, 0.5 + 0.002 * y + n, 0.4 + n]
-            })
-            .collect()
-    }
-
-    fn disc(w: usize, h: usize, cx: f32, cy: f32, r: f32) -> Vec<bool> {
-        (0..w * h).map(|i| ((i % w) as f32 - cx).hypot((i / w) as f32 - cy) < r).collect()
-    }
-
-    fn hole_rmse(a: &[f32], b: &[f32], hole: &[bool], ch: usize) -> f32 {
-        let (mut e, mut n) = (0.0f32, 0);
-        for (i, hh) in hole.iter().enumerate() {
-            if *hh {
-                for c in 0..ch {
-                    e += (a[i * ch + c] - b[i * ch + c]).powi(2);
-                    n += 1;
-                }
-            }
-        }
-        (e / n as f32).sqrt()
-    }
-
-    #[test]
-    fn completion_fills_blemish_from_texture() {
-        let (w, h, ch) = (96, 96, 3);
-        let clean = texture(w, h);
-        let hole = disc(w, h, 48.0, 48.0, 9.0);
-        let mut dirty = clean.clone();
-        for (i, hh) in hole.iter().enumerate() {
-            if *hh {
-                dirty[i * ch..i * ch + ch].copy_from_slice(&[0.02, 0.02, 0.02]);
-            }
-        }
-        let out = complete(w, h, ch, &dirty, &hole, &CompleteParams::default()).unwrap();
-        let before = hole_rmse(&dirty, &clean, &hole, ch);
-        let after = hole_rmse(&out, &clean, &hole, ch);
-        assert!(after < 0.06 && after < before * 0.15, "rmse before {before} after {after}");
-        // Outside the hole untouched.
-        assert!(out.iter().zip(&dirty).zip(hole.iter().flat_map(|h| [*h; 3])).all(|((a, b), h)| h || a == b));
-        // Deterministic.
-        assert_eq!(out, complete(w, h, ch, &dirty, &hole, &CompleteParams::default()).unwrap());
-    }
-
-    #[test]
-    fn completion_continues_structure() {
-        // Vertical stripes: the filled hole should keep the stripes (not a blur).
-        let (w, h, ch) = (80, 80, 1);
-        let clean: Vec<f32> = (0..w * h).map(|i| if (i % w / 4) % 2 == 0 { 0.2 } else { 0.8 }).collect();
-        let hole = disc(w, h, 40.0, 40.0, 7.0);
-        let dirty: Vec<f32> = clean.iter().zip(&hole).map(|(c, h)| if *h { 0.5 } else { *c }).collect();
-        let out = complete(w, h, ch, &dirty, &hole, &CompleteParams::default()).unwrap();
-        let err = hole_rmse(&out, &clean, &hole, ch);
-        assert!(err < 0.15, "{err}");
-    }
-
-    #[test]
-    fn proximity_finds_matching_offset() {
-        let (w, h, ch) = (80, 60, 1);
-        // Periodic pattern with period 10 in x: a match is any multiple-of-10 displacement.
-        let img: Vec<f32> = (0..w * h).map(|i| ((i % w) as f32 * std::f32::consts::TAU / 10.0).sin() * 0.4 + 0.5).collect();
-        let hole = disc(w, h, 40.0, 30.0, 5.0);
-        let (dx, dy) = best_offset(w, h, ch, &img, &hole, 3, 20).unwrap();
-        assert_eq!(dx.rem_euclid(10), 0, "dx {dx} dy {dy}");
-        assert!((dx, dy) != (0, 0));
-    }
-
-    #[test]
-    fn proximity_search_clamps_hostile_radii_without_overflow_or_hanging() {
-        let (w, h, ch) = (24, 20, 1);
-        let img: Vec<f32> = (0..w * h).map(|i| (i % w) as f32 / w as f32).collect();
-        let hole = disc(w, h, 12.0, 10.0, 2.0);
-        // User-supplied values used to overflow i32 loops, cast a huge usize
-        // ring into a negative number, or take billions of search iterations.
-        let result = best_offset(w, h, ch, &img, &hole, usize::MAX, i32::MAX);
-        if let Some((dx, dy)) = result {
-            assert!(dx.abs() <= w as i32 && dy.abs() <= h as i32);
-        }
-        assert_eq!(best_offset(w, h, ch, &img, &hole, 2, -1), None);
-        assert_eq!(best_offset(w, h, ch, &img, &hole, 2, 0), None);
-    }
-
-    /// The exhaustive onion peel, as it was before the early-exit search (#2771).
-    fn onion_peel_plain(w: usize, h: usize, ch: usize, r: i32, img: &mut [f32], px: &[Px], sources: &[(i32, i32)]) {
-        let mut known: Vec<bool> = px.iter().map(|k| matches!(k, Px::Known | Px::Source)).collect();
-        loop {
-            let front: Vec<usize> = (0..w * h)
-                .filter(|&i| {
-                    let (x, y) = ((i % w) as i32, (i / w) as i32);
-                    !known[i]
-                        && px[i] == Px::Hole
-                        && (-1..=1).any(|dy: i32| {
-                            (-1..=1).any(|dx: i32| {
-                                let (nx, ny) = (x + dx, y + dy);
-                                nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h && known[ny as usize * w + nx as usize]
-                            })
-                        })
-                })
-                .collect();
-            if front.is_empty() {
-                return;
-            }
-            let vals: Vec<Vec<f32>> = front
-                .iter()
-                .map(|&i| {
-                    let (x, y) = ((i % w) as i32, (i / w) as i32);
-                    let mut best = (f32::INFINITY, (0i32, 0i32));
-                    for &(sx, sy) in sources {
-                        let (mut e, mut n) = (0.0f32, 0usize);
-                        for dy in -r..=r {
-                            for dx in -r..=r {
-                                let (tx, ty) = (x + dx, y + dy);
-                                if tx < 0 || ty < 0 || tx as usize >= w || ty as usize >= h || !known[ty as usize * w + tx as usize] {
-                                    continue;
-                                }
-                                let (ti, si) = ((ty as usize * w + tx as usize) * ch, ((sy + dy) as usize * w + (sx + dx) as usize) * ch);
-                                for c in 0..ch {
-                                    let d = img[ti + c] - img[si + c];
-                                    e += d * d;
-                                }
-                                n += 1;
-                            }
-                        }
-                        if n > 0 && e / (n as f32) < best.0 {
-                            best = (e / n as f32, (sx, sy));
-                        }
-                    }
-                    let si = (best.1.1 as usize * w + best.1.0 as usize) * ch;
-                    img[si..si + ch].to_vec()
-                })
-                .collect();
-            for (&i, v) in front.iter().zip(vals) {
-                img[i * ch..(i + 1) * ch].copy_from_slice(&v);
-                known[i] = true;
-            }
-        }
-    }
-
-    #[test]
-    fn onion_peel_picks_exactly_what_the_plain_scan_picks() {
-        let (w, h, ch, r) = (48, 40, 3, 3);
-        // Noise over a gradient, with the left half repeating every 6 columns: many exact ties.
-        let mut img = texture(w, h);
-        for y in 0..h {
-            for x in 6..w / 2 {
-                for c in 0..ch {
-                    img[(y * w + x) * ch + c] = img[(y * w + x % 6) * ch + c];
-                }
-            }
-        }
-        for hole in [disc(w, h, 20.0, 18.0, 7.5), disc(w, h, 34.0, 22.0, 5.0)] {
-            let px: Vec<Px> = hole.iter().map(|h| if *h { Px::Hole } else { Px::Source }).collect();
-            let near = integral(w, h, &hole);
-            let sources: Vec<(i32, i32)> = (r..h as i32 - r)
-                .flat_map(|y| (r..w as i32 - r).map(move |x| (x, y)))
-                .filter(|&(x, y)| window_count(&near, w, h, x - r, y - r, x + r + 1, y + r + 1) == 0)
-                .collect();
-            let (mut fast, mut plain) = (img.clone(), img.clone());
-            onion_peel(w, h, ch, r, &mut fast, &px, &sources);
-            onion_peel_plain(w, h, ch, r, &mut plain, &px, &sources);
-            assert!(fast.iter().zip(&plain).all(|(a, b)| a.to_bits() == b.to_bits()));
-            assert_ne!(fast, img);
-        }
-    }
-
-    #[test]
-    fn synthesis_fills_hole_with_plausible_values() {
-        let (w, h, ch) = (64, 64, 3);
-        let clean = texture(w, h);
-        let hole = disc(w, h, 32.0, 32.0, 6.0);
-        let out = synthesize(w, h, ch, &clean, &hole, 8, 3);
-        let err = hole_rmse(&out, &clean, &hole, ch);
-        assert!(err < 0.15, "{err}");
-        assert!(out.iter().all(|v| v.is_finite()));
-    }
-}
+mod tests;

@@ -6,7 +6,7 @@ const PORTAL_NAMESPACE: &str = "org.freedesktop.appearance";
 const PORTAL_KEY: &str = "color-scheme";
 
 #[cfg(target_os = "linux")]
-fn portal_proxy() -> Option<zbus::blocking::Proxy<'static>> {
+pub(crate) fn portal_proxy() -> Option<zbus::blocking::Proxy<'static>> {
     let conn = zbus::blocking::connection::Builder::session().ok()?.method_timeout(std::time::Duration::from_secs(2)).build().ok()?;
     zbus::blocking::Proxy::new(&conn, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Settings").ok()
 }
@@ -14,7 +14,7 @@ fn portal_proxy() -> Option<zbus::blocking::Proxy<'static>> {
 #[cfg(target_os = "linux")]
 fn portal_theme(proxy: &zbus::blocking::Proxy<'_>) -> Option<egui::Theme> {
     let value: zbus::zvariant::OwnedValue = proxy.call("Read", &(PORTAL_NAMESPACE, PORTAL_KEY)).ok()?;
-    decode(portal_code(value)?)
+    portal_code(value).and_then(decode).or_else(gtk_theme)
 }
 
 #[cfg(target_os = "linux")]
@@ -39,8 +39,8 @@ fn decode(code: u32) -> Option<egui::Theme> {
     }
 }
 
-/// One-shot fallback for desktops without the settings portal. It runs once at start-up, by
-/// absolute path, and is never repeated.
+/// GNOME fallback when the portal has no preference. Read only on the appearance worker,
+/// using an absolute path rather than the shell's PATH.
 #[cfg(target_os = "linux")]
 fn gtk_theme() -> Option<egui::Theme> {
     let exe = ["/usr/bin/gsettings", "/bin/gsettings", "/usr/local/bin/gsettings"].into_iter().find(|p| std::path::Path::new(p).is_file())?;
@@ -55,7 +55,7 @@ fn gtk_theme() -> Option<egui::Theme> {
 fn parse_gtk_scheme(s: &str) -> Option<egui::Theme> {
     match s.trim().trim_matches('\'') {
         "prefer-dark" => Some(egui::Theme::Dark),
-        "prefer-light" => Some(egui::Theme::Light),
+        "prefer-light" | "default" => Some(egui::Theme::Light),
         _ => None,
     }
 }
@@ -97,7 +97,7 @@ pub fn service() -> Option<photocraft_ui_egui::SystemThemeFn> {
                 if namespace != PORTAL_NAMESPACE || key != PORTAL_KEY {
                     continue;
                 }
-                publisher.publish(portal_code(changed).and_then(decode));
+                publisher.publish(portal_code(changed).and_then(decode).or_else(gtk_theme));
             }
         })
     }
@@ -184,7 +184,10 @@ mod tests {
         assert_eq!(super::portal_code(zbus::zvariant::OwnedValue::try_from(nested).unwrap()), Some(2));
         assert_eq!(super::parse_gtk_scheme("'prefer-light'\n"), Some(egui::Theme::Light));
         assert_eq!(super::parse_gtk_scheme("'prefer-dark'\n"), Some(egui::Theme::Dark));
-        assert_eq!(super::parse_gtk_scheme("'default'\n"), None);
+        // GNOME's "default" appearance is light, even though the portal reports no preference.
+        assert_eq!(super::parse_gtk_scheme("'default'\n"), Some(egui::Theme::Light));
+        assert_eq!(super::parse_gtk_scheme("default"), Some(egui::Theme::Light));
+        assert_eq!(super::parse_gtk_scheme("'not-a-scheme'"), None);
     }
 
     /// #2798: a first read that misses the start-up wait still wakes the idle UI.

@@ -2,21 +2,52 @@
 //! Drop Shadow's light (#882), Motion Blur and the other direction angles of the filter
 //! dialogs (#3152) share it, as Photoshop's dialogs do.
 
-use super::*;
+use super::{Response, Sense, Stroke, Tokens, Ui, row_label, value_field, value_field_whole_alerting, vec2};
 
 /// `Label (dial) [field°]` for a direction in document angles: counter-clockwise from three
 /// o'clock, y up. The dial points anywhere in -180..=180; the result is clamped to `range`, and
 /// the field accepts the whole of `range` (Motion Blur takes -360..=360, so a typed or
 /// remembered 270° stays 270°).
 pub fn angle_dial_row(ui: &mut Ui, label: &str, angle: &mut f32, range: std::ops::RangeInclusive<f32>) -> Response {
+    angle_dial_line(ui, label, None, angle, range)
+}
+
+/// [`angle_dial_row`] with a whole-number alerting field (`value_field_whole_alerting`),
+/// returning the field's response (for focus/id tracking) and whether an out-of-range value was
+/// committed.
+pub fn angle_dial_row_whole_alerting(ui: &mut Ui, label: &str, angle: &mut f32, range: std::ops::RangeInclusive<f32>) -> (Response, bool) {
+    angle_dial_line_in(ui, label, None, angle, range, true)
+}
+
+/// [`angle_dial_row`] with its label right-aligned in a `label_w` column ([`row_label`]) when
+/// given, lined up with the [`slider_line`] rows around it (Layer Style).
+pub fn angle_dial_line(ui: &mut Ui, label: &str, label_w: Option<f32>, angle: &mut f32, range: std::ops::RangeInclusive<f32>) -> Response {
+    angle_dial_line_in(ui, label, label_w, angle, range, false).0
+}
+
+fn angle_dial_line_in(
+    ui: &mut Ui,
+    label: &str,
+    label_w: Option<f32>,
+    angle: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    whole_alerting: bool,
+) -> (Response, bool) {
     let t = Tokens::get(ui.ctx());
     // The dial clamps with max/min, not `f32::clamp`, which panics if a malformed spec
     // reverses the range.
     let (lo, hi) = (*range.start(), *range.end());
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
+        match label_w {
+            Some(w) => {
+                row_label(ui, label, w);
+            }
+            None => {
+                ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
+            }
+        }
         let (rect, mut dial) = ui.allocate_exact_size(vec2(42.0, 42.0), Sense::click_and_drag());
-        dial.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, ui.is_enabled(), tl!(label)));
+        dial.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, ui.is_enabled(), tl!(label)));
         if (dial.clicked() || dial.dragged())
             && let Some(pos) = dial.interact_pointer_pos()
         {
@@ -49,11 +80,16 @@ pub fn angle_dial_row(ui: &mut Ui, label: &str, angle: &mut f32, range: std::ops
             }
         }
         // The dialogs' own number field: it takes the opening focus (#1757), Tab and arrow steps.
-        let field = value_field(ui, angle, range, "°", 64.0);
+        let (field, alert) = if whole_alerting {
+            value_field_whole_alerting(ui, tl!(label), angle, range, "°", 64.0)
+        } else {
+            (value_field(ui, angle, range, "°", 64.0).accessible_name(tl!(label)), false)
+        };
         if field.changed() {
             dial.mark_changed();
         }
-        dial | field
+        let resp = if whole_alerting { field } else { dial | field };
+        (resp, alert)
     })
     .inner
 }
@@ -61,10 +97,11 @@ pub fn angle_dial_row(ui: &mut Ui, label: &str, angle: &mut f32, range: std::ops
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::Vec2;
     use egui_kittest::kittest::Queryable;
 
     fn click(h: &mut egui_kittest::Harness<'_, f32>, delta: Vec2) {
-        let rect = h.query_all_by_label("Angle").last().unwrap().rect();
+        let rect = h.get_by_role_and_label(egui::accesskit::Role::Slider, "Angle").rect();
         let pos = rect.center() + delta;
         h.event(egui::Event::PointerMoved(pos));
         h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });

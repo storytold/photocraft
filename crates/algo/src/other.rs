@@ -128,12 +128,32 @@ pub(crate) fn edge_of(u: UndefinedAreas) -> Edge {
 /// Shifts the bounds' content by whole pixels.
 pub(crate) fn offset(src: &Image, out: Rect, ctx: &Ctx, dx: i32, dy: i32, undefined: UndefinedAreas) -> Vec<f32> {
     let n = src.ch;
-    let edge = edge_of(undefined);
+    // Subtraction can leave i32 even for valid command parameters. Apply the edge
+    // policy before narrowing: saturating first would change the wrapped pixel.
+    let coordinate = |position: i32, distance: i32, start: i32, end: i32| -> Option<i32> {
+        if start >= end {
+            return None;
+        }
+        let p = i64::from(position) - i64::from(distance);
+        let (start, end) = (i64::from(start), i64::from(end));
+        let mapped = match undefined {
+            UndefinedAreas::Wrap => start + (p - start).rem_euclid(end - start),
+            UndefinedAreas::Repeat => p.clamp(start, end - 1),
+            UndefinedAreas::Transparent if p >= start && p < end => p,
+            UndefinedAreas::Transparent => return None,
+        };
+        i32::try_from(mapped).ok()
+    };
     let mut res = Vec::with_capacity(out.width() as usize * out.height() as usize * n);
     for y in out.y0..out.y1 {
+        let sy = coordinate(y, dy, ctx.bounds.y0, ctx.bounds.y1);
         for x in out.x0..out.x1 {
+            let sx = coordinate(x, dx, ctx.bounds.x0, ctx.bounds.x1);
             for c in 0..n {
-                res.push(src.get_edge(x - dx, y - dy, c, edge, ctx.bounds));
+                res.push(match (sx, sy) {
+                    (Some(sx), Some(sy)) => src.get(sx, sy, c),
+                    _ => 0.0,
+                });
             }
         }
     }
@@ -184,5 +204,63 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod offset_overflow_tests {
+    use super::*;
+
+    #[test]
+    fn offset_limits_match_equivalent_small_offsets_for_every_edge_policy() {
+        for bounds in [Rect::new(0, 0, 3, 5), Rect::new(-7, 11, -4, 16)] {
+            let mut src = Image::new(bounds, 4);
+            // Include signed/HDR values and varying alpha; offset must only move samples.
+            for (i, sample) in src.data.iter_mut().enumerate() {
+                *sample = i as f32 * 0.125 - 2.0;
+            }
+            let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Rgb, alpha: true };
+            for policy in [UndefinedAreas::Wrap, UndefinedAreas::Repeat, UndefinedAreas::Transparent] {
+                for dx in [i32::MIN, i32::MAX, -8, 0, 7] {
+                    for dy in [i32::MIN, i32::MAX, -9, 0, 6] {
+                        let reduce = |d: i32, size: i32| match policy {
+                            UndefinedAreas::Wrap => d.rem_euclid(size),
+                            _ => d.clamp(-100, 100),
+                        };
+                        let (rx, ry) = (reduce(dx, 3), reduce(dy, 5));
+                        let mut expected = Vec::new();
+                        for y in bounds.y0..bounds.y1 {
+                            for x in bounds.x0..bounds.x1 {
+                                for c in 0..4 {
+                                    expected.push(src.get_edge(x - rx, y - ry, c, edge_of(policy), bounds));
+                                }
+                            }
+                        }
+                        assert_eq!(offset(&src, bounds, &ctx, dx, dy, policy), expected, "{bounds:?} {policy:?} {dx} {dy}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn offset_wrap_handles_bounds_at_signed_coordinate_limits() {
+        for start in [i32::MIN, i32::MAX - 3] {
+            let bounds = Rect::new(start, start, start + 3, start + 3);
+            let mut src = Image::new(bounds, 1);
+            src.data = (0..9).map(|i| i as f32).collect();
+            let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Grayscale, alpha: false };
+            assert_eq!(offset(&src, bounds, &ctx, i32::MIN, i32::MIN, UndefinedAreas::Wrap), vec![8.0, 6.0, 7.0, 2.0, 0.0, 1.0, 5.0, 3.0, 4.0]);
+        }
+    }
+
+    #[test]
+    fn offset_wrap_accepts_minimum_signed_distance() {
+        let bounds = Rect::new(0, 0, 3, 1);
+        let mut src = Image::new(bounds, 1);
+        src.data = vec![0.1, 0.5, 0.9];
+        let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Grayscale, alpha: false };
+        let got = offset(&src, bounds, &ctx, i32::MIN, 0, UndefinedAreas::Wrap);
+        assert_eq!(got, vec![0.9, 0.1, 0.5]);
     }
 }

@@ -7,10 +7,15 @@ Automation is a privilege boundary because requests can cause filesystem access,
 - Desktop control binds to `127.0.0.1` and uses one JSON request/reply per line.
 - Headless TCP refuses a successfully bound non-loopback address.
 - Every desktop-control and headless-TCP connection must authenticate with a 256-bit bearer token before method dispatch.
-- Encoded request lines are limited to 1 MiB on desktop and headless TCP and on the headless
-  JSON-lines stdio server (`photocraft-cli serve`). MCP over stdio has no request-byte cap: the
-  MCP SDK reads its own lines, and only MCP tool results are size-checked. Active TCP connections
-  are limited to 16, and headless/MCP batches to 256 steps.
+- Encoded request lines are limited to 1 MiB on desktop and headless TCP, the headless
+  JSON-lines stdio server (`photocraft-cli serve`), and MCP stdio. The MCP line limit is
+  enforced before rmcp's line buffer; an oversized MCP line closes that stdio session because
+  its request ID cannot safely be parsed. Active TCP connections are limited to 16, and
+  headless/MCP batches to 256 steps.
+- Capability-scoped automation file opens read in chunks without reserving from the file's
+  metadata length. A read rejects data beyond the length observed on the opened file, so growth
+  after the metadata check cannot expand the read. Large PSB files have no fixed automation file
+  size ceiling; their materialized bytes and decoded document still require available memory.
 - JSON-lines replies and encoded MCP tool results are limited to 8 MiB; retained batch replies
   have an aggregate budget and stop later steps when exhausted. The headless stdio JSON-lines
   transport enforces the same request/reply ceilings as TCP.
@@ -24,6 +29,14 @@ Automation is a privilege boundary because requests can cause filesystem access,
   Screenshots are decoded under separate dimension, pixel, and allocation ceilings before
   downscaling; the 5 MiB PNG limit applies to the returned image.
 - MCP normally uses stdio and can optionally bridge to loopback control TCP.
+- ArtCraft Launcher › Settings › AI agents (off by default; one switch for every Craft app) opens that loopback
+  listener without launch flags. Its token is kept in a user-only file in the settings folder
+  (`agent-control.token`) and stays the same across restarts and port changes: restarting does
+  not revoke it. To revoke an exposed token, delete that file; the next start creates a new one.
+  The published `agent-connection.json` holds the port and the token file's path, never the
+  token. `photocraft-cli mcp` authenticates with the challenge handshake, so the token
+  itself is never sent: the listener must first prove it holds the token, and a stale file whose
+  port another program took fails that check before the client reveals anything.
 - The bridge and UI request paths use timeouts.
 - Engine commands are expected to reject invalid parameters without panicking.
 - Remote filesystem methods use separately granted read and write directory capabilities.
@@ -49,12 +62,15 @@ Automation is a privilege boundary because requests can cause filesystem access,
 - no general per-client or per-tool capability model beyond filesystem read/write authority;
 - no automated bulk apply of the Preferences dialog; agents can change individual safe keys with
   `prefs.set`;
-- no explicit JSON-depth policy, aggregate document/session-memory accounting, compositor
-  scratch-space accounting, or command-duration/cancellation budget;
+- no application-specific JSON-depth policy (serde_json's parser has its default finite recursion
+  limit), aggregate document/session-memory accounting, compositor scratch-space accounting,
+  or command-duration/cancellation budget;
 - one thread per accepted TCP connection;
 - no structured security audit event stream;
-- desktop screenshot capture/encoding and document import/export have no automation-specific
-  operation budgets; the desktop transport limits replies after their creation;
+- desktop screenshots are admission-bounded (4 outstanding requests, 128 MiB per image, 256 MiB
+  aggregate, 8 s deadline), which is far above the 8 MiB JSON reply cap; document import/export
+  have no automation-specific operation budgets, and the desktop transport limits replies after
+  their creation;
 - expensive engine commands are not charged to a session budget.
 
 Reply rejection can happen after a command has changed state. Such errors report that the
