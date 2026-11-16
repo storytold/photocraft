@@ -126,8 +126,9 @@ pub(super) fn offset(angle: f32, distance: f32) -> (f32, f32) {
 /// measure Size 10 with the Gaussian contour and leave Anti-aliased with any other contour
 /// unmeasured, so every other contour keeps today's map bit-for-bit. The built-in Gaussian preset
 /// carries that name from the Contour picker and from a PSD import; an edited curve becomes
-/// "Custom" and keeps today's map.
-fn anti_aliased_contour(c: &Contour) -> bool {
+/// "Custom" and keeps today's map. Public because the GPU map program asks for the same rule, so
+/// both compositors take the offset or neither does.
+pub fn anti_aliased_contour(c: &Contour) -> bool {
     matches!(c, Contour::Custom { name, .. } if name.eq_ignore_ascii_case("Gaussian"))
 }
 
@@ -140,8 +141,9 @@ fn anti_aliased_contour(c: &Contour) -> bool {
 /// Inner Shadow within 1.4 levels of every measured pixel, and the glow within 4.6 at four
 /// samples of eighteen and within 3 at the rest, which is where today's off-path profile already
 /// sits from the reference. *Why* the two pairs of edges differ is not measured, so this
-/// reproduces both profiles instead of guessing a rule for the unmeasured cases.
-fn aa_shift(on: bool, c: &Contour) -> f32 {
+/// reproduces both profiles instead of guessing a rule for the unmeasured cases. The GPU map
+/// program adds the same offset to its shift stage, so both compositors build the same geometry.
+pub fn aa_shift(on: bool, c: &Contour) -> f32 {
     if on && anti_aliased_contour(c) { -1.0 / 3.0 } else { 0.0 }
 }
 

@@ -18,7 +18,13 @@ impl B {
         // shadow_map
         let angle = if s.use_global_light { light.angle } else { s.angle };
         let (dx, dy) = offset(angle, s.distance);
-        let src = self.shift(In::Shape, dx, dy, if inner { 1.0 } else { 0.0 }, inner);
+        // #14934: an Anti-aliased Inner Shadow takes the CPU's sub-pixel source offset (inner
+        // branch and the Gaussian contour only, `fx::aa_shift`); a Drop Shadow keeps today's map
+        // (#14881). With Choke above 0 the CPU recomputes its dilation distance on the offset map
+        // while this shift of the whole-pixel field does not, so the two compositors are pinned
+        // equal at the measured Choke 0 by `anti_aliased_inner_shadow_matches_the_cpu_ramps`.
+        let aa = fx::aa_shift(inner && s.anti_alias, &s.contour);
+        let src = self.shift(In::Shape, dx + aa, dy + aa, if inner { 1.0 } else { 0.0 }, inner);
         let m = self.spread_blur(src, (s.size, s.spread), inner, dx, dy);
         self.finish(m, None, false, &s.contour, inner, 0);
         1

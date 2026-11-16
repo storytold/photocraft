@@ -317,3 +317,71 @@ fn bands_end_at_the_coordinate_ceiling() {
     assert_eq!((bands[0].y0, bands[0].y1, bands[1].y1), (i32::MAX - 100, i32::MAX - 36, i32::MAX));
     assert_eq!(super::bands(Rect::new(0, 0, 8, 10), 0).len(), 10, "a zero step still makes progress");
 }
+
+/// #14934: the GPU's Inner Shadow program takes the same sub-pixel source offset as the CPU's
+/// `shadow_map` - without a device, by asking what stages the effect builds. The measured gate
+/// (Anti-aliased on, Gaussian contour, the inner branch) is what adds the stage; a Linear contour
+/// or a Drop Shadow keeps the program, and the program key, exactly as it was.
+#[test]
+fn anti_aliased_inner_shadow_shifts_the_map_stage() {
+    use photocraft_doc::{Contour, FxCommon, Shadow};
+    let pts: [(f32, f32); 11] = [
+        (0.0, 0.0),
+        (0.117, 0.023),
+        (0.172, 0.055),
+        (0.234, 0.117),
+        (0.305, 0.234),
+        (0.383, 0.414),
+        (0.523, 0.688),
+        (0.617, 0.812),
+        (0.703, 0.891),
+        (0.805, 0.953),
+        (1.0, 1.0),
+    ];
+    let gaussian = Contour::Custom {
+        name: "Gaussian".into(),
+        points: pts.iter().map(|(input, output)| photocraft_doc::adjust::CurvePoint { input: *input, output: *output }).collect(),
+        corners: (0..pts.len()).map(|i| i > 0 && i < pts.len() - 1).collect(),
+    };
+    let shadow = |anti_aliased: bool, contour: Contour| Shadow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        color: photocraft_color::Color::BLACK,
+        angle: 0.0,
+        use_global_light: false,
+        distance: 0.0,
+        spread: 0.0,
+        size: 10.0,
+        contour,
+        anti_alias: anti_aliased,
+        noise: 0.0,
+        knocks_out: false,
+    };
+    fn shift_stages(p: &MapProgram) -> Vec<&Stage> {
+        p.stages.iter().filter(|s| s.kernel == Kernel::MShift).collect()
+    }
+    let light = GlobalLight::default();
+    let aa = photocraft_compose::effects::aa_shift(true, &gaussian);
+    assert_eq!(aa, -1.0 / 3.0, "the CPU offset the GPU has to copy");
+    // The inner branch always takes one shift stage: it is where `1 - alpha` happens. At Distance 0
+    // without Anti-aliased that stage is the identity, and that is what must change.
+    let off = program(&Effect::InnerShadow(shadow(false, gaussian.clone())), &light, false);
+    assert_eq!(shift_stages(&off).len(), 1, "the inner branch keeps its one (identity) shift stage");
+    assert_eq!(shift_stages(&off)[0].p0, [0.0, 0.0, 1.0, 1.0], "p0 = (dx, dy, outside, invert) at Distance 0, Anti-aliased off");
+    let on = program(&Effect::InnerShadow(shadow(true, gaussian.clone())), &light, false);
+    assert_eq!(shift_stages(&on).len(), 1, "the Anti-aliased inner shadow still builds one shift stage, not two");
+    assert_eq!(shift_stages(&on)[0].p0, [aa, aa, 1.0, 1.0], "the shift stage must carry the CPU's sub-pixel source offset");
+    assert!(
+        shift_stages(&on)[0].radius >= 1,
+        "a sub-pixel shift reads the tap beyond its base, so the stage radius must cover it: {}",
+        shift_stages(&on)[0].radius
+    );
+    assert_ne!(on.key, off.key, "the flag has to invalidate the cached program");
+    // Unmeasured cases keep today's stage: the contour gate is the CPU's.
+    let linear = program(&Effect::InnerShadow(shadow(true, Contour::Linear)), &light, false);
+    assert_eq!(shift_stages(&linear)[0].p0, [0.0, 0.0, 1.0, 1.0], "a Linear inner shadow still ignores Anti-aliased (#14934 leaves that contour unmeasured)");
+    // A Drop Shadow (its own item is #14881) keeps its whole-pixel program either way.
+    let drop_on = program(&Effect::DropShadow(shadow(true, gaussian.clone())), &light, false);
+    let drop_off = program(&Effect::DropShadow(shadow(false, gaussian)), &light, false);
+    assert_eq!(shift_stages(&drop_on).len(), 0, "a Drop Shadow at Distance 0 takes no shift stage");
+    assert_eq!(drop_on.key, drop_off.key, "the Drop Shadow still ignores Anti-aliased (#14881 is its own item)");
+}
