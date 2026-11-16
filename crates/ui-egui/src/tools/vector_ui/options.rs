@@ -181,6 +181,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::panels::options_bar::range_alert(&mut app.ui, CONCAVITY_RANGE_ALERT);
         }
     }
+    // The Rectangle tool's Align Edges, at the bar's right end after the gear (#13346). Only a
+    // shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
+    if tool == Tool::Rectangle {
+        crate::widgets::vline(ui, 22.0);
+        let o = &mut app.ui.tool_options;
+        ui.add_enabled_ui(o.shape_mode == "shape", |ui| crate::widgets::checkbox(ui, &mut o.align_edges, tl!("Align Edges")));
+    }
     true
 }
 
