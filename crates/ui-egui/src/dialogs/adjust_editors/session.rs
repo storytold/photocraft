@@ -79,6 +79,19 @@ pub fn properties_reset(ctx: &egui::Context, doc: u64, id: LayerId, adj: &Adjust
     Some(v)
 }
 
+/// The keys of `values` that differ from the layer's `committed` settings. A Properties commit sends only
+/// these: the engine merges them over the layer's current adjustment, so a curve the user did not touch (a
+/// file's 17 to 19 points, or fractional coordinates) is never sent back through the command's own limits
+/// and rounding, which would refuse or truncate it.
+fn changed_keys(committed: &Value, values: &Value) -> Value {
+    match (committed.as_object(), values.as_object()) {
+        (Some(old), Some(new)) => {
+            Value::Object(new.iter().filter(|(key, value)| old.get(key.as_str()) != Some(*value)).map(|(key, value)| (key.clone(), value.clone())).collect())
+        }
+        _ => values.clone(),
+    }
+}
+
 /// The Properties-panel editor of an adjustment layer: previews live (`app.live_adjust`) while a
 /// control moves and commits one `layer.setAdjustment` per gesture.
 pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
@@ -134,7 +147,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     if e.commit {
         if values != committed {
             let rev = app.session.active().map(|s| s.revision);
-            let mut p = values;
+            let mut p = changed_keys(&committed, &values);
             p["layer"] = json!(id.0);
             if session {
                 p["coalesce"] = json!(properties_coalesce(id));

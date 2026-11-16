@@ -312,6 +312,41 @@ fn curves_fast_release_commits_one_edit_and_undo_restores_the_curve() {
     assert_eq!(layer(&h).1, before);
 }
 
+/// A Properties commit sends only the keys the user changed: editing the Red curve of a layer that carries an
+/// imported composite curve (19 points, or hundredths of a level) leaves that composite curve exactly as the
+/// file had it, instead of the command refusing it or truncating it.
+#[test]
+fn curves_properties_edit_of_red_keeps_an_imported_master_exact() {
+    let nineteen: Vec<[f64; 2]> = (0..19).map(|k| [k as f64 * 14.0, (k as f64 * 14.0 + 6.0).min(255.0)]).collect();
+    let hundredths: Vec<[f64; 2]> = vec![[0.0, 0.0], [43.35, 33.2], [255.0, 255.0]];
+    for (name, points) in [("19 points", nineteen), ("hundredths of a level", hundredths)] {
+        let mut h = app_harness("curves", "rgb", 8);
+        let (id, _) = layer(&h);
+        let imported = photocraft_engine::adjust_params::from_params("curves", &json!({"points": points}), None, photocraft_color::ColorMode::Rgb).unwrap();
+        let Adjustment::Curves { master: file_master, .. } = &imported else { panic!("{imported:?}") };
+        let file_master = file_master.clone();
+        h.state_mut()
+            .session
+            .edit("Import", |doc, _| {
+                let l = doc.layer_mut(id).ok_or(photocraft_engine::EngineError::NoLayer(id))?;
+                l.content = LayerContent::Adjustment(imported.clone());
+                Ok(())
+            })
+            .unwrap();
+        // The Channel dropdown's choice lives in egui memory: 1 = Red.
+        h.ctx.data_mut(|d| d.insert_temp(super::layer_mem(id).with("curves-ch"), 1usize));
+        h.run_steps(4);
+        let steps = h.state().session.active().unwrap().history.past_len();
+        let g = curves_graph(&h, id);
+        click(&mut h, g.center());
+        let (_, after) = layer(&h);
+        let Adjustment::Curves { master, per_channel, .. } = &after else { panic!("{after:?}") };
+        assert_eq!(per_channel[0].len(), 3, "{name}: the Red curve got its new point");
+        assert_eq!(*master, file_master, "{name}: the composite curve is exactly the file's");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{name}: one history step");
+    }
+}
+
 /// Real pointer input: `n` clicks at `at` with `mods` held (2 = a double-click).
 fn clicks_with(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, n: usize, mods: egui::Modifiers) {
     // Well past the double-click time since the last gesture.
