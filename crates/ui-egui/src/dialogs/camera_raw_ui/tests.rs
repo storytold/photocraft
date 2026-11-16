@@ -1487,3 +1487,61 @@ fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The histogram's hover badge follows Show Lab Color Readouts (#12337): L a b in Lab mode,
+/// the same numbers as the pointer readout; R G B otherwise; nothing without a hover sample.
+#[test]
+fn hover_badge_shows_lab_values_with_lab_readouts() {
+    use crate::camera_raw_scope_ui::hover_badge_text;
+    let (mut app, _ctx) = worker_app();
+    let d = app.camera_raw.as_mut().unwrap();
+    assert_eq!(hover_badge_text(d, false), None);
+    assert_eq!(hover_badge_text(d, true), None);
+    d.scope.pointer_sample = Some([-1.0, 2.0]);
+    assert_eq!(hover_badge_text(d, false), None);
+    d.scope.pointer_sample = Some([0.25, 0.25]);
+    let value = |lab: bool| -> Vec<f64> {
+        let r = d.readout([0.25, 0.25], lab).unwrap();
+        r["values"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()
+    };
+    let rgb = value(false);
+    assert_eq!(hover_badge_text(d, false).unwrap(), format!("R {:.0}   G {:.0}   B {:.0}", rgb[0], rgb[1], rgb[2]));
+    let lab = value(true);
+    let text = hover_badge_text(d, true).unwrap();
+    assert_eq!(text, format!("L {:.1}   a {:.1}   b {:.1}", lab[0], lab[1], lab[2]));
+    assert!(text.starts_with("L "), "{text}");
+    assert_ne!(text, hover_badge_text(d, false).unwrap());
+}
+
+#[test]
+fn hover_badge_shows_dashes_for_a_component_that_is_not_a_number() {
+    use crate::camera_raw_scope_ui::badge_text_of;
+    let values = serde_json::json!([null, 12.0, "x"]);
+    assert_eq!(badge_text_of(&values, false), "R --   G 12   B --");
+    assert_eq!(badge_text_of(&values, true), "L --   a 12.0   b --");
+    assert_eq!(badge_text_of(&serde_json::json!([1.0, 2.0]), true), "L 1.0   a 2.0   b --");
+    assert_eq!(badge_text_of(&serde_json::json!(null), false), "R --   G --   B --");
+}
+
+#[test]
+fn sampler_rows_show_dashes_for_a_component_that_is_not_a_number_as_the_badge_does() {
+    use crate::camera_raw_scope_ui::readout_text;
+    let rgb = serde_json::json!({"space": "rgb", "values": [12.4, null, 200.0]});
+    assert_eq!(readout_text(Some(rgb)), "R 12  G --  B 200");
+    let lab = serde_json::json!({"space": "lab", "values": [50.0, "x", 3.31]});
+    assert_eq!(readout_text(Some(lab)), "L 50.0  a --  b 3.3");
+    assert_eq!(readout_text(Some(serde_json::json!({"space": "rgb"}))), "R --  G --  B --");
+}
+
+#[test]
+fn hover_badge_font_shrinks_to_fit_but_not_below_eight() {
+    use crate::camera_raw_scope_ui::badge_font_size;
+    assert_eq!(badge_font_size(100.0, 150.0), 11.0);
+    assert_eq!(badge_font_size(150.0, 150.0), 11.0);
+    let scaled = badge_font_size(200.0, 150.0);
+    assert!(scaled < 11.0 && scaled > 8.0, "{scaled}");
+    assert!((scaled - 8.25).abs() < 1e-4, "{scaled}");
+    assert_eq!(badge_font_size(400.0, 100.0), 8.0);
+    assert_eq!(badge_font_size(100.0, 0.0), 8.0);
+    assert_eq!(badge_font_size(0.0, 0.0), 11.0);
+}
