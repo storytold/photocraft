@@ -49,6 +49,73 @@ fn line_edge(app: &mut PhotocraftApp, id: LayerId, caret: usize, end: bool) -> u
 /// Keyboard input while editing. Returns true when a type edit session is active (single-key
 /// tool shortcuts must then be skipped). Handled events are removed from the frame's input.
 pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    handle_keys_from(app, ctx, 0)
+}
+
+/// True when `Tool::Type` (or mask/vertical variants) has a primary canvas click/release on
+/// this pass followed by non-command keyboard or IME input before `App::ui` creates `text_edit`.
+/// Prevents single-key tool shortcuts (such as `R` for Rotate View) from stealing the first key
+/// of immediate post-click typing.
+pub(crate) fn pending_canvas_edit(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    if !app.ui.tool.is_type()
+        || app.ui.text_edit.is_some()
+        || !app.last_canvas_rect.is_positive()
+        || !app.ui.dialogs.is_empty()
+        || app.discard.is_some()
+        || app.ui.palette_open
+        || app.ui.brush_picker.is_some()
+        || app.ui.canvas_tool_menu.is_some()
+        || app.ui.layer_menu.is_some()
+        || egui::Popup::is_any_open(ctx)
+        || crate::menu_nav::is_open(ctx)
+        || crate::menu_keys::is_focused(ctx)
+    {
+        return false;
+    }
+    let canvas = crate::rulers::content_rect(app, app.last_canvas_rect);
+    let drag_type = app.drag.as_ref().is_some_and(|d| d.tool.is_type());
+    ctx.input(|i| {
+        let mut pressed_in_canvas = false;
+        let mut armed = false;
+        for ev in &i.events {
+            match ev {
+                egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: true, pos, .. } => {
+                    pressed_in_canvas = canvas.contains(*pos);
+                }
+                egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, pos, .. } => {
+                    if (pressed_in_canvas && canvas.contains(*pos)) || drag_type {
+                        armed = true;
+                    }
+                    pressed_in_canvas = false;
+                }
+                egui::Event::Text(_) | egui::Event::Ime(_) if armed => return true,
+                egui::Event::Key { pressed: true, modifiers, .. } if armed && !modifiers.command && !modifiers.ctrl => return true,
+                _ => {}
+            }
+        }
+        false
+    })
+}
+
+/// Processes trailing keyboard, text, and IME events right after a canvas click inside `App::ui`
+/// opened a new `text_edit` session on the same pass.
+pub(crate) fn handle_opened_edit_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.ui.text_edit.is_none() || !super::ime::in_ui_pass(ctx) || !reset_route_eligible(app, ctx) {
+        return;
+    }
+    let start_idx = ctx.input(|i| {
+        i.events.iter().rposition(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, .. })).map_or(0, |idx| idx + 1)
+    });
+    let has_tail = ctx.input(|i| start_idx < i.events.len());
+    if !has_tail {
+        return;
+    }
+    // `App::logic` already claimed `raw_pass` via `controls_only` when `text_edit` was still None.
+    super::ime::reset_raw_pass(app, ctx.viewport_id());
+    handle_keys_from(app, ctx, start_idx);
+}
+
+fn handle_keys_from(app: &mut PhotocraftApp, ctx: &egui::Context, start_idx: usize) -> bool {
     bind_reset_context(app, ctx);
     // A receipt is only valid for the frame that produced it; never reuse last frame's.
     app.type_ime.frame = None;
@@ -111,7 +178,7 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         .unwrap_or_else(|| ctx.input(|input| input.pointer.primary_down()));
     let mut custom_mutations = true;
     let mut deferred_custom = false;
-    for (k, ev) in events.iter().enumerate() {
+    for (k, ev) in events.iter().enumerate().skip(start_idx) {
         if custom_mutations && !reset_route_eligible(app, ctx) {
             custom_mutations = false;
             suspend_reset(app, ctx);
