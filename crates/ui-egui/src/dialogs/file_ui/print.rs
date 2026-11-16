@@ -169,6 +169,15 @@ fn unit_pt(units: &str) -> f64 {
     }
 }
 
+/// A paper of `w` x `h` points in the Print dialog's `units`, as the line under the printer shows
+/// it: whole millimeters and points, two decimals otherwise (595 x 841 pt is 49.58 x 70.08 pica).
+fn paper_in_units(w: f64, h: f64, units: &str) -> String {
+    let k = unit_pt(units);
+    let decimals = if matches!(units, "mm" | "pt") { 0 } else { 2 };
+    let units = if matches!(units, "in" | "mm" | "pt" | "pica") { units } else { "cm" };
+    format!("{:.*} × {:.*} {units}", decimals, w / k, decimals, h / k)
+}
+
 /// A number field in `units` for a value kept in points; true when edited.
 fn length_field(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str) -> bool {
     length_field_prec(ui, label, pt, units, 0)
@@ -190,7 +199,9 @@ fn length_field_range(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str,
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(label).color(t.text_dim));
         let before = v;
-        crate::widgets::value_field_prec(ui, &mut v, range, units, 70.0, decimals).accessible_name(tl!(&label));
+        // Typed lengths convert at 72 points to the inch, as `unit_pt` does, whatever the
+        // Point/Pica Size preference: `1in` typed in Points must stay one inch.
+        crate::widgets::value_field_prec_ppi(ui, &mut v, range, units, 70.0, decimals, 72.0).accessible_name(tl!(&label));
         if (v - before).abs() > 1e-4 && v.is_finite() {
             *pt = f64::from(v) * k;
             changed = true;
@@ -517,7 +528,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                 });
                 let paper = p.get("paper").and_then(Value::as_array).map(|a| (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64)));
                 let text = match paper {
-                    Some((Some(w), Some(h))) => format!("{:.0} × {:.0} mm  ·  {}", w / 72.0 * 25.4, h / 72.0 * 25.4, tl!("set in Print Settings…")),
+                    Some((Some(w), Some(h))) => format!("{}  ·  {}", paper_in_units(w, h, &s(f, "units", "cm")), tl!("set in Print Settings…")),
                     _ => String::new(),
                 };
                 ui.label(egui::RichText::new(text).color(t.text_dim).size(11.0));

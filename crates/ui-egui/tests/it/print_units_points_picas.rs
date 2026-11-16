@@ -100,3 +100,37 @@ fn points_and_picas_are_remembered_for_the_next_print() {
         assert!(h.query_all_by_value(label).next().is_some(), "the reopened Units menu must show {label}");
     }
 }
+
+#[test]
+fn printer_paper_line_follows_the_units() {
+    // Printing to a printer (not to a PDF) shows the paper its driver reported under the printer.
+    let (mut h, _) = measured(json!({"paper": REFERENCE_A4, "units": "pt", "dryRun": false, "output": "", "__driverPageInitialized": true}));
+    let mut current = "Points";
+    for (label, paper) in [
+        ("Points", "595 × 841 pt"),
+        ("Picas", "49.58 × 70.08 pica"),
+        ("Millimeters", "210 × 297 mm"),
+        ("Centimeters", "20.99 × 29.67 cm"),
+        ("Inches", "8.26 × 11.68 in"),
+    ] {
+        if label != current {
+            click(&mut h, current);
+            click(&mut h, label);
+            current = label;
+        }
+        assert!(h.query_by_label_contains(paper).is_some(), "{label}: the printer's paper must read {paper}");
+    }
+}
+
+#[test]
+fn inches_typed_in_points_or_picas_stay_inches_with_the_traditional_point_size() {
+    let (mut h, id) = measured(json!({"paper": REFERENCE_A4, "center": false, "top": 0.0, "left": 0.0, "units": "pt"}));
+    // What the app sets each frame with Preferences > Point/Pica Size at Traditional (72.27 pt/in).
+    photocraft_ui_egui::widgets::set_field_resolution(&h.ctx, 300.0, 72.27);
+    enter_length(&mut h, "Top", "1in");
+    assert_eq!(fields(&h, id)["top"], 1.0, "1 in typed in Points is 72 pt, one inch");
+    click(&mut h, "Points");
+    click(&mut h, "Picas");
+    enter_length(&mut h, "Left", "2in");
+    assert_eq!(fields(&h, id)["left"], 2.0, "2 in typed in Picas is 12 pica, two inches");
+}
