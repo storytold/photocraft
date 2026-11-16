@@ -20,6 +20,7 @@ mod options;
 
 pub use arrange::{Border, borders, cells, drag_border};
 pub(crate) use arrange::{document_is_floating, float_window};
+pub(crate) use dialogs::remember_image_processor;
 pub(crate) use dialogs::write_copy;
 #[cfg(test)]
 use dialogs::{form, front, label_of};

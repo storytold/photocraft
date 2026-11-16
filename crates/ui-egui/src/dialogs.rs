@@ -1225,6 +1225,10 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     image_processor_ui::preflight(&mut app.ui, id)?;
     fit_image_range::preflight(&mut app.ui, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    // Image Processor's Run keeps its values for the next open, even when the run fails (#13905).
+    if image_processor_ui::owns(&d.fields) {
+        crate::view_cmds::remember_image_processor(app, &d.fields);
+    }
     match d.kind {
         DialogKind::NewDocument => {
             let r = app.run("file.new", crate::new_doc_ui::command_params(&d.fields));

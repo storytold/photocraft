@@ -608,19 +608,25 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             json!({"input": dir, "output": format!("{dir}/corrected"), "format": "same", "profile": "auto", "correctDistortion": true, "correctVignette": true, "correctCA": true, "autoScale": true, "edge": "transparency"}),
             json!({"format": ["same", "png", "jpg", "psd", "tiff"], "profile": ["auto", "generic", "none"], "edge": ["transparency", "edgeExtension", "black", "white"]}),
         ),
-        "file.scripts.imageProcessor" => dialog(
-            app,
-            json!({
+        "file.scripts.imageProcessor" => {
+            // The values of the last run over the defaults (#13905).
+            let fields = image_processor_fields(
+                app,
+                doc.is_some(),
+                json!({
                 "source": if doc.is_some() { "current" } else { "folder" },
                 "input": dir, "includeSubfolders": false, "output": format!("{dir}/processed"),
                 "jpeg": {"enabled": true, "quality": 5, "convertToSrgb": false, "resize": false, "width": 1, "height": 1},
                 "psd": {"enabled": false, "maximizeCompatibility": true, "resize": false, "width": 1, "height": 1},
                 "tiff": {"enabled": false, "lzw": false, "resize": false, "width": 1, "height": 1},
-                "__labels": {"current": tl!("Current document"), "open": tl!("All open documents"), "folder": tl!("Folder"), "includeSubfolders": tl!("Include All Subfolders")},
-                "__order": ["source", "input", "includeSubfolders", "output"]
-            }),
-            json!({"source": ["current", "open", "folder"]}),
-        ),
+                // Include ICC Profile, on by default (#13902).
+                "includeIcc": true,
+                "__labels": {"current": tl!("Current document"), "open": tl!("All open documents"), "folder": tl!("Folder"), "includeSubfolders": tl!("Include All Subfolders"), "includeIcc": tl!("Include ICC Profile")},
+                "__order": ["source", "input", "includeSubfolders", "output", "includeIcc"]
+                }),
+            );
+            dialog(app, fields, json!({"source": ["current", "open", "folder"]}))
+        }
         "file.automate.batch" => {
             let Some(row) = crate::actions::selected_action_row(app) else {
                 return Some(Err("record an action in the Actions panel first".into()));
@@ -813,4 +819,63 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         app.ui.status_error = false;
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
+}
+
+/// Where the Image Processor's last run is kept (#13905): the preferences' `dialogs` map, by
+/// command id, as New Document keeps its own.
+pub(crate) const IMAGE_PROCESSOR: &str = "file.scripts.imageProcessor";
+
+/// Keep every value of an Image Processor run for the next open (#13905): the folders, the file
+/// types and their options, and the rest of its fields. Called when Run is confirmed, so a run
+/// that then fails keeps them too; Cancel never gets here.
+pub(crate) fn remember_image_processor(app: &mut PhotocraftApp, fields: &Map<String, Value>) {
+    let kept: Map<String, Value> = fields.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    app.session.prefs.edit(|p| p.dialogs.insert(IMAGE_PROCESSOR.into(), Value::Object(kept)));
+}
+
+/// The Image Processor's `defaults` with the last run's values over them (#13905). A stored value
+/// that doesn't fit its field (another type, out of range, an unknown source) is ignored, and
+/// without a document a stored document source falls back to the folder, as today.
+fn image_processor_fields(app: &PhotocraftApp, has_doc: bool, mut defaults: Value) -> Value {
+    let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(IMAGE_PROCESSOR).cloned() else { return defaults };
+    let Some(fields) = defaults.as_object_mut() else { return defaults };
+    for (key, default) in fields.clone() {
+        if key.starts_with("__") {
+            continue;
+        }
+        if let Some(v) = saved.get(&key).and_then(|v| fit_saved(&key, &default, v)) {
+            fields.insert(key, v);
+        }
+    }
+    if !has_doc && fields.get("source").and_then(Value::as_str) != Some("folder") {
+        fields.insert("source".into(), json!("folder"));
+    }
+    defaults
+}
+
+/// `v` when it fits the field `key` whose default is `default`, else `None`.
+fn fit_saved(key: &str, default: &Value, v: &Value) -> Option<Value> {
+    match default {
+        Value::Bool(_) => v.as_bool().map(Value::Bool),
+        Value::String(_) if key == "source" => v.as_str().filter(|s| matches!(*s, "current" | "open" | "folder")).map(|s| json!(s)),
+        Value::String(_) => v.as_str().map(|s| json!(s)),
+        Value::Number(_) => {
+            let range = match key {
+                "quality" => 1.0..=12.0,
+                _ => 1.0..=30_000.0,
+            };
+            v.as_f64().filter(|n| n.is_finite() && range.contains(n)).map(|_| v.clone())
+        }
+        Value::Object(d) => {
+            let saved = v.as_object()?;
+            let mut out = d.clone();
+            for (k, dv) in d {
+                if let Some(sv) = saved.get(k).and_then(|sv| fit_saved(k, dv, sv)) {
+                    out.insert(k.clone(), sv);
+                }
+            }
+            Some(Value::Object(out))
+        }
+        _ => None,
+    }
 }

@@ -107,21 +107,52 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "source must be folder, current or open".into() }),
     };
     let output = str_param(p, "output", cmd)?.to_string();
+    // Include ICC Profile (#13902): off leaves the profile out of flat results.
+    let include_icc = match p.get("includeIcc") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "includeIcc must be true or false".into() }),
+    };
     if p.get("format").is_none() && ["jpeg", "psd", "tiff"].iter().any(|key| p.get(key).is_some()) {
-        return image_processor_formats(s, p, source, &output);
+        return image_processor_formats(s, p, source, &output, include_icc);
     }
     let format = p.get("format").and_then(Value::as_str).unwrap_or("jpg");
     // The format becomes a filename extension, never a path supplied by a caller.
     if format.trim_start_matches('.').is_empty() || format.contains(['/', '\\']) || format.chars().any(char::is_control) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: "format must be a filename extension".into() });
     }
+    // TIFF results are `.tif` files that keep their layers, the composite on white without an
+    // alpha channel (#13898), unless the call says otherwise.
+    let tiff = matches!(format.trim_start_matches('.').to_ascii_lowercase().as_str(), "tif" | "tiff");
+    let format = if tiff { "tif" } else { format };
+    let mut params = p.clone();
+    if tiff {
+        for (key, default) in [("tiffLayers", true), ("tiffTransparency", false)] {
+            // An absent key and a null one both mean "not given" (`tiff_bool_param` reads null as unset).
+            if p.get(key).is_none_or(Value::is_null) {
+                params[key] = json!(default);
+            }
+        }
+    }
+    let p = &params;
     let fit = match (size_param(p, "width"), size_param(p, "height")) {
         (None, None) => None,
         (w, h) => Some(json!({"width": w.unwrap_or(1e9), "height": h.unwrap_or(1e9), "dontEnlarge": true})),
     };
     let to_srgb = p.get("convertToSrgb").and_then(Value::as_bool).unwrap_or(false);
-    let save = SaveOpts::from_params(s, p, cmd)?.or_quality(8.0);
-    let process = |scratch: &mut Session, _: &str| {
+    let mut save = SaveOpts::from_params(s, p, cmd)?.or_quality(8.0);
+    save.embed_icc = include_icc;
+    let folder_inputs = if source == "folder" { Some(batch_inputs_tree(p, cmd, &output)?) } else { None };
+    let process = |scratch: &mut Session, out: &str| {
+        // TIFF results are `.tif` now, so a `.tif` source in the output folder is a name collision: refuse it,
+        // as the multi-format path does, rather than write the result over the source.
+        if tiff
+            && let Some(inputs) = &folder_inputs
+            && super::paths::is_file(out)
+            && inputs.iter().any(|input| super::paths::same_file(&input.path, out))
+        {
+            return Err(EngineError::Other(format!("output would replace a source file: {out}")));
+        }
         if to_srgb && scratch.active().is_some_and(|d| d.doc.mode != ColorMode::Rgb) {
             scratch.execute("image.mode.rgb", json!({}))?;
         }
@@ -130,9 +161,8 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(false)
     };
-    let r = if source == "folder" {
-        let inputs = batch_inputs_tree(p, cmd, &output)?;
-        process_tree(s, &inputs, &output, format, save, "", &process)
+    let r = if let Some(inputs) = &folder_inputs {
+        process_tree(s, inputs, &output, format, save, "", &process)
     } else {
         let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().collect() };
         if documents.is_empty() {
@@ -195,7 +225,8 @@ fn processor_format(s: &Session, key: &str, extension: &'static str, options: &V
         "psd" => (json!({"maximizeCompatibility": processor_bool(options, "maximizeCompatibility", true)?}), false),
         _ => {
             let compression = if processor_bool(options, "lzw", false)? { "lzw" } else { "none" };
-            (json!({"tiffLayers": true, "tiffCompression": compression}), false)
+            // The composite on white, without an alpha channel, as the reference writes it (#13898).
+            (json!({"tiffLayers": true, "tiffTransparency": false, "tiffCompression": compression}), false)
         }
     };
     let save = SaveOpts::from_params(s, &params, IMAGE_PROCESSOR)?;
@@ -207,7 +238,7 @@ enum ProcessorInputs<'a> {
     Documents(Vec<&'a crate::DocState>),
 }
 
-fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -> Result<Value> {
+fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str, include_icc: bool) -> Result<Value> {
     // Resolve all settings and collect inputs before a format can write any files.
     let mut formats = Vec::new();
     for (key, extension) in [("jpeg", "jpg"), ("psd", "psd"), ("tiff", "tif")] {
@@ -219,6 +250,9 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
     }
     if formats.is_empty() {
         return Err(image_processor_param(IMAGE_PROCESSOR_NO_FORMAT));
+    }
+    for format in &mut formats {
+        format.save.embed_icc = include_icc;
     }
     let inputs = match source {
         "folder" => ProcessorInputs::Folder(batch_inputs_tree(p, IMAGE_PROCESSOR, output)?),
