@@ -941,6 +941,7 @@ pub(super) const EVENTS: &[Event] = &[
             "channel.target",
             "edit.undo",
             "edit.redo",
+            "history.selectState",
             "history.selectSnapshot",
             "view.fitOnScreen",
             "view.actualPixels",

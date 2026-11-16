@@ -57,6 +57,7 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
         // History › Step Backward / Step Forward.
         (Some("HstS"), Target::Ordinal(o)) if o == "Prvs" => none("edit.undo"),
         (Some("HstS"), Target::Ordinal(o)) if o == "Nxt" => none("edit.redo"),
+        (Some("HstS"), Target::Offset(o)) if o != 0 && r.len() == 1 && d.items.len() == 1 => step("history.selectState", json!({"offset": o})),
         (Some("SnpS"), Target::Name(n)) => {
             // Keep unsupported scopes/options and names that cannot round-trip as Unicode.
             let exact = matches!(r, [ReferenceItem::Name { name, .. }]
@@ -134,6 +135,14 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
         }
         "edit.undo" => desc("null").with("null", enumerated("HstS", "Ordn", "Prvs")),
         "edit.redo" => desc("null").with("null", enumerated("HstS", "Ordn", "Nxt ")),
+        "history.selectState" => {
+            // Only the relative form is mapped: an absolute native row is not a Photoshop id.
+            let offset = i32::try_from(p.get("offset")?.as_i64()?).ok()?;
+            if offset == 0 || p.as_object()?.len() != 1 {
+                return None;
+            }
+            desc("null").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("HstS"), offset }]))
+        }
         "history.selectSnapshot" => {
             // Native ids belong to this session and have no recorded Photoshop identity.
             let name = jstr(p, "name")?;

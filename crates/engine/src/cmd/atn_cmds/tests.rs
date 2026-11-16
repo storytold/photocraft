@@ -1224,6 +1224,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("history.clear", json!({})),
         ("history.newSnapshot", json!({"name": "CopyCat - action result", "from": "fullDocument", "replaceExisting": true})),
         ("history.selectSnapshot", json!({"name": "Checkpoint"})),
+        ("history.selectState", json!({"offset": -2})),
         ("layerComp.apply", json!({"comp": "Comp 1"})),
         ("layerComp.apply", json!({"comp": {"index": 2}})),
         ("layerComp.apply", json!({"comp": {"id": 7}})),

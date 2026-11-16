@@ -788,6 +788,143 @@ fn recorded_transform_zero_points_keep_nonzero_or_unrepresentable_offsets() {
     }
 }
 
+fn history_offset(offset: i32) -> Descriptor {
+    Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("HstS"), offset }]))
+}
+
+fn history_document(depth: u32) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":8,"height":8,"depth":depth})).unwrap();
+    for (name, color) in [("First", "#0000ff"), ("Second", "#00ff00"), ("Third", "#ff0000")] {
+        s.execute("layer.new.layer", json!({"name":name})).unwrap();
+        s.execute("edit.fill", json!({"contents":"color","color":color})).unwrap();
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), 6);
+    s
+}
+
+#[test]
+fn recorded_history_offsets_import_and_export_signed_relative_references() {
+    for offset in [i32::MIN, -5, -2, -1, 1, 3, i32::MAX] {
+        let d = history_offset(offset);
+        for event in [AtnEvent::Code(*b"slct"), AtnEvent::name("select")] {
+            let action = recorded(event, d.clone());
+            assert_eq!(action.steps, vec![("history.selectState".into(), json!({"offset":offset}))]);
+            assert_eq!(saved(&action).descriptor.unwrap().get("null"), d.get("null"));
+        }
+    }
+}
+
+#[test]
+fn recorded_history_offsets_resolve_against_the_playback_position() {
+    for depth in [8, 16, 32] {
+        let mut s = history_document(depth);
+        for (from, offset, target) in [(6, -2, 4), (6, -5, 1), (4, -2, 2), (1, 3, 4), (0, 6, 6)] {
+            let action = recorded(AtnEvent::name("select"), history_offset(offset));
+            s.execute("history.selectState", json!({"state":target})).unwrap();
+            let expected = s.active().unwrap().doc.clone();
+            let expected_layer = s.active().unwrap().active_layer;
+            s.execute("history.selectState", json!({"state":from})).unwrap();
+            let revision = s.active().unwrap().revision;
+            replay_saved(&mut s, &action);
+            let st = s.active().unwrap();
+            assert_eq!(st.doc, expected, "{from} + {offset} at depth {depth}");
+            assert_eq!(st.active_layer, expected_layer);
+            assert_eq!(st.history.past_len(), target);
+            assert_eq!(st.history.redo_labels().count(), 6 - target, "later states remain redoable");
+            assert_eq!(st.revision, revision + 1, "one history jump");
+        }
+    }
+}
+
+#[test]
+fn recorded_history_offsets_reject_invalid_native_targets_before_changing_history() {
+    let mut s = history_document(8);
+    s.execute("history.selectState", json!({"state":3})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let revision = s.active().unwrap().revision;
+    let redo: Vec<_> = s.active().unwrap().history.redo_labels().map(str::to_string).collect();
+    for p in [
+        json!({"offset":-4}),
+        json!({"offset":4}),
+        json!({"offset":i64::MIN}),
+        json!({"offset":i64::MAX}),
+        json!({"offset":f64::MAX}),
+        json!({"offset":0.5}),
+        json!({"offset":"-2"}),
+        json!({"offset":null}),
+        json!({"offset":true}),
+        json!({"offset":[]}),
+        json!({"state":1,"offset":-2}),
+    ] {
+        assert!(s.execute("history.selectState", p.clone()).is_err(), "{p}");
+        let st = s.active().unwrap();
+        assert_eq!(st.doc, before, "{p}");
+        assert_eq!(st.revision, revision, "{p}");
+        assert_eq!(st.history.past_len(), 3, "{p}");
+        assert_eq!(st.history.redo_labels().collect::<Vec<_>>(), redo, "{p}");
+    }
+    assert_eq!(s.execute("history.selectState", json!({"offset":0})).unwrap()["changed"], false);
+    assert_eq!(s.active().unwrap().revision, revision, "native zero offset is a no-op");
+    assert!(Session::new().execute("history.selectState", json!({"offset":-2})).is_err());
+}
+
+#[test]
+fn recorded_history_offsets_keep_unrepresented_scopes_and_export_options() {
+    let d = history_offset(-2);
+    let D::Reference(r) = d.get("null").unwrap() else { panic!("history reference") };
+    let mut duplicate = d.clone();
+    duplicate.items.push((Id::new("null"), D::Reference(r.clone())));
+    let cases = [
+        history_offset(0),
+        d.clone().with("unknown", D::Boolean(true)),
+        duplicate,
+        Descriptor::new("slct")
+            .with("null", D::Reference(vec![r[0].clone(), ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Other") }])),
+        Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Index { class: class("HstS"), index: 2 }])),
+        Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Identifier { class: class("HstS"), id: 2 }])),
+    ];
+    for d in cases {
+        let action = recorded(AtnEvent::name("select"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    for p in [
+        json!({"state":1}),
+        json!({"offset":0}),
+        json!({"offset":0.5}),
+        json!({"offset":i64::MAX}),
+        json!({"offset":-2,"state":1}),
+        json!({"offset":-2,"unknown":true}),
+    ] {
+        let native = Action::new("Recorded", vec![("history.selectState".into(), p.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&native], &[], false).is_err(), "{p}");
+    }
+}
+
+#[test]
+fn recorded_history_offsets_continue_the_parent_only_after_a_successful_jump() {
+    for (offset, succeeds) in [(-2, true), (-20, false)] {
+        let mut s = history_document(8);
+        let before = s.active().unwrap().doc.clone();
+        let mut action = recorded(AtnEvent::name("select"), history_offset(offset));
+        action.steps.push(("layer.renameLayer".into(), json!({"name":"AfterRestore"})));
+        s.actions.list = vec![action];
+        let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+        if succeeds {
+            assert_eq!(result["ran"], 2, "{result}");
+            assert!(result.get("failed").is_none(), "{result}");
+            let st = s.active().unwrap();
+            assert_eq!(st.doc.layers.len(), 3, "return to the state before the third layer was created");
+            assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "AfterRestore");
+        } else {
+            assert!(result.get("failed").is_some(), "{result}");
+            assert_eq!(result["ran"], 0);
+            assert_eq!(s.active().unwrap().doc, before, "an out-of-range jump must not partially undo");
+        }
+    }
+}
+
 fn snapshot_selection(name: &str) -> Descriptor {
     Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Name { class: class("SnpS"), name: UnicodeString::new_nul(name) }]))
 }
