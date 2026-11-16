@@ -2447,53 +2447,6 @@ fn live_dab_offers_are_refused_or_dropped_when_they_dont_match() {
 }
 
 #[test]
-fn indexed_live_dab_matches_cold_without_work_surface_feedback() {
-    let indexed_blur_levels = || {
-        let mut s = session(96, 64, 8, "rgb");
-        paint_layer(&mut s, |x, _| if x == 48 { [0.25, 0.25, 0.25, 1.0] } else { [0.5, 0.5, 0.5, 1.0] });
-        s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
-        s
-    };
-    let all = [[8.0, 32.0], [18.0, 30.0], [30.0, 34.0], [42.0, 28.0], [54.0, 36.0], [68.0, 30.0], [82.0, 34.0]];
-    let points = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
-    let opts = |points: &[[f64; 2]]| {
-        json!({
-            "points": points,
-            "size": 18,
-            "hardness": 35,
-            "opacity": 100,
-            "flow": 100,
-            "spacing": 45,
-            "strength": 100,
-            "target": "pixels"
-        })
-    };
-    let mut cold = indexed_blur_levels();
-    let table = cold.active().unwrap().doc.color_table.clone().unwrap();
-    let before = layer_bytes(&cold);
-    cold.execute("paint.blur", opts(&all)).unwrap();
-    let expected = layer_bytes(&cold);
-    assert_ne!(expected, before, "the indexed blur did not paint");
-    assert_eq!(cold.active().unwrap().doc.color_table.as_ref(), Some(&table), "cold blur changes the table");
-
-    let split = indexed_blur_levels();
-    let id = split.active().unwrap().active_layer.unwrap();
-    let mut first = LiveDab::begin(&split, "paint.blur", &opts(&all[..1])).unwrap();
-    first.push(&points(&all[1..3])).unwrap();
-    first.push(&points(&all[3..])).unwrap();
-    let preview = live_layer_bytes(&first.doc, id);
-    assert_eq!(preview, expected, "split live blur preview differs from cold bytes");
-    assert_eq!(first.doc.color_table.as_ref(), Some(&table), "live blur changes the table");
-
-    let one = indexed_blur_levels();
-    let id = one.active().unwrap().active_layer.unwrap();
-    let mut one_batch = LiveDab::begin(&one, "paint.blur", &opts(&all[..1])).unwrap();
-    one_batch.push(&points(&all[1..])).unwrap();
-    assert_eq!(live_layer_bytes(&one_batch.doc, id), preview, "LiveDab output changes with batch partitioning");
-    assert_eq!(one_batch.doc.color_table.as_ref(), Some(&table), "partitioned live blur changes the table");
-}
-
-#[test]
 fn indexed_live_retouch_clone_matches_cold_and_wrapped_palette() {
     let points = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
     let on_palette = |doc: &photocraft_doc::Document, id: photocraft_doc::LayerId, table: &photocraft_doc::ColorTable| {
@@ -2524,8 +2477,10 @@ fn indexed_live_retouch_clone_matches_cold_and_wrapped_palette() {
         let mut cold = indexed_gray_levels();
         let table = cold.active().unwrap().doc.color_table.clone().unwrap();
         let commit = opts(&all);
+        let before = layer_bytes(&cold);
         cold.execute("paint.cloneStamp", commit.clone()).unwrap();
         let expected = layer_bytes(&cold);
+        assert_ne!(expected, before, "indexed clone did not paint (wrap={wrap})");
         assert_eq!(cold.active().unwrap().doc.color_table.as_ref(), Some(&table), "cold clone changes the table (wrap={wrap})");
         let cold_st = cold.active().unwrap();
         on_palette(&cold_st.doc, cold_st.active_layer.unwrap(), &table);

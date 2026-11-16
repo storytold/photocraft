@@ -454,8 +454,11 @@ pub(crate) fn constrain_document(before: &Document, after: &mut Document) -> cra
             let layer = after.layer_at(&path).ok_or_else(|| indexed_error("layer tree changed during indexed edit"))?;
             let LayerContent::Raster(surface) = &layer.content else { continue };
             let original = originals.get(&layer.id).copied();
-            validate_surface(surface, original)?;
             let changed = !original.is_some_and(|original| same_surface_storage(surface, original));
+            // Unchanged surfaces retain storage already admitted by `add_document`.
+            if changed {
+                validate_surface(surface, original)?;
+            }
             (layer.id, changed)
         };
         if !needs_work {

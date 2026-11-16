@@ -736,8 +736,13 @@ partitioned pointer batches. Changed tiles are constrained without densifying un
 tiles; entering Indexed mode, changing the table, or changing depth performs its own explicit
 remap and is not remapped a second time.
 
-Current Indexed-mode tool refusals remain in force: Color Replacement, Mixer Brush and Dodge
-are not re-enabled by this constraint. `indexed_tool_matrix` adapts @squintdev's two-palette,
+Only changed raster storage is validated and constrained. An untouched raster in a format
+already admitted by `Session::add_document` must not block non-pixel edits such as layer colour
+labels; attempting to rewrite unsupported raster storage still fails without committing.
+
+Current Indexed-mode tool refusals remain in force: Color Replacement, Mixer Brush, Dodge,
+Burn, Sponge, Blur, Sharpen and Smudge are not re-enabled by this constraint.
+`indexed_tool_matrix` adapts @squintdev's two-palette,
 12-operation matrix: it captures the original table before each operation, checks accepted
 operations through undo/redo, uses meaningful RGB or guaranteed-change controls, and verifies
 that refused operations leave pixels, layers and history untouched. The matrix keeps its

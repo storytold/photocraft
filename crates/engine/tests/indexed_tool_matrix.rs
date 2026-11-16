@@ -171,7 +171,7 @@ fn assert_quantized_tool(palette_name: &str, paint: Paint, tool: &str, run: Tool
     assert_ne!(raster_snapshot(&control), control_before, "{label}: RGB control did not make a meaningful edit");
 }
 
-fn assert_indexed_refusal(palette_name: &str, paint: Paint, tool: &str, params: serde_json::Value) {
+fn assert_indexed_refusal(palette_name: &str, paint: Paint, tool: &str, params: serde_json::Value, rgb_control: Paint) {
     let mut s = indexed(paint);
     let original_mode = doc(&s).mode;
     let original_depth = doc(&s).depth;
@@ -179,16 +179,123 @@ fn assert_indexed_refusal(palette_name: &str, paint: Paint, tool: &str, params: 
     let before = raster_snapshot(&s);
     let steps = history_len(&s);
 
-    // The same parameters are accepted in RGB; Indexed must reject the operation for its mode,
-    // rather than pass this test through malformed parameters or an unavailable command.
-    let mut rgb = rgb_document(paint);
+    // The same parameters must perform a real edit in RGB, so an Indexed refusal cannot pass
+    // because the command or its inputs are invalid.
+    let mut rgb = rgb_document(rgb_control);
+    let rgb_before = raster_snapshot(&rgb);
     rgb.execute(tool, params.clone()).unwrap();
-    let error = s.execute(tool, params).unwrap_err();
     let label = format!("{palette_name} / {tool}");
+    assert_ne!(raster_snapshot(&rgb), rgb_before, "{label}: RGB control did not make a meaningful edit");
+
+    let error = s.execute(tool, params).unwrap_err();
     assert!(matches!(&error, photocraft_engine::EngineError::Other(reason) if reason.contains("Indexed Color")), "{label}: unexpected refusal: {error}");
     assert_eq!(raster_snapshot(&s), before, "{label}: refusal changed samples or layers");
     assert_eq!(history_len(&s), steps, "{label}: refusal added history");
     assert_indexed_state(&s, original_mode, original_depth, &original_table, &label);
+}
+
+#[test]
+fn paint_color_replacement_refuses_indexed_without_editing() {
+    for (palette_name, paint) in palette_cases() {
+        assert_indexed_refusal(
+            palette_name,
+            paint,
+            "paint.colorReplacement",
+            json!({"points": [[4, 10], [36, 10]], "size": 8, "mode": "color", "tolerance": 30, "color": "#ff0000"}),
+            gradient,
+        );
+    }
+}
+
+#[test]
+fn paint_mixer_brush_refuses_indexed_without_editing() {
+    for (palette_name, paint) in palette_cases() {
+        assert_indexed_refusal(
+            palette_name,
+            paint,
+            "paint.mixerBrush",
+            json!({"points": [[4, 10], [36, 10]], "size": 8, "wet": 0, "load": 100, "mix": 0, "color": "#ff0000"}),
+            gradient,
+        );
+    }
+}
+
+#[test]
+fn paint_blur_refuses_indexed_without_editing() {
+    for (palette_name, paint) in palette_cases() {
+        assert_indexed_refusal(
+            palette_name,
+            paint,
+            "paint.blur",
+            json!({"points": [[20, 10], [30, 10]], "size": 20, "hardness": 0, "strength": 100, "opacity": 50}),
+            soft_edge,
+        );
+    }
+}
+
+#[test]
+fn paint_sharpen_refuses_indexed_without_editing() {
+    for (palette_name, paint) in palette_cases() {
+        assert_indexed_refusal(
+            palette_name,
+            paint,
+            "paint.sharpen",
+            json!({"points": [[20, 10], [30, 10]], "size": 20, "hardness": 0, "strength": 100, "opacity": 50}),
+            soft_edge,
+        );
+    }
+}
+
+#[test]
+fn paint_smudge_refuses_indexed_without_editing() {
+    for (palette_name, paint) in palette_cases() {
+        assert_indexed_refusal(
+            palette_name,
+            paint,
+            "paint.smudge",
+            json!({"points": [[20, 10], [30, 10]], "size": 20, "hardness": 0, "strength": 100, "opacity": 50}),
+            paint,
+        );
+    }
+}
+
+#[test]
+fn paint_dodge_refuses_indexed_without_editing() {
+    for (palette_name, paint) in palette_cases() {
+        assert_indexed_refusal(
+            palette_name,
+            paint,
+            "paint.dodge",
+            json!({"points": [[4, 10], [36, 10]], "size": 8, "hardness": 100, "opacity": 100, "range": "midtones", "exposure": 100}),
+            soft_edge,
+        );
+    }
+}
+
+#[test]
+fn paint_burn_refuses_indexed_without_editing() {
+    for (palette_name, paint) in palette_cases() {
+        assert_indexed_refusal(
+            palette_name,
+            paint,
+            "paint.burn",
+            json!({"points": [[24, 10], [36, 10]], "size": 20, "hardness": 0, "opacity": 50, "exposure": 100, "range": "highlights", "protectTones": false}),
+            halves,
+        );
+    }
+}
+
+#[test]
+fn paint_sponge_refuses_indexed_without_editing() {
+    for (palette_name, paint) in palette_cases() {
+        assert_indexed_refusal(
+            palette_name,
+            paint,
+            "paint.sponge",
+            json!({"points": [[20, 10], [30, 10]], "size": 20, "hardness": 0, "opacity": 50, "mode": "saturate"}),
+            gradient,
+        );
+    }
 }
 
 fn run_gradient(s: &mut Session) {
@@ -209,38 +316,6 @@ fn run_bucket(s: &mut Session) {
     s.execute("paint.bucket", json!({"x": 30, "y": 10, "tolerance": 0, "contiguous": true, "antiAlias": false, "color": "#ff0000"})).unwrap();
 }
 
-fn run_blur(s: &mut Session) {
-    s.execute("paint.blur", json!({"points": [[20, 10], [30, 10]], "size": 20, "hardness": 0, "strength": 100, "opacity": 50})).unwrap();
-}
-
-fn run_sharpen(s: &mut Session) {
-    s.execute("paint.sharpen", json!({"points": [[20, 10], [30, 10]], "size": 20, "hardness": 0, "strength": 100, "opacity": 50})).unwrap();
-}
-
-fn run_smudge(s: &mut Session) {
-    s.execute("paint.smudge", json!({"points": [[20, 10], [30, 10]], "size": 20, "hardness": 0, "strength": 100, "opacity": 50})).unwrap();
-}
-
-fn run_burn(s: &mut Session) {
-    s.execute(
-        "paint.burn",
-        json!({
-            "points": [[24, 10], [36, 10]],
-            "size": 20,
-            "hardness": 0,
-            "opacity": 50,
-            "exposure": 100,
-            "range": "highlights",
-            "protectTones": false
-        }),
-    )
-    .unwrap();
-}
-
-fn run_sponge(s: &mut Session) {
-    s.execute("paint.sponge", json!({"points": [[20, 10], [30, 10]], "size": 20, "hardness": 0, "opacity": 50, "mode": "saturate"})).unwrap();
-}
-
 #[test]
 fn paint_gradient_stays_in_the_original_table() {
     for (palette_name, paint) in palette_cases() {
@@ -252,76 +327,6 @@ fn paint_gradient_stays_in_the_original_table() {
 fn paint_bucket_stays_in_the_original_table() {
     for (palette_name, paint) in palette_cases() {
         assert_quantized_tool(palette_name, paint, "paint.bucket", run_bucket, paint, Some((30, 10)));
-    }
-}
-
-#[test]
-fn paint_color_replacement_refuses_indexed_without_editing() {
-    for (palette_name, paint) in palette_cases() {
-        assert_indexed_refusal(
-            palette_name,
-            paint,
-            "paint.colorReplacement",
-            json!({"points": [[4, 10], [36, 10]], "size": 8, "mode": "color", "tolerance": 30}),
-        );
-    }
-}
-
-#[test]
-fn paint_mixer_brush_refuses_indexed_without_editing() {
-    for (palette_name, paint) in palette_cases() {
-        assert_indexed_refusal(palette_name, paint, "paint.mixerBrush", json!({"points": [[4, 10], [36, 10]], "size": 8, "wet": 0, "load": 100, "mix": 0}));
-    }
-}
-
-#[test]
-fn paint_blur_stays_in_the_original_table() {
-    for (palette_name, paint) in palette_cases() {
-        assert_quantized_tool(palette_name, paint, "paint.blur", run_blur, soft_edge, None);
-    }
-}
-
-#[test]
-fn paint_sharpen_stays_in_the_original_table() {
-    for (palette_name, paint) in palette_cases() {
-        // A sharp black/white edge may legitimately snap back to the same two entries. A non-linear
-        // RGB edge still proves that this test exercises a real sharpen edit.
-        assert_quantized_tool(palette_name, paint, "paint.sharpen", run_sharpen, soft_edge, None);
-    }
-}
-
-#[test]
-fn paint_smudge_stays_in_the_original_table() {
-    for (palette_name, paint) in palette_cases() {
-        assert_quantized_tool(palette_name, paint, "paint.smudge", run_smudge, paint, None);
-    }
-}
-
-#[test]
-fn paint_dodge_refuses_indexed_without_editing() {
-    for (palette_name, paint) in palette_cases() {
-        assert_indexed_refusal(
-            palette_name,
-            paint,
-            "paint.dodge",
-            json!({"points": [[4, 10], [36, 10]], "size": 8, "hardness": 100, "opacity": 100, "range": "midtones", "exposure": 100}),
-        );
-    }
-}
-
-#[test]
-fn paint_burn_stays_in_the_original_table() {
-    for (palette_name, paint) in palette_cases() {
-        assert_quantized_tool(palette_name, paint, "paint.burn", run_burn, paint, None);
-    }
-}
-
-#[test]
-fn paint_sponge_stays_in_the_original_table() {
-    for (palette_name, paint) in palette_cases() {
-        // Saturating black/white is a legitimate quantized no-op; use the coloured RGB control to
-        // ensure the matrix entry is not merely accepting an inert command.
-        assert_quantized_tool(palette_name, paint, "paint.sponge", run_sponge, gradient, None);
     }
 }
 

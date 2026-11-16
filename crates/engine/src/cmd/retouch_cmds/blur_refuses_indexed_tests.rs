@@ -13,10 +13,15 @@ const BITMAP: &str = "Could not use the blur tool because it does not work with 
 
 /// The grey document with its left half black: an edge for the stroke to work on.
 fn edged(mode: ColorMode, depth: SampleType) -> Session {
-    let mut s = session(mode, depth);
+    let indexed = mode == ColorMode::Indexed;
+    let mut s = session(if indexed { ColorMode::Rgb } else { mode }, depth);
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 64})).unwrap();
     s.execute("edit.fill", json!({"contents": "color", "color": "#000000"})).unwrap();
     s.execute("select.deselect", json!({})).unwrap();
+    if indexed {
+        s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+        assert!(s.active().unwrap().doc.color_table.is_some(), "indexed fixture needs a color table");
+    }
     s
 }
 

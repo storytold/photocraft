@@ -307,7 +307,8 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 return Ok(l.bounds);
             }
             let sel = doc.selection.clone();
-        let canvas = doc.bounds();
+            let canvas = doc.bounds();
+            let table = if auto_erase { indexed_table_for(doc, p)? } else { None };
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
             let clip = paintable_area(canvas, surf);
             let mut brush = brush;
@@ -652,8 +653,7 @@ impl LiveStroke {
         let mut doc = (*st.doc).clone();
         let indexed_table = indexed_table_for(&doc, p)?;
         let sel = doc.selection.clone();
-            let canvas = doc.bounds();
-            let table = if auto_erase { indexed_table_for(doc, p)? } else { None };
+        let canvas = doc.bounds();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
         let clip = paintable_area(canvas, surf);
         let bg = crate::color_cmds::swatch_in_doc(s, s.tools.background);

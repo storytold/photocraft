@@ -4,8 +4,8 @@
 //! command surface rather than private implementation helpers: every paint is a real Session
 //! transaction, and assertions inspect the document's native samples and palette sidecar.
 
-use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{ColorTable, Document};
+use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
+use photocraft_doc::{ColorTable, Document, LabelColor, Layer, Size};
 use photocraft_engine::Session;
 use serde_json::json;
 
@@ -320,4 +320,35 @@ fn rgb_mode_paint_remains_rgb_and_does_not_create_a_color_table() {
     assert_eq!(doc(&s).mode, ColorMode::Rgb);
     assert_eq!(doc(&s).color_table, None);
     assert_eq!(rgba(&s, 8, 6), [1.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn unchanged_foreign_storage_layers_do_not_veto_non_pixel_edits() {
+    let mut d = Document::with_background("synthetic", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::rgb(1.0, 1.0, 1.0));
+    let gray = Layer::raster("gray", PixelFormat::GRAY8);
+    let gray_id = gray.id;
+    d.layers.push(gray);
+    d.mode = ColorMode::Indexed;
+    d.color_table = Some(ColorTable { colors: vec![[0, 0, 0], [255, 255, 255]], transparent: None });
+    let mut s = Session::new();
+    s.add_document(d, None);
+    let gray_pixels = |s: &Session| doc(s).layer(gray_id).unwrap().surface().unwrap().to_interleaved(doc(s).bounds());
+    let before = gray_pixels(&s);
+    let fixed = table(&s);
+
+    s.execute("layer.setLabelColor", json!({"color": "red", "layer": gray_id.0})).unwrap();
+    assert_eq!(doc(&s).layer(gray_id).unwrap().label, LabelColor::from_id("red").unwrap());
+    assert_eq!(gray_pixels(&s), before);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&s).layer(gray_id).unwrap().label, LabelColor::from_id("none").unwrap());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(doc(&s).layer(gray_id).unwrap().label, LabelColor::from_id("red").unwrap());
+
+    // White changes the initially black Gray surface: changed storage still must validate.
+    s.execute("layer.select", json!({"layer": gray_id.0})).unwrap();
+    let history = s.active().unwrap().history.past_len();
+    assert!(s.execute("edit.fill", json!({"color": "#ffffff"})).is_err());
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    assert_eq!(gray_pixels(&s), before, "the refused fill changed the foreign layer");
+    assert_eq!(table(&s), fixed);
 }
