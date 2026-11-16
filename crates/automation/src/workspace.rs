@@ -289,7 +289,9 @@ fn holds_image(dir: &Dir, relative: &Path) -> bool {
 /// Whether the JPEG `file` is JPEG-LS, by the codecs' JPEG-LS check (an SOI, then marker segments
 /// up to an SOF55 frame header) run on the file itself. Each step seeks over a segment and reads 4
 /// bytes, so a long comment or metadata segment is never loaded. The walk takes up to 1,024 steps,
-/// more than the check's 64, because an ICC profile alone can span 255 segments. `None` when the
+/// more than the check's 64, because an ICC profile alone can span 255 segments. DRI and DNL
+/// segments are skipped like LSE, APPn and COM, since T.87 section C.1.1 allows them in a JPEG-LS
+/// stream, and an SOF57 frame header (JPEG-LS extensions, T.870) counts as JPEG-LS. `None` when the
 /// walk does not reach a frame or scan marker within them: a file cut short, a byte that is not a
 /// marker where one should be, or a read error.
 fn jpeg_is_ls(file: &mut (impl Read + Seek)) -> Option<bool> {
@@ -301,8 +303,8 @@ fn jpeg_is_ls(file: &mut (impl Read + Seek)) -> Option<bool> {
         file.by_ref().take(4).read_to_end(&mut b).ok()?;
         let (Some(&0xFF), Some(&marker)) = (b.first(), b.get(1)) else { return None };
         match marker {
-            0xF7 => return Some(true),
-            0xDA | 0xD9 | 0xC0..=0xCF | 0xDB..=0xDF => return Some(false),
+            0xF7 | 0xF9 => return Some(true),
+            0xDA | 0xD9 | 0xC0..=0xCF | 0xDB | 0xDE | 0xDF => return Some(false),
             0xFF => pos += 1,
             0x01 | 0xD0..=0xD7 => pos += 2,
             _ => {

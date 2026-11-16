@@ -158,9 +158,10 @@ fn write_stream_seeks_back_and_keeps_the_original_on_failure() {
 #[test]
 fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
     let (inside, _, workspace) = roots("read-only-kinds");
-    let files: [(&str, &[u8]); 9] = [
+    let files: [(&str, &[u8]); 10] = [
         ("scan.jls", b"keep"),
         ("LOG", b"\xFF\xD8\xFF\xF7 keep"),
+        ("RESTART", b"\xFF\xD8\xFF\xDD\x00\x04\x00\x00\xFF\xF7 keep"),
         ("notes.md", b"# keep"),
         ("data.csv", b"a,b\n1,2\n"),
         ("letter.rtf", b"{\\rtf1 keep}"),
@@ -181,9 +182,10 @@ fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
     assert!(temp_files(&inside).is_empty());
 }
 
-/// A JPEG-LS file whose frame header follows segments longer than the bytes first read is still
-/// JPEG-LS, and a JPEG whose marker walk stops short is not taken for an ordinary JPEG. An ordinary
-/// JPEG with the same long segments is replaced.
+/// A JPEG-LS file whose frame header follows segments longer than the bytes first read, or follows
+/// DRI, DNL and LSE segments, is still JPEG-LS, and a JPEG whose marker walk stops short is not
+/// taken for an ordinary JPEG. An ordinary JPEG with the same long segments, or with a DRI segment,
+/// is replaced.
 #[test]
 fn write_tells_jpeg_ls_from_jpeg_past_long_segments() {
     let (inside, _, workspace) = roots("jpeg-ls-walk");
@@ -203,9 +205,18 @@ fn write_tells_jpeg_ls_from_jpeg_past_long_segments() {
     let comment = [segment(0xFE, 100)];
     let metadata = [segment(0xE1, 65_533), segment(0xFE, 65_533), segment(0xE2, 300)];
     let profile = vec![segment(0xE2, 10); 255];
+    // T.87 allows DRI, DNL and LSE segments before the frame header as well.
+    let restart = [segment(0xFE, 100), segment(0xDD, 2), segment(0xDC, 2), segment(0xF8, 10)];
     let mut cut = jpeg(&comment, 0xF7);
     cut.truncate(80);
-    let kept: [(&str, Vec<u8>); 4] = [("COMMENTED", jpeg(&comment, 0xF7)), ("TAGGED", jpeg(&metadata, 0xF7)), ("PROFILED", jpeg(&profile, 0xF7)), ("CUT", cut)];
+    let kept: [(&str, Vec<u8>); 6] = [
+        ("COMMENTED", jpeg(&comment, 0xF7)),
+        ("TAGGED", jpeg(&metadata, 0xF7)),
+        ("PROFILED", jpeg(&profile, 0xF7)),
+        ("RESTARTED", jpeg(&restart, 0xF7)),
+        ("EXTENDED", [jpeg(&comment, 0xF9), vec![0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00]].concat()),
+        ("CUT", cut),
+    ];
     let replaced: Vec<&str> = kept
         .iter()
         .filter(|(name, bytes)| {
@@ -215,7 +226,8 @@ fn write_tells_jpeg_ls_from_jpeg_past_long_segments() {
         .map(|(name, _)| *name)
         .collect();
     assert!(replaced.is_empty(), "replaced: {replaced:?}");
-    for (name, segments) in [("PHOTO", &comment[..]), ("EXIF", &metadata[..]), ("ICC", &profile[..])] {
+    let interval = [segment(0xFE, 100), segment(0xDD, 2)];
+    for (name, segments) in [("PHOTO", &comment[..]), ("EXIF", &metadata[..]), ("ICC", &profile[..]), ("INTERVAL", &interval[..])] {
         std::fs::write(inside.join(name), jpeg(segments, 0xC0)).unwrap();
         workspace.write(name, b"\x89PNG\r\n\x1a\n").unwrap();
         assert_eq!(std::fs::read(inside.join(name)).unwrap(), b"\x89PNG\r\n\x1a\n", "{name}");
