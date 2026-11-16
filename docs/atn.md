@@ -546,6 +546,11 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   conflicting destinations, malformed paths and unrepresented slice/output settings remain kept
   steps; unsupported native export options are refused. An omitted matte keeps the native no-matte
   default.
+- Save for Web keeps its `SWch` choice independently of `EICC`: `CHsR` converts to sRGB and
+  `CHDc` keeps the document profile. Its `SWmd` values `MDNn`, `MDCp`, `MDCC`, `MDAx` and `MDAl`
+  map to the existing metadata modes None, Copyright, Copyright and Contact, All Except Camera
+  Info and All. Unknown enum values/types and additional unrepresented output settings remain
+  kept steps.
 - Photo Filter converts recorded Lab colours through `craft-cms`.
 - Direct Vibrance and Gradient Map save as the string events `vibrance` and `gradientMapEvent`.
   Stroke Outside uses `StrL.Otsd`, group Pass Through uses `BlnM.passThrough`, Canvas Size extension

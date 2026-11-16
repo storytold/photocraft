@@ -1235,7 +1235,7 @@ fn recorded_web_destination_keeps_ambiguous_malformed_and_unrepresented_forms() 
         ("Op  ", enm("wrong", "OpSa")),
         ("unknown", D::Boolean(false)),
         ("SWsl", enm("STsl", "SLAl")),
-        ("SWmd", enm("STmd", "MDCC")),
+        ("SWmd", enm("STmd", "Other")),
         ("ovNC", D::List(vec![])),
         ("Trns", D::Integer(1)),
         ("Qlty", D::Double(f64::NAN)),
@@ -1285,8 +1285,8 @@ fn recorded_web_destination_refuses_native_settings_the_descriptor_cannot_repres
         json!({"slices":"selected"}),
         json!({"numbers":[1]}),
         json!({"html":true}),
-        json!({"metadata":"all"}),
-        json!({"convertToSrgb":false}),
+        json!({"metadata":"other"}),
+        json!({"convertToSrgb":"false"}),
         json!({"width":10}),
         json!({"quality":101}),
         json!({"quality":2.5}),
@@ -1356,6 +1356,150 @@ fn recorded_web_destination_with_unmapped_slice_settings_stops_before_writing() 
     assert!(result.get("failed").is_some(), "{result}");
     assert!(!path.exists());
     assert_eq!(s.active().unwrap().doc, before);
+}
+
+fn web_color_metadata(mut d: Descriptor, profile: &str, metadata: &str, embed: bool) -> Descriptor {
+    let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+    settings.items.extend([(Id::new("SWch"), enm("STch", profile)), (Id::new("SWmd"), enm("STmd", metadata)), (Id::new("EICC"), D::Boolean(embed))]);
+    d
+}
+
+#[test]
+fn recorded_web_color_metadata_imports_and_exports_all_existing_choices() {
+    for (code, metadata) in [("MDNn", "none"), ("MDCp", "copyright"), ("MDCC", "copyrightAndContact"), ("MDAx", "allExceptCameraInfo"), ("MDAl", "all")] {
+        for (profile, convert) in [("CHsR", true), ("CHDc", false)] {
+            for embed in [false, true] {
+                for event in [AtnEvent::Code(*b"Expr"), AtnEvent::name("export")] {
+                    let d = web_color_metadata(web_destination("/out/image.png", true, false), profile, code, embed);
+                    let action = recorded(event, d);
+                    assert_eq!(action.steps[0].0, "file.export.saveForWebLegacy");
+                    let p = &action.steps[0].1;
+                    assert_eq!(p["metadata"], metadata);
+                    assert_eq!(p["convertToSrgb"], convert);
+                    assert_eq!(p["embedIcc"], embed, "embedding is independent of conversion");
+                    let saved = saved(&action).descriptor.unwrap();
+                    let Some(D::Descriptor(settings)) = saved.get("Usng") else { panic!("SaveForWeb") };
+                    assert_eq!(enum_value(settings, "SWmd", "STmd"), &Id::Code(code.as_bytes().try_into().unwrap()));
+                    assert_eq!(enum_value(settings, "SWch", "STch"), &Id::Code(profile.as_bytes().try_into().unwrap()));
+                    assert_eq!(settings.get("EICC"), Some(&D::Boolean(embed)));
+                    let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+                    let back = atn_cmds::import(&bytes).unwrap();
+                    assert_eq!(back.actions[0].steps[0].1["metadata"], metadata);
+                    assert_eq!(back.actions[0].steps[0].1["convertToSrgb"], convert);
+                }
+            }
+        }
+    }
+    let native =
+        Action::new("Recorded", vec![("file.export.saveForWebLegacy".into(), json!({"path":"/out/image.jpg","metadata":"contact","convertToSrgb":false}))]);
+    let written = saved(&native).descriptor.unwrap();
+    let Some(D::Descriptor(settings)) = written.get("Usng") else { panic!("SaveForWeb") };
+    assert!(enum_value(settings, "SWmd", "STmd").is("MDCC"), "native contact is an alias of copyrightAndContact");
+}
+
+#[test]
+fn recorded_web_color_metadata_preserves_unknown_enums_and_extra_output_options() {
+    let base = web_color_metadata(web_destination("/out/image.png", true, false), "CHsR", "MDCC", false);
+    let mut cases = Vec::new();
+    for (key, value) in [
+        ("SWch", enm("STch", "Other")),
+        ("SWch", enm("wrong", "CHsR")),
+        ("SWch", D::Boolean(true)),
+        ("SWmd", enm("STmd", "Other")),
+        ("SWmd", enm("wrong", "MDCC")),
+        ("SWmd", D::Integer(1)),
+        ("SWsl", enm("STsl", "SLAl")),
+        ("ovNC", D::List(vec![])),
+    ] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        settings.items.retain(|(k, _)| !k.is(key));
+        settings.items.push((Id::new(key), value));
+        cases.push(d);
+    }
+    for key in ["SWch", "SWmd"] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        settings.items.push((Id::new(key), settings.get(key).unwrap().clone()));
+        cases.push(d);
+    }
+    for d in cases {
+        let action = recorded(AtnEvent::name("export"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    for extra in [json!({"metadata":"other"}), json!({"metadata":1}), json!({"convertToSrgb":"yes"}), json!({"metadata":"all","slices":"all"})] {
+        let mut p = json!({"path":"/out/image.png"});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let native = Action::new("Recorded", vec![("file.export.saveForWebLegacy".into(), p.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&native], &[], false).is_err(), "{p}");
+    }
+}
+
+#[test]
+fn recorded_web_color_metadata_filters_the_written_jpeg_xmp() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":8,"height":6})).unwrap();
+    s.execute("file.fileInfo", json!({"title":"MetadataTitle","author":"ExampleCreator","copyright":"MetadataNotice"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    for (code, notice, creator, title) in
+        [("MDNn", false, false, false), ("MDCp", true, false, false), ("MDCC", true, true, false), ("MDAx", true, true, true), ("MDAl", true, true, true)]
+    {
+        let path = dir.path().join(format!("{code}.jpg"));
+        let mut d = web_color_metadata(web_destination(&path.to_string_lossy(), true, false), "CHsR", code, false);
+        let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        settings.items.iter_mut().find(|(key, _)| key.is("Fmt ")).unwrap().1 = enm("IRFm", "JPEG");
+        let action = recorded(AtnEvent::name("export"), d);
+        let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+        let action = atn_cmds::import(&bytes).unwrap().actions.remove(0);
+        replay_saved(&mut s, &action);
+        let image = photocraft_codecs::decode(&std::fs::read(path).unwrap()).unwrap();
+        let xmp = image.meta.xmp.unwrap_or_default();
+        assert_eq!(xmp.contains("MetadataNotice"), notice, "{code}");
+        assert_eq!(xmp.contains("ExampleCreator"), creator, "{code}");
+        assert_eq!(xmp.contains("MetadataTitle"), title, "{code}");
+        assert_eq!(s.active().unwrap().doc, before, "metadata filtering affects the export, not the source");
+    }
+}
+
+#[test]
+fn recorded_web_color_metadata_converts_pixels_independently_of_profile_embedding() {
+    let dir = tempfile::tempdir().unwrap();
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":8,"height":6,"depth":depth})).unwrap();
+        let source_profile = craft_cms::Builtin::DisplayP3.profile().to_bytes();
+        s.edit("Tagged color", |doc, _| {
+            doc.icc_profile = Some(source_profile.clone());
+            let pixel = photocraft_raster::from_rgba(&doc.pixel_format(), [0.25, 0.5, 0.75, 1.0]);
+            let bounds = doc.bounds();
+            doc.layers[0].surface_mut().unwrap().fill_rect(bounds, &pixel);
+            Ok(())
+        })
+        .unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let mut by_conversion = Vec::new();
+        for (profile, convert) in [("CHDc", false), ("CHsR", true)] {
+            let mut by_embedding = Vec::new();
+            for embed in [false, true] {
+                let path = dir.path().join(format!("{depth}-{profile}-{embed}.png"));
+                let action =
+                    recorded(AtnEvent::name("export"), web_color_metadata(web_destination(&path.to_string_lossy(), true, false), profile, "MDNn", embed));
+                let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+                let action = atn_cmds::import(&bytes).unwrap().actions.remove(0);
+                replay_saved(&mut s, &action);
+                let out = photocraft_io::import("out.png", &std::fs::read(path).unwrap()).unwrap().document;
+                let expected = if convert { craft_cms::Builtin::Srgb.profile().to_bytes() } else { source_profile.clone() };
+                assert_eq!(out.icc_profile, embed.then_some(expected), "{depth} {profile} {embed}");
+                by_embedding.push(photocraft_compose::flatten(&out).px[0]);
+                assert_eq!(s.active().unwrap().doc, before, "color conversion must not edit the source");
+            }
+            assert_eq!(by_embedding[0], by_embedding[1], "embedding changes only the profile");
+            by_conversion.push(by_embedding[0]);
+        }
+        assert!((0..3).any(|i| (by_conversion[0][i] - by_conversion[1][i]).abs() > 0.01), "conversion must change tagged wide-gamut pixels at {depth} bits");
+    }
 }
 
 fn history_offset(offset: i32) -> Descriptor {

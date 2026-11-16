@@ -1094,7 +1094,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ),
         (
             "file.export.saveForWebLegacy",
-            json!({"path": "C:\\shots\\a.jpg", "format": "jpeg", "interlaced": false, "transparency": false, "embedIcc": true, "progressive": true, "optimized": true, "quality": 80, "matte": "none"}),
+            json!({"path": "C:\\shots\\a.jpg", "format": "jpeg", "interlaced": false, "transparency": false, "embedIcc": true, "progressive": true, "optimized": true, "quality": 80, "matte": "none", "convertToSrgb": false, "metadata": "all"}),
         ),
         ("image.adjustments.gradientMap", json!({"stops": [[0, "#000000"], [0.5, "#ff8000"], [1, "#ffffff"]], "reverse": true, "dither": false})),
         ("image.adjustments.gradientMap", json!({"stops": [[0,[0.5,0,0]],[1,[0,1,0]]], "__atnGrMp":{"name":"Recorded","colors":[[127.5,0,0],[0,255,0]]}})),

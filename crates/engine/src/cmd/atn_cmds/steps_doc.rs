@@ -195,6 +195,8 @@ pub(super) fn close_to(_: &str, p: &Value) -> Option<Descriptor> {
 }
 
 const WEB_FORMATS: &[(&str, &str)] = &[("PN24", "png24"), ("PN8", "png8"), ("JPEG", "jpeg"), ("GIFf", "gif"), ("WBMP", "wbmp")];
+const WEB_METADATA: &[(&str, &str)] =
+    &[("MDNn", "none"), ("MDCp", "copyright"), ("MDCC", "copyrightAndContact"), ("MDAx", "allExceptCameraInfo"), ("MDAl", "all")];
 
 /// Only represented settings may run: dropping slice/output options can write different files.
 fn web_keys(d: &Descriptor, keys: &[&str]) -> bool {
@@ -224,7 +226,8 @@ fn web_path(v: &D) -> Option<String> {
 }
 
 fn web_settings_supported(u: &Descriptor) -> bool {
-    const KEYS: &[&str] = &["In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB"];
+    const KEYS: &[&str] =
+        &["In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB", "SWch", "SWmd"];
     if !u.class_id.is("SaveForWeb") || !web_keys(u, KEYS) {
         return false;
     }
@@ -235,6 +238,16 @@ fn web_settings_supported(u: &Descriptor) -> bool {
     }
     if let Some(format) = u.get("Fmt ")
         && !matches!(format, D::Enumerated { type_id, value } if type_id.is("IRFm") && WEB_FORMATS.iter().any(|(code, _)| value.is(code)))
+    {
+        return false;
+    }
+    if let Some(profile) = u.get("SWch")
+        && !matches!(profile, D::Enumerated { type_id, value } if type_id.is("STch") && (value.is("CHsR") || value.is("CHDc")))
+    {
+        return false;
+    }
+    if let Some(metadata) = u.get("SWmd")
+        && !matches!(metadata, D::Enumerated { type_id, value } if type_id.is("STmd") && WEB_METADATA.iter().any(|(code, _)| value.is(code)))
     {
         return false;
     }
@@ -276,6 +289,13 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
     let Some(path) = path else { return unsupported };
     // "Save in directory": `In` is only the folder, and each document saves under its own name.
     let mut p = if get_bool(u, "DIDr") == Some(true) { json!({"folder": path}) } else { json!({"path": path}) };
+    if let Some(profile) = get_enum(u, "SWch") {
+        p["convertToSrgb"] = json!(profile == "CHsR");
+    }
+    if let Some(metadata) = get_enum(u, "SWmd") {
+        let Some(metadata) = lookup(WEB_METADATA, &metadata) else { return unsupported };
+        p["metadata"] = json!(metadata);
+    }
     if let Some(f) = get_enum(u, "Fmt ") {
         match lookup(WEB_FORMATS, &f) {
             Some(f) => p["format"] = json!(f),
@@ -302,16 +322,30 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
 }
 
 pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
-    const KEYS: &[&str] = &["path", "folder", "format", "interlaced", "transparency", "embedIcc", "progressive", "optimized", "quality", "colors", "matte"];
+    const KEYS: &[&str] = &[
+        "path",
+        "folder",
+        "format",
+        "interlaced",
+        "transparency",
+        "embedIcc",
+        "progressive",
+        "optimized",
+        "quality",
+        "colors",
+        "matte",
+        "convertToSrgb",
+        "metadata",
+    ];
     if p.as_object()?.iter().any(|(key, value)| !value.is_null() && !KEYS.contains(&key.as_str())) {
         return None;
     }
-    for key in ["interlaced", "transparency", "embedIcc", "progressive", "optimized"] {
+    for key in ["interlaced", "transparency", "embedIcc", "progressive", "optimized", "convertToSrgb"] {
         if !matches!(p.get(key), None | Some(Value::Null | Value::Bool(_))) {
             return None;
         }
     }
-    for key in ["path", "folder", "format", "matte"] {
+    for key in ["path", "folder", "format", "matte", "metadata"] {
         if !matches!(p.get(key), None | Some(Value::Null | Value::String(_))) {
             return None;
         }
@@ -335,6 +369,13 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
     let mut u = desc("SaveForWeb").with("Op  ", enm("SWOp", "OpSa")).with("Fmt ", enm("IRFm", lookup_back(WEB_FORMATS, jstr(p, "format").unwrap_or("png24"))?));
     if in_folder {
         u = u.with("DIDr", D::Boolean(true));
+    }
+    if let Some(convert) = jbool(p, "convertToSrgb") {
+        u = u.with("SWch", enm("STch", if convert { "CHsR" } else { "CHDc" }));
+    }
+    if let Some(metadata) = jstr(p, "metadata") {
+        let metadata = if metadata == "contact" { "copyrightAndContact" } else { metadata };
+        u = u.with("SWmd", enm("STmd", lookup_back(WEB_METADATA, metadata)?));
     }
     for (key, param, default) in [
         ("Intr", "interlaced", false),
