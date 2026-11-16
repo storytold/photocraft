@@ -130,7 +130,7 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 | Brushes `.abr` | R/W | R/W | `psd/src/abr.rs` (v6/v12) |
 | Gradients `.grd` | R/W | R/W | |
 | Patterns `.pat` | R/W | R/W | |
-| Swatches `.aco`, `.act`, `.ase` | R/W | R/W | FILE-215-14; `.act` also from Image › Mode › Color Table Load…/Save… and the Indexed Color (Custom) dialog (`psd/src/act.rs`: 768 raw RGB bytes, optional 4-byte trailer — u16 BE entry count + u16 BE transparent index); palette PNGs (PLTE + single tRNS) load as a source, 1×N palette PNGs save with the dialog's tRNS |
+| Swatches `.aco`, `.act`, `.ase` | R/W | R/W | FILE-215-14; `.act` also from Image › Mode › Color Table Load…/Save… (`psd/src/act.rs`) |
 | LUTs `.cube` / `.3dl` / `.look` | R/W (Export Color Lookup) | R/W / R / R | `craft-cms` `src/lutfile.rs` |
 | Keyboard shortcuts `.kys` | R/W | R/W | `engine/src/kys.rs` (`write`: Edit › Keyboard Shortcuts › Export…, rows carry our id; Photoshop reading our files is unverified) |
 | ICC profiles | R | R | Own CMS |
@@ -201,7 +201,6 @@ The original reference entry retains its source date and historical totals; curr
 | 2026-10-30 | patch | TIFF: YCbCr (PhotometricInterpretation 6) opens as RGB instead of failing with "colour type YCbCr(8)": JPEG-compressed with subsampled chroma (as scanners write it) through the JPEG conversion, uncompressed with ReferenceBlackWhite and YCbCrCoefficients; 8 and 16-bit. Uncompressed subsampled YCbCr and YCbCr with extra samples still fail with a clear error (#10316) |
 | 2026-10-28 | minor | JPEG Options shows the size the file will have (FILE-215-19 partial: no Matte or progressive Scans) |
 | 2026-10-26 | minor | Embedded AI/PDF/EPS save-back retains native format and a separate source-bound display preview; original sources remain undoable. Native Adobe interoperability and standalone EPS/DCS remain unverified; no corpus floor or percentage changed. |
-| 2026-10-24 | minor | Indexed Color (Custom) and the Color Table dialogs load/save `.act` palettes, with palette PNGs as an alternate source (1×N saves carry the dialog's tRNS); custom palettes quantize verbatim, `forced` ignored |
 | 2026-10-22 | minor | Embedded PSD vectors gain explicit bounded SVG editor/save-back; standalone EPS/DCS and native-format fidelity remain open. |
 | 2026-10-22 | minor | TIFF: flat pages up to 300,000 px a side open (was 2^30 px, about 32,768²): `codecs::TiffBands` decodes a group of rows at a time into the layer's tiles. The 117,504 × 22,464 px banner from #8456 opens in 3.3 s at 11.45 GB peak for a 10.56 GB layer; 30,000² 6.8 s / 6.43 GB → 1.1 s / 3.86 GB; 36 MP 220 → 52 ms. Layered TIFFs still decode whole (#8169) |
 | 2026-10-24 | minor | Layered TIFF: the `LMsk` block in tag 37724 carries Photoshop's default global layer mask (14 bytes) instead of none; with an empty block Photoshop read only the composite (#9095). PSD output unchanged |

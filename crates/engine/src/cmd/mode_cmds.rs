@@ -435,6 +435,9 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
     let colors = if custom_table.is_some() { 256 } else { color_count(p, CMD)? };
     let amount = num(p, "amount", 75.0).clamp(0.0, 100.0) / 100.0;
     let transparency = p.get("transparency").and_then(Value::as_bool).unwrap_or(true);
+    // "1st index as transparent": put the auto-appended transparent entry at index 0 instead of
+    // last (the dialog's switch; no-op for a table with no free slot).
+    let transparent_first = p.get("transparentFirst").and_then(Value::as_bool).unwrap_or(false);
     let matte = indexed_matte(s, p)?;
     // An explicit transparent entry (index into the final table): that entry is used as-is and
     // no white is appended for it. `null` explicitly disables transparency (a loaded .act
@@ -492,8 +495,15 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
                 .ok_or_else(|| bad(CMD, format!("transparent: an index from 0 to {}", pal.len().saturating_sub(1))))?;
             Some(t)
         } else if has_clear && pal.len() < 256 {
-            pal.push([255, 255, 255]);
-            Some(pal.len() - 1)
+            // "1st index as transparent": the auto entry heads the table and the rest shift up;
+            // otherwise it goes last, as Photoshop appends it. Pixels store RGB, so no remap.
+            if transparent_first {
+                pal.insert(0, [255, 255, 255]);
+                Some(0)
+            } else {
+                pal.push([255, 255, 255]);
+                Some(pal.len() - 1)
+            }
         } else {
             None
         };
@@ -956,7 +966,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.indexedColor",
             "Indexed Color…",
             ["Image", "Mode"],
-            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform|custom"="selective","colors":2..256=256,"paletteColors":json,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"transparent":json,"matte":color,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; transparent: index of the transparent entry, no white appended; a table that fills all 256 entries has no slot for the auto transparent entry, so systemMac/systemWindows, and exact when the image already has 256 colours, drop transparency unless transparent names an index; matte: none|foreground|background|white|black|gray|netscapeGray|#rrggbb; gray=50% Gray (#808080), netscapeGray=Netscape Gray (#c0c0c0))"##,
+            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform|custom"="selective","colors":2..256=256,"paletteColors":json,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"transparentFirst":bool=false,"transparent":json,"matte":color,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; transparent: index of the transparent entry, no white appended; a table that fills all 256 entries has no slot for the auto transparent entry, so systemMac/systemWindows, and exact when the image already has 256 colours, drop transparency unless transparent names an index; transparentFirst: put that auto entry at index 0 instead of last, ignored when it has no slot; matte: none|foreground|background|white|black|gray|netscapeGray|#rrggbb; gray=50% Gray (#808080), netscapeGray=Netscape Gray (#c0c0c0))"##,
             |s| mode_is(
                 s,
                 &[ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Indexed, ColorMode::Duotone, ColorMode::Cmyk, ColorMode::Lab],
