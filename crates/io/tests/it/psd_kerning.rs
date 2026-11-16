@@ -67,7 +67,7 @@ fn manual_and_off_kerning_round_trip_through_psd() {
     let LayerContent::Text(b) = &back.layers[0].content else { panic!("not text") };
     assert_eq!(chars(b), chars(&t));
 
-    let tysh = photocraft_text::psd::build_tysh(&t, 72.0, None);
+    let tysh = photocraft_text::psd::build_tysh(&t, 72.0, None).unwrap();
     let f = kerning_fields(&tysh);
     // 11 characters + the trailing paragraph break.
     assert_eq!(f.len(), 12);
@@ -183,7 +183,7 @@ fn duplicate_preserved_text_indices_get_distinct_txt2_objects() {
     for (name, text, mode) in cases {
         let mut t = layer(text, &[(text.len(), mode, 0.0)]);
         photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
-        let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None);
+        let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None).unwrap();
         t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
         doc.layers.push(Layer::new(name, LayerContent::Text(t)));
     }
@@ -207,7 +207,7 @@ fn new_text_layer_below_keeps_the_preserved_text_indices() {
     for (i, text) in ["AV", "BC"].into_iter().enumerate() {
         let mut t = layer(text, &[(2, Kerning::Optical, 0.0)]);
         photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
-        let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None);
+        let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None).unwrap();
         t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, i as i32).unwrap()));
         doc.layers.push(Layer::new(text, LayerContent::Text(t)));
     }
@@ -253,7 +253,7 @@ fn edited_text_layer_takes_its_own_style_runs() {
     let mut doc = Document::new("k", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
     let mut t = layer("world", &[(5, Kerning::Metrics, 0.0)]);
     photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
-    let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None);
+    let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None).unwrap();
     t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
     doc.layers.push(Layer::new("edited", LayerContent::Text(t)));
     doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", std::sync::Arc::new(photoshop_txt2(&[("Hello world", "/28 true")])))];
@@ -275,7 +275,7 @@ fn edited_text_layer_keeps_its_stylistic_sets() {
     }
     t.sync_summary();
     photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
-    let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None);
+    let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None).unwrap();
     t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
     doc.layers.push(Layer::new("sets", LayerContent::Text(t)));
     doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", std::sync::Arc::new(photoshop_txt2(&[("Il36", "")])))];
@@ -301,7 +301,7 @@ fn hostile_text_index_never_sizes_the_save() {
     let mut r = t.clone();
     photocraft_text::TextEngine::new().render_layer(&mut r, doc.resolution_dpi, doc.pixel_format());
     // An invalid index is remapped into the saved Txt2 rather than preserved.
-    r.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&photocraft_text::psd::build_tysh(&r, 72.0, None), i32::MAX).unwrap()));
+    r.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&photocraft_text::psd::build_tysh(&r, 72.0, None).unwrap(), i32::MAX).unwrap()));
     doc.layers.push(Layer::new("hostile", LayerContent::Text(r)));
     let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
     let file = craft_psd::PsdFile::from_bytes(&bytes).unwrap();
@@ -331,7 +331,7 @@ fn txt2_extras_survive_an_unedited_resave() {
     let mut r = layer("AV", &[(2, Kerning::Metrics, 0.0)]);
     photocraft_text::TextEngine::new().render_layer(&mut r, doc.resolution_dpi, doc.pixel_format());
     // The file's layer: its `TySh` names object 0.
-    let raw = photocraft_text::psd::build_tysh(&r, doc.resolution_dpi, None);
+    let raw = photocraft_text::psd::build_tysh(&r, doc.resolution_dpi, None).unwrap();
     r.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
     // The file's own block for this text: its style runs, and the pen positions only it holds.
     let txt2 = photocraft_text::psd::build_txt2(&[(0, &r)], Some(&photoshop));
@@ -360,7 +360,7 @@ fn without_document_sizes(tysh: &[u8], also: impl FnOnce(&mut E)) -> Vec<u8> {
     also(&mut e);
     let item = t.text.items.iter_mut().find(|(k, _)| k.is("EngineData")).unwrap();
     item.1 = D::RawData(photocraft_text::engine_data::write(&e));
-    let out = photocraft_text::psd::write_tysh(&t);
+    let out = photocraft_text::psd::write_tysh(&t).unwrap();
     assert!(!out.windows(15).any(|w| w == b"SuperscriptSize"));
     out
 }
@@ -374,7 +374,7 @@ fn edited_type_drops_the_files_txt2() {
     let make = |text: &str| {
         let mut t = layer(text, &[(text.len(), Kerning::Metrics, 0.0)]);
         photocraft_text::TextEngine::new().render_layer(&mut t, 72.0, photocraft_color::PixelFormat::RGBA8);
-        let raw = photocraft_text::psd::build_tysh(&t, 72.0, None);
+        let raw = photocraft_text::psd::build_tysh(&t, 72.0, None).unwrap();
         t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
         t
     };
@@ -472,13 +472,13 @@ fn native_txt2_carries_what_photoshop_needs() {
 #[test]
 fn hostile_kerning_values() {
     let t = layer("AV", &[(1, Kerning::Off, f32::NAN), (1, Kerning::Metrics, f32::INFINITY)]);
-    let tysh = photocraft_text::psd::build_tysh(&t, 72.0, None);
+    let tysh = photocraft_text::psd::build_tysh(&t, 72.0, None).unwrap();
     assert!(kerning_fields(&tysh).iter().all(|f| f.1 == 0));
     let back = photocraft_text::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
     assert!(chars(&back).iter().all(|c| c.1 == 0.0));
     // Huge values clamp.
     let t = layer("AV", &[(1, Kerning::Off, 1e30), (1, Kerning::Metrics, 0.0)]);
-    let f = kerning_fields(&photocraft_text::psd::build_tysh(&t, 72.0, None));
+    let f = kerning_fields(&photocraft_text::psd::build_tysh(&t, 72.0, None).unwrap());
     assert_eq!(f[1].1, 10_000);
 }
 
@@ -545,7 +545,7 @@ fn photoshop_kerning_oracles() {
 
         let original = t.psd_raw.as_ref().map(|r| r.to_vec()).unwrap();
         let tysh = photocraft_text::psd::parse_tysh(&original).unwrap();
-        let rebuilt = photocraft_text::psd::build_tysh(t, doc.resolution_dpi, None);
+        let rebuilt = photocraft_text::psd::build_tysh(t, doc.resolution_dpi, None).unwrap();
         if same_fields {
             assert_eq!(kerning_fields(&rebuilt), kerning_fields(&original), "{name}");
         }

@@ -248,6 +248,7 @@ fn finish_place(app: &mut PhotocraftApp, ctx: &egui::Context, place: PlaceJob, o
     app.sync_views();
     match outcome {
         JobOutcome::Done(result) => {
+            notices::io_result_warnings(app, &result, &place.name);
             // The tab can change while the file is placed: the box opens only on the document it
             // was placed in, and never over another one. An image placed into a frame has none.
             if app.ui.transform.is_none()
@@ -766,7 +767,7 @@ pub(crate) fn after_open(
     name: &str,
     path: Option<&str>,
     warnings: &[String],
-    bytes: Option<&[u8]>,
+    bytes: Option<&Arc<Vec<u8>>>,
 ) -> Result<(), String> {
     let index = app.session.documents().iter().position(|st| st.doc.id == document).ok_or("the opened document is missing")?;
     app.session.set_active(index);

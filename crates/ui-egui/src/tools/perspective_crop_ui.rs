@@ -4,8 +4,8 @@
 //!   BL in document px; clicked corners are put in that order);
 //! - drag a corner to move it alone, onto an edge of a skewed object (a photographed page, a
 //!   facade); drag inside the quad to move it;
-//! - the quad shows its perspective grid (Show Grid) and turns red while it isn't a convex quad
-//!   wound like its box, which can't be committed;
+//! - the quad shows its perspective grid (Show Grid) and turns red while it isn't a convex quad,
+//!   which can't be committed; one flipped on one axis (wound the other way) commits mirrored;
 //! - ↵ (or ✓) commits: `image.perspectiveCrop` maps the quad onto an upright rectangle, the whole
 //!   document in one undo step. Its size comes from the options bar's W x H (and the resolution),
 //!   which are the Crop tool's fields (`crop_size`), or with them empty from the rectangle the
@@ -14,7 +14,7 @@
 //! A pending quad belongs to the document it was drawn on, like the Crop tool's frame.
 
 use egui::{Color32, Pos2, Stroke};
-use photocraft_algo::transform::{Homography, convex_quad};
+use photocraft_algo::transform::{Homography, convex_quad, convex_quad_any_winding};
 use photocraft_engine::prefs::Unit;
 use serde_json::{Value, json};
 
@@ -426,7 +426,8 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         _ => app.ui.perspective_crop,
     };
     if let Some(q) = quad.filter(|q| q.iter().flatten().all(|v| v.is_finite())) {
-        let ok = convex_quad(&q);
+        // A quad flipped on one axis is wound counter-clockwise and commits mirrored (#12489).
+        let ok = convex_quad_any_winding(&q);
         let color = if ok { accent } else { Color32::from_rgb(0xe5, 0x3e, 0x3e) };
         // The image outside the quad is dimmed (#11972), following the quad while it is dragged.
         if ok && let Some(size) = app.session.active().map(|d| d.doc.size) {
@@ -553,6 +554,10 @@ mod perspective_crop_shield_tests;
 #[cfg(test)]
 #[path = "perspective_crop_deselect_tests.rs"]
 mod perspective_crop_deselect_tests;
+
+#[cfg(test)]
+#[path = "perspective_crop_mirrored_tests.rs"]
+mod perspective_crop_mirrored_tests;
 
 #[cfg(test)]
 mod tests {
