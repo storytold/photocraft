@@ -947,3 +947,22 @@ fn each_display_converts_the_snapshot_itself() {
     assert!(app.move_preview.as_ref().and_then(|p| p.snapshot.as_ref()).is_some_and(|s| s.picture.is_some()), "the picture is kept for the next display");
     ctx.tex_manager().write().take_delta().clear();
 }
+
+/// A costly drag's snapshot reduced 4× or more is made from a proxy of the layers scaled down
+/// first, so it arrives while the drag is still under way; it shows what the full reduction shows.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_reduced_drag_snapshot_comes_from_a_proxy_and_matches_the_full_reduction() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 2048, "height": 2048})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "paint"})).unwrap();
+    s.execute("select.rect", json!({"x": 256, "y": 256, "width": 1024, "height": 512})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let rect = Rect::new(256, 256, 1280, 768);
+    let fast = super::snapshot_picture(&doc, rect, 64, 32);
+    let full = photocraft_compose::render_reduced_rect(&doc, rect, 64, 32);
+    assert_eq!((fast.rect.width(), fast.rect.height()), (full.rect.width(), full.rect.height()));
+    let worst = fast.px.iter().zip(&full.px).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (a - b).abs())).fold(0.0_f32, f32::max);
+    assert!(worst < 0.02, "the proxy's snapshot differs by {worst}");
+}

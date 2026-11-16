@@ -215,9 +215,15 @@ fn start_snapshot_thread(doc: &Document, moving: &[LayerId], rect: Rect) -> Opti
     let keep = |path: &[usize]| paths.iter().any(|m| m.starts_with(path) || path.starts_with(m));
     let hide: Vec<LayerId> = walk.iter().filter(|(p, _, _)| !keep(p)).map(|(_, _, l)| l.id).collect();
     let mut only = doc.clone();
+    let format = doc.pixel_format();
     for id in hide {
         if let Some(l) = only.layer_mut(id) {
             l.visible = false;
+            // Hidden, it draws nothing: emptied, the proxy (`snapshot_picture`) skips its pixels.
+            if !matches!(l.content, photocraft_doc::LayerContent::Group(_)) {
+                l.content = photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(format));
+            }
+            l.mask = None;
         }
     }
     let longest = rect.width().max(rect.height()).max(1);
@@ -228,8 +234,8 @@ fn start_snapshot_thread(doc: &Document, moving: &[LayerId], rect: Rect) -> Opti
         // On a small pool of its own: in the shared one its tiles queued ahead of the redraw
         // thread's uploads, and the canvas blocks drawn meanwhile took 100–260 ms each.
         let picture = match snapshot_pool() {
-            Some(pool) => pool.install(|| photocraft_compose::render_reduced_rect(&only, rect, w, h)),
-            None => photocraft_compose::render_reduced_rect(&only, rect, w, h),
+            Some(pool) => pool.install(|| snapshot_picture(&only, rect, w, h)),
+            None => snapshot_picture(&only, rect, w, h),
         };
         // Freed once rendered, whether or not its drag still wants it.
         drop(slot);
@@ -237,6 +243,25 @@ fn start_snapshot_thread(doc: &Document, moving: &[LayerId], rect: Rect) -> Opti
     });
     started.ok()?;
     Some(Snapshot { rect, rx: Some(rx), picture: None, textures: Vec::new() })
+}
+
+/// The snapshot's pixels, `rect` of `only` reduced to `w`×`h`: from a proxy of the layers scaled
+/// down first (as thumbnails are made) when the reduction is at least 4× and the proxy composites
+/// faithfully (no layer effects or vector masks, whose sizes are in document pixels). Averaging
+/// every document pixel of 18 storyboard boards took longer than the drag itself, and the drag
+/// showed nothing until the snapshot arrived. The proxy's pixels are up to `k` document pixels
+/// off, which a reduced picture can't show.
+#[cfg(not(target_arch = "wasm32"))]
+fn snapshot_picture(only: &Document, rect: Rect, w: u32, h: u32) -> photocraft_compose::Buffer {
+    let longest = rect.width().max(rect.height()).max(1);
+    let k = longest / w.max(h).max(1).saturating_mul(2);
+    if k >= 2 && photocraft_compose::proxy::proxy_faithful(only) {
+        let proxy = photocraft_compose::proxy::proxy_document(only, k);
+        let k = k as i32;
+        let r = Rect::new(rect.x0.div_euclid(k), rect.y0.div_euclid(k), (rect.x1 + k - 1).div_euclid(k), (rect.y1 + k - 1).div_euclid(k));
+        return photocraft_compose::render_reduced_rect(&proxy, r, w, h);
+    }
+    photocraft_compose::render_reduced_rect(only, rect, w, h)
 }
 
 /// One drag snapshot renders at a time: a drag released before its picture arrived leaves the
