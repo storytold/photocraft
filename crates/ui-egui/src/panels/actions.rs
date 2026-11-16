@@ -307,7 +307,7 @@ fn selected_set_actions(app: &PhotocraftApp) -> Vec<usize> {
         .list
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.set.as_deref() == Some(set) && a.set_slot == app.ui.actions.selected_set_slot)
+        .filter(|(_, a)| photocraft_engine::atn_cmds::logical_set_name(a.set.as_deref()) == set && a.set_slot == app.ui.actions.selected_set_slot)
         .map(|(i, _)| i)
         .collect()
 }
@@ -460,11 +460,11 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
     let mut alternates = serde_json::Map::new();
     let mut deferred = None;
     if let Some(key) = photocraft_engine::prefs::normalize_shortcut(shortcut) {
-        let pending_legacy = |other: &str| pending && other.starts_with(actions_cmds::PLAY_SHORTCUT_PREFIX);
+        let pending_action = |other: &str| pending && other != id.as_str() && actions_cmds::is_action_key(other);
         let mut conflicts = DeferredShortcutConflicts { winner: id.clone(), chord: key.clone(), primary: Vec::new(), alternate: Vec::new() };
         for (other, assigned) in &prefs.shortcuts {
             if photocraft_engine::prefs::normalize_shortcut(assigned).as_ref() == Some(&key) {
-                if pending_legacy(other) {
+                if pending_action(other) {
                     conflicts.primary.push(other.clone());
                 } else if can_clear(other) {
                     set.insert(other.clone(), json!(""));
@@ -472,11 +472,11 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
             }
         }
         for (other, assigned) in &prefs.alternate_shortcuts {
-            if can_clear(other) || pending_legacy(other) {
+            if can_clear(other) || pending_action(other) {
                 let remaining: Vec<_> =
                     assigned.iter().filter(|assigned| photocraft_engine::prefs::normalize_shortcut(assigned).as_ref() != Some(&key)).collect();
                 if remaining.len() != assigned.len() {
-                    if pending_legacy(other) {
+                    if pending_action(other) {
                         conflicts.alternate.push((other.clone(), assigned.clone()));
                     } else {
                         alternates.insert(other.clone(), json!(remaining));
@@ -487,7 +487,14 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
         deferred = (!conflicts.primary.is_empty() || !conflicts.alternate.is_empty()).then_some(conflicts);
     }
     set.insert(id.clone(), json!(shortcut));
-    let volatile_keys = pending.then(|| set.keys().chain(alternates.keys()).cloned().collect::<Vec<_>>());
+    let volatile_keys = pending.then(|| {
+        let mut keys = set.keys().chain(alternates.keys()).cloned().collect::<Vec<_>>();
+        if let Some(conflicts) = &deferred {
+            keys.extend(conflicts.primary.iter().cloned());
+            keys.extend(conflicts.alternate.iter().map(|(key, _)| key.clone()));
+        }
+        keys
+    });
     let result = app.run("edit.keyboardShortcuts", json!({"set": set, "alternates": alternates, "allowUnknown": true, "removeConflicts": false}))?;
     if let Err(error) = actions_cmds::commit_action_id(&mut app.session, index, action_id) {
         if let Some((shortcuts, alternate_shortcuts)) = previous {
@@ -510,39 +517,34 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
     Ok(result)
 }
 
-/// Release pending shortcut writes and apply legacy conflicts only after the native definitions were written.
+/// Release pending shortcuts only after their final native headers were written.
+/// Browser preference holds remain owned by the independent service acknowledgment.
 pub(crate) fn finish_deferred_shortcut_conflicts(app: &mut PhotocraftApp, actions_written: bool) {
     if !actions_written {
-        return;
-    }
-    app.ui.actions.preset_store_disconnected = false;
-    app.ui.actions.volatile_shortcut_keys.clear();
-    let deferred = std::mem::take(&mut app.ui.actions.deferred_shortcut_conflicts);
-    if deferred.is_empty() {
         return;
     }
     let list = &app.session.actions.list;
     let prefs = app.session.prefs();
     let mut primary = BTreeSet::new();
     let mut alternate = BTreeMap::new();
-    for pending in deferred {
+    for pending in &app.ui.actions.deferred_shortcut_conflicts {
         let Some(winner) = actions_cmds::shortcut_row(list, &pending.winner) else { continue };
         if prefs.shortcuts.get(&pending.winner) != Some(&pending.chord) {
             continue;
         }
         let losing = |key: &str| actions_cmds::shortcut_row(list, key).is_some_and(|row| row != winner);
-        for key in pending.primary {
-            if losing(&key)
-                && prefs.shortcuts.get(&key).and_then(|assigned| photocraft_engine::prefs::normalize_shortcut(assigned)).as_ref() == Some(&pending.chord)
+        for key in &pending.primary {
+            if losing(key)
+                && prefs.shortcuts.get(key).and_then(|assigned| photocraft_engine::prefs::normalize_shortcut(assigned)).as_ref() == Some(&pending.chord)
             {
-                primary.insert(key);
+                primary.insert(key.clone());
             }
         }
-        for (key, original) in pending.alternate {
-            if losing(&key) && prefs.alternate_shortcuts.get(&key) == Some(&original) {
+        for (key, original) in &pending.alternate {
+            if losing(key) && prefs.alternate_shortcuts.get(key) == Some(original) {
                 alternate
-                    .entry(key)
-                    .or_insert(original)
+                    .entry(key.clone())
+                    .or_insert_with(|| original.clone())
                     .retain(|assigned| photocraft_engine::prefs::normalize_shortcut(assigned).as_ref() != Some(&pending.chord));
             }
         }
@@ -554,7 +556,21 @@ pub(crate) fn finish_deferred_shortcut_conflicts(app: &mut PhotocraftApp, action
             }
             prefs.alternate_shortcuts.extend(alternate);
         });
+        // Attachment may have just restored the old native header. Persist the guarded
+        // cleanup before preferences can expose keys from a different generation.
+        if app.session.preset_store.is_some() {
+            app.session.sync_preset_store();
+        }
     }
+    if app.session.preset_store.is_some() && !app.session.action_definitions_written() {
+        return;
+    }
+    // A failed key-only rewrite retains both the conflict snapshot and all held keys.
+    // Without a native store, the caller's async acknowledgment remains authoritative;
+    // this never clears services.actions_write_pending or the browser's paired write.
+    app.ui.actions.preset_store_disconnected = false;
+    app.ui.actions.volatile_shortcut_keys.clear();
+    app.ui.actions.deferred_shortcut_conflicts.clear();
 }
 
 /// An immutable source value; library continuation never resolves merely by a reused name.

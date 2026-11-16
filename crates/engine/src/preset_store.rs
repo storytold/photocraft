@@ -1433,9 +1433,14 @@ impl Session {
         self.sync_preset_store_with_action_write();
     }
 
-    /// Whether this store confirmed a successful definitions write for the current Actions revision.
+    /// Whether this store confirmed the current definitions revision and shortcut-header snapshot.
+    /// A previous write of the same revision cannot acknowledge a newer key-only edit.
     pub fn action_definitions_written(&self) -> bool {
-        self.preset_store.as_ref().is_some_and(|store| store.actions_written_rev == Some(self.actions.rev))
+        self.preset_store.as_ref().is_some_and(|store| {
+            store.actions_written_rev == Some(self.actions.rev)
+                && store.actions_keys.iter().map(|(key, chord)| (key, chord))
+                    .eq(self.prefs().shortcuts.iter().filter(|(key, _)| crate::actions_cmds::is_action_key(key)))
+        })
     }
 
     fn sync_preset_store_with_action_write(&mut self) -> bool {

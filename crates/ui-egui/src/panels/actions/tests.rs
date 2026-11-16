@@ -3640,4 +3640,25 @@ fn classic_default_category_keeps_declared_and_physical_folder_rows() {
     );
     assert_eq!(row_folder_parts(&physical[0], &[], &slots).unwrap().1, Some(1));
     assert_eq!(row_folder_parts(&physical[1], &[], &slots).unwrap().1, Some(0));
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut canonical = Action::new("Canonical loose", Vec::new());
+    canonical.set = Some(photocraft_engine::atn_cmds::UNGROUPED_SET.into());
+    let mut first = Action::new("Physical first", Vec::new());
+    first.set = canonical.set.clone();
+    first.set_slot = Some(0);
+    let mut second = Action::new("Physical second", Vec::new());
+    second.set = canonical.set.clone();
+    second.set_slot = Some(1);
+    app.session.actions.list = vec![Action::new("Legacy loose", Vec::new()), canonical, first, second];
+    app.session.actions.set_rows = slots;
+    app.ui.actions.selected_set = Some(photocraft_engine::atn_cmds::UNGROUPED_SET.into());
+    assert_eq!(playback_targets(&app), [0, 1], "both unbound default spellings share a category, excluding physical rows");
+    app.ui.actions.slot_revision = app.session.actions.set_rows_revision;
+    app.ui.actions.selected_set_slot = Some(0);
+    assert_eq!(playback_targets(&app), [2]);
+    app.ui.actions.selected_set_slot = Some(1);
+    assert_eq!(playback_targets(&app), [3]);
+    app.ui.actions.slot_revision = app.session.actions.set_rows_revision.wrapping_add(1);
+    assert!(playback_targets(&app).is_empty(), "a stale physical selection never falls back to loose actions");
 }
