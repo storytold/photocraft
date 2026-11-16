@@ -80,18 +80,23 @@ fn controls_quad(r: Rect) -> [[f64; 2]; 4] {
     [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|p| [f64::from(p.x), f64::from(p.y)])
 }
 
-/// Classify screen coordinates with the fixed screen-space tolerance, without a pivot.
-fn controls_zone(r: Rect, p: Pos2) -> crate::transform_tool::Hit {
-    crate::state::TransformSession::box_hit(&controls_quad(r), [f64::from(p.x), f64::from(p.y)], crate::transform_tool::HANDLE_PX)
-}
-
-/// Share the open session's screen-sized zones before the first interaction (#11097).
-pub(super) fn transform_controls_cursor(r: Rect, p: Pos2) -> Option<egui::CursorIcon> {
+/// Classify where Move's transform controls can act, using screen-space tolerance.
+fn controls_zone(r: Rect, p: Pos2) -> Option<crate::transform_tool::Hit> {
     if !p.is_finite() {
         return None;
     }
+    let hit = crate::state::TransformSession::box_hit(&controls_quad(r), [f64::from(p.x), f64::from(p.y)], crate::transform_tool::HANDLE_PX);
+    // Only the rotation band starts a transform. Beyond it the Move tool owns the pointer.
+    if hit == crate::transform_tool::Hit::Outside && (!r.expand(18.0).contains(p) || r.expand(5.0).contains(p)) {
+        return None;
+    }
+    Some(hit)
+}
+
+/// Show the cursor for the operation a press would start.
+pub(super) fn transform_controls_cursor(r: Rect, p: Pos2) -> Option<egui::CursorIcon> {
     use crate::transform_tool::Hit;
-    Some(match controls_zone(r, p) {
+    Some(match controls_zone(r, p)? {
         Hit::Corner(0 | 2) => egui::CursorIcon::ResizeNwSe,
         Hit::Corner(_) => egui::CursorIcon::ResizeNeSw,
         Hit::Edge(0 | 2) => egui::CursorIcon::ResizeVertical,
@@ -101,27 +106,19 @@ pub(super) fn transform_controls_cursor(r: Rect, p: Pos2) -> Option<egui::Cursor
     })
 }
 
-/// At any distance outside the controls, the same edge/corner direction as Free Transform.
+/// In the rotation band, point toward the closest edge or corner.
 pub(super) fn transform_controls_turn(r: Rect, p: Pos2) -> Option<Vec2> {
-    if controls_zone(r, p) != crate::transform_tool::Hit::Outside {
+    if controls_zone(r, p) != Some(crate::transform_tool::Hit::Outside) {
         return None;
     }
     let k = crate::state::TransformSession::box_turn_direction(&controls_quad(r), [f64::from(p.x), f64::from(p.y)])?;
     Some(vec2(k[0] as f32, k[1] as f32) * 16.0)
 }
 
-/// Resize from the shared handle zones and keep Move's existing rotation press band.
-/// Outside presses beyond that band still reach the Move tool, even where hover paints a turn arc.
+/// A press on a handle or in the rotation band starts Free Transform.
 pub(super) fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
-    if !p.is_finite() {
-        return false;
-    }
     use crate::transform_tool::Hit;
-    match controls_zone(r, p) {
-        Hit::Corner(_) | Hit::Edge(_) => true,
-        Hit::Outside => r.expand(18.0).contains(p) && !r.expand(5.0).contains(p),
-        Hit::Inside | Hit::Pivot => false,
-    }
+    matches!(controls_zone(r, p), Some(Hit::Corner(_) | Hit::Edge(_) | Hit::Outside))
 }
 
 /// The reference application's alert when a Move-tool transform control is dragged on a frame
