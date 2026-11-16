@@ -35,10 +35,23 @@ pub struct FrameToolUi {
     pub drag: Option<FrameDrag>,
     #[serde(skip)]
     pub auto_transform: bool,
+    /// Space (the reposition key) is held: a frame being drawn moves instead of sizing (#13867).
+    #[serde(skip)]
+    pub space: bool,
 }
 impl Default for FrameToolUi {
     fn default() -> Self {
-        Self { ellipse: false, shape: "rectangle".into(), sides: 5, stroke: None, target: Target::Frame, selected: None, drag: None, auto_transform: false }
+        Self {
+            ellipse: false,
+            shape: "rectangle".into(),
+            sides: 5,
+            stroke: None,
+            target: Target::Frame,
+            selected: None,
+            drag: None,
+            auto_transform: false,
+            space: false,
+        }
     }
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -63,13 +76,18 @@ fn drawn(start: [f64; 2], cur: [f64; 2], square: bool, centred: bool) -> [i64; 4
     let [x, y] = cur;
     let (mut dx, mut dy) = (x - sx, y - sy);
     if square {
-        let side = dx.abs().max(dy.abs());
+        // Shift squares from the drag's shorter side, as the reference application does (#13865).
+        let side = dx.abs().min(dy.abs());
         dx = side.copysign(dx);
         dy = side.copysign(dy);
     }
     let (a, b) = if centred { ([sx - dx, sy - dy], [sx + dx, sy + dy]) } else { (start, [sx + dx, sy + dy]) };
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])].map(|v| v.round() as i64)
 }
+#[cfg(test)]
+mod shift_square_tests;
+#[cfg(test)]
+mod size_hud_tests;
 pub fn selected(app: &PhotocraftApp) -> Option<&Layer> {
     let st = app.session.active()?;
     let id = photocraft_engine::frame_cmds::frame_of(&st.doc, st.active_layer?)?;
@@ -340,6 +358,52 @@ pub fn cancel(app: &mut PhotocraftApp) {
     app.ui.frame_tool.drag = None;
     app.frame_preview = None;
 }
+/// Space (the reposition key) for this canvas frame (#13867). Whether a frame is being drawn, which
+/// Space then moves: the canvas keeps the key from the temporary Hand tool meanwhile.
+pub fn set_space(app: &mut PhotocraftApp, down: bool) -> bool {
+    app.ui.frame_tool.space = down;
+    matches!(app.ui.frame_tool.drag, Some(FrameDrag::New { .. }))
+}
+#[cfg(test)]
+mod space_move_tests;
+
+/// Escape during a drag. A frame being drawn is made at the pointer, as the reference application
+/// does (#13866); the mouse movement and release after it change nothing. Moving, resizing or
+/// rotating an existing frame is cancelled.
+pub fn escape(app: &mut PhotocraftApp) {
+    let Some(FrameDrag::New { start, cur, square, centred, doc, revision }) = app.ui.frame_tool.drag.clone() else {
+        cancel(app);
+        return;
+    };
+    cancel(app);
+    if app.session.active().is_some_and(|st| st.doc.id == doc && st.revision == revision) {
+        commit_new(app, start, cur, square, centred);
+    }
+}
+/// Make the frame drawn from `start` to `cur`, unless the drag was a click or drew nothing.
+fn commit_new(app: &mut PhotocraftApp, start: [f64; 2], cur: [f64; 2], square: bool, centred: bool) {
+    if (cur[0] - start[0]).hypot(cur[1] - start[1]) * f64::from(app.point_zoom()) < CLICK_PX {
+        return;
+    }
+    let r = drawn(start, cur, square, centred);
+    if r[2] <= r[0] || r[3] <= r[1] {
+        return;
+    }
+    let mut p = shape_params(app, r);
+    if let Some(id) = content_layer(app, r) {
+        p["layer"] = json!(id);
+    }
+    match app.run("layer.new.frame", p) {
+        Ok(v) => {
+            if let Some(id) = v.get("layer").and_then(Value::as_u64) {
+                select(app, LayerId(id), Target::Frame);
+            }
+        }
+        Err(e) => report(app, Err(e)),
+    }
+}
+#[cfg(test)]
+mod escape_commit_tests;
 /// A native double click (also driven by ui.click count=2) toggles content-only selection.
 pub fn double_click(app: &mut PhotocraftApp, p: [f64; 2]) {
     let Some(id) = frame_at(app, p) else { return };
@@ -441,9 +505,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             }
         }
         ToolEvent::Move { x, y, .. } => {
+            let space = app.ui.frame_tool.space;
             if let Some(d) = &mut app.ui.frame_tool.drag {
                 match d {
-                    FrameDrag::New { cur, square, centred, .. } => {
+                    FrameDrag::New { start, cur, square, centred, .. } => {
+                        // Space held moves the whole frame with the pointer (#13867).
+                        if space {
+                            *start = [start[0] + x - cur[0], start[1] + y - cur[1]];
+                        }
                         *cur = [x, y];
                         *square = mods.shift;
                         *centred = mods.alt;
@@ -463,31 +532,22 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 return true;
             }
             match d {
-                FrameDrag::New { start, .. } => {
-                    if (x - start[0]).hypot(y - start[1]) * f64::from(app.point_zoom()) < CLICK_PX {
-                        return true;
-                    }
-                    let r = drawn(start, [x, y], mods.shift, mods.alt);
-                    if r[2] <= r[0] || r[3] <= r[1] {
-                        return true;
-                    }
-                    let mut p = shape_params(app, r);
-                    if let Some(id) = content_layer(app, r) {
-                        p["layer"] = json!(id);
-                    }
-                    match app.run("layer.new.frame", p) {
-                        Ok(v) => {
-                            if let Some(id) = v.get("layer").and_then(Value::as_u64) {
-                                select(app, LayerId(id), Target::Frame);
-                            }
-                        }
-                        Err(e) => report(app, Err(e)),
-                    }
+                FrameDrag::New { start, cur, .. } => {
+                    // Released with Space still down: the last step moved the frame too (#13867).
+                    let start = if app.ui.frame_tool.space { [start[0] + x - cur[0], start[1] + y - cur[1]] } else { start };
+                    commit_new(app, start, [x, y], mods.shift, mods.alt)
                 }
                 FrameDrag::Edit { layer, original, start, mode, .. } => {
                     let transform = edit_transform(&original, mode, start, [x, y], mods);
                     if transform != original.transform {
-                        let r = app.run("layer.frame.set", json!({"layer":layer.0,"transform":transform.m}));
+                        let mut p = json!({"layer":layer.0,"transform":transform.m});
+                        // Moving an empty frame is a "Move" step (#13880). Handle drags, and a
+                        // frame with an image (not measured yet), keep "Frame Properties".
+                        let empty = app.session.active().and_then(|st| st.doc.layer(layer)).is_some_and(|l| l.children().is_none_or(<[Layer]>::is_empty));
+                        if mode == EditMode::Move && empty {
+                            p["historyName"] = json!("Move");
+                        }
+                        let r = app.run("layer.frame.set", p);
                         report(app, r);
                     }
                 }
@@ -528,9 +588,14 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         return;
     }
     if let Some(FrameDrag::New { start, cur, square, centred, .. }) = &app.ui.frame_tool.drag {
-        if let Some(path) = outline(app, drawn(*start, *cur, *square, *centred)) {
+        let r = drawn(*start, *cur, *square, *centred);
+        if let Some(path) = outline(app, r) {
             paint_path(painter, xf, &path, stroke);
         }
+        // The size the release would make, beside the pointer, like the marquee's (#13870).
+        let at = painter.ctx().input(|i| i.pointer.latest_pos()).unwrap_or_else(|| xf.to_screen(cur[0] as f32, cur[1] as f32));
+        let size = crate::canvas::size_readout(app, [0.0, 0.0, (r[2] - r[0]) as f64, (r[3] - r[1]) as f64]);
+        crate::canvas::draw_value_readout(app, painter.ctx(), "frame-size-readout", at, ["W:", "H:"], size);
         return;
     }
     let Some(l) = selected(app) else { return };
@@ -868,3 +933,5 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     false
 }
+#[cfg(test)]
+mod move_history_tests;
