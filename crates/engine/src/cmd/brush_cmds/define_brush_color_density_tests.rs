@@ -101,17 +101,17 @@ fn defined_tips_match_the_six_measured_density_targets_at_all_depths() {
     for command in COMMANDS {
         for depth in [8, 16, 32] {
             for (name, rgb, expected, tolerance) in [
-                    ("red", [255u8, 0, 0], 0.49f32, 0.03f32),
-                    ("green", [0, 255, 0], 0.14, 0.03),
-                    ("blue", [0, 0, 255], 0.72, 0.03),
-                    ("gray 128", [128, 128, 128], 0.50, 0.01),
-                    ("gray 200", [200, 200, 200], 0.22, 0.01),
-                    ("black", [0, 0, 0], 1.0, 0.0001),
-                ] {
-                    let [r, g, b] = rgb.map(|v| f32::from(v) / 255.0);
-                    let mut s = rgb_source(depth, [r, g, b, 1.0]);
-                    let actual = define_square(&mut s, command);
-                    assert!((actual - expected).abs() <= tolerance, "{command}, {name}, depth {depth}: {actual}");
+                ("red", [255u8, 0, 0], 0.49f32, 0.03f32),
+                ("green", [0, 255, 0], 0.14, 0.03),
+                ("blue", [0, 0, 255], 0.72, 0.03),
+                ("gray 128", [128, 128, 128], 0.50, 0.01),
+                ("gray 200", [200, 200, 200], 0.22, 0.01),
+                ("black", [0, 0, 0], 1.0, 0.0001),
+            ] {
+                let [r, g, b] = rgb.map(|v| f32::from(v) / 255.0);
+                let mut s = rgb_source(depth, [r, g, b, 1.0]);
+                let actual = define_square(&mut s, command);
+                assert!((actual - expected).abs() <= tolerance, "{command}, {name}, depth {depth}: {actual}");
             }
         }
     }
@@ -276,47 +276,47 @@ fn sampled_trcs_cannot_hide_non_finite_contributing_channels() {
         assert!((define_square(&mut finite, command) - 0.49).abs() <= 0.03);
 
         for rgba in [
-                [f32::INFINITY, 0.0, 0.0, 1.0],
-                [0.0, f32::INFINITY, 0.0, 1.0],
-                [0.0, 0.0, f32::INFINITY, 1.0],
-                [0.0, 0.0, 0.0, f32::INFINITY],
-                [f32::NAN, 0.0, 0.0, 1.0],
-                [f32::NEG_INFINITY, 0.0, 0.0, 1.0],
-            ] {
-                let mut s = rgb_source(32, rgba);
-                s.edit("Assign sampled sRGB", |doc, _| {
-                    doc.icc_profile = Some(icc.clone());
-                    Ok(())
-                })
-                .unwrap();
-                s.execute("select.rect", json!({"x": 8, "y": 8, "width": 24, "height": 24})).unwrap();
-                // An accepted invalid source would replace this existing preset.
-                s.execute("brush.presets.save", json!({"name": "Kept preset"})).unwrap();
-                let active = s.active().unwrap().active_layer.unwrap();
-                let stored = s.active().unwrap().doc.layer(active).unwrap().surface().unwrap().rgba(20, 20).map(f32::to_bits);
-                assert_eq!(stored, rgba.map(f32::to_bits), "non-finite values must reach the source read unchanged");
-                let doc = s.active().unwrap().doc.clone();
-                let history = s.active().unwrap().history.past_len();
-                let brush = s.tools.brush.clone();
-                let presets = s.tools.presets.clone();
-                let current = s.tools.current_preset.clone();
-                let revision = s.tools.brush_rev;
-                let journal = s.journal.clone();
+            [f32::INFINITY, 0.0, 0.0, 1.0],
+            [0.0, f32::INFINITY, 0.0, 1.0],
+            [0.0, 0.0, f32::INFINITY, 1.0],
+            [0.0, 0.0, 0.0, f32::INFINITY],
+            [f32::NAN, 0.0, 0.0, 1.0],
+            [f32::NEG_INFINITY, 0.0, 0.0, 1.0],
+        ] {
+            let mut s = rgb_source(32, rgba);
+            s.edit("Assign sampled sRGB", |doc, _| {
+                doc.icc_profile = Some(icc.clone());
+                Ok(())
+            })
+            .unwrap();
+            s.execute("select.rect", json!({"x": 8, "y": 8, "width": 24, "height": 24})).unwrap();
+            // An accepted invalid source would replace this existing preset.
+            s.execute("brush.presets.save", json!({"name": "Kept preset"})).unwrap();
+            let active = s.active().unwrap().active_layer.unwrap();
+            let stored = s.active().unwrap().doc.layer(active).unwrap().surface().unwrap().rgba(20, 20).map(f32::to_bits);
+            assert_eq!(stored, rgba.map(f32::to_bits), "non-finite values must reach the source read unchanged");
+            let doc = s.active().unwrap().doc.clone();
+            let history = s.active().unwrap().history.past_len();
+            let brush = s.tools.brush.clone();
+            let presets = s.tools.presets.clone();
+            let current = s.tools.current_preset.clone();
+            let revision = s.tools.brush_rev;
+            let journal = s.journal.clone();
 
-                let error = s.execute(command, json!({"name": "Kept preset"})).unwrap_err();
+            let error = s.execute(command, json!({"name": "Kept preset"})).unwrap_err();
 
-                assert!(error.to_string().contains("non-finite"), "{command}: {error}");
-                assert!(Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-                assert_eq!(s.active().unwrap().history.past_len(), history);
-                assert_eq!(s.active().unwrap().active_layer, Some(active));
-                assert!(s.active().unwrap().doc.selection.is_some());
-                assert_eq!(s.active().unwrap().doc.icc_profile.as_ref(), Some(&icc));
-                assert_eq!(s.active().unwrap().doc.layer(active).unwrap().surface().unwrap().rgba(20, 20).map(f32::to_bits), stored);
-                assert_eq!(s.tools.brush, brush);
-                assert_eq!(s.tools.presets, presets);
-                assert_eq!(s.tools.current_preset, current);
-                assert_eq!(s.tools.brush_rev, revision);
-                assert_eq!(s.journal, journal);
+            assert!(error.to_string().contains("non-finite"), "{command}: {error}");
+            assert!(Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+            assert_eq!(s.active().unwrap().active_layer, Some(active));
+            assert!(s.active().unwrap().doc.selection.is_some());
+            assert_eq!(s.active().unwrap().doc.icc_profile.as_ref(), Some(&icc));
+            assert_eq!(s.active().unwrap().doc.layer(active).unwrap().surface().unwrap().rgba(20, 20).map(f32::to_bits), stored);
+            assert_eq!(s.tools.brush, brush);
+            assert_eq!(s.tools.presets, presets);
+            assert_eq!(s.tools.current_preset, current);
+            assert_eq!(s.tools.brush_rev, revision);
+            assert_eq!(s.journal, journal);
         }
     }
 }
