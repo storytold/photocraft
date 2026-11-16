@@ -91,8 +91,17 @@ fn upload(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let tint = Color32::from_rgba_unmultiplied(r, g, b, a);
         // The tint marks the sampling area (with Indicates: Excluded Area, what is left out);
         // the fill area is never tinted.
-        let px: Vec<Color32> =
-            w.mask.iter().zip(&w.hole_px).map(|(m, h)| if w.opts.show_overlay && !*h && *m != w.opts.excluded { tint } else { Color32::TRANSPARENT }).collect();
+        let px: Vec<Color32> = w
+            .mask
+            .iter()
+            .zip(&w.hole_px)
+            .zip(&w.base.eligible_px)
+            .map(
+                |((&selected, &hole), &eligible)| {
+                    if w.opts.show_overlay && !hole && (selected && eligible) != w.opts.excluded { tint } else { Color32::TRANSPARENT }
+                },
+            )
+            .collect();
         let img = egui::ColorImage::new([w.pw, w.ph], px);
         match &mut w.overlay_tex {
             Some(t) => t.set(img, egui::TextureOptions::NEAREST),

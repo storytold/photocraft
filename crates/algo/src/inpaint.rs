@@ -87,12 +87,14 @@ pub struct CompleteParams {
     pub refine_extent: usize,
     /// Colour adaptation of the copies.
     pub adapt: Adapt,
+    /// A channel to copy without gain or bias, such as alpha.
+    pub unadapted_channel: Option<usize>,
     pub seed: u64,
 }
 
 impl Default for CompleteParams {
     fn default() -> Self {
-        Self { patch_radius: 3, em_iters: 10, min_em_iters: 3, pm_iters: 2, refine_extent: 192, adapt: Adapt::NONE, seed: 1 }
+        Self { patch_radius: 3, em_iters: 10, min_em_iters: 3, pm_iters: 2, refine_extent: 192, adapt: Adapt::NONE, unadapted_channel: None, seed: 1 }
     }
 }
 
@@ -231,6 +233,7 @@ fn complete_cow<'a>(
             tmom: Vec::new(),
             smom: Vec::new(),
             adapt: p.adapt,
+            unadapted_channel: p.unadapted_channel,
             ctl: *ctl,
         };
         solver.prepare(keep_source_moments);

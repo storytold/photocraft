@@ -49,12 +49,14 @@ pub struct FillOptions {
     pub scale: bool,
     /// Add a horizontally mirrored source copy.
     pub mirror: bool,
+    /// Channel containing coverage, if the caller is excluding transparent pixels from the source.
+    pub alpha_channel: Option<usize>,
     pub seed: u64,
 }
 
 impl Default for FillOptions {
     fn default() -> Self {
-        Self { color_adaptation: color_level("default"), rotations: Vec::new(), scale: false, mirror: false, seed: 1 }
+        Self { color_adaptation: color_level("default"), rotations: Vec::new(), scale: false, mirror: false, alpha_channel: None, seed: 1 }
     }
 }
 
@@ -261,7 +263,7 @@ fn fill_cow(
     if !hole.iter().any(|h| *h) {
         return Ok(img.into_owned());
     }
-    let params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+    let params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, unadapted_channel: opts.alpha_channel, ..Default::default() };
     let gap = 2 * params.patch_radius + 2;
     let ok: Vec<bool> = par::map(w * h, true, |i| !hole[i] && source[i]);
     let src = Src { w, h, ch, img: &img, ok: &ok };
@@ -342,7 +344,7 @@ fn fill_cow(
             };
             match filled {
                 Ok(f) => f,
-                Err(img) => membrane_fill_with(w, h, ch, &img, hole, ctl)?,
+                Err(img) => fallback(w, h, ch, img, hole, source, opts.alpha_channel, ctl)?,
             }
         }
         Some(mimg) => match complete_masked(mw, mh, ch, &mimg, &roles, &params, &inner)? {
@@ -358,11 +360,68 @@ fn fill_cow(
                 }
                 out
             }
-            None => membrane_fill_with(w, h, ch, &img, hole, ctl)?,
+            None => fallback(w, h, ch, img, hole, source, opts.alpha_channel, ctl)?,
         },
     };
     ctl.check()?;
     ctl.progress(1.0);
+    Ok(out)
+}
+
+/// With too few samples for a full patch, the membrane normally interpolates the hole's
+/// surroundings. If those include transparent pixels, use the mean of the eligible samples
+/// instead, so the fallback cannot mix excluded pixels back into the fill.
+#[allow(clippy::too_many_arguments)]
+fn fallback(
+    w: usize,
+    h: usize,
+    ch: usize,
+    img: Cow<[f32]>,
+    hole: &[bool],
+    source: &[bool],
+    alpha_channel: Option<usize>,
+    ctl: &Interrupt,
+) -> Result<Vec<f32>, Cancelled> {
+    let Some(alpha) = alpha_channel.filter(|&i| i < ch) else {
+        return membrane_fill_with(w, h, ch, &img, hole, ctl);
+    };
+    let mut has_transparency = false;
+    let mut sum = vec![0.0f64; ch];
+    let mut count = 0usize;
+    for (y, (row, (holes, sources))) in img.chunks_exact(w * ch).zip(hole.chunks_exact(w).zip(source.chunks_exact(w))).enumerate() {
+        if y.is_multiple_of(32) {
+            ctl.check()?;
+        }
+        for (px, (&is_hole, &is_source)) in row.chunks_exact(ch).zip(holes.iter().zip(sources)) {
+            if is_hole {
+                continue;
+            }
+            let visible = px[alpha] > 0.0 && px[alpha].is_finite();
+            has_transparency |= !visible;
+            if is_source && visible {
+                for (total, &value) in sum.iter_mut().zip(px) {
+                    *total += f64::from(value);
+                }
+                count += 1;
+            }
+        }
+    }
+    if !has_transparency || count == 0 {
+        return membrane_fill_with(w, h, ch, &img, hole, ctl);
+    }
+    let mean: Vec<f32> = sum.iter().map(|&total| (total / count as f64) as f32).collect();
+    let mut out = img.into_owned();
+    par::chunks_mut(&mut out, w * ch, true, |y, row| {
+        if ctl.cancelled() {
+            return;
+        }
+        for (pixel, &is_hole) in row.chunks_exact_mut(ch).zip(&hole[y * w..(y + 1) * w]) {
+            if is_hole {
+                pixel.copy_from_slice(&mean);
+            }
+        }
+    });
+    ctl.check()?;
     Ok(out)
 }
 

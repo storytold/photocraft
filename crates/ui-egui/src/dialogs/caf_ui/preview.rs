@@ -8,6 +8,8 @@ pub(super) struct Base {
     pub(super) rect: Rect,
     pub(super) hole: Vec<bool>,
     pub(super) base: Vec<bool>,
+    /// Whether each overlay proxy pixel has coverage in the sampled image.
+    pub(super) eligible_px: Vec<bool>,
 }
 
 impl Base {
@@ -58,9 +60,9 @@ impl Preview {
     }
 }
 
-/// The preview's error when the sampling area has no pixels outside the fill area (the engine's
+/// The preview's error when the sampling area has no usable pixels outside the fill area (the engine's
 /// fill refuses that case with the same words).
-const NOTHING_TO_SAMPLE: &str = "nothing to sample from: the sampling area has no pixels outside the fill area";
+const NOTHING_TO_SAMPLE: &str = "nothing to sample from: the sampling area has no usable pixels outside the fill area";
 
 /// The plan of the current state (without strokes when `strokes` is false).
 pub(super) fn plan_params(w: &CafWorkspace, strokes: bool) -> Value {
@@ -96,8 +98,39 @@ pub(super) fn compute_base(app: &PhotocraftApp, w: &CafWorkspace) -> Result<Base
         p["sampling"] = json!("rectangular");
     }
     let plan = photocraft_engine::edit_menu_cmds::content_aware_plan(&st.doc, w.layer, &p, CMD).map_err(|e| e.to_string())?;
+    let eligible_px = sampling_coverage(w, &st.doc, &plan)?;
     let base = if custom { vec![false; plan.base.len()] } else { plan.base };
-    Ok(Base { window: plan.window, rect: plan.rect, hole: plan.hole, base })
+    Ok(Base { window: plan.window, rect: plan.rect, hole: plan.hole, base, eligible_px })
+}
+
+/// Cache coverage at proxy resolution. Brush strokes can reach beyond the plan's window.
+fn sampling_coverage(w: &CafWorkspace, doc: &photocraft_doc::Document, plan: &photocraft_engine::edit_menu_cmds::CafPlan) -> Result<Vec<bool>, String> {
+    let Some(alpha) = plan.opts.alpha_channel else { return Ok(vec![true; w.pw * w.ph]) };
+    let surface = doc.layer(w.layer).and_then(|l| l.surface()).ok_or("no pixel layer")?;
+    let composite = (w.opts.sample_all && plan.rect != w.canvas).then(|| photocraft_compose::render_reduced(doc, w.pw as u32, w.ph as u32));
+    let n = plan.fmt.channels();
+    let stride = plan.rect.width() as usize;
+    let mut coverage = vec![false; w.pw * w.ph];
+    for (i, eligible) in coverage.iter_mut().enumerate() {
+        let (px, py) = (i % w.pw, i / w.pw);
+        let (x, y) = w.proxy_center(px, py);
+        let (x, y) = (x.floor() as i32, y.floor() as i32);
+        if !w.canvas.contains(x, y) {
+            continue;
+        }
+        let value = if plan.rect.contains(x, y) {
+            let sample = (y - plan.rect.y0) as usize * stride + (x - plan.rect.x0) as usize;
+            plan.img[sample * n + alpha]
+        } else if let Some(composite) = &composite {
+            composite.get(px as i32, py as i32)[3]
+        } else {
+            let mut pixel = [0.0f32; 8];
+            surface.read_pixel(x, y, &mut pixel);
+            pixel[alpha]
+        };
+        *eligible = value > 0.0 && value.is_finite();
+    }
+    Ok(coverage)
 }
 
 /// The fill area's edges merged into runs, as the canvas traces a selection, in document px;
