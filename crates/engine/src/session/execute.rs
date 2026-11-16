@@ -180,7 +180,9 @@ impl Session {
             && channel_cmds::is_channel_target(params)
             && self.active().is_some_and(|d| {
                 use photocraft_color::ColorMode::{Cmyk, Indexed, Lab, Multichannel};
-                matches!(d.doc.mode, Cmyk | Lab | Indexed | Multichannel)
+                // The named plane must exist (an alpha channel in range, a Quick Mask in progress); otherwise
+                // the old mode refusal answers, not a later "no alpha channel" error.
+                matches!(d.doc.mode, Cmyk | Lab | Indexed | Multichannel) && channel_cmds::read_target_surface(&d.doc, None, params).is_ok()
             })
         {
             // The plane is named by the params, so no active layer is needed (a multichannel document has none).

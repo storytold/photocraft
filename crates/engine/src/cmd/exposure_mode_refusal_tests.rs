@@ -10,20 +10,20 @@ const EXPOSURE: &str = "image.adjustments.exposure";
 
 fn new_doc(mode: &str, depth: u32) -> Session {
     let mut s = Session::new();
-    s.execute("file.new", json!({"width": 8, "height": 8, "mode": mode, "depth": depth, "background": "white"})).unwrap();
+    s.execute("file.new", json!({"width": 8, "height": 8, "mode": mode, "depth": depth, "background": "white"})).expect("file.new");
     s
 }
 
 fn pixel(s: &Session) -> [f32; 4] {
-    photocraft_compose::render(&s.active().unwrap().doc, Rect::new(2, 2, 3, 3)).px[0]
+    photocraft_compose::render(&s.active().expect("an active document").doc, Rect::new(2, 2, 3, 3)).px[0]
 }
 
 fn assert_refused(mut s: Session, what: &str) {
     assert!(!s.is_enabled(EXPOSURE), "{what}: the menu entry is greyed out");
-    let steps = s.active().unwrap().history.past_len();
+    let steps = s.active().expect("an active document").history.past_len();
     let before = pixel(&s);
     assert!(s.execute(EXPOSURE, json!({"exposure": -1})).is_err(), "{what}: running it is refused");
-    assert_eq!(s.active().unwrap().history.past_len(), steps, "{what}: no history state");
+    assert_eq!(s.active().expect("an active document").history.past_len(), steps, "{what}: no history state");
     assert_eq!(pixel(&s), before, "{what}: no pixel changes");
 }
 
@@ -38,15 +38,15 @@ fn cmyk_and_lab_documents_refuse_exposure() {
 #[test]
 fn indexed_multichannel_and_bitmap_documents_refuse_exposure() {
     let mut indexed = new_doc("rgb", 8);
-    indexed.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none", "forced": "none"})).unwrap();
+    indexed.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none", "forced": "none"})).expect("indexed color");
     assert_refused(indexed, "Indexed Color");
 
     let mut multi = new_doc("rgb", 8);
-    multi.execute("image.mode.multichannel", json!({})).unwrap();
+    multi.execute("image.mode.multichannel", json!({})).expect("multichannel");
     assert_refused(multi, "Multichannel");
 
     let mut bitmap = new_doc("grayscale", 8);
-    bitmap.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+    bitmap.execute("image.mode.bitmap", json!({"method": "threshold"})).expect("test step");
     assert_refused(bitmap, "Bitmap");
 }
 
@@ -56,10 +56,10 @@ fn rgb_and_grayscale_documents_keep_exposure_at_every_depth() {
         for depth in [8, 16, 32] {
             let mut s = new_doc(mode, depth);
             assert!(s.is_enabled(EXPOSURE), "{mode} {depth} bit");
-            let steps = s.active().unwrap().history.past_len();
+            let steps = s.active().expect("an active document").history.past_len();
             let before = pixel(&s);
-            s.execute(EXPOSURE, json!({"exposure": -1})).unwrap();
-            assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{mode} {depth} bit: one history state");
+            s.execute(EXPOSURE, json!({"exposure": -1})).expect("test step");
+            assert_eq!(s.active().expect("an active document").history.past_len(), steps + 1, "{mode} {depth} bit: one history state");
             assert!(pixel(&s)[0] < before[0], "{mode} {depth} bit darkens: {:?} -> {:?}", before, pixel(&s));
         }
     }
@@ -80,7 +80,7 @@ fn duotone_documents_keep_todays_behaviour() {
         d.mode = photocraft_color::ColorMode::Duotone;
         Ok(())
     })
-    .unwrap();
+    .expect("test step");
     assert!(s.is_enabled(EXPOSURE), "Duotone is not refused by this item");
 }
 
@@ -97,18 +97,18 @@ fn the_refusal_names_the_documents_mode() {
 #[test]
 fn a_quick_mask_in_a_cmyk_document_keeps_todays_behaviour() {
     let mut s = new_doc("cmyk", 8);
-    s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({"on": true})).expect("test step");
     assert!(s.is_enabled(EXPOSURE), "the Quick Mask is not refused by this item");
-    let steps = s.active().unwrap().history.past_len();
-    s.execute(EXPOSURE, json!({"exposure": -1, "target": "quickMask"})).unwrap();
-    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history state");
+    let steps = s.active().expect("an active document").history.past_len();
+    s.execute(EXPOSURE, json!({"exposure": -1, "target": "quickMask"})).expect("test step");
+    assert_eq!(s.active().expect("an active document").history.past_len(), steps + 1, "one history state");
 }
 
 fn docs() -> Vec<(&'static str, Session)> {
     let mut indexed = new_doc("rgb", 8);
-    indexed.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none", "forced": "none"})).unwrap();
+    indexed.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none", "forced": "none"})).expect("indexed color");
     let mut multi = new_doc("rgb", 8);
-    multi.execute("image.mode.multichannel", json!({})).unwrap();
+    multi.execute("image.mode.multichannel", json!({})).expect("multichannel");
     vec![("cmyk", new_doc("cmyk", 8)), ("lab", new_doc("lab", 8)), ("indexed", indexed), ("multichannel", multi)]
 }
 
@@ -118,26 +118,27 @@ fn docs() -> Vec<(&'static str, Session)> {
 #[test]
 fn an_explicit_alpha_target_is_not_refused_in_other_modes() {
     for (mode, mut s) in docs() {
-        s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
-        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
-        let steps = s.active().unwrap().history.past_len();
+        s.execute("channel.new", json!({"name": "A", "fill": "white"})).expect("test step");
+        s.execute("channel.target", json!({"channel": "composite"})).expect("test step");
+        let steps = s.active().expect("an active document").history.past_len();
         let r = s.execute(EXPOSURE, json!({"exposure": -1, "target": {"channel": 0}}));
         assert!(r.is_ok(), "{mode} alpha: {r:?}");
-        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{mode}: one history state");
-        assert!(s.execute(EXPOSURE, json!({"exposure": -1, "target": "pixels"})).is_err(), "{mode}: pixels stay refused");
+        assert_eq!(s.active().expect("an active document").history.past_len(), steps + 1, "{mode}: one history state");
+        let e = s.execute(EXPOSURE, json!({"exposure": -1, "target": "pixels"})).expect_err("pixels stay refused");
+        assert!(e.to_string().contains("needs an RGB or Grayscale document"), "{mode}: the document-mode refusal, got {e}");
     }
 }
 
 #[test]
 fn an_explicit_quick_mask_target_is_not_refused_in_other_modes() {
     for (mode, mut s) in docs() {
-        s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        s.execute("select.editInQuickMaskMode", json!({"on": true})).expect("test step");
         // The panel shows a colour channel (not the Quick Mask), so only the params name the plane.
         s.execute("channel.target", json!({"colors": [0]})).unwrap_or_else(|e| panic!("{mode}: showing a colour channel failed: {e:?}"));
-        let steps = s.active().unwrap().history.past_len();
+        let steps = s.active().expect("an active document").history.past_len();
         let r = s.execute(EXPOSURE, json!({"exposure": -1, "target": "quickMask"}));
         assert!(r.is_ok(), "{mode} quick mask: {r:?}");
-        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{mode}: one history state");
+        assert_eq!(s.active().expect("an active document").history.past_len(), steps + 1, "{mode}: one history state");
     }
 }
 
@@ -147,12 +148,27 @@ fn an_explicit_quick_mask_target_is_not_refused_in_other_modes() {
 fn an_explicit_channel_target_on_a_shape_layer_is_still_refused_in_rgb() {
     for mode in ["rgb", "grayscale"] {
         let mut s = new_doc(mode, 8);
-        s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
-        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
-        s.execute("shape.create", json!({"kind": "rect", "rect": [1, 1, 4, 4], "fill": "#ff0000"})).unwrap();
-        let steps = s.active().unwrap().history.past_len();
+        s.execute("channel.new", json!({"name": "A", "fill": "white"})).expect("test step");
+        s.execute("channel.target", json!({"channel": "composite"})).expect("test step");
+        s.execute("shape.create", json!({"kind": "rect", "rect": [1, 1, 4, 4], "fill": "#ff0000"})).expect("test step");
+        let steps = s.active().expect("an active document").history.past_len();
         let r = s.execute(EXPOSURE, json!({"exposure": -1, "target": {"channel": 0}}));
         assert!(r.is_err(), "{mode}: a shape layer is not a pixel layer: {r:?}");
-        assert_eq!(s.active().unwrap().history.past_len(), steps, "{mode}: no history state");
+        assert_eq!(s.active().expect("an active document").history.past_len(), steps, "{mode}: no history state");
+    }
+}
+
+/// The bypass needs the named plane to exist: a missing alpha index, a huge one, or a Quick Mask that is
+/// not there get the document-mode refusal, and never panic.
+#[test]
+fn a_target_naming_no_plane_keeps_the_mode_refusal() {
+    let targets = [json!({"channel": 99}), json!({"channel": usize::MAX}), json!({"channel": u64::MAX}), json!("quickMask")];
+    for (mode, mut s) in docs() {
+        for t in &targets {
+            let steps = s.active().expect("an active document").history.past_len();
+            let e = s.execute(EXPOSURE, json!({"exposure": -1, "target": t})).expect_err("a missing plane is refused");
+            assert!(e.to_string().contains("needs an RGB or Grayscale document"), "{mode} {t}: the document-mode refusal, got {e}");
+            assert_eq!(s.active().expect("an active document").history.past_len(), steps, "{mode} {t}: no history state");
+        }
     }
 }
