@@ -47,10 +47,7 @@ fn assert_missing_scope_refusal(session: &mut Session, conditional: bool, comman
     let caller = session.actions.list.iter().find(|action| action.name == "Caller").unwrap();
     assert_eq!(caller.steps[0].1[if conditional { "then" } else { "action" }], "Finish");
     assert_eq!(caller.steps[0].1["set"], "Missing", "deferred external reference stays unrewritten");
-    assert!(
-        caller.steps[0].1.get(if conditional { "thenActionId" } else { "actionId" }).is_none(),
-        "an unresolved scope must not bind a local namesake"
-    );
+    assert!(caller.steps[0].1.get(if conditional { "thenActionId" } else { "actionId" }).is_none(), "an unresolved scope must not bind a local namesake");
     let played = session.execute("actions.play", json!({"action":"Caller"})).unwrap();
     assert!(played["failed"]["error"].as_str().unwrap().contains("no action in the named set"), "{played}");
     assert_eq!(played["failed"]["id"], command);
