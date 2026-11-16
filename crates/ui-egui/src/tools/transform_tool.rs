@@ -468,4 +468,6 @@ pub(crate) fn default_interpolation(app: &PhotocraftApp) -> &'static str {
 }
 
 #[cfg(test)]
+mod mode_switch_tests;
+#[cfg(test)]
 mod tests;
