@@ -231,3 +231,32 @@ fn a_huge_canvas_still_bakes_the_stack() {
     assert!(near(e[0], [1.0; 3]) && near(e[e.len() - 1], [0.0; 3]), "the inverse at both corners");
     assert!(near(e[33 * 33 * 16 + 33 * 16 + 16], [0.5; 3]), "and the middle");
 }
+
+/// CodeRabbit on #15045: the lattice that replaces the Background keeps its locks, so a deep-knockout layer above it
+/// (0 % fill: the knocked-out area shows bare) knocks out to the lattice, not to transparency: the Invert on top still
+/// gives the exact inverse of every entry.
+#[test]
+fn a_deep_knockout_layer_knocks_out_to_the_lattice() {
+    let (mut s, _) = session();
+    edit(&mut s, |d| {
+        let mut l = green(d, 1.0);
+        l.advanced.knockout = photocraft_doc::Knockout::Deep;
+        l.fill_opacity = 0.0;
+        d.layers.insert(1, l);
+    });
+    let e = entries(&mut s);
+    for (r, g, b) in [(0, 0, 0), (6, 0, 3), (2, 5, 1), (6, 6, 6)] {
+        assert!(near(at(&e, r, g, b), input(r, g, b).map(|v| 1.0 - v)), "({r},{g},{b}): {:?}", at(&e, r, g, b));
+    }
+}
+
+/// CodeRabbit on #15045: the public helper keeps the earlier adjustment table only for a canvas too small for the
+/// lattice (and other modes); it returns a table, not a hidden failure.
+#[test]
+fn bake_cube_keeps_the_adjustment_table_on_a_canvas_too_small_for_the_lattice() {
+    let (mut s, _) = session();
+    s.execute("image.canvasSize", json!({"width": 2, "height": 2, "anchor": "center"})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let cube = bake_cube(&doc, 33, "t").expect("the earlier table");
+    assert!(cube.contains("LUT_3D_SIZE 33"));
+}

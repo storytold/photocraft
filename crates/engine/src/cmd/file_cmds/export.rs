@@ -318,7 +318,13 @@ fn bake_cube_stack(size: usize, title: &str, doc: &Document) -> Result<String> {
         grid.depth = depth;
         let lattice = Layer::new("Lattice", LayerContent::Raster(surf));
         match grid.layers.iter().position(|l| Some(l.id) == doc.background().map(|b| b.id)) {
-            Some(i) => grid.layers[i] = lattice,
+            Some(i) => {
+                // The lattice takes the Background's place and its identity (locked transparency and position), so a
+                // deep-knockout layer above it still knocks out to the lattice.
+                let mut lattice = lattice;
+                lattice.locks = grid.layers[i].locks;
+                grid.layers[i] = lattice;
+            }
             None => grid.layers.insert(0, lattice),
         }
         let ys: std::collections::BTreeSet<usize> = pass.iter().map(|e| e.2.1).collect();
@@ -336,17 +342,20 @@ fn bake_cube_stack(size: usize, title: &str, doc: &Document) -> Result<String> {
 }
 
 /// The table `file.export.colorLookupTables` bakes by default: the whole visible stack of an RGB
-/// document (#13742). Other modes, and a canvas too small for the lattice, keep the earlier
-/// table of the visible top-level adjustments.
-pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
+/// document (#13742). Other modes, and a canvas too small for the lattice (the bake's own refusal),
+/// keep the earlier table of the visible top-level adjustments; any other error of the stack bake,
+/// an allocation failure included, is returned rather than hidden behind that table.
+pub fn bake_cube(doc: &Document, size: usize, title: &str) -> Result<String> {
     let size = size.clamp(2, craft_cms::lutfile::MAX_SIZE);
-    if doc.mode == ColorMode::Rgb
-        && let Ok(cube) = bake_cube_stack(size, title, doc)
-    {
-        return cube;
+    if doc.mode == ColorMode::Rgb {
+        match bake_cube_stack(size, title, doc) {
+            Ok(cube) => return Ok(cube),
+            Err(EngineError::BadParams { .. }) => {}
+            Err(e) => return Err(e),
+        }
     }
     let layers: Vec<&Layer> = doc.layers.iter().filter(|l| l.visible && matches!(l.content, LayerContent::Adjustment(_))).collect();
-    bake_cube_layers(size, title, &layers, doc.depth)
+    Ok(bake_cube_layers(size, title, &layers, doc.depth))
 }
 
 /// Export either the whole visible stack (backward-compatible default), the Layers panel's
