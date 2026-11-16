@@ -904,6 +904,7 @@ fn save_new_style(app: &mut PhotocraftApp, f: &Map<String, Value>) {
                 o.insert(k.clone(), v.clone());
             }
         }
+        normalize_wide_angle(kind, &mut params);
         entries.push(json!([kind, params]));
     }
     let bo = f.get("p:blendingOptions").cloned().unwrap_or_else(|| json!({}));
@@ -1804,13 +1805,15 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
             {
                 e["params"] = v["params"].clone();
             }
-            let mut stored = disp.clone();
-            normalize_wide_angle(&sel_kind, &mut stored);
-            if crate::widgets::secondary_button(ui, tl!("Make Default"), 110.0).clicked()
-                && app.run("layer.layerStyle.makeDefault", json!({"kind": sel_kind, "params": stored})).is_ok()
-                && let Some(d) = f.get_mut(USER_DEFAULTS).and_then(Value::as_object_mut)
-            {
-                d.insert(sel_kind.to_string(), stored);
+            if crate::widgets::secondary_button(ui, tl!("Make Default"), 110.0).clicked() {
+                // Stored like OK stores it: a typed 360 is 0.
+                let mut stored = disp.clone();
+                normalize_wide_angle(&sel_kind, &mut stored);
+                if app.run("layer.layerStyle.makeDefault", json!({"kind": sel_kind, "params": stored})).is_ok()
+                    && let Some(d) = f.get_mut(USER_DEFAULTS).and_then(Value::as_object_mut)
+                {
+                    d.insert(sel_kind.to_string(), stored);
+                }
             }
         });
     });

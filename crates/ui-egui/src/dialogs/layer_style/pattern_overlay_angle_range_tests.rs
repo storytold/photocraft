@@ -98,3 +98,21 @@ fn make_default_stores_360_as_0_like_ok_does() {
     assert_eq!(made_default_angle(KIND, "-360"), (-360.0, -360.0));
     assert_eq!(made_default_angle(KIND, "270"), (270.0, 270.0));
 }
+
+/// What New Style… stores for a typed `text`.
+fn new_style_angle(kind: &str, text: &str) -> f64 {
+    let mut harness = typed_dialog(kind, text);
+    let (app, fields) = harness.state_mut();
+    let before: Vec<String> = app.session.presets.styles.iter().flat_map(|g| g.items.iter().map(|s| s.name.clone())).collect();
+    save_new_style(app, fields);
+    let found = app.session.presets.styles.iter().flat_map(|g| g.items.iter()).find(|s| !before.contains(&s.name));
+    let Some(style) = found else { return f64::NAN };
+    find_angle(&serde_json::to_value(&style.effects).unwrap_or(Value::Null)).unwrap_or(f64::NAN)
+}
+
+#[test]
+fn new_style_stores_360_as_0_like_ok_does() {
+    assert_eq!(new_style_angle(KIND, "360"), 0.0);
+    assert_eq!(new_style_angle(KIND, "-360"), -360.0);
+    assert_eq!(new_style_angle(KIND, "270"), 270.0);
+}
