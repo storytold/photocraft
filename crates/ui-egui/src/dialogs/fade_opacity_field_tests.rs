@@ -114,19 +114,84 @@ fn the_schema_keeps_the_0_to_100_range_with_100_by_default() {
     assert!(spec.params.contains("whole %"));
 }
 
-/// CodeRabbit on #15099: scrubbing the field is not typing. A scrub's fractions (37.5, from the drag speed)
-/// are rounded like any field's drag, not read without their dot (375, clamped to 100); typed text still is.
+/// CodeRabbit on #15099 and #15123: scrubbing the field is not typing. A scrub's fractions (37.5, from the
+/// drag speed) are rounded like any field's drag, not read without their dot (375, clamped to 100); typed
+/// text still is, read from the text as typed (`0.40` is 40, `0.4` is 4).
 #[test]
 fn a_scrub_drag_rounds_and_does_not_drop_the_dot() {
     use super::read_fade_opacity;
-    // Typed: the dot goes.
-    assert_eq!(read_fade_opacity(12.3, true), 123.0);
-    assert_eq!(read_fade_opacity(0.4, true), 4.0);
-    assert_eq!(read_fade_opacity(50.0, true), 50.0);
+    assert_eq!(read_fade_opacity(12.3, Some("12.3"), true), 123.0);
+    assert_eq!(read_fade_opacity(0.4, Some("0.4"), true), 4.0);
+    assert_eq!(read_fade_opacity(0.4, Some("0.40"), true), 40.0, "trailing zeros count");
+    assert_eq!(read_fade_opacity(0.1, Some("0.10"), true), 10.0);
+    assert_eq!(read_fade_opacity(50.0, Some("50"), true), 50.0);
+    assert_eq!(read_fade_opacity(0.4, None, true), 4.0, "without the text, the number's own form");
     // A drag: the number itself, which the field rounds (37.5 -> 38, never 375 -> 100).
-    assert_eq!(read_fade_opacity(37.5, false), 37.5);
-    assert_eq!(read_fade_opacity(37.5, false).round().clamp(0.0, 100.0), 38.0);
-    assert_eq!(read_fade_opacity(12.3, false).round(), 12.0);
+    assert_eq!(read_fade_opacity(37.5, None, false), 37.5);
+    assert_eq!(read_fade_opacity(37.5, Some("37.5"), false).round().clamp(0.0, 100.0), 38.0);
+    assert_eq!(read_fade_opacity(12.3, None, false).round(), 12.0);
+}
+
+/// CodeRabbit on #15123: typing `0.40` into the field (through the widget, so its text is what was typed) gives 40.
+#[test]
+fn typing_a_decimal_with_a_trailing_zero_keeps_the_zero() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "0.40");
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(40));
+    type_opacity(&mut h, "0.4");
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(4));
+}
+
+/// CodeRabbit on #15123: `0.4` then a `0` typed in a later frame is `0.40` to the parser but 0.4 to the number,
+/// which does not change. The text is what is read, so opacity goes from 4 to 40.
+#[test]
+fn appending_a_zero_in_a_later_frame_reads_the_whole_text() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "0.4");
+    h.run_steps(2);
+    assert_eq!(opacity(&h, id), json!(4), "0.4 is 4");
+    h.event(Event::Text("0".into()));
+    h.run_steps(2);
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(40), "0.40 is 40");
+    assert_eq!(alerts(&h), 0);
+}
+
+/// The text the field held before it had the focus is not an entry: clicking into it after `150` was
+/// entered does not read that text again (the value stays 100, no second alert).
+#[test]
+fn clicking_back_into_the_field_does_not_reread_the_old_text() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "150");
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(100));
+    h.state_mut().ui.dialogs.retain(|d| d.kind != DialogKind::Error);
+    h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == id).unwrap().fields.insert("opacity".into(), json!(60));
+    h.run_steps(2);
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Opacity")).expect("an Opacity field");
+    field.click();
+    h.run_steps(3);
+    assert_eq!(opacity(&h, id), json!(60), "gaining the focus changes nothing");
+    assert_eq!(alerts(&h), 0);
+}
+
+/// CodeRabbit on #15123: after `0.4` (opacity 4, the number's draft 0.4) the text is replaced by something that is not a
+/// number. The parser keeps the draft 0.4, which must not be read again as an entry (0.4 rounds to 0): opacity stays 4.
+#[test]
+fn replacing_a_fraction_with_text_that_is_not_a_number_keeps_the_value() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "0.4");
+    h.run_steps(2);
+    assert_eq!(opacity(&h, id), json!(4), "0.4 is 4");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Text("not a number".into()));
+    h.run_steps(2);
+    assert_eq!(opacity(&h, id), json!(4), "while typing");
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(4), "once the field is left");
+    assert_eq!(alerts(&h), 0);
 }
 
 /// CodeRabbit on #15106: the Enter that leaves an out-of-range Opacity raises the alert and does not also
@@ -162,4 +227,34 @@ fn a_command_arrow_step_does_not_read_its_fraction_as_typed_text() {
     h.run_steps(3);
     assert_eq!(opacity(&h, id), json!(50));
     assert_eq!(alerts(&h), 0, "no range alert");
+}
+
+/// CodeRabbit on #15106: a pasted value is typed text whatever modifier was held for the paste: `150` is clamped to
+/// 100 and the range alert comes once the field is left.
+#[test]
+fn a_pasted_value_past_the_range_raises_the_alert() {
+    let (mut h, id) = open();
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Opacity")).expect("an Opacity field");
+    field.click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Paste("150".into()));
+    h.run_steps(2);
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(100));
+    assert_eq!(alerts(&h), 1, "the range alert");
+}
+
+/// CodeRabbit on #15099: after `150` set the out-of-range mark, replacing the text with something that is not a number
+/// takes the mark back: leaving the field raises no alert.
+#[test]
+fn text_that_is_not_a_number_clears_an_earlier_range_mark() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "150");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Text("abc".into()));
+    h.run_steps(1);
+    leave(&mut h);
+    assert_eq!(alerts(&h), 0, "no range alert");
+    assert_eq!(opacity(&h, id), json!(100), "the clamped value stays");
 }
