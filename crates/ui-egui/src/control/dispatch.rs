@@ -242,8 +242,8 @@ fn ui_set(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
     if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
         return err(format!("unknown field `{field}` (fields: {})", UI_SET_FIELDS.join(", ")));
     }
-    // Everything is validated and materialized before the first field is applied, so a
-    // rejected call applies none of its fields (#412's guarantee, down to the values
+    // Input and all fields are validated and materialized before application starts, so a
+    // rejected input applies none of its fields (#412's validation guarantee, down to values
     // and nested keys).
     wrap(UiSet::parse(app, p).and_then(|set| set.apply(app, ctx, p)))
 }
@@ -274,8 +274,9 @@ impl UiSet {
 
     /// Apply validated fields, propagating command failures from selection and brush updates.
     fn apply(mut self, app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> std::result::Result<Value, String> {
-        // All fields are validated. Select the requested frame thumbnail before applying the
-        // remaining view state, so a denied selection leaves the other fields intact.
+        // All fields are validated. Follow a changed layer filter before applying any other UI
+        // state: a denied selection must not leave a partly applied patch.
+        self.tools.apply_layer_filter(app)?;
         self.tools.select_frame_target(app)?;
         self.tools.apply(app)?;
         self.crop.apply(app);
@@ -370,6 +371,16 @@ impl ToolSet {
         Ok(())
     }
 
+    /// Apply a filter patch before other fields, since following it can be refused.
+    fn apply_layer_filter(&mut self, app: &mut PhotocraftApp) -> std::result::Result<(), String> {
+        if let Some(filter) = self.layer_filter.take() {
+            crate::layer_filter_ui::apply(app, filter);
+            // As a filter edit in the panel: deselect the layers it now hides, row shown or not.
+            crate::layer_filter_ui::selection::try_follow(app)?;
+        }
+        Ok(())
+    }
+
     /// Apply a validated patch, selecting the tool before its per-tool settings.
     fn apply(self, app: &mut PhotocraftApp) -> std::result::Result<(), String> {
         if let Some(shape) = &self.frame_shape {
@@ -411,11 +422,6 @@ impl ToolSet {
         }
         if let Some(on) = self.tile_grid {
             app.ui.view.tile_grid = on;
-        }
-        if let Some(f) = self.layer_filter {
-            crate::layer_filter_ui::apply(app, f);
-            // As a filter edit in the panel: deselect the layers it now hides, row shown or not.
-            crate::layer_filter_ui::selection::try_follow(app)?;
         }
         if let Some(m) = self.pen_mode {
             app.ui.tool_options.vector_mode = m;

@@ -49,5 +49,25 @@ pub fn deselect_hidden(app: &mut PhotocraftApp) -> Result<(), String> {
     }
     let active = st.active_layer.filter(|a| listed.contains(a)).or(listed.last().copied());
     let anchor = st.layer_anchor.filter(|a| listed.contains(a)).or(active);
+    authorize_deselection(app)?;
     photocraft_engine::layer_multi_cmds::set_selection(&mut app.session, listed, active, anchor).map_err(|e| e.to_string())
+}
+
+/// The partial-selection path has the same command and engine authorization as the full path.
+fn authorize_deselection(app: &PhotocraftApp) -> Result<(), String> {
+    let command = "select.deselectLayers";
+    let params = json!({});
+    if app.automation_input
+        && let Some(authorize) = app.services.automation_command.as_ref()
+    {
+        authorize(command, &params)?;
+    }
+    if let Some(authorize) = app.session.authorize {
+        authorize(command, &params).map_err(|error| error.to_string())?;
+    } else if app.automation_input
+        && let Some(authorize) = app.services.automation_authorize
+    {
+        authorize(command, &params).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }

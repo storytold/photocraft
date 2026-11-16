@@ -512,6 +512,63 @@ fn control_patch_reports_a_refused_deselection_and_retries_the_same_filter() {
     assert_eq!(app.session.active().unwrap().selected_layers(), [blue], "after success an identical patch does not prune a later selection");
 }
 
+
+/// A filter-driven partial deselection uses the normal command and engine authorization gates,
+/// and a refused mixed patch leaves every other field untouched for retry.
+#[test]
+fn partial_filter_deselection_checks_both_gates_before_applying_mixed_fields() {
+    fn deny_engine(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "select.deselectLayers" { Err(photocraft_engine::EngineError::Other("engine refused".into())) } else { Ok(()) }
+    }
+    let mut app = app();
+    let red = layer(&app, "Red");
+    let blue = layer(&app, "Blue");
+    app.run("layer.select", json!({"layer":red.0,"mode":"replace"})).unwrap();
+    app.run("layer.select", json!({"layer":blue.0,"mode":"add"})).unwrap();
+    let state = app.session.active().unwrap();
+    let selection = state.selected_layers();
+    let active = state.active_layer;
+    let anchor = state.layer_anchor;
+    let history = state.history.past_len();
+    let pen_mode = app.ui.tool_options.vector_mode.clone();
+    assert_eq!(selection, [red, blue]);
+    app.automation_input = true;
+    app.services.automation_command = Some(Box::new(|id, _| if id == "select.deselectLayers" { Err("command refused".into()) } else { Ok(()) }));
+    let patch = json!({"layerFilter":{"by":"name","name":"Red"},"tileGrid":true,"penMode":"path"});
+    let refused = call(&mut app, "ui.set", patch.clone());
+    assert_eq!(refused["ok"], false);
+    assert!(refused["error"].as_str().unwrap().contains("command refused"));
+    assert_eq!(app.session.active().unwrap().selected_layers(), selection);
+    assert_eq!(app.session.active().unwrap().active_layer, active);
+    assert_eq!(app.session.active().unwrap().layer_anchor, anchor);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    assert!(!app.ui.view.tile_grid);
+    assert_eq!(app.ui.tool_options.vector_mode, pen_mode);
+    assert!(Filter::of(&app).on, "the denied filter remains pending for retry");
+
+    app.services.automation_command = None;
+    app.services.automation_authorize = Some(deny_engine);
+    let refused = call(&mut app, "ui.set", patch.clone());
+    assert_eq!(refused["ok"], false);
+    assert!(refused["error"].as_str().unwrap().contains("engine refused"));
+    assert_eq!(app.session.active().unwrap().selected_layers(), selection);
+    assert_eq!(app.session.active().unwrap().active_layer, active);
+    assert_eq!(app.session.active().unwrap().layer_anchor, anchor);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    assert!(!app.ui.view.tile_grid);
+    assert_eq!(app.ui.tool_options.vector_mode, pen_mode);
+
+    app.services.automation_authorize = None;
+    assert_eq!(call(&mut app, "ui.set", patch)["ok"], true);
+    let state = app.session.active().unwrap();
+    assert_eq!(state.selected_layers(), [red]);
+    assert_eq!(state.active_layer, Some(red));
+    assert_eq!(state.layer_anchor, Some(red));
+    assert_eq!(state.history.past_len(), history);
+    assert!(app.ui.view.tile_grid);
+    assert_eq!(app.ui.tool_options.vector_mode, "path");
+}
+
 /// Off because nothing is picked yet keeps the controls usable: the first Kind button turns it on.
 #[test]
 fn controls_stay_usable_while_nothing_is_picked() {
