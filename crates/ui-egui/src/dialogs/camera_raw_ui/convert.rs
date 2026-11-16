@@ -210,6 +210,7 @@ pub(super) fn open_pixels(
         undo: Vec::new(),
         redo: Vec::new(),
         edit_origin: None,
+        clarity_before_auto: None,
         main_focused: false,
     };
     d.render(ctx);

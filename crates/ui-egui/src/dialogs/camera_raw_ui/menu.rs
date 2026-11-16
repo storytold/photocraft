@@ -35,8 +35,8 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" | "demosaic" => {}
-            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" => {
+            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "autoEffects" if value.is_boolean() => {}
+            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "autoEffects" => {
                 return Some(Err(format!("RAW Develop {key} must be a boolean")));
             }
             _ => return Some(Err(format!("unknown RAW Develop ui property {key}"))),
@@ -102,6 +102,13 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
             return Some(Err(format!("bad RAW Develop settings: {e}")));
         }
     }
+    let mut clarity_before_auto = d.clarity_before_auto;
+    if let Some(enabled) = ui.get("autoEffects").and_then(Value::as_bool)
+        && let Some((clarity, before)) = d.effects_auto_edit(enabled, next_params.clarity)
+    {
+        next_params.clarity = clarity;
+        clarity_before_auto = before;
+    }
     let scope_update = match ui.get("scope") {
         Some(scope) => match crate::camera_raw_scope_ui::prepare_control(&next_params, d.selection.is_some(), &app.ui.camera_raw_scope, scope) {
             Ok(update) => Some(update),
@@ -134,10 +141,11 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if d.params.point_curve != next_params.point_curve {
         d.curve_state = Default::default();
     }
-    if d.params != next_params {
+    if d.params != next_params || d.clarity_before_auto != clarity_before_auto {
         remember_edit(d);
         d.dirty = true;
         d.params = next_params;
+        d.clarity_before_auto = clarity_before_auto;
     }
     if let Some(b) = ui.get("before").and_then(Value::as_bool) {
         d.show_before = b;

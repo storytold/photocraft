@@ -951,6 +951,67 @@ fn auto_sets_the_light_sliders_from_the_image() {
 }
 
 #[test]
+fn effects_auto_is_reversible_and_preserves_other_settings() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let st = app.session.active_mut().unwrap();
+    let layer = st.active_layer.unwrap();
+    let Some(photocraft_doc::LayerContent::Raster(surf)) = std::sync::Arc::make_mut(&mut st.doc).layer_mut(layer).map(|l| &mut l.content) else {
+        panic!("expected a raster layer");
+    };
+    let format = surf.format();
+    for x in 0..64 {
+        let v = 0.5 + 0.05 * (x as f32 * std::f32::consts::TAU / 32.0).sin();
+        let pixel = photocraft_raster::from_rgba(&format, [v, v, v, 1.0]);
+        for y in 0..64 {
+            surf.write_pixel(x, y, &pixel);
+        }
+    }
+    let mut update = |ui| menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": ui})).unwrap();
+    let initial = update(json!({"set": {"clarity": -12, "texture": 8, "dehaze": 5, "saturation": 7, "grainAmount": 2, "exposure": 0.5}})).unwrap();
+    assert!(update(json!({"autoEffects": true, "view": "invalid"})).is_err());
+    assert_eq!(update(json!({})).unwrap()["autoEffects"], false);
+    let auto = update(json!({"autoEffects": true})).unwrap();
+    assert_eq!(auto["autoEffects"], true);
+    assert!(auto["params"]["clarity"].as_f64().unwrap() > 0.0);
+    let mut expected = initial["params"].clone();
+    expected["clarity"] = auto["params"]["clarity"].clone();
+    assert_eq!(auto["params"], expected);
+    assert_eq!(update(json!({"autoEffects": true})).unwrap()["previewRevision"], auto["previewRevision"]);
+
+    let off = update(json!({"autoEffects": false})).unwrap();
+    assert_eq!(off["autoEffects"], false);
+    assert_eq!(off["params"], initial["params"]);
+    let undo = update(json!({"undo": true})).unwrap();
+    assert_eq!(undo["autoEffects"], true);
+    assert_eq!(undo["params"], auto["params"]);
+    let redo = update(json!({"redo": true})).unwrap();
+    assert_eq!(redo["autoEffects"], false);
+    assert_eq!(redo["params"], initial["params"]);
+}
+
+#[test]
+fn effects_auto_stays_with_its_raw_in_the_filmstrip() {
+    use photocraft_raw::testgen::DngSpec;
+    let (mut app, _) = raw_app();
+    let ctx = egui::Context::default();
+    let data = (0..64 * 64).map(|i| (12_000.0 + 2_000.0 * ((i % 64) as f32 * std::f32::consts::TAU / 32.0).sin()) as u16).collect();
+    let dng = DngSpec::cfa(64, 64, data).build();
+    app.open_bytes("one.dng", &dng).unwrap();
+    app.open_bytes("two.dng", &dng).unwrap();
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    let auto = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"clarity": -12}, "autoEffects": true}})).unwrap().unwrap();
+    assert_eq!(auto["autoEffects"], true);
+    filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
+    assert_eq!(app.camera_raw.as_ref().unwrap().clarity_before_auto, None);
+    filmstrip::show_raw(&mut app, &ctx, 0).unwrap();
+    let off = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"autoEffects": false}})).unwrap().unwrap();
+    assert_eq!(off["params"]["clarity"].as_f64(), Some(-12.0));
+}
+
+#[test]
 fn a_sidecar_fills_the_dialog_and_open_writes_it_back() {
     use std::sync::{Arc, Mutex};
     let (mut app, dng) = raw_app();

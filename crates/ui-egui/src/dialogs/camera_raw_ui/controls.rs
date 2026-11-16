@@ -1,42 +1,46 @@
 use super::open::{Target, cancel, raw_stage};
 use super::sidecar::{load_settings, report_file_error, save_settings};
 use super::{
-    Align2, BANDS, CameraRaw, CameraRawDialog, Color32, ERect, FontId, PANEL_W, PhotocraftApp, Pos2, Sense, Stroke, Tokens, ToneZone, Value, Wheel, curve_lut,
-    json, pos2, vec2, widgets,
+    Align2, BANDS, CameraRaw, CameraRawDialog, Color32, ERect, Edit, FontId, PANEL_W, PhotocraftApp, Pos2, Sense, Stroke, Tokens, ToneZone, Value, Wheel,
+    curve_lut, json, pos2, vec2, widgets,
 };
 
 const RAW_UNDO_LIMIT: usize = 40;
 
 pub(super) fn remember_edit(d: &mut CameraRawDialog) {
+    push_edit(d, d.edit());
+}
+
+fn push_edit(d: &mut CameraRawDialog, edit: Edit) {
     if d.undo.len() == RAW_UNDO_LIMIT {
         d.undo.remove(0);
     }
-    d.undo.push(d.params.clone());
+    d.undo.push(edit);
     d.redo.clear();
 }
 
 pub(super) fn undo_edit(d: &mut CameraRawDialog) -> bool {
     let Some(prev) = d.undo.pop() else { return false };
-    d.redo.push(d.params.clone());
-    if d.params.point_curve != prev.point_curve {
-        d.curve_state = Default::default();
-    }
-    d.params = prev;
-    d.dirty = true;
-    d.edit_origin = None;
+    d.redo.push(d.edit());
+    restore_edit(d, prev);
     true
 }
 
 pub(super) fn redo_edit(d: &mut CameraRawDialog) -> bool {
     let Some(next) = d.redo.pop() else { return false };
-    d.undo.push(d.params.clone());
-    if d.params.point_curve != next.point_curve {
+    d.undo.push(d.edit());
+    restore_edit(d, next);
+    true
+}
+
+fn restore_edit(d: &mut CameraRawDialog, edit: Edit) {
+    if d.params.point_curve != edit.params.point_curve {
         d.curve_state = Default::default();
     }
-    d.params = next;
+    d.params = edit.params;
+    d.clarity_before_auto = edit.clarity_before_auto;
     d.dirty = true;
     d.edit_origin = None;
-    true
 }
 
 fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
@@ -380,6 +384,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         crate::camera_raw_scope_ui::header(&mut props, d, scope);
         d.scope.alt_tone = None;
         let mut dirty = false;
+        let mut toggle_effects = false;
+        let auto_effects = d.clarity_before_auto.is_some();
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             let p = &mut d.params;
@@ -408,6 +414,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 row(ui, &mut dirty, "Saturation", &mut p.saturation, -100.0..=100.0, None);
             });
             section(ui, "Effects", false, |ui| {
+                let hint =
+                    if auto_effects { tl!("Restore Clarity to its value before Auto") } else { tl!("Suggest a Clarity adjustment for low-contrast detail") };
+                toggle_effects = ui.add(egui::Button::new(tl!("Auto")).selected(auto_effects)).on_hover_text(hint).clicked();
                 row(ui, &mut dirty, "Texture", &mut p.texture, -100.0..=100.0, None);
                 row(ui, &mut dirty, "Clarity", &mut p.clarity, -100.0..=100.0, None);
                 row(ui, &mut dirty, "Dehaze", &mut p.dehaze, -100.0..=100.0, None);
@@ -550,9 +559,14 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             && let Some(origin) = d.edit_origin.take()
             && origin != d.params
         {
-            let edited = std::mem::replace(&mut d.params, origin);
+            push_edit(d, Edit { params: origin, clarity_before_auto: d.clarity_before_auto });
+        }
+        if toggle_effects && let Some((clarity, before)) = d.effects_auto_edit(!auto_effects, d.params.clarity) {
             remember_edit(d);
-            d.params = edited;
+            d.params.clarity = clarity;
+            d.clarity_before_auto = before;
+            d.dirty = true;
+            ctx.request_repaint();
         }
     });
     crate::camera_raw_scope_ui::persist(app, ctx);

@@ -14,6 +14,8 @@
 //! "commit":true | "cancel":true}}}`; the reply describes the dialog. `{"ui":{"saveSettings":true}}`
 //! and `{"ui":{"loadSettings":true}}` run Save Settings… / Load Settings… (Camera Raw `.xmp`
 //! settings files, see [`photocraft_io::camera_raw_xmp`]) through the file dialog.
+//! `{"ui":{"autoEffects":true}}` applies Auto Clarity when the image has suitable detail.
+//! Send `false` to restore the prior Clarity value.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::camera_raw::{CameraRaw, Wheel, curve_lut};
@@ -61,6 +63,11 @@ const PROXY_SIDE: usize = 900;
 pub(crate) const PARALLEL_MIN_PIXELS: usize = 16 * 1024;
 const PANEL_W: f32 = 330.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
+
+struct Edit {
+    params: CameraRaw,
+    clarity_before_auto: Option<f32>,
+}
 
 pub struct CameraRawDialog {
     pub layer: LayerId,
@@ -117,13 +124,27 @@ pub struct CameraRawDialog {
     develop_ms: f64,
     pub(crate) develop_backend: &'static str,
     /// Settings before each finished edit, so Ctrl+Z works inside the dialog (#4100).
-    undo: Vec<CameraRaw>,
-    redo: Vec<CameraRaw>,
+    undo: Vec<Edit>,
+    redo: Vec<Edit>,
     /// Params at pointer-down. One drag is one undo step.
     edit_origin: Option<CameraRaw>,
+    /// Also indicates that the Effects Auto button is selected.
+    clarity_before_auto: Option<f32>,
 }
 
 impl CameraRawDialog {
+    fn edit(&self) -> Edit {
+        Edit { params: self.params.clone(), clarity_before_auto: self.clarity_before_auto }
+    }
+
+    fn effects_auto_edit(&self, enabled: bool, clarity: f32) -> Option<(f32, Option<f32>)> {
+        match (enabled, self.clarity_before_auto) {
+            (true, None) => photocraft_algo::camera_raw::auto_clarity(&self.proxy, self.pw, self.ph).map(|estimate| (estimate, Some(clarity))),
+            (false, Some(previous)) => Some((previous, None)),
+            _ => None,
+        }
+    }
+
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
@@ -131,6 +152,7 @@ impl CameraRawDialog {
             "histogram": {"source": if self.show_before { "before" } else { "after" }, "approximate": true, "size": [self.pw, self.ph],
                 "sampleDomain": "preview-rgb", "range": [0, 1], "red": h.channels[0].as_slice(), "green": h.channels[1].as_slice(), "blue": h.channels[2].as_slice(),
                 "samples": h.samples, "transparent": h.transparent, "invalid": h.invalid, "underflow": h.underflow, "overflow": h.overflow, "shadows": h.shadows, "highlights": h.highlights}});
+        result["autoEffects"] = json!(self.clarity_before_auto.is_some());
         result["smartFilter"] = json!(match self.target {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter | Target::OpenRaw => None,
