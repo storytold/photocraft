@@ -406,6 +406,9 @@ fn ok_at_capacity_says_the_pending_key_was_not_taken() {
     // Plain letters under ⌘⌥⇧, valid on every platform (the F keys under ⌘⌥ are reserved on some).
     let full: Vec<String> = ('A'..='Z').filter(|c| *c != 'Y').take(photocraft_engine::prefs::MAX_ALTERNATES).map(|c| format!("Cmd+Alt+Shift+{c}")).collect();
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("alternates".into(), json!({ "edit.cut": full }));
+    // Eight further keys make the dialog taller than the default window with the fonts of some platforms, which leaves OK
+    // out of view: a tall window keeps it clickable everywhere.
+    h.set_size(egui::vec2(1100.0, 1800.0));
     h.run_steps(3);
     click(&mut h, "Add Shortcut");
     press(&mut h, FREE.0, FREE.1);
