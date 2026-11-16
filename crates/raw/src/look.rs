@@ -854,9 +854,9 @@ mod tests {
         assert_eq!(s.data, data, "decoding must preserve the synthetic sensor codes");
         assert!(s.black.values.iter().chain(&s.black.delta_h).chain(&s.black.delta_v).all(|value| *value == 0.0));
         assert_eq!(s.baseline_exposure, 0.0);
-        // The JPEG oracle below uses the generator's known 12-bit white. Vendor
-        // plateau inference may treat a repeated patch edge as saturation; keep
-        // this rendering-fit test independent of that separate estimation policy.
+        // The fixture uses a 12-bit encoding scale. craft-raw's NEF reader takes no WhiteLevel
+        // tag and reads the brightest flat, noiseless patch as a saturation plateau.
+        // Keep this rendering-fit test independent of that separate estimation policy.
         s.white = [4095.0; 3];
         let to_srgb = color::invert(&color::srgb_to_xyz_d50()).unwrap();
         let pro_to_srgb = color::mul(&to_srgb, &color::rgb_to_xyz(color::ROMM, color::D50_XY));

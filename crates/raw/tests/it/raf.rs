@@ -6,7 +6,7 @@ use photocraft_raw::*;
 
 const RGGB: [u8; 4] = [0, 1, 1, 2];
 
-/// A 30×18 X-Trans RAF with a 2-pixel masked border.
+/// A 30×18 X-Trans RAF with a 2-pixel masked border, exercising padded rows.
 fn xtrans(packing: RafPacking, bits: u32) -> RafSpec {
     let (w, h) = (30, 18);
     let white = ((1u32 << bits) - 1) as u16;
@@ -27,6 +27,75 @@ fn every_storage_decodes_exactly() {
         let s = decode(&b, &Limits::default()).unwrap_or_else(|e| panic!("{packing:?}: {e}"));
         assert_eq!((s.width, s.height), (30, 18));
         assert_eq!(s.data, spec.data, "{packing:?}");
+    }
+}
+
+const SMALL_ROW_VALUES: [u16; 16] = [0, 1, 0x3FFF, 0x2000, 0x1234, 42, 255, 0x1555, 0x2AAA, 2, 0x3FFE, 4096, 8191, 1023, 7, 37];
+
+#[test]
+fn generated_raw_ifd_tags_are_strictly_ascending() {
+    let specs = [
+        xtrans(RafPacking::U16 { le: true }, 14),
+        xtrans(RafPacking::U16 { le: false }, 16),
+        xtrans(RafPacking::Lsb12, 12),
+        xtrans(RafPacking::Words14, 14),
+        compressed(&XTRANS, 14, false),
+        compressed(&XTRANS, 14, true),
+    ];
+    for mut spec in specs {
+        for wb in [None, Some([302, 604, 453])] {
+            spec.wb_grb = wb;
+            let bytes = spec.build();
+            let region_at = u32::from_be_bytes(bytes[100..104].try_into().unwrap()) as usize;
+            let region = &bytes[region_at..];
+            let le = &region[..2] == b"II";
+            let word = |at| {
+                let bytes = region[at..at + 2].try_into().unwrap();
+                if le { u16::from_le_bytes(bytes) } else { u16::from_be_bytes(bytes) }
+            };
+            let long = |at| {
+                let bytes = region[at..at + 4].try_into().unwrap();
+                if le { u32::from_le_bytes(bytes) } else { u32::from_be_bytes(bytes) }
+            };
+            // Follow the serialized TIFF pointers independently of the decoder.
+            let ifd0 = long(4) as usize;
+            assert_eq!(word(ifd0), 1);
+            assert_eq!(word(ifd0 + 2), 0xF000);
+            let raw_ifd = long(ifd0 + 10) as usize;
+            let tags: Vec<_> = (0..usize::from(word(raw_ifd))).map(|i| word(raw_ifd + 2 + 12 * i)).collect();
+            assert!(tags.windows(2).all(|pair| pair[0] < pair[1]), "{:?}, WB {wb:?}: {tags:X?}", spec.packing);
+            assert_eq!(tags.contains(&0xF005), spec.packing == RafPacking::Words14);
+            assert_eq!(tags.contains(&0xF006), spec.packing == RafPacking::Words14);
+            assert_eq!(tags.contains(&0xF00E), wb.is_some());
+        }
+    }
+}
+
+#[test]
+fn small_word_packed_rows_decode_exactly() {
+    // Eight 14-bit samples need four words per row. At two rows this has the
+    // same payload size as U16, so the packed-word flag must select the decoder.
+    for data in [vec![1; 16], SMALL_ROW_VALUES.to_vec()] {
+        let mut spec = RafSpec::new(8, 2, data.clone(), RGGB.to_vec());
+        spec.packing = RafPacking::Words14;
+        spec.bits = 14;
+        let sensor = decode(&spec.build(), &Limits::default()).unwrap();
+        assert_eq!((sensor.width, sensor.height), (8, 2));
+        assert_eq!(sensor.data, data);
+    }
+}
+
+#[test]
+fn small_u16_rows_keep_their_container_packing() {
+    for le in [false, true] {
+        for data in [vec![1; 16], SMALL_ROW_VALUES.to_vec()] {
+            let mut spec = RafSpec::new(8, 2, data.clone(), RGGB.to_vec());
+            spec.packing = RafPacking::U16 { le };
+            spec.bits = 14;
+            let sensor = decode(&spec.build(), &Limits::default()).unwrap();
+            assert_eq!((sensor.width, sensor.height), (8, 2));
+            assert_eq!(sensor.data, data, "U16 little-endian: {le}");
+        }
     }
 }
 
