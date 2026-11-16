@@ -3,9 +3,10 @@
 use craft_exr::decode::{Limits, PartInfo, SampleType};
 use photocraft_codecs::{Image, SampleType as CodecSample};
 
-// A power of two smaller than half the least positive HALF value, as recommended by
-// OpenEXR. It lets a straight-alpha layer carry light from a zero-coverage pixel.
-const MIN_ALPHA: f32 = 1.0 / 67_108_864.0;
+// Give emission a little coverage so straight-alpha layers can carry it. The smallest
+// normal binary16 alpha survives the canvas's half-float texture upload and keeps ordinary
+// emission colours representable after division.
+const EMISSION_ALPHA: f32 = 1.0 / 16_384.0;
 
 pub(crate) fn parts(bytes: &[u8]) -> Vec<PartInfo> {
     // This is a header-only query. The actual decoder enforces its own pixel limits.
@@ -44,11 +45,21 @@ pub(crate) fn unpremultiply(data: &mut [u8], channels: usize) {
         if !(0.0..1.0).contains(&a) {
             continue;
         }
-        if a == 0.0 && colours.iter().all(|colour| f32::from_ne_bytes(*colour) == 0.0) {
-            continue;
-        }
-        let a = a.max(MIN_ALPHA);
-        *alpha = a.to_ne_bytes();
+        let a = if a == 0.0 {
+            if colours.iter().all(|colour| f32::from_ne_bytes(*colour) == 0.0) {
+                continue;
+            }
+            *alpha = EMISSION_ALPHA.to_ne_bytes();
+            EMISSION_ALPHA
+        } else if a == EMISSION_ALPHA {
+            // Reserve the exact marker for zero-alpha emission. Move a real sample at the
+            // marker up by one float32 step, preserving its coverage at export.
+            let a = a.next_up();
+            *alpha = a.to_ne_bytes();
+            a
+        } else {
+            a
+        };
         for colour in colours {
             *colour = (f32::from_ne_bytes(*colour) / a).clamp(f32::MIN, f32::MAX).to_ne_bytes();
         }
@@ -72,7 +83,7 @@ pub(crate) fn premultiply_image(image: &mut Image) {
         for colour in colours {
             *colour = (f32::from_ne_bytes(*colour) * a).to_ne_bytes();
         }
-        if a == MIN_ALPHA {
+        if a == EMISSION_ALPHA {
             *alpha = 0.0f32.to_ne_bytes();
         }
     }

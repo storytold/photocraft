@@ -51,6 +51,27 @@ fn exr_scanline_alpha_opens_and_round_trips() {
 }
 
 #[test]
+fn exr_emission_survives_half_float_texture_samples() {
+    let bytes = fixture(ChannelLayout::Rgba, &[0.5, 0.25, 0.125, 0.0], &[0.5, 0.25, 0.125, 1.0 / 16_384.0]);
+    let doc = import("emission.exr", &bytes).unwrap().document;
+    let samples = doc.layers[0].surface().unwrap().read_region(doc.bounds());
+    let half = Image::from_f32(32, 16, ChannelLayout::Rgba, &samples)
+        .unwrap()
+        .convert(ChannelLayout::Rgba, codecs::SampleType::F16)
+        .convert(ChannelLayout::Rgba, codecs::SampleType::F32);
+    let alpha = half.get(4, 4, 3);
+    assert!(alpha > 0.0);
+    for (channel, expected) in [0.5, 0.25, 0.125].into_iter().enumerate() {
+        assert!((half.get(4, 4, channel) * alpha - expected).abs() <= 1e-6);
+    }
+
+    let saved = export(&doc, "exr", &ExportOptions::default()).unwrap();
+    let raw = codecs::decode(&saved.bytes).unwrap();
+    assert_eq!(raw.get(4, 4, 3), 0.0);
+    assert_eq!(raw.get(24, 4, 3), (1.0f32 / 16_384.0).next_up());
+}
+
+#[test]
 fn exr_selected_channel_group_keeps_associated_colour() {
     let channels: Vec<_> = ["diffuse.R", "diffuse.G", "diffuse.B", "diffuse.A"]
         .into_iter()
