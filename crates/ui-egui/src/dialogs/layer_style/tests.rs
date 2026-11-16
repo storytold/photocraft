@@ -330,6 +330,13 @@ fn new_effects_start_from_the_made_default() {
 }
 
 #[test]
+fn bevel_emboss_style_choices_include_stroke_emboss() {
+    let style = spec("bevelEmboss").iter().find(|&&(key, _, _)| key == "style").map(|&(_, _, param)| param);
+
+    assert!(matches!(style, Some(P::Choice(options)) if options.contains(&("stroke", "Stroke Emboss"))));
+}
+
+#[test]
 fn every_kind_has_spec_and_defaults() {
     for &(kind, _) in KINDS {
         assert!(!spec(kind).is_empty(), "{kind}");
