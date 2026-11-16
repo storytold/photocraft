@@ -1145,8 +1145,8 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
             {
                 d.fields.remove("sourceLayer");
             }
-            d.fields.insert(field.to_string(), value);
-            crate::filter_dialog::color_settings_after_dialog_set(&app.session, &mut d.fields, field);
+            let old = d.fields.insert(field.to_string(), value);
+            crate::filter_dialog::color_settings_after_dialog_set(&app.session, &mut d.fields, field, old.as_ref());
             // A Color Picker's colour shows in its target dialog at once, as a drag would.
             crate::color_picker_ui::live_preview::sync(app);
             ok(Value::Null)

@@ -101,10 +101,23 @@ pub(super) fn sync(ctx: &egui::Context, f: &mut Map<String, Value>) {
     }
 }
 
-/// `ui.dialog.set` picking an entry loads its setup at once, as the next draw would: a confirm
-/// before that draw then sends the setup's values with its name, not the old values.
-pub(crate) fn after_dialog_set(session: &Session, f: &mut Map<String, Value>, field: &str) {
-    if f.get("__command").and_then(Value::as_str) != Some(COMMAND) || field != KEY {
+/// `ui.dialog.set` does at once what the next draw would, so a confirm before that draw sends the
+/// same name and values: picking an entry loads its setup, and changing a control (`old` is the
+/// value it replaced) while a setup shows makes it Custom.
+pub(crate) fn after_dialog_set(session: &Session, f: &mut Map<String, Value>, field: &str, old: Option<&Value>) {
+    if f.get("__command").and_then(Value::as_str) != Some(COMMAND) {
+        return;
+    }
+    if field != KEY {
+        if !is_tracked(field) || current(f) == CUSTOM_SETTINGS {
+            return;
+        }
+        // The value the shown setup gave, or before the first draw the one the dialog opened with.
+        let base = f.get(BASE).and_then(|b| b.get(field)).or(old);
+        if matches!((base, f.get(field)), (Some(b), Some(v)) if !same(b, v)) {
+            f.insert(KEY.into(), json!(CUSTOM_SETTINGS));
+            f.insert(APPLIED.into(), json!(CUSTOM_SETTINGS));
+        }
         return;
     }
     let monitor = f.get("monitorProfile").and_then(Value::as_str).unwrap_or("auto");

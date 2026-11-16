@@ -188,3 +188,30 @@ fn a_setup_set_by_script_loads_before_the_next_draw() {
         assert_eq!((c.ask_on_mismatch, c.ask_on_paste, c.ask_on_missing), (true, true, true), "{frames} frames");
     }
 }
+
+#[test]
+fn a_control_set_by_script_shows_custom_before_the_next_draw() {
+    let name = "North America General Purpose 2";
+    let stored = preset_setup(&ColorSettings::default(), name, "srgb").unwrap();
+    // The engine keeps a named setup's name over the first two (gamma is no part of a setup, and
+    // the setup loads over a reset), so only the dialog can tell they changed. Setting the value a
+    // control already shows is no change.
+    for (key, value, expected) in
+        [("blendTextGamma", json!(1.8), CUSTOM_SETTINGS), ("reset", json!(true), CUSTOM_SETTINGS), ("blendTextGamma", json!(1.45), name)]
+    {
+        // Confirmed with no draw at all, and after one draw.
+        for frames in [0, 1] {
+            // A fresh app each time: the dialog reopens with the last confirmed values.
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            let ctx = egui::Context::default();
+            PhotocraftApp::setup_context(&ctx, Default::default());
+            app.session.color.settings = stored.clone();
+            let id = open_dialog(&mut app, &ctx);
+            show(&mut app, &ctx, frames);
+            dialog_set(&mut app, &ctx, id, key, value.clone());
+            assert_eq!(app.ui.dialog_mut(id).unwrap().fields["preset"], expected, "{key} {value}, {frames} frames");
+            crate::dialogs::confirm(&mut app, id).unwrap();
+            assert_eq!(app.session.color.settings.preset, expected, "{key} {value}, {frames} frames");
+        }
+    }
+}
