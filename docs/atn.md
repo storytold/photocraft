@@ -184,7 +184,7 @@ row; the action still adds only one Undo entry.
 | `Rple` | ripple | Ripple | `filter.distort.ripple` |
 | `Rtte` | rotateEventEnum | Rotate | `image.imageRotation.90cw`, `image.imageRotation.90ccw`, `image.imageRotation.180`, `image.rotation.arbitrary`, `edit.transform.rotate90Cw`, `edit.transform.rotate90Ccw`, `edit.transform.rotate180` |
 | `save` | save | Save | `file.save`, `file.saveAs`, `file.saveACopy` |
-| `slct` | select | Select | `layer.select`, `layer.selectAbove`, `layer.selectBelow`, `layer.addAboveToSelection`, `layer.addBelowToSelection`, `layer.selectTop`, `layer.selectBottom`, `channel.target`, `edit.undo`, `edit.redo`, `view.fitOnScreen`, `view.actualPixels`, `view.zoomIn`, `view.zoomOut`, `document.activate` |
+| `slct` | select | Select | `layer.select`, `layer.selectAbove`, `layer.selectBelow`, `layer.addAboveToSelection`, `layer.addBelowToSelection`, `layer.selectTop`, `layer.selectBottom`, `channel.target`, `edit.undo`, `edit.redo`, `history.selectSnapshot`, `view.fitOnScreen`, `view.actualPixels`, `view.zoomIn`, `view.zoomOut`, `document.activate` |
 | (string ID only) | selectAllLayers | Select All Layers | `select.allLayers` |
 | (string ID only) | refineSelectionEdge | Select and Mask | `select.refineEdge` |
 | (string ID only) | smartBrushWorkspace | Select and Mask | `select.refineEdge` |
@@ -521,6 +521,9 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   Loading the active layer's vector mask (`Path.vectorMask`, `Vrsn` 1, `vectorMaskParams` true)
   maps to `select.loadSelection` and saves back as a path reference. Other vector-mask source
   references and additional path-selection options remain kept steps.
+- Selecting a named snapshot (`SnpS`) resolves its exact name at playback through
+  `history.selectSnapshot`; a missing or ambiguous name fails without restoring another snapshot.
+  Native snapshot ids are session-local and do not export as Photoshop references.
 - Close without `Svng` preserves the unanswered save choice. Headless playback refuses to discard a
   changed document. Native `file.close` still defaults to discard; `save: "ask"` opts into this policy.
 - Photo Filter converts recorded Lab colours through `craft-cms`.

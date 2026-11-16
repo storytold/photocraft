@@ -57,6 +57,15 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
         // History › Step Backward / Step Forward.
         (Some("HstS"), Target::Ordinal(o)) if o == "Prvs" => none("edit.undo"),
         (Some("HstS"), Target::Ordinal(o)) if o == "Nxt" => none("edit.redo"),
+        (Some("SnpS"), Target::Name(n)) => {
+            // Keep unsupported scopes/options and names that cannot round-trip as Unicode.
+            let exact = matches!(r, [ReferenceItem::Name { name, .. }]
+                if *name == UnicodeString::new(&n) || *name == UnicodeString::new_nul(&n));
+            if d.items.len() != 1 || !exact || n.trim().is_empty() || n.contains('\0') {
+                return Mapped::Unsupported { harmless: false };
+            }
+            step("history.selectSnapshot", json!({"name": n}))
+        }
         (Some(c), Target::Class) if is_tool_class(c) => Mapped::Unsupported { harmless: true },
         // A menu item chosen while recording (`Mn`): the View menu's zoom items replay.
         (Some("Mn"), Target::Ordinal(item)) => match lookup(MENU_ITEMS, &item) {
@@ -125,6 +134,14 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
         }
         "edit.undo" => desc("null").with("null", enumerated("HstS", "Ordn", "Prvs")),
         "edit.redo" => desc("null").with("null", enumerated("HstS", "Ordn", "Nxt ")),
+        "history.selectSnapshot" => {
+            // Native ids belong to this session and have no recorded Photoshop identity.
+            let name = jstr(p, "name")?;
+            if p.as_object()?.len() != 1 || name.trim().is_empty() || name.contains('\0') {
+                return None;
+            }
+            desc("null").with("null", name_ref("SnpS", name))
+        }
         "layer.selectAbove" => desc("null").with("null", ord("Frwr")),
         "layer.selectBelow" => desc("null").with("null", ord("Bckw")),
         "layer.addAboveToSelection" => desc("null").with("null", ord("Frwr")).with("selectionModifier", enm("selectionModifierType", "addToSelection")),

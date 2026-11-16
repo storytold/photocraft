@@ -1223,6 +1223,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.stylize.diffuse", json!({"mode": "normal", "seed": 321654})),
         ("history.clear", json!({})),
         ("history.newSnapshot", json!({"name": "CopyCat - action result", "from": "fullDocument", "replaceExisting": true})),
+        ("history.selectSnapshot", json!({"name": "Checkpoint"})),
         ("layerComp.apply", json!({"comp": "Comp 1"})),
         ("layerComp.apply", json!({"comp": {"index": 2}})),
         ("layerComp.apply", json!({"comp": {"id": 7}})),

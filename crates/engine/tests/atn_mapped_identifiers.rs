@@ -788,6 +788,113 @@ fn recorded_transform_zero_points_keep_nonzero_or_unrepresentable_offsets() {
     }
 }
 
+fn snapshot_selection(name: &str) -> Descriptor {
+    Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Name { class: class("SnpS"), name: UnicodeString::new_nul(name) }]))
+}
+
+#[test]
+fn recorded_snapshot_selection_imports_and_exports_the_name() {
+    for name in ["Checkpoint", "检查点", "  padded  ", "1"] {
+        let d = snapshot_selection(name);
+        for event in [AtnEvent::Code(*b"slct"), AtnEvent::name("select")] {
+            let action = recorded(event, d.clone());
+            assert_eq!(action.steps, vec![("history.selectSnapshot".into(), json!({"name":name}))]);
+            assert_eq!(saved(&action).descriptor.unwrap().get("null"), d.get("null"));
+        }
+        let native = Action::new("Recorded", vec![("history.selectSnapshot".into(), json!({"name":name}))]);
+        assert_eq!(saved(&native).descriptor.unwrap().get("null"), d.get("null"));
+    }
+}
+
+#[test]
+fn recorded_snapshot_selection_resolves_names_at_playback() {
+    // Import has no document or snapshot ids to capture; the name resolves when played.
+    let action = recorded(AtnEvent::name("select"), snapshot_selection("Checkpoint"));
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":4,"height":4,"depth":depth})).unwrap();
+        s.execute("history.newSnapshot", json!({"name":"Unrelated"})).unwrap();
+        s.execute("edit.fill", json!({"contents":"color","color":"#0000ff"})).unwrap();
+        let id = s.execute("history.newSnapshot", json!({"name":"Checkpoint"})).unwrap()["snapshot"].as_u64().unwrap();
+        let checkpoint = s.active().unwrap().doc.clone();
+        s.execute("edit.fill", json!({"contents":"color","color":"#ff0000"})).unwrap();
+        s.execute("layer.new.layer", json!({"name":"Later"})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let states = s.active().unwrap().history.past_len();
+        replay_saved(&mut s, &action);
+        assert_eq!(s.active().unwrap().doc, checkpoint, "restore the named snapshot at depth {depth}");
+        assert_eq!(s.active().unwrap().history.past_len(), states + 1, "one undoable restore");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, before);
+        s.execute("history.selectSnapshot", json!({"snapshot":id})).unwrap();
+        assert_eq!(s.active().unwrap().doc, checkpoint, "existing id calls still work");
+        s.execute("edit.undo", json!({})).unwrap();
+        s.execute("history.renameSnapshot", json!({"snapshot":id,"name":"Renamed"})).unwrap();
+        let failed = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+        assert!(failed.get("failed").is_some(), "the old name must not retain an earlier resolved id: {failed}");
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+#[test]
+fn recorded_snapshot_selection_keeps_unrepresented_references_and_options() {
+    let d = snapshot_selection("Checkpoint");
+    let D::Reference(r) = d.get("null").unwrap() else { panic!("snapshot reference") };
+    let mut duplicate = d.clone();
+    duplicate.items.push((Id::new("null"), D::Reference(r.clone())));
+    let mut cases = vec![d.clone().with("unknown", D::Boolean(true)), d.clone().with("MkVs", D::Boolean(true)), duplicate];
+    for reference in [
+        vec![ReferenceItem::Name { class: class("HstS"), name: UnicodeString::new_nul("Checkpoint") }],
+        vec![ReferenceItem::Index { class: class("SnpS"), index: 1 }],
+        vec![ReferenceItem::Identifier { class: class("SnpS"), id: 1 }],
+        vec![ReferenceItem::Enumerated { class: class("SnpS"), type_id: Id::new("Ordn"), value: Id::new("Trgt") }],
+        vec![r[0].clone(), ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Other") }],
+    ] {
+        cases.push(Descriptor::new("slct").with("null", D::Reference(reference)));
+    }
+    cases.extend([snapshot_selection(""), snapshot_selection("   ")]);
+    for name in [UnicodeString(vec![0xd800, 0]), UnicodeString(vec![65, 0, 0])] {
+        cases.push(Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Name { class: class("SnpS"), name }])));
+    }
+    for d in cases {
+        let action = recorded(AtnEvent::name("select"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    for p in [json!({"snapshot":1}), json!({"name":"Checkpoint","snapshot":1}), json!({"name":"Checkpoint","unknown":true}), json!({"name":""})] {
+        let native = Action::new("Recorded", vec![("history.selectSnapshot".into(), p.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&native], &[], false).is_err(), "{p}");
+    }
+}
+
+#[test]
+fn recorded_snapshot_selection_rejects_missing_ambiguous_and_invalid_native_names() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    let id = s.execute("history.newSnapshot", json!({"name":"Duplicate"})).unwrap()["snapshot"].clone();
+    s.execute("history.newSnapshot", json!({"name":"Duplicate"})).unwrap();
+    s.execute("edit.fill", json!({"contents":"color","color":"#ff0000"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let states = s.active().unwrap().history.past_len();
+    for p in [
+        json!({"name":"Duplicate"}),
+        json!({"name":"Missing"}),
+        json!({"name":" Duplicate "}),
+        json!({"name":""}),
+        json!({"name":"   "}),
+        json!({"name":null}),
+        json!({"name":1}),
+        json!({"name":true}),
+        json!({"name":[]}),
+        json!({"name":"Duplicate","snapshot":id}),
+    ] {
+        assert!(s.execute("history.selectSnapshot", p.clone()).is_err(), "{p}");
+        assert_eq!(s.active().unwrap().doc, before, "{p}");
+        assert_eq!(s.active().unwrap().history.past_len(), states, "{p}");
+    }
+    assert!(Session::new().execute("history.selectSnapshot", json!({"name":"Checkpoint"})).is_err());
+}
+
 fn vector_mask_selection() -> Descriptor {
     Descriptor::new("setd")
         .with("null", D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]))
