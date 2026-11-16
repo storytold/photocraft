@@ -34,6 +34,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         if tool == Tool::PathSelection {
             lbl(ui, if app.ui.vector_mask_target { "Drag to move the targeted vector mask" } else { tl!("Drag to move the selected path") });
         }
+        // A work or saved path edited without a shape layer keeps its Thickness and Color.
+        crate::widgets::vline(ui, 22.0);
+        path_options(ui, &mut app.ui.view.path_options, None);
         return true;
     }
     if tool == Tool::AddAnchorPoint {

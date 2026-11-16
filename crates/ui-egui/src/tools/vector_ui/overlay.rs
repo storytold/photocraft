@@ -305,14 +305,19 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 curvature_refresh(&mut next, false);
                 if let [.., a, b] = next.knots.as_slice() {
                     let pts = curve_points(a[0], a[2], b[1], b[0], &to_scr);
-                    painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, look.color), 4.0, 3.0));
+                    painter.add(egui::Shape::dashed_line(&pts, Stroke::new(look.width, look.color), 4.0, 3.0));
                 }
             } else {
                 // The rubber band ends where a ⇧-click would put the next anchor, and is drawn in
-                // the Path Options' colour and thickness.
-                let shift = painter.ctx().input(|i| i.modifiers.shift);
-                let h = if pen.curvature { h } else { shift_45(last[0], h, shift) };
-                let [a, b, c, d] = rubber_band_segment(*last, h);
+                // the Path Options' colour and thickness. Over the first anchor it is the closing
+                // segment the click makes, which arrives along that anchor's incoming handle.
+                let [a, b, c, d] = match pen.knots.first() {
+                    Some(first) if super::pen::closes_path_at(app, tool, h[0], h[1]) => [last[0], last[2], first[1], first[0]],
+                    _ => {
+                        let shift = painter.ctx().input(|i| i.modifiers.shift);
+                        rubber_band_segment(*last, if pen.curvature { h } else { shift_45(last[0], h, shift) })
+                    }
+                };
                 let pts = curve_points(a, b, c, d, &to_scr);
                 painter.add(egui::Shape::dashed_line(&pts, Stroke::new(look.width, look.color), 4.0, 3.0));
             }

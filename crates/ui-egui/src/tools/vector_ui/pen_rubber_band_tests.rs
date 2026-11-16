@@ -176,3 +176,33 @@ fn the_setting_is_saved_inspected_and_reset() {
     assert_eq!(app.ui.tool_options.feather, 12.0);
     assert_eq!(inspect(&mut app), json!(false));
 }
+
+/// The Curvature Pen's preview of its next curve takes the Path Options' thickness too.
+#[test]
+fn the_curvature_preview_has_the_path_options_thickness() {
+    let mut app = drawing(Tool::CurvaturePen);
+    if let Some(pen) = app.ui.pen.as_mut() {
+        pen.curvature = true;
+    }
+    app.ui.view.path_options.thickness = 3.0;
+    assert!(segments(&app).iter().filter(|(_, s)| s.width == 3.0).count() > 5, "the dashed preview is 3 px");
+}
+
+/// Over the first anchor the Rubber Band is the closing segment the click makes: it arrives along
+/// the first anchor's incoming handle, not as a straight corner.
+#[test]
+fn over_the_first_anchor_the_rubber_band_is_the_closing_segment() {
+    let mut app = drawing(Tool::Pen);
+    app.ui.tool_options.pen_rubber_band = true;
+    app.ui.view.path_options.thickness = 2.0;
+    // A smooth first anchor at (20, 20) whose incoming handle points down to (20, 60).
+    app.ui.pen.as_mut().unwrap().knots[0] = [[20.0, 20.0], [20.0, 60.0], [20.0, -20.0]];
+    app.hover_doc = Some([20.0, 20.0]);
+    let pts: Vec<Pos2> = segments(&app).into_iter().filter(|(_, s)| s.width == 2.0).flat_map(|(p, _)| p).collect();
+    assert!(pts.len() > 10, "the dashed preview: {pts:?}");
+    // The cubic (120,30) (120,30) (20,60) (20,20) passes (70, 40) halfway; the straight corner
+    // would pass (70, 25).
+    let near = |q: Pos2| pts.iter().map(|p| p.distance(q)).fold(f32::INFINITY, f32::min);
+    assert!(near(Pos2::new(70.0, 40.0)) < 1.5, "bent by the first anchor's incoming handle");
+    assert!(near(Pos2::new(70.0, 25.0)) > 5.0, "not the straight corner");
+}

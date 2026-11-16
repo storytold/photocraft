@@ -78,7 +78,8 @@ fn path_options_are_one_display_setting_not_a_tool_option() {
 
 #[test]
 fn pen_and_shape_options_bars_have_the_path_options_gear() {
-    for tool in [Tool::Pen, Tool::FreeformPen, Tool::CurvaturePen, Tool::Rectangle] {
+    // Path Selection and Direct Selection without a shape layer edit a work or saved path.
+    for tool in [Tool::Pen, Tool::FreeformPen, Tool::CurvaturePen, Tool::Rectangle, Tool::PathSelection, Tool::DirectSelection] {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 60.0)).build_ui_state(
             move |ui, app: &mut PhotocraftApp| {
                 ui.horizontal(|ui| options_bar(app, ui, tool));
