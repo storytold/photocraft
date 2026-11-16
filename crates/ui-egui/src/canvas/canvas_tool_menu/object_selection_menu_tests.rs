@@ -175,7 +175,7 @@ fn the_other_selection_tools_keep_their_menus() {
         Tool::Lasso,
         Tool::PolygonLasso,
         Tool::MagneticLasso,
-        Tool::MagicWand,
+        // The Magic Wand has its own menus (#11783, wand_menu_tests).
     ];
     for tool in tools {
         for (selection, menu) in [(true, SELECTION_MENU), (false, NO_SELECTION_MENU)] {

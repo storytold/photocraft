@@ -517,6 +517,41 @@ pub const NO_SELECTION_MENU: &[Row] = &[
     Some(("Load Selection…", "select.loadSelection")),
 ];
 
+/// The Magic Wand's rows that set the options bar's selection mode (#11783).
+pub const WAND_ADD: &str = "canvasMenu.wand.addToSelection";
+pub const WAND_SUBTRACT: &str = "canvasMenu.wand.subtractFromSelection";
+pub const WAND_INTERSECT: &str = "canvasMenu.wand.intersectSelection";
+
+/// The Magic Wand's context menu with a selection, in the reference application's order
+/// (#11783). Its Sample Size rows come first there; they wait for the Sample Size option (#11777).
+pub const WAND_SELECTION_MENU: &[Row] = &[
+    Some(("Add To Selection", WAND_ADD)),
+    Some(("Subtract From Selection", WAND_SUBTRACT)),
+    Some(("Intersect Selection", WAND_INTERSECT)),
+    None,
+    Some(("Grow", "select.grow")),
+    Some(("Similar", "select.similar")),
+    None,
+    Some(("Deselect", "select.deselect")),
+    Some(("Select Inverse", "select.inverse")),
+    Some(("Feather…", "select.modify.feather")),
+    Some(("Select and Mask…", "select.selectAndMask")),
+    None,
+    Some(("Save Selection…", "select.saveSelection")),
+    Some(("Make Work Path…", "select.toWorkPath")),
+    None,
+    Some(("Layer via Copy", "layer.new.layerViaCopy")),
+    Some(("Layer via Cut", "layer.new.layerViaCut")),
+    None,
+    Some(("Last Filter", "filter.lastFilter")),
+    None,
+    Some(("Fade…", "edit.fade")),
+];
+
+/// The Magic Wand's context menu with nothing selected (#11783), after its Sample Size rows.
+pub const WAND_NO_SELECTION_MENU: &[Row] =
+    &[Some(("Select All", "select.all")), None, Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
+
 /// Photoshop's generic layer menu, in its order for a pixel layer without a selection: the Count
 /// tool's canvas menu on a marker or off one (#11772), and the Red Eye and Object Selection
 /// (#12866) tools' without a selection. Each row is enabled as the Layers panel menu enables it
@@ -927,6 +962,8 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         if menu.has_path { SHAPE_MENU } else { SHAPE_MENU_NO_PATH }
     } else if sampler_menu(menu) {
         SAMPLER_MENU
+    } else if menu.tool == Tool::MagicWand {
+        if menu.has_selection { WAND_SELECTION_MENU } else { WAND_NO_SELECTION_MENU }
     } else if menu.tool == Tool::Count {
         COUNT_MENU
     } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection) {
@@ -1307,6 +1344,9 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if sampler_menu(menu) {
         return command == SAMPLER_DELETE && menu.sampler.is_some() && sampler_current(app, menu);
     }
+    if !menu.transform && menu.tool == Tool::MagicWand && matches!(command, WAND_ADD | WAND_SUBTRACT | WAND_INTERSECT) {
+        return true;
+    }
     // Inside the Content-Aware Move selection menu (#12194), Load Selection… stays greyed until a
     // selection channel (non-spot alpha channel) has been saved.
     if inside_selection(menu) && command == "select.loadSelection" {
@@ -1530,6 +1570,11 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     } else if sampler_menu(&menu) {
         let (id, params) = engine_call(app, &menu, command);
         app.run(&id, params).map(|_| ())
+    } else if menu.tool == Tool::MagicWand
+        && !menu.transform
+        && let Some(r) = choose_wand(app, command)
+    {
+        r
     } else if is_eyedropper(&menu) {
         choose_eyedropper(app, ctx, &menu, command)
     } else if command == "select.toWorkPath" {
@@ -1543,6 +1588,24 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+}
+
+/// The Magic Wand's own rows (#11783): the selection-mode rows set the options bar's mode, and
+/// Grow / Similar run with the wand's Tolerance and Sample All Layers. `None` for its other rows.
+fn choose_wand(app: &mut PhotocraftApp, command: &str) -> Option<Result<(), String>> {
+    let mode = match command {
+        WAND_ADD => 1,
+        WAND_SUBTRACT => 2,
+        WAND_INTERSECT => 3,
+        "select.grow" | "select.similar" => {
+            let o = &app.ui.tool_options;
+            let p = json!({"tolerance": o.tolerance, "sampleAllLayers": o.sample_all.magic_wand});
+            return Some(app.run(command, p).map(|_| ()));
+        }
+        _ => return None,
+    };
+    app.ui.selection_mode = mode;
+    Some(Ok(()))
 }
 
 /// An Eyedropper row (#11747): a size sets the Sample Size (shared with the options bar); a Copy
@@ -1938,6 +2001,9 @@ mod convert_point_menu_tests;
 
 #[cfg(test)]
 mod object_selection_menu_tests;
+
+#[cfg(test)]
+mod wand_menu_tests;
 
 #[cfg(test)]
 mod line_menu_tests;
