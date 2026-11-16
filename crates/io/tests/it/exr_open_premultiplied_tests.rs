@@ -96,6 +96,6 @@ fn exr_uint_channels_keep_their_raw_values() {
     let memory = import("uint.exr", &bytes).unwrap();
     for doc in [&file.document, &memory.document] {
         let values = doc.layers[0].surface().unwrap().read_region(doc.bounds());
-        assert!(values.chunks_exact(2).all(|pixel| pixel == [800.0, 0.0]));
+        assert!(values.as_chunks::<2>().0.iter().all(|pixel| *pixel == [800.0, 0.0]));
     }
 }
