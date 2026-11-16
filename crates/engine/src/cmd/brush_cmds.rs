@@ -1519,6 +1519,5 @@ mod mixer_live_tests;
 #[path = "color_replacement_history_name_tests.rs"]
 mod color_replacement_history_name_tests;
 
-
 #[cfg(test)]
 mod define_brush_merged_source_tests;
