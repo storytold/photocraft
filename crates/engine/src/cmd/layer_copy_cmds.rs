@@ -74,14 +74,16 @@ fn prepare_shapes(layers: &mut [Layer], doc: &Document, new_canvas: bool) {
 /// Readies `copies` (a scratch document of the source's colour holding duplicated layers) for
 /// landing in `dest`: smart objects get fresh contents ids, keeping only the sharing within the
 /// batch (contents ids belong to a document, so the copies never join objects already in `dest`,
-/// including another opening of the same file), and the pixels convert to `dest`'s profile and
-/// bit depth.
+/// including another opening of the same file), the pixels convert to `dest`'s profile and
+/// bit depth, and the type points at `dest`'s text styles.
 pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) -> Result<()> {
-    adapt_copies_with(copies, dest, s.color.settings.intent(), s.color.settings.bpc)
+    adapt_copies_with(copies, dest, s.color.settings.intent(), s.color.settings.bpc)?;
+    adopt_text_styles(copies, &dest.text_styles)
 }
 
 /// [`adapt_copies`] with Color Settings' intent and black point compensation passed in, so it
-/// can run on a worker.
+/// can run on a worker, and without the text styles: a copy made as a job adopts those as it
+/// lands, against the destination's styles as they are then.
 fn adapt_copies_with(copies: &mut Document, dest: &Document, intent: craft_cms::Intent, bpc: bool) -> Result<()> {
     remap_link_groups(copies, dest)?;
     let mut contents = HashMap::new();
@@ -126,7 +128,7 @@ fn remap_link_groups(copies: &mut Document, dest: &Document) -> Result<()> {
 }
 
 /// The copies' pixels in `dest`'s colour profile and bit depth, type at its resolution, and their
-/// text styles and shapes made ready for it (the rest of [`adapt_copies_with`]).
+/// shapes made ready for it (the rest of [`adapt_copies_with`]).
 fn convert_copies(copies: &mut Document, dest: &Document, intent: craft_cms::Intent, bpc: bool) -> Result<()> {
     if (copies.mode, &copies.icc_profile) != (dest.mode, &dest.icc_profile) {
         let profile = crate::color_cmds::document_profile(dest);
@@ -142,7 +144,6 @@ fn convert_copies(copies: &mut Document, dest: &Document, intent: craft_cms::Int
     // application (24 pt at 72 ppi becomes 5.76 pt at 300 ppi, with no transform). Left at the
     // source's, a copy re-laid out at the destination's resolution on its next edit (#9560).
     crate::canvas_geom::retarget_type_resolution(copies, dest.resolution_dpi);
-    adopt_text_styles(copies, &dest.text_styles)?;
     let new_canvas = copies.bounds() != dest.bounds();
     prepare_shapes(&mut copies.layers, dest, new_canvas);
     Ok(())
@@ -373,6 +374,11 @@ fn land_copies(
     if (live.mode, live.depth, &live.icc_profile) != (ddoc.mode, ddoc.depth, &ddoc.icc_profile) {
         return Err(bad("the destination's mode, bit depth or colour profile changed while the layers were copied; copy them again"));
     }
+    // Type takes the destination's resolution and styles as they are now: either may have
+    // changed while the job ran, and a style id taken from the job's snapshot could already be
+    // one the destination has added since.
+    crate::canvas_geom::retarget_type_resolution(&mut copies, live.resolution_dpi);
+    adopt_text_styles(&mut copies, &live.text_styles)?;
     // Link groups the destination took meanwhile stay its own.
     remap_link_groups(&mut copies, live)?;
     let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !live.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
