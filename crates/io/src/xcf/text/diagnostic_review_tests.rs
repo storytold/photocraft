@@ -4,14 +4,16 @@ use super::*;
 fn inherited_long_multibyte_diagnostics_stay_bounded_across_many_descendants() {
     // The cutoff falls inside a multibyte scalar. A single large source value
     // must not be copied in full for each otherwise-small native text run.
-    let value = format!("aa{}", "界".repeat(170_000));
-    let children = "<b>x</b>".repeat(1_000);
+    // Keep the diagnostic test inside the independent inherited-byte-work cap.
+    // Its cutoff still splits a multibyte scalar and applies to many descendants.
+    let value = format!("aa{}", "界".repeat(5_000));
+    let children = "<b>x</b>".repeat(256);
     for attribute in ["variant", "font_variant", "text_transform"] {
         let markup = format!("<markup><span {attribute}='{value}'>{children}</span></markup>");
         let mut notes = Vec::new();
         let (text, runs) = markup_runs(&markup, &CharStyle::default(), &HashMap::new(), 72., &mut notes).unwrap();
-        assert_eq!(text, "x".repeat(1_000));
-        assert_eq!(runs.len(), 1_000);
+        assert_eq!(text, "x".repeat(256));
+        assert_eq!(runs.len(), 256);
         assert!(runs.iter().all(|run| run.style.weight == 700 && run.style.caps == Caps::Normal));
         assert_eq!(notes.len(), 1, "one inherited disclosure: {attribute}");
         assert!(notes[0].len() < 320, "diagnostic must be bounded before descendant formatting");

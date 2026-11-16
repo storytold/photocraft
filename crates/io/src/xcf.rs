@@ -416,12 +416,11 @@ impl<'a> Image<'a> {
         let mut name_cursor = c.at(c.pos);
         self.effect_decode_work.charge(name_cursor.string_bytes()?.len().saturating_add(4))?;
         let (name, name_limited) = self.metadata_name(&mut c, "Mask")?;
-        let properties_start = c.pos;
-        let properties = props(&mut c)?;
-        self.effect_decode_work.charge(c.pos.saturating_sub(properties_start))?;
+        let properties = wire::props_with_work(&mut c, ctl, &mut |bytes| self.effect_decode_work.charge(bytes))?;
+        self.effect_decode_work.charge(8)?;
         let _hierarchy = c.ptr()?;
-        let children = if self.version >= 26 { effects::read_pointers(&mut c, &mut self.meta_budget, ctl)? } else { Vec::new() };
-        self.effect_decode_work.charge(children.len().saturating_mul(8).saturating_add(16))?;
+        let children =
+            if self.version >= 26 { effects::read_pointers_with_work(&mut c, &mut self.meta_budget, &mut self.effect_decode_work, ctl)? } else { Vec::new() };
         // metadata_name already charged the admitted name allocation. The fallback
         // is bounded; never materialize a source-sized name before checking its allowance.
         let bytes = std::mem::size_of::<CoverageMaskHeader<'_>>().saturating_add(properties.len().saturating_mul(std::mem::size_of::<Prop<'_>>()));

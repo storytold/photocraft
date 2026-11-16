@@ -88,9 +88,33 @@ pub(super) fn props_version<'a>(c: &mut Cursor<'a>, version: Option<u32>) -> Res
 
 /// The same bounded property framing, with cancellation between records for header-only callers.
 pub(super) fn props_version_with_interrupt<'a>(c: &mut Cursor<'a>, version: Option<u32>, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<Prop<'a>>> {
+    props_charged(c, version, ctl, &mut |_| Ok(()))
+}
+
+/// Coverage inventory supplies a nonrefundable work debit before each framing step.
+pub(super) fn props_with_work<'a>(
+    c: &mut Cursor<'a>,
+    ctl: &photocraft_raster::Interrupt<'_>,
+    charge: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<Vec<Prop<'a>>> {
+    props_charged(c, None, ctl, charge)
+}
+
+#[cfg(test)]
+thread_local! { pub(super) static PROPERTY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn props_charged<'a>(
+    c: &mut Cursor<'a>,
+    version: Option<u32>,
+    ctl: &photocraft_raster::Interrupt<'_>,
+    charge: &mut impl FnMut(usize) -> Result<()>,
+) -> Result<Vec<Prop<'a>>> {
     let mut out = Vec::new();
     loop {
         ctl.check().map_err(|_| super::IoError::Cancelled)?;
+        charge(8)?;
+        #[cfg(test)]
+        PROPERTY_READS.with(|count| count.set(count.get().saturating_add(1)));
         let offset = c.pos;
         let kind = c.u32()?;
         let len = c.u32()? as usize;
@@ -118,6 +142,7 @@ pub(super) fn props_version_with_interrupt<'a>(c: &mut Cursor<'a>, version: Opti
         if len > MAX_PAYLOAD {
             return Err(invalid(format!("property {kind} declares {len} bytes")));
         }
+        charge(len)?;
         let data = c.take(len)?;
         out.try_reserve(1).map_err(|_| invalid("not enough memory for XCF properties"))?;
         out.push(Prop { offset, kind, data });

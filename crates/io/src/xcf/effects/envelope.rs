@@ -68,10 +68,26 @@ fn push_error(effect: &mut StoredEffect<'_>, message: String, budget: &mut usize
 /// Pointers stay in stored order. The caller establishes source execution order
 /// from owner semantics rather than guessing from array order.
 pub(in crate::xcf) fn read_pointers(cursor: &mut Cursor<'_>, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Vec<usize>> {
+    read_pointers_charged(cursor, budget, ctl, &mut |_| Ok(()))
+}
+
+pub(in crate::xcf) fn read_pointers_with_work(cursor: &mut Cursor<'_>, budget: &mut usize, work: &mut DecodeWork, ctl: &Interrupt<'_>) -> Result<Vec<usize>> {
+    read_pointers_charged(cursor, budget, ctl, &mut |bytes| work.charge(bytes))
+}
+
+#[cfg(test)]
+thread_local! { pub(in crate::xcf) static POINTER_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn read_pointers_charged(cursor: &mut Cursor<'_>, budget: &mut usize, ctl: &Interrupt<'_>, work: &mut impl FnMut(usize) -> Result<()>) -> Result<Vec<usize>> {
     let mut pointers = Vec::new();
     let mut seen = std::collections::HashSet::new();
     loop {
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+        // Include attempted/truncated terminators and duplicate lookups, not only
+        // pointers that survive in the returned vector. HashSet bounds lookup work.
+        work(if cursor.wide { 24 } else { 20 })?;
+        #[cfg(test)]
+        POINTER_READS.with(|count| count.set(count.get().saturating_add(1)));
         // Read the optional record identity without requiring it to fit this host's
         // address space. Record decoding, not list framing, owns individual validity.
         let raw_pointer = if cursor.wide { (u64::from(cursor.u32()?) << 32) | u64::from(cursor.u32()?) } else { u64::from(cursor.u32()?) };

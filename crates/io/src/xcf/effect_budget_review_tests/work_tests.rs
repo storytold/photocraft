@@ -136,7 +136,7 @@ fn auxiliary_mask_names_share_work_even_when_retention_uses_a_short_fallback() {
     w.ptr(usize::MAX); // Header inventory must not decode the hierarchy.
     w.ptr(0);
     let mut image = image(&w.out, PROBE_ALLOWANCE);
-    let per_record = 64 + name.len() + 4 + 8 + 16;
+    let per_record = 64 + name.len() + 4 + 8 + 32;
     image.effect_decode_work = effects::DecodeWork::with_limit(per_record * 2 + per_record / 2);
     let mut admitted = 0;
     for _ in 0..12 {
@@ -152,6 +152,113 @@ fn auxiliary_mask_names_share_work_even_when_retention_uses_a_short_fallback() {
     }
     assert_eq!(admitted, 2);
     assert_eq!(image.effect_decode_work.stats(), (0, 0));
+}
+
+fn late_mask_failure(kind: u8, distinct: bool) -> (Vec<u8>, Vec<usize>) {
+    let (original, effect, later) = fixture(false);
+    let record = &original[effect..later];
+    let mut w = W { out: vec![0; 4], wide: true };
+    let mut parents = Vec::new();
+    for _ in 0..if distinct { 12 } else { 1 } {
+        let parent = w.out.len();
+        w.out.extend_from_slice(record);
+        let mask = w.out.len();
+        w.patch(parent + record.len() - 8, mask);
+        w.u32(1);
+        w.u32(1);
+        w.string("Mask");
+        if kind == 0 {
+            for _ in 0..1024 {
+                w.prop(8, &1u32.to_be_bytes());
+            }
+            w.u32(99);
+            w.u32((MAX_PAYLOAD + 1) as u32); // Late invalid length, independent of subsequent records.
+        } else {
+            w.end();
+            w.ptr(usize::MAX); // Never decode auxiliary hierarchy samples.
+            for pointer in 1..=32 {
+                w.ptr(pointer);
+            }
+            if kind == 1 {
+                w.ptr(1); // Late duplicate: HashSet lookup, not a quadratic Vec scan.
+            } else {
+                w.out.extend_from_slice(&[0, 0, 0]); // Truncated wide pointer at EOF.
+            }
+        }
+        parents.push(parent);
+    }
+    if !distinct {
+        parents.resize(12, parents[0]);
+    }
+    (w.out, parents)
+}
+
+#[test]
+fn late_mask_property_and_pointer_failures_spend_work_before_refundable_storage() {
+    let (original, effect, _) = fixture(false);
+    let (effect_work, _) = probe(&original, effect, false);
+    let retained = decoded_charge(&original, effect, false);
+    for (kind, distinct) in [(0, false), (0, true), (1, false), (1, true), (2, false)] {
+        let (bytes, parents) = late_mask_failure(kind, distinct);
+        let mask_work = if kind == 0 { 64 + 8 + 1024 * 12 + 8 } else { 64 + 8 + 8 + 8 + 33 * 24 };
+        let mut image = image(&bytes, PROBE_ALLOWANCE);
+        image.effect_decode_work = effects::DecodeWork::with_limit(2 * (effect_work + mask_work) + 64);
+        wire::PROPERTY_READS.with(|count| count.set(0));
+        effects::POINTER_READS.with(|count| count.set(0));
+        for (ordinal, pointer) in parents.iter().enumerate() {
+            let source = owner(&mut image, ordinal, None);
+            image.inventory_coverage_effects(source, &[*pointer], &Interrupt::NONE).unwrap();
+        }
+        assert_eq!(image.effect_decode_work.stats().0, 0);
+        let properties = wire::PROPERTY_READS.with(std::cell::Cell::get);
+        let pointers = effects::POINTER_READS.with(std::cell::Cell::get);
+        if kind == 0 {
+            assert_eq!(properties, 2 * 1025, "late invalid properties: distinct={distinct}");
+            assert_eq!(pointers, 0);
+        } else {
+            assert_eq!(properties, 2);
+            assert_eq!(pointers, 2 * 33, "late duplicate/truncated pointers: kind={kind}, distinct={distinct}");
+        }
+        assert_eq!(
+            image.meta_budget,
+            PROBE_ALLOWANCE - 2 * retained - parents.len() * 14 * std::mem::size_of::<usize>(),
+            "failed mask storage stays fully refunded"
+        );
+        let ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("durable report") };
+        assert!(
+            report.entries.iter().any(|entry| entry.reason == ConversionReason::RetentionLimit && entry.source_description.contains("decode-work allowance"))
+        );
+    }
+}
+
+#[test]
+fn valid_mask_properties_and_pointer_terminator_succeed_at_the_exact_work_boundary() {
+    let mut w = W { out: vec![0; 4], wide: true };
+    let mask = w.out.len();
+    w.u32(1);
+    w.u32(1);
+    w.string("Mask");
+    for _ in 0..4 {
+        w.prop(8, &1u32.to_be_bytes());
+    }
+    w.end();
+    w.ptr(usize::MAX);
+    for pointer in [1, 2, 3, 0] {
+        w.ptr(pointer);
+    }
+    let mut image = image(&w.out, PROBE_ALLOWANCE);
+    image.effect_decode_work = effects::DecodeWork::with_limit(64 + 8 + 4 * 12 + 8 + 8 + 4 * 24);
+    let record = image.coverage_mask_header(mask, &Interrupt::NONE).unwrap();
+    assert_eq!(record.name, "Mask");
+    assert_eq!(record.properties.len(), 4);
+    assert_eq!(record.children, [1, 2, 3]);
+    assert_eq!(image.effect_decode_work.stats().0, 0);
+    assert_eq!(
+        image.meta_budget,
+        PROBE_ALLOWANCE - record.name.capacity() - std::mem::size_of::<CoverageMaskHeader<'_>>() - 4 * std::mem::size_of::<Prop<'_>>() - 3 * 32
+    );
+    let cancelled = Interrupt::cancel_only(&|| true);
+    assert!(matches!(image.coverage_mask_header(mask, &cancelled), Err(IoError::Cancelled)));
 }
 
 #[test]

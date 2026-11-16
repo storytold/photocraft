@@ -19,10 +19,15 @@ const MAX_FEATURE_SETTINGS: usize = 64;
 // One markup's inherited attribute processing across every text descendant.
 // Count inspection and application separately; retained diagnostics are not work bounds.
 const MARKUP_ATTRIBUTE_VISITS: usize = 1 << 20;
+// Ordinary inherited styles fit comfortably; huge repeated names/font descriptions
+// must not multiply source-sized hashing/parsing even when native storage is small.
+const MARKUP_ATTRIBUTE_BYTES: usize = 16 << 20;
 #[cfg(test)]
 thread_local! {
     static MARKUP_ATTRIBUTE_VISIT_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static MARKUP_ATTRIBUTE_BYTE_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static MARKUP_ATTRIBUTE_VISITS_DONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MARKUP_ATTRIBUTE_BYTES_DONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 // Shared across all optional point-origin layouts in one import. Costs are
 // scalars + 16 per style run + 32 per logical line, never refunded after work.
@@ -1102,17 +1107,46 @@ struct InheritedMarkupAttributes<'a> {
     overrides_face: bool,
 }
 
-fn charge_markup_attribute(visits_left: &mut usize) -> Result<()> {
-    *visits_left =
-        visits_left.checked_sub(1).ok_or_else(|| crate::IoError::Unsupported("source text markup exceeds the bounded attribute-visit allowance".into()))?;
+struct MarkupWork {
+    visits_left: usize,
+    bytes_left: usize,
+}
+
+impl MarkupWork {
+    fn new() -> Self {
+        Self { visits_left: MARKUP_ATTRIBUTE_VISITS, bytes_left: MARKUP_ATTRIBUTE_BYTES }
+    }
+}
+
+fn charge_markup_attribute(attribute: &roxmltree::Attribute<'_, '_>, work: &mut MarkupWork) -> Result<()> {
+    let visits_left = work
+        .visits_left
+        .checked_sub(1)
+        .ok_or_else(|| crate::IoError::Unsupported("source text markup exceeds the bounded attribute-visit allowance".into()))?;
+    // Pay before font-map hashing, font parsing, style copies or diagnostics.
+    // The second pass pays again for applying/formatting the same attribute.
+    let bytes = attribute
+        .name()
+        .len()
+        .checked_add(attribute.value().len())
+        .ok_or_else(|| crate::IoError::Unsupported("source text markup attribute byte-work overflows".into()))?;
+    let bytes_left = work
+        .bytes_left
+        .checked_sub(bytes)
+        .ok_or_else(|| crate::IoError::Unsupported("source text markup exceeds the bounded attribute-byte allowance".into()))?;
+    work.visits_left = visits_left;
+    work.bytes_left = bytes_left;
     #[cfg(test)]
-    MARKUP_ATTRIBUTE_VISITS_DONE.with(|count| count.set(count.get().saturating_add(1)));
+    {
+        MARKUP_ATTRIBUTE_VISITS_DONE.with(|count| count.set(count.get().saturating_add(1)));
+        MARKUP_ATTRIBUTE_BYTES_DONE.with(|count| count.set(count.get().saturating_add(bytes)));
+    }
     Ok(())
 }
 
 /// Fold the preparatory namespace/font/face lookups into one charged scan.
 /// Otherwise their repeated `.any`/`.attribute` walks bypass the application budget.
-fn inspect_markup_attributes<'a, 'input: 'a>(ancestor: roxmltree::Node<'a, 'input>, visits_left: &mut usize) -> Result<InheritedMarkupAttributes<'a>> {
+fn inspect_markup_attributes<'a, 'input: 'a>(ancestor: roxmltree::Node<'a, 'input>, work: &mut MarkupWork) -> Result<InheritedMarkupAttributes<'a>> {
     let unsupported_namespace = || crate::IoError::Unsupported("namespaced markup does not have an admitted native text-formatting meaning".into());
     if ancestor.tag_name().namespace().is_some() {
         return Err(unsupported_namespace());
@@ -1121,7 +1155,7 @@ fn inspect_markup_attributes<'a, 'input: 'a>(ancestor: roxmltree::Node<'a, 'inpu
     let mut description = None;
     let mut overrides_face = matches!(ancestor.tag_name().name(), "b" | "i" | "tt");
     for attribute in ancestor.attributes() {
-        charge_markup_attribute(visits_left)?;
+        charge_markup_attribute(&attribute, work)?;
         if attribute.namespace().is_some() {
             return Err(unsupported_namespace());
         }
@@ -1138,14 +1172,21 @@ fn inspect_markup_attributes<'a, 'input: 'a>(ancestor: roxmltree::Node<'a, 'inpu
 /// Translate bounded XML markup into UTF-8 text and native style runs.
 /// DTD, namespaced reinterpretation and materialized style amplification are rejected.
 fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle>, dpi: f64, notes: &mut Vec<String>) -> Result<(String, Vec<TextRun>)> {
-    let mut visits_left = MARKUP_ATTRIBUTE_VISITS;
+    let mut work = MarkupWork::new();
     #[cfg(test)]
-    MARKUP_ATTRIBUTE_VISIT_LIMIT.with(|limit| {
-        if let Some(limit) = limit.take() {
-            visits_left = limit;
-        }
-    });
-    markup_runs_with_attribute_allowance(markup, base, fonts, dpi, notes, &mut visits_left)
+    {
+        MARKUP_ATTRIBUTE_VISIT_LIMIT.with(|limit| {
+            if let Some(limit) = limit.take() {
+                work.visits_left = limit;
+            }
+        });
+        MARKUP_ATTRIBUTE_BYTE_LIMIT.with(|limit| {
+            if let Some(limit) = limit.take() {
+                work.bytes_left = limit;
+            }
+        });
+    }
+    markup_runs_with_attribute_allowance(markup, base, fonts, dpi, notes, &mut work)
 }
 
 fn markup_runs_with_attribute_allowance(
@@ -1154,7 +1195,7 @@ fn markup_runs_with_attribute_allowance(
     fonts: &HashMap<String, CharStyle>,
     dpi: f64,
     notes: &mut Vec<String>,
-    visits_left: &mut usize,
+    work: &mut MarkupWork,
 ) -> Result<(String, Vec<TextRun>)> {
     let xml =
         roxmltree::Document::parse_with_options(markup, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES as u32, ..Default::default() })
@@ -1179,7 +1220,7 @@ fn markup_runs_with_attribute_allowance(
         }
         for ancestor in ancestors.iter().rev() {
             style.size_pt = unscaled_size;
-            let inherited = inspect_markup_attributes(*ancestor, visits_left)?;
+            let inherited = inspect_markup_attributes(*ancestor, work)?;
             if let Some(requested) = inherited.font {
                 if let Some(font) = fonts.get(requested) {
                     style.font_family = font.font_family.clone();
@@ -1212,7 +1253,7 @@ fn markup_runs_with_attribute_allowance(
             }
             let mut explicit_alpha = None;
             for a in ancestor.attributes() {
-                charge_markup_attribute(visits_left)?;
+                charge_markup_attribute(&a, work)?;
                 match a.name() {
                     "font" | "font_desc" => {}
                     "font_family" | "face" => {
