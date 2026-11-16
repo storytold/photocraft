@@ -16,7 +16,8 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
-const FORMATS: [(&str, &str); 7] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO"), ("jxl", "JPEG XL")];
+const FORMATS: [(&str, &str); 8] =
+    [("png", "PNG"), ("jpg", "JPG"), ("gif", "GIF"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO"), ("jxl", "JPEG XL")];
 
 /// Preferences ▸ remembered dialog settings: Export As writes the settings it was used with
 /// last under its command id and seeds the next dialog from them, as Fill, Liquify and the
@@ -507,10 +508,38 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
         session.execute("image.imageSize", json!({"width": w, "height": h, "resample": resample})).map_err(|e| e.to_string())?;
     }
     let fmt = s_fmt(f);
-    if !f.get("transparency").and_then(Value::as_bool).unwrap_or(true) || fmt == "jpg" {
+    // GIF has no Transparency choice: its fully transparent pixels always stay transparent.
+    if (fmt != "gif" && !f.get("transparency").and_then(Value::as_bool).unwrap_or(true)) || fmt == "jpg" {
         session.execute("layer.flattenImage", json!({})).map_err(|e| e.to_string())?;
     }
-    session.active().map(|d| (*d.doc).clone()).ok_or_else(|| "export failed".into())
+    let mut out = session.active().map(|d| (*d.doc).clone()).ok_or_else(|| "export failed".to_string())?;
+    if fmt == "gif" && out.mode == ColorMode::Rgb && out.depth == photocraft_doc::SampleType::U8 {
+        matte_partial_alpha(&mut out)?;
+    }
+    Ok(out)
+}
+
+/// GIF keeps one transparent index and no partial alpha. As measured in the reference
+/// application, a partly transparent pixel is matted on white and made opaque, and a fully
+/// transparent one stays transparent. Other modes and depths keep what the GIF encoder does.
+fn matte_partial_alpha(doc: &mut Document) -> Result<(), String> {
+    let fmt = doc.pixel_format();
+    let px = photocraft_compose::flatten(doc).into_px();
+    // A canvas past the render limit comes back empty: writing that over the full bounds would assert.
+    if px.len() as u64 != u64::from(doc.size.width) * u64::from(doc.size.height) {
+        return Err("the image is too large to export as GIF".into());
+    }
+    let data: Vec<f32> = px
+        .into_iter()
+        .flat_map(|[r, g, b, a]| {
+            let q = if a < 0.5 / 255.0 { [r, g, b, 0.0] } else { [r * a + 1.0 - a, g * a + 1.0 - a, b * a + 1.0 - a, 1.0] };
+            photocraft_raster::from_rgba(&fmt, q)
+        })
+        .collect();
+    let mut layer = photocraft_doc::Layer::raster("Layer 1", fmt);
+    layer.surface_mut().ok_or("export failed")?.write_region(doc.bounds(), &data);
+    doc.layers = vec![layer];
+    Ok(())
 }
 
 /// The exported pixel size: each side scaled and rounded on its own, never below 1 px. The
@@ -1108,7 +1137,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     }
                 });
             }
-            if fmt != "jpg" {
+            if fmt != "jpg" && fmt != "gif" {
                 let mut tr = f.get("transparency").and_then(Value::as_bool).unwrap_or(true);
                 crate::widgets::checkbox(ui, &mut tr, tl!("Transparency"));
                 f.insert("transparency".into(), json!(tr));
@@ -1127,9 +1156,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             if crate::widgets::checkbox(ui, &mut srgb, tl!("Convert to sRGB")).changed() {
                 f.insert("profile".into(), json!(if srgb { "srgb" } else { "document" }));
             }
-            let mut embed = f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true);
-            crate::widgets::checkbox(ui, &mut embed, tl!("Embed Color Profile"));
-            f.insert("embedProfile".into(), json!(embed));
+            if fmt != "gif" {
+                let mut embed = f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true);
+                crate::widgets::checkbox(ui, &mut embed, tl!("Embed Color Profile"));
+                f.insert("embedProfile".into(), json!(embed));
+            }
             ui.add_space(8.0);
             ui.label(egui::RichText::new(tl!("Image Size")).font(crate::theme::semibold(12.0)).color(t.text));
             let (bw, bh) = (n(f, "__w", f64::from(doc.size.width)), n(f, "__h", f64::from(doc.size.height)));
@@ -1498,6 +1529,8 @@ mod tests;
 #[cfg(test)]
 mod enter_key_tests;
 
+#[cfg(test)]
+mod gif_format_tests;
 #[cfg(test)]
 mod jpg_progressive_tests;
 #[cfg(test)]
