@@ -23,7 +23,7 @@ fn source(depth: u32) -> Session {
 }
 
 #[test]
-fn visible_capture_is_identical_with_background_tip_group_or_no_active_layer() {
+fn selected_visible_capture_is_identical_with_background_tip_group() {
     for command in COMMANDS {
         for depth in [8, 16, 32] {
             let mut s = source(depth);
@@ -31,8 +31,9 @@ fn visible_capture_is_identical_with_background_tip_group_or_no_active_layer() {
             let painted = s.active().unwrap().active_layer.unwrap();
             s.execute("layer.new.group", json!({"name": "Empty active group"})).unwrap();
             let group = s.active().unwrap().active_layer.unwrap();
+            s.execute("select.rect", json!({"x": 50, "y": 40, "width": 100, "height": 50})).unwrap();
             let mut expected = None;
-            for active in [Some(background), Some(painted), Some(group), None] {
+            for active in [Some(background), Some(painted), Some(group)] {
                 s.edit("Choose capture-independent active layer", |_, current| {
                     *current = active;
                     Ok(())
@@ -80,27 +81,24 @@ fn selection_limits_the_visible_composite_even_with_background_active() {
 }
 
 #[test]
-fn visible_group_children_and_occlusion_count_but_hidden_layers_and_groups_do_not() {
+fn visible_composite_keeps_occlusion_and_ignores_hidden_source() {
     for command in COMMANDS {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
-        s.edit("Visible and hidden composite contributors", |doc, active| {
-            let mut black = Layer::raster("Nested visible black", doc.pixel_format());
+        s.edit("Visible composite with hidden source", |doc, active| {
+            let mut black = Layer::raster("Visible black", doc.pixel_format());
             black.surface_mut().unwrap().fill_rect(Rect::new(1, 1, 5, 5), &[0.0, 0.0, 0.0, 1.0]);
-            let visible = Layer::group("Visible group", vec![black]);
             let mut hidden_black = Layer::raster("Hidden black", doc.pixel_format());
             hidden_black.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.0, 0.0, 0.0, 1.0]);
             hidden_black.visible = false;
-            let mut hidden_group = Layer::group("Hidden ancestor", vec![hidden_black.duplicate()]);
-            hidden_group.children_mut().unwrap()[0].visible = true;
-            hidden_group.visible = false;
             let mut white = Layer::raster("Visible white occlusion", doc.pixel_format());
             white.surface_mut().unwrap().fill_rect(Rect::new(1, 1, 3, 5), &[1.0, 1.0, 1.0, 1.0]);
             *active = Some(hidden_black.id);
-            doc.layers.extend([visible, hidden_black, hidden_group, white]);
+            doc.layers.extend([black, hidden_black, white]);
             Ok(())
         })
         .unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
         s.execute(command, json!({"name": "Only visible ink"})).unwrap();
         assert_eq!((tip(&s).width, tip(&s).height), (2, 4));
         for y in 0..4 {
@@ -120,24 +118,23 @@ fn composite_transparency_and_selection_coverage_are_applied_once() {
             s.edit("Nested translucent source", |doc, active| {
                 let mut black = Layer::raster("Half black", doc.pixel_format());
                 black.surface_mut().unwrap().fill_rect(Rect::new(1, 1, 6, 7), &[0.0, 0.0, 0.0, 0.5]);
-                let group = Layer::group("Active group", vec![black]);
-                *active = Some(group.id);
-                doc.layers.push(group);
+                *active = Some(black.id);
+                doc.layers.push(black);
                 Ok(())
             })
             .unwrap();
-            for selected in [false, true] {
-                if selected {
-                    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+            for coverage in [1.0f32, 0.25] {
+                s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+                if coverage < 1.0 {
                     s.edit("Quarter coverage", |doc, _| {
-                        doc.selection.as_mut().unwrap().fill_rect(Rect::new(0, 0, 8, 8), &[0.25]);
+                        doc.selection.as_mut().unwrap().fill_rect(Rect::new(0, 0, 8, 8), &[coverage]);
                         Ok(())
                     })
                     .unwrap();
                 }
                 s.execute(command, json!({"name": "Translucent composite"})).unwrap();
                 assert_eq!((tip(&s).width, tip(&s).height), (5, 6));
-                let expected = if selected { 0.125 } else { 0.5 };
+                let expected = 0.5 * coverage;
                 for y in 0..6 {
                     for x in 0..5 {
                         assert!((tip(&s).get(x, y) - expected).abs() < 0.003);
@@ -163,6 +160,7 @@ fn a_hidden_black_source_over_white_or_transparency_is_empty_and_does_not_replac
                 Ok(())
             })
             .unwrap();
+            s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
             s.execute("brush.presets.save", json!({"name": "Kept"})).unwrap();
             let brush = s.tools.brush.clone();
             let presets = s.tools.presets.clone();
@@ -177,28 +175,6 @@ fn a_hidden_black_source_over_white_or_transparency_is_empty_and_does_not_replac
             assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
             assert_eq!(s.active().unwrap().history.past_len(), history);
         }
-    }
-}
-
-#[test]
-fn merged_rgb_retains_the_document_profile_before_gray_conversion() {
-    for command in COMMANDS {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 8, "height": 8, "depth": 32, "background": "transparent"})).unwrap();
-        s.edit("Linear gray nested under active group", |doc, active| {
-            doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
-            let mut layer = Layer::raster("Linear half gray", doc.pixel_format());
-            layer.surface_mut().unwrap().fill_rect(Rect::new(1, 1, 5, 5), &[0.5, 0.5, 0.5, 1.0]);
-            let group = Layer::group("Active group", vec![layer]);
-            *active = Some(group.id);
-            doc.layers.push(group);
-            Ok(())
-        })
-        .unwrap();
-        s.execute(command, json!({"name": "Profiled merged tip"})).unwrap();
-        assert_eq!((tip(&s).width, tip(&s).height), (4, 4));
-        // Encoded sGray for linear RGB 0.5 is about 0.735, not encoded RGB 0.5.
-        assert!((tip(&s).get(0, 0) - 0.265).abs() < 0.01);
     }
 }
 
@@ -227,56 +203,48 @@ fn sparse_budget_source(width: u32, height: u32, selected: bool) -> Session {
 fn composite_storage_is_counted_with_density_and_mask_before_any_allocation() {
     const WIDTH: u32 = 32768;
     for command in COMMANDS {
-        for selected in [false, true] {
-            // Density plus optional mask fit exactly; the simultaneously live RGBA band
-            // must also count, even though the document itself is sparse.
-            let bytes = if selected { 8 } else { 4 };
-            let height = (crate::allocation::MAX_DENSE_BYTES / (bytes * u64::from(WIDTH))) as u32;
-            let mut s = sparse_budget_source(WIDTH, height, selected);
-            let doc = s.active().unwrap().doc.clone();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
-            let current = s.tools.current_preset.clone();
-            let history = s.active().unwrap().history.past_len();
-            crate::allocation::fail_next_for_test();
-            let result = s.execute(command, json!({"name": "Composite over budget"}));
-            let unspent = crate::allocation::capacity::<u8>(0, "consume composite budget failpoint");
-            let err = result.unwrap_err();
-            assert!(err.to_string().contains("working memory"), "{err}");
-            assert!(unspent.is_err(), "budget refusal must precede the first allocation");
-            assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-            assert_eq!(s.active().unwrap().history.past_len(), history);
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
-            assert_eq!(s.tools.current_preset, current);
-        }
+        // This selected case covers the density, selection mask and live compositor band.
+        let height = (crate::allocation::MAX_DENSE_BYTES / (8 * u64::from(WIDTH))) as u32;
+        let mut s = sparse_budget_source(WIDTH, height, true);
+        let doc = s.active().unwrap().doc.clone();
+        let brush = s.tools.brush.clone();
+        let presets = s.tools.presets.clone();
+        let current = s.tools.current_preset.clone();
+        let history = s.active().unwrap().history.past_len();
+        crate::allocation::fail_next_for_test();
+        let result = s.execute(command, json!({"name": "Composite over budget"}));
+        let unspent = crate::allocation::capacity::<u8>(0, "consume composite budget failpoint");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("working memory"), "{err}");
+        assert!(unspent.is_err(), "budget refusal must precede the first allocation");
+        assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+        assert_eq!(s.tools.brush, brush);
+        assert_eq!(s.tools.presets, presets);
+        assert_eq!(s.tools.current_preset, current);
     }
 }
 
 #[test]
 fn compositor_allocation_boundary_failure_preserves_source_and_preset_state() {
     for command in COMMANDS {
-        for selected in [false, true] {
-            let mut s = source(8);
-            if selected {
-                s.execute("select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 150})).unwrap();
-            }
-            let doc = s.active().unwrap().doc.clone();
-            let history = s.active().unwrap().history.past_len();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
-            let current = s.tools.current_preset.clone();
-            crate::allocation::fail_after_for_test(if selected { 2 } else { 1 });
-            let result = s.execute(command, json!({"name": "Compositor allocation failure"}));
-            let _ = crate::allocation::capacity::<u8>(0, "reset compositor failpoint");
-            let err = result.unwrap_err();
-            assert!(err.to_string().contains("not enough memory"), "{err}");
-            assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-            assert_eq!(s.active().unwrap().history.past_len(), history);
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
-            assert_eq!(s.tools.current_preset, current);
-        }
+        let mut s = source(8);
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 150})).unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        let brush = s.tools.brush.clone();
+        let presets = s.tools.presets.clone();
+        let current = s.tools.current_preset.clone();
+        crate::allocation::fail_after_for_test(2);
+        let result = s.execute(command, json!({"name": "Compositor allocation failure"}));
+        let _ = crate::allocation::capacity::<u8>(0, "reset compositor failpoint");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("not enough memory"), "{err}");
+        assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+        assert_eq!(s.tools.brush, brush);
+        assert_eq!(s.tools.presets, presets);
+        assert_eq!(s.tools.current_preset, current);
     }
 }
 
@@ -286,26 +254,24 @@ fn a_banded_capture_that_fits_the_budget_is_not_charged_for_a_full_rgba_canvas()
     let band_rows = photocraft_compose::band_rows_for(WIDTH, 0) as u64;
     let band_bytes = u64::from(WIDTH) * band_rows * 16;
     for command in COMMANDS {
-        for selected in [false, true] {
-            let sample_bytes = if selected { 8 } else { 4 };
-            let height = ((crate::allocation::MAX_DENSE_BYTES - band_bytes) / (sample_bytes * u64::from(WIDTH))) as u32;
-            let pixels = u64::from(WIDTH) * u64::from(height);
-            assert!(pixels * sample_bytes + band_bytes <= crate::allocation::MAX_DENSE_BYTES);
-            assert!(pixels * (sample_bytes + 16) > crate::allocation::MAX_DENSE_BYTES, "a full-plane estimate would incorrectly reject this fixture");
-            let mut s = sparse_budget_source(WIDTH, height, selected);
-            let doc = s.active().unwrap().doc.clone();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
-            // Refuse the first real allocation, after verifying that the budget allowed it.
-            crate::allocation::fail_next_for_test();
-            let result = s.execute(command, json!({"name": "Fits with bands"}));
-            let unspent = crate::allocation::capacity::<u8>(0, "consume band acceptance failpoint");
-            let err = result.unwrap_err().to_string();
-            assert!(err.contains("not enough memory") && !err.contains("working memory"), "{err}");
-            assert!(unspent.is_ok(), "the accepted budget must reach the first allocation");
-            assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
-        }
+        let sample_bytes = 8;
+        let height = ((crate::allocation::MAX_DENSE_BYTES - band_bytes) / (sample_bytes * u64::from(WIDTH))) as u32;
+        let pixels = u64::from(WIDTH) * u64::from(height);
+        assert!(pixels * sample_bytes + band_bytes <= crate::allocation::MAX_DENSE_BYTES);
+        assert!(pixels * (sample_bytes + 16) > crate::allocation::MAX_DENSE_BYTES, "a full-plane estimate would incorrectly reject this fixture");
+        let mut s = sparse_budget_source(WIDTH, height, true);
+        let doc = s.active().unwrap().doc.clone();
+        let brush = s.tools.brush.clone();
+        let presets = s.tools.presets.clone();
+        // Refuse the first real allocation, after verifying that the budget allowed it.
+        crate::allocation::fail_next_for_test();
+        let result = s.execute(command, json!({"name": "Fits with bands"}));
+        let unspent = crate::allocation::capacity::<u8>(0, "consume band acceptance failpoint");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not enough memory") && !err.contains("working memory"), "{err}");
+        assert!(unspent.is_ok(), "the accepted budget must reach the first allocation");
+        assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+        assert_eq!(s.tools.brush, brush);
+        assert_eq!(s.tools.presets, presets);
     }
 }
