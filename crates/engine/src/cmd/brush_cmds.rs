@@ -1116,7 +1116,8 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     // A selection mask, when present, is a second buffer of the same size; it must fail gracefully too
     // (review of #5469), so read it through the fallible allocator.
     let sv = crate::allocation::read_region(sel, area, "defining a brush from the selection")?;
-    // Keep the allocation boundary fallible before entering compositor-owned scratch storage.
+    // Keep a fault-injection checkpoint before entering compositor-owned scratch storage.
+    // The compositor's scratch allocation itself is not fallible through this call.
     crate::allocation::checkpoint("defining a brush from the selection")?;
     photocraft_compose::render_bands(&d.doc, area, 0, |band| -> Result<()> {
         for (row, pixels) in band.px.chunks_exact(w).enumerate() {
