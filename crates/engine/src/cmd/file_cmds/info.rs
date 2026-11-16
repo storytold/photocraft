@@ -1,4 +1,5 @@
 use super::{EngineError, Result, Session, Value, json};
+use crate::kys::xml_escape;
 
 // ---------- File Info (XMP) ----------
 
@@ -11,10 +12,6 @@ const INFO_FIELDS: [(&str, &str, &str); 6] = [
     ("copyright", "dc:rights", "Alt"),
     ("authorTitle", "photoshop:AuthorsPosition", ""),
 ];
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
-}
 
 fn xml_unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
