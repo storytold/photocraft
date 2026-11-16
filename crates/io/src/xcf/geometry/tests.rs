@@ -170,17 +170,27 @@ fn geometry_stream_matches_shared_irregular_property_framing() {
     string(b"source.xcf\0", &mut link);
     link.extend(317u32.to_be_bytes());
     link.extend(193u32.to_be_bytes());
-    let mut cases: Vec<(u32, u32, u32, Vec<u8>)> = vec![(7, 1, 6, colormap), (26, 48, (link.len() - 4) as u32, link)];
+    // Only indexed images consume the historical palette length workaround.
+    let mut cases: Vec<(u32, u32, u32, u32, Vec<u8>)> = vec![(7, 2, 1, 6, colormap.clone()), (26, 0, 48, (link.len() - 4) as u32, link)];
+    for base_type in [0, 1] {
+        cases.push((7, base_type, 1, colormap.len() as u32, colormap.clone()));
+        // Unused malformed contents still use their correctly declared framing.
+        cases.push((7, base_type, 1, 4, u32::MAX.to_be_bytes().to_vec()));
+    }
     for version in [20, 21] {
         let mut unit = [1f32.to_be_bytes(), 2u32.to_be_bytes()].concat();
         for _ in 0..if version < 21 { 5 } else { 3 } {
             string(b"unit\0", &mut unit);
         }
-        cases.push((version, 24, 4, unit));
+        cases.push((version, 0, 24, 4, unit));
     }
-    for (version, kind, declared, payload) in cases {
+    for (version, base_type, kind, declared, payload) in cases {
         let mut bytes = header(&[]);
         bytes[9..14].copy_from_slice(format!("v{version:03}\0").as_bytes());
+        bytes[22..26].copy_from_slice(&base_type.to_be_bytes());
+        if base_type == 2 {
+            bytes[26..30].copy_from_slice(&150u32.to_be_bytes()); // Indexed samples require nonlinear U8.
+        }
         bytes.truncate(bytes.len() - 8);
         bytes.extend(kind.to_be_bytes());
         bytes.extend(declared.to_be_bytes());
@@ -191,14 +201,14 @@ fn geometry_stream_matches_shared_irregular_property_framing() {
         bytes.extend(0u32.to_be_bytes());
         bytes.extend(999u32.to_be_bytes()); // END ignores the unused length, as wire does.
         let (mut cursor, header) = read_header(&bytes).unwrap();
-        let props = wire::props_version_with_interrupt(&mut cursor, Some(header.version), &Interrupt::NONE).unwrap();
+        let props = wire::props_image_with_interrupt(&mut cursor, header.version, header.base_type == 2, &Interrupt::NONE).unwrap();
         let expected = metadata::image_resolution(&props, 72.);
         assert_eq!(expected, 288.);
         for (name, wrapped) in std::iter::once(("source.xcf", bytes.clone())).chain(wrappers(&bytes)) {
             assert_eq!(
                 source_geometry(name, &wrapped, &Interrupt::NONE).unwrap(),
                 Some(((317., 193.), f64::from(expected))),
-                "kind {kind}, version {version}, {name}"
+                "base {base_type}, kind {kind}, version {version}, {name}"
             );
         }
     }

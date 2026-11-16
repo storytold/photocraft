@@ -101,7 +101,7 @@ fn coverage_owner(image: &mut Image<'_>) -> usize {
 }
 
 #[test]
-fn effect_group_bounds_reject_wrapped_dimensions_and_coordinate_overflow_without_decoding_hierarchy() {
+fn optional_effect_frame_overflow_keeps_groups_without_decoding_hierarchy_or_queuing_effects() {
     fn group(w: &mut W, width: u32, height: u32, x: i32, y: i32) -> usize {
         let effect = effect(w, 0);
         let at = w.out.len();
@@ -126,10 +126,18 @@ fn effect_group_bounds_reject_wrapped_dimensions_and_coordinate_overflow_without
         let ptr = group(&mut w, width, height, x, y);
         let mut image = image(&w.out, MAX_METADATA_BYTES);
         let before = image.budget;
-        let error = image.import_layers(&[ptr], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap_err();
-        assert!(error.to_string().contains(message), "{error}");
+        let (layers, _) = image.import_layers(&[ptr], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
+        assert_eq!(layers.len(), 1, "{message}: the optional frame cannot discard its group");
+        assert!(layers[0].is_group());
         assert_eq!(image.budget, before, "no group hierarchy pixels are admitted");
-        assert!(image.pending_effects.is_empty());
+        assert!(image.pending_effects.is_empty(), "invalid frames must not queue their effects");
+        assert!(image.warnings.finish().iter().any(|warning| warning.contains("effect frame") && warning.contains("pixels preserved")));
+        let ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("typed report") };
+        let frames: Vec<_> = report.entries.iter().filter(|entry| entry.feature_code == "xcf.layer_effect.frame").collect();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].disposition, ConversionDisposition::SkippedNonessential);
+        assert_eq!(frames[0].reason, ConversionReason::InvalidOptionalData);
+        assert!(frames[0].targets.iter().any(|target| target.layer_id == Some(layers[0].id)));
     }
     for (width, x, right) in [(i32::MAX as u32, 0, i32::MAX), (i32::MAX as u32, i32::MIN, -1)] {
         let mut w = W { out: vec![0; 4], wide: true };
