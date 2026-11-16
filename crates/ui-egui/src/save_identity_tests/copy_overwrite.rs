@@ -603,7 +603,6 @@ fn a_failed_copy_over_a_hard_link_leaves_the_other_documents_file_alone() {
 /// published its bytes and then failed still costs the other open document its savepoint: its file
 /// now holds a layer, not that document. The `published = false` half is the control that a failure
 /// before the rename leaves the other tab alone, and A itself is never saved by an export.
-/// Expected from source; not an executed result until hosted CI runs it.
 #[test]
 fn a_layer_export_that_published_before_failing_keeps_the_other_documents_file() {
     for published in [false, true] {
@@ -620,8 +619,14 @@ fn a_layer_export_that_published_before_failing_keeps_the_other_documents_file()
         app.remember_stamp(b, &target);
         app.session.set_active(0);
         let a = app.session.documents()[0].doc.id;
+        // A fresh document's top layer is empty, and Layer › Export As skips empty layers: fill it so
+        // the export really writes, then mark the document saved again so the export is the only thing
+        // that could dirty A.
+        app.run("edit.fill", json!({"color": "#3366cc"})).unwrap();
+        app.session.active_mut().unwrap().saved_to(own.clone());
         let layer = app.session.active().unwrap().doc.layers.last().unwrap().id;
-        app.services.write = Some(Box::new(failing_after_write(published)));
+        let calls = Rc::new(std::cell::Cell::new(0));
+        app.services.write = Some(Box::new(counting_writer(failing_after_write(published), calls.clone())));
         app.services.file_dialog = Some(crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(target.clone()))]).0);
         let fields = json!({"format": "png", "scale": 100, "__layers": [layer.0]});
         crate::export_dialog::confirm(&mut app, fields.as_object().unwrap()).unwrap();
@@ -629,6 +634,7 @@ fn a_layer_export_that_published_before_failing_keeps_the_other_documents_file()
         for _ in 0..3 {
             app.poll_file_dialog(&ctx, None);
         }
+        assert_eq!(calls.get(), 1, "published={published}: the layer export reached the writer, so nothing was skipped as empty");
         let b_state = app.session.documents().iter().find(|st| st.doc.id == b).unwrap();
         assert_eq!(b_state.path.as_deref(), Some(target.as_str()), "published={published}: B keeps its path");
         assert_eq!(b_state.is_dirty(), published, "published={published}: B is unsaved once its file holds a layer");
