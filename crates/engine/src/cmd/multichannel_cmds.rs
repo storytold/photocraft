@@ -199,7 +199,7 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, p: &Value) -> Resul
     let asked = match p.get("profile").and_then(Value::as_str).filter(|_| mode == ColorMode::Rgb) {
         Some(spec) => {
             let pr = s.color.resolve(spec, s.active().map(|st| &*st.doc), Some(mode))?;
-            if pr.color_space != photocraft_cms::ColorSpace::Rgb {
+            if pr.color_space != craft_cms::ColorSpace::Rgb {
                 return Err(EngineError::Other(format!("profile `{}` is {:?}, not RGB", pr.description, pr.color_space)));
             }
             Some(pr)

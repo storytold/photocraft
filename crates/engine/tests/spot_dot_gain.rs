@@ -7,7 +7,7 @@
 //! concurrent test could flatten one document under two settings. Keep any other test that
 //! changes the spot dot gain in this file.
 
-use photocraft_cms::Builtin;
+use craft_cms::Builtin;
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_compose::multichannel::{InkLight, InkSpace, SPOT_DOT_GAIN, inks_in, spot_dot_gain};
 use photocraft_doc::{AlphaChannel, Document, Size};

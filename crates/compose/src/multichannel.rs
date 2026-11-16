@@ -27,7 +27,7 @@
 
 use std::sync::Arc;
 
-use photocraft_cms::{Builtin, ColorSpace, Curve, Profile, Transform, TransformOptions};
+use craft_cms::{Builtin, ColorSpace, Curve, Profile, Transform, TransformOptions};
 use photocraft_color::convert::CmykSpace;
 use photocraft_color::{Color, ColorMode};
 use photocraft_doc::{AlphaChannel, Document};
@@ -109,7 +109,7 @@ pub struct InkLight {
 impl InkLight {
     /// The sRGB tone curve.
     pub fn srgb() -> InkLight {
-        let t = photocraft_cms::curve::srgb_trc();
+        let t = craft_cms::curve::srgb_trc();
         InkLight { trc: Some(Arc::new([t.clone(), t.clone(), t])) }
     }
 
@@ -209,7 +209,7 @@ impl InkSpace {
         let to_own = if doc.mode == ColorMode::Rgb {
             own.as_ref()
                 .filter(|p| p.color_space == ColorSpace::Rgb && !p.same_colors(Builtin::Srgb.profile()))
-                .and_then(|own| photocraft_cms::transform::cached(Builtin::Srgb.profile(), own, TransformOptions::default()).ok())
+                .and_then(|own| craft_cms::transform::cached(Builtin::Srgb.profile(), own, TransformOptions::default()).ok())
         } else {
             None
         };
@@ -258,7 +258,8 @@ impl InkSpace {
         }
         let mut rgb = photocraft_color::convert::with_cmyk_space(self.cmyk.as_ref(), || color.to_rgb());
         if let Some(t) = &self.to_own {
-            t.apply(&mut rgb, 3);
+            // An RGB → RGB transform over one RGB pixel; were it refused, the colour stays sRGB.
+            let _ = t.apply(&mut rgb, 3);
         }
         rgb.map(|v| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) })
     }

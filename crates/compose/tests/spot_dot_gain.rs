@@ -2,7 +2,7 @@
 //! thumbnail. The setting is process-wide (`multichannel::set_spot_dot_gain`), so this test has its
 //! own binary, and it is one test: changing it here can't race other tests that render inks.
 
-use photocraft_cms::Builtin;
+use craft_cms::Builtin;
 use photocraft_color::convert::linear_to_srgb;
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_compose::multichannel::{InkLight, InkSpace, SPOT_DOT_GAIN, dot_gain, inks_in, set_spot_dot_gain, spot_dot_gain};

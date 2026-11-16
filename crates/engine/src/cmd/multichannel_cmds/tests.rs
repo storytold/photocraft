@@ -110,8 +110,8 @@ fn flattens_layers_and_keeps_alpha_channels() {
     assert_eq!(d.channels.len(), 4);
     assert!(d.channels[3].spot.is_none(), "the saved selection stays an alpha channel");
     // The black fill on the upper layer is solid ink in all three plates.
-    for k in 0..3 {
-        assert!(d.channels[k].surface.pixel(1, 1)[0] > 0.99);
+    for channel in d.channels.iter().take(3) {
+        assert!(channel.surface.pixel(1, 1)[0] > 0.99);
     }
     // Back to RGB: the alpha channel survives, the inks become colour channels.
     s.execute("image.mode.rgb", json!({})).unwrap();
@@ -240,7 +240,7 @@ fn flat_export_prints_the_inks() {
 /// channel-for-channel conversion keeps its tag as it was.
 #[test]
 fn printed_rgb_result_is_tagged_and_a_bad_profile_changes_nothing() {
-    let tag = |s: &Session| doc(s).icc_profile.as_ref().and_then(|b| photocraft_cms::Profile::parse(b).ok());
+    let tag = |s: &Session| doc(s).icc_profile.as_ref().and_then(|b| craft_cms::Profile::parse(b).ok());
     let mut s = session("rgb", 8);
     s.execute("image.mode.multichannel", json!({})).unwrap();
     s.edit("drop", |doc, _| {
@@ -255,7 +255,7 @@ fn printed_rgb_result_is_tagged_and_a_bad_profile_changes_nothing() {
     }
     let r = s.execute("image.mode.rgb", json!({"profile": "adobe-rgb-compat"})).unwrap();
     assert_eq!(r["converted"], "appearance");
-    assert!(tag(&s).unwrap().same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile()));
+    assert!(tag(&s).unwrap().same_colors(craft_cms::Builtin::AdobeRgbCompat.profile()));
     s.execute("edit.undo", json!({})).unwrap();
     s.execute("image.mode.rgb", json!({})).unwrap();
     assert!(tag(&s).unwrap().same_colors(&s.color.working(ColorMode::Rgb)));

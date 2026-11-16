@@ -8,6 +8,7 @@
 //! * Drag selected anchors to move them, a direction handle to turn it (a smooth point keeps its
 //!   handles collinear; ⌥ breaks them apart), or a segment to bend it (straight segments move).
 //!   The arrow keys nudge the selected anchors 1 px (⇧ 10 px), one history step per press.
+//!   ⌥-drag on a segment drags a copy of its subpath, appended to the path (⌥-click selects it).
 //! * Convert Point (the tool, or Pen + ⌥): click an anchor to make it a corner, drag from it to
 //!   pull out smooth handles, drag a handle to move it alone. The tool selects the anchor it
 //!   converts, so its handles show; a press on empty canvas does nothing, and ⌘/Ctrl is Direct
@@ -76,6 +77,9 @@ pub struct DirectSelection {
     pub anchors: Vec<[usize; 2]>,
     /// A clicked segment (`[subpath, knot]` it leaves): its two handles show.
     pub segment: Option<[usize; 2]>,
+    /// The subpaths of `target` whose anchors are drawn (Delete Anchor Point on a saved path, #12769);
+    /// `None` draws all of them, as right after the path is targeted.
+    pub shown: Option<Vec<usize>>,
     #[serde(skip)]
     pub drag: Option<Drag>,
     /// The history step the drag's commit joins (`coalesce`): a Curvature Pen click on a segment
@@ -276,18 +280,24 @@ pub enum Edit {
     Path(Vec<[usize; 2]>),
     /// Pen + ⌥ on an anchor: a click makes a corner, a drag pulls out smooth handles.
     Convert([usize; 2]),
+    /// ⌥-drag on a segment: a moved copy of the subpath of these anchors (all of them) goes last.
+    Duplicate(Vec<[usize; 2]>),
 }
 
 impl Edit {
-    /// The drag's end with ⇧ held: moving anchors locks to multiples of 45°, as in Photoshop (#5475).
+    /// The drag's end with ⇧ held: moving anchors locks to multiples of 45°, as in Photoshop (#5475),
+    /// with the measured (+60, -25) drag kept on the axis (#13207).
     fn constrain(&self, start: [f64; 2], p: [f64; 2], shift: bool) -> [f64; 2] {
-        if shift && matches!(self, Edit::Anchors(_)) { crate::stroke_constraint::snap45(start, p) } else { p }
+        if shift && matches!(self, Edit::Anchors(_) | Edit::Duplicate(_)) { crate::stroke_constraint::snap45_anchor(start, p) } else { p }
     }
 
     /// The edit for a drag from `start` to `end`, as a command and its params (without target).
     fn command(&self, start: [f64; 2], end: [f64; 2]) -> (&'static str, Value) {
         let d = [end[0] - start[0], end[1] - start[1]];
         match self {
+            // One anchor is "Drag Anchor Point" in History, two or more the default "Drag Anchor
+            // Points", as in Photoshop (#13205).
+            Edit::Anchors(a) if a.len() == 1 => ("path.moveAnchors", json!({"anchors": a, "move": d, "stepName": "Drag Anchor Point"})),
             Edit::Anchors(a) => ("path.moveAnchors", json!({"anchors": a, "move": d})),
             Edit::Curvature(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "curvature": true})),
             Edit::Handle([s, k], h, from, independent) => {
@@ -296,6 +306,7 @@ impl Edit {
             Edit::Segment([s, k], t) => ("path.bendSegment", json!({"subpath": s, "knot": k, "t": t, "move": d})),
             Edit::Path(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "stepName": "Drag Path"})),
             Edit::Convert([s, k]) => ("path.convertPoint", json!({"subpath": s, "knot": k, "out": end})),
+            Edit::Duplicate(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "duplicate": true, "stepName": "Drag Path"})),
         }
     }
 
@@ -309,6 +320,11 @@ impl Edit {
             Edit::Handle(k, h, from, independent) => edit::move_handle(&mut p, *k, *h, Point::new(from.x + d[0], from.y + d[1]), *independent),
             Edit::Segment(k, t) => edit::bend_segment(&mut p, *k, *t, d),
             Edit::Convert(k) => edit::convert_point(&mut p, *k, Some(Point::new(end[0], end[1]))),
+            Edit::Duplicate(a) => {
+                p.subpaths.push(p.subpaths.get(a.first()?[0])?.clone());
+                let last = p.subpaths.len() - 1;
+                edit::move_anchors(&mut p, &a.iter().map(|&[_, k]| [last, k]).collect::<Vec<_>>(), d)
+            }
         }
         .ok()?;
         Some(p)
@@ -316,9 +332,11 @@ impl Edit {
 }
 
 /// Is Direct Selection what the pointer does now: its own tool, or a Pen (the Pen, Freeform Pen
-/// or Curvature Pen), an anchor point tool or Convert Point with ⌘/Ctrl held.
+/// or Curvature Pen), an anchor point tool or Convert Point with ⌘/Ctrl held, or Path Selection
+/// with ⌘/Ctrl alone (#13284; with ⌥ or ⇧ too, the reference was not measured, so as today).
 fn direct(tool: Tool, mods: Modifiers) -> bool {
     tool == Tool::DirectSelection
+        || (tool == Tool::PathSelection && mods.command && !mods.alt && !mods.shift)
         || (matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint)
             && mods.command)
 }
@@ -362,6 +380,15 @@ pub fn shows(app: &PhotocraftApp, mods: Modifiers) -> bool {
         || ds.drag.is_some()
         || matches!(app.ui.tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint)
         || (app.ui.tool == Tool::Pen && app.ui.pen.is_none() && !ds.anchors.is_empty() && still_valid(app, ds))
+}
+
+/// Are the anchors of subpath `s` of `r` drawn now (#12769)?
+pub(crate) fn anchors_shown(app: &PhotocraftApp, r: PathRef, s: usize) -> bool {
+    let ds = &app.ui.direct_selection;
+    if ds.target != Some(r) || !still_valid(app, ds) {
+        return true;
+    }
+    ds.shown.as_ref().is_none_or(|shown| shown.contains(&s))
 }
 
 /// The active paths, front first: the targeted vector mask, the active shape layer's path or the
@@ -642,6 +669,11 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
         let _ = app.run("layer.select", json!({"layer": id}));
     }
     let owner = Owner::current(app);
+    let tool_is_path_selection = app.ui.tool == Tool::PathSelection;
+    // ⌥-drag on a segment duplicates its subpath (#13211). With ⌘/Ctrl or ⇧ too, or on the Pen
+    // path or a Type Path, the reference was not measured: it moves the subpath, as before.
+    let alt_duplicates =
+        app.ui.tool == Tool::DirectSelection && !mods.command && !mods.ctrl && !mods.shift && !matches!(target, PathRef::Pen | PathRef::TypePath(_));
     let ds = &mut app.ui.direct_selection;
     if ds.target.as_ref() != Some(&target) {
         *ds = DirectSelection { target: Some(target), ..Default::default() };
@@ -688,7 +720,9 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
                     return true;
                 }
                 ds.anchors.push(k);
-            } else if !ds.anchors.contains(&k) {
+            } else if !ds.anchors.contains(&k) || tool_is_path_selection {
+                // Path Selection's ⌘/Ctrl moves the anchor pressed alone, not the selected
+                // component it belongs to (#13284).
                 ds.anchors = vec![k];
             }
             Edit::Anchors(ds.anchors.clone())
@@ -696,7 +730,7 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
         Hit::Segment(k, _) if mods.alt => {
             ds.segment = None;
             ds.anchors = edit::subpath_anchors(&base, k[0]);
-            Edit::Anchors(ds.anchors.clone())
+            if alt_duplicates { Edit::Duplicate(ds.anchors.clone()) } else { Edit::Anchors(ds.anchors.clone()) }
         }
         Hit::Segment(k, t) => {
             ds.anchors.clear();
@@ -852,9 +886,18 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
     }
     // sync_views checks ownership while the command runs: keep this selection off the live UI
     // until its own command is done, then bind it to the revision that made.
-    let selection = std::mem::take(&mut app.ui.direct_selection);
+    let mut selection = std::mem::take(&mut app.ui.direct_selection);
     match app.run(id, params) {
-        Ok(_) => keep_after_command(app, selection),
+        Ok(_) => {
+            if let Edit::Duplicate(a) = edit {
+                // The copy is what was dragged: it ends up selected, not the source.
+                selection.anchors = a.iter().map(|&[_, k]| [base.subpaths.len(), k]).collect();
+                if let Some(shown) = selection.shown.as_mut() {
+                    shown.push(base.subpaths.len());
+                }
+            }
+            keep_after_command(app, selection)
+        }
         Err(e) => {
             if selection.owner.as_ref().is_some_and(|owner| owner.valid(app)) {
                 app.ui.direct_selection = selection;
@@ -962,7 +1005,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn F
                 crate::vector_ui::draw_handle(painter, to_scr([kn.anchor.x, kn.anchor.y]), to_scr([c.x, c.y]), accent);
             }
         }
-        for (s, sp) in path.subpaths.iter().enumerate() {
+        for (s, sp) in path.subpaths.iter().enumerate().filter(|(s, _)| !ours || anchors_shown(app, r, *s)) {
             for (k, kn) in sp.knots.iter().enumerate() {
                 crate::vector_ui::draw_anchor(painter, to_scr([kn.anchor.x, kn.anchor.y]), ours && ds.anchors.contains(&[s, k]), accent);
             }
@@ -988,6 +1031,21 @@ mod convert_point_tolerance_tests;
 
 #[cfg(test)]
 mod convert_point_drag_segment_tests;
+
+#[cfg(test)]
+mod delete_key_tests;
+
+#[cfg(test)]
+mod history_names_tests;
+
+#[cfg(test)]
+mod shift_angle_tests;
+
+#[cfg(test)]
+mod options_bar_tests;
+
+#[cfg(test)]
+mod alt_drag_duplicate_tests;
 
 #[cfg(test)]
 mod freeform_command_tests {
