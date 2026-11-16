@@ -250,6 +250,10 @@ struct DragPaint {
     from: egui::Pos2,
     to: egui::Pos2,
     seg_frame: u64,
+    /// The frame the drag began in and the first segment, from the press origin: boxes drawn
+    /// before the pressed one in that frame had no state yet, so they take it one frame later.
+    born: u64,
+    first: (egui::Pos2, egui::Pos2),
 }
 
 /// The middle of the part of the segment `a`..`b` that lies inside `rect` (the point itself for a
@@ -313,7 +317,9 @@ pub fn drag_toggle(ui: &Ui, resp: &Response, hit: Rect, on: &mut bool) -> bool {
         *on = !*on;
         let to = latest.unwrap_or(resp.rect.center());
         let from = ctx.input(|i| i.pointer.press_origin()).unwrap_or(to);
-        ctx.data_mut(|d| d.insert_temp(key, DragPaint { group: ui.scope_id(), target: *on, seen: frame, from, to, seg_frame: frame }));
+        ctx.data_mut(|d| {
+            d.insert_temp(key, DragPaint { group: ui.scope_id(), target: *on, seen: frame, from, to, seg_frame: frame, born: frame, first: (from, to) })
+        });
         return true;
     }
     if resp.clicked() {
@@ -326,8 +332,15 @@ pub fn drag_toggle(ui: &Ui, resp: &Response, hit: Rect, on: &mut bool) -> bool {
     }
     // The part of the box that is on screen; the pointer must have crossed it, on this ui's layer.
     let visible = hit.intersect(ui.clip_rect());
-    let Some(p) = segment_crossing(st.from, st.to, visible) else { return false };
-    if ctx.layer_id_at(p) != Some(ui.layer_id()) {
+    // This frame's segment, and in the frame after the drag began the first one too, which the
+    // boxes drawn before the pressed one could not see in its own frame.
+    let first = (st.born.saturating_add(1) == frame).then_some(st.first);
+    let crossed = [Some((st.from, st.to)), first]
+        .into_iter()
+        .flatten()
+        .filter_map(|(a, b)| segment_crossing(a, b, visible))
+        .any(|p| ctx.layer_id_at(p) == Some(ui.layer_id()));
+    if !crossed {
         return false;
     }
     *on = st.target;

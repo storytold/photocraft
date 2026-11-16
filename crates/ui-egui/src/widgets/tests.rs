@@ -2186,6 +2186,27 @@ mod checkbox_drag {
         assert_eq!(*h.state(), [true, false, true], "the covered box on the way keeps its state");
     }
 
+    /// #3333: the first move of a drag upwards jumps over boxes drawn before the pressed one, which
+    /// see the drag only on the next frame (the release frame here); they are still set.
+    #[test]
+    fn drag_sweep_jumping_upwards_in_the_first_move_sets_the_boxes_on_the_way() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 4]| {
+                ui.vertical(|ui| {
+                    for b in s.iter_mut() {
+                        crate::widgets::checkbox(ui, b, "Box");
+                    }
+                });
+            },
+            [false; 4],
+        );
+        h.run();
+        let b = box_points(&h);
+        assert_eq!(b.len(), 4);
+        sweep(&mut h, &[b[3], b[0]], 1);
+        assert_eq!(*h.state(), [true; 4]);
+    }
+
     /// #3333: sweeping upwards and releasing on the next frame still reaches the earlier box.
     #[test]
     fn drag_sweep_upwards_with_a_quick_release_reaches_the_earlier_box() {
