@@ -157,6 +157,32 @@ pub fn smart_placement_axis_aligned(layer: &Layer) -> bool {
 }
 
 /// `w`, in the smart object's source space, mapped through its placement.
+/// A document-space warp of a smart object put back in its contents' space, by `inv` (the inverse
+/// of its placement): the box it then covers, and the warp (`None` for no warp). A preset keeps
+/// its style over that box, a cylinder stays a cylinder where it can.
+fn warp_in_source(inv: &Homography, w: &Warp) -> ([f64; 4], Option<Warp>) {
+    let corners = [[w.bounds[0], w.bounds[1]], [w.bounds[2], w.bounds[1]], [w.bounds[2], w.bounds[3]], [w.bounds[0], w.bounds[3]]].map(|p| hom_apply(inv, p));
+    let sb = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let warp = match w.style {
+        WarpStyle::None => None,
+        WarpStyle::Custom => Some(Warp::custom(w.to_mesh(1, 1).map_points(|p| hom_apply(inv, p)), sb)),
+        WarpStyle::Cylinder => cylinder_in_source(w, inv, sb),
+        _ => Some(Warp { bounds: sb, mesh: None, ..w.clone() }),
+    };
+    (sb, warp)
+}
+
+/// A smart object's warp edited in document space (Warp mode on an upright placement,
+/// [`smart_warp_doc_space`]) in its contents' space, with the placement it shows through:
+/// what [`smart_warp_source`] gives for a stored warp. `None` for another layer, a degenerate
+/// placement or no warp.
+pub fn smart_warp_to_source(layer: &Layer, w: &Warp) -> Option<(Warp, Homography)> {
+    let LayerContent::Smart(sm) = &layer.content else { return None };
+    let t = crate::smart_cmds::placement(sm);
+    let (_, warp) = warp_in_source(&t.inverse()?, w);
+    Some((warp?, t))
+}
+
 fn placed_warp(sm: &photocraft_doc::SmartObject, w: &Warp) -> Warp {
     let t = crate::smart_cmds::placement(sm);
     let corners = [[w.bounds[0], w.bounds[1]], [w.bounds[2], w.bounds[1]], [w.bounds[2], w.bounds[3]], [w.bounds[0], w.bounds[3]]].map(|p| hom_apply(&t, p));
@@ -327,21 +353,14 @@ fn warp_layer(
         LayerContent::Smart(sm) => {
             // Store in source space: undo the placement (affine, or Distort / Perspective) around the warp.
             let inv = crate::smart_cmds::placement(sm).inverse().ok_or_else(|| EngineError::Other("the smart object's transform is degenerate".into()))?;
-            let corners =
-                [[w.bounds[0], w.bounds[1]], [w.bounds[2], w.bounds[1]], [w.bounds[2], w.bounds[3]], [w.bounds[0], w.bounds[3]]].map(|p| hom_apply(&inv, p));
-            let sb = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            let (sb, plain) = warp_in_source(&inv, w);
             let src_warp = match w.style {
-                WarpStyle::None => None,
                 WarpStyle::Custom => {
                     let mesh = w.to_mesh(1, 1).map_points(|p| hom_apply(&inv, p));
                     // A `mesh` parameter's knots span the contents, not the warp box's image (#4113).
-                    match frames.and_then(|f| f.get(&l.id)).and_then(|&c| content_frame_warp(&mesh, c, sb)) {
-                        Some(cw) => Some(cw),
-                        None => Some(Warp::custom(mesh, sb)),
-                    }
+                    frames.and_then(|f| f.get(&l.id)).and_then(|&c| content_frame_warp(&mesh, c, sb)).or(plain)
                 }
-                WarpStyle::Cylinder => cylinder_in_source(w, &inv, sb),
-                _ => Some(Warp { bounds: sb, mesh: None, ..w.clone() }),
+                _ => plain,
             };
             sm.warp = src_warp.filter(|w| !w.is_identity());
             // Fallback appearance for sources that can't be re-rendered.

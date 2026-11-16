@@ -154,6 +154,7 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
         return;
     }
     let (Some(t), Some(pv)) = (app.ui.transform.as_mut(), app.transform_preview.as_mut()) else { return };
+    let place = t.warp_place;
     let Some(w) = t.warp.as_mut() else { return };
     match ev {
         ToolEvent::Down { x, y, .. } => {
@@ -169,16 +170,51 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
             }
         }
         ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
-            match (&pv.warp_drag, w.mesh.as_mut()) {
-                (Some(WarpDrag::Point { index, start, pts0 }), Some(m)) => m.drag_point(pts0, *index, [x - start[0], y - start[1]]),
-                (Some(WarpDrag::Surface { s, t, start, pts0 }), Some(m)) => m.pull(pts0, *s, *t, [x - start[0], y - start[1]]),
-                _ => {}
+            if let (Some(drag @ (WarpDrag::Point { start, pts0, .. } | WarpDrag::Surface { start, pts0, .. })), Some(m)) = (&pv.warp_drag, w.mesh.as_mut()) {
+                let d = [x - start[0], y - start[1]];
+                let moved = |m: &mut BezierMesh, f: f64| match drag {
+                    WarpDrag::Point { index, .. } => m.drag_point(pts0, *index, [d[0] * f, d[1] * f]),
+                    WarpDrag::Surface { s, t, .. } => m.pull(pts0, *s, *t, [d[0] * f, d[1] * f]),
+                    _ => {}
+                };
+                moved(m, 1.0);
+                // Under a perspective the mesh stays ahead of its horizon: a drag that would take
+                // it past (the pointer beyond the vanishing point, or far the other way) goes only
+                // as far as it can.
+                if let Some(h) = place
+                    && !ahead_of_horizon(h, &m.points, pts0)
+                {
+                    let (mut lo, mut hi) = (0.0, 1.0);
+                    for _ in 0..30 {
+                        let mid = (lo + hi) / 2.0;
+                        moved(m, mid);
+                        if ahead_of_horizon(h, &m.points, pts0) { lo = mid } else { hi = mid }
+                    }
+                    moved(m, lo);
+                }
             }
             if matches!(ev, ToolEvent::Up { .. }) {
                 pv.warp_drag = None;
             }
         }
     }
+}
+
+/// How close to its horizon a warp's control points may come under a perspective placement: a
+/// point's perspective divisor stays at least this share of the largest divisor of the mesh
+/// before the drag (or as small as the smallest was).
+const HORIZON_MARGIN: f64 = 0.05;
+
+/// Whether every control point in `pts` stays ahead of the horizon of placement `h` (row-major
+/// 3 × 3), by [`HORIZON_MARGIN`] against the mesh `base` the drag started from. A Bézier surface
+/// lies inside its control points' hull and the divisor is linear, so then the whole surface is
+/// ahead of it and maps to a finite place.
+pub(super) fn ahead_of_horizon(h: [f64; 9], pts: &[[f64; 2]], base: &[[f64; 2]]) -> bool {
+    let w = |p: &[f64; 2]| h[6] * p[0] + h[7] * p[1] + h[8];
+    let sign = if base.iter().map(w).sum::<f64>() < 0.0 { -1.0 } else { 1.0 };
+    let (lo, hi) = base.iter().map(|p| sign * w(p)).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+    let floor = (HORIZON_MARGIN * hi).min(lo);
+    floor.is_finite() && pts.iter().all(|p| sign * w(p) >= floor)
 }
 
 /// The document point of a pointer event.

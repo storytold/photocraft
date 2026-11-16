@@ -1246,7 +1246,20 @@ pub fn leave_warp(app: &mut PhotocraftApp) {
         }
     }
     let layer_warp = holds_warp(app);
+    // An upright smart object's warp was edited in document space: it is held in the contents'
+    // space with the placement, as any other smart object's, so a box moved before Warp comes
+    // back shows it through that move exactly (a mesh in document space would have to be split
+    // to follow a perspective).
+    let to_contents = app.ui.transform.as_ref().filter(|t| t.warp_place.is_none() && !t.selection && t.path.is_none() && t.target.is_none()).and_then(|t| {
+        let w = t.warp.as_ref().filter(|w| t.warp_entry.as_ref() != Some(*w))?;
+        let layer = app.session.active()?.doc.layer(LayerId(t.layer))?;
+        photocraft_engine::warp_cmds::smart_warp_to_source(layer, w)
+    });
     let Some(t) = app.ui.transform.as_mut() else { return };
+    if let Some((w, place)) = to_contents {
+        t.warp = Some(w);
+        t.warp_place = Some(place.0);
+    }
     // One transform session, as in Photoshop: a warp made here is kept when the box goes back to
     // another mode, and the box then transforms the warped result. An untouched warp is dropped.
     let warp = t.warp.take();

@@ -4684,7 +4684,21 @@ fn a_warp_is_kept_when_the_box_switches_to_another_mode() {
         let warped = app.ui.transform.as_ref().unwrap().warp.clone();
         leave_warp(&mut app);
         let t = app.ui.transform.as_ref().unwrap();
-        assert!(t.warp.is_none() && t.held_warp == warped, "smart {smart}: the warp is held");
+        assert!(t.warp.is_none() && t.held_warp.is_some(), "smart {smart}: the warp is held");
+        // A smart object's in its contents' space, shown through its placement: the same mesh.
+        let held = t.held_warp.as_ref().unwrap().to_mesh(1, 1);
+        let shown = held.map_points(|p| {
+            t.held_place.map_or(p, |h| {
+                let (x, y) = photocraft_algo::transform::Homography(h).apply(p[0], p[1]);
+                [x, y]
+            })
+        });
+        let want_mesh = warped.as_ref().unwrap().to_mesh(1, 1);
+        assert_eq!(t.held_place.is_some(), smart, "smart {smart}: held with its placement");
+        assert!(
+            shown.points.iter().zip(&want_mesh.points).all(|(a, b)| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9),
+            "smart {smart}: the warp is held as it was"
+        );
         for q in &mut app.ui.transform.as_mut().unwrap().quad {
             q[0] += 10.0;
         }
