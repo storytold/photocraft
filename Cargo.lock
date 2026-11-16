@@ -5797,7 +5797,10 @@ dependencies = [
  "craft-xcf",
  "craft-xml",
  "crc32fast",
+ "data-url",
  "flate2",
+ "gif",
+ "image-webp",
  "kurbo 0.13.1",
  "lopdf",
  "miniz_oxide 0.9.1",
@@ -5818,6 +5821,7 @@ dependencies = [
  "thiserror 2.0.21",
  "ttf-parser",
  "zune-core",
+ "zune-jpeg",
  "zune-jpegxl",
 ]
 

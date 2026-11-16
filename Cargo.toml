@@ -10,6 +10,11 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
+# Match SVG renderer backends for exact optional-image validation.
+zune-jpeg = "=0.5.15"
+gif = "=0.14.2"
+image-webp = "=0.2.4"
+data-url = "=0.3.2"
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a", features = ["serde"] }
 # Feature flags shared with the launcher and the other Craft apps (craft-libs#1118, #1119).
 craft-flags = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
