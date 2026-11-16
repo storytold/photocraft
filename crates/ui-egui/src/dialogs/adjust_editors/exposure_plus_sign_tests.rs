@@ -36,3 +36,48 @@ fn typed_plus_sign_parses_like_a_plain_number() {
     assert_eq!(parse_num("+20"), Some(20.0));
     assert_eq!(parse_num("1.23"), Some(1.23));
 }
+
+/// #14639: after an arrow step the field selects the text it shows, plus sign included, so a
+/// typed number replaces the whole value rather than leaving its last digit behind.
+#[test]
+fn stepping_a_plus_prefixed_field_selects_the_whole_shown_value() {
+    use egui::accesskit::Role;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = Harness::builder().with_size(egui::vec2(300.0, 400.0)).build_ui_state(
+        |ui, values: &mut serde_json::Value| {
+            let cx = crate::adjust_editors::EditorCx {
+                mem: egui::Id::unique("plus-selection"),
+                hist: None,
+                gray: false,
+                swatches: [[0.0; 3], [1.0; 3]],
+                gradients: Vec::new(),
+                dialog: true,
+                dynamic_color_sliders: true,
+                isolated_curve: None,
+            };
+            crate::adjust_editors::editor(ui, "exposure", values, &cx);
+        },
+        serde_json::json!({}),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(4);
+    let gamma = |h: &Harness<'static, serde_json::Value>| {
+        h.query_all_by_role(Role::SpinButton).nth(2).unwrap().value().unwrap_or_default()
+    };
+    assert_eq!(gamma(&h), "+1", "the dialog opens Gamma at one, shown with its plus");
+    h.query_all_by_role(Role::SpinButton).nth(2).unwrap().click();
+    h.run_steps(2);
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(gamma(&h), "+1.01", "an arrow step keeps the plus");
+    // The step selected the whole shown text: typing replaces it, rather than leaving `1` behind
+    // (`+1.01` with four characters selected would read `21`).
+    h.event(egui::Event::Text("2".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state()["gamma"].as_f64(), Some(2.0), "a typed 2 replaces +1.01: {}", h.state());
+    assert_eq!(gamma(&h), "+2");
+}

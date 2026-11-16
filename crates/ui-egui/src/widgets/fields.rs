@@ -368,7 +368,10 @@ fn value_field_box(
                 ui.memory_mut(|m| m.request_focus(resp.id));
             }
             // The text stays selected, as in Photoshop: typing after a step replaces the value.
-            crate::field_tab::select_all(ui.ctx(), resp.id, &if fine { fmt_num2(f64::from(*value)) } else { fmt_num(f64::from(*value)) });
+            // Select what `number_edit` displays, not a plainer format: the plus of
+            // `plus_above_one` (#14639) and the row's own decimals are part of the shown text.
+            let shown = format_field_text(f64::from(*value), decimals, fine, opts.keep_zeros, opts.blank_when_zero, opts.plus_above_one);
+            crate::field_tab::select_all(ui.ctx(), resp.id, &shown);
         }
         let pass = ui.ctx().cumulative_pass_nr();
         ui.data_mut(|d| d.insert_temp(stepped_id(resp.id), pass));
