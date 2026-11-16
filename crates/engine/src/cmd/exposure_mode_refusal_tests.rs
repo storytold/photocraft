@@ -103,3 +103,43 @@ fn a_quick_mask_in_a_cmyk_document_keeps_todays_behaviour() {
     s.execute(EXPOSURE, json!({"exposure": -1, "target": "quickMask"})).unwrap();
     assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history state");
 }
+
+fn docs() -> Vec<(&'static str, Session)> {
+    let mut indexed = new_doc("rgb", 8);
+    indexed.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none", "forced": "none"})).unwrap();
+    let mut multi = new_doc("rgb", 8);
+    multi.execute("image.mode.multichannel", json!({})).unwrap();
+    vec![("cmyk", new_doc("cmyk", 8)), ("lab", new_doc("lab", 8)), ("indexed", indexed), ("multichannel", multi)]
+}
+
+/// An explicit alpha channel or Quick Mask target in the params is a gray plane in any mode, so the
+/// document-mode refusal does not apply, whatever the Channels panel shows; a pixel target is still
+/// refused.
+#[test]
+fn an_explicit_alpha_target_is_not_refused_in_other_modes() {
+    for (mode, mut s) in docs() {
+        s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        let r = s.execute(EXPOSURE, json!({"exposure": -1, "target": {"channel": 0}}));
+        assert!(r.is_ok(), "{mode} alpha: {r:?}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{mode}: one history state");
+        assert!(s.execute(EXPOSURE, json!({"exposure": -1, "target": "pixels"})).is_err(), "{mode}: pixels stay refused");
+    }
+}
+
+#[test]
+fn an_explicit_quick_mask_target_is_not_refused_in_other_modes() {
+    for (mode, mut s) in docs() {
+        s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        // The panel shows a colour channel (not the Quick Mask), so only the params name the plane.
+        let shown = s.execute("channel.target", json!({"colors": [0]}));
+        if shown.is_err() {
+            continue;
+        }
+        let steps = s.active().unwrap().history.past_len();
+        let r = s.execute(EXPOSURE, json!({"exposure": -1, "target": "quickMask"}));
+        assert!(r.is_ok(), "{mode} quick mask: {r:?}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{mode}: one history state");
+    }
+}
