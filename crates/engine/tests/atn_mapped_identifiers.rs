@@ -1502,6 +1502,134 @@ fn recorded_web_color_metadata_converts_pixels_independently_of_profile_embeddin
     }
 }
 
+fn web_jpeg_recording(path: &str, pass: i32) -> Descriptor {
+    let mut d = web_destination(path, true, false);
+    let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+    settings.items.iter_mut().find(|(key, _)| key.is("Fmt ")).unwrap().1 = enm("IRFm", "JPEG");
+    settings.items.extend([(Id::new("Pass"), D::Integer(pass)), (Id::new("Optm"), D::Boolean(true)), (Id::new("Qlty"), D::Integer(80))]);
+    d
+}
+
+#[test]
+fn recorded_web_jpeg_pass_maps_baseline_and_progressive_and_writes_pass() {
+    for (pass, progressive) in [(1, false), (3, true)] {
+        for optimized in [false, true] {
+            for legacy in [false, true] {
+                let mut d = web_jpeg_recording("/out/image.jpg", pass);
+                let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+                settings.items.iter_mut().find(|(key, _)| key.is("Optm")).unwrap().1 = D::Boolean(optimized);
+                if legacy {
+                    settings.items.retain(|(key, _)| !key.is("Pass"));
+                    settings.items.push((Id::new("Prgr"), D::Boolean(progressive)));
+                }
+                for event in [AtnEvent::Code(*b"Expr"), AtnEvent::name("export")] {
+                    let action = recorded(event, d.clone());
+                    assert_eq!(action.steps[0].0, "file.export.saveForWebLegacy");
+                    assert_eq!(action.steps[0].1["format"], "jpeg");
+                    assert_eq!(action.steps[0].1["progressive"], progressive);
+                    assert_eq!(action.steps[0].1["optimized"], optimized);
+                    let saved = saved(&action).descriptor.unwrap();
+                    let Some(D::Descriptor(settings)) = saved.get("Usng") else { panic!("SaveForWeb") };
+                    assert_eq!(settings.get("Pass"), Some(&D::Integer(pass)));
+                    assert!(settings.get("Prgr").is_none(), "JPEG exports its recorded integer scan choice");
+                    let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+                    let back = atn_cmds::import(&bytes).unwrap();
+                    assert!(back.unsupported.is_empty());
+                    assert_eq!(back.actions[0].steps[0].1["progressive"], progressive);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_web_jpeg_pass_preserves_other_scans_conflicts_and_unrepresented_settings() {
+    let base = web_jpeg_recording("/out/image.jpg", 3);
+    let mut cases = Vec::new();
+    for value in [D::Integer(-1), D::Integer(0), D::Integer(2), D::Integer(4), D::Double(3.0), D::Boolean(true)] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        settings.items.iter_mut().find(|(key, _)| key.is("Pass")).unwrap().1 = value;
+        cases.push(d);
+    }
+    for (key, value) in [
+        ("Prgr", D::Boolean(false)),
+        ("Prgr", D::Boolean(true)),
+        ("Pass", D::Integer(3)),
+        ("blur", D::Double(0.0)),
+        ("blur", D::Double(1.0)),
+        ("QChS", D::Integer(0)),
+    ] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        settings.items.push((Id::new(key), value));
+        cases.push(d);
+    }
+    for format in [None, Some(enm("IRFm", "PN24")), Some(enm("IRFm", "GIFf"))] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        settings.items.retain(|(key, _)| !key.is("Fmt "));
+        if let Some(format) = format {
+            settings.items.push((Id::new("Fmt "), format));
+        }
+        cases.push(d);
+    }
+    for d in cases {
+        let action = recorded(AtnEvent::name("export"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+}
+
+/// Read JPEG frame markers before the first scan, independently of the native progressive flag.
+fn web_jpeg_frame_marker(bytes: &[u8]) -> Option<u8> {
+    if bytes.get(..2)? != [0xff, 0xd8] {
+        return None;
+    }
+    let mut rest = bytes.get(2..)?;
+    loop {
+        if rest.first() != Some(&0xff) {
+            return None;
+        }
+        let marker = *rest.get(1)?;
+        if (0xc0..=0xcf).contains(&marker) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) {
+            return Some(marker);
+        }
+        if matches!(marker, 0xda | 0xd9) {
+            return None;
+        }
+        let len = usize::from(u16::from_be_bytes(rest.get(2..4)?.try_into().ok()?));
+        if len < 2 {
+            return None;
+        }
+        rest = rest.get(2 + len..)?;
+    }
+}
+
+#[test]
+fn recorded_web_jpeg_pass_writes_the_expected_frame_at_every_document_depth() {
+    let dir = tempfile::tempdir().unwrap();
+    for depth in [8, 16, 32] {
+        for (pass, marker) in [(1, 0xc0), (3, 0xc2)] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":8,"height":6,"depth":depth})).unwrap();
+            s.execute("edit.fill", json!({"contents":"color","color":"#3366cc"})).unwrap();
+            let before = s.active().unwrap().doc.clone();
+            let past = s.active().unwrap().history.past_len();
+            let path = dir.path().join(format!("{depth}-{pass}.jpg"));
+            let action = recorded(AtnEvent::name("export"), web_jpeg_recording(&path.to_string_lossy(), pass));
+            let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+            let action = atn_cmds::import(&bytes).unwrap().actions.remove(0);
+            replay_saved(&mut s, &action);
+            let bytes = std::fs::read(path).unwrap();
+            assert_eq!(web_jpeg_frame_marker(&bytes), Some(marker), "Pass {pass} at {depth} bits");
+            assert_eq!(photocraft_codecs::decode(&bytes).unwrap().dimensions(), (8, 6));
+            assert_eq!(s.active().unwrap().doc, before);
+            assert_eq!(s.active().unwrap().history.past_len(), past);
+        }
+    }
+}
+
 fn history_offset(offset: i32) -> Descriptor {
     Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("HstS"), offset }]))
 }

@@ -551,6 +551,10 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   map to the existing metadata modes None, Copyright, Copyright and Contact, All Except Camera
   Info and All. Unknown enum values/types and additional unrepresented output settings remain
   kept steps.
+- Save for Web JPEG's integer `Pass` values 1 and 3 map to the existing non-progressive and
+  progressive modes and export in that form. The existing `Prgr` flag still imports; simultaneous
+  `Pass`/`Prgr`, other pass values and unrepresented JPEG settings remain kept steps. The native
+  encoder determines the progressive scan layout; this mapping does not add a custom scan count.
 - Photo Filter converts recorded Lab colours through `craft-cms`.
 - Direct Vibrance and Gradient Map save as the string events `vibrance` and `gradientMapEvent`.
   Stroke Outside uses `StrL.Otsd`, group Pass Through uses `BlnM.passThrough`, Canvas Size extension

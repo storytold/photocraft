@@ -227,7 +227,7 @@ fn web_path(v: &D) -> Option<String> {
 
 fn web_settings_supported(u: &Descriptor) -> bool {
     const KEYS: &[&str] =
-        &["In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB", "SWch", "SWmd"];
+        &["In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Pass", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB", "SWch", "SWmd"];
     if !u.class_id.is("SaveForWeb") || !web_keys(u, KEYS) {
         return false;
     }
@@ -252,6 +252,13 @@ fn web_settings_supported(u: &Descriptor) -> bool {
         return false;
     }
     if ["DIDr", "Intr", "Trns", "EICC", "Prgr", "Optm", "Mtt "].iter().any(|key| !matches!(u.get(key), None | Some(D::Boolean(_)))) {
+        return false;
+    }
+    // Only the recorded baseline/progressive choices have a native switch. Do not guess when
+    // another pass count, format or competing legacy flag accompanies the choice.
+    if let Some(pass) = u.get("Pass")
+        && (!matches!(pass, D::Integer(1) | D::Integer(3)) || get_enum(u, "Fmt ").as_deref() != Some("JPEG") || u.get("Prgr").is_some())
+    {
         return false;
     }
     for (key, min, max) in [("Qlty", 0.0, 100.0), ("NCol", 2.0, 256.0), ("MttR", 0.0, 255.0), ("MttG", 0.0, 255.0), ("MttB", 0.0, 255.0)] {
@@ -306,6 +313,9 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
         if let Some(b) = get_bool(u, key) {
             p[param] = json!(b);
         }
+    }
+    if let Some(D::Integer(pass)) = u.get("Pass") {
+        p["progressive"] = json!(*pass == 3);
     }
     for (key, param) in [("Qlty", "quality"), ("NCol", "colors")] {
         if let Some(v) = get_num(u, key) {
@@ -377,13 +387,13 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
         let metadata = if metadata == "contact" { "copyrightAndContact" } else { metadata };
         u = u.with("SWmd", enm("STmd", lookup_back(WEB_METADATA, metadata)?));
     }
-    for (key, param, default) in [
-        ("Intr", "interlaced", false),
-        ("Trns", "transparency", true),
-        ("EICC", "embedIcc", false),
-        ("Prgr", "progressive", false),
-        ("Optm", "optimized", true),
-    ] {
+    // JPEG uses Photoshop's recorded mode value; other formats retain the existing flag form.
+    if jstr(p, "format") == Some("jpeg") {
+        u = u.with("Pass", D::Integer(if jbool(p, "progressive") == Some(true) { 3 } else { 1 }));
+    } else {
+        u = u.with("Prgr", D::Boolean(jbool(p, "progressive").unwrap_or(false)));
+    }
+    for (key, param, default) in [("Intr", "interlaced", false), ("Trns", "transparency", true), ("EICC", "embedIcc", false), ("Optm", "optimized", true)] {
         u = u.with(key, D::Boolean(jbool(p, param).unwrap_or(default)));
     }
     if let Some(q) = jnum(p, "quality") {
