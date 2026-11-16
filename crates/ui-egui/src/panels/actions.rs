@@ -734,6 +734,9 @@ fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &Value) -> Re
         && let Some(object) = values.as_object()
     {
         d.fields.extend(object.iter().map(|(key, value)| (key.clone(), value.clone())));
+        if id == "image.canvasSize" {
+            crate::sizing::restore_canvas_size_units(&mut d.fields, object);
+        }
     }
     Ok(dialog)
 }

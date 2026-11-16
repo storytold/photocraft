@@ -525,3 +525,74 @@ fn sizing_dialogs_open_on_width_selected() {
         assert_eq!(h.state().session.active().unwrap().doc.size.width, 50, "{command}");
     }
 }
+
+#[test]
+fn recorded_canvas_size_percent_resolves_against_each_batch_input() {
+    use egui_kittest::Harness;
+    use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 24, "height": 12})).unwrap();
+    app.run("actions.record", json!({"name": "Double canvas height"})).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let ctx = h.ctx.clone();
+    let dialog = crate::menus::invoke(h.state_mut(), &ctx, "image.canvasSize", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let f = &mut h.state_mut().ui.dialog_mut(dialog).unwrap().fields;
+    set_unit(f, "width", "percent");
+    f.insert("anchor".into(), json!("top"));
+    f.insert("extensionColor".into(), json!("white"));
+    h.run_steps(3);
+    type_into(&mut h, 1, "200");
+    let f = fields(&h);
+    assert_eq!((num(&f, "width"), num(&f, "height")), (24.0, 24.0));
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+
+    let app = h.state_mut();
+    assert_eq!(app.session.active().unwrap().doc.size, Size::new(24, 24));
+    app.run("actions.stop", json!({})).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("out");
+    std::fs::create_dir(&output).unwrap();
+    let cases = [("small.png", 20, 10), ("large.png", 40, 20)];
+    let inputs: Vec<_> = cases
+        .iter()
+        .map(|&(name, width, height)| {
+            let doc = Document::with_background(name, Size::new(width, height), ColorMode::Rgb, SampleType::U8, Color::BLACK);
+            let bytes = photocraft_io::export(&doc, name, &Default::default()).unwrap().bytes;
+            let path = temp.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        })
+        .collect();
+    let result = app.session.execute("file.automate.batch", json!({"action": "Double canvas height", "input": inputs, "output": output})).unwrap();
+    assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+    assert_eq!(result["files"].as_array().unwrap().len(), 2);
+    for (name, width, height) in cases {
+        let doc = photocraft_io::import(name, &std::fs::read(output.join(name)).unwrap()).unwrap().document;
+        assert_eq!(doc.size, Size::new(width, height * 2), "{name}: percentage is relative to this input");
+        let surface = doc.layers[0].surface().unwrap();
+        assert_eq!(surface.rgba(0, height as i32 - 1), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(surface.rgba(0, height as i32), [1.0; 4]);
+    }
+}
+
+#[test]
+fn canvas_size_keeps_pixel_parameters_for_deltas_and_mixed_units() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 30, "height": 20})).unwrap();
+    for (relative, column_width, height) in [(true, false, 10), (false, true, 40), (false, false, 0)] {
+        let id = open(&mut app, "image.canvasSize").unwrap();
+        let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+        set_unit(fields, "height", "percent");
+        if column_width {
+            set_unit(fields, "width", "col");
+        }
+        fields.insert("relative".into(), json!(relative));
+        fields.insert("height".into(), json!(height));
+        let params = crate::filter_dialog::params_of(fields);
+        assert!(params.get("units").is_none(), "{params}");
+        assert_eq!(params["height"], height);
+        app.ui.close_dialog(id);
+    }
+}

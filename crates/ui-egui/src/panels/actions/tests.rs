@@ -3501,3 +3501,37 @@ fn dragging_uses_the_displayed_folder_occurrence() {
     assert_eq!(app.session.actions.list[1].name, "A");
     assert_eq!(app.session.actions.list[1].set_slot, Some(0));
 }
+
+#[test]
+fn record_again_restores_canvas_size_percentages_and_retains_legacy_pixels() {
+    use photocraft_doc::Size;
+
+    let cases = [
+        (json!({"units": "percent", "height": 125}), "percent", (22.0, 13.75), Size::new(22, 14)),
+        (json!({"width": 17, "height": 20}), "px", (17.0, 20.0), Size::new(17, 20)),
+        (json!({"units": "px", "width": 17, "height": 20}), "px", (17.0, 20.0), Size::new(17, 20)),
+    ];
+    for (recorded, unit, (width, height), expected) in cases {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 22, "height": 11})).unwrap();
+        app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "percent"})).unwrap();
+        app.session.actions.list.push(Action::new("Resize", vec![("image.canvasSize".into(), recorded)]));
+        app.ui.actions.selected = Some(0);
+        app.ui.actions.selected_step = Some(0);
+        let opened = record_again::open(&mut app).unwrap();
+        let dialog = opened["dialog"].as_u64().unwrap();
+        let fields = &app.ui.dialog_mut(dialog).unwrap().fields;
+        assert_eq!(fields["__unit"], unit);
+        assert_eq!((fields["width"].as_f64(), fields["height"].as_f64()), (Some(width), Some(height)));
+        let params = crate::filter_dialog::params_of(fields);
+        if unit == "percent" {
+            assert_eq!(params["units"], "percent");
+            assert_eq!(params["width"].as_f64(), Some(100.0));
+            assert_eq!(params["height"].as_f64(), Some(125.0));
+        } else {
+            assert!(params.get("units").is_none());
+        }
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.size, expected);
+    }
+}

@@ -1520,7 +1520,9 @@ fn random_seed(entropy: u64, current: i64) -> i64 {
 pub fn params_of(f: &Map<String, Value>) -> Value {
     // A document picker left at "None" (-1) means "not given".
     let unset = |k: &str, v: &Value| k == "mapDocument" && v.as_i64() == Some(-1);
-    Value::Object(f.iter().filter(|(k, v)| !k.starts_with("__") && !unset(k, v)).map(|(k, v)| (k.clone(), v.clone())).collect())
+    let mut params = f.iter().filter(|(k, v)| !k.starts_with("__") && !unset(k, v)).map(|(k, v)| (k.clone(), v.clone())).collect();
+    crate::sizing::preserve_canvas_size_percent(f, &mut params);
+    Value::Object(params)
 }
 
 /// Filter › Distort › Displace confirmed with no map: no open document picked and no path typed
