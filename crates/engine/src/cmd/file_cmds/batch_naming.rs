@@ -61,7 +61,7 @@ impl Date {
 }
 
 /// Serial letters use the one-based count; recorded components pass the input index (#4579 by @FabioLissi).
-fn letters(mut serial: u64, upper: bool) -> String {
+pub(crate) fn letters(mut serial: u64, upper: bool) -> String {
     let mut bytes = Vec::new();
     while serial > 0 {
         serial -= 1;

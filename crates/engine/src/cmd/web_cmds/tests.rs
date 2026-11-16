@@ -1467,6 +1467,90 @@ fn two_slices() -> (Session, u64, u64) {
     (s, number("left"), number("right"))
 }
 
+/// Output Settings components are concatenated once, then the selected extension is appended.
+/// Repeated image names use the Save for Web suffix rather than overwriting a previous slice.
+#[test]
+fn web_file_naming_components_and_collisions() {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect":[0,0,32,48]})).unwrap();
+    for (naming, expected) in [
+        (json!({"name":"Export Base","components":["document"],"extension":"lower"}), vec!["Export Base.jpg", "Export Base-02.jpg"]),
+        (json!({"name":"Export Base","components":["slice"],"extension":"upper"}), vec!["Export Base_01.JPG", "Export Base_02.JPG"]),
+        (json!({"components":[{"text":"X"},"serial2","hyphen","letter",{"text":"Y"}],"extension":"none"}), vec!["X01-aY", "X02-bY"]),
+        (json!({"components":[{"text":"A B"},"underscore","LETTER"],"unix":true,"extension":"lower"}), vec!["A-B_A.jpg", "A-B_B.jpg"]),
+    ] {
+        let mut paths = Vec::new();
+        let result = save_for_web_with_writer(&mut s, &json!({"dir":"output","imagesFolder":"","format":"jpeg","fileNaming":naming}), &mut |path, data| {
+            assert_eq!(photocraft_codecs::decode(data).unwrap().dimensions(), (32, 48));
+            paths.push(path.strip_prefix("output/").unwrap().to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(paths, expected, "{naming}");
+        assert_eq!(result["files"].as_array().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn web_file_naming_is_validated_before_writing_or_committing_a_float() {
+    let dir = tmp("naming-validation");
+    for naming in [
+        json!(false),
+        json!({}),
+        json!({"components":[]}),
+        json!({"components":["unknown"]}),
+        json!({"components":["document"],"extension":"bad"}),
+        json!({"components":[{"text":3}]}),
+        json!({"components":[{"text":"literal","other":true}]}),
+        json!({"components":["document"],"unix":"true"}),
+        json!({"components":["document"],"future":true}),
+        json!({"components":["none"],"name":false}),
+        json!({"components":[{"text":"x".repeat(4097)}]}),
+        json!({"components":["document"],"name":"bad\u{0000}name"}),
+    ] {
+        let mut s = session(8);
+        assert_refused(&mut s, &dir, json!({"dir":dir,"fileNaming":naming}), "fileNaming");
+    }
+    for output in [json!({"path":"output.png"}), json!({"folder":"output"}), json!({"dir":"output","html":true}), json!({})] {
+        let mut s = session(8);
+        let mut output = output;
+        output["fileNaming"] = json!({"components":["document"]});
+        assert_refused(&mut s, &dir, output, "fileNaming");
+    }
+}
+
+#[test]
+fn web_file_naming_checks_every_derived_name_before_any_output() {
+    let dir = tmp("naming-preflight");
+    for name in ["../escape", "stream:alternate", "NUL", "bad?name", "x\u{0001}name", &"界".repeat(100), &"x".repeat(4097)] {
+        let mut s = session(8);
+        s.execute("slice.new", json!({"rect":[0,0,32,48],"name":"valid"})).unwrap();
+        s.execute("slice.new", json!({"rect":[32,0,32,48],"name":name})).unwrap();
+        assert_refused(&mut s, &dir, json!({"dir":dir,"fileNaming":{"components":["slice"]}}), "fileNaming");
+    }
+}
+
+#[test]
+fn web_file_naming_does_not_reserve_or_validate_files_for_no_image_cells() {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect":[0,0,16,48],"kind":"noImage","name":"bad:name"})).unwrap();
+    s.execute("slice.new", json!({"rect":[16,0,16,48],"name":"tile"})).unwrap();
+    let mut paths = Vec::new();
+    save_for_web_with_writer(&mut s, &json!({"dir":"output","imagesFolder":"","fileNaming":{"components":[{"text":"tile"}]}}), &mut |path, _| {
+        paths.push(path.to_string());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(paths, ["output/tile.png", "output/tile-02.png"]);
+    paths.clear();
+    save_for_web_with_writer(&mut s, &json!({"dir":"output","imagesFolder":"","fileNaming":{"components":["slice"]}}), &mut |path, _| {
+        paths.push(path.to_string());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(paths, ["output/tile.png", "output/web_03.png"]);
+}
+
 /// A refused slice export writes and remembers nothing, and (called directly, as the platform
 /// writer is) leaves a floating move in place.
 fn assert_refused(s: &mut Session, dir: &str, p: Value, expect: &str) {

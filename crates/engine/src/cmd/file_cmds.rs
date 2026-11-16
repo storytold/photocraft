@@ -72,6 +72,7 @@ pub use save::{
 
 mod batch_naming;
 pub(crate) use batch_naming::COMPONENTS as BATCH_NAMING_COMPONENTS;
+pub(crate) use batch_naming::letters as serial_letters;
 
 // ---------- predicates ----------
 
