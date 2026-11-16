@@ -573,7 +573,7 @@ fn skip_transform_when_placing_leaves_the_place_without_a_box() {
 }
 
 /// Polls the app's background jobs until they have all landed.
-fn land_jobs(app: &mut PhotocraftApp) {
+pub(super) fn land_jobs(app: &mut PhotocraftApp) {
     let ctx = egui::Context::default();
     for _ in 0..2000 {
         crate::jobs_ui::tick(app, &ctx);
@@ -588,7 +588,7 @@ fn land_jobs(app: &mut PhotocraftApp) {
 /// A smart object placed the way a dropped file is (the last step made it), in Free Transform
 /// and moved 8 px right, with commits running in the background as in the desktop app:
 /// (app, the placed layer, its frame before the move, history steps before the place).
-fn moved_place() -> (PhotocraftApp, LayerId, photocraft_geom::Rect, usize) {
+pub(super) fn moved_place() -> (PhotocraftApp, LayerId, photocraft_geom::Rect, usize) {
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let steps = app.session.active().unwrap().history.past_len();
@@ -604,7 +604,7 @@ fn moved_place() -> (PhotocraftApp, LayerId, photocraft_geom::Rect, usize) {
     (app, placed, frame, steps)
 }
 
-fn frame_of(app: &PhotocraftApp, layer: LayerId) -> Option<photocraft_geom::Rect> {
+pub(super) fn frame_of(app: &PhotocraftApp, layer: LayerId) -> Option<photocraft_geom::Rect> {
     let st = app.session.active()?;
     Some(photocraft_engine::transform_cmds::transform_frame(&st.doc, st.doc.layer(layer)?))
 }
@@ -1347,11 +1347,12 @@ fn untouched_warp_of_a_cylinder_copy_keeps_its_own_step() {
 }
 
 /// #1099: cancel, frame cleanup and a commit before the next frame all belong to the
-/// original document, including after tab reordering and with shared layer IDs.
+/// original document, including after tab reordering and with shared layer IDs. Leaving the box
+/// for another document applies it in the original, as ↩ does (#13569); Esc takes the copy back.
 #[test]
-fn cancelling_a_copy_after_switching_documents_preserves_the_active_document() {
+fn ending_a_copy_after_switching_documents_preserves_the_active_document() {
     for reorder in [false, true] {
-        for finish in [cancel, end_if_left, commit] {
+        for (finish, applies) in [(cancel as fn(&mut PhotocraftApp), false), (end_if_left, true), (commit, true)] {
             let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
             let original = app.session.active().unwrap().doc.clone();
             let steps = app.session.active().unwrap().history.past_len();
@@ -1360,8 +1361,9 @@ fn cancelling_a_copy_after_switching_documents_preserves_the_active_document() {
             // Cloning a document deliberately shares layer IDs, but gets a fresh document ID.
             let other = app.session.active().unwrap().doc.as_ref().clone();
             app.session.add_document(other, None);
-            app.run("layer.new.layer", json!({})).unwrap();
-            app.run("layer.new.layer", json!({})).unwrap();
+            // Through the engine: the shell's New Layer would apply the open box first (#5667).
+            app.session.execute("layer.new.layer", json!({})).unwrap();
+            app.session.execute("layer.new.layer", json!({})).unwrap();
             assert!(app.session.undo());
             let st = app.session.active().unwrap();
             let (doc, history, redo, revision, layer) =
@@ -1369,6 +1371,7 @@ fn cancelling_a_copy_after_switching_documents_preserves_the_active_document() {
             if reorder {
                 app.session.move_document(0, 1);
             }
+            assert!(app.ui.transform.is_some(), "the box is still open when it is ended");
             finish(&mut app);
             assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
             let st = app.session.active().unwrap();
@@ -1376,8 +1379,18 @@ fn cancelling_a_copy_after_switching_documents_preserves_the_active_document() {
             assert_eq!((st.history.entries(), st.revision, st.active_layer), (history, revision, layer));
             assert_eq!(st.history.redo_labels().collect::<Vec<_>>(), redo);
             let origin = app.session.documents().iter().find(|st| st.doc.id == original.id).unwrap();
-            assert!(Arc::ptr_eq(&origin.doc, &original), "only the originating copy is undone");
-            assert_eq!(origin.history.past_len(), steps);
+            if applies {
+                assert_eq!(origin.doc.layers.len(), original.layers.len() + 1, "the copy stays in the original");
+                assert_eq!(origin.history.past_len(), steps + 1, "the copy and its move are one step there");
+                let bounds = |l: &photocraft_doc::Layer| l.surface().map(|s| s.content_bounds());
+                let copy = origin.doc.layers.iter().find(|l| original.layer(l.id).is_none()).expect("the copy");
+                assert_eq!(bounds(copy), Some(photocraft_geom::Rect::new(12, 8, 28, 24)), "the copy has the box's move");
+                let square = Some(photocraft_geom::Rect::new(8, 8, 24, 24));
+                assert!(origin.doc.layers.iter().any(|l| l.id != copy.id && bounds(l) == square), "the layer copied from stays");
+            } else {
+                assert!(Arc::ptr_eq(&origin.doc, &original), "only the originating copy is undone");
+                assert_eq!(origin.history.past_len(), steps);
+            }
             assert!(!origin.history.can_redo());
         }
     }
