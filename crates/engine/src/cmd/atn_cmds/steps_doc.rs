@@ -225,10 +225,43 @@ fn web_path(v: &D) -> Option<String> {
     (!path.is_empty() && !path.contains('\0')).then_some(path)
 }
 
+const WEB_SLICE_OUTPUT_KEYS: &[&str] = &["SWsl", "SImg", "SHTM", "ovSF", "ovSN"];
+
+/// An explicit all-slices/images-only folder export, including its relative image subfolder.
+fn web_slice_images_folder(u: &Descriptor) -> Option<String> {
+    if get_bool(u, "DIDr") != Some(true)
+        || get_bool(u, "SImg") != Some(true)
+        || get_bool(u, "SHTM") != Some(false)
+        || !matches!(u.get("SWsl"), Some(D::Enumerated { type_id, value }) if type_id.is("STsl") && value.is("SLAl"))
+    {
+        return None;
+    }
+    let subfolder = get_bool(u, "ovSF")?;
+    // Recordings can omit the unused name when images go straight into the output directory.
+    if !subfolder && u.get("ovSN").is_none() {
+        return Some(String::new());
+    }
+    let D::Text(name) = u.get("ovSN")? else { return None };
+    // Folder names must decode exactly; replacement characters could redirect generated files.
+    let units = name.0.strip_suffix(&[0]).unwrap_or(&name.0);
+    let name = String::from_utf16(units).ok()?;
+    let folder = crate::web_cmds::web_images_folder(&name, "file.export.saveForWebLegacy").ok()?;
+    if subfolder && folder.is_empty() {
+        return None;
+    }
+    Some(if subfolder { folder } else { String::new() })
+}
+
 fn web_settings_supported(u: &Descriptor) -> bool {
-    const KEYS: &[&str] =
-        &["In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Pass", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB", "SWch", "SWmd"];
+    const KEYS: &[&str] = &[
+        "In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Pass", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB", "SWch", "SWmd", "SWsl",
+        "SImg", "SHTM", "ovSF", "ovSN",
+    ];
     if !u.class_id.is("SaveForWeb") || !web_keys(u, KEYS) {
+        return false;
+    }
+    // A partial output block must not fall through to a whole-image save.
+    if WEB_SLICE_OUTPUT_KEYS.iter().any(|key| u.get(key).is_some()) && web_slice_images_folder(u).is_none() {
         return false;
     }
     if let Some(operation) = u.get("Op  ")
@@ -295,7 +328,13 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
     };
     let Some(path) = path else { return unsupported };
     // "Save in directory": `In` is only the folder, and each document saves under its own name.
-    let mut p = if get_bool(u, "DIDr") == Some(true) { json!({"folder": path}) } else { json!({"path": path}) };
+    let mut p = if let Some(images) = web_slice_images_folder(u) {
+        json!({"dir":path,"slices":"all","html":false,"imagesFolder":images})
+    } else if get_bool(u, "DIDr") == Some(true) {
+        json!({"folder":path})
+    } else {
+        json!({"path":path})
+    };
     if let Some(profile) = get_enum(u, "SWch") {
         p["convertToSrgb"] = json!(profile == "CHsR");
     }
@@ -346,16 +385,20 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
         "matte",
         "convertToSrgb",
         "metadata",
+        "dir",
+        "slices",
+        "imagesFolder",
+        "html",
     ];
     if p.as_object()?.iter().any(|(key, value)| !value.is_null() && !KEYS.contains(&key.as_str())) {
         return None;
     }
-    for key in ["interlaced", "transparency", "embedIcc", "progressive", "optimized", "convertToSrgb"] {
+    for key in ["interlaced", "transparency", "embedIcc", "progressive", "optimized", "convertToSrgb", "html"] {
         if !matches!(p.get(key), None | Some(Value::Null | Value::Bool(_))) {
             return None;
         }
     }
-    for key in ["path", "folder", "format", "matte", "metadata"] {
+    for key in ["path", "folder", "format", "matte", "metadata", "dir", "slices", "imagesFolder"] {
         if !matches!(p.get(key), None | Some(Value::Null | Value::String(_))) {
             return None;
         }
@@ -367,11 +410,30 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
             return None;
         }
     }
+    let dir = jstr(p, "dir").filter(|v| !v.is_empty());
+    let images = if dir.is_some() {
+        if ["path", "folder"].iter().any(|key| p.get(key).is_some_and(|v| !v.is_null()))
+            || jstr(p, "slices").unwrap_or("all") != "all"
+            || jbool(p, "html") == Some(true)
+        {
+            return None;
+        }
+        Some(crate::web_cmds::web_images_folder(jstr(p, "imagesFolder").unwrap_or("images"), "file.export.saveForWebLegacy").ok()?)
+    } else {
+        if ["dir", "slices", "imagesFolder", "html"].iter().any(|key| p.get(key).is_some_and(|v| !v.is_null())) {
+            return None;
+        }
+        None
+    };
     // A step recorded with the document's own name keeps only its folder (#5305).
-    let (path, in_folder) = match (jstr(p, "path").filter(|v| !v.is_empty()), jstr(p, "folder").filter(|v| !v.is_empty())) {
-        (Some(path), _) => (path, false),
-        (None, Some(folder)) => (folder, true),
-        (None, None) => return None,
+    let (path, in_folder) = if let Some(dir) = dir {
+        (dir, true)
+    } else {
+        match (jstr(p, "path").filter(|v| !v.is_empty()), jstr(p, "folder").filter(|v| !v.is_empty())) {
+            (Some(path), _) => (path, false),
+            (None, Some(folder)) => (folder, true),
+            (None, None) => return None,
+        }
     };
     if path.contains('\0') {
         return None;
@@ -379,6 +441,14 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
     let mut u = desc("SaveForWeb").with("Op  ", enm("SWOp", "OpSa")).with("Fmt ", enm("IRFm", lookup_back(WEB_FORMATS, jstr(p, "format").unwrap_or("png24"))?));
     if in_folder {
         u = u.with("DIDr", D::Boolean(true));
+    }
+    if let Some(images) = images {
+        u = u
+            .with("SWsl", enm("STsl", "SLAl"))
+            .with("SImg", D::Boolean(true))
+            .with("SHTM", D::Boolean(false))
+            .with("ovSF", D::Boolean(!images.is_empty()))
+            .with("ovSN", text(if images.is_empty() { "images" } else { &images }));
     }
     if let Some(convert) = jbool(p, "convertToSrgb") {
         u = u.with("SWch", enm("STch", if convert { "CHsR" } else { "CHDc" }));

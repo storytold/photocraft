@@ -40,7 +40,7 @@ fn safe_slice_url(url: &str) -> bool {
 }
 
 /// Keep the image folder relative to the selected export directory on every platform.
-fn web_images_folder(images: &str, cmd: &str) -> Result<String> {
+pub(crate) fn web_images_folder(images: &str, cmd: &str) -> Result<String> {
     if images.is_empty() {
         return Ok(String::new());
     }

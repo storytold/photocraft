@@ -1630,6 +1630,174 @@ fn recorded_web_jpeg_pass_writes_the_expected_frame_at_every_document_depth() {
     }
 }
 
+fn web_all_slice_images(mut d: Descriptor, images_folder: bool) -> Descriptor {
+    let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+    settings.items.extend([
+        (Id::new("SWsl"), enm("STsl", "SLAl")),
+        (Id::new("SImg"), D::Boolean(true)),
+        (Id::new("SHTM"), D::Boolean(false)),
+        (Id::new("ovSF"), D::Boolean(images_folder)),
+        (Id::new("ovSN"), D::Text(UnicodeString::new_nul("images"))),
+    ]);
+    d
+}
+
+#[test]
+fn recorded_web_slice_output_maps_all_images_to_a_directory() {
+    for images in [false, true] {
+        for nested in [false, true] {
+            let d = web_all_slice_images(web_destination("/out/slices", nested, true), images);
+            for event in [AtnEvent::Code(*b"Expr"), AtnEvent::name("export")] {
+                let action = recorded(event, d.clone());
+                assert_eq!(action.steps[0].0, "file.export.saveForWebLegacy");
+                let p = &action.steps[0].1;
+                assert_eq!(p["dir"], "/out/slices");
+                assert_eq!(p["slices"], "all");
+                assert_eq!(p["html"], false);
+                assert_eq!(p["imagesFolder"], if images { "images" } else { "" });
+                assert!(p.get("folder").is_none() && p.get("path").is_none(), "slice output must not become a whole-image save");
+                let written = saved(&action).descriptor.unwrap();
+                let Some(D::Descriptor(settings)) = written.get("Usng") else { panic!("SaveForWeb") };
+                assert_eq!(settings.get("DIDr"), Some(&D::Boolean(true)));
+                assert!(enum_value(settings, "SWsl", "STsl").is("SLAl"));
+                for key in ["SImg", "SHTM", "ovSF", "ovSN"] {
+                    let Some(D::Descriptor(source)) = d.get("Usng") else { panic!("source") };
+                    assert_eq!(settings.get(key), source.get(key), "{key}");
+                }
+            }
+        }
+    }
+    let mut d = web_all_slice_images(web_destination("/out/slices", true, true), true);
+    let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+    settings.items.iter_mut().find(|(key, _)| key.is("ovSN")).unwrap().1 = D::Text(UnicodeString::new_nul("assets/切片"));
+    let action = recorded(AtnEvent::name("export"), d);
+    assert_eq!(action.steps[0].1["imagesFolder"], "assets/切片");
+    let written = saved(&action).descriptor.unwrap();
+    let Some(D::Descriptor(settings)) = written.get("Usng") else { panic!("SaveForWeb") };
+    assert_eq!(settings.get("ovSN"), Some(&D::Text(UnicodeString::new_nul("assets/切片"))));
+}
+
+#[test]
+fn recorded_web_slice_output_allows_an_absent_inactive_folder_name() {
+    let mut d = web_all_slice_images(web_destination("/out/slices", true, true), false);
+    let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+    settings.items.retain(|(key, _)| !key.is("ovSN"));
+    let action = recorded(AtnEvent::name("export"), d);
+    assert_eq!(action.steps[0].0, "file.export.saveForWebLegacy");
+    assert_eq!(action.steps[0].1["imagesFolder"], "");
+    assert_eq!(action.steps[0].1["dir"], "/out/slices");
+    assert_eq!(action.steps[0].1["slices"], "all");
+}
+
+#[test]
+fn recorded_web_slice_output_writes_user_and_auto_pieces_at_each_depth() {
+    let root = tempfile::tempdir().unwrap();
+    for depth in [8, 16, 32] {
+        for images_folder in ["", "images", "assets/切片"] {
+            let images = !images_folder.is_empty();
+            let out = root.path().join(format!(
+                "{depth}-{}",
+                if images_folder == "" {
+                    "root"
+                } else if images_folder == "images" {
+                    "default"
+                } else {
+                    "custom"
+                }
+            ));
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":32,"height":24,"depth":depth,"name":"Export.psd"})).unwrap();
+            s.execute("slice.new", json!({"rect":[0,0,16,12],"name":"left"})).unwrap();
+            s.execute("slice.new", json!({"rect":[16,0,16,12],"name":"right"})).unwrap();
+            let before = s.active().unwrap().doc.clone();
+            let past = s.active().unwrap().history.past_len();
+            let mut d = web_all_slice_images(web_destination(&out.to_string_lossy(), true, true), images);
+            let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+            settings.items.iter_mut().find(|(key, _)| key.is("ovSN")).unwrap().1 =
+                D::Text(UnicodeString::new_nul(if images { images_folder } else { "images" }));
+            let action = recorded(AtnEvent::name("export"), d);
+            let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+            let action = atn_cmds::import(&bytes).unwrap().actions.remove(0);
+            replay_saved(&mut s, &action);
+            let files = if images { out.join(images_folder) } else { out.clone() };
+            let mut names: Vec<_> = std::fs::read_dir(&files).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            assert_eq!(names, ["Export_03.png", "left.png", "right.png"], "All includes auto slices");
+            for (name, size) in [("left.png", (16, 12)), ("right.png", (16, 12)), ("Export_03.png", (32, 12))] {
+                assert_eq!(photocraft_codecs::decode(&std::fs::read(files.join(name)).unwrap()).unwrap().dimensions(), size);
+            }
+            assert!(!out.join("Export.png").exists(), "do not replace pieces with the whole image");
+            assert!(!out.join("Export.html").exists(), "images only");
+            assert_eq!(s.active().unwrap().doc, before);
+            assert_eq!(s.active().unwrap().history.past_len(), past);
+            assert!(s.prefs().dialogs.get("file.export.saveForWebLegacy").is_some_and(|p| p.get("dir").is_none()));
+            s.execute("file.new", json!({"width":8,"height":6,"name":"Second.psd"})).unwrap();
+            replay_saved(&mut s, &action);
+            assert_eq!(photocraft_codecs::decode(&std::fs::read(files.join("Second.png")).unwrap()).unwrap().dimensions(), (8, 6));
+        }
+    }
+}
+
+#[test]
+fn recorded_web_slice_output_keeps_incomplete_or_unrepresented_output_choices() {
+    let base = web_all_slice_images(web_destination("/out/slices", true, true), true);
+    let mut cases = Vec::new();
+    for key in ["SWsl", "SImg", "SHTM", "ovSF", "ovSN", "DIDr"] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        let mut duplicate = settings.clone();
+        duplicate.items.push((Id::new(key), duplicate.get(key).unwrap().clone()));
+        cases.push(Descriptor::new("null").with("Usng", D::Descriptor(duplicate)));
+        settings.items.retain(|(k, _)| !k.is(key));
+        cases.push(d);
+    }
+    for (key, value) in [
+        ("SWsl", enm("STsl", "Other")),
+        ("SWsl", enm("wrong", "SLAl")),
+        ("SImg", D::Boolean(false)),
+        ("SHTM", D::Boolean(true)),
+        ("SHTM", D::Integer(0)),
+        ("ovSF", D::Integer(1)),
+        ("ovSN", D::Text(UnicodeString::new_nul(""))),
+        ("ovSN", D::Text(UnicodeString::new_nul("../outside"))),
+        ("ovSN", D::Integer(0)),
+        ("DIDr", D::Boolean(false)),
+        ("ovNC", D::List(vec![])),
+        ("ovSN", D::Text(UnicodeString(vec![0xd800, 0]))),
+        ("ovSN", D::Text(UnicodeString::new_nul("bad\0name"))),
+        ("ovSN", D::Text(UnicodeString::new_nul("C:\\outside"))),
+        ("obIA", D::Boolean(false)),
+        ("obIP", D::Text(UnicodeString::new_nul(""))),
+    ] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        settings.items.retain(|(k, _)| !k.is(key));
+        settings.items.push((Id::new(key), value));
+        cases.push(d);
+    }
+    for d in cases {
+        let action = recorded(AtnEvent::name("export"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    for extra in [
+        json!({"slices":"user"}),
+        json!({"slices":"selected"}),
+        json!({"numbers":[1]}),
+        json!({"html":true}),
+        json!({"imagesFolder":1}),
+        json!({"imagesFolder":"../outside"}),
+        json!({"path":"/out/image.png"}),
+        json!({"folder":"/out/other"}),
+        json!({"dir":""}),
+    ] {
+        let mut p = json!({"dir":"/out/slices","format":"png24"});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let native = Action::new("Recorded", vec![("file.export.saveForWebLegacy".into(), p.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&native], &[], false).is_err(), "{p}");
+    }
+}
+
 fn history_offset(offset: i32) -> Descriptor {
     Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("HstS"), offset }]))
 }

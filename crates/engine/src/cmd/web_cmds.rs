@@ -35,6 +35,7 @@ use quick::{export_preferences, quick_export};
 pub use quick::{quick_export_target, quick_export_target_is_own_file};
 use save_web::save_for_web;
 pub use save_web::save_for_web_with_writer;
+pub(crate) use save_web::web_images_folder;
 pub use settings::{PRESETS, WebFormat, WebMetadata, WebSettings, preset_settings, rgb_hex};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
