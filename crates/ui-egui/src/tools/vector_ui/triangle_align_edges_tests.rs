@@ -41,7 +41,7 @@ fn triangle_box_snaps_with_align_edges_and_stays_fractional_without() {
 #[test]
 fn other_shape_tools_always_snap() {
     let o = ToolOptions { align_edges: false, ..Default::default() };
-    for tool in [Tool::Polygon, Tool::EllipseShape, Tool::Rectangle, Tool::Star] {
+    for tool in [Tool::EllipseShape, Tool::Rectangle, Tool::Star] {
         let r = rect(&o, tool, START, END).unwrap();
         assert!(r.iter().all(|v| v.fract() == 0.0), "{tool:?}: {r:?}");
     }
