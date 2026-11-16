@@ -361,3 +361,24 @@ fn command_enter_alone_commits_an_invalid_draft_and_raises_the_alert() {
         assert_eq!(scale(&h), 1000.0);
     }
 }
+
+/// A Cmd/Ctrl+Enter leaves the field like a plain Enter (the text edit surrenders focus a frame later), so the
+/// alert is raised once, in the frame the Enter pressed (before the dialog's OK reads it), and the late
+/// lost-focus frame does not raise it a second time: after Esc closes it, nothing re-raises it.
+#[test]
+fn a_command_enter_raises_the_alert_once_and_leaves_the_field() {
+    let mut h = harness(scale_fields());
+    field(&h, "Scale").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("1001".into()));
+    h.run_steps(1);
+    h.event(key(egui::Key::Enter, true, false, egui::Modifiers::COMMAND));
+    h.run_steps(3);
+    assert!(alert_up(&h), "the Cmd+Enter raises the alert");
+    assert!(!field(&h, "Scale").is_focused(), "and leaves the field, as a plain Enter does");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!alert_up(&h), "Esc closes it and the late lost-focus frame does not raise it again");
+    assert_eq!(scale(&h), 1000.0);
+}

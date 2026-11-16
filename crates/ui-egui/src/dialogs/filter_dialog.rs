@@ -1814,9 +1814,10 @@ fn scale_effects_json(v: f32, min: f32, max: f32) -> Value {
 
 /// Scale Effects' Scale field, as the reference was measured (#14995): whole percents in `range`.
 /// A typed "." is ignored (`33.6` reads 336), and a value typed past the range or with decimals
-/// (`33,6`, read as 33.6) becomes the closest whole number in range; once the field is left after
-/// such a value, this returns true so the alert shows. While the field has the keyboard it keeps
-/// the typed text. An arrow-key or wheel step stops at the ends and says nothing.
+/// (`33,6`, read as 33.6) becomes the closest whole number in range; once the value is committed (the field
+/// is left, or Enter, Ctrl+Enter or Cmd+Enter is pressed in it) after such a value, this returns true so the
+/// alert shows. While the field has the keyboard it keeps the typed text. An arrow-key or wheel step stops at
+/// the ends and says nothing.
 fn scale_effects_field(ui: &mut egui::Ui, name: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>) -> bool {
     let (lo, hi) = (*range.start(), *range.end());
     let fit = |x: f32| whole_in(f64::from(x), f64::from(lo), f64::from(hi)) as f32;
@@ -1860,9 +1861,12 @@ fn scale_effects_field(ui: &mut egui::Ui, name: &str, v: &mut f32, range: std::o
     if !r.has_focus() {
         ui.data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
     }
-    // The field's text edit only leaves on a plain Enter, but the dialog's OK reads an Enter with any modifiers
-    // (Ctrl/Cmd+Enter included): each of those commits the typed value too, so the alert is judged now.
-    let enter_commit = r.has_focus() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. })));
+    // The text edit reports leaving the field a frame after an Enter, but the dialog's OK reads that Enter at once
+    // (Ctrl/Cmd+Enter included, with any modifiers): each commits the typed value, so the alert is judged now. Such a
+    // commit also leaves the field (the text edit surrenders focus a frame later), so it is judged once, now, and not
+    // again by that late lost-focus frame. Key repeats are not commits.
+    let enter_commit =
+        r.has_focus() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat: false, .. })));
     let wrong = (r.lost_focus() || enter_commit) && ui.data_mut(|d| d.remove_temp::<bool>(wrong_id)).unwrap_or(false);
     wrong && !esc
 }
