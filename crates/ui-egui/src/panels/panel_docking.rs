@@ -1607,7 +1607,7 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         let collapsed = panels.iter().all(|id| self.collapsed.contains(id));
         let locked = self.app.session.prefs().workspace_locked;
         let resp = crate::icons::button(ui, "ellipsis", ui.available_height().min(28.0), false, tl!("Panel menu"));
-        egui::Popup::menu(&resp).show(|ui| {
+        let menu = |ui: &mut egui::Ui| {
             ui.set_min_width(180.0);
             panel_menu(self.app, ui, active);
             if ui.add_enabled(!locked, egui::Button::new(if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") })).clicked() {
@@ -1635,7 +1635,8 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
                 self.commands.push(("window.panel.group", json!({"panel":active,"operation":"close"})));
                 ui.close();
             }
-        });
+        };
+        egui::Popup::menu(&resp).show(|ui| crate::widgets::menu_scroll(ui, menu));
     }
 }
 

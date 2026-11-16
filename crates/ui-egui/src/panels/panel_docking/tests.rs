@@ -768,6 +768,51 @@ fn actions_panel_menu_includes_load_and_save_actions() {
     assert!(menu.query_all_by_label("New Action…").count() > 0);
 }
 
+#[test]
+fn load_actions_is_reachable_from_the_panel_menu_in_a_short_window() {
+    use crate::file_dialog::{FileDialogRequest, fake};
+
+    for (height, wheel_steps) in [(760.0, 0), (240.0, 8)] {
+        let (dialog, requests) = fake(vec![None]);
+        let mut app = app();
+        app.services.file_dialog = Some(dialog);
+        app.run("window.panel.float", json!({"panel":"actions","x":30,"y":35,"width":260,"height":220})).unwrap();
+        let mut h = harness(app, vec2(1000.0, height));
+        let floating = floating_rect(&h, "actions");
+        let button = h.query_all_by_label("Panel menu").find(|node| floating.contains_rect(node.rect())).unwrap().rect().center();
+        let click = |h: &mut Harness<'static, PhotocraftApp>, pos| {
+            h.hover_at(pos);
+            for pressed in [true, false] {
+                h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                h.run_steps(1);
+            }
+            h.run_steps(2);
+        };
+        click(&mut h, button);
+        let menu_top = h.get_by_label("New Action…").rect().center();
+        h.hover_at(menu_top);
+        for _ in 0..wheel_steps {
+            h.event(Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -60.0),
+                modifiers: Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            });
+            h.run_steps(4);
+        }
+        let row = h.query_all_by_label("Load Actions…").map(|row| row.rect().center()).find(|p| h.ctx.content_rect().contains(*p));
+        let row = row.unwrap_or_else(|| panic!("Load Actions… stays outside the {height}-point window"));
+        click(&mut h, row);
+        let ctx = h.ctx.clone();
+        h.state_mut().poll_file_dialog(&ctx, None);
+        assert!(
+            matches!(requests.borrow().as_slice(), [FileDialogRequest::Open { multiple: true, extensions: Some(ext), .. }] if ext == &["atn"]),
+            "Load Actions… must open the ATN picker at height {height}"
+        );
+    }
+}
+
 /// The Channels panel menu (☰) has the channel items, not only the rows' context menu (#11451):
 /// New Spot Channel… and New Channel… open their dialogs, and OK in New Channel adds a channel.
 #[test]
