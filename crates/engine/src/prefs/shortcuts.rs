@@ -145,6 +145,27 @@ pub const ALTERNATE_SHORTCUTS: &[(&str, &str)] = &[
     ("file.close", "Cmd+F4"),
 ];
 
+/// Use Legacy Undo Shortcuts (#14319): the undo keys of a run started with it on, as the
+/// reference application documents them. ⌘Z toggles Undo/Redo (Toggle Last State), ⌥⌘Z is Step
+/// Backward and ⇧⌘Z Step Forward; Undo and Redo themselves have no key then. `Cmd` is Ctrl off
+/// the Mac, as everywhere.
+pub const LEGACY_UNDO_SHORTCUTS: &[(&str, Option<&str>)] = &[
+    ("edit.undo", None),
+    ("edit.redo", None),
+    ("edit.toggleLastState", Some("Cmd+Z")),
+    ("history.stepBackward", Some("Cmd+Alt+Z")),
+    ("history.stepForward", Some("Cmd+Shift+Z")),
+];
+
+/// The default key of `id` in this run: [`LEGACY_UNDO_SHORTCUTS`] when the run started with Use
+/// Legacy Undo Shortcuts on and `id` is one of them, else `default`.
+pub fn undo_key<'a>(id: &str, default: Option<&'a str>, legacy: bool) -> Option<&'a str> {
+    match LEGACY_UNDO_SHORTCUTS.iter().find(|(c, _)| legacy && *c == id) {
+        Some((_, key)) => *key,
+        None => default,
+    }
+}
+
 /// A command's default alternate keys ([`ALTERNATE_SHORTCUTS`]).
 pub fn default_alternates(id: &str) -> impl Iterator<Item = &'static str> + '_ {
     ALTERNATE_SHORTCUTS.iter().filter(move |(c, _)| *c == id).map(|(_, sc)| *sc)
