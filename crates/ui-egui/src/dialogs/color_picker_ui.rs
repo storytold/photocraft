@@ -58,10 +58,7 @@ pub fn not_web_safe(rgb: [f32; 3]) -> Option<[f32; 3]> {
     (hex(web) != hex(rgb)).then_some(web)
 }
 
-pub fn hex(c: [f32; 3]) -> String {
-    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02x}{:02x}{:02x}", q(c[0]), q(c[1]), q(c[2]))
-}
+pub use photocraft_engine::adjust_params::hex;
 
 pub fn parse_hex(s: &str) -> Option<[f32; 3]> {
     let h = s.trim().trim_start_matches('#');

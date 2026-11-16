@@ -1,19 +1,13 @@
 use super::options::{draws_path, solid_paint};
 use super::overlay::path_lines;
-use super::{Affine, Color32, PhotocraftApp, Tokens, Tool, ToolOptions, Value, ViewXform, json, paint_param};
+use super::{Affine, PhotocraftApp, Tokens, Tool, ToolOptions, Value, ViewXform, json, paint_param};
 
 pub fn is_shape_tool(t: Tool) -> bool {
     matches!(t, Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::CustomShape)
 }
 
-fn rgb32(c: [f32; 4]) -> Color32 {
-    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
-}
-
 pub(super) fn hex(c: [f32; 4]) -> String {
-    let c = rgb32(c);
-    format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
+    crate::color_picker_ui::hex([c[0], c[1], c[2]])
 }
 
 pub(super) fn stroke_param(app: &PhotocraftApp) -> Value {

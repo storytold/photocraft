@@ -24,8 +24,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 fn hex(c: [f32; 4]) -> String {
-    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
+    crate::color_picker_ui::hex([c[0], c[1], c[2]])
 }
 
 /// Does a new foreground recolour selected shape layers with `tool`?
