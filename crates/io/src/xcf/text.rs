@@ -103,6 +103,8 @@ mod review_round2_tests;
 mod review_tests;
 #[cfg(test)]
 mod spacing_review_tests;
+#[cfg(test)]
+mod xml_parse_work_review_tests;
 
 #[derive(Debug)]
 enum Value {
@@ -1283,6 +1285,63 @@ fn markup_runs_in_file(
     markup_runs_with_attribute_allowance(markup, base, fonts, dpi, notes, &mut work)
 }
 
+/// Fence duplicate-attribute and deep-tree parser work before constructing a DOM.
+/// Later native-style budgets cannot protect work the XML reader already spent.
+fn parse_markup_with<'a, T>(markup: &'a str, parse: impl FnOnce(&'a str) -> Result<T>) -> Result<T> {
+    if craft_svg::guard::too_wide(markup, 256, 1 << 20) {
+        return Err(crate::IoError::Unsupported("source text markup exceeds the bounded XML attribute-parse allowance".into()));
+    }
+    if craft_svg::guard::deeper_than(markup, MAX_DEPTH) {
+        return Err(crate::IoError::Unsupported("source text markup exceeds the bounded XML nesting allowance".into()));
+    }
+    check_markup_namespace_work(markup, 1 << 20)?;
+    parse(markup)
+}
+
+/// A child with declarations makes the DOM reader copy its parent's scope via
+/// repeated prefix searches. Local attribute widths alone miss that inherited
+/// quadratic work. The streaming reader keeps raw names and never builds scope.
+fn check_markup_namespace_work(markup: &str, mut work_left: usize) -> Result<()> {
+    let options = craft_xml::Options {
+        names: craft_xml::Names::AsWritten,
+        ns_decls: true,
+        strict: true,
+        doctype: craft_xml::Doctype::Reject,
+        unknown_entity: craft_xml::UnknownEntity::Error,
+        limits: craft_xml::Limits { max_input: super::MAX_STRING, max_depth: MAX_DEPTH, max_attrs: 256, ..Default::default() },
+        ..Default::default()
+    };
+    let mut events = options.events(markup.as_bytes());
+    let mut scopes: Vec<usize> = Vec::new();
+    // The DOM also maintains a globally sorted namespace index. Inserting a new
+    // binding can shift every earlier binding, even across shallow siblings.
+    let mut declarations_seen = 1usize; // Includes the predefined XML binding.
+    while let Some(event) = events.next().map_err(|error| invalid(format!("invalid source text markup: {error}")))? {
+        match event {
+            craft_xml::Event::Start { attrs, .. } => {
+                let declarations = attrs.iter().filter(|(name, _)| name == "xmlns" || name.starts_with("xmlns:")).count();
+                // Overcount shadowed/repeated prefixes rather than resolving them
+                // during admission. Prefix lookup for names/attributes is bounded too.
+                let scope = scopes.last().copied().unwrap_or(0).saturating_add(declarations);
+                let copying = if declarations == 0 { 0 } else { scope.saturating_mul(scope) };
+                let inserted = declarations_seen.saturating_add(declarations);
+                let insertion = declarations.saturating_mul(inserted);
+                let cost = copying.saturating_add(scope.saturating_mul(attrs.len().saturating_add(1))).saturating_add(insertion);
+                work_left = work_left
+                    .checked_sub(cost)
+                    .ok_or_else(|| crate::IoError::Unsupported("source text markup exceeds the bounded XML namespace-parse allowance".into()))?;
+                declarations_seen = inserted;
+                scopes.push(scope);
+            }
+            craft_xml::Event::End { .. } => {
+                scopes.pop();
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn markup_runs_with_attribute_allowance(
     markup: &str,
     base: &CharStyle,
@@ -1291,9 +1350,10 @@ fn markup_runs_with_attribute_allowance(
     notes: &mut Vec<String>,
     work: &mut MarkupWork<'_>,
 ) -> Result<(String, Vec<TextRun>)> {
-    let xml =
+    let xml = parse_markup_with(markup, |markup| {
         roxmltree::Document::parse_with_options(markup, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES as u32, ..Default::default() })
-            .map_err(|e| invalid(format!("invalid source text markup: {e}")))?;
+            .map_err(|e| invalid(format!("invalid source text markup: {e}")))
+    })?;
     let mut text = String::new();
     let mut runs = Vec::new();
     // A short ancestor style can otherwise multiply a long font name/feature
