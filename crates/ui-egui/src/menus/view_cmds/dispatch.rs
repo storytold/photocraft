@@ -51,6 +51,8 @@ pub fn handles(id: &str) -> bool {
             | "view.patternPreview"
             | "view.pixelArtPreview"
             | "view.rotateView"
+            | "view.rotateLeft"
+            | "view.rotateRight"
             | "view.resetView"
             | "window.panel.layers"
             | "window.panel.history"
@@ -86,7 +88,13 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
         // (#9349); with none open, Cycle can only bring a full screen mode back to Standard.
         "view.screenMode.cycle" => app.ui.text_edit.is_none() && (doc || app.ui.view.screen_mode != "standard"),
         "view.screenMode.fullScreen" | "view.screenMode.fullScreenWithMenuBar" => doc,
-        "view.twoHundredPercent" | "view.printSize" | "view.fitLayersOnScreen" | "view.rotateView" | "view.resetView" => doc,
+        "view.twoHundredPercent"
+        | "view.printSize"
+        | "view.fitLayersOnScreen"
+        | "view.rotateView"
+        | "view.rotateLeft"
+        | "view.rotateRight"
+        | "view.resetView" => doc,
         "view.fitArtboardOnScreen" => app.session.active().is_some_and(|d| d.doc.has_artboards()),
         i if i.starts_with("window.arrange.") => match &i["window.arrange.".len()..] {
             "consolidateAllToTabs" => true,
@@ -103,6 +111,8 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
         // Batch's dialog is built from an Actions-panel action. Keep it disabled until one
         // exists instead of opening a menu item that can only report "record an action".
         "file.automate.batch" => crate::actions::selected_action(app).is_some() && engine_enabled(),
+        #[cfg(target_arch = "wasm32")]
+        "file.export.dataSetsAsFiles" => false,
         i if wraps(i) => engine_enabled(),
         _ => true,
     })
@@ -203,9 +213,17 @@ fn type_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "ornaments" => "ornm",
         "ordinals" => "ordn",
         "fractions" => "frac",
-        _ => return None,
+        set => stylistic_set_tag(set.strip_prefix("stylisticSets.set")?)?,
     };
     Some(photocraft_engine::type_extra_cmds::feature_on_at(t, start, tag))
+}
+
+/// `ss01`..`ss20` for the digits of a Stylistic Sets item id (`1`..`20`, no leading zeros).
+fn stylistic_set_tag(n: &str) -> Option<&'static str> {
+    if n.starts_with('0') || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    photocraft_engine::type_extra_cmds::STYLISTIC_SET_TAGS.get(n.parse::<usize>().ok()?.checked_sub(1)?).copied()
 }
 
 /// Engine commands that get a dialog or file picker here when invoked without parameters.
@@ -213,6 +231,7 @@ fn wraps(id: &str) -> bool {
     matches!(
         id,
         "file.openAs"
+            | "file.openAsSmartObject"
             | "file.openExrParts"
             | "file.saveACopy"
             | "file.placeEmbedded"
@@ -236,6 +255,7 @@ fn wraps(id: &str) -> bool {
             | "file.export.layerCompsToFiles"
             | "file.export.artboardsToFiles"
             | "file.export.artboardsToPdf"
+            | "file.export.dataSetsAsFiles"
             | "layer.new.artboard"
             | "file.export.colorLookupTables"
             | "view.newGuideLayout"
@@ -303,6 +323,9 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
     }
     if id == "view.rotateView" {
         return crate::rotate_view::command(app, p);
+    }
+    if matches!(id, "view.rotateLeft" | "view.rotateRight") {
+        return crate::rotate_view::step(app, id == "view.rotateRight", p);
     }
     if id == "view.resetView" {
         return crate::rotate_view::reset(app);
