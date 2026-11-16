@@ -185,18 +185,20 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
 }
 
 /// A shape tool's gear settings, as its popup edits them: the constraint, Fixed Size W and H,
-/// Proportional W and H, and From Center.
+/// Proportional W and H, the Freeform Radius (the Polygon's only) and From Center.
 struct GearFields<'a> {
     constraint: &'a mut String,
     fixed: [&'a mut f32; 2],
     ratio: [&'a mut f32; 2],
+    freeform_radius: Option<&'a mut f32>,
     from_center: &'a mut bool,
 }
 
 /// The gear of `tool`, for the tools that have one: its fields, the label of its "square" radio,
 /// and whether the Proportional fields show empty while greyed out. The Rectangle's says Square
 /// and shows 1 : 1 greyed (#13343); the Triangle's says Equilateral and shows its ratio only once
-/// Proportional is chosen (#13361).
+/// Proportional is chosen (#13361); the Polygon's says Symmetric, shows 1 : 1 greyed and adds
+/// Freeform (#13306).
 fn gear_of(o: &mut crate::state::ToolOptions, tool: Tool) -> Option<(GearFields<'_>, &'static str, bool)> {
     Some(match tool {
         Tool::Rectangle => (
@@ -204,6 +206,7 @@ fn gear_of(o: &mut crate::state::ToolOptions, tool: Tool) -> Option<(GearFields<
                 constraint: &mut o.rect_constraint,
                 fixed: [&mut o.rect_fixed_width, &mut o.rect_fixed_height],
                 ratio: [&mut o.rect_ratio_width, &mut o.rect_ratio_height],
+                freeform_radius: None,
                 from_center: &mut o.rect_from_center,
             },
             tl!("Square"),
@@ -214,18 +217,31 @@ fn gear_of(o: &mut crate::state::ToolOptions, tool: Tool) -> Option<(GearFields<
                 constraint: &mut o.triangle_constraint,
                 fixed: [&mut o.triangle_fixed_width, &mut o.triangle_fixed_height],
                 ratio: [&mut o.triangle_ratio_width, &mut o.triangle_ratio_height],
+                freeform_radius: None,
                 from_center: &mut o.triangle_from_center,
             },
             tl!("Equilateral"),
             true,
+        ),
+        Tool::Polygon => (
+            GearFields {
+                constraint: &mut o.polygon_constraint,
+                fixed: [&mut o.polygon_fixed_width, &mut o.polygon_fixed_height],
+                ratio: [&mut o.polygon_ratio_width, &mut o.polygon_ratio_height],
+                freeform_radius: Some(&mut o.polygon_freeform_radius),
+                from_center: &mut o.polygon_from_center,
+            },
+            tl!("Symmetric"),
+            false,
         ),
         _ => return None,
     })
 }
 
 /// A shape tool's gear, after the path arrangement as in the reference application (#13343,
-/// #13361): Unconstrained (the default), Square (`square_label`), Fixed Size and Proportional, each
-/// size's W and H greyed unless its radio is chosen, and From Center. With `blank_ratio` the
+/// #13361, #13306): Unconstrained (the default), Square (`square_label`), Fixed Size and
+/// Proportional, each size's W and H greyed unless its radio is chosen, Freeform with its Radius
+/// (enabled only with Freeform) for a tool that has it, and From Center. With `blank_ratio` the
 /// greyed Proportional fields show empty. The settings are tool options; Escape closes the popup
 /// and keeps them. The Path Options at its top are #9971's.
 fn shape_gear(ui: &mut egui::Ui, o: GearFields<'_>, square_label: &str, blank_ratio: bool) {
@@ -251,6 +267,15 @@ fn shape_gear(ui: &mut egui::Ui, o: GearFields<'_>, square_label: &str, blank_ra
                         let value = if blank && !on { &mut empty } else { value };
                         crate::widgets::value_field_prec_blank(ui, value, 0.0..=max, suffix, 72.0, decimals).accessible_name(name);
                     }
+                });
+            });
+        }
+        if let Some(radius) = o.freeform_radius {
+            ui.horizontal(|ui| {
+                ui.radio_value(o.constraint, "freeform".to_string(), tl!("Freeform"));
+                ui.add_enabled_ui(*o.constraint == "freeform", |ui| {
+                    ui.label(tl!("Radius:"));
+                    crate::widgets::value_field_prec_blank(ui, radius, 0.0..=300_000.0, "px", 72.0, 0).accessible_name(tl!("Freeform Radius:"));
                 });
             });
         }

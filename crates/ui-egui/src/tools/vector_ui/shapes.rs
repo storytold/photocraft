@@ -128,6 +128,9 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             // Settings saved with the old 0..100 range draw at the nearest value (#13258).
             "arrowConcavity": if o.arrow_concavity.is_finite() { o.arrow_concavity.round().clamp(-50.0, 50.0) } else { 0.0 }})
     } else {
+        if tool == Tool::Polygon && o.polygon_constraint == "freeform" {
+            return freeform_polygon(o, start, end, mods);
+        }
         let ([x0, y0, w, h], squared) = drag_box(o, tool, start, end, mods);
         let rect = [x0.min(x0 + w), y0.min(y0 + h), w.abs(), h.abs()];
         // Align Edges (#13370) is the Triangle tool's option, and only in Shape mode, where its
@@ -157,8 +160,9 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
     })
 }
 
-/// A shape tool's gear settings (#13343, #13361): the constraint ("unconstrained", "square",
-/// "fixedSize" or "proportional"), Fixed Size W × H, Proportional W : H and From Center.
+/// A shape tool's gear settings (#13343, #13361, #13306): the constraint ("unconstrained",
+/// "square", "fixedSize" or "proportional"; the Polygon's "freeform" is [`freeform_polygon`]'s),
+/// Fixed Size W × H, Proportional W : H and From Center.
 struct Gear<'a> {
     constraint: &'a str,
     fixed: (f32, f32),
@@ -166,7 +170,7 @@ struct Gear<'a> {
     from_center: bool,
 }
 
-/// `tool`'s gear, for the tools that have one (the Rectangle and the Triangle).
+/// `tool`'s gear, for the tools that have one (the Rectangle, the Triangle and the Polygon).
 fn gear(o: &ToolOptions, tool: Tool) -> Option<Gear<'_>> {
     Some(match tool {
         Tool::Rectangle => Gear {
@@ -180,6 +184,12 @@ fn gear(o: &ToolOptions, tool: Tool) -> Option<Gear<'_>> {
             fixed: (o.triangle_fixed_width, o.triangle_fixed_height),
             ratio: (o.triangle_ratio_width, o.triangle_ratio_height),
             from_center: o.triangle_from_center,
+        },
+        Tool::Polygon => Gear {
+            constraint: &o.polygon_constraint,
+            fixed: (o.polygon_fixed_width, o.polygon_fixed_height),
+            ratio: (o.polygon_ratio_width, o.polygon_ratio_height),
+            from_center: o.polygon_from_center,
         },
         _ => return None,
     })
@@ -219,6 +229,47 @@ fn drag_box(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: e
         squared = false;
     }
     (if from_center { [start[0] - w, start[1] - h, 2.0 * w, 2.0 * h] } else { [start[0], start[1], w, h] }, squared)
+}
+
+/// The Polygon tool's Freeform drag (#13306): a regular polygon of the options bar's sides,
+/// centred on the middle of the drag (on the press point with ⌥ or From Center, each turning the
+/// other off), with one vertex at the release point and the others clockwise from it, as in the
+/// reference application. Not measured, so chosen here: ⇧ turns the polygon so that this vertex
+/// lies at a multiple of 45° from the centre, at the same radius (the measured 21.8° drag lies
+/// flat to the right), and a Radius above 0 sets the circumradius, the drag then only placing and
+/// turning the polygon. Sent as a path, since a live polygon has no rotation, with its tight box
+/// as `rect`. None when too small to draw.
+fn freeform_polygon(o: &ToolOptions, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
+    let centre = if mods.alt != o.polygon_from_center { start } else { [(start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0] };
+    let (dx, dy) = (end[0] - centre[0], end[1] - centre[1]);
+    let reach = dx.hypot(dy);
+    if !(reach >= 0.5) {
+        return None;
+    }
+    let radius = match positive_pair(o.polygon_freeform_radius, 1.0) {
+        Some((r, _)) => r,
+        None => reach,
+    };
+    let mut angle = dy.atan2(dx);
+    if mods.shift {
+        let step = std::f64::consts::FRAC_PI_4;
+        angle = (angle / step).round() * step;
+    }
+    let sides = o.polygon_sides.clamp(3, 100);
+    let pts: Vec<(f64, f64)> = (0..sides)
+        .map(|i| {
+            let a = angle + std::f64::consts::TAU * f64::from(i) / f64::from(sides);
+            (centre[0] + radius * a.cos(), centre[1] + radius * a.sin())
+        })
+        .collect();
+    let (xs, ys) = (pts.iter().map(|p| p.0), pts.iter().map(|p| p.1));
+    let (x0, y0) = (xs.clone().fold(f64::INFINITY, f64::min), ys.clone().fold(f64::INFINITY, f64::min));
+    let (x1, y1) = (xs.fold(f64::NEG_INFINITY, f64::max), ys.fold(f64::NEG_INFINITY, f64::max));
+    if !(x1 - x0 >= 1.0 && y1 - y0 >= 1.0) {
+        return None;
+    }
+    let path = photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polygon(&pts)]);
+    Some(json!({"kind": "path", "path": photocraft_engine::vector_cmds::path_json(&path), "rect": [x0, y0, x1 - x0, y1 - y0]}))
 }
 
 /// `(w, h)` in f64 when both are finite and above zero (gear fields that are not empty).
@@ -307,6 +358,12 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         return;
     }
     p["historyName"] = json!(line_history_name(tool));
+    // A Freeform polygon comes as its path (#13306); its layer is still named as a polygon.
+    if p["kind"] == "path"
+        && let Some(st) = app.session.active()
+    {
+        p["name"] = json!(st.doc.next_layer_name("Polygon"));
+    }
     // With an operation other than New Layer the drag joins the active shape layer.
     if let Some(op) = drag_path_op(app)
         && let Some(id) = super::options::selected_shape(&app.session)
@@ -408,6 +465,9 @@ fn shape_outline(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2]
         let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
         let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
         Some(photocraft_engine::presets::shapes::fit(&shape.path, rect, mods.shift))
+    } else if geometry["kind"] == "path" {
+        // A Freeform polygon (#13306) comes as its path.
+        photocraft_engine::vector_cmds::parse_path(&geometry["path"]).ok()
     } else {
         photocraft_engine::vector_cmds::shape_path(&geometry).ok()
     }
