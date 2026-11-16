@@ -66,10 +66,15 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         let n = sf.channels();
         let colors = sf.mode.color_channels();
         // #14490: at 8 bit Apply Image truncates the Add/Subtract quotient instead of rounding it
-        // to the nearest level. Nothing else is measured, so only this depth and only these two
-        // blends take that path; Calculations, 16 and 32 bit, the other colour modes (only RGB is
-        // measured) and the blend modes stay as they are.
-        let truncates = matches!(blending, Blending::Add { .. } | Blending::Subtract { .. }) && sf.sample == SampleType::U8 && sf.mode == ColorMode::Rgb;
+        // to the nearest level. Nothing else is measured, so only this depth, only these two
+        // blends, and only with Offset 0 take that path; Calculations, 16 and 32 bit, the other
+        // colour modes (only RGB is measured), the blend modes and Scale with an Offset stay as
+        // they are.
+        let truncates = match blending {
+            Blending::Add { offset, .. } | Blending::Subtract { offset, .. } => offset == 0.0,
+            Blending::Mode(_) => false,
+        } && sf.sample == SampleType::U8
+            && sf.mode == ColorMode::Rgb;
         let mut v = surf.read_region(area);
         for (i, px) in v.chunks_exact_mut(n).enumerate() {
             let base_a = if sf.alpha { px[colors].clamp(0.0, 1.0) } else { 1.0 };

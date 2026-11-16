@@ -172,6 +172,23 @@ fn half_opacity_keeps_todays_rounding() {
 }
 
 #[test]
+fn scale_two_with_a_non_zero_offset_keeps_todays_rounding() {
+    // Review #14634 (calc.rs:72): the truncation gate ignored Offset, but #14490 lists "Scale
+    // with an Offset at the same time" as not measured, so those blends keep Blending::apply's
+    // rounding. The review's exact inputs: Add, target 50, source 255, Scale 2, Offset 1 gives
+    // (50 + 255) / 2 + 1 = 153.5 and must stay 154, not 153; Subtract, target 50, source 255,
+    // Scale 2, Offset 128 gives (50 - 255) / 2 + 128 = 25.5 and must stay 26, not 25.
+    let mut s = pair(8, "#c86432", "#3296fa");
+    apply(&mut s, json!({"source": {"document": 1}, "blending": "add", "scale": 2, "offset": 1}));
+    assert_eq!(levels(&s, RIGHT, 1), [154, 204, 254], "Add, Scale 2, Offset 1: right half");
+    assert_eq!(levels(&s, LEFT, 1), [165, 115, 90], "Add, Scale 2, Offset 1: whole quotients on the left half");
+    let mut s = pair(8, "#c86432", "#3296fa");
+    apply(&mut s, json!({"source": {"document": 1}, "blending": "subtract", "scale": 2, "offset": 128}));
+    assert_eq!(levels(&s, RIGHT, 1), [26, 76, 126], "Subtract, Scale 2, Offset 128: right half");
+    assert_eq!(levels(&s, LEFT, 1), [164, 114, 89], "Subtract, Scale 2, Offset 128: whole quotients on the left half");
+}
+
+#[test]
 fn an_eight_bit_grayscale_target_keeps_todays_rounding() {
     // Only RGB is measured (#14490), so another colour mode keeps rounding to the nearest level:
     // (50 + 255) / 2 = 152.5 lands on 153 in a Grayscale target.
