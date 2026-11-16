@@ -342,10 +342,16 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
 /// params is let through those four modes by `Session::precondition` (a gray plane in any mode); a
 /// targeted layer mask never reaches this check (`channel_cmds::mask_target_enabled` answers for it).
 pub(crate) fn exposure_enabled(s: &Session) -> std::result::Result<(), String> {
-    use photocraft_color::ColorMode;
     if crate::channel_cmds::edits_channel(s) {
         return Ok(());
     }
+    exposure_mode_refusal(s)?;
+    has_adjustable(s)
+}
+
+/// The document-mode refusal of Exposure, independent of what the Channels panel targets.
+pub(crate) fn exposure_mode_refusal(s: &Session) -> std::result::Result<(), String> {
+    use photocraft_color::ColorMode;
     let d = s.active().ok_or("no document open")?;
     let mode = match d.doc.mode {
         ColorMode::Cmyk => Some("CMYK Color"),
@@ -357,7 +363,7 @@ pub(crate) fn exposure_enabled(s: &Session) -> std::result::Result<(), String> {
     if let Some(m) = mode {
         return Err(format!("Exposure needs an RGB or Grayscale document (this one is {m})"));
     }
-    has_adjustable(s)
+    Ok(())
 }
 
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the

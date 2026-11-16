@@ -172,3 +172,34 @@ fn a_target_naming_no_plane_keeps_the_mode_refusal() {
         }
     }
 }
+
+/// With the Channels panel on an existing alpha channel (or the Quick Mask) the panel must not decide for a
+/// call whose params name a pixels target or a plane that does not exist: those get the mode refusal.
+#[test]
+fn a_params_target_beats_the_channels_panel_in_other_modes() {
+    for (mode, mut s) in docs() {
+        s.execute("channel.new", json!({"name": "A", "fill": "white"})).expect("test step");
+        s.execute("channel.target", json!({"channel": 0})).expect("test step");
+        for t in [json!("pixels"), json!({"channel": 99}), json!({"channel": u64::MAX}), json!("quickMask")] {
+            let steps = s.active().expect("an active document").history.past_len();
+            let e = s.execute(EXPOSURE, json!({"exposure": -1, "target": t})).expect_err("refused despite the panel");
+            assert!(e.to_string().contains("needs an RGB or Grayscale document"), "{mode} {t}: the document-mode refusal, got {e}");
+            assert_eq!(s.active().expect("an active document").history.past_len(), steps, "{mode} {t}: no history state");
+        }
+        // The panel still governs a call with no target of its own, and a named existing plane still works.
+        assert!(s.execute(EXPOSURE, json!({"exposure": -1})).is_ok(), "{mode}: the panel's alpha takes a targetless call");
+        assert!(s.execute(EXPOSURE, json!({"exposure": -1, "target": {"channel": 0}})).is_ok(), "{mode}: the named alpha works");
+    }
+}
+
+#[test]
+fn a_params_target_beats_the_quick_mask_panel_in_other_modes() {
+    for (mode, mut s) in docs() {
+        s.execute("select.editInQuickMaskMode", json!({"on": true})).expect("test step");
+        let e = s.execute(EXPOSURE, json!({"exposure": -1, "target": "pixels"})).expect_err("pixels refused");
+        assert!(e.to_string().contains("needs an RGB or Grayscale document"), "{mode}: got {e}");
+        let e = s.execute(EXPOSURE, json!({"exposure": -1, "target": {"channel": 7}})).expect_err("missing alpha refused");
+        assert!(e.to_string().contains("needs an RGB or Grayscale document"), "{mode}: got {e}");
+        assert!(s.execute(EXPOSURE, json!({"exposure": -1})).is_ok(), "{mode}: the Quick Mask takes a targetless call");
+    }
+}

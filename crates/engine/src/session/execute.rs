@@ -188,6 +188,18 @@ impl Session {
             // The plane is named by the params, so no active layer is needed (a multichannel document has none).
             return Ok(());
         }
+        // The params name the target, so the panel does not decide: a pixels target, or a plane that does not
+        // exist, in those four modes gets the mode refusal even while the Channels panel is on an alpha or the
+        // Quick Mask (which would let `exposure_enabled` pass). A mask target keeps its own check.
+        if spec.id == "image.adjustments.exposure"
+            && params.get("target").is_some()
+            && matches!(channel_cmds::target_of(params), channel_cmds::Target::Pixels | channel_cmds::Target::Alpha(_) | channel_cmds::Target::QuickMask)
+        {
+            use photocraft_color::ColorMode::{Cmyk, Indexed, Lab, Multichannel};
+            if self.active().is_some_and(|d| matches!(d.doc.mode, Cmyk | Lab | Indexed | Multichannel)) {
+                crate::adjust_cmds::exposure_mode_refusal(self)?;
+            }
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
 
