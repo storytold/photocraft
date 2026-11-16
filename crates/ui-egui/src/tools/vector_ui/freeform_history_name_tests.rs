@@ -104,7 +104,8 @@ fn pen_and_curvature_keep_default_history_names_even_with_freeform_selected_at_c
             }
             app.ui.tool = Tool::FreeformPen;
             assert!(pen_commit(&mut app, false));
-            assert_step(&app, n, if mode == "path" { "Work Path" } else { "New Shape Layer" });
+            let path_step = if curvature { "Work Path" } else { "New Work Path" };
+            assert_step(&app, n, if mode == "path" { path_step } else { "New Shape Layer" });
         }
     }
 }
