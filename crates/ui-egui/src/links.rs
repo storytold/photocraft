@@ -33,28 +33,16 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context, url: &str) -> Value {
     json!({"url": url})
 }
 
-/// The prominent "Join us on Discord" button.
-pub fn discord_button(app: &mut PhotocraftApp, ui: &mut egui::Ui, min_width: f32) -> egui::Response {
-    let r = crate::widgets::primary_button(ui, tl!("Join us on Discord"), min_width).on_hover_text(DISCORD);
-    if r.clicked() {
-        open(app, ui.ctx(), DISCORD);
-    }
-    r
-}
-
-/// "PhotoCraft website · GitHub · ArtCraft" as links, centred. Clicks route through [`open`] (the
+/// "PhotoCraft website · Discord · GitHub · ArtCraft" as left-aligned links. Clicks route through [`open`] (the
 /// platform browser service) rather than `ui.hyperlink_to`, which uses the unreliable `ctx.open_url`.
 pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let links = [(tl!("PhotoCraft website"), APP_PAGE), (tl!("GitHub"), GITHUB), (tl!("ArtCraft"), ARTCRAFT_WEBSITE)];
+    let links = [(tl!("PhotoCraft website"), APP_PAGE), (tl!("Discord"), DISCORD), (tl!("GitHub"), GITHUB), (tl!("ArtCraft"), ARTCRAFT_WEBSITE)];
     let font = egui::FontId::proportional(12.5);
     let sep = "  ·  ";
-    let width: f32 = links.iter().map(|(l, _)| ui.painter().layout_no_wrap((*l).into(), font.clone(), t.text).size().x).sum::<f32>()
-        + 2.0 * ui.painter().layout_no_wrap(sep.into(), font.clone(), t.text).size().x;
     let mut clicked: Option<&str> = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
         for (i, (label, url)) in links.iter().enumerate() {
             if i > 0 {
                 ui.label(egui::RichText::new(sep).font(font.clone()).color(t.text_faint));
@@ -75,7 +63,7 @@ mod tests {
 
     #[test]
     fn links_open_through_the_platform_service() {
-        // Issue #14: links (Help menu, Discord button, start-page links) must open in the browser.
+        // Issue #14: links (Help menu, start-page links) must open in the browser.
         // They route through the `open_url` service rather than the unreliable `ctx.open_url`.
         use std::sync::{Arc, Mutex};
         let opened: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -94,7 +82,7 @@ mod tests {
             crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
             assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some(*url), "{id}");
         }
-        // The direct open() helper (Discord button / start-page links) also uses it.
+        // The direct open() helper (start-page links) also uses it.
         open(&mut app, &ctx, DISCORD);
         assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some(DISCORD));
     }
@@ -135,5 +123,28 @@ mod tests {
             assert_eq!(r["url"], url);
             assert_eq!(app.ui.status, format!("Opened {url}"));
         }
+    }
+
+    #[test]
+    fn link_row_includes_discord_and_opens_it() {
+        use egui_kittest::kittest::Queryable;
+        use std::sync::{Arc, Mutex};
+        let opened: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = opened.clone();
+        let services = crate::Services {
+            open_url: Some(Box::new(move |u: &str| {
+                rec.lock().unwrap().push(u.to_string());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 100.0)).build_ui_state(|ui, app| link_row(app, ui), app);
+        PhotocraftApp::setup_context(&harness.ctx, Default::default());
+        harness.run_steps(1);
+        let discord_link = harness.query_all_by_label("Discord").next().expect("Discord link in link_row");
+        discord_link.click();
+        harness.run_steps(1);
+        assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some(DISCORD));
     }
 }
