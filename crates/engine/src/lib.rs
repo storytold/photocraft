@@ -45,6 +45,8 @@ pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
+/// The largest magnitude a path-editing command accepts for a coordinate (`path.convertPoint`, `path.moveHandle`).
+pub use cmd::path_edit_cmds::MAX as PATH_COORD_LIMIT;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 

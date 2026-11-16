@@ -14,7 +14,7 @@ use crate::state::Tool;
 
 /// The issue's document: 800 x 600 with the saved path "Path 1", a corner square with an anchor
 /// at (300, 300), targeted in the Paths panel.
-fn app() -> PhotocraftApp {
+pub(super) fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     let square = json!({"subpaths": [{"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]}]});
@@ -33,7 +33,7 @@ fn escape(app: &mut PhotocraftApp) {
     ctx.end_pass().textures_delta.clear();
 }
 
-fn path_1(app: &PhotocraftApp) -> Path {
+pub(super) fn path_1(app: &PhotocraftApp) -> Path {
     app.session.active().unwrap().doc.paths.iter().find(|p| p.name == "Path 1").unwrap().path.clone()
 }
 
