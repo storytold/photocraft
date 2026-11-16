@@ -36,6 +36,8 @@ use crate::{EngineError, Result, Session};
 pub enum SystemPrintOutcome {
     Printed,
     Cancelled,
+    /// The desktop cannot show its native confirmation; use the normal spooler instead.
+    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +59,12 @@ pub struct SystemPrintSettings {
     pub paper: (f64, f64),
     pub landscape: bool,
     pub driver_options: Vec<(String, String)>,
+    /// Windows DEVMODE selected through Print Settings, encoded as hexadecimal.
+    pub driver_settings: Option<String>,
+    /// Whether the rendered job should be treated as grayscale by the printer driver.
+    pub grayscale: bool,
+    /// Target resolution for desktop adapters that must rasterize the composed PDF.
+    pub raster_dpi: f64,
 }
 
 /// Desktop-shell bridge used after PhotoCraft has composed the print-ready PDF.
@@ -1335,10 +1343,15 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     options.push(("media".into(), media));
     options.retain(|(key, _)| key != "orientation-requested");
     options.push(("orientation-requested".into(), if p.get("orientation").and_then(Value::as_str) == Some("landscape") { "4" } else { "3" }.into()));
+    let selected_printer = p.get("printer").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string);
+    let driver_settings = match (selected_printer.as_deref(), printer_settings(p)?) {
+        (Some(printer), Some(settings)) => Some(craft_print::DriverSettings::new(printer, settings)),
+        _ => None,
+    };
+    let grayscale = p.get("grayscale").and_then(Value::as_bool).unwrap_or(false);
     let job = craft_print::Job {
         duplex,
-        grayscale: p.get("grayscale").and_then(Value::as_bool).unwrap_or(false),
-        printer: p.get("printer").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string),
+        printer: selected_printer,
         copies,
         collate: p.get("collate").and_then(Value::as_bool).unwrap_or(true),
         duplex,
@@ -1346,8 +1359,10 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
         // PhotoCraft already placed and scaled the image on its physical sheet. Scaling again
         // in the driver would change the preview, print resolution and crop-mark positions.
         scaling: craft_print::Scaling::Exact,
-        grayscale: p.get("grayscale").and_then(Value::as_bool).unwrap_or(false),
+        grayscale,
+        grey_pages: grayscale,
         options,
+        driver_settings,
     };
     let command = if send && !system_dialog { json!(craft_print::command_preview(&job).map_err(other)?) } else { Value::Null };
     let pdf_path = match output {
@@ -1359,6 +1374,7 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     };
     let mut sent = false;
     let mut cancelled = false;
+    let mut used_system_dialog = system_dialog;
     let mut spool = Value::Null;
     let mut backend = Value::Null;
     if (send || system_dialog) && !dry {
@@ -1377,6 +1393,9 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
                 paper: (pw, ph),
                 landscape: p.get("orientation").and_then(Value::as_str) == Some("landscape"),
                 driver_options: job.options.clone(),
+                driver_settings: p.get("printerSettings").and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_string),
+                grayscale: job.grayscale,
+                raster_dpi: (f64::from(doc.resolution_dpi) / scale).clamp(96.0, 600.0),
             };
             match open(&pdf, &settings).map_err(other)? {
                 SystemPrintOutcome::Printed => {
@@ -1385,6 +1404,23 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
                     sent = true;
                 }
                 SystemPrintOutcome::Cancelled => cancelled = true,
+                SystemPrintOutcome::Unavailable => {
+                    require_printing_enabled()?;
+                    let print_job = PrintJob {
+                        printer: job.printer.clone(),
+                        copies,
+                        title: doc.name.clone(),
+                        server: p.get("printServer").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string),
+                        paper: (pw, ph),
+                        landscape: p.get("orientation").and_then(Value::as_str) == Some("landscape"),
+                        pdf: pdf.clone(),
+                    };
+                    let (where_, via) = spool_job(spooler, &print_job, &job)?;
+                    spool = json!(where_);
+                    backend = json!(via);
+                    sent = true;
+                    used_system_dialog = false;
+                }
             }
         } else if send {
             require_printing_enabled()?;
@@ -1420,18 +1456,18 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
         "scale": scale * 100.0,
         // The system dialog is authoritative and does not report its final choices back on every
         // platform. Avoid presenting PhotoCraft's initial values as the settings that printed.
-        "printer": if system_dialog { Value::Null } else { json!(job.printer) },
-        "copies": if system_dialog { Value::Null } else { json!(copies) },
-        "collate": if system_dialog { Value::Null } else { json!(job.collate) },
-        "duplex": if system_dialog { Value::Null } else { json!(duplex_name) },
+        "printer": if used_system_dialog { Value::Null } else { json!(job.printer) },
+        "copies": if used_system_dialog { Value::Null } else { json!(copies) },
+        "collate": if used_system_dialog { Value::Null } else { json!(job.collate) },
+        "duplex": if used_system_dialog { Value::Null } else { json!(duplex_name) },
         "grayscale": job.grayscale,
-        "driverOptions": if system_dialog {
+        "driverOptions": if used_system_dialog {
             Value::Null
         } else {
             json!(job.options.iter().map(|(key, value)| json!([key, value])).collect::<Vec<_>>())
         },
         "command": command,
-        "systemDialog": system_dialog,
+        "systemDialog": used_system_dialog,
         "cancelled": cancelled,
         "sent": sent,
         "spooler": spool,

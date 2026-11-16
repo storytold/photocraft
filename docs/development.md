@@ -1200,8 +1200,9 @@ Settings scroll independently of the preview so Print and Cancel stay visible on
 Corner/center crop marks and registration crosshairs preview at their PDF sizes.
 
 Every paper preset and custom size selects CUPS media explicitly, overriding conflicting
-`media`, `PageSize` and `PageRegion` driver options. Supported tray/quality choices are retained
-when reopening Print; selecting another printer loads that printer's defaults. Invalid paper,
+`media`, `PageSize` and `PageRegion` driver options. PhotoCraft retains the tray and quality
+settings it submitted when reopening Print; changes made afterward in the operating system's
+confirmation dialog are not copied back. Selecting another printer loads that printer's defaults. Invalid paper,
 scale, position or document resolution returns an error before composing a PDF. The PDF 1.4
 paper limit is 14,400 points per side. Fit uses an estimated 18 pt inset (36 pt with marks);
 actual printer imageable margins, proof-color preview and interactive resize handles remain open.
@@ -1218,6 +1219,10 @@ Cancelling that dialog submits no job and fires no print event. With an output p
 PDF only and does not open a system dialog or submit a print job. `file.printOneCopy` remains the
 deliberate direct route through `craft-print`. Grayscale is composed into the print PDF and
 represented in the PhotoCraft preview.
+
+If Preview automation is unavailable on macOS or the XDG Print portal is unavailable on Linux,
+interactive Print falls back to PhotoCraft's regular spooler route instead of failing solely because
+the desktop confirmation service is missing.
 
 On macOS, Preview's public AppleScript print settings seed copies, collation and the selected target
 printer before showing its print sheet. Preview exposes no duplex property there, so choose duplex

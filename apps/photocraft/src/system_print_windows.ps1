@@ -33,8 +33,9 @@ $page = $pdf.GetPage(0)
 try {
     $width = [int][Math]::Max(1, [Math]::Round($page.Size.Width * 100.0 / 96.0))
     $height = [int][Math]::Max(1, [Math]::Round($page.Size.Height * 100.0 / 96.0))
-    $renderWidth = [uint32][Math]::Max(1, [Math]::Min(32768, [Math]::Round($page.Size.Width * 3.0)))
-    $renderHeight = [uint32][Math]::Max(1, [Math]::Min(32768, [Math]::Round($page.Size.Height * 3.0)))
+    $renderDpi = [Math]::Max(96.0, [Math]::Min(600.0, [double]$env:PHOTOCRAFT_PRINT_RASTER_DPI))
+    $renderWidth = [uint32][Math]::Max(1, [Math]::Min(32768, [Math]::Round($page.Size.Width * $renderDpi / 96.0)))
+    $renderHeight = [uint32][Math]::Max(1, [Math]::Min(32768, [Math]::Round($page.Size.Height * $renderDpi / 96.0)))
     $options = [Windows.Data.Pdf.PdfPageRenderOptions]::new()
     $options.DestinationWidth = $renderWidth
     $options.DestinationHeight = $renderHeight
@@ -59,11 +60,27 @@ $document.OriginAtMargins = $false
 if (-not [string]::IsNullOrWhiteSpace($env:PHOTOCRAFT_PRINT_PRINTER)) {
     $document.PrinterSettings.PrinterName = $env:PHOTOCRAFT_PRINT_PRINTER
 }
+if (-not [string]::IsNullOrWhiteSpace($env:PHOTOCRAFT_PRINT_DRIVER_SETTINGS)) {
+    $hex = $env:PHOTOCRAFT_PRINT_DRIVER_SETTINGS
+    if (($hex.Length % 2) -ne 0) { throw 'PhotoCraft received malformed Windows printer settings' }
+    $bytes = [byte[]]::new($hex.Length / 2)
+    for ($i = 0; $i -lt $bytes.Length; $i++) {
+        $bytes[$i] = [Convert]::ToByte($hex.Substring($i * 2, 2), 16)
+    }
+    $devmode = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
+    try {
+        [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $devmode, $bytes.Length)
+        $document.PrinterSettings.SetHdevmode($devmode)
+    } finally {
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($devmode)
+    }
+}
 $paperWidth = [Math]::Min($width, $height)
 $paperHeight = [Math]::Max($width, $height)
 $document.DefaultPageSettings.PaperSize = [System.Drawing.Printing.PaperSize]::new('PhotoCraft page', $paperWidth, $paperHeight)
 $document.DefaultPageSettings.Landscape = ($width -gt $height)
 $document.DefaultPageSettings.Margins = [System.Drawing.Printing.Margins]::new(0, 0, 0, 0)
+$document.DefaultPageSettings.Color = ($env:PHOTOCRAFT_PRINT_GRAYSCALE -ne '1')
 $document.PrinterSettings.Copies = [int16][Math]::Max(1, [Math]::Min(999, [int]$env:PHOTOCRAFT_PRINT_COPIES))
 $document.PrinterSettings.Collate = ($env:PHOTOCRAFT_PRINT_COLLATE -eq '1')
 switch ($env:PHOTOCRAFT_PRINT_DUPLEX) {
@@ -79,7 +96,19 @@ $document.add_PrintPage({
         $event.PageBounds.Width,
         $event.PageBounds.Height
     )
-    $event.Graphics.DrawImage($bitmap, $box)
+    $scale = [Math]::Min($box.Width / $bitmap.Width, $box.Height / $bitmap.Height)
+    $drawWidth = $bitmap.Width * $scale
+    $drawHeight = $bitmap.Height * $scale
+    $drawBox = [System.Drawing.RectangleF]::new(
+        $box.X + ($box.Width - $drawWidth) / 2.0,
+        $box.Y + ($box.Height - $drawHeight) / 2.0,
+        $drawWidth,
+        $drawHeight
+    )
+    $event.Graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+    $event.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $event.Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $event.Graphics.DrawImage($bitmap, $drawBox)
     $event.HasMorePages = $false
 })
 

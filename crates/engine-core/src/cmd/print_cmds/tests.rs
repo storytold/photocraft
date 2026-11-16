@@ -541,6 +541,11 @@ fn system_dialog_receives_pdf_and_reports_confirmation_or_cancel() {
 
     let calls = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&calls);
+    let mut dev_mode = vec![0; 228];
+    dev_mode[68..70].copy_from_slice(&220_u16.to_le_bytes());
+    dev_mode[70..72].copy_from_slice(&8_u16.to_le_bytes());
+    let driver_settings = craft_print::rgb::DevMode::from_bytes(dev_mode).unwrap().to_hex();
+    let expected_driver_settings = driver_settings.clone();
     let mut s = session("rgb", 8);
     s.system_print_dialog = Some(Arc::new(move |pdf, settings| {
         assert!(pdf.starts_with(b"%PDF"));
@@ -548,10 +553,14 @@ fn system_dialog_receives_pdf_and_reports_confirmation_or_cancel() {
         assert_eq!(settings.copies, 2);
         assert!(settings.collate);
         assert_eq!(settings.paper, (612.0, 792.0));
+        assert_eq!(settings.driver_settings.as_deref(), Some(expected_driver_settings.as_str()));
+        assert!(settings.grayscale);
+        assert_eq!(settings.raster_dpi, 144.0);
         seen.fetch_add(1, Ordering::Relaxed);
         Ok(SystemPrintOutcome::Printed)
     }));
-    let printed = s.execute("file.print", json!({"systemDialog": true, "copies": 2})).unwrap();
+    let printed =
+        s.execute("file.print", json!({"systemDialog": true, "copies": 2, "scale": 50, "printerSettings": driver_settings, "grayscale": true})).unwrap();
     assert_eq!(printed["sent"], true);
     assert_eq!(printed["spooler"], "system-dialog");
     assert!(printed["copies"].is_null(), "the system dialog's final choice is unknown");
@@ -563,6 +572,26 @@ fn system_dialog_receives_pdf_and_reports_confirmation_or_cancel() {
     let cancelled = s.execute("file.print", json!({"systemDialog": true})).unwrap();
     assert_eq!(cancelled["cancelled"], true);
     assert_eq!(cancelled["sent"], false);
+}
+
+#[test]
+fn unavailable_system_dialog_falls_back_to_the_normal_spooler() {
+    use std::sync::Arc;
+
+    if !in_child("cmd::print_cmds::tests::unavailable_system_dialog_falls_back_to_the_normal_spooler", &[]) {
+        return;
+    }
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = session("rgb", 8);
+    s.print_spooler = Some(recording_spooler(true, &seen));
+    s.system_print_dialog = Some(Arc::new(|_, _| Ok(SystemPrintOutcome::Unavailable)));
+
+    let printed = s.execute("file.print", json!({"systemDialog": true, "printer": "Studio", "copies": 2})).unwrap();
+    assert_eq!((printed["sent"].as_bool(), printed["systemDialog"].as_bool()), (Some(true), Some(false)));
+    assert_eq!((printed["backend"].as_str(), printed["spooler"].as_str()), (Some("test"), Some("queued")));
+    let jobs = seen.lock().unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!((jobs[0].printer.as_deref(), jobs[0].copies), (Some("Studio"), 2));
 }
 
 #[test]
