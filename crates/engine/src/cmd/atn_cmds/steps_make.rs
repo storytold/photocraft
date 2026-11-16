@@ -943,6 +943,21 @@ fn selection_from(d: &Descriptor) -> Mapped {
             "Prvs" => none("select.reselect"),
             _ => unsupported,
         },
+        Some(D::Reference(t)) if ref_class(t).as_deref() == Some("Path") => {
+            let destination = matches!(get_ref(d, "null"), Some([ReferenceItem::Property { class, key }])
+                if class.class_id.is("Chnl") && key.is("fsel"));
+            let source = matches!(t.as_slice(), [
+                ReferenceItem::Enumerated { class: path, type_id: path_type, value: path_value },
+                ReferenceItem::Enumerated { class: layer, type_id: layer_type, value: layer_value },
+            ] if path.class_id.is("Path") && path_type.is("Path") && path_value.is("vectorMask")
+                && layer.class_id.is("Lyr ") && layer_type.is("Ordn") && layer_value.is("Trgt"));
+            // Only the recorded plain replacement form is represented. Extra path-selection
+            // options or a different reference chain must not silently change the selection.
+            if d.items.len() != 4 || !destination || !source || d.get("Vrsn") != Some(&D::Integer(1)) || d.get("vectorMaskParams") != Some(&D::Boolean(true)) {
+                return unsupported;
+            }
+            step("select.loadSelection", json!({"channel": "vectorMask"}))
+        }
         Some(D::Reference(t)) => match (ref_class(t).as_deref(), target(t)) {
             (Some("Chnl"), Target::Ordinal(o)) if o == "Trsp" => {
                 let mut p = Map::new();
@@ -1310,6 +1325,22 @@ pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
             return None;
         }
         "select.loadSelection" => match jstr(p, "channel")? {
+            "vectorMask" => {
+                // This form addresses the active layer. Do not drop another layer/document
+                // selector, or fall through to writing a channel literally named vectorMask.
+                if p.get("layer").is_some_and(|v| !v.is_null())
+                    || p.get("document").is_some_and(|v| !v.is_null())
+                    || p.as_object()?.keys().any(|k| !matches!(k.as_str(), "channel" | "layer" | "document" | "invert" | "operation"))
+                {
+                    return None;
+                }
+                sel(D::Reference(vec![
+                    ReferenceItem::Enumerated { class: class("Path"), type_id: Id::new("Path"), value: Id::new("vectorMask") },
+                    ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") },
+                ]))
+                .with("Vrsn", D::Integer(1))
+                .with("vectorMaskParams", D::Boolean(true))
+            }
             "transparency" => {
                 let mut r = vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: Id::new("Chnl"), value: Id::new("Trsp") }];
                 if p.get("layer").is_some_and(|v| !v.is_null()) {

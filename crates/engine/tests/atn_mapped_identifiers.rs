@@ -788,6 +788,129 @@ fn recorded_transform_zero_points_keep_nonzero_or_unrepresentable_offsets() {
     }
 }
 
+fn vector_mask_selection() -> Descriptor {
+    Descriptor::new("setd")
+        .with("null", D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]))
+        .with(
+            "T   ",
+            D::Reference(vec![
+                ReferenceItem::Enumerated { class: class("Path"), type_id: Id::new("Path"), value: Id::new("vectorMask") },
+                ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") },
+            ]),
+        )
+        .with("Vrsn", D::Integer(1))
+        .with("vectorMaskParams", D::Boolean(true))
+}
+
+#[test]
+fn recorded_vector_mask_selection_imports_and_exports_a_path_reference() {
+    let expected = vector_mask_selection();
+    for event in [AtnEvent::Code(*b"setd"), AtnEvent::name("set")] {
+        let action = recorded(event, expected.clone());
+        assert_eq!(action.steps, vec![("select.loadSelection".into(), json!({"channel":"vectorMask"}))]);
+        let written = saved(&action).descriptor.unwrap();
+        for key in ["null", "T   ", "Vrsn", "vectorMaskParams"] {
+            assert_eq!(written.get(key), expected.get(key), "{key}: a vector mask is a Path, not a named Channel");
+        }
+    }
+    for p in [json!({"channel":"vectorMask"}), json!({"channel":"vectorMask","invert":false,"operation":"new","layer":null,"document":null})] {
+        let native = Action::new("Recorded", vec![("select.loadSelection".into(), p)]);
+        assert_eq!(saved(&native).descriptor.unwrap().get("T   "), expected.get("T   "));
+    }
+}
+
+#[test]
+fn recorded_vector_mask_selection_resolves_the_active_layer_at_playback() {
+    let action = recorded(AtnEvent::name("set"), vector_mask_selection());
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":40,"height":20,"depth":depth})).unwrap();
+        for (name, x) in [("First", 4), ("Second", 22)] {
+            s.execute("layer.new.layer", json!({"name":name})).unwrap();
+            let path = json!({"subpaths":[{"knots":[[x,4],[x+12,4],[x+12,16],[x,16]]}]});
+            s.execute("layer.vectorMask.add", json!({"path":path})).unwrap();
+        }
+        for (name, x) in [("First", 4), ("Second", 22)] {
+            s.execute("layer.select", json!({"layer":name})).unwrap();
+            s.execute("select.rect", json!({"x":0,"y":0,"width":2,"height":2})).unwrap();
+            let before = s.active().unwrap().doc.clone();
+            replay_saved(&mut s, &action);
+            let selection = s.active().unwrap().doc.selection.as_ref().unwrap();
+            assert_eq!(selection.content_bounds(), photocraft_geom::Rect::from_xywh(x, 4, 12, 12));
+            assert!(selection.sample_channel(x + 6, 10, 0) > 0.99);
+            assert!(selection.sample_channel(0, 0, 0) < 0.01, "replace the previous selection");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc, before, "Undo at depth {depth}");
+        }
+        s.execute("layer.vectorMask.delete", json!({})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        s.actions.list = vec![action.clone()];
+        let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+        assert!(result.get("failed").is_some(), "a missing vector mask must fail: {result}");
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+#[test]
+fn recorded_vector_mask_selection_keeps_unrepresented_forms() {
+    let base = vector_mask_selection();
+    let mut cases = vec![base.clone().with("Fthr", D::Double(2.0)), base.clone().with("AntA", D::Boolean(false))];
+    for (key, values) in [("Vrsn", vec![D::Integer(2), D::Double(1.0)]), ("vectorMaskParams", vec![D::Boolean(false), D::Integer(1)])] {
+        let mut missing = base.clone();
+        missing.items.retain(|(k, _)| !k.is(key));
+        cases.push(missing);
+        for value in values {
+            let mut d = base.clone();
+            d.items.iter_mut().find(|(k, _)| k.is(key)).unwrap().1 = value;
+            cases.push(d);
+        }
+    }
+    for key in ["null", "T   ", "Vrsn", "vectorMaskParams"] {
+        let mut d = base.clone();
+        d.items.push((Id::new(key), d.get(key).unwrap().clone()));
+        cases.push(d);
+    }
+    let D::Reference(source) = base.get("T   ").unwrap() else { panic!("source reference") };
+    for replacement in [
+        ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Frnt") },
+        ReferenceItem::Enumerated { class: class("Dcmn"), type_id: Id::new("Ordn"), value: Id::new("Trgt") },
+        ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Path"), value: Id::new("Trgt") },
+        ReferenceItem::Name { class: class("Lyr "), name: UnicodeString::new_nul("Source") },
+    ] {
+        let mut d = base.clone();
+        d.items.iter_mut().find(|(k, _)| k.is("T   ")).unwrap().1 = D::Reference(vec![source[0].clone(), replacement]);
+        cases.push(d);
+    }
+    for (key, reference) in [
+        ("null", vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }, source[1].clone()]),
+        ("T   ", vec![source[0].clone()]),
+        ("T   ", vec![source[0].clone(), source[1].clone(), source[1].clone()]),
+        ("T   ", vec![ReferenceItem::Enumerated { class: class("Path"), type_id: Id::new("Ordn"), value: Id::new("vectorMask") }, source[1].clone()]),
+    ] {
+        let mut d = base.clone();
+        d.items.iter_mut().find(|(k, _)| k.is(key)).unwrap().1 = D::Reference(reference);
+        cases.push(d);
+    }
+    for d in cases {
+        let action = recorded(AtnEvent::name("set"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+}
+
+#[test]
+fn recorded_vector_mask_selection_export_refuses_options_it_cannot_represent() {
+    for extra in [json!({"layer":"Source"}), json!({"document":1}), json!({"invert":true}), json!({"operation":"add"}), json!({"unknown":true})] {
+        let mut p = json!({"channel":"vectorMask"});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let action = Action::new("Recorded", vec![("select.loadSelection".into(), p.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&action], &[], false).is_err(), "{p}");
+        let (bytes, skipped) = atn_cmds::export("Identifiers", &[&action], &[], true).unwrap();
+        assert_eq!(skipped.len(), 1, "{p}");
+        assert!(atn::parse(&bytes).unwrap().actions[0].items.is_empty());
+    }
+}
+
 fn canvas() -> Descriptor {
     Descriptor::new("null")
         .with("Wdth", D::UnitFloat { unit: *b"#Pxl", value: 6.0 })

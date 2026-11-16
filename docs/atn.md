@@ -518,6 +518,9 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   (`Usng.Clr `). Layer via Copy / Cut keeps names, blend modes, opacity and colour labels.
 - Loading another layer's transparency keeps its source reference. Background property references
   remain independent of translated names; ordinary layer-name references remain names.
+  Loading the active layer's vector mask (`Path.vectorMask`, `Vrsn` 1, `vectorMaskParams` true)
+  maps to `select.loadSelection` and saves back as a path reference. Other vector-mask source
+  references and additional path-selection options remain kept steps.
 - Close without `Svng` preserves the unanswered save choice. Headless playback refuses to discard a
   changed document. Native `file.close` still defaults to discard; `save: "ask"` opts into this policy.
 - Photo Filter converts recorded Lab colours through `craft-cms`.
@@ -863,7 +866,7 @@ differences that do not change what a step does.
   had none.
 - Ids of the recording session (`LyrI`, `DocI`, `Idnt`, `layerSectionStart`, `layerSectionEnd`, `Vrsn`),
   recording flags (`dontRecord`, `forceNotify`) and default flags (`MkVs` false, `Adjs` false)
-  are not written back.
+  are not written back, except `Vrsn` 1 when loading a vector mask.
 - An adjustment layer's values equal to the defaults are not written back (other values are).
 - Colours are kept as 8-bit values (51.0031 becomes 51); gradient names become "Custom".
 - A loaded Gradient Fill Make or Set (`gradientLayer`) saves back as the recorded descriptor until
