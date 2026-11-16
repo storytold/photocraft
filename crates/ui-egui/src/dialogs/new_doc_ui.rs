@@ -506,11 +506,12 @@ impl Card {
 }
 
 /// The Recent category: the Clipboard preset, then the documents recently created here (newest
-/// first, as Photoshop lists only those), or the built-in defaults while there are none yet.
+/// first, as Photoshop lists only those), or the default size while there are none yet.
 pub(crate) fn recent_cards(f: &Map<String, Value>, recent: &[DocumentSettings]) -> Vec<Card> {
     let mut cards: Vec<Card> = clipboard_preset(f).map(Card::Builtin).into_iter().collect();
     if recent.is_empty() {
-        cards.extend(CATEGORIES[0].1.iter().copied().map(Card::Builtin));
+        // Only the first (Default PhotoCraft Size); the others still name matching recent documents.
+        cards.extend(CATEGORIES[0].1.iter().take(1).copied().map(Card::Builtin));
     } else {
         cards.extend(recent.iter().cloned().map(Card::Recent));
     }
@@ -668,13 +669,10 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
     widgets::hairline(ui);
     ui.add_space(8.0);
     let units = app.session.prefs().units_and_rulers.clone();
-    // Recent items get Photoshop's heading and four columns; built-in presets keep three.
-    let (presets, recent_items): (Vec<Card>, bool) = match CATEGORIES.iter().find(|c| c.0 == cat) {
+    // The Recent tab gets Photoshop's heading and four columns; the preset tabs keep three.
+    let (presets, recent_tab): (Vec<Card>, bool) = match CATEGORIES.iter().find(|c| c.0 == cat) {
         Some(c) if c.0 != CATEGORIES[0].0 => (c.1.iter().copied().map(Card::Builtin).collect(), false),
-        _ => {
-            let recent = &app.session.presets.recent_documents;
-            (recent_cards(f, recent), !recent.is_empty())
-        }
+        _ => (recent_cards(f, &app.session.presets.recent_documents), true),
     };
     let presets: Vec<Card> = presets
         .into_iter()
@@ -692,10 +690,10 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                 create |= saved_presets(app, ui, f);
                 return;
             }
-            let heading = if recent_items { tl!("YOUR RECENT ITEMS ({n})") } else { tl!("BLANK DOCUMENT PRESETS ({n})") };
+            let heading = if recent_tab { tl!("YOUR RECENT ITEMS ({n})") } else { tl!("BLANK DOCUMENT PRESETS ({n})") };
             ui.label(RichText::new(crate::i18n::fmt(heading, &[("n", &presets.len().to_string())])).size(11.0).color(t.text_faint));
             ui.add_space(6.0);
-            let (columns, card) = if recent_items { (4, vec2(122.0, 112.0)) } else { (3, vec2(164.0, 112.0)) };
+            let (columns, card) = if recent_tab { (4, vec2(122.0, 112.0)) } else { (3, vec2(164.0, 112.0)) };
             // Up to 20 recent documents: scroll past three rows rather than grow the dialog.
             egui::ScrollArea::vertical().id_salt("new-document-presets").max_height(3.0 * (card.y + 8.0)).show(ui, |ui| {
                 for row in presets.chunks(columns) {

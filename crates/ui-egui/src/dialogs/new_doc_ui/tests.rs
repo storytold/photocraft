@@ -767,11 +767,11 @@ mod dialog {
         let mut f = fields(&h);
         super::super::set_clipboard(&mut f, 640, 360);
         set_fields(&mut h, f);
-        // Recent lists the Clipboard card first: three presets instead of two.
-        assert!(h.query_by_label_contains("BLANK DOCUMENT PRESETS (3)").is_some());
-        let heading = h.get_by_label_contains("BLANK DOCUMENT PRESETS").rect();
-        // Pick the second card, then the first (Clipboard) again.
-        click_at(&mut h, heading.left_bottom() + egui::vec2(80.0 + 172.0, 60.0));
+        // Recent lists the Clipboard card first: two cards instead of one.
+        assert!(h.query_by_label_contains("YOUR RECENT ITEMS (2)").is_some());
+        let heading = h.get_by_label_contains("YOUR RECENT ITEMS").rect();
+        // Pick the second card (four columns: 122 px cards, 8 px apart), then the first (Clipboard) again.
+        click_at(&mut h, heading.left_bottom() + egui::vec2(80.0 + 130.0, 60.0));
         assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some("Default PhotoCraft Size"));
         click_at(&mut h, heading.left_bottom() + egui::vec2(80.0, 60.0));
         assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some(super::super::CLIPBOARD));

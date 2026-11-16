@@ -1,11 +1,12 @@
 //! #14038: File › New › Recent is headed "YOUR RECENT ITEMS (n)", lays its cards out 4 per row and
-//! keeps every created document, duplicates included, as Photoshop does.
+//! keeps every created document, duplicates included, as Photoshop does. Before any document is
+//! created it lists only the default size.
 
 use egui_kittest::{Harness, kittest::Queryable};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::new_doc_ui::{CATEGORIES, recent_cards};
+use crate::new_doc_ui::recent_cards;
 use crate::state::{DialogKind, UiState};
 
 fn app() -> PhotocraftApp {
@@ -63,10 +64,9 @@ fn the_list_is_capped_at_twenty() {
 fn recent_items_are_listed_without_built_in_presets() {
     let mut app = app();
     let fields = app.new_document_fields();
-    // No recent items yet: today's built-in defaults.
+    // No recent items yet: only the default size (no HDTV 1080p).
     let titles = |cards: &[crate::new_doc_ui::Card]| cards.iter().map(|c| c.title()).collect::<Vec<_>>();
-    let defaults: Vec<&str> = CATEGORIES[0].1.iter().map(|p| p.0).collect();
-    assert_eq!(titles(&recent_cards(&fields, &[])), defaults);
+    assert_eq!(titles(&recent_cards(&fields, &[])), ["Default PhotoCraft Size"]);
     // A document of a default's size is listed once, as the recent item; the other default is gone.
     create(&mut app, json!({"width": 1920, "height": 1080, "resolution": 72.0, "__unit": "px"}));
     create_px(&mut app, 600, 400);
@@ -90,9 +90,13 @@ fn size_lines(h: &Harness<'static, PhotocraftApp>) -> Vec<(String, egui::Rect)> 
 }
 
 fn dialog(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    dialog_with(app, UiState::new_document_fields())
+}
+
+fn dialog_with(app: PhotocraftApp, fields: serde_json::Map<String, Value>) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.state_mut().ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
+    h.state_mut().ui.open_dialog(DialogKind::NewDocument, fields);
     h.run_steps(3);
     h
 }
@@ -137,9 +141,24 @@ fn the_recent_tab_is_headed_your_recent_items_with_four_cards_per_row() {
 }
 
 #[test]
-fn without_recent_items_the_tab_keeps_todays_defaults() {
+fn without_recent_items_the_tab_lists_only_the_default_size() {
     let h = dialog(app());
-    let count = CATEGORIES[0].1.len();
-    assert!(h.query_by_label(&format!("BLANK DOCUMENT PRESETS ({count})")).is_some());
-    assert!(h.query_by_label_contains("YOUR RECENT ITEMS").is_none());
+    assert!(h.query_by_label("YOUR RECENT ITEMS (1)").is_some());
+    assert!(h.query_by_label_contains("BLANK DOCUMENT PRESETS").is_none());
+    let names: Vec<String> = size_lines(&h).into_iter().map(|(text, _)| text).collect();
+    assert_eq!(names, ["7 x 5 in @ 300 ppi"], "only Default PhotoCraft Size, no HDTV 1080p");
+}
+
+#[test]
+fn without_recent_items_a_clipboard_card_comes_first_in_the_four_column_grid() {
+    let mut fields = UiState::new_document_fields();
+    crate::new_doc_ui::set_clipboard(&mut fields, 640, 360);
+    let h = dialog_with(app(), fields);
+    assert!(h.query_by_label("YOUR RECENT ITEMS (2)").is_some());
+    let lines = size_lines(&h);
+    let names: Vec<&str> = lines.iter().map(|(text, _)| text.as_str()).collect();
+    assert_eq!(names, ["640 x 360 px @ 72 ppi", "7 x 5 in @ 300 ppi"]);
+    // Four-column cards are 122 px wide with an 8 px gap; the preset tabs' three columns are 164 px.
+    let pitch = lines[1].1.center().x - lines[0].1.center().x;
+    assert!((pitch - 130.0).abs() < 2.0, "card pitch {pitch}");
 }
