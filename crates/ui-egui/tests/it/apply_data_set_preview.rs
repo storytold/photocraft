@@ -109,6 +109,7 @@ fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
                 return;
             }
             photocraft_ui_egui::dialogs::show(app, &ctx);
+            photocraft_ui_egui::discard_ui::show(app, &ctx);
         },
         app,
     );
@@ -417,4 +418,53 @@ fn autosave_waits_while_previewing() {
     let saved = saved.lock().unwrap();
     assert_eq!(saved.len(), 1);
     assert_eq!(*saved[0], *before, "the document itself");
+}
+
+/// Services that keep every document they are asked to encode, and a document with unsaved work
+/// and its own file, so File › Save writes it back in place.
+fn saving_app() -> (PhotocraftApp, Layers, Arc<std::sync::Mutex<Vec<Document>>>) {
+    let encoded: Arc<std::sync::Mutex<Vec<Document>>> = Default::default();
+    let log = encoded.clone();
+    let services = photocraft_ui_egui::Services {
+        export: Some(Box::new(move |d: &Document, _path: &str, _settings: &photocraft_ui_egui::ExportSettings| {
+            log.lock().unwrap().push(d.clone());
+            Ok((Vec::new(), Vec::new()))
+        })),
+        write: Some(Box::new(|_path: &str, _bytes: &[u8]| Ok(()))),
+        ..Default::default()
+    };
+    let (mut a, l) = app_with(services);
+    let dir = std::env::temp_dir().join(format!("pc-apply-data-set-preview-{}-save", std::process::id()));
+    a.session.active_mut().unwrap().path = Some(dir.join("own.psd").to_string_lossy().into_owned());
+    a.run("layer.new.layer", json!({"name": "Work"})).unwrap();
+    (a, l, encoded)
+}
+
+/// Save on the unsaved-changes prompt (closing the document or quitting while the dialog shows a
+/// set) and File › Save run from the menu or the control channel write the document itself,
+/// never the preview.
+#[test]
+fn saving_while_previewing_writes_the_document_itself() {
+    for via_prompt in [true, false] {
+        let (a, l, encoded) = saving_app();
+        let mut h = harness(a);
+        let before = doc(&h);
+        open(&mut h);
+        click(&mut h, "Preview");
+        assert_eq!(shown(&h, &l).1, "Alpha");
+        let ctx = h.ctx.clone();
+        if via_prompt {
+            photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "file.close", json!({})).unwrap();
+            h.run_steps(3);
+            assert!(photocraft_ui_egui::discard_ui::inspect(h.state()).is_some(), "closing unsaved work asks first");
+            // Save: Yes on Windows and Linux, S on macOS; the test context is not macOS.
+            h.key_press(egui::Key::Y);
+            h.run_steps(3);
+        } else {
+            photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "file.save", json!({})).unwrap();
+        }
+        let encoded = encoded.lock().unwrap();
+        assert_eq!(encoded.len(), 1, "via_prompt={via_prompt}");
+        assert_eq!(encoded[0], *before, "via_prompt={via_prompt}: the document itself, nothing of Zed");
+    }
 }
