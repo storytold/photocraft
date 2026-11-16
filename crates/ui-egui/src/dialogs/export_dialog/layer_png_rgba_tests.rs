@@ -284,3 +284,37 @@ fn only_the_layer_branches_ask_for_the_kept_alpha() {
     assert!(settings(&several).layer_alpha, "and so does Export As of several layers");
     assert!(!settings(&fields(None)).layer_alpha, "File > Export As asks for nothing");
 }
+
+/// #14816 review: which of a layer's clear pixels read as white must not depend on how the PNG is
+/// written. In the version under review that was decided per band, and the last row of a band is a
+/// band boundary at every band size - down to the image's own bottom row, where a group's children
+/// reach least. The document Export As hands the encoder already stores its never-painted area as
+/// 255,255,255,0, so every band size writes the whole-image file's bytes and whites that row.
+#[test]
+fn a_group_layer_png_stores_the_same_pixels_whatever_the_band_size() {
+    let (mut app, _written, _open) = app(70, 60);
+    painted(&mut app, "Yellow", "#ffff00", Some((0, 0, 40, 40)));
+    painted(&mut app, "Cyan", "#00ffff", Some((30, 30, 40, 30)));
+    app.run("select.allLayers", json!({})).unwrap();
+    app.run("layer.new.groupFromLayers", json!({"name": "Pair"})).unwrap();
+    let group = active(&app);
+    let doc = source_document(&app, &fields(Some(group))).unwrap();
+    let opts = photocraft_io::ExportOptions { layer_alpha: true, ..Default::default() };
+    let buffered = photocraft_io::export_flat(&doc, photocraft_codecs::Format::Png, &opts).unwrap();
+    let (w, h, layout, whole) = png(&buffered.bytes);
+    assert_eq!((w, h, layout), (70, 60, ChannelLayout::Rgba), "the whole-image layer PNG");
+    // The baseline the bands are held to: the bottom row is clear up to the cyan child, and the
+    // pixels nothing painted inside the group's bounds are stored white with a zero alpha.
+    assert_eq!(px(&whole, w, 4, 0, 59), vec![255, 255, 255, 0], "the buffered file whites its clear bottom row");
+    assert_eq!(px(&whole, w, 4, 15, 59), vec![255, 255, 255, 0], "and the clear pixels along that row");
+    assert_eq!(px(&whole, w, 4, 50, 59), vec![0, 255, 255, 255], "where the cyan child paints, its colour stays");
+    let ctl = photocraft_raster::Interrupt::NONE;
+    for rows in [1, 7] {
+        let streamed = photocraft_io::export_png_streamed_with_renderer(&doc, &opts, &ctl, rows, None).unwrap();
+        let (bw, bh, blayout, band) = png(&streamed.bytes);
+        assert_eq!((bw, bh, blayout), (w, h, layout), "written {rows} rows at a time");
+        assert_eq!(band, whole, "{rows} rows at a time stores different RGBA bytes");
+        assert_eq!(px(&band, w, 4, 0, 59), vec![255, 255, 255, 0], "{rows} rows at a time whites the bottom row too");
+        assert_eq!(px(&band, w, 4, 50, 59), vec![0, 255, 255, 255], "{rows} rows at a time keeps the child's colour");
+    }
+}
