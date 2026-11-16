@@ -3525,8 +3525,8 @@ fn gaussian_contour() -> Contour {
     }
 }
 
-/// The issue's test document with the Inner Shadow's Size, Choke and Anti-aliased as given.
-fn inner_shadow_doc(size: f32, spread: f32, anti_aliased: bool) -> Document {
+/// The issue's test document with the Inner Shadow's Size, Choke, Distance and Anti-aliased as given.
+fn inner_shadow_doc(size: f32, spread: f32, distance: f32, anti_aliased: bool) -> Document {
     let (w, h) = (400u32, 300u32);
     let mut d = Document::new("14934", Size::new(w, h), ColorMode::Rgb, SampleType::U8);
     let area = Rect::from_xywh(0, 0, w, h);
@@ -3544,7 +3544,7 @@ fn inner_shadow_doc(size: f32, spread: f32, anti_aliased: bool) -> Document {
         color: Color::BLACK,
         angle: 0.0,
         use_global_light: false,
-        distance: 0.0,
+        distance,
         spread,
         size,
         contour: gaussian_contour(),
@@ -3561,7 +3561,7 @@ fn inner_shadow_doc(size: f32, spread: f32, anti_aliased: bool) -> Document {
 /// (Normal 100 %, Use Global Light off, Size 10, Distance 0, Choke 0, Noise 0, Contour Gaussian)
 /// with the Anti-aliased checkbox as given.
 fn inner_shadow_issue_doc(anti_aliased: bool) -> Document {
-    inner_shadow_doc(10.0, 0.0, anti_aliased)
+    inner_shadow_doc(10.0, 0.0, 0.0, anti_aliased)
 }
 
 /// The nine G levels inwards from each of the issue's four edges of a 400 x 300 flatten.
@@ -3615,18 +3615,23 @@ fn anti_aliased_inner_shadow_matches_the_cpu_ramps() {
 /// neighbours the review names: there the blur has width 1, the identity, so the offset would be
 /// the whole map. #14934 measured Choke 0 with a wider blur, so the offset is gated off at all of
 /// them and this check pins the two compositors stay equal - while Choke 4 %, which dilates
-/// nothing, keeps the offset and still has to agree.
+/// nothing, keeps the offset and still has to agree. The last two rows pin where the offset stays
+/// on at a Distance other than the measured 0: there the shift stage carries a whole-pixel light
+/// offset plus the third of a pixel, which is the case the gate leaves on the anti-aliased path,
+/// and the same pair at Choke 50 % stays gated at that Distance too.
 #[test]
 fn anti_aliased_inner_shadow_gated_neighbours_match_the_cpu() {
     let Some(mut g) = gpu() else { return };
-    for (size, spread, what) in [
-        (10.0, 0.5, "Size 10 Choke 50 %"),
-        (10.0, 0.05, "Size 10 Choke 5 %"),
-        (2.0, 0.5, "Size 2 Choke 50 %"),
-        (1.0, 0.0, "Size 1"),
-        (2.0, 0.0, "Size 2 Choke 0 (offset on: both compositors shift the map the same way)"),
-        (10.0, 0.04, "Size 10 Choke 4 % (dilates nothing, offset on)"),
+    for (size, spread, distance, what) in [
+        (10.0, 0.5, 0.0, "Size 10 Choke 50 %"),
+        (10.0, 0.05, 0.0, "Size 10 Choke 5 %"),
+        (2.0, 0.5, 0.0, "Size 2 Choke 50 %"),
+        (1.0, 0.0, 0.0, "Size 1"),
+        (2.0, 0.0, 0.0, "Size 2 Choke 0 (offset on: both compositors shift the map the same way)"),
+        (10.0, 0.04, 0.0, "Size 10 Choke 4 % (dilates nothing, offset on)"),
+        (10.0, 0.0, 5.0, "Size 10 Choke 0 at Distance 5 (offset on, whole-pixel light offset)"),
+        (10.0, 0.5, 5.0, "Size 10 Choke 50 % at Distance 5 (still gated)"),
     ] {
-        check(&mut g, &inner_shadow_doc(size, spread, true), &format!("#14934 inner shadow, {what}, Anti-aliased"));
+        check(&mut g, &inner_shadow_doc(size, spread, distance, true), &format!("#14934 inner shadow, {what}, Anti-aliased"));
     }
 }

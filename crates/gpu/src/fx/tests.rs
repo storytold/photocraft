@@ -414,12 +414,12 @@ fn anti_aliased_inner_shadow_stage_follows_the_measured_geometry() {
         points: pts.iter().map(|(input, output)| photocraft_doc::adjust::CurvePoint { input: *input, output: *output }).collect(),
         corners: (0..pts.len()).map(|i| i > 0 && i < pts.len() - 1).collect(),
     };
-    let shadow = |size: f32, spread: f32, anti_aliased: bool| Shadow {
+    let shadow = |size: f32, spread: f32, distance: f32, anti_aliased: bool| Shadow {
         common: FxCommon::new(BlendMode::Normal, 1.0),
         color: photocraft_color::Color::BLACK,
         angle: 0.0,
         use_global_light: false,
-        distance: 0.0,
+        distance,
         spread,
         size,
         contour: gaussian(),
@@ -427,13 +427,16 @@ fn anti_aliased_inner_shadow_stage_follows_the_measured_geometry() {
         noise: 0.0,
         knocks_out: false,
     };
-    // The inner branch always builds exactly one shift stage (it is where `1 - alpha` happens);
-    // at Distance 0 `spread_blur` adds no second one.
-    let shift_key = |e: &Effect| -> ([f32; 4], u64) {
+    // The inner branch always builds its source shift stage (it is where `1 - alpha` happens); a
+    // Choke that dilates at a Distance other than 0 adds a second one for the distance field.
+    let shift_key = |e: &Effect| -> (Vec<[f32; 4]>, u64) {
         let p = program(e, &GlobalLight::default(), false);
-        let stages: Vec<&Stage> = p.stages.iter().filter(|s| s.kernel == Kernel::MShift).collect();
-        assert_eq!(stages.len(), 1, "the inner branch builds one shift stage for {e:?}");
-        (stages[0].p0, p.key)
+        (p.stages.iter().filter(|s| s.kernel == Kernel::MShift).map(|s| s.p0).collect(), p.key)
+    };
+    let source_shift = |e: &Effect| -> [f32; 4] {
+        let (stages, _) = shift_key(e);
+        assert!(!stages.is_empty(), "the inner branch builds its source shift stage for {e:?}");
+        stages[0]
     };
     for (size, spread, what) in [
         (1.0, 0.0, "Size 1 (blur width 1: the identity)"),
@@ -441,18 +444,34 @@ fn anti_aliased_inner_shadow_stage_follows_the_measured_geometry() {
         (10.0, 0.5, "Size 10 Choke 50 % (the CPU dilates an offset map, the GPU a whole-pixel field)"),
         (10.0, 0.05, "Size 10 Choke 5 % (dilates 1 px too)"),
     ] {
-        let on = shift_key(&Effect::InnerShadow(shadow(size, spread, true)));
-        let off = shift_key(&Effect::InnerShadow(shadow(size, spread, false)));
+        let on = shift_key(&Effect::InnerShadow(shadow(size, spread, 0.0, true)));
+        let off = shift_key(&Effect::InnerShadow(shadow(size, spread, 0.0, false)));
         assert_eq!(on, off, "the {what} inner shadow program moved with Anti-aliased: on {:?}, off {:?}", on.0, off.0);
     }
     // Away from the degeneracies the rule is in the inputs: Size 1.5 and Size 20 take the offset
     // exactly as the measured Size 10 does, and so does a Choke that dilates nothing.
+    let aa = -1.0f32 / 3.0;
     for size in [1.5, 2.0, 3.0, 20.0] {
-        let (p0, _) = shift_key(&Effect::InnerShadow(shadow(size, 0.0, true)));
-        assert_eq!(p0, [-1.0 / 3.0, -1.0 / 3.0, 1.0, 1.0], "Size {size} at Choke 0 must carry the CPU's sub-pixel offset");
+        let p0 = source_shift(&Effect::InnerShadow(shadow(size, 0.0, 0.0, true)));
+        assert_eq!(p0, [aa, aa, 1.0, 1.0], "Size {size} at Choke 0 must carry the CPU's sub-pixel offset");
     }
-    let thin = shift_key(&Effect::InnerShadow(shadow(10.0, 0.04, true)));
-    assert_eq!(thin.0, [-1.0 / 3.0, -1.0 / 3.0, 1.0, 1.0], "Choke 4 % dilates nothing (round(0.4) = 0), so the map shape is the measured one");
-    let thin_off = shift_key(&Effect::InnerShadow(shadow(10.0, 0.04, false)));
+    let thin = shift_key(&Effect::InnerShadow(shadow(10.0, 0.04, 0.0, true)));
+    assert_eq!(thin.0, vec![[aa, aa, 1.0, 1.0]], "Choke 4 % dilates nothing (round(0.4) = 0), so the map shape is the measured one");
+    let thin_off = shift_key(&Effect::InnerShadow(shadow(10.0, 0.04, 0.0, false)));
     assert_ne!(thin.1, thin_off.1, "and the flag still invalidates that program's key");
+    // The gate reads the Size and Choke, not the measured Distance 0: at Distance 5 (angle 0, so a
+    // whole-pixel light offset of -5, 0) the Choke 0 program carries that offset plus the third of
+    // a pixel, exactly as `shadow_map` shifts by `dx + aa`; the Choke 50 % program at the same
+    // Distance stays whole-pixel, gated like every other dilating Choke, and keeps its second
+    // (distance field) shift stage exactly as it does with the flag off.
+    let far_on = source_shift(&Effect::InnerShadow(shadow(10.0, 0.0, 5.0, true)));
+    assert_eq!(far_on, [-5.0 + aa, 0.0 + aa, 1.0, 1.0], "Size 10 Choke 0 at Distance 5 must carry the light offset plus the sub-pixel offset");
+    let far_off = source_shift(&Effect::InnerShadow(shadow(10.0, 0.0, 5.0, false)));
+    assert_eq!(far_off, [-5.0, 0.0, 1.0, 1.0], "with the flag off the shift stays the whole-pixel light offset");
+    let far_on_key = shift_key(&Effect::InnerShadow(shadow(10.0, 0.0, 5.0, true))).1;
+    assert_ne!(far_on_key, shift_key(&Effect::InnerShadow(shadow(10.0, 0.0, 5.0, false))).1, "and the flag invalidates the Distance 5 program key");
+    let far_choke_on = shift_key(&Effect::InnerShadow(shadow(10.0, 0.5, 5.0, true)));
+    let far_choke_off = shift_key(&Effect::InnerShadow(shadow(10.0, 0.5, 5.0, false)));
+    assert_eq!(far_choke_on.0.len(), 2, "Choke 50 % at Distance 5 shifts the source and the distance field");
+    assert_eq!(far_choke_on, far_choke_off, "the Choke 50 % program at Distance 5 stayed whole-pixel: on {:?}, off {:?}", far_choke_on.0, far_choke_off.0);
 }
