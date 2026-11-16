@@ -243,7 +243,7 @@ public static class PcDisplay {
       string icc = "";
       string profile = "";
       try {
-        string path = ProfilePath(dd.DeviceName);
+        string path = ProfilePath(MonitorKey(dd.DeviceName));
         if (path != null) {
           string encoded = ReadIcc(path);
           if (encoded != null) {
@@ -261,6 +261,14 @@ public static class PcDisplay {
       else rest.AppendLine(line);
     }
     return primary.ToString() + rest.ToString();
+  }
+
+  static string MonitorKey(string adapter) {
+    DISPLAY_DEVICE mon = new DISPLAY_DEVICE();
+    mon.cb = Marshal.SizeOf(typeof(DISPLAY_DEVICE));
+    // EDD_GET_DEVICE_INTERFACE_NAME: WCS wants the monitor DeviceKey, not the adapter name.
+    if (EnumDisplayDevices(adapter, 0, ref mon, 1u) && !string.IsNullOrEmpty(mon.DeviceKey)) return mon.DeviceKey;
+    return adapter;
   }
 
   static string ProfilePath(string device) {
@@ -318,6 +326,7 @@ public static class PcDisplay {
 }
 '@
 [PcDisplay]::Read()
+
 "#;
 
 #[cfg(target_os = "windows")]
@@ -495,8 +504,8 @@ mod linux {
             return None;
         }
         bytes.truncate(declared);
-        let profile = photocraft_cms::Profile::parse(&bytes).ok()?;
-        (profile.color_space == photocraft_cms::ColorSpace::Rgb).then_some(bytes)
+        let profile = craft_cms::Profile::parse(&bytes).ok()?;
+        (profile.color_space == craft_cms::ColorSpace::Rgb).then_some(bytes)
     }
 
     fn unambiguous_clone_profile(output_names: &[String], profiles: &HashMap<String, Vec<IccProfile>>) -> Option<IccProfile> {
@@ -521,11 +530,11 @@ mod linux {
 
         #[test]
         fn checked_icc_bytes_require_a_bounded_parseable_rgb_profile() {
-            let rgb = photocraft_cms::Builtin::Srgb.profile().to_bytes();
+            let rgb = craft_cms::Builtin::Srgb.profile().to_bytes();
             let bytes = rgb.as_ref().clone();
             assert_eq!(checked_icc_bytes(bytes.clone()), Some(bytes));
 
-            let cmyk = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes();
+            let cmyk = craft_cms::Builtin::CoatedCmyk.profile().to_bytes();
             assert!(checked_icc_bytes(cmyk.as_ref().clone()).is_none());
             assert!(checked_icc_bytes(vec![0; 132]).is_none());
             assert!(checked_icc_bytes(vec![0; MAX_ICC_BYTES + 1]).is_none());
@@ -533,8 +542,8 @@ mod linux {
 
         #[test]
         fn cloned_outputs_use_only_one_unambiguous_profile() {
-            let srgb = photocraft_cms::Builtin::Srgb.profile().to_bytes();
-            let p3 = photocraft_cms::Builtin::DisplayP3.profile().to_bytes();
+            let srgb = craft_cms::Builtin::Srgb.profile().to_bytes();
+            let p3 = craft_cms::Builtin::DisplayP3.profile().to_bytes();
             let profile = |name: &str, bytes: std::sync::Arc<Vec<u8>>| IccProfile { name: name.into(), bytes };
             let outputs = ["DP-1".to_owned(), "HDMI-1".to_owned()];
 
@@ -584,7 +593,8 @@ fn parse_displays(out: &str, cocoa_y_up: bool) -> Detection {
         let b64 = b64.trim();
         // An ICC profile starts with its size and carries `acsp` at offset 36; anything else is
         // treated as no profile (the engine then says the display has none).
-        let icc = (!b64.is_empty()).then(|| base64_decode(b64)).flatten().filter(|b| b.len() >= 132 && b.get(36..40) == Some(b"acsp"));
+        let icc =
+            (!b64.is_empty()).then(|| photocraft_engine::paint::tile::b64_decode(b64)).flatten().filter(|b| b.len() >= 132 && b.get(36..40) == Some(b"acsp"));
         let profile_name = Some(profile_name.trim().to_string()).filter(|n| !n.is_empty());
         displays.push(Display { id, name, frame: [x, top, w, h], profile_name, icc: icc.map(std::sync::Arc::new) });
     }
@@ -612,50 +622,9 @@ fn display_id(s: &str) -> Option<u32> {
     })
 }
 
-/// Standard base64 (RFC 4648, with padding) → bytes; `None` on any invalid character.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    let val = |c: u8| -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        } as u32)
-    };
-    let s = s.trim_end_matches('=').as_bytes();
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    for chunk in s.chunks(4) {
-        let mut acc = 0u32;
-        for (i, c) in chunk.iter().enumerate() {
-            acc |= val(*c)? << (18 - 6 * i);
-        }
-        let n = match chunk.len() {
-            4 => 3,
-            3 => 2,
-            2 => 1,
-            _ => return None,
-        };
-        out.extend_from_slice(&acc.to_be_bytes()[1..1 + n]);
-    }
-    Some(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base64() {
-        assert_eq!(base64_decode("aGVsbG8=").as_deref(), Some(&b"hello"[..]));
-        assert_eq!(base64_decode("aGVsbG8h").as_deref(), Some(&b"hello!"[..]));
-        assert_eq!(base64_decode("aGk=").as_deref(), Some(&b"hi"[..]));
-        assert_eq!(base64_decode("").as_deref(), Some(&b""[..]));
-        assert!(base64_decode("a").is_none());
-        assert!(base64_decode("a$==").is_none());
-    }
 
     #[test]
     fn helper_replies() {
@@ -722,18 +691,7 @@ mod tests {
     }
 
     fn base64_encode(b: &[u8]) -> String {
-        const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut s = String::new();
-        for c in b.chunks(3) {
-            let n = c.iter().enumerate().fold(0u32, |n, (i, v)| n | u32::from(*v) << (16 - 8 * i));
-            for i in 0..=c.len() {
-                s.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
-            }
-        }
-        while !s.len().is_multiple_of(4) {
-            s.push('=');
-        }
-        s
+        photocraft_engine::paint::tile::b64_encode(b)
     }
 
     #[test]
@@ -745,6 +703,10 @@ mod tests {
         // Current user (1), then system-wide (0); CPT_ICC is 0 and CPST_NONE is 4.
         assert!(script.contains("new uint[] { 1u, 0u }"), "{script}");
         assert!(script.contains("0u, 4u, 0u"), "{script}");
+        // WCS takes the monitor's DeviceKey (second EnumDisplayDevices, EDD_GET_DEVICE_INTERFACE_NAME).
+        assert!(script.contains("MonitorKey") && script.contains("EnumDisplayDevices(adapter, 0, ref mon, 1u)"), "{script}");
+        // `-Command -` leaves a multiline script unsubmitted unless stdin ends on a blank line.
+        assert!(script.ends_with("[PcDisplay]::Read()\n\n"), "the script must end with a blank line");
         let mut icc = vec![0u8; 132];
         icc[36..40].copy_from_slice(b"acsp");
         let b64 = base64_encode(&icc);

@@ -1,6 +1,11 @@
 //! Desktop colour capture starts only on an explicit UI request. No snapshots are written to
 //! disk, transmitted or retained after a pick. Wayland delegates to its permission portal.
-use photocraft_ui_egui::screen_picker::{Capture, MAX_PIXELS, Pending, ScreenImage, Service};
+use photocraft_ui_egui::screen_picker::{Capture, Pending, Service};
+// Only the platform capture backends (and the tests) build images and check sizes.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
+use photocraft_ui_egui::screen_picker::MAX_PIXELS;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+use photocraft_ui_egui::screen_picker::ScreenImage;
 
 pub fn service(cc: &eframe::CreationContext<'_>, wayland: bool) -> Option<Service> {
     if !cfg!(any(target_os = "linux", target_os = "macos", target_os = "windows")) {
@@ -33,7 +38,14 @@ pub fn service(cc: &eframe::CreationContext<'_>, wayland: bool) -> Option<Servic
         Pending { receiver: rx, cancelled }
     }))
 }
+/// Whether to pick through the desktop portal: on a Wayland desktop, whichever display server the
+/// window opened on. Xwayland serves only its own windows, so reading its root window fails (#8977).
+#[cfg(target_os = "linux")]
+pub fn uses_portal(desktop: crate::linux_libs::DisplaySession) -> bool {
+    desktop == crate::linux_libs::DisplaySession::Wayland
+}
 #[derive(Clone, Copy)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos", target_os = "windows", test)), allow(dead_code))]
 struct Placement {
     index: usize,
     x: i32,
@@ -41,9 +53,11 @@ struct Placement {
     width: u32,
     height: u32,
 }
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 fn find_monitor(placements: &[Placement], x: i32, y: i32, w: u32, h: u32) -> Option<usize> {
     placements.iter().find(|p| p.x == x && p.y == y && p.width == w && p.height == h).map(|p| p.index)
 }
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 fn count(width: usize, height: usize) -> Result<usize, String> {
     width.checked_mul(height).filter(|&n| n > 0 && n <= MAX_PIXELS).ok_or_else(|| "Screen capture exceeds the 64 MP memory budget".into())
 }
@@ -56,11 +70,11 @@ fn icc_profile(bytes: Vec<u8>) -> Option<Vec<u8>> {
     if bytes.is_empty() || bytes.len() > MAX_ICC_PROFILE_BYTES {
         return None;
     }
-    let profile = match photocraft_cms::Profile::parse(&bytes) {
+    let profile = match craft_cms::Profile::parse(&bytes) {
         Ok(profile) => profile,
         Err(_) => return None,
     };
-    (profile.color_space == photocraft_cms::ColorSpace::Rgb).then_some(bytes)
+    (profile.color_space == craft_cms::ColorSpace::Rgb).then_some(bytes)
 }
 #[cfg(target_os = "linux")]
 fn icc_profile_atom<C: x11rb::connection::RequestConnection>(conn: &C, name: &str) -> Option<u32> {
@@ -420,13 +434,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn x11_screen_capture_accepts_only_bounded_rgb_icc_profiles() {
-        let rgb = photocraft_cms::Builtin::Srgb.profile().to_bytes();
+        let rgb = craft_cms::Builtin::Srgb.profile().to_bytes();
         let bytes = rgb.as_ref().clone();
         assert_eq!(icc_profile(bytes.clone()), Some(bytes));
 
         assert!(icc_profile(Vec::new()).is_none());
         assert!(icc_profile(vec![0; MAX_ICC_PROFILE_BYTES + 1]).is_none());
-        let cmyk = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes();
+        let cmyk = craft_cms::Builtin::CoatedCmyk.profile().to_bytes();
         assert!(icc_profile(cmyk.as_ref().clone()).is_none());
     }
     #[cfg(target_os = "linux")]
@@ -471,6 +485,15 @@ mod tests {
         let y = (200.0 - first.position.y) as usize;
         let offset = (y * first.width + x) * 4;
         assert_eq!(&first.rgba[offset..offset + 4], &[255, 128, 64, 255]);
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_wayland_desktop_picks_through_the_portal_even_with_an_xwayland_window() {
+        use crate::linux_libs::DisplaySession;
+        // A pen or the X11 display-server preference opens the window through Xwayland, but the
+        // session is still Wayland: the X11 grab fails there with BadMatch (#8977).
+        assert!(uses_portal(DisplaySession::Wayland));
+        assert!(!uses_portal(DisplaySession::X11));
     }
     #[test]
     fn screen_capture_matches_negative_and_hidpi_monitor_geometry() {

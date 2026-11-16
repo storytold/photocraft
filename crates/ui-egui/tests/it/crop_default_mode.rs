@@ -93,6 +93,8 @@ fn setup() -> Option<Harness> {
         app.run("edit.fill", json!({"color": "#ff0000"})).expect("fill");
         app.run("select.deselect", json!({})).expect("deselect");
         app.sync_views();
+        // The options bar's Ratio dropdown: the contextual task bar shows the same one (#10890).
+        app.ui.panels.context_task_bar = false;
         app.ui.extras.rulers = false;
         app.ui.extras.snap = false;
         app.ui.view.show.smart_guides = false;
@@ -126,7 +128,7 @@ fn a_ratio_dropdown_updates_the_preview_and_enter_without_touching_a_handle() {
 }
 
 #[test]
-fn the_swap_button_and_x_apply_the_same_inscribed_ratio() {
+fn the_swap_button_and_x_swap_the_ratio_about_the_centre() {
     // Windows WARP can access-violate when GPU harnesses initialize or tear down concurrently:
     // hold the GPU lock for the whole test, harness included.
     let _gpu = photocraft_testkit::gpu_lock();
@@ -138,10 +140,10 @@ fn the_swap_button_and_x_apply_the_same_inscribed_ratio() {
     let before = mid(screen_box(&h));
     h.get_by_label("Swaps height and width").click();
     h.run_steps(3);
+    // Both turn the frame instead of fitting the turned ratio inside it (#7057, #7738).
     let button = h.state().ui.crop_rect.unwrap();
     assert_eq!(h.state().ui.tool_options.crop_ratio, "2:3");
-    assert!(((button[2] - button[0]) / (button[3] - button[1]) - 2.0 / 3.0).abs() < 1e-10);
-    assert!(button[0] >= original[0] && button[2] <= original[2] && button[1] >= original[1] && button[3] <= original[3]);
+    assert_eq!(button, [70.0, -20.0, 230.0, 220.0]);
     assert!(mid(screen_box(&h)).distance(before) < 0.01);
     h.state_mut().ui.crop_rect = Some(original);
     h.state_mut().ui.tool_options.crop_ratio = "3:2".into();
@@ -237,4 +239,35 @@ fn a_resize_keeps_the_box_centre_after_a_space_pan() {
     // middle).
     let b = screen_box(&h);
     assert!(mid(b).distance(mid(box0)) < 0.5, "still where it was: {:?} vs {:?}", mid(b), mid(box0));
+}
+
+#[test]
+fn clear_removes_the_displayed_crop_proportions_without_changing_the_frame() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut h) = setup() else { return };
+    let o = &mut h.state_mut().ui.tool_options;
+    o.crop_ratio = "16:9".into();
+    o.crop_custom_ratio_width = 16.0;
+    o.crop_custom_ratio_height = 9.0;
+    h.run_steps(3);
+    assert!(h.query_all_by_value("16").next().is_some());
+    assert!(h.query_all_by_value("9").next().is_some());
+    let frame = h.state().ui.crop_rect;
+    let save = |h: &mut Harness, name: &str| {
+        if let Some(dir) = std::env::var_os("CRAFT_UI_VISUAL_FIXTURES") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            h.render().unwrap().save(dir.join(name)).unwrap();
+        }
+    };
+    save(&mut h, "crop-clear-before.png");
+    h.query_all_by_label("Clear").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).expect("Crop options bar Clear").click();
+    h.run_steps(3);
+    save(&mut h, "crop-clear-after.png");
+    let o = &h.state().ui.tool_options;
+    assert!(o.crop_ratio.is_empty());
+    assert_eq!((o.crop_custom_ratio_width, o.crop_custom_ratio_height), (0.0, 0.0));
+    assert!(h.query_all_by_value("16").next().is_none());
+    assert!(h.query_all_by_value("9").next().is_none());
+    assert_eq!(h.state().ui.crop_rect, frame);
 }

@@ -42,16 +42,9 @@ fn evidence(h: &mut Harness, name: &str) {
 }
 
 fn open_format_choices(h: &mut Harness) {
-    let label = h.get_by_label("Format").rect();
-    // The full app also draws the workspace and layer-blend dropdowns behind this modal.
-    // Target the actual form field beside Format, like the existing numeric-field harnesses.
-    h.query_all_by_role(egui::accesskit::Role::ComboBox)
-        .find(|n| {
-            let r = n.rect();
-            r.left() >= label.right() && (r.center().y - label.center().y).abs() < 3.0
-        })
-        .expect("format dropdown beside its label")
-        .click();
+    // The caption is a separate Label node with the same text; the accessible ComboBox name
+    // identifies the actual form field without guessing from coordinates.
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Format").click();
     h.run_steps(3);
 }
 
@@ -69,32 +62,20 @@ fn replace_text(h: &mut Harness, value: &str) {
 }
 
 fn edit_path(h: &mut Harness, name: &str, value: &Path) {
-    let label = h.get_by_label(name).rect();
-    h.query_all_by_role(egui::accesskit::Role::TextInput)
-        .find(|n| {
-            let r = n.rect();
-            r.left() >= label.right() && (r.center().y - label.center().y).abs() < 3.0
-        })
-        .expect("path text field beside its label")
-        .click();
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, name).click();
     h.run_steps(2);
     replace_text(h, &value.to_string_lossy());
-    h.get_by_label(name).click();
+    // Clicking the caption commits the field without Enter confirming the dialog.
+    h.get_by_role_and_label(egui::accesskit::Role::Label, name).click();
     h.run_steps(2);
 }
 
 fn edit_quality(h: &mut Harness, value: &str) {
-    let label = h.get_by_label("Quality").rect();
-    h.query_all_by_role(egui::accesskit::Role::SpinButton)
-        .find(|n| {
-            let r = n.rect();
-            r.left() >= label.right() && (r.center().y - label.center().y).abs() < 3.0
-        })
-        .expect("quality numeric field beside its label")
-        .click();
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Quality").click();
     h.run_steps(2);
     replace_text(h, value);
-    h.get_by_label("Quality").click();
+    // Clicking the caption commits the field without Enter confirming the dialog.
+    h.get_by_role_and_label(egui::accesskit::Role::Label, "Quality").click();
     h.run_steps(3);
 }
 
@@ -114,17 +95,18 @@ fn batch_menu_offers_quality() {
     let mut h = harness();
     open(&mut h, "file.automate.batch");
     evidence(&mut h, "batch-quality");
-    assert!(h.query_by_label("Quality").is_some(), "Batch must expose its supported output quality");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::SpinButton, "Quality").is_some(), "Batch must expose its supported output quality");
 }
 
 #[test]
-fn image_processor_menu_offers_webp() {
+fn image_processor_menu_offers_independent_file_types() {
     let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.scripts.imageProcessor");
-    open_format_choices(&mut h);
+    for label in ["Save as JPEG", "Save as PSD", "Save as TIFF"] {
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label);
+    }
     evidence(&mut h, "image-processor-formats");
-    assert!(h.query_by_label("WebP").or_else(|| h.query_by_label("Webp")).is_some(), "Image Processor must offer the supported WebP output format");
 }
 
 struct Scratch(PathBuf);
@@ -223,8 +205,10 @@ fn batch_custom_quality_is_bounded_dialog_local_and_reversible() {
     assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null(), "reopening returns to the existing default");
 }
 
+/// Actual folder-mode controls must pass both WebP quality endpoints to the encoder while
+/// preserving the active document, history, preferences and recorded actions.
 #[test]
-fn batch_and_processor_real_controls_write_the_chosen_webp_quality() {
+fn batch_real_controls_write_the_chosen_webp_quality() {
     let _gpu = photocraft_testkit::gpu_lock();
     let dir = Scratch::new();
     let input = dir.0.join("input");
@@ -237,43 +221,33 @@ fn batch_and_processor_real_controls_write_the_chosen_webp_quality() {
     let history = h.state().session.active().unwrap().history.entries();
     let prefs = serde_json::to_value(h.state().session.prefs()).unwrap();
     let actions = serde_json::to_value(&h.state().session.actions.list).unwrap();
-    for (command, prefix) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processor")] {
-        let mut outputs = Vec::new();
-        for quality in [0, 12] {
-            let output = dir.0.join(format!("{prefix}-{quality}"));
-            open(&mut h, command);
-            if prefix == "batch" {
-                assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null());
-                h.get_by_label("Custom").click();
-                h.run_steps(3);
-            } else {
-                let fields = &h.state().ui.dialogs.last().unwrap().fields;
-                assert_eq!(fields["quality"], json!(8));
-                assert_eq!(fields["width"], json!(0));
-                assert_eq!(fields["height"], json!(0));
-                assert_eq!(fields["convertToSrgb"], json!(true));
-            }
-            choose_webp(&mut h);
-            edit_path(&mut h, "Input", &input);
-            edit_path(&mut h, "Output", &output);
-            edit_quality(&mut h, &quality.to_string());
-            evidence(&mut h, &format!("{prefix}-webp-quality-{quality}"));
-            h.get_by_label("OK").click();
-            h.run_steps(5);
-            assert!(h.state().ui.dialogs.is_empty());
-            let bytes = std::fs::read(output.join("owned-pattern.webp")).expect("the actual dialog confirmation writes the selected WebP");
-            let decoded = photocraft_codecs::decode_as(Format::WebP, &bytes).unwrap();
-            assert_eq!(decoded.dimensions(), (64, 48));
-            assert_eq!(decoded.layout(), ChannelLayout::Rgb);
-            let (_, params) = h.state().session.journal.last().unwrap();
-            assert_eq!(params["format"], json!("webp"));
-            assert_eq!(params["quality"].as_f64(), Some(f64::from(quality)));
-            assert!(params.as_object().unwrap().keys().all(|k| !k.starts_with("__")), "private shell values never become command params");
-            outputs.push(bytes);
-        }
-        assert_ne!(outputs[0], outputs[1], "{command}: actual chosen quality reaches the encoder");
-        assert!(outputs[0].len() < outputs[1].len());
+    let mut outputs = Vec::new();
+    for quality in [0, 12] {
+        let output = dir.0.join(format!("batch-{quality}"));
+        open(&mut h, "file.automate.batch");
+        assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null());
+        h.get_by_label("Custom").click();
+        h.run_steps(3);
+        choose_webp(&mut h);
+        edit_path(&mut h, "Input", &input);
+        edit_path(&mut h, "Output", &output);
+        edit_quality(&mut h, &quality.to_string());
+        evidence(&mut h, &format!("batch-webp-quality-{quality}"));
+        h.get_by_label("OK").click();
+        h.run_steps(5);
+        assert!(h.state().ui.dialogs.is_empty());
+        let bytes = std::fs::read(output.join("owned-pattern.webp")).expect("the actual dialog confirmation writes the selected WebP");
+        let decoded = photocraft_codecs::decode_as(Format::WebP, &bytes).unwrap();
+        assert_eq!(decoded.dimensions(), (64, 48));
+        assert_eq!(decoded.layout(), ChannelLayout::Rgb);
+        let (_, params) = h.state().session.journal.last().unwrap();
+        assert_eq!(params["format"], json!("webp"));
+        assert_eq!(params["quality"].as_f64(), Some(f64::from(quality)));
+        assert!(params.as_object().unwrap().keys().all(|k| !k.starts_with("__")), "private shell values never become command params");
+        outputs.push(bytes);
     }
+    assert_ne!(outputs[0], outputs[1], "actual chosen quality reaches the encoder");
+    assert!(outputs[0].len() < outputs[1].len());
     let active = h.state().session.active().unwrap();
     assert!(Arc::ptr_eq(&active.doc, &doc));
     assert_eq!((active.revision, active.history.entries()), (revision, history));
@@ -309,19 +283,12 @@ fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
     edit_path(&mut h, "Output", &output);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File Naming").click();
     h.run_steps(2);
-    replace_text(&mut h, "{serial}_{name}");
-    let label = h.get_by_label("Starting serial").rect();
-    h.query_all_by_role(egui::accesskit::Role::SpinButton)
-        .find(|n| {
-            let r = n.rect();
-            r.left() >= label.right() && r.left() < label.right() + 100.0 && (r.center().y - label.center().y).abs() < 3.0
-        })
-        .expect("starting serial number control")
-        .click();
+    replace_text(&mut h, "{serial}_{name}.{ext}");
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Starting serial").click();
     h.run_steps(2);
     h.event(egui::Event::Text("7".into()));
     h.run_steps(3);
-    h.get_by_label("Starting serial").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Label, "Starting serial").click();
     h.run_steps(3);
     assert_eq!(h.state().ui.dialogs.last().unwrap().fields["startingSerial"], 7, "typing changes the starting serial");
     evidence(&mut h, "batch-naming");

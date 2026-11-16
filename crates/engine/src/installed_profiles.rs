@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use photocraft_cms::{ColorSpace, Profile, ProfileClass};
+use craft_cms::{ColorSpace, Profile, ProfileClass};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -224,8 +224,10 @@ fn sanitize_stem(raw: &str) -> String {
 }
 
 fn reserved_device_name(stem: &str) -> bool {
+    // Windows reserves the name before the first dot, with any extension ("con.v2.icc").
+    let head = stem.split('.').next().unwrap_or(stem).trim_end();
     matches!(
-        stem.to_ascii_lowercase().as_str(),
+        head.to_ascii_lowercase().as_str(),
         "con"
             | "prn"
             | "aux"
@@ -383,7 +385,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Profile",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":"<file.icc>","data":"<base64>","name":"<file name>"} → {path, description, class, colorSpace} (`data` wins when both are set). Copies an RGB, CMYK or Gray input, display, output or color-space .icc/.icm into the app's Profiles folder (the settings directory, or PHOTOCRAFT_CONFIG_DIR/Profiles). The working-space, proof and print menus then list it; a bad file is refused and nothing is written."##,
+            params: r##"{"path":"<file.icc>","data":"<base64>","name":"<file name>"} → {path, description, class, colorSpace} (`data` wins when both are set). Copies an RGB, CMYK or Gray input, display, output or color-space .icc/.icm into the app's Profiles folder (the settings directory, or PHOTOCRAFT_CONFIG_DIR/Profiles). Proof and print menus then list it, and a display or colour-space profile is also offered as a working space; a bad file is refused and nothing is written."##,
             enabled: |_| Ok(()),
             run: import_cmd,
             journal: false,
@@ -394,7 +396,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_cms::Builtin;
+    use craft_cms::Builtin;
 
     fn temp_dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("pc-installed-{tag}-{}", std::process::id()));
@@ -523,6 +525,16 @@ mod tests {
             assert_eq!(s.color.settings.working_rgb, screen_path);
             assert_eq!(s.color.settings.monitor_profile, screen_path);
         });
+    }
+
+    #[test]
+    fn a_windows_device_name_before_the_first_dot_is_not_used_as_a_file_name() {
+        assert_eq!(sanitize_stem("CON.v2.icc"), "profile");
+        assert_eq!(sanitize_stem("con.v2"), "profile");
+        assert_eq!(sanitize_stem("LPT1.backup.icc"), "profile");
+        assert_eq!(sanitize_stem("NUL"), "profile");
+        assert_eq!(sanitize_stem("Press CMYK"), "Press CMYK");
+        assert_eq!(sanitize_stem("studio.display"), "studio");
     }
 
     #[test]

@@ -7,6 +7,8 @@ use std::path::{Path as FsPath, PathBuf};
 #[cfg(feature = "corpus")]
 use std::sync::Arc;
 
+#[cfg(feature = "corpus")]
+use craft_psd::PsdFile;
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{
     Document, Fill, Knot, Layer, LayerContent, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, ShapeLayer, ShapeStroke, Size, StrokeAlign, Subpath,
@@ -14,8 +16,6 @@ use photocraft_doc::{
 };
 use photocraft_geom::{Point, Rect};
 use photocraft_io::*;
-#[cfg(feature = "corpus")]
-use photocraft_psd::PsdFile;
 
 fn roundtrip(d: &Document) -> Document {
     let r = export(d, "x.psd", &ExportOptions::default()).unwrap();
@@ -135,6 +135,37 @@ fn shape_layer_typed_roundtrip() {
     }
 }
 
+/// #6180: Appearance fill and stroke alphas survive PSD save/load, and a redraw
+/// (move/crop) uses those values instead of snapping to opaque.
+#[test]
+fn rectangle_appearance_alphas_survive_psd_and_redraw() {
+    let mut d = doc();
+    let sh = ShapeLayer {
+        path: photocraft_vector::shapes::rect(16.0, 16.0, 128.0, 96.0),
+        fill: Some(Fill::Solid(Color::rgba(1.0, 0.0, 0.0, 0.5))),
+        stroke: Some(ShapeStroke { width: 4.0, paint: Fill::Solid(Color::rgba(0.0, 0.0, 1.0, 0.4)), opacity: 0.5, ..ShapeStroke::default() }),
+        live: Some(LiveShape::Rect { rect: [16.0, 16.0, 128.0, 96.0], radii: [0.0; 4] }),
+        ..Default::default()
+    };
+    d.layers.push(shape_layer(sh));
+    let b = roundtrip(&d);
+    let LayerContent::Shape(s) = &b.layers[1].content else { panic!("not a shape") };
+    let Fill::Solid(fill) = s.fill.as_ref().unwrap() else { panic!("solid fill") };
+    assert!((fill.alpha - 0.5).abs() < 1e-4, "fill appearance alpha {}", fill.alpha);
+    let st = s.stroke.as_ref().unwrap();
+    let Fill::Solid(stroke_c) = &st.paint else { panic!("solid stroke") };
+    assert!((stroke_c.alpha - 0.4).abs() < 1e-4, "stroke colour alpha {}", stroke_c.alpha);
+    assert!((st.opacity - 0.5).abs() < 1e-4, "stroke opacity {}", st.opacity);
+    let mut redrawn = s.clone();
+    redrawn.cache = Some(photocraft_vector::render_shape(&redrawn, photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 256, 256)));
+    let Fill::Solid(fill2) = redrawn.fill.as_ref().unwrap() else { panic!("solid fill") };
+    assert!((fill2.alpha - 0.5).abs() < 1e-4);
+    let st2 = redrawn.stroke.as_ref().unwrap();
+    let Fill::Solid(stroke2) = &st2.paint else { panic!("solid stroke") };
+    assert!((stroke2.alpha - 0.4).abs() < 1e-4);
+    assert!((st2.opacity - 0.5).abs() < 1e-4);
+}
+
 #[test]
 fn custom_stroke_styles_roundtrip_through_psd_vstk() {
     for align in [StrokeAlign::Inside, StrokeAlign::Center, StrokeAlign::Outside] {
@@ -191,7 +222,7 @@ fn shape_density_and_feather_roundtrip_through_mask_parameters() {
             sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
             d.layers.push(Layer::new("Shape", LayerContent::Shape(sh)));
             let bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
-            let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+            let file = craft_psd::PsdFile::from_bytes(&bytes).unwrap();
             let rec = file.layers().last().unwrap();
             let p = rec.layer_mask().and_then(|m| m.parameters).expect("mask parameters");
             assert_eq!((p.vector_density, p.vector_feather), (Some(128), Some(6.0)), "{depth:?}");
@@ -210,7 +241,7 @@ fn shape_density_and_feather_roundtrip_through_mask_parameters() {
     let mut d = doc();
     d.layers.push(shape_layer(ShapeLayer { path: square, fill: Some(Fill::Solid(Color::BLACK)), ..ShapeLayer::default() }));
     let bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
-    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&bytes).unwrap();
     assert!(file.layers().last().unwrap().layer_mask().and_then(|m| m.parameters).is_none());
     let LayerContent::Shape(back) = &import("x.psd", &bytes).unwrap().document.layers[1].content else { panic!("a shape") };
     assert_eq!((back.density, back.feather), (1.0, 0.0));
