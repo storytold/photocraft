@@ -1112,13 +1112,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 crate::widgets::checkbox(ui, &mut o.protect_detail, tl!("Protect Detail"));
             }
             if tool == Tool::Smudge {
-                crate::widgets::checkbox(ui, &mut o.finger_painting, tl!("Finger Painting"));
-                let before = app.session.tools.brush.clone();
-                let mut brush = before.clone();
-                if crate::eraser_ui::pressure_size_button(ui, brush.pressure_size).clicked() {
-                    brush.pressure_size = !brush.pressure_size;
+                fn pressure_size_control(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+                    let before = app.session.tools.brush.clone();
+                    let mut brush = before.clone();
+                    if crate::eraser_ui::pressure_size_button(ui, brush.pressure_size).clicked() {
+                        brush.pressure_size = !brush.pressure_size;
+                    }
+                    crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
                 }
-                crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
+                crate::widgets::checkbox(ui, &mut o.finger_painting, tl!("Finger Painting"));
+                pressure_size_control(app, ui);
             }
             if out_of_range {
                 crate::eraser_ui::open_range_alert(app);
