@@ -770,11 +770,11 @@ fn desktop_mode_changes_are_refused_only_where_they_could_read_a_profile_file() 
 #[test]
 fn desktop_mode_changes_never_read_a_working_space_file() {
     // A synthetic working-space file outside any automation root: if the conversion read it,
-    // the document would come out tagged with this profile.
-    let outside = std::env::temp_dir().join(format!("photocraft-desktop-mode-{}", std::process::id()));
-    std::fs::create_dir_all(&outside).unwrap();
+    // the document would come out tagged with this profile. The folder is created exclusively and
+    // removed when `outside` drops, even if an assertion below panics.
+    let outside = tempfile::Builder::new().prefix("photocraft-desktop-mode-").tempdir().unwrap();
     let icc = |name: &str, builtin: craft_cms::Builtin| {
-        let path = outside.join(name);
+        let path = outside.path().join(name);
         std::fs::write(&path, builtin.profile().to_bytes().as_slice()).unwrap();
         path.to_string_lossy().into_owned()
     };
@@ -815,7 +815,6 @@ fn desktop_mode_changes_never_read_a_working_space_file() {
     session.authorize = None;
     let gray = session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
     assert_eq!(gray["profile"], craft_cms::Builtin::GrayGamma22.description());
-    let _ = std::fs::remove_dir_all(&outside);
 }
 
 #[test]
