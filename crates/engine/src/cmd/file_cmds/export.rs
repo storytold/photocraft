@@ -69,6 +69,21 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let mut report = LayerExportReport::default();
     let mut planned = Vec::new();
     plan_layer_exports(&doc.layers, &mut Vec::new(), "", visible_only, &mut planned, &mut report.skipped)?;
+    // The prefix is optional; only the layer name needs the empty-name fallback.
+    let file_name =
+        |l: &Layer, number: &str| format!("{}_{number}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, sanitize(&l.name));
+    // Every name is known before anything is encoded: one that no file system takes (each group level adds
+    // 6 bytes, so about 41 nested groups pass 255) fails the export before the first file is written.
+    for PlannedLayer { l, number, .. } in &planned {
+        let name = file_name(l, number);
+        if name.len() > MAX_FILE_NAME_BYTES {
+            return Err(EngineError::Other(format!(
+                "Layers to Files: the file name for layer \"{}\" is {} bytes, more than the {MAX_FILE_NAME_BYTES} a file name can hold; shorten the layer or prefix name or nest it in fewer groups",
+                l.name,
+                name.len()
+            )));
+        }
+    }
     for PlannedLayer { l, groups, number } in planned {
         let mut one = (*doc).clone();
         let mut only = l.clone();
@@ -103,8 +118,7 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
             }
         }
 
-        // The prefix is optional; only the layer name needs the empty-name fallback.
-        let name = format!("{}_{number}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, sanitize(&l.name));
+        let name = file_name(l, &number);
         // TIFF, BMP and Targa files are flattened on white, as the reference writes them (#13967):
         // a white fill under the layer, and a TIFF without a transparency channel. PNG and PSD
         // keep transparency; other modes and 32-bit documents keep today's output (not measured), and
@@ -129,6 +143,9 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
 
 /// How deep [`plan_layer_exports`] follows groups before refusing the document.
 const MAX_GROUP_DEPTH: usize = 128;
+
+/// The longest file name, in bytes, that common file systems (ext4, APFS, NTFS) take.
+const MAX_FILE_NAME_BYTES: usize = 255;
 
 /// One layer Layers to Files writes: the layer, its groups (outermost first) and its number
 /// (`0000s_0001` for the second art layer of the first group).
