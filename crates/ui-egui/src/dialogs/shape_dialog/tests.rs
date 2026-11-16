@@ -188,17 +188,18 @@ fn cancel_draws_nothing_and_ok_remembers_the_size() {
     app.ui.close_dialog(id);
     assert_eq!(layers(&app), before);
 
-    press(&mut app, Tool::Rectangle, [10.0, 10.0], [10.0, 10.0]);
+    // Create Ellipse remembers its last OK (Create Rectangle does not, #13339).
+    press(&mut app, Tool::EllipseShape, [10.0, 10.0], [10.0, 10.0]);
     let id = only_dialog(&app);
     set(&mut app, id, json!({"width": 33, "height": 44, "fromCenter": true}));
     crate::dialogs::confirm(&mut app, id).unwrap();
-    press(&mut app, Tool::Rectangle, [50.0, 50.0], [50.0, 50.0]);
+    press(&mut app, Tool::EllipseShape, [50.0, 50.0], [50.0, 50.0]);
     let f = &app.ui.dialogs[0].fields;
     assert_eq!((f["width"].as_f64(), f["height"].as_f64(), f["fromCenter"].as_bool()), (Some(33.0), Some(44.0), Some(true)));
     // Each tool remembers its own values.
     let id = only_dialog(&app);
     app.ui.close_dialog(id);
-    press(&mut app, Tool::EllipseShape, [50.0, 50.0], [50.0, 50.0]);
+    press(&mut app, Tool::Polygon, [50.0, 50.0], [50.0, 50.0]);
     assert_eq!(app.ui.dialogs[0].fields["width"].as_f64(), Some(100.0));
 }
 
@@ -206,7 +207,8 @@ fn cancel_draws_nothing_and_ok_remembers_the_size() {
 fn bad_values_are_errors_not_panics() {
     let mut app = app();
     for bad in [
-        json!({"width": 0}),
+        json!({"height": 0}),
+        json!({"width": 0.5}),
         json!({"width": -5}),
         json!({"height": 1e12}),
         json!({"width": "wide"}),
@@ -233,8 +235,8 @@ fn bad_values_are_errors_not_panics() {
         assert_eq!(layers(&app), before, "{bad}");
     }
     // Bad remembered values fall back to the defaults.
-    app.session.prefs.edit(|p| p.dialogs.insert("shape.create.rectangle".into(), json!({"width": -1, "height": "x", "fromCenter": 3})));
-    press(&mut app, Tool::Rectangle, [10.0, 10.0], [10.0, 10.0]);
+    app.session.prefs.edit(|p| p.dialogs.insert("shape.create.ellipse".into(), json!({"width": -1, "height": "x", "fromCenter": 3})));
+    press(&mut app, Tool::EllipseShape, [10.0, 10.0], [10.0, 10.0]);
     let f = &app.ui.dialogs[0].fields;
     assert_eq!((f["width"].as_f64(), f["height"].as_f64(), f["fromCenter"].as_bool()), (Some(100.0), Some(100.0), Some(false)));
 }
@@ -350,9 +352,9 @@ fn right_click_picks_the_unit_of_that_field_only_and_it_is_not_remembered() {
     press(&mut app, Tool::Rectangle, [140.0, 140.0], [140.0, 140.0]);
     let id = only_dialog(&app);
     let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
-    assert_eq!((f.get("widthUnit"), f["width"].as_f64()), (None, Some(50.0)), "the size is remembered, the unit isn't");
+    assert_eq!((f.get("widthUnit"), f["width"].as_f64()), (None, Some(100.0)), "neither the unit nor the size is remembered (#13339)");
     let s = sides(&frame(&egui::Context::default(), &app, &mut f, vec![]));
-    assert_eq!(shown(&s), [("1.76".to_string(), "cm".to_string()), ("3.53".to_string(), "cm".to_string())]);
+    assert_eq!(shown(&s), [("3.53".to_string(), "cm".to_string()), ("3.53".to_string(), "cm".to_string())]);
 }
 
 /// CodeRabbit on #9456: in Path mode a click opens no Create dialog, whose OK would make a shape
