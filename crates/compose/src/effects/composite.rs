@@ -645,7 +645,9 @@ impl<'a> EffectPass<'a> {
             let mut blended = alloc.clone(&base)?;
             let mut ones = alloc.scalar_filled(self.big, 0.0)?;
             for (one, &s) in ones.iter_mut().zip(&share) {
-                if s > 0.0 { *one = 1.0; }
+                if s > 0.0 {
+                    *one = 1.0;
+                }
             }
             let ones = Map { w, h, v: ones };
             // The share already carries the Dissolve choice, so the paint itself composites as Normal.
@@ -867,7 +869,9 @@ mod outside_stroke_allocation_tests {
         }));
         let mut shape = Map::new(4, 4, 0.0);
         for (index, value) in shape.v.iter_mut().enumerate() {
-            if matches!(index, 5 | 6 | 9 | 10) { *value = 1.0; }
+            if matches!(index, 5 | 6 | 9 | 10) {
+                *value = 1.0;
+            }
         }
         let patterns = PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES);
         let texture = TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
@@ -877,7 +881,9 @@ mod outside_stroke_allocation_tests {
         assert!(strokes.iter().any(|stroke| stroke_widths(stroke).1 > 0.0));
         let fields = pass.stroke_fields(true);
         let mut lay = Buffer::filled(rect, [0.0; 4]);
-        for (pixel, alpha) in lay.px.iter_mut().zip(&shape.v) { pixel[3] = *alpha; }
+        for (pixel, alpha) in lay.px.iter_mut().zip(&shape.v) {
+            pixel[3] = *alpha;
+        }
         let original = Buffer::filled(rect, [1.0; 4]);
 
         // The three scalar allocations are the accumulated cover, this stroke's share, and the
@@ -885,10 +891,7 @@ mod outside_stroke_allocation_tests {
         for fail_at in 1..=3 {
             let allocator = FailScalarAt { fail_at, attempts: AtomicUsize::new(0) };
             let mut work = original.clone();
-            assert_eq!(
-                pass.paint_outside_strokes_with(&mut work, &lay, &shape, &strokes, &fields, &allocator),
-                Err(fail_at),
-            );
+            assert_eq!(pass.paint_outside_strokes_with(&mut work, &lay, &shape, &strokes, &fields, &allocator), Err(fail_at),);
             assert_eq!(allocator.attempts.load(Ordering::Relaxed), fail_at);
             assert_eq!(work, original, "a rejected scalar scratch buffer cannot publish partial stroke pixels");
         }

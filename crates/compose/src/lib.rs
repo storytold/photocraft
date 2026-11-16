@@ -223,8 +223,7 @@ impl BufferAlloc for FallibleBufferAlloc {
         let height = usize::try_from(rect.height()).map_err(|_| photocraft_raster::AllocationError::SizeOverflow)?;
         let len = width.checked_mul(height).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
         let bytes = len.checked_mul(std::mem::size_of::<f32>()).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
-        photocraft_raster::scratch::try_take(len, value)
-            .ok_or(photocraft_raster::AllocationError::NotEnoughMemory { bytes })
+        photocraft_raster::scratch::try_take(len, value).ok_or(photocraft_raster::AllocationError::NotEnoughMemory { bytes })
     }
 }
 
