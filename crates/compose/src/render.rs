@@ -270,8 +270,6 @@ mod fallible_bands_tests {
     #[test]
     fn render_bands_with_alloc_reports_outer_and_tile_allocations_before_the_sink() {
         let doc = Document::new("fallible tile", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
-        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
-        let ctx = Ctx::for_doc(&doc, &patterns);
         for fail_at in [1, 2] {
             let alloc = FailBufferAt { fail_at, attempts: AtomicUsize::new(0) };
             let mut delivered = 0;
@@ -313,14 +311,11 @@ mod fallible_bands_tests {
 
         let alloc = FallibleBufferAlloc;
         render_tiled_with_alloc(&doc, doc.bounds(), RENDER_TILE, &cx, &alloc).unwrap();
-        let cached_cx = Ctx::for_doc(&doc, &patterns);
         let cache_hit_alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
-        crate::fx_cache::effect_maps_with(&doc.layers[0], doc.bounds(), &cached_cx, &cache_hit_alloc).unwrap();
-        assert_eq!(cache_hit_alloc.attempts.load(Ordering::Relaxed), 0, "the successful cache avoids rebuilding its RGBA shape");
+        crate::fx_cache::effect_maps_with(&doc.layers[0], doc.bounds(), &cx, &cache_hit_alloc).unwrap();
+        assert_eq!(cache_hit_alloc.attempts.load(Ordering::Relaxed), 0, "the successful render-context cache avoids rebuilding its RGBA shape");
 
         let outlined = outlined_effect_document();
-        let patterns = pattern::PreparedPatterns::new(&outlined.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(outlined.pixel_format().mode);
-        let cx = Ctx::for_doc(&outlined, &patterns);
         let alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
         let mut delivered = 0;
         let result = render_bands_with_alloc(&outlined, outlined.bounds(), RENDER_TILE, &alloc, &mut |_| {
