@@ -1104,6 +1104,8 @@ mod brush_hud_rate_tests;
 #[cfg(test)]
 mod brush_opacity_minimum_tests;
 #[cfg(test)]
+mod brush_picker_range_alert_tests;
+#[cfg(test)]
 mod burn_default_tip_tests;
 
 #[cfg(test)]
