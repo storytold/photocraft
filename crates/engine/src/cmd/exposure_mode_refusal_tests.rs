@@ -203,3 +203,19 @@ fn a_params_target_beats_the_quick_mask_panel_in_other_modes() {
         assert!(s.execute(EXPOSURE, json!({"exposure": -1})).is_ok(), "{mode}: the Quick Mask takes a targetless call");
     }
 }
+
+/// A present `target` key is explicit even when it is null or unrecognised: `target_of` reads it as Pixels, so
+/// the panel (an existing alpha here) must not let Exposure edit layer pixels in these modes.
+#[test]
+fn a_null_or_typo_target_gets_the_mode_refusal_despite_the_panel() {
+    for (mode, mut s) in docs() {
+        s.execute("channel.new", json!({"name": "A", "fill": "white"})).expect("test step");
+        s.execute("channel.target", json!({"channel": 0})).expect("test step");
+        for t in [json!(null), json!("pixles"), json!(7), json!(true)] {
+            let steps = s.active().expect("an active document").history.past_len();
+            let e = s.execute(EXPOSURE, json!({"exposure": -1, "target": t})).expect_err("refused despite the panel");
+            assert!(e.to_string().contains("needs an RGB or Grayscale document"), "{mode} {t}: the document-mode refusal, got {e}");
+            assert_eq!(s.active().expect("an active document").history.past_len(), steps, "{mode} {t}: no history state");
+        }
+    }
+}
