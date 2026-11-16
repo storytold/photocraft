@@ -500,6 +500,8 @@ pub(crate) fn browser(
                 };
                 let rows = g.items.len().div_ceil(cols);
                 let (area, _) = ui.allocate_exact_size(vec2(w, rows as f32 * (cell.y + gap) + 2.0), Sense::hover());
+                // Outlines are painted after every cell, so the following cells don't cover them.
+                let mut outlines = Vec::new();
                 for (ii, it) in g.items.iter().enumerate() {
                     let (cx, cy) = ((ii % cols) as f32, (ii / cols) as f32);
                     let r = Rect::from_min_size(area.min + vec2(pad + cx * (cell.x + gap), cy * (cell.y + gap)), cell);
@@ -529,7 +531,7 @@ pub(crate) fn browser(
                             Some((Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside))
                         };
                         if let Some((stroke, kind)) = stroke {
-                            ui.painter().rect_stroke(r, CornerRadius::same(if flush { 0 } else { 2 }), stroke, kind);
+                            outlines.push((r, stroke, kind));
                         }
                     }
                     let resp = if list { resp } else { resp.on_hover_text(&it.name) };
@@ -572,6 +574,9 @@ pub(crate) fn browser(
                             }
                         });
                     });
+                }
+                for (r, stroke, kind) in outlines {
+                    ui.painter().rect_stroke(r, CornerRadius::same(if flush { 0 } else { 2 }), stroke, kind);
                 }
             }
             // Insertion line while a folder is dragged by its header.
