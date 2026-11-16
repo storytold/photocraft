@@ -63,10 +63,6 @@ pub(super) fn variants(p: &Value) -> Vec<Value> {
     let fmt = p["format"].as_str().unwrap_or("jpeg");
     for k in [2.0, 4.0] {
         let mut v = p.clone();
-        if let Some(m) = v.as_object_mut() {
-            m.remove("colorTable");
-            m.remove("colorTableEdits");
-        }
         if fmt == "jpeg" || (fmt == "webp" && !p["lossless"].as_bool().unwrap_or(false)) {
             v["quality"] = json!((p["quality"].as_f64().unwrap_or(60.0) / k).round().max(1.0));
         } else if fmt == "gif" || fmt == "png8" {
@@ -75,9 +71,75 @@ pub(super) fn variants(p: &Value) -> Vec<Value> {
             v["format"] = json!(if k == 2.0 { "png8" } else { "gif" });
             v["colors"] = json!(256 / k as u32);
         }
+        // A pane with the current settings shows what Save writes, palette edits included.
+        if !p.as_object().is_some_and(|c| same_settings(c, &v))
+            && let Some(m) = v.as_object_mut()
+        {
+            m.remove("colorTable");
+            m.remove("colorTableEdits");
+        }
         out.push(v);
     }
     out
+}
+
+const VARIANT_KEYS: [&str; 3] = ["format", "quality", "colors"];
+
+/// Whether variant `v` carries the same format, quality and colours as `current` (numbers
+/// compare by value, so an integer 2 equals 2.0). Keys `v` lacks are not compared.
+fn same_settings(current: &Map<String, Value>, v: &Value) -> bool {
+    VARIANT_KEYS.iter().all(|k| match (v.get(*k), current.get(*k)) {
+        (None, _) => true,
+        (Some(a), Some(b)) => match (a.as_f64(), b.as_f64()) {
+            (Some(x), Some(y)) => x == y,
+            _ => a == b,
+        },
+        (Some(_), None) => false,
+    })
+}
+
+/// Makes a 4-Up variant the current settings, so Save writes what that pane showed.
+pub(super) fn select_variant(f: &mut Map<String, Value>, v: &Value) {
+    // The current settings chosen again change nothing, and keep their palette edits.
+    if same_settings(f, v) {
+        return;
+    }
+    for k in VARIANT_KEYS {
+        if let Some(x) = v.get(k) {
+            f.insert(k.into(), x.clone());
+        }
+    }
+    // The palette belongs to the old settings; dropping its signature makes `prepare_table`
+    // rebuild it (a same-palette signature would otherwise leave no table at all).
+    for k in ["colorTable", "colorTableEdits", "__tableSignature", "__selectedColor"] {
+        f.remove(k);
+    }
+    // Hand-edited settings are no longer the named preset.
+    f.insert("__preset".into(), json!(""));
+}
+
+/// What a click on a preview pane does in Save for Web's 4-Up.
+#[derive(Clone, Copy)]
+pub(super) enum Choice {
+    /// Nothing: the original, or a view without alternatives.
+    Plain,
+    /// The pane Save writes: it gets the accent border.
+    Current,
+    /// An alternative: a click makes these settings current.
+    Variant,
+}
+
+/// A preview pane's index and what clicking it does.
+#[derive(Clone, Copy)]
+pub(super) struct Slot {
+    pane: usize,
+    choice: Choice,
+}
+
+impl Slot {
+    const fn new(pane: usize, choice: Choice) -> Self {
+        Self { pane, choice }
+    }
 }
 
 /// The flattened preview image: pixels, width, height, full-size / proxy pixel ratio.
@@ -86,7 +148,8 @@ pub(super) type WebProxy = (Arc<Vec<[f32; 4]>>, u32, u32, f64, egui::Vec2);
 pub(super) type WebCache = (String, Arc<egui::TextureHandle>, Option<(usize, Option<usize>, &'static str)>);
 
 /// Renders one preview pane: the original (`None`) or an optimised variant.
-fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<&Value>, f: &mut Map<String, Value>, pane: usize, frame: Option<usize>) {
+fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<&Value>, f: &mut Map<String, Value>, slot: Slot, frame: Option<usize>) {
+    let pane = slot.pane;
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else { return };
     let doc = st.doc.clone();
@@ -160,8 +223,29 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         // Photoshop's panes are grey around the image; only the image shows transparency (#2362).
         ui.painter().rect_filled(r, 0.0, t.canvas);
         let image = web_preview::paint(ui, r, &response, &tex, source_size, f);
-        web_preview::slices(ui, r, image, &response, &doc, crate::tools::slice_ui::slice_color(app), f);
+        let choosable = matches!(slot.choice, Choice::Variant) && p.is_some();
+        let slice_clicked = web_preview::slices(ui, r, image, &response, &doc, crate::tools::slice_ui::slice_color(app), choosable, f);
         ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
+        match slot.choice {
+            Choice::Plain => {}
+            // The pane Save writes is marked so the choice is clear.
+            Choice::Current => {
+                ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+            }
+            // A click (not a drag, which pans) makes the alternative's settings current.
+            // Not the second click of a double-click, and not a slice gesture (a click on a user or layer
+            // slice, or a Shift-click on any slice); a plain click on an auto slice does choose.
+            Choice::Variant => {
+                if response.clicked_by(egui::PointerButton::Primary)
+                    && !response.double_clicked()
+                    && !response.triple_clicked()
+                    && !slice_clicked
+                    && let Some(v) = p
+                {
+                    select_variant(f, v);
+                }
+            }
+        }
         let (l1, l2) = match (p, info) {
             (None, _) => ("Original".to_string(), format!("{}  ·  {} × {} px", doc.name, doc.size.width, doc.size.height)),
             (Some(_), Some((bytes, colors, ext))) => {
@@ -279,24 +363,24 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
         ui.vertical(|ui| {
             ui.set_width(area.x);
             match s(f, "__view", "2up").as_str() {
-                "original" => web_pane(app, ui, area, None, f, 0, frame),
-                "optimized" => web_pane(app, ui, area, Some(&p), f, 1, frame),
+                "original" => web_pane(app, ui, area, None, f, Slot::new(0, Choice::Plain), frame),
+                "optimized" => web_pane(app, ui, area, Some(&p), f, Slot::new(1, Choice::Plain), frame),
                 "2up" => {
                     ui.horizontal(|ui| {
-                        web_pane(app, ui, egui::vec2(half_w, area.y), None, f, 0, frame);
-                        web_pane(app, ui, egui::vec2(half_w, area.y), Some(&p), f, 1, frame);
+                        web_pane(app, ui, egui::vec2(half_w, area.y), None, f, Slot::new(0, Choice::Plain), frame);
+                        web_pane(app, ui, egui::vec2(half_w, area.y), Some(&p), f, Slot::new(1, Choice::Plain), frame);
                     });
                 }
                 _ => {
                     let v = variants(&p);
                     let cell = egui::vec2(half_w, half_h);
                     ui.horizontal(|ui| {
-                        web_pane(app, ui, cell, None, f, 0, frame);
-                        web_pane(app, ui, cell, Some(&v[0]), f, 1, frame);
+                        web_pane(app, ui, cell, None, f, Slot::new(0, Choice::Plain), frame);
+                        web_pane(app, ui, cell, Some(&v[0]), f, Slot::new(1, Choice::Current), frame);
                     });
                     ui.horizontal(|ui| {
-                        web_pane(app, ui, cell, Some(&v[1]), f, 2, frame);
-                        web_pane(app, ui, cell, Some(&v[2]), f, 3, frame);
+                        web_pane(app, ui, cell, Some(&v[1]), f, Slot::new(2, Choice::Variant), frame);
+                        web_pane(app, ui, cell, Some(&v[2]), f, Slot::new(3, Choice::Variant), frame);
                     });
                 }
             }
