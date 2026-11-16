@@ -255,8 +255,11 @@ fn a_deep_knockout_layer_knocks_out_to_the_lattice() {
 #[test]
 fn bake_cube_keeps_the_adjustment_table_on_a_canvas_too_small_for_the_lattice() {
     let (mut s, _) = session();
-    s.execute("image.canvasSize", json!({"width": 2, "height": 2, "anchor": "center"})).unwrap();
+    // 1 x 1 at 41 points needs more renders than the limit: the stack bake refuses, the helper keeps the earlier table.
+    s.execute("image.canvasSize", json!({"width": 1, "height": 1, "anchor": "center"})).unwrap();
     let doc = s.active().unwrap().doc.clone();
-    let cube = bake_cube(&doc, 33, "t").expect("the earlier table");
-    assert!(cube.contains("LUT_3D_SIZE 33"));
+    assert!(bake_cube_stack(41, "t", &doc).is_err(), "the stack bake refuses a canvas this small");
+    let cube = bake_cube(&doc, 41, "t").expect("the earlier table");
+    let adjustments: Vec<&Layer> = doc.layers.iter().filter(|l| l.visible && matches!(l.content, LayerContent::Adjustment(_))).collect();
+    assert_eq!(cube, bake_cube_layers(41, "t", &adjustments, doc.depth), "the adjustment-only table");
 }

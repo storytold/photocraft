@@ -188,6 +188,9 @@ fn bake_cube_layers(size: usize, title: &str, layers: &[&Layer], depth: photocra
     craft_cms::lutfile::write_cube_export("PhotoCraft", title, n, !matches!(depth, photocraft_color::SampleType::F32), rows)
 }
 
+/// How the refusal of a canvas too small for the lattice begins ([`bake_cube`] keeps the adjustment table for it alone).
+const CANVAS_TOO_SMALL: &str = "the canvas is too small";
+
 /// Most renders [`bake_cube_stack`] makes: a canvas far smaller than the lattice needs one pass
 /// per lattice entry sharing a pixel, and the bake refuses rather than run for minutes.
 const MAX_STACK_RENDERS: usize = 1 << 16;
@@ -274,7 +277,7 @@ fn bake_cube_stack(size: usize, title: &str, doc: &Document) -> Result<String> {
     let cols = n * n;
     let at = |c: usize, g: usize| lattice_pos(n, w, h, c, g);
     let too_many =
-        || EngineError::BadParams { cmd: CMD.into(), msg: format!("the canvas is too small for a {n}-point table; use fewer grid points or a larger canvas") };
+        || EngineError::BadParams { cmd: CMD.into(), msg: format!("{CANVAS_TOO_SMALL} for a {n}-point table; use fewer grid points or a larger canvas") };
     // The work limit is checked from the entries-per-pixel counts, before any pass is allocated.
     if stack_render_rows(n, w, h) > MAX_STACK_RENDERS {
         return Err(too_many());
@@ -352,7 +355,9 @@ pub fn bake_cube(doc: &Document, size: usize, title: &str) -> Result<String> {
     if doc.mode == ColorMode::Rgb {
         match bake_cube_stack(size, title, doc) {
             Ok(cube) => return Ok(cube),
-            Err(EngineError::BadParams { .. }) => {}
+            // Only the work-limit refusal (a canvas too small for the lattice) falls back: an empty canvas, an
+            // allocation failure and the rest are the caller's.
+            Err(EngineError::BadParams { msg, .. }) if msg.starts_with(CANVAS_TOO_SMALL) => {}
             Err(e) => return Err(e),
         }
     }
