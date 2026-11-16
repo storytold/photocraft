@@ -1232,7 +1232,8 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
     let draft_id = ui.make_persistent_id("fade-opacity-typed");
     // An arrow key steps the value (⌘/Ctrl by 0.1), which is not typed text (50.1 stays 50, not 501): read before the
     // field, which consumes the key. It steps the stored percent, not the draft kept from the last entry.
-    let arrow = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown));
+    // The mouse wheel steps it the same way (the field consumes it too).
+    let arrow = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown)) || crate::field_wheel::focused_wheel_pending(ui.ctx());
     let mut draft = ui.ctx().data(|d| d.get_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
     // Tab in a dialog with this one field hands the focus back to it: that ends the entry too.
     if let Some(field) = draft.and_then(|(_, _, field)| field).filter(|field| crate::field_tab::reached(ui.ctx(), *field)) {
@@ -1275,7 +1276,9 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
     if (r.changed() || reads_text) && typed.is_finite() {
         // Typed text is read without its dot; a scrub drag, whose fractions come from the drag speed, is
         // only rounded, as every other field's drag is (a drag to 37.5 is 38, not 375).
-        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none() && !arrow;
+        // Typed text is a change of the text itself (or the commit that leaves the field): a number the widget changed
+        // without parsing text (a wheel notch, an accessibility set-value) leaves the cached text behind and is not it.
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none() && !arrow && (text_changed || r.lost_focus());
         let whole = read_fade_opacity(typed, text.as_deref(), typing);
         v = whole.round().clamp(0.0, 100.0);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, typing && !(0.0..=100.0).contains(&whole)));
