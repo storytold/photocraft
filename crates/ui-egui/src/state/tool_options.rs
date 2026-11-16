@@ -13,6 +13,8 @@ pub struct ToolOptions {
     pub sample_all: SampleAllLayers,
     /// Object Selection › Object Finder: hovering highlights the object a click selects (#4087).
     pub object_finder: bool,
+    /// Object Selection › Hard Edge (#12855): off, the result gets a softer, slightly wider rim.
+    pub object_hard_edge: bool,
     /// Remove tool: the fill goes to a new layer above the target (Photoshop's Create a new layer).
     pub remove_new_layer: bool,
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
@@ -103,6 +105,11 @@ pub struct ToolOptions {
     /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
+    /// Shape tools › Path operations (#13235): how a drag combines with the active shape layer
+    /// (Shape mode) or work path (Path mode). Same values as `pen_path_op`; in Path mode "newLayer"
+    /// means Exclude Overlapping Shapes.
+    #[serde(default = "default_shape_path_op")]
+    pub shape_path_op: String,
     /// Shape tools: "shape" (a shape layer) or "path" (the work path), as Photoshop's tool mode
     /// (#9453). Shape by default, where the Pen's own mode defaults to Path.
     pub shape_mode: String,
@@ -117,6 +124,9 @@ pub struct ToolOptions {
     pub shape_fill_gradient: Option<photocraft_doc::Fill>,
     pub shape_stroke_gradient: Option<photocraft_doc::Fill>,
     pub corner_radius: f32,
+    /// Shape tools' Align Edges: snap the drawn shape's box to whole pixels. On by default; the
+    /// Triangle tool shows it, enabled in Shape mode only (#13370); the other shape tools always snap.
+    pub align_edges: bool,
     pub polygon_sides: u32,
     pub line_weight: f32,
     /// Line arrowheads.
@@ -125,6 +135,17 @@ pub struct ToolOptions {
     pub arrow_width: f32,
     pub arrow_length: f32,
     pub arrow_concavity: f32,
+    /// Rectangle tool › gear (#13343): how a drag sizes the rectangle: "unconstrained" (the
+    /// default), "square", "fixedSize" or "proportional".
+    pub rect_constraint: String,
+    /// Rectangle tool › gear › Fixed Size W and H in px; 0 is an empty field, as they start.
+    pub rect_fixed_width: f32,
+    pub rect_fixed_height: f32,
+    /// Rectangle tool › gear › Proportional W : H, 1 : 1 to start.
+    pub rect_ratio_width: f32,
+    pub rect_ratio_height: f32,
+    /// Rectangle tool › gear › From Center: every drag draws from its centre. Off to start.
+    pub rect_from_center: bool,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -313,7 +334,7 @@ pub struct ToolOptions {
 }
 
 fn default_art_history_style() -> String {
-    "tightMedium".into()
+    "tightShort".into()
 }
 
 pub(super) fn yes() -> bool {
@@ -329,6 +350,10 @@ fn default_move_target() -> String {
 }
 
 fn default_pen_path_op() -> String {
+    "newLayer".into()
+}
+
+fn default_shape_path_op() -> String {
     "newLayer".into()
 }
 
@@ -455,6 +480,7 @@ impl Default for ToolOptions {
             anti_alias: true,
             sample_all: SampleAllLayers::default(),
             object_finder: true,
+            object_hard_edge: true,
             remove_new_layer: false,
             remove_after_each_stroke: true,
             feather: 0.0,
@@ -502,6 +528,7 @@ impl Default for ToolOptions {
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
+            shape_path_op: default_shape_path_op(),
             shape_mode: "shape".into(),
             shape_fill: true,
             stroke_width: 0.0,
@@ -509,6 +536,7 @@ impl Default for ToolOptions {
             shape_fill_gradient: None,
             shape_stroke_gradient: None,
             corner_radius: 0.0,
+            align_edges: true,
             polygon_sides: 5,
             line_weight: 1.0,
             arrow_start: false,
@@ -516,6 +544,12 @@ impl Default for ToolOptions {
             arrow_width: 5.0,
             arrow_length: 10.0,
             arrow_concavity: 0.0,
+            rect_constraint: "unconstrained".into(),
+            rect_fixed_width: 0.0,
+            rect_fixed_height: 0.0,
+            rect_ratio_width: 1.0,
+            rect_ratio_height: 1.0,
+            rect_from_center: false,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
             pen_rubber_band: false,
