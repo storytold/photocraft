@@ -240,3 +240,15 @@ fn an_ico_canvas_over_256_px_is_refused() {
     f.insert("canvasWidth".into(), json!(512));
     assert!(export_document(&doc, &f, Some(256), &profile).is_ok());
 }
+
+/// A Scale All row scales the Canvas Size with the image: an untouched canvas (the image size) stays the image size
+/// at every row, and a set canvas keeps its proportion. Before, only the image was scaled and the 1x canvas read as
+/// a larger one, padding every row's file back to the 1x size.
+#[test]
+fn a_scale_all_row_scales_the_canvas_with_the_image() {
+    let f = json!({"width": 200, "height": 150, "canvasWidth": 200, "canvasHeight": 150}).as_object().cloned().unwrap();
+    let half = scaled_fields(&f, 0.5);
+    assert_eq!((n(&half, "width", 0.0), n(&half, "height", 0.0)), (100.0, 75.0));
+    assert_eq!((n(&half, "canvasWidth", 0.0), n(&half, "canvasHeight", 0.0)), (100.0, 75.0));
+    assert!(export_canvas(&half, 100.0, 75.0).is_none(), "an untouched canvas stays the image");
+}

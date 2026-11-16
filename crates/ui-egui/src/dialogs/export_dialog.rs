@@ -135,7 +135,8 @@ fn scaled_fields(f: &Map<String, Value>, factor: f64) -> Map<String, Value> {
     let mut out = f.clone();
     if (factor - 1.0).abs() > f64::EPSILON {
         out.insert("scale".into(), json!(n(f, "scale", 100.0) * factor));
-        for key in ["width", "height"] {
+        // The canvas is in the export's pixels: it follows the row's size, or an untouched canvas would read as a bigger one.
+        for key in ["width", "height", "canvasWidth", "canvasHeight"] {
             if let Some(v) = f.get(key).and_then(Value::as_f64) {
                 out.insert(key.into(), json!((v * factor).round().max(1.0)));
             }
