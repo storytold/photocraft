@@ -555,6 +555,10 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         crate::render_path::layer_fit(app, fit);
     }
     if present && current {
+        // A full refresh begun in slices: the next bands.
+        if super::gpu_slices::pending(app, id) && !super::gpu_slices::step(app, ctx, &gpu, (id, &doc), display.as_deref()) {
+            return false;
+        }
         // An adjustment preview composited where the view was: catch up where it moved to.
         if let Some(r) = crate::adjust_preview::uncovered(app, id, raw_key, visible) {
             let r = gpu.refresh(id.0, &doc, Some(r), display.as_deref());
@@ -587,6 +591,22 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     let budget_start = crate::gpu_canvas::now_ms();
     gpu_budget(app, &gpu, idx, partial, visible);
     app.perf.stage.damage_ms += crate::gpu_canvas::now_ms() - budget_start;
+    // A very large canvas refreshes in slices over the next frames, not in one long frame.
+    if !partial && let Some(drawn) = super::gpu_slices::start(app, ctx, &gpu, (id, &doc), display.as_deref(), visible) {
+        crate::background_redraw::cancel(app, id);
+        app.perf.gpu_layer_fit = gpu.layer_fit();
+        if !drawn {
+            return false;
+        }
+        crate::render_path::note(app, id.0, crate::render_path::Path::Gpu { full: true });
+        if let Some(cache) = app.canvases.get_mut(&(id, GPU_OUTPUT)) {
+            cache.revision = revision;
+            cache.preview_key = preview_key;
+            cache.on_gpu = true;
+            cache.texture = None;
+        }
+        return true;
+    }
     let defer = crate::background_redraw::enabled(app);
     let r = gpu.refresh_with(id.0, &doc, if partial { damage } else { None }, display.as_deref(), defer);
     app.perf.gpu_layer_fit = gpu.layer_fit();
@@ -622,6 +642,9 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     }
     if r.kind.starts_with("gpu") {
         app.perf.gpu_uploads = r.uploads;
+    }
+    if partial && super::gpu_slices::pending(app, id) && !super::gpu_slices::step(app, ctx, &gpu, (id, &doc), display.as_deref()) {
+        return false;
     }
     let Some(cache) = app.canvases.get_mut(&(id, GPU_OUTPUT)) else { return true };
     cache.revision = revision;
@@ -711,6 +734,8 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
         gpu.retain(&live);
     }
     crate::background_redraw::retain(app);
+    let open: Vec<_> = app.session.documents().iter().map(|st| st.doc.id).collect();
+    app.gpu_slices.retain(|id, _| open.contains(id));
     // Page work for closed documents (or of a dropped GPU canvas) is cancelled.
     if app.gpu.is_none() {
         app.streams.clear();

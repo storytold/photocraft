@@ -368,6 +368,9 @@ pub struct PhotocraftApp {
     navigator_gpu: HashMap<DocId, crate::gpu_canvas::ViewParams>,
     /// Documents whose GPU canvas texture holds the plain document (`canvas::ensure_gpu`).
     navigator_plain: std::collections::HashSet<DocId>,
+    /// Bands of a very large canvas still to composite after a full refresh begun in slices
+    /// (`canvas::gpu_slices`), per document.
+    gpu_slices: HashMap<DocId, std::collections::VecDeque<photocraft_geom::Rect>>,
     /// Viewport pages of documents too large for their GPU texture set (`canvas::viewport_pages`).
     streams: HashMap<DocId, canvas::viewport_pages::Stream>,
     /// The Info panel's Color Sampler readouts for (document, revision) (`panels::sampler_readouts`).

@@ -602,6 +602,12 @@ impl GpuCanvas {
         }
     }
 
+    /// Whether the wgpu compositor is still being built: refreshes go to the CPU compositor
+    /// meanwhile.
+    pub fn compositor_building(&self) -> bool {
+        matches!(*self.compositor_build.lock().unwrap_or_else(std::sync::PoisonError::into_inner), compositor_build::BuildState::Building)
+    }
+
     /// Replace the whole document image with an `Rgba8Unorm` texture. `rgba` is premultiplied
     /// RGBA8, `size[0] * size[1] * 4` bytes (anything else is ignored).
     pub fn upload_full(&self, doc: u64, size: [u32; 2], rgba: &[u8]) {

@@ -26,6 +26,7 @@ mod drag;
 mod filter_preview;
 mod gesture;
 pub mod gpu_canvas;
+pub(crate) mod gpu_slices;
 pub mod guide_select;
 pub mod layer_pick_ui;
 pub mod move_ui;

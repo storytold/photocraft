@@ -49,6 +49,7 @@ impl PhotocraftApp {
             display_memo: HashMap::new(),
             navigator_gpu: HashMap::new(),
             navigator_plain: std::collections::HashSet::new(),
+            gpu_slices: HashMap::new(),
             streams: HashMap::new(),
             info_samplers: None,
             monitors: Default::default(),
