@@ -181,6 +181,48 @@ fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
     assert!(temp_files(&inside).is_empty());
 }
 
+/// A JPEG-LS file whose frame header follows segments longer than the bytes first read is still
+/// JPEG-LS, and a JPEG whose marker walk stops short is not taken for an ordinary JPEG. An ordinary
+/// JPEG with the same long segments is replaced.
+#[test]
+fn write_tells_jpeg_ls_from_jpeg_past_long_segments() {
+    let (inside, _, workspace) = roots("jpeg-ls-walk");
+    let segment = |marker: u8, payload: usize| {
+        let len = u16::try_from(payload + 2).unwrap();
+        let mut s = vec![0xFF, marker];
+        s.extend_from_slice(&len.to_be_bytes());
+        s.resize(s.len() + payload, b'c');
+        s
+    };
+    let jpeg = |segments: &[Vec<u8>], frame: u8| {
+        let mut b = vec![0xFF, 0xD8];
+        segments.iter().for_each(|s| b.extend_from_slice(s));
+        b.extend_from_slice(&[0xFF, frame, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00]);
+        b
+    };
+    let comment = [segment(0xFE, 100)];
+    let metadata = [segment(0xE1, 65_533), segment(0xFE, 65_533), segment(0xE2, 300)];
+    let profile = vec![segment(0xE2, 10); 255];
+    let mut cut = jpeg(&comment, 0xF7);
+    cut.truncate(80);
+    let kept: [(&str, Vec<u8>); 4] = [("COMMENTED", jpeg(&comment, 0xF7)), ("TAGGED", jpeg(&metadata, 0xF7)), ("PROFILED", jpeg(&profile, 0xF7)), ("CUT", cut)];
+    let replaced: Vec<&str> = kept
+        .iter()
+        .filter(|(name, bytes)| {
+            std::fs::write(inside.join(name), bytes).unwrap();
+            workspace.write(name, b"\x89PNG\r\n\x1a\n").is_ok() || std::fs::read(inside.join(name)).unwrap() != *bytes
+        })
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(replaced.is_empty(), "replaced: {replaced:?}");
+    for (name, segments) in [("PHOTO", &comment[..]), ("EXIF", &metadata[..]), ("ICC", &profile[..])] {
+        std::fs::write(inside.join(name), jpeg(segments, 0xC0)).unwrap();
+        workspace.write(name, b"\x89PNG\r\n\x1a\n").unwrap();
+        assert_eq!(std::fs::read(inside.join(name)).unwrap(), b"\x89PNG\r\n\x1a\n", "{name}");
+    }
+    assert!(temp_files(&inside).is_empty());
+}
+
 /// A writer that panics leaves the original and no temporary file behind.
 #[test]
 fn write_stream_cleans_up_after_a_panicking_writer() {

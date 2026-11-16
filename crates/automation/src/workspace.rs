@@ -1,6 +1,6 @@
 //! Capability-based filesystem policy for untrusted automation paths.
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Components, Path, PathBuf, Prefix};
 use std::sync::Arc;
 
@@ -267,12 +267,51 @@ fn exported_codec(ext: &str) -> bool {
 
 /// Whether the file at `relative` starts like an image PhotoCraft writes (PSD/PSB or a written
 /// codec's magic). Containers that also hold other things (zip, PDF) are judged by name only.
+/// A JPEG-LS file starts like any JPEG, and the frame header that tells them apart can sit past
+/// the head, so a JPEG counts only when [`jpeg_is_ls`] reaches a frame or scan marker that is not
+/// JPEG-LS.
 fn holds_image(dir: &Dir, relative: &Path) -> bool {
     let mut head = [0u8; 64];
-    let Ok(mut file) = dir.open(relative) else { return false };
+    let Ok(file) = dir.open(relative) else { return false };
+    let mut file = file.into_std();
     let Ok(n) = file.read(&mut head) else { return false };
     let head = &head[..n];
-    head.starts_with(b"8BPS") || photocraft_codecs::detect(head).is_some_and(|format| format.extensions().iter().any(|ext| exported_codec(ext)))
+    if head.starts_with(b"8BPS") {
+        return true;
+    }
+    let Some(format) = photocraft_codecs::detect(head) else { return false };
+    if format == photocraft_codecs::Format::Jpeg && jpeg_is_ls(&mut file) != Some(false) {
+        return false;
+    }
+    format.extensions().iter().any(|ext| exported_codec(ext))
+}
+
+/// Whether the JPEG `file` is JPEG-LS, by the codecs' JPEG-LS check (an SOI, then marker segments
+/// up to an SOF55 frame header) run on the file itself. Each step seeks over a segment and reads 4
+/// bytes, so a long comment or metadata segment is never loaded. The walk takes up to 1,024 steps,
+/// more than the check's 64, because an ICC profile alone can span 255 segments. `None` when the
+/// walk does not reach a frame or scan marker within them: a file cut short, a byte that is not a
+/// marker where one should be, or a read error.
+fn jpeg_is_ls(file: &mut (impl Read + Seek)) -> Option<bool> {
+    let mut pos = 2u64;
+    let mut b = Vec::with_capacity(4);
+    for _ in 0..1024 {
+        b.clear();
+        file.seek(SeekFrom::Start(pos)).ok()?;
+        file.by_ref().take(4).read_to_end(&mut b).ok()?;
+        let (Some(&0xFF), Some(&marker)) = (b.first(), b.get(1)) else { return None };
+        match marker {
+            0xF7 => return Some(true),
+            0xDA | 0xD9 | 0xC0..=0xCF | 0xDB..=0xDF => return Some(false),
+            0xFF => pos += 1,
+            0x01 | 0xD0..=0xD7 => pos += 2,
+            _ => {
+                let len = b.get(2..4)?;
+                pos += 2 + u64::from(u16::from_be_bytes([len[0], len[1]]));
+            }
+        }
+    }
+    None
 }
 
 fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
