@@ -89,7 +89,21 @@ choice!(LogDetail { SessionsOnly = "sessionsOnly", Concise = "concise", Detailed
 choice!(Ask { Always = "always", Never = "never", Ask = "ask" } default Always);
 choice!(QuickExportFormat { Png = "png", Jpg = "jpg", Gif = "gif", Webp = "webp", Exr = "exr" } default Png);
 choice!(ExportLocation { Ask = "ask", SameFolder = "sameFolder" } default Ask);
-choice!(ExportMetadata { None = "none", Copyright = "copyright", All = "all" } default Copyright);
+choice!(
+    /// Quick Export › Metadata, as the reference application offers it (#13788): None (the
+    /// default) or Copyright and Contact Info (`copyright`). An `all` stored by earlier versions
+    /// loads as Copyright and Contact Info.
+    ExportMetadata { None = "none", Copyright = "copyright" } default None
+);
+
+/// [`ExportMetadata`] as stored: earlier versions' `all` is Copyright and Contact Info (#13788).
+fn export_metadata_compat<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<ExportMetadata, D::Error> {
+    let name = String::deserialize(d)?;
+    match name.as_str() {
+        "all" => Ok(ExportMetadata::Copyright),
+        other => ExportMetadata::parse(other).ok_or_else(|| serde::de::Error::unknown_variant(other, ExportMetadata::NAMES)),
+    }
+}
 choice!(
     /// Painting cursors: Standard (tool icon), Precise (crosshair), Normal Brush Tip (the 50%
     /// opacity contour), Full Size Brush Tip (the whole diameter).
@@ -644,8 +658,11 @@ pub struct Export {
     /// Keep the existing lossless Quick Export default until the user opts into lossy WebP.
     pub webp_lossless: bool,
     pub webp_quality: u32,
+    #[serde(deserialize_with = "export_metadata_compat")]
     pub metadata: ExportMetadata,
     pub convert_to_srgb: bool,
+    /// PNG › Smaller File (8-bit): Quick Export writes a palette PNG (#13785). Off by default.
+    pub png_smaller_file: bool,
     /// The folder the last successful export through a save dialog went to (Export As, Quick
     /// Export, Save for Web, ...). The next export dialog starts there; empty until the first
     /// export, and ignored while the folder no longer exists (#10192).
@@ -660,8 +677,9 @@ impl Default for Export {
             jpeg_quality: 85,
             webp_lossless: true,
             webp_quality: 85,
-            metadata: ExportMetadata::Copyright,
+            metadata: ExportMetadata::None,
             convert_to_srgb: true,
+            png_smaller_file: false,
             last_folder: String::new(),
         }
     }
