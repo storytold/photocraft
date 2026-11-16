@@ -102,6 +102,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         }
     }
     let (mut radius_alert, mut sides_alert) = (false, false);
+    let mut radius_invalid = false;
     match tool {
         Tool::Rectangle => {
             crate::widgets::vline(ui, 22.0);
@@ -109,8 +110,9 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             lbl(ui, label);
             // The tool's own radius for the next rectangle (#13338); the active shape is not touched.
             let mut r = o.corner_radius;
-            let (resp, out_of_range) = crate::widgets::value_field_alerting(ui, label, &mut r, RADIUS_RANGE, "px", 62.0);
+            let (resp, out_of_range, invalid) = crate::widgets::value_field_alerting_checked(ui, label, &mut r, RADIUS_RANGE, "px", 62.0);
             radius_alert = out_of_range;
+            radius_invalid = invalid;
             if resp.changed() {
                 o.corner_radius = r;
             }
@@ -200,6 +202,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         crate::paint_picker::remember(app, rgb);
     }
     range_alert(app, radius_alert, RADIUS_RANGE_ALERT);
+    range_alert(app, radius_invalid, RADIUS_INVALID_ALERT);
     range_alert(app, sides_alert, SIDES_RANGE_ALERT);
 }
 
@@ -208,6 +211,10 @@ pub(crate) const RADIUS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=150_000.0;
 
 /// The reference's alert for a Rectangle tool Radius typed past [`RADIUS_RANGE`] (#13336).
 pub(crate) const RADIUS_RANGE_ALERT: &str = "A value between 0.000 pixel and 150000.000 Pixels is required. Closest value inserted.";
+
+/// The reference's alert for text that is no number typed into the Radius (#13619); the value stays.
+pub(crate) const RADIUS_INVALID_ALERT: &str =
+    "Invalid numeric entry. A number between 0.000 pixel and 150000.000 Pixels is required. Restored last valid value.";
 
 /// The Polygon tool's Sides: whole numbers 3..100. Returns true once the field is left with a
 /// value typed past them, so the caller shows [`SIDES_RANGE_ALERT`] (#13304).

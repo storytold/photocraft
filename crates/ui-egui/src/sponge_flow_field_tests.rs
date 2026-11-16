@@ -55,6 +55,23 @@ fn click_at(h: &mut Harness<'static, PhotocraftApp>, p: egui::Pos2) {
     h.run_steps(3);
 }
 
+/// #13619: the invalid-entry rule belongs to `value_field_alerting_checked`; a whole-number field
+/// keeps the range alert of a value typed past the range even when `abc` replaces it.
+#[test]
+fn flow_keeps_its_range_alert_when_a_non_number_replaces_the_out_of_range_text() {
+    let mut h = bar();
+    flow_field(&h).click();
+    h.run_steps(1);
+    for text in ["200", "abc"] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(text.into()));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(alerts(&h), vec![TOLERANCE_RANGE_ALERT.to_string()]);
+}
+
 #[test]
 fn the_sponge_bar_shows_flow_after_mode_at_50_percent() {
     let h = bar();
