@@ -108,6 +108,11 @@ The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon
 
 ## Compact tool controls
 
+Layers reserves its action bar at the bottom of the dock before sizing the controls and
+scrolling list. At short heights, rows scroll in the space above it instead of pushing actions
+into the status bar. Channels and Paths use the same bounded list sizing. The action buttons
+retain their existing commands and hit targets.
+
 The toolbar scrolls its tool rows when two columns still exceed the available height. Foreground
 and background colours stay visible below those rows, together with the Quick Mask and Screen
 Mode controls in every theme. Long options rows scroll horizontally. Both scrollers bring newly focused
