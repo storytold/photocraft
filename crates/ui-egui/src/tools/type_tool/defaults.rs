@@ -1,6 +1,6 @@
 use super::editing::edit_home;
 use super::insertion_style;
-use super::{LayerId, PhotocraftApp, TextLayer, hex, json, text_layer};
+use super::{LayerId, PhotocraftApp, TextLayer, json, text_layer};
 
 /// Representative for the displayed properties: the edit layer, else a selected type layer.
 pub(crate) fn target(app: &PhotocraftApp) -> Option<(u64, Option<[usize; 2]>)> {
@@ -107,7 +107,8 @@ pub(super) fn default_style_params(app: &PhotocraftApp) -> serde_json::Value {
     p["size"] = json!(o.type_size);
     p["align"] = json!(o.type_align);
     p["direction"] = json!(o.type_direction);
-    p["color"] = json!(hex(app.session.tools.foreground));
+    let fg = app.session.tools.foreground;
+    p["color"] = crate::color_picker_ui::document_color(app, [fg[0], fg[1], fg[2]]);
     p
 }
 
@@ -239,6 +240,8 @@ pub fn open_color_picker(app: &mut PhotocraftApp, rgb: [f32; 3]) -> u64 {
 pub fn foreground_changed(app: &mut PhotocraftApp) {
     let Some((layer, Some(range))) = target(app) else { return };
     let Some(ed) = app.ui.text_edit.as_ref() else { return };
-    let p = json!({"layer": layer, "range": range, "color": hex(app.session.tools.foreground), "coalesce": ed.session});
+    let fg = app.session.tools.foreground;
+    let color = crate::color_picker_ui::document_color(app, [fg[0], fg[1], fg[2]]);
+    let p = json!({"layer": layer, "range": range, "color": color, "coalesce": ed.session});
     let _ = app.run("type.setStyle", p);
 }

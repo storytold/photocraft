@@ -12,9 +12,9 @@
 //! touched: the parent dialog's own OK still makes the one history step. What the target was is
 //! kept here, not in the picker's fields, which automation may rewrite.
 
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
-use super::{hex, parse_hex, set_field};
+use super::{color_value, float_rgb, hex, parse_hex, set_field, unchanged};
 use crate::PhotocraftApp;
 use crate::crop_shield::ShieldColor;
 
@@ -31,7 +31,7 @@ pub(crate) struct Live {
     picker: u64,
     before: Before,
     /// The colour shown in the target; `None` while it shows what it was.
-    shown: Option<String>,
+    shown: Option<Value>,
 }
 
 /// Preview picker `picker` in `field` of dialog `parent` (a key or a JSON pointer).
@@ -73,11 +73,14 @@ pub(crate) fn previews(app: &PhotocraftApp, picker: u64) -> bool {
 
 /// The colour picker `picker` shows: `Some(None)` while it is the one it opened on (or not
 /// a colour), `None` once the picker is closed.
-fn picked(app: &PhotocraftApp, picker: u64) -> Option<Option<String>> {
-    let d = app.ui.dialogs.iter().find(|d| d.id == picker)?;
+fn picked(app: &PhotocraftApp, live: &Live) -> Option<Option<Value>> {
+    let d = app.ui.dialogs.iter().find(|d| d.id == live.picker)?;
+    if matches!(live.before, Before::Field { .. }) && float_rgb(&d.fields) {
+        return Some(color_value(&d.fields).filter(|_| !unchanged(&d.fields)));
+    }
     let colour = |key: &str| d.fields.get(key).and_then(Value::as_str).and_then(parse_hex).map(hex);
     let (color, orig) = (colour("color"), colour("__orig"));
-    Some(color.filter(|c| orig.as_ref() != Some(c)))
+    Some(color.filter(|c| orig.as_ref() != Some(c)).map(Value::String))
 }
 
 /// `"#rrggbb"` as the Crop shield stores it.
@@ -87,12 +90,12 @@ fn shield_rgb(color: &str) -> Option<[u8; 3]> {
 
 /// Show `color` in the target, or what it was (`None`), where it shows `shown` now. `Err` when
 /// the target is gone.
-fn show(app: &mut PhotocraftApp, before: &mut Before, shown: Option<&str>, color: Option<&str>) -> Result<(), String> {
+fn show(app: &mut PhotocraftApp, before: &mut Before, shown: Option<&Value>, color: Option<&Value>) -> Result<(), String> {
     match before {
         Before::Field { parent, field, fields } => {
             let mut next = fields.clone();
             if let Some(c) = color {
-                set_field(&mut next, field, json!(c))?;
+                set_field(&mut next, field, c.clone())?;
             }
             app.ui.dialog_mut(*parent).ok_or("the dialog this colour was for is closed")?.fields = next;
         }
@@ -101,14 +104,14 @@ fn show(app: &mut PhotocraftApp, before: &mut Before, shown: Option<&str>, color
             // puts back, not the one the picker opened on.
             let s = &app.ui.tool_options.crop_shield;
             let expected = match shown {
-                Some(c) => (ShieldColor::Custom, shield_rgb(c)),
+                Some(c) => (ShieldColor::Custom, c.as_str().and_then(shield_rgb)),
                 None => (*was, Some(*custom)),
             };
             if (s.color, Some(s.custom_color)) != expected {
                 (*was, *custom) = (s.color, s.custom_color);
             }
             match color {
-                Some(c) => crate::crop_shield::set_custom_color(app, c)?,
+                Some(c) => crate::crop_shield::set_custom_color(app, c.as_str().ok_or("not a Crop shield colour")?)?,
                 None => {
                     let s = &mut app.ui.tool_options.crop_shield;
                     (s.color, s.custom_color) = (*was, *custom);
@@ -128,9 +131,9 @@ pub(crate) fn sync(app: &mut PhotocraftApp) -> bool {
     let mut live = std::mem::take(&mut app.color_picker_live);
     let mut changed = false;
     live.retain_mut(|l| {
-        let Some(color) = picked(app, l.picker) else {
+        let Some(color) = picked(app, l) else {
             if l.shown.is_some() {
-                changed |= show(app, &mut l.before, l.shown.as_deref(), None).is_ok();
+                changed |= show(app, &mut l.before, l.shown.as_ref(), None).is_ok();
             }
             return false;
         };
@@ -138,7 +141,7 @@ pub(crate) fn sync(app: &mut PhotocraftApp) -> bool {
             return true;
         }
         // A target that is gone (its dialog closed) stops the preview.
-        if show(app, &mut l.before, l.shown.as_deref(), color.as_deref()).is_err() {
+        if show(app, &mut l.before, l.shown.as_ref(), color.as_ref()).is_err() {
             return false;
         }
         l.shown = color;
@@ -156,7 +159,7 @@ pub(crate) fn end(app: &mut PhotocraftApp, picker: u64) {
     let Some(i) = app.color_picker_live.iter().position(|l| l.picker == picker) else { return };
     let mut l = app.color_picker_live.remove(i);
     if l.shown.is_some() {
-        let _ = show(app, &mut l.before, l.shown.as_deref(), None);
+        let _ = show(app, &mut l.before, l.shown.as_ref(), None);
     }
 }
 
