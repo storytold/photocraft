@@ -1146,6 +1146,11 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
                 d.fields.remove("sourceLayer");
             }
             d.fields.insert(field.to_string(), value);
+            // A new file type brings back its own per-type checkboxes now, not on the next frame:
+            // an OK before then would send the previous type's (#13637).
+            if field == "format" {
+                crate::view_cmds::per_format_state(&mut d.fields);
+            }
             // A Color Picker's colour shows in its target dialog at once, as a drag would.
             crate::color_picker_ui::live_preview::sync(app);
             ok(Value::Null)

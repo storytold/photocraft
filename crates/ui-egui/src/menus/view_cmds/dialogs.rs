@@ -339,8 +339,9 @@ const RESET_SHELL_KEYS: [&str; 5] = [BATCH_QUALITY, JPEG_CUSTOM, JPEG_QUALITY, P
 
 /// When the `format` field has changed, keeps the `__perFormat` keys' values under the type they
 /// were set for and brings back the new type's (their value at open for a type not seen yet), as
-/// Artboards to Files keeps Include Artboard Name per file type.
-fn per_format_state(f: &mut Map<String, Value>) {
+/// Artboards to Files keeps Include Artboard Name per file type. Also run when a control client
+/// sets `format`, so an OK before the next frame sends the new type's values.
+pub(crate) fn per_format_state(f: &mut Map<String, Value>) {
     let Some(keys) = f.get("__perFormat").and_then(Value::as_array).cloned() else { return };
     let format = f.get("format").and_then(Value::as_str).unwrap_or_default().to_string();
     let seen = f.get(FORMAT_SEEN).and_then(Value::as_str).unwrap_or_default().to_string();

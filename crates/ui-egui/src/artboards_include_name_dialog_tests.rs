@@ -125,3 +125,25 @@ fn layer_comps_to_files_has_no_artboard_name() {
     assert_eq!(h.query_all_by_role_and_label(Role::CheckBox, INCLUDE).count(), 0);
     assert!(h.state_mut().ui.dialog_mut(dialog).unwrap().fields.get("includeName").is_none());
 }
+
+/// A control client that picks another file type and confirms before the dialog is drawn again
+/// exports with that type's own Include Artboard Name, not the tick of the type it left.
+#[test]
+fn a_file_type_set_by_a_control_client_brings_its_own_tick_at_once() {
+    let mut h = harness();
+    let dialog = open(&mut h, ARTBOARDS);
+    let dir = tempfile::tempdir().unwrap();
+    set(&mut h, dialog, "dir", json!(dir.path().to_string_lossy()));
+    h.get_by_role_and_label(Role::CheckBox, INCLUDE).click();
+    h.run_steps(4);
+    assert!(ticked(&h), "PNG ticked");
+    let ctx = h.ctx.clone();
+    let (req, _rx) = crate::control::ControlRequest::new("ui.dialog.set", json!({"dialog": dialog, "field": "format", "value": "jpg"}));
+    assert!(matches!(crate::control::handle(h.state_mut(), &ctx, &req), crate::control::Outcome::Done(_)));
+    assert_eq!(params(&mut h, dialog)["includeName"], false, "JPEG keeps its own, unticked");
+    // OK in the same frame: no border around the board.
+    let r = crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    let file = r["files"][0].as_str().unwrap().to_string();
+    let img = photocraft_io::import("x.jpg", &std::fs::read(&file).unwrap()).unwrap().document;
+    assert_eq!((img.size.width, img.size.height), (64, 64));
+}
