@@ -191,7 +191,7 @@ row; the action still adds only one Undo entry.
 | (string ID only) | smartBrushWorkspace | Select and Mask | `select.refineEdge` |
 | (string ID only) | autoCutout | Select Subject | `select.subject` |
 | `SlcC` | selectiveColor | Selective Color | `image.adjustments.selectiveColor` |
-| `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `gradient.fill.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions`, `image.analysis.setMeasurementScale` (Set Measurement Scale › Custom) |
+| `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `gradient.fill.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.layerStyle.replace`, `layer.smartFilter.blendingOptions`, `image.analysis.setMeasurementScale` (Set Measurement Scale › Custom) |
 | (string ID only) | adaptCorrect | Shadows/Highlights | `image.adjustments.shadowsHighlights` |
 | `Shrp` | sharpen | Sharpen | `filter.sharpen.sharpen` |
 | `ShrE` | sharpenEdges | Sharpen Edges | `filter.sharpen.sharpenEdges` |
@@ -566,6 +566,11 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   layers for `Trgt`, at their existing canvas positions and leaves the source active. Stack indexes
   and ordinals retain their reference form; recording-session output ids are not reused. Other
   destination forms, unknown options and malformed hints remain kept steps.
+- A Set of the active layer's whole `Lefx` property containing one complete RGB Color Overlay
+  at 100% style scale maps to `layer.layerStyle.replace`, clearing previous effects. Per-effect
+  enabled state, blend and opacity are retained; the native command keeps the layer's master
+  Effects visibility. Unedited steps retain their original descriptor. Other effects, colour
+  spaces, scale values, explicit master switches and unknown settings remain kept steps.
 - Photo Filter converts recorded Lab colours through `craft-cms`.
 - Direct Vibrance and Gradient Map save as the string events `vibrance` and `gradientMapEvent`.
   Stroke Outside uses `StrL.Otsd`, group Pass Through uses `BlnM.passThrough`, Canvas Size extension

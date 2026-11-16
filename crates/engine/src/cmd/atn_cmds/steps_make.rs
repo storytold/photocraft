@@ -1202,6 +1202,7 @@ pub(super) fn set_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     let unsupported = Mapped::Unsupported { harmless: false };
     match (ref_class(r).as_deref(), target(r)) {
+        (Some("Prpr"), Target::Property(p)) if p == "Lefx" => super::steps_layer_style::replace_from(d),
         (Some("Path"), Target::Property(p)) if p == "WrPt" => super::steps_path::from(d),
         (Some("Chnl"), Target::Property(p)) if p == "fsel" => selection_from(d),
         // Quick Mask mode on (`set` of the document's quick-mask property); `clearEvent` turns it off.
@@ -1311,6 +1312,7 @@ pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
     let fsel = D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]);
     let sel = |t: D| desc("null").with("null", fsel.clone()).with("T   ", t);
     Some(match id {
+        super::steps_layer_style::REPLACE => return super::steps_layer_style::style_to(id, p),
         "path.set" => return super::steps_path::to(p),
         super::steps_measurement::SET_SCALE => return super::steps_measurement::to(p),
         "select.all" => sel(enm("Ordn", "Al  ")),

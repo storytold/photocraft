@@ -2062,6 +2062,141 @@ fn recorded_duplicate_destination_rejects_ambiguous_and_unknown_forms() {
     }
 }
 
+fn color_overlay_style(red: f64, green: f64, blue: f64) -> Descriptor {
+    let overlay = Descriptor::new("SoFi")
+        .with("enab", D::Boolean(true))
+        .with("present", D::Boolean(true))
+        .with("showInDialog", D::Boolean(true))
+        .with("Md  ", enm("BlnM", "Nrml"))
+        .with("Clr ", D::Descriptor(Descriptor::new("RGBC").with("Rd  ", D::Double(red)).with("Grn ", D::Double(green)).with("Bl  ", D::Double(blue))))
+        .with("Opct", D::UnitFloat { unit: *b"#Prc", value: 100.0 });
+    Descriptor::new("setd")
+        .with(
+            "null",
+            D::Reference(vec![
+                ReferenceItem::Property { class: class("Prpr"), key: Id::new("Lefx") },
+                ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") },
+            ]),
+        )
+        .with("T   ", D::Descriptor(Descriptor::new("Lefx").with("Scl ", D::UnitFloat { unit: *b"#Prc", value: 100.0 }).with("SoFi", D::Descriptor(overlay))))
+}
+
+#[test]
+fn recorded_color_overlay_style_preserves_the_full_descriptor_and_edits() {
+    let d = color_overlay_style(12.25, 128.0, 240.75);
+    for event in [AtnEvent::Code(*b"setd"), AtnEvent::name("set")] {
+        let mut action = recorded(event, d.clone());
+        assert_eq!(action.steps[0].0, "layer.layerStyle.replace");
+        assert_eq!(action.steps[0].1["effects"].as_array().unwrap().len(), 1);
+        assert_eq!(action.steps[0].1["effects"][0]["kind"], "colorOverlay");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+        action.steps[0].1["effects"][0]["params"]["opacity"] = json!(50);
+        let written = saved(&action).descriptor.unwrap();
+        assert_ne!(written.to_bytes(), d.to_bytes(), "an edit must not restore stale source bytes");
+        let Some(D::Descriptor(style)) = written.get("T   ") else { panic!("style") };
+        let Some(D::Descriptor(overlay)) = style.get("SoFi") else { panic!("overlay") };
+        assert_eq!(overlay.get("Opct"), Some(&D::UnitFloat { unit: *b"#Prc", value: 50.0 }));
+        assert_eq!(enum_value(overlay, "Md  ", "BlnM"), &Id::new("Nrml"));
+    }
+}
+
+#[test]
+fn recorded_color_overlay_style_preserves_enabled_opacity_and_blend() {
+    for enabled in [false, true] {
+        let mut d = color_overlay_style(12.25, 128.0, 240.75);
+        let Some(D::Descriptor(style)) = d.items.iter_mut().find(|(key, _)| key.is("T   ")).map(|(_, v)| v) else { panic!("style") };
+        let Some(D::Descriptor(overlay)) = style.items.iter_mut().find(|(key, _)| key.is("SoFi")).map(|(_, v)| v) else { panic!("overlay") };
+        for (key, value) in [("enab", D::Boolean(enabled)), ("Md  ", enm("BlnM", "Mltp")), ("Opct", D::UnitFloat { unit: *b"#Prc", value: 37.5 })] {
+            overlay.items.iter_mut().find(|(k, _)| k.is(key)).unwrap().1 = value;
+        }
+        let action = recorded(AtnEvent::name("set"), d.clone());
+        assert_eq!(action.steps[0].0, "layer.layerStyle.replace");
+        let effect: photocraft_doc::Effect = serde_json::from_value(action.steps[0].1["effects"][0]["fx"].clone()).unwrap();
+        let photocraft_doc::Effect::ColorOverlay { common, .. } = effect else { panic!("effect") };
+        assert_eq!(common.enabled, enabled);
+        assert_eq!(common.blend, photocraft_color::BlendMode::Multiply);
+        assert_eq!(common.opacity, 0.375);
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+}
+
+#[test]
+fn recorded_color_overlay_style_replaces_old_effects_and_undoes_at_each_depth() {
+    let action = recorded(AtnEvent::name("set"), color_overlay_style(0.0, 0.0, 255.0));
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":8,"height":8,"depth":depth,"background":"transparent"})).unwrap();
+        s.execute("edit.fill", json!({"contents":"color","color":"#ff0000"})).unwrap();
+        s.execute("layer.layerStyle.dropShadow", json!({"size":1,"distance":1})).unwrap();
+        s.execute("layer.layerStyle.stroke", json!({"color":"#00ff00","size":1})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let past = s.active().unwrap().history.past_len();
+        replay_saved(&mut s, &action);
+        let st = s.active().unwrap();
+        let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(layer.effects.items.len(), 1, "Set Lefx replaces the full list");
+        assert!(matches!(layer.effects.items[0], photocraft_doc::Effect::ColorOverlay { .. }));
+        assert_eq!(st.history.past_len(), past + 1);
+        let pixel = photocraft_compose::render(&st.doc, photocraft_geom::Rect::from_xywh(3, 3, 1, 1)).px[0];
+        assert_eq!(pixel, [0.0, 0.0, 1.0, 1.0]);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+#[test]
+fn recorded_color_overlay_style_keeps_unknown_or_incomplete_effects() {
+    let base = color_overlay_style(12.25, 128.0, 240.75);
+    let mut cases = Vec::new();
+    for (key, value) in
+        [("Scl ", D::UnitFloat { unit: *b"#Prc", value: 50.0 }), ("masterFXSwitch", D::Boolean(false)), ("DrSh", D::Descriptor(Descriptor::new("DrSh")))]
+    {
+        let mut d = base.clone();
+        let Some(D::Descriptor(style)) = d.items.iter_mut().find(|(key, _)| key.is("T   ")).map(|(_, v)| v) else { panic!("style") };
+        style.items.retain(|(k, _)| !k.is(key));
+        style.items.push((Id::new(key), value));
+        cases.push(d);
+    }
+    for (key, value) in [
+        ("present", D::Boolean(false)),
+        ("showInDialog", D::Boolean(false)),
+        ("Opct", D::UnitFloat { unit: *b"#Prc", value: 101.0 }),
+        ("Opct", D::UnitFloat { unit: *b"#Pxl", value: 50.0 }),
+        ("Md  ", enm("BlnM", "unknown")),
+        ("unknown", D::Boolean(true)),
+    ] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(style)) = d.items.iter_mut().find(|(key, _)| key.is("T   ")).map(|(_, v)| v) else { panic!("style") };
+        let Some(D::Descriptor(overlay)) = style.items.iter_mut().find(|(key, _)| key.is("SoFi")).map(|(_, v)| v) else { panic!("overlay") };
+        overlay.items.retain(|(k, _)| !k.is(key));
+        overlay.items.push((Id::new(key), value));
+        cases.push(d);
+    }
+    for key in ["null", "T   "] {
+        let mut d = base.clone();
+        d.items.push((Id::new(key), d.get(key).unwrap().clone()));
+        cases.push(d);
+    }
+    for key in ["enab", "Md  ", "Clr ", "Opct"] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(style)) = d.items.iter_mut().find(|(key, _)| key.is("T   ")).map(|(_, v)| v) else { panic!("style") };
+        let Some(D::Descriptor(overlay)) = style.items.iter_mut().find(|(key, _)| key.is("SoFi")).map(|(_, v)| v) else { panic!("overlay") };
+        let mut duplicate = overlay.clone();
+        duplicate.items.push((Id::new(key), duplicate.get(key).unwrap().clone()));
+        let mut duplicate_style = style.clone();
+        duplicate_style.items.iter_mut().find(|(key, _)| key.is("SoFi")).unwrap().1 = D::Descriptor(duplicate);
+        cases.push(Descriptor::new("null").with("null", base.get("null").unwrap().clone()).with("T   ", D::Descriptor(duplicate_style)));
+        let Some(D::Descriptor(overlay)) = style.items.iter_mut().find(|(key, _)| key.is("SoFi")).map(|(_, v)| v) else { panic!("overlay") };
+        overlay.items.retain(|(k, _)| !k.is(key));
+        cases.push(d);
+    }
+    for d in cases {
+        let action = recorded(AtnEvent::name("set"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+}
+
 fn history_offset(offset: i32) -> Descriptor {
     Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("HstS"), offset }]))
 }

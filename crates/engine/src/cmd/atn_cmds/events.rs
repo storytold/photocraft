@@ -928,6 +928,7 @@ pub(super) const EVENTS: &[Event] = &[
             "gradient.fill.set",
             "layer.new.layerFromBackground",
             "layer.layerStyle.blendingOptions",
+            super::steps_layer_style::REPLACE,
             "layer.smartFilter.blendingOptions",
             "path.set",
         ],

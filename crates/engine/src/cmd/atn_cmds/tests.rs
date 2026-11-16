@@ -1135,6 +1135,12 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.layerStyle.copyLayerStyle", json!({})),
         ("layer.layerStyle.scaleEffects", json!({"scale": 200})),
         ("layer.layerStyle.createLayer", json!({})),
+        ("layer.layerStyle.replace", {
+            let effect = crate::layer_style::effect_from_params("colorOverlay", &json!({"color":"#3366cc"})).unwrap();
+            let mut params = json!({"effects":[{"kind":"colorOverlay","params":{},"fx":serde_json::to_value(effect).unwrap()}]});
+            normalise(&mut params);
+            params
+        }),
         ("layer.layerStyle.pasteLayerStyle", json!({"allowGroups": true})),
         ("layer.setExpanded", json!({"all": true, "expanded": false})),
         ("layerComp.apply", json!({"comp": "Original"})),
