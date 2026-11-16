@@ -891,6 +891,11 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         });
                     });
                     ui.add_space(4.0);
+                    if let Some(language) = item.as_ref().and_then(|item| item["languageName"].as_str()) {
+                        let name = crate::i18n::t(language);
+                        ui.label(crate::i18n::fmt(tl!("Language: {name}"), &[("name", name)]));
+                        ui.add_space(4.0);
+                    }
                     if crate::widgets::checkbox(ui, &mut all_layers, tl!("Check All Layers")).changed() {
                         act = Some("relist");
                     }

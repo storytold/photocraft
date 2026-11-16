@@ -15,6 +15,133 @@ use std::sync::OnceLock;
 
 static WORDS_GZ: &[u8] = include_bytes!("../../../assets/dict/en_US-scowl-50.txt.gz");
 
+/// A character language with a bundled spelling dictionary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Language {
+    English,
+    German,
+}
+
+impl Language {
+    /// Untagged text uses American English; unsupported or malformed tags are not checked.
+    pub fn from_tag(tag: Option<&str>) -> Option<Self> {
+        let Some(tag) = tag else { return Some(Self::English) };
+        if tag.len() > 255 || !tag.is_ascii() {
+            return None;
+        }
+        let parts: Vec<&str> = tag.split('-').collect();
+        let primary = parts[0];
+        let language = if primary.eq_ignore_ascii_case("en") {
+            Self::English
+        } else if primary.eq_ignore_ascii_case("de") {
+            Self::German
+        } else {
+            return None;
+        };
+        if parts.iter().any(|p| p.is_empty() || p.len() > 8 || !p.bytes().all(|b| b.is_ascii_alphanumeric())) {
+            return None;
+        }
+        let alpha = |p: &str| p.bytes().all(|b| b.is_ascii_alphabetic());
+        let mut i = 1;
+        while i <= 3 && parts.get(i).is_some_and(|p| p.len() == 3 && alpha(p)) {
+            i += 1;
+        }
+        // Optional script and region, then variants, extensions and private-use subtags.
+        if parts.get(i).is_some_and(|p| p.len() == 4 && alpha(p)) {
+            i += 1;
+        }
+        if parts.get(i).is_some_and(|p| (p.len() == 2 && alpha(p)) || (p.len() == 3 && p.bytes().all(|b| b.is_ascii_digit()))) {
+            i += 1;
+        }
+        let variants = i;
+        while let Some(p) = parts.get(i).filter(|p| p.len() >= 5 || (p.len() == 4 && p.as_bytes()[0].is_ascii_digit())) {
+            if parts[variants..i].iter().any(|v| v.eq_ignore_ascii_case(p)) {
+                return None;
+            }
+            i += 1;
+        }
+        let mut extensions = 0u64;
+        while i < parts.len() {
+            let p = parts[i];
+            if p.len() != 1 {
+                return None;
+            }
+            let key = p.as_bytes()[0].to_ascii_lowercase();
+            i += 1;
+            if key == b'x' {
+                return (i < parts.len()).then_some(language);
+            }
+            let bit = if key.is_ascii_digit() { key - b'0' } else { key - b'a' + 10 };
+            if extensions & (1u64 << bit) != 0 {
+                return None;
+            }
+            extensions |= 1u64 << bit;
+            let start = i;
+            while parts.get(i).is_some_and(|p| p.len() >= 2) {
+                i += 1;
+            }
+            if i == start {
+                return None;
+            }
+        }
+        Some(language)
+    }
+
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::English => "en-US",
+            Self::German => "de",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::English => "English: USA",
+            Self::German => "German: 2006 Reform",
+        }
+    }
+
+    pub fn dictionary(self) -> &'static Dictionary {
+        match self {
+            Self::English => Dictionary::english(),
+            Self::German => Dictionary::german(),
+        }
+    }
+}
+
+/// A whole-word misspelling and the dictionary used for its suggestions.
+pub struct LocalizedMisspelling {
+    pub misspelling: Misspelling,
+    pub language: Language,
+    pub suggestions: Vec<String>,
+}
+
+/// Checks whole words using the language of their first character. Style boundaries never
+/// split a word; normalized character runs and returned ranges both use UTF-8 byte offsets.
+pub fn misspellings_for_layer(layer: &photocraft_doc::TextLayer, user: &HashSet<String>, max: usize) -> Vec<LocalizedMisspelling> {
+    let runs = layer.char_runs();
+    let mut run = 0;
+    let mut end = runs[0].len;
+    let mut out = Vec::new();
+    for (a, b) in words(&layer.text) {
+        while a >= end && run + 1 < runs.len() {
+            run += 1;
+            end += runs[run].len;
+        }
+        let Some(language) = Language::from_tag(runs[run].style.language.as_deref()) else { continue };
+        let word = &layer.text[a..b];
+        let dictionary = language.dictionary();
+        if !dictionary.check(word, user) {
+            out.push(LocalizedMisspelling {
+                misspelling: Misspelling { start: a, end: b, word: word.to_string() },
+                language,
+                suggestions: dictionary.suggest(word, max),
+            });
+        }
+    }
+    out
+}
+
 /// A word list with frequency levels.
 pub struct Dictionary {
     /// Word (as listed) → SCOWL level.
@@ -35,6 +162,48 @@ pub struct Misspelling {
 }
 
 impl Dictionary {
+    /// The bundled German dictionary (decoded independently on first use).
+    pub fn german() -> &'static Dictionary {
+        static D: OnceLock<Dictionary> = OnceLock::new();
+        D.get_or_init(|| {
+            let mut s = String::new();
+            let _ = flate2::read::GzDecoder::new(&include_bytes!("../../../assets/dict/de_DE-morphy-1.2.4.txt.gz")[..]).read_to_string(&mut s);
+            Dictionary::from_ranked_literals(&s)
+        })
+    }
+
+    /// German's `priority<TAB>surface form` format keeps literal `#` and whitespace in forms.
+    fn from_ranked_literals(list: &str) -> Dictionary {
+        let mut words = HashMap::new();
+        let mut by_lower: HashMap<String, Vec<String>> = HashMap::new();
+        for line in list.lines() {
+            let Some((priority, word)) = line.split_once('\t') else { continue };
+            let level = match priority {
+                "10" => 10,
+                "50" => 50,
+                _ => continue,
+            };
+            if word.is_empty() || words.contains_key(word) {
+                continue;
+            }
+            words.insert(word.to_string(), level);
+            by_lower.entry(word.to_lowercase()).or_default().push(word.to_string());
+        }
+        let mut by_len: Vec<Vec<(String, Vec<char>, u8)>> = Vec::new();
+        for (lw, forms) in &by_lower {
+            let n = lw.chars().count();
+            if by_len.len() <= n {
+                by_len.resize(n + 1, Vec::new());
+            }
+            let lvl = forms.iter().filter_map(|f| words.get(f)).min().copied().unwrap_or(50);
+            by_len[n].push((lw.clone(), lw.chars().collect(), lvl));
+        }
+        for v in &mut by_len {
+            v.sort();
+        }
+        Dictionary { words, by_lower, by_len }
+    }
+
     /// The bundled English dictionary (decoded once).
     pub fn english() -> &'static Dictionary {
         static D: OnceLock<Dictionary> = OnceLock::new();
@@ -256,6 +425,10 @@ fn distance(a: &[char], b: &[char], max: usize, rows: &mut Rows) -> Option<usize
     }
     (prev[m] <= max).then_some(prev[m])
 }
+
+#[cfg(test)]
+#[path = "spell_language_tests.rs"]
+mod language_tests;
 
 #[cfg(test)]
 mod tests {
