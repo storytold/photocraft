@@ -607,6 +607,11 @@ fn czech_shortcut_conflicts_keep_warning_state_and_shortcut_codes() {
         for piece in template.split('{').map(|piece| piece.split_once('}').map_or(piece, |(_, rest)| rest)).filter(|piece| !piece.trim().is_empty()) {
             assert!(message.contains(piece), "{message:?} lacks {piece:?}");
         }
+        // The pressed key is a pending edit: nothing is committed until it is accepted.
+        assert!(fields["overrides"].get("file.new").is_none_or(|v| v.is_null()), "not committed yet");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+        let fields = &h.state().ui.dialogs.iter().find(|d| d.id == id).expect("dialog").fields;
         assert_eq!(fields["overrides"]["file.new"], json!("Cmd+O"));
     });
 }
