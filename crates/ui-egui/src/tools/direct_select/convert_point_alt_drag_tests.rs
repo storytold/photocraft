@@ -233,3 +233,17 @@ fn a_modifier_that_changes_during_the_drag_keeps_the_press_decision() {
     let k = knot(&early_alt, 0, 1);
     assert_eq!((k.out_ctrl, k.in_ctrl, k.smooth), (p(350.0, 330.0), p(300.0, 300.0), false), "⌥ released before the commit: {k:?}");
 }
+
+/// The press gate asks for a CLOSED subpath, so it keeps EVERY anchor of an open one on the old
+/// path - not only the end anchor the issue names as not measured, but an interior corner too.
+/// Guard pin of the old path: green before and after this PR.
+#[test]
+fn an_alt_drag_from_an_interior_anchor_of_an_open_subpath_keeps_the_mirrored_pair() {
+    let mut app = app(Tool::ConvertPoint);
+    let open_corner = json!({"subpaths": [{"closed": false, "knots": [[100, 300], [300, 300], [300, 500]]}]});
+    app.run("path.set", json!({"name": "Path 1", "path": open_corner})).unwrap();
+    app.sync_views();
+    assert_eq!(added(&mut app, |a| drag(a, CORNER, DRAG_TO, Modifiers::ALT)), ["Change Anchor Point"]);
+    let k = knot(&app, 0, 1);
+    assert_eq!((k.anchor, k.out_ctrl, k.in_ctrl, k.smooth), (p(300.0, 300.0), p(350.0, 330.0), p(250.0, 270.0), true), "{k:?}");
+}

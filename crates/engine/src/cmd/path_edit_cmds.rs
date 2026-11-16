@@ -350,7 +350,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "path.convertPoint",
             "Convert Point",
-            r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror),"independent":bool=false (with "out": the Convert Point tool's ⌥-drag: only the out handle comes out, the in-handle stays retracted on the anchor and the point stays a corner),"curvature":bool=false (the Curvature Pen's double-click: toggles smooth/corner and reflows the smooth knots of the subpath; out ignored),"stepName":"Change Anchor Point"? (History step name; the Convert Point tool sends it; default "Convert Point"; any other value is refused)"#.into(),
+            r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror),"independent":bool=false (with "out": the Convert Point tool's ⌥-drag: only the out handle comes out, the in-handle stays retracted on the anchor and the point stays a corner),"curvature":bool=false (the Curvature Pen's double-click: toggles smooth/corner and reflows the smooth knots of the subpath; out and independent ignored),"stepName":"Change Anchor Point"? (History step name; the Convert Point tool sends it; default "Convert Point"; any other value is refused)"#.into(),
             convert_point,
         ),
         spec(
@@ -455,14 +455,17 @@ mod tests {
 
     #[test]
     fn a_malformed_independent_is_refused_before_the_curvature_edit() {
-        // The review input: `"curvature": true` with `"independent": "yes"`. The option is read as a
-        // bool whatever branch the command takes, so it is checked before the curvature return.
+        // The review input: `"curvature": true` with `"independent": "yes"`, plus the type sweep the
+        // plain route gets. The option is read as a bool whatever branch the command takes, so it is
+        // checked before the curvature return.
         let mut s = session();
         s.execute("path.set", json!({"path": square()})).unwrap();
         let (before, steps) = (work(&s), s.active().unwrap().history.entries().len());
-        let e = s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "curvature": true, "independent": "yes"})).unwrap_err();
-        assert!(e.to_string().contains("`independent` must be true or false"), "{e}");
-        assert_eq!(work(&s), before, "the refused option edits nothing");
+        for bad in [json!("yes"), json!([1]), json!([true]), json!({}), json!(1)] {
+            let e = s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "curvature": true, "independent": bad})).unwrap_err();
+            assert!(e.to_string().contains("`independent` must be true or false"), "{bad}: {e}");
+        }
+        assert_eq!(work(&s), before, "a refused option edits nothing");
         assert_eq!(s.active().unwrap().history.entries().len(), steps, "and leaves no history step");
         // A bool value is still accepted next to `curvature`, which ignores it as its spec says.
         s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "curvature": true, "independent": true})).unwrap();
@@ -487,8 +490,11 @@ mod tests {
 
     #[test]
     fn an_independent_convert_on_a_shape_layer_pulls_out_one_handle() {
-        // Guard test (passes before and after): the option reaches every path `edit_path` routes to,
-        // here a shape layer's path, which stops being a live shape as with any other point edit.
+        // Red at upstream/main d547d50c7, where the option does not exist and the same params give
+        // the mirrored smooth pair (out (60, 20), in (40, 0), smooth true); a guard test for this
+        // review round's change. The option reaches the shape-layer route of `edit_path` (the Type
+        // Path and vector-mask routes are not pinned here), and the layer stops being a live shape
+        // as with any other point edit.
         let mut s = session();
         s.execute("file.new", json!({"width": 120, "height": 100, "background": "white"})).unwrap();
         let id = s.execute("shape.create", json!({"kind": "rect", "rect": [10, 10, 40, 40], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
