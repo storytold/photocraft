@@ -1208,6 +1208,33 @@ mod tests {
         let hidden = compute_histograms(&s.active().unwrap().doc, source, ToneSpace::Rgb, HistScope::WholeInput);
         assert_eq!(hidden.pixel_count, 0, "0.6 x 0 is hidden");
     }
+
+    /// #12325 review: each mask alone reveals (0.02 is above the 8-bit cutoff of 0.5/255), but the
+    /// compositor multiplies them: 0.02 x 0.02 = 0.0004 is below it, so nothing is blended in and
+    /// nothing counts. The pixel mask must not be skipped as "reveals all" next to a vector mask.
+    #[test]
+    fn two_faint_masks_whose_product_is_below_the_cutoff_count_nothing() {
+        let (mut s, id) = masked_adjustment(64, 64, 32, true);
+        s.edit("faint-masks", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            l.mask.as_mut().unwrap().surface = photocraft_doc::Surface::with_default(photocraft_doc::PixelFormat::GRAY8, &[0.02]);
+            let mut v = photocraft_doc::vector::VectorMask::new(photocraft_vector::shapes::rect(1000.0, 1000.0, 1.0, 1.0));
+            v.density = 0.98; // outside its path a vector mask reads 1 - density = 0.02
+            l.vector_mask = Some(v);
+            Ok(())
+        })
+        .unwrap();
+        let source = HistSource::BelowLayer(id);
+        let both = compute_histograms(&s.active().unwrap().doc, source, ToneSpace::Rgb, HistScope::WholeInput);
+        assert_eq!(both.pixel_count, 0, "0.02 x 0.02 is below the cutoff, so the adjustment is not blended in");
+        s.edit("no-vector-mask", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().vector_mask = None;
+            Ok(())
+        })
+        .unwrap();
+        let alone = compute_histograms(&s.active().unwrap().doc, source, ToneSpace::Rgb, HistScope::WholeInput);
+        assert_eq!(alone.pixel_count, 64 * 64, "the 0.02 pixel mask alone still reveals everything");
+    }
     #[test]
     fn vector_mask_limits_the_counted_area() {
         let (s, id) = vector_masked_adjustment(64, 64, 32);
