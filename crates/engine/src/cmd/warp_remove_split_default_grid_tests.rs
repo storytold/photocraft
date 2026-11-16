@@ -1,5 +1,6 @@
 //! #12912: removing the only split of a one-way split of the Default warp grid gives back the
 //! Default grid (one patch, its thirds drawn as guides), for a horizontal and a vertical split.
+//! A split adds only its own line (measured in the reference application), so this is one patch again.
 //! Other grids, and thirds that were edited after the split, keep today's behaviour.
 
 use super::*;
@@ -39,7 +40,7 @@ fn assert_mesh_near(got: &BezierMesh, want: &BezierMesh) {
 fn removing_the_only_horizontal_split_gives_back_the_default_grid() {
     let mut s = session();
     let split = split_cmd(&mut s, "edit.transform.splitWarpHorizontally", default_grid(), [400.0, 320.0]);
-    assert_eq!((split.us.len(), split.vs.len()), (4, 3), "3 columns x 2 rows");
+    assert_eq!((split.us.len(), split.vs.len()), (2, 3), "1 column x 2 rows");
     let m = split_cmd(&mut s, "edit.transform.removeWarpSplit", split, [400.0, 320.0]);
     assert_eq!((m.us.as_slice(), m.vs.as_slice()), ([0.0, 1.0].as_slice(), [0.0, 1.0].as_slice()));
     assert_mesh_near(&m, &default_grid());
@@ -49,7 +50,7 @@ fn removing_the_only_horizontal_split_gives_back_the_default_grid() {
 fn removing_the_only_vertical_split_gives_back_the_default_grid() {
     let mut s = session();
     let split = split_cmd(&mut s, "edit.transform.splitWarpVertically", default_grid(), [300.0, 200.0]);
-    assert_eq!((split.us.len(), split.vs.len()), (3, 4), "2 columns x 3 rows");
+    assert_eq!((split.us.len(), split.vs.len()), (3, 2), "2 columns x 1 row");
     let m = split_cmd(&mut s, "edit.transform.removeWarpSplit", split, [300.0, 200.0]);
     assert_eq!((m.us.as_slice(), m.vs.as_slice()), ([0.0, 1.0].as_slice(), [0.0, 1.0].as_slice()));
     assert_mesh_near(&m, &default_grid());
@@ -72,9 +73,10 @@ fn a_bent_default_grid_comes_back_bent() {
 
 #[test]
 fn edited_thirds_are_kept() {
-    // An anchor on a third moved after the split: merging would lose it, so the columns stay.
+    // A grid with sections at the thirds (3 x 1), split, then an anchor on a third moved:
+    // merging would lose it, so the columns stay.
     let mut s = session();
-    let mut split = split_cmd(&mut s, "edit.transform.splitWarpHorizontally", default_grid(), [400.0, 320.0]);
+    let mut split = split_cmd(&mut s, "edit.transform.splitWarpHorizontally", BezierMesh::identity(BOX, 3, 1), [400.0, 320.0]);
     let nx = split.nx();
     split.points[3][0] += 20.0;
     split.points[nx * 3 + 3][0] += 20.0;

@@ -800,26 +800,11 @@ pub enum Split {
     Remove,
 }
 
-/// The default warp draws rule-of-thirds guides on its single patch. Make those real sections
-/// before a split, so the cut divides the grid on screen instead of replacing it. A one-way split
-/// keeps only the thirds across its line and drops the ones it replaces (#12495).
-fn commit_default_sections(mesh: &mut BezierMesh, how: Split) {
-    if !matches!(how, Split::Vertical) {
-        let _ = mesh.split_u(1.0 / 3.0);
-        let _ = mesh.split_u(2.0 / 3.0);
-    }
-    if !matches!(how, Split::Horizontal) {
-        let _ = mesh.split_v(1.0 / 3.0);
-        let _ = mesh.split_v(2.0 / 3.0);
-    }
-}
-
 /// Applies a split (or removes the split nearest `at`) on `w`'s mesh (presets become custom).
 pub fn split_warp(w: &Warp, at: Option<[f64; 2]>, how: Split) -> Option<Warp> {
+    // The Default grid's thirds are its handles, drawn as guides, not sections: as in the reference
+    // application, a split adds only its own line (a vertical split of the Default grid is 2 x 1).
     let mut mesh = w.to_mesh(1, 1);
-    if !matches!(how, Split::Remove) && w.style == WarpStyle::Custom && mesh.us.len() == 2 && mesh.vs.len() == 2 {
-        commit_default_sections(&mut mesh, how);
-    }
     let (s, t) = match at {
         Some(p) => mesh.param_at(p),
         None => (0.5, 0.5),
@@ -859,7 +844,7 @@ pub fn split_warp(w: &Warp, at: Option<[f64; 2]>, how: Split) -> Option<Warp> {
 }
 
 /// After a split is removed: when what is left is the Default grid's thirds that a one-way split
-/// made real (`commit_default_sections`) and nothing else, merge them back into the Default grid's
+/// would leave and nothing else, merge them back into the Default grid's
 /// one patch, which draws them as guides again (#12912). Only when that loses nothing: splitting
 /// the merged patch at the thirds must give back the same points, so thirds whose anchors or
 /// handles were moved, or any other grid, stay as they are. The mesh doesn't record where its
@@ -1004,7 +989,7 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist|cylinder","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"values":[left,bottom,right,top,topDepth,bottomDepth,wrap]? (cylinder: silhouettes and edges in document px, the ellipses' depths in half-axis units, wrap 0..1; horizontal only),"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest","contents":bool? (smart object: `warp` is in its contents' own space, as Warp mode edits it, and is stored as it is),"placement":[9 numbers]? (with contents: the new placement, contents → document, row-major 3×3; the box's move in the same step)} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
-    const S: &str = r##"{"warp":{…}? (the warp being edited; returned split),"rect":[x0,y0,x1,y1]?,"at":[x,y]? (document point; default = middle of the patch)} — without `warp`, edits the active smart object's warp. A 1×1 custom mesh is divided at the thirds first (the guides drawn on the default grid), so splitWarpCrosswise on an identity custom warp returns a 4×4 mesh (knots at 0, 1/3, 1/2, 2/3 and 1), not a 2×2. A preset is fitted as one patch and split without that step."##;
+    const S: &str = r##"{"warp":{…}? (the warp being edited; returned split),"rect":[x0,y0,x1,y1]?,"at":[x,y]? (document point; default = middle of the patch)} — without `warp`, edits the active smart object's warp. A split adds only its own line: splitWarpCrosswise on an identity custom warp returns a 2×2 mesh (the Default grid's thirds are its handles, not sections). A preset is fitted as one patch first."##;
     const G: &str = r##"{"warp":{…}? (the warp being edited; returned with the new mesh),"rect":[x0,y0,x1,y1]?,"size":n|"default"|"3"|"4"|"5" (square patches, 1..=64; 1 and "default" are the single-patch grid)} — without `warp`/`style`/`mesh`, edits the active smart object's warp. The surface is kept and the new lines are real splits at i/n."##;
     vec![
         CommandSpec {

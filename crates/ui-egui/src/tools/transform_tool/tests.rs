@@ -886,10 +886,10 @@ fn split_tool_places_the_line_where_the_pointer_releases() {
     warp_pointer(&mut app, ToolEvent::Up { x: 14.0, y: 20.0 }, 2.0, mods);
     let us = knots(&app);
     let has = |ks: &[f64], u: f64| ks.iter().any(|k| (k - u).abs() < 0.02);
-    // The release cuts the default grid where it is, in place of its vertical thirds.
+    // The release cuts the default grid where it is: one line, no sections at the thirds.
     assert!(us.len() == 3 && has(&us, 0.25), "{us:?}");
     let vs = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.as_ref().unwrap().vs.clone();
-    assert!(has(&vs, 1.0 / 3.0) && has(&vs, 2.0 / 3.0), "horizontal sections stay: {vs:?}");
+    assert_eq!(vs, vec![0.0, 1.0], "no rows at the thirds");
     assert!(app.transform_preview.as_ref().unwrap().split_tool.is_none(), "one split ends the mode");
     // Option-click in the open places both lines, without a button armed.
     app.transform_preview.as_mut().unwrap().split_tool = None;
@@ -2924,7 +2924,7 @@ fn warp_mode_drags_anchor_with_handles_splits_and_commits() {
     split(&mut app, "edit.transform.splitWarpCrosswise", None).unwrap();
     let split_m = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.as_ref().unwrap();
     assert_eq!(split_m.points.last().copied(), Some([42.0, 38.0]), "the corner survives the cut");
-    assert!(split_m.us.iter().any(|u| (u - 1.0 / 3.0).abs() < 1e-6) && split_m.us.iter().any(|u| (u - 0.5).abs() < 1e-6));
+    assert_eq!(split_m.us, vec![0.0, 0.5, 1.0], "one cut, no sections at the thirds");
     commit(&mut app);
     let st = app.session.active().unwrap();
     let b = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds();

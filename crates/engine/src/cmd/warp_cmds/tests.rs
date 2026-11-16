@@ -308,9 +308,9 @@ fn split_cuts_existing_sections_instead_of_replacing_the_grid() {
     let plain = Warp::custom(BezierMesh::identity(b, 1, 1), b);
     let cut = split_warp(&plain, Some([b[0] + 0.25 * 90.0, 30.0]), Split::Vertical).unwrap();
     let m = cut.mesh.unwrap();
-    assert_eq!(m.us.len(), 3, "the cut at 0.25 replaces the vertical thirds: {:?}", m.us);
+    assert_eq!(m.us.len(), 3, "one cut at 0.25: {:?}", m.us);
     assert!((m.us[1] - 0.25).abs() < 1e-6, "{:?}", m.us);
-    assert_eq!(m.vs, vec![0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]);
+    assert_eq!(m.vs, vec![0.0, 1.0], "no rows at the thirds");
     let grid = BezierMesh::identity(b, 3, 3);
     let cut = split_warp(&Warp::custom(grid.clone(), b), Some([45.0, 10.0]), Split::Vertical).unwrap();
     let m = cut.mesh.unwrap();
@@ -376,16 +376,14 @@ fn smart_object_warp_is_lossless() {
 }
 
 #[test]
-fn crosswise_split_of_an_identity_custom_warp_is_four_by_four() {
+fn crosswise_split_of_an_identity_custom_warp_is_two_by_two() {
     let mut s = session(8);
     let r = s.execute("edit.transform.splitWarpCrosswise", json!({"style": "custom", "rect": [0.0, 0.0, 90.0, 60.0]})).unwrap();
     let out: Warp = serde_json::from_value(r["warp"].clone()).unwrap();
     let m = out.mesh.unwrap();
-    assert_eq!((m.us.len(), m.vs.len()), (5, 5), "thirds, then the centre cut: {:?}", (m.us.clone(), m.vs.clone()));
-    for u in [0.0, 1.0 / 3.0, 0.5, 2.0 / 3.0, 1.0] {
-        assert!(m.us.iter().any(|k| (k - u).abs() < 1e-6), "{:?}", m.us);
-        assert!(m.vs.iter().any(|k| (k - u).abs() < 1e-6), "{:?}", m.vs);
-    }
+    // Only the centre cut: the Default grid's thirds are its handles, not sections.
+    assert_eq!(m.us, vec![0.0, 0.5, 1.0]);
+    assert_eq!(m.vs, vec![0.0, 0.5, 1.0]);
 }
 
 #[test]
