@@ -136,6 +136,64 @@ fn editing_vertical_metrics_invalidates_the_imported_baseline() {
     }
 }
 
+#[test]
+fn spacing_edits_keep_the_imported_baseline_while_changing_width() {
+    let imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
+    let id = imported.layers[0].id;
+    for props in [json!({"tracking": 100}), json!({"kerning": 100}), json!({"kerning": "optical"}), json!({"kerning": "off"})] {
+        let mut session = Session::new();
+        session.add_document(imported.clone(), None);
+        // AV has nonzero pair kerning in bundled Inter, so switching it off is observable.
+        session.execute("type.edit", json!({"layer": id.0, "text": "AVAVA"})).unwrap();
+        let mut engine = photocraft_text::TextEngine::new();
+        let before = engine.layout(text(&session, id), 72.0);
+        let before_ink = text(&session, id).cache.as_ref().unwrap().content_bounds();
+        let mut params = props.clone();
+        params["layer"] = json!(id.0);
+        session.execute("type.setStyle", params).unwrap();
+        let after = engine.layout(text(&session, id), 72.0);
+        assert_eq!(after.lines.len(), 1, "{props}");
+        assert_eq!(after.lines[0].baseline, before.lines[0].baseline, "{props}");
+        assert!((after.lines[0].x1 - before.lines[0].x1).abs() > 0.01, "spacing must change: {props}");
+        assert_eq!(text(&session, id).cache.as_ref().unwrap().content_bounds().y0, before_ink.y0, "{props}");
+        // Removing the hint would introduce the original 15 px jump on a spacing-only edit.
+        let mut without_hint = text(&session, id).clone();
+        without_hint.psd_first_baseline = None;
+        let fallback = engine.layout(&without_hint, 72.0);
+        assert!((after.lines[0].baseline - fallback.lines[0].baseline - 15.0).abs() < 0.001, "{props}");
+    }
+}
+
+#[test]
+fn font_metric_edits_stop_using_the_imported_baseline() {
+    let imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
+    let id = imported.layers[0].id;
+    for mut params in [
+        json!({"font": "JetBrains Mono"}),
+        json!({"fontStyle": "SemiBold"}),
+        json!({"weight": 600}),
+        json!({"italic": true}),
+        json!({"size": 48}),
+        json!({"variations": {"wght": 650}}),
+        json!({"caps": "small"}),
+        json!({"baseline": "superscript"}),
+    ] {
+        let mut session = Session::new();
+        session.add_document(imported.clone(), None);
+        params["layer"] = json!(id.0);
+        session.execute("type.setStyle", params.clone()).unwrap();
+        let layer = text(&session, id);
+        assert!(!layer.psd_first_baseline.as_ref().unwrap().matches(&layer.char_runs()[0].style), "{params}");
+        let mut without_hint = layer.clone();
+        without_hint.psd_first_baseline = None;
+        let mut engine = photocraft_text::TextEngine::new();
+        let layout = engine.layout(layer, 72.0);
+        let fallback = engine.layout(&without_hint, 72.0);
+        assert!(!layout.lines.is_empty(), "{params}");
+        assert_eq!(layout.lines, fallback.lines, "{params}");
+    }
+}
+
 /// Keep imported text aligned through edit entry, typing, undo/redo and native/PSD saves.
 #[test]
 fn entering_psd_type_edit_without_typing_keeps_the_recorded_baseline() {
