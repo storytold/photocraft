@@ -132,6 +132,13 @@ const UNEVEN_FULL_HEIGHT_TWIST_TOL: f64 = 1.15;
 /// split from 0.9972 (and stay whole at 0.9900), while cells measured by their top or bottom row
 /// stay whole up to 0.9999.
 const INNER_ROW_WEIGHT: f64 = 1.005;
+/// In a quilt's patch a cell's row asks for a split across where its inner control points drift
+/// unevenly along it ([`uneven_drift`]) by this much (document px), and a column asks for a split
+/// down from [`QUILT_COL_UNEVEN_TOL`]. Lumpy meshes split 3 × 2 and 2 × 3 show both: rows split
+/// from 0.65 and columns stay whole at 0.674.
+const QUILT_ROW_UNEVEN_TOL: f64 = 0.62;
+/// See [`QUILT_ROW_UNEVEN_TOL`].
+const QUILT_COL_UNEVEN_TOL: f64 = 0.72;
 /// A cell of a one-patch full mesh twisted past this splits both ways (probes with one inner
 /// control point moved: cells at 2.25 px split across and down, at 1.75 px only the one way).
 const BOTH_WAYS_TWIST_TOL: f64 = 2.0;
@@ -298,19 +305,25 @@ impl Net {
     }
     /// The largest of the net's columns' [`need`]s, its inner control columns included.
     fn cols_need(&self) -> f64 {
-        (0..self.nu).map(|i| need(&self.ctrl_col(i))).fold(0.0, f64::max)
+        self.cols_cut_need(f64::INFINITY)
     }
-    /// The largest of the net's rows' [`need`]s, its inner control rows included and counted
+    /// The largest of the net's columns' [`cut_need`]s with uneven drift tolerance `uneven`.
+    fn cols_cut_need(&self, uneven: f64) -> f64 {
+        (0..self.nu).map(|i| cut_need(&self.ctrl_col(i), uneven)).fold(0.0, f64::max)
+    }
+    /// A quilt cell's need across: the largest of its net's rows' [`cut_need`]s (uneven drift
+    /// over [`QUILT_ROW_UNEVEN_TOL`]), its inner control rows included and counted
     /// [`INNER_ROW_WEIGHT`] times.
-    fn rows_need(&self) -> f64 {
-        self.rows_need_by(INNER_ROW_WEIGHT)
+    fn quilt_rows_need(&self) -> f64 {
+        self.rows_need_by(INNER_ROW_WEIGHT, QUILT_ROW_UNEVEN_TOL)
     }
-    /// The largest of the net's rows' [`need`]s, its inner control rows counted `inner` times.
-    fn rows_need_by(&self, inner: f64) -> f64 {
+    /// The largest of the net's rows' [`cut_need`]s with uneven drift tolerance `uneven`, its
+    /// inner control rows counted `inner` times.
+    fn rows_need_by(&self, inner: f64, uneven: f64) -> f64 {
         let last = self.nv.saturating_sub(1);
         (0..self.nv)
             .map(|j| {
-                let n = need(&self.ctrl_row(j));
+                let n = cut_need(&self.ctrl_row(j), uneven);
                 if j == 0 || j == last { n } else { inner * n }
             })
             .fold(0.0, f64::max)
@@ -414,6 +427,13 @@ fn uneven_drift(c: &[P]) -> f64 {
     let drift = |k: usize| c.get(k).map_or(0.0, |p| ((p[0] - a[0]) * ch[0] + (p[1] - a[1]) * ch[1]) / len - len * k as f64 / n as f64);
     let d = (drift(1) - drift(n - 1)).abs();
     if d.is_finite() { d } else { 0.0 }
+}
+
+/// [`need`], or the segment's [`uneven_drift`] over `uneven` (px) where that is larger; an
+/// infinite `uneven` leaves [`need`] alone.
+fn cut_need(c: &[P], uneven: f64) -> f64 {
+    let n = need(c);
+    if uneven.is_finite() && uneven > 0.0 { n.max(uneven_drift(c) / uneven) } else { n }
 }
 
 /// [`need`], with the first inner control point's own drift along the chord, counted
@@ -791,8 +811,8 @@ fn strip_down_cuts(net: &Net, level_cells: &[Cell], decisions: &mut [(bool, bool
     }
     let strip = |v0: f64| {
         let s = net.sub([0.0, 1.0, v0, v0 + 0.5]);
-        let sides = [0.0, 0.5, 1.0].iter().map(|&u| need(&segment(net.col(u), v0, v0 + 0.5))).fold(0.0, f64::max);
-        let fv = sides.max(s.cols_need());
+        let sides = [0.0, 0.5, 1.0].iter().map(|&u| cut_need(&segment(net.col(u), v0, v0 + 0.5), QUILT_COL_UNEVEN_TOL)).fold(0.0, f64::max);
+        let fv = sides.max(s.cols_cut_need(QUILT_COL_UNEVEN_TOL));
         (s.top_row_twist(), s.twist(), fv)
     };
     let (top, bottom) = (strip(0.0), strip(0.5));
@@ -842,7 +862,7 @@ fn cell_needs<'a>(net: &Net, c: Cell, rules: &Rules, sub: impl Fn() -> &'a Net) 
     let full_one = rules.full_mesh();
     // A quilt's patch measures its cells' rows by all the rows of their control nets.
     let fu = if rules.twist_spreads {
-        sub().rows_need()
+        sub().quilt_rows_need()
     } else {
         let w = match (full_one, u0 < EPS && u1 - u0 > 0.5 - EPS) {
             (true, true) => LEFT_EDGE_FIRST_POINT_WEIGHT,
@@ -852,13 +872,15 @@ fn cell_needs<'a>(net: &Net, c: Cell, rules: &Rules, sub: impl Fn() -> &'a Net) 
         need_weighing_first(&segment(net.row(v0), u0, u1), w).max(need_weighing_first(&segment(net.row(v1), u0, u1), w))
     };
     // A whole quilt patch measures its columns by every column of its control net.
+    // A quilt's patch also counts its columns' uneven drift.
+    let tol = if rules.twist_spreads { QUILT_COL_UNEVEN_TOL } else { f64::INFINITY };
     let fv = if rules.twist_spreads && u1 - u0 > 1.0 - EPS && v1 - v0 > 1.0 - EPS {
-        net.cols_need()
+        net.cols_cut_need(tol)
     } else {
-        need(&segment(net.col(u0), v0, v1)).max(need(&segment(net.col(u1), v0, v1)))
+        cut_need(&segment(net.col(u0), v0, v1), tol).max(cut_need(&segment(net.col(u1), v0, v1), tol))
     };
     // A one-patch full mesh also measures its cells by every row and column of their control nets.
-    if full_one { (fu.max(sub().rows_need_by(1.0)), fv.max(sub().cols_need())) } else { (fu, fv) }
+    if full_one { (fu.max(sub().rows_need_by(1.0, f64::INFINITY)), fv.max(sub().cols_need())) } else { (fu, fv) }
 }
 
 /// A one-patch full mesh's cells twisted past [`BOTH_WAYS_TWIST_TOL`] (`measured`, column need
@@ -1474,6 +1496,19 @@ mod tests {
         assert!(need(&[[0.0, 0.0], [1.25, 0.0], [2.25, 0.0], [3.0, 0.0]]) < 1.0);
     }
 
+    /// A quilt cell's row with inner points drifting 0.65 px apart asks for a split across, though
+    /// its plain need is small; a column needs [`QUILT_COL_UNEVEN_TOL`]; outside quilts nothing
+    /// changes.
+    #[test]
+    fn quilt_cut_need_counts_uneven_drift() {
+        let seg = [[0.0, 0.0], [10.325, 0.0], [19.675, 0.0], [30.0, 0.0]];
+        assert!(need(&seg) < 1.0);
+        assert!((uneven_drift(&seg) - 0.65).abs() < 1e-9);
+        assert!(cut_need(&seg, QUILT_ROW_UNEVEN_TOL) >= 1.0);
+        assert!(cut_need(&seg, QUILT_COL_UNEVEN_TOL) < 1.0);
+        assert_eq!(cut_need(&seg, f64::INFINITY), need(&seg));
+    }
+
     /// Inner points drifting apart along the chord count as uneven; drifting together, they don't.
     #[test]
     fn uneven_drift_takes_the_first_drift_against_the_last() {
@@ -1876,8 +1911,8 @@ mod tests {
                 .flat_map(|j| (0..4).map(move |i| [10.0 * i as f64, 10.0 * j as f64 + if j == j_bent && (i == 1 || i == 2) { 0.997 } else { 0.0 }]))
                 .collect(),
         };
-        assert!(net(0).rows_need() < 1.0, "a top row at 0.997 needs no split");
-        assert!(net(1).rows_need() > 1.0, "an inner row at 0.997 does");
+        assert!(net(0).quilt_rows_need() < 1.0, "a top row at 0.997 needs no split");
+        assert!(net(1).quilt_rows_need() > 1.0, "an inner row at 0.997 does");
     }
 
     /// In a quilt with a single row of patches, a point on a patch's inner seam stays where the
