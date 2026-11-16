@@ -109,6 +109,37 @@ fn paint_arrow(ctx: &egui::Context, p: egui::Pos2, fill: Color32, edge: Color32)
     });
 }
 
+/// Direct Selection's hollow arrow as the pointer (#13220): white with a black outline, its tip on
+/// `p`, one unit into a 24-unit box as the reference's hotspot does. Painted straight onto a
+/// tooltip-order layer, not an `Area`: an area's first frame is an invisible sizing pass and it
+/// fades in again after every frame it was not shown, both while the OS cursor is already hidden.
+/// The caller hides the OS cursor (`CursorIcon::None`).
+pub fn cursor_hollow_arrow(ctx: &egui::Context, p: egui::Pos2) {
+    // The arrowhead in a 24-unit box with its tip at (1, 1): tip, right flank, notch, tail and up
+    // the left flank. `PathShape` fills convex shapes only, so the body fans from the tip in three
+    // triangles and the tail is one more, while the concave silhouette is stroked on its own: the
+    // inner edges stay out of sight.
+    const SIZE: f32 = 22.0;
+    const TIP: (f32, f32) = (1.0, 1.0);
+    const TIP_R: (f32, f32) = (13.4, 11.8);
+    const NOTCH: (f32, f32) = (8.0, 12.8);
+    const TAIL_R: (f32, f32) = (10.4, 19.6);
+    const TAIL_END: (f32, f32) = (7.6, 20.6);
+    const TAIL_L: (f32, f32) = (5.2, 14.0);
+    const TIP_L: (f32, f32) = (1.0, 17.6);
+    let unit = SIZE / 24.0;
+    let origin = p - egui::vec2(TIP.0, TIP.1) * unit;
+    let at = |c: (f32, f32)| origin + egui::vec2(c.0, c.1) * unit;
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-hollow-arrow-cursor")));
+    let pieces: [&[(f32, f32)]; 4] = [&[TIP, TIP_R, NOTCH], &[TIP, NOTCH, TAIL_L], &[TIP, TAIL_L, TIP_L], &[NOTCH, TAIL_R, TAIL_END, TAIL_L]];
+    for piece in pieces {
+        let points: Vec<egui::Pos2> = piece.iter().map(|&c| at(c)).collect();
+        painter.add(egui::Shape::convex_polygon(points, Color32::WHITE, egui::Stroke::NONE));
+    }
+    let outline_points: Vec<egui::Pos2> = [TIP, TIP_R, NOTCH, TAIL_R, TAIL_END, TAIL_L, TIP_L].iter().map(|&c| at(c)).collect();
+    painter.add(egui::Shape::closed_line(outline_points, egui::Stroke::new(1.6, Color32::from_black_alpha(230))));
+}
+
 /// A small icon beside the OS arrow pointer at `p` (Photoshop's cursor badges: scissors for
 /// cutting the selected pixels). Below-right of the arrow, white with a dark outline. The caller
 /// keeps the arrow (`CursorIcon::Default`).
