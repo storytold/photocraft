@@ -42,7 +42,7 @@ const WANTS: &[Want] = &[
         white: [4080.0; 3],
         sample_max: (4095, 2207),
     },
-    // The same camera after DNG Converter, with its own measured sample oracle.
+    // The same camera after DNG Converter: the sensor data round-trips identically.
     Want {
         file: "CRW_4061.DNG",
         format: RawFormat::Dng,
@@ -158,7 +158,7 @@ fn developing_produces_the_crop_in_16bit_rgb() {
         // A real exposure covers a sane share of the range and never leaves it. The PowerShot
         // CR2 is the documented exception: it carries no as-shot white
         // balance we read, so the grey-world estimate brightens these scenes (the PowerShot's
-        // own DNG, with its file WB, develops blacks to ~0 â€” reading the maker-note WB of
+        // own DNG, with its file WB, develops blacks to ~0 — reading the maker-note WB of
         // Canon is the follow-up). Sony's SR2SubIFD now supplies the applied gains and black.
         let estimated_wb = w.file == "IMG_4059.CR2";
         let black_cap: u16 = if estimated_wb { 16384 } else { 4096 };

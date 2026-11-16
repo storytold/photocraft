@@ -1170,11 +1170,15 @@ fn a_latin1_embedded_svg_that_decodes_past_the_budget_is_refused() {
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
     let error = parse_bounded(image_svg(&format!("{wide}{small}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
-    // An unreadable image charges the entire budget before the Latin-1 child is retried.
-    // The retry must measure decoded text too, not only its smaller inflated byte stream.
-    let compressed = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>");
+    // A damaged predecessor may consume the accounting budget, but must not hide
+    // the next child's own decoded-text overrun during refusal reclassification.
+    let compressed = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
     let damaged = embedded_image("image/svg+xml", &compressed[..compressed.len() / 2]);
     let error = parse_bounded(image_svg(&format!("{damaged}{wide}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+    assert!(error.to_string().contains("byte or nesting budget"), "{error}");
+    let plain = format!("<image width=\"1\" height=\"1\" href=\"data:image/svg+xml;base64,{}\"/>", base64(&latin1));
+    assert!(image_svg(&format!("{damaged}{plain}")).len() < budget, "exercise child decoding, not the outer source cap");
+    let error = parse_bounded(image_svg(&format!("{damaged}{plain}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
 }
 

@@ -217,3 +217,43 @@ fn raster_callbacks_own_pixel_charges_and_keep_mime_aliases_separate() {
     assert_eq!(usage.raster_pixels, 4);
     assert_eq!(usage.invalid_raster_images, 1, "a mismatched MIME cannot borrow the successful PNG cache entry");
 }
+
+// Preserve upstream's text_rechecked boundary using the integrated real resolver.
+// Plain and gzip retries spend source bytes before decoding, independently of
+// inflation work and the drawing's genuine decoded-content capacity.
+#[test]
+fn plain_legacy_encoding_rechecks_have_a_separate_bounded_work_allowance() {
+    super::super::on_svg_stack(|| {
+        let xml = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg><!--\xe9--></svg>";
+        for compressed in [false, true] {
+            let (options, state, resolver) = wrapped_options(MAX_RASTER_PIXELS);
+            let encode = |bytes: &[u8]| {
+                if compressed {
+                    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                    encoder.write_all(bytes).unwrap();
+                    encoder.finish().unwrap()
+                } else {
+                    bytes.to_vec()
+                }
+            };
+            assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(encode(&[0xff])), &options).is_none());
+            state.lock().unwrap_or_else(PoisonError::into_inner).classification_text_bytes_left = xml.len();
+            assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(encode(xml)), &options).is_none());
+            {
+                let state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                assert_eq!(state.classification_text_bytes_left, 0);
+                assert_eq!(state.svg_resource_limits, 0, "exactly fitting text recheck is permitted");
+                assert_eq!(state.classification_bytes_left, MAX_BOUNDED_SVG_BYTES as usize - usize::from(compressed) * xml.len());
+            }
+            assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(encode(xml)), &options).is_none());
+            let state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            assert_eq!(state.classification_text_bytes_left, 0);
+            assert_eq!(state.svg_resource_limits, 1, "the next source cannot repeat text-conversion work");
+            assert_eq!(state.invalid_svg, 1, "the original encoding error stays invalid");
+            assert_eq!(state.svg_limits, 2);
+            assert_eq!(resolver.usage().embedded_svg_count, 0, "rechecked children are never admitted");
+        }
+        Ok(())
+    })
+    .unwrap();
+}

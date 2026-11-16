@@ -491,8 +491,8 @@ fn excessive_mime_parameters_are_disclosed_only_for_used_image_resources() {
 fn valid_image_at_the_mime_parameter_boundary_keeps_its_pixels() {
     let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
     let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
-    // 63 MIME parameters plus the base64 marker hit the admitted 64-separator boundary.
-    let parameters = (0..63).map(|index| format!(";p{index}=x")).collect::<String>();
+    // This helper percent-encodes the payload; 64 parameters hit the separator boundary.
+    let parameters = (0..64).map(|index| format!(";p{index}=x")).collect::<String>();
     let text = drawing(&url(&format!("image/png{parameters}"), &png));
     for bytes in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
         let imported = crate::import("valid.svg", &bytes).unwrap();

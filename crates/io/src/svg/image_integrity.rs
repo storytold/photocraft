@@ -26,6 +26,9 @@ pub(super) struct Integrity {
     svg_failure_exhausted: bool,
     classification_bytes_left: usize,
     classification_content_left: usize,
+    // Upstream's text_rechecked contract: even plain legacy-encoded retries
+    // allocate/scan decoded text. Charge source bytes before every retry decode.
+    classification_text_bytes_left: usize,
     raster: HashMap<usize, RasterRecord>,
     encoded_left: usize,
     invalid_raster: usize,
@@ -45,6 +48,7 @@ impl Integrity {
             svg_failure_exhausted: false,
             classification_bytes_left: MAX_BOUNDED_SVG_BYTES as usize,
             classification_content_left: MAX_BOUNDED_SVG_BYTES as usize,
+            classification_text_bytes_left: MAX_BOUNDED_SVG_BYTES as usize,
             raster: HashMap::new(),
             encoded_left: (MAX_INFLATED_BYTES + MAX_BOUNDED_SVG_BYTES) as usize,
             invalid_raster: 0,
@@ -101,6 +105,12 @@ impl Integrity {
                 if compressed {
                     self.classification_bytes_left = self.classification_bytes_left.saturating_sub(bytes.len());
                 }
+                let Some(text_left) = self.classification_text_bytes_left.checked_sub(bytes.len()) else {
+                    self.svg_limits = self.svg_limits.saturating_add(1);
+                    self.svg_resource_limits = self.svg_resource_limits.saturating_add(1);
+                    return;
+                };
+                self.classification_text_bytes_left = text_left;
                 match craft_svg::svgz::decode(&bytes) {
                     Ok(text) => text.len() > content_left,
                     Err(_) => {
