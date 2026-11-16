@@ -303,7 +303,8 @@ impl PhotocraftApp {
         // A TIFF asks for TIFF Options (compression, pyramid, transparency, layers); the save
         // continues from the prompt, which records the step once answered.
         if choices.tiff.is_none() && tiff_options_ui::wants_prompt(self, &path) {
-            tiff_options_ui::park(self, path.clone(), false, "file.saveAs")?;
+            let copy = self.saves_copy(&path, None)?;
+            tiff_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         let tiff_layers = choices.tiff.and_then(|t| t.layers);
@@ -559,7 +560,7 @@ impl PhotocraftApp {
         // so the editable document isn't marked saved after losing them (#3806).
         let st = self.session.active().ok_or("no document")?;
         let tiff = |p: &str| matches!(photocraft_engine::file_cmds::extension(p).as_deref(), Some("tif" | "tiff"));
-        let holds = photocraft_engine::file_cmds::holds_at(&st.doc, path) || tiff(path);
+        let holds = photocraft_engine::file_cmds::holds_at(&st.doc, path) || (tiff(path) && photocraft_io::tiff_layers::supports_layers(&st.doc));
         let lives_layered = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::saves_in_place(p) || tiff(p));
         Ok(tiff_layers == Some(false) || (!holds && (plain_raster(&st.doc).is_none() || lives_layered)))
     }
@@ -569,6 +570,7 @@ impl PhotocraftApp {
     /// (`None`: 32 with an alpha channel or transparency, else 24), the DDS options and the JPEG
     /// Options.
     fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
+        let tiff_layers = tiff_layers.or(choices.tiff.and_then(|t| t.layers));
         let copy = self.saves_copy(&path, tiff_layers)?;
         let settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
         match self.write_document(path.clone(), &settings, copy)? {
@@ -578,8 +580,8 @@ impl PhotocraftApp {
     }
 
     /// Encodes the active document with `settings` and writes it to `path`, which becomes the
-    /// document's path unless saving a copy. A copy leaves the original's path and unsaved
-    /// changes intact. Returns the path and the export warnings (also shown to the user), or
+    /// document's path unless saving a copy. An incomplete copy over the own file invalidates
+    /// its savepoint; other copies keep its saved state. Returns the path and export warnings, or
     /// `None` when the save went to a background job (#2017), which finishes it in
     /// [`jobs_ui::tick`].
     pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
@@ -592,13 +594,101 @@ impl PhotocraftApp {
         let st = self.session.active().ok_or("no document")?;
         ensure_memory_to_save(&st.doc, &path)?;
         let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
+        let invalidate = copy && Self::copy_needs_savepoint_check(&st.doc, &path, settings);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
-        write(&path, &bytes)?;
+        let written_bytes = write(&path, &bytes);
+        if invalidate {
+            self.invalidate_incomplete_copy(doc, &path, written_bytes.is_ok());
+        }
+        if written_bytes.is_err() {
+            self.detach_others_after_replaced_write(&path, doc);
+        }
+        written_bytes?;
         let revision = saved_revision_after_write(!self.services.write_unconfirmed, written, previous);
         self.saved(doc, revision, &path, &warnings, copy);
         Ok(Some((path, warnings)))
+    }
+
+    /// A layered copy keeps the editable document; flat copies can change pixels, alpha or
+    /// layers. Recheck file identity after writing before invalidating its saved state.
+    pub(crate) fn copy_needs_savepoint_check(doc: &photocraft_doc::Document, path: &str, settings: &ExportSettings) -> bool {
+        let layered = photocraft_engine::file_cmds::holds_at(doc, path)
+            || (tiff_options_ui::is_tiff_path(path) && settings.tiff_layers && photocraft_io::tiff_layers::keeps_document(doc));
+        !layered
+    }
+
+    /// A successful incomplete write may have replaced this document's file. Atomic replacement
+    /// of a different hard-link entry leaves its own file intact.
+    pub(crate) fn invalidate_savepoint(&mut self, doc: DocId, path: &str) {
+        if self.session.savepoints_at(path).contains(&doc) {
+            self.session.invalidate_savepoints(&[doc]);
+        }
+    }
+
+    /// [`Self::invalidate_savepoint`] after writing an incomplete copy: `written` says whether the
+    /// write reported success. A failed write normally leaves the file as it was, since every
+    /// document write goes through `photocraft_format::atomic`, which replaces the destination only
+    /// once the new file is complete and flushed. A folder flush can fail *after* the rename,
+    /// though, and that error comes back with the copy already in place; the disk stamp tells the
+    /// two apart, so a save that may have replaced the file never leaves the document looking saved.
+    pub(crate) fn invalidate_incomplete_copy(&mut self, doc: DocId, path: &str, written: bool) {
+        if written || self.bound_file_changed(doc) {
+            self.invalidate_savepoint(doc, path);
+        }
+    }
+
+    /// Whether `doc`'s bound file changed on disk since this app last saw it, however a write named
+    /// the file. [`Self::changed_on_disk`] compares the spelling, and an alias—`nested/../own.tif`,
+    /// a symlink, another letter case on a case-insensitive volume—is the same entry, so asking at
+    /// the bound path is what tells a published copy from one that failed before the rename. A file
+    /// that is gone, or one never stamped, counts as unchanged, as there.
+    fn bound_file_changed(&self, doc: DocId) -> bool {
+        let Some((own, then)) = self.disk_stamps.get(&doc) else { return false };
+        self.services.file_stamp.as_ref().and_then(|stamp| stamp(own)).is_some_and(|now| now != *then)
+    }
+
+    /// A copy that failed after the atomic writer replaced its bytes stands in for the file all the
+    /// same: the other open documents bound to it no longer match it, exactly as they are detached
+    /// after a successful write. Runs whatever this document's own saved state was left as — a
+    /// complete copy leaves `invalidate` false — and never re-stamps, since a stamp cannot tell our
+    /// write from another app's.
+    pub(crate) fn detach_others_after_replaced_write(&mut self, path: &str, saver: DocId) {
+        if self.published_over(path) {
+            self.detach_others_from_file(path, saver);
+            self.sync_views();
+        }
+    }
+
+    /// Whether a write to `path` replaced the file behind one of the documents saved there even
+    /// though it reported an error (see [`Self::invalidate_incomplete_copy`]).
+    pub(crate) fn published_over(&self, path: &str) -> bool {
+        self.session.savepoints_at(path).iter().any(|doc| self.bound_file_changed(*doc))
+    }
+
+    /// Record this app's write only when it replaced the document's bound file; a copy elsewhere
+    /// must not hide later external changes to the source.
+    pub(crate) fn remember_written_savepoint(&mut self, doc: DocId, path: &str) {
+        if let Some(own) = self.session.documents().iter().find(|st| st.doc.id == doc).and_then(|st| st.path.clone())
+            && photocraft_engine::file_cmds::same_file(&own, path)
+        {
+            self.remember_stamp(doc, &own);
+        }
+    }
+
+    /// Export As and layer exports may resize or replace the composite. Invalidate documents
+    /// still bound to the destination after the successful write.
+    pub(crate) fn exported_over_savepoints(&mut self, path: &str) {
+        let docs = self.session.savepoints_at(path);
+        if docs.is_empty() {
+            return;
+        }
+        self.session.invalidate_savepoints(&docs);
+        for doc in docs {
+            self.remember_written_savepoint(doc, path);
+        }
+        self.sync_views();
     }
 
     /// After `saver` was written to `path`, any other open document bound to that file no longer
@@ -716,9 +806,9 @@ impl PhotocraftApp {
             if hooks {
                 self.push_recent(path);
             }
-        } else if self.disk_stamps.get(&doc).is_some_and(|(own, _)| own == path) {
-            // A copy written over the document's own file is this app's change too.
-            self.remember_stamp(doc, path);
+        }
+        if copy || !arm {
+            self.remember_written_savepoint(doc, path);
         }
         self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).invalidate(path);
         self.ui.status_error = false;
@@ -837,10 +927,18 @@ impl PhotocraftApp {
         let state = self.session.active().ok_or("no document")?;
         ensure_memory_to_save(&state.doc, &target)?;
         let (doc, revision) = (state.doc.id, state.revision);
+        let invalidate = !photocraft_engine::file_cmds::holds_at(&state.doc, &target) && Self::copy_needs_savepoint_check(&state.doc, &target, &settings);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &settings)?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
-        write(&target, &bytes)?;
+        let written_bytes = write(&target, &bytes);
+        if invalidate {
+            self.invalidate_incomplete_copy(doc, &target, written_bytes.is_ok());
+        }
+        if written_bytes.is_err() {
+            self.detach_others_after_replaced_write(&target, doc);
+        }
+        written_bytes?;
         self.saved_automation(doc, revision, &target, &warnings, false);
         Ok(reply(&target, &warnings))
     }

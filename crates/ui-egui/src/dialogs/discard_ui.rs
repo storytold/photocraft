@@ -149,10 +149,13 @@ pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     // A save or print worker must finish its external side effect before the process exits;
-    // `jobs_ui` repeats the close after completion and keeps errors visible.
+    // `jobs_ui` repeats the close after completion and keeps errors visible. The repeated close
+    // asks again: a copy may leave a document unsaved while the worker runs, so an Exit answered
+    // before it began must not carry over (`jobs_ui::close_after_saves`).
     if app.saving() || app.printing() {
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         app.jobs.close_after_saves = true;
+        app.allow_close = false;
         return;
     }
     // Leaving: through the platform's own quit where there is one (see `Services::quit`), with

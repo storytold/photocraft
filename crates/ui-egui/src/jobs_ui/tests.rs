@@ -20,7 +20,9 @@ fn app_harness() -> Harness<'static, PhotocraftApp> {
 
 /// [`app_harness`] over the given services (the beep test records the hook's calls).
 fn app_harness_with(services: crate::Services) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(|cc| {
+    let builder = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8);
+    let builder = if std::env::var_os("PHOTOCRAFT_COPY_SNAPSHOTS").is_some() { builder.wgpu() } else { builder };
+    let mut h = builder.build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 320, "height": 240})).unwrap();
@@ -763,6 +765,75 @@ fn quitting_waits_for_a_background_save_to_finish() {
 }
 
 #[test]
+fn a_background_copy_overwrite_invalidates_only_after_a_successful_write() {
+    for outcome in ["success", "failure", "cancel"] {
+        let mut h = app_harness();
+        let path = "/tmp/photocraft-test/own.tif";
+        h.state_mut().session.active_mut().unwrap().saved_to(path.into());
+        let revision = h.state().session.active().unwrap().revision;
+        let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+        h.state_mut().services.save_file = Some(gates.save((outcome == "failure").then_some("disk full")));
+        let settings = crate::ExportSettings { tiff_layers: false, ..Default::default() };
+        assert_eq!(h.state_mut().write_document(path.into(), &settings, true), Ok(None));
+        assert!(!h.state().has_unsaved_work(), "{outcome}: a pending write has changed nothing");
+        if outcome == "cancel" {
+            let job = h.state().jobs.saves[0].job;
+            crate::jobs_ui::cancel(h.state_mut(), job);
+        }
+        gates.encode.store(true, Ordering::Relaxed);
+        step_until(&mut h, |app| !app.saving());
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.revision, revision, "{outcome}: the document was not edited");
+        assert_eq!(st.path.as_deref(), Some(path));
+        assert_eq!(st.is_dirty(), outcome == "success", "{outcome}: only a completed replacement invalidates the savepoint");
+        assert_eq!(gates.written().len(), usize::from(outcome == "success"));
+    }
+}
+
+#[test]
+fn quitting_during_a_destructive_copy_asks_before_discarding_the_layers() {
+    let mut h = app_harness();
+    let path = "/tmp/photocraft-test/own.tif";
+    h.state_mut().session.active_mut().unwrap().saved_to(path.into());
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    let settings = crate::ExportSettings { tiff_layers: false, ..Default::default() };
+    h.state_mut().write_document(path.into(), &settings, true).unwrap();
+    assert!(press_window_close(h.state_mut()));
+    assert!(h.state().jobs.close_after_saves);
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |app| !app.saving());
+    h.run_steps(3);
+    assert!(h.state().has_unsaved_work());
+    assert!(h.state().discard.is_some(), "the deferred quit asks about the layers now missing from disk");
+    assert!(!h.state().allow_close);
+    if let Some(dir) = std::env::var_os("PHOTOCRAFT_COPY_SNAPSHOTS") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        h.render().unwrap().save(dir.join("discard-layers-close-warning.png")).unwrap();
+    }
+}
+
+#[test]
+fn a_background_copy_invalidates_its_source_even_after_switching_tabs() {
+    let mut h = app_harness();
+    let path = "/tmp/photocraft-test/own.tif";
+    h.state_mut().session.active_mut().unwrap().saved_to(path.into());
+    let doc = h.state().active_doc_id().unwrap();
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().write_document(path.into(), &crate::ExportSettings { tiff_layers: false, ..Default::default() }, true).unwrap();
+    h.state_mut().run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    let other = h.state().active_doc_id().unwrap();
+    h.state_mut().session.active_mut().unwrap().saved_to("other.psd".into());
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |app| !app.saving());
+    assert_eq!(h.state().active_doc_id().unwrap(), other);
+    assert!(!h.state().session.active().unwrap().is_dirty(), "the other tab was not invalidated");
+    assert!(h.state().session.documents().iter().find(|st| st.doc.id == doc).unwrap().is_dirty());
+}
+
+#[test]
 fn a_failed_save_does_not_close_the_window_over_its_error() {
     let mut h = app_harness();
     let gates = Gates::default();
@@ -1295,4 +1366,134 @@ fn asynchronous_place_completion_displays_result_warnings() {
     // A frame placement bypasses transform startup but must still display its warnings.
     super::finish_place(&mut app, &egui::Context::default(), place, photocraft_engine::jobs::JobOutcome::Done(json!({"frame":1,"warnings":[warning]})));
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == warning)));
+}
+
+#[test]
+fn background_copy_overwrite_rechecks_file_identity_after_atomic_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    let alias = dir.path().join("alias.tif").to_string_lossy().into_owned();
+    std::fs::write(&own, b"saved original").unwrap();
+    std::fs::hard_link(&own, &alias).unwrap();
+    let mut h = app_harness();
+    h.state_mut().session.active_mut().unwrap().saved_to(own.clone());
+    h.state_mut().services.save_file = Some(Arc::new(|doc, path, settings, ctl| {
+        ctl.check()?;
+        let result = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+        photocraft_format::atomic_write(std::path::Path::new(path), &result.bytes).map_err(|e| e.to_string())?;
+        Ok(result.warnings)
+    }));
+    let settings = crate::ExportSettings { tiff_layers: false, ..Default::default() };
+    assert_eq!(h.state_mut().write_document(alias.clone(), &settings, true), Ok(None));
+    step_until(&mut h, |app| !app.saving());
+    assert!(!h.state().has_unsaved_work());
+    assert_eq!(std::fs::read(&own).unwrap(), b"saved original");
+    assert_ne!(std::fs::read(&alias).unwrap(), b"saved original");
+}
+
+#[test]
+fn background_copy_overwrite_recreating_a_deleted_backing_file_through_an_alias_is_unsaved() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    std::fs::create_dir(dir.path().join("nested")).unwrap();
+    let alias = dir.path().join("nested").join("..").join("own.tif").to_string_lossy().into_owned();
+    std::fs::write(&own, b"saved original").unwrap();
+    let mut h = app_harness();
+    h.state_mut().session.active_mut().unwrap().saved_to(own.clone());
+    std::fs::remove_file(&own).unwrap();
+    h.state_mut().services.save_file = Some(Arc::new(|doc, path, settings, ctl| {
+        ctl.check()?;
+        let result = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+        photocraft_format::atomic_write(std::path::Path::new(path), &result.bytes).map_err(|e| e.to_string())?;
+        Ok(result.warnings)
+    }));
+    let settings = crate::ExportSettings { tiff_layers: false, ..Default::default() };
+    assert_eq!(h.state_mut().write_document(alias, &settings, true), Ok(None));
+    step_until(&mut h, |app| !app.saving());
+    assert!(h.state().session.active().unwrap().is_dirty());
+    assert!(photocraft_codecs::tiff_photoshop_tags(&std::fs::read(&own).unwrap()).1.is_none());
+}
+
+/// #11258 review: a quit agreed to before a copy-overwrite job ends must not close over the file
+/// that copy replaced. `advance` sets `allow_close` when the exit prompt is answered, and the close
+/// it sends is held while another save runs; the held close is judged again once the job ends, so
+/// the document the finished copy left unsaved is asked about instead of closed.
+#[test]
+fn a_held_quit_asks_about_the_file_a_finished_copy_replaced() {
+    let mut h = app_harness();
+    let path = "/tmp/photocraft-test/own.tif";
+    h.state_mut().session.active_mut().unwrap().saved_to(path.into());
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    let settings = crate::ExportSettings { tiff_layers: false, ..Default::default() };
+    h.state_mut().write_document(path.into(), &settings, true).unwrap();
+    // Quitting is agreed to already (the exit prompt was answered while another save was still
+    // running) and the window close waits for the copy.
+    h.state_mut().allow_close = true;
+    assert!(press_window_close(h.state_mut()), "the close waits for the copy");
+    assert!(h.state().jobs.close_after_saves);
+    assert!(!h.state().allow_close, "the held close is judged again, so quitting is asked about");
+    // The copy ends, replacing the document's layers with a flat image.
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |app| !app.saving());
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().is_dirty(), "the copy left the file short of its document");
+    assert!(h.state().discard.is_some(), "the held quit asks about the layers now missing from disk");
+    assert!(!h.state().allow_close, "quitting is not agreed to until it is answered");
+    assert_eq!(h.state().session.documents().len(), 1, "the window stays open");
+}
+
+/// A background copy of A over another open document B's file that publishes and then fails must
+/// detach B like a successful copy does, even though A's own copy is complete (so
+/// `invalidate_savepoint` is false). A stays bound and clean; the unpublished half is the control.
+/// Expected from source; not an executed result until hosted CI runs it.
+#[test]
+fn a_background_copy_that_published_before_failing_detaches_the_other_documents_file() {
+    for published in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let a_path = dir.path().join("a.tif").to_string_lossy().into_owned();
+        let other = dir.path().join("b.tif").to_string_lossy().into_owned();
+        std::fs::write(&other, b"saved original").unwrap();
+        let mut h = app_harness();
+        h.state_mut().services.file_stamp = Some(Box::new(|path: &str| {
+            let meta = std::fs::metadata(path).ok()?;
+            Some(crate::services::FileStamp { len: meta.len(), modified: meta.modified().ok() })
+        }));
+        h.state_mut().run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        let b = h.state().active_doc_id().unwrap();
+        h.state_mut().session.active_mut().unwrap().saved_to(other.clone());
+        h.state_mut().remember_stamp(b, &other);
+        // A copies: bound to its own file and clean, and complete so the copy keeps its savepoint.
+        h.state_mut().session.set_active(0);
+        h.state_mut().session.active_mut().unwrap().saved_to(a_path.clone());
+        let a = h.state().active_doc_id().unwrap();
+        let settings = crate::ExportSettings { tiff_layers: true, ..Default::default() };
+        assert!(
+            !PhotocraftApp::copy_needs_savepoint_check(&h.state().session.documents()[0].doc, &other, &settings),
+            "A's layered copy is complete, so its own savepoint is not at stake"
+        );
+        h.state_mut().services.save_file = Some(Arc::new(move |_, path, _, ctl| {
+            ctl.check()?;
+            if published {
+                // The bytes are a mock, not an encoded TIFF: what matters is that they land.
+                ctl.commit()?;
+                photocraft_format::atomic_write(std::path::Path::new(path), b"a's copy").map_err(|e| e.to_string())?;
+                return Err("the folder could not be flushed after the write".into());
+            }
+            Err("disk full".into())
+        }));
+        h.state_mut().write_document(other.clone(), &settings, true).unwrap();
+        step_until(&mut h, |app| !app.saving());
+        let b_state = h.state().session.documents().iter().find(|st| st.doc.id == b).unwrap();
+        assert_eq!(b_state.path.is_none(), published, "published={published}: the other tab loses a file that now holds this document");
+        assert_eq!(b_state.is_dirty(), published, "published={published}: the other tab is unsaved once its file holds another document");
+        assert_eq!(
+            std::fs::read(&other).unwrap() != b"saved original",
+            published,
+            "published={published}: the file holds the copy only when the write published"
+        );
+        let a_state = h.state().session.documents().iter().find(|st| st.doc.id == a).unwrap();
+        assert_eq!(a_state.path.as_deref(), Some(a_path.as_str()), "published={published}: the copying document keeps its own file");
+        assert!(!a_state.is_dirty(), "published={published}: a failed copy does not save the document it copied");
+    }
 }

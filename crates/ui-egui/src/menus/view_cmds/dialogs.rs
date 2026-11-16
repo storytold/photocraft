@@ -739,8 +739,8 @@ pub(super) fn suggested_copy_name(doc_name: &str, has_file: bool, copy_suffix: &
 }
 
 /// File › Save a Copy: pick a name, encode with the export service, write; the document's path
-/// and saved state are untouched. An action being recorded keeps it as a `file.saveACopy` step
-/// with its path (#4373).
+/// is kept; an incomplete overwrite of its own file invalidates the saved state. An action
+/// being recorded keeps it as a `file.saveACopy` step with its path (#4373).
 fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let doc = app.session.active().ok_or("no document")?.doc.clone();
     let has_file = app.session.active().is_some_and(|d| d.path.is_some());
@@ -781,16 +781,26 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
 }
 
 /// Writes `doc` to `path` as a copy (Save a Copy, and its replayed action step): the document's
-/// path and saved state are untouched. `choices` are the Targa, DDS and JPEG answers, when there
-/// are any.
+/// path is kept; an incomplete overwrite of its own file invalidates the saved state.
+/// `choices` hold any format answers.
 pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document, path: &str, choices: crate::FormatChoices) -> Result<Value, String> {
     let settings = choices.apply(app.save_settings());
     crate::app::ensure_memory_to_save(doc, path)?;
+    let invalidate = PhotocraftApp::copy_needs_savepoint_check(doc, path, &settings);
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(doc, path, &settings)?;
     let write = app.services.write.as_mut().ok_or("no writer configured")?;
-    write(path, &bytes)?;
+    let written = write(path, &bytes);
+    if invalidate {
+        app.invalidate_incomplete_copy(doc.id, path, written.is_ok());
+    }
+    if written.is_err() {
+        app.detach_others_after_replaced_write(path, doc.id);
+    }
+    written?;
+    app.remember_written_savepoint(doc.id, path);
     app.detach_others_from_file(path, doc.id);
+    app.sync_views();
     let template = "Saved a copy as {path}";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("path", path)]);
     app.ui.status_error = false;

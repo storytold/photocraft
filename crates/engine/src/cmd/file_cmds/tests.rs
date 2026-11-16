@@ -1698,6 +1698,25 @@ fn save_a_copy_keeps_path_and_dirty_state() {
     assert!(s.execute("file.saveACopy", json!({})).is_err());
 }
 
+#[test]
+fn copy_overwrite_marks_a_flattened_own_file_unsaved_but_keeps_an_intact_copy_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    for (ext, layers) in [("psd", false), ("psd", true), ("tif", false), ("tif", true)] {
+        let path = dir.path().join(format!("own.{ext}")).to_string_lossy().into_owned();
+        let mut s = session(4, 4, 8);
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.active_mut().unwrap().saved_to(path.clone());
+        let p = if ext == "tif" {
+            json!({"path": path, "overwrite": true, "tiffLayers": layers})
+        } else {
+            json!({"path": path, "overwrite": true, "layers": layers})
+        };
+        s.execute("file.saveACopy", p).unwrap();
+        assert_eq!(s.active().unwrap().is_dirty(), !layers, "{ext}, layers={layers}");
+        assert_eq!(s.active().unwrap().path.as_deref(), Some(path.as_str()));
+    }
+}
+
 /// A copy over the document's own file, however the path is spelt, would replace it (a lossy
 /// re-encode can't be undone), so it is refused unless `overwrite` is passed (#7437).
 #[test]
@@ -4640,4 +4659,139 @@ fn public_begin_playback_scopes_registered_actions_but_still_rejects_real_recurs
     let recording = begin_playback(&mut s, &driver).unwrap();
     assert!(s.actions.playback_stack[0].position.is_none());
     finish_playback(&mut s, recording, &driver, 0);
+}
+
+#[test]
+fn copy_overwrite_marks_a_lab_tiff_unsaved_even_when_layers_are_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    for depth in [8, 16, 32] {
+        let path = dir.path().join(format!("own-{depth}.tif")).to_string_lossy().into_owned();
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "lab", "depth": depth})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.active_mut().unwrap().saved_to(path.clone());
+        let reply = s.execute("file.saveACopy", json!({"path": path, "overwrite": true, "tiffLayers": true})).unwrap();
+        assert!(s.active().unwrap().is_dirty(), "depth={depth}");
+        assert!(!reply["warnings"].as_array().unwrap().is_empty());
+        assert!(photocraft_codecs::tiff_photoshop_tags(&std::fs::read(&path).unwrap()).1.is_none());
+    }
+}
+
+#[test]
+fn copy_overwrite_of_a_hard_link_leaves_the_original_savepoint_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    let alias = dir.path().join("alias.tif").to_string_lossy().into_owned();
+    std::fs::write(&own, b"saved original").unwrap();
+    std::fs::hard_link(&own, &alias).unwrap();
+    let mut s = session(4, 4, 8);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.active_mut().unwrap().saved_to(own.clone());
+    s.execute("file.saveACopy", json!({"path": alias, "overwrite": true, "tiffLayers": false})).unwrap();
+    assert!(!s.active().unwrap().is_dirty());
+    assert_eq!(std::fs::read(&own).unwrap(), b"saved original");
+    assert_ne!(std::fs::read(&alias).unwrap(), b"saved original");
+}
+
+#[test]
+fn copy_overwrite_of_a_flat_background_tiff_remains_conservatively_unsaved() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    let mut s = session(4, 4, 8);
+    assert!(!photocraft_io::tiff_layers::would_write_layers(&s.active().unwrap().doc));
+    s.active_mut().unwrap().saved_to(own.clone());
+    s.execute("file.saveACopy", json!({"path": own, "overwrite": true, "tiffLayers": true})).unwrap();
+    assert!(s.active().unwrap().is_dirty());
+    assert!(photocraft_codecs::tiff_photoshop_tags(&std::fs::read(&own).unwrap()).1.is_none());
+}
+
+/// `own-tif` for a document in the given Image › Mode, with a second layer so the layered
+/// encoder has layers to write.
+fn own_tiff_after(base: &str, conversion: Option<(&str, &str)>) -> (tempfile::TempDir, String, Session) {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": base})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    if let Some((command, params)) = conversion {
+        s.execute(command, serde_json::from_str(params).unwrap()).unwrap();
+    }
+    s.active_mut().unwrap().saved_to(own.clone());
+    (dir, own, s)
+}
+
+/// A copy over the document's own file: the savepoint survives only when the file holds all of it.
+fn copy_over_own_tiff(s: &mut Session, own: &str) -> serde_json::Value {
+    s.execute("file.saveACopy", json!({"path": own, "overwrite": true, "tiffLayers": true})).unwrap()
+}
+
+/// The review's case, one test each: a layered TIFF of an Indexed document writes it expanded, so
+/// reopening the file gives an RGB document without the colour table, and the savepoint goes.
+#[test]
+fn copy_overwrite_of_an_indexed_document_keeps_it_unsaved() {
+    let (_dir, own, mut s) = own_tiff_after("rgb", Some(("image.mode.indexedColor", "{}")));
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Indexed);
+    copy_over_own_tiff(&mut s, &own);
+    assert!(s.active().unwrap().is_dirty(), "the file no longer holds the palette or the mode");
+    let back = photocraft_io::import("own.tif", &std::fs::read(&own).unwrap()).unwrap().document;
+    assert_ne!(back.mode, ColorMode::Indexed, "reopening gives what was written");
+}
+
+/// A Bitmap document's layered TIFF is a Grayscale one: the bitmap bits and the mode are left
+/// behind, so the savepoint goes.
+#[test]
+fn copy_overwrite_of_a_bitmap_document_keeps_it_unsaved() {
+    let (_dir, own, mut s) = own_tiff_after("gray", Some(("image.mode.bitmap", "{}")));
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Bitmap);
+    copy_over_own_tiff(&mut s, &own);
+    assert!(s.active().unwrap().is_dirty(), "the file no longer holds the bitmap mode");
+    let back = photocraft_io::import("own.tif", &std::fs::read(&own).unwrap()).unwrap().document;
+    assert_ne!(back.mode, ColorMode::Bitmap);
+}
+
+/// A Duotone document keeps its layers in memory, so the layers alone would say "kept": it is the
+/// duotone inks the file cannot hold that keep the savepoint from surviving.
+#[test]
+fn copy_overwrite_of_a_duotone_document_keeps_it_unsaved() {
+    let (_dir, own, mut s) = own_tiff_after("gray", Some(("image.mode.duotone", r#"{"type": "monotone"}"#)));
+    let doc = s.active().unwrap().doc.clone();
+    assert_eq!(doc.mode, ColorMode::Duotone);
+    assert!(photocraft_io::tiff_layers::supports_layers(&doc), "the layers themselves fit a layered TIFF");
+    assert!(photocraft_io::tiff_layers::would_write_layers(&doc));
+    copy_over_own_tiff(&mut s, &own);
+    assert!(s.active().unwrap().is_dirty(), "the file no longer holds the duotone inks");
+    let back = photocraft_io::import("own.tif", &std::fs::read(&own).unwrap()).unwrap().document;
+    assert_ne!(back.mode, ColorMode::Duotone);
+}
+
+/// A Multichannel document's channels are the image, which a layered TIFF has no room for.
+#[test]
+fn copy_overwrite_of_a_multichannel_document_keeps_it_unsaved() {
+    let (_dir, own, mut s) = own_tiff_after("rgb", Some(("image.mode.multichannel", "{}")));
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Multichannel);
+    copy_over_own_tiff(&mut s, &own);
+    assert!(s.active().unwrap().is_dirty(), "the file no longer holds the channels");
+}
+
+/// Past `codecs::MAX_EXTRA_SAMPLES` the layered writer keeps only the first channels: the copy
+/// drops the rest, so the savepoint goes; a document that fits keeps it.
+#[test]
+fn copy_overwrite_past_the_tiff_channel_limit_keeps_it_unsaved() {
+    for extra in [photocraft_codecs::MAX_EXTRA_SAMPLES, photocraft_codecs::MAX_EXTRA_SAMPLES + 1] {
+        let (_dir, own, mut s) = own_tiff_after("rgb", None);
+        for _ in 0..extra {
+            s.execute("channel.new", json!({})).unwrap();
+        }
+        assert_eq!(s.active().unwrap().doc.channels.len(), extra);
+        // The channels were added after the save, so mark the document saved again: its dirtiness
+        // must come from the copy's savepoint invalidation, not from the fixture that filled it.
+        s.active_mut().unwrap().saved_to(own.clone());
+        assert!(!s.active().unwrap().is_dirty(), "{extra}: the document starts saved");
+        copy_over_own_tiff(&mut s, &own);
+        let overwritten = extra > photocraft_codecs::MAX_EXTRA_SAMPLES;
+        assert_eq!(s.active().unwrap().is_dirty(), overwritten, "{extra} extra channels");
+        assert_eq!(s.active().unwrap().saved_revision == u64::MAX, overwritten, "{extra}: the savepoint, not the revision, is what a copy invalidates");
+        let back = photocraft_io::import("own.tif", &std::fs::read(&own).unwrap()).unwrap().document;
+        assert_eq!(back.channels.len(), extra.min(photocraft_codecs::MAX_EXTRA_SAMPLES), "{extra}: what the file kept");
+    }
 }

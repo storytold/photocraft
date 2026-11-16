@@ -1,6 +1,9 @@
 use super::*;
 use photocraft_doc::{Layer, LayerContent};
 
+#[path = "tests/copy_overwrite.rs"]
+mod copy_overwrite;
+
 fn tmp(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("photocraft-web-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);

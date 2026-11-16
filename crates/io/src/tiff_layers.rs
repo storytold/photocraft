@@ -32,12 +32,36 @@ pub fn would_write_layers(doc: &Document) -> bool {
     !(single_layer(doc).is_some() && doc.layers.first().is_some_and(|l| l.locks.transparency))
 }
 
-/// Documents a layered TIFF can hold: the TIFF composite must be in the document's model so
-/// that the layer channels inside the tag match it (Lab TIFFs are not decoded or encoded by
-/// `photocraft-codecs`), and there must be layers to keep (a Multichannel document has none:
-/// its channels are the image).
-fn layered_mode(doc: &Document) -> bool {
+/// Whether the layered TIFF encoder can preserve this document's layers. Unsupported color
+/// modes fall back to a flat TIFF even when the caller requests layer data.
+pub fn supports_layers(doc: &Document) -> bool {
     matches!(doc.pixel_format().mode, ColorMode::Grayscale | ColorMode::Rgb | ColorMode::Cmyk) && doc.mode != ColorMode::Multichannel && !doc.layers.is_empty()
+}
+
+/// Whether a layered TIFF of `doc` holds the whole document, so the written file can stand in for
+/// it and a save over its own file may keep its saved state. The contract for the callers that
+/// decide that (`file.saveACopy` and the shell's copy paths): the layers ([`supports_layers`],
+/// [`would_write_layers`]), the document's own colour mode, and every extra channel the writer
+/// keeps.
+///
+/// Each clause follows what the layered encoder writes, not a separate opinion:
+/// - Indexed, Bitmap and Duotone documents are edited expanded (RGB or Grayscale) and the layered
+///   TIFF stores that expanded form, so the colour table, the bitmap bits and the duotone inks
+///   stay behind; Multichannel has no layers to write ([`supports_layers`]).
+/// - The extra samples are the document's channels and its Quick Mask, and the encoder keeps at
+///   most [`photocraft_codecs::MAX_EXTRA_SAMPLES`] of them, warning about the rest. The count here is
+///   the encoder's own, so the limit moves with the codec's constant rather than being copied.
+pub fn keeps_document(doc: &Document) -> bool {
+    supports_layers(doc)
+        && would_write_layers(doc)
+        && matches!(doc.mode, ColorMode::Grayscale | ColorMode::Rgb | ColorMode::Cmyk)
+        && extra_channels(doc) <= codecs::MAX_EXTRA_SAMPLES
+}
+
+/// The extra channels a layered TIFF writes as extra samples: the document's channels and its
+/// Quick Mask, which the writer takes up to [`photocraft_codecs::MAX_EXTRA_SAMPLES`] of.
+fn extra_channels(doc: &Document) -> usize {
+    doc.channels.len().saturating_add(usize::from(doc.quick_mask.is_some()))
 }
 
 /// Replaces (or inserts) resource `id`; removes it when `data` is `None`.
@@ -334,7 +358,7 @@ const TIFF_COMPOSITE_DONE: f32 = 0.72;
 /// codec (Lab) are saved flat, with a warning. Reports progress through `ctl` (see
 /// [`crate::export_with`]).
 pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
-    if !layered_mode(doc) {
+    if !supports_layers(doc) {
         let mut r = crate::flat::export_flat_with(doc, Format::Tiff, opts, ctl)?;
         if !doc.layers.is_empty() {
             r.warnings.push(format!("{:?} documents are saved as a flat TIFF: their layers are not kept", doc.pixel_format().mode));

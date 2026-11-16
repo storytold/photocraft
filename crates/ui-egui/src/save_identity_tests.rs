@@ -5,6 +5,8 @@ use photocraft_engine::Session;
 use serde_json::json;
 use std::{cell::RefCell, rc::Rc};
 
+mod copy_overwrite;
+
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(
         Session::new(),

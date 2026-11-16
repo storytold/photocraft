@@ -376,8 +376,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
             crate::app::ensure_memory_to_save(doc, &path)?;
             let export = app.services.export.as_ref().ok_or("no exporter configured")?;
             let (bytes, warnings) = export(doc, &path, &ExportSettings { xmp_all: false, ..Default::default() })?;
-            let write = app.services.write.as_mut().ok_or("no writer configured")?;
-            write(&path, &bytes)?;
+            write_exported(app, &path, &bytes)?;
             crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
             exported.push(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}));
         }
@@ -1244,6 +1243,18 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     })
 }
 
+/// Writes an export to `path` and reports the savepoints it replaced. A write that failed can still
+/// have published its bytes (the atomic writer renames before it flushes the folder), so the
+/// documents saved at `path` are checked either way; an earlier failure leaves them as they were.
+fn write_exported(app: &mut PhotocraftApp, path: &str, bytes: &[u8]) -> Result<(), String> {
+    let write = app.services.write.as_mut().ok_or("no writer configured")?;
+    let written = write(path, bytes);
+    if written.is_ok() || app.published_over(path) {
+        app.exported_over_savepoints(path);
+    }
+    written
+}
+
 /// Why several Scale All rows cannot be exported here, if they cannot: the browser build writes no
 /// folder of files (a browser folder handle is not a path), so one size at a time is its limit.
 fn batch_unsupported(rows: usize, browser: bool) -> Option<&'static str> {
@@ -1310,8 +1321,7 @@ fn write_export(app: &mut PhotocraftApp, doc: &Document, f: &Map<String, Value>,
     crate::app::ensure_memory_to_save(&out, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(&out, path, &settings(f))?;
-    let write = app.services.write.as_mut().ok_or("no writer configured")?;
-    write(path, &bytes)?;
+    write_exported(app, path, &bytes)?;
     let template = "Exported {path} ({size})";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("path", path), ("size", &crate::sizing::human_bytes(bytes.len() as f64))]);
     app.ui.status_error = false;
@@ -1397,8 +1407,7 @@ fn write_layer_file(
     crate::app::ensure_memory_to_save(&out, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(&out, path, settings)?;
-    let write = app.services.write.as_mut().ok_or("no writer configured")?;
-    write(path, &bytes)?;
+    write_exported(app, path, &bytes)?;
     let template = "Exported {path}";
     let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(path))]);
     crate::notices::io_warnings(app, &what, &warnings);
