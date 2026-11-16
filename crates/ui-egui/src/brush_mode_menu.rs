@@ -402,7 +402,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &Context) {
         close(app);
         // Escape also consumes the release of a right-button gesture still in flight.
         if same_tool && ctx.input(|i| i.pointer.secondary_down()) {
-            ctx.data_mut(|d| d.insert_temp(dismissal_key(ctx, "dismiss-pointer"), true));
+            let key = dismissal_key(ctx, "dismiss-pointer");
+            ctx.data_mut(|d| d.insert_temp(key, true));
         }
         return;
     }

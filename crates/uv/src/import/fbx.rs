@@ -369,6 +369,7 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
     }
     let default_material = scene.materials.len();
     scene.materials.push(Material::default());
+    let has_deformer = objects.children_by_name("Deformer").next().is_some();
     let mut warned_skin = false;
     let mut triangulation_budget = super::TriangulationBudget::default();
     for geometry in objects.children_by_name("Geometry").filter(|n| string(*n, 2) == Some("Mesh")) {
@@ -494,7 +495,7 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
                 return Err(Error("Unterminated FBX polygon".into()));
             }
         }
-        if objects.children_by_name("Deformer").next().is_some() {
+        if has_deformer {
             warned_skin = true;
         }
     }
@@ -650,8 +651,8 @@ mod preflight_tests {
     fn nested_file(depth: usize) -> Vec<u8> {
         fn append_node(bytes: &mut Vec<u8>, descendants: usize) {
             let start = bytes.len();
-            bytes.resize(start + 14, 0); // 32-bit node header plus one-byte name
-            bytes[start + 13] = 1;
+            bytes.resize(start + 13, 0); // 32-bit node header fields plus name length
+            bytes[start + 12] = 1;
             bytes.push(b'N');
             if descendants != 0 {
                 append_node(bytes, descendants - 1);
@@ -663,6 +664,7 @@ mod preflight_tests {
 
         let mut bytes = b"Kaydara FBX Binary  \x00\x1a\x00".to_vec();
         bytes.extend_from_slice(&7400_u32.to_le_bytes());
+        // The first node is depth one because preflight enters its child list at depth one.
         append_node(&mut bytes, depth.saturating_sub(1));
         bytes.resize(bytes.len() + 13, 0); // implicit root end marker
         bytes
@@ -705,5 +707,10 @@ mod preflight_tests {
     #[test]
     fn bounded_preflight_rejects_excessive_nesting() {
         assert!(preflight_binary(&nested_file(FBX_MAX_DEPTH + 1)).is_err());
+    }
+
+    #[test]
+    fn bounded_preflight_accepts_maximum_nesting() {
+        assert!(preflight_binary(&nested_file(FBX_MAX_DEPTH)).is_ok());
     }
 }

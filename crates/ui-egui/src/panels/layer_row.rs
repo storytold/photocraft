@@ -346,7 +346,6 @@ pub(super) fn layer_row(
         {
             actions.push(("ui.maskTarget".into(), json!({"enabled":true,"show":true})));
         }
-    } else if resp.clicked() && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
     } else if resp.clicked() && !frame_clicked && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
         if l.frame.is_some() {
             app.ui.frame_tool.selected = Some(l.id.0);

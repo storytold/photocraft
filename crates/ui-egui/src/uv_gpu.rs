@@ -336,6 +336,22 @@ fn extent(size: [u32; 2]) -> wgpu::Extent3d {
 }
 const MAX_UV_GPU_MAP_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ENVIRONMENT_TEXTURE_BYTES: u64 = 512 * 1024 * 1024;
+/// Include every mip level in the resident-map budget, not only the uploaded base image.
+fn uv_map_mip_bytes(size: [u32; 2], bytes_per_texel: u64) -> Option<u64> {
+    if size.contains(&0) {
+        return None;
+    }
+    let (mut width, mut height) = (u64::from(size[0]), u64::from(size[1]));
+    let mut total = 0u64;
+    loop {
+        total = total.checked_add(width.checked_mul(height)?.checked_mul(bytes_per_texel)?)?;
+        if width == 1 && height == 1 {
+            return Some(total);
+        }
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+    }
+}
 fn validate_environment_images(max_side: u32, levels: &[Image]) -> Result<(), String> {
     let mut total_bytes = 0u64;
     for image in levels {
@@ -1547,12 +1563,9 @@ impl Renderer {
         {
             return Err("Invalid material image dimensions or length".into());
         }
-        let upload_bytes = u64::from(size[0])
-            .checked_mul(u64::from(size[1]))
-            .and_then(|pixels| pixels.checked_mul(if normal { 8 } else { 4 }))
-            .ok_or("Material texture size overflow")?;
+        let upload_bytes = uv_map_mip_bytes(size, if normal { 8 } else { 4 }).ok_or("Material texture size overflow")?;
         if upload_bytes > MAX_UV_GPU_MAP_BYTES {
-            return Err("Material texture exceeds the 512 MiB GPU upload limit".into());
+            return Err("Material texture and mipmaps exceed the 512 MiB GPU limit".into());
         }
         if let (Some(im), Some((expected, [x, y, w, h]))) = (image, hint)
             && previous.as_ref().is_some_and(|old| old.source == MapSource::Cpu && old.key == expected && old.size == size)
@@ -1674,6 +1687,9 @@ impl Renderer {
         let max = self.rs.device.limits().max_texture_dimension_2d;
         if size.contains(&0) || size.iter().any(|side| *side > max) {
             return Err("GPU-composited map exceeds the full-resolution texture limit".into());
+        }
+        if uv_map_mip_bytes(size, 8).is_none_or(|bytes| bytes > MAX_UV_GPU_MAP_BYTES) {
+            return Err("GPU-composited map and mipmaps exceed the 512 MiB GPU limit".into());
         }
         let mut map = if let Some(map) = previous.filter(|map| map.source == MapSource::GpuComposite && map.size == size) {
             map

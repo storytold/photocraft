@@ -175,6 +175,9 @@ pub(crate) fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         }
     }
     if plain_key(ctx, egui::Key::F4) {
+        if uv_ui::finish_paint(app).is_err() {
+            return true;
+        }
         app.ui.uv_workbench.swap_views = !app.ui.uv_workbench.swap_views;
         return true;
     }
@@ -251,6 +254,10 @@ fn bar(app: &mut PhotocraftApp, ui: &mut Ui) {
                 }
                 ui.separator();
                 if ui.button(tl!("Swap 3D / 2D                 F4")).clicked() {
+                    if uv_ui::finish_paint(app).is_err() {
+                        ui.close();
+                        return;
+                    }
                     app.ui.uv_workbench.swap_views = !app.ui.uv_workbench.swap_views;
                     ui.close();
                 }

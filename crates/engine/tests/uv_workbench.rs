@@ -166,10 +166,10 @@ fn mask_paint_fill_bounds_are_clipped_to_the_canvas() {
 fn zero_coverage_is_explicit_and_blocks_destructive_fill() {
     let mut s = scene();
     s.execute("uv.mask.apply", json!({})).unwrap();
-    let before = photocraft_compose::render(&s.active().unwrap().doc, s.active().unwrap().doc.bounds()).px;
+    let before = photocraft_compose::render(&s.active().unwrap().doc, s.active().unwrap().doc.bounds()).px.clone();
     s.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
     let doc = &s.active().unwrap().doc;
-    assert_eq!(before, photocraft_compose::render(doc, doc.bounds()).px);
+    assert_eq!(before, photocraft_compose::render(doc, doc.bounds()).px.clone());
 }
 
 #[test]
@@ -177,12 +177,12 @@ fn fill_changes_shell_interior_but_not_seam() {
     let mut s = scene();
     choose(&mut s);
     s.execute("uv.mask.apply", json!({"guard":8})).unwrap();
-    let before = photocraft_compose::render(&s.active().unwrap().doc, s.active().unwrap().doc.bounds()).px;
+    let before = photocraft_compose::render(&s.active().unwrap().doc, s.active().unwrap().doc.bounds()).px.clone();
     // Imported flat images may have a locked Background: unlock through the existing command.
     s.execute("layer.setProps", json!({"locks":{"all":false,"pixels":false}})).unwrap();
     s.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
     let doc = &s.active().unwrap().doc;
-    let after = photocraft_compose::render(doc, doc.bounds()).px;
+    let after = photocraft_compose::render(doc, doc.bounds()).px.clone();
     assert_eq!(before[64 * 128 + 52], after[64 * 128 + 52]);
     assert_ne!(before[64 * 128 + 30], after[64 * 128 + 30]);
 }
@@ -208,7 +208,7 @@ fn protected_layer_mask_survives_deselection_at_all_depths() {
         assert_eq!(layer.mask.as_ref().unwrap().surface.format().sample, expected);
         s.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
         let doc = &s.active().unwrap().doc;
-        let px = photocraft_compose::render(doc, doc.bounds()).px;
+        let px = photocraft_compose::render(doc, doc.bounds()).px.clone();
         assert_eq!(px[64 * 128 + 52], [1.0; 4]);
         assert!(px[64 * 128 + 30][1] < 0.01);
     }
@@ -459,7 +459,8 @@ fn all_map_slots_roundtrip_and_reimport_preserve_editable_documents() {
         assert!(s.uv.map_bindings(kind)[material].is_some());
     }
     let ids: Vec<_> = s.uv.all_bindings().copied().collect();
-    s.execute("uv.model.reimport", json!({})).unwrap();
+    let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.fbx");
+    s.execute("uv.model.reimport", json!({"path":model.to_str().unwrap()})).unwrap();
     assert_eq!(ids, s.uv.all_bindings().copied().collect::<Vec<_>>());
 }
 

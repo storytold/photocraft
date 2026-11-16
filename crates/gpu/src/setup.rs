@@ -19,6 +19,18 @@ pub(crate) fn mask_fill_source_bytes([width, height]: [u32; 2], max_side: u32) -
     }
 }
 
+fn validate_mask_fill_budget(sizes: impl IntoIterator<Item = [u32; 2]>, max_side: u32, budget: u64) -> Result<(), Unsupported> {
+    let mut total = 0u64;
+    for size in sizes {
+        let bytes = mask_fill_source_bytes(size, max_side)?;
+        total = total.checked_add(bytes).ok_or_else(|| Unsupported("mask Fill source byte count overflows".into()))?;
+        if total > budget {
+            return Err(Unsupported(format!("mask Fill sources exceed the {} MiB GPU cache budget", budget >> 20)));
+        }
+    }
+    Ok(())
+}
+
 /// Classification of a synchronous compositor pipeline build failure.
 ///
 /// Only a recognized shader compiler diagnostic is considered deterministic. Every other
@@ -510,14 +522,21 @@ impl Compositor {
                 }
             }
         }
+        let mut mask_fill_sources = Vec::new();
+        let mut seen_mask_fills = std::collections::HashSet::new();
         for pass in &p.passes {
             if let Some(pat) = pass.pattern {
                 self.check_pattern(pat)?;
             }
             if let Some(fill) = &pass.mask_fill {
-                mask_fill_source_bytes(fill.size, self.device_max)?;
+                if seen_mask_fills.insert((fill.layer, fill.index)) {
+                    mask_fill_sources.push(fill.size);
+                }
             }
         }
+        // Admit all unique source textures before frame_res uploads any of them. This includes
+        // cached and new Fill maps, matching the cache's shared pattern-memory budget.
+        validate_mask_fill_budget(mask_fill_sources, self.device_max, self.pattern_budget)?;
         Ok(())
     }
 
@@ -647,6 +666,17 @@ impl Compositor {
     /// render to carry it.
     pub fn take_gpu_timing(&mut self) -> Option<timing::GpuTiming> {
         self.timer.as_mut().and_then(timing::GpuTimer::take)
+    }
+}
+
+#[cfg(test)]
+mod mask_fill_budget_tests {
+    use super::*;
+
+    #[test]
+    fn aggregate_mask_fill_budget_admits_one_maximal_source_and_rejects_multiple_sources() {
+        assert!(validate_mask_fill_budget([[8192, 8192]], 16_384, consts::PATTERN_BUDGET).is_ok());
+        assert!(validate_mask_fill_budget([[4096, 4096]; 5], 16_384, consts::PATTERN_BUDGET).is_err());
     }
 }
 use super::consts;

@@ -613,6 +613,14 @@ fn symmetry_document_matches(app: &PhotocraftApp, state: &State, target_material
 }
 
 fn mark_path_break(app: &mut PhotocraftApp) {
+    // Batched UV sampling defers the live preview until the end of the frame. Hand the points
+    // before this boundary to the renderer first, so the worker records the break after them,
+    // matching the index stored in Drag and forwarded to the commit.
+    if app.drag.is_some() && app.live_stroke.is_some() {
+        let deferred = std::mem::replace(&mut app.defer_live_stroke, false);
+        canvas::feed_live_stroke(app);
+        app.defer_live_stroke = deferred;
+    }
     if let Some(drag) = app.drag.as_mut() {
         let index = drag.points.len();
         if index > 0 && drag.breaks.last() != Some(&index) {
@@ -2199,6 +2207,44 @@ mod tests {
 
         finish(&mut app, &mut state);
         assert_eq!(app.session.active().unwrap().history.past_len(), history + 1, "all source and mirrored batches share one Undo");
+    }
+
+    #[test]
+    fn deferred_cpu_mirror_break_is_queued_after_current_uv_samples() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let (mut app, _, _) = setup(Tool::Brush);
+        app.run("paint.setSymmetry", json!({"mode":"horizontal","center":[64.0,64.0]})).unwrap();
+        let doc = app.session.active().unwrap().doc.id;
+        let mut state = State {
+            tool: Some(Tool::Brush),
+            material: Some(app.session.uv.material),
+            doc: Some(doc),
+            action: Action::Paint,
+            suppress_document_symmetry: true,
+            ..Default::default()
+        };
+        app.uv_paint_key = Some("uv3d-deferred-break-test".into());
+        app.defer_live_stroke = true;
+        tool_event(&mut app, &state, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(&mut app, &state, ToolEvent::Move { x: 30.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+        state.mirror_path.extend([
+            MirrorPathPoint::Sample(MirrorSample { sample: Sample { triangle: 0, shell: 0, point: [100.0, 20.0] }, pressure: 1.0, pen: None, time_ms: 1.0 }),
+            MirrorPathPoint::Sample(MirrorSample { sample: Sample { triangle: 0, shell: 0, point: [100.0, 30.0] }, pressure: 1.0, pen: None, time_ms: 2.0 }),
+        ]);
+
+        replay_mirror_path(&mut app, &mut state);
+        assert_eq!(app.drag.as_ref().unwrap().breaks, [2]);
+        app.defer_live_stroke = false;
+        canvas::feed_live_stroke(&mut app);
+        let index = app.session.active_index().unwrap();
+        let (preview, _) = canvas::display_doc(&mut app, index);
+        let surface = preview.layers[0].surface().unwrap();
+        assert_ne!(surface.rgba(25, 20), [1.0; 4], "the source UV path was previewed");
+        assert_ne!(surface.rgba(100, 20), [1.0; 4], "the mirrored UV path was previewed");
+        assert_eq!(surface.rgba(60, 20), [1.0; 4], "the worker break follows the deferred source samples");
+
+        finish(&mut app, &mut state);
+        assert_eq!(app.session.active().unwrap().doc.layers[0].surface().unwrap(), surface, "the CPU commit preserves the exact previewed UV breaks");
     }
 
     #[test]

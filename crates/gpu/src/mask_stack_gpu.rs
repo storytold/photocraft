@@ -240,6 +240,10 @@ impl MaskStackRenderer {
                     {
                         return Err("Mask Levels settings are invalid".into());
                     }
+                    // The cached inputs and ping-pong targets use f16. Levels can magnify
+                    // coverage quantization near a narrow input range, so keep the CPU's f32
+                    // result authoritative until this path can preserve f32 intermediates.
+                    return Err("Mask Levels need the CPU path to preserve f32 coverage precision".into());
                 }
                 EffectKind::Blur { radius } if *radius > 64 => return Err("Mask Blur radius exceeds the GPU preview limit of 64".into()),
                 _ => {}
@@ -1902,6 +1906,32 @@ mod mask_stack_gpu_tests {
     fn allocation_budget_rejects_oversized_canvas_before_gpu_setup() {
         let stack = Stack { base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]), layers: Vec::new(), active: 0 };
         assert!(MaskStackRenderer::validate_allocation_budget(&stack, [16_384, 16_384]).is_err());
+    }
+
+    #[test]
+    fn levels_fall_back_before_gpu_rendering_when_f16_cannot_preserve_coverage() {
+        let stack = Stack {
+            base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[2.0_f32.powi(-14)]),
+            layers: vec![photocraft_doc::mask_paint::Paint {
+                name: "Levels".into(),
+                visible: true,
+                opacity: 1.0,
+                blend: photocraft_color::BlendMode::Normal,
+                surface: Surface::new(photocraft_color::PixelFormat::RGBA8),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Levels {
+                    input_black: 2.0_f32.powi(-14) - 2.0_f32.powi(-24),
+                    gamma: 1.0,
+                    input_white: 2.0_f32.powi(-14),
+                    output_black: 0.0,
+                    output_white: 1.0,
+                },
+            }],
+            active: 0,
+        };
+        assert!(MaskStackRenderer::validate_allocation_budget(&stack, [32, 32]).is_err());
     }
 
     #[test]

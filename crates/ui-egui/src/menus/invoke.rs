@@ -92,11 +92,11 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
     if !keeps_box_drag(id) {
         crate::type_box_preview::end_drag(app);
     }
-    if crate::discard_ui::intercept(app, id, &params) {
-        return Ok(Value::Null);
-    }
     #[cfg(feature = "uv-workbench")]
     if crate::uv_project::intercept(app, id, &params) {
+        return Ok(Value::Null);
+    }
+    if crate::discard_ui::intercept(app, id, &params) {
         return Ok(Value::Null);
     }
     let r = invoke_unguarded(app, ctx, id, params);

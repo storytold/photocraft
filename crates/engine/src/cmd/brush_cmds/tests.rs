@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+static MASK_PREVIEW_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn session(w: u32, h: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": w, "height": h, "background": "transparent"})).unwrap();
@@ -378,8 +381,10 @@ fn mask_preview_dirty_tile_packets_are_bounded_and_replay_default_clears() {
 }
 
 #[cfg(feature = "uv-workbench")]
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn uv_mask_shell_id_cache_hits_and_invalidates_on_material_topology_and_size() {
+    let _worker_guard = MASK_PREVIEW_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     use photocraft_geom::Size;
 
     let mut s = Session::new();
@@ -705,7 +710,9 @@ fn mask_preview_cadence_coalesces_until_elapsed_intervals() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn throttled_live_mask_cache_coalesces_damage_and_commit_flushes_blur_halos() {
+    let _worker_guard = MASK_PREVIEW_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     use photocraft_color::PixelFormat;
     use photocraft_doc::{
         LayerMask,
@@ -891,7 +898,9 @@ fn assert_mask_preview_failure_paths(s: &mut Session, id: photocraft_doc::LayerI
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn mask_preview_release_defers_flattening_to_the_single_commit_refresh() {
+    let _worker_guard = MASK_PREVIEW_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     use photocraft_color::PixelFormat;
     use photocraft_doc::{
         LayerMask,

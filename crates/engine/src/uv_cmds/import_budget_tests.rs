@@ -307,7 +307,11 @@ fn case_distinct_files_keep_distinct_identities_and_symlink_escape_is_rejected()
     let directory = ModelDirectory::new(source.to_str().expect("model path")).expect("open model directory");
     let lower = directory.open_texture_file(&lower_path.to_string_lossy()).expect("open lower file").1;
     let upper = directory.open_texture_file(&upper_path.to_string_lossy()).expect("open upper file").1;
-    assert_ne!(UvTextureKey::File(Arc::new(lower)), UvTextureKey::File(Arc::new(upper)));
+    // Unix includes macOS volumes that are case-insensitive. Only assert distinct identities
+    // when the filesystem actually stores these spellings as separate files.
+    if !same_file::is_same_file(&lower_path, &upper_path).expect("compare case variants") {
+        assert_ne!(UvTextureKey::File(Arc::new(lower)), UvTextureKey::File(Arc::new(upper)));
+    }
 
     let outside_dir = tempfile::tempdir().expect("external directory");
     let outside = outside_dir.path().join("outside.png");
