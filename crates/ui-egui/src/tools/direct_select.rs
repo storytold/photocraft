@@ -521,11 +521,22 @@ fn targeted(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
 fn hit_converting(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
     let zoom = f64::from(app.point_zoom().max(0.01));
     let tol = 6.0 / zoom;
-    // An anchor is in reach within 5 points (5 screen px at display scale 1, as measured, #12748);
-    // other display scales weren't measured and keep the points unit, like every canvas tolerance.
-    // The 0.01 point covers the f32 screen-to-document mapping, so a press 5 px away always hits.
-    // Shown handles and segments weren't measured and keep `tol`.
-    let reach = 5.01 / zoom;
+    // An anchor is in reach within 5 screen (device) pixels, as measured (#12748), on every display
+    // scale (#13174): `current_zoom` is device pixels per document pixel, so the display scale
+    // doesn't widen it as it does the points of `tol`. The 0.01 px covers the f32
+    // screen-to-document mapping, so a press 5 px away always hits.
+    // Shown handles and segments weren't measured and keep `tol`, also on display scales below
+    // about 0.835, where the anchor reach is the wider of the two.
+    let reach = 5.01 / f64::from(app.current_zoom().max(0.01));
+    let at = Point::new(p[0], p[1]);
+    let hit = |path: &Path, shown: &[([usize; 2], Handle)]| {
+        let near = edit::hit(path, at, tol, shown);
+        if reach <= tol || matches!(near, Some(Hit::Handle(..) | Hit::Anchor(_))) {
+            return near;
+        }
+        // A shown handle within `tol` comes first and a segment last, as in `edit::hit`.
+        edit::hit(path, at, reach, &[]).filter(|h| matches!(h, Hit::Anchor(_))).or(near)
+    };
     let beyond = |path: &Path, k: [usize; 2]| {
         path.subpaths.get(k[0]).and_then(|s| s.knots.get(k[1])).is_some_and(|kn| (kn.anchor.x - p[0]).hypot(kn.anchor.y - p[1]) > reach)
     };
@@ -539,7 +550,7 @@ fn hit_converting(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hi
         .into_iter()
         .find_map(|(r, path)| {
             let shown = if valid && ds.target.as_ref() == Some(&r) { shown_handles(ds, &path) } else { Vec::new() };
-            edit::hit(&path, Point::new(p[0], p[1]), tol.max(reach), &shown).map(|h| (r, path, h))
+            hit(&path, &shown).map(|h| (r, path, h))
         })
         // The front path's anchor out of reach swallows the press, as today, rather than handing it
         // to a path behind.
