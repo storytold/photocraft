@@ -24,6 +24,7 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
+        let slice_document = self.session.active().map(|st| st.doc.id);
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
@@ -55,6 +56,19 @@ impl PhotocraftApp {
             && let Ok(reply) = &result
         {
             crate::layer_filter_ui::find::apply(self, reply);
+        }
+        // Action steps and pointer gestures share the engine's per-document slice target.
+        // Ordinary painting outside the slice tools does not resolve the slice grid here.
+        if matches!(id, "slice.select" | "slice.new") {
+            if let Ok(reply) = &result {
+                self.ui.slices.selected = reply.get("number").and_then(Value::as_u64).and_then(|number| usize::try_from(number).ok());
+            }
+        } else if matches!(self.ui.tool, Tool::Slice | Tool::SliceSelect)
+            || id.starts_with("slice.")
+            || id == "actions.play"
+            || slice_document != self.session.active().map(|st| st.doc.id)
+        {
+            crate::tools::slice_ui::sync_selection(self);
         }
         result
     }

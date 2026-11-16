@@ -18,7 +18,7 @@ use crate::state::{DialogKind, Tool};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SliceUi {
-    /// The selected slice's display number (Slice Select tool).
+    /// Cached display number; the per-document engine state owns the selection.
     pub selected: Option<usize>,
     /// Slice Select options bar › Hide Auto Slices.
     pub hide_auto: bool,
@@ -98,10 +98,11 @@ fn is_slice_tool(t: Tool) -> bool {
 
 /// The slice under a document point: stored slices win (the latest on top), then auto slices.
 pub fn slice_at(doc: &Document, x: f64, y: f64) -> Option<ResolvedSlice> {
-    let all = slices::resolve(doc);
-    let (xi, yi) = (x.floor() as i32, y.floor() as i32);
-    let order = |r: &ResolvedSlice| r.id.and_then(|id| doc.slices.list.iter().position(|s| s.id == id));
-    all.iter().filter(|r| r.rect.contains(xi, yi)).max_by_key(|r| order(r).map_or(0, |i| i + 1)).cloned()
+    photocraft_engine::slice_cmds::slice_at(doc, x, y)
+}
+
+pub(crate) fn sync_selection(app: &mut PhotocraftApp) {
+    app.ui.slices.selected = app.session.active().and_then(photocraft_engine::slice_cmds::selected_number);
 }
 
 fn rect_from(a: [f64; 2], b: [f64; 2]) -> photocraft_geom::Rect {
@@ -154,13 +155,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, _mods: egui::Modifiers) -
     if !is_slice_tool(tool) {
         return false;
     }
+    if matches!(&ev, ToolEvent::Down { .. }) {
+        sync_selection(app);
+    }
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return true };
     let locked = app.session.file_menu.slices_locked;
     match ev {
         // View › Lock Slices: neither tool draws, selects or moves a slice, and the press says
         // why, as Photoshop's error does (#7865).
         ToolEvent::Down { .. } if locked => {
-            app.ui.slices.selected = None;
+            let _ = app.run("slice.select", json!({"clear":true}));
             app.ui.status = tl!("Slices are locked (View › Lock Slices)").to_string();
             app.ui.status_error = true;
         }
@@ -179,7 +183,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, _mods: egui::Modifiers) -
                     return true;
                 }
                 let hit = slice_at(&doc, x, y);
-                app.ui.slices.selected = hit.as_ref().map(|r| r.number);
+                let params = if hit.is_some() { json!({"point":[x,y]}) } else { json!({"clear":true}) };
+                if app.run("slice.select", params).is_err() {
+                    return true;
+                }
                 // The whole slice moves, also when the press hits one piece of a covered slice.
                 if let Some(r) = hit
                     && let Some(sl) = r.id.and_then(|id| doc.slices.get(id)).filter(|_| r.origin == SliceOrigin::User)
@@ -203,7 +210,8 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, _mods: egui::Modifiers) -
                         app.ui.slices.selected = v.get("number").and_then(Value::as_u64).map(|n| n as usize);
                     }
                 } else {
-                    app.ui.slices.selected = slice_at(&doc, x, y).map(|r| r.number);
+                    let params = if slice_at(&doc, x, y).is_some() { json!({"point":[x,y]}) } else { json!({"clear":true}) };
+                    let _ = app.run("slice.select", params);
                 }
             }
             Some(SliceDrag::Move { id, start, rect, .. }) => {
@@ -246,7 +254,8 @@ fn hex(s: &str, fallback: Color32) -> Color32 {
 /// Slice outlines and numbered badges (View › Show › Slices; always while a slice tool is on).
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let tool_on = is_slice_tool(app.ui.tool);
-    let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
+    let Some(st) = app.session.active() else { return };
+    let doc = st.doc.clone();
     if !(tool_on || (app.ui.view.shows(app.ui.view.show.slices) && !doc.slices.is_empty())) {
         return;
     }
@@ -256,6 +265,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     let selected_color = Color32::from_rgb(0xff, 0xb0, 0x00);
     let to_screen = |r: photocraft_geom::Rect| Rect::from_two_pos(xf.to_screen(r.x0 as f32, r.y0 as f32), xf.to_screen(r.x1 as f32, r.y1 as f32));
     let all = slices::resolve(&doc);
+    let selected_number = photocraft_engine::slice_cmds::selected_number_in(st, &all);
     // Auto slices first (dotted, underneath), then user and layer slices.
     for pass in [true, false] {
         for r in all.iter().filter(|r| (r.origin == SliceOrigin::Auto) == pass) {
@@ -263,7 +273,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 continue;
             }
             let sr = to_screen(r.rect);
-            let selected = app.ui.slices.selected == Some(r.number);
+            let selected = selected_number == Some(r.number);
             if pass {
                 let pts = [sr.left_top(), sr.right_top(), sr.right_bottom(), sr.left_bottom(), sr.left_top()];
                 painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, color.gamma_multiply(0.7)), 3.0, 3.0));
@@ -328,7 +338,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 
 /// The selected slice's id, promoting an auto slice first when `promote`.
 fn selected_id(app: &mut PhotocraftApp, promote: bool) -> Option<u32> {
-    let n = app.ui.slices.selected?;
+    let n = app.session.active().and_then(photocraft_engine::slice_cmds::selected_number)?;
     let doc = app.session.active()?.doc.clone();
     let r = slices::resolve(&doc).into_iter().find(|r| r.number == n)?;
     match r.id {
@@ -343,6 +353,9 @@ fn selected_id(app: &mut PhotocraftApp, promote: bool) -> Option<u32> {
 /// An auto slice has nothing to delete, and View › Lock Slices refuses with a message.
 pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     use crate::shortcut_dispatch::Focus;
+    if app.ui.tool == Tool::SliceSelect && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+        sync_selection(app);
+    }
     // Text fields and widgets that delete with these keys themselves keep them.
     if app.ui.tool != Tool::SliceSelect
         || app.ui.slices.selected.is_none()
@@ -373,6 +386,7 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 
 /// Slice Options dialog for the selected slice (auto slices are promoted on OK).
 pub fn open_options(app: &mut PhotocraftApp) -> Result<Value, String> {
+    sync_selection(app);
     let n = app.ui.slices.selected.ok_or("select a slice with the Slice Select tool")?;
     let st = app.session.active().ok_or("no document")?;
     let r = slices::resolve(&st.doc).into_iter().find(|r| r.number == n).ok_or("no such slice")?;
@@ -393,6 +407,7 @@ pub fn open_options(app: &mut PhotocraftApp) -> Result<Value, String> {
 
 /// Divide Slice dialog.
 fn open_divide(app: &mut PhotocraftApp) -> Result<Value, String> {
+    sync_selection(app);
     let n = app.ui.slices.selected.ok_or("select a slice first")?;
     let mut f = serde_json::Map::new();
     f.insert("__command".into(), json!("slice.divide"));
@@ -446,9 +461,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             let _ = app.run("slice.fromGuides", json!({}));
         }
     } else {
-        let sel = app.ui.slices.selected.is_some();
-        let stored =
-            sel && app.session.active().is_some_and(|d| slices::resolve(&d.doc).iter().any(|r| Some(r.number) == app.ui.slices.selected && r.id.is_some()));
+        let (selected, stored) = app.session.active().map_or((None, false), |st| {
+            let all = slices::resolve(&st.doc);
+            let selected = photocraft_engine::slice_cmds::selected_number_in(st, &all);
+            let stored = all.iter().any(|r| Some(r.number) == selected && r.id.is_some());
+            (selected, stored)
+        });
+        app.ui.slices.selected = selected;
+        let sel = selected.is_some();
         if ui.add_enabled_ui(sel && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Promote"), 0.0)).inner.clicked() {
             let _ = selected_id(app, true).map(|id| app.run("slice.promote", json!({"slice": id})));
         }

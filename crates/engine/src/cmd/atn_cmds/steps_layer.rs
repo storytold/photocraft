@@ -28,6 +28,7 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
         step("layer.select", p)
     };
     match (ref_class(r).as_deref(), target(r)) {
+        (Some("slice"), _) => super::steps_slice::select_from(d),
         (Some("Lyr"), Target::Name(_) | Target::Index(_) | Target::Ordinal(_)) => {
             let Some(params) = recorded_layer_target(r) else { return Mapped::Unsupported { harmless: false } };
             with_modifier(params)
@@ -88,6 +89,7 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
     let ord = |o: &str| D::Reference(vec![ReferenceItem::Enumerated { class: class("Lyr "), type_id: code("Ordn"), value: code(o) }]);
     let enumerated = |cls: &str, ty: &str, v: &str| D::Reference(vec![ReferenceItem::Enumerated { class: class(cls), type_id: code(ty), value: code(v) }]);
     Some(match id {
+        "slice.select" => return super::steps_slice::select_to(p),
         "layer.select" => {
             if p.get("occurrence").is_some() {
                 return None;

@@ -828,6 +828,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.new.artboard", json!({"rect": [10, 20, 100, 50], "name": "Hero"})),
         ("layer.new.artboardFromLayers", json!({"name": "Cards"})),
         ("slice.new", json!({"rect": [3, 5, 11, 7]})),
+        ("slice.select", json!({"point": [10, 20]})),
         ("layer.smartObjects.stackMode.range", json!({})),
         ("layer.smartObjects.stackMode.entropy", json!({})),
         ("layer.smartObjects.stackMode.kurtosis", json!({})),

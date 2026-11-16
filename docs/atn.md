@@ -184,7 +184,7 @@ row; the action still adds only one Undo entry.
 | `Rple` | ripple | Ripple | `filter.distort.ripple` |
 | `Rtte` | rotateEventEnum | Rotate | `image.imageRotation.90cw`, `image.imageRotation.90ccw`, `image.imageRotation.180`, `image.rotation.arbitrary`, `edit.transform.rotate90Cw`, `edit.transform.rotate90Ccw`, `edit.transform.rotate180` |
 | `save` | save | Save | `file.save`, `file.saveAs`, `file.saveACopy` |
-| `slct` | select | Select | `layer.select`, `layer.selectAbove`, `layer.selectBelow`, `layer.addAboveToSelection`, `layer.addBelowToSelection`, `layer.selectTop`, `layer.selectBottom`, `channel.target`, `edit.undo`, `edit.redo`, `history.selectState`, `history.selectSnapshot`, `view.fitOnScreen`, `view.actualPixels`, `view.zoomIn`, `view.zoomOut`, `document.activate` |
+| `slct` | select | Select | `layer.select`, `layer.selectAbove`, `layer.selectBelow`, `layer.addAboveToSelection`, `layer.addBelowToSelection`, `layer.selectTop`, `layer.selectBottom`, `channel.target`, `edit.undo`, `edit.redo`, `history.selectState`, `history.selectSnapshot`, `slice.select`, `view.fitOnScreen`, `view.actualPixels`, `view.zoomIn`, `view.zoomOut`, `document.activate` |
 | (string ID only) | selectAllLayers | Select All Layers | `select.allLayers` |
 | (string ID only) | refineSelectionEdge | Select and Mask | `select.refineEdge` |
 | (string ID only) | smartBrushWorkspace | Select and Mask | `select.refineEdge` |
@@ -528,6 +528,11 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   `history.selectState`. The target resolves at playback and must be within the available history;
   an invalid target fails before moving. Zero offsets, index/ID references and extra options remain
   kept steps.
+- Selecting a single slice by a pixel point maps to `slice.select`. It shares the Slice Select
+  tool's per-document target without editing or promoting auto slices. Stored slices retain their
+  identity when numbers change; an auto region that no longer exists is not replaced by its old
+  display number. Additive selection, other units and extra options remain kept steps; native
+  selection clearing does not export to ATN.
 - Close without `Svng` preserves the unanswered save choice. Headless playback refuses to discard a
   changed document. Native `file.close` still defaults to discard; `save: "ask"` opts into this policy.
 - Photo Filter converts recorded Lab colours through `craft-cms`.

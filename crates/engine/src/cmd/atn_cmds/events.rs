@@ -943,6 +943,7 @@ pub(super) const EVENTS: &[Event] = &[
             "edit.redo",
             "history.selectState",
             "history.selectSnapshot",
+            "slice.select",
             "view.fitOnScreen",
             "view.actualPixels",
             "view.zoomIn",

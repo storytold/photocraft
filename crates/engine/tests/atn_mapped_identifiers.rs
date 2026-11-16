@@ -788,6 +788,182 @@ fn recorded_transform_zero_points_keep_nonzero_or_unrepresentable_offsets() {
     }
 }
 
+fn slice_selection(x: f64, y: f64) -> Descriptor {
+    Descriptor::new("slct")
+        .with("null", D::Reference(vec![ReferenceItem::Class(class("slice"))]))
+        .with(
+            "At  ",
+            D::Descriptor(
+                Descriptor::new("Pnt ").with("Hrzn", D::UnitFloat { unit: *b"#Pxl", value: x }).with("Vrtc", D::UnitFloat { unit: *b"#Pxl", value: y }),
+            ),
+        )
+        .with("addToSelection", D::Boolean(false))
+}
+
+#[test]
+fn recorded_slice_selection_imports_and_exports_pixel_points() {
+    for (x, y) in [(101.0, 115.0), (10.5, 20.25)] {
+        for event in [AtnEvent::Code(*b"slct"), AtnEvent::name("select")] {
+            let d = slice_selection(x, y);
+            let action = recorded(event, d.clone());
+            assert_eq!(action.steps.len(), 1);
+            assert_eq!(action.steps[0].0, "slice.select");
+            assert_eq!(action.steps[0].1["point"][0].as_f64(), Some(x));
+            assert_eq!(action.steps[0].1["point"][1].as_f64(), Some(y));
+            let written = saved(&action).descriptor.unwrap();
+            for key in ["null", "At  ", "addToSelection"] {
+                assert_eq!(written.get(key), d.get(key));
+            }
+            let mut without_default_flag = d.clone();
+            without_default_flag.items.retain(|(key, _)| !key.is("addToSelection"));
+            assert_eq!(recorded(AtnEvent::name("select"), without_default_flag).steps, action.steps);
+        }
+    }
+}
+
+#[test]
+fn recorded_slice_selection_replays_without_editing_or_promoting_auto_slices() {
+    let action = recorded(AtnEvent::name("select"), slice_selection(101.0, 115.0));
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":320,"height":240,"depth":depth})).unwrap();
+        let id = s.execute("slice.new", json!({"rect":[0,0,2,1]})).unwrap()["slice"].clone();
+        let st = s.active_mut().unwrap();
+        st.saved_revision = st.revision;
+        let before = st.doc.clone();
+        let history = st.history.entries();
+        replay_saved(&mut s, &action);
+        let selected = s.execute("slice.list", json!({})).unwrap()["selected"].clone();
+        assert_eq!(selected["origin"], "auto");
+        assert!(selected["id"].is_null());
+        let st = s.active().unwrap();
+        assert_eq!(st.doc, before, "selection must not promote the auto slice");
+        assert_eq!(st.history.entries(), history);
+        assert!(!st.is_dirty());
+        let stored = recorded(AtnEvent::name("select"), slice_selection(0.5, 0.5));
+        replay_saved(&mut s, &stored);
+        assert_eq!(s.execute("slice.list", json!({})).unwrap()["selected"]["id"], id);
+        s.execute("file.new", json!({"width":320,"height":240})).unwrap();
+        assert!(s.execute("slice.list", json!({})).unwrap()["selected"].is_null());
+        s.execute("document.activate", json!({"offset":-1})).unwrap();
+        assert_eq!(s.execute("slice.list", json!({})).unwrap()["selected"]["id"], id, "selection belongs to its document");
+    }
+}
+
+#[test]
+fn recorded_slice_selection_keeps_unknown_options_units_and_reference_forms() {
+    let base = slice_selection(10.0, 20.0);
+    let mut cases = vec![base.clone().with("unknown", D::Boolean(true))];
+    for value in [D::Boolean(true), D::Integer(0)] {
+        let mut d = base.clone();
+        d.items.iter_mut().find(|(k, _)| k.is("addToSelection")).unwrap().1 = value;
+        cases.push(d);
+    }
+    for key in ["null", "At  ", "addToSelection"] {
+        let mut d = base.clone();
+        d.items.push((Id::new(key), d.get(key).unwrap().clone()));
+        cases.push(d);
+    }
+    for reference in [
+        vec![ReferenceItem::Class(class("Path"))],
+        vec![ReferenceItem::Class(class("slice")), ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Other") }],
+    ] {
+        let mut d = base.clone();
+        d.items.iter_mut().find(|(k, _)| k.is("null")).unwrap().1 = D::Reference(reference);
+        cases.push(d);
+    }
+    let mut wrong_point = base.clone();
+    let D::Descriptor(point) = &mut wrong_point.items.iter_mut().find(|(k, _)| k.is("At  ")).unwrap().1 else { panic!("point") };
+    point.class_id = Id::new("Rctn");
+    cases.push(wrong_point);
+    for value in [D::UnitFloat { unit: *b"#Rlt", value: 10.0 }, D::UnitFloat { unit: *b"#Pxl", value: f64::NAN }, D::Double(10.0)] {
+        let mut d = base.clone();
+        let D::Descriptor(point) = &mut d.items.iter_mut().find(|(k, _)| k.is("At  ")).unwrap().1 else { panic!("point") };
+        point.items.iter_mut().find(|(k, _)| k.is("Hrzn")).unwrap().1 = value;
+        cases.push(d);
+    }
+    for d in cases {
+        let action = recorded(AtnEvent::name("select"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    for p in [json!({"clear":true}), json!({"point":[1.0,2.0],"add":true}), json!({"point":[1.0,2.0],"unknown":true})] {
+        let native = Action::new("Recorded", vec![("slice.select".into(), p.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&native], &[], false).is_err(), "{p}");
+    }
+}
+
+#[test]
+fn recorded_slice_selection_validates_native_inputs_and_locking_before_changing_state() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":100,"height":80})).unwrap();
+    s.execute("slice.new", json!({"rect":[10,10,30,20]})).unwrap();
+    s.execute("slice.select", json!({"point":[20.0,20.0]})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let selected = s.execute("slice.list", json!({})).unwrap()["selected"].clone();
+    s.execute("slice.select", json!({"point":[20.0,20.0],"coalesce":"selection"})).unwrap();
+    for p in [
+        json!({}),
+        json!({"point":[]}),
+        json!({"point":[1]}),
+        json!({"point":[1,2,3]}),
+        json!({"point":[null,2]}),
+        json!({"point":[f64::MAX,2]}),
+        json!({"point":[-1,2]}),
+        json!({"point":[1,2],"clear":true}),
+        json!({"clear":false}),
+    ] {
+        assert!(s.execute("slice.select", p.clone()).is_err(), "{p}");
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.execute("slice.list", json!({})).unwrap()["selected"], selected);
+    }
+    s.execute("view.lockSlices", json!({"on":true})).unwrap();
+    assert!(s.execute("slice.select", json!({"point":[90.0,70.0]})).is_err());
+    assert_eq!(s.execute("slice.list", json!({})).unwrap()["selected"], selected);
+    s.execute("slice.select", json!({"clear":true})).unwrap();
+    assert!(s.execute("slice.list", json!({})).unwrap()["selected"].is_null());
+    assert!(Session::new().execute("slice.select", json!({"point":[1,2]})).is_err());
+}
+
+#[test]
+fn recorded_slice_selection_keeps_stored_identity_and_invalidates_changed_auto_regions() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":100,"height":80})).unwrap();
+    let id = s.execute("slice.new", json!({"rect":[10,10,30,20]})).unwrap()["slice"].clone();
+    s.execute("slice.select", json!({"point":[20.0,20.0]})).unwrap();
+    s.execute("slice.set", json!({"slice":id,"rect":[50,40,30,20]})).unwrap();
+    assert_eq!(s.execute("slice.list", json!({})).unwrap()["selected"]["id"], id);
+    s.execute("slice.select", json!({"point":[90.0,70.0]})).unwrap();
+    let auto = s.execute("slice.list", json!({})).unwrap()["selected"].clone();
+    s.execute("slice.set", json!({"slice":id,"rect":[0,0,50,80]})).unwrap();
+    let selected = s.execute("slice.list", json!({})).unwrap()["selected"].clone();
+    assert!(selected.is_null(), "a changed auto region must not retarget its old display number: {auto} -> {selected}");
+}
+
+#[test]
+fn recorded_slice_selection_preserves_floating_pixels() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":100,"height":80,"background":"transparent"})).unwrap();
+    s.execute("slice.new", json!({"rect":[10,10,30,20]})).unwrap();
+    s.execute("select.rect", json!({"x":10,"y":10,"width":10,"height":10})).unwrap();
+    s.execute("edit.fill", json!({"contents":"color","color":"#ff0000"})).unwrap();
+    s.execute("select.float", json!({"dx":5,"dy":0})).unwrap();
+    assert!(s.active().unwrap().floating.is_some());
+    let before = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.entries();
+    for p in [json!({"point":[90.0,70.0]}), json!({"clear":true})] {
+        s.execute("slice.select", p).unwrap();
+        let st = s.active().unwrap();
+        assert_eq!(st.doc, before, "slice view state must not commit the floating pixels");
+        assert_eq!(st.history.entries(), history);
+        assert!(st.floating.is_some());
+        assert_eq!(st.floating.as_ref().unwrap().revision, st.revision);
+    }
+    assert!(s.execute("slice.select", json!({"point":[-1,2]})).is_err());
+    assert_eq!(s.active().unwrap().doc, before);
+    assert!(s.active().unwrap().floating.is_some());
+}
+
 fn history_offset(offset: i32) -> Descriptor {
     Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("HstS"), offset }]))
 }

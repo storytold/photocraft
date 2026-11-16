@@ -1,6 +1,6 @@
 //! Recorded rectangular user slices. Other slice types and options stay kept Photoshop steps.
 
-use super::descriptors::{PX, class_ref, desc, px};
+use super::descriptors::{PX, class_ref, desc, get_ref, px};
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, Id, ReferenceItem, Value, json};
 
@@ -75,4 +75,41 @@ pub(super) fn make_to(p: &Value) -> Option<Descriptor> {
     let r = EDGES.into_iter().zip(edges).fold(desc("Rctn"), |r, (key, v)| r.with(key, px(f64::from(v))));
     let user = D::Enumerated { type_id: Id::new("sliceType"), value: Id::Str(b"user".to_vec()) };
     Some(desc("null").with("null", class_ref("slice")).with("Usng", D::Descriptor(desc("slice").with("Type", user).with("At  ", D::Descriptor(r)))))
+}
+
+/// Only single-slice selection by a pixel point is represented; additive selection stays kept.
+pub(super) fn select_from(d: &Descriptor) -> Mapped {
+    let unsupported = Mapped::Unsupported { harmless: false };
+    let keys: &[&str] = if d.get("addToSelection").is_some() { &["null", "At  ", "addToSelection"] } else { &["null", "At  "] };
+    if !exact_keys(d, keys)
+        || !matches!(d.get("addToSelection"), None | Some(D::Boolean(false)))
+        || !matches!(get_ref(d, "null"), Some([ReferenceItem::Class(class)]) if class.class_id.is("slice"))
+    {
+        return unsupported;
+    }
+    let Some(D::Descriptor(point)) = d.get("At  ") else { return unsupported };
+    if !point.class_id.is("Pnt ") || !exact_keys(point, &["Hrzn", "Vrtc"]) {
+        return unsupported;
+    }
+    let coordinate = |key| match point.get(key) {
+        Some(D::UnitFloat { unit, value }) if *unit == PX && value.is_finite() => Some(*value),
+        _ => None,
+    };
+    let (Some(x), Some(y)) = (coordinate("Hrzn"), coordinate("Vrtc")) else { return unsupported };
+    step("slice.select", json!({"point": [x, y]}))
+}
+
+pub(super) fn select_to(p: &Value) -> Option<Descriptor> {
+    if p.as_object()?.len() != 1 {
+        return None;
+    }
+    let point = p.get("point")?.as_array().filter(|p| p.len() == 2)?;
+    let x = point.first()?.as_f64().filter(|n| n.is_finite())?;
+    let y = point.get(1)?.as_f64().filter(|n| n.is_finite())?;
+    Some(
+        desc("null")
+            .with("null", class_ref("slice"))
+            .with("At  ", D::Descriptor(desc("Pnt ").with("Hrzn", px(x)).with("Vrtc", px(y))))
+            .with("addToSelection", D::Boolean(false)),
+    )
 }
