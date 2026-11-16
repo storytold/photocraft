@@ -54,10 +54,6 @@ fn files(f: &Map<String, Value>) -> Vec<String> {
     f.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 
-fn folder(f: &Map<String, Value>) -> &str {
-    f.get("folder").and_then(Value::as_str).unwrap_or("")
-}
-
 fn selected(f: &Map<String, Value>) -> Option<usize> {
     f.get("selected").and_then(Value::as_u64).map(|i| i as usize)
 }
@@ -77,23 +73,31 @@ fn file_name(p: &str) -> &str {
     std::path::Path::new(p).file_name().and_then(|n| n.to_str()).unwrap_or(p)
 }
 
-/// The open documents that have a file, in tab order (what Add Open Files adds).
-fn open_files(app: &PhotocraftApp) -> Vec<String> {
-    app.session.documents().iter().filter_map(|d| d.path.clone()).collect()
+/// What Add Open Files adds: the open documents saved and unchanged since, in tab order, as the
+/// reference adds them (#14001); and whether another open document (never saved, or changed
+/// since its save) was left out.
+fn open_files(app: &PhotocraftApp) -> (Vec<String>, bool) {
+    let docs = app.session.documents();
+    let saved: Vec<String> = docs.iter().filter(|d| !d.is_dirty()).filter_map(|d| d.path.clone()).collect();
+    (saved.clone(), saved.len() < docs.len())
 }
 
-/// OK needs files to load: some in the list, or a chosen folder.
+/// The reference's alert when Add Open Files leaves unsaved documents out (#14001).
+pub(crate) const UNSAVED_ALERT: &str = "Documents must be saved before they can be merged.";
+
+/// OK needs files to load in the list, whichever Use is chosen (#14002).
 pub fn can_confirm(f: &Map<String, Value>) -> bool {
-    !owns(f) || if folder_mode(f) { !folder(f).is_empty() } else { !files(f).is_empty() }
+    !owns(f) || !files(f).is_empty()
 }
 
-/// Browse…: files to add (Files) or the folder to load (Folder), into dialog `id` once the file
-/// dialog answers.
+/// Browse…: files to add (Files), or every image directly in a folder, sorted by name (Folder),
+/// appended to the one list of dialog `id` once the file dialog answers (#14002).
 fn browse(app: &mut PhotocraftApp, id: u64, folder: bool) {
     let r = if folder {
         app.ask_folder(move |app, path| {
+            let images = photocraft_engine::file_cmds::list_images(&path).map_err(|e| e.to_string())?;
             let d = app.ui.dialog_mut(id).ok_or("the dialog was closed")?;
-            d.fields.insert("folder".into(), json!(path));
+            add(&mut d.fields, images);
             Ok(Value::Null)
         })
     } else {
@@ -139,24 +143,17 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     let folder_mode = folder_mode(f);
     let mut browse_now = false;
     ui.horizontal_top(|ui| {
-        // The list: the chosen files, or the images in the chosen folder.
-        let shown: Vec<String> = if folder_mode {
-            if folder(f).is_empty() { Vec::new() } else { photocraft_engine::file_cmds::list_images(folder(f)).unwrap_or_default() }
-        } else {
-            files(f)
-        };
+        // One list for both modes: Use only decides what Browse… asks for (#14002).
+        let shown = files(f);
         let sel = selected(f);
         egui::Frame::NONE.fill(t.field).stroke(egui::Stroke::new(1.0, t.field_border)).corner_radius(t.radius_sm).inner_margin(4.0).show(ui, |ui| {
             ui.set_min_size(vec2(300.0, 160.0));
             ui.set_max_width(300.0);
             egui::ScrollArea::vertical().id_salt("load-stack-files").max_height(160.0).auto_shrink([false, false]).show(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                    if folder_mode && !folder(f).is_empty() {
-                        ui.label(RichText::new(folder(f)).color(t.text_dim));
-                    }
                     for (i, p) in shown.iter().enumerate() {
-                        let row = ui.add(egui::Button::selectable(!folder_mode && sel == Some(i), file_name(p))).on_hover_text(p.as_str());
-                        if row.clicked() && !folder_mode {
+                        let row = ui.add(egui::Button::selectable(sel == Some(i), file_name(p))).on_hover_text(p.as_str());
+                        if row.clicked() {
                             f.insert("selected".into(), json!(i));
                         }
                     }
@@ -169,7 +166,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             if widgets::secondary_button(ui, tl!("Browse…"), 120.0).clicked() {
                 browse_now = true;
             }
-            let can_remove = !folder_mode && sel.is_some_and(|i| i < files(f).len());
+            let can_remove = sel.is_some_and(|i| i < files(f).len());
             if ui.add_enabled_ui(can_remove, |ui| widgets::secondary_button(ui, tl!("Remove"), 120.0)).inner.clicked()
                 && let Some(i) = sel
             {
@@ -178,11 +175,17 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 f.insert("files".into(), json!(list));
                 f.remove("selected");
             }
-            let open = open_files(app);
-            if ui.add_enabled_ui(!folder_mode && !open.is_empty(), |ui| widgets::secondary_button(ui, tl!("Add Open Files"), 120.0)).inner.clicked() {
-                add(f, open);
+            // Enabled as today: when an open document has a file (not measured otherwise).
+            let has_file = app.session.documents().iter().any(|d| d.path.is_some());
+            if ui.add_enabled_ui(has_file, |ui| widgets::secondary_button(ui, tl!("Add Open Files"), 120.0)).inner.clicked() {
+                let (saved, left_out) = open_files(app);
+                add(f, saved);
+                // One alert per click, however many were left out; the saved ones are added.
+                if left_out {
+                    app.ui.open_dialog(DialogKind::Error, Map::from_iter([("message".to_string(), json!(tl!(UNSAVED_ALERT)))]));
+                }
             }
-            if ui.add_enabled_ui(!folder_mode && files(f).len() > 1, |ui| widgets::secondary_button(ui, tl!("Sort By Name"), 120.0)).inner.clicked() {
+            if ui.add_enabled_ui(files(f).len() > 1, |ui| widgets::secondary_button(ui, tl!("Sort By Name"), 120.0)).inner.clicked() {
                 let mut list = files(f);
                 list.sort_by_key(|p| file_name(p).to_lowercase());
                 f.insert("files".into(), json!(list));
@@ -211,19 +214,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 
 /// OK: load the list (or the folder) into a new document.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let paths = if folder_mode(f) {
-        let dir = folder(f);
-        if dir.is_empty() {
-            return Err("Choose a folder to load".into());
-        }
-        json!(dir)
-    } else {
-        let list = files(f);
-        if list.is_empty() {
-            return Err("Add the files to load".into());
-        }
-        json!(list)
-    };
+    // OK loads exactly the listed files, in either mode (#14002).
+    let list = files(f);
+    if list.is_empty() {
+        return Err("Add the files to load".into());
+    }
+    let paths = json!(list);
     let align = f.get("align").and_then(Value::as_bool).unwrap_or(false);
     let smart = f.get("smartObject").and_then(Value::as_bool).unwrap_or(false);
     let r = if statistics(f) {
@@ -240,3 +236,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod add_open_files_tests;
+
+#[cfg(test)]
+mod folder_append_tests;
