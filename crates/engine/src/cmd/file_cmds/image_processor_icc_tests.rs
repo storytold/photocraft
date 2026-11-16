@@ -1,5 +1,6 @@
 //! #13902: Image Processor's Include ICC Profile (`includeIcc`, on by default): off leaves the
 //! profile out of JPEG and TIFF results; PSD and the source documents keep theirs.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use serde_json::{Value, json};
 
 use crate::Session;

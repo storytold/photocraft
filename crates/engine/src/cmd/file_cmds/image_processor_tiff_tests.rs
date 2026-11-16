@@ -1,5 +1,6 @@
 //! #13898: Image Processor's TIFF results are `.tif` files that keep their layers, with the
 //! composite on white and no alpha channel; explicit TIFF options and other formats keep today's.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use serde_json::json;
 
 use crate::Session;
