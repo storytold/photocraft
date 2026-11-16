@@ -630,8 +630,8 @@ fn termination_child() {
     s.write(Marker { backend: "auto".into(), adapter: "Mesa Intel(R) Iris(R) Graphics 5100".into(), adapter_backend: "gl".into(), ..Default::default() })
         .unwrap();
     let shared: SharedSentinel = Arc::new(Mutex::new(Some(s)));
-    assert!(release_on_termination(shared, previous.crashed().cloned()));
-    println!("ready");
+    let taken = release_on_termination(shared, previous.crashed().cloned());
+    println!("ready taken={taken}");
     std::thread::sleep(std::time::Duration::from_secs(30));
     panic!("not signalled");
 }
@@ -651,13 +651,14 @@ fn termination_signals_are_not_graphics_crashes() {
             let _ = self.0.wait();
         }
     }
-    // `ignore_hup`: started as `nohup` starts it, with SIGHUP ignored (kept across `exec`).
-    let start = |dir: &Path, ignore_hup: bool| -> Reap {
+    // `ignored`: the signals the child starts with ignored, as `nohup` starts it with SIGHUP ignored
+    // (kept across `exec`). Returns the child and whether it took the signals over.
+    let start_with = |dir: &Path, ignored: &str| -> (Reap, bool) {
         let exe = std::env::current_exe().unwrap();
         let args = ["--exact", "gpu_startup::tests::termination_child", "--nocapture", "--test-threads=1"];
-        let mut command = if ignore_hup {
+        let mut command = if !ignored.is_empty() {
             let mut c = std::process::Command::new("sh");
-            c.args(["-c", "trap '' HUP; exec \"$0\" \"$@\""]).arg(exe).args(args);
+            c.args(["-c", &format!("trap '' {ignored}; exec \"$0\" \"$@\"")]).arg(exe).args(args);
             c
         } else {
             let mut c = std::process::Command::new(exe);
@@ -673,6 +674,11 @@ fn termination_signals_are_not_graphics_crashes() {
             line.clear();
         }
         assert!(line.contains("ready"), "the child started");
+        (child, line.contains("taken=true"))
+    };
+    let start = |dir: &Path, ignore_hup: bool| -> Reap {
+        let (child, taken) = start_with(dir, if ignore_hup { "HUP" } else { "" });
+        assert!(taken, "the signals are taken over");
         child
     };
     let send = |child: &Reap, signal: &str| {
@@ -708,6 +714,19 @@ fn termination_signals_are_not_graphics_crashes() {
     send(&child, "TERM");
     assert_eq!(child.0.wait().unwrap().code(), Some(128 + 15));
     assert_eq!(begin_when_unlocked(&dir).0, Previous::Clean, "SIGTERM after an ignored SIGHUP");
+    let _ = std::fs::remove_dir_all(&dir);
+    // Started with all three ignored, nothing is taken over (reported as such) and none of them
+    // ends the process.
+    let dir = temp_dir("signal-all-ignored");
+    let (child, taken) = start_with(&dir, "HUP INT TERM");
+    assert!(!taken, "no signal is taken over when all were inherited ignored");
+    for signal in ["HUP", "INT", "TERM"] {
+        send(&child, signal);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let mut child = child;
+    assert!(child.0.try_wait().unwrap().is_none(), "ignored signals stay ignored");
+    drop(child);
     let _ = std::fs::remove_dir_all(&dir);
     let dir = temp_dir("signal-KILL");
     assert_eq!(run(&dir, "KILL").signal(), Some(9));

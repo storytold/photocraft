@@ -565,8 +565,9 @@ const TERMINATION: [async_signal::Signal; 3] = [async_signal::Signal::Term, asyn
 ///
 /// The signals are taken over on a thread of their own, for the whole run: once they are, they no
 /// longer end the process by themselves, so that thread has to. Returns whether they were taken
-/// over; when not (the thread or the handler couldn't be set up) they keep their default action.
-/// A signal the process inherited ignored (`nohup`) is left ignored.
+/// over; when not (the thread or the handler couldn't be set up, or every one of them was inherited
+/// ignored) they keep their default action. A signal the process inherited ignored (`nohup`) is
+/// left ignored.
 #[cfg(target_os = "linux")]
 pub fn release_on_termination(sentinel: SharedSentinel, previous: Option<Marker>) -> bool {
     use futures_lite::StreamExt;
@@ -574,7 +575,12 @@ pub fn release_on_termination(sentinel: SharedSentinel, previous: Option<Marker>
     let spawned = std::thread::Builder::new().name("photocraft-termination".into()).spawn(move || {
         // One inherited ignored (`nohup` ignores SIGHUP, a shell's background job SIGINT) stays
         // ignored: taking it over would let it end the process.
-        let wanted = TERMINATION.into_iter().filter(|&signal| !inherited_ignored(signal));
+        let wanted: Vec<_> = TERMINATION.into_iter().filter(|&signal| !inherited_ignored(signal)).collect();
+        if wanted.is_empty() {
+            // All three inherited ignored: nothing was taken over, and the thread has no job.
+            let _ = ready.send(false);
+            return;
+        }
         let mut signals = match async_signal::Signals::new(wanted) {
             Ok(signals) => signals,
             Err(error) => {
