@@ -64,18 +64,30 @@ fn shift_sets_flow_alt_sets_smoothing_and_airbrush_does_not_swap_roles() {
     assert_eq!(a.session.tools.brush.mixer.flow, 0.6);
 }
 #[test]
-fn digits_do_not_pair_across_tools() {
-    let mut brush_to_mixer = app(Tool::Brush);
-    press(&mut brush_to_mixer, 4, false, 0.0);
-    brush_to_mixer.ui.tool = Tool::MixerBrush;
-    press(&mut brush_to_mixer, 5, false, 300.0);
-    assert_eq!(brush_to_mixer.session.tools.brush.opacity, 0.4);
-    assert_eq!(brush_to_mixer.session.tools.brush.mixer.wet, 0.5);
+fn digit_pairs_preserve_the_existing_shared_cross_tool_sequence() {
+    // The new target inherits the same pending-digit sequence as Main's existing tools.
+    let mut brush_to_selected = app(Tool::Brush);
+    press(&mut brush_to_selected, 4, false, 0.0);
+    brush_to_selected.ui.tool = Tool::MixerBrush;
+    press(&mut brush_to_selected, 5, false, 300.0);
+    assert_eq!(brush_to_selected.session.tools.brush.opacity, 0.4);
+    assert_eq!(brush_to_selected.session.tools.brush.mixer.wet, 0.45);
 
-    let mut mixer_to_brush = app(Tool::MixerBrush);
-    press(&mut mixer_to_brush, 4, false, 0.0);
-    mixer_to_brush.ui.tool = Tool::Brush;
-    press(&mut mixer_to_brush, 5, false, 300.0);
-    assert_eq!(mixer_to_brush.session.tools.brush.mixer.wet, 0.4);
-    assert_eq!(mixer_to_brush.session.tools.brush.opacity, 0.5);
+    // A selected-tool digit still contributes to the unchanged legacy Brush sequence.
+    let mut selected_to_brush = app(Tool::MixerBrush);
+    press(&mut selected_to_brush, 4, false, 0.0);
+    selected_to_brush.ui.tool = Tool::Brush;
+    press(&mut selected_to_brush, 5, false, 300.0);
+    assert_eq!(selected_to_brush.session.tools.brush.mixer.wet, 0.4);
+    assert_eq!(selected_to_brush.session.tools.brush.opacity, 0.45);
+
+    // Consuming the first pair must also leave the next legacy digit unpaired.
+    let mut through_selected = app(Tool::Brush);
+    press(&mut through_selected, 4, false, 0.0);
+    through_selected.ui.tool = Tool::MixerBrush;
+    press(&mut through_selected, 5, false, 300.0);
+    through_selected.ui.tool = Tool::Brush;
+    press(&mut through_selected, 6, false, 400.0);
+    assert_eq!(through_selected.session.tools.brush.mixer.wet, 0.45);
+    assert_eq!(through_selected.session.tools.brush.opacity, 0.6);
 }
