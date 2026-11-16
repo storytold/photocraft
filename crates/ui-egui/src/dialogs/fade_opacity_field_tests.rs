@@ -125,7 +125,7 @@ fn a_scrub_drag_rounds_and_does_not_drop_the_dot() {
     assert_eq!(read_fade_opacity(0.4, Some("0.40"), true), 40.0, "trailing zeros count");
     assert_eq!(read_fade_opacity(0.1, Some("0.10"), true), 10.0);
     assert_eq!(read_fade_opacity(50.0, Some("50"), true), 50.0);
-    assert_eq!(read_fade_opacity(0.4, None, true), 4.0, "without the text, the number's own form");
+    assert_eq!(read_fade_opacity(0.4, None, true), 0.4, "without the text nothing was typed: the number itself");
     // A drag: the number itself, which the field rounds (37.5 -> 38, never 375 -> 100).
     assert_eq!(read_fade_opacity(37.5, None, false), 37.5);
     assert_eq!(read_fade_opacity(37.5, Some("37.5"), false).round().clamp(0.0, 100.0), 38.0);
@@ -257,4 +257,38 @@ fn text_that_is_not_a_number_clears_an_earlier_range_mark() {
     leave(&mut h);
     assert_eq!(alerts(&h), 0, "no range alert");
     assert_eq!(opacity(&h, id), json!(100), "the clamped value stays");
+}
+
+/// CodeRabbit on #15106: a typed whole number with a dot is read like any typed fraction: `1.0` is 10, `2.0` is 20.
+#[test]
+fn a_typed_whole_number_with_a_dot_loses_its_dot() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "1.0");
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(10));
+    let (mut h, id) = open();
+    type_opacity(&mut h, "2.0");
+    leave(&mut h);
+    assert_eq!(opacity(&h, id), json!(20));
+}
+
+/// CodeRabbit on #15106: an arrow key after a typed entry steps the stored percent, not the draft kept from the entry:
+/// after `0.4` (stored 4), ArrowUp is 5, not 1.4.
+#[test]
+fn an_arrow_after_typing_steps_the_stored_value() {
+    let (mut h, id) = open();
+    type_opacity(&mut h, "0.4");
+    assert_eq!(opacity(&h, id), json!(4));
+    h.key_press(Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(opacity(&h, id), json!(5));
+}
+
+/// CodeRabbit on #15099: a number set without any typed text (an accessibility action, a scrub) is not typed text: its
+/// dot stays (37.5 is 37.5, never 375).
+#[test]
+fn a_number_set_without_typed_text_keeps_its_dot() {
+    use super::read_fade_opacity;
+    assert_eq!(read_fade_opacity(37.5, None, true), 37.5);
+    assert_eq!(read_fade_opacity(1.0, Some("1.0"), true), 10.0);
 }

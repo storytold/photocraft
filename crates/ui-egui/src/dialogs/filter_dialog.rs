@@ -1213,13 +1213,11 @@ fn fade_slider_gestures() -> crate::widgets::RowGestures {
 /// its dot (`12.3` is 123, `0.4` is 4); anything else, a scrub drag's fractions included (`37.5`), is
 /// the number itself, rounded by the caller.
 fn read_fade_opacity(value: f32, text: Option<&str>, typing: bool) -> f32 {
-    if value.fract() == 0.0 || !typing {
-        return value;
-    }
-    // From the text as it was typed, so `0.40` is 40 and `0.4` is 4; the number's own formatting has lost
-    // its trailing zeros.
-    let digits = text.map_or_else(|| format!("{value}"), str::to_owned).replace('.', "");
-    digits.parse::<f32>().unwrap_or(value)
+    // Without the field's text nothing was typed (a scrub, or an accessibility action that sets the number).
+    let (true, Some(text)) = (typing, text) else { return value };
+    // From the text as it was typed, so `0.40` is 40, `1.0` is 10 and `0.4` is 4: the number's own formatting has
+    // lost its trailing zeros and its dot.
+    text.replace('.', "").parse::<f32>().unwrap_or(value)
 }
 
 /// Edit › Fade's Opacity (#13811): whole percents 0..=100, a field with `%` and a slider. A typed
@@ -1232,6 +1230,9 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
     let stored = f.get("opacity").and_then(Value::as_f64).unwrap_or(100.0).round().clamp(0.0, 100.0) as f32;
     // What was typed, kept while the field has the keyboard, so `150` isn't redrawn as 100 mid-entry.
     let draft_id = ui.make_persistent_id("fade-opacity-typed");
+    // An arrow key steps the value (⌘/Ctrl by 0.1), which is not typed text (50.1 stays 50, not 501): read before the
+    // field, which consumes the key. It steps the stored percent, not the draft kept from the last entry.
+    let arrow = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown));
     let mut draft = ui.ctx().data(|d| d.get_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
     // Tab in a dialog with this one field hands the focus back to it: that ends the entry too.
     if let Some(field) = draft.and_then(|(_, _, field)| field).filter(|field| crate::field_tab::reached(ui.ctx(), *field)) {
@@ -1241,11 +1242,8 @@ fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
             f.insert("__rangeAlert".into(), json!(tl!(FADE_OPACITY_RANGE_ALERT)));
         }
     }
-    let draft = draft.filter(|(_, kept, field)| *kept == stored && field.is_some_and(|f| ui.ctx().memory(|m| m.has_focus(f))));
+    let draft = draft.filter(|(_, kept, field)| !arrow && *kept == stored && field.is_some_and(|f| ui.ctx().memory(|m| m.has_focus(f))));
     let (mut typed, mut v) = (draft.map_or(stored, |(typed, _, _)| typed), stored);
-    // An arrow key steps the value (⌘/Ctrl by 0.1), which is not typed text (50.1 stays 50, not 501): read before the
-    // field, which consumes the key. Holding ⌘/Ctrl is not the test, a pasted value is typed too.
-    let arrow = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown));
     let r = ui
         .horizontal(|ui| {
             ui.label(egui::RichText::new(name).color(t.text_dim));
