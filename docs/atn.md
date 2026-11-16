@@ -541,6 +541,11 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   export as a current-target reference.
 - Close without `Svng` preserves the unanswered save choice. Headless playback refuses to discard a
   changed document. Native `file.close` still defaults to discard; `save: "ask"` opts into this policy.
+- Save for Web accepts `In  ` inside `Usng` and the existing outer destination, exporting it inside
+  `Usng`. `DIDr` retains a folder destination under each playback document's name. Duplicate or
+  conflicting destinations, malformed paths and unrepresented slice/output settings remain kept
+  steps; unsupported native export options are refused. An omitted matte keeps the native no-matte
+  default.
 - Photo Filter converts recorded Lab colours through `craft-cms`.
 - Direct Vibrance and Gradient Map save as the string events `vibrance` and `gradientMapEvent`.
   Stroke Outside uses `StrL.Otsd`, group Pass Through uses `BlnM.passThrough`, Canvas Size extension

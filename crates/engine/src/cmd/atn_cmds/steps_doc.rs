@@ -196,11 +196,84 @@ pub(super) fn close_to(_: &str, p: &Value) -> Option<Descriptor> {
 
 const WEB_FORMATS: &[(&str, &str)] = &[("PN24", "png24"), ("PN8", "png8"), ("JPEG", "jpeg"), ("GIFf", "gif"), ("WBMP", "wbmp")];
 
-/// `export` (Save for Web): needs the destination path (`In`), as the command writes a file.
+/// Only represented settings may run: dropping slice/output options can write different files.
+fn web_keys(d: &Descriptor, keys: &[&str]) -> bool {
+    d.items.len() <= keys.len()
+        && d.items.iter().all(|(key, _)| keys.iter().any(|known| key.is(known)))
+        && keys.iter().all(|key| d.items.iter().filter(|(k, _)| k.is(key)).count() <= 1)
+}
+
+fn web_whole(n: f64, min: f64, max: f64) -> bool {
+    n.is_finite() && n.fract() == 0.0 && (min..=max).contains(&n)
+}
+
+/// File destinations must decode exactly: lossy UTF-16 or an embedded NUL could name another file.
+fn web_path(v: &D) -> Option<String> {
+    let D::Path(b) = v else { return None };
+    if b.get(..4)? != b"txtu" {
+        return None;
+    }
+    let len = usize::try_from(u32::from_le_bytes(b.get(4..8)?.try_into().ok()?)).ok()?;
+    let units = usize::try_from(u32::from_le_bytes(b.get(8..12)?.try_into().ok()?)).ok()?;
+    if len != b.len() || units.checked_mul(2)?.checked_add(12)? != len {
+        return None;
+    }
+    let payload = b.get(12..)?.strip_suffix(&[0, 0])?;
+    let path: String = char::decode_utf16(payload.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair))).collect::<Result<_, _>>().ok()?;
+    (!path.is_empty() && !path.contains('\0')).then_some(path)
+}
+
+fn web_settings_supported(u: &Descriptor) -> bool {
+    const KEYS: &[&str] = &["In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB"];
+    if !u.class_id.is("SaveForWeb") || !web_keys(u, KEYS) {
+        return false;
+    }
+    if let Some(operation) = u.get("Op  ")
+        && !matches!(operation, D::Enumerated { type_id, value } if type_id.is("SWOp") && value.is("OpSa"))
+    {
+        return false;
+    }
+    if let Some(format) = u.get("Fmt ")
+        && !matches!(format, D::Enumerated { type_id, value } if type_id.is("IRFm") && WEB_FORMATS.iter().any(|(code, _)| value.is(code)))
+    {
+        return false;
+    }
+    if ["DIDr", "Intr", "Trns", "EICC", "Prgr", "Optm", "Mtt "].iter().any(|key| !matches!(u.get(key), None | Some(D::Boolean(_)))) {
+        return false;
+    }
+    for (key, min, max) in [("Qlty", 0.0, 100.0), ("NCol", 2.0, 256.0), ("MttR", 0.0, 255.0), ("MttG", 0.0, 255.0), ("MttB", 0.0, 255.0)] {
+        if let Some(v) = u.get(key) {
+            let n = match v {
+                D::Integer(n) => f64::from(*n),
+                D::Double(n) => *n,
+                _ => return false,
+            };
+            if !web_whole(n, min, max) {
+                return false;
+            }
+        }
+    }
+    let colors = ["MttR", "MttG", "MttB"].map(|key| u.get(key).is_some());
+    match get_bool(u, "Mtt ") {
+        Some(true) => colors.into_iter().all(|present| present),
+        Some(false) => true,
+        None => colors.into_iter().all(|present| !present),
+    }
+}
+
+/// `export` (Save for Web): recorded destinations live inside `Usng`; existing outer `In` is accepted.
 pub(super) fn export_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let Some(u) = get_obj(d, "Usng") else { return unsupported };
-    let Some(path) = d.get("In  ").and_then(path_text) else { return unsupported };
+    if !web_keys(d, &["Usng", "In  "]) || !web_settings_supported(u) {
+        return unsupported;
+    }
+    // Even equal paths in both places are ambiguous; do not choose one and discard the other.
+    let path = match (d.get("In  "), u.get("In  ")) {
+        (Some(path), None) | (None, Some(path)) => web_path(path),
+        _ => None,
+    };
+    let Some(path) = path else { return unsupported };
     // "Save in directory": `In` is only the folder, and each document saves under its own name.
     let mut p = if get_bool(u, "DIDr") == Some(true) { json!({"folder": path}) } else { json!({"path": path}) };
     if let Some(f) = get_enum(u, "Fmt ") {
@@ -229,12 +302,36 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
 }
 
 pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
+    const KEYS: &[&str] = &["path", "folder", "format", "interlaced", "transparency", "embedIcc", "progressive", "optimized", "quality", "colors", "matte"];
+    if p.as_object()?.iter().any(|(key, value)| !value.is_null() && !KEYS.contains(&key.as_str())) {
+        return None;
+    }
+    for key in ["interlaced", "transparency", "embedIcc", "progressive", "optimized"] {
+        if !matches!(p.get(key), None | Some(Value::Null | Value::Bool(_))) {
+            return None;
+        }
+    }
+    for key in ["path", "folder", "format", "matte"] {
+        if !matches!(p.get(key), None | Some(Value::Null | Value::String(_))) {
+            return None;
+        }
+    }
+    for (key, min, max) in [("quality", 0.0, 100.0), ("colors", 2.0, 256.0)] {
+        if let Some(value) = p.get(key).filter(|v| !v.is_null())
+            && !value.as_f64().is_some_and(|n| web_whole(n, min, max))
+        {
+            return None;
+        }
+    }
     // A step recorded with the document's own name keeps only its folder (#5305).
-    let (path, in_folder) = match (jstr(p, "path").filter(|v| !v.is_empty()), jstr(p, "folder")) {
+    let (path, in_folder) = match (jstr(p, "path").filter(|v| !v.is_empty()), jstr(p, "folder").filter(|v| !v.is_empty())) {
         (Some(path), _) => (path, false),
         (None, Some(folder)) => (folder, true),
         (None, None) => return None,
     };
+    if path.contains('\0') {
+        return None;
+    }
     let mut u = desc("SaveForWeb").with("Op  ", enm("SWOp", "OpSa")).with("Fmt ", enm("IRFm", lookup_back(WEB_FORMATS, jstr(p, "format").unwrap_or("png24"))?));
     if in_folder {
         u = u.with("DIDr", D::Boolean(true));
@@ -255,9 +352,13 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
         u = u.with("NCol", long(c));
     }
     match jstr(p, "matte") {
-        Some("none") => u = u.with("Mtt ", D::Boolean(false)),
-        matte => {
-            let c = color_desc(matte.unwrap_or("#ffffff"))?;
+        None | Some("none") => u = u.with("Mtt ", D::Boolean(false)),
+        Some(matte) => {
+            let hex = matte.trim_start_matches('#');
+            if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            let c = color_desc(&format!("#{hex}"))?;
             u = u
                 .with("Mtt ", D::Boolean(true))
                 .with("MttR", get_num(&c, "Rd  ").map(long)?)
@@ -265,7 +366,7 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
                 .with("MttB", get_num(&c, "Bl  ").map(long)?);
         }
     }
-    Some(desc("null").with("Usng", D::Descriptor(u)).with("In  ", path_value(path)))
+    Some(desc("null").with("Usng", D::Descriptor(u.with("In  ", path_value(path)))))
 }
 
 /// Import layer-retaining conversions; keep unsupported destructive choices verbatim.

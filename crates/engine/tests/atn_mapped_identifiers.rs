@@ -1173,6 +1173,191 @@ fn recorded_slice_division_resolves_a_selection_from_the_same_saved_action() {
     assert!(parts.iter().skip(1).all(|slice| slice.rect.y0 >= 10));
 }
 
+fn web_path(path: &str) -> D {
+    let units: Vec<_> = path.encode_utf16().chain(Some(0)).collect();
+    let mut bytes = b"txtu".to_vec();
+    bytes.extend_from_slice(&((12 + units.len() * 2) as u32).to_le_bytes());
+    bytes.extend_from_slice(&(units.len() as u32).to_le_bytes());
+    for unit in units {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    D::Path(bytes)
+}
+
+fn web_destination(path: &str, nested: bool, folder: bool) -> Descriptor {
+    let mut settings = Descriptor::new("SaveForWeb").with("Op  ", enm("SWOp", "OpSa")).with("Fmt ", enm("IRFm", "PN24")).with("DIDr", D::Boolean(folder));
+    if nested {
+        settings = settings.with("In  ", web_path(path));
+    }
+    let d = Descriptor::new("null").with("Usng", D::Descriptor(settings));
+    if nested { d } else { d.with("In  ", web_path(path)) }
+}
+
+#[test]
+fn recorded_web_destination_imports_outer_and_nested_paths_and_saves_nested() {
+    for nested in [false, true] {
+        for folder in [false, true] {
+            for path in ["/out/图片.png", r"C:\exports\image.png"] {
+                for event in [AtnEvent::Code(*b"Expr"), AtnEvent::name("export")] {
+                    let action = recorded(event, web_destination(path, nested, folder));
+                    let key = if folder { "folder" } else { "path" };
+                    assert_eq!(action.steps, vec![("file.export.saveForWebLegacy".into(), json!({key:path,"format":"png24"}))]);
+                    let written = saved(&action).descriptor.unwrap();
+                    assert!(written.get("In  ").is_none(), "canonical export keeps the destination with its SaveForWeb settings");
+                    let Some(D::Descriptor(settings)) = written.get("Usng") else { panic!("SaveForWeb settings") };
+                    assert_eq!(settings.get("In  "), Some(&web_path(path)));
+                    assert_eq!(settings.get("DIDr"), folder.then_some(&D::Boolean(true)));
+                    assert_eq!(settings.get("Mtt "), Some(&D::Boolean(false)), "the native default has no matte");
+                    let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+                    let back = atn_cmds::import(&bytes).unwrap();
+                    assert!(back.unsupported.is_empty());
+                    assert_eq!(back.actions[0].steps[0].1[key], path);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_web_destination_keeps_ambiguous_malformed_and_unrepresented_forms() {
+    let base = web_destination("/out/image.png", false, false);
+    let nested = web_destination("/out/image.png", true, false);
+    let mut cases = vec![nested.clone().with("In  ", web_path("/other/image.png")), nested.clone().with("In  ", web_path("/out/image.png"))];
+    for key in ["Usng", "In  "] {
+        cases.push(base.clone().with(key, base.get(key).unwrap().clone()));
+    }
+    for (key, value) in [
+        ("In  ", D::Text(UnicodeString::new_nul("/out/image.png"))),
+        ("In  ", web_path("")),
+        ("In  ", web_path("/out/bad\0name.png")),
+        ("DIDr", D::Integer(1)),
+        ("Op  ", enm("SWOp", "OpOp")),
+        ("Op  ", enm("wrong", "OpSa")),
+        ("unknown", D::Boolean(false)),
+        ("SWsl", enm("STsl", "SLAl")),
+        ("SWmd", enm("STmd", "MDCC")),
+        ("ovNC", D::List(vec![])),
+        ("Trns", D::Integer(1)),
+        ("Qlty", D::Double(f64::NAN)),
+        ("Qlty", D::Double(20.5)),
+        ("Qlty", D::Integer(101)),
+        ("Mtt ", D::Boolean(true)),
+    ] {
+        let mut d = if key == "In  " { nested.clone() } else { base.clone() };
+        let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        settings.items.retain(|(k, _)| !k.is(key));
+        settings.items.push((Id::new(key), value));
+        cases.push(d);
+    }
+    let mut duplicate = nested.clone();
+    let Some(D::Descriptor(settings)) = duplicate.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+    settings.items.push((Id::new("In  "), web_path("/other/image.png")));
+    cases.push(duplicate);
+    let mut wrong_class = base.clone();
+    let Some(D::Descriptor(settings)) = wrong_class.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+    settings.class_id = Id::new("Other");
+    cases.push(wrong_class);
+    for corruption in 0..4 {
+        let D::Path(mut bytes) = web_path("/out/image.png") else { panic!("path") };
+        match corruption {
+            0 => bytes[12..14].copy_from_slice(&0xd800_u16.to_le_bytes()),
+            1 => bytes[4..8].copy_from_slice(&0_u32.to_le_bytes()),
+            2 => {
+                bytes.pop();
+            }
+            _ => bytes.extend_from_slice(&[0, 0]),
+        }
+        let mut d = nested.clone();
+        let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        settings.items.iter_mut().find(|(key, _)| key.is("In  ")).unwrap().1 = D::Path(bytes);
+        cases.push(d);
+    }
+    for d in cases {
+        let action = recorded(AtnEvent::name("export"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+}
+
+#[test]
+fn recorded_web_destination_refuses_native_settings_the_descriptor_cannot_represent() {
+    for extra in [
+        json!({"slices":"selected"}),
+        json!({"numbers":[1]}),
+        json!({"html":true}),
+        json!({"metadata":"all"}),
+        json!({"convertToSrgb":false}),
+        json!({"width":10}),
+        json!({"quality":101}),
+        json!({"quality":2.5}),
+        json!({"transparency":"yes"}),
+        json!({"unknown":true}),
+        json!({"matte":"#ffffff80"}),
+        json!({"matte":"teal"}),
+    ] {
+        let mut params = json!({"path":"/out/image.png","format":"png24"});
+        params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let native = Action::new("Recorded", vec![("file.export.saveForWebLegacy".into(), params.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&native], &[], false).is_err(), "{params}");
+    }
+    for params in [json!({"folder":""}), json!({"path":"bad\0name.png"}), json!({"path":"/out/image.png","format":"webp"})] {
+        let native = Action::new("Recorded", vec![("file.export.saveForWebLegacy".into(), params.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&native], &[], false).is_err(), "{params}");
+    }
+}
+
+#[test]
+fn recorded_web_destination_plays_into_only_the_recorded_file_or_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    for depth in [8, 16, 32] {
+        for folder in [false, true] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":8,"height":6,"depth":depth,"name":"First.psd","background":"transparent"})).unwrap();
+            let path = if folder { dir.path().to_path_buf() } else { dir.path().join(format!("fixed-{depth}.png")) };
+            let action = recorded(AtnEvent::name("export"), web_destination(&path.to_string_lossy(), true, folder));
+            // The saved form makes native defaults explicit; require stability after that normalization.
+            let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+            let action = atn_cmds::import(&bytes).unwrap().actions.remove(0);
+            let before = s.active().unwrap().doc.clone();
+            let past = s.active().unwrap().history.past_len();
+            replay_saved(&mut s, &action);
+            let out = if folder { dir.path().join("First.png") } else { path.clone() };
+            let decoded = photocraft_io::import("out.png", &std::fs::read(&out).unwrap()).unwrap().document;
+            assert_eq!(decoded.size, photocraft_geom::Size::new(8, 6));
+            assert_eq!(photocraft_compose::flatten(&decoded).px.first().unwrap()[3], 0.0, "no default matte may fill the transparent canvas");
+            assert_eq!(s.active().unwrap().doc, before);
+            assert_eq!(s.active().unwrap().history.past_len(), past);
+            assert!(s.prefs().dialogs.get("file.export.saveForWebLegacy").is_some_and(|p| p.get("path").is_none() && p.get("folder").is_none()));
+            if folder {
+                s.execute("file.new", json!({"width":4,"height":3,"name":"Second.psd"})).unwrap();
+                replay_saved(&mut s, &action);
+                let second = photocraft_io::import("out.png", &std::fs::read(dir.path().join("Second.png")).unwrap()).unwrap().document;
+                assert_eq!(second.size, photocraft_geom::Size::new(4, 3));
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_web_destination_with_unmapped_slice_settings_stops_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("unmapped.png");
+    let mut d = web_destination(&path.to_string_lossy(), true, false);
+    let Some(D::Descriptor(settings)) = d.items.iter_mut().find(|(key, _)| key.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+    settings.items.push((Id::new("SWsl"), enm("STsl", "SLAl")));
+    let mut action = recorded(AtnEvent::name("export"), d);
+    action.steps.push(("layer.renameLayer".into(), json!({"name":"AfterExport"})));
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":8,"height":6})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    s.actions.list = vec![action];
+    let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+    assert_eq!(result["ran"], 0, "{result}");
+    assert!(result.get("failed").is_some(), "{result}");
+    assert!(!path.exists());
+    assert_eq!(s.active().unwrap().doc, before);
+}
+
 fn history_offset(offset: i32) -> Descriptor {
     Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("HstS"), offset }]))
 }
