@@ -280,3 +280,35 @@ fn the_params_doc_names_the_option() {
     let spec = specs().into_iter().find(|c| c.id == "file.export.artboardsToFiles").unwrap();
     assert!(spec.params.contains(r#""content":"overlapping|artboard"="overlapping""#), "{}", spec.params);
 }
+
+/// The source document's composite pixel at (x, y); Red Board sits at the canvas origin, so its
+/// file pixels line up with these.
+fn source_px(s: &Session, x: i32, y: i32) -> [u8; 4] {
+    px(&s.active().unwrap().doc, x, y)
+}
+
+/// A mask on the board above keeps hiding what it hid when the export clips that board to its
+/// rect: the board clip is added beside it instead of replacing it.
+#[test]
+fn a_mask_on_the_board_above_still_hides_its_part() {
+    let (mut s, [red, blue, _]) = session(8);
+    s.edit("Mask", |doc, _| {
+        let board = doc.layer_mut(LayerId(blue)).unwrap();
+        // A canvas-wide fill reaches past the board, so the export clips the board to its rect.
+        let fill = Layer::new("Green", LayerContent::Fill(photocraft_doc::Fill::Solid(Color::rgb(0.0, 1.0, 0.0))));
+        board.children_mut().unwrap().insert(0, fill);
+        let mut mask = photocraft_doc::LayerMask::reveal_all();
+        mask.surface.fill_rect(Rect::new(140, 50, 160, 70), &[0.0]);
+        board.mask = Some(mask);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(rgb(source_px(&s, 150, 60)), WHITE, "the mask shows Blue Board's background there");
+    let out = Out::new("board-mask");
+    for format in ["png", "psd"] {
+        let f = export(&mut s, &out, red, json!({"format": format}));
+        for (x, y) in [(150, 60), (145, 55), (170, 60), (125, 140), (110, 50), (10, 140)] {
+            assert_eq!(px(&f, x, y), source_px(&s, x, y), "{format} at ({x},{y})");
+        }
+    }
+}

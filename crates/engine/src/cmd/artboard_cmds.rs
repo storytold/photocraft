@@ -664,7 +664,13 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
 /// artboard) holding its layers over a new pixel layer "Background for <board>" filled with the
 /// board's background where the two boards overlap, in source coordinates and bottom to top. A
 /// group whose layers reach past its own board (effects, pixels outside the board, adjustments)
-/// gets a mask to its board, which the artboard clipped them to.
+/// gets a hard mask to its board, which the artboard clipped them to.
+///
+/// The artboard painted its background beneath the group and then composited the group (its
+/// blend mode, opacity, effects and masks) over it. A board with any of those keeps them on a
+/// group of its own inside the plain group, above the background, so they still apply to its
+/// layers only and its own mask keeps its feather and Layer Mask Hides Effects setting; the plain
+/// group then carries nothing but the board clip.
 fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
     let above = doc.layers.iter().skip_while(|l| l.id != id).skip(1);
     let mut out = Vec::new();
@@ -674,27 +680,60 @@ fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
         if overlap.is_empty() {
             continue;
         }
-        let mut group = l.clone();
-        if let LayerContent::Group(g) = &mut group.content {
+        let mut board = l.clone();
+        if let LayerContent::Group(g) = &mut board.content {
             g.artboard = None;
             cut_pixels(&mut g.children, overlap, 0);
         }
-        let reach = photocraft_compose::change_bounds(&group, doc.bounds());
-        if reach.is_none_or(|r| !ab.rect.contains_rect(&r)) {
-            let mut mask = photocraft_doc::LayerMask::reveal_all();
-            mask.surface = Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.0]);
-            mask.surface.fill_rect(ab.rect, &[1.0]);
-            group.mask = Some(mask);
-        }
-        if let (Some(bg), Some(children)) = (ab.background.rgba(), group.children_mut()) {
+        let bg = ab.background.rgba();
+        let mut group = if stacks_like_its_layers(&board, bg) {
+            board
+        } else {
+            board.clipped = false;
+            let mut plain = Layer::group(l.name.clone(), vec![board]);
+            plain.label = l.label;
+            plain
+        };
+        if let (Some(bg), Some(children)) = (bg, group.children_mut()) {
             let fmt = doc.pixel_format();
             let mut surf = Surface::new(fmt);
             surf.fill_rect(overlap, &photocraft_raster::from_rgba(&fmt, bg));
             children.insert(0, Layer::new(format!("Background for {}", l.name), LayerContent::Raster(surf)));
         }
+        // With the background in place: its pixels widen what the group's layers can reach.
+        let reach = photocraft_compose::change_bounds(&group, doc.bounds());
+        if reach.is_none_or(|r| !ab.rect.contains_rect(&r)) {
+            let mut mask = photocraft_doc::LayerMask::reveal_all();
+            mask.surface = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+            mask.surface.fill_rect(ab.rect, &[1.0]);
+            group.mask = Some(mask);
+        }
         out.push(group);
     }
     out
+}
+
+/// Whether artboard `board` (already a plain group) composites over its background `bg` exactly
+/// as its layers stacked over that background in one pass-through group do: no effects, masks,
+/// opacity, Blend If or other blending options of its own (Normal only over an opaque
+/// background, which hides whatever an isolated group would leave out), and no mask the board
+/// clip would replace.
+fn stacks_like_its_layers(board: &Layer, bg: Option<[f32; 4]>) -> bool {
+    let blend = match board.blend {
+        photocraft_color::BlendMode::PassThrough => true,
+        photocraft_color::BlendMode::Normal => bg.is_some_and(|c| c[3] >= 1.0),
+        _ => false,
+    };
+    blend
+        && board.opacity >= 1.0
+        && board.fill_opacity >= 1.0
+        && board.mask.is_none()
+        && board.vector_mask.is_none()
+        && board.frame.is_none()
+        && board.excluded_channels == 0
+        && board.blend_if == photocraft_doc::BlendIf::default()
+        && board.advanced == photocraft_doc::AdvancedBlending::default()
+        && !photocraft_compose::effects::has_effects(board)
 }
 
 /// Cuts the pixel layers in `layers` (and in groups inside them, `depth` levels down so far) to
