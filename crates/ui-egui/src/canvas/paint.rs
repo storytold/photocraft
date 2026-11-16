@@ -684,6 +684,21 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
                 // edge would blur it to grey).
                 let pts: Vec<Pos2> = pts.into_iter().map(|p| p.round() + vec2(0.5, 0.5)).collect();
                 crate::tool_feedback::draw_solid_path(painter, &pts, false);
+                // Smoothing holds the outline back from the pointer: draw the string between them,
+                // with a dot at the smoothed end, as the brush does (#3479). Only while a freehand
+                // stretch is in progress (button held) and smoothing is actually on; the rubber-band
+                // preview between Alt-clicks keeps its straight segment without an indicator.
+                if let Some(lasso) = &d.lasso
+                    && lasso.down()
+                    && app.ui.tool_options.lasso_smoothing > 0.0
+                    && !d.points.is_empty()
+                {
+                    let smoothed = d.points[d.points.len() - 1];
+                    let (dx, dy) = (smoothed[0] - lasso.cursor[0], smoothed[1] - lasso.cursor[1]);
+                    if (dx * dx + dy * dy).sqrt() >= 2.0 {
+                        draw_smoothing_string(painter, xf, ([smoothed[0], smoothed[1]], [lasso.cursor[0], lasso.cursor[1]]));
+                    }
+                }
             } else {
                 crate::tool_feedback::draw_ants(painter, &pts, false);
             }

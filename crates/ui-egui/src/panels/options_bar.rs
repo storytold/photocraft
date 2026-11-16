@@ -462,6 +462,15 @@ fn lasso_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     opt_label(ui, tl!("Feather"));
     widgets::value_field(ui, &mut app.ui.tool_options.feather, 0.0..=1000.0, "px", 62.0);
     widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
+    // The Lasso smooths its freehand outline (a PhotoCraft extension; the Polygonal and Magnetic
+    // Lassos have their own controls and no freehand to stabilise).
+    if app.ui.tool == Tool::Lasso {
+        widgets::vline(ui, 22.0);
+        opt_label(ui, tl!("Smoothing"));
+        widgets::value_field(ui, &mut app.ui.tool_options.lasso_smoothing, 0.0..=100.0, "%", 58.0)
+            .on_hover_text(tl!("Set smoothing for the lasso outline\nUse higher values to reduce the shakiness of the stroke"));
+        lasso_smoothing_options(app, ui);
+    }
     widgets::vline(ui, 22.0);
     if app.ui.tool == Tool::MagneticLasso {
         let o = &mut app.ui.tool_options;
@@ -493,6 +502,25 @@ fn lasso_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ),
         );
     }
+}
+
+/// The gear beside the Lasso's Smoothing: the brush's Smoothing Options, as far as they apply to
+/// a selection outline. Greyed at 0 %, where there is no smoothing to tune, as the brush's are
+/// (#11939).
+fn lasso_smoothing_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let resp = icons::button(ui, "settings", 24.0, false, tl!("Set additional smoothing options"));
+    let resp = crate::brush_picker::named(resp, "Set additional smoothing options");
+    egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.label(egui::RichText::new(tl!("Smoothing Options")).strong());
+        let o = &mut app.ui.tool_options;
+        let on = o.lasso_smoothing.round() > 0.0;
+        ui.add_enabled_ui(on, |ui| {
+            widgets::checkbox(ui, &mut o.lasso_pulled_string, tl!("Pulled String Mode"))
+                .on_hover_text(tl!("The outline moves only once the pointer pulls the string taut"));
+            widgets::checkbox(ui, &mut o.lasso_adjust_for_zoom, tl!("Adjust for Zoom"))
+                .on_hover_text(tl!("Keep the string the same length on screen at every zoom"));
+        });
+    });
 }
 
 /// Selection and paint tools expose their controls as a family of options rows.

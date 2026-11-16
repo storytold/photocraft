@@ -350,6 +350,7 @@ pub(crate) fn sanitize(o: &mut ToolOptions) {
     let fit = |v: &mut f32, lo: f32, hi: f32, def: f32| *v = if v.is_nan() { def } else { v.clamp(lo, hi) };
     fit(&mut o.tolerance, 0.0, 255.0, d.tolerance);
     fit(&mut o.feather, 0.0, 1000.0, d.feather);
+    fit(&mut o.lasso_smoothing, 0.0, 100.0, d.lasso_smoothing);
     fit(&mut o.fill_opacity, 1.0, 100.0, d.fill_opacity);
     fit(&mut o.type_size, 0.1, 1296.0, d.type_size);
     fit(&mut o.pattern_stamp_scale, 1.0, 1000.0, d.pattern_stamp_scale);
