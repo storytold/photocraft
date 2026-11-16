@@ -193,7 +193,7 @@ pub fn apply_filter_to_surface(
     canvas: photocraft_geom::Rect,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<photocraft_raster::Surface>> {
-    apply_filter_to_surface_with(id, params, surf, bounds, selection, canvas, &crate::jobs::JobCtx::new(), cancelled)
+    apply_filter_to_surface_with(id, params, surf, bounds, selection, canvas, FilterApplyContext { job: None, cancelled })
 }
 
 /// Render a stored filter with the caller's cancellation context, including custom kernel preparation.
@@ -207,7 +207,13 @@ pub(crate) fn apply_filter_to_surface_in(
     ctx: &crate::jobs::JobCtx,
 ) -> Result<Option<photocraft_raster::Surface>> {
     let cancelled = || ctx.cancelled();
-    apply_filter_to_surface_with(id, params, surf, bounds, selection, canvas, ctx, &cancelled)
+    apply_filter_to_surface_with(id, params, surf, bounds, selection, canvas, FilterApplyContext { job: Some(ctx), cancelled: &cancelled })
+}
+
+#[derive(Clone, Copy)]
+struct FilterApplyContext<'a> {
+    job: Option<&'a crate::jobs::JobCtx>,
+    cancelled: &'a (dyn Fn() -> bool + Sync),
 }
 
 fn apply_filter_to_surface_with(
@@ -217,10 +223,12 @@ fn apply_filter_to_surface_with(
     bounds: photocraft_geom::Rect,
     selection: Option<&photocraft_raster::Surface>,
     canvas: photocraft_geom::Rect,
-    ctx: &crate::jobs::JobCtx,
-    cancelled: &(dyn Fn() -> bool + Sync),
+    context: FilterApplyContext<'_>,
 ) -> Result<Option<photocraft_raster::Surface>> {
-    ctx.check()?;
+    if let Some(ctx) = context.job {
+        ctx.check()?;
+    }
+    let cancelled = context.cancelled;
     if cancelled() {
         return Err(EngineError::Cancelled);
     }
