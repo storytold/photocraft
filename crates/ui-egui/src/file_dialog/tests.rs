@@ -835,6 +835,210 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
     app.poll_file_dialog(&ctx, None);
 }
 
+/// #9656: Save As and the export dialogs start in the open document's folder by default; with
+/// Save As to Original Folder off they start in the folder last saved to, for any document.
+#[test]
+fn save_as_starts_in_the_document_folder_unless_original_folder_is_off() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let exports = tmp.path().join("exports");
+    std::fs::create_dir(&exports).unwrap();
+    let exports = exports.to_string_lossy().into_owned();
+    app.session.active_mut().unwrap().path = Some(joined("/clients/a", "design.psd"));
+    let suggested = |open: &Open| match &open.borrow()[0].0 {
+        FileDialogRequest::Save { suggested } => suggested.clone(),
+        other => panic!("save dialog expected, got {other:?}"),
+    };
+    let ask = |app: &mut PhotocraftApp, open: &Open, id: &str, answer_with: Option<&str>| {
+        menus::invoke(app, &ctx, id, json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        let asked = suggested(open);
+        answer(open, answer_with.map(|p| FileDialogAnswer::SaveTo(p.into())));
+        app.poll_file_dialog(&ctx, None);
+        asked
+    };
+    // The default: Save As offers the document's own path, and nothing is remembered across documents.
+    assert!(app.session.prefs().file_handling.save_as_to_original_folder);
+    assert_eq!(ask(&mut app, &open, "file.saveAs", Some(&joined(&exports, "design.psd"))), joined("/clients/a", "design.psd"));
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, exports.as_str());
+    app.session.active_mut().unwrap().path = Some(joined("/clients/a", "design.psd"));
+    assert_eq!(ask(&mut app, &open, "file.saveAs", None), joined("/clients/a", "design.psd"));
+    // Off: the name stays, the folder is the one last saved to.
+    app.run("prefs.set", json!({"path": "fileHandling.saveAsToOriginalFolder", "value": false})).unwrap();
+    assert_eq!(ask(&mut app, &open, "file.saveAs", None), joined(&exports, "design.psd"));
+    // A bare export name follows the same rule, for a document that was never saved there.
+    app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined(&exports, "result.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    // Nothing remembered yet: fall back to the document's folder.
+    app.run("prefs.set", json!({"path": "fileHandling.lastSaveFolder", "value": ""})).unwrap();
+    assert_eq!(ask(&mut app, &open, "file.saveAs", None), joined("/clients/a", "design.psd"));
+    app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/clients/a", "result.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+}
+
+/// #9656 review: the remembered folder moves only when the write was accepted. Save As into a
+/// folder, a later export into another one that fails, then reopening the dialog: it still starts
+/// in the first folder.
+#[test]
+fn a_failed_export_does_not_move_the_remembered_save_folder() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let (good, other) = (tmp.path().join("good"), tmp.path().join("other"));
+    std::fs::create_dir(&good).unwrap();
+    std::fs::create_dir(&other).unwrap();
+    let (good, other) = (good.to_string_lossy().into_owned(), other.to_string_lossy().into_owned());
+    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false}})).unwrap();
+    let suggested = |open: &Open| match &open.borrow()[0].0 {
+        FileDialogRequest::Save { suggested } => suggested.clone(),
+        other => panic!("save dialog expected, got {other:?}"),
+    };
+    let doc = app.session.active().unwrap().doc.id;
+    // A successful export remembers its folder.
+    app.pick_save("a.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo(joined(&good, "a.png"))));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, good);
+    // A failed one does not, for the preference or for the document.
+    app.pick_save("b.png", |_, _| Err("disk full".into())).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined(&good, "b.png"));
+    answer(&open, Some(FileDialogAnswer::SaveTo(joined(&other, "b.png"))));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, good);
+    assert_eq!(app.save_dirs.get(&doc).map(|p| p.to_string_lossy().into_owned()), Some(good.clone()));
+    // Reopening starts where the last good save went.
+    app.pick_save("c.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined(&good, "c.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+}
+
+/// #9656 review: an export that needs no dialog (Quick Export beside the document) still
+/// remembers its folder, for the preference and for the document.
+#[test]
+fn a_dialogless_export_remembers_its_folder() {
+    let (mut app, _, _) = app();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_string_lossy().into_owned();
+    let doc = app.session.active().unwrap().doc.id;
+    app.remember_save_folder(Some(doc), &joined(&dir, "a.png"));
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, dir);
+    assert_eq!(app.save_dirs.get(&doc).map(|p| p.to_string_lossy().into_owned()), Some(dir));
+    // A bare download name (the web) has no folder to remember.
+    app.remember_save_folder(Some(doc), "b.png");
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, tmp.path().to_string_lossy());
+}
+
+/// #9656 review: the real Quick Export beside a PSD (Same Folder, no dialog) writes the file and
+/// then remembers that folder, for the preference and for the document; one that cannot be
+/// written remembers nothing.
+#[test]
+fn a_quick_export_beside_the_document_remembers_its_folder() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_string_lossy().into_owned();
+    app.run("prefs.set", json!({"path": "export.quickExportLocation", "value": "sameFolder"})).unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    app.session.active_mut().unwrap().path = Some(joined(&dir, "photo.psd"));
+    assert!(app.session.prefs().file_handling.last_save_folder.is_empty());
+    menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(open.borrow().is_empty(), "no dialog");
+    assert!(std::fs::read(tmp.path().join("photo.png")).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"), "the export was written");
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, dir);
+    assert_eq!(app.save_dirs.get(&doc).map(|p| p.to_string_lossy().into_owned()), Some(dir.clone()));
+    // Beside a "folder" that is really a file, the export cannot be written and the remembered
+    // folder stays put.
+    std::fs::write(tmp.path().join("blocker"), b"a file").unwrap();
+    app.session.active_mut().unwrap().path = Some(joined(&joined(&dir, "blocker"), "other.psd"));
+    assert!(menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).is_err());
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, dir, "a failed export moves nothing");
+}
+
+/// #9656 review: a remembered folder that no longer exists is not offered; the dialog starts
+/// beside the document instead.
+#[test]
+fn a_vanished_save_folder_falls_back_to_beside_the_document() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let gone = tmp.path().join("gone");
+    std::fs::create_dir(&gone).unwrap();
+    let gone = gone.to_string_lossy().into_owned();
+    app.session.active_mut().unwrap().path = Some(joined("/clients/a", "design.psd"));
+    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false, "fileHandling.lastSaveFolder": gone}})).unwrap();
+    assert_eq!(app.last_save_dir(), Some(std::path::PathBuf::from(&gone)));
+    std::fs::remove_dir(&gone).unwrap();
+    assert_eq!(app.last_save_dir(), None);
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if *suggested == joined("/clients/a", "design.psd")));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if *suggested == joined("/clients/a", "result.png")));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+}
+
+/// #9656: Clear Recent Files also forgets the remembered save folder.
+#[test]
+fn clearing_recent_files_forgets_the_last_save_folder() {
+    let (mut app, _, _) = jpeg_app(None, false);
+    app.run("prefs.set", json!({"path": "fileHandling.lastSaveFolder", "value": "/exports"})).unwrap();
+    app.clear_recent();
+    assert!(app.session.prefs().file_handling.last_save_folder.is_empty());
+}
+
+/// #9656: with Save As to Original Folder off, File › Save of a flat file that asks for a name
+/// still offers the document's own file; only Save As moves to the remembered folder.
+#[test]
+fn plain_save_keeps_the_documents_file_when_original_folder_is_off() {
+    let ctx = egui::Context::default();
+    let path = "/pics/My image.jpg";
+    let (mut app, open, _) = jpeg_app(None, false);
+    app.opened_from(path);
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let exports = tmp.path().to_string_lossy().into_owned();
+    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false, "fileHandling.lastSaveFolder": exports}})).unwrap();
+    for (id, expected) in [("file.save", path.to_string()), ("file.saveAs", joined(&exports, "My image.jpg"))] {
+        menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if *suggested == expected), "{id}");
+        answer(&open, None);
+        app.poll_file_dialog(&ctx, None);
+    }
+}
+
+/// The same for a document opened by a relative path: File › Save keeps `design.jpg`, which
+/// a bare name would otherwise move to the remembered folder.
+#[test]
+fn plain_save_keeps_a_relative_document_path_when_original_folder_is_off() {
+    let ctx = egui::Context::default();
+    let (mut app, open, _) = jpeg_app(None, false);
+    app.opened_from("design.jpg");
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let exports = tmp.path().to_string_lossy().into_owned();
+    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false, "fileHandling.lastSaveFolder": exports}})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if suggested == "design.jpg"));
+}
+
 #[test]
 fn save_suggestions_preserve_explicit_directories_and_untitled_names() {
     let (mut app, open, _) = app();
