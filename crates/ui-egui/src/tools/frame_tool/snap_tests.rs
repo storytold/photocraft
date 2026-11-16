@@ -233,3 +233,32 @@ fn an_exact_alignment_of_the_squared_corner_beats_a_correction_on_the_other_axis
     assert_eq!(frames(&app), vec![[137, 87, 200, 150]], "stays on x 137");
     assert_eq!(lines, vec![(true, 137.0)]);
 }
+
+/// CodeRabbit on #15141: with Ctrl released mid-drag, a small Shift square can find an edge behind its (unsnapped)
+/// start. The snapped side would be negative: the unsnapped square stays and no line is shown.
+#[test]
+fn a_shift_square_whose_snap_would_cross_its_start_stays_unsnapped() {
+    let mut app = app(true);
+    let ctrl = egui::Modifiers { ctrl: true, ..Default::default() };
+    let shift = egui::Modifiers { shift: true, ..Default::default() };
+    tool_event(&mut app, ToolEvent::Down { x: 141.0, y: 95.0, pressure: 1.0 }, ctrl);
+    tool_event(&mut app, ToolEvent::Move { x: 144.0, y: 98.0, pressure: 1.0 }, shift);
+    // The x edge at 137 is 7 behind the corner and 4 behind the start: snapped, the side would be -4.
+    assert!(app.prefs_rt.snap_lines.is_empty(), "no line for an edge the frame does not reach");
+    let Some(FrameDrag::New { start, cur, .. }) = app.ui.frame_tool.drag.clone() else { panic!("a frame being drawn") };
+    assert_eq!((start, cur), ([141.0, 95.0], [144.0, 98.0]), "the pointer is not pulled back onto the start");
+    tool_event(&mut app, ToolEvent::Up { x: 144.0, y: 98.0 }, shift);
+}
+
+/// CodeRabbit on #15160: the press comes first, Shift is held only afterwards. The press snaps to x 137; the squaring
+/// then starts from that snapped start.
+#[test]
+fn shift_held_after_a_snapped_press_squares_from_the_snapped_start() {
+    let mut app = app(true);
+    let none = egui::Modifiers::NONE;
+    let shift = egui::Modifiers { shift: true, ..Default::default() };
+    tool_event(&mut app, ToolEvent::Down { x: 130.0, y: 200.0, pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Move { x: 250.0, y: 50.0, pressure: 1.0 }, shift);
+    tool_event(&mut app, ToolEvent::Up { x: 250.0, y: 50.0 }, shift);
+    assert_eq!(frames(&app), vec![[137, 90, 247, 200]]);
+}
