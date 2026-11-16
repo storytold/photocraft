@@ -1332,6 +1332,18 @@ fn build() -> Vec<CommandSpec> {
                         crate::adjust_params::from_command_params(&kind, &tone, None, adjust_mode(s, p))?
                     }
                 };
+                // A smart filter replays its params with the rules for adjustments a file carries,
+                // so it records the Levels or Curves the command read (whole levels, at most 16
+                // points), not the raw params: otherwise the replay keeps points the command merged.
+                let recorded = recorded.or_else(|| {
+                    matches!(kind.as_str(), "levels" | "curves").then(|| {
+                        let mut q = p.clone();
+                        if let (Value::Object(q), Value::Object(read)) = (&mut q, crate::adjust_params::to_params(&adj)) {
+                            q.extend(read);
+                        }
+                        q
+                    })
+                });
                 let adj = if matches!(kind.as_str(), "levels" | "curves")
                     && let Some(colors) = crate::color_channels::target(s, p)?
                 {
