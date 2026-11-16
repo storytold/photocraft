@@ -7,7 +7,7 @@
 //! "..." button (a compact icon panel); the gear (the Move tool's three hover and group toggles,
 //! #11381).
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons};
@@ -53,6 +53,47 @@ fn bar_groups() -> [[BarButton; 4]; 2] {
     ]
 }
 
+/// Whether the active document has artboards. The reference application greys Align To out
+/// there, showing Selection, and viewing such a document turns the setting back to Selection.
+fn align_to_off(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| st.doc.has_artboards())
+}
+
+/// Align To as the reference application keeps it: Selection whenever the active document has
+/// artboards (#10337).
+pub(crate) fn sync_align_to(app: &mut PhotocraftApp) {
+    if align_to_off(app) {
+        app.ui.tool_options.move_align_to_canvas = false;
+    }
+}
+
+/// The parameters of a `layer.align.*` run from the Move tool or Properties: Align To Canvas
+/// sends `to: canvas`; Selection leaves the engine's own choice (the selection's bounds, else the
+/// layers', a lone layer's canvas or artboard) (#10337).
+pub(crate) fn align_params(app: &PhotocraftApp) -> Value {
+    if app.ui.tool_options.move_align_to_canvas && !align_to_off(app) { json!({"to": "canvas"}) } else { json!({}) }
+}
+
+/// The parameters a bar or panel button's command runs with: Align To for the aligns, none for
+/// the distributes.
+fn params_for(app: &PhotocraftApp, cmd: &str) -> Value {
+    if cmd.starts_with("layer.align.") { align_params(app) } else { json!({}) }
+}
+
+fn align_to_label(canvas: bool) -> &'static str {
+    if canvas { tl!("Canvas") } else { tl!("Selection") }
+}
+
+/// Align To: Selection or Canvas, as a drop-down (Properties' Align and Distribute), greyed out
+/// in a document with artboards.
+pub(crate) fn align_to(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    sync_align_to(app);
+    let on = !align_to_off(app);
+    let canvas = &mut app.ui.tool_options.move_align_to_canvas;
+    ui.label(tl!("Align To"));
+    ui.add_enabled_ui(on, |ui| crate::widgets::dropdown(ui, "align-to", tl!("Align To"), canvas, &[(false, "Selection"), (true, "Canvas")], 130.0));
+}
+
 /// Whether the "..." panel is open: a click on the button toggles it and nothing else closes it
 /// (Escape included), as in the reference application.
 pub(crate) fn panel_open_id() -> egui::Id {
@@ -67,12 +108,13 @@ pub(crate) fn panel_is_open(ctx: &egui::Context) -> bool {
 /// artwork inside a 28 pt hit target for high-DPI legibility without changing enabled-state or
 /// command dispatch (#8849).
 pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    sync_align_to(app);
     ui.spacing_mut().item_spacing.x = 0.0;
     for group in bar_groups() {
         for (cmd, icon, tip) in group {
             let on = app.session.is_enabled(cmd);
             if ui.add_enabled_ui(on, |ui| icons::button_with_icon_size(ui, icon, 28.0, 20.0, false, tip)).inner.clicked() {
-                let _ = app.run(cmd, json!({}));
+                let _ = app.run(cmd, params_for(app, cmd));
             }
         }
         ui.add_space(6.0);
@@ -90,8 +132,7 @@ pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// The compact icon panel under the "..." button: Align (6) and Distribute (6). The Distribute
-/// Spacing group (#10715) and the Align To dropdown (#10358) go below these as further `group`
-/// rows.
+/// Spacing group (#10715) goes below these as a further `group` row; Align To (#10358) is last.
 fn panel(app: &mut PhotocraftApp, ctx: &egui::Context, anchor: egui::Rect) {
     let t = Tokens::get(ctx);
     egui::Area::new(egui::Id::unique("move-align-panel")).order(egui::Order::Foreground).fixed_pos(anchor.left_bottom() + egui::vec2(0.0, 2.0)).show(
@@ -107,7 +148,7 @@ fn panel(app: &mut PhotocraftApp, ctx: &egui::Context, anchor: egui::Rect) {
                             let tip = format!("{kind}: {}", tl!(label));
                             let on = app.session.is_enabled(cmd);
                             if ui.add_enabled_ui(on, |ui| icons::button_with_icon_size(ui, icon, 28.0, 20.0, false, &tip)).inner.clicked() {
-                                let _ = app.run(cmd, json!({}));
+                                let _ = app.run(cmd, params_for(app, cmd));
                             }
                         }
                     });
@@ -115,6 +156,18 @@ fn panel(app: &mut PhotocraftApp, ctx: &egui::Context, anchor: egui::Rect) {
                 group(ui, tl!("Align"), tl!("Align"), &ALIGN);
                 ui.add_space(4.0);
                 group(ui, tl!("Distribute"), tl!("Distribute"), &DISTRIBUTE);
+                // Align To, as in the reference application's Move tool (#10337): greyed out at
+                // Selection in a document with artboards.
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(tl!("Align To")).small().color(t.text_dim));
+                let on = !align_to_off(app);
+                ui.add_enabled_ui(on, |ui| {
+                    ui.horizontal(|ui| {
+                        for c in [false, true] {
+                            ui.radio_value(&mut app.ui.tool_options.move_align_to_canvas, c, align_to_label(c));
+                        }
+                    });
+                });
             });
         },
     );
@@ -147,5 +200,94 @@ mod tests {
             assert!(icons::exists(icon), "{icon} is not embedded");
         }
         assert!(icons::exists("settings"));
+    }
+
+    /// #10337: the Move tool's Align To (radio rows in the ⋯ menu) sends its icons' aligns to the
+    /// canvas; Selection, the default, aligns the selected layers to each other.
+    #[test]
+    fn align_to_canvas_in_the_move_options_aligns_to_the_canvas() {
+        use egui_kittest::kittest::Queryable;
+        for canvas in [false, true] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+            let mut ids = Vec::new();
+            for x in [40, 90] {
+                ids.push(app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+                app.run("select.rect", json!({"x": x, "y": 30, "width": 20, "height": 20})).unwrap();
+                app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+                app.run("select.deselect", json!({})).unwrap();
+            }
+            app.run("layer.select", json!({"layer": ids[0], "mode": "add"})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().cumulative_pass_nr() == 0 {
+                        PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                        return;
+                    }
+                    ui.horizontal(|ui| options(app, ui));
+                },
+                app,
+            );
+            h.run_steps(3);
+            if canvas {
+                h.get_by_label("Align and distribute").click();
+                h.run_steps(3);
+                h.get_by_label("Canvas").click();
+                h.run_steps(3);
+                assert!(h.state().ui.tool_options.move_align_to_canvas, "the radio sets Align To Canvas");
+                h.key_press(egui::Key::Escape);
+                h.run_steps(3);
+            }
+            h.get_by_label("Align left edges").click();
+            h.run_steps(3);
+            let st = h.state().session.active().unwrap();
+            let lefts: Vec<i32> =
+                ids.iter().map(|&id| st.doc.layer(photocraft_doc::LayerId(id)).and_then(|l| l.surface()).unwrap().content_bounds().x0).collect();
+            assert_eq!(lefts, if canvas { [0, 0] } else { [40, 40] }, "Align To Canvas: {canvas}");
+        }
+    }
+
+    /// #10337, as measured in the reference application: in a document with artboards Align To is
+    /// greyed out at Selection, so the align icons align the selected layers to each other, and a
+    /// Canvas setting turns back to Selection.
+    #[test]
+    fn align_to_is_selection_in_a_document_with_artboards() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+        let mut ids = Vec::new();
+        for x in [40, 90] {
+            ids.push(app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+            app.run("select.rect", json!({"x": x, "y": 30, "width": 20, "height": 20})).unwrap();
+            app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            app.run("select.deselect", json!({})).unwrap();
+        }
+        app.run("layer.select", json!({"layer": ids[0], "mode": "add"})).unwrap();
+        app.run("layer.new.artboardFromLayers", json!({})).unwrap();
+        app.run("layer.select", json!({"layer": ids[0]})).unwrap();
+        app.run("layer.select", json!({"layer": ids[1], "mode": "add"})).unwrap();
+        let left = |app: &PhotocraftApp, id: u64| {
+            let st = app.session.active().unwrap();
+            st.doc.layer(photocraft_doc::LayerId(id)).and_then(|l| l.surface()).unwrap().content_bounds().x0
+        };
+        let first = left(&app, ids[0]);
+        assert!(first > 0, "the layers sit away from the canvas edge: {first}");
+        app.ui.tool_options.move_align_to_canvas = true;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                    return;
+                }
+                ui.horizontal(|ui| options(app, ui));
+            },
+            app,
+        );
+        h.run_steps(3);
+        assert!(!h.state().ui.tool_options.move_align_to_canvas, "Align To turns back to Selection");
+        h.get_by_label("Align left edges").click();
+        h.run_steps(3);
+        let lefts: Vec<i32> = ids.iter().map(|&id| left(h.state(), id)).collect();
+        assert_eq!(lefts, [first, first], "aligned to each other, not to the canvas");
     }
 }

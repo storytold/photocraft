@@ -197,6 +197,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             move_auto_select,
             move_target,
             move_show_transform,
+            move_align_to_canvas,
             move_show_hover_bounds,
             move_expand_group_on_click,
             move_show_layers_hover_bounds,
