@@ -92,3 +92,25 @@ fn the_shape_above_the_frame_moves_by_the_drag_offset_with_snap_on() {
     assert_eq!(shape_box(&app, shape), [442.0, 50.0, 542.0, 150.0], "moved -8, not snapped to -10");
     assert_eq!(frame_box(&app, frame), [430, 100, 520, 200], "the frame stayed");
 }
+
+/// CodeRabbit on #15174: a shape inside a group with a vector mask is clipped to that mask (a frame group clips its
+/// children to its outline the same way). Pressed where the shape's own box reaches but the mask does not, the press is
+/// on the empty frame under it, not on the clipped-away shape.
+#[test]
+fn a_shape_clipped_away_by_its_groups_vector_mask_is_not_what_the_press_hits() {
+    let (mut app, frame, shape) = app();
+    app.session
+        .edit("mask group", |doc, _| {
+            let i = doc.layers.iter().position(|l| l.id == shape).unwrap();
+            let inner = doc.layers.remove(i);
+            let mut group = Layer::group("Masked", vec![inner]);
+            group.vector_mask = Some(photocraft_doc::VectorMask::new(photocraft_vector::shapes::rect(450.0, 50.0, 50.0, 50.0)));
+            doc.layers.insert(i, group);
+            Ok(())
+        })
+        .unwrap();
+    // (480, 120) is inside the empty frame and the shape's box (450..550 x 50..150), but the mask ends at y 100.
+    drag(&mut app, [480.0, 120.0], [500.0, 130.0]);
+    assert_eq!(frame_box(&app, frame), [450, 110, 540, 210], "the empty frame moved +20,+10");
+    assert_eq!(shape_box(&app, shape), [450.0, 50.0, 550.0, 150.0], "the shape stayed");
+}

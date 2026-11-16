@@ -320,6 +320,15 @@ fn inside(f: &Frame, p: [f64; 2]) -> bool {
     let (Some(x1), Some(y1)) = (x.checked_add(1), y.checked_add(1)) else { return false };
     photocraft_vector::path_coverage(&f.outline(), Rect::new(x, y, x1, y1)).first().is_some_and(|v| *v > 0.0)
 }
+/// Whether a group above the layer at `path` clips it away at `p`: a frame group clips its children to its
+/// outline, and a group's enabled vector mask to its path. A shape visible there only outside that outline
+/// is not what the press is on.
+fn clipped_by_ancestor(doc: &photocraft_doc::Document, path: &[usize], pixel: Rect, p: [f64; 2]) -> bool {
+    (1..path.len()).filter_map(|n| doc.layer_at(path.get(..n)?)).any(|group| {
+        group.frame.as_ref().is_some_and(|f| !inside(f, p))
+            || group.vector_mask.as_ref().is_some_and(|m| m.enabled && !photocraft_vector::path_coverage(&m.path, pixel).first().is_some_and(|v| *v > 0.0))
+    })
+}
 /// The shape layer drawn above the empty frame `frame` whose fill covers `p` (#13882): visible,
 /// not position-locked, the topmost one. Other kinds of layers above a frame, and frames that hold
 /// an image, weren't measured and keep today's press.
@@ -340,6 +349,7 @@ fn shape_above(app: &PhotocraftApp, frame: LayerId, p: [f64; 2]) -> Option<Layer
             && !(locks.all || locks.position)
             && sh.fill.is_some()
             && photocraft_vector::path_coverage(&sh.path, pixel).first().is_some_and(|v| *v > 0.0)
+            && !clipped_by_ancestor(&st.doc, &path, pixel, p)
         {
             return Some(l.id);
         }
