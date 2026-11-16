@@ -480,7 +480,7 @@ fn document_duplicate_params(d: &Descriptor) -> Option<Map<String, Value>> {
             // A name the UTF-16 conversion would change (an unpaired surrogate becoming
             // U+FFFD, extra NULs dropped) has no faithful param: keeping the Photoshop step
             // saves the recorded name back byte for byte.
-            let Some(name) = exact_name(d) else { return None };
+            let name = exact_name(d)?;
             params.insert("name".into(), name.into());
         } else if k.is("Mrgd") {
             let D::Boolean(merged) = v else { return None };
