@@ -184,7 +184,6 @@ fn depth_dragged(depth0: f64, step: f64) -> f64 {
 /// from them on every move, so the preview follows. A press off the cylinder grabs nothing.
 pub(super) fn cylinder_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64) {
     let (Some(t), Some(pv)) = (app.ui.transform.as_mut(), app.transform_preview.as_mut()) else { return };
-    let place = t.warp_place;
     let Some(w) = t.warp.as_mut() else { return };
     match ev {
         ToolEvent::Down { x, y, .. } => {
@@ -192,27 +191,10 @@ pub(super) fn cylinder_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64)
                 cylinder_values(w).and_then(|values0| cylinder_hit(w, [x, y], tol).map(|handle| WarpDrag::Cylinder { handle, start: [x, y], values0 }));
         }
         ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
-            if let Some(WarpDrag::Cylinder { handle, start, values0 }) = &pv.warp_drag {
-                let d = [x - start[0], y - start[1]];
-                let at = |f: f64| Warp::cylinder(&cylinder_dragged(*values0, *handle, [d[0] * f, d[1] * f]), w.bounds);
-                // Under a perspective the cylinder stays ahead of its horizon, as a mesh does
-                // ([`super::warp::ahead_of_horizon`]): the drag goes only as far as it can.
-                let base = Warp::cylinder(values0, w.bounds).and_then(|c| c.mesh).map(|m| m.points).unwrap_or_default();
-                let ahead = |c: &Warp| place.is_none_or(|h| c.mesh.as_ref().is_some_and(|m| super::warp::ahead_of_horizon(h, &m.points, &base)));
-                let c = match at(1.0) {
-                    Some(c) if ahead(&c) => Some(c),
-                    _ => {
-                        let (mut lo, mut hi) = (0.0, 1.0);
-                        for _ in 0..30 {
-                            let mid = (lo + hi) / 2.0;
-                            if at(mid).is_some_and(|c| ahead(&c)) { lo = mid } else { hi = mid }
-                        }
-                        at(lo)
-                    }
-                };
-                if let Some(c) = c {
-                    *w = c;
-                }
+            if let Some(WarpDrag::Cylinder { handle, start, values0 }) = &pv.warp_drag
+                && let Some(c) = Warp::cylinder(&cylinder_dragged(*values0, *handle, [x - start[0], y - start[1]]), w.bounds)
+            {
+                *w = c;
             }
             if matches!(ev, ToolEvent::Up { .. }) {
                 pv.warp_drag = None;
