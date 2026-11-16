@@ -79,7 +79,7 @@ fn exported_text_parses_back_with_the_same_values() {
     for depth in [8, 32] {
         let mut s = session(depth);
         let text = cube(&mut s, 5);
-        let lut = photocraft_cms::lutfile::parse_cube(&text).unwrap();
+        let lut = craft_cms::lutfile::parse_cube(&text).unwrap();
         assert_eq!(lut.size, 5);
         assert_eq!(lut.title, "My Look");
         let written: Vec<f32> = values(&text).iter().map(|x| x.parse().unwrap()).collect();
@@ -87,5 +87,28 @@ fn exported_text_parses_back_with_the_same_values() {
         for (a, b) in lut.data.iter().zip(&written) {
             assert!((a - b).abs() < 1e-6, "{a} vs {b}");
         }
+    }
+}
+
+#[test]
+fn shared_writer_keeps_empty_and_quoted_titles_and_red_fastest_order() {
+    let mut s = session(32);
+    for (title, escaped) in [("", ""), ("A \"look\"", "A 'look'")] {
+        let result = s.execute("file.export.colorLookupTables", json!({"size": 2, "title": title})).unwrap();
+        let text = result["cube"].as_str().unwrap();
+        assert_eq!(text.lines().nth(1).unwrap(), format!("TITLE \"{escaped}\""));
+        assert_eq!(
+            data_lines(text),
+            [
+                "1.000000 1.000000 1.000000",
+                "0.000000 1.000000 1.000000",
+                "1.000000 0.000000 1.000000",
+                "0.000000 0.000000 1.000000",
+                "1.000000 1.000000 0.000000",
+                "0.000000 1.000000 0.000000",
+                "1.000000 0.000000 0.000000",
+                "0.000000 0.000000 0.000000",
+            ]
+        );
     }
 }
