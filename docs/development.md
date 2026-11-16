@@ -742,8 +742,12 @@ tables, and **Exact** fills the table when the image already uses 256 colours: c
 Transparency on and one of those therefore produces an opaque Indexed document. The computed
 palettes (Adaptive, Selective, Perceptual, Uniform) are built one colour short when transparency is
 on, and **Web** uses 216 entries, so they keep the transparent entry. Naming an explicit
-`transparent` index still makes that entry transparent with any palette; the preset palettes have
-no grid in the dialog to pick one, so there the conversion flattens.
+`transparent` index still makes that entry transparent with any palette.
+
+The auto-appended entry goes **last**, as Photoshop appends it. The command's `transparentFirst`
+puts it at index 0 instead and shifts the other entries up one (the table's pixels store RGB, so
+nothing is remapped). It is ignored for System (Mac) and System (Windows), which have no free slot.
+
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).

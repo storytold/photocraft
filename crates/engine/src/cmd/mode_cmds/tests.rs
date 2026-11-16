@@ -1411,6 +1411,37 @@ fn web_palette_keeps_the_transparent_entry_and_a_full_exact_table_cannot() {
 }
 
 #[test]
+fn transparent_first_heads_the_table_and_is_the_default_last() {
+    // The dialog's "1st index as transparent": the auto-appended entry goes to index 0 and the
+    // table's other entries shift up; the default keeps Photoshop's last-entry placement.
+    let clear_doc = || {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+        paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+        s
+    };
+    let mut first = clear_doc();
+    let r = first
+        .execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ff00"], "dither": "none", "transparentFirst": true}))
+        .unwrap();
+    let t = doc(&first).color_table.as_ref().unwrap();
+    assert_eq!(t.transparent, Some(0), "the transparent entry heads the table");
+    assert_eq!(r["transparentIndex"], json!(0));
+    assert_eq!(t.colors, vec![[255, 255, 255], [255, 0, 0], [0, 255, 0]], "the custom colours shift up by one");
+    // Clear pixels are transparent; the opaque red pixels stay opaque.
+    let surf = doc(&first).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(6, 0)[3], 0.0);
+    assert_eq!(surf.rgba(2, 0)[3], 1.0);
+
+    // Default: appended last, as before.
+    let mut last = clear_doc();
+    last.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ff00"], "dither": "none"})).unwrap();
+    let t = doc(&last).color_table.as_ref().unwrap();
+    assert_eq!(t.transparent, Some(2), "default keeps the transparent entry last");
+    assert_eq!(t.colors, vec![[255, 0, 0], [0, 255, 0], [255, 255, 255]]);
+}
+
+#[test]
 fn color_table_clearing_transparency_leaves_empty_pixels_alone() {
     // A non-black transparent entry: fully-transparent black pixels (the surface default — an
     // empty layer or pruned tiles) must not take the transparent index, or clearing
