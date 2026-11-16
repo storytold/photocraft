@@ -12,14 +12,16 @@ umask 077
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
-if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
   warn "APPLE_CERTIFICATE is not set: macOS builds will be ad-hoc signed and not notarized"
   exit 0
 fi
 
 TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 KEYCHAIN="$TMP/photocraft-signing.keychain-db"
-CERT="$TMP/photocraft-signing.p12"
+# A fresh, private file (mktemp creates it exclusively, mode 0600): a predictable name could be
+# pre-created by another account, and redirection would keep that file's owner and mode.
+CERT="$(mktemp "$TMP/photocraft-signing.XXXXXX")"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 
 trap 'rm -f "$CERT"' EXIT
@@ -36,13 +38,13 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS"
 security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
 
 IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Developer ID Application/ { print $2; exit }')"
-if [ -z "$IDENTITY" ]; then
+if [[ -z "$IDENTITY" ]]; then
   security find-identity -v -p codesigning "$KEYCHAIN" >&2
   echo "error: no 'Developer ID Application' identity in APPLE_CERTIFICATE" >&2
   exit 1
 fi
 echo "Imported signing identity $IDENTITY"
-if [ -n "${GITHUB_ENV:-}" ]; then
+if [[ -n "${GITHUB_ENV:-}" ]]; then
   { echo "MACOS_SIGN_IDENTITY=$IDENTITY"; echo "MACOS_KEYCHAIN=$KEYCHAIN"; } >>"$GITHUB_ENV"
 else
   echo "MACOS_SIGN_IDENTITY=$IDENTITY"

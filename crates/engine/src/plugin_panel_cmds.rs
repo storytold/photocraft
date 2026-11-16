@@ -19,7 +19,7 @@
 //! | `storage.set` | kept per plug-in, in memory for now |
 //! | `blob.free` | releases the blob |
 //! | `doc.info` | answered from [`crate::inspect::document`] — the size, the layer stack, the selection bounds |
-//! | `doc.command` | run, if the manifest asks for the capability and the host's own list allows it (see [`permissions`]) |
+//! | `doc.command` | run, if the manifest asks for the capability and the host's own list allows it (see `plugin_panel_cmds/permissions.rs`) |
 //! | `doc.capture`, `doc.commit`, `http.request` | **refused**, with an `ok: false` result |
 //!
 //! Those refusals are answers, not silence: the panel is told what happened, so it can say so. The

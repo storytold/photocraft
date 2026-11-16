@@ -139,7 +139,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // started) is opening now, and opens at the top of its body. egui persists a scroll area's
     // offset by id, and the app persists egui's memory to `ui.ron`, so without this a panel scrolls
     // to where it was left — including a scroll left over from yesterday — the moment it appears.
-    let seen_id = egui::Id::new("plugin-panel-seen");
+    let seen_id = egui::Id::unique("plugin-panel-seen");
     let mut seen: std::collections::HashSet<String> = ctx.data(|d| d.get_temp(seen_id).unwrap_or_default());
     for (i, panel) in panels.iter().enumerate() {
         if !panel.visible {
@@ -206,7 +206,7 @@ fn window(ctx: &egui::Context, t: &Tokens, panel: &PanelDraw, index: usize, canv
         // Versioned: the id is what eframe keeps a window's saved size under, in `ui.ron`. Bumping
         // it is how a panel that was saved at the old 420 px opens at the new default instead. It
         // also moves the body's scroll area to a fresh id, so an old saved offset cannot return.
-        .id(egui::Id::new(("plugin-panel-v2", panel.id.as_str())))
+        .id(egui::Id::unique(("plugin-panel-v2", panel.id.as_str())))
         .title_bar(false)
         .resizable(true)
         .default_size(vec2(panel.min_width as f32, default_height))
@@ -232,7 +232,7 @@ fn window(ctx: &egui::Context, t: &Tokens, panel: &PanelDraw, index: usize, canv
                     // empty, with the styles cut off above it.
                     let has_footer = panel.progress.is_some() || !panel.notices.is_empty();
                     if has_footer {
-                        egui::Panel::bottom(egui::Id::new(("plugin-panel-footer", panel.id.as_str())))
+                        egui::Panel::bottom(egui::Id::unique(("plugin-panel-footer", panel.id.as_str())))
                             .frame(egui::Frame::NONE)
                             .show(ui, |ui| footer(ui, t, panel, &mut asked));
                     }
@@ -324,7 +324,7 @@ fn flush_typing(app: &mut PhotocraftApp, ctx: &egui::Context, pending: &Pending)
             continue;
         }
         send_event(app, panel, "ui.change", Some(widget), typed.clone());
-        ctx.data_mut(|d| d.remove::<(String, String)>(egui::Id::new(("plugin-panel-text", panel.as_str(), widget.as_str()))));
+        ctx.data_mut(|d| d.remove::<(String, String)>(egui::Id::unique(("plugin-panel-text", panel.as_str(), widget.as_str()))));
     }
 }
 
@@ -466,7 +466,7 @@ fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pendi
         Widget::Separator => crate::widgets::hairline(ui),
         Widget::Text { id, value, placeholder, multiline, max_length } => {
             let shown = panel.values.get(id).and_then(Value::as_str).unwrap_or(value);
-            let key = egui::Id::new(("plugin-panel-text", panel.id.as_str(), id.as_str()));
+            let key = egui::Id::unique(("plugin-panel-text", panel.id.as_str(), id.as_str()));
             // The buffer is what is being typed; it is dropped the moment the panel's own value stops
             // matching the one the buffer was seeded from, so `ui.set` from the plug-in wins.
             let mut buf: (String, String) = ui.data(|d| d.get_temp(key)).unwrap_or_else(|| (shown.to_string(), shown.to_string()));
@@ -523,7 +523,8 @@ fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pendi
             // A plug-in's labels are its own strings, not the application's: they are not translated.
             let list: Vec<(String, &str)> = options.iter().map(|o| (o.value.clone(), o.label.as_str())).collect();
             let salt = format!("plugin-panel-choice-{}-{id}", panel.id);
-            if crate::widgets::dropdown_literal(ui, &salt, &mut current, &list, width) && current != shown {
+            let name = options.iter().find(|o| o.value == shown).map_or("", |o| o.label.as_str());
+            if crate::widgets::dropdown_literal(ui, &salt, name, &mut current, &list, width) && current != shown {
                 pending.events.push((panel.id.clone(), id.clone(), Value::String(current)));
             }
         }

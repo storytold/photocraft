@@ -12,11 +12,13 @@
 //! Both are re-emitted verbatim while they still decode to the document's state, and are
 //! regenerated otherwise (comp appearance is not written to PSD; `.pcraft` keeps it).
 
+use std::collections::HashMap;
+
+use craft_psd::descriptor::{Descriptor, UnicodeString, Value, VersionedDescriptor};
+use craft_psd::metadata::{MetadataItem, parse_shmd, write_shmd};
 use photocraft_doc::comps::layer_position;
 use photocraft_doc::{Artboard, ArtboardBackground, CompLayerState, Document, Guides, Layer, LayerComp};
 use photocraft_geom::Rect;
-use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value, VersionedDescriptor};
-use photocraft_psd::metadata::{MetadataItem, parse_shmd, write_shmd};
 
 use crate::blocks::{color_from_desc, color_to_desc, num};
 
@@ -203,6 +205,14 @@ pub(crate) fn decode_comps(resource: Option<&[u8]>, doc: &Document) -> (Vec<Laye
         }
     }
     let last_applied = int(d, "lastAppliedComp").map(|v| v as u32).filter(|id| comps.iter().any(|c| c.id == *id));
+    // Index each comp ID to its first occurrence once. Both the comp list and the
+    // per-layer setting ID lists are file-controlled, so matching settings against comps
+    // with iter_mut().find() per ID is O(n*m) and lets a crafted document stall import.
+    // or_insert preserves first-match behavior for duplicate comp IDs.
+    let mut id_to_index: HashMap<u32, usize> = HashMap::with_capacity(comps.len());
+    for (i, c) in comps.iter().enumerate() {
+        id_to_index.entry(c.id).or_insert(i);
+    }
     let mut last = LayerComp {
         id: 0,
         name: "Last Document State".into(),
@@ -239,7 +249,7 @@ pub(crate) fn decode_comps(resource: Option<&[u8]>, doc: &Document) -> (Vec<Laye
                 _ => None,
             };
             for id in &s.comps {
-                let target = if *id == 0 { Some(&mut last) } else { comps.iter_mut().find(|c| c.id == *id) };
+                let target = if *id == 0 { Some(&mut last) } else { id_to_index.get(id).map(|&i| &mut comps[i]) };
                 let Some(c) = target else { continue };
                 let visible = if *id != 0 && c.apply_visibility { Some(resolved) } else { s.visible };
                 if visible.is_none() && s.offset.is_none() {

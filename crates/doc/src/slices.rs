@@ -202,33 +202,61 @@ pub fn auto_slices(canvas: Rect, taken: &[Rect]) -> Vec<Rect> {
     xs.dedup();
     ys.sort_unstable();
     ys.dedup();
-    let covered = |x0: i32, y0: i32| taken.iter().any(|r| x0 >= r.x0 && x0 < r.x1 && y0 >= r.y0 && y0 < r.y1);
-    // Horizontal runs per row band.
+    // Clip the taken rectangles to the canvas once, so band coverage only considers rects that
+    // can actually cover a cell.
+    let clipped: Vec<Rect> = taken.iter().map(|r| r.intersect(&canvas)).filter(|r| !r.is_empty()).collect();
+    // Map an x edge to its cell index in `xs` (xs is sorted/deduped).
+    let x_cell = |x: i32| xs.partition_point(|&e| e <= x).saturating_sub(1);
+    // Horizontal runs per row band. For each band, mark covered x-cells in a single pass over
+    // the rects intersecting that band, instead of scanning every rect for every cell (which
+    // was cubic in the slice count and let a crafted document stall canvas drawing).
+    let ncells = xs.len().saturating_sub(1);
     let mut runs: Vec<Rect> = Vec::new();
     for yw in ys.windows(2) {
+        let (band_y0, band_y1) = (yw[0], yw[1]);
+        let mut covered_cell = vec![false; ncells];
+        for r in &clipped {
+            if r.y0 <= band_y0 && band_y1 <= r.y1 {
+                // Rect spans this whole band vertically; mark the x-cells it covers.
+                let (c0, c1) = (x_cell(r.x0), x_cell(r.x1));
+                for c in covered_cell.iter_mut().take(c1).skip(c0) {
+                    *c = true;
+                }
+            }
+        }
         let mut start: Option<i32> = None;
-        for xw in xs.windows(2) {
-            let free = !covered(xw[0], yw[0]);
+        for (ci, xw) in xs.windows(2).enumerate() {
+            let free = !covered_cell.get(ci).copied().unwrap_or(false);
             match (free, start) {
                 (true, None) => start = Some(xw[0]),
                 (false, Some(s)) => {
-                    runs.push(Rect::new(s, yw[0], xw[0], yw[1]));
+                    runs.push(Rect::new(s, band_y0, xw[0], band_y1));
                     start = None;
                 }
                 _ => {}
             }
         }
         if let Some(s) = start {
-            runs.push(Rect::new(s, yw[0], *xs.last().unwrap_or(&canvas.x1), yw[1]));
+            runs.push(Rect::new(s, band_y0, *xs.last().unwrap_or(&canvas.x1), band_y1));
         }
     }
     // Merge vertically adjacent runs with the same columns.
+    // `open` finds the slice a run continues by its columns and bottom edge: searching the output
+    // for each run is quadratic in the runs, and bars crossing in a grid leave a million of them.
     let mut out: Vec<Rect> = Vec::new();
+    let mut open: std::collections::HashMap<(i32, i32, i32), usize> = std::collections::HashMap::new();
     for r in runs {
-        if let Some(prev) = out.iter_mut().find(|p| p.x0 == r.x0 && p.x1 == r.x1 && p.y1 == r.y0) {
-            prev.y1 = r.y1;
-        } else {
-            out.push(r);
+        match open.remove(&(r.x0, r.x1, r.y0)) {
+            Some(i) => {
+                if let Some(prev) = out.get_mut(i) {
+                    prev.y1 = r.y1;
+                }
+                open.insert((r.x0, r.x1, r.y1), i);
+            }
+            None => {
+                open.insert((r.x0, r.x1, r.y1), out.len());
+                out.push(r);
+            }
         }
     }
     out
@@ -297,6 +325,53 @@ mod tests {
         assert_eq!(auto.len(), 4);
         assert_eq!(auto[0], Rect::new(0, 0, 100, 10));
         assert_eq!(auto_slices(canvas, &[]), vec![canvas]);
+    }
+
+    #[test]
+    fn auto_slices_cover_exactly_with_many_overlapping_slices() {
+        // Several overlapping slices form a non-trivial grid. The per-band coverage pass must
+        // still tile the complement exactly: auto area + taken-union area == canvas, with no
+        // auto slice overlapping a taken rect or another auto slice.
+        let canvas = Rect::new(0, 0, 200, 150);
+        let taken = [Rect::new(10, 10, 90, 70), Rect::new(50, 40, 160, 120), Rect::new(120, 0, 200, 50), Rect::new(0, 100, 60, 150)];
+        let auto = auto_slices(canvas, &taken);
+        // No auto slice intersects any taken rect.
+        for a in &auto {
+            for t in &taken {
+                assert!(a.intersect(t).is_empty(), "{a:?} overlaps taken {t:?}");
+            }
+        }
+        // Auto slices do not overlap each other.
+        for (i, a) in auto.iter().enumerate() {
+            for b in &auto[i + 1..] {
+                assert!(a.intersect(b).is_empty(), "{a:?} overlaps {b:?}");
+            }
+        }
+        // Auto area equals the canvas minus the union of taken rects (computed on the same grid).
+        let union_cells: i64 = {
+            // Sum cell areas covered by at least one taken rect, over the fine grid.
+            let mut xs = vec![canvas.x0, canvas.x1];
+            let mut ys = vec![canvas.y0, canvas.y1];
+            for t in &taken {
+                xs.extend([t.x0, t.x1]);
+                ys.extend([t.y0, t.y1]);
+            }
+            xs.sort_unstable();
+            xs.dedup();
+            ys.sort_unstable();
+            ys.dedup();
+            let mut sum = 0i64;
+            for yw in ys.windows(2) {
+                for xw in xs.windows(2) {
+                    let covered = taken.iter().any(|r| xw[0] >= r.x0 && xw[0] < r.x1 && yw[0] >= r.y0 && yw[0] < r.y1);
+                    if covered {
+                        sum += i64::from(xw[1] - xw[0]) * i64::from(yw[1] - yw[0]);
+                    }
+                }
+            }
+            sum
+        };
+        assert_eq!(area(&auto) + union_cells, i64::from(canvas.width()) * i64::from(canvas.height()));
     }
 
     #[test]

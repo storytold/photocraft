@@ -26,16 +26,18 @@ const NOTE: &str = "chapter 1";
 /// More of it, typed and then left by *clicking* a button rather than pressing Enter.
 const TAIL: &str = " continued";
 
-/// The whole app, with the example panel installed and a 40 × 28 document open. One test drives all
-/// of it: the registry and the open panels are process-wide, so two of these running at once would be
-/// testing each other.
-fn harness() -> Harness<'static, PhotocraftApp> {
+/// The whole app, with the example panel installed and optionally a 40 × 28 document open. Tests
+/// hold the registry guard: the registry and open panels are process-wide, so concurrent harnesses
+/// would test each other.
+fn harness(new_document: bool) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(1100.0, 760.0)).with_max_steps(96).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
     });
     h.state_mut().run("plugin.install", json!({"path": EXAMPLE})).unwrap();
-    h.state_mut().run("file.new", json!({"width": 40, "height": 28})).unwrap();
+    if new_document {
+        h.state_mut().run("file.new", json!({"width": 40, "height": 28})).unwrap();
+    }
     h.run_steps(3);
     h
 }
@@ -77,9 +79,75 @@ fn focus_note_field(h: &mut Harness<'static, PhotocraftApp>) -> bool {
     h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| window.contains(n.rect().center())).map(|n| n.click()).is_some()
 }
 
+/// Built-in menu paths stay English while a translated UI shows the plug-in's own title.
+fn assert_translated_panel_row(h: &Harness<'_, PhotocraftApp>) {
+    let Some(ja) = crate::i18n::Lang::from_code("ja") else {
+        return;
+    };
+    let _lang = crate::i18n::language_scope(ja);
+    let items = crate::menus::menu_items(h.state());
+    let row = items.iter().find(|i| i.id == ITEM).expect("still listed in Japanese");
+    assert_eq!(row.path, ["Window", "Plug-ins"]);
+    assert_eq!(row.label, "Document Info");
+}
+
+/// Commit the panel note with Enter and a click, returning what the field holds afterward.
+fn type_and_commit_panel_note(h: &mut Harness<'static, PhotocraftApp>) -> String {
+    // Typing stays on this side of the sandbox until the field is committed: Enter is the commit, and
+    // only then does the plug-in hear about it — and only then does it store the note. (The buttons
+    // above took the focus, so the field is clicked again first.)
+    assert!(focus_note_field(h));
+    h.run_steps(1);
+    h.event(egui::Event::Text(NOTE.into()));
+    h.run_steps(1);
+    assert_eq!(inspected(h)["storage"].get("note"), None, "keystrokes do not cross the sandbox");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(inspected(h)["storage"]["note"], NOTE, "the committed edit was stored");
+    assert_eq!(widget(h, 1)["value"], NOTE, "and the plug-in sent it back in the field");
+    // The panel says so in its status line as well ("Note saved to plug-in storage"), but that line
+    // belongs to the document and any other test's session can rewrite it between two frames, so the
+    // acknowledgement is left to the engine test: the note above is what proves the commit happened.
+
+    // Clicking elsewhere in the panel ends the edit too, and that click must not lose it: a letterer
+    // pastes a chapter into a script box and presses a button, and what they typed has to reach the
+    // plug-in. What the panel then *says* is not asserted: its status line follows the document, and
+    // another test's session announces its own (or none) to this panel between frames — with three
+    // thousand tests in one binary, that line is not this test's to read. That a click sees the edit
+    // it overtook is asserted below, directly on `flush_typing`, where no other test can interfere.
+    assert!(focus_note_field(h));
+    h.run_steps(1);
+    h.event(egui::Event::Text(TAIL.into()));
+    h.run_steps(1);
+    h.get_by_label("Read Document").click();
+    h.run_steps(3);
+    let stored = inspected(h)["storage"]["note"].as_str().unwrap_or_default().to_string();
+    assert!(stored.ends_with(TAIL), "the click did not lose the edit: {stored:?}");
+    let typed = widget(h, 1)["value"].as_str().unwrap_or_default().to_string();
+    assert!(typed.ends_with(TAIL), "and the field still holds what was typed: {typed:?}");
+    typed
+}
+
+/// A panel's menu row is available without a document; its window must be too, even on Home.
+#[test]
+fn a_panel_can_open_without_a_document() {
+    let _registry = crate::plugin_ui::registry_guard();
+    let mut h = harness(false);
+    assert!(h.state().session.active().is_none());
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, ITEM, json!({})).unwrap();
+    h.run_steps(3);
+    let checked = row_checked(&h);
+    let visible = shown(&h, "Read Document");
+    h.state_mut().run("plugin.remove", json!({"id": PANEL})).unwrap();
+    assert!(checked, "opening the row opens the panel without a document");
+    assert!(visible, "Home must not hide an open plug-in panel");
+}
+
 #[test]
 fn a_panel_gets_a_window_row_that_opens_into_the_view_it_sent() {
-    let mut h = harness();
+    let _registry = crate::plugin_ui::registry_guard();
+    let mut h = harness(true);
     // A row under Window › Plug-ins, named by the title the module declares — not by its package
     // name, and not in Filter › Plug-ins, where filters are run on a layer.
     let items = crate::menus::menu_items(h.state());
@@ -94,14 +162,7 @@ fn a_panel_gets_a_window_row_that_opens_into_the_view_it_sent() {
     // The path is the untranslated English menu path, like every other item's, so the row survives a
     // translated UI (#2540) — while the label stays the plug-in's own string, which is not ours to
     // translate.
-    let ja = crate::i18n::Lang::from_code("ja").expect("registered language");
-    assert_ne!(crate::i18n::tr(ja, "Window"), "Window", "the language must really translate the path");
-    let lang = crate::i18n::language_scope(ja);
-    let items = crate::menus::menu_items(h.state());
-    let row = items.iter().find(|i| i.id == ITEM).expect("still listed in Japanese");
-    assert_eq!(row.path, ["Window", "Plug-ins"]);
-    assert_eq!(row.label, "Document Info");
-    drop(lang);
+    assert_translated_panel_row(&h);
 
     // Picking the row opens it: the plug-in's view is drawn, in the app's own theme.
     let ctx = h.ctx.clone();
@@ -151,38 +212,7 @@ fn a_panel_gets_a_window_row_that_opens_into_the_view_it_sent() {
     h.run_steps(2);
     assert_eq!(inspected(&mut h)["timers"], 0, "the same button clears the timer it armed");
 
-    // Typing stays on this side of the sandbox until the field is committed: Enter is the commit, and
-    // only then does the plug-in hear about it — and only then does it store the note. (The buttons
-    // above took the focus, so the field is clicked again first.)
-    assert!(focus_note_field(&mut h));
-    h.run_steps(1);
-    h.event(egui::Event::Text(NOTE.into()));
-    h.run_steps(1);
-    assert_eq!(inspected(&mut h)["storage"].get("note"), None, "keystrokes do not cross the sandbox");
-    h.key_press(egui::Key::Enter);
-    h.run_steps(3);
-    assert_eq!(inspected(&mut h)["storage"]["note"], NOTE, "the committed edit was stored");
-    assert_eq!(widget(&mut h, 1)["value"], NOTE, "and the plug-in sent it back in the field");
-    // The panel says so in its status line as well ("Note saved to plug-in storage"), but that line
-    // belongs to the document and any other test's session can rewrite it between two frames, so the
-    // acknowledgement is left to the engine test: the note above is what proves the commit happened.
-
-    // Clicking elsewhere in the panel ends the edit too, and that click must not lose it: a letterer
-    // pastes a chapter into a script box and presses a button, and what they typed has to reach the
-    // plug-in. What the panel then *says* is not asserted: its status line follows the document, and
-    // another test's session announces its own (or none) to this panel between frames — with three
-    // thousand tests in one binary, that line is not this test's to read. That a click sees the edit
-    // it overtook is asserted below, directly on `flush_typing`, where no other test can interfere.
-    assert!(focus_note_field(&mut h));
-    h.run_steps(1);
-    h.event(egui::Event::Text(TAIL.into()));
-    h.run_steps(1);
-    h.get_by_label("Read Document").click();
-    h.run_steps(3);
-    let stored = inspected(&mut h)["storage"]["note"].as_str().unwrap_or_default().to_string();
-    assert!(stored.ends_with(TAIL), "the click did not lose the edit: {stored:?}");
-    let typed = widget(&mut h, 1)["value"].as_str().unwrap_or_default().to_string();
-    assert!(typed.ends_with(TAIL), "and the field still holds what was typed: {typed:?}");
+    let typed = type_and_commit_panel_note(&mut h);
 
     // Picking the row again closes the window; the same row is the way back.
     crate::menus::invoke(h.state_mut(), &ctx, ITEM, json!({})).unwrap();
@@ -284,7 +314,7 @@ fn window_widths(view: Value, frames: usize) -> Vec<f32> {
         });
         // The panel is really drawn; its pixels are not what is being measured.
         out.textures_delta.clear();
-        widths.push(ctx.memory(|m| m.area_rect(egui::Id::new(("plugin-panel-v2", "test.widening")))).map_or(0.0, |rect| rect.width()));
+        widths.push(ctx.memory(|m| m.area_rect(egui::Id::unique(("plugin-panel-v2", "test.widening")))).map_or(0.0, |rect| rect.width()));
     }
     widths
 }
@@ -311,7 +341,7 @@ fn test_panel(id: &str, view: Value) -> PanelDraw {
 
 /// The panel window's outer rectangle, as egui has it after the frame.
 fn panel_window_rect(ctx: &egui::Context, id: &str) -> Option<egui::Rect> {
-    ctx.memory(|m| m.area_rect(egui::Id::new(("plugin-panel-v2", id))))
+    ctx.memory(|m| m.area_rect(egui::Id::unique(("plugin-panel-v2", id))))
 }
 
 /// Draws one frame of the panel's real window, with the input egui would have received.
@@ -346,9 +376,12 @@ fn a_panel_body_fills_the_window_and_its_footer_stays_at_the_bottom() {
     // only the height of its content (egui's `auto_shrink`), so the window opened at egui's 420 px
     // default with the progress row right under the body and the lower half empty — the styles
     // below the fold with a large empty area under them.
-    let mut panel = test_panel("test.fill", json!({"type":"column","children":[
+    let mut panel = test_panel(
+        "test.fill",
+        json!({"type":"column","children":[
         {"type":"label","text":"A short page"},
-        {"type":"label","text":"with two lines in it","level":"muted"}]}));
+        {"type":"label","text":"with two lines in it","level":"muted"}]}),
+    );
     panel.progress = Some(Progress { fraction: Some(0.5), text: Some("Rendering".into()), cancellable: false, done: false });
     let ctx = egui::Context::default();
     PhotocraftApp::setup_context(&ctx, Default::default());
@@ -361,10 +394,7 @@ fn a_panel_body_fills_the_window_and_its_footer_stays_at_the_bottom() {
     assert!(window.height() >= 600.0, "the panel opens at {} px tall on a 760 px screen: {window:?}", window.height());
     assert!(window.bottom() <= canvas().bottom() + 1.0, "and it fits on the screen: {window:?}");
     let footer = painted_y(&shapes, "Rendering").expect("the progress text is drawn");
-    assert!(
-        footer > window.bottom() - 90.0,
-        "the host's footer is at the bottom of the window, not under the body: {footer} in {window:?}"
-    );
+    assert!(footer > window.bottom() - 90.0, "the host's footer is at the bottom of the window, not under the body: {footer} in {window:?}");
 }
 
 #[test]
@@ -392,6 +422,7 @@ fn a_reopened_panel_starts_at_the_top_of_its_body() {
         let mut frame = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
         frame.events.push(egui::Event::PointerMoved(pointer));
         frame.events.push(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
             delta: vec2(0.0, -240.0),
             phase: egui::TouchPhase::Move,
@@ -407,10 +438,7 @@ fn a_reopened_panel_starts_at_the_top_of_its_body() {
     let frame = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
     let reopened = draw_panel(&ctx, &panel, frame, true);
     let first = painted_y(&reopened, "Row 0").expect("the first row is drawn again");
-    assert!(
-        (first - top).abs() < 120.0,
-        "a reopened panel starts at its first row, not at the old offset: {first} vs {top}"
-    );
+    assert!((first - top).abs() < 120.0, "a reopened panel starts at its first row, not at the old offset: {first} vs {top}");
 }
 
 /// How far right the tree is drawn when the panel gives it `width` pixels.
@@ -498,7 +526,7 @@ fn a_long_script_is_clipped_to_its_box() {
             egui::Frame::NONE.show(root, |ui| {
                 ui.set_max_width(400.0);
                 let top = ui.min_rect().bottom();
-                let _ = multiline_field(ui, egui::Id::new("long-script"), &mut text, "", 150.0, None);
+                let _ = multiline_field(ui, egui::Id::unique("long-script"), &mut text, "", 150.0, None);
                 box_bottom = ui.min_rect().bottom();
                 assert!((box_bottom - top - 150.0).abs() < 1.0, "the script box takes its 150 px: {}", box_bottom - top);
             });
@@ -565,13 +593,16 @@ fn a_row_wraps_its_buttons_in_a_narrow_panel() {
     // at the cursor and then advanced past without the wrapping row ever being asked whether it
     // fits — so the arrows ran off the panel's right edge one after another, and the row's grown
     // rect widened the column, which stopped the font line under it wrapping too.
-    let mut panel = test_panel("test.wrap", json!({"type":"column","children":[
+    let mut panel = test_panel(
+        "test.wrap",
+        json!({"type":"column","children":[
         {"type":"row","children":[
             {"type":"label","text":"Line"},
             {"type":"number","id":"lineNo","value":1.0,"min":1.0,"max":1.0,"step":1.0,"slider":false},
             {"type":"button","id":"prev","label":"◀"},{"type":"button","id":"next","label":"▶"},
             {"type":"button","id":"first","label":"⏮"},{"type":"button","id":"last","label":"⏭"}]},
-        {"type":"label","level":"muted","text":"Font: 000 10 Cents Comic [TeddyBear] Regular · 14 pt"}]}));
+        {"type":"label","level":"muted","text":"Font: 000 10 Cents Comic [TeddyBear] Regular · 14 pt"}]}),
+    );
     panel.min_width = 250;
     let ctx = egui::Context::default();
     PhotocraftApp::setup_context(&ctx, Default::default());
@@ -588,7 +619,12 @@ fn a_row_wraps_its_buttons_in_a_narrow_panel() {
         let egui::Shape::Text(text) = &shape.shape else { continue };
         if ["◀", "▶", "⏮", "⏭"].iter().any(|a| text.galley.job.text == *a) {
             let right = text.pos.x + text.galley.size().x;
-            assert!(text.pos.x >= window.left() && right <= window.right(), "{:?} is drawn past the panel: x {}..{right} in {window:?}", text.galley.job.text, text.pos.x);
+            assert!(
+                text.pos.x >= window.left() && right <= window.right(),
+                "{:?} is drawn past the panel: x {}..{right} in {window:?}",
+                text.galley.job.text,
+                text.pos.x
+            );
             arrows.push(text.pos.y);
         }
         if text.galley.job.text.starts_with("Font:") {
