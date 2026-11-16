@@ -45,6 +45,8 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("view.rotateRight", "view.rotateLeft"),
     ("view.resetView", "view.rotateRight"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("layer.layerMask.copy", "layer.layerMask.apply"),
+    ("layer.layerMask.paste", "layer.layerMask.copy"),
 ];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
