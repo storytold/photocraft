@@ -162,7 +162,26 @@ pub fn list_state() -> BrushesPanelState {
 /// the footer scale (`Preferences::brush_picker`).
 fn view(app: &PhotocraftApp) -> Value {
     let st = &app.ui.brush_picker_list;
-    json!({"showName": st.show_name, "showStroke": st.show_stroke, "showTip": st.show_tip, "showSearch": st.show_search, "scale": st.scale})
+    json!({"showName": st.show_name, "showStroke": st.show_stroke, "showTip": st.show_tip, "showSearch": st.show_search, "scale": st.scale, "showRecent": st.show_recent})
+}
+
+/// How many recently used brushes the picker's recent row keeps (#11884; the reference's limit
+/// was not measured).
+pub const RECENT_MAX: usize = 8;
+
+/// Keep the recent row up to date with the current preset (#11884): it goes to the front, moving
+/// there if it was already in the row, the row keeps at most [`RECENT_MAX`], and a preset that
+/// no longer exists leaves it. The current preset is found as `tools.setBrush` finds it, whatever
+/// the case, and noted under the preset's own name.
+pub fn note_recent(st: &mut BrushesPanelState, current: Option<&str>, presets: &[BrushPreset]) {
+    st.recent.retain(|name| presets.iter().any(|p| &p.name == name));
+    if let Some(cur) = current.and_then(|c| presets.iter().find(|p| p.name.eq_ignore_ascii_case(c))).map(|p| p.name.as_str())
+        && st.recent.first().map(String::as_str) != Some(cur)
+    {
+        st.recent.retain(|name| name != cur);
+        st.recent.insert(0, cur.to_string());
+    }
+    st.recent.truncate(RECENT_MAX);
 }
 
 /// Remember the picker's view in the preferences once the user lets go of the pointer: the
@@ -170,6 +189,31 @@ fn view(app: &PhotocraftApp) -> Value {
 /// frame (not from the picker's own code) so a view set while the picker is closed — by the
 /// control channel — is remembered too.
 pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // The recent row follows the current preset however it changed (the picker, the Brushes
+    // panel, a key, the control channel), so it is kept here in the frame loop too.
+    // While the pointer is on the open picker's row, a brush picked there keeps its place, so the
+    // tiles don't shift under the pointer; it goes to the front once the pointer leaves the row.
+    // Each brush picked there meanwhile is remembered in order, so all of them count then.
+    let held = recent_row_id().with("held");
+    let current = app.session.tools.current_preset.clone();
+    if pointer_on_recent_row(ctx) {
+        if let Some(cur) = current {
+            ctx.data_mut(|d| {
+                let picked = d.get_temp_mut_or_default::<Vec<String>>(held);
+                picked.retain(|name| name != &cur);
+                picked.push(cur);
+                if picked.len() > RECENT_MAX {
+                    picked.remove(0);
+                }
+            });
+        }
+        note_recent(&mut app.ui.brush_picker_list, None, &app.session.tools.presets);
+    } else {
+        for name in ctx.data_mut(|d| d.remove_temp::<Vec<String>>(held)).unwrap_or_default() {
+            note_recent(&mut app.ui.brush_picker_list, Some(&name), &app.session.tools.presets);
+        }
+        note_recent(&mut app.ui.brush_picker_list, current.as_deref(), &app.session.tools.presets);
+    }
     if ctx.input(|i| i.pointer.any_down()) {
         return;
     }
@@ -177,6 +221,17 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.session.prefs().brush_picker != now {
         app.session.prefs.edit(|p| p.brush_picker = now);
     }
+}
+
+/// The recent row's rect in the pass that drew it (`recent_row`).
+fn recent_row_id() -> egui::Id {
+    picker_id().with("recent-row")
+}
+
+/// Is the pointer on the recent row the picker drew this pass?
+fn pointer_on_recent_row(ctx: &egui::Context) -> bool {
+    let Some((pass, rect)) = ctx.data(|d| d.get_temp::<(u64, egui::Rect)>(recent_row_id())) else { return false };
+    pass == ctx.cumulative_pass_nr() && ctx.pointer_latest_pos().is_some_and(|p| rect.contains(p))
 }
 
 /// Restore the picker's remembered view at launch. A missing or malformed part keeps its
@@ -196,6 +251,9 @@ pub fn restore(app: &mut PhotocraftApp) {
     }
     if let Some(v) = saved.get("showSearch").and_then(Value::as_bool) {
         st.show_search = v;
+    }
+    if let Some(v) = saved.get("showRecent").and_then(Value::as_bool) {
+        st.show_recent = v;
     }
     if let Some(v) = saved.get("scale").and_then(Value::as_f64)
         && v.is_finite()
@@ -351,6 +409,10 @@ pub fn body(
         });
     });
     ui.add_space(4.0);
+    if st.show_recent && !st.recent.is_empty() {
+        recent_row(ui, presets, current, &st.recent, &mut picks);
+        ui.add_space(4.0);
+    }
     // The list takes the picker's height past the controls above it and the footer below.
     let mut layout = LIST;
     layout.max_height = (size.y - (ui.cursor().min.y - top) - FOOTER_H).max(80.0);
@@ -386,6 +448,65 @@ fn dismiss_popup(resp: &egui::Response) {
     if resp.is_pointer_button_down_on() {
         egui::Popup::close_all(&resp.ctx);
     }
+}
+
+/// The row of recently used brushes under the search field (#11884): each tip as a small tile, a
+/// click picks it and a double-click picks it and closes the picker, as in the preset groups.
+fn recent_row(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>, recent: &[String], picks: &mut Vec<Pick>) {
+    const TILE: f32 = 30.0;
+    const GAP: f32 = 3.0;
+    let t = Tokens::get(ui.ctx());
+    // A full row is wider than the narrowest picker: the tiles shrink to fit its width.
+    let n = recent.iter().filter(|name| presets.iter().any(|p| &p.name == *name)).count().max(1) as f32;
+    let tile = ((ui.available_width() - GAP * (n - 1.0)) / n).clamp(12.0, TILE);
+    let row = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = GAP;
+        for name in recent {
+            let Some(p) = presets.iter().find(|p| &p.name == name) else { continue };
+            let is_current = current.is_some_and(|c| c.eq_ignore_ascii_case(name));
+            let (r, resp) = ui.allocate_exact_size(vec2(tile, tile), egui::Sense::click());
+            let label = crate::i18n::fmt(tl!("Recent brush: {name}"), &[("name", name)]);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, is_current, &label));
+            if is_current {
+                ui.painter().rect_filled(r, 3.0, t.accent_soft);
+                ui.painter().rect_stroke(r, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(r, 3.0, t.hover);
+            }
+            let pb = &p.brush;
+            let tip =
+                crate::brush_preview::tip_texture(ui.ctx(), &format!("brush-recent-tip:{name}"), &pb.tip, (pb.hardness, pb.angle, pb.roundness), 24, t.text);
+            let side = (tile - 6.0) * crate::brush_sections::thumb_scale(pb.size);
+            ui.painter().image(
+                tip.id(),
+                egui::Rect::from_center_size(r.center(), vec2(side, side)),
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+            let resp = resp.on_hover_text(name);
+            // The double-click chooses the brush its first click picked, even if the row has
+            // moved between the clicks (the pointer left it and came back). Two quick clicks on
+            // neighbouring tiles are two clicks, not a double-click. A click older than the
+            // double-click delay began no double-click: one begun off the tiles chooses this tile.
+            let first_click = picker_id().with("recent-first-click");
+            let now = ui.input(|i| i.time);
+            let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
+            let first = if resp.double_clicked() {
+                ui.ctx().data_mut(|d| d.remove_temp::<(String, egui::Pos2, f64)>(first_click)).filter(|(_, _, t)| now - t <= delay)
+            } else {
+                None
+            };
+            if resp.double_clicked() && first.as_ref().is_none_or(|(_, at, _)| r.contains(*at)) {
+                picks.push(Pick::List(Action::Choose(first.map_or_else(|| name.clone(), |(first, _, _)| first))));
+            } else if resp.clicked() || resp.double_clicked() {
+                let at = resp.interact_pointer_pos().unwrap_or_else(|| r.center());
+                ui.ctx().data_mut(|d| d.insert_temp(first_click, (name.clone(), at, now)));
+                picks.push(Pick::List(Action::Select(name.clone())));
+            }
+        }
+    });
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.ctx().data_mut(|d| d.insert_temp(recent_row_id(), (pass, row.response.rect)));
 }
 
 /// A remembered picker size, clamped for `screen` (a corrupt or wildly stale value falls back to
@@ -480,20 +601,12 @@ impl Gear {
 
     /// Is this entry only listed, its function still to come? It is greyed and does nothing.
     /// New Brush Group…, Append Default Brushes…, Export Selected Brushes… and Legacy Brushes come
-    /// with the Brushes panel's library actions (#7450), Show Recent Brushes with the picker's
-    /// recent-brush bar (#7452). What Show Additional Preset Info, Get More Brushes… and Converted
+    /// with the Brushes panel's library actions (#7450). What Show Additional Preset Info, Get More Brushes… and Converted
     /// Legacy Tool Presets do is not measured yet (#11819).
     pub(crate) fn placeholder(self) -> bool {
         matches!(
             self,
-            Gear::NewGroup
-                | Gear::AdditionalInfo
-                | Gear::RecentBrushes
-                | Gear::AppendDefaults
-                | Gear::ExportSelected
-                | Gear::GetMore
-                | Gear::LegacyToolPresets
-                | Gear::LegacyBrushes
+            Gear::NewGroup | Gear::AdditionalInfo | Gear::AppendDefaults | Gear::ExportSelected | Gear::GetMore | Gear::LegacyToolPresets | Gear::LegacyBrushes
         )
     }
 }
@@ -562,8 +675,12 @@ fn gear_menu(ui: &mut egui::Ui, current: Option<&str>, presets: &[BrushPreset], 
                 Gear::SearchBar => {
                     ui.checkbox(&mut st.show_search, label);
                 }
-                // Checked by default in Photoshop; greyed until their function lands.
-                Gear::AdditionalInfo | Gear::RecentBrushes => {
+                // Shows or hides the recent row under the search field (#11884).
+                Gear::RecentBrushes => {
+                    ui.checkbox(&mut st.show_recent, label);
+                }
+                // Checked by default in Photoshop; greyed until its function lands.
+                Gear::AdditionalInfo => {
                     ui.add_enabled(false, egui::Checkbox::new(&mut true, label));
                 }
                 _ => {
@@ -586,6 +703,10 @@ fn gear_menu(ui: &mut egui::Ui, current: Option<&str>, presets: &[BrushPreset], 
         }
     });
 }
+
+#[cfg(test)]
+#[path = "../brush_picker_recent_tests.rs"]
+mod brush_picker_recent_tests;
 
 #[cfg(test)]
 #[path = "../brush_picker_gear_menu_tests.rs"]
