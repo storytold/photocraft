@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 
 use photocraft_doc::{Document, LayerContent, LayerId};
-use photocraft_text::spell::Dictionary;
+use photocraft_text::spell::{Language, misspellings_for_layer};
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, layer_param};
@@ -93,23 +93,27 @@ fn layers_param(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
 
 fn list(s: &Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let dict = Dictionary::english();
     let ok = accepted(s, p);
     let max = p.get("suggestions").and_then(Value::as_u64).unwrap_or(5) as usize;
     let mut out = Vec::new();
     for id in layers_param(s, p)? {
-        let Some(t) = text(&st.doc, id) else { continue };
-        let found = dict.misspellings(t, &ok);
+        let Some(LayerContent::Text(layer)) = st.doc.layer(id).map(|layer| &layer.content) else { continue };
+        let t = &layer.text;
+        let found = misspellings_for_layer(layer, &ok, max);
         // Convert every start/end byte offset to a character offset in one pass over the
         // text, instead of rescanning the prefix with char_at twice per misspelling.
         let mut offsets = Vec::with_capacity(found.len() * 2);
         for m in &found {
-            offsets.push(m.start);
-            offsets.push(m.end);
+            offsets.push(m.misspelling.start);
+            offsets.push(m.misspelling.end);
         }
         let chars = char_offsets(t, &offsets);
         for (i, m) in found.iter().enumerate() {
-            out.push(json!({ "layer": id.0, "start": chars[i * 2], "end": chars[i * 2 + 1], "word": m.word, "suggestions": dict.suggest(&m.word, max) }));
+            out.push(json!({
+                "layer": id.0, "start": chars[i * 2], "end": chars[i * 2 + 1],
+                "word": m.misspelling.word, "suggestions": m.suggestions,
+                "language": m.language.tag(), "languageName": m.language.name()
+            }));
         }
     }
     Ok(json!({ "misspellings": out, "count": out.len() }))
@@ -226,10 +230,17 @@ fn check_spelling(s: &mut Session, p: &Value) -> Result<Value> {
         "suggest" => {
             let w = p.get("word").and_then(Value::as_str).unwrap_or("");
             let ok = accepted(s, p);
-            let d = Dictionary::english();
-            Ok(
-                json!({ "word": w, "correct": d.check(w, &ok), "suggestions": d.suggest(w, p.get("suggestions").and_then(Value::as_u64).unwrap_or(5) as usize) }),
-            )
+            let language = Language::from_tag(p.get("language").and_then(Value::as_str));
+            let max = p.get("suggestions").and_then(Value::as_u64).unwrap_or(5) as usize;
+            let (correct, suggestions) = language.map_or_else(
+                || (true, Vec::new()),
+                |language| {
+                    let dictionary = language.dictionary();
+                    (dictionary.check(w, &ok), dictionary.suggest(w, max))
+                },
+            );
+            Ok(json!({ "word": w, "correct": correct, "suggestions": suggestions,
+                    "language": language.map(Language::tag), "languageName": language.map(Language::name) }))
         }
         other => Err(bad("edit.checkSpelling", format!("unknown action {other:?}"))),
     }
@@ -283,7 +294,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Check Spelling…",
             menu: &["Edit"],
             shortcut: None,
-            params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id|name? (check one layer),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer"? (default: the active layer),"start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"} → list: {"misspellings":[{"layer","start","end","word","suggestions"}],"count"} (an action records only a call without "action", as {"allLayers"} with its dialog on)"#,
+            params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id|name? (check one layer),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer"? (default: the active layer),"start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"; suggest: "language":BCP-47? (default en-US; unsupported languages are not flagged)} → list: {"misspellings":[{"layer","start","end","word","suggestions","language","languageName"}],"count"} (an action records only a call without "action", as {"allLayers"} with its dialog on)"#,
             enabled: has_type,
             journal: true,
             run: check_spelling,
