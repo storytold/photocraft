@@ -211,7 +211,7 @@ fn preset_card_titles_fit_the_card_in_every_language() {
 }
 
 #[test]
-fn recent_category_lists_clipboard_then_created_documents_then_uncovered_defaults() {
+fn recent_category_lists_clipboard_then_created_documents() {
     let settings = |w, h, ppi| DocumentSettings {
         width: w,
         height: h,
@@ -226,7 +226,7 @@ fn recent_category_lists_clipboard_then_created_documents_then_uncovered_default
     };
     let mut f = Map::new();
     set_clipboard(&mut f, 20, 30);
-    let cards = recent_cards(&f, &[settings(800, 600, 72.0), settings(1920, 1080, 72.0)], &UnitsAndRulers::default());
+    let cards = recent_cards(&f, &[settings(800, 600, 72.0), settings(1920, 1080, 72.0)]);
     let titles: Vec<(&str, String)> = cards.iter().map(|c| (c.title(), c.size_line(&UnitsAndRulers::default(), &f))).collect();
     assert_eq!(
         titles,
@@ -234,7 +234,6 @@ fn recent_category_lists_clipboard_then_created_documents_then_uncovered_default
             (CLIPBOARD, "20 x 30 px @ 72 ppi".to_string()),
             ("Custom", "800 x 600 px @ 72 ppi".to_string()),
             ("HDTV 1080p", "1920 x 1080 px @ 72 ppi".to_string()),
-            ("Default PhotoCraft Size", "7 x 5 in @ 300 ppi".to_string()),
         ]
     );
     assert!(holds(&f, &settings(20, 30, 72.0)) && !holds(&f, &settings(800, 600, 72.0)));
@@ -768,11 +767,11 @@ mod dialog {
         let mut f = fields(&h);
         super::super::set_clipboard(&mut f, 640, 360);
         set_fields(&mut h, f);
-        // Recent lists the Clipboard card first: three presets instead of two.
-        assert!(h.query_by_label_contains("BLANK DOCUMENT PRESETS (3)").is_some());
-        let heading = h.get_by_label_contains("BLANK DOCUMENT PRESETS").rect();
-        // Pick the second card, then the first (Clipboard) again.
-        click_at(&mut h, heading.left_bottom() + egui::vec2(80.0 + 172.0, 60.0));
+        // Recent lists the Clipboard card first: two cards instead of one.
+        assert!(h.query_by_label_contains("YOUR RECENT ITEMS (2)").is_some());
+        let heading = h.get_by_label_contains("YOUR RECENT ITEMS").rect();
+        // Pick the second card (four columns: 122 px cards, 8 px apart), then the first (Clipboard) again.
+        click_at(&mut h, heading.left_bottom() + egui::vec2(80.0 + 130.0, 60.0));
         assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some("Default PhotoCraft Size"));
         click_at(&mut h, heading.left_bottom() + egui::vec2(80.0, 60.0));
         assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some(super::super::CLIPBOARD));

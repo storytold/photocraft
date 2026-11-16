@@ -204,7 +204,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `document.presets.get` | `{"name":"Product square"}` → `{preset,params}`: fetch settings; pass `params` to `file.new` to create a document, optionally adding a document `name` |
 | `document.presets.delete` | `{"name":"Product square"}`: delete the named saved configuration |
 | `document.recent.list` | `{}` → `{recent:[settings]}`: File › New › Recent, the settings of the documents last created with the New Document dialog, newest first (at most 20) |
-| `document.recent.add` | `{"settings":{…as document.presets.save}}`: put settings first in Recent (the dialog does this after Create; equal entries collapse); not recorded into actions |
+| `document.recent.add` | `{"settings":{…as document.presets.save}}`: put settings first in Recent (the dialog does this after Create; equal settings stay separate entries, as in Photoshop); not recorded into actions |
 | `type.hitTest` | `{"layer":id?,"x":px,"y":px}`: character under a document point. No `layer` picks the topmost visible type layer there. Result `{"layer","index","line","inside"}` |
 | `type.caret` | `{"layer":id?,"index":char}`: caret segment in document pixels, `{"index","line","segment":[[x,y],[x,y]]}` (rotated and vertical type included) |
 | `type.navigate` | `{"layer":id?,"index":char,"move":"wordPrev\|wordNext\|linePrev\|lineNext\|lineStart\|lineEnd\|start\|end","x":px?}`: neighbouring caret. `x` keeps the column across line moves. Result `{"index"}` |
