@@ -412,6 +412,46 @@ fn recovery_dir() -> Option<PathBuf> {
     crate::app_dirs::recovery_dir()
 }
 
+/// What kind of install this is and where it keeps its files (Help › System Info).
+/// `recovery_dir` is the folder the recovery service uses. `main` fills in the log file from the
+/// logger: an instance started beside a running one writes `photocraft-<pid>.log`.
+fn install_info(recovery_dir: Option<PathBuf>) -> photocraft_ui_egui::system_info::InstallInfo {
+    let data = crate::app_dirs::current();
+    let exe = std::env::current_exe().ok();
+    let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    photocraft_ui_egui::system_info::InstallInfo {
+        kind: install_kind(data.mode, exe.as_deref(), set("APPIMAGE"), set("FLATPAK_ID"), set("SNAP")),
+        settings_dir: data.dir.clone(),
+        log_file: None,
+        recovery_dir,
+    }
+}
+
+/// "Installed", "Portable", "AppImage", "Flatpak", "Snap" or "Built from source" (an executable
+/// under a Cargo `target` folder), plus a note when `PHOTOCRAFT_CONFIG_DIR` moved the settings.
+pub fn install_kind(mode: crate::app_dirs::Mode, exe: Option<&Path>, appimage: bool, flatpak: bool, snap: bool) -> String {
+    use crate::app_dirs::Mode;
+    let source = exe.is_some_and(|e| e.components().any(|c| c.as_os_str() == "target"));
+    let base = if flatpak {
+        "Flatpak"
+    } else if snap {
+        "Snap"
+    } else if appimage {
+        "AppImage"
+    } else if source {
+        "Built from source"
+    } else if mode == Mode::Portable {
+        "Portable"
+    } else {
+        "Installed"
+    };
+    match mode {
+        Mode::Override => format!("{base}, settings from PHOTOCRAFT_CONFIG_DIR"),
+        Mode::Portable if base != "Portable" => format!("{base}, portable settings"),
+        _ => base.to_string(),
+    }
+}
+
 /// Write `bytes` crash-safely (temp file beside the target, fsync, rename, directory fsync; see
 /// [`photocraft_format::atomic`]). Every document write (Save, Save As, Export, Save for Web) and
 /// the preferences go through here, so a failed or interrupted save never destroys the old file.
@@ -760,6 +800,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
     let clip_unreadable: Rc<Cell<bool>> = Rc::default();
     let automation = self::automation(automation);
+    // Resolved once: it moves an earlier version's autosaves and may take the migration lock.
+    let recovery = recovery_dir();
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             crate::crash_guard::guard("Open", || {
@@ -876,7 +918,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         // Set by main, which starts loading the store before the window opens.
         preset_store: None,
         is_wayland: false,
-        ..recovery_services(recovery_dir())
+        install: Some(install_info(recovery.clone())),
+        ..recovery_services(recovery)
     }
 }
 
