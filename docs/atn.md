@@ -2375,8 +2375,10 @@ Nested values as recorded (example values):
 #### Distribute
 
 - Event: `Dstr` / `distort`
-- PhotoCraft command: `layer.distribute.leftEdges (one command per edge)`
-- `Usng` selects the edge or centre; one enum value per Distribute menu item.
+- PhotoCraft commands: the six edge/centre `layer.distribute.*` commands, plus
+  `layer.distribute.horizontally` and `layer.distribute.vertically` for equal gaps.
+- `Usng` selects the edge, centre or spacing mode; `ADSt.AdSH` and `ADSt.AdSV`
+  select equal horizontal and vertical gaps, respectively.
 - Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
 | Key | String ID | Type | Unit | Example value | Allowed |

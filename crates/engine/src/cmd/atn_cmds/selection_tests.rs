@@ -58,7 +58,7 @@ fn fixtures() -> Vec<(&'static str, Option<&'static str>, Descriptor)> {
     for mode in ["Scrn", "H", "linearDodge"] {
         cases.push(("Fade", Some("fade"), desc("null").with("Opct", pct(25.0)).with("Md  ", enm("BlnM", mode))));
     }
-    for edge in ["AdCH", "AdRg", "AdTp", "AdCV", "AdBt"] {
+    for edge in ["AdCH", "AdRg", "AdTp", "AdCV", "AdBt", "AdSH", "AdSV"] {
         cases.push(("Dstr", Some("distribute"), desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", edge))));
     }
     cases
@@ -459,7 +459,36 @@ fn link_action_targets_the_selected_layers() {
     assert_eq!(linked(&s), 2);
 }
 
-/// Distinct sized/placed layers exercise each recorded distribution edge and center.
+#[test]
+fn distribute_spacing_identifiers_round_trip_and_preserve_invalid_forms() {
+    for (value, id) in [("AdSH", "layer.distribute.horizontally"), ("AdSV", "layer.distribute.vertically")] {
+        let descriptor = desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", value));
+        for event in [AtnEvent::Code(*b"Dstr"), AtnEvent::name("distribute"), AtnEvent::name("distort")] {
+            let loaded = import(&file(event, descriptor.clone())).unwrap();
+            assert!(loaded.unsupported.is_empty(), "{value}: {:?}", loaded.unsupported);
+            assert_eq!(loaded.actions[0].steps, [(id.to_string(), json!({}))]);
+            let (saved, skipped) = export("Distribution", &[&loaded.actions[0]], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            let written = atn::parse(&saved).unwrap().actions[0].items[0].clone();
+            assert_eq!(written.event, AtnEvent::Code(*b"Dstr"));
+            assert_eq!(written.descriptor, Some(descriptor.clone()));
+            assert_eq!(import(&saved).unwrap().actions[0].steps, loaded.actions[0].steps);
+        }
+        for changed in [
+            descriptor.clone().with("futureSetting", D::Boolean(true)),
+            descriptor.clone().with("Usng", enm("ADSt", value)),
+            desc("null").with("null", name_ref("Lyr ", "Other")).with("Usng", enm("ADSt", value)),
+            desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("otherType", value)),
+            desc("null").with("null", target_ref("Lyr ")).with("Usng", D::Enumerated { type_id: code("ADSt"), value: Id::Str(value.as_bytes().to_vec()) }),
+        ] {
+            assert_kept("Dstr", Some("distribute"), changed.clone());
+            assert_kept("", Some("distort"), changed);
+        }
+        assert!(export_item(id, &json!({"layer": "Other"}), "S").is_none());
+    }
+}
+
+/// Distinct sized/placed layers exercise each recorded edge, center and equal-gap direction.
 #[test]
 fn distribute_actions_match_the_requested_native_direction_and_undo() {
     for (value, edge) in [
@@ -469,10 +498,12 @@ fn distribute_actions_match_the_requested_native_direction_and_undo() {
         ("AdTp", "topEdges"),
         ("AdCV", "verticalCenters"),
         ("AdBt", "bottomEdges"),
+        ("AdSH", "horizontally"),
+        ("AdSV", "vertically"),
     ] {
         let setup = || {
             let mut s = image(8);
-            for (name, x, y, size) in [("One", 0, 0, 1), ("Two", 4, 3, 2), ("Three", 6, 6, 1)] {
+            for (name, x, y, size) in [("One", 0, 0, 1), ("Two", 4, 2, 2), ("Three", 7, 7, 1)] {
                 s.execute("layer.new.layer", json!({"name":name})).unwrap();
                 s.execute("select.rect", json!({"x":x,"y":y,"width":size,"height":size})).unwrap();
                 s.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
@@ -492,6 +523,17 @@ fn distribute_actions_match_the_requested_native_direction_and_undo() {
         assert!(result.get("failed").is_none(), "{result}");
         direct.execute(&format!("layer.distribute.{edge}"), json!({})).unwrap();
         assert_eq!(bounds(&actual), bounds(&direct), "{edge}");
+        if matches!(edge, "horizontally" | "vertically") {
+            let vertical = edge == "vertically";
+            let st = actual.active().unwrap();
+            let interval = |name: &str| {
+                let r = st.doc.layers.iter().find(|l| l.name == name).unwrap().surface().unwrap().content_bounds();
+                if vertical { (r.y0, r.y1) } else { (r.x0, r.x1) }
+            };
+            let (first, middle, last) = (interval("One"), interval("Two"), interval("Three"));
+            assert_eq!((first, middle, last), ((0, 1), (3, 5), (7, 8)), "equal 2-pixel gaps: {edge}");
+            assert_ne!(bounds(&actual), before, "spacing must actually move the middle layer");
+        }
         actual.execute("edit.undo", json!({})).unwrap();
         assert_eq!(bounds(&actual), before);
     }

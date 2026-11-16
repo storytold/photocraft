@@ -431,6 +431,8 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.distribute.topEdges",
             "layer.distribute.verticalCenters",
             "layer.distribute.bottomEdges",
+            "layer.distribute.horizontally",
+            "layer.distribute.vertically",
         ],
         super::steps_selection::distribute_from,
         super::steps_selection::distribute_to
