@@ -102,6 +102,36 @@ fn next_document_applies_the_box() {
     assert_eq!(doc(&app, a).history.past_len(), steps + 1);
 }
 
+/// A copy of A keeps A's layer IDs, with the same layer active and selected, so only the document
+/// tells the switch apart: picking the copy's tab still applies the box in A and leaves the copy
+/// alone.
+#[test]
+fn a_copy_with_the_same_layer_ids_still_applies_the_box() {
+    let mut app = app_with_square(64, SQUARE);
+    let a = app.session.active().unwrap().doc.id;
+    let copy = app.session.active().unwrap().doc.as_ref().clone();
+    app.session.add_document(copy, None);
+    let b = app.session.active().unwrap().doc.id;
+    assert!(app.session.set_active(0));
+    app.sync_views();
+    let st = app.session.active().unwrap();
+    let (layer, steps) = (st.active_layer.unwrap(), st.history.past_len());
+    begin(&mut app, &egui::Context::default()).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 8.0, y]);
+    let b_before = snapshot(doc(&app, b));
+    assert!(app.session.set_active(1));
+    let st = app.session.active().unwrap();
+    assert_ne!(st.doc.id, a);
+    assert_eq!((st.active_layer, st.selected_layers()), (Some(layer), vec![layer]), "the copy has the same layer active and selected");
+    end_if_left(&mut app);
+    assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "the box ended");
+    assert_eq!(app.session.active().unwrap().doc.id, b);
+    assert_untouched(&app, b, &b_before);
+    assert_eq!(square(&app, a, layer), SQUARE.translate(8, 0), "A has the move");
+    assert_eq!(doc(&app, a).history.past_len(), steps + 1);
+}
+
 /// Closing the document switched to returns to A with the box applied, and Undo there takes it
 /// back. Closing another document while A stays active leaves the box open, as nothing left it.
 #[test]
