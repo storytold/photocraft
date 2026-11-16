@@ -18,12 +18,24 @@ pub(crate) fn is_folder_field(key: &str) -> bool {
     matches!(key, "dir" | "input" | "output")
 }
 
+/// A text field that names a file to write, picked with the Save dialog: Artboards to PDF's `path`.
+pub(crate) fn is_save_field(fields: &serde_json::Map<String, Value>, key: &str) -> bool {
+    key == "path" && fields.get("__command").and_then(Value::as_str) == Some("file.export.artboardsToPdf")
+}
+
 /// Browse… beside a path field of dialog `id`: a folder picker for folder fields
 /// ([`is_folder_field`]), a `.wasm` picker for Install Plug-in…'s `path`. The answer fills the field.
 fn browse_field(app: &mut PhotocraftApp, id: u64, fields: &serde_json::Map<String, Value>, key: &str) {
     let key = key.to_string();
     let r = if is_folder_field(&key) {
         app.ask_folder(move |app, path| fill_field(app, id, &key, path))
+    } else if is_save_field(fields, &key) {
+        // The Save dialog starts at the field's path. Choosing a file only fills the field: no
+        // folder is remembered (`pick_export` remembers one as exported), since the dialog can
+        // still be cancelled. A name typed without an extension still writes a PDF, and when the
+        // added `.pdf` names a file that exists, the app asks before the field takes it.
+        let current = fields.get(&key).and_then(Value::as_str).filter(|p| !p.is_empty()).unwrap_or("Artboards.pdf").to_string();
+        app.pick_save_path(&current, "pdf", move |app, path| fill_field(app, id, &key, path))
     } else if fields.get("__command").and_then(Value::as_str) == Some("plugin.install") {
         let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
         let request = crate::file_dialog::FileDialogRequest::Open { multiple: false, initial_dir, extensions: Some(vec!["wasm".into()]) };
@@ -929,7 +941,8 @@ pub fn title(d: &Dialog) -> String {
         DialogKind::About => "About PhotoCraft".into(),
         DialogKind::LayerStyle => "Layer Style".into(),
         DialogKind::Command => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command").trim_end_matches('…').to_string(),
-        DialogKind::Error => "Error".into(),
+        // An alert that isn't an error names itself (Artboards To PDF's "was successful").
+        DialogKind::Error => d.fields.get("__title").and_then(Value::as_str).unwrap_or("Error").into(),
     }
 }
 
@@ -1074,6 +1087,10 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     let result = crate::actions::run_step_dialog(app, &d.fields, &cmd, params.clone());
     if let Ok(r) = &result {
         report_file_errors(app, &d, r);
+        // Run on this thread (no background jobs): the export is over.
+        if cmd == "file.export.artboardsToPdf" {
+            artboards_to_pdf_done(app, r);
+        }
     }
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
@@ -1114,6 +1131,38 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     result
 }
 
+/// Artboards to PDF with a destination folder that doesn't exist stays open with its values and
+/// says so in an alert, as the reference application does (#13657). The engine refuses it too,
+/// for scripts; here the dialog isn't closed first.
+fn artboards_to_pdf_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
+    let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id) else { return Ok(()) };
+    if d.fields.get("__command").and_then(Value::as_str) != Some("file.export.artboardsToPdf") {
+        return Ok(());
+    }
+    let path = d.fields.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
+    let name = app.session.active().map(|st| st.doc.name.clone()).unwrap_or_default();
+    if let Err(e) = photocraft_engine::artboard_cmds::pdf_destination(&path, &name) {
+        let message = e.to_string();
+        let mut fields = serde_json::Map::new();
+        fields.insert("message".into(), json!(message));
+        app.ui.open_dialog(DialogKind::Error, fields);
+        return Err(message);
+    }
+    Ok(())
+}
+
+/// The alert a finished Artboards to PDF shows (#13657): "Artboards To PDF was successful." with
+/// the PDF's path on a second line. `result` is the command's; a pending job reports it when it
+/// lands (`jobs_ui`).
+pub(crate) fn artboards_to_pdf_done(app: &mut PhotocraftApp, result: &Value) {
+    let Some(path) = result.get("path").and_then(Value::as_str) else { return };
+    let mut fields = serde_json::Map::new();
+    fields.insert("message".into(), json!(format!("{}\n{path}", tl!("Artboards To PDF was successful."))));
+    // Not titled "Error": it says the export worked.
+    fields.insert("__title".into(), json!("Artboards To PDF"));
+    app.ui.open_dialog(DialogKind::Error, fields);
+}
+
 /// Check child pickers, file access and dialog-specific inputs before removing the dialog.
 /// Equalize checks its document, layer and selection. A rejected preset choice leaves the prompt
 /// and its pending import available for retry.
@@ -1149,6 +1198,7 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     }
     // Merge Channels with too few, repeated, closed or changed documents stays open (#11451).
     merge_channels_ui::preflight(app, id)?;
+    artboards_to_pdf_preflight(app, id)?;
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::preset_group_prompt::owns(&d.fields)) {
         crate::preset_group_prompt::replace_choice(&d.fields)?;
     }

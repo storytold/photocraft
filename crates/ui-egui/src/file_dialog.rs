@@ -212,6 +212,32 @@ impl PhotocraftApp {
         Ok(asked)
     }
 
+    /// Ask for a file a command writes later, from a path field of its dialog: `then` gets the
+    /// chosen path, given `ext` when typed without an extension and lowercased as
+    /// [`Self::pick_save`] does. When that names a file the dialog didn't ask about, the app asks
+    /// whether to replace it before `then` runs (`replace_prompt`), as a save does. No folder is
+    /// remembered: nothing is written until the command runs.
+    pub(crate) fn pick_save_path(
+        &mut self,
+        suggested: &str,
+        ext: &str,
+        then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        let ext = ext.to_string();
+        let answered_ext = ext.clone();
+        let asked = self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string() }, move |app, answer| match answer {
+            FileDialogAnswer::SaveTo(path) => {
+                let path = saved_path(app, &path, Some(&answered_ext));
+                then(app, path)
+            }
+            _ => Err(UNEXPECTED.into()),
+        })?;
+        if let Some(p) = self.file_dialog.as_mut() {
+            p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, Some(&ext))));
+        }
+        Ok(asked)
+    }
+
     /// Remember the folder of an export that succeeded as where the next export dialog starts.
     /// The web answers a download name, which has no folder, and leaves it alone.
     fn remember_export_folder(&mut self, path: &str) {

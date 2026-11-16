@@ -127,6 +127,86 @@ fn image_processor_source_picker_hides_folder_fields_for_open_documents() {
     assert_eq!(h.query_all_by_label("Browse…").count(), 1);
 }
 
+/// Artboards to PDF's file is chosen with Browse…, in the Save dialog: a document opened through
+/// the desktop portal suggested its temporary folder, and a typed `~/` wrote nothing.
+#[test]
+fn artboards_to_pdf_file_is_chosen_with_browse() {
+    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::SaveTo("/tmp/exports/boards.pdf".into()))]);
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    h.state_mut().run("layer.new.artboard", json!({"rect": [0, 0, 64, 64]})).unwrap();
+    h.state_mut().sync_views();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.export.artboardsToPdf", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(field(&h, "path").is_some(), "the dialog has a Path field");
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    match asked.borrow().as_slice() {
+        [FileDialogRequest::Save { suggested }] => assert!(suggested.ends_with(".pdf"), "{suggested}"),
+        other => panic!("unexpected requests {other:?}"),
+    }
+    assert_eq!(field(&h, "path"), Some(json!("/tmp/exports/boards.pdf")));
+}
+
+/// Choosing the PDF with Browse… and then cancelling the export remembers no folder: the next
+/// export doesn't start where nothing was exported.
+#[test]
+fn browsing_for_the_pdf_and_cancelling_remembers_no_folder() {
+    let (mut h, _) = harness(vec![Some(FileDialogAnswer::SaveTo("/tmp/elsewhere/boards".into()))]);
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    h.state_mut().run("layer.new.artboard", json!({"rect": [0, 0, 64, 64]})).unwrap();
+    h.state_mut().sync_views();
+    let before = (h.state().session.prefs().export.last_folder.clone(), h.state().save_dirs.clone());
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.export.artboardsToPdf", json!({})).unwrap();
+    h.run_steps(4);
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert_eq!(field(&h, "path"), Some(json!("/tmp/elsewhere/boards.pdf")), "the field gets the file, as a PDF");
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    assert!(h.state().ui.dialogs.is_empty(), "the export was cancelled");
+    assert_eq!((h.state().session.prefs().export.last_folder.clone(), h.state().save_dirs.clone()), before);
+}
+
+/// The `.pdf` added to a name typed without an extension can name a file the Save dialog didn't
+/// ask about: the app asks before the field takes it. Cancel keeps the field as it was; Replace
+/// fills it.
+#[test]
+fn browsing_for_the_pdf_asks_before_taking_a_file_its_added_extension_names() {
+    let answered = || Some(FileDialogAnswer::SaveTo("/tmp/exports/boards".into()));
+    let (mut h, _) = harness(vec![answered(), answered()]);
+    h.state_mut().services.file_stamp = Some(Box::new(|path: &str| (path == "/tmp/exports/boards.pdf").then_some(crate::FileStamp { len: 1, modified: None })));
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    h.state_mut().run("layer.new.artboard", json!({"rect": [0, 0, 64, 64]})).unwrap();
+    h.state_mut().sync_views();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.export.artboardsToPdf", json!({})).unwrap();
+    h.run_steps(4);
+    let pdf_path = |h: &Harness<'_, PhotocraftApp>| {
+        let d = h.state().ui.dialogs.iter().find(|d| d.fields.get("__command").and_then(Value::as_str) == Some("file.export.artboardsToPdf"));
+        d.and_then(|d| d.fields.get("path").cloned())
+    };
+    let prompt = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| crate::replace_prompt::owns(&d.fields)).map(|d| d.id);
+    let before = pdf_path(&h);
+
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    let id = prompt(&h).expect("the app asks before the field takes boards.pdf");
+    assert_eq!(pdf_path(&h), before, "nothing is filled in before the answer");
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(4);
+    assert!(prompt(&h).is_none() && !h.state().file_dialog_open());
+    assert_eq!(pdf_path(&h), before, "Cancel keeps the field");
+
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    let id = prompt(&h).expect("asked again");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(4);
+    assert_eq!(pdf_path(&h), Some(json!("/tmp/exports/boards.pdf")), "Replace fills the field");
+}
+
 #[test]
 fn scratch_disk_browse_sets_only_the_selected_draft_and_cancel_keeps_it() {
     let (mut h, asked) = harness(vec![Some(FileDialogAnswer::FolderTo("/tmp/scratch".into())), None]);
