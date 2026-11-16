@@ -22,6 +22,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             }
         }
         "shortcuts" => shortcuts_body(app, ui, f),
+        super::customize_toolbar::KIND => super::customize_toolbar::body(app, ui, f),
         "presets" => presets_body(app, ui, f),
         "presetsIO" => presets_io_body(ui, f),
         "mismatch" => mismatch_body(ui, f),
