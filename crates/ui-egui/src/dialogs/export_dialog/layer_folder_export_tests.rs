@@ -18,6 +18,8 @@ fn named(name: &str) -> Document {
 fn names_keep_spaces_replace_illegal_characters_and_number_duplicates_downwards() {
     assert_eq!(layer_file_stem("a/b:c*?"), "a_b_c__");
     assert_eq!(layer_file_stem("Artboard 1"), "Artboard 1");
+    assert_eq!(layer_file_stem(" . "), "layer");
+    assert_eq!(layer_file_stem("COM1.front"), "COM1_.front");
     assert_eq!(layer_file_stem(r#"q<u>o"t|e\s"#), "q_u_o_t_e_s");
     // Bottom to top: three `Dup`s under `Top`. The upper `Dup` keeps the name.
     let docs = [named("Dup"), named("Dup"), named("Dup"), named("Top")];
@@ -115,4 +117,36 @@ fn one_file_keeps_the_save_dialog_with_the_layers_name() {
     });
     assert!(suggested.as_deref().is_some_and(|s| s.ends_with("a_b_c__.png")), "{suggested:?}");
     assert_eq!(*written.borrow(), ["/out/picked.png"]);
+}
+
+#[test]
+fn quick_export_numbers_outputs_around_existing_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path();
+    let existing = out.join("Dup.png");
+    std::fs::write(&existing, b"keep").unwrap();
+    let (mut app, ids, _, written, _) = app(crate::FileDialogAnswer::FolderTo(out.to_string_lossy().into_owned()));
+    app.session.active_mut().unwrap().selected_layers = ids;
+    quick_export_selected_layers_png(&mut app).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    let want: Vec<_> = ["a_b_c__.png", "Dup-1.png", "Dup-2.png"].iter().map(|name| out.join(name).to_string_lossy().into_owned()).collect();
+    assert_eq!(*written.borrow(), want);
+    assert_eq!(std::fs::read(existing).unwrap(), b"keep");
+}
+
+#[cfg(unix)]
+#[test]
+fn quick_export_chooses_a_new_name_beside_a_dangling_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path();
+    let victim = out.join("victim");
+    let link = out.join("Dup.png");
+    std::os::unix::fs::symlink(&victim, &link).unwrap();
+    let (mut app, ids, _, written, _) = app(crate::FileDialogAnswer::FolderTo(out.to_string_lossy().into_owned()));
+    app.session.active_mut().unwrap().selected_layers = ids;
+    quick_export_selected_layers_png(&mut app).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert!(written.borrow().contains(&out.join("Dup-2.png").to_string_lossy().into_owned()));
+    assert_eq!(std::fs::read_link(link).unwrap(), victim);
+    assert!(!victim.exists());
 }

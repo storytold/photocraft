@@ -90,11 +90,23 @@ fn the_dialog_opens_on_the_first_layer_with_pixels_and_exports_only_those() {
 
 #[test]
 fn quick_export_skips_the_same_layers() {
-    let (mut app, l, written) = app("quick.png");
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, l, written) = app_answering(crate::FileDialogAnswer::FolderTo(dir.path().to_string_lossy().into_owned()));
     app.session.active_mut().unwrap().selected_layers = vec![l.empty, l.red, l.adjustment, l.blue, l.gone];
     quick_export_selected_layers_png(&mut app).unwrap();
     poll(&mut app);
-    assert_eq!(*written.borrow(), ["quick.png", "quick-2-Blue.png"]);
+    let want: Vec<_> = ["Red.png", "Blue.png"].iter().map(|name| dir.path().join(name).to_string_lossy().into_owned()).collect();
+    assert_eq!(*written.borrow(), want);
+}
+
+#[test]
+fn quick_export_with_one_exportable_layer_keeps_the_save_dialog() {
+    let (mut app, l, written) = app("only.png");
+    app.session.active_mut().unwrap().selected_layers = vec![l.empty, l.blue];
+    quick_export_selected_layers_png(&mut app).unwrap();
+    poll(&mut app);
+    assert_eq!(*written.borrow(), ["only.png"]);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
 }
 
 #[test]
