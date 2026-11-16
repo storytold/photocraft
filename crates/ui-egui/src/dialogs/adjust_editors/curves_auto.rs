@@ -1,15 +1,15 @@
-//! Curves' Auto (#9237): the points Photoshop's Curves › Auto (Enhance Brightness and Contrast,
-//! clipping 0.10 % at each end) puts on the curve, fitted to what it was measured to do.
+//! Curves' Auto (#9237): the points the reference application's Curves › Auto (Enhance Brightness
+//! and Contrast, clipping 0.10 % at each end) puts on the curve, fitted to what it was measured to do.
 //!
-//! Measured on Photoshop 2025 (notes: `photocraft/notes/curves-measurements-2026-11-14.md`, the
-//! output of Auto on synthetic images read back pixel by pixel):
+//! Measured on the reference application (the output of Auto on synthetic images read back pixel by
+//! pixel):
 //! - the black point stays at (0, 0), whatever the image's darkest level;
 //! - the white end moves to input 228 (Levels' Auto white, 229) unless the image reaches white
 //!   itself, in which case it sits at the image's own white;
 //! - one to three points in between lift the midtones, by an amount that follows the image.
 //!
-//! The inner points are NOT Photoshop's algorithm, which is not known: they are a fit. Three points
-//! sit at 28 %, 64 % and 82 % of the white input, and their outputs are linear in the histogram's
+//! The inner points are NOT the reference application's algorithm, which is not known: they are a
+//! fit. Three points sit at 28 %, 64 % and 82 % of the white input, and their outputs are linear in the histogram's
 //! mean and in whether the image reaches white, fitted to nine measured images (ramps, uniform
 //! ranges, a bimodal image, a colour ramp, and a strip image with 17 levels). Against the measured
 //! curves the fit is within about 2 levels on the dark and mid-range images and within 6 to 12 on
@@ -18,7 +18,7 @@
 
 use super::auto_levels;
 
-/// The white input of a Curves Auto curve that does not reach white (Photoshop's Auto: about 228).
+/// The white input of a Curves Auto curve that does not reach white (the reference application's Auto: about 228).
 const WHITE_FLOOR: f32 = 228.0;
 
 /// Where the three inner points sit, as a fraction of the white input.
@@ -90,10 +90,10 @@ mod tests {
         histogram((0..17).map(|i| ((40 + 4 * i) + (50 + 4 * i) + (30 + 3 * i) + 1) / 3))
     }
 
-    /// #9237 (davidmann4): Photoshop's Auto on the 17-strip image puts the composite curve through
+    /// #9237 (davidmann4): the reference application's Auto on the 17-strip image puts the composite curve through
     /// (0, 0), (66, 68), (147, 182), (188, 231) and (229, 255); the fit holds each within 2 levels.
     #[test]
-    fn the_17_strip_image_matches_photoshops_composite_curve_within_2_levels() {
+    fn the_17_strip_image_matches_the_reference_composite_curve_within_2_levels() {
         let curve = auto_curve(&strips());
         assert_eq!(curve.first(), Some(&[0.0, 0.0]), "black stays at (0, 0): {curve:?}");
         for (x, want) in [(0, 0.0), (66, 68.0), (147, 182.0), (188, 231.0), (229, 255.0)] {
@@ -114,7 +114,7 @@ mod tests {
         }
     }
 
-    /// The fit against what Photoshop 2025 gave on the measured ramps: output at a few inputs, within
+    /// The fit against what the reference application gave on the measured ramps: output at a few inputs, within
     /// the fit's tolerance (2 on the dark and mid-range images, 6 on a full ramp).
     #[test]
     fn the_fit_stays_near_the_measured_ramps() {

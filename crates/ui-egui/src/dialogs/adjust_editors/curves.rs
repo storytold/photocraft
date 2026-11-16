@@ -355,7 +355,7 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     if cx.dialog {
         select_channel_by_key(ui, cx.mem.with("curves-ch"), channels.len());
     }
-    // Channel menu, with Auto at the right of its row as in Photoshop's Curves (#9229).
+    // Channel menu, with Auto at the right of its row as in the reference application's Curves (#9229).
     let mut auto = false;
     let ch = ui
         .horizontal(|ui| {
@@ -374,7 +374,7 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let tinted = isolated.is_some_and(|c| c.tint) || (isolated.is_none_or(|c| c.components.is_some()) && ch != 0);
     let key = curve_key(&chan);
     let mut e = curves_mode_row(ui, v, key, cx);
-    // Auto: the shown channel's curve becomes the fitted copy of Photoshop's (black stays at (0, 0),
+    // Auto: the shown channel's curve becomes the fitted copy of the reference application's (black stays at (0, 0),
     // white at about 228 or the image's own, three points lifting the midtones; see curves_auto).
     // With the pencil it draws that curve into the shown channel's map and stays in pencil mode, so
     // the other channels' drawn maps keep every level (leaving the pencil would refit them all to

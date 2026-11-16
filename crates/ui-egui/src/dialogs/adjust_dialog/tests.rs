@@ -418,7 +418,7 @@ fn two_tone() -> PhotocraftApp {
     PhotocraftApp::new(s, crate::Services::default())
 }
 
-/// #9229, #9237: Curves has an Auto button beside the channel menu, as Photoshop's does. On the
+/// #9229, #9237: Curves has an Auto button beside the channel menu, as the reference application's does. On the
 /// two-tone image (levels 60 and 190, mean 125) it keeps the black point at (0, 0), puts the white end
 /// at 228 (the image does not reach white) and three fitted points between, as one edit; it does not
 /// stretch the image's own range to 0..255 the way Levels' Auto does.
