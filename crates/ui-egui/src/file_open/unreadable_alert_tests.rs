@@ -10,7 +10,13 @@ use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 fn app_with(answer: Option<FileDialogAnswer>) -> PhotocraftApp {
-    let services = Services { file_dialog: Some(file_dialog::fake(vec![answer]).0), ..Default::default() };
+    let services = Services {
+        file_dialog: Some(file_dialog::fake(vec![answer]).0),
+        import: Some(Box::new(|name, bytes, opts| {
+            photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| format!("{name}: {e}"))
+        })),
+        ..Default::default()
+    };
     PhotocraftApp::new(photocraft_engine::Session::new(), services)
 }
 
@@ -52,8 +58,10 @@ fn unrecognized_and_mislabeled_files_show_the_exact_alert_without_opening_docume
 fn an_open_failure_alert_has_one_ok_button_and_closes_when_clicked() {
     let mut app = app_with(None);
     app.open_failed("notes.txt", "notes.txt: codec: unrecognized image format");
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(900.0, 600.0))
+        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+        .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
     h.run_steps(3);
     assert!(h.query_by_label(&expected("notes.txt")).is_some());
     assert!(h.query_by_label("Cancel").is_none());
