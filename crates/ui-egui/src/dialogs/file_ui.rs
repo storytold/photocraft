@@ -140,6 +140,11 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             let events: Vec<&str> = photocraft_engine::automate_cmds::EVENTS.iter().map(|e| e.0).collect();
             form(app, id, "Script Events Manager", json!({"enabled": enabled, "event": "openDocument", "script": "", "name": ""}), json!({"event": events}))
         }
+        // A missing linked file is the answer before the destination is asked for (#14076).
+        "file.package" if photocraft_engine::print_cmds::package_link_missing(&app.session) => {
+            let message = tl!(photocraft_engine::print_cmds::PACKAGE_MISSING_LINK);
+            json!({"dialog": app.ui.open_dialog(DialogKind::Error, Map::from_iter([("message".to_string(), json!(message))]))})
+        }
         "file.package" => form(app, id, "Package", json!({"dir": dir}), json!({})),
         "file.export.pathsToIllustrator" => {
             // Document Bounds comes first; a document without paths offers only it, selected (#13771).
@@ -263,6 +268,9 @@ mod tests;
 
 #[cfg(test)]
 mod contact_sheet_subfolders_tests;
+
+#[cfg(test)]
+mod package_missing_link_tests;
 
 #[cfg(test)]
 mod web_playback_tests {
