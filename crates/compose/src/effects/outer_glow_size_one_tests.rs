@@ -167,6 +167,101 @@ fn other_cases_are_unchanged() {
     assert_eq!(bit_hash(&glow_map(&document_shape(), &glow(7.0, 0.0), true, (0, 0))), 0x8af6_374a_dbf8_ef49, "the Size 7 inner glow map moved");
 }
 
+/// The issue's rectangle at a constant alpha other than 1: the reviewer's input is the same
+/// rectangle with alpha 0.5 (a semi-transparent layer), and `aa_rect` is the anti-aliased variant
+/// with half-alpha edge columns.
+fn alpha_rect(alpha: f32) -> Map {
+    let mut m = Map::new(DOC_W, DOC_H, 0.0);
+    for y in 75..=224 {
+        for x in 100..=299 {
+            m.v[y * DOC_W + x] = alpha;
+        }
+    }
+    m
+}
+
+/// The issue's rectangle with anti-aliased left and right edges: half-alpha columns at x 100 and
+/// x 299, solid between.
+fn aa_rect() -> Map {
+    let mut m = Map::new(DOC_W, DOC_H, 0.0);
+    for y in 75..=224 {
+        m.v[y * DOC_W + 100] = 0.5;
+        m.v[y * DOC_W + 299] = 0.5;
+        for x in 101..=298 {
+            m.v[y * DOC_W + x] = 1.0;
+        }
+    }
+    m
+}
+
+/// Assert a coverage within 1e-6: the Range transfer is a 4096-step table, so a value can land a
+/// fraction of a step away from its exact number.
+fn assert_cov(got: f32, want: f32, what: &str) {
+    assert!((got - want).abs() <= 1e-6, "{what}: {got:.8} vs {want:.8}");
+}
+
+/// The review thread on this PR names its input and its two numbers: the issue's rectangle with
+/// alpha 0.5 at the gated Size 1 / Spread 0. The first pixel outside the edge was coverage 0
+/// before this PR, the 1/4-1/2-1/4 convolution puts 0.125 there, and the default Range 50 %
+/// doubles it to 0.25. All three are exact here, so the deviation from the issue's "not measured:
+/// Size 1 on semi-transparent or anti-aliased pixels ... keep today's behaviour" line is pinned in
+/// one place: a later source-alpha gate in either compositor turns this test red.
+///
+/// Today's values, measured in this worktree with the Size 1 branch of `glow_map` disabled (so the
+/// width-1 blur ran): half-alpha rectangle (200, 74) = 0.0, (200, 75) = 0.99987793, map hash
+/// 0xd0e6bf61d9737225; anti-aliased rectangle (99, 150) = 0.0, (200, 74) = 0.0, map hash
+/// 0xf9ae492cac9e7225. The `other_sizes` test below pins those same maps where this PR does not
+/// reach them.
+#[test]
+fn size_one_at_half_alpha_adds_the_quarter_ramp_of_the_review() {
+    let mut raw = alpha_rect(0.5);
+    super::blur::size_one_blur(&mut raw);
+    assert_eq!(raw.get(200, 74), 0.125, "one quarter of the 0.5 alpha, one pixel above the edge");
+    assert_eq!(raw.get(199, 74), 0.125, "the same at another top-edge pixel");
+    assert_eq!(raw.get(200, 75), 0.375, "the edge pixel itself loses a quarter of its own alpha");
+
+    let m = glow_map(&alpha_rect(0.5), &glow(1.0, 0.0), false, (0, 0));
+    assert_cov(m.get(200, 74), 0.25, "half-alpha rectangle, 1 px out, after Range 50 %");
+    assert_cov(m.get(200, 73), 0.0, "half-alpha rectangle, 2 px out");
+    assert_cov(m.get(200, 75), 0.75, "half-alpha rectangle, the edge pixel");
+    assert_eq!(bit_hash(&m), 0xd91b_e123_c0a1_3225, "the half-alpha Size 1 outer glow map moved");
+
+    // Anti-aliased edges: the half-alpha column lights the pixel outside it, while the solid part
+    // of the same layer keeps the measured quarter (0.25 raw, 0.5 after Range).
+    let aa = glow_map(&aa_rect(), &glow(1.0, 0.0), false, (0, 0));
+    assert_cov(aa.get(99, 150), 0.25, "anti-aliased column, 1 px out");
+    assert_cov(aa.get(98, 150), 0.0, "anti-aliased column, 2 px out");
+    assert_cov(aa.get(200, 74), 0.5, "the solid top edge of the same layer");
+    assert_eq!(bit_hash(&aa), 0xe092_2088_66b5_a225, "the anti-aliased Size 1 outer glow map moved");
+}
+
+/// The Size 1 branch is the only line this PR reads those inputs: the same semi-transparent and
+/// anti-aliased shapes keep their map bit for bit at every other Size. The hashes are what the
+/// maps give in this worktree with the Size 1 branch of `glow_map` disabled (the rest of
+/// `glow_map` is untouched by this PR), i.e. today's maps.
+#[test]
+fn half_alpha_and_anti_aliased_input_keeps_todays_maps_at_other_sizes() {
+    let soft = alpha_rect(0.5);
+    let soft_sizes: [(f32, u64); 4] = [(0.5, 0xd0e6_bf61_d973_7225), (1.5, 0x620b_afed_455f_c1ad), (3.0, 0xd4d9_49ed_340d_9335), (10.0, 0x9b98_fd63_3d0c_5c3d)];
+    for (size, want) in soft_sizes {
+        assert_eq!(bit_hash(&glow_map(&soft, &glow(size, 0.0), false, (0, 0))), want, "the Size {size} half-alpha map moved");
+    }
+    let aa = aa_rect();
+    let aa_sizes: [(f32, u64); 2] = [(0.5, 0xf9ae_492c_ac9e_7225), (3.0, 0xa4a2_98dd_f385_bcd5)];
+    for (size, want) in aa_sizes {
+        assert_eq!(bit_hash(&glow_map(&aa, &glow(size, 0.0), false, (0, 0))), want, "the Size {size} anti-aliased map moved");
+    }
+    // What those untouched maps read, so the falloff these inputs get today is the tent's and not
+    // the Size 1 ramp: Size 3 over the half-alpha rectangle, three pixels in from the top edge.
+    let three = glow_map(&soft, &glow(3.0, 0.0), false, (0, 0));
+    assert_cov(three.get(200, 74), 0.33333334, "Size 3, half alpha, 1 px out");
+    assert_cov(three.get(200, 73), 0.11111111, "Size 3, half alpha, 2 px out");
+    assert_cov(three.get(200, 75), 0.6666667, "Size 3, half alpha, the edge pixel");
+    let aa_three = glow_map(&aa, &glow(3.0, 0.0), false, (0, 0));
+    assert_cov(aa_three.get(99, 150), 0.44444445, "Size 3, anti-aliased column, 1 px out");
+    assert_cov(aa_three.get(98, 150), 0.11111111, "Size 3, anti-aliased column, 2 px out");
+}
+
 /// A hash over every coverage value of a map: the map is bit-for-bit unchanged iff this is.
 fn bit_hash(m: &Map) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;

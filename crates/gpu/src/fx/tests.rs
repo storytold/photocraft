@@ -364,3 +364,75 @@ fn size_one_outer_glow_convolves_the_cpus_kernel() {
     }
     assert!(blurs(&Effect::InnerGlow(softer(1.0))).is_empty(), "a Size 1 inner glow keeps today's program");
 }
+
+/// The second review thread on this PR asks what the Size 1 branch does to semi-transparent and
+/// anti-aliased source pixels, whose behaviour issue #14950 leaves unmeasured. The glow program
+/// takes its kernel from the effect settings alone and reads only the layer's shape: no distance
+/// field, no second input, so this side has nothing to gate a source-alpha rule on. Convolving the
+/// published `size_one_kernel` over the reviewer's input (the issue's rectangle at alpha 0.5) the
+/// way `fs_mblur` does lands on exactly the numbers the CPU's `size_one_blur` gives for the same
+/// rectangle, pinned in compose `outer_glow_size_one_tests::size_one_at_half_alpha_adds_the_quarter_ramp_of_the_review`:
+/// 0.125 on the first pixel above a half-alpha edge, 0.375 on the edge pixel, 0 two pixels out.
+#[test]
+fn size_one_kernel_convolve_matches_the_cpu_on_a_half_alpha_edge() {
+    use photocraft_doc::{Glow, GlowSource, GlowTechnique};
+    let (w, h) = (40usize, 30usize);
+    let mut v = vec![0.0f32; w * h];
+    for y in 5..25 {
+        for x in 10..30 {
+            v[y * w + x] = 0.5;
+        }
+    }
+    let (r, taps) = photocraft_compose::effects::size_one_kernel();
+    let r = i64::from(r);
+    let (wi, hi) = (w as i64, h as i64);
+    let at = |s: &[f32], x: i64, y: i64| -> f32 { if x < 0 || y < 0 || x >= wi || y >= hi { 0.0 } else { s[(y * wi + x) as usize] } };
+    // Two separable passes with the published taps, zero outside the region: `fs_mblur`.
+    let mut tmp = vec![0.0f32; v.len()];
+    for y in 0..hi {
+        for x in 0..wi {
+            let mut acc = 0.0;
+            for (i, tap) in taps.iter().enumerate() {
+                acc += at(&v, x + i as i64 - r, y) * *tap;
+            }
+            tmp[(y * wi + x) as usize] = acc;
+        }
+    }
+    let mut out = vec![0.0f32; v.len()];
+    for y in 0..hi {
+        for x in 0..wi {
+            let mut acc = 0.0;
+            for (i, tap) in taps.iter().enumerate() {
+                acc += at(&tmp, x, y + i as i64 - r) * *tap;
+            }
+            out[(y * wi + x) as usize] = acc;
+        }
+    }
+    assert_eq!(out[4 * w + 20], 0.125, "one pixel above a half-alpha edge, as on the CPU");
+    assert_eq!(out[5 * w + 20], 0.375, "the half-alpha edge pixel itself, as on the CPU");
+    assert_eq!(out[3 * w + 20], 0.0, "nothing two pixels out");
+    // And the program really does read only the shape: a source-alpha gate would need a new input.
+    let light = GlobalLight::default();
+    let p = program(
+        &Effect::OuterGlow(Glow {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            paint: photocraft_doc::FxPaint::Color(photocraft_color::Color::BLACK),
+            technique: GlowTechnique::Softer,
+            spread: 0.0,
+            size: 1.0,
+            contour: Contour::Linear,
+            anti_alias: false,
+            range: 0.5,
+            jitter: 0.0,
+            noise: 0.0,
+            source: GlowSource::Edge,
+        }),
+        &light,
+        false,
+    );
+    assert!(p.fields.is_empty(), "the Size 1 Softer glow program asks for no distance field");
+    assert!(
+        p.stages.iter().all(|st| matches!(st.a, Some(In::Shape) | Some(In::Val(_)))),
+        "every stage reads the layer shape or the previous stage, never a per-pixel alpha input"
+    );
+}
