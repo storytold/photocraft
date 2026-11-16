@@ -4,7 +4,9 @@
 //! targeting a layer mask; CMYK and Lab stay enabled but fail at apply; an empty pixel layer
 //! answers its own message. No refusal adds a history state or touches a pixel. RGB at 8, 16 and
 //! 32 bit and a smart object (a smart filter) keep working, and the other adjustments keep today's
-//! checks - Brightness/Contrast still runs on a targeted layer mask.
+//! checks - Brightness/Contrast still runs on a targeted layer mask, and a step naming an alpha
+//! channel or the Quick Mask in its own params edits that channel instead of meeting the layer
+//! refusals.
 
 use super::*;
 use photocraft_color::ColorMode;
@@ -149,6 +151,80 @@ fn a_targeted_alpha_channel_keeps_todays_behaviour_on_a_hidden_or_empty_layer() 
     s.execute("layer.new.layer", json!({"name": "empty"})).unwrap();
     s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
     s.execute("image.adjustments.colorLookup", json!({"lut": "warm"})).expect("a channel edit on an empty layer runs");
+}
+
+#[test]
+fn an_explicit_alpha_channel_target_ignores_an_empty_active_layer() {
+    // Review #14485: the channel exemption must come from the step's own params as well as from the
+    // Channels panel. A step naming `{"channel": 0}` edits that alpha channel, so the empty-layer
+    // refusal must not stand in its way: the same step changed the channel before #14429.
+    let mut s = session(ColorMode::Rgb);
+    s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    let empty = s.execute("layer.new.layer", json!({"name": "empty"})).unwrap()["layer"].as_u64().unwrap();
+    let past = s.active().unwrap().history.past_len();
+    s.execute("image.adjustments.colorLookup", json!({"lut": "warm", "target": {"channel": 0}}))
+        .expect("a step naming an alpha channel runs although the active layer is empty");
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
+    let st = s.active().unwrap();
+    assert!(st.doc.layer(photocraft_doc::LayerId(empty)).unwrap().surface().unwrap().content_bounds().is_empty(), "the empty layer was not the edit target");
+    assert_eq!(st.doc.channels[0].surface.content_bounds(), st.doc.bounds(), "the alpha channel is what the step wrote");
+}
+
+#[test]
+fn a_hidden_active_layer_greys_the_entry_even_for_an_explicit_channel_target() {
+    // Pinned for review #14485, the other half of the same input: the enabled check takes no
+    // params, so it only knows the Channels panel. A step naming its channel target in its params
+    // still meets the measured hidden-layer refusal, because the entry is greyed for the hidden
+    // active layer. Letting the params exempt it would mean changing `Session::precondition`,
+    // outside the files #14429 names.
+    let mut s = session(ColorMode::Rgb);
+    let bg = s.active().unwrap().active_layer.unwrap();
+    s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    s.execute("layer.hideLayers", json!({"layer": bg.0})).unwrap();
+    let step = json!({"lut": "warm", "target": {"channel": 0}});
+    assert!(!s.is_enabled_with("image.adjustments.colorLookup", &step), "the enable check follows the hidden active layer");
+    refused(&mut s, "hidden active layer, channel in the params", NOT_AVAILABLE, step);
+}
+
+#[test]
+fn an_explicit_quick_mask_target_answers_its_own_message_not_a_layer_refusal() {
+    // The other half of the same rule: `"target": "quickMask"` names the Quick Mask, so Color
+    // Lookup's layer refusals step aside and the channel path answers with its own text.
+    let mut s = session(ColorMode::Rgb);
+    s.execute("layer.new.layer", json!({"name": "empty"})).unwrap();
+    let got = match s.execute("image.adjustments.colorLookup", json!({"lut": "warm", "target": "quickMask"})) {
+        Ok(v) => panic!("the Quick Mask step ran anyway: {v}"),
+        Err(EngineError::Other(why)) => why,
+        Err(e) => panic!("wrong error kind: {e}"),
+    };
+    assert_eq!(got, "not in Quick Mask mode", "the channel path answers, not the layer refusal");
+}
+
+#[test]
+fn a_step_targeting_a_layer_mask_stays_available_and_answers_at_apply() {
+    // Measured (#14429): with a layer mask targeted the reference runs the command and answers the
+    // unavailable text, so the entry is NOT greyed for the mask; the refusal comes from
+    // `color_lookup_applicable` at apply. Pinned so the two checks cannot drift apart silently:
+    // the enable half for a mask target lives in `channel_cmds::mask_target_enabled`, outside the
+    // files #14429 names.
+    let mut s = session(ColorMode::Rgb);
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let mask_step = json!({"lut": "warm", "target": "mask"});
+    assert!(s.is_enabled_with("image.adjustments.colorLookup", &mask_step), "a mask-targeted step stays available, as the reference runs it");
+    refused(&mut s, "mask target through the enable check", NOT_AVAILABLE, mask_step);
+}
+
+#[test]
+fn an_explicit_channel_target_still_answers_the_document_mode_refusal() {
+    // The channel exemption is a rule about the target, not a licence to edit a document the
+    // reference marks unavailable: the mode refusals come first, whether the Channels panel or the
+    // params name the channel.
+    let mut s = session(ColorMode::Grayscale);
+    s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    refused(&mut s, "channel target in a Grayscale document", NOT_AVAILABLE, json!({"lut": "warm", "target": {"channel": 0}}));
 }
 
 #[test]

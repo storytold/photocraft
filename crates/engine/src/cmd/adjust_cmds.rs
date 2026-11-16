@@ -348,18 +348,23 @@ fn adjustable_layer_ok(s: &Session, layer: Option<photocraft_doc::LayerId>) -> s
 
 /// Color Lookup's refusals (#14429), measured against the reference: Grayscale, Indexed,
 /// Multichannel and Bitmap documents, a hidden pixel layer and a targeted layer mask answer
-/// [`COLOR_LOOKUP_UNAVAILABLE`] (and the menu entry is greyed); an empty pixel layer answers
+/// [`COLOR_LOOKUP_UNAVAILABLE`]; the modes and a hidden pixel layer grey the menu entry too,
+/// while a mask-targeted step stays available and answers at apply, because the enabled check
+/// takes no params and cannot see the mask. An empty pixel layer answers
 /// [`COLOR_LOOKUP_EMPTY_LAYER`]. CMYK and Lab keep the enabled check - the dialog opens - but
 /// applying returns the unavailable error. Unmeasured targets (a targeted alpha channel or
 /// Quick Mask, several layers, a hidden group, a layer empty only inside the selection) keep
-/// the plain adjustment checks.
+/// the plain adjustment checks; a channel target counts as one whether the Channels panel or the
+/// step's own params name it.
 pub(crate) const COLOR_LOOKUP_UNAVAILABLE: &str = "The command \"Color Lookup\" is not currently available.";
 pub(crate) const COLOR_LOOKUP_EMPTY_LAYER: &str = "Could not complete the Color Lookup command because the active layer is empty.";
 
 /// The layer-content, document-mode and visibility half of the Color Lookup checks, shared by
 /// the menu and by apply (#14429). `layer` is the layer the step edits: `None` (the menu, which
-/// has no params) means the active layer, apply passes the one the params resolve to.
-fn color_lookup_target_ok(s: &Session, layer: Option<photocraft_doc::LayerId>) -> std::result::Result<(), String> {
+/// has no params) means the active layer, apply passes the one the params resolve to. `channel`
+/// says the step edits an alpha channel or the Quick Mask instead of a layer: the menu learns
+/// that from the Channels panel, apply also from a `"target"` in its own params.
+fn color_lookup_target_ok(s: &Session, layer: Option<photocraft_doc::LayerId>, channel: bool) -> std::result::Result<(), String> {
     adjustable_layer_ok(s, layer)?;
     let d = s.active().ok_or("no document open")?;
     if matches!(
@@ -372,8 +377,8 @@ fn color_lookup_target_ok(s: &Session, layer: Option<photocraft_doc::LayerId>) -
         return Err(COLOR_LOOKUP_UNAVAILABLE.into());
     }
     // A targeted alpha channel or Quick Mask is not measured: it keeps today's behaviour, which
-    // does not look at the active layer at all.
-    if crate::channel_cmds::edits_channel(s) {
+    // does not look at the layer at all.
+    if channel {
         return Ok(());
     }
     let l = layer.or(d.active_layer).and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
@@ -383,9 +388,10 @@ fn color_lookup_target_ok(s: &Session, layer: Option<photocraft_doc::LayerId>) -
     Ok(())
 }
 
-/// The enabled check picked for `image.adjustments.colorLookup` (#14429).
+/// The enabled check picked for `image.adjustments.colorLookup` (#14429). The menu has no params,
+/// so its channel target is the one the Channels panel shows.
 pub(crate) fn has_color_lookup_target(s: &Session) -> std::result::Result<(), String> {
-    color_lookup_target_ok(s, None)
+    color_lookup_target_ok(s, None, crate::channel_cmds::edits_channel(s))
 }
 
 /// The apply-time check for Color Lookup (#14429): the menu refusals answer the same text when
@@ -393,9 +399,12 @@ pub(crate) fn has_color_lookup_target(s: &Session) -> std::result::Result<(), St
 /// than at the menu, and an empty pixel layer gets its own message. Runs before the edit, so a
 /// refusal leaves no history state and no pixel touched.
 pub(crate) fn color_lookup_applicable(s: &Session, p: &Value) -> std::result::Result<(), String> {
+    // A step naming its channel target in the params edits that channel, exactly as a Channels
+    // panel target does: the layer the params resolve to is not what changes.
+    let channel = crate::channel_cmds::edits_channel(s) || crate::channel_cmds::is_channel_target(p);
     // The layer the edit and the smart-filter path act on (`layer` param, else the active one).
     let target = crate::commands::layer_param(s, p).map_err(|e| e.to_string())?;
-    color_lookup_target_ok(s, Some(target))?;
+    color_lookup_target_ok(s, Some(target), channel)?;
     if crate::commands::is_mask_target(p) {
         return Err(COLOR_LOOKUP_UNAVAILABLE.into());
     }
@@ -403,7 +412,7 @@ pub(crate) fn color_lookup_applicable(s: &Session, p: &Value) -> std::result::Re
     if matches!(d.doc.mode, photocraft_color::ColorMode::Cmyk | photocraft_color::ColorMode::Lab) {
         return Err(COLOR_LOOKUP_UNAVAILABLE.into());
     }
-    if crate::channel_cmds::edits_channel(s) {
+    if channel {
         return Ok(());
     }
     if let Some(l) = d.doc.layer(target)
