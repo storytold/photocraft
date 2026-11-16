@@ -167,7 +167,10 @@ pub fn interact_with_hit_radius(
         && !press
         && let (Some(PointCurveDrag { index, offset: off, removed }), Some(pos)) = (state.drag, ui.input(|i| i.pointer.interact_pos()))
     {
-        let outside = !graph.expand(DRAG_OFF).contains(pos);
+        // A press grabs a point up to `hit_radius` away, which can be that far outside the graph,
+        // so the band where a drag removes a point must never sit inside the band where a press
+        // still selects one: it is at least the host's active grab radius.
+        let outside = !graph.expand(DRAG_OFF.max(hit_radius)).contains(pos);
         let g = to_val(pos);
         let target = [g[0] + off[0], g[1] + off[1]];
         match index {
