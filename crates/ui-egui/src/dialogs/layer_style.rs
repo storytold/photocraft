@@ -28,6 +28,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod pattern_overlay_snap_tests;
 
 #[derive(Clone, Copy)]
 enum P {
@@ -1753,6 +1755,15 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                         let value = json!(cur);
                         disp[key] = value.clone();
                         set_param(f, selected, key, value);
+                    }
+                    if sel_kind == "patternOverlay" {
+                        ui.add_space(4.0);
+                        if widgets::secondary_button(ui, tl!("Snap to Origin"), 110.0).clicked() {
+                            for (pk, pv) in [("phaseX", json!(0.0)), ("phaseY", json!(0.0))] {
+                                disp[pk] = pv.clone();
+                                set_param(f, selected, pk, pv);
+                            }
+                        }
                     }
                 });
             }
