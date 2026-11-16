@@ -373,6 +373,9 @@ mod tests;
 mod fx_mode_tests;
 
 #[cfg(test)]
+mod dense_budget_tests;
+
+#[cfg(test)]
 mod brush_clear_background_tests;
 pub mod command_hints;
 #[cfg(test)]

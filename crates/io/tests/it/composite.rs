@@ -4,9 +4,9 @@
 use crate::common;
 
 use common::*;
+use craft_psd::{PixelData, PsdBuilder, PsdFile};
 use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_io::*;
-use photocraft_psd::{PixelData, PsdBuilder, PsdFile};
 
 const TOL: f32 = 1.0 / 255.0 + 1e-4;
 
@@ -72,8 +72,8 @@ fn builder_oracle(depth: u16, mode: ColorMode) {
         }
     };
     let mut b = PsdBuilder::new(d.size.width, d.size.height).depth(depth).color_mode(match mode {
-        ColorMode::Grayscale => photocraft_psd::ColorMode::Grayscale,
-        _ => photocraft_psd::ColorMode::Rgb,
+        ColorMode::Grayscale => craft_psd::ColorMode::Grayscale,
+        _ => craft_psd::ColorMode::Rgb,
     });
     for l in &d.layers {
         let s = l.surface().unwrap();
@@ -84,8 +84,8 @@ fn builder_oracle(depth: u16, mode: ColorMode) {
             let fmt = s.format();
             s.read_region(r).chunks_exact(fmt.channels()).map(|p| photocraft_raster::to_rgba(&fmt, p)).collect()
         };
-        let mut spec = photocraft_psd::LayerSpec::new(l.name.clone(), r.x0, r.y0, r.width(), r.height(), to_pixels(&buf));
-        spec.blend_mode = photocraft_psd::BlendMode::from_key(l.blend.psd_key());
+        let mut spec = craft_psd::LayerSpec::new(l.name.clone(), r.x0, r.y0, r.width(), r.height(), to_pixels(&buf));
+        spec.blend_mode = craft_psd::BlendMode::from_key(l.blend.psd_key());
         spec.opacity = (l.opacity * 255.0).round() as u8;
         spec.fill_opacity = Some((l.fill_opacity * 255.0).round() as u8);
         spec.visible = l.visible;
@@ -93,8 +93,8 @@ fn builder_oracle(depth: u16, mode: ColorMode) {
         if let Some(m) = &l.mask {
             let mr = m.surface.content_bounds();
             let data = m.surface.read_region(mr).iter().map(|v| (v * 255.0).round() as u8).collect();
-            spec.mask = Some(photocraft_psd::MaskSpec {
-                rect: photocraft_psd::Rect { top: mr.y0, left: mr.x0, bottom: mr.y1, right: mr.x1 },
+            spec.mask = Some(craft_psd::MaskSpec {
+                rect: craft_psd::Rect { top: mr.y0, left: mr.x0, bottom: mr.y1, right: mr.x1 },
                 data,
                 default_color: (m.surface.default_pixel()[0] * 255.0).round() as u8,
                 disabled: !m.enabled,
