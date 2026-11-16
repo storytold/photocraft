@@ -1145,6 +1145,30 @@ pub fn made_here_without_document_sizes(tysh: &[u8], dpi: f32) -> bool {
     same_engine_data(&without_document_sizes(build_engine_data(&layer, None, dpi)), &file)
 }
 
+/// Whether the paragraph styles of `layer` (alignment, indents, spacing, auto leading, direction,
+/// hyphenation) differ from those of the `TySh` it was opened with (`psd_raw`). The `Txt2` check
+/// compares only text and character style runs, so a paragraph-only edit would keep the file's
+/// block with its old paragraph runs beside the edited layer. A layer without a block has
+/// nothing to differ from.
+pub fn paragraphs_edited(layer: &TextLayer, dpi: f32) -> bool {
+    let Some(file) = layer.psd_raw.as_deref().and_then(|raw| super::text_layer_from_tysh(raw, dpi)) else { return false };
+    let styles = |l: &TextLayer| l.paragraph_runs().into_iter().map(|r| r.style).collect::<Vec<_>>();
+    let (now, then) = (styles(layer), styles(&file));
+    let close = |a: f32, b: f32| (a - b).abs() <= 1e-3 * a.abs().max(b.abs()).max(1.0);
+    now.len() != then.len()
+        || now.iter().zip(&then).any(|(a, b)| {
+            a.align != b.align
+                || a.direction != b.direction
+                || a.hyphenate != b.hyphenate
+                || !close(a.first_line_indent_pt, b.first_line_indent_pt)
+                || !close(a.start_indent_pt, b.start_indent_pt)
+                || !close(a.end_indent_pt, b.end_indent_pt)
+                || !close(a.space_before_pt, b.space_before_pt)
+                || !close(a.space_after_pt, b.space_after_pt)
+                || !close(a.auto_leading, b.auto_leading)
+        })
+}
+
 /// EngineData trees equal key for key, in the same order, numbers within float rounding (a layer
 /// read back holds its sizes as `f32`).
 fn same_engine_data(a: &E, b: &E) -> bool {

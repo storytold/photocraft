@@ -495,7 +495,7 @@ fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
             ex.text_index.insert(id, next_txt);
         }
         // An unedited save writes the file's `Txt2` back as it was (#2374). Once the type layers
-        // no longer match it, a merged block beside regenerated `TySh` data makes Photoshop fail
+        // no longer match it (their text, character or paragraph styles), a merged block beside regenerated `TySh` data makes Photoshop fail
         // to open the file ("program error", REQUIRE 903 per type layer), so the text is written
         // the way a new document's is: generated `TySh` for every type layer, no inherited `Txt2`.
         // A file an older PhotoCraft saved that way is mixed already: a type layer it made from
@@ -512,7 +512,11 @@ fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
                 .collect();
             let mixed =
                 text_layers.iter().any(|(_, t)| t.psd_raw.as_deref().is_some_and(|d| photocraft_text::psd::made_here_without_document_sizes(d, ex.dpi)));
-            ex.regen_text = !text_layers.is_empty() && (mixed || photocraft_text::psd::build_txt2_at(&text_layers, Some(prev), ex.dpi) != prev[..]);
+            // The block's comparison covers text and character styles; a paragraph-only edit
+            // (alignment, indents, spacing) is caught against the layer's own `TySh`.
+            let paragraphs = text_layers.iter().any(|(_, t)| photocraft_text::psd::paragraphs_edited(t, ex.dpi));
+            ex.regen_text =
+                !text_layers.is_empty() && (mixed || paragraphs || photocraft_text::psd::build_txt2_at(&text_layers, Some(prev), ex.dpi) != prev[..]);
             // Every type layer is rewritten, the untouched ones too: numbered afresh for the native
             // block written in place of the file's (no empty slots for objects that are gone), and
             // the export says what that costs.

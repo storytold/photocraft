@@ -437,6 +437,32 @@ fn edited_type_drops_the_files_txt2() {
     assert_eq!(texts, ["AV", "Hi"], "every type layer is still live text");
 }
 
+/// A paragraph-only edit (alignment) of a type layer from a file: the file's `Txt2` object still
+/// has the old paragraph runs, and Photoshop reads the paragraph style from them. The save must
+/// not keep that block beside the edited layer, and the alignment must come back on reopen.
+#[test]
+fn a_paragraph_only_edit_does_not_keep_the_files_txt2() {
+    let mut t = layer("AV", &[(2, Kerning::Metrics, 0.0)]);
+    photocraft_text::TextEngine::new().render_layer(&mut t, 72.0, photocraft_color::PixelFormat::RGBA8);
+    let raw = photocraft_text::psd::build_tysh(&t, 72.0, None).unwrap();
+    t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
+    let prev = photocraft_text::psd::build_txt2(&[(0, &t)], Some(&photoshop_txt2(&[("AV", "")])));
+    t.paragraphs = vec![photocraft_doc::text::ParagraphRun {
+        len: t.text.len() + 1,
+        style: photocraft_doc::text::ParagraphStyle { align: photocraft_doc::text::TextAlign::Center, ..Default::default() },
+    }];
+    let mut doc = Document::new("k", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    doc.layers.push(Layer::new("t", LayerContent::Text(t)));
+    doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", std::sync::Arc::new(prev.clone()))];
+    let saved = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&saved.bytes).unwrap();
+    let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").map(|b| b.data.clone());
+    assert_ne!(txt2.as_deref(), Some(&prev[..]), "the file's Txt2 with the old alignment was kept");
+    let back = photocraft_io::import("k.psd", &saved.bytes).unwrap().document;
+    let LayerContent::Text(b) = &back.layers[0].content else { panic!("not text") };
+    assert_eq!(b.paragraph_runs().first().map(|r| r.style.align), Some(photocraft_doc::text::TextAlign::Center), "the alignment comes back");
+}
+
 /// A PhotoCraft-native `Txt2` carries what Photoshop 27 needs, found by building the block up in
 /// Photoshop: to open the file, paragraph runs whose style is `<< /0 << /0 () /5 << >> /6 1 >> >>`
 /// (an empty dictionary there makes it refuse the file), a paragraph style sheet (`/0 /6`) and the
