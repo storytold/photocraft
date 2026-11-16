@@ -246,7 +246,8 @@ fn paint_gradient_honours_explicit_transparency_stops() {
         ] {
             let mut s = Session::new();
             s.execute("file.new", json!({"width": 16, "height": 16, "depth": depth, "background": "transparent"})).unwrap();
-            let mut p = json!({"from": [0, 0], "to": [0, 15], "transparency": transparency});
+            // Pixel 15 is sampled at 14.5 (#12018), so a drag to 14 ends on it.
+            let mut p = json!({"from": [0, 0], "to": [0, 14], "transparency": transparency});
             for (k, v) in extra.as_object().unwrap() {
                 p[k] = v.clone();
             }
@@ -541,7 +542,7 @@ fn shapes_place_as_shape_layers() {
     let r = s.execute("shape.presets.place", json!({"preset": "Heart", "rect": [10, 10, 40, 20], "fill": "#ff0000"})).unwrap();
     let id = LayerId(r["layer"].as_u64().unwrap());
     let l = s.active().unwrap().doc.layer(id).unwrap().clone();
-    assert_eq!(l.name, "Heart");
+    assert_eq!(l.name, "Heart 1");
     let LayerContent::Shape(sh) = &l.content else { panic!("not a shape layer") };
     let (x0, y0, x1, y1) = sh.path.control_bounds().unwrap();
     // Keep aspect: 20 px tall, centred horizontally in the 40 px rect.
@@ -816,9 +817,8 @@ fn clone_source_flip_scale_rotation() {
     let px = layer_px(&s, 42, 24);
     assert!((px[0] - 18.0 / 63.0).abs() < 0.02, "{px:?}");
     s.execute("cloneSource.resetTransform", json!({})).unwrap();
-    s.execute("cloneSource.set", json!({"source": [20, 20], "width": 200, "height": 200})).unwrap();
     let mut s2 = clone_doc(16);
-    s2.presets.clone = s.presets.clone.clone();
+    s2.execute("cloneSource.set", json!({"source": [20, 20], "width": 200, "height": 200})).unwrap();
     s2.execute("paint.cloneStamp", json!({"points": [[40, 24]], "size": 21, "hardness": 100})).unwrap();
     // 200 %: 4 px right of the anchor samples 2 px right of the source.
     let px = layer_px(&s2, 44, 24);
@@ -993,4 +993,21 @@ fn export_presets_survive_a_presets_json_round_trip() {
     assert_eq!(restored.presets.export_presets.len(), 1);
     assert_eq!(restored.presets.export_presets[0].name, "Web");
     assert_eq!(restored.presets.export_presets[0].settings.format, "jpg");
+}
+
+/// A nested command a preset command runs answers to the session's authorization hook: a denied one
+/// does not run, an ungated call still succeeds.
+#[test]
+fn nested_preset_commands_answer_to_the_authorization_gate() {
+    fn deny_select_all(id: &str, _: &Value) -> crate::Result<()> {
+        if id == "select.all" { Err(crate::EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let mut s = session(8);
+    s.authorize = Some(deny_select_all);
+    let e = super::call(&mut s, "select.all", json!({})).unwrap_err().to_string();
+    assert!(e.contains("is disabled"), "{e}");
+    assert!(s.active().unwrap().doc.selection.is_none(), "the denied command did not run");
+    s.authorize = None;
+    super::call(&mut s, "select.all", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.selection.is_some());
 }

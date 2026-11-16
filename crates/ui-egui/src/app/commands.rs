@@ -7,6 +7,12 @@ impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
+        let library_change = matches!(id, "actions.clearAll" | "actions.reset" | "actions.replace" | "actions.undoLibrary");
+        if library_change && let Err(error) = actions::library::idle(self, id) {
+            self.ui.status = error.clone();
+            self.ui.status_error = true;
+            return Err(error);
+        }
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -21,6 +27,17 @@ impl PhotocraftApp {
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
+        }
+        if let Ok(reply) = &result {
+            if library_change {
+                actions::library_selection_changed(self);
+            } else if id == "actions.load" {
+                actions::library_slots_changed(self);
+            } else if id == "actions.duplicate"
+                && let Some(slot) = reply["setSlot"].as_u64().and_then(|slot| usize::try_from(slot).ok())
+            {
+                actions::library_slot_inserted(self, slot);
+            }
         }
         // An explicit channel target (⌘2, ⌘\, ⌘3…) decides what the Layers panel targets too:
         // ⌘2 after the mask was targeted goes back to the layer's pixels.
@@ -93,11 +110,26 @@ impl PhotocraftApp {
         if let Some(result) = smart_svg_ui::intercept(self, id, &params) {
             return result;
         }
+        // Document exports read committed pixels, not the pending Free Transform preview.
+        // Check on execution (also dialog OK and automation), leaving Folder processing usable.
+        if id == "file.scripts.imageProcessor"
+            && self.ui.transform.is_some()
+            && match params.get("source").and_then(Value::as_str) {
+                Some("open") => true,
+                Some("current") => self.transform_preview.as_ref().is_none_or(|preview| self.session.active().is_some_and(|st| st.doc.id == preview.doc.id)),
+                _ => false,
+            }
+        {
+            return Err("Commit or cancel the transform first".into());
+        }
         if let Some(r) = transform_tool::intercept(self, id) {
             return r;
         }
         if let Some(r) = crate::crop_ui::intercept(self, id) {
             return r;
+        }
+        if id == "edit.undo" && actions::library::edit_undo_label(self).is_some() {
+            return actions::library::undo(self);
         }
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
