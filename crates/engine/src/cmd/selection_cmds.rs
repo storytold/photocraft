@@ -18,6 +18,8 @@ mod color_range_performance;
 #[cfg(test)]
 mod color_range_window_tests;
 #[cfg(test)]
+mod wand_sample_size_tests;
+#[cfg(test)]
 mod wand_seed_outside_tests;
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
@@ -135,12 +137,64 @@ pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[
     }
 }
 
+/// The Magic Wand's `sampleSize` param: 1 (Point Sample, the default) or the side of the
+/// averaged square, one of `sample_cmds::SAMPLE_SIZES`.
+fn wand_sample_size(p: &Value) -> Result<u32> {
+    use crate::sample_cmds::SAMPLE_SIZES;
+    match p.get("sampleSize") {
+        None | Some(Value::Null) => Ok(1),
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| SAMPLE_SIZES.contains(n))
+            .ok_or_else(|| EngineError::BadParams { cmd: "select.magicWand".into(), msg: format!("`sampleSize` = {v} must be one of {SAMPLE_SIZES:?}") }),
+    }
+}
+
+/// The Sample Size reference colour: the average of the `size` by `size` square around the
+/// clicked pixel (clipped to `area`), weighted by alpha so transparent pixels don't pull it,
+/// with the clicked pixel's own alpha. `None` for Point Sample, a seed outside `area`, or a
+/// square with nothing opaque in it (the clicked pixel then stays the reference).
+fn wand_average(img: &[[u8; 4]], area: Rect, (x, y): (i32, i32), size: u32) -> Option<[u8; 4]> {
+    if size <= 1 || !area.contains(x, y) {
+        return None;
+    }
+    let square = crate::sample_cmds::sample_rect(f64::from(x), f64::from(y), size, area)?;
+    let w = area.width() as usize;
+    let at = |px: i32, py: i32| img.get((py - area.y0) as usize * w + (px - area.x0) as usize).copied();
+    let (mut sum, mut weight) = ([0u64; 3], 0u64);
+    for py in square.y0..square.y1 {
+        for px in square.x0..square.x1 {
+            let Some(p) = at(px, py) else { continue };
+            let a = u64::from(p[3]);
+            for c in 0..3 {
+                sum[c] += u64::from(p[c]) * a;
+            }
+            weight += a;
+        }
+    }
+    let seed = at(x, y)?;
+    (weight > 0).then(|| {
+        let avg = sum.map(|v| ((v + weight / 2) / weight).min(255) as u8);
+        [avg[0], avg[1], avg[2], seed[3]]
+    })
+}
+
 fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
-    let (area, img) = match shown_gray(s) {
+    let size = wand_sample_size(p)?;
+    let (area, mut img) = match shown_gray(s) {
         Some(plane) => plane,
         None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
     };
+    // Sample Size: the fill compares against the square's average. The wand takes its reference
+    // colour from the clicked pixel, so that pixel carries the average here; a contiguous fill
+    // starts from the clicked pixel either way.
+    if let Some(avg) = wand_average(&img, area, (x, y), size)
+        && let Some(seed) = img.get_mut((y - area.y0) as usize * area.width() as usize + (x - area.x0) as usize)
+    {
+        *seed = avg;
+    }
     let m = mode(p);
     // Subtract and Intersect grow the region from the seed through the selection only (#11779).
     // A global match (Contiguous off) ignores the limit, so it skips the full-area mask.
@@ -746,7 +800,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.magicWand",
             "Magic Wand",
             [],
-            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the visible alpha, Quick Mask, or layer mask when that is the picture)"##,
+            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"sampleSize":1|3|5|11|31|51|101=1,"mode":"replace|add|subtract|intersect"="replace"} (samples the visible alpha, Quick Mask, or layer mask when that is the picture; sampleSize 1 is Point Sample, else the side of the averaged square)"##,
             has_doc,
             magic_wand
         ),
