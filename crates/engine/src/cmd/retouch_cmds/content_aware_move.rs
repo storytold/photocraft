@@ -917,7 +917,7 @@ fn run_scaled(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, scale: 
     let cov = if plan.map.is_some() { coverage(sel, plan.area) } else { Vec::new() };
     let landed_in = |r: Rect| -> Vec<bool> {
         match &plan.map {
-            None => mask(sel, r.translate(-dx, -dy)),
+            None => mask_within(sel, r.translate(-dx, -dy), plan.area),
             Some(_) => landed_mask(&cov, plan.area, &full_inv, r),
         }
     };
