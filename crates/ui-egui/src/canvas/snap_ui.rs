@@ -491,7 +491,13 @@ fn square_corner(targets: &SnapTargets, start: [f64; 2], p: [f64; 2], tol: f64) 
         (false, true) => false,
         (true, true) => ax.abs() <= ay.abs(),
     };
-    let side = (side + if by_x { ax * sx } else { ay * sy }).max(0.0);
+    let snapped_side = side + if by_x { ax * sx } else { ay * sy };
+    // An edge behind the start (Ctrl released mid-drag, so the start itself was not snapped) would fold the frame
+    // onto its start: keep the unsnapped square and show no line the frame does not reach.
+    if snapped_side < 0.0 {
+        return (p, Vec::new());
+    }
+    let side = snapped_side;
     let lines = lines.into_iter().filter(|l| l.vertical == by_x).collect();
     ([start[0] + sx * side, start[1] + sy * side], lines)
 }
