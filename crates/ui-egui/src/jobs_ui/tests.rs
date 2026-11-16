@@ -1142,7 +1142,7 @@ fn identity_app() -> PhotocraftApp {
     PhotocraftApp::new(session, crate::Services::default())
 }
 
-fn identity_png(profile: Option<photocraft_cms::Builtin>) -> Vec<u8> {
+fn identity_png(profile: Option<craft_cms::Builtin>) -> Vec<u8> {
     let app = identity_app();
     let mut doc = (*app.session.active().unwrap().doc).clone();
     doc.icc_profile = profile.map(|profile| profile.profile().to_bytes());
@@ -1264,7 +1264,7 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     let mut app = identity_app();
     let control = IdentityControl::capture(&app);
     app.session.execute("edit.colorSettings", json!({"askOnMismatch": true, "askOnMissing": false, "policyRgb": "preserve"})).unwrap();
-    let mismatched = identity_png(photocraft_cms::Builtin::from_id("adobe-rgb-compat"));
+    let mismatched = identity_png(craft_cms::Builtin::from_id("adobe-rgb-compat"));
     let prompt = completed_identity_open(&mut app, "profile.png", mismatched);
     assert!(prompt["held"].as_u64().is_some());
     let first = completed_identity_open(&mut app, "first.png", identity_png(None));
@@ -1283,4 +1283,16 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     assert_eq!(crate::open_prompt::answer(&mut app, None).unwrap()["cancelled"], 3);
     assert!(app.held_opens.is_empty());
     control.assert_untouched(&app);
+}
+
+#[test]
+fn asynchronous_place_completion_displays_result_warnings() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    let warning = "SVG: 1 embedded image was omitted";
+    let place = super::PlaceJob { job: JobId(1), name: "omitted.svg".into(), doc };
+    // A frame placement bypasses transform startup but must still display its warnings.
+    super::finish_place(&mut app, &egui::Context::default(), place, photocraft_engine::jobs::JobOutcome::Done(json!({"frame":1,"warnings":[warning]})));
+    assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == warning)));
 }

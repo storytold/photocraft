@@ -26,10 +26,13 @@ use crate::commands::{CommandSpec, blend_from_str};
 use crate::{EngineError, Result, Session};
 
 mod art_history;
+mod clone_sampling;
 mod content_aware_move;
 mod patch;
 mod pattern_stamp;
-pub use pattern_stamp::live_impressionist as live_pattern_impressionist;
+pub use pattern_stamp::{
+    INDEXED_REFUSAL as PATTERN_STAMP_INDEXED_REFUSAL, live_impressionist as live_pattern_impressionist, press_refusal as pattern_stamp_press_refusal,
+};
 mod periodic;
 mod remove;
 pub use content_aware_move::{ContentAwarePreview, preview as content_aware_move_preview};
@@ -234,7 +237,7 @@ mod dab;
 mod heal;
 mod sampling;
 
-pub use clone::{LiveRetouch, clone_preview, clone_preview_periodic};
+pub use clone::{LiveRetouch, clone_destination_preview, clone_preview, clone_preview_periodic, healing_preview, healing_preview_periodic};
 use clone::{blend_param, clamp_samples, clone_stamp};
 pub(crate) use dab::DabEffect;
 #[cfg(test)]
@@ -256,7 +259,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","source":[sx,sy] (sampled under the first point) | "offset":[dx,dy],"aligned":bool=true,"sampleLayer":"current|currentAndBelow|all"="current","mode":"normal|multiply|…"="normal","wrap":bool=false (repeat source and stroke at document edges for Pattern Preview) → {"damage","offset","aligned","nextSource"}"#
+                r#","source":[sx,sy] (sampled under the first point) | "offset":[dx,dy],"aligned":bool=true,"sampleLayer":"current|currentAndBelow|all"="current","sourceLayer":id? (Current Layer: this layer, else the picked slot's layer/document, else the paint target; explicit source/offset use this document),"mode":"normal|multiply|…"="normal","wrap":bool=false (repeat source and stroke at document edges for Pattern Preview) → {"damage","offset","aligned","nextSource"}"#
             ),
             enabled: has_pixel_layer,
             run: clone_stamp,
@@ -408,7 +411,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","state":row (a History panel row, as history.setSource),"snapshot":id (a history.newSnapshot id; default: the History panel's source, as paint.historyBrush; a source of another canvas size or colour mode is an error),"style":"tightShort|tightMedium|tightLong|looseMedium|looseLong|dab|tightCurl|looseCurl"="tightMedium","area":0..100=50,"tolerance":0..100=0,"opacity":0..100=100 (overrides the common 1..100: how strongly the history state is painted; 0 changes nothing; no flow, mode is Normal)"#
+                r#","state":row (a History panel row, as history.setSource),"snapshot":id (a history.newSnapshot id; default: the History panel's source, as paint.historyBrush; a source of another canvas size or colour mode is an error),"style":"tightShort|tightMedium|tightLong|looseMedium|looseLong|dab|tightCurl|looseCurl"="tightShort","area":0..100=50,"tolerance":0..100=0,"opacity":0..100=100 (overrides the common 1..100: how strongly the history state is painted; 0 changes nothing; no flow, mode is Normal)"#
             ),
             enabled: has_pixel_layer,
             run: art_history::run,
@@ -419,6 +422,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod clone_source_layer_tests;
 
 #[cfg(test)]
 mod patch_history_names_tests;

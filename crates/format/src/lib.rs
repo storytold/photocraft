@@ -33,6 +33,7 @@ mod finite;
 mod import_conversion;
 pub mod manifest;
 mod migrate;
+mod noreplace;
 pub mod read;
 mod store;
 pub mod zip;
@@ -42,12 +43,13 @@ use std::path::Path;
 use photocraft_doc::Document;
 use photocraft_raster::Rgba8Image;
 
-pub use atomic::{atomic_write, atomic_write_progress, atomic_write_stream, atomic_write_stream_progress};
+pub use atomic::{atomic_write, atomic_write_no_follow, atomic_write_progress, atomic_write_stream, atomic_write_stream_progress};
 #[cfg(not(target_arch = "wasm32"))]
 pub use autosave::RecoveryStore;
 pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, recover};
 pub use convert::MAX_GROUP_DEPTH;
 pub use manifest::{FORMAT_VERSION, Manifest};
+pub use noreplace::{PublishNewError, rename_noreplace, write_noreplace};
 pub use read::{read_file, read_file_limited};
 pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats, read_entry};
 
@@ -193,16 +195,7 @@ impl Default for LoadOptions {
 ///
 /// Bundles written here place the manifest first; re-zipped bundles may reorder entries.
 pub fn is_pcraft(bytes: &[u8]) -> bool {
-    if !bytes.starts_with(b"PK\x03\x04") {
-        return false;
-    }
-    if bytes.len() >= 30 {
-        let name_len = u16::from_le_bytes([bytes[26], bytes[27]]) as usize;
-        if bytes.get(30..30 + name_len) == Some(b"manifest.json") {
-            return true;
-        }
-    }
-    zip::ZipReader::new(bytes).is_ok_and(|archive| archive.find("manifest.json").is_some())
+    craft_pcraft_bundle::is_pcraft_zip(bytes)
 }
 
 /// Save to an in-memory ZIP bundle (one-shot; use [`PcraftWriter`] for
@@ -242,7 +235,8 @@ pub fn load_bytes_source(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Doc
 
 pub fn load_path_with(path: &Path, opts: &LoadOptions) -> Result<Document> {
     if path.is_dir() {
-        store::load(&store::DirSource { root: path.to_path_buf() }, opts)
+        let source = store::DirSource::new(path, opts)?;
+        store::load(&source, opts)
     } else {
         let bytes = read::read_file(path)?;
         load_from_bytes_with(&bytes, opts)

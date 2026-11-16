@@ -188,3 +188,22 @@ fn hover_over_the_canvas_moves_the_preview() {
     assert!((q[2][0] - 110.0).abs() < 0.5 && (q[2][1] - 100.0).abs() < 0.5, "{q:?}");
     assert_eq!(q[2], q[3]);
 }
+
+/// #13065: a drag that builds no box, which is what a start the snap moved onto its release
+/// point gives, keeps the corners clicked so far, so the next click still finishes the quad.
+#[test]
+fn a_drag_that_makes_no_box_keeps_the_clicked_corners() {
+    let mut app = app();
+    for p in [A, B, C] {
+        click(&mut app, p);
+    }
+    // A straight drag has no area, so `new_box` returns None and no quad replaces the clicks.
+    pointer(&mut app, ToolEvent::Down { x: 60.0, y: 70.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(&mut app, ToolEvent::Move { x: 120.0, y: 70.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(&mut app, ToolEvent::Up { x: 120.0, y: 70.0 }, egui::Modifiers::NONE);
+    assert_eq!(app.ui.perspective_crop, None, "a drag with no area builds no box");
+    assert_eq!(app.pcrop.clicks, vec![A, B, C], "the three clicks stay");
+    click(&mut app, D);
+    assert!(app.pcrop.clicks.is_empty(), "the fourth click still finishes the quad");
+    assert_eq!(app.ui.perspective_crop, Some([A, B, C, D]));
+}
