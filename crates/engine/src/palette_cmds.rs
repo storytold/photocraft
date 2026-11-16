@@ -682,15 +682,21 @@ mod tests {
             };
             session.execute("file.new", mode_params).unwrap();
             session.execute(mode_command, new_params).unwrap();
-            let before = session.active().unwrap().doc.color_table.clone();
+            let (before_doc, before_history) = {
+                let active = session.active().unwrap();
+                (active.doc.clone(), active.history.past_len())
+            };
 
             assert!(!session.is_enabled(FILTER_ID), "{mode:?}");
-            let error =
-                session.execute(FILTER_ID, json!({"paletteSnapshot": {"name": "two", "colors": [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]}})).unwrap_err().to_string();
-            assert!(error.contains("Indexed Color or Bitmap"), "{mode:?}: {error}");
-            let document = &session.active().unwrap().doc;
-            assert_eq!(document.mode, mode);
-            assert_eq!(document.color_table, before);
+            assert!(
+                session
+                    .execute(FILTER_ID, json!({"paletteSnapshot": {"name": "two", "colors": [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]}}))
+                    .is_err(),
+                "{mode:?}"
+            );
+            let active = session.active().unwrap();
+            assert_eq!(active.doc, before_doc, "{mode:?}: failed Palette Map leaves the document unchanged");
+            assert_eq!(active.history.past_len(), before_history, "{mode:?}: failed Palette Map adds no history step");
         }
     }
 
