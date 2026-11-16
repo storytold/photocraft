@@ -172,3 +172,131 @@ fn a_new_press_at_the_same_spot_rebaselines_from_the_shown_values() {
     drag_satin(&mut f, false, [40.0, 0.0], PRESS + 1.0);
     assert_eq!(params(&f, "fx1"), (0.0, 30.0), "(-40, 0) + (10, 0) = (-30, 0)");
 }
+
+/// #14985: a press with no travel keeps fractional values (from an imported file, say) as they
+/// are, and so does a drag that comes back to where it began: nothing was dragged.
+#[test]
+fn no_travel_keeps_fractional_values() {
+    let mut f = fields("satin");
+    set_param(&mut f, "fx1", "angle", json!(90.5));
+    set_param(&mut f, "fx1", "distance", json!(20.75));
+    drag_satin(&mut f, true, [0.0, 0.0], PRESS);
+    assert_eq!(params(&f, "fx1"), (90.5, 20.75));
+    drag_satin(&mut f, false, [30.0, 0.0], PRESS);
+    assert_eq!(params(&f, "fx1"), (145.0, 36.0));
+    drag_satin(&mut f, false, [0.0, 0.0], PRESS);
+    assert_eq!(params(&f, "fx1"), (90.5, 20.75));
+}
+
+mod on_the_canvas {
+    //! #14985 through the canvas: the drag counts in document pixels at every zoom, Shift
+    //! changes nothing, the preview shows the drag while the document keeps its style, and
+    //! Cancel leaves the document as it was.
+    use egui::{Modifiers, PointerButton, Pos2, pos2, vec2};
+    use egui_kittest::Harness;
+    use serde_json::json;
+
+    use crate::PhotocraftApp;
+
+    /// A 400×300 document with a pixel layer at `zoom`, Layer Style open on a Satin page set
+    /// to Angle 90 / Distance 20.
+    fn harness(zoom: f32) -> Harness<'static, PhotocraftApp> {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.sync_views();
+        app.ui.extras.rulers = false;
+        let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::shortcuts::handle(app, &ctx);
+                egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+                crate::dialogs::show(app, &ctx);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(4);
+        let v = &mut h.state_mut().ui.views[0];
+        (v.zoom, v.center, v.fit_pending) = (zoom, [200.0, 150.0], false);
+        crate::layer_style::open(h.state_mut(), Some("satin")).unwrap();
+        let f = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
+        let id = f["selected"].as_str().unwrap().to_string();
+        super::set_param(f, &id, "angle", json!(90.0));
+        super::set_param(f, &id, "distance", json!(20.0));
+        h.run_steps(4);
+        h
+    }
+
+    fn satin(h: &Harness<'static, PhotocraftApp>) -> (f64, f64) {
+        let f = &h.state().ui.dialogs.last().unwrap().fields;
+        let p = &super::entry(f, f["selected"].as_str().unwrap()).unwrap()["params"];
+        (p["angle"].as_f64().unwrap(), p["distance"].as_f64().unwrap())
+    }
+
+    fn step(h: &mut Harness<'static, PhotocraftApp>, e: egui::Event) {
+        h.event(e);
+        h.run_steps(1);
+    }
+
+    /// A press on the free image left of the dialog, moved by `by` screen points, held.
+    fn drag(h: &mut Harness<'static, PhotocraftApp>, by: egui::Vec2, modifiers: Modifiers) {
+        let r = h.state().last_canvas_rect;
+        let a: Pos2 = pos2(r.left() + 60.0, r.center().y);
+        step(h, egui::Event::ModifiersChanged(modifiers));
+        step(h, egui::Event::PointerMoved(a));
+        step(h, egui::Event::PointerButton { pos: a, button: PointerButton::Primary, pressed: true, modifiers });
+        step(h, egui::Event::PointerMoved(a + by * 0.5));
+        step(h, egui::Event::PointerMoved(a + by));
+    }
+
+    #[test]
+    fn a_drag_at_200_percent_counts_in_document_pixels() {
+        let mut h = harness(2.0);
+        drag(&mut h, vec2(60.0, 0.0), Modifiers::NONE);
+        assert_eq!(satin(&h), (146.0, 36.0), "60 screen px at 200 % is 30 px");
+        let mut h = harness(2.0);
+        drag(&mut h, vec2(10.0, -60.0), Modifiers::NONE);
+        assert_eq!(satin(&h), (-116.0, 11.0));
+    }
+
+    #[test]
+    fn shift_changes_nothing() {
+        let mut h = harness(1.0);
+        drag(&mut h, vec2(30.0, 10.0), Modifiers::SHIFT);
+        assert_eq!(satin(&h), (135.0, 42.0), "Shift neither snaps the angle nor changes the result");
+        let mut h = harness(1.0);
+        drag(&mut h, vec2(5.0, -30.0), Modifiers::SHIFT);
+        assert_eq!(satin(&h), (-116.0, 11.0));
+    }
+
+    #[test]
+    fn the_preview_follows_the_drag_and_cancel_leaves_the_document() {
+        let mut h = harness(1.0);
+        drag(&mut h, vec2(30.0, 0.0), Modifiers::NONE);
+        assert_eq!(satin(&h), (146.0, 36.0));
+        let app = h.state();
+        let st = app.session.active().unwrap();
+        let layer = st.active_layer.unwrap();
+        let fx = |doc: &photocraft_doc::Document| doc.layer(layer).unwrap().effects.items.clone();
+        let f = &app.ui.dialogs.last().unwrap().fields;
+        let shown = super::preview_document(&st.doc, &app.session.patterns, f).unwrap();
+        let satin_of = |items: &[photocraft_doc::Effect]| {
+            items.iter().find_map(|e| match e {
+                photocraft_doc::Effect::Satin(s) => Some((s.angle, s.distance)),
+                _ => None,
+            })
+        };
+        assert_eq!(satin_of(&fx(&shown)), Some((146.0, 36.0)), "the preview shows the dragged satin");
+        assert_eq!(satin_of(&fx(&st.doc)), None, "the document is untouched while the dialog is open");
+        let id = app.ui.dialogs.last().unwrap().id;
+        crate::dialogs::cancel(h.state_mut(), id).unwrap();
+        h.run_steps(2);
+        let st = h.state().session.active().unwrap();
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(satin_of(&fx(&st.doc)), None, "Cancel leaves the document as it was");
+    }
+}

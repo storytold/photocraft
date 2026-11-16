@@ -605,6 +605,13 @@ pub fn drag_satin(f: &mut Map<String, Value>, start: bool, total: [f64; 2], pres
         }
     };
     let total = [total[0] - base[0], total[1] - base[1]];
+    // No travel (a plain press, or the pointer back where the drag began) keeps the values
+    // captured at the baseline as they were, fractions included: nothing was dragged.
+    if total == [0.0, 0.0] {
+        set_param(f, &id, "angle", json!(angle));
+        set_param(f, &id, "distance", json!(distance));
+        return;
+    }
     let a = angle.to_radians();
     let (ox, oy) = (-a.cos() * distance + total[0], a.sin() * distance + total[1]);
     let d = ox.hypot(oy);
