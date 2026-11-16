@@ -28,6 +28,7 @@ fn scratch_reuse_preserves_pixels() {
 
 /// Render a layer's own content (no blending into the backdrop yet) into an isolated buffer.
 /// Returns None for layers that operate on the backdrop (adjustments, pass-through groups).
+#[cfg(test)]
 pub(crate) fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buffer> {
     match render_content_with(layer, rect, cx, &InfallibleBufferAlloc) {
         Ok(buffer) => buffer,

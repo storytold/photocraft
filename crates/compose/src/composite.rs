@@ -1,4 +1,4 @@
-use super::content::{channel_weights, empty_in, render_content_with, restore_channels, surface_to_buffer, surface_to_buffer_with};
+use super::content::{channel_weights, empty_in, render_content_with, restore_channels, surface_to_buffer_with};
 use super::ctx::Ctx;
 use super::extents::{effects_frame, mask_k, mask_vals, recycle_mask, shapeless_stroke_bounds};
 use super::fx_cache::effect_maps_with;
@@ -598,14 +598,7 @@ pub fn text_gamma(layer: &Layer) -> f32 {
 
 /// A stroked shape layer with visible clipped layers: Photoshop draws the shape's vector stroke
 /// above the clipped layers, so the base content is the fill alone and the stroke is laid on top
-/// after clipping. See [`split_parts`].
-fn shape_parts(layer: &Layer, clipped: &[Layer], rect: Rect, cx: &Ctx) -> Option<(Buffer, Buffer, Option<Vec<f32>>)> {
-    if !clipped.iter().any(|c| c.visible) {
-        return None;
-    }
-    split_parts(layer, rect, cx)
-}
-
+/// after clipping. See [`split_parts_with`].
 fn shape_parts_with<A: BufferAlloc>(
     layer: &Layer,
     clipped: &[Layer],
@@ -623,13 +616,6 @@ fn shape_parts_with<A: BufferAlloc>(
 /// layers. Fill and stroke are unmasked: the mask applies to them together. Layer effects paint
 /// the fill's interior effects beneath the vector stroke (psd-tools stroke-composite: a colour
 /// overlay leaves the stroke, the stroke effect covers it).
-fn split_parts(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<(Buffer, Buffer, Option<Vec<f32>>)> {
-    let LayerContent::Shape(sh) = &layer.content else { return None };
-    sh.stroke.as_ref()?;
-    let (fs, ss) = shape_split::split(sh, cx.canvas, cx.depth)?;
-    Some((surface_to_buffer(&fs, rect), surface_to_buffer(&ss, rect), mask_vals(layer, rect, cx)))
-}
-
 fn split_parts_with<A: BufferAlloc>(
     layer: &Layer,
     rect: Rect,

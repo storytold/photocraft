@@ -60,7 +60,9 @@ use composite::{composite_stack_at, dissolve_noise};
 #[cfg(test)]
 use content::render_fill;
 pub use content::{RENDER_TILE, channel_weights, fill_frame, layer_shape, render_fill_content, stroke_frame, surface_to_buffer};
-use content::{empty_in, render_content};
+use content::empty_in;
+#[cfg(test)]
+use content::render_content;
 use ctx::{Ctx, prepare_effects};
 #[cfg(test)]
 use ctx::{LayerKeys, PREPARE_DEPTH, effect_layers, prepare_tones};
