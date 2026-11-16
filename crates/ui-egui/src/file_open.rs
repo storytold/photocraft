@@ -327,7 +327,7 @@ impl PhotocraftApp {
             // prompt that is answered later all place the file at its place in the set.
             match self.open_path_placed(abs, None, Some(order)) {
                 Ok(_) => opened += 1,
-                Err(e) => self.open_failed(&display_name(abs), &e),
+                Err(e) => self.open_failed(abs, &e),
             }
         }
         crate::jobs_ui::end_batch(self);
@@ -361,12 +361,23 @@ impl PhotocraftApp {
         true
     }
 
-    /// Show "Couldn't open <name>: <error>" as an error (status bar + notice).
-    pub fn open_failed(&mut self, name: &str, err: &str) {
-        self.failed({
+    /// Report one failed open in an OK alert, naming its source file once. Pass the source path
+    /// when available so its exact prefix can be removed from filesystem read errors too.
+    pub fn open_failed(&mut self, source: &str, err: &str) {
+        let name = display_name(source);
+        let source_prefix = format!("{source}: ");
+        let name_prefix = format!("{name}: ");
+        let reason = err.strip_prefix(&source_prefix).or_else(|| err.strip_prefix(&name_prefix)).unwrap_or(err);
+        let msg = if reason == "codec: unrecognized image format" {
+            crate::i18n::fmt(tl!("Could not open \"{name}\" because PhotoCraft does not recognize this type of file."), &[("name", &name)])
+        } else {
             let template = "Couldn't open {name}: {error}";
-            crate::i18n::fmt(tl!(template), &[("name", name), ("error", err)])
-        });
+            crate::i18n::fmt(tl!(template), &[("name", &name), ("error", reason)])
+        };
+        log::warn!("{msg}");
+        self.ui.status = msg.clone();
+        self.ui.status_error = true;
+        self.ui.open_dialog(crate::state::DialogKind::Error, serde_json::json!({"message": msg}).as_object().cloned().unwrap_or_default());
     }
 
     /// Show "Couldn't place <name>: <error>" as an error (status bar + notice).
@@ -712,3 +723,6 @@ fn same_file(p: &str, path: &str, canon: Option<&std::path::Path>) -> bool {
 mod dialog_order_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod unreadable_alert_tests;
