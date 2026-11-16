@@ -56,6 +56,11 @@ fn context_choose(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Ou
         return mode_menu_choose(app, ctx, id);
     }
     let Some(menu) = app.ui.canvas_tool_menu.as_ref() else { return err("no canvas context menu is open") };
+    // A menu opened on another document closes, and its row runs nowhere (#12359).
+    if !crate::canvas_tool_menu::opened_here(app, menu) {
+        app.ui.canvas_tool_menu = None;
+        return err("the canvas context menu was opened on another document; it is now closed");
+    }
     if !crate::canvas_tool_menu::available(app, menu, id) {
         return err("context action is unavailable");
     }
