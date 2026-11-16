@@ -198,6 +198,8 @@ fn remember(app: &mut PhotocraftApp, choice: JpegChoice) {
 pub struct Prompt {
     /// The document that requested the save, even if tabs change while this is open.
     doc: photocraft_doc::DocId,
+    /// The first visible frame gives the quality field keyboard focus.
+    focus_quality_on_open: bool,
     /// Where the document goes.
     pub path: String,
     /// Quality, 0–12.
@@ -237,7 +239,7 @@ pub fn park_at(app: &mut PhotocraftApp, path: String, copy: bool, record: &'stat
     }
     let doc = app.active_doc_id()?;
     let Start { quality, own_quality, format } = start;
-    app.jpeg_options = Some(Prompt { doc, path, quality: quality.min(MAX_QUALITY), format, own_quality, copy, record });
+    app.jpeg_options = Some(Prompt { doc, focus_quality_on_open: true, path, quality: quality.min(MAX_QUALITY), format, own_quality, copy, record });
     Ok(())
 }
 
@@ -255,7 +257,29 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         crate::widgets::section_label(ui, tl!("Image Options"));
         ui.horizontal(|ui| {
             let quality_caption = ui.label(tl!("Quality"));
-            ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1)).labelled_by(quality_caption.id);
+            // The field sits in its own scope so the focus request names the field's own id (a DragValue
+            // has no `.id()` of its own); it does not make that id independent of the widgets before it.
+            ui.push_id("jpeg-quality", |ui| {
+                let quality_id = ui.next_auto_id();
+                if !ui.is_sizing_pass() && std::mem::take(&mut p.focus_quality_on_open) {
+                    ui.memory_mut(|m| m.request_focus(quality_id));
+                }
+                // Up and Down step by one quality level while pointer scrubbing stays fine. Left and Right
+                // are left alone: a focused DragValue is a text field and they move its caret.
+                if ui.is_enabled() && ui.memory(|m| m.has_focus(quality_id)) {
+                    let (up, down) = ui.input_mut(|input| {
+                        let n = |input: &mut egui::InputState, key| input.count_and_consume_key(egui::Modifiers::NONE, key);
+                        (n(input, egui::Key::ArrowUp), n(input, egui::Key::ArrowDown))
+                    });
+                    if up != 0 || down != 0 {
+                        // egui may already have queued a focus move for the consumed arrow.
+                        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+                        let stepped = usize::from(quality).saturating_add(up).saturating_sub(down);
+                        quality = u8::try_from(stepped).map_or(MAX_QUALITY, |q| q.min(MAX_QUALITY));
+                    }
+                }
+                ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1)).labelled_by(quality_caption.id);
+            });
             // Photoshop's presets: picking one sets the quality it starts at.
             let preset = craft_ui::ComboBox::from_id_salt("jpeg-quality-preset").selected_text(quality_label(quality)).show_ui(ui, |ui| {
                 for q in [3, 5, 8, 10] {
