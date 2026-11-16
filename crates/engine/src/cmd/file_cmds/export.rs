@@ -6,11 +6,24 @@ use super::{ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Rect
 #[path = "layers_to_files_index_tests.rs"]
 mod layers_to_files_index_tests;
 
+#[cfg(test)]
+#[path = "layers_to_files_destination_tests.rs"]
+mod layers_to_files_destination_tests;
+
 // ---------- Export ----------
 
 pub(super) fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.layersToFiles";
-    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
+    // The destination (#13969), before the first write: empty asks for one (the files would land
+    // in the working folder), and a folder that doesn't exist is refused, never created.
+    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd)).unwrap_or_default().to_string();
+    if dir.trim().is_empty() {
+        return Err(EngineError::Other("Please specify destination.".into()));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if matches!(std::path::Path::new(&dir).try_exists(), Ok(false)) {
+        return Err(EngineError::Other(format!("Destination does not exist: {dir}")));
+    }
     let report = export_layers_report_with(s, p, |name, bytes| write_file(&join(&dir, name), bytes))?;
     let files: Vec<String> = report.files.iter().map(|name| join(&dir, name)).collect();
     Ok(json!({"files": files, "skipped": report.skipped}))

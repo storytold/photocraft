@@ -543,7 +543,10 @@ fn doc_export_layers_reports_skips_in_workspace_and_trusted_sessions() {
     for trusted in [false, true] {
         let base = std::env::temp_dir().join(format!("pc-export-skips-{}-{trusted}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        // Layers to Files writes only into an existing folder (#13969).
+        for folder in ["out", "all"] {
+            std::fs::create_dir_all(base.join(folder)).unwrap();
+        }
         let mut h =
             if trusted { Headless::trusted_local() } else { Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&base), Some(&base)).unwrap()) };
         h.handle("doc.new", json!({"width": 4, "height": 4, "background": "white", "name": "card"})).unwrap();
