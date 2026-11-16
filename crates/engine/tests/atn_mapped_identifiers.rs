@@ -694,6 +694,100 @@ fn pass_through_uses_the_string_identifier_and_replays_on_a_group() {
     }
 }
 
+fn relative_transform(horizontal: D, vertical: D) -> Descriptor {
+    Descriptor::new("null")
+        .with("null", D::Reference(vec![ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") }]))
+        .with("FTcs", enm("QCSt", "Qcsa"))
+        .with("Ofst", D::Descriptor(Descriptor::new("Ofst").with("Hrzn", horizontal).with("Vrtc", vertical)))
+        .with("Wdth", D::UnitFloat { unit: *b"#Prc", value: 50.0 })
+        .with("Hght", D::UnitFloat { unit: *b"#Prc", value: 50.0 })
+        .with("Intr", enm("Intp", "Nrst"))
+}
+
+#[test]
+fn recorded_transform_zero_points_import_and_export_as_zero_pixels() {
+    for (unit_x, dx, unit_y, dy) in [(*b"#Rlt", 0.0, *b"#Rlt", -0.0), (*b"#Rlt", 0.0, *b"#Pxl", 2.0), (*b"#Pxl", 3.5, *b"#Rlt", 0.0)] {
+        for selection in [false, true] {
+            let mut d = relative_transform(D::UnitFloat { unit: unit_x, value: dx }, D::UnitFloat { unit: unit_y, value: dy });
+            if selection {
+                d.items.iter_mut().find(|(key, _)| key.is("null")).unwrap().1 =
+                    D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]);
+            }
+            let action = recorded(AtnEvent::name("transform"), d);
+            let id = if selection { "select.transformSelection" } else { "edit.transform" };
+            assert_eq!(action.steps[0].0, id);
+            let params = &action.steps[0].1;
+            assert_eq!(params["dx"].as_f64(), Some(dx));
+            assert_eq!(params["dy"].as_f64(), Some(dy));
+            assert_eq!(params["scaleX"], 50);
+            assert_eq!(params["scaleY"], 50);
+            assert_eq!(params["interpolation"], "nearest");
+            let written = saved(&action).descriptor.unwrap();
+            let Some(D::Descriptor(offset)) = written.get("Ofst") else { panic!("offset lost") };
+            for (key, expected) in [("Hrzn", dx), ("Vrtc", dy)] {
+                assert!(matches!(offset.get(key), Some(D::UnitFloat { unit, value }) if unit == b"#Pxl" && *value == expected));
+            }
+            assert_eq!(recorded(AtnEvent::Code(*b"Trnf"), written).steps, action.steps);
+        }
+    }
+}
+
+#[test]
+fn recorded_transform_zero_points_replay_independently_of_depth_and_resolution() {
+    let point =
+        recorded(AtnEvent::Code(*b"Trnf"), relative_transform(D::UnitFloat { unit: *b"#Rlt", value: 0.0 }, D::UnitFloat { unit: *b"#Rlt", value: 0.0 }));
+    let pixel =
+        recorded(AtnEvent::Code(*b"Trnf"), relative_transform(D::UnitFloat { unit: *b"#Pxl", value: 0.0 }, D::UnitFloat { unit: *b"#Pxl", value: 0.0 }));
+    let setup = |depth, dpi| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":8,"height":8,"depth":depth,"background":"transparent"})).unwrap();
+        s.execute("image.imageSize", json!({"resolution":dpi,"resample":"none"})).unwrap();
+        s.execute("select.rect", json!({"x":1,"y":2,"width":4,"height":4})).unwrap();
+        s.execute("edit.fill", json!({"contents":"color","color":"#ff0000"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s
+    };
+    let pixels = |s: &Session| {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(st.doc.bounds())
+    };
+    for depth in [8, 16, 32] {
+        for dpi in [72, 300] {
+            let mut actual = setup(depth, dpi);
+            let mut expected = setup(depth, dpi);
+            let before = pixels(&actual);
+            replay_saved(&mut actual, &point);
+            replay_saved(&mut expected, &pixel);
+            assert_eq!(pixels(&actual), pixels(&expected), "{depth} bits, {dpi} dpi");
+            assert_ne!(pixels(&actual), before, "the transform must actually scale the layer");
+            let st = actual.active().unwrap();
+            assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds().size(), photocraft_geom::Size::new(2, 2));
+            actual.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(pixels(&actual), before);
+        }
+    }
+}
+
+#[test]
+fn recorded_transform_zero_points_keep_nonzero_or_unrepresentable_offsets() {
+    for value in [
+        D::UnitFloat { unit: *b"#Rlt", value: 1.0 },
+        D::UnitFloat { unit: *b"#Rlt", value: -2.842_170_943_040_401e-14 },
+        D::UnitFloat { unit: *b"#Rlt", value: f64::NAN },
+        D::UnitFloat { unit: *b"#Pxl", value: f64::INFINITY },
+        D::UnitFloat { unit: *b"#Prc", value: 0.0 },
+        D::Double(0.0),
+    ] {
+        for x_axis in [false, true] {
+            let zero = D::UnitFloat { unit: *b"#Rlt", value: 0.0 };
+            let d = if x_axis { relative_transform(value.clone(), zero) } else { relative_transform(zero, value.clone()) };
+            let action = recorded(AtnEvent::Code(*b"Trnf"), d.clone());
+            assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{value:?}");
+            assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+        }
+    }
+}
+
 fn canvas() -> Descriptor {
     Descriptor::new("null")
         .with("Wdth", D::UnitFloat { unit: *b"#Pxl", value: 6.0 })

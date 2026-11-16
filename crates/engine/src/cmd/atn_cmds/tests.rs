@@ -1957,7 +1957,7 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     let close_yes = item("Cls ", "Close", Some(desc("null").with("Svng", enm("YsN ", "Ys  "))));
     let close_no = item("close", "Close", Some(desc("null").with("Svng", enm("YsN ", "N   "))));
     // A layer only moved is a translation; scaled, it is the relative Free Transform; the
-    // selection's frame goes to Transform Selection; points (not pixels) stay unsupported.
+    // selection's frame goes to Transform Selection; nonzero point offsets stay unsupported.
     let moved = desc("null")
         .with("null", target_ref("Lyr "))
         .with("FTcs", enm("QCSt", "Qcsa"))

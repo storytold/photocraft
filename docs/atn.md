@@ -511,8 +511,9 @@ condition IDs remain kept Photoshop steps with their original descriptors.
 
 ### Settings retained by mapped events
 
-- Transform keeps its recorded `FTcs` reference point. Show with `TglO` true maps to
-  `layer.showOnly`; repeating it restores the other layers' visibility.
+- Transform keeps its recorded `FTcs` reference point. Exact zero offsets in points (`#Rlt`)
+  normalize to zero pixels on export; nonzero point offsets remain kept steps.
+  Show with `TglO` true maps to `layer.showOnly`; repeating it restores the other layers' visibility.
 - Make keeps top-level group names, new-layer clipping (`Usng.Grup`) and adjustment colour labels
   (`Usng.Clr `). Layer via Copy / Cut keeps names, blend modes, opacity and colour labels.
 - Loading another layer's transparency keeps its source reference. Background property references

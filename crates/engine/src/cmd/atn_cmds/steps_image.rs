@@ -1,5 +1,5 @@
 use super::descriptors::{
-    PX, Target, ang, boolean, class, code, desc, enm, enumerated, get_bool, get_enum, get_list, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref,
+    PT, PX, Target, ang, boolean, class, code, desc, enm, enumerated, get_bool, get_enum, get_list, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref,
     layer_target, long, num, pct, px, ref_class, target, trimmed,
 };
 use super::events::pixel_target;
@@ -32,8 +32,11 @@ pub(super) fn transform_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let mut p = Map::new();
     if let Some(o) = get_obj(d, "Ofst") {
-        let in_px = |k: &str| matches!(o.get(k), Some(D::UnitFloat { unit: PX, .. }));
-        if !in_px("Hrzn") || !in_px("Vrtc") {
+        // Exact zero points need no playback DPI conversion; every nonzero point offset stays kept.
+        // Non-finite pixels must not fall through to the missing-number defaults as zero.
+        let representable =
+            |k: &str| matches!(o.get(k), Some(D::UnitFloat { unit, value }) if value.is_finite() && (*unit == PX || (*unit == PT && *value == 0.0)));
+        if !representable("Hrzn") || !representable("Vrtc") {
             return unsupported;
         }
         if let Some(x) = get_num(o, "Hrzn") {
