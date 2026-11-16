@@ -17,8 +17,12 @@ const EDIT: &str = "Edit Toolbar…";
 fn harness(hidden: &[&str]) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.edit_prefs(|p| p.toolbar.hidden = hidden.iter().map(|h| (*h).to_string()).collect());
+    harness_for(app, vec2(400.0, 1800.0))
+}
+
+fn harness_for(mut app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
     app.ui.tool = Tool::Brush;
-    let mut h = Harness::builder().with_size(vec2(400.0, 1800.0)).build_ui_state(|ui, app| toolbar(app, ui), app);
+    let mut h = Harness::builder().with_size(size).build_ui_state(|ui, app| toolbar(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(2);
     h
@@ -70,8 +74,9 @@ fn rows(h: &Harness<'static, PhotocraftApp>) -> Vec<Pos2> {
 #[test]
 fn extra_tools_are_the_hidden_tools_in_toolbar_order() {
     let hidden = ["count", "Frame", "not a tool", "HorizontalTypeMask"].map(String::from);
-    assert_eq!(extra_tools(&hidden), vec![Tool::Frame, Tool::Count, Tool::HorizontalTypeMask]);
-    assert!(extra_tools(&[]).is_empty());
+    let custom = |hidden: &[String]| photocraft_engine::prefs::ToolbarCustomization { hidden: hidden.to_vec(), ..Default::default() };
+    assert_eq!(extra_tools(&custom(&hidden)), vec![Tool::Frame, Tool::Count, Tool::HorizontalTypeMask]);
+    assert!(extra_tools(&custom(&[])).is_empty());
     let extras = [Tool::Frame, Tool::Count];
     assert_eq!(extras_slot_tool(Tool::Brush, &[], &extras), Some(Tool::Frame), "the first extra tool when none was used yet");
     assert_eq!(extras_slot_tool(Tool::Brush, &[Tool::Brush, Tool::Count, Tool::Frame], &extras), Some(Tool::Count), "the one used last");
@@ -161,4 +166,57 @@ fn without_extra_tools_the_flyout_has_only_edit_toolbar() {
     h.run_steps(1);
     assert!(!flyout_open(&h));
     assert!(h.state().ui.dialogs.is_empty());
+}
+
+/// CodeRabbit on #14653: the slot reads the toolbar's resolved layout. `edit.toolbar` with `extras`
+/// moves Brush out of the toolbar into the stored extras and clears `hidden`, so a slot that read only
+/// `hidden` found no extra tool and Brush was in neither place.
+#[test]
+fn a_tool_edit_toolbar_stored_in_the_extras_reaches_the_slot() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("edit.toolbar", serde_json::json!({"extras": [["Brush"]]})).unwrap();
+    assert!(app.session.prefs().toolbar.hidden.is_empty(), "the writer clears `hidden`");
+    assert_eq!(extra_tools(&app.session.prefs().toolbar), vec![Tool::Brush]);
+    let mut h = harness_for(app, vec2(400.0, 1800.0));
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(2);
+    let tip = tool_tip(Tool::Brush);
+    let more = h.get_by_label(&tip);
+    assert_eq!(more.accesskit_node().toggled(), Some(Toggled::True), "the slot shows Brush, the current extra tool");
+}
+
+/// CodeRabbit on #14653: with 40 extra tools the flyout (41 rows of 26 points) is taller than a 600 point
+/// window. It stays inside the window and scrolls, and its last tool can still be picked.
+#[test]
+fn a_flyout_taller_than_the_window_scrolls_and_reaches_the_last_tool() {
+    let tools: Vec<Tool> = crate::panels::toolbar::layout_order(&Default::default()).into_iter().take(40).collect();
+    assert_eq!(tools.len(), 40);
+    let hidden: Vec<String> = tools.iter().map(|t| format!("{t:?}")).collect();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.edit_prefs(|p| p.toolbar.hidden = hidden.clone());
+    let extras = extra_tools(&app.session.prefs().toolbar);
+    assert_eq!(extras.len(), 40, "every hidden tool is an extra tool");
+    let mut h = harness_for(app, vec2(400.0, 600.0));
+    // Brush is current: when it is one of the extras the slot shows it, else "•••".
+    let label = if extras.contains(&Tool::Brush) { tool_tip(Tool::Brush) } else { EDIT.to_string() };
+    let at = slot(&h, &label);
+    press(&mut h, at, PointerButton::Secondary);
+    let area = h.ctx.memory(|m| m.area_rect(egui::Id::unique("toolbar-more-flyout"))).expect("flyout is open");
+    assert!(h.ctx.content_rect().contains_rect(area), "the flyout fits the window: {area:?}");
+    // Scroll to the end, then pick the bottom row.
+    h.event(Event::PointerMoved(area.center()));
+    h.run_steps(2);
+    h.event(Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, -5000.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Default::default(),
+    });
+    h.run_steps(12);
+    let last = rows(&h).pop().expect("a visible row");
+    press(&mut h, last, PointerButton::Primary);
+    // A 600 point window shows about 21 rows unscrolled; a tool from the end of the 40 was out of reach before.
+    let picked = extras.iter().position(|t| *t == h.state().ui.tool).expect("an extra tool was picked");
+    assert!(picked >= 25, "a tool from the end of the list was picked: row {picked} of {}", extras.len());
 }

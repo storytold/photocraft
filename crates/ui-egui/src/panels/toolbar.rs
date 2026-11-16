@@ -160,11 +160,12 @@ pub(crate) fn more_flyout_open(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<bool>(more_flyout_id())).unwrap_or(false)
 }
 
-/// Edit › Toolbar's extra tools: the tools hidden from the toolbar, in toolbar order. Only the
-/// "…" slot and their letters reach them.
-pub(crate) fn extra_tools(hidden: &[String]) -> Vec<Tool> {
-    let hidden: Vec<Tool> = hidden.iter().map(String::as_str).filter_map(Tool::from_name).collect();
-    TOOL_SECTIONS.iter().flat_map(|section| section.iter()).flat_map(|slot| slot.iter()).copied().filter(|tool| hidden.contains(tool)).collect()
+/// Edit › Toolbar's extra tools, as the toolbar's resolved layout has them (`tool_layout`): the
+/// extras Edit › Toolbar stored, then the tools hidden from the toolbar in toolbar order. The
+/// toolbar and this slot read the same layout, so a tool moved to the extras by `edit.toolbar`
+/// (which clears `hidden`) is not lost from both. Only the "…" slot and their letters reach them.
+pub(crate) fn extra_tools(custom: &photocraft_engine::prefs::ToolbarCustomization) -> Vec<Tool> {
+    tool_layout(custom).1.into_iter().flatten().collect()
 }
 
 /// The extra tool a click on the "…" slot selects: the current tool when it is one, else the
@@ -205,39 +206,48 @@ fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::R
             let width = |text: &str| ui.painter().layout_no_wrap(text.to_string(), egui::FontId::proportional(12.5), t.text).size().x;
             let label_w = extras.iter().map(|tool| width(tl!(tool.label()))).fold(width(edit), f32::max);
             let fw = (label_w + 42.0 + 40.0).max(180.0);
-            let mut chosen = None;
-            // The "Edit Toolbar…" row, then one row per extra tool, as in a tool flyout.
-            for row in std::iter::once(None).chain(extras.iter().copied().map(Some)) {
-                let (r, resp) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
-                let (icon, label) = match row {
-                    Some(tool) => (icons::tool_icon(tool), tl!(tool.label())),
-                    None => ("ellipsis", edit),
-                };
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-                if resp.hovered() {
-                    ui.painter().rect_filled(r, 3.0, t.hover);
-                }
-                if row == Some(app.ui.tool) {
-                    ui.painter().rect_filled(Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(4.0, 4.0)), 0.0, t.text);
-                }
-                icons::paint(ui, Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(18.0, 18.0)), icon, 14.0, t.icon);
-                ui.painter().text(pos2(r.left() + 42.0, r.center().y), Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), t.text);
-                if let Some(tool) = row
-                    && let Some(sc) = crate::tool_shortcuts::shortcut(app, tool)
-                {
-                    ui.painter().text(
-                        pos2(r.right() - 8.0, r.center().y),
-                        Align2::RIGHT_CENTER,
-                        crate::shortcuts::pretty(&sc),
-                        egui::FontId::proportional(12.0),
-                        t.text_dim,
-                    );
-                }
-                if resp.clicked() {
-                    chosen = Some(row.map_or(MoreRow::EditToolbar, MoreRow::Tool));
-                }
-            }
-            chosen
+            // As tall as the window allows (the area is kept on screen), then it scrolls, so every
+            // extra tool stays reachable however many there are.
+            let room = (ui.ctx().content_rect().height() - 48.0).max(120.0);
+            egui::ScrollArea::vertical()
+                .max_height(room)
+                .auto_shrink([true, true])
+                .show(ui, |ui| {
+                    let mut chosen = None;
+                    // The "Edit Toolbar…" row, then one row per extra tool, as in a tool flyout.
+                    for row in std::iter::once(None).chain(extras.iter().copied().map(Some)) {
+                        let (r, resp) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
+                        let (icon, label) = match row {
+                            Some(tool) => (icons::tool_icon(tool), tl!(tool.label())),
+                            None => ("ellipsis", edit),
+                        };
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+                        if resp.hovered() {
+                            ui.painter().rect_filled(r, 3.0, t.hover);
+                        }
+                        if row == Some(app.ui.tool) {
+                            ui.painter().rect_filled(Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(4.0, 4.0)), 0.0, t.text);
+                        }
+                        icons::paint(ui, Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(18.0, 18.0)), icon, 14.0, t.icon);
+                        ui.painter().text(pos2(r.left() + 42.0, r.center().y), Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), t.text);
+                        if let Some(tool) = row
+                            && let Some(sc) = crate::tool_shortcuts::shortcut(app, tool)
+                        {
+                            ui.painter().text(
+                                pos2(r.right() - 8.0, r.center().y),
+                                Align2::RIGHT_CENTER,
+                                crate::shortcuts::pretty(&sc),
+                                egui::FontId::proportional(12.0),
+                                t.text_dim,
+                            );
+                        }
+                        if resp.clicked() {
+                            chosen = Some(row.map_or(MoreRow::EditToolbar, MoreRow::Tool));
+                        }
+                    }
+                    chosen
+                })
+                .inner
         })
     });
     match area.inner.inner {
@@ -542,7 +552,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 // any selected slot; a left or right click selects its last-used extra tool (the
                 // right click also opens the flyout). Without extra tools a left click opens Edit
                 // Toolbar.
-                let extras = extra_tools(&app.session.prefs().toolbar.hidden);
+                let extras = extra_tools(&app.session.prefs().toolbar);
                 let extra = extras.contains(&app.ui.tool).then_some(app.ui.tool);
                 let more = match extra {
                     Some(tool) => {
