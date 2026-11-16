@@ -126,7 +126,11 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
         let mut save = save;
         let depth = one.depth;
         let flattens = match format.as_str() {
-            "tif" | "tiff" => depth != photocraft_doc::SampleType::F32,
+            // ZIP- (and JPEG-) compressed TIFF files are not measured and keep today's output.
+            "tif" | "tiff" => {
+                depth != photocraft_doc::SampleType::F32
+                    && matches!(save.tiff_compression, None | Some(photocraft_codecs::TiffCompression::None | photocraft_codecs::TiffCompression::Lzw))
+            }
             "bmp" | "tga" | "targa" => depth == photocraft_doc::SampleType::U8,
             _ => false,
         };

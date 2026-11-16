@@ -112,3 +112,17 @@ fn a_16_bit_targa_keeps_its_transparency() {
     assert_eq!(n, 4);
     assert_eq!(px[0][3], 0, "transparent outside the layer, as before the change");
 }
+
+/// CodeRabbit on #15205: TIFF with ZIP compression is not measured and keeps today's output (no white layer: the
+/// transparent half of the layer stays transparent, with an alpha channel); LZW and none are flattened as before.
+#[test]
+fn a_zip_compressed_tiff_is_not_flattened() {
+    let s = session();
+    let files = export(&s, json!({"format": "tiff", "tiffCompression": "zip"}));
+    let (_, tif) = files.iter().find(|(n, _)| n.contains("Blue Half")).unwrap();
+    let (_, px, _) = rgba(tif);
+    assert_eq!(px[0][3], 0, "transparent outside the layer");
+    let files = export(&s, json!({"format": "tiff", "tiffCompression": "lzw"}));
+    let (_, tif) = files.iter().find(|(n, _)| n.contains("Blue Half")).unwrap();
+    assert_eq!(rgba(tif).1[0], [255, 255, 255, 255], "LZW is flattened on white");
+}
