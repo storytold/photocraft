@@ -304,3 +304,47 @@ fn unmeasured_geometric_adaptation_keeps_todays_fill() {
         check_unmeasured(what, &opts, &want);
     }
 }
+
+#[test]
+fn measured_auto_area_is_the_rectangular_one() {
+    // What the measured Auto and Rectangular fills above rest on: on this document Auto keeps the
+    // whole window, as in the reference application.
+    let (img, hole, ww) = window_buffers();
+    assert_eq!(auto_sampling(ww, 400, 3, &img, &hole), hole.iter().map(|h| !h).collect::<Vec<bool>>());
+}
+
+/// #14191 marks Auto on a document where its content-based choice differs from Rectangular as not
+/// measured, so that fill keeps today's 7x7 patch even with the measured options. The document: the
+/// measured one with a white column 40 px wide at x 440 to 480 in the window, which Auto leaves
+/// out. Today's fill is the completion with [`CompleteParams`]' default radius on the same roles.
+#[test]
+fn auto_fill_whose_area_differs_from_rectangular_keeps_todays_patch_radius() {
+    let (mut img, hole, ww) = window_buffers();
+    let column = |i: usize| (440..480).contains(&(window().x0 as usize + i % ww));
+    for (i, px) in img.chunks_mut(3).enumerate() {
+        if column(i) {
+            px.copy_from_slice(&[250.0 / 255.0; 3]);
+        }
+    }
+    let source = auto_sampling(ww, 400, 3, &img, &hole);
+    let rectangular: Vec<bool> = hole.iter().map(|h| !h).collect();
+    assert_ne!(source, rectangular, "Auto must choose an area other than the Rectangular one here");
+    let opts = FillOptions::default();
+    let out = fill(ww, 400, 3, &img, &hole, &source, &opts);
+    let roles: Vec<Px> = (0..ww * 400)
+        .map(|i| {
+            if hole[i] {
+                Px::Hole
+            } else if source[i] {
+                Px::Source
+            } else {
+                Px::Known
+            }
+        })
+        .collect();
+    let params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+    assert_eq!(params.patch_radius, 3, "today's radius");
+    let today = complete_masked(ww, 400, 3, &img, &roles, &params, &Interrupt::NONE).unwrap().unwrap();
+    let moved = out.iter().zip(&today).filter(|(a, b)| a != b).count();
+    assert_eq!(moved, 0, "{moved} channel values differ from today's radius-3 fill");
+}

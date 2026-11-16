@@ -249,14 +249,21 @@ pub fn fill_owned(
 /// 20 px stripes: the default 7x7 patch fits inside one stripe or inside one band gap, so it
 /// carries no phase information and the completion decides from colour alone and runs one region
 /// into the other. An 11x11 patch covers a feature and the one next to it, which is what keeps
-/// their phase through the hole. Every other option set is marked "not measured" in #14191 and
-/// keeps [`CompleteParams`]' default radius.
+/// their phase through the hole. Every other option set, and a sampling area other than the
+/// Rectangular one, is marked "not measured" in #14191 and keeps [`CompleteParams`]' default radius.
 const MEASURED_STRUCTURE_PATCH_RADIUS: usize = 5;
 
 /// Whether `opts` holds the option set #14191 measured on its test document: Default colour
 /// adaptation, no rotation, no scale and no mirror.
 fn structure_measured(opts: &FillOptions) -> bool {
     opts.color_adaptation == color_level("default") && opts.rotations.is_empty() && !opts.scale && !opts.mirror
+}
+
+/// Whether `source` is the Rectangular sampling area of the buffer: every pixel outside the hole.
+/// #14191 measured Rectangular, and Auto where it keeps that same area; Auto where its
+/// content-based choice differs (or any other area) is not measured.
+fn rectangular_area(hole: &[bool], source: &[bool]) -> bool {
+    hole.iter().zip(source).all(|(h, s)| *h || *s)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -277,7 +284,7 @@ fn fill_cow(
         return Ok(img.into_owned());
     }
     let mut params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
-    if structure_measured(opts) {
+    if structure_measured(opts) && rectangular_area(hole, source) {
         params.patch_radius = MEASURED_STRUCTURE_PATCH_RADIUS;
     }
     let gap = 2 * params.patch_radius + 2;
