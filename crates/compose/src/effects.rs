@@ -250,4 +250,7 @@ impl FxMaps {
 mod tests;
 
 #[cfg(test)]
+mod outer_glow_range_one_tests;
+
+#[cfg(test)]
 mod satin_size_one_tests;
