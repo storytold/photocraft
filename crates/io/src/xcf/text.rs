@@ -29,6 +29,50 @@ thread_local! {
     static MARKUP_ATTRIBUTE_VISITS_DONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MARKUP_ATTRIBUTE_BYTES_DONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+// A file may contain many aliases of the same optional configuration. Failed
+// translations still spent parse/attribute work, independently of report storage.
+// Match the existing 32 MiB metadata allowance: at most 32 MAX_STRING-sized
+// configurations reach parsing, including failures and aliases. Attribute work
+// separately admits eight full markup allowances across the file. These are
+// deterministic work bounds, not a wall-clock guarantee or retained-storage cap.
+const FILE_TEXT_CONFIG_BYTES: usize = super::MAX_METADATA_BYTES;
+
+struct AttributeWork {
+    visits_left: usize,
+    bytes_left: usize,
+}
+
+pub(super) struct DecodeWork {
+    config_bytes_left: usize,
+    attributes: AttributeWork,
+}
+
+impl Default for DecodeWork {
+    fn default() -> Self {
+        Self {
+            config_bytes_left: FILE_TEXT_CONFIG_BYTES,
+            attributes: AttributeWork { visits_left: 8 * MARKUP_ATTRIBUTE_VISITS, bytes_left: 8 * MARKUP_ATTRIBUTE_BYTES },
+        }
+    }
+}
+
+impl DecodeWork {
+    fn charge_config(&mut self, length: usize) -> Result<()> {
+        self.config_bytes_left = self
+            .config_bytes_left
+            .checked_sub(length)
+            .ok_or_else(|| crate::IoError::Unsupported("document text configuration source-work allowance exhausted".into()))?;
+        #[cfg(test)]
+        TEXT_CONFIG_PARSES.with(|count| count.set(count.get().saturating_add(1)));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEXT_CONFIG_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 // Shared across all optional point-origin layouts in one import. Costs are
 // scalars + 16 per style run + 32 per logical line, never refunded after work.
 pub(super) const POINT_LAYOUT_WORK_UNITS: usize = 1 << 20;
@@ -47,6 +91,8 @@ mod attribute_visit_review_tests;
 mod diagnostic_review_tests;
 #[cfg(test)]
 mod feature_settings_review_tests;
+#[cfg(test)]
+mod file_work_review_tests;
 #[cfg(test)]
 mod literal_profile_review_tests;
 #[cfg(test)]
@@ -471,6 +517,7 @@ pub(super) fn decode(data: &[u8], dpi: f32, offset: (i32, i32)) -> Result<Decode
 }
 
 /// None preserves saved pixels when optional point-origin measurement is not admitted.
+#[cfg(test)]
 pub(super) fn decode_with_interrupt(
     data: &[u8],
     dpi: f32,
@@ -478,10 +525,22 @@ pub(super) fn decode_with_interrupt(
     ctl: &photocraft_raster::Interrupt<'_>,
     work_left: &mut usize,
 ) -> Result<Option<DecodedText>> {
+    decode_with_work(data, dpi, offset, ctl, work_left, &mut DecodeWork::default())
+}
+
+pub(super) fn decode_with_work(
+    data: &[u8],
+    dpi: f32,
+    offset: (i32, i32),
+    ctl: &photocraft_raster::Interrupt<'_>,
+    work_left: &mut usize,
+    decode_work: &mut DecodeWork,
+) -> Result<Option<DecodedText>> {
     ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     if data.len() > super::MAX_STRING || !dpi.is_finite() || dpi <= 0.0 {
         return Err(invalid("text configuration size or DPI is invalid"));
     }
+    decode_work.charge_config(data.len())?;
     let data = data.strip_suffix(&[0]).unwrap_or(data);
     let mut parser = Parser { bytes: data, at: 0, nodes: 0 };
     let mut fields = Vec::new();
@@ -685,7 +744,7 @@ pub(super) fn decode_with_interrupt(
                 return Err(invalid("duplicate markup font identity"));
             }
         }
-        let (text, runs) = markup_runs(source, &style, &fonts, dpi, &mut notes)?;
+        let (text, runs) = markup_runs_in_file(source, &style, &fonts, dpi, &mut notes, &mut decode_work.attributes)?;
         layer.text = text;
         layer.runs = runs;
     } else {
@@ -758,6 +817,7 @@ pub(super) fn decode_gdyntext(data: &[u8], dpi: f32, offset: (i32, i32)) -> Resu
         .ok_or_else(|| crate::IoError::Unsupported("point text exceeds the bounded origin-layout allowance".into()))
 }
 
+#[cfg(test)]
 pub(super) fn decode_gdyntext_with_interrupt(
     data: &[u8],
     dpi: f32,
@@ -765,10 +825,22 @@ pub(super) fn decode_gdyntext_with_interrupt(
     ctl: &photocraft_raster::Interrupt<'_>,
     work_left: &mut usize,
 ) -> Result<Option<DecodedText>> {
+    decode_gdyntext_with_work(data, dpi, offset, ctl, work_left, &mut DecodeWork::default())
+}
+
+pub(super) fn decode_gdyntext_with_work(
+    data: &[u8],
+    dpi: f32,
+    offset: (i32, i32),
+    ctl: &photocraft_raster::Interrupt<'_>,
+    work_left: &mut usize,
+    decode_work: &mut DecodeWork,
+) -> Result<Option<DecodedText>> {
     ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     if data.len() > super::MAX_STRING || !dpi.is_finite() || dpi <= 0. {
         return Err(invalid("invalid legacy text size or DPI"));
     }
+    decode_work.charge_config(data.len())?;
     let source = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(data)).map_err(|_| invalid("legacy text configuration is not UTF-8 escaped data"))?;
     let source = source.strip_prefix("GDT10{").and_then(|source| source.strip_suffix('}')).ok_or_else(|| invalid("legacy text magic/framing is invalid"))?;
     let fields: Vec<_> = source.split("}{").take(9).collect();
@@ -1107,18 +1179,19 @@ struct InheritedMarkupAttributes<'a> {
     overrides_face: bool,
 }
 
-struct MarkupWork {
+struct MarkupWork<'a> {
     visits_left: usize,
     bytes_left: usize,
+    shared: Option<&'a mut AttributeWork>,
 }
 
-impl MarkupWork {
+impl<'a> MarkupWork<'a> {
     fn new() -> Self {
-        Self { visits_left: MARKUP_ATTRIBUTE_VISITS, bytes_left: MARKUP_ATTRIBUTE_BYTES }
+        Self { visits_left: MARKUP_ATTRIBUTE_VISITS, bytes_left: MARKUP_ATTRIBUTE_BYTES, shared: None }
     }
 }
 
-fn charge_markup_attribute(attribute: &roxmltree::Attribute<'_, '_>, work: &mut MarkupWork) -> Result<()> {
+fn charge_markup_attribute(attribute: &roxmltree::Attribute<'_, '_>, work: &mut MarkupWork<'_>) -> Result<()> {
     let visits_left = work
         .visits_left
         .checked_sub(1)
@@ -1134,6 +1207,14 @@ fn charge_markup_attribute(attribute: &roxmltree::Attribute<'_, '_>, work: &mut 
         .bytes_left
         .checked_sub(bytes)
         .ok_or_else(|| crate::IoError::Unsupported("source text markup exceeds the bounded attribute-byte allowance".into()))?;
+    if let Some(shared) = work.shared.as_mut() {
+        let shared_visits =
+            shared.visits_left.checked_sub(1).ok_or_else(|| crate::IoError::Unsupported("document text attribute-visit work allowance exhausted".into()))?;
+        let shared_bytes =
+            shared.bytes_left.checked_sub(bytes).ok_or_else(|| crate::IoError::Unsupported("document text attribute-byte work allowance exhausted".into()))?;
+        shared.visits_left = shared_visits;
+        shared.bytes_left = shared_bytes;
+    }
     work.visits_left = visits_left;
     work.bytes_left = bytes_left;
     #[cfg(test)]
@@ -1146,7 +1227,7 @@ fn charge_markup_attribute(attribute: &roxmltree::Attribute<'_, '_>, work: &mut 
 
 /// Fold the preparatory namespace/font/face lookups into one charged scan.
 /// Otherwise their repeated `.any`/`.attribute` walks bypass the application budget.
-fn inspect_markup_attributes<'a, 'input: 'a>(ancestor: roxmltree::Node<'a, 'input>, work: &mut MarkupWork) -> Result<InheritedMarkupAttributes<'a>> {
+fn inspect_markup_attributes<'a, 'input: 'a>(ancestor: roxmltree::Node<'a, 'input>, work: &mut MarkupWork<'_>) -> Result<InheritedMarkupAttributes<'a>> {
     let unsupported_namespace = || crate::IoError::Unsupported("namespaced markup does not have an admitted native text-formatting meaning".into());
     if ancestor.tag_name().namespace().is_some() {
         return Err(unsupported_namespace());
@@ -1171,8 +1252,21 @@ fn inspect_markup_attributes<'a, 'input: 'a>(ancestor: roxmltree::Node<'a, 'inpu
 
 /// Translate bounded XML markup into UTF-8 text and native style runs.
 /// DTD, namespaced reinterpretation and materialized style amplification are rejected.
+#[cfg(test)]
 fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle>, dpi: f64, notes: &mut Vec<String>) -> Result<(String, Vec<TextRun>)> {
+    markup_runs_in_file(markup, base, fonts, dpi, notes, &mut DecodeWork::default().attributes)
+}
+
+fn markup_runs_in_file(
+    markup: &str,
+    base: &CharStyle,
+    fonts: &HashMap<String, CharStyle>,
+    dpi: f64,
+    notes: &mut Vec<String>,
+    shared: &mut AttributeWork,
+) -> Result<(String, Vec<TextRun>)> {
     let mut work = MarkupWork::new();
+    work.shared = Some(shared);
     #[cfg(test)]
     {
         MARKUP_ATTRIBUTE_VISIT_LIMIT.with(|limit| {
@@ -1195,7 +1289,7 @@ fn markup_runs_with_attribute_allowance(
     fonts: &HashMap<String, CharStyle>,
     dpi: f64,
     notes: &mut Vec<String>,
-    work: &mut MarkupWork,
+    work: &mut MarkupWork<'_>,
 ) -> Result<(String, Vec<TextRun>)> {
     let xml =
         roxmltree::Document::parse_with_options(markup, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES as u32, ..Default::default() })

@@ -15,6 +15,7 @@ fn image(bytes: &[u8], metadata: usize) -> Image<'_> {
         budget: MAX_PIXEL_BYTES,
         meta_budget: metadata,
         effect_decode_work: Default::default(),
+        text_decode_work: Default::default(),
         point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings: Warnings::default(),
         outcomes: conversion::Outcomes::new(26).unwrap(),

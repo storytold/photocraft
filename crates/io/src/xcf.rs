@@ -144,6 +144,8 @@ struct Image<'a> {
     meta_budget: usize,
     /// Nonrefundable effect decoding work shared across all drawable/coverage owners.
     effect_decode_work: effects::DecodeWork,
+    /// Nonrefundable configuration and inherited attribute work across all text owners.
+    text_decode_work: text::DecodeWork,
     /// Cumulative optional point-origin shaping work; independent of retained metadata.
     point_text_work_left: usize,
     warnings: Warnings,
@@ -1006,6 +1008,7 @@ pub(crate) fn import_with_sample_order(
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
+        text_decode_work: Default::default(),
         point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings,
         outcomes: conversion::Outcomes::new(version)?,

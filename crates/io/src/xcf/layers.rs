@@ -408,9 +408,9 @@ impl<'a> Image<'a> {
             let decoded = if let Some(error) = &self.native_color_error {
                 Err(IoError::Unsupported(format!("native text colors cannot be converted: {error}")))
             } else if config_name == "plug_in_gdyntext/data" {
-                text::decode_gdyntext_with_interrupt(config, self.resolution_dpi, (x, y), ctl, &mut self.point_text_work_left)
+                text::decode_gdyntext_with_work(config, self.resolution_dpi, (x, y), ctl, &mut self.point_text_work_left, &mut self.text_decode_work)
             } else {
-                text::decode_with_interrupt(config, self.resolution_dpi, (x, y), ctl, &mut self.point_text_work_left)
+                text::decode_with_work(config, self.resolution_dpi, (x, y), ctl, &mut self.point_text_work_left, &mut self.text_decode_work)
             };
             match decoded {
                 Ok(Some(decoded)) => {
