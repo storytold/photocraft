@@ -200,7 +200,7 @@ pub fn open_bytes_as_with_options(
     let (r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
-        let r = photocraft_io::import_with_options(&decode_name, bytes, &opts).map_err(|e| match as_ext {
+        let r = photocraft_io::import_with_options_as(&decode_name, bytes, as_ext, &opts).map_err(|e| match as_ext {
             Some(ext) => crate::error::io_open_as_error(&file_name(name), ext, e),
             None => crate::error::io_open_error(&decode_name, e),
         })?;
@@ -271,13 +271,6 @@ pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::BadParams { cmd: "file.openAs".into(), msg: format!("\"as\" names no format PhotoCraft reads: {ext:?}") });
     }
     let bytes = read_file(&path)?;
-    if let Some(ext) = as_ext {
-        let requested = photocraft_formats::from_extension(ext);
-        let detected = photocraft_formats::detect(&path, &bytes);
-        if requested.is_some() && detected.is_some() && requested != detected {
-            return Err(EngineError::Other(format!("{path}: contents do not match the requested {ext} format")));
-        }
-    }
     let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?;
     remember_batch_open(s);
     Ok(result)
@@ -467,6 +460,7 @@ impl PlaceInput {
 
 /// A place decoded, flattened and fitted, ready to be inserted by [`apply_place`].
 pub(crate) struct Prepared {
+    pub(super) warnings: Vec<String>,
     pub(super) content: LayerContent,
     pub(super) layer_name: String,
     /// The history step's name.
@@ -480,7 +474,7 @@ pub(crate) struct Prepared {
 
 /// Insert the prepared layer as one undo step and report the place. Runs on the session's thread.
 pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
-    let Prepared { content, layer_name, label, scale, bounds, smart, frame } = p;
+    let Prepared { warnings, content, layer_name, label, scale, bounds, smart, frame } = p;
     let layer = Layer::new(layer_name, content);
     let id = layer.id;
     s.edit(label, move |doc, active| {
@@ -493,7 +487,7 @@ pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
         }
         Ok(())
     })?;
-    Ok(json!({"layer": id.0, "frame": frame.map(|f| f.0), "scale": scale * 100.0, "bounds": bounds, "smartObject": smart}))
+    Ok(json!({"layer": id.0, "frame": frame.map(|f| f.0), "scale": scale * 100.0, "bounds": bounds, "smartObject": smart, "warnings": warnings}))
 }
 
 pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
