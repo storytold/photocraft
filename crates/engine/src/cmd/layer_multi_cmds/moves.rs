@@ -1313,4 +1313,142 @@ mod style_phase_tests {
         assert!(!targets_only_wrap(&after, &[id], false), "with a move phase the whole-canvas move is not skipped");
         assert!(subtree_wraps_only(l, 0), "but the layer still wraps as raster samples");
     }
+
+    /// A session on an 80 x 80 RGB8 document with the #14960 pattern registered and `layer` above
+    /// the Background, and that layer's id.
+    fn pattern_session(layer: Layer) -> (Session, LayerId) {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 80, "height": 80, "depth": 8, "mode": "rgb", "background": "transparent"})).expect("a document opens");
+        let id = layer.id;
+        s.edit("setup", |doc, _| {
+            doc.patterns.push(quad_pattern());
+            doc.layers.push(layer);
+            Ok(())
+        })
+        .expect("the layer is set up");
+        (s, id)
+    }
+
+    /// Not measured by #14960, pinned as it now is: Layer > Rasterize > Layer on a shape layer with
+    /// a linked overlay keeps the style live but turns the content into pixels, and a pixel layer is
+    /// one of the kinds the issue measured, so the grid jumps by the layer's own top-left, from its
+    /// corner to the document origin, at that transition. Nothing records the old corner as a move
+    /// phase; the issue measures no kind transition, and this test keeps the jump from changing by
+    /// accident.
+    #[test]
+    fn rasterize_layer_moves_a_shape_layer_overlay_grid_to_the_document_origin() {
+        let path = photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(25.0, 21.0), (45.0, 21.0), (45.0, 41.0), (25.0, 41.0)])]);
+        let sh = photocraft_doc::ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(1.0, 0.5, 0.0))), ..Default::default() };
+        let mut l = Layer::new("Shape", LayerContent::Shape(sh));
+        l.effects.items = vec![linked_overlay()];
+        let (mut s, id) = pattern_session(l);
+        // 5 px inside the shape: red-blue on the grid that starts at the layer's corner (25, 21).
+        assert_eq!(letters(open_doc(&s), Rect::new(30, 31, 31, 32)), vec!['B'], "a shape layer keeps the corner anchor");
+        s.execute("layer.rasterize.layer", json!({"layer": id.0})).expect("the layer rasterizes");
+        let d = open_doc(&s);
+        assert!(matches!(d.layer(id).expect("the layer").content, LayerContent::Raster(_)), "the content is pixels now");
+        assert_eq!(phase(d, id), None, "the transition records no move phase");
+        assert_eq!(letters(d, Rect::new(30, 31, 31, 32)), vec!['K'], "the same pixel reads the document-origin grid: the grid jumped with the content kind");
+    }
+
+    /// Not measured by #14960, pinned as it now is: Rasterize > Layer Style bakes the style and
+    /// clears the recorded phase together with the reference point, so an overlay added after that
+    /// bake tiles from the document origin even though the layer physically moved +5,+3. The
+    /// issue's "an overlay added after a move tiles from that move" rule does not reach the state a
+    /// bake leaves behind, and this test pins that limit instead of guessing a rule for it.
+    #[test]
+    fn a_new_overlay_after_a_style_bake_starts_at_the_document_origin() {
+        let mut l = Layer::new("Shape", shape(Rect::new(20, 16, 40, 36)));
+        l.effects.items = vec![linked_overlay()];
+        let (mut s, id) = pattern_session(l);
+        s.execute("layer.translate", json!({"layer": id.0, "dx": 5, "dy": 3})).expect("the layer moves");
+        assert_eq!(phase(open_doc(&s), id), Some((5.0, 3.0)), "the move records the phase the overlay reads");
+        // 5 px inside the moved shape: on the grid that starts at (5, 3) the tile is (25, 26) -> red.
+        assert_eq!(letters(open_doc(&s), Rect::new(30, 29, 31, 30)), vec!['R'], "the overlay the bake bakes in follows the phase");
+        s.execute("layer.rasterize.layerStyle", json!({"layer": id.0})).expect("the style bakes");
+        assert_eq!(phase(open_doc(&s), id), None, "the bake clears the phase with the style");
+        s.edit("a new overlay", |doc, _| {
+            doc.layer_mut(id).expect("the layer").effects.items = vec![linked_overlay()];
+            Ok(())
+        })
+        .expect("the new overlay lands");
+        assert_eq!(
+            letters(open_doc(&s), Rect::new(30, 29, 31, 30)),
+            vec!['G'],
+            "the new overlay starts on the document grid, not on the phase the moved layer carried"
+        );
+    }
+
+    /// A session on a 40 x 40 RGB8 document with two positioned raster layers: `src` carries a
+    /// linked Pattern Overlay and has never moved, `dst` has no style. Returns both layer ids.
+    fn style_pair() -> (Session, LayerId, LayerId) {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40, "depth": 8, "mode": "rgb", "background": "transparent"})).expect("a document opens");
+        let (src, dst) = s
+            .edit("setup", |doc, _| {
+                let mut a = Layer::new("A", shape(Rect::new(5, 5, 15, 15)));
+                a.effects.items = vec![linked_overlay()];
+                let b = Layer::new("B", shape(Rect::new(20, 20, 30, 30)));
+                let (ia, ib) = (a.id, b.id);
+                doc.layers.push(a);
+                doc.layers.push(b);
+                Ok((ia, ib))
+            })
+            .expect("the two layers are set up");
+        (s, src, dst)
+    }
+
+    /// The open document (the plain fixture above already uses the name `doc`).
+    fn open_doc(s: &Session) -> &Document {
+        &s.active().expect("a document is open").doc
+    }
+
+    /// Carry `src`'s style onto `dst` the way the Layers panel does it: Layer Style > Copy and
+    /// Paste, or `through_clipboard` false: dragging the fx row onto the other layer (a copy, so
+    /// the source keeps its own style and phase).
+    fn carry_style(s: &mut Session, through_clipboard: bool, src: LayerId, dst: LayerId) {
+        if through_clipboard {
+            s.execute("layer.layerStyle.copyLayerStyle", json!({"layer": src.0})).expect("the style is copied");
+            s.execute("layer.layerStyle.pasteLayerStyle", json!({"layer": dst.0})).expect("the style pastes");
+        } else {
+            s.execute("layer.layerStyle.transferEffects", json!({"from": src.0, "to": dst.0, "copy": true})).expect("the fx row lands");
+        }
+    }
+
+    /// Review (#14960): `move_phase` records where THIS layer's Move commands took it, so it belongs
+    /// to the layer and not to its style, like the `psd_raw` block and the reference point. Carrying
+    /// a style from a layer that moved +5,+3 onto a layer that never moved must leave the second
+    /// layer's overlay grid on the document origin.
+    #[test]
+    fn a_carried_style_does_not_move_the_destination_grid() {
+        for through_clipboard in [true, false] {
+            let (mut s, src, dst) = style_pair();
+            s.execute("layer.translate", json!({"layer": src.0, "dx": 5, "dy": 3})).expect("the source layer moves");
+            assert_eq!(phase(open_doc(&s), src), Some((5.0, 3.0)), "the move records the source's phase");
+            assert_eq!(phase(open_doc(&s), dst), None, "the target has never moved");
+            carry_style(&mut s, through_clipboard, src, dst);
+            let d = open_doc(&s);
+            let l = d.layer(dst).expect("the target layer");
+            assert_eq!(l.effects.items.len(), 1, "the style itself arrived");
+            assert_eq!(phase(d, dst), None, "clipboard {through_clipboard}: the carried style leaves the target's grid on the document origin");
+            assert_eq!(phase(d, src), Some((5.0, 3.0)), "the source keeps its own phase");
+        }
+    }
+
+    /// The same rule from the other side: pasting a style from a layer that never moved onto a layer
+    /// that moved +2,+2 must not take that layer's grid back to the document origin.
+    #[test]
+    fn a_carried_style_does_not_erase_the_destination_move_phase() {
+        for through_clipboard in [true, false] {
+            let (mut s, src, dst) = style_pair();
+            s.execute("layer.translate", json!({"layer": dst.0, "dx": 2, "dy": 2})).expect("the target layer moves");
+            assert_eq!(phase(open_doc(&s), dst), Some((2.0, 2.0)), "the target records its own phase");
+            assert_eq!(phase(open_doc(&s), src), None, "the source has never moved");
+            carry_style(&mut s, through_clipboard, src, dst);
+            let d = open_doc(&s);
+            let l = d.layer(dst).expect("the target layer");
+            assert_eq!(l.effects.items.len(), 1, "the style itself arrived");
+            assert_eq!(phase(d, dst), Some((2.0, 2.0)), "clipboard {through_clipboard}: the target keeps the phase its own move recorded");
+        }
+    }
 }

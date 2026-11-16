@@ -192,6 +192,45 @@ fn an_unlinked_overlay_tiles_from_the_document_origin_whatever_the_layer_holds()
     assert_eq!(letter(pixel(&b, 120, 100)), 'W', "tile marker at (120, 100): {:?}", pixel(&b, 120, 100));
 }
 
+/// Every other pin above measures Scale 100 % and Angle 0, where the anchor only offsets the grid.
+/// At Scale 200 % the anchor is also the centre the pattern is scaled about, so taking the anchor
+/// from the layer's corner and putting it on the document origin moves the whole placement. The
+/// second document below puts that corner in as a stored reference point, which is where
+/// `upstream/main` anchored this layer: at this scale the two anchors give different pixels, so the
+/// pin really measures the placement centre (which it also is for a non-zero Angle, not measured
+/// here).
+#[test]
+fn a_linked_overlay_at_scale_200_is_scaled_about_its_anchor() {
+    let with_anchor = |reference: Option<(f64, f64)>| {
+        let pat = quad_pattern();
+        let mut l = shape(SHAPE);
+        l.effects.items = vec![Effect::PatternOverlay {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            name: pat.name.clone(),
+            id: pat.id.clone(),
+            scale: 2.0,
+            angle: 0.0,
+            link: true,
+            phase: (0.0, 0.0),
+        }];
+        l.effects.reference = reference;
+        let mut d = Document::with_background("Pattern overlay origin", Size::new(400, 300), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        d.patterns.push(pat);
+        d.layers.push(l);
+        flat(&d)
+    };
+    let doc_origin = with_anchor(None);
+    let corner = with_anchor(Some((100.0, 75.0)));
+    // Doubled tiles: on the document grid a tile corner falls every 40 px, at (120, 80) among them,
+    // while the corner anchor has plain green there.
+    assert_eq!(letter(pixel(&doc_origin, 120, 80)), 'W', "tile marker of the scaled document grid at (120, 80): {:?}", pixel(&doc_origin, 120, 80));
+    assert_eq!(letter(pixel(&corner, 120, 80)), 'G', "the same point on the corner-anchored placement: {:?}", pixel(&corner, 120, 80));
+    // Down at y 223 the scaled document grid is in its black quadrant where the corner-anchored
+    // placement has its blue one.
+    assert_eq!(letter(pixel(&doc_origin, 100, 223)), 'K', "(100, 223) on the scaled document grid: {:?}", pixel(&doc_origin, 100, 223));
+    assert_eq!(letter(pixel(&corner, 100, 223)), 'B', "the same point on the corner-anchored placement: {:?}", pixel(&corner, 100, 223));
+}
+
 /// The other linked patterns are not part of #14960: a pattern stroke with no stored reference
 /// point still tiles from the layer's corner. y 76 is the top half of the tile that starts at the
 /// corner y 75 and the lower half of a tile of the document grid, so the two anchors give this
