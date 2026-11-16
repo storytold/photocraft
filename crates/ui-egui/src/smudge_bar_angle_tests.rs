@@ -40,7 +40,7 @@ fn type_angle(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
     h.run_steps(3);
 }
 
-fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<&str> {
+fn alerts<'a>(h: &'a Harness<'static, PhotocraftApp>) -> Vec<&'a str> {
     h.state().ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).map(|d| d.fields["message"].as_str().unwrap()).collect()
 }
 
