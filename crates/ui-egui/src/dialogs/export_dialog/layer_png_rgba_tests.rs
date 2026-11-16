@@ -180,6 +180,27 @@ fn a_group_of_a_stroked_layer_keeps_the_effects_corner() {
     );
 }
 
+/// #14968 review: the exported group's own layer style paints as much as a child's does. The
+/// fully clear corner of a 5 px outside stroke on the exported group's root must stay the
+/// stroke's black, exactly as when the same stroke sits on a leaf inside the group.
+#[test]
+fn a_group_with_its_own_stroke_keeps_the_effects_corner() {
+    let (mut app, written, _open) = app(60, 60);
+    painted(&mut app, "Square", "#000000", Some((16, 16, 24, 24)));
+    app.run("select.allLayers", json!({})).unwrap();
+    app.run("layer.new.groupFromLayers", json!({"name": "Framed"})).unwrap();
+    let group = active(&app);
+    app.run("layer.layerStyle.stroke", json!({"layer": group, "size": 5, "position": "outside", "color": "#000000"})).unwrap();
+    let (w, h, layout, data) = png(&export_as(&mut app, &written, &fields(Some(group))));
+    assert_eq!((w, h), (34, 34), "the child's 24 x 24 plus the group's own 5 px of stroke on each side");
+    assert_eq!(layout, ChannelLayout::Rgba);
+    assert_eq!(px(&data, w, 4, 0, 0), vec![0, 0, 0, 0], "the corner the group's own stroke reaches keeps its black");
+    assert!(
+        clear_pixels(&data, w, h).iter().all(|p| px(&data, w, 4, p.0, p.1) == vec![0, 0, 0, 0]),
+        "everything inside the box grown by the group's own stroke keeps the effect's colour"
+    );
+}
+
 /// #14990: the same corner on a plain pixel layer, a kind the reference application did not measure
 /// for clear pixels: it keeps today's 0,0,0,0.
 #[test]

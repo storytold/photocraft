@@ -1000,10 +1000,12 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
 /// covers the empty corners nothing painted, so a group joins the reach only where it paints
 /// something of its own: an enabled layer style, a Frame's stroke, an Artboard's board. Pixels of the
 /// exported bounds outside every box were never painted by anything, and are stored white with a zero
-/// alpha (#14990, #14816 review).
+/// alpha (#14990, #14816 review). The exported group itself follows the same rule (#14968 review):
+/// a root without paint of its own adds nothing, and one with a style grows the reach like any
+/// other group.
 fn never_painted_to_white(px: &mut [[f32; 4]], w: usize, area: Rect, b: Rect, group: &Layer) {
     let mut reach: Vec<Rect> = Vec::new();
-    let mut stack: Vec<&Layer> = group.children().map_or(Vec::new(), |kids| kids.iter().filter(|k| k.visible).collect());
+    let mut stack: Vec<&Layer> = vec![group];
     while let Some(l) = stack.pop() {
         let mut paints = true;
         if let Some(kids) = l.children() {
