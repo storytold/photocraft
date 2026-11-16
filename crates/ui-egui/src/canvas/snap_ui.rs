@@ -216,6 +216,13 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     if app.session.active().is_none() || app.distort.active() {
         return;
     }
+    // Warp drags snap to nothing, as in the reference application: a pull, a corner or a handle
+    // dropped a few pixels from the document's centre or edges lands where it was dropped. Snapped
+    // as a box press, a pull at the box's centre counted as the reference point and stuck to the
+    // document's centre: drags under 8 px did nothing and every pull was off by a pixel.
+    if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_some()) {
+        return;
+    }
     // The tool the press acts as: ⌘ makes a painting tool the Move tool, and a selection tool
     // outside the selection moves the layer as the Move tool does (#2681).
     let tool = crate::canvas::event_tool(app, mods);

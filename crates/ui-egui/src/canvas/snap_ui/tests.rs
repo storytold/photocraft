@@ -547,7 +547,9 @@ fn transform_non_distortion_gestures_keep_control_snap_override() {
         let mut app = app_with_corner_guides(menu);
         crate::canvas::tool_event(&mut app, ToolEvent::Down { x: press[0], y: press[1], pressure: 1.0 }, m);
         crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 108.0, y: 32.0, pressure: 1.0 }, m);
-        assert!(app.prefs_rt.snap.as_ref().unwrap().disabled, "{menu}, {press:?}, {m:?}");
+        // Warp drags never snap, so a Warp press starts no snapping at all.
+        let snap = app.prefs_rt.snap.as_ref();
+        assert!(if menu == "edit.transform.warp" { snap.is_none() } else { snap.unwrap().disabled }, "{menu}, {press:?}, {m:?}");
         assert!(app.prefs_rt.snap_lines.is_empty(), "{menu}, {press:?}");
     }
 }

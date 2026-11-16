@@ -4943,3 +4943,25 @@ fn a_waiting_new_layer_click_keeps_the_layer_it_was_made_on() {
     assert_eq!(at(new), at(placed) + 1, "the new layer sits right above the layer selected at the click: {order:?}");
     assert_eq!(st.active_layer, Some(new));
 }
+
+/// Warp drags don't snap: a 4 px pull at the box's centre (one pixel from the document's centre,
+/// with snapping on) moves the surface by exactly 4 px. It used to snap to the document's centre
+/// as a reference-point drag and stay put, with a stray pixel the other way.
+#[test]
+fn a_warp_pull_near_the_document_centre_does_not_snap() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(100, photocraft_geom::Rect::new(20, 30, 82, 72));
+    assert!(app.ui.extras.snap, "snapping is on by default");
+    crate::menus::invoke(&mut app, &ctx, "edit.transform.warp", json!({})).unwrap();
+    let t = app.ui.transform.as_ref().unwrap();
+    let mesh0 = t.warp.as_ref().unwrap().mesh.clone().unwrap();
+    let centre = t.warp_to_doc(mesh0.eval(0.5, 0.5));
+    assert_eq!(centre, [51.0, 51.0], "one pixel from the document's centre");
+    let none = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: centre[0], y: centre[1], pressure: 1.0 }, none);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: centre[0], y: centre[1] - 4.0, pressure: 1.0 }, none);
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: centre[0], y: centre[1] - 4.0 }, none);
+    let t = app.ui.transform.as_ref().unwrap();
+    let got = t.warp_to_doc(t.warp.as_ref().unwrap().mesh.as_ref().unwrap().eval(0.5, 0.5));
+    assert!((got[0] - centre[0]).abs() < 1e-6 && (got[1] - (centre[1] - 4.0)).abs() < 1e-6, "{got:?}");
+}
