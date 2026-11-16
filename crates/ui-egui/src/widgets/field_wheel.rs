@@ -56,6 +56,19 @@ fn pass_id(ctx: &Context) -> Id {
     Id::unique("pc-field-wheel-pass").with(ctx.viewport_id())
 }
 
+fn suspended_id() -> Id {
+    Id::unique("pc-field-wheel-suspended")
+}
+
+/// Keep the wheel available to a palette/settings scroller, including over focused value fields.
+/// Other controls retain their normal keyboard and pointer editing.
+pub(crate) fn without<T>(ui: &mut Ui, contents: impl FnOnce(&mut Ui) -> T) -> T {
+    let previous = ui.data_mut(|d| std::mem::replace(d.get_temp_mut_or_default::<bool>(suspended_id()), true));
+    let result = contents(ui);
+    ui.data_mut(|d| *d.get_temp_mut_or_default::<bool>(suspended_id()) = previous);
+    result
+}
+
 /// A wheel event a field takes: plain or Shift, not the view's Alt or Ctrl/Cmd zoom, nor a plain
 /// sideways scroll (a trackpad swipe pans the view; Shift+wheel can arrive sideways). An event
 /// with no delta at all counts: a gesture can start with one, and it is what lets a field under
@@ -167,6 +180,9 @@ pub(crate) fn focused_field_wheeled(ctx: &Context) -> bool {
 /// Record that value field `id` (whose slot is `field`, as given to [`notches`]) has keyboard
 /// focus this frame, so the wheel is its next frame.
 pub fn set_focused(ctx: &Context, id: Id, field: Id) {
+    if ctx.data(|d| d.get_temp::<bool>(suspended_id()).unwrap_or(false)) {
+        return;
+    }
     let key = focused_id(ctx);
     ctx.data_mut(|d| d.insert_temp(key, (id, field)));
 }
@@ -174,6 +190,9 @@ pub fn set_focused(ctx: &Context, id: Id, field: Id) {
 /// Wheel notches for the value field `field` in `rect` this frame (up positive, Shift ×10):
 /// all of the wheel while it is `focused`, else a gesture that started with the pointer over it.
 pub fn notches(ui: &Ui, field: Id, focused: bool, rect: Rect) -> f32 {
+    if ui.data(|d| d.get_temp::<bool>(suspended_id()).unwrap_or(false)) {
+        return 0.0;
+    }
     install(ui.ctx());
     let events: Vec<Event> = if focused {
         let taken_key = taken_id(ui.ctx());
