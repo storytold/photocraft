@@ -265,6 +265,13 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
     Ok(json!({"files": files, "errors": errors}))
 }
 
+/// Auto-Align's `reference` for a stack of `n` files whose first file is the layer `first`: two files leave the choice
+/// to Auto-Align (its default, the bottom layer, is the reference the application was measured to use, #13995); three
+/// or more are not measured and keep today's reference, the first file.
+pub(super) fn align_reference(first: Option<LayerId>, n: usize) -> Value {
+    first.filter(|_| n > 2).map_or(Value::Null, |id| json!(id.0))
+}
+
 pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.scripts.loadFilesIntoStack";
     let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")) {
@@ -294,8 +301,13 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
     stack.icc_profile = base.icc_profile.clone();
     let fmt = stack.pixel_format();
     // The first file on top, the last at the bottom (layers are stored bottom first).
-    for (name, d) in docs.iter().rev() {
-        stack.layers.push(Layer::new(name.clone(), LayerContent::Raster(flattened_checked(d, fmt, cmd)?)));
+    let mut first = None;
+    for (i, (name, d)) in docs.iter().enumerate().rev() {
+        let layer = Layer::new(name.clone(), LayerContent::Raster(flattened_checked(d, fmt, cmd)?));
+        if i == 0 {
+            first = Some(layer.id);
+        }
+        stack.layers.push(layer);
     }
     let n = stack.layers.len();
     let smart = p.get("createSmartObject").and_then(Value::as_bool).unwrap_or(false);
@@ -313,7 +325,10 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
     let i = s.add_document(stack, None);
     if align {
         s.execute("select.allLayers", json!({}))?;
-        s.execute("edit.autoAlignLayers", json!({"projection": "auto"}))?;
+        // Two files: the bottom layer, now the last file, is the reference (measured, #13995). Three or more
+        // files are not measured and keep today's reference, the first file (it used to be the bottom layer).
+        let reference = align_reference(first, n);
+        s.execute("edit.autoAlignLayers", json!({"projection": "auto", "reference": reference}))?;
         if smart {
             s.edit("Convert to Smart Object", |doc, active| {
                 let layers = std::mem::take(&mut doc.layers);
