@@ -35,10 +35,34 @@ fn text_of(s: &Session, id: LayerId) -> String {
     }
 }
 
-fn tmp(name: &str) -> String {
-    let d = std::env::temp_dir().join(format!("pc-vars-{}-{name}", std::process::id()));
-    let _ = std::fs::create_dir_all(&d);
-    d.to_string_lossy().into_owned()
+/// An owned scratch directory: unique per call, removed when dropped (also when an assertion
+/// panics), so a failed or interrupted run never leaves files for the next one to trip over.
+struct Tmp {
+    path: String,
+    _guard: tempfile::TempDir,
+}
+
+impl std::fmt::Display for Tmp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.path)
+    }
+}
+
+impl AsRef<std::path::Path> for Tmp {
+    fn as_ref(&self) -> &std::path::Path {
+        std::path::Path::new(&self.path)
+    }
+}
+
+impl serde::Serialize for Tmp {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(&self.path)
+    }
+}
+
+fn tmp(name: &str) -> Tmp {
+    let guard = tempfile::Builder::new().prefix(&format!("pc-vars-{name}-")).tempdir().unwrap();
+    Tmp { path: guard.path().to_string_lossy().into_owned(), _guard: guard }
 }
 
 #[test]
@@ -222,7 +246,6 @@ fn csv_import_preserves_unicode_headers_names_and_text() {
         assert!(s.redo());
         assert_eq!(text_of(&s, title), text);
     }
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -288,7 +311,6 @@ fn csv_multiline_values_apply_persist_and_export_as_two_data_sets() {
             .collect();
         assert_ne!(texts[0], texts[1], "the exported rows have different content");
         assert_eq!(*doc(&reopened), before_export, "export keeps the live document unchanged");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
@@ -307,7 +329,6 @@ fn csv_multiline_default_names_count_logical_nonblank_records() {
         assert_eq!(rows["dataSets"][0]["values"][0]["value"], "first\n\nline");
         assert_eq!(rows["dataSets"][1]["values"][0]["value"], "", "a quoted empty field is a record");
     }
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -328,7 +349,6 @@ fn csv_import_preserves_unicode_pixel_paths() {
     s.execute("image.applyDataSet", json!({"name": "синий"})).unwrap();
     let pixel = doc(&s).layer(photo).unwrap().surface().unwrap().pixel(32, 24);
     assert_eq!(pixel, vec![0.0, 0.0, 1.0, 1.0]);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -344,7 +364,6 @@ fn csv_import_errors_leave_existing_data_sets_unchanged() {
         assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
         assert_eq!(doc(&s).variables.data_sets[0].name, "Сохранённый набор");
     }
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -426,7 +445,6 @@ fn export_data_sets_rejects_collisions_before_writing() {
         assert_eq!(after.history.entries(), history);
         assert_eq!(after.history.past_len(), past);
         assert_eq!(after.history.can_redo(), redo);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
@@ -492,7 +510,6 @@ fn export_data_sets_unique_paths_preserve_variations_and_document() {
         assert_eq!(after.history.entries(), history);
         assert_eq!(after.history.past_len(), past);
         assert_eq!(after.history.can_redo(), redo);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
@@ -573,7 +590,6 @@ fn applied_text_is_rendered_in_the_document_and_in_exports() {
     assert!(stored_ink(&exported) > 0, "the exported PSD stores the text's pixels");
     s.execute("image.applyDataSet", json!({"name": "row1"})).unwrap();
     assert!(dark(doc(&s)) > 0, "the applied text is drawn");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A text layer created bold-italic with tracking, underline, all caps and colour, bound to a
@@ -677,7 +693,6 @@ fn exported_data_sets_keep_the_character_style() {
     assert_eq!(t.text, "After");
     let got = &t.char_runs()[0].style;
     assert_eq!((got.weight, got.italic, got.underline), (style.weight, style.italic, style.underline));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -741,7 +756,6 @@ fn data_sets_as_files_writes_one_layered_psd_per_data_set_by_default() {
         assert!(matches!(&title.content, LayerContent::Text(t) if t.text == text), "{path} carries the data set's text");
         assert_eq!(back.layers.iter().find(|l| l.name == "badge").unwrap().visible, badge_visible, "{path} badge visibility");
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -758,8 +772,6 @@ fn data_sets_as_files_extension_changes_only_the_case() {
     let other = tmp("psd-bad-extension");
     assert!(s.execute("file.export.dataSetsAsFiles", json!({"dir": other, "extension": ".png"})).is_err());
     assert_eq!(std::fs::read_dir(&other).unwrap().count(), 0);
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&other);
 }
 
 #[test]
@@ -786,9 +798,6 @@ fn data_sets_as_files_keeps_other_formats_for_scripts() {
         let png = s.execute("file.export.dataSetsAsFiles", json!({"dir": dotted, "format": format, "dataSets": ["Data Set 1"]})).unwrap();
         assert_eq!(png["files"], json!([format!("{dotted}/Data_Set_1.png")]), "format {format}");
     }
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&other);
-    let _ = std::fs::remove_dir_all(&dotted);
 }
 
 #[test]
@@ -805,7 +814,6 @@ fn data_sets_as_files_path_shaped_format_cannot_leave_dir() {
     }
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing is written inside dir");
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1, "nothing is written beside dir");
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -832,7 +840,6 @@ fn data_sets_as_files_hostile_format_and_extension_are_errors() {
     let ok = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "format": null, "extension": null, "dataSets": ["Data Set 1"]})).unwrap();
     assert_eq!(ok["files"], json!([format!("{dir}/Data_Set_1.psd")]));
     assert!(ok["warnings"].is_array(), "{ok}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -845,5 +852,4 @@ fn data_sets_as_files_ignores_other_formats_save_params() {
         .execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["Data Set 1"], "tgaBits": 16, "tiffCompression": "jpeg", "ddsCompression": 7}))
         .unwrap();
     assert_eq!(ok["files"], json!([format!("{dir}/Data_Set_1.psd")]));
-    let _ = std::fs::remove_dir_all(&dir);
 }
