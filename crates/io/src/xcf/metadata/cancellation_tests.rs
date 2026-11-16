@@ -102,8 +102,9 @@ fn cancellation_interrupts_sampler_scans_even_after_native_capacity_is_full() {
             let (mut outcomes, owner) = outcomes();
             let calls = AtomicUsize::new(0);
             let cancel = || calls.fetch_add(1, Ordering::Relaxed) == 63 && cancel_during;
+            let mut budget = usize::MAX;
             let result =
-                image(&mut doc, &properties, 26, &mut view, &mut outcomes, owner, &mut usize::MAX, &mut Default::default(), &Interrupt::cancel_only(&cancel));
+                image(&mut doc, &properties, 26, &mut view, &mut outcomes, owner, &mut budget, &mut Default::default(), &Interrupt::cancel_only(&cancel));
             assert_eq!(view.samplers, vec![[0., 0.]; MAX_INITIAL_SAMPLERS]);
             if cancel_during {
                 assert!(matches!(result, Err(crate::IoError::Cancelled)));

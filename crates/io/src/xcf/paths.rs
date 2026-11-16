@@ -36,12 +36,12 @@ impl Default for DecodeWork {
 impl DecodeWork {
     fn admit(&mut self, bytes: usize, ctl: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
-        if !super::work_budget::WorkBudget::new(&mut self.bytes_left).keep_remaining(bytes) {
-            return Ok(false);
-        }
+        let admitted = super::work_budget::WorkBudget::new(&mut self.bytes_left).keep_remaining(bytes);
         #[cfg(test)]
-        PATH_DECODES.with(|count| count.set(count.get().saturating_add(1)));
-        Ok(true)
+        if admitted {
+            PATH_DECODES.with(|count| count.set(count.get().saturating_add(1)));
+        }
+        Ok(admitted)
     }
 }
 
