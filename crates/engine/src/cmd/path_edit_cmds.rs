@@ -178,15 +178,17 @@ fn convert_point(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.convertPoint";
     let k = knot(CMD, p)?;
     let label = step_name(CMD, p, "Convert Point", &["Change Anchor Point"])?;
-    if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
-        return edit_path(s, CMD, p, label, |path| edit::toggle_curvature_point(path, k));
-    }
-    let out = point(CMD, p, "out")?;
+    // Read and checked before the curvature branch: a malformed option is refused whether or not
+    // the branch would have used it (the curvature route ignores `independent`, as its spec says).
     let independent = match p.get("independent") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(CMD, "`independent` must be true or false")),
     };
+    if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
+        return edit_path(s, CMD, p, label, |path| edit::toggle_curvature_point(path, k));
+    }
+    let out = point(CMD, p, "out")?;
     // `independent` only changes a drag with `out`; a click leaves a corner with retracted handles
     // either way, so it goes through the plain edit.
     edit_path(s, CMD, p, label, |path| match (out, independent) {
@@ -449,6 +451,57 @@ mod tests {
         s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "curvature": true})).unwrap();
         assert_eq!(work(&s), before);
         assert!(s.execute("path.convertPoint", json!({"subpath": 0, "knot": 9, "curvature": true})).is_err());
+    }
+
+    #[test]
+    fn a_malformed_independent_is_refused_before_the_curvature_edit() {
+        // The review input: `"curvature": true` with `"independent": "yes"`. The option is read as a
+        // bool whatever branch the command takes, so it is checked before the curvature return.
+        let mut s = session();
+        s.execute("path.set", json!({"path": square()})).unwrap();
+        let (before, steps) = (work(&s), s.active().unwrap().history.entries().len());
+        let e = s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "curvature": true, "independent": "yes"})).unwrap_err();
+        assert!(e.to_string().contains("`independent` must be true or false"), "{e}");
+        assert_eq!(work(&s), before, "the refused option edits nothing");
+        assert_eq!(s.active().unwrap().history.entries().len(), steps, "and leaves no history step");
+        // A bool value is still accepted next to `curvature`, which ignores it as its spec says.
+        s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "curvature": true, "independent": true})).unwrap();
+        let k = work(&s).subpaths[0].knots[1];
+        assert!(k.smooth && k.in_ctrl != k.anchor && k.out_ctrl != k.anchor, "{k:?}");
+    }
+
+    #[test]
+    fn an_explicit_null_independent_defaults_as_the_other_bools_here() {
+        // Guard test (passes before and after this PR): an explicit JSON null means "not given" for
+        // this command family's options, `stepName` and `duplicate` included, so `independent` is
+        // read the same way and the plain mirrored edit runs.
+        let mut s = session();
+        s.execute("path.set", json!({"path": square()})).unwrap();
+        let absent = s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "out": [70, 10]})).unwrap();
+        let null = s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "out": [70, 10], "independent": null})).unwrap();
+        assert_eq!(null["path"], absent["path"], "null is the absent value here");
+        let k = &null["path"]["subpaths"][0]["knots"][1];
+        assert_eq!((k["out"].clone(), k["in"].clone(), k["smooth"].clone()), (json!([70.0, 10.0]), json!([50.0, 10.0]), json!(true)));
+        assert!(s.execute("path.moveAnchors", json!({"anchors": [[0, 0]], "move": [1, 1], "duplicate": null})).is_ok(), "the same reading for `duplicate`");
+    }
+
+    #[test]
+    fn an_independent_convert_on_a_shape_layer_pulls_out_one_handle() {
+        // Guard test (passes before and after): the option reaches every path `edit_path` routes to,
+        // here a shape layer's path, which stops being a live shape as with any other point edit.
+        let mut s = session();
+        s.execute("file.new", json!({"width": 120, "height": 100, "background": "white"})).unwrap();
+        let id = s.execute("shape.create", json!({"kind": "rect", "rect": [10, 10, 40, 40], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+        let r = s.execute("path.convertPoint", json!({"name": "layer", "layer": id, "subpath": 0, "knot": 1, "out": [60, 20], "independent": true})).unwrap();
+        let k = &r["path"]["subpaths"][0]["knots"][1];
+        assert_eq!(
+            (k["anchor"].clone(), k["out"].clone(), k["in"].clone(), k["smooth"].clone()),
+            (json!([50.0, 10.0]), json!([60.0, 20.0]), json!([50.0, 10.0]), json!(false)),
+            "{k}"
+        );
+        let st = s.active().unwrap();
+        let photocraft_doc::LayerContent::Shape(ShapeLayer { live, .. }) = &st.doc.layer(LayerId(id)).unwrap().content else { panic!("shape") };
+        assert!(live.is_none(), "the edit left a plain path, as every point edit does");
     }
 
     #[test]

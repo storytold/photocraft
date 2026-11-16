@@ -190,3 +190,46 @@ fn an_alt_click_without_a_drag_leaves_a_plain_corner() {
     assert_eq!(added(&mut app, |a| drag(a, CORNER, CORNER, Modifiers::ALT)), ["Change Anchor Point"], "⌥-click");
     assert_eq!(knot(&app, 0, 1), Knot::corner(300.0, 300.0), "both handles retracted");
 }
+
+/// The gate on the press is the point kind (a corner of a closed subpath), not the length of its
+/// handles: an ⌥-drag from a corner that already carries two uneven handles pulls the out-handle
+/// to the pointer and retracts the other on the anchor.
+#[test]
+fn an_alt_drag_from_a_corner_with_uneven_handles_retracts_the_other_one() {
+    let mut app = app(Tool::ConvertPoint);
+    let corner_with_handles = json!({"subpaths": [{"closed": true, "knots": [
+        [100, 300],
+        {"anchor": [300, 300], "in": [260, 240], "out": [380, 300], "smooth": false},
+        [300, 500],
+        [100, 500],
+    ]}]});
+    app.run("path.set", json!({"name": "Path 1", "path": corner_with_handles})).unwrap();
+    app.sync_views();
+    assert_eq!(added(&mut app, |a| drag(a, CORNER, DRAG_TO, Modifiers::ALT)), ["Change Anchor Point"]);
+    let k = knot(&app, 0, 1);
+    assert_eq!((k.anchor, k.out_ctrl, k.in_ctrl, k.smooth), (p(300.0, 300.0), p(350.0, 330.0), p(300.0, 300.0), false), "{k:?}");
+}
+
+/// The press makes the decision, so a modifier that changes in the middle of the drag does not
+/// switch the gesture: ⌥ arriving during the drag stays the mirrored pair it started as, and ⌥
+/// released during the drag keeps the one-handle result it started as.
+#[test]
+fn a_modifier_that_changes_during_the_drag_keeps_the_press_decision() {
+    let down = ToolEvent::Down { x: CORNER[0], y: CORNER[1], pressure: 1.0 };
+    let move_to = ToolEvent::Move { x: DRAG_TO[0], y: DRAG_TO[1], pressure: 1.0 };
+    let up = ToolEvent::Up { x: DRAG_TO[0], y: DRAG_TO[1] };
+
+    let mut late_alt = app(Tool::ConvertPoint);
+    for (ev, mods) in [(down, Modifiers::NONE), (move_to, Modifiers::ALT), (up, Modifiers::ALT)] {
+        tool_event(&mut late_alt, ev, mods);
+    }
+    let k = knot(&late_alt, 0, 1);
+    assert_eq!((k.out_ctrl, k.in_ctrl, k.smooth), (p(350.0, 330.0), p(250.0, 270.0), true), "⌥ only from the move on: {k:?}");
+
+    let mut early_alt = app(Tool::ConvertPoint);
+    for (ev, mods) in [(down, Modifiers::ALT), (move_to, Modifiers::NONE), (up, Modifiers::NONE)] {
+        tool_event(&mut early_alt, ev, mods);
+    }
+    let k = knot(&early_alt, 0, 1);
+    assert_eq!((k.out_ctrl, k.in_ctrl, k.smooth), (p(350.0, 330.0), p(300.0, 300.0), false), "⌥ released before the commit: {k:?}");
+}
