@@ -999,9 +999,7 @@ mod tests {
         let RenameTarget::Group(g) = target else { panic!("a new group targets the group, not {target:?}") };
         assert!(g.starts_with("Group"), "the created group is {g}");
         // And the field commits it back to the group: the preset of the same key keeps its name.
-        let had_preset = photocraft_engine::presets::shapes::all_groups(&app.session)
-            .iter()
-            .any(|grp| grp.items.iter().any(|s| s.name == g));
+        let had_preset = photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|grp| grp.items.iter().any(|s| s.name == g));
         let h = rename_in_shapes_panel(app, RenameTarget::Group(g.clone()), "Kit");
         let groups = photocraft_engine::presets::shapes::all_groups(&h.state().session);
         assert!(groups.iter().any(|grp| grp.name == "Kit"), "the group took the new name");

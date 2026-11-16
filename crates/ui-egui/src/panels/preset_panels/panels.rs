@@ -1,6 +1,6 @@
 use super::{
-    Align2, Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, RenameTarget, Sense, Stroke, TextureHandle, Tokens,
-    Tool, Value, browser, canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
+    Align2, Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, RenameTarget, Sense, Stroke, TextureHandle, Tokens, Tool,
+    Value, browser, canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
 };
 
 // ------------------------------------------------------------------ Gradients
