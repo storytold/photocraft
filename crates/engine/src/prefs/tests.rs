@@ -1236,3 +1236,13 @@ fn a_saved_control_port_turns_the_agent_connection_on() {
     assert!(!load(r#"{"integrations":{"controlPort":7878,"connectAgents":false}}"#).connect_agents, "an explicit choice wins");
     assert!(!load("{}").connect_agents, "off by default");
 }
+
+/// CodeRabbit on #15086: `prefs.set` still takes an earlier version's `export.metadata` value `all` (it is Copyright and
+/// Contact Info), instead of refusing it before the stored-value compatibility reader sees it.
+#[test]
+fn prefs_set_takes_the_legacy_all_for_export_metadata() {
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"path": "export.metadata", "value": "all"})).unwrap();
+    assert_eq!(s.execute("prefs.get", json!({"path": "export.metadata"})).unwrap(), json!("copyright"));
+    assert!(s.execute("prefs.set", json!({"path": "export.metadata", "value": "everything"})).is_err());
+}
