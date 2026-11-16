@@ -16,13 +16,14 @@ pub fn angle_dial_row(ui: &mut Ui, label: &str, angle: &mut f32, range: std::ops
 /// returning the field's response (for focus/id tracking) and whether an out-of-range value was
 /// committed.
 pub fn angle_dial_row_whole_alerting(ui: &mut Ui, label: &str, angle: &mut f32, range: std::ops::RangeInclusive<f32>) -> (Response, bool) {
-    angle_dial_line_in(ui, label, None, angle, range, true, false)
+    let wraps = half_turn_range(&range);
+    angle_dial_line_in(ui, label, None, angle, range, true, wraps)
 }
 
 /// [`angle_dial_row`] with its label right-aligned in a `label_w` column ([`row_label`]) when
 /// given, lined up with the [`slider_line`] rows around it (Layer Style).
 pub fn angle_dial_line(ui: &mut Ui, label: &str, label_w: Option<f32>, angle: &mut f32, range: std::ops::RangeInclusive<f32>) -> Response {
-    let wraps = *range.start() >= -180.0 && *range.end() <= 180.0;
+    let wraps = half_turn_range(&range);
     angle_dial_line_in(ui, label, label_w, angle, range, false, wraps).0
 }
 
@@ -32,6 +33,11 @@ pub fn angle_dial_line(ui: &mut Ui, label: &str, label_w: Option<f32>, angle: &m
 /// steps on instead of jumping back into it.
 pub fn angle_dial_line_wrapping(ui: &mut Ui, label: &str, label_w: Option<f32>, angle: &mut f32, range: std::ops::RangeInclusive<f32>) -> Response {
     angle_dial_line_in(ui, label, label_w, angle, range, false, true).0
+}
+
+/// Whether `range` is within the dial's own half turn each way, so the arrow keys wrap round it.
+fn half_turn_range(range: &std::ops::RangeInclusive<f32>) -> bool {
+    *range.start() >= -180.0 && *range.end() <= 180.0
 }
 
 fn angle_dial_line_in(
@@ -166,6 +172,19 @@ mod tests {
         h.run();
         press_on_dial(&mut h, egui::Key::ArrowRight);
         assert_eq!(*h.state(), -179.0, "Drop Shadow's dial still wraps past 180°");
+    }
+
+    #[test]
+    fn the_whole_alerting_dial_wraps_round_a_half_turn_range() {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 100.0)).build_ui_state(
+            |ui, angle| {
+                angle_dial_row_whole_alerting(ui, "Angle", angle, -180.0..=180.0);
+            },
+            180.0_f32,
+        );
+        h.run();
+        press_on_dial(&mut h, egui::Key::ArrowRight);
+        assert_eq!(*h.state(), -179.0, "the Filter dialog's dial wraps past 180° as before");
     }
 
     #[test]
