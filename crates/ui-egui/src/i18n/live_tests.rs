@@ -600,11 +600,18 @@ fn czech_shortcut_conflicts_keep_warning_state_and_shortcut_codes() {
         let fields = &h.state().ui.dialogs.iter().find(|d| d.id == id).expect("dialog").fields;
         assert_eq!(fields["messageWarning"], json!(true));
         let message = fields["message"].as_str().expect("message");
-        let template = tr(lang("cs"), "{shortcut} is already in use by {commands} and will be removed from it when you click OK.");
+        // A pressed key is a pending edit now: the conflict message says it is removed "if accepted" (not yet in the Czech catalog,
+        // so its fixed text is the English one around the shortcut and commands).
+        let template = tr(lang("cs"), "{shortcut} is already in use and will be removed from {commands} if accepted.");
         // The message is the conflict template, filled in: its fixed text appears around the shortcut and commands.
         for piece in template.split('{').map(|piece| piece.split_once('}').map_or(piece, |(_, rest)| rest)).filter(|piece| !piece.trim().is_empty()) {
             assert!(message.contains(piece), "{message:?} lacks {piece:?}");
         }
+        // The pressed key is a pending edit: nothing is committed until it is accepted.
+        assert!(fields["overrides"].get("file.new").is_none_or(|v| v.is_null()), "not committed yet");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+        let fields = &h.state().ui.dialogs.iter().find(|d| d.id == id).expect("dialog").fields;
         assert_eq!(fields["overrides"]["file.new"], json!("Cmd+O"));
     });
 }
