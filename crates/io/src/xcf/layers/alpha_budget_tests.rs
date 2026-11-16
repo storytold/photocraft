@@ -208,7 +208,7 @@ fn opaque_f32_24mp_alpha_emission_timing() {
     let validate = |decoded: &Pixels| {
         assert_eq!((decoded.width, decoded.height, decoded.channels), (width, height, 4));
         assert_eq!(decoded.data.len(), pixels * 4);
-        assert!(decoded.data.chunks_exact(4).all(|pixel| pixel == expected));
+        assert!(decoded.data.as_chunks::<4>().0.iter().all(|pixel| *pixel == expected));
     };
     {
         let mut tight = image(&bytes, native_bytes, 0, precision);
