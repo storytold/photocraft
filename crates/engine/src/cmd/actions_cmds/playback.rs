@@ -77,7 +77,7 @@ fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<Va
                 Some((action, target)) => {
                     let unique_name = target.id.is_none() && s.actions.list.iter().filter(|candidate| candidate.name == action.name).take(2).count() == 1;
                     Some(Destination::Classic { action: Box::new(action), target, unique_name })
-                },
+                }
                 None => {
                     s.actions.recording = Some((s.journal.len(), index));
                     return Err(bad("actions.play", "the recording destination no longer exists"));

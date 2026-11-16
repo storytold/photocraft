@@ -747,7 +747,13 @@ fn desktop_shortcuts_wait_for_the_actions_definition_write() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let fail_at = Arc::new(AtomicUsize::new(0));
         if attach {
-            tx.send(open(Box::new(RetriableActionsWrite { store: definitions.clone(), reject: reject.clone(), attempts: attempts.clone(), fail_at: fail_at.clone() }))).unwrap();
+            tx.send(open(Box::new(RetriableActionsWrite {
+                store: definitions.clone(),
+                reject: reject.clone(),
+                attempts: attempts.clone(),
+                fail_at: fail_at.clone(),
+            })))
+            .unwrap();
         }
         drop(tx);
         tick(&mut app, &ctx);
@@ -810,7 +816,11 @@ fn desktop_shortcuts_wait_for_the_actions_definition_write() {
         reopened.load_prefs_json(&saved.to_string()).unwrap();
         assert!(reopened.attach_preset_store(open(Box::new(definitions.clone()))).is_empty());
         assert_eq!(reopened.prefs().shortcuts[&new], "F4");
-        assert_ne!(reopened.prefs().shortcuts.get(&old).map(String::as_str), Some("F4"), "the durable native header must not resurrect the old conflicting key");
+        assert_ne!(
+            reopened.prefs().shortcuts.get(&old).map(String::as_str),
+            Some("F4"),
+            "the durable native header must not resurrect the old conflicting key"
+        );
     }
 }
 

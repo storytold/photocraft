@@ -743,7 +743,9 @@ fn action_definitions_written_requires_a_successful_current_write() {
     let revision = s.actions.rev;
     let written = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
     let key = crate::actions_cmds::occurrence_key(id);
-    s.edit_prefs(|prefs| { prefs.shortcuts.insert(key.clone(), "F4".into()); });
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts.insert(key.clone(), "F4".into());
+    });
     assert_eq!(s.actions.rev, revision, "a shortcut-header edit does not change the definitions revision");
     assert!(!s.action_definitions_written(), "the preceding revision write cannot acknowledge new keys");
     s.preset_store.as_mut().unwrap().backend = Box::new(MigrationFail { mem: mem.clone(), fail_name: ACTIONS_FILE.into() });

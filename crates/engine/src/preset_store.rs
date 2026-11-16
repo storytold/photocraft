@@ -1438,8 +1438,11 @@ impl Session {
     pub fn action_definitions_written(&self) -> bool {
         self.preset_store.as_ref().is_some_and(|store| {
             store.actions_written_rev == Some(self.actions.rev)
-                && store.actions_keys.iter().map(|(key, chord)| (key, chord))
-                    .eq(self.prefs().shortcuts.iter().filter(|(key, _)| crate::actions_cmds::is_action_key(key)))
+                && store.actions_keys.iter().map(|(key, chord)| (key, chord)).eq(self
+                    .prefs()
+                    .shortcuts
+                    .iter()
+                    .filter(|(key, _)| crate::actions_cmds::is_action_key(key)))
         })
     }
 
