@@ -70,7 +70,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let focal = match p.get("focal") {
         None => d.perspective.focal,
         Some(Value::Null) => None,
-        Some(v) => Some(v.as_f64().filter(|f| f.is_finite() && *f > 0.0).ok_or_else(|| bad("`focal` must be a number above 0, or null"))?),
+        // Vanishing Point ignores a focal length of 1 px or less, so it is not saved either.
+        Some(v) => Some(v.as_f64().filter(|f| f.is_finite() && *f > 1.0).ok_or_else(|| bad("`focal` must be a number above 1, or null"))?),
     };
     // Without planes there is no canvas size to record: the candidate keeps the saved one, so only
     // the planes and the focal length decide whether anything changes.
@@ -103,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Set Perspective Planes",
             menu: &[],
             shortcut: None,
-            params: r##"{"planes":[[[x,y]×4]] (at most 64, clockwise from the top-left),"focal":px>0|null (absent keeps the saved one)} → {"changed": bool}"##,
+            params: r##"{"planes":[[[x,y]×4]] (at most 64, clockwise from the top-left),"focal":px>1|null (absent keeps the saved one)} → {"changed": bool}"##,
             enabled: has_doc,
             run: set,
             journal: true,
@@ -301,6 +302,30 @@ mod tests {
         s.execute("image.canvasSize", json!({"width": 500, "height": 300, "anchor": "center"})).unwrap();
         assert_eq!(saved(&s).planes, shifted(&original.planes, -50.0 + 50.0, -40.0));
         assert!(saved(&s).valid_for(500, 300));
+    }
+
+    #[test]
+    fn planes_saved_for_another_canvas_size_are_left_stale_by_a_crop() {
+        let mut s = session();
+        let stale = PerspectivePlanes { planes: vec![FLOOR], focal: Some(500.0), size: Some([999, 999]) };
+        let kept = stale.clone();
+        s.edit("stale planes", move |doc, _| {
+            doc.perspective = kept;
+            Ok(())
+        })
+        .unwrap();
+        s.execute("image.crop", json!({"x": 50, "y": 40, "width": 300, "height": 200})).unwrap();
+        assert_eq!(saved(&s), stale, "a crop neither moves stale planes nor makes them valid");
+        assert!(!saved(&s).valid_for(300, 200));
+    }
+
+    #[test]
+    fn a_focal_length_of_one_pixel_or_less_is_refused() {
+        let mut s = session();
+        for f in [1.0, 0.5] {
+            assert!(s.execute(SET, json!({"planes": [FLOOR], "focal": f})).is_err(), "focal {f}");
+        }
+        assert!(s.execute(SET, json!({"planes": [FLOOR], "focal": 1.5})).is_ok());
     }
 
     #[test]

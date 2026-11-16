@@ -866,7 +866,8 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         layer,
         canvas,
         planes: saved.clone(),
-        focal: st.doc.perspective.focal.filter(|f| size_matches && f.is_finite() && *f > 0.0),
+        // The camera ignores a focal length of 1 px or less (`Scene::new`), so the dialog does too.
+        focal: st.doc.perspective.focal.filter(|f| size_matches && f.is_finite() && *f > 1.0),
         torn: saved_torn.clone(),
         tool: if saved.is_empty() { VpTool::CreatePlane } else { VpTool::EditPlane },
         pending: Vec::new(),

@@ -320,7 +320,10 @@ impl Session {
         // none, they are dropped (they no longer match the picture, and a later resize back to the
         // old size must not make them look valid again). Before the history record, so undo
         // restores them. An edit that set the planes itself (Vanishing Point) is left alone.
-        if st.doc.perspective == before.perspective && st.doc.perspective != photocraft_doc::PerspectivePlanes::default() {
+        // Planes already saved for another canvas size are stale: left exactly as they are (a
+        // map would otherwise stamp the new size on them and make them look valid).
+        let saved_for_before = before.perspective.size.is_none_or(|s| s == [before.size.width, before.size.height]);
+        if saved_for_before && st.doc.perspective == before.perspective && st.doc.perspective != photocraft_doc::PerspectivePlanes::default() {
             if let Some(a) = symmetry_map {
                 let size = st.doc.size;
                 let doc = Arc::make_mut(&mut st.doc);
@@ -337,7 +340,7 @@ impl Session {
                 }
                 pp.size = Some([size.width, size.height]);
                 let k = a.determinant().abs().sqrt();
-                pp.focal = pp.focal.map(|f| f * k).filter(|f| f.is_finite() && *f > 0.0);
+                pp.focal = pp.focal.map(|f| f * k).filter(|f| f.is_finite() && *f > 1.0);
             } else if st.doc.size != before.size {
                 Arc::make_mut(&mut st.doc).perspective = Default::default();
             }
