@@ -1013,13 +1013,18 @@ fn file_command(fields: &Fields) -> Option<&'static str> {
 /// the same name in different subfolders are told apart.
 /// Layers to Files refused its destination (#13969): the dialog back with every value, under the
 /// reference's alert.
-fn layers_to_files_destination_alert(app: &mut PhotocraftApp, d: &Dialog, result: &Result<Value, String>) {
+pub(crate) fn layers_to_files_destination_alert(app: &mut PhotocraftApp, d: &Dialog, result: &Result<Value, String>) {
     let message = match result {
         Err(e) if e == "Please specify destination." => tl!("Please specify destination."),
         Err(e) if e.starts_with("Destination does not exist:") => tl!("Destination does not exist."),
         _ => return,
     };
-    app.ui.dialogs.push(d.clone());
+    // The refusal ends a playing action (`confirm_generic_command` abandons its paused entry), so the dialog
+    // comes back as an ordinary one: with the paused token a corrected retry would be refused for belonging
+    // to an action that is gone.
+    let mut restored = d.clone();
+    restored.fields.remove(crate::actions::RESUME);
+    app.ui.dialogs.push(restored);
     app.ui.open_dialog(DialogKind::Error, Fields::from_iter([("message".into(), json!(message))]));
 }
 
