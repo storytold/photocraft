@@ -235,6 +235,98 @@ fn batch_override_open_and_unrepresented_open_settings_round_trip() {
     assert!(super::steps_doc::open_to("file.openAs", &json!({"path":"/recorded.png","as":"png"})).is_none());
 }
 
+fn recorded_open_descriptor(path: &str) -> Descriptor {
+    let mut d =
+        desc("Opn ").with("dontRecord", D::Boolean(false)).with("forceNotify", D::Boolean(true)).with("null", path_value(path)).with("DocI", D::Integer(42));
+    d.name = UnicodeString::new_nul("Recorded Open");
+    d
+}
+
+#[test]
+fn mapped_open_recording_metadata_imports_and_round_trips() {
+    let path = "/recorded/image.png";
+    let canonical = desc("null").with("null", path_value(path));
+    let mut partial = recorded_open_descriptor(path);
+    partial.items.retain(|(key, _)| !key.is("DocI"));
+    let variants = [
+        canonical.clone(),
+        recorded_open_descriptor(path),
+        partial,
+        desc("Opn ").with("null", path_value(path)).with("dontRecord", D::Boolean(true)).with("forceNotify", D::Boolean(false)).with("DocI", D::Integer(0)),
+    ];
+    for descriptor in variants {
+        for event in [AtnEvent::Code(*b"Opn "), AtnEvent::name("open")] {
+            let source = one_action(vec![AtnItem { event, ..item("Opn ", "Open", Some(descriptor.clone())) }]);
+            let loaded = import(&atn::write(&source).unwrap()).unwrap();
+            assert!(loaded.unsupported.is_empty(), "{descriptor:?}");
+            assert_eq!(loaded.actions[0].steps, [("file.openAs".into(), json!({"path": path}))]);
+            let (saved, skipped) = export("Open", &[&loaded.actions[0]], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0].descriptor, Some(canonical.clone()));
+            assert_eq!(import(&saved).unwrap().actions[0].steps, loaded.actions[0].steps);
+        }
+    }
+}
+
+#[test]
+fn mapped_open_recording_metadata_preserves_unsupported_forms() {
+    let base = recorded_open_descriptor("/recorded/image.png");
+    let mut invalid = vec![
+        base.clone().with("As  ", D::Class(class("PNGf"))),
+        base.clone().with("unknownOpenOption", D::Boolean(true)),
+        base.clone().with("null", path_value("/other.png")),
+        base.clone().with("forceNotify", D::Boolean(true)),
+    ];
+    for (key, value) in [
+        ("dontRecord", D::Integer(0)),
+        ("forceNotify", text("true")),
+        ("DocI", D::Integer(-1)),
+        ("DocI", D::Double(42.0)),
+        ("null", path_value("")),
+        ("null", text("/recorded/image.png")),
+    ] {
+        let mut changed = base.clone();
+        changed.items.iter_mut().find(|(k, _)| k.is(key)).unwrap().1 = value;
+        invalid.push(changed);
+    }
+    let mut missing_path = base;
+    missing_path.items.retain(|(key, _)| !key.is("null"));
+    invalid.push(missing_path);
+    for descriptor in invalid {
+        for event in [AtnEvent::Code(*b"Opn "), AtnEvent::name("open")] {
+            let source = one_action(vec![AtnItem { event: event.clone(), ..item("Opn ", "Open", Some(descriptor.clone())) }]);
+            let loaded = import(&atn::write(&source).unwrap()).unwrap();
+            assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP, "{descriptor:?}");
+            let (saved, skipped) = export("Open", &[&loaded.actions[0]], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            let written = atn::parse(&saved).unwrap().actions[0].items[0].clone();
+            assert_eq!(written.event, event);
+            assert_eq!(written.descriptor.unwrap().to_bytes(), descriptor.to_bytes());
+        }
+    }
+    assert!(event_and_descriptor("file.openAs", &json!({"path": "/recorded/image.png", "as": "png"})).is_none());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn mapped_open_recording_metadata_plays_and_continues() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("recorded.png").to_string_lossy().into_owned();
+    let mut writer = Session::new();
+    writer.execute("file.new", json!({"width": 3, "height": 2, "background": "transparent"})).unwrap();
+    writer.execute("file.saveACopy", json!({"path": path})).unwrap();
+    let source = one_action(vec![
+        AtnItem { event: AtnEvent::name("open"), ..item("Opn ", "Open", Some(recorded_open_descriptor(&path))) },
+        item("Mk  ", "Make", Some(desc("null").with("null", class_ref("Lyr ")).with("Usng", D::Descriptor(desc("Lyr ").with("Nm  ", text("After Open")))))),
+    ]);
+    let mut session = Session::new();
+    session.execute("actions.load", json!({"data": b64(&atn::write(&source).unwrap())})).unwrap();
+    assert!(session.execute("actions.play", json!({"action": "A"})).unwrap().get("failed").is_none());
+    let doc = &session.active().unwrap().doc;
+    assert_eq!((doc.size.width, doc.size.height), (3, 2));
+    assert!(doc.layers.iter().any(|layer| layer.name == "After Open"));
+}
+
 /// Unsupported modes and misplaced fields must not lose data through a partial conversion.
 #[test]
 fn batch_unknown_components_wrong_start_placement_and_unsupported_modes_stay_whole() {

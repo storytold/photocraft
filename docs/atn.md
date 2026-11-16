@@ -728,11 +728,11 @@ own binding. Authorization sees the redirected path before opening. No executed
 Open is a per-file failure. Save and Close accepts only a document opened from
 that input or its recorded Save snapshot, including after Close.
 
-The Open ATN converter admits only its represented path field. Richer recorded
-Open settings remain complete steps; native format/decoder options execute but
-are refused on ATN export until their wire representation is supported. This does
-not claim parity for unrepresented Open options. Native Batch keeps automatic
-opening when overrideOpen is false or omitted.
+Open maps its recorded path, accepting optional Boolean `dontRecord` / `forceNotify`
+and non-negative integer `DocI` as recording metadata. Export omits that metadata.
+Decoder options, unknown or duplicate fields, and malformed metadata remain complete
+kept steps; native format/decoder options still refuse ATN export. Native Batch
+keeps automatic opening when overrideOpen is false or omitted.
 
 Suppress Color Profile Warnings applies a private snapshot of the caller's color
 and import settings to each scratch input without profile questions. Import
@@ -859,8 +859,9 @@ differences that do not change what a step does.
 - Save writes the 4-character event code where the file had the string ID, writes `null` as the
   top-level class (the application writes the event code), and writes an empty descriptor for steps that
   had none.
-- Ids of the recording session (`LyrI`, `DocI`, `Idnt`, `layerSectionStart`, `layerSectionEnd`, `Vrsn`,
-  `forceNotify`) and default flags (`MkVs` false, `Adjs` false) are not written back.
+- Ids of the recording session (`LyrI`, `DocI`, `Idnt`, `layerSectionStart`, `layerSectionEnd`, `Vrsn`),
+  recording flags (`dontRecord`, `forceNotify`) and default flags (`MkVs` false, `Adjs` false)
+  are not written back.
 - An adjustment layer's values equal to the defaults are not written back (other values are).
 - Colours are kept as 8-bit values (51.0031 becomes 51); gradient names become "Custom".
 - A loaded Gradient Fill Make or Set (`gradientLayer`) saves back as the recorded descriptor until

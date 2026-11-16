@@ -25,9 +25,19 @@ pub(super) fn place_to(id: &str, p: &Value) -> Option<Descriptor> {
     Some(d.with("Lnkd", D::Boolean(id == "file.placeLinked")).with("Antl", D::Boolean(true)))
 }
 
-/// `open`: File › Open of a recorded path.
+/// `open`: File › Open of a recorded path; session ids and recorder/notification flags are metadata.
 pub(super) fn open_from(d: &Descriptor) -> Mapped {
-    if d.items.len() != 1 || !d.class_id.is("null") || !d.name.to_string_lossy().is_empty() {
+    const KEYS: [&str; 4] = ["null", "dontRecord", "forceNotify", "DocI"];
+    let supported = |key: &Id, value: &D| {
+        key.is("null")
+            || ((key.is("dontRecord") || key.is("forceNotify")) && matches!(value, D::Boolean(_)))
+            || (key.is("DocI") && matches!(value, D::Integer(id) if *id >= 0))
+    };
+    // Decoder options must not disappear, and a duplicate key must not select just its first value.
+    if d.items.len() > KEYS.len()
+        || d.items.iter().any(|(key, value)| !supported(key, value))
+        || KEYS.iter().any(|key| d.items.iter().filter(|(k, _)| k.is(key)).count() > 1)
+    {
         return Mapped::Unsupported { harmless: false };
     }
     match d.get("null").and_then(path_text) {
