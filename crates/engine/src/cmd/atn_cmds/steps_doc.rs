@@ -400,7 +400,12 @@ pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
     };
     p.insert("anchor".into(), anchor.into());
     if d.get("canvasExtensionColorType").is_some() {
-        let Some(c) = get_enum(d, "canvasExtensionColorType") else { return Mapped::Unsupported { harmless: false } };
+        let Some(D::Enumerated { type_id, value }) = d.get("canvasExtensionColorType") else { return Mapped::Unsupported { harmless: false } };
+        // A different enum type or a string spelling the char ID must not select a colour.
+        if !type_id.is("canvasExtensionColorType") || !matches!(value, Id::Code(_)) {
+            return Mapped::Unsupported { harmless: false };
+        }
+        let c = trimmed(value);
         match lookup(EXTENSION, &c) {
             Some(c) => {
                 p.insert("extensionColor".into(), c.into());

@@ -522,7 +522,8 @@ condition IDs remain kept Photoshop steps with their original descriptors.
 - Photo Filter converts recorded Lab colours through `craft-cms`.
 - Direct Vibrance and Gradient Map save as the string events `vibrance` and `gradientMapEvent`.
   Stroke Outside uses `StrL.Otsd`, group Pass Through uses `BlnM.passThrough`, Canvas Size extension
-  colours use `FrgC` and `Clr `, and Absolute Colorimetric intent uses `Inte.AClr`.
+  colours use `FrgC`, `BckC` and `Clr `, and Absolute Colorimetric intent uses `Inte.AClr`.
+  Legacy `Bckg` still imports as the background colour.
 - Make adjustment layers keeps surrounding `Usng.Opct` as layer opacity, independently of the
   adjustment settings. Recorded percentages use eight-bit layer-opacity storage at every document
   depth: 70 % becomes 179/255. Native creation accepts an optional 0..1 `opacity` fraction.

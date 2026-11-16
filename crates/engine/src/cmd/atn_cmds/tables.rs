@@ -125,8 +125,16 @@ pub(super) const OFFSET_FILL: &[(&str, &str)] = &[("Wrp ", "wrap"), ("Rpt ", "re
 
 pub(super) const TRIM: &[(&str, &str)] = &[("Trns", "transparent"), ("topLeftPixelColor", "topLeft"), ("bottomRightPixelColor", "bottomRight")];
 
-pub(super) const EXTENSION: &[(&str, &str)] =
-    &[("Bckg", "background"), ("FrgC", "foreground"), ("Frgd", "foreground"), ("Wht ", "white"), ("Blck", "black"), ("Trns", "transparent")];
+// Canonical values precede legacy aliases so Save writes the Photoshop colour identifier.
+pub(super) const EXTENSION: &[(&str, &str)] = &[
+    ("BckC", "background"),
+    ("Bckg", "background"),
+    ("FrgC", "foreground"),
+    ("Frgd", "foreground"),
+    ("Wht ", "white"),
+    ("Blck", "black"),
+    ("Trns", "transparent"),
+];
 
 pub(super) const FILL_CONTENTS: &[(&str, &str)] = &[
     ("FrgC", "foreground"),

@@ -702,12 +702,14 @@ fn canvas() -> Descriptor {
         .with("Vrtc", enm("VrtL", "Top "))
 }
 
-/// Foreground and custom extension colours select visibly different new border pixels.
+/// Foreground, background and custom extension colours select different new border pixels.
 #[test]
-fn canvas_extension_identifiers_preserve_foreground_and_custom_color() {
+fn canvas_extension_identifiers_preserve_foreground_background_and_custom_color() {
     for (input, custom, canonical, expected) in [
         ("FrgC", false, "FrgC", [1.0, 0.0, 0.0, 1.0]),
         ("Frgd", false, "FrgC", [1.0, 0.0, 0.0, 1.0]),
+        ("BckC", false, "BckC", [0.0, 1.0, 0.0, 1.0]),
+        ("Bckg", false, "BckC", [0.0, 1.0, 0.0, 1.0]),
         ("Clr ", true, "Clr ", [0.0, 0.0, 1.0, 1.0]),
         ("Othr", true, "Clr ", [0.0, 0.0, 1.0, 1.0]),
     ] {
@@ -718,17 +720,22 @@ fn canvas_extension_identifiers_preserve_foreground_and_custom_color() {
         let action = recorded(AtnEvent::Code(*b"CnvS"), d);
         assert_eq!(action.steps[0].0, "image.canvasSize");
         assert_eq!(*enum_value(saved(&action).descriptor.as_ref().unwrap(), "canvasExtensionColorType", "canvasExtensionColorType"), Id::new(canonical));
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width":4,"height":4,"background":"white"})).unwrap();
-        s.execute("tools.setColors", json!({"foreground":"#ff0000","background":"#00ff00"})).unwrap();
-        let (id, p) = &action.steps[0];
-        s.execute(id, p.clone()).unwrap();
-        let pixel: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x":5,"y":1})).unwrap()).unwrap();
-        assert_eq!(pixel, expected);
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":4,"height":4,"depth":depth,"background":"white"})).unwrap();
+            s.execute("tools.setColors", json!({"foreground":"#ff0000","background":"#00ff00"})).unwrap();
+            replay_saved(&mut s, &action);
+            let pixel: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x":5,"y":1})).unwrap()).unwrap();
+            assert_eq!(pixel, expected, "{input} at {depth} bits");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc.size, photocraft_geom::Size::new(4, 4));
+        }
     }
     for d in [
         canvas().with("canvasExtensionColorType", enm("canvasExtensionColorType", "futureColor")).with("canvasExtensionColor", D::Descriptor(blue())),
         canvas().with("canvasExtensionColorType", D::Integer(1)),
+        canvas().with("canvasExtensionColorType", enm("otherType", "BckC")),
+        canvas().with("canvasExtensionColorType", D::Enumerated { type_id: Id::new("canvasExtensionColorType"), value: Id::Str(b"BckC".to_vec()) }),
         canvas().with("canvasExtensionColorType", enm("canvasExtensionColorType", "Clr ")),
     ] {
         let action = recorded(AtnEvent::Code(*b"CnvS"), d.clone());
