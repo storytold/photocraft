@@ -2,8 +2,9 @@
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 use photocraft_color::{BlendMode, Color};
-use photocraft_doc::{Document, Frame, Layer, LayerContent, LayerId, Path, VectorMask};
+use photocraft_doc::{Document, Frame, Layer, LayerContent, LayerId, LiveShape, Path, VectorMask};
 use photocraft_geom::Affine;
+use photocraft_vector as vector;
 use serde_json::{Value, json};
 
 fn bad(msg: impl Into<String>) -> EngineError {
@@ -28,6 +29,26 @@ fn check_lock(doc: &Document, id: LayerId) -> Result<()> {
     let locks = doc.effective_locks(id);
     if locks.all || locks.position { Err(bad("the frame or its containing group is locked")) } else { Ok(()) }
 }
+/// The largest corner radius a frame takes, in pixels (#13875).
+pub const MAX_FRAME_RADIUS: f64 = 150_000.0;
+
+/// A star Polygon frame's unit outline (#13876), as the reference application draws it: `sides`
+/// outer points, the inner ones at `percent` of the polygon's apothem (not of its radius), the
+/// whole star stretched to fill the frame's `w` × `h` box; the outer points rounded by `radius` px.
+///
+/// The star is built from its live shape, not through `shape.create`, which clamps the ratio to
+/// 1 %: 1 % of the apothem is below that (0.8 % of the radius on five sides, 0.5 % on three).
+/// The sharp star is stretched to the box first and rounded there, in document pixels, so the arcs
+/// stay circular and `radius` is the radius drawn on a frame that isn't square.
+pub fn star_path(sides: u64, percent: f64, radius: f64, w: f64, h: f64) -> Result<Path> {
+    let sides = sides.clamp(3, 100);
+    let inner = percent / 100.0 * (std::f64::consts::PI / sides as f64).cos();
+    let sharp = vector::shapes::live_path(&LiveShape::Polygon { rect: [0.0, 0.0, w, h], sides: sides as u32, star_ratio: inner, corner_radius: 0.0 });
+    let sized = normalized(&sharp)?.0.transform(&Affine { m: [w, 0.0, 0.0, h, 0.0, 0.0] });
+    let rounded = vector::shapes::round_corners_where(sized, radius, |i| vector::shapes::polygon_rounds_vertex(inner, i));
+    Ok(rounded.transform(&Affine { m: [1.0 / w, 0.0, 0.0, 1.0 / h, 0.0, 0.0] }))
+}
+
 fn geometry(p: &Value) -> Result<Frame> {
     let get = |key: &str| crate::commands::int_i32("layer.new.frame", p, key)?.ok_or_else(|| bad(format!("missing `{key}`")));
     let (x, y, w, h) = (get("x")?, get("y")?, get("width")?, get("height")?);
@@ -35,14 +56,46 @@ fn geometry(p: &Value) -> Result<Frame> {
         return Err(bad("frame sides must be 1..=300000 pixels, within the coordinate range"));
     }
     let shape = p.get("shape").map_or(Some("rectangle"), Value::as_str).ok_or_else(|| bad("shape must be a string"))?;
+    // The corner radius in document pixels (#13875); Ellipse and Custom frames have no corners.
+    let radius = match p.get("radius") {
+        None | Some(Value::Null) => 0.0,
+        Some(v) => v
+            .as_f64()
+            .filter(|r| r.is_finite() && (0.0..=MAX_FRAME_RADIUS).contains(r))
+            .ok_or_else(|| bad("radius must be a number from 0 to 150000 pixels"))?,
+    };
     let path = match shape {
         "rectangle" | "ellipse" | "triangle" | "polygon" => {
             let sides = p.get("sides").map_or(Some(5), Value::as_u64).ok_or_else(|| bad("sides must be an integer"))?;
             if !(3..=100).contains(&sides) {
                 return Err(bad("sides must be 3..=100"));
             }
-            crate::vector_cmds::shape_path(&json!({"kind": match shape { "rectangle" => "rect", "ellipse" => "ellipse", _ => "polygon" },
-                "rect": [0, 0, 1, 1], "sides": if shape == "triangle" { 3 } else { sides }}))?
+            let kind = match shape {
+                "rectangle" => "rect",
+                "ellipse" => "ellipse",
+                _ => "polygon",
+            };
+            let sides = if shape == "triangle" { 3 } else { sides };
+            // A Polygon frame's star ratio in percent (#13876); 100 is the plain polygon.
+            let star = match p.get("starRatio") {
+                None | Some(Value::Null) => 100.0,
+                Some(v) => {
+                    v.as_f64().filter(|r| r.is_finite() && (1.0..=100.0).contains(r)).ok_or_else(|| bad("starRatio must be a number from 1 to 100 (%)"))?
+                }
+            };
+            if shape == "polygon" && star < 100.0 {
+                star_path(sides, star, radius, f64::from(w), f64::from(h))?
+            } else if radius > 0.0 && shape != "ellipse" {
+                // Rounded at the frame's size, then scaled into its unit outline, so the corners
+                // stay circular on a frame that isn't square.
+                let (fw, fh) = (f64::from(w), f64::from(h));
+                let sized = crate::vector_cmds::shape_path(
+                    &json!({"kind": kind, "rect": [0.0, 0.0, fw, fh], "sides": sides, "radius": radius, "cornerRadius": radius}),
+                )?;
+                sized.transform(&Affine { m: [1.0 / fw, 0.0, 0.0, 1.0 / fh, 0.0, 0.0] })
+            } else {
+                crate::vector_cmds::shape_path(&json!({"kind": kind, "rect": [0, 0, 1, 1], "sides": sides}))?
+            }
         }
         "custom" => {
             let path = crate::vector_cmds::parse_path(p.get("path").ok_or_else(|| bad("a custom frame needs path"))?).map_err(bad)?;
@@ -366,7 +419,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "layer.new.frame",
             "New Frame",
-            r#"{"x":i32,"y":i32,"width":u32,"height":u32,"shape":"rectangle|ellipse|triangle|polygon|custom"="rectangle","sides":3..100=5,"path":object?,"stroke":object|null?,"layer":id?,"name":str?} → {layer,frame:[x,y,w,h],shape}"#,
+            r#"{"x":i32,"y":i32,"width":u32,"height":u32,"shape":"rectangle|ellipse|triangle|polygon|custom"="rectangle","sides":3..100=5,"radius":0..150000=0 (px; rounds Rectangle, Triangle and Polygon corners),"starRatio":1..100=100 (%, Polygon: below 100 a star filling the box),"path":object?,"stroke":object|null?,"layer":id?,"name":str?} → {layer,frame:[x,y,w,h],shape}"#,
             has_doc,
             new_frame,
         ),
@@ -395,5 +448,9 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 #[cfg(test)]
 mod content_name_tests;
+#[cfg(test)]
+mod radius_tests;
+#[cfg(test)]
+mod star_tests;
 #[cfg(test)]
 mod tests;
