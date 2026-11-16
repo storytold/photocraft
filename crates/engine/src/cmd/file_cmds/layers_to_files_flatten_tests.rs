@@ -98,3 +98,17 @@ fn png_and_psd_keep_their_transparency() {
     assert_eq!(names, ["Blue Half"], "no white layer added");
     assert!((doc.layers[0].opacity - 0.5).abs() < 0.01);
 }
+
+/// CodeRabbit on #15205: 16-bit BMP and Targa documents keep today's output (the reference's 16-bit BMP and
+/// Targa are not measured): no white layer, so a 32-bit Targa still has transparent pixels. 8-bit stays
+/// flattened (see above), and a 16-bit TIFF is still flattened.
+#[test]
+fn a_16_bit_targa_keeps_its_transparency() {
+    let mut s = session();
+    s.execute("image.mode.bits16", json!({})).unwrap();
+    let files = export(&s, json!({"format": "tga", "tgaBits": 32}));
+    let (_, tga) = files.iter().find(|(n, _)| n.contains("Blue Half")).unwrap();
+    let (_, px, n) = rgba(tga);
+    assert_eq!(n, 4);
+    assert_eq!(px[0][3], 0, "transparent outside the layer, as before the change");
+}

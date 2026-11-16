@@ -107,9 +107,16 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
         let name = format!("{}_{number}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, sanitize(&l.name));
         // TIFF, BMP and Targa files are flattened on white, as the reference writes them (#13967):
         // a white fill under the layer, and a TIFF without a transparency channel. PNG and PSD
-        // keep transparency; other modes and 32-bit documents keep today's output (not measured).
+        // keep transparency; other modes and 32-bit documents keep today's output (not measured), and
+        // so do 16-bit BMP and Targa files (a 16-bit TIFF is measured).
         let mut save = save;
-        if matches!(format.as_str(), "tif" | "tiff" | "bmp" | "tga" | "targa") && one.mode == ColorMode::Rgb && one.depth != photocraft_doc::SampleType::F32 {
+        let depth = one.depth;
+        let flattens = match format.as_str() {
+            "tif" | "tiff" => depth != photocraft_doc::SampleType::F32,
+            "bmp" | "tga" | "targa" => depth == photocraft_doc::SampleType::U8,
+            _ => false,
+        };
+        if flattens && one.mode == ColorMode::Rgb {
             one.layers.insert(0, Layer::new("Background", LayerContent::Fill(photocraft_doc::Fill::Solid(photocraft_color::Color::WHITE))));
             save.tiff_transparency = Some(false);
         }
