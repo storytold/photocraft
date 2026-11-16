@@ -71,9 +71,13 @@ fn text_anchor(app: &mut PhotocraftApp, xf: &ViewXform) -> Option<Rect> {
                 .lines
                 .iter()
                 .flat_map(|ln| {
-                    let (tx0, ty0) = l.to_text(ln.x0, ln.baseline - ln.ascent);
-                    let (tx1, ty1) = l.to_text(ln.x1.max(ln.x0 + 1.0), ln.baseline + ln.descent);
-                    [scr_t(tx0, ty0), scr_t(tx1, ty1)]
+                    let (x0, x1) = (ln.x0, ln.x1.max(ln.x0 + 1.0));
+                    let (y0, y1) = (ln.baseline - ln.ascent, ln.baseline + ln.descent);
+                    let c0 = l.to_text(x0, y0);
+                    let c1 = l.to_text(x1, y0);
+                    let c2 = l.to_text(x1, y1);
+                    let c3 = l.to_text(x0, y1);
+                    [scr_t(c0.0, c0.1), scr_t(c1.0, c1.1), scr_t(c2.0, c2.1), scr_t(c3.0, c3.1)]
                 })
                 .collect();
             if pts.is_empty() {
@@ -164,30 +168,41 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::Mor
         }
 
         // --- Bold toggle ---
-        let is_bold = char_style.as_ref().map_or_else(
+        let font_is_bold = char_style.as_ref().map_or_else(
             || style.contains("Bold") || o.type_style.contains("Bold"),
-            |c| c.faux_bold || c.weight >= 600 || style.contains("Bold"),
+            |c| c.weight >= 600 || style.contains("Bold"),
         );
+        let faux_bold = char_style.as_ref().is_some_and(|c| c.faux_bold);
+        let is_bold = faux_bold || font_is_bold;
 
         let toggle_bold = crate::icons::button(ui, "bold", task_bar::BUTTON, is_bold, tl!("Bold"));
         if toggle_bold.clicked() {
             if is_bold {
-                let target = if style.contains("Italic") { "Italic" } else { "Regular" };
-                let new_style = styles(&fam)
-                    .into_iter()
-                    .find(|s| s == target)
-                    .unwrap_or_else(|| target.into());
-                app.ui.tool_options.type_style = new_style.clone();
-                apply(app, ui.ctx(), json!({"fontStyle": new_style, "fauxBold": false}));
+                if faux_bold && !font_is_bold {
+                    apply(app, ui.ctx(), json!({"fauxBold": false}));
+                } else {
+                    let is_italic = char_style.as_ref().map_or_else(
+                        || {
+                            let s = style.to_lowercase();
+                            let os = o.type_style.to_lowercase();
+                            s.contains("italic") || s.contains("oblique") || os.contains("italic") || os.contains("oblique")
+                        },
+                        |c| c.italic || style.to_lowercase().contains("italic") || style.to_lowercase().contains("oblique"),
+                    );
+                    let new_style = resolve_bold_counterpart(&fam, &style, is_italic, false);
+                    app.ui.tool_options.type_style = new_style.clone();
+                    apply(app, ui.ctx(), json!({"fontStyle": new_style, "fauxBold": false}));
+                }
             } else {
-                let target = if style.contains("Italic") { "Bold Italic" } else { "Bold" };
-                let available = styles(&fam);
-                let new_style = available
-                    .iter()
-                    .find(|s| *s == target)
-                    .or_else(|| available.iter().find(|s| s.contains("Bold")))
-                    .cloned()
-                    .unwrap_or_else(|| target.into());
+                let is_italic = char_style.as_ref().map_or_else(
+                    || {
+                        let s = style.to_lowercase();
+                        let os = o.type_style.to_lowercase();
+                        s.contains("italic") || s.contains("oblique") || os.contains("italic") || os.contains("oblique")
+                    },
+                    |c| c.italic || style.to_lowercase().contains("italic") || style.to_lowercase().contains("oblique"),
+                );
+                let new_style = resolve_bold_counterpart(&fam, &style, is_italic, true);
                 app.ui.tool_options.type_style = new_style.clone();
                 apply(app, ui.ctx(), json!({"fontStyle": new_style}));
             }
@@ -282,6 +297,81 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::Mor
     });
 }
 
+/// Resolves the bold or non-bold counterpart style for a font family, preserving italic/oblique styling.
+pub(crate) fn resolve_bold_counterpart(fam: &str, current_style: &str, is_italic: bool, want_bold: bool) -> String {
+    let available = super::fonts::styles(fam);
+    let lower_curr = current_style.to_lowercase();
+    let is_oblique = lower_curr.contains("oblique")
+        || (!lower_curr.contains("italic") && available.iter().any(|s| s.to_lowercase().contains("oblique")));
+
+    let target = match (is_italic, is_oblique, want_bold) {
+        (true, true, true) => "Bold Oblique",
+        (true, true, false) => "Oblique",
+        (true, false, true) => "Bold Italic",
+        (true, false, false) => "Italic",
+        (false, _, true) => "Bold",
+        (false, _, false) => "Regular",
+    };
+
+    if let Some(s) = available.iter().find(|s| s.eq_ignore_ascii_case(target)) {
+        return s.clone();
+    }
+
+    let faces = photocraft_text::try_shared()
+        .and_then(|shared| shared.lock().ok().map(|mut e| e.fonts.faces(fam)))
+        .unwrap_or_default();
+
+    let style_info = |s: &str| -> (bool, f32) {
+        if let Some(f) = faces.iter().find(|f| f.style.eq_ignore_ascii_case(s)) {
+            (f.italic, f.weight)
+        } else {
+            let lower = s.to_lowercase();
+            let it = lower.contains("italic") || lower.contains("oblique");
+            let weight = if lower.contains("thin") || lower.contains("hairline") {
+                100.0
+            } else if lower.contains("extralight") || lower.contains("ultralight") {
+                200.0
+            } else if lower.contains("light") {
+                300.0
+            } else if lower.contains("medium") {
+                500.0
+            } else if lower.contains("semibold") || lower.contains("demibold") {
+                600.0
+            } else if lower.contains("extrabold") || lower.contains("ultrabold") {
+                800.0
+            } else if lower.contains("black") || lower.contains("heavy") {
+                900.0
+            } else if lower.contains("bold") {
+                700.0
+            } else {
+                400.0
+            };
+            (it, weight)
+        }
+    };
+
+    let target_weight = if want_bold { 700.0 } else { 400.0 };
+
+    let best = available
+        .iter()
+        .filter(|s| {
+            let (it, w) = style_info(s);
+            let is_bd = w >= 600.0;
+            it == is_italic && is_bd == want_bold
+        })
+        .min_by(|a, b| {
+            let (_, wa) = style_info(a);
+            let (_, wb) = style_info(b);
+            (wa - target_weight).abs().total_cmp(&(wb - target_weight).abs())
+        });
+
+    if let Some(s) = best {
+        return s.clone();
+    }
+
+    target.into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +424,125 @@ mod tests {
         app.ui.panels.context_task_bar = true;
         app.ui.text_edit = None;
         assert!(!eligible(&app));
+    }
+
+    /// Preserving oblique styling when toggling bold.
+    #[test]
+    fn resolve_bold_counterpart_preserves_oblique() {
+        // Toggling bold on oblique selects Bold Oblique
+        assert_eq!(resolve_bold_counterpart("CustomFamily", "Oblique", true, true), "Bold Oblique");
+        // Toggling bold off on Bold Oblique selects Oblique
+        assert_eq!(resolve_bold_counterpart("CustomFamily", "Bold Oblique", true, false), "Oblique");
+        // Regular / Bold fallback
+        assert_eq!(resolve_bold_counterpart("CustomFamily", "Regular", false, true), "Bold");
+        assert_eq!(resolve_bold_counterpart("CustomFamily", "Bold", false, false), "Regular");
+        // Bundled Inter has Regular, Medium, SemiBold: toggling bold picks SemiBold
+        assert_eq!(resolve_bold_counterpart("Inter", "Regular", false, true), "SemiBold");
+        assert_eq!(resolve_bold_counterpart("Inter", "SemiBold", false, false), "Regular");
+    }
+
+    /// Preserving italic styling when toggling bold.
+    #[test]
+    fn resolve_bold_counterpart_preserves_italic() {
+        assert_eq!(resolve_bold_counterpart("CustomFamily", "Italic", true, true), "Bold Italic");
+        assert_eq!(resolve_bold_counterpart("CustomFamily", "Bold Italic", true, false), "Italic");
+    }
+
+    /// `text_anchor` transforms all four corners of each line rectangle,
+    /// so rotated camera (-45 degrees) captures the full vertical extent.
+    #[test]
+    fn text_anchor_transforms_all_four_corners_with_rotation() {
+        let mut app = app_with_doc();
+        let created = app
+            .run(
+                "type.create",
+                json!({
+                    "text": "PhotoCraft Text",
+                    "size": 32,
+                    "x": 100,
+                    "y": 100,
+                }),
+            )
+            .unwrap();
+        let layer = created["layer"].as_u64().unwrap();
+        app.sync_views();
+
+        app.ui.tool = crate::state::Tool::Type;
+        app.ui.panels.context_task_bar = true;
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer,
+            caret: 0,
+            anchor: 0,
+            session: String::new(),
+            created: false,
+            dragging: false,
+            mask: false,
+            document: None,
+            resize: None,
+            preedit: None,
+        });
+
+        // ViewXform with -45 degree camera rotation
+        let xf = ViewXform {
+            rect: Rect::from_min_size(Pos2::new(0.0, 0.0), egui::vec2(800.0, 600.0)),
+            zoom: 1.0,
+            center: [100.0, 100.0],
+            flip: false,
+            rotation: -45.0,
+            aspect: 1.0,
+        };
+
+        let rect = text_anchor(&mut app, &xf).expect("anchor rect exists");
+        assert!(rect.is_positive());
+        assert!(rect.height() > 5.0);
+        assert!(rect.width() > 5.0);
+    }
+
+    /// When faux bold alone makes the button active, clearing it preserves the underlying face (e.g. Light).
+    #[test]
+    fn clear_faux_bold_alone_preserves_underlying_face() {
+        let mut app = app_with_doc();
+        let created = app
+            .run(
+                "type.create",
+                json!({
+                    "text": "Light Text",
+                    "size": 24,
+                    "fontStyle": "Light",
+                    "fauxBold": true,
+                }),
+            )
+            .unwrap();
+        let layer = super::super::LayerId(created["layer"].as_u64().unwrap());
+        app.sync_views();
+
+        let t = super::super::text_layer(&app.session.active().unwrap().doc, layer).unwrap();
+        let c = &t.char_runs()[0].style;
+        assert!(c.faux_bold);
+        assert_eq!(c.font_style, "Light");
+
+        // Verify font_is_bold is false and faux_bold is true
+        let font_is_bold = c.weight >= 600 || c.font_style.contains("Bold");
+        assert!(!font_is_bold);
+        assert!(c.faux_bold);
+
+        // Clearing faux bold without replacing fontStyle keeps "Light"
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: layer.0,
+            caret: 0,
+            anchor: 0,
+            session: String::new(),
+            created: false,
+            dragging: false,
+            mask: false,
+            document: None,
+            resize: None,
+            preedit: None,
+        });
+        super::super::defaults::apply(&mut app, &egui::Context::default(), json!({"fauxBold": false}));
+        let t_after = super::super::text_layer(&app.session.active().unwrap().doc, layer).unwrap();
+        let c_after = &t_after.char_runs()[0].style;
+        assert!(!c_after.faux_bold);
+        assert_eq!(c_after.font_style, "Light");
     }
 }
