@@ -1105,14 +1105,22 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if r.changed() {
                 o.strength = s;
             }
-            let smudge_angle = if tool == Tool::Smudge {
-                let before = app.session.tools.brush.clone();
-                let mut brush = before.clone();
-                let alert = crate::eraser_ui::angle_field(ui, &mut brush);
-                Some((before, brush, alert))
-            } else {
-                None
-            };
+            if tool == Tool::Smudge {
+                fn angle_control(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+                    let before = app.session.tools.brush.clone();
+                    let mut brush = before.clone();
+                    let alert = crate::eraser_ui::angle_field(ui, &mut brush);
+                    crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
+                    if alert {
+                        app.ui.open_dialog(
+                            crate::state::DialogKind::Error,
+                            json!({"message": tl!(crate::eraser_ui::ANGLE_RANGE_MESSAGE)}).as_object().cloned().unwrap_or_default(),
+                        );
+                    }
+                }
+                angle_control(app, ui);
+            }
+            let o = &mut app.ui.tool_options;
             if let Some(all) = o.sample_all.slot(tool) {
                 crate::widgets::checkbox(ui, all, tl!("Sample All Layers"));
             }
@@ -1121,15 +1129,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             if tool == Tool::Smudge {
                 crate::widgets::checkbox(ui, &mut o.finger_painting, tl!("Finger Painting"));
-            }
-            if let Some((before, brush, alert)) = smudge_angle {
-                crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
-                if alert {
-                    app.ui.open_dialog(
-                        crate::state::DialogKind::Error,
-                        json!({"message": tl!(crate::eraser_ui::ANGLE_RANGE_MESSAGE)}).as_object().cloned().unwrap_or_default(),
-                    );
-                }
             }
             if out_of_range {
                 crate::eraser_ui::open_range_alert(app);
