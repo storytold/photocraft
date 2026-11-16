@@ -3,7 +3,7 @@
 //! brush instead of painting. Left and right
 //! set the diameter (the circle's edge follows the pointer), up and down the hardness (down makes
 //! it harder). The brush circle stays where the drag began, tinted to show the hardness, with a
-//! Diameter/Hardness readout beside the pointer.
+//! Diameter/Hardness readout beside its centre that stays put too, as in Photoshop (#11702).
 //!
 //! The change is `tools.setBrush` calls sharing one `coalesce` key, so the whole drag is one
 //! journal entry (Rule 1) and, the brush being tool state, no history step. Krita's ⇧+drag (the
@@ -143,7 +143,8 @@ fn update(app: &mut PhotocraftApp, r: Resize, x: f64, y: f64) {
 }
 
 /// Draw the resize feedback: the brush circle at the anchor, filled with the brush preview
-/// colour as a dab of the brush's hardness covers (Photoshop's), and the readout beside the pointer.
+/// colour as a dab of the brush's hardness covers (Photoshop's), and the readout beside the anchor,
+/// where it stays readable instead of running off with the pointer (#11702).
 /// Returns true while a resize is in progress (the canvas then hides its cursor).
 pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) -> bool {
     let Some(r) = app.brush_resize else { return false };
@@ -155,11 +156,10 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) -> boo
     painter.circle_stroke(c, radius, Stroke::new(1.0, Color32::from_white_alpha(220)));
     // Photoshop hides the pointer while the circle stays put.
     painter.ctx().set_cursor_icon(egui::CursorIcon::None);
-    let at = painter.ctx().pointer_latest_pos().unwrap_or(c);
     let percent = |v: f32| format!("{}%", (v * 100.0).round() as i64);
     let labels = [readout_label(tl!("Diameter:")), readout_label(tl!("Hardness:")), readout_label(tl!("Opacity:"))];
     let values = [format!("{} px", b.size.round() as i64), percent(b.hardness), percent(b.opacity)];
-    crate::canvas::draw_readout(painter.ctx(), "brush-resize-readout", at, labels.each_ref().map(String::as_str), values);
+    crate::canvas::draw_readout(painter.ctx(), "brush-resize-readout", c, labels.each_ref().map(String::as_str), values);
     true
 }
 

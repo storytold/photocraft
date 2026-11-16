@@ -1776,7 +1776,7 @@ fn paint_cursor(ctx: &egui::Context, w: &mut SelectMaskWorkspace, clip: &egui::P
         } else if w.tool.brushes() {
             let r = (w.size() as f32 * 0.5 * v.zoom).max(2.0);
             // While its size is dragged the circle stays where the drag began, with the
-            // Diameter/Hardness readout beside the pointer, as on the main canvas (#10497).
+            // Diameter/Hardness readout beside its centre, as on the main canvas (#10497, #11702).
             let resize = w.resize.filter(|&(tool, ..)| tool == w.tool);
             let center = resize.map_or(hp, |(_, anchor, ..)| anchor);
             clip.circle_stroke(center, r, Stroke::new(1.5, Color32::BLACK));
@@ -1786,7 +1786,7 @@ fn paint_cursor(ctx: &egui::Context, w: &mut SelectMaskWorkspace, clip: &egui::P
                 crate::canvas::draw_readout(
                     ctx,
                     "select-mask-brush-resize-readout",
-                    hp,
+                    center,
                     ["Diameter:", "Hardness:"],
                     [format!("{} px", w.size().round() as i64), hardness],
                 );
