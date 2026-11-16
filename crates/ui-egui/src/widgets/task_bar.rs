@@ -51,6 +51,11 @@ impl MoreMenu {
         self.hide |= hide;
         self.picked = picked.or(self.picked);
     }
+
+    /// Suppresses the ⋯ button so this bar does not show it.
+    pub fn suppress(&mut self) {
+        self.shown = true;
+    }
 }
 
 /// What the bar did this frame.

@@ -189,6 +189,7 @@ impl PhotocraftApp {
             color_picker_live: Vec::new(),
             pending_after_prompt: None,
             after_transform_commit: None,
+            place_action_bar: None,
             tone_hist: None,
             doc_hist: None,
             doc_hist_preview: None,

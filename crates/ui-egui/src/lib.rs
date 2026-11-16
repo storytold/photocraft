@@ -645,6 +645,8 @@ pub struct PhotocraftApp {
     pub(crate) pending_after_prompt: Option<(String, serde_json::Value)>,
     /// A command clicked while Free Transform commits in the background, run when it lands.
     pub(crate) after_transform_commit: Option<(String, serde_json::Value)>,
+    /// The placed layer just committed from Free Transform: shows the Place Quick Actions bar.
+    pub(crate) place_action_bar: Option<tools::place_action_bar::PlaceActionBar>,
     /// Last mirrored or imported OS image; this can predate the current internal copy.
     os_clip_sig: Option<u64>,
     /// Last observed SVG bytes, to distinguish an unchanged OS source from a newer internal copy.

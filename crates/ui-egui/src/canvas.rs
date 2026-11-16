@@ -1783,6 +1783,8 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
         let before = app.ui.views.get(idx).cloned();
         crate::crop_task_bar::draw(app, ui, xf);
         crate::type_tool::draw_task_bar(app, ui, xf);
+        crate::tools::place_action_bar::draw(app, ui, xf);
+        crate::tools::transform_task_bar::draw(app, ui, xf);
         if let Some(now) = app.ui.views.get(idx)
             && Some(now) != before.as_ref()
         {
