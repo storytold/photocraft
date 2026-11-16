@@ -169,7 +169,23 @@ fn duplicate_set_distinguishes_implicit_caption_and_empty_import() {
     assert_eq!(s.actions.list[copy["index"].as_u64().unwrap() as usize].name, "Implicit copy");
     assert_eq!(s.execute("actions.duplicate", json!({"set":"Same"})).unwrap()["actions"], 2);
     assert_eq!(s.execute("actions.duplicate", json!({"set":"Empty"})).unwrap(), json!({"set":"Empty copy","actions":0}));
-    assert_eq!(s.actions.sets, ["Empty copy"]);
+    // A set copy declares its own durable name, even when its source was implicit.
+    // It does not turn that copy into an imported physical folder occurrence.
+    assert_eq!(s.actions.sets, ["Same copy", "Same copy 2", "Empty copy"]);
+    assert_eq!(s.actions.set_rows, ["Same", "Empty"]);
+    for (name, slot) in [("Physical", Some(0)), ("Implicit", None)] {
+        assert_eq!(s.actions.list.iter().find(|action| action.name == name).unwrap().set_slot, slot);
+    }
+    for (set, expected) in [("Same copy", vec!["Implicit copy"]), ("Same copy 2", vec!["Physical copy", "Implicit copy 2"])] {
+        let copied: Vec<_> = s.actions.list.iter().filter(|action| action.set.as_deref() == Some(set)).collect();
+        assert_eq!(copied.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), expected);
+        assert!(copied.iter().all(|action| action.set_slot.is_none()));
+    }
+    s.execute("actions.delete", json!({"action":"Implicit copy"})).unwrap();
+    assert_eq!(s.actions.sets, ["Same copy", "Same copy 2", "Empty copy"]);
+    let empty_copy = s.execute("actions.save", json!({"set":"Same copy"})).unwrap();
+    assert!(empty_copy["actions"].as_array().unwrap().is_empty(), "the declared copy remains exportable after its last action");
+    assert_eq!(s.execute("actions.save", json!({"set":"Same copy 2"})).unwrap()["actions"], json!(["Physical copy", "Implicit copy 2"]));
     assert_eq!(s.actions.set_rows, ["Same", "Empty"]);
 }
 
