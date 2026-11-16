@@ -457,3 +457,21 @@ fn locate_binary_search_matches_linear_scan() {
     }
     assert_eq!(BezierMesh::locate(&knots, f64::NAN), linear(f64::NAN));
 }
+
+/// A preset's stored envelope is its net at the lowest exact degree: an Arc is quadratic across
+/// and straight down, so its box is the quadratic's, which swings far past the warp's box
+/// (wider than the 4 × 4 net's). An unbent preset has none.
+#[test]
+fn preset_envelope_bounds_take_the_lowest_degree_net() {
+    let close = |a: [f64; 4], b: [f64; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9);
+    let b = [0.0, 0.0, 128.0, 128.0];
+    let arc = |bend: f64| Warp::preset(WarpStyle::Arc, bend, b).preset_envelope_bounds().unwrap();
+    assert!(close(arc(100.0), [-128.0, -128.0, 256.0, 128.0]), "{:?}", arc(100.0));
+    assert!(close(arc(50.0), [-90.50966799187808, -47.84300132521139, 218.50966799187808, 128.0]), "{:?}", arc(50.0));
+    // Inflate is quadratic both ways: its 4 x 4 net's box is narrower than the envelope's.
+    let cubic = StyleWarp::new(WarpStyle::Inflate, 50.0, 0.0, 0.0, false, b).unwrap().mesh().control_bounds();
+    let env = Warp::preset(WarpStyle::Inflate, 50.0, b).preset_envelope_bounds().unwrap();
+    assert!(cubic[0] > env[0] + 1.0 && cubic[2] < env[2] - 1.0, "{cubic:?} vs {env:?}");
+    assert_eq!(Warp::preset(WarpStyle::Arc, 0.0, b).preset_envelope_bounds(), None);
+    assert_eq!(Warp::none(b).preset_envelope_bounds(), None);
+}

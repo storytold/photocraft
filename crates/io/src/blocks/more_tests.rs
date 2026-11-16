@@ -89,6 +89,39 @@ fn plld_corners_frame_a_spilled_custom_warp_like_sold() {
     assert!(close(plld_transform(&q, Some((50.0, 25.0)), None).0, t));
 }
 
+/// A `SoLd` frames a bending preset by its stored envelope's box (an Arc's reaches past the
+/// source): `Trnf` holds that box's corners, and the placement reads back as written. The
+/// application reads a named preset that way, so a file framing the source rect instead
+/// (older exports) reopens with the preset smaller. `PlLd` keeps the source rect.
+#[test]
+fn sold_frames_a_preset_by_its_envelope_box() {
+    use crate::smart_map::{PlacedSpec, parse_sold, plld_bytes, sold_bytes};
+    use photocraft_geom::warp::{Warp, WarpStyle};
+    let warp = Warp::preset(WarpStyle::Arc, 50.0, [0.0, 0.0, 50.0, 25.0]);
+    let env = warp.preset_envelope_bounds().unwrap();
+    assert!(env[0] < 0.0 && env[2] > 50.0, "the test needs an envelope that spills: {env:?}");
+    let t = Affine { m: [2.0, 0.5, -0.25, 2.0, 120.0, 210.0] };
+    let spec = PlacedSpec { idnt: "arc", placed: "p", transform: t, perspective: None, size: (50.0, 25.0), dpi: 72.0, warp: Some(&warp), filter_fx: None };
+    let sold = sold_bytes(None, &spec, &mut Vec::new());
+    let close = |a: Affine, b: Affine| a.m.iter().zip(b.m).all(|(x, y)| (x - y).abs() < 1e-9);
+    let back = parse_smart(b"SoLd", &sold).1;
+    assert!(close(back, t), "{back:?} vs {t:?}");
+    assert_eq!(parse_sold(&sold).map(|s| s.transform), Some(back));
+    let d = parse_prefix_versioned(&sold[8..]).unwrap();
+    let Some(Value::List(q)) = d.get("Trnf") else { panic!("no Trnf") };
+    let q: Vec<f64> = q.iter().filter_map(|v| num(Some(v))).collect();
+    let [a, b, c, dd, e, f] = t.m;
+    let map = |x: f64, y: f64| [a * x + c * y + e, b * x + dd * y + f];
+    let want: Vec<f64> = [(env[0], env[1]), (env[2], env[1]), (env[2], env[3]), (env[0], env[3])].iter().flat_map(|&(x, y)| map(x, y)).collect();
+    assert!(q.iter().zip(&want).all(|(x, y)| (x - y).abs() < 1e-9), "{q:?} vs {want:?}");
+    // The old export's quad (the source rect's corners) now places the arc smaller.
+    let old = corners_affine(&[120.0, 210.0, 220.0, 235.0, 213.75, 285.0, 113.75, 260.0], env).unwrap();
+    assert!(old.m[0] < 2.0 * 50.0 / (env[2] - env[0]) + 1e-9);
+    // PlLd: the source rect's corners, as before.
+    let (_, p) = parse_plld(&plld_bytes(&spec, &mut Vec::new())).unwrap();
+    assert!(p.iter().zip([120.0, 210.0, 220.0, 235.0, 213.75, 285.0, 113.75, 260.0]).all(|(x, y)| (x - y).abs() < 1e-9), "{p:?}");
+}
+
 /// Malformed `PlLd` data (wrong magic, truncated anywhere, a Pascal length past the end,
 /// non-finite corners) reads as `None`, never a panic.
 #[test]
