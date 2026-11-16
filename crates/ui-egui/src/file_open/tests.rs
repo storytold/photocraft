@@ -284,10 +284,11 @@ fn save_in_place_skips_alpha_profiles_and_layer_state_the_file_would_drop() {
     let (mut app, written) = app_with(vec![None, None, None]);
     let ctx = egui::Context::default();
     let edit = |app: &mut PhotocraftApp, f: &dyn Fn(&mut Document)| f(std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc));
-    // An RGB layer with transparency: DPX keeps its alpha, so it is written back.
+    // An RGB layer with transparency: DPX keeps its alpha, so it is written back (`dpxBits`
+    // answers DPX Options, which a plain Save of a DPX frame asks).
     app.open_file("/pics/rgb.dpx", b"x").unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
-    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap()["path"], "/pics/rgb.dpx");
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({"dpxBits": 8})).unwrap()["path"], "/pics/rgb.dpx");
     assert_eq!(written.borrow().len(), 1);
     // A gray one: DPX writes gray without alpha.
     app.open_file("/pics/gray.dpx", b"x").unwrap();
