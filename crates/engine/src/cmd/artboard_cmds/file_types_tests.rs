@@ -157,9 +157,36 @@ fn scripts_still_default_to_png() {
 fn unknown_format_is_an_error_and_writes_nothing() {
     let mut s = boards();
     let dir = out_dir("unknown");
-    for format in ["xyz", "png9", ""] {
+    // A token with a second extension or a path in it is not a file type either: `unknown.png`
+    // used to name `<board>.unknown.png` and write PNGs.
+    for format in ["xyz", "png9", "", "unknown.png", "x.jpg", "../png", "png/x", "png "] {
         assert!(s.execute("file.export.artboardsToFiles", json!({"dir": dir, "format": format})).is_err(), "{format}");
     }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A board past the compositor's render limit flattens to an empty buffer; the PNG-8 and PDF
+/// paths flatten it themselves, so they refuse it as a bad parameter instead of panicking on the
+/// empty buffer (`region data length mismatch`).
+#[test]
+fn oversized_board_is_a_bad_params_error_for_png8_and_pdf() {
+    let mut s = Session::new();
+    let mut doc = Document::new("huge", Size::new(40_000, 40_000), ColorMode::Rgb, SampleType::U8);
+    let mut board = Layer::group("Huge Board", Vec::new());
+    if let LayerContent::Group(g) = &mut board.content {
+        g.artboard = Some(Artboard { rect: Rect::new(0, 0, 40_000, 40_000), background: ArtboardBackground::Transparent, preset: String::new() });
+    }
+    doc.layers.push(board);
+    s.add_document(doc, None);
+    let dir = out_dir("huge");
+    for format in ["png8", "pdf"] {
+        let r = s.execute("file.export.artboardsToFiles", json!({"dir": dir, "format": format}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{format}: {r:?}");
+    }
+    let path = join(&dir, "huge.pdf");
+    let r = s.execute("file.export.artboardsToPdf", json!({"path": path}));
+    assert!(matches!(r, Err(EngineError::BadParams { .. })), "artboardsToPdf: {r:?}");
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
