@@ -323,14 +323,25 @@ fn has_pixels(s: &Session) -> std::result::Result<(), String> {
 /// Image › Adjustments targets: a pixel layer, a smart object (the adjustment is recorded as a
 /// smart filter, as in Photoshop), or a targeted alpha channel / Quick Mask.
 pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
+    adjustable_layer_ok(s, None)
+}
+
+/// The layer-content half of [`has_adjustable`] for one layer: `None` is the active layer (what
+/// the menu and every other Image > Adjustments command checks), an id is the layer a step's
+/// params resolve to. A command that edits a layer it names must be checked on that layer: the
+/// active layer can be a group or an adjustment layer, which is never adjustable (#14429).
+fn adjustable_layer_ok(s: &Session, layer: Option<photocraft_doc::LayerId>) -> std::result::Result<(), String> {
     if crate::channel_cmds::edits_channel(s) {
         return Ok(());
     }
     let d = s.active().ok_or("no document open")?;
-    let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
+    let l = layer.or(d.active_layer).and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
     match &l.content {
         LayerContent::Raster(_) => Ok(()),
         LayerContent::Smart(sm) if sm.cache.is_some() => Ok(()),
+        // "active layer" in the text, as every Image > Adjustments check says it: a step naming
+        // such a layer already answers this sentence at admission, where
+        // `Session::explicit_layer_enabled` checks the resolved target as if it were active.
         other => Err(format!("active layer is {} {} layer, not a pixel layer", other.article(), other.kind_name())),
     }
 }
@@ -345,11 +356,11 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
 pub(crate) const COLOR_LOOKUP_UNAVAILABLE: &str = "The command \"Color Lookup\" is not currently available.";
 pub(crate) const COLOR_LOOKUP_EMPTY_LAYER: &str = "Could not complete the Color Lookup command because the active layer is empty.";
 
-/// The document-mode and visibility half of the Color Lookup checks, shared by the menu and
-/// by apply (#14429). `layer` is the layer the step edits: `None` (the menu, which has no
-/// params) means the active layer, apply passes the one the params resolve to.
+/// The layer-content, document-mode and visibility half of the Color Lookup checks, shared by
+/// the menu and by apply (#14429). `layer` is the layer the step edits: `None` (the menu, which
+/// has no params) means the active layer, apply passes the one the params resolve to.
 fn color_lookup_target_ok(s: &Session, layer: Option<photocraft_doc::LayerId>) -> std::result::Result<(), String> {
-    has_adjustable(s)?;
+    adjustable_layer_ok(s, layer)?;
     let d = s.active().ok_or("no document open")?;
     if matches!(
         d.doc.mode,

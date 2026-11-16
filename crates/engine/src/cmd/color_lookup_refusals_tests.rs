@@ -33,14 +33,22 @@ fn snapshot(s: &Session) -> (Vec<f32>, usize) {
 /// wraps a greyed command's precondition text in `Disabled` and a run-level error in `Other`;
 /// both must carry the measured sentence itself, which is what the reference dialog shows.
 fn refused(s: &mut Session, case: &str, want: &str, p: Value) {
-    let (pixels, past) = snapshot(s);
+    let active = s.active().unwrap().active_layer.unwrap().0;
+    refused_on_layer(s, case, want, p, active);
+}
+
+/// [`refused`] watching layer `watch` instead of the active one, for a step whose params name a
+/// different target: a group or an adjustment layer, the active layer of these cases, has no
+/// surface of its own to snapshot.
+fn refused_on_layer(s: &mut Session, case: &str, want: &str, p: Value, watch: u64) {
+    let (pixels, past) = (pixel(s, watch), s.active().unwrap().history.past_len());
     let got = match s.execute("image.adjustments.colorLookup", p) {
         Ok(v) => panic!("{case}: ran anyway: {v}"),
         Err(EngineError::Disabled(_, why)) | Err(EngineError::Other(why)) => why,
         Err(e) => panic!("{case}: refused with the wrong error kind: {e}"),
     };
     assert_eq!(got, want, "{case}: refused with the wrong text");
-    let (after, past_after) = snapshot(s);
+    let (after, past_after) = (pixel(s, watch), s.active().unwrap().history.past_len());
     assert_eq!((after.as_slice(), past_after), (pixels.as_slice(), past), "{case}: the refusal changed the document");
 }
 
@@ -213,4 +221,86 @@ fn an_empty_explicit_target_gets_the_empty_layer_message_although_the_active_lay
     let before = pixel(&s, bg);
     refused(&mut s, "empty explicit target", EMPTY_LAYER, json!({"lut": "warm", "layer": top}));
     assert_eq!(pixel(&s, bg), before, "the filled active layer was not edited");
+}
+
+/// The Background, a "top" pixel layer (flooded with the bucket when `fill`), and an empty group
+/// above them. Creating a group makes it the active layer, so this is the Layers panel state the
+/// reference still runs Color Lookup from when the step names a pixel layer (#14429).
+fn top_and_group(fill: bool) -> (Session, u64, u64, u64) {
+    let (mut s, bg, top) = bg_and_top(fill);
+    let group = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    (s, bg, top, group)
+}
+
+#[test]
+fn a_group_active_layer_does_not_reject_a_visible_nonempty_explicit_raster_target() {
+    // The apply-time raster check runs on the layer the params name, not on the active one: the
+    // menu entry still greys for the group, but the step editing "top" is valid (#14429).
+    let (mut s, bg, top, group) = top_and_group(true);
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, group, "the new group is the active layer");
+    assert!(!s.is_enabled("image.adjustments.colorLookup"), "the menu entry still follows the active layer");
+    let (before, before_bg, past) = (pixel(&s, top), pixel(&s, bg), s.active().unwrap().history.past_len());
+    s.execute("image.adjustments.colorLookup", json!({"lut": "warm", "layer": top})).expect("a visible, filled raster target runs while a group is active");
+    assert_ne!(pixel(&s, top), before, "the targeted layer was edited");
+    assert_eq!(pixel(&s, bg), before_bg, "the Background was left alone");
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, group, "the active layer is unchanged");
+}
+
+#[test]
+fn an_active_adjustment_layer_does_not_reject_a_visible_nonempty_explicit_raster_target() {
+    let (mut s, bg, top) = bg_and_top(true);
+    let adj = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, adj, "the new adjustment layer is the active one");
+    assert!(!s.is_enabled("image.adjustments.colorLookup"), "the menu entry still follows the active layer");
+    let (before, before_bg, past) = (pixel(&s, top), pixel(&s, bg), s.active().unwrap().history.past_len());
+    s.execute("image.adjustments.colorLookup", json!({"lut": "warm", "layer": top}))
+        .expect("a visible, filled raster target runs while an adjustment layer is active");
+    assert_ne!(pixel(&s, top), before, "the targeted layer was edited");
+    assert_eq!(pixel(&s, bg), before_bg, "the Background was left alone");
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, adj, "the active layer is unchanged");
+}
+
+#[test]
+fn a_group_active_layer_does_not_reject_an_explicit_smart_object_target() {
+    // The other half of the same check: a smart object with its rendered cache is adjustable too,
+    // and its adjustment records a smart filter instead of baking pixels (#14429).
+    let (mut s, _bg, _top) = bg_and_top(true);
+    let smart = s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let group = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, group, "the new group is the active layer");
+    let past = s.active().unwrap().history.past_len();
+    s.execute("image.adjustments.colorLookup", json!({"lut": "warm", "layer": smart})).expect("a smart object target runs while a group is active");
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
+    let photocraft_doc::LayerContent::Smart(sm) = &s.active().unwrap().doc.layer(photocraft_doc::LayerId(smart)).unwrap().content else {
+        panic!("the target is still a smart object");
+    };
+    assert_eq!(sm.smart_filters.len(), 1, "the adjustment became the smart filter");
+    assert_eq!(sm.smart_filters[0].command, "image.adjustments.colorLookup", "Color Lookup itself");
+}
+
+#[test]
+fn a_group_active_layer_keeps_the_measured_refusal_for_a_hidden_explicit_target() {
+    // The target stays the thing that is checked: the group does not add its own complaint.
+    let (mut s, bg, _top, _group) = top_and_group(true);
+    s.execute("layer.hideLayers", json!({"layer": bg})).unwrap();
+    refused_on_layer(&mut s, "hidden target, group active", NOT_AVAILABLE, json!({"lut": "warm", "layer": bg}), bg);
+}
+
+#[test]
+fn a_group_active_layer_keeps_the_empty_layer_message_for_an_empty_explicit_target() {
+    let (mut s, _bg, top, _group) = top_and_group(false);
+    refused_on_layer(&mut s, "empty target, group active", EMPTY_LAYER, json!({"lut": "warm", "layer": top}), top);
+}
+
+#[test]
+fn an_explicit_group_target_is_still_refused_while_a_raster_layer_is_active() {
+    // The mirror case, unchanged by the fix: a group is not adjustable, named by the params or not.
+    let (mut s, _bg, top) = bg_and_top(true);
+    let group = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": top})).unwrap();
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, top, "the filled pixel layer is the active one");
+    let want = "active layer is a Group layer, not a pixel layer";
+    refused_on_layer(&mut s, "group as the explicit target", want, json!({"lut": "warm", "layer": group}), top);
 }
