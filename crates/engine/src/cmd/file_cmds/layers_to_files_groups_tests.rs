@@ -140,3 +140,36 @@ fn empty_and_deep_groups_never_panic() {
     // The empty group still takes group number 0000, so Grp is 0001s.
     assert_eq!(report.files[1], "l2f-test_0001s_0000_Inner.png");
 }
+
+/// CodeRabbit on #15201: a layer inside 42 groups gets a 264 byte file name (6 bytes per group level),
+/// which common file systems refuse. The export fails with a clear error before any file is written;
+/// 40 groups (252 bytes) still export.
+#[test]
+fn a_file_name_longer_than_255_bytes_is_refused_before_anything_is_written() {
+    let nested = |groups: usize| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+        s.edit("nested", |doc, _| {
+            doc.layers.clear();
+            let mut deep = Layer::new("L", LayerContent::Text(TextLayer { text: "L".into(), ..Default::default() }));
+            for i in 0..groups {
+                deep = Layer::group(format!("G{i}"), vec![deep]);
+            }
+            doc.layers.push(Layer::new("Top", LayerContent::Text(TextLayer { text: "T".into(), ..Default::default() })));
+            doc.layers.push(deep);
+            Ok(())
+        })
+        .unwrap();
+        s
+    };
+    let mut written = Vec::new();
+    let e = export_layers_report_with(&nested(42), &json!({"prefix": "d", "visibleOnly": false}), |name, _| {
+        written.push(name.to_string());
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(e.to_string().contains("264 bytes") && e.to_string().contains("255"), "{e}");
+    assert!(written.is_empty(), "nothing written before the refusal: {written:?}");
+    let (report, _) = export(&nested(40), json!({"prefix": "d", "visibleOnly": false}));
+    assert_eq!(report.files.iter().map(String::len).max(), Some(252), "40 groups: 252 bytes, accepted");
+}
