@@ -253,8 +253,8 @@ pub fn parse(v: &serde_json::Value) -> Result<Attribute, String> {
 }
 
 /// The Attribute filter's controls: the attribute dropdown.
-pub fn controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub fn controls(attribute: &mut Attribute, ui: &mut egui::Ui) {
     let attributes: Vec<(Attribute, &str)> = Attribute::ALL.into_iter().map(|a| (a, a.label())).collect();
     let width = ui.available_width().max(96.0);
-    widgets::dropdown(ui, "layer-filter-attribute", tl!("Attribute"), &mut app.ui.layer_filter_attribute, &attributes, width);
+    widgets::dropdown(ui, "layer-filter-attribute", tl!("Attribute"), attribute, &attributes, width);
 }

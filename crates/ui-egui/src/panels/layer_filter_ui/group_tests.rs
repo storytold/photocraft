@@ -5,7 +5,6 @@ use serde_json::json;
 
 use super::{Filter, FilterBy};
 use crate::PhotocraftApp;
-use crate::state::UiState;
 
 fn new_session() -> Session {
     let mut s = Session::new();
@@ -16,7 +15,9 @@ fn new_session() -> Session {
 /// The app with `s` open and the Layers panel filtered by Group.
 fn app(s: Session) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(s, crate::Services::default());
-    app.ui.layer_filter_by = FilterBy::Group;
+    let f = super::patched(&Filter::of(&app), &json!({"by": "group"})).unwrap();
+    assert!(f.on, "picking Group turns the switch on");
+    super::apply(&mut app, f);
     app
 }
 
@@ -49,8 +50,13 @@ fn set_expanded(s: &mut Session, name: &str, expanded: bool) {
 /// Layers panel uses for the frame.
 fn listed(app: &PhotocraftApp) -> Vec<String> {
     let doc = &app.session.active().unwrap().doc;
-    let f = Filter::of_app(app);
-    crate::layer_tree_ui::panel_rows(app, doc).into_iter().filter(|(_, l)| f.shows(l)).map(|(depth, l)| format!("{}{}", "  ".repeat(depth), l.name)).collect()
+    let f = Filter::of(app);
+    let context = super::FilterContext::of_app(app, &f);
+    crate::layer_tree_ui::panel_rows(app, doc)
+        .into_iter()
+        .filter(|(_, l)| f.shows_with(l, &context))
+        .map(|(depth, l)| format!("{}{}", "  ".repeat(depth), l.name))
+        .collect()
 }
 
 /// The selected layers' names.
@@ -73,7 +79,8 @@ fn nested() -> Session {
 #[test]
 fn lists_nested_groups_with_their_contents_and_hides_loose_layers() {
     let app = app(nested());
-    assert!(Filter::of_app(&app).active(), "Group filters at once");
+    let f = Filter::of(&app);
+    assert!(f.active_with(&super::FilterContext::of_app(&app, &f)), "Group filters at once");
     assert_eq!(listed(&app), ["Outer", "  Inner", "    Deep"]);
 }
 
@@ -119,19 +126,18 @@ fn the_list_does_not_depend_on_the_selection() {
 fn applying_it_keeps_a_selected_layer_in_a_group_and_deselects_a_loose_one() {
     let mut app = app(nested());
     select(&mut app.session, "Deep");
-    super::selection::deselect_hidden(&mut app);
+    super::selection::deselect_hidden(&mut app).unwrap();
     assert_eq!(selected(&app), ["Deep"], "a listed layer stays selected");
     select(&mut app.session, "Top Pixel");
-    super::selection::deselect_hidden(&mut app);
+    super::selection::deselect_hidden(&mut app).unwrap();
     assert!(selected(&app).is_empty(), "a layer in no group is hidden, so it is deselected");
 }
 
 #[test]
 fn group_is_set_by_name_through_the_control_channel() {
-    let ui = UiState::default();
-    let f = super::patched(&ui, &json!({"by": "group"})).unwrap();
+    let f = super::patched(&Filter::default(), &json!({"by": "group"})).unwrap();
     assert_eq!(f.by, FilterBy::Group);
-    let err = super::patched(&ui, &json!({"by": "nope"})).unwrap_err();
+    let err = super::patched(&Filter::default(), &json!({"by": "nope"})).unwrap_err();
     assert!(err.contains("group"), "the error lists group: {err}");
 }
 
