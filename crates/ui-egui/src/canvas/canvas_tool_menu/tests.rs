@@ -926,7 +926,7 @@ fn pen_options_bar_makes_a_selection_from_the_path() {
         crate::vector_ui::pen_up(&mut app);
     }
     make_selection(&mut app).unwrap();
-    assert_eq!(app.ui.dialogs.last().and_then(|d| d.fields.get("name")), Some(&json!("Cutout")));
+    assert_eq!(app.ui.dialogs.last().and_then(|d| d.fields.get("pathIndex")), Some(&json!(0)));
 }
 
 /// #1056: the Path Selection and Direct Selection tools' right-click opens the path menu for
@@ -1012,7 +1012,7 @@ fn pen_menu_creates_mask_deletes_path_and_opens_named_path_dialogs() {
     let st = app.session.active().unwrap();
     assert!(st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.vector_mask.is_some()));
     // The new vector mask's path becomes the active one (#4728); pick the Work Path again.
-    assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"));
     app.ui.selected_path = Some("work".into());
     choose_open(&mut app, "edit.defineCustomShape");
     let id = app.ui.dialogs.last().map(|d| d.id).unwrap();

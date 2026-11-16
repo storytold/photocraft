@@ -116,15 +116,17 @@ pub(crate) fn shows_anchors(tool: Tool) -> bool {
 /// The saved path selected in the Paths panel: Photoshop's target path, drawn on the canvas with
 /// any tool (#6550). `None` when the panel selects the work path, a layer's path or nothing.
 pub(crate) fn selected_saved_path(app: &PhotocraftApp) -> Option<&Path> {
-    let sel = app.ui.selected_path.as_deref().filter(|s| !matches!(*s, "work" | "layer"))?;
-    app.session.active()?.doc.paths.iter().find(|p| p.name == sel).map(|p| &p.path)
+    let doc = &app.session.active()?.doc;
+    let index = app.ui.selected_path.as_ref()?.saved_index(doc)?;
+    doc.paths.get(index).map(|p| &p.path)
 }
 
 /// [`selected_saved_path`] with its index in the document's `paths`: the saved path Path
 /// Selection and Direct Selection edit (#8478).
 pub(crate) fn selected_saved_path_index(app: &PhotocraftApp) -> Option<(usize, Path)> {
-    let sel = app.ui.selected_path.as_deref().filter(|s| !matches!(*s, "work" | "layer"))?;
-    app.session.active()?.doc.paths.iter().enumerate().find(|(_, p)| p.name == sel).map(|(i, p)| (i, p.path.clone()))
+    let doc = &app.session.active()?.doc;
+    let index = app.ui.selected_path.as_ref()?.saved_index(doc)?;
+    doc.paths.get(index).map(|p| (index, p.path.clone()))
 }
 
 /// Work path / active shape path / selected saved path outlines, anchors, and the pen path in
@@ -170,7 +172,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         let moving = path_selection_preview(app, doc);
         let moved = |which: MovedPath| moving.as_ref().filter(|(m, _)| *m == which).map(|(_, p)| p);
         if let Some(wp) = doc.work_path.as_ref().filter(|_| work_path_shown_in(app, doc))
-            && (anchors || app.ui.selected_path.as_deref() == Some("work"))
+            && (anchors || app.ui.selected_path.as_ref().and_then(|p| p.name()) == Some("work"))
         {
             draw_path(moved(MovedPath::Work).unwrap_or(wp), anchors);
         }

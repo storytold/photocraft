@@ -208,8 +208,14 @@ fn active_path(s: &Session, name: &str) -> Result<Path> {
 }
 
 fn enable(s: &mut Session, p: &Value) -> Result<Value> {
-    let name = p.get("name").and_then(Value::as_str).unwrap_or("work");
-    let axis = SymmetryAxis::from_path(name.to_owned(), &active_path(s, name)?)?;
+    let (name, path) = if p.get("pathIndex").is_some() {
+        let target = crate::vector_cmds::PathTarget::parse(s, p, "paint.symmetryFromPath")?;
+        (target.name(s)?, target.resolve(s)?)
+    } else {
+        let name = p.get("name").and_then(Value::as_str).unwrap_or("work");
+        (name.to_owned(), active_path(s, name)?)
+    };
+    let axis = SymmetryAxis::from_path(name.clone(), &path)?;
     let count = axis.segments.len();
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     st.symmetry = Some(PaintingSymmetry::Path(axis));
@@ -239,7 +245,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Make Symmetry Path",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":"work"|"layer"|savedPathName="work"} — mirror Brush, Pencil and Eraser strokes across the path"##,
+            params: r##"{"name":"work"|"layer"|savedPathName="work" | "pathIndex":uint (0-based saved path)} — mirror Brush, Pencil and Eraser strokes across the path"##,
             enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
             run: enable,
             journal: true,

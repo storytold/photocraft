@@ -518,7 +518,7 @@ pub struct PhotocraftApp {
     view_docs: Vec<DocId>,
     /// The document `ui.selected_path` belongs to, as of the last [`Self::sync_views`]: a Paths
     /// panel selection never carries over to a same-named path in another tab.
-    path_document: Option<(DocId, u64, std::sync::Weak<Document>)>,
+    path_document: Option<(DocId, u64, std::sync::Weak<Document>, u64)>,
     pub fps: f32,
     pub(crate) last_frame_time: f64,
     thumbs: HashMap<(photocraft_doc::LayerId, u8), (u64, egui::TextureHandle)>,
@@ -998,6 +998,8 @@ mod new_doc_web_artboards_tests;
 
 #[cfg(test)]
 mod blend_dropdown_wheel_tests;
+#[cfg(test)]
+mod duplicate_paths_ui_tests;
 #[cfg(test)]
 mod paths_scroll_tests;
 

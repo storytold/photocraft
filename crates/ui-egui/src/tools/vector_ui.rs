@@ -189,7 +189,7 @@ pub struct PenPath {
 pub struct Resumed {
     pub doc: u64,
     /// A document path's name ("work" or a saved path's), or "layer" for `layer`'s.
-    pub path: String,
+    pub path: crate::state::PathSelection,
     /// The shape layer (Shape mode) or targeted vector mask whose path it is.
     #[serde(default)]
     pub layer: Option<u64>,
@@ -299,7 +299,7 @@ enum PenTarget {
     VectorMask(u64),
     /// The work path or a saved path; `append` adds the draft as a subpath (#4721).
     Path {
-        name: String,
+        name: crate::state::PathSelection,
         append: bool,
     },
 }
@@ -377,7 +377,7 @@ pub(crate) fn cancel_stale_pen(app: &mut PhotocraftApp) -> bool {
             // The temporary source commit ran sync_views on that document. Rebind its runtime
             // tracker before restoring the destination UI, so the next frame cannot clear
             // an unrelated saved-path selection in the destination tab.
-            app.path_document = app.session.active().map(|st| (st.doc.id, st.revision, Arc::downgrade(&st.doc)));
+            app.path_document = app.session.active().map(|st| (st.doc.id, st.revision, Arc::downgrade(&st.doc), st.saved_paths_revision()));
             app.ui = saved_ui;
             app.ui.pen = if result.is_ok() { None } else { failed };
             if result.is_ok() && app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {

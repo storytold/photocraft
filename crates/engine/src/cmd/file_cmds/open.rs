@@ -134,6 +134,9 @@ pub(super) fn revert(s: &mut Session) -> Result<Value> {
         Ok(())
     })?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    // Reloading can replace saved paths without changing their count. Positional UI targets
+    // must be picked again, just as after restoring a History panel snapshot.
+    st.invalidate_saved_path_indices();
     st.saved_revision = st.revision;
     Ok(json!({"path": path, "layers": st.doc.layers.len()}))
 }

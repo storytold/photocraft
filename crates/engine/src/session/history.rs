@@ -50,6 +50,7 @@ impl Session {
                 // (it recomposited everything before).
                 let damage = layer_multi_cmds::step_damage(&d, &st.doc);
                 let before = std::mem::replace(&mut st.doc, d);
+                st.invalidate_saved_path_indices();
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
                 st.bump_revision(keep_clean);
@@ -88,6 +89,7 @@ impl Session {
                 }
                 let damage = layer_multi_cmds::step_damage(&st.doc, &d);
                 let before = std::mem::replace(&mut st.doc, d);
+                st.invalidate_saved_path_indices();
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
                 st.bump_revision(keep_clean);
@@ -137,6 +139,7 @@ impl Session {
         }
         let damage = layer_multi_cmds::step_damage(&d, &st.doc);
         let before = std::mem::replace(&mut st.doc, d);
+        st.invalidate_saved_path_indices();
         // Taking back a selection-only step keeps a clean document clean, as Undo does (#6865).
         let keep_clean = st.keeps_clean(&before);
         restore_target(st, layers);

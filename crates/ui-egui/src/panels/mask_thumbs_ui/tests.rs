@@ -211,7 +211,7 @@ fn add_vector_mask_uses_the_selected_path_and_targets_the_new_mask() {
     let l = h.state().session.active().unwrap().doc.layer(id).unwrap().clone();
     assert_eq!(l.vector_mask.map(|v| v.path), Some(work), "the vector mask is the selected path, not Reveal All");
     assert!(h.state().ui.vector_mask_target && !h.state().ui.mask_target, "the new vector mask is targeted");
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("layer"), "the mask's path becomes the active path");
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"), "the mask's path becomes the active path");
 }
 
 #[test]
@@ -449,7 +449,7 @@ fn paths_list_the_layer_path_above_a_bottom_footer() {
     // Selecting the temporary row targets the layer's path: Load as selection uses it.
     let p = h.get_by_label("Badge Shape Path").rect().center();
     click_with(&mut h, p, Modifiers::NONE);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("layer"));
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"));
     // Footer: fill, stroke, load as selection, … (26 pt buttons, 2 pt apart).
     let footer = crate::vector_ui::paths_footer(&h.ctx).unwrap();
     let p = pos2(footer.left() + 2.0 * 28.0 + 13.0, footer.center().y);
@@ -603,7 +603,7 @@ fn clicking_the_vector_mask_targets_it_for_the_path_tools() {
     let r = mask_rect(&h, masked, MaskKind::Vector);
     click_with(&mut h, r.center(), Modifiers::NONE);
     assert!(h.state().ui.vector_mask_target && !h.state().ui.mask_target);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("layer"), "the Paths panel selects its path");
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"), "the Paths panel selects its path");
     assert!(near(super::brackets(&h.ctx).unwrap(), r.expand(3.0)), "brackets on the vector mask");
     assert_eq!(crate::canvas::paint_target(h.state()), json!("pixels"));
     // Path Selection moves the vector mask.

@@ -421,7 +421,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Define Custom Shape…",
             ["Edit"],
             None,
-            r##"{"name":text,"path":"work|<saved path name>"?}"##,
+            r##"{"name":text,"path":"work|<saved path name>"|{subpaths}?}"##,
             can_define_shape,
             define_custom_shape
         ),

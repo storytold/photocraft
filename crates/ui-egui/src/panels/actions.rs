@@ -1626,8 +1626,10 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ui.add_enabled(selected, egui::Button::new(tl!("Insert Stop…"))).clicked() {
         act = Some("stop");
     }
-    let path_selected =
-        app.ui.selected_path.as_deref().is_some_and(|name| photocraft_engine::actions_edit_cmds::selected_recording_path(&app.session, name).is_ok());
+    let path_selected = app.ui.selected_path.as_ref().is_some_and(|target| {
+        app.session.active().is_some_and(|st| target.path(&st.doc).is_some())
+            || target.name().is_some_and(|name| photocraft_engine::actions_edit_cmds::selected_recording_path(&app.session, name).is_ok())
+    });
     if ui.add_enabled(selected && path_selected, egui::Button::new(tl!("Insert Path"))).clicked() {
         act = Some("insertPath");
     }
@@ -1679,7 +1681,11 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         "toolRecording" => app.run("actions.allowToolRecording", json!({"enabled": tools})),
         "insertPath" => app.run(
             "actions.insertPath",
-            json!({"action": app.ui.actions.selected, "at": app.ui.actions.selected_step.map(|i| i.saturating_add(1)), "name": app.ui.selected_path}),
+            app.ui
+                .selected_path
+                .as_ref()
+                .map(|target| target.with_params(json!({"action": app.ui.actions.selected, "at": app.ui.actions.selected_step.map(|i| i.saturating_add(1))})))
+                .unwrap_or(json!({})),
         ),
         "insertMenu" => menu_item::open(app),
         "load" => load_dialog(app),

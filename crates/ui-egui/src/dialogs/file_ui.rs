@@ -155,7 +155,16 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             // Opens on the Paths panel's selected row, as the reference application does (#13777).
             // A shape layer's path ("layer") is not an entry yet, and a row the document no longer
             // has falls back to All Paths (Document Bounds without paths).
-            let paths = app.ui.selected_path.as_deref().filter(|s| *s != "layer" && names.iter().any(|n| n == s)).unwrap_or(fallback).to_string();
+            let selected_name = app.ui.selected_path.as_ref().and_then(|target| {
+                target.name().or_else(|| {
+                    let doc = &app.session.active()?.doc;
+                    let name = &doc.paths.get(target.saved_index(doc)?)?.name;
+                    // This exporter still selects names: an ambiguous name means export all paths.
+                    (doc.paths.iter().filter(|p| &p.name == name).take(2).count() == 1 && !matches!(name.as_str(), "work" | "all" | "documentBounds" | "layer"))
+                        .then_some(name.as_str())
+                })
+            });
+            let paths = selected_name.filter(|s| *s != "layer" && names.iter().any(|n| n == s)).unwrap_or(fallback).to_string();
             form(app, id, "Export Paths to File", json!({"path": format!("{dir}/{stem}.ai"), "paths": paths}), json!({"paths": names}))
         }
         _ => return None,

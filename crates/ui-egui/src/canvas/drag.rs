@@ -439,7 +439,7 @@ pub(super) struct VectorGestureOwner {
     document: std::sync::Weak<Document>,
     revision: u64,
     layer: Option<photocraft_doc::LayerId>,
-    selected_path: Option<String>,
+    selected_path: Option<crate::state::PathSelection>,
     vector_mask: bool,
     mode: String,
     tool: Tool,

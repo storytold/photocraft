@@ -3,6 +3,7 @@ use super::options::selected_shape;
 use super::path_ops::{targeted_vector_mask, targeted_vector_mask_id, work_path_shown};
 use super::shapes::{fill_param, stroke_param};
 use super::{Document, LayerContent, Path, PenPath, PhotocraftApp, Resumed, Tokens, Tool, ToolOptions, Value, json, vec2};
+use crate::state::PathSelection;
 
 // ---------------------------------------------------------------------------------------------
 // Pen
@@ -351,7 +352,7 @@ pub fn pen_enter(app: &mut PhotocraftApp) {
 /// Deselect and hide the Work Path a finished path just went into. Callers check that it did: a
 /// draft drawn into a vector mask leaves the Work Path selected without changing it.
 fn deselect_finished_work_path(app: &mut PhotocraftApp) {
-    if app.ui.selected_path.as_deref() == Some("work") {
+    if app.ui.selected_path.as_ref().and_then(|p| p.name()) == Some("work") {
         super::deselect_loaded_path(app, "work");
     }
 }
@@ -467,7 +468,8 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
         pen.resumes.as_ref().and_then(|r| app.session.active().and_then(|st| with_resumed_subpath(&st.doc, r, &path)).map(|p| (r.path.clone(), p)))
     {
         // The resumed subpath, carried on, takes its old place: one step, no second subpath.
-        app.run("path.set", json!({"name": name, "path": p, "historyName": freeform.then_some("Freeform Pen")})).inspect(|_| app.ui.selected_path = Some(name))
+        app.run("path.set", name.with_params(json!({"path": p, "historyName": freeform.then_some("Freeform Pen")})))
+            .inspect(|_| app.ui.selected_path = Some(name))
     } else if let Some((id, existing)) = targeted_vector_mask(app) {
         // A targeted vector mask takes the new subpath (#196), as in Photoshop.
         let mut p = photocraft_engine::vector_cmds::path_json(&existing);
@@ -486,7 +488,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
         // subpath, even with nothing selected in the Paths panel.
         let target = draft_target(app, pen);
         let name = target.clone().unwrap_or_else(|| "work".into());
-        let mut params = json!({"name": name, "path": path, "historyName": freeform.then_some("Freeform Pen")});
+        let mut params = name.with_params(json!({"path": path, "historyName": freeform.then_some("Freeform Pen")}));
         if target.is_some() {
             params["op"] = json!(op.unwrap_or("combine"));
         }
@@ -502,8 +504,8 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
 
 /// The document path a Path-mode draft joins when committed (not into a vector mask): the path it
 /// resumed, else the path selected in the Paths panel. `None`: it becomes a new Work Path.
-fn draft_target(app: &PhotocraftApp, pen: &PenPath) -> Option<String> {
-    let exists = |n: &String| app.session.active().is_some_and(|st| path_exists(&st.doc, n));
+fn draft_target(app: &PhotocraftApp, pen: &PenPath) -> Option<PathSelection> {
+    let exists = |n: &PathSelection| app.session.active().is_some_and(|st| path_exists(&st.doc, n));
     let resumed_from =
         pen.resumes.as_ref().filter(|r| r.layer.is_none() && app.session.active().is_some_and(|st| st.doc.id.0 == r.doc)).map(|r| r.path.clone());
     resumed_from.filter(exists).or_else(|| app.ui.selected_path.clone().filter(exists))
@@ -539,29 +541,29 @@ pub(super) fn draft_shape_path(app: &PhotocraftApp, pen: &PenPath) -> Option<(Va
 }
 
 /// Does `doc` have the path the Paths panel calls `name`: "work", or a saved path's name?
-fn path_exists(doc: &Document, name: &str) -> bool {
+fn path_exists(doc: &Document, name: &PathSelection) -> bool {
     doc_path(doc, name).is_some()
 }
 
 /// The path the Paths panel calls `name`: "work", or a saved path's name.
-fn doc_path<'a>(doc: &'a Document, name: &str) -> Option<&'a Path> {
-    if name == "work" { doc.work_path.as_ref() } else { doc.paths.iter().find(|p| p.name == name).map(|p| &p.path) }
+fn doc_path<'a>(doc: &'a Document, name: &PathSelection) -> Option<&'a Path> {
+    name.path(doc)
 }
 
 /// The path a Pen path carries on (#6593): a targeted vector mask, else in Shape mode the
 /// selected shape layer's, else the path a new Pen path would join (the one selected in the Paths
 /// panel, else the work path). Its Paths-panel name ("layer" for a layer's), layer and path.
-fn resume_target(app: &PhotocraftApp) -> Option<(String, Option<u64>, &Path)> {
+fn resume_target(app: &PhotocraftApp) -> Option<(PathSelection, Option<u64>, &Path)> {
     let st = app.session.active()?;
     // Borrowed, not cloned: the canvas asks on every hover (`continues_path_at`).
     if let Some(id) = targeted_vector_mask_id(app) {
         let mask = st.doc.layer(photocraft_doc::LayerId(id))?.vector_mask.as_ref()?;
-        return Some(("layer".to_string(), Some(id), &mask.path));
+        return Some(("layer".into(), Some(id), &mask.path));
     }
     if app.ui.tool_options.vector_mode == "shape" {
         let l = st.active_layer.and_then(|id| st.doc.layer(id))?;
         let LayerContent::Shape(sh) = &l.content else { return None };
-        return Some(("layer".to_string(), Some(l.id.0), &sh.path));
+        return Some(("layer".into(), Some(l.id.0), &sh.path));
     }
     let name = app.ui.selected_path.clone().filter(|n| path_exists(&st.doc, n)).unwrap_or_else(|| "work".into());
     // A Work Path hidden by Make Selection isn't carried on: a new path replaces it (#6079).
@@ -574,7 +576,7 @@ fn resume_target(app: &PhotocraftApp) -> Option<(String, Option<u64>, &Path)> {
 
 /// Subpath `index` of the path a Pen path carries on, as a Pen path to carry on drawing from its
 /// last anchor, or from its first when `reversed`: then its knots run backwards, handles swapped.
-fn resumed(doc: u64, name: String, layer: Option<u64>, index: usize, sub: &photocraft_doc::vector::Subpath, reversed: bool) -> PenPath {
+fn resumed(doc: u64, name: PathSelection, layer: Option<u64>, index: usize, sub: &photocraft_doc::vector::Subpath, reversed: bool) -> PenPath {
     let mut knots: Vec<_> = sub.knots.iter().map(|k| (knot_points(k), k.smooth)).collect();
     if reversed {
         knots.reverse();
@@ -613,7 +615,7 @@ pub(super) fn resume_selected(app: &PhotocraftApp) -> Option<PenPath> {
     let carried = match layer {
         Some(id) => crate::direct_select::PathRef::Layer(id),
         None if name == "work" => crate::direct_select::PathRef::Work,
-        None => crate::direct_select::PathRef::Saved(st.doc.paths.iter().position(|p| p.name == name)?),
+        None => crate::direct_select::PathRef::Saved(name.saved_index(&st.doc)?),
     };
     if carried != target {
         return None;
@@ -758,8 +760,8 @@ fn merge_target(app: &PhotocraftApp) -> Option<(&'static str, Value, usize)> {
         return Some(("path.mergeShapeComponents", json!({"name": "layer", "layer": id}), p.components().len()));
     }
     let name = app.ui.selected_path.clone().filter(|n| path_exists(&st.doc, n)).unwrap_or_else(|| "work".into());
-    let path = if name == "work" { st.doc.work_path.as_ref() } else { st.doc.paths.iter().find(|p| p.name == name).map(|p| &p.path) }?;
-    Some(("path.mergeShapeComponents", json!({"name": name}), path.components().len()))
+    let path = name.path(&st.doc)?;
+    Some(("path.mergeShapeComponents", name.params(), path.components().len()))
 }
 
 /// The Path Operations button of the Pen, Freeform Pen, Curvature Pen, Path Selection (#1397) and
@@ -1087,7 +1089,7 @@ pub(super) fn make_shape_from_draft(app: &mut PhotocraftApp, pen: &PenPath) -> R
     app.ui.selected_path = selected;
     let (params, consume) = made?;
     let r = app.run("path.toShape", params);
-    if r.is_ok() && consume && app.ui.selected_path.as_deref() == Some("work") {
+    if r.is_ok() && consume && app.ui.selected_path.as_ref().and_then(|p| p.name()) == Some("work") {
         app.ui.selected_path = None;
     }
     r

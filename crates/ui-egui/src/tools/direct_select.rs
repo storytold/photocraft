@@ -50,17 +50,13 @@ pub enum PathRef {
 }
 
 impl PathRef {
-    /// The engine's target params for this path. A saved path goes by its name; one that is gone
-    /// gets an empty name, which the engine refuses.
-    pub(crate) fn params(self, app: &PhotocraftApp) -> Value {
+    /// The engine's target params for this path. Invalid saved indices fail without fallback.
+    pub(crate) fn params(self, _app: &PhotocraftApp) -> Value {
         match self {
             PathRef::Work => json!({"name": "work"}),
             PathRef::Layer(id) => json!({"name": "layer", "layer": id}),
             PathRef::TypePath(id) => json!({"name": "layer", "layer": id, "typePath": true}),
-            PathRef::Saved(i) => {
-                let name = app.session.active().and_then(|st| st.doc.paths.get(i)).map(|p| p.name.clone()).unwrap_or_default();
-                json!({"name": name})
-            }
+            PathRef::Saved(i) => json!({"pathIndex": i}),
             // Never sent: edits to the Pen path being drawn don't go through the engine.
             PathRef::Pen => json!({}),
         }
@@ -122,8 +118,9 @@ pub(crate) struct Owner {
     document: photocraft_doc::DocId,
     source: std::sync::Weak<photocraft_doc::Document>,
     revision: u64,
+    saved_paths_revision: u64,
     layer: Option<photocraft_doc::LayerId>,
-    selected_path: Option<String>,
+    selected_path: Option<crate::state::PathSelection>,
     vector_mask: bool,
     tool: Tool,
     validation: std::cell::RefCell<SelectionValidation>,
@@ -132,6 +129,7 @@ pub(crate) struct Owner {
 impl PartialEq for Owner {
     fn eq(&self, other: &Self) -> bool {
         self.source.ptr_eq(&other.source)
+            && self.saved_paths_revision == other.saved_paths_revision
             && (self.document, self.revision, self.layer, &self.selected_path, self.vector_mask, self.tool)
                 == (other.document, other.revision, other.layer, &other.selected_path, other.vector_mask, other.tool)
     }
@@ -144,6 +142,7 @@ impl Owner {
             document: st.doc.id,
             source: std::sync::Arc::downgrade(&st.doc),
             revision: st.revision,
+            saved_paths_revision: st.saved_paths_revision(),
             layer: st.active_layer,
             selected_path: app.ui.selected_path.clone(),
             vector_mask: app.ui.vector_mask_target || st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::VectorMask,
@@ -183,6 +182,14 @@ impl Owner {
 /// the handles selected with Direct Selection, so an idle selection crosses those two tools; a
 /// drag keeps its own tool.
 pub(crate) fn still_valid(app: &PhotocraftApp, ds: &DirectSelection) -> bool {
+    // Equal geometry does not identify a saved row: deletion or history can reuse its index.
+    // Check before either the exact-owner or cached component-signature fast path. Work/layer
+    // components retain their existing ability to survive unrelated history edits.
+    if matches!(ds.target, Some(PathRef::Saved(_)))
+        && !ds.owner.as_ref().is_some_and(|owner| app.session.active().is_some_and(|st| st.saved_paths_revision() == owner.saved_paths_revision))
+    {
+        return false;
+    }
     ds.owner.as_ref().is_some_and(|owner| owner.valid(app) || (ds.drag.is_none() && owns(owner.tool) && owns(app.ui.tool) && owner.valid_path(app)))
         || component_selection_matches(app, ds)
 }
@@ -402,7 +409,7 @@ pub(crate) fn active_paths(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
     let saved = crate::vector_ui::selected_saved_path_index(app).map(|(i, p)| (PathRef::Saved(i), p));
     let work = app.session.active().and_then(|st| st.doc.work_path.clone()).filter(|_| crate::vector_ui::work_path_shown(app)).map(|p| (PathRef::Work, p));
     let mut out: Vec<_> = saved.into_iter().chain(layer).chain(work).collect();
-    if app.ui.selected_path.as_deref() == Some("work")
+    if app.ui.selected_path.as_ref().and_then(|p| p.name()) == Some("work")
         && let Some(index) = out.iter().position(|(target, _)| *target == PathRef::Work)
     {
         out.swap(0, index);
@@ -476,7 +483,9 @@ pub(crate) fn hit_active(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, P
     let targets: Vec<(PathRef, Path)> = match crate::vector_ui::selected_saved_path_index(app) {
         Some((i, path)) => Some((PathRef::Saved(i), path)).filter(|(r, _)| writable(app, r)).into_iter().collect(),
         // The Work Path selected in the Paths panel is the only target too, as for Path Selection.
-        None if app.ui.selected_path.as_deref() == Some("work") => active_paths(app).into_iter().filter(|(r, _)| *r == PathRef::Work).collect(),
+        None if app.ui.selected_path.as_ref().and_then(|p| p.name()) == Some("work") => {
+            active_paths(app).into_iter().filter(|(r, _)| *r == PathRef::Work).collect()
+        }
         None => targeted(app),
     };
     targets

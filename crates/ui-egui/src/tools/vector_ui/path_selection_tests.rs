@@ -104,7 +104,7 @@ fn selecting_a_saved_path_keeps_the_hidden_work_path_hidden() {
     panel(&mut h, 2);
     let saved = h.get_by_label("Saved").rect();
     click(&mut h, egui::pos2(saved.left() + 70.0, saved.center().y), Modifiers::NONE);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("Saved"));
+    assert_eq!(h.state().ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }));
     assert!(!crate::vector_ui::work_path_shown(h.state()), "a saved path doesn't show the Work Path");
     // So Delete with the Pen doesn't delete the invisible work path either.
     press(&mut h, Key::Delete, Modifiers::NONE);
@@ -112,7 +112,7 @@ fn selecting_a_saved_path_keeps_the_hidden_work_path_hidden() {
     // Selecting the Work Path shows it; now Delete deletes it.
     let work = h.get_by_label("Work Path").rect();
     click(&mut h, egui::pos2(work.left() + 70.0, work.center().y), Modifiers::NONE);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     assert!(crate::vector_ui::work_path_shown(h.state()), "selecting the Work Path shows it");
     press(&mut h, Key::Delete, Modifiers::NONE);
     assert!(h.state().session.active().unwrap().doc.work_path.is_none(), "{}", h.state().ui.status);
@@ -134,12 +134,12 @@ fn reselecting_the_hidden_work_path_ends_the_hide() {
     panel(&mut h, 2);
     let work = h.get_by_label("Work Path").rect();
     click(&mut h, egui::pos2(work.left() + 70.0, work.center().y), Modifiers::NONE);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     // Clicking the panel's empty area deselects it.
     click(&mut h, egui::pos2(work.left() + 70.0, work.bottom() + 40.0), Modifiers::NONE);
     assert_eq!(h.state().ui.selected_path, None);
     assert!(crate::vector_ui::work_path_shown(h.state()), "the unchanged Work Path didn't go back into hiding");
-    assert_eq!(crate::vector_ui::active_path_name(h.state()).as_deref(), Some("work"));
+    assert_eq!(crate::vector_ui::active_path_name(h.state()).as_ref().and_then(|p| p.name()), Some("work"));
     // So Delete with the Pen deletes it, like any unselected Work Path.
     press(&mut h, Key::Delete, Modifiers::NONE);
     assert!(h.state().session.active().unwrap().doc.work_path.is_none(), "{}", h.state().ui.status);
@@ -255,16 +255,16 @@ fn thumbnail_selection_ctrl_click_paths_targets_thumbnail_and_clicked_path() {
     let mut h = harness();
     h.state_mut().run("path.set", json!({"name":"work","path":rect_path(10.0,10.0,50.0,40.0)})).unwrap();
     h.state_mut().run("path.set", json!({"name":"Saved","path":rect_path(100.0,40.0,60.0,50.0)})).unwrap();
-    h.state_mut().ui.selected_path = Some("Saved".into());
+    h.state_mut().ui.selected_path = Some(crate::state::PathSelection::Saved { index: 0 });
     panel(&mut h, 2);
     let row = h.get_by_label("Work Path").rect();
     click(&mut h, egui::pos2(row.left() + 70.0, row.center().y), command());
     assert!(selection(&h).is_none(), "Ctrl-click on the name only selects the path row");
-    h.state_mut().ui.selected_path = Some("Saved".into());
+    h.state_mut().ui.selected_path = Some(crate::state::PathSelection::Saved { index: 0 });
     h.run_steps(2);
     click(&mut h, egui::pos2(row.left() + 22.0, row.center().y), command());
     assert_eq!(selection(&h), Some([10, 10, 50, 40]), "{}", h.state().ui.status);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("Saved"), "loading a thumbnail does not change the selected path");
+    assert_eq!(h.state().ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }), "loading a thumbnail does not change the selected path");
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert!(selection(&h).is_none());
     h.state_mut().run("edit.redo", json!({})).unwrap();
@@ -305,7 +305,7 @@ fn thumbnail_selection_ctrl_click_layer_path_preserves_panel_target() {
     let row = h.get_by_label("Badge Shape Path").rect();
     click(&mut h, egui::pos2(row.left() + 22.0, row.center().y), command());
     assert_eq!(selection(&h), Some([40, 20, 60, 40]));
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     assert!(!h.state().ui.mask_target && !h.state().ui.vector_mask_target);
     if let Ok(path) = std::env::var("PHOTOCRAFT_THUMBNAIL_SELECTION_SCREENSHOT") {
         h.render().unwrap().save(path).unwrap();

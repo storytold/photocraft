@@ -2,6 +2,7 @@
 //! and Hand tools, an active Free Transform box, text being edited with a Type tool, committed type
 //! under a Type tool, the pasteboard (outside the image), a guide and a pending crop.
 
+use crate::state::PathSelection;
 use egui::Context;
 use photocraft_doc::{ColorMode, LayerContent};
 use photocraft_engine::prefs::{self, CanvasColor};
@@ -20,7 +21,7 @@ pub struct CanvasToolMenu {
     #[serde(default)]
     pub has_path: bool,
     #[serde(default)]
-    pub path_name: Option<String>,
+    pub path_name: Option<PathSelection>,
     /// Opened over a Free Transform box: its modes instead of the tool's actions.
     #[serde(default)]
     pub transform: bool,
@@ -1337,17 +1338,26 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     });
     let shape = shape_layer.is_some();
     let can_mask = layer.is_some_and(|l| !matches!(l.content, LayerContent::Shape(_))) && !locked;
-    let saved = menu.path_name.as_deref().is_some_and(|n| n != "work" && n != "layer");
+    let saved = menu.path_name.as_ref().is_some_and(|n| n.name() != Some("work") && n.name() != Some("layer"));
     let has_path = menu.has_path;
     let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let pending_layer = pending && (app.ui.tool_options.vector_mode == "shape" || app.ui.vector_mask_target);
     match command {
         "layer.vectorMask.fromPath" => has_path && can_mask && !pending_layer,
-        "path.delete" => has_path && !pending_layer && (pending || menu.path_name.as_deref() != Some("layer")),
+        "path.delete" => has_path && !pending_layer && (pending || menu.path_name.as_ref().and_then(|p| p.name()) != Some("layer")),
         "edit.defineCustomShape" | "path.toSelection" | "path.transform" | "paint.symmetryFromPath" => has_path,
         "view.newGuidesFromShape" => shape && !pending,
         "path.fill" | "path.stroke" => has_path && can_paint && !pending_layer,
-        "path.clippingPath.set" => saved && !pending,
+        "path.clippingPath.set" => {
+            saved
+                && !pending
+                && menu
+                    .path_name
+                    .as_ref()
+                    .and_then(|p| p.saved_index(&st.doc))
+                    .and_then(|i| st.doc.paths.get(i))
+                    .is_some_and(|path| st.doc.paths.iter().filter(|p| p.name == path.name).take(2).count() == 1)
+        }
         "layer.combineShapes.unite"
         | "layer.combineShapes.subtractFrontShape"
         | "layer.combineShapes.intersectShapeAreas"
@@ -1637,11 +1647,11 @@ pub(crate) fn remember_simulate_pressure(app: &mut PhotocraftApp, params: &Value
 }
 
 /// The Stroke Path dialog for the path `name` (Paths panel menu, Alt-click on its Stroke button).
-pub(crate) fn stroke_path_dialog(app: &mut PhotocraftApp, name: &str) {
-    pen_dialog(app, "path.stroke", "Stroke Path…", name);
+pub(crate) fn stroke_path_dialog(app: &mut PhotocraftApp, name: impl Into<PathSelection>) {
+    pen_dialog(app, "path.stroke", "Stroke Path…", &name.into());
 }
 
-fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
+fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &PathSelection) {
     let spec = match command {
         "edit.defineCustomShape" => r##"{"name":text}"##,
         "path.toSelection" => r##"{"feather":0..250=0,"antiAlias":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
@@ -1652,11 +1662,22 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
         _ => "{}",
     };
     let mut fields = serde_json::Map::new();
+    if matches!(name, PathSelection::Saved { .. })
+        && let Some(st) = app.session.active()
+    {
+        fields.insert("__pathSource".into(), json!([st.doc.id.0, st.revision]));
+    }
     if command == "edit.defineCustomShape" {
-        fields.insert("path".into(), json!(name));
+        let path = app.session.active().and_then(|st| name.path(&st.doc));
+        fields
+            .insert("path".into(), name.name().map(|n| json!(n)).unwrap_or_else(|| path.map(photocraft_engine::vector_cmds::path_json).unwrap_or(Value::Null)));
         fields.insert("name".into(), json!(""));
-    } else {
+    } else if command == "path.clippingPath.set" {
+        let name =
+            app.session.active().and_then(|st| name.saved_index(&st.doc).and_then(|i| st.doc.paths.get(i))).map(|p| p.name.as_str()).or_else(|| name.name());
         fields.insert("name".into(), json!(name));
+    } else if let Some(params) = name.params().as_object() {
+        fields.extend(params.clone());
     }
     if command == "path.toSelection" {
         // OK deselects and hides the path, as ⌘↩ does (#6079).
@@ -1750,7 +1771,7 @@ pub(crate) fn make_selection(app: &mut PhotocraftApp) -> Result<(), String> {
     if pending && !crate::vector_ui::pen_commit(app, false) {
         return Err(app.ui.status.clone());
     }
-    let name = if pending_layer { Some("layer".to_string()) } else { crate::vector_ui::active_path_name(app) }
+    let name = if pending_layer { Some("layer".into()) } else { crate::vector_ui::active_path_name(app) }
         .ok_or_else(|| "No path is available for this action".to_string())?;
     pen_dialog(app, "path.toSelection", "Make Selection…", &name);
     Ok(())
@@ -1770,7 +1791,7 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
     if pending && !crate::vector_ui::pen_commit(app, false) {
         return Err(app.ui.status.clone());
     }
-    let name = if pending { Some(if pending_layer { "layer" } else { "work" }.to_string()) } else { menu.path_name.clone() }
+    let name = if pending { Some(if pending_layer { "layer" } else { "work" }.into()) } else { menu.path_name.clone() }
         .ok_or_else(|| "No path is available for this action".to_string())?;
     match command {
         "edit.defineCustomShape" | "path.toSelection" | "path.fill" | "path.stroke" | "path.clippingPath.set" | "path.transform" => {
@@ -1778,7 +1799,7 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
             pen_dialog(app, command, label, &name);
         }
         _ => {
-            app.run(command, json!({"name": name}))?;
+            app.run(command, name.params())?;
         }
     }
     Ok(())
@@ -1790,6 +1811,10 @@ fn menu_id() -> egui::Id {
 
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let Some(mut menu) = app.ui.canvas_tool_menu.clone() else { return };
+    if matches!(menu.path_name, Some(PathSelection::Saved { .. })) && menu.path_name != crate::vector_ui::active_path_name(app) {
+        app.ui.canvas_tool_menu = None;
+        return;
+    }
     if ctx.input(|i| i.key_pressed(egui::Key::Escape))
         || app.ui.tool != menu.under.unwrap_or(menu.tool)
         || (menu.transform && app.ui.transform.is_none())

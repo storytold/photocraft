@@ -504,7 +504,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // A path selected in the Paths panel becomes the vector mask, as in Photoshop (#4728);
             // Alt still inverts it.
             match crate::vector_ui::selected_document_path(app).filter(|_| cmd.starts_with("layer.vectorMask.")) {
-                Some(name) => actions.push(("layer.vectorMask.currentPath".into(), json!({"name": name, "hide": alt}))),
+                Some(name) => actions.push(("layer.vectorMask.currentPath".into(), name.with_params(json!({"hide": alt})))),
                 None => actions.push((cmd.into(), json!({}))),
             }
         }

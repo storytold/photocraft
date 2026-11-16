@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 mod color_panel;
 mod panel_state;
+mod path_selection;
 mod tool;
 mod tool_options;
 mod transform;
@@ -17,6 +18,7 @@ pub use panel_state::{
     CameraRawPreviewState, CameraRawScopeState, CurvesEditorState, LayerThumbnailContents, LayerThumbnailSize, LayersPanelDialog, LayersPanelOptions,
     PointCurveDrag, PointCurveState,
 };
+pub use path_selection::PathSelection;
 pub use tool::Tool;
 pub use tool_options::{SampleAllLayers, ToolOptions};
 use tool_options::{default_brush_tool, default_layer_filter_mode, layer_filter_mode_or_normal, yes};
@@ -421,9 +423,9 @@ pub struct UiState {
     /// The bounding box of several selected shape layers, a handle being dragged.
     #[serde(skip)]
     pub shape_box: Option<crate::shape_bounds_box::Drag>,
-    /// Selected row in the Paths panel ("work" or a saved path name).
+    /// Selected row in the Paths panel; saved rows use their document index.
     #[serde(default)]
-    pub selected_path: Option<String>,
+    pub selected_path: Option<PathSelection>,
     /// The document and Work Path deselected by making a selection from it with the Pen or Path
     /// Selection tool (#6079): the canvas hides that path until a path is selected again or the
     /// Work Path changes.

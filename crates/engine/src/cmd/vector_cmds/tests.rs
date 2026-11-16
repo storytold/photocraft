@@ -2,6 +2,9 @@ use serde_json::json;
 
 use super::*;
 
+#[path = "path_index_tests.rs"]
+mod path_index_tests;
+
 #[test]
 fn stroke_validation_rejects_hostile_values_without_editing_history() {
     let mut s = session(100, 80, 8);

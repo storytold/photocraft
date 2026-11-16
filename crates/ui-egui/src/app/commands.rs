@@ -344,7 +344,7 @@ impl PhotocraftApp {
         // The Paths panel selection belongs to the active document. Ordinary edits replace the
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
         // reopened document, even with the same ID.
-        let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
+        let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc), st.saved_paths_revision()));
         // Crop's Fill goes back to its default entry when another document that was already open
         // becomes active (a tab switch, or closing the active one), as in the reference
         // application. A new or opened document isn't in `view_docs` yet, so it keeps the setting,
@@ -356,11 +356,21 @@ impl PhotocraftApp {
             self.ui.tool_options.crop_content_aware = false;
         }
         let same_document = match (&self.path_document, &document) {
-            (Some((old_id, old_revision, old_source)), Some((id, revision, source))) => old_id == id && (revision > old_revision || old_source.ptr_eq(source)),
+            (Some((old_id, old_revision, old_source, _)), Some((id, revision, source, _))) => {
+                old_id == id && (revision > old_revision || old_source.ptr_eq(source))
+            }
             (None, None) => true,
             _ => false,
         };
-        if !same_document {
+        // The engine observes every list mutation and history restoration. Comparing only the
+        // final path count misses delete+append actions; weak snapshots may die during coalescing.
+        let saved_list_changed = matches!(self.ui.selected_path, Some(state::PathSelection::Saved { .. }))
+            && matches!((&self.path_document, &document), (Some((_, _, _, old)), Some((_, _, _, now))) if old != now);
+        let stale_index =
+            self.ui.selected_path.as_ref().is_some_and(|sel| {
+                matches!(sel, state::PathSelection::Saved { .. }) && self.session.active().is_none_or(|st| sel.saved_index(&st.doc).is_none())
+            });
+        if !same_document || saved_list_changed || stale_index {
             self.ui.selected_path = None;
         }
         self.path_document = document;

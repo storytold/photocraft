@@ -202,7 +202,7 @@ pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
                 for row in rows {
                     let (name, text) = match row.kind {
-                        PathRow::Saved => (row.name.clone(), row.name),
+                        PathRow::Saved(_) => (row.name.clone(), row.name),
                         PathRow::Work => ("work".into(), tl!("Work Path").into()),
                         PathRow::Layer => ("layer".into(), row.name),
                     };

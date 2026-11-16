@@ -1021,6 +1021,11 @@ fn report_file_errors(app: &mut PhotocraftApp, d: &Dialog, r: &Value) {
 /// Confirm a command dialog no specific handler owns: run its `__command` with the dialog's
 /// parameters, then settle the filter preview and the playing action.
 fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Value, String> {
+    if let Some(source) = d.fields.get("__pathSource")
+        && app.session.active().is_none_or(|st| *source != json!([st.doc.id.0, st.revision]))
+    {
+        return Err(tl!("The path changed while the dialog was open; select it again.").into());
+    }
     crate::filter_dialog::refresh_match_color_sources(&app.session, &mut d.fields);
     let Some(cmd) = d.fields.get("__command").and_then(Value::as_str).map(str::to_string) else {
         app.filter_preview = None;
@@ -1074,12 +1079,8 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     if result.is_ok() && cmd == "path.toSelection" {
         crate::canvas_tool_menu::name_make_selection_step(app, &d.fields, &params, revision);
     }
-    if result.is_ok()
-        && cmd == "path.toSelection"
-        && d.fields.contains_key("__deselectPath")
-        && let Some(name) = params.get("name").and_then(Value::as_str)
-    {
-        crate::vector_ui::deselect_loaded_path(app, name);
+    if result.is_ok() && cmd == "path.toSelection" && d.fields.contains_key("__deselectPath") {
+        crate::vector_ui::deselect_loaded_path(app, params.get("name").and_then(Value::as_str).unwrap_or("work"));
     }
     if result.is_ok() && cmd == "path.stroke" {
         // The Stroke Path dialog reopens with the Simulate Pressure that was just applied (#10527).

@@ -40,14 +40,14 @@ fn deleting_a_saved_paths_last_anchor_leaves_it_empty_in_one_undoable_step() {
     assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
     assert_eq!(s.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
     let list = s.execute("path.list", json!({})).unwrap();
-    assert_eq!(list["paths"], json!([{"name": "Path 1", "knots": 0, "subpaths": 0}]), "Path 1 stays in the Paths panel");
+    assert_eq!(list["paths"], json!([{"pathIndex": 0, "name": "Path 1", "knots": 0, "subpaths": 0}]), "Path 1 stays in the Paths panel");
     let info = s.execute("path.info", json!({"name": "Path 1"})).unwrap();
     assert_eq!(info["path"]["subpaths"], json!([]));
     assert!(s.undo());
     assert_eq!(doc(&s).paths[0].path, before, "Undo brings the anchor back");
     assert!(s.redo());
     assert!(doc(&s).paths[0].path.subpaths.is_empty());
-    assert_eq!(s.execute("path.list", json!({})).unwrap()["paths"], json!([{"name": "Path 1", "knots": 0, "subpaths": 0}]));
+    assert_eq!(s.execute("path.list", json!({})).unwrap()["paths"], json!([{"pathIndex": 0, "name": "Path 1", "knots": 0, "subpaths": 0}]));
 }
 
 /// ⌫ / Delete on the Add Anchor Point tool's selected anchor (`segments`, #12703) follows the same

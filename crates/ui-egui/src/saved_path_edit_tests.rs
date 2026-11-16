@@ -70,15 +70,15 @@ fn direct_selection_drags_an_anchor_of_the_selected_saved_path() {
 }
 
 #[test]
-fn direct_selection_marquee_selects_and_arrow_params_name_the_saved_path() {
+fn direct_selection_marquee_selects_and_arrow_params_index_the_saved_path() {
     let mut app = app(Tool::DirectSelection);
     with_saved_path(&mut app);
     drag(&mut app, [30.0, 30.0], [50.0, 50.0], Modifiers::NONE);
     assert_eq!((app.ui.direct_selection.target, app.ui.direct_selection.anchors.clone()), (Some(PathRef::Saved(0)), vec![[0, 0]]));
-    assert_eq!(PathRef::Saved(0).params(&app), json!({"name": NAME}));
-    // A path that is gone gets no name, which the engine refuses instead of editing another one.
-    assert_eq!(PathRef::Saved(7).params(&app), json!({"name": ""}));
-    assert!(app.run("path.moveAnchors", json!({"name": "", "anchors": [[0, 0]], "move": [1, 1]})).is_err());
+    assert_eq!(PathRef::Saved(0).params(&app), json!({"pathIndex": 0}));
+    // An out-of-range index is refused instead of editing another saved path.
+    assert_eq!(PathRef::Saved(7).params(&app), json!({"pathIndex": 7}));
+    assert!(app.run("path.moveAnchors", json!({"pathIndex": 7, "anchors": [[0, 0]], "move": [1, 1]})).is_err());
 }
 
 #[test]
@@ -122,11 +122,11 @@ fn path_selection_moves_the_selected_saved_path() {
 }
 
 #[test]
-fn free_transform_path_names_the_selected_saved_path() {
+fn free_transform_path_indexes_the_selected_saved_path() {
     let mut app = app(Tool::PathSelection);
     with_saved_path(&mut app);
     let (params, path) = crate::vector_ui::free_transform_path(&app).expect("the saved path is transformable");
-    assert_eq!(params, json!({"name": NAME}));
+    assert_eq!(params, json!({"pathIndex": 0}));
     assert_eq!(path, saved(&app));
 }
 

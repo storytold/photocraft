@@ -1264,7 +1264,7 @@ fn esc_ends_a_pen_path_and_keeps_it() {
     assert_eq!(path.subpaths.len(), 1);
     assert!(!path.subpaths[0].closed, "left open");
     assert_eq!(path.subpaths[0].knots.len(), 3);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
 }
 
 /// Over the first anchor of a Pen path the canvas shows the close-path pointer (#4596), a bitmap

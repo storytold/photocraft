@@ -181,6 +181,7 @@ pub(crate) fn delete_state(s: &mut Session, i: usize, current: usize) -> Result<
     }
     let damage = crate::layer_multi_cmds::step_damage(&d, &st.doc);
     st.doc = d;
+    st.invalidate_saved_path_indices();
     crate::restore_target(st, layers);
     st.revision += 1;
     st.last_damage = damage;

@@ -1,5 +1,6 @@
-use super::params::{color, f64p, layer_id, op_from, parse_path, path_json};
+use super::params::{color, f64p, layer_id, op_from, parse_path};
 use super::shape::{map_path, map_shape, transform_shape, with_shape};
+use super::target::{PathTarget, saved_mut};
 use super::{
     Affine, BlendMode, ClippingPath, Color, Document, EngineError, LayerContent, LayerId, NamedPath, Path, Rect, Result, SelectionMode, Session, Value, bad,
     blend_from_str, json, sel, vector,
@@ -60,7 +61,7 @@ pub(super) fn paths_list(s: &Session) -> Result<Value> {
         }
     });
     Ok(json!({
-        "paths": doc.paths.iter().map(|p| json!({ "name": p.name, "knots": knots(&p.path), "subpaths": p.path.subpaths.len() })).collect::<Vec<_>>(),
+        "paths": doc.paths.iter().enumerate().map(|(i, p)| json!({ "pathIndex": i, "name": p.name, "knots": knots(&p.path), "subpaths": p.path.subpaths.len() })).collect::<Vec<_>>(),
         "workPath": doc.work_path.as_ref().map(|p| json!({ "knots": knots(p), "subpaths": p.subpaths.len() })),
         "clippingPath": doc.clipping_path.as_ref().map(|c| json!({ "name": c.name, "flatness": c.flatness })),
         "layerPath": layer,
@@ -93,10 +94,11 @@ pub(super) fn pen_history_name<'a>(p: &Value, cmd: &str, default: &'a str) -> Re
 /// Path label.
 pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.set";
+    let target = PathTarget::parse(s, p, CMD)?;
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let append = p.get("op").and_then(Value::as_str).map(|o| op_from(o).ok_or_else(|| bad(CMD, format!("unknown op `{o}`")))).transpose()?;
-    let label = pen_history_name(p, CMD, if is_work(name.as_deref()) { "Work Path" } else { "Save Path" })?;
+    let label = pen_history_name(p, CMD, if target.is_work() { "Work Path" } else { "Save Path" })?;
     s.edit(label, |doc, _| {
         let merge = |old: Option<&Path>, new: Path| -> Result<Path> {
             let merged = match (old, append) {
@@ -115,7 +117,10 @@ pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
             vector::flatten::validate_path(&merged).map_err(|e| bad(CMD, e))?;
             Ok(merged)
         };
-        if is_work(name.as_deref()) {
+        if let Some(i) = target.index() {
+            let saved = saved_mut(doc, i)?;
+            saved.path = merge(Some(&saved.path), path)?;
+        } else if target.is_work() {
             doc.work_path = Some(merge(doc.work_path.as_ref(), path)?);
         } else {
             let n = name.clone().unwrap_or_default();
@@ -128,13 +133,23 @@ pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(())
     })?;
-    let path = resolve_path(s, name.as_deref())?;
-    Ok(json!({ "name": name.unwrap_or_else(|| "work".into()), "path": path_json(&path) }))
+    target.info(s)
 }
 
 pub(super) fn path_delete(s: &mut Session, p: &Value) -> Result<Value> {
+    let target = PathTarget::parse(s, p, "path.delete")?;
+    target.check_clipping_reference(s, "path.delete")?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     s.edit("Delete Path", |doc, _| {
+        if let Some(i) = target.index() {
+            // Check before remove: command input must never panic, even when the index is stale.
+            let name = saved_mut(doc, i)?.name.clone();
+            doc.paths.remove(i);
+            if doc.clipping_path.as_ref().is_some_and(|c| c.name == name) {
+                doc.clipping_path = None;
+            }
+            return Ok(());
+        }
         if is_work(name.as_deref()) {
             return doc.work_path.take().map(|_| ()).ok_or_else(|| EngineError::Other("no work path".into()));
         }
@@ -154,6 +169,9 @@ pub(super) fn path_delete(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub(super) fn clipping_path_set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.clippingPath.set";
+    if p.get("pathIndex").is_some() {
+        return Err(bad(CMD, "clipping paths require a saved path `name`, not `pathIndex`"));
+    }
     let name = p.get("name").and_then(Value::as_str).filter(|name| !name.is_empty()).ok_or_else(|| bad(CMD, "missing saved path `name`"))?.to_owned();
     let flatness = match p.get("flatness") {
         Some(value) => {
@@ -182,8 +200,8 @@ pub(super) fn clipping_path_clear(s: &mut Session, _p: &Value) -> Result<Value> 
 
 /// The path `path.transform` edits: `layer`'s shape path or vector mask (its vector mask alone when
 /// `vector_mask` is set), else the work path or a saved path.
-fn transform_target(s: &Session, name: &str, layer: Option<LayerId>, vector_mask: bool) -> Result<Path> {
-    let Some(id) = layer else { return resolve_path(s, Some(name)) };
+fn transform_target(s: &Session, target: PathTarget<'_>, layer: Option<LayerId>, vector_mask: bool) -> Result<Path> {
+    let Some(id) = layer else { return target.resolve(s) };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     if vector_mask {
@@ -222,8 +240,9 @@ enum PathMap {
 
 pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.transform";
-    let name = p.get("name").and_then(Value::as_str).unwrap_or("work").to_owned();
-    let layer_id = if name == "layer" { Some(layer_id(s, p)?) } else { None };
+    let target = PathTarget::parse(s, p, CMD)?;
+    let name = target.name(s)?;
+    let layer_id = if target.is_layer() { Some(layer_id(s, p)?) } else { None };
     let vector_mask = match p.get("vectorMask") {
         None => false,
         Some(Value::Bool(v)) => *v,
@@ -244,7 +263,7 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
             Some(r) => [r[0], r[1], r[2], r[3]],
             None => {
                 let (x0, y0, x1, y1) =
-                    transform_target(s, &name, layer_id, vector_mask)?.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
+                    transform_target(s, target, layer_id, vector_mask)?.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
                 [x0, y0, x1, y1]
             }
         };
@@ -299,7 +318,7 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
         let (sx, sy) = (number("scaleX", 1.0)?, number("scaleY", 1.0)?);
         let angle = number("angle", 0.0)?;
         // An explicit `layer` parameter determines both the transformed path and its pivot (#3062).
-        let path = transform_target(s, &name, layer_id, vector_mask)?;
+        let path = transform_target(s, target, layer_id, vector_mask)?;
         let (x0, y0, x1, y1) = path.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
         let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
         PathMap::Affine(
@@ -309,11 +328,11 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
                 .then(&Affine::translate(cx + tx, cy + ty)),
         )
     };
-    let out = match &map {
+    let out = target.with_index(match &map {
         PathMap::Affine(a) => json!({ "name": name, "matrix": a.m }),
         PathMap::Projective(h) => json!({ "name": name, "homography": h.0 }),
         PathMap::Warp(_) => json!({ "name": name, "warp": true }),
-    };
+    });
     if !vector_mask
         && let Some(id) = layer_id
         && s.active().and_then(|d| d.doc.layer(id)).is_some_and(|layer| matches!(layer.content, LayerContent::Shape(_)))
@@ -330,7 +349,7 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(out);
     }
     s.edit("Transform Path", |doc, _| {
-        let path = path_mut(doc, &name, layer_id)?;
+        let path = target.path_mut(doc, layer_id)?;
         *path = match &map {
             PathMap::Affine(a) => path.transform(a),
             PathMap::Projective(h) => map_path(path, Some(h), None)?,
@@ -343,36 +362,41 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub(super) fn path_rename(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.rename";
-    let name = p.get("name").and_then(Value::as_str).map(str::to_string);
+    let target = PathTarget::parse(s, p, CMD)?;
+    target.check_clipping_reference(s, CMD)?;
+    let name = target.name(s)?;
     let to = p.get("to").and_then(Value::as_str).filter(|t| !t.is_empty()).ok_or_else(|| bad(CMD, "missing `to`"))?.to_string();
     if is_work(Some(&to)) {
         return Err(bad(CMD, "`to` cannot name the work path"));
     }
-    s.edit(if is_work(name.as_deref()) { "Save Path" } else { "Rename Path" }, |doc, _| {
+    s.edit(if target.is_work() { "Save Path" } else { "Rename Path" }, |doc, _| {
         if doc.paths.iter().any(|q| q.name == to) {
             return Err(EngineError::Other(format!("a path named \"{to}\" already exists")));
         }
-        if is_work(name.as_deref()) {
+        if target.is_work() {
             // Photoshop: saving the work path turns it into a named path.
             let path = doc.work_path.take().ok_or_else(|| EngineError::Other("no work path".into()))?;
             doc.paths.push(NamedPath { name: to.clone(), path, psd_raw: None });
             return Ok(());
         }
-        let n = name.clone().unwrap_or_default();
-        let q = doc.paths.iter_mut().find(|q| q.name == n).ok_or_else(|| EngineError::Other(format!("no path named \"{n}\"")))?;
+        let n = &name;
+        let q = match target.index() {
+            Some(i) => saved_mut(doc, i)?,
+            None => doc.paths.iter_mut().find(|q| q.name == *n).ok_or_else(|| EngineError::Other(format!("no path named \"{n}\"")))?,
+        };
         q.name = to.clone();
         if let Some(c) = doc.clipping_path.as_mut()
-            && c.name == n
+            && c.name == *n
         {
             c.name = to.clone();
         }
         Ok(())
     })?;
-    Ok(json!({ "name": to }))
+    Ok(target.with_index(json!({ "name": to })))
 }
 
 pub(super) fn path_to_selection(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = resolve_path(s, p.get("name").and_then(Value::as_str))?;
+    let path = PathTarget::parse(s, p, "path.toSelection")?.resolve(s)?;
     // Validate before rasterizing or touching selection history. An unchecked feather value
     // could silently become zero (negative/string), or expand into an excessive blur.
     let feather = match p.get("feather") {
@@ -438,7 +462,7 @@ pub(super) fn select_to_work_path(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(super) fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = resolve_path(s, p.get("name").and_then(Value::as_str))?;
+    let path = PathTarget::source(s, p, "path.fill")?.resolve(s)?;
     let fg = s.tools.foreground;
     let c = p.get("color").and_then(color).unwrap_or(Color::rgba(fg[0], fg[1], fg[2], fg[3]));
     let rgb = c.to_rgb();
@@ -567,7 +591,7 @@ fn stroke_points(pts: &[(f64, f64)], closed: bool, simulate: bool) -> Vec<photoc
 /// history step. Only `path.stroke` itself is journalled, so a recorded action replays it once.
 fn stroke_with_command(s: &mut Session, p: &Value, cmd: &str, lines: &[vector::Polyline], simulate: bool) -> Result<Value> {
     let mut params = p.as_object().cloned().unwrap_or_default();
-    for k in ["name", "tool", "simulatePressure", "coalesce"] {
+    for k in ["name", "pathIndex", "tool", "simulatePressure", "coalesce"] {
         params.remove(k);
     }
     let journal = s.journal.len();
@@ -593,7 +617,7 @@ fn stroke_with_command(s: &mut Session, p: &Value, cmd: &str, lines: &[vector::P
 }
 
 pub(super) fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = resolve_path(s, p.get("name").and_then(Value::as_str))?;
+    let path = PathTarget::source(s, p, "path.stroke")?.resolve(s)?;
     let tool = p.get("tool").and_then(Value::as_str).unwrap_or("brush");
     let simulate = match p.get("simulatePressure") {
         None | Some(Value::Null) => false,

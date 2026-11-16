@@ -1279,6 +1279,11 @@ pub(super) fn event_for(item: &AtnEvent) -> Option<&'static Event> {
 /// The event `id` exports as: the first event listing it whose converter accepts the params
 /// (Quick Mask on is a `set`, off a `clearEvent`).
 pub(super) fn event_and_descriptor(id: &str, params: &Value) -> Option<(&'static Event, Descriptor)> {
+    // No measured ATN mapping carries a saved-path index. Dropping it would change the
+    // target to the Work Path or active path; use the existing unsupported-step policy.
+    if params.get("pathIndex").is_some() {
+        return None;
+    }
     if params.get("_atnBounds").is_some()
         && (id != "select.rect" || !matches!(params.get("mode").and_then(Value::as_str), Some("add" | "subtract" | "intersect")))
     {

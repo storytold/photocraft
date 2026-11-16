@@ -74,7 +74,7 @@ fn a_click_on_empty_canvas_hides_the_anchors_and_the_next_anchor_click_only_sele
     let n = steps(&app);
     click(&mut app, [50.0, 50.0]);
     assert_eq!(steps(&app), n);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("Path 1"));
     assert_eq!(drawn(&app), [false; 3]);
     click(&mut app, [300.0, 500.0]);
     assert_eq!(steps(&app), n);

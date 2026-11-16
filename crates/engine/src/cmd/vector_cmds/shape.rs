@@ -505,6 +505,7 @@ fn new_fill_stroke(s: &Session, cmd: &str, p: &Value) -> Result<(Option<Fill>, O
 /// that would duplicate the selected shape or vector mask.
 pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.toShape";
+    let target = super::PathTarget::parse(s, p, CMD)?;
     let name = match p.get("name") {
         None | Some(Value::Null) => None,
         Some(Value::String(n)) => Some(n.as_str()),
@@ -515,14 +516,17 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(CMD, "`consumeWorkPath` must be true or false")),
     };
+    if target.index().is_some() && (p.get("path").is_some() || consume_flag) {
+        return Err(bad(CMD, "`pathIndex` cannot be combined with inline `path` or `consumeWorkPath: true`"));
+    }
     let (path, consume_work) = match p.get("path").filter(|v| !v.is_null()) {
         Some(_) if name.is_some() => return Err(bad(CMD, "give `name` or `path`, not both")),
         Some(v) => (parse_path(v).map_err(|e| bad(CMD, e))?, consume_flag),
-        None if super::is_work(name) => {
+        None if target.is_work() => {
             let d = s.active().ok_or(EngineError::NoDocument)?;
             (d.doc.work_path.clone().ok_or_else(|| bad(CMD, "there is no Work Path"))?, true)
         }
-        None => (super::resolve_path(s, name)?, false),
+        None => (target.resolve(s)?, false),
     };
     if !path.subpaths.iter().any(|sp| sp.knots.len() >= 2) {
         return Err(bad(CMD, "the path has no segment to make a shape from"));

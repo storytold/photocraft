@@ -21,7 +21,7 @@ fn app() -> PhotocraftApp {
     app.run("path.set", json!({"name": "Path 1", "path": square})).unwrap();
     app.sync_views();
     app.ui.tool = Tool::DeleteAnchorPoint;
-    app.ui.selected_path = Some("Path 1".into());
+    app.ui.selected_path = Some(crate::state::PathSelection::Saved { index: 0 });
     app
 }
 
@@ -60,7 +60,7 @@ fn the_first_escape_clears_the_selected_anchor_and_the_second_deselects_the_path
     let n = steps(&app);
     escape(&mut app);
     assert!(app.ui.direct_selection.anchors.is_empty(), "the first Esc clears the anchor");
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "and keeps Path 1 selected");
+    assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }), "and keeps Path 1 selected");
     assert!(!active_paths(&app).is_empty(), "its outline stays");
     escape(&mut app);
     assert_eq!(app.ui.selected_path, None, "the second Esc deselects Path 1");
@@ -74,7 +74,7 @@ fn a_targeted_work_path_keeps_todays_escape() {
     app.run("path.set", json!({"name": "work", "path": line})).unwrap();
     app.ui.selected_path = Some("work".into());
     escape(&mut app);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
 }
 
 #[test]
@@ -95,11 +95,11 @@ fn with_path_1_targeted_escape_still_leaves_full_screen_and_deselects_pixels_fir
     app.ui.view.screen_mode = "fullScreen".into();
     escape(&mut app);
     assert_eq!(app.ui.view.screen_mode, "standard");
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "leaving full screen keeps Path 1 selected");
+    assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }), "leaving full screen keeps Path 1 selected");
     app.run("select.all", json!({})).unwrap();
     escape(&mut app);
     assert!(app.session.active().unwrap().doc.selection.is_none(), "Esc deselects the pixels");
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "and keeps Path 1 selected");
+    assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }), "and keeps Path 1 selected");
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn escape_while_renaming_path_1_cancels_the_rename() {
     h.run_steps(3);
     let names: Vec<String> = h.state().session.active().unwrap().doc.paths.iter().map(|p| p.name.clone()).collect();
     assert_eq!(names, ["Path 1"], "Esc cancels the rename");
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("Path 1"));
+    assert_eq!(h.state().ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }));
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn the_first_escape_without_a_selected_anchor_keeps_path_1_targeted() {
     let mut app = app();
     let n = steps(&app);
     escape(&mut app);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "the first Esc keeps Path 1 targeted");
+    assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }), "the first Esc keeps Path 1 targeted");
     assert!(!active_paths(&app).is_empty(), "its outline stays");
     escape(&mut app);
     assert_eq!(app.ui.selected_path, None, "the second Esc deselects Path 1");
@@ -166,7 +166,7 @@ fn an_escape_during_a_direct_selection_drag_keeps_the_anchors() {
     escape(&mut app);
     assert_eq!(app.ui.direct_selection.anchors, vec![[0, 1]], "the drag's release still moves them");
     assert!(app.ui.direct_selection.drag.is_some(), "and Esc does not end the drag");
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "nor deactivates the path");
+    assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }), "nor deactivates the path");
 }
 
 #[test]
@@ -174,11 +174,13 @@ fn a_newly_targeted_path_starts_at_the_first_escape_again() {
     let mut app = app();
     let line = json!({"subpaths": [{"knots": [[600, 100], [700, 100]]}]});
     app.run("path.set", json!({"name": "Path 2", "path": line})).unwrap();
+    assert!(app.ui.selected_path.is_none(), "a changed saved-path list clears the positional selection");
+    app.ui.selected_path = Some(crate::state::PathSelection::Saved { index: 0 });
     escape(&mut app);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "the first Esc keeps Path 1 targeted");
-    app.ui.selected_path = Some("Path 2".into());
+    assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }), "the first Esc keeps Path 1 targeted");
+    app.ui.selected_path = Some(crate::state::PathSelection::Saved { index: 1 });
     escape(&mut app);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 2"), "the first Esc on a new path keeps it targeted");
+    assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 1 }), "the first Esc on a new path keeps it targeted");
     escape(&mut app);
     assert_eq!(app.ui.selected_path, None, "and the second Esc deselects it");
 }

@@ -18,8 +18,14 @@ pub fn selected_path<'a>(s: &'a Session, name: &str) -> Result<&'a Path> {
 
 /// The native path step is also the source for a future independently verified ATN wire mapping.
 pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
-    let name = p.get("name").and_then(Value::as_str).ok_or_else(|| bad("actions.insertPath", "select a path"))?;
-    let path = selected_path(s, name)?;
+    let indexed;
+    let path = if p.get("pathIndex").is_some() {
+        indexed = crate::vector_cmds::PathTarget::parse(s, p, "actions.insertPath")?.resolve(s)?;
+        &indexed
+    } else {
+        let name = p.get("name").and_then(Value::as_str).ok_or_else(|| bad("actions.insertPath", "select a path"))?;
+        selected_path(s, name)?
+    };
     photocraft_vector::flatten::validate_path(path).map_err(|e| bad("actions.insertPath", e))?;
     let path = crate::vector_cmds::path_json(path);
     s.execute("actions.insert", json!({"action":p.get("action"),"at":p.get("at"),"id":"path.set","params":{"name":"work","path":path}}))
