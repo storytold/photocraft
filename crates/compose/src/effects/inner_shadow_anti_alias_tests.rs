@@ -220,3 +220,79 @@ fn the_off_path_is_bit_for_bit_unchanged() {
     assert_eq!(bit_hash(&map(10.0, 5.0, 90.0, 0.0, gaussian(), false)), 0xe8fb_ce94_b436_f35b, "the Size 10 Distance 5 inner shadow map moved");
     assert_eq!(bit_hash(&map(10.0, 0.0, 0.0, 0.5, gaussian(), false)), 0x013f_77f0_d6ef_b7c1, "the Size 10 Choke 50 % inner shadow map moved");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Independent review of this PR: the offset was a constant applied at every Size, Choke and
+// Distance with the flag on, and only Size 10 / Choke 0 was measured. The four probes below are
+// the review's break inputs, written before the code changed.
+
+/// The review's first break: the issue's document with SIZE 1 (Angle 0, Distance 0, Choke 0,
+/// Gaussian, Anti-aliased on). `spread_split(1, 0)` is `(0, 1)`, so `dilate` no-ops at a radius of
+/// 0 and `blur(m, 1.0)` is the identity (`tent_kernel(1).0 == 0`, and `tent` returns at once): the
+/// third-of-a-pixel source offset becomes the whole map. Coverage 1/3 through the Gaussian
+/// contour (0.30) then lands on the bottom and right inner edges only, G 90 where the layer reads
+/// its own 128, and nothing at the top and left - a one-sided black line that no measurement
+/// shows, because Size 1 was never measured with the flag on. Today's Size 1 map is empty and
+/// has to stay empty.
+#[test]
+fn anti_aliased_size_one_keeps_todays_empty_map() {
+    let off = map(1.0, 0.0, 0.0, 0.0, gaussian(), false);
+    assert!(off.v.iter().all(|v| *v == 0.0), "today's Size 1 inner shadow map is no longer empty");
+    let on = map(1.0, 0.0, 0.0, 0.0, gaussian(), true);
+    for (side, x, y) in [("bottom", 200i64, 224), ("right", 299, 150), ("top", 200, 75), ("left", 100, 150)] {
+        let got = g(on.get(x, y));
+        assert_eq!(got.round() as i32, 128, "Anti-aliased Size 1 painted the {side} inner edge: G {got:.1}");
+    }
+    assert_eq!(bit_hash(&on), bit_hash(&off), "the Size 1 inner shadow map moved with Anti-aliased on");
+}
+
+/// The second degeneracy the review names: Size 2 with Choke 50 %. `spread_split(2, 0.5)` is
+/// `(1, 1.0)`, a 1 px dilation plus a blur of width exactly 1 - the identity again - so the
+/// offset would be the only soft thing in the map. That neighbour keeps today's output.
+#[test]
+fn anti_aliased_size_two_choke_half_keeps_todays_map() {
+    let off = map(2.0, 0.0, 0.0, 0.5, gaussian(), false);
+    let on = map(2.0, 0.0, 0.0, 0.5, gaussian(), true);
+    assert_eq!(bit_hash(&on), bit_hash(&off), "the Size 2 Choke 50 % inner shadow map moved with Anti-aliased on (its blur width is 1, the identity)");
+}
+
+/// The parity finding: with Choke above 0 the CPU recomputes its chamfer dilation distance on the
+/// offset map (`blur::dilate`), while the GPU dilates with a whole-pixel-shifted distance field of
+/// the unshifted shape (`fx::builders::spread_blur`), so the two compositors part by exactly the
+/// third of a pixel the offset adds. #14934 measured Choke 0, so every Choke that dilates keeps
+/// today's map. The boundary is the map both compositors can build alike: no dilation
+/// (`spread_split`'s radius 0) and a blur wider than the identity.
+#[test]
+fn anti_aliased_choke_keeps_todays_map() {
+    let off = map(10.0, 0.0, 0.0, 0.5, gaussian(), false);
+    assert_eq!(bit_hash(&off), 0x013f_77f0_d6ef_b7c1, "the Size 10 Choke 50 % inner shadow map (Anti-aliased off) moved");
+    assert_eq!(
+        bit_hash(&map(10.0, 0.0, 0.0, 0.5, gaussian(), true)),
+        0x013f_77f0_d6ef_b7c1,
+        "Anti-aliased moved the Size 10 Choke 50 % map, where CPU and GPU cannot be made equal"
+    );
+    // Choke 5 % dilates too (spread_split(10, 0.05) = (1, 9.5)) and stays on today's map.
+    assert_eq!(
+        bit_hash(&map(10.0, 0.0, 0.0, 0.05, gaussian(), true)),
+        bit_hash(&map(10.0, 0.0, 0.0, 0.05, gaussian(), false)),
+        "Anti-aliased moved the Size 10 Choke 5 % map"
+    );
+}
+
+/// Pattern 13 the other way round: the rule may not be keyed on the one measured document's
+/// Size 10 either. Every Size whose blur is wider than the identity takes the offset at Choke 0,
+/// and so does a Distance other than 0 - the offset is a rule in the inputs. Guard test: green
+/// before and after, it states where the boundary must NOT sit.
+#[test]
+fn the_offset_follows_the_inputs_not_the_measured_size() {
+    for size in [1.5, 2.0, 3.0, 6.0, 20.0, 250.0] {
+        let off = bit_hash(&map(size, 0.0, 0.0, 0.0, gaussian(), false));
+        assert_ne!(
+            bit_hash(&map(size, 0.0, 0.0, 0.0, gaussian(), true)),
+            off,
+            "Anti-aliased did nothing at Size {size}, Choke 0: the rule would be keyed on the measured Size 10"
+        );
+    }
+    let dist_off = bit_hash(&map(10.0, 5.0, 90.0, 0.0, gaussian(), false));
+    assert_ne!(bit_hash(&map(10.0, 5.0, 90.0, 0.0, gaussian(), true)), dist_off, "Anti-aliased did nothing at Size 10, Distance 5, Choke 0");
+}

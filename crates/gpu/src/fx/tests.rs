@@ -360,8 +360,8 @@ fn anti_aliased_inner_shadow_shifts_the_map_stage() {
         p.stages.iter().filter(|s| s.kernel == Kernel::MShift).collect()
     }
     let light = GlobalLight::default();
-    let aa = photocraft_compose::effects::aa_shift(true, &gaussian);
-    assert_eq!(aa, -1.0 / 3.0, "the CPU offset the GPU has to copy");
+    let aa = photocraft_compose::effects::aa_shift(true, &gaussian, 10.0, 0.0);
+    assert_eq!(aa, -1.0 / 3.0, "the CPU offset the GPU has to copy at the measured Size 10, Choke 0");
     // The inner branch always takes one shift stage: it is where `1 - alpha` happens. At Distance 0
     // without Anti-aliased that stage is the identity, and that is what must change.
     let off = program(&Effect::InnerShadow(shadow(false, gaussian.clone())), &light, false);
@@ -384,4 +384,75 @@ fn anti_aliased_inner_shadow_shifts_the_map_stage() {
     let drop_off = program(&Effect::DropShadow(shadow(false, gaussian)), &light, false);
     assert_eq!(shift_stages(&drop_on).len(), 0, "a Drop Shadow at Distance 0 takes no shift stage");
     assert_eq!(drop_on.key, drop_off.key, "the Drop Shadow still ignores Anti-aliased (#14881 is its own item)");
+}
+
+/// #14934 review: the GPU's gate is the CPU's rule, including its two degenerate neighbours. At
+/// Size 1, and at Size 2 with Choke 50 %, the blur the map gets has width 1, which is the
+/// identity, so a sub-pixel source offset would be the entire map; at any Choke that dilates the
+/// CPU recomputes its distance field on the offset map while this builder shifts a whole-pixel
+/// field of the unshifted shape. In every one of those the program must be the Anti-aliased-off
+/// program, stage for stage and key for key. Away from the degeneracies the offset follows the
+/// inputs, not the measured Size 10.
+#[test]
+fn anti_aliased_inner_shadow_stage_follows_the_measured_geometry() {
+    use photocraft_doc::{Contour, FxCommon, Shadow};
+    let pts: [(f32, f32); 11] = [
+        (0.0, 0.0),
+        (0.117, 0.023),
+        (0.172, 0.055),
+        (0.234, 0.117),
+        (0.305, 0.234),
+        (0.383, 0.414),
+        (0.523, 0.688),
+        (0.617, 0.812),
+        (0.703, 0.891),
+        (0.805, 0.953),
+        (1.0, 1.0),
+    ];
+    let gaussian = || Contour::Custom {
+        name: "Gaussian".into(),
+        points: pts.iter().map(|(input, output)| photocraft_doc::adjust::CurvePoint { input: *input, output: *output }).collect(),
+        corners: (0..pts.len()).map(|i| i > 0 && i < pts.len() - 1).collect(),
+    };
+    let shadow = |size: f32, spread: f32, anti_aliased: bool| Shadow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        color: photocraft_color::Color::BLACK,
+        angle: 0.0,
+        use_global_light: false,
+        distance: 0.0,
+        spread,
+        size,
+        contour: gaussian(),
+        anti_alias: anti_aliased,
+        noise: 0.0,
+        knocks_out: false,
+    };
+    // The inner branch always builds exactly one shift stage (it is where `1 - alpha` happens);
+    // at Distance 0 `spread_blur` adds no second one.
+    let shift_key = |e: &Effect| -> ([f32; 4], u64) {
+        let p = program(e, &GlobalLight::default(), false);
+        let stages: Vec<&Stage> = p.stages.iter().filter(|s| s.kernel == Kernel::MShift).collect();
+        assert_eq!(stages.len(), 1, "the inner branch builds one shift stage for {e:?}");
+        (stages[0].p0, p.key)
+    };
+    for (size, spread, what) in [
+        (1.0, 0.0, "Size 1 (blur width 1: the identity)"),
+        (2.0, 0.5, "Size 2 Choke 50 % (blur width 1)"),
+        (10.0, 0.5, "Size 10 Choke 50 % (the CPU dilates an offset map, the GPU a whole-pixel field)"),
+        (10.0, 0.05, "Size 10 Choke 5 % (dilates 1 px too)"),
+    ] {
+        let on = shift_key(&Effect::InnerShadow(shadow(size, spread, true)));
+        let off = shift_key(&Effect::InnerShadow(shadow(size, spread, false)));
+        assert_eq!(on, off, "the {what} inner shadow program moved with Anti-aliased: on {:?}, off {:?}", on.0, off.0);
+    }
+    // Away from the degeneracies the rule is in the inputs: Size 1.5 and Size 20 take the offset
+    // exactly as the measured Size 10 does, and so does a Choke that dilates nothing.
+    for size in [1.5, 2.0, 3.0, 20.0] {
+        let (p0, _) = shift_key(&Effect::InnerShadow(shadow(size, 0.0, true)));
+        assert_eq!(p0, [-1.0 / 3.0, -1.0 / 3.0, 1.0, 1.0], "Size {size} at Choke 0 must carry the CPU's sub-pixel offset");
+    }
+    let thin = shift_key(&Effect::InnerShadow(shadow(10.0, 0.04, true)));
+    assert_eq!(thin.0, [-1.0 / 3.0, -1.0 / 3.0, 1.0, 1.0], "Choke 4 % dilates nothing (round(0.4) = 0), so the map shape is the measured one");
+    let thin_off = shift_key(&Effect::InnerShadow(shadow(10.0, 0.04, false)));
+    assert_ne!(thin.1, thin_off.1, "and the flag still invalidates that program's key");
 }

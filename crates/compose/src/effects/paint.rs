@@ -242,6 +242,27 @@ pub fn anti_aliased_contour(c: &Contour) -> bool {
     matches!(c, Contour::Custom { name, .. } if name.eq_ignore_ascii_case("Gaussian"))
 }
 
+/// Whether Choke / Spread `spread` of a `size` px soft effect leaves the map both issues measured:
+/// one the two compositors build alike, and one whose edge is soft at all. `spread_split` splits
+/// the Size into a dilation radius and a blur width, and both neighbours of the measured split are
+/// degeneracies of that split rather than a guess about an unmeasured picture:
+/// - a radius above 0 makes the CPU recompute its chamfer distance on the offset map
+///   (`blur::dilate`), while the GPU dilates with a distance field of the unshifted shape shifted
+///   by whole pixels only (`fx::builders::spread_blur`), so the two compositors part by exactly
+///   the fraction of a pixel the offset adds. Keep those on today's map.
+/// - a blur width of 1 or less is the identity (`blur::tent` returns at once, because
+///   `tent_kernel(1).0 == 0`), and with the radius at 0 nothing else softens the edge either: at
+///   Size 1, or at Size 2 with half Choke / Spread, the source offset would be the whole map -
+///   coverage on the bottom and right inner edges of an Inner Shadow and one glowing line outside
+///   the top and left of an Outer Glow, which no measurement shows.
+///
+/// Radius 0 with a wider blur is the map both issues measured, whatever the Size: the rule is in
+/// the inputs, not in the measured documents' Size 10.
+fn anti_aliased_geometry(size: f32, spread: f32) -> bool {
+    let (r, bw) = spread_split(size, spread);
+    r <= 0.0 && bw > 1.0
+}
+
 /// The sub-pixel offset towards the top-left that an anti-aliased effect builds its map from,
 /// added to the whole-pixel light offset. Both measured tables sit on a third of a pixel: with the
 /// flag on, the Outer Glow reaches a pixel further at the top and left (its reported bounds grow
@@ -253,8 +274,12 @@ pub fn anti_aliased_contour(c: &Contour) -> bool {
 /// sits from the reference. *Why* the two pairs of edges differ is not measured, so this
 /// reproduces both profiles instead of guessing a rule for the unmeasured cases. The GPU map
 /// program adds the same offset to its shift stage, so both compositors build the same geometry.
-pub fn aa_shift(on: bool, c: &Contour) -> f32 {
-    if on && anti_aliased_contour(c) { -1.0 / 3.0 } else { 0.0 }
+/// Only the configuration the issues measured takes it: the Gaussian contour
+/// (`anti_aliased_contour`) with a Size and Choke / Spread `anti_aliased_geometry` allows, so the
+/// offset is neither keyed to the measured Size nor applied to a map the two compositors build
+/// differently. Every other neighbour keeps today's map bit-for-bit.
+pub fn aa_shift(on: bool, c: &Contour, size: f32, spread: f32) -> f32 {
+    if on && anti_aliased_contour(c) && anti_aliased_geometry(size, spread) { -1.0 / 3.0 } else { 0.0 }
 }
 
 /// The lengths a 100 % gradient at `angle` spans in a `w` × `h` frame: the chord (Linear and
@@ -405,8 +430,9 @@ pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bo
     let angle = if s.use_global_light { light.angle } else { s.angle };
     let (dx, dy) = offset(angle, s.distance);
     // #14934: an Anti-aliased Inner Shadow builds its map from the shape off-centre (`aa_shift`).
-    // Only the inner branch was measured, so a Drop Shadow keeps today's map (#14881 is its own).
-    let aa = aa_shift(inner && s.anti_alias, &s.contour);
+    // Only the inner branch was measured, so a Drop Shadow keeps today's map (#14881 is its own),
+    // and `aa_shift` leaves every Choke that dilates and every Size whose blur is the identity.
+    let aa = aa_shift(inner && s.anti_alias, &s.contour, s.size, s.spread);
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
     let mut m = src.shifted(dx + aa, dy + aa, if inner { 1.0 } else { 0.0 });
     let (r, bw) = spread_split(s.size, s.spread);
