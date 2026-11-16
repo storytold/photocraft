@@ -604,6 +604,22 @@ fn unavailable_system_dialog_falls_back_to_the_normal_spooler() {
 }
 
 #[test]
+fn active_system_dialog_failure_does_not_fallback_or_submit() {
+    use std::sync::Arc;
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = session("rgb", 8);
+    s.print_spooler = Some(recording_spooler(true, &seen));
+    // Desktop adapters return Unavailable only during preflight. Once PreparePrint/Print may have
+    // started, they return Err so the engine cannot silently submit the same job a second time.
+    s.system_print_dialog = Some(Arc::new(|_, _| Err("PreparePrint response timed out".into())));
+
+    let error = s.execute("file.print", json!({"systemDialog": true, "printer": "Studio"})).unwrap_err();
+    assert!(error.to_string().contains("PreparePrint response timed out"), "{error}");
+    assert!(seen.lock().unwrap().is_empty(), "an active dialog error must not reach the fallback spooler");
+}
+
+#[test]
 fn windows_rgb_transport_rotates_pixels_before_printing() {
     let mut page = page_of(3, vec![1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0, 0, 5, 0, 0, 6, 0, 0], false);
     page.image.width = 2;
