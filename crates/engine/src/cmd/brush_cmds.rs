@@ -1066,13 +1066,7 @@ fn presets_set_current(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document")?;
-    if d.doc.selection.is_none() {
-        return Err("no selection".into());
-    }
-    if d.active_layer.and_then(|id| d.doc.layer(id)).is_none() {
-        return Err("no active layer".into());
-    }
+    s.active().ok_or("no document")?;
     Ok(())
 }
 
@@ -1095,8 +1089,8 @@ fn define_from_selection_with_renderer(
     let cmd = "brush.defineFromSelection";
     let name = name_param(p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let sel = d.doc.selection.as_ref().ok_or_else(|| bad(cmd, "no selection"))?;
-    let area = sel.content_bounds().intersect(&d.doc.bounds());
+    let sel = d.doc.selection.as_ref();
+    let area = sel.map_or_else(|| d.doc.bounds(), |sel| sel.content_bounds().intersect(&d.doc.bounds()));
     if area.is_empty() {
         return Err(bad(cmd, "the selection is empty"));
     }
@@ -1110,7 +1104,7 @@ fn define_from_selection_with_renderer(
     // Sparse canvases can span huge areas. Density and selection remain live while the
     // compositor holds one RGBA band, not a full-canvas RGBA plane; account for that
     // actual maximum band before allocating any sampling buffers.
-    let mask_bytes = (sel.channels() as u64).saturating_mul(4);
+    let mask_bytes = sel.map_or(0, |sel| (sel.channels() as u64).saturating_mul(4));
     let band_rows = area.height().min(photocraft_compose::band_rows_for(area.width(), 0) as u32);
     let band_bytes = u64::from(area.width()).saturating_mul(u64::from(band_rows)).saturating_mul(16);
     let dense_bytes = (len as u64).saturating_mul(4u64.saturating_add(mask_bytes)).saturating_add(band_bytes);
@@ -1124,15 +1118,28 @@ fn define_from_selection_with_renderer(
         )));
     }
     let mut v = crate::allocation::filled(len, 0.0, "defining a brush from the selection")?;
-    let sc = sel.channels();
+    let sc = sel.map_or(1, |sel| sel.channels());
     // A selection mask, when present, is a second buffer of the same size; it must fail gracefully too
     // (review of #5469), so read it through the fallible allocator.
-    let sv = crate::allocation::read_region(sel, area, "defining a brush from the selection")?;
+    let sv = sel.map(|sel| crate::allocation::read_region(sel, area, "defining a brush from the selection")).transpose()?;
+    // The compositor keeps RGB document encoding; other document models produce
+    // the existing RGB numeric view (including the document-profile CMYK conversion).
+    let source = if d.doc.mode == photocraft_color::ColorMode::Rgb {
+        crate::color_cmds::document_profile(&d.doc)
+    } else {
+        crate::color_cmds::working_profile(photocraft_color::ColorMode::Rgb)
+    };
+    let options = craft_cms::TransformOptions { intent: craft_cms::Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    let gray =
+        craft_cms::cached(&source, craft_cms::Builtin::SGray.profile(), options).map_err(|e| bad(cmd, format!("cannot convert brush source to gray: {e}")))?;
+    let mut converted = [0.0f32; 16];
+    // Keep the allocation boundary fallible before entering compositor-owned scratch storage.
+    crate::allocation::checkpoint("defining a brush from the selection")?;
     let rendered = render(&d.doc, area, &mut |band| -> Result<()> {
         for (row, pixels) in band.px.chunks_exact(w).enumerate() {
             let y = (band.rect.y0 - area.y0) as usize + row;
             for (x, c) in pixels.iter().enumerate() {
-                let selected = sv[(y * w + x) * sc];
+                let selected = sv.as_ref().map_or(1.0, |sv| sv[(y * w + x) * sc]);
                 // Known-zero contributions leave the freshly zeroed density alone.
                 if selected == 0.0 {
                     continue;
@@ -1140,8 +1147,19 @@ fn define_from_selection_with_renderer(
                 if c[3] == 0.0 {
                     continue;
                 }
-                let lum = photocraft_color::blend::lum([c[0], c[1], c[2]]);
-                v[y * w + x] = ((1.0 - lum) * c[3] * selected).clamp(0.0, 1.0);
+                // A sampled profile curve can clamp infinity to a finite endpoint;
+                // reject contributing invalid source values before the CMS can hide them.
+                if c.iter().any(|channel| !channel.is_finite()) {
+                    return Err(bad(cmd, "brush source contains a non-finite colour channel"));
+                }
+                // Composite over white before the nonlinear gray conversion. The
+                // selection scales the resulting density once; alpha is already in it.
+                let over_white = [c[0], c[1], c[2]].map(|channel| channel * c[3] + (1.0 - c[3]));
+                gray.eval(&over_white, &mut converted).map_err(|e| bad(cmd, format!("cannot convert brush source to gray: {e}")))?;
+                if !converted[0].is_finite() {
+                    return Err(bad(cmd, "brush source converted to a non-finite gray value"));
+                }
+                v[y * w + x] = ((1.0 - converted[0]) * selected).clamp(0.0, 1.0);
             }
         }
         Ok(())
@@ -1537,3 +1555,9 @@ mod color_replacement_history_name_tests;
 
 #[cfg(test)]
 mod define_brush_merged_source_tests;
+
+#[cfg(test)]
+mod define_brush_no_selection_tests;
+
+#[cfg(test)]
+mod define_brush_color_density_tests;

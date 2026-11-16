@@ -633,7 +633,7 @@ impl<'a> EffectPass<'a> {
         }
         let (w, h) = (self.w, self.h);
         let base = alloc.clone(work)?;
-        let mut acc = vec![[0.0f32; 4]; w * h]; // premultiplied Σ share·blended
+        let mut acc = alloc.filled(self.big, [0.0; 4])?; // premultiplied Σ share·blended
         let mut cover = vec![0.0f32; w * h];
         for st in strokes.iter().copied() {
             let (_, out_w) = stroke_widths(st);
@@ -647,7 +647,7 @@ impl<'a> EffectPass<'a> {
             // The share already carries the Dissolve choice, so the paint itself composites as Normal.
             let paint_blend = if st.common.blend == BlendMode::Dissolve { BlendMode::Normal } else { st.common.blend };
             paint_fx(&mut blended, &ones, &st.paint, self.stroke_frame(st), self.anchor, self.big, paint_blend, 1.0, self.patterns);
-            for ((a, b), s) in acc.iter_mut().zip(&blended.px).zip(&share) {
+            for ((a, b), s) in acc.px.iter_mut().zip(&blended.px).zip(&share) {
                 if *s > 0.0 {
                     for c in 0..3 {
                         a[c] += s * b[c] * b[3];
@@ -656,7 +656,7 @@ impl<'a> EffectPass<'a> {
                 }
             }
         }
-        for ((p, a), c) in work.px.iter_mut().zip(&acc).zip(&cover) {
+        for ((p, a), c) in work.px.iter_mut().zip(&acc.px).zip(&cover) {
             if *c <= 0.0 {
                 continue;
             }
@@ -789,4 +789,65 @@ fn mix_premul(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
     }
     out[3] = alpha;
     out
+}
+
+#[cfg(test)]
+mod outside_stroke_allocation_tests {
+    use super::*;
+    use photocraft_color::{Color, PixelFormat};
+    use photocraft_doc::{FxCommon, StrokeFx};
+
+    struct RejectFilled;
+
+    impl BufferAlloc for RejectFilled {
+        type Error = &'static str;
+
+        fn filled(&self, _rect: Rect, _color: [f32; 4]) -> Result<Buffer, Self::Error> {
+            Err("outside stroke accumulator")
+        }
+
+        fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error> {
+            buffer.try_clone().map_err(|_| "clone allocation")
+        }
+    }
+
+    #[test]
+    fn enabled_outside_stroke_accumulator_propagates_allocation_failure_and_preserves_pixels() {
+        let rect = Rect::new(0, 0, 4, 4);
+        let mut layer = Layer::raster("outside stroke", PixelFormat::RGBA8);
+        layer.effects.items.push(Effect::Stroke(StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            size: 1.0,
+            position: StrokePosition::Outside,
+            paint: FxPaint::Color(Color::rgb(0.0, 0.0, 1.0)),
+            overprint: false,
+        }));
+        let mut shape = Map::new(4, 4, 0.0);
+        for (index, value) in shape.v.iter_mut().enumerate() {
+            if matches!(index, 5 | 6 | 9 | 10) {
+                *value = 1.0;
+            }
+        }
+        let patterns = PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES);
+        let texture = TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
+        let maps = build_maps(&layer, shape.v.clone(), rect, &GlobalLight::default(), &texture);
+        let pass = EffectPass::new(&layer, &maps, rect, rect, &patterns, None);
+        let strokes: Vec<_> = layer.effects.items.iter().filter_map(|effect| if let Effect::Stroke(stroke) = effect { Some(stroke) } else { None }).collect();
+        assert!(strokes.iter().any(|stroke| stroke_widths(stroke).1 > 0.0));
+        let fields = pass.stroke_fields(true);
+        let mut lay = Buffer::filled(rect, [0.0; 4]);
+        for (pixel, alpha) in lay.px.iter_mut().zip(&shape.v) {
+            pixel[3] = *alpha;
+        }
+        let original = Buffer::filled(rect, [1.0; 4]);
+        let mut failed = original.clone();
+        assert_eq!(pass.paint_outside_strokes_with(&mut failed, &lay, &shape, &strokes, &fields, &RejectFilled), Err("outside stroke accumulator"));
+        assert_eq!(failed, original, "a rejected accumulator cannot publish partial stroke pixels");
+        let mut legacy = original.clone();
+        pass.paint_outside_strokes_with(&mut legacy, &lay, &shape, &strokes, &fields, &InfallibleBufferAlloc).unwrap();
+        let mut fallible = original.clone();
+        pass.paint_outside_strokes_with(&mut fallible, &lay, &shape, &strokes, &fields, &crate::FallibleBufferAlloc).unwrap();
+        assert_ne!(legacy, original, "the enabled outside stroke must actually paint");
+        assert_eq!(fallible, legacy);
+    }
 }
