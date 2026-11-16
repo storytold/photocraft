@@ -75,10 +75,9 @@ pub fn dropdown_wheel_grouped<T: PartialEq + Clone>(
     dropdown_with(ui, id, name, current, options, width, true, true, &starts_group, &|_| true)
 }
 
-/// [`dropdown_wheel_grouped`] whose open list greys the options `enabled` refuses: drawn disabled,
-/// not picked by the pointer and not previewed, and passed over by every wheel notch. The keys
-/// still land on them; the caller steps past (#12879, the Pattern Stamp's Behind on the
-/// Background).
+/// [`dropdown_wheel_grouped`] whose options `enabled` rejects are drawn greyed: they can't be
+/// clicked or previewed, and the wheel, the arrow keys and a typed letter skip them (#11815,
+/// #12879: the Pattern Stamp's Behind on the Background).
 #[allow(clippy::too_many_arguments)]
 pub fn dropdown_wheel_grouped_enabled<T: PartialEq + Clone>(
     ui: &mut Ui,
@@ -123,9 +122,10 @@ fn dropdown_with<T: PartialEq + Clone>(
     let response = combo_list(ui, id, label, width, close, |ui| {
         fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
         // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
-        let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
+        // A greyed option has no label to match, so the search goes on to the next one it can pick.
+        let labels: Vec<&str> = options.iter().zip(texts.iter()).map(|((v, _), l)| if enabled(v) { l.as_str() } else { "" }).collect();
         let shown = options.iter().position(|(v, _)| v == current);
-        if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
+        if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)).filter(|(v, _)| enabled(v)) {
             *current = v.clone();
             chosen.push(v.clone());
             reveal = true;
@@ -187,7 +187,7 @@ fn dropdown_with<T: PartialEq + Clone>(
         None => response.response.accessible_name(name),
     };
     press.after(&response);
-    if combo_box_arrow_keys(ui, &response, current, options) {
+    if combo_box_arrow_keys(ui, &response, current, options, enabled) {
         chosen.push(current.clone());
     }
     if wheel && !over_list {
@@ -250,12 +250,12 @@ fn wheel_steps<T: PartialEq + Clone>(notches: f32, current: &mut T, options: &[(
     let mut chosen = Vec::new();
     // Down (negative) is the next option. No more steps than there are options.
     for _ in 0..(notches.abs().min(options.len() as f32) as usize) {
-        let mut ahead = options.iter().enumerate().skip(index.saturating_add(1));
-        let mut behind = options.iter().enumerate().take(index).rev();
-        let next = if notches < 0.0 { ahead.find(|(_, (v, _))| enabled(v)) } else { behind.find(|(_, (v, _))| enabled(v)) };
-        let Some((next, (v, _))) = next else { break };
+        // The next option that can be chosen: greyed ones are passed over.
+        let Some(next) = next_enabled(options, index, notches < 0.0, enabled) else { break };
         index = next;
-        chosen.push(v.clone());
+        if let Some((v, _)) = options.get(next) {
+            chosen.push(v.clone());
+        }
     }
     if let Some(v) = chosen.last() {
         *current = v.clone();
@@ -263,10 +263,19 @@ fn wheel_steps<T: PartialEq + Clone>(notches: f32, current: &mut T, options: &[(
     chosen
 }
 
+/// The index of the first option after (`down`) or before `index` that `enabled` accepts.
+fn next_enabled<T>(options: &[(T, &str)], index: usize, down: bool, enabled: &dyn Fn(&T) -> bool) -> Option<usize> {
+    if down {
+        (index + 1..options.len()).find(|&i| options.get(i).is_some_and(|(v, _)| enabled(v)))
+    } else {
+        (0..index).rev().find(|&i| options.get(i).is_some_and(|(v, _)| enabled(v)))
+    }
+}
+
 /// Give a dropdown keyboard focus when it opens, then use the arrow keys to move through its
 /// choices. `craft_ui::ComboBox` opens a popup but leaves focus on the canvas by default, which makes
 /// controls such as the Layers panel's Blend Mode dropdown unreachable from the keyboard.
-fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, current: &mut T, options: &[(T, &str)]) -> bool {
+fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, current: &mut T, options: &[(T, &str)], enabled: &dyn Fn(&T) -> bool) -> bool {
     if response.clicked() {
         response.request_focus();
     }
@@ -283,7 +292,7 @@ fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, 
         return false;
     };
     let index = options.iter().position(|(value, _)| value == current).unwrap_or(0);
-    let next = if step > 0 { (index + 1).min(options.len() - 1) } else { index.saturating_sub(1) };
+    let next = next_enabled(options, index, step > 0, enabled).unwrap_or(index);
     match options.get(next) {
         Some((value, _)) if next != index => {
             *current = value.clone();
