@@ -1138,11 +1138,11 @@ fn save_text(app: &mut PhotocraftApp, suggested: &str, text: String) -> Result<V
 }
 
 #[cfg(test)]
-#[path = "shortcut_set_switch_tests.rs"]
-mod shortcut_set_switch_tests;
-#[cfg(test)]
 #[path = "shortcut_pending_edit_tests.rs"]
 mod shortcut_pending_edit_tests;
+#[cfg(test)]
+#[path = "shortcut_set_switch_tests.rs"]
+mod shortcut_set_switch_tests;
 
 #[cfg(test)]
 #[path = "shortcut_undo_tests.rs"]
