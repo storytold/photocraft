@@ -906,10 +906,11 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     } else if shadow_drag && !input.middle && crate::dialogs::free_pointer_over(input.ctx, input.rect).is_some() {
         input.ctx.set_cursor_icon(egui::CursorIcon::Move);
         if let Some(p) = crate::dialogs::free_press(input.ctx, input.rect) {
-            let (start, origin) = input.ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.press_origin().unwrap_or(p)));
+            let (start, origin, press) =
+                input.ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.press_origin().unwrap_or(p), i.pointer.press_start_time().unwrap_or(i.time)));
             let total = input.xf.unmap_vec(p - origin) / (input.view.zoom / input.ppp);
             if let Some(d) = app.ui.dialogs.last_mut() {
-                crate::layer_style::drag_offset(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)], [f64::from(origin.x), f64::from(origin.y)]);
+                crate::layer_style::drag_offset(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)], press);
             }
         }
     } else if gradient_drag && !input.middle && crate::dialogs::free_pointer_over(input.ctx, input.rect).is_some() {

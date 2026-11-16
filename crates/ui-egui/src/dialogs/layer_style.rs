@@ -552,11 +552,11 @@ pub fn drags_offset(f: &Map<String, Value>) -> bool {
 }
 
 /// A drag on the image with a shadow or Satin page selected: [`drag_satin`] on a Satin page, else
-/// [`drag_shadow`] (which does nothing off a shadow page, and ignores `origin`, the press origin
-/// in screen points that tells a Satin drag its gesture; #14985).
-pub fn drag_offset(f: &mut Map<String, Value>, start: bool, total: [f64; 2], origin: [f64; 2]) {
+/// [`drag_shadow`] (which does nothing off a shadow page, and ignores `press`, the press's start
+/// time that tells a Satin drag its gesture; #14985).
+pub fn drag_offset(f: &mut Map<String, Value>, start: bool, total: [f64; 2], press: f64) {
     if drags_satin(f) {
-        drag_satin(f, start, total, origin);
+        drag_satin(f, start, total, press);
     } else {
         drag_shadow(f, start, total);
     }
@@ -570,16 +570,17 @@ pub fn canvas_drag_hint(f: &Map<String, Value>) -> Option<&'static str> {
 }
 
 /// A drag on the image with a Satin page selected: `start` is true on the press, `total` the
-/// pointer's movement since in document pixels and `origin` the press origin in screen points.
-/// The drag keeps the satin's angle and distance as shown, the selected instance, `origin` and
-/// `total` at its baseline, retaken on the press and whenever that record is missing, malformed or
-/// for another press or instance (a press the drag did not see begin, as after a middle-button
-/// pan): the satin then moves by the travel since the baseline, never from an earlier gesture's
-/// values. The offset vector (−cos angle, sin angle) × distance follows the pointer; the new
-/// distance is its length truncated to a whole pixel (1 to 250) and the new angle its direction
-/// truncated toward zero to a whole degree, the angle shown kept when the vector collapses. A
-/// Satin never uses Global Light, so only this instance's `angle` and `distance` change (#14985).
-pub fn drag_satin(f: &mut Map<String, Value>, start: bool, total: [f64; 2], origin: [f64; 2]) {
+/// pointer's movement since in document pixels and `press` the press's start time, which tells one
+/// gesture from the next wherever each begins. The drag keeps the satin's angle and distance as
+/// shown, the selected instance, `press` and `total` at its baseline, retaken on the press and
+/// whenever that record is missing, malformed or for another press or instance (a press the drag
+/// did not see begin, as after a middle-button pan, even at the same spot): the satin then moves
+/// by the travel since the baseline, never from an earlier gesture's values. The offset vector
+/// (−cos angle, sin angle) × distance follows the pointer; the new distance is its length
+/// truncated to a whole pixel (1 to 250) and the new angle its direction truncated toward zero to
+/// a whole degree, the angle shown kept when the vector collapses. A Satin never uses Global
+/// Light, so only this instance's `angle` and `distance` change (#14985).
+pub fn drag_satin(f: &mut Map<String, Value>, start: bool, total: [f64; 2], press: f64) {
     const KEY: &str = "__satinDrag";
     let Some(id) = f.get("selected").and_then(Value::as_str).map(str::to_string).filter(|_| drags_satin(f)) else { return };
     let Some(p) = entry(f, &id).and_then(|e| e.get("params")) else { return };
@@ -589,14 +590,17 @@ pub fn drag_satin(f: &mut Map<String, Value>, start: bool, total: [f64; 2], orig
         let a = v?.as_array()?;
         Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?])
     };
-    let stored = f.get(KEY).filter(|k| k.get("id").and_then(Value::as_str) == Some(id.as_str()) && pair(k.get("origin")) == Some(origin)).and_then(|k| {
-        let [bx, by] = pair(k.get("base"))?;
-        Some(([bx, by], k.get("angle")?.as_f64()?, k.get("distance")?.as_f64()?))
-    });
+    let stored = f
+        .get(KEY)
+        .filter(|k| k.get("id").and_then(Value::as_str) == Some(id.as_str()) && k.get("press").and_then(Value::as_f64) == Some(press))
+        .and_then(|k| {
+            let [bx, by] = pair(k.get("base"))?;
+            Some(([bx, by], k.get("angle")?.as_f64()?, k.get("distance")?.as_f64()?))
+        });
     let (base, angle, distance) = match stored {
         Some(s) if !start => s,
         _ => {
-            f.insert(KEY.into(), json!({"id": id, "origin": origin, "base": total, "angle": shown_angle, "distance": shown_distance}));
+            f.insert(KEY.into(), json!({"id": id, "press": press, "base": total, "angle": shown_angle, "distance": shown_distance}));
             (total, shown_angle, shown_distance)
         }
     };

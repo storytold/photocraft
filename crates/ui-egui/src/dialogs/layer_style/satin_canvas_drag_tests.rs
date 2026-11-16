@@ -2,7 +2,8 @@
 //! Distance, and the options bar says so.
 use super::*;
 
-const ORIGIN: [f64; 2] = [0.0, 0.0];
+/// The press start time the canvas passes for one gesture.
+const PRESS: f64 = 1.0;
 
 fn fields(kind: &str) -> Map<String, Value> {
     let mut f = Map::new();
@@ -27,8 +28,8 @@ fn params(f: &Map<String, Value>, id: &str) -> (f64, f64) {
 fn drag_from_90_20(f: &mut Map<String, Value>, total: [f64; 2]) -> (f64, f64) {
     set_param(f, "fx1", "angle", json!(90.0));
     set_param(f, "fx1", "distance", json!(20.0));
-    drag_satin(f, true, [0.0, 0.0], ORIGIN);
-    drag_satin(f, false, total, ORIGIN);
+    drag_satin(f, true, [0.0, 0.0], PRESS);
+    drag_satin(f, false, total, PRESS);
     params(f, "fx1")
 }
 
@@ -37,7 +38,7 @@ fn drag_from_90_20(f: &mut Map<String, Value>, total: [f64; 2]) -> (f64, f64) {
 fn a_satin_drag_sets_the_truncated_angle_and_distance() {
     let mut f = fields("satin");
     assert!(drags_satin(&f));
-    drag_satin(&mut f, true, [0.0, 0.0], ORIGIN);
+    drag_satin(&mut f, true, [0.0, 0.0], PRESS);
     assert_eq!(params(&f, "fx1"), (90.0, 20.0), "a plain press keeps the satin where it is");
     for (total, want) in [
         ([30.0, 0.0], (146.0, 36.0)),
@@ -46,6 +47,11 @@ fn a_satin_drag_sets_the_truncated_angle_and_distance() {
         ([-30.0, 0.0], (33.0, 36.0)),
         ([20.0, -20.0], (180.0, 20.0)),
         ([5.0, 0.0], (104.0, 20.0)),
+        // Measured later on the issue: negative angles truncate toward zero, and Shift (which the
+        // drag ignores) gave (+30, +10) -> 135 / 42.
+        ([5.0, -30.0], (-116.0, 11.0)),
+        ([-5.0, -30.0], (-63.0, 11.0)),
+        ([30.0, 10.0], (135.0, 42.0)),
     ] {
         assert_eq!(drag_from_90_20(&mut f, total), want, "drag {total:?}");
     }
@@ -75,16 +81,16 @@ fn only_the_satin_page_takes_the_drag_and_the_hint() {
         let mut f = fields(kind);
         assert!(!drags_satin(&f), "{kind}");
         assert_eq!(canvas_drag_hint(&f), None, "{kind}");
-        drag_satin(&mut f, true, [0.0, 0.0], ORIGIN);
-        drag_satin(&mut f, false, [30.0, 0.0], ORIGIN);
+        drag_satin(&mut f, true, [0.0, 0.0], PRESS);
+        drag_satin(&mut f, false, [30.0, 0.0], PRESS);
         assert_eq!(params(&f, "fx1"), (90.0, 20.0), "{kind}: nothing moves");
     }
     let mut f = fields("satin");
     f.insert("selected".into(), json!(BLENDING));
     assert!(!drags_satin(&f));
     assert_eq!(canvas_drag_hint(&f), None);
-    drag_satin(&mut f, true, [0.0, 0.0], ORIGIN);
-    drag_satin(&mut f, false, [30.0, 0.0], ORIGIN);
+    drag_satin(&mut f, true, [0.0, 0.0], PRESS);
+    drag_satin(&mut f, false, [30.0, 0.0], PRESS);
     assert_eq!(params(&f, "fx1"), (90.0, 20.0));
 }
 
@@ -109,17 +115,17 @@ fn a_satin_drag_leaves_global_light_and_the_shadow_drag_alone() {
 fn the_canvas_offset_drag_routes_satin_and_shadow_pages() {
     let mut f = fields("satin");
     assert!(drags_offset(&f));
-    drag_offset(&mut f, true, [0.0, 0.0], ORIGIN);
-    drag_offset(&mut f, false, [5.0, 0.0], ORIGIN);
+    drag_offset(&mut f, true, [0.0, 0.0], PRESS);
+    drag_offset(&mut f, false, [5.0, 0.0], PRESS);
     assert_eq!(params(&f, "fx1"), (104.0, 20.0), "truncated, as the satin drag does");
     f.insert("selected".into(), json!("fx2"));
     assert!(drags_offset(&f));
-    drag_offset(&mut f, true, [0.0, 0.0], ORIGIN);
+    drag_offset(&mut f, true, [0.0, 0.0], PRESS);
     assert_eq!(params(&f, "fx2"), (120.0, 10.0));
     let mut f = fields("gradientOverlay");
     assert!(!drags_offset(&f));
-    drag_offset(&mut f, true, [0.0, 0.0], ORIGIN);
-    drag_offset(&mut f, false, [30.0, 0.0], ORIGIN);
+    drag_offset(&mut f, true, [0.0, 0.0], PRESS);
+    drag_offset(&mut f, false, [30.0, 0.0], PRESS);
     assert_eq!(params(&f, "fx1"), (90.0, 20.0));
 }
 
@@ -128,11 +134,11 @@ fn the_canvas_offset_drag_routes_satin_and_shadow_pages() {
 fn a_continuing_drag_through_the_zero_vector_keeps_the_displayed_angle() {
     let mut f = fields("satin");
     assert_eq!(drag_from_90_20(&mut f, [30.0, 0.0]), (146.0, 36.0));
-    drag_satin(&mut f, false, [0.0, -20.0], ORIGIN);
+    drag_satin(&mut f, false, [0.0, -20.0], PRESS);
     assert_eq!(params(&f, "fx1"), (146.0, 1.0));
 }
 
-/// #14985: a press the drag did not see begin (another origin) moves the satin only by the travel
+/// #14985: a press the drag did not see begin (another press time) moves the satin only by the travel
 /// since the drag took over, from the values shown, never from an earlier gesture's.
 #[test]
 fn a_press_the_drag_did_not_see_begin_rebaselines_from_the_shown_values() {
@@ -140,7 +146,7 @@ fn a_press_the_drag_did_not_see_begin_rebaselines_from_the_shown_values() {
     assert_eq!(drag_from_90_20(&mut f, [30.0, 0.0]), (146.0, 36.0));
     set_param(&mut f, "fx1", "angle", json!(0.0));
     set_param(&mut f, "fx1", "distance", json!(40.0));
-    let b = [100.0, 50.0];
+    let b = 2.0;
     drag_satin(&mut f, false, [10.0, 0.0], b);
     assert_eq!(params(&f, "fx1"), (0.0, 40.0), "nothing jumps to the old gesture's values");
     // Offset (-40, 0) + travel (10, 30) = (-30, 30): 45 degrees, 42 px.
@@ -149,4 +155,20 @@ fn a_press_the_drag_did_not_see_begin_rebaselines_from_the_shown_values() {
     // The same press goes on from that baseline: (-40, 0) + (0, 40) = (-40, 40).
     drag_satin(&mut f, false, [10.0, 40.0], b);
     assert_eq!(params(&f, "fx1"), (45.0, 56.0));
+}
+
+/// #14985: a new gesture that begins at the same spot as the last one (a middle-button pan pressed
+/// there during a held press, then released) is still another press: the drag re-baselines from
+/// the values shown instead of restoring the earlier gesture's.
+#[test]
+fn a_new_press_at_the_same_spot_rebaselines_from_the_shown_values() {
+    let mut f = fields("satin");
+    assert_eq!(drag_from_90_20(&mut f, [30.0, 0.0]), (146.0, 36.0));
+    set_param(&mut f, "fx1", "angle", json!(0.0));
+    set_param(&mut f, "fx1", "distance", json!(40.0));
+    // Same position, so the same travel as the old gesture's last frame, but a later press.
+    drag_satin(&mut f, false, [30.0, 0.0], PRESS + 1.0);
+    assert_eq!(params(&f, "fx1"), (0.0, 40.0), "nothing jumps back to 146 / 36");
+    drag_satin(&mut f, false, [40.0, 0.0], PRESS + 1.0);
+    assert_eq!(params(&f, "fx1"), (0.0, 30.0), "(-40, 0) + (10, 0) = (-30, 0)");
 }
