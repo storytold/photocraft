@@ -17,11 +17,17 @@ fn blend_mode(d: &Descriptor) -> Option<&'static str> {
     }
 }
 
+/// One recorded text that saves back unchanged: no unpaired surrogate replaced, no trailing
+/// NULs lost. [`exact_name`] is this check on the first `Nm  ` of a descriptor.
+fn exact_text(original: &UnicodeString) -> Option<String> {
+    let name = original.to_string_lossy();
+    (*original == UnicodeString::new_nul(&name) || *original == UnicodeString::new(&name)).then_some(name)
+}
+
 /// A `Nm  ` text that saves back unchanged: no unpaired surrogate replaced, no extra NULs lost.
 fn exact_name(d: &Descriptor) -> Option<String> {
     let D::Text(original) = d.get("Nm  ")? else { return None };
-    let name = original.to_string_lossy();
-    (*original == UnicodeString::new_nul(&name) || *original == UnicodeString::new(&name)).then_some(name)
+    exact_text(original)
 }
 
 /// A `patternLayer` descriptor's pattern, scale, angle and link as the params of
@@ -469,22 +475,36 @@ fn current_document_reference(r: &[ReferenceItem]) -> bool {
 /// The params of Image > Duplicate recorded as a Make (#15185): the new document's
 /// optional `Nm  ` name and the optional `Mrgd` merged-contents flag. Any other key, or
 /// a present value of the wrong type or one the conversion would change, keeps the whole
-/// step instead.
+/// step instead. A key that appears twice also keeps the step: craft-psd keeps every
+/// parsed item, and the command has one target, one name and one flag, so a second item
+/// of a key would be dropped without a rule saying which one wins.
 fn document_duplicate_params(d: &Descriptor) -> Option<Map<String, Value>> {
     let mut params = Map::new();
+    let mut references = 0;
     for (k, v) in &d.items {
         if k.is("null") {
+            // The caller reads the first reference; a second one names a target the params
+            // cannot carry.
+            references += 1;
+            if references > 1 {
+                return None;
+            }
             continue;
         }
         if k.is("Nm  ") {
-            // A name the UTF-16 conversion would change (an unpaired surrogate becoming
-            // U+FFFD, extra NULs dropped) has no faithful param: keeping the Photoshop step
-            // saves the recorded name back byte for byte.
-            let name = exact_name(d)?;
-            params.insert("name".into(), name.into());
+            // The value of THIS item: a descriptor lookup would read the first `Nm  ` and let
+            // an unpaired surrogate (U+FFFD) or dropped trailing NULs go unremarked next to a
+            // readable name.
+            let D::Text(name) = v else { return None };
+            let name = exact_text(name)?;
+            if params.insert("name".into(), name.into()).is_some() {
+                return None;
+            }
         } else if k.is("Mrgd") {
             let D::Boolean(merged) = v else { return None };
-            params.insert("mergedOnly".into(), (*merged).into());
+            if params.insert("mergedOnly".into(), (*merged).into()).is_some() {
+                return None;
+            }
         } else {
             return None;
         }

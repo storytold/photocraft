@@ -4845,7 +4845,7 @@ fn make_document_duplicate_round_trips_through_save() {
 }
 
 /// A recorded `Nm  ` the mapping cannot carry without changing it - an unpaired surrogate
-/// would become U+FFFD, extra NULs would be dropped - keeps the Photoshop step, so the
+/// would become U+FFFD, trailing NULs would be dropped - keeps the Photoshop step, so the
 /// original name saves back byte for byte.
 #[test]
 fn make_document_duplicate_name_must_round_trip() {
@@ -4872,6 +4872,26 @@ fn make_document_duplicate_name_must_round_trip() {
             assert_eq!(back, Some(&D::Text(name.clone())), "{name:?}");
         }
     }
+}
+
+/// `to_string_lossy` strips only TRAILING NULs, so a name with an embedded NUL converts
+/// unchanged: the guard must not reject it, and the recorded name reaches the copied document.
+#[test]
+fn make_document_duplicate_embedded_nul_name_reaches_the_copy() {
+    let units = || UnicodeString(vec![0x0041, 0x0000, 0x0042]);
+    let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", D::Text(units()));
+    let loaded = mapped_recording("Mk  ", d);
+    assert!(loaded.unsupported.is_empty(), "{:?}", loaded.unsupported);
+    assert_eq!(loaded.actions[0].steps, vec![("image.duplicate".into(), json!({"name": "A\0B"}))]);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6, "name": "Nul"})).unwrap();
+    let items = vec![item("Mk  ", "Make", Some(desc("null").with("null", target_ref("Dcmn")).with("Nm  ", D::Text(units()))))];
+    let r = s.execute("actions.load", json!({"data": set_of("Nul", vec![("A", items)])})).unwrap();
+    assert_eq!(r["unsupported"], json!([]), "{r}");
+    let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+    assert_eq!(s.documents().len(), 2, "the Make duplicated the document");
+    assert_eq!(s.active().unwrap().doc.name, "A\0B", "the embedded NUL survives import, mapping and play");
 }
 
 /// A recorded Make whose `Nm  ` name equals a document that is already open duplicates under
@@ -4910,6 +4930,18 @@ fn other_make_document_forms_stay_kept_steps() {
         // A present value the mapper cannot read keeps the whole step.
         desc("null").with("null", target.clone()).with("Mrgd", long(1.0)),
         desc("null").with("null", target.clone()).with("Nm  ", long(3.0)),
+        // craft-psd keeps every item, so a key can repeat; reading the descriptor would see
+        // only the first one and silently drop the rest. A second `Nm  ` the mapping cannot
+        // carry must keep the whole step instead.
+        desc("null")
+            .with("null", target.clone())
+            .with("Nm  ", D::Text(UnicodeString(vec![u16::from(b'C'), 0])))
+            .with("Nm  ", D::Text(UnicodeString(vec![0xD800]))),
+        // Two readable values for one param: nothing says which one wins, so nothing maps.
+        desc("null").with("null", target.clone()).with("Nm  ", text("A")).with("Nm  ", text("B")),
+        desc("null").with("null", target.clone()).with("Mrgd", D::Boolean(true)).with("Mrgd", D::Boolean(false)),
+        // A second document reference is not dropped on the way to the params.
+        desc("null").with("null", target.clone()).with("null", target.clone()),
         // A key outside the measured form is not silently dropped.
         desc("null").with("null", target).with("Usng", D::Descriptor(desc("Chnl"))),
     ] {
