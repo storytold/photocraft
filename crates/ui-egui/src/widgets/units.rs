@@ -36,6 +36,15 @@ pub fn value_field_int(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclu
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(0), integer: true, ..Default::default() }, None).0
 }
 
+/// A [`value_field_prec`] whose typed points and picas (`1in` in a `pt` field) convert at `ppi`
+/// points to the inch instead of the Point/Pica Size preference; pixels still convert at the
+/// active document's resolution. Print keeps its lengths in PostScript points (#14136).
+pub fn value_field_prec_ppi(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, decimals: u32, ppi: f64) -> Response {
+    let dpi = ui.data(|d| d.get_temp::<(f64, f64)>(field_resolution_id())).map_or(72.0, |(dpi, _)| dpi);
+    let units = unit_of_suffix(suffix.trim()).map(|unit| FieldUnits { unit, dpi, ppi });
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), units, ..Default::default() }, None).0
+}
+
 /// A [`value_field_prec`] that keeps its trailing zeros (`50.0`, `0.0`): Warp's Bend, H and V,
 /// which the reference shows to one decimal (#12503).
 pub fn value_field_fixed(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, decimals: u32) -> Response {
