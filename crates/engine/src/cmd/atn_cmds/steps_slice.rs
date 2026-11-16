@@ -1,6 +1,6 @@
-//! Recorded rectangular user slices. Other slice types and options stay kept Photoshop steps.
+//! Recorded slice creation, single-slice selection and count-based division.
 
-use super::descriptors::{PX, class_ref, desc, get_ref, px};
+use super::descriptors::{PX, class_ref, desc, get_ref, px, target_ref};
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, Id, ReferenceItem, Value, json};
 
@@ -112,4 +112,55 @@ pub(super) fn select_to(p: &Value) -> Option<Descriptor> {
             .with("At  ", D::Descriptor(desc("Pnt ").with("Hrzn", px(x)).with("Vrtc", px(y))))
             .with("addToSelection", D::Boolean(false)),
     )
+}
+
+fn division_counts_fit(down: i32, across: i32) -> bool {
+    // Match the native division bounds instead of silently clamping a recorded count.
+    (1..=1000).contains(&down) && (1..=1000).contains(&across) && (down > 1 || across > 1) && down * across <= crate::slice_cmds::MAX_DIVIDE_PARTS
+}
+
+pub(super) fn divide_from(d: &Descriptor) -> Mapped {
+    let unsupported = Mapped::Unsupported { harmless: false };
+    let keys: Vec<_> = ["null", "slicesDown", "slicesAcross"].into_iter().filter(|key| d.get(key).is_some()).collect();
+    if !exact_keys(d, &keys)
+        || !matches!(get_ref(d, "null"), Some([ReferenceItem::Enumerated { class, type_id, value }])
+            if class.class_id.is("slice") && type_id.is("Ordn") && value.is("Trgt"))
+    {
+        return unsupported;
+    }
+    let count = |key| match d.get(key) {
+        None => Some(1),
+        Some(D::Integer(n)) => Some(*n),
+        _ => None,
+    };
+    let (Some(down), Some(across)) = (count("slicesDown"), count("slicesAcross")) else { return unsupported };
+    if !division_counts_fit(down, across) {
+        return unsupported;
+    }
+    let mut params = json!({});
+    for (source, target, n) in [("slicesDown", "horizontal", down), ("slicesAcross", "vertical", across)] {
+        if d.get(source).is_some() {
+            params[target] = json!(n);
+        }
+    }
+    step("slice.divide", params)
+}
+
+pub(super) fn divide_to(p: &Value) -> Option<Descriptor> {
+    // Stored IDs/display numbers have no portable equivalent to Photoshop's current target.
+    if p.as_object()?.keys().any(|key| !matches!(key.as_str(), "horizontal" | "vertical")) {
+        return None;
+    }
+    let count = |key| p.get(key).map_or(Some(1), |value| i32::try_from(value.as_i64()?).ok());
+    let (down, across) = (count("horizontal")?, count("vertical")?);
+    if !division_counts_fit(down, across) {
+        return None;
+    }
+    let mut d = desc("null").with("null", target_ref("slice"));
+    for (source, target, n) in [("horizontal", "slicesDown", down), ("vertical", "slicesAcross", across)] {
+        if p.get(source).is_some() {
+            d = d.with(target, D::Integer(n));
+        }
+    }
+    Some(d)
 }

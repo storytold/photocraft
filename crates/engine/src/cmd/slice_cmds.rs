@@ -416,11 +416,25 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 /// The most parts one Divide Slice makes. Resolving the slice list is quadratic in the slice count
 /// (`slices::resolve`), so a 1000 x 1000 division, a million slices, left every later list or
 /// export with ~5e11 steps of work (#1020).
-const MAX_DIVIDE_PARTS: i32 = 10_000;
+pub(crate) const MAX_DIVIDE_PARTS: i32 = 10_000;
 
 fn divide(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "slice.divide";
-    let t = find(s, p, cmd)?;
+    let t = if p.get("slice").is_some() || p.get("number").is_some() {
+        find(s, p, cmd)?
+    } else {
+        let st = s.active().ok_or(EngineError::NoDocument)?;
+        let resolved = slices::resolve(&st.doc);
+        // ATN references the current target, never an arbitrary first slice or stale number.
+        let selected = selection::selected(st, &resolved).ok_or_else(|| bad(cmd, "select a slice first"))?;
+        if selected.origin == SliceOrigin::Layer {
+            return Err(bad(cmd, "a layer-based slice must be promoted before division"));
+        }
+        match selected.id {
+            Some(id) => Target::Stored(id),
+            None => Target::Auto(selected.rect),
+        }
+    };
     let down = crate::commands::int(p, "horizontal").unwrap_or(1).clamp(1, 1000) as i32;
     let across = crate::commands::int(p, "vertical").unwrap_or(1).clamp(1, 1000) as i32;
     if down == 1 && across == 1 {
@@ -585,7 +599,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "slice.divide",
             "Divide Slice…",
             &[],
-            r##"{"slice":id | "number":n,"horizontal":n=1 (slices down),"vertical":n=1 (slices across); at most 10000 parts} → {slices}"##,
+            r##"{"slice":id | "number":n (omit both to divide the current selected user/auto slice),"horizontal":n=1 (slices down),"vertical":n=1 (slices across); at most 10000 parts} → {slices}"##,
             unlocked,
             divide
         ),

@@ -964,6 +964,215 @@ fn recorded_slice_selection_preserves_floating_pixels() {
     assert!(s.active().unwrap().floating.is_some());
 }
 
+fn slice_division(down: Option<i32>, across: Option<i32>) -> Descriptor {
+    let mut d = Descriptor::new("divide")
+        .with("null", D::Reference(vec![ReferenceItem::Enumerated { class: class("slice"), type_id: Id::new("Ordn"), value: Id::new("Trgt") }]));
+    for (key, count) in [("slicesDown", down), ("slicesAcross", across)] {
+        if let Some(count) = count {
+            d = d.with(key, D::Integer(count));
+        }
+    }
+    d
+}
+
+#[test]
+fn recorded_slice_division_imports_and_exports_counts_on_the_current_target() {
+    for (down, across, params) in [
+        (Some(5), None, json!({"horizontal":5})),
+        (None, Some(3), json!({"vertical":3})),
+        (Some(5), Some(3), json!({"horizontal":5,"vertical":3})),
+        (Some(1), Some(2), json!({"horizontal":1,"vertical":2})),
+        (Some(1000), Some(10), json!({"horizontal":1000,"vertical":10})),
+    ] {
+        let d = slice_division(down, across);
+        let action = recorded(AtnEvent::name("divide"), d.clone());
+        assert_eq!(action.steps, vec![("slice.divide".into(), params)]);
+        let written = saved(&action);
+        assert_eq!(written.event, AtnEvent::name("divide"));
+        for key in ["null", "slicesDown", "slicesAcross"] {
+            assert_eq!(written.descriptor.as_ref().unwrap().get(key), d.get(key));
+        }
+    }
+}
+
+#[test]
+fn recorded_slice_division_replays_on_stored_and_auto_slices_at_each_depth() {
+    let action = recorded(AtnEvent::name("divide"), slice_division(Some(5), Some(3)));
+    for depth in [8, 16, 32] {
+        for stored in [false, true] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":103,"height":83,"depth":depth})).unwrap();
+            let rect = if stored {
+                s.execute("slice.new", json!({"rect":[11,13,61,47],"name":"Options","url":"https://example.test/"})).unwrap();
+                photocraft_geom::Rect::from_xywh(11, 13, 61, 47)
+            } else {
+                s.active().unwrap().doc.bounds()
+            };
+            let selection = recorded(AtnEvent::name("select"), slice_selection(f64::from(rect.x0 + 1), f64::from(rect.y0 + 1)));
+            replay_saved(&mut s, &selection);
+            let before = s.active().unwrap().doc.clone();
+            let past = s.active().unwrap().history.past_len();
+            replay_saved(&mut s, &action);
+            let st = s.active().unwrap();
+            let parts = &st.doc.slices.list;
+            assert_eq!(parts.len(), 15);
+            for (index, slice) in parts.iter().enumerate() {
+                let (row, column) = (index as i32 / 3, index as i32 % 3);
+                let x = |i| rect.x0 + rect.width() as i32 * i / 3;
+                let y = |i| rect.y0 + rect.height() as i32 * i / 5;
+                assert_eq!(slice.rect, photocraft_geom::Rect::new(x(column), y(row), x(column + 1), y(row + 1)));
+                assert_eq!(slice.origin, photocraft_doc::slices::SliceOrigin::User);
+            }
+            if stored {
+                assert_eq!(parts[0].name, "Options");
+                assert_eq!(parts[0].url, "https://example.test/");
+            }
+            let mut only_slices_changed = (*before).clone();
+            only_slices_changed.slices = st.doc.slices.clone();
+            assert_eq!(*st.doc, only_slices_changed);
+            assert_eq!(st.history.past_len(), past + 1, "auto promotion and division form one undo step");
+            let divided = st.doc.clone();
+            assert!(s.undo());
+            assert_eq!(s.active().unwrap().doc, before);
+            assert!(s.redo());
+            assert_eq!(s.active().unwrap().doc, divided);
+        }
+    }
+}
+
+#[test]
+fn recorded_slice_division_keeps_unsupported_counts_options_and_references() {
+    let base = slice_division(Some(5), None);
+    let mut cases = vec![base.clone().with("pixelsDown", D::Integer(10)), base.clone().with("unknown", D::Boolean(false))];
+    for (down, across) in [(None, None), (Some(1), None), (Some(0), None), (Some(-2), None), (Some(1001), None), (Some(101), Some(100))] {
+        cases.push(slice_division(down, across));
+    }
+    for key in ["null", "slicesDown"] {
+        cases.push(base.clone().with(key, base.get(key).unwrap().clone()));
+    }
+    for value in [D::Double(2.0), D::Boolean(true), D::UnitFloat { unit: *b"#Pxl", value: 10.0 }] {
+        let mut d = base.clone();
+        d.items.iter_mut().find(|(key, _)| key.is("slicesDown")).unwrap().1 = value;
+        cases.push(d);
+    }
+    for reference in [
+        vec![ReferenceItem::Class(class("slice"))],
+        vec![ReferenceItem::Enumerated { class: class("slice"), type_id: Id::new("wrong"), value: Id::new("Trgt") }],
+        vec![ReferenceItem::Enumerated { class: class("slice"), type_id: Id::new("Ordn"), value: Id::new("Frst") }],
+        vec![ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") }],
+        vec![
+            ReferenceItem::Enumerated { class: class("slice"), type_id: Id::new("Ordn"), value: Id::new("Trgt") },
+            ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Other") },
+        ],
+    ] {
+        let mut d = base.clone();
+        d.items.iter_mut().find(|(key, _)| key.is("null")).unwrap().1 = D::Reference(reference);
+        cases.push(d);
+    }
+    for d in cases {
+        let action = recorded(AtnEvent::name("divide"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    for params in [
+        json!({}),
+        json!({"horizontal":1}),
+        json!({"horizontal":0}),
+        json!({"horizontal":1001}),
+        json!({"horizontal":2.5}),
+        json!({"horizontal":101,"vertical":100}),
+        json!({"horizontal":2,"slice":1}),
+        json!({"horizontal":2,"number":1}),
+        json!({"horizontal":2,"unknown":true}),
+    ] {
+        let native = Action::new("Recorded", vec![("slice.divide".into(), params.clone())]);
+        assert!(atn_cmds::export("Identifiers", &[&native], &[], false).is_err(), "{params}");
+    }
+}
+
+#[test]
+fn recorded_slice_division_requires_a_valid_unlocked_current_target() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":100,"height":80})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    assert!(s.execute("slice.divide", json!({"horizontal":2})).is_err(), "no implicit first-slice fallback");
+    s.execute("slice.select", json!({"point":[90,70]})).unwrap();
+    for params in [json!({"horizontal":1000}), json!({"horizontal":2,"slice":null}), json!({"horizontal":2,"number":0})] {
+        assert!(s.execute("slice.divide", params).is_err());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+    s.execute("view.lockSlices", json!({"on":true})).unwrap();
+    assert!(s.execute("slice.divide", json!({"horizontal":2})).is_err());
+    assert_eq!(s.active().unwrap().doc, before);
+    s.execute("view.lockSlices", json!({"on":false})).unwrap();
+    s.execute("slice.new", json!({"rect":[0,0,10,10]})).unwrap();
+    s.execute("slice.select", json!({"point":[90,70]})).unwrap();
+    s.execute("slice.new", json!({"rect":[0,0,50,80]})).unwrap();
+    // Re-select an auto region, then change its geometry without giving it a replacement target.
+    s.execute("slice.select", json!({"point":[90,70]})).unwrap();
+    s.execute("slice.set", json!({"slice":2,"rect":[0,0,60,80]})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let past = s.active().unwrap().history.past_len();
+    assert!(s.execute("slice.divide", json!({"horizontal":2})).is_err());
+    assert_eq!(s.active().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().history.past_len(), past);
+    s.execute("view.clearSlices", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"contents":"color","color":"#ff0000"})).unwrap();
+    s.execute("layer.newLayerBasedSlice", json!({})).unwrap();
+    s.execute("slice.select", json!({"point":[10,10]})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    assert!(s.execute("slice.divide", json!({"horizontal":2})).is_err(), "layer-based targets need an explicit promotion");
+    assert_eq!(s.active().unwrap().doc, before);
+}
+
+#[test]
+fn recorded_slice_division_continues_the_parent_only_after_success() {
+    for selected in [false, true] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":100,"height":80})).unwrap();
+        if selected {
+            s.execute("slice.select", json!({"point":[50,40]})).unwrap();
+        }
+        let before = s.active().unwrap().doc.clone();
+        let mut action = recorded(AtnEvent::name("divide"), slice_division(Some(5), None));
+        action.steps.push(("layer.renameLayer".into(), json!({"name":"AfterDivide"})));
+        let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+        s.actions.list = atn_cmds::import(&bytes).unwrap().actions;
+        let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+        if selected {
+            assert_eq!(result["ran"], 2, "{result}");
+            assert!(result.get("failed").is_none(), "{result}");
+            assert_eq!(s.active().unwrap().doc.slices.list.len(), 5);
+            assert_eq!(s.active().unwrap().doc.layers[0].name, "AfterDivide");
+        } else {
+            assert_eq!(result["ran"], 0, "{result}");
+            assert!(result.get("failed").is_some(), "{result}");
+            assert_eq!(s.active().unwrap().doc, before);
+        }
+    }
+}
+
+#[test]
+fn recorded_slice_division_resolves_a_selection_from_the_same_saved_action() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":100,"height":80})).unwrap();
+    s.execute("slice.new", json!({"rect":[0,0,10,10]})).unwrap();
+    let mut action = recorded(AtnEvent::name("select"), slice_selection(50.0, 50.0));
+    action.steps.extend(recorded(AtnEvent::name("divide"), slice_division(Some(5), None)).steps);
+    let (bytes, _) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+    let imported = atn_cmds::import(&bytes).unwrap();
+    assert!(imported.unsupported.is_empty());
+    s.actions.list = imported.actions;
+    let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+    assert_eq!(result["ran"], 2, "{result}");
+    assert!(result.get("failed").is_none(), "{result}");
+    let parts = &s.active().unwrap().doc.slices.list;
+    assert_eq!(parts.len(), 6, "the originally selected user slice remains intact");
+    assert_eq!(parts[0].rect, photocraft_geom::Rect::from_xywh(0, 0, 10, 10));
+    assert!(parts.iter().skip(1).all(|slice| slice.rect.y0 >= 10));
+}
+
 fn history_offset(offset: i32) -> Descriptor {
     Descriptor::new("slct").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("HstS"), offset }]))
 }

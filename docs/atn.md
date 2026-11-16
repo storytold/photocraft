@@ -113,6 +113,7 @@ row; the action still adds only one Undo entry.
 | `Dspc` | despeckle | Despeckle | `filter.noise.despeckle` |
 | `DfrC` | differenceClouds | Difference Clouds | `filter.render.differenceClouds` |
 | `Dfs ` | diffuse | Diffuse | `filter.stylize.diffuse` |
+| (string ID only) | divide | Divide Slice | `slice.divide` |
 | `Dplc` | duplicate | Duplicate | `layer.duplicate`, `image.duplicate` |
 | `DstS` | dustAndScratches | Dust & Scratches | `filter.noise.dustAndScratches` |
 | (string ID only) | placedLayerEditContents | Edit Contents | `layer.smartObjects.editContents` |
@@ -533,6 +534,11 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   identity when numbers change; an auto region that no longer exists is not replaced by its old
   display number. Additive selection, other units and extra options remain kept steps; native
   selection clearing does not export to ATN.
+- Slice division by `slicesDown` and/or `slicesAcross` maps to `slice.divide` on the current
+  selected user or auto slice. Counts are bounded by the native limits (1–1000 per axis and at
+  most 10,000 parts, with at least one axis greater than 1). Pixel-size division, scoped references
+  and extra options remain kept steps. Native division by stored ID or display number does not
+  export as a current-target reference.
 - Close without `Svng` preserves the unanswered save choice. Headless playback refuses to discard a
   changed document. Native `file.close` still defaults to discard; `save: "ask"` opts into this policy.
 - Photo Filter converts recorded Lab colours through `craft-cms`.

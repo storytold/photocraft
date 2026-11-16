@@ -851,6 +851,14 @@ pub(super) const EVENTS: &[Event] = &[
         to: |_, p| link_to(p, false),
     },
     Event {
+        code: "",
+        name: "divide",
+        label: "Divide Slice",
+        ids: &["slice.divide"],
+        from: super::steps_slice::divide_from,
+        to: |_, p| super::steps_slice::divide_to(p),
+    },
+    Event {
         code: "Mk  ",
         name: "make",
         label: "Make",
