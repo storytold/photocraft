@@ -163,7 +163,7 @@ impl SplashState {
             ui.label(RichText::new("PhotoCraft").font(FontId::proportional(26.0)).color(t.text).strong());
 
             // Version & Subtitle
-            let version_text = format!("v{}  ·  Open Source Native Image Editor", env!("CARGO_PKG_VERSION"));
+            let version_text = crate::i18n::fmt(tl!("v{version}  ·  Open Source Native Image Editor"), &[("version", env!("CARGO_PKG_VERSION"))]);
             ui.label(RichText::new(version_text).font(FontId::proportional(12.0)).color(t.text_faint));
 
             ui.add_space(16.0);
@@ -188,11 +188,11 @@ impl SplashState {
 
             // Status message
             let status_msg = if font_ready {
-                crate::i18n::t("Ready")
+                tl!("Ready")
             } else if progress < 0.5 {
-                crate::i18n::t("Initializing graphics & engine…")
+                tl!("Initializing graphics & engine…")
             } else {
-                crate::i18n::t("Loading workspace & font assets…")
+                tl!("Loading workspace & font assets…")
             };
 
             ui.label(RichText::new(status_msg).font(FontId::proportional(11.5)).color(t.text_dim));
@@ -200,7 +200,7 @@ impl SplashState {
             ui.add_space(10.0);
 
             // Skip hint
-            ui.label(RichText::new(crate::i18n::t("Click anywhere to skip")).font(FontId::proportional(10.0)).color(Color32::from_white_alpha(45)));
+            ui.label(RichText::new(tl!("Click anywhere to skip")).font(FontId::proportional(10.0)).color(Color32::from_white_alpha(45)));
         });
     }
 }
@@ -311,5 +311,45 @@ mod tests {
         // Dismissed
         splash.dismiss();
         assert_eq!(splash.time_until_appearance(1.0), None);
+    }
+
+    /// Verifies that every user-visible splash string (including the tagline) goes through `i18n`
+    /// while keeping the product name `PhotoCraft` untranslated.
+    #[test]
+    fn splash_show_routes_copy_through_i18n() {
+        fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(shape) => out.push(shape.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+                _ => {}
+            }
+        }
+        let catalog = "\tv{version}  ·  Open Source Native Image Editor\tv{version}  ·  Translated Editor\n\
+                       \tReady\tTranslated Ready\n\
+                       \tInitializing graphics & engine…\tTranslated Init…\n\
+                       \tLoading workspace & font assets…\tTranslated Load…\n\
+                       \tClick anywhere to skip\tTranslated Skip\n";
+        let lang = crate::i18n::fixture_lang("fr", catalog);
+        let ctx = egui::Context::default();
+        crate::PhotocraftApp::setup_context(&ctx, Default::default());
+        let mut splash = SplashState::new();
+        splash.start_time = 0.01;
+        let mut output = crate::i18n::with_language(lang, || {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1024.0, 768.0))), time: Some(0.5), ..Default::default() };
+            ctx.run_ui(input, |ui| splash.show(&ctx, ui))
+        });
+        output.textures_delta.clear();
+        let mut drawn = Vec::new();
+        for shape in &output.shapes {
+            collect(&shape.shape, &mut drawn);
+        }
+        let expected_tagline = format!("v{}  ·  Translated Editor", env!("CARGO_PKG_VERSION"));
+        assert!(drawn.iter().any(|s| s == "PhotoCraft"), "product name stays English: {drawn:?}");
+        assert!(drawn.iter().any(|s| s == &expected_tagline), "tagline must be translated: {drawn:?}");
+        assert!(drawn.iter().any(|s| s == "Translated Skip"), "skip hint must be translated: {drawn:?}");
+        assert!(
+            drawn.iter().any(|s| matches!(s.as_str(), "Translated Ready" | "Translated Init…" | "Translated Load…")),
+            "status message must be translated: {drawn:?}"
+        );
     }
 }
