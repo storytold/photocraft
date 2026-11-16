@@ -312,3 +312,29 @@ fn a_mask_on_the_board_above_still_hides_its_part() {
         }
     }
 }
+
+/// A Normal board renders its layers on their own before they go over its background, so a
+/// Multiply layer in it does not blend with that background; the export keeps the board as a
+/// group of its own above the background layer instead of stacking its layers on it.
+#[test]
+fn a_multiply_layer_in_a_normal_board_above_does_not_blend_with_its_background() {
+    let (mut s, [red, blue, _]) = session(8);
+    s.edit("Normal", |doc, _| {
+        let board = doc.layer_mut(LayerId(blue)).unwrap();
+        board.blend = photocraft_color::BlendMode::Normal;
+        if let LayerContent::Group(g) = &mut board.content {
+            g.artboard.as_mut().unwrap().background = photocraft_doc::ArtboardBackground::Custom(Color::rgb(0.0, 1.0, 0.0));
+        }
+        board.children_mut().unwrap().last_mut().unwrap().blend = photocraft_color::BlendMode::Multiply;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(rgb(source_px(&s, 150, 60)), BLUE, "Blue, rendered on its own, covers the green background");
+    let out = Out::new("normal-multiply");
+    for format in ["png", "psd"] {
+        let f = export(&mut s, &out, red, json!({"format": format}));
+        for (x, y) in [(150, 60), (125, 35), (110, 50)] {
+            assert_eq!(px(&f, x, y), source_px(&s, x, y), "{format} at ({x},{y})");
+        }
+    }
+}

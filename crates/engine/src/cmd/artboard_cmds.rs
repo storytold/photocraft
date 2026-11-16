@@ -686,7 +686,7 @@ fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
             cut_pixels(&mut g.children, overlap, 0);
         }
         let bg = ab.background.rgba();
-        let mut group = if stacks_like_its_layers(&board, bg) {
+        let mut group = if stacks_like_its_layers(&board) {
             board
         } else {
             board.clipped = false;
@@ -713,18 +713,13 @@ fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
     out
 }
 
-/// Whether artboard `board` (already a plain group) composites over its background `bg` exactly
-/// as its layers stacked over that background in one pass-through group do: no effects, masks,
-/// opacity, Blend If or other blending options of its own (Normal only over an opaque
-/// background, which hides whatever an isolated group would leave out), and no mask the board
-/// clip would replace.
-fn stacks_like_its_layers(board: &Layer, bg: Option<[f32; 4]>) -> bool {
-    let blend = match board.blend {
-        photocraft_color::BlendMode::PassThrough => true,
-        photocraft_color::BlendMode::Normal => bg.is_some_and(|c| c[3] >= 1.0),
-        _ => false,
-    };
-    blend
+/// Whether artboard `board` (already a plain group) composites over its background exactly as
+/// its layers stacked over that background in one pass-through group do: pass-through (a Normal
+/// group renders its layers on their own first, so a Multiply or Screen layer in it never blends
+/// with the background), and no effects, masks, opacity, Blend If or other blending options of
+/// its own, nor a mask the board clip would replace.
+fn stacks_like_its_layers(board: &Layer) -> bool {
+    board.blend == photocraft_color::BlendMode::PassThrough
         && board.opacity >= 1.0
         && board.fill_opacity >= 1.0
         && board.mask.is_none()
