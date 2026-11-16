@@ -1,6 +1,7 @@
 //! A CMYK document's Channel Mixer (`mixr` with four ink records, #8047) through PSD: an imported
 //! block nobody edited is saved back exactly as it was read, whatever its layout; an edited one
-//! is written in Photoshop's own 44-byte layout. With the `corpus` feature, Photoshop's own CMYK
+//! is written in Photoshop's own 44-byte layout, except a monochrome one, whose layout no
+//! Photoshop sample confirms yet: that is not written. With the `corpus` feature, Photoshop's own CMYK
 //! mixers (photoshop corpus cmyk8 and cmyk16 channel-mixer.psd) are read, rendered on their inks
 //! against the files' merged images, and saved back byte for byte.
 
@@ -50,7 +51,8 @@ fn psd_with_mixr(block: &[u8]) -> Vec<u8> {
 /// A monochrome block carrying its first record alone (padded), and a four-record block followed
 /// by bytes our writer never emits: both import as CMYK mixers (the monochrome one with a
 /// warning, as no Photoshop sample confirms how it renders), are saved back unchanged while
-/// unedited, and are rewritten as Photoshop's 44 bytes once edited.
+/// unedited; once edited, the four-record one is rewritten as Photoshop's 44 bytes and the
+/// monochrome one is not written (its layout is unconfirmed).
 #[test]
 fn unedited_cmyk_mixer_blocks_are_saved_back_as_read() {
     let mut mono = i16s(&[1, 1, 30, 30, 30, 100, 0]);
@@ -71,9 +73,40 @@ fn unedited_cmyk_mixer_blocks_are_saved_back_as_read() {
                 rows[1][4] = 0.1;
             }
         }
-        let edited = mixr(&exported(&doc)).unwrap();
-        assert_eq!(edited.len(), 44, "monochrome {monochrome}: edited");
-        assert_ne!(edited, block);
+        let r = export(&doc, "x.psd", &ExportOptions::default()).unwrap();
+        let edited = mixr(&PsdFile::from_bytes(&r.bytes).unwrap());
+        let skipped = r.warnings.iter().any(|w| w.contains("monochrome CMYK Channel Mixer is not written"));
+        assert_eq!(skipped, monochrome, "{:?}", r.warnings);
+        if monochrome {
+            // No Photoshop sample confirms the layout: an edited one is not regenerated.
+            assert_eq!(edited, None, "monochrome: edited");
+        } else {
+            let edited = edited.unwrap();
+            assert_eq!(edited.len(), 44, "edited");
+            assert_ne!(edited, block);
+        }
+    }
+}
+
+/// An RGB monochrome mixer in a CMYK document (from a `.pcraft` or a mode change) would be
+/// reshaped into a monochrome CMYK mixer, whose `mixr` layout no Photoshop sample confirms yet
+/// (#8047): it is not written, with a warning naming the layer; without Monochrome it is
+/// reshaped and written as before.
+#[test]
+fn rgb_monochrome_mixer_in_a_cmyk_document_is_not_written_as_cmyk() {
+    for monochrome in [true, false] {
+        let mut d = Document::with_background("mixer", Size::new(4, 4), ColorMode::Cmyk, SampleType::U8, Color::WHITE);
+        let matrix = [[0.4, 0.4, 0.2, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        d.layers.push(Layer::new("Gray Mix", LayerContent::Adjustment(Adjustment::ChannelMixer { matrix, monochrome, cmyk: None })));
+        let r = export(&d, "x.psd", &ExportOptions::default()).unwrap();
+        let block = mixr(&PsdFile::from_bytes(&r.bytes).unwrap());
+        let skipped = r.warnings.iter().any(|w| w.contains("\"Gray Mix\"") && w.contains("monochrome CMYK Channel Mixer is not written"));
+        assert_eq!(skipped, monochrome, "{:?}", r.warnings);
+        if monochrome {
+            assert_eq!(block, None, "no inferred monochrome CMYK block");
+        } else {
+            assert_eq!(block.map(|b| b.len()), Some(44), "reshaped to Photoshop's CMYK layout");
+        }
     }
 }
 

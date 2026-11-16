@@ -293,11 +293,10 @@ pub(super) fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> 
     });
     ui.data_mut(|d| d.insert_temp(out_id, out));
     // Source sliders: label and the colour at the track's far end.
-    let sources: &[(&str, [u8; 3])] = if cmyk {
-        &[(tl!("Cyan"), [0, 174, 239]), (tl!("Magenta"), [236, 0, 140]), (tl!("Yellow"), [255, 222, 0]), (tl!("Black"), [35, 31, 32])]
-    } else {
-        &[(tl!("Red"), [225, 50, 50]), (tl!("Green"), [50, 190, 70]), (tl!("Blue"), [60, 100, 235])]
-    };
+    let (ink, rgb) = (t.mixer_ink, t.mixer_rgb);
+    let ink_sources = [(tl!("Cyan"), ink[0]), (tl!("Magenta"), ink[1]), (tl!("Yellow"), ink[2]), (tl!("Black"), ink[3])];
+    let rgb_sources = [(tl!("Red"), rgb[0]), (tl!("Green"), rgb[1]), (tl!("Blue"), rgb[2])];
+    let sources: &[(&str, Color32)] = if cmyk { &ink_sources } else { &rgb_sources };
     let track_start = if cmyk { Color32::WHITE } else { Color32::BLACK };
     let keys: &[&str] = if cmyk { &adjust_params::MIXER_INKS } else { &["red", "green", "blue"] };
     let n = sources.len();
@@ -308,8 +307,11 @@ pub(super) fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> 
     let mut row = row_of(v, key, &fallback);
     let mut e = Edit::default();
     let mut changed = false;
+    // An imported monochrome CMYK mixer is edited only by turning Monochrome off (#8047): the
+    // engine refuses any other edit while it is on.
+    let editable = !(cmyk && mono);
     for (value, (text, c)) in row.iter_mut().zip(sources) {
-        let r = gradient_slider(ui, text, value, -200.0..=200.0, "%", [track_start, Color32::from_rgb(c[0], c[1], c[2])], cx.dynamic_color_sliders);
+        let r = ui.add_enabled_ui(editable, |ui| gradient_slider(ui, text, value, -200.0..=200.0, "%", [track_start, *c], cx.dynamic_color_sliders)).inner;
         changed |= r.changed;
         e.add(r);
     }
@@ -320,7 +322,7 @@ pub(super) fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> 
         ui.label(RichText::new(format!("{total:+.0}%")).font(crate::theme::mono(12.0)).color(if warn { t.warning } else { t.text }));
     });
     if let Some(constant) = row.get_mut(n) {
-        let r = widgets::slider_row(ui, tl!("Constant"), constant, -200.0..=200.0, "%", None);
+        let r = ui.add_enabled_ui(editable, |ui| widgets::slider_row(ui, tl!("Constant"), constant, -200.0..=200.0, "%", None)).inner;
         changed |= r.changed();
         e.add(Edit::of(&r));
     }

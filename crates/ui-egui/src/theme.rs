@@ -211,6 +211,12 @@ pub struct Tokens {
     pub caption_close_text: Color32,
     /// Dims the main window behind a modal that takes all input (Camera Raw).
     pub scrim: Color32,
+    /// Channel Mixer source tracks: the colour at the far end of the red, green and blue
+    /// sliders (each starts at black, no light).
+    pub mixer_rgb: [Color32; 3],
+    /// Channel Mixer source tracks in a CMYK document: cyan, magenta, yellow and black ink
+    /// (each starts at white, no ink).
+    pub mixer_ink: [Color32; 4],
 }
 
 impl Tokens {
@@ -331,6 +337,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
             ThemeKind::Studio => Tokens {
                 kind,
@@ -373,6 +381,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
             ThemeKind::StudioLight => Tokens {
                 kind,
@@ -413,6 +423,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
             ThemeKind::Classic => Tokens {
                 kind,
@@ -453,6 +465,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
             // libadwaita's named colours (window, sidebar, card, view, accent, destructive) and
             // radii (6 px buttons, 12 px cards), mapped onto the Studio layout. GNOME's close
@@ -496,6 +510,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(212, 212, 216),
                 caption_close_text: Color32::from_rgb(50, 50, 54),
                 scrim: Color32::from_black_alpha(110),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
             ThemeKind::AdwaitaDark => Tokens {
                 kind,
@@ -536,6 +552,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(72, 72, 76),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
             // The light counterpart, adapted the same way: our own values, chosen a few levels
             // from Breeze Light's surfaces so the app blends into a Plasma desktop without being a
@@ -582,6 +600,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(213, 51, 60),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
             // An adaptation of KDE Plasma's Breeze Dark look on the Studio layout, not a copy: our
             // own values, chosen a few levels from Breeze Dark's surfaces (the darkest canvas, then
@@ -632,6 +652,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(213, 51, 60),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
             // Soft Dark: our own low-contrast palette on the Studio layout. Muted violet-grey
             // surfaces (never near-black), softened off-white text and a periwinkle accent; the
@@ -675,6 +697,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(200, 72, 86),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(100),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
             // Soft Light: pale violet-grey surfaces, softened dark-violet text (not black) and a
             // periwinkle accent, with the same generous radii as Soft Dark.
@@ -717,6 +741,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(200, 60, 72),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(90),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
             // Ethan Schoonover's Solarized Dark palette: base03 canvas, base02 surfaces, base0
             // body text and the Solarized blue accent. https://ethanschoonover.com/solarized/
@@ -760,6 +786,8 @@ impl Tokens {
                 caption_close: Color32::from_rgb(220, 50, 47),
                 caption_close_text: Color32::from_rgb(253, 246, 227),
                 scrim: Color32::from_black_alpha(110),
+                mixer_rgb: [Color32::from_rgb(225, 50, 50), Color32::from_rgb(50, 190, 70), Color32::from_rgb(60, 100, 235)],
+                mixer_ink: [Color32::from_rgb(0, 174, 239), Color32::from_rgb(236, 0, 140), Color32::from_rgb(255, 222, 0), Color32::from_rgb(35, 31, 32)],
             },
         }
     }

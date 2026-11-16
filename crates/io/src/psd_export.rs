@@ -461,11 +461,21 @@ impl Ex<'_> {
             // A Channel Mixer whose outputs don't match the document's mode has no
             // PSD encoding that reads back as it is: save its nearest equivalent.
             let reshaped = adjust_map::mixer_for(a, channels);
+            let target = reshaped.as_ref().unwrap_or(a);
+            // No Photoshop sample shows a monochrome CMYK `mixr` yet (#8047), so its layout would
+            // be a guess: such a mixer is saved only as the imported block it came from (kept
+            // above), never regenerated, whether it was a CMYK mixer or an RGB one reshaped here.
+            let unconfirmed = matches!(target, photocraft_doc::Adjustment::ChannelMixer { cmyk: Some(_), monochrome: true, .. });
+            if unconfirmed {
+                self.warnings
+                    .push(format!("layer \"{}\": monochrome CMYK Channel Mixer is not written to PSD (its Photoshop layout is not confirmed yet)", l.name));
+                return;
+            }
             if reshaped.is_some() {
                 let shape = if channels == adjust_map::Channels::Cmyk { "cyan, magenta, yellow and black" } else { "red, green and blue" };
                 self.warnings.push(format!("layer \"{}\": Channel Mixer saved with {shape} outputs, the document mode's own", l.name));
             }
-            let w = adjust_map::write(reshaped.as_ref().unwrap_or(a));
+            let w = adjust_map::write(target);
             if w.is_empty() {
                 self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
             }

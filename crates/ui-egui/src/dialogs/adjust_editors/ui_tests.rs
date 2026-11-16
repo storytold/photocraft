@@ -986,9 +986,17 @@ fn channel_mixer_monochrome_is_disabled_for_cmyk_mixers() {
     imported["gray"] = json!([30, 30, 30, 100, 0]);
     let mut h = editor_harness("channelMixer", imported);
     assert!(!h.get_by_label("Monochrome").accesskit_node().is_disabled(), "imported monochrome CMYK: can turn it off");
+    // The engine refuses any other edit of it, so the source and Constant fields are disabled.
+    let fields = |h: &Harness<'static, serde_json::Value>| {
+        h.query_all_by_role(egui::accesskit::Role::SpinButton).map(|n| n.accesskit_node().is_disabled()).collect::<Vec<_>>()
+    };
+    let locked = fields(&h);
+    assert!(!locked.is_empty() && locked.iter().all(|d| *d), "the source and Constant fields are disabled while Monochrome is on: {locked:?}");
     h.get_by_label("Monochrome").click();
     h.run_steps(3);
     assert_eq!(h.state()["monochrome"], json!(false), "{}", h.state());
+    let open = fields(&h);
+    assert!(!open.is_empty() && open.iter().all(|d| !*d), "turning Monochrome off enables them again: {open:?}");
 
     let mut h = editor_harness("channelMixer", json!({"red": [100, 0, 0, 0], "green": [0, 100, 0, 0], "blue": [0, 0, 100, 0], "monochrome": false}));
     assert!(!h.get_by_label("Monochrome").accesskit_node().is_disabled(), "RGB: enabled");
