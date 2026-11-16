@@ -265,6 +265,13 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
     Ok(json!({"files": files, "errors": errors}))
 }
 
+/// Auto-Align's `reference` for a stack of `n` files whose first file is the layer `first`: two files leave the choice
+/// to Auto-Align (its default, the bottom layer, is the reference the application was measured to use, #13995); three
+/// or more are not measured and keep today's reference, the first file.
+pub(super) fn align_reference(first: Option<LayerId>, n: usize) -> Value {
+    first.filter(|_| n > 2).map_or(Value::Null, |id| json!(id.0))
+}
+
 pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.scripts.loadFilesIntoStack";
     let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")) {
@@ -280,20 +287,31 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         let bytes = read_file(path)?;
         docs.push((file_name(path), import_opened(s, &file_name(path), &bytes)?));
     }
-    let first = &docs[0].1;
+    // The last file is the bottom layer and gives the stack its mode, depth, resolution and
+    // profile, as the reference's Load Layers does (#13995).
+    let Some((_, base)) = docs.last() else { return Err(EngineError::BadParams { cmd: cmd.into(), msg: "no files to load".into() }) };
     let w = docs.iter().map(|(_, d)| d.size.width).max().unwrap_or(1);
     let h = docs.iter().map(|(_, d)| d.size.height).max().unwrap_or(1);
     // A new unsaved "Untitled-N" document, like Photoshop's Load Layers, not one named after a file.
     let doc_name = untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
     // The smart object (Create Smart Object) keeps the first file's name.
     let smart_name = stem(&paths[0]);
-    let mut stack = Document::new(doc_name, photocraft_doc::Size::new(w, h), first.mode, first.depth);
-    stack.resolution_dpi = first.resolution_dpi;
-    stack.icc_profile = first.icc_profile.clone();
+    // A 16-bit file raises an 8-bit stack to 16 bits/channel, as the reference does (#13997); a
+    // 32-bit file doesn't, and a 16- or 32-bit base keeps its depth.
+    let raise = base.depth == photocraft_color::SampleType::U8 && docs.iter().any(|(_, d)| d.depth == photocraft_color::SampleType::U16);
+    let depth = if raise { photocraft_color::SampleType::U16 } else { base.depth };
+    let mut stack = Document::new(doc_name, photocraft_doc::Size::new(w, h), base.mode, depth);
+    stack.resolution_dpi = base.resolution_dpi;
+    stack.icc_profile = base.icc_profile.clone();
     let fmt = stack.pixel_format();
-    // First file at the bottom, like Photoshop's script.
-    for (name, d) in &docs {
-        stack.layers.push(Layer::new(name.clone(), LayerContent::Raster(flattened_checked(d, fmt, cmd)?)));
+    // The first file on top, the last at the bottom (layers are stored bottom first).
+    let mut first = None;
+    for (i, (name, d)) in docs.iter().enumerate().rev() {
+        let layer = Layer::new(name.clone(), LayerContent::Raster(flattened_checked(d, fmt, cmd)?));
+        if i == 0 {
+            first = Some(layer.id);
+        }
+        stack.layers.push(layer);
     }
     let n = stack.layers.len();
     let smart = p.get("createSmartObject").and_then(Value::as_bool).unwrap_or(false);
@@ -311,7 +329,10 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
     let i = s.add_document(stack, None);
     if align {
         s.execute("select.allLayers", json!({}))?;
-        s.execute("edit.autoAlignLayers", json!({"projection": "auto"}))?;
+        // Two files: the bottom layer, now the last file, is the reference (measured, #13995). Three or more
+        // files are not measured and keep today's reference, the first file (it used to be the bottom layer).
+        let reference = align_reference(first, n);
+        s.execute("edit.autoAlignLayers", json!({"projection": "auto", "reference": reference}))?;
         if smart {
             s.edit("Convert to Smart Object", |doc, active| {
                 let layers = std::mem::take(&mut doc.layers);

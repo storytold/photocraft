@@ -202,7 +202,8 @@ fn source_files_list_is_built_with_browse_remove_sort_and_open_files() {
     assert_eq!(h.state().session.documents().len(), docs + 1, "a new document");
     let d = &h.state().session.active().unwrap().doc;
     let names: Vec<&str> = d.layers.iter().map(|l| l.name.as_str()).collect();
-    assert_eq!(names, ["a.png", "c.png", "b.png"], "one layer per file, in the list's order");
+    // The list's first file is the top layer and the last the base (#13995); layers are stored bottom first.
+    assert_eq!(names, ["b.png", "c.png", "a.png"], "one layer per file, the list reversed: its first file on top");
 }
 
 /// Use: Folder loads the images of the folder Browse… chose, listed in the dialog; with Create
