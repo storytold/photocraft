@@ -192,18 +192,9 @@ pub fn render_fill_content(layer: &Layer, f: &Fill, canvas: Rect, patterns: &[Pa
 /// `quantum`: the document depth's levels, which a dithered gradient is rounded to
 /// ([`gradient_fill::render_quantized`]); `None` keeps it in float.
 pub(crate) fn render_fill(f: &Fill, rect: Rect, canvas: Rect, patterns: &pattern::PreparedPatterns<'_>, quantum: Option<f32>) -> Buffer {
-    match f {
-        Fill::Solid(c) => {
-            let rgb = c.to_rgb();
-            Buffer::filled(rect, [rgb[0], rgb[1], rgb[2], c.alpha])
-        }
-        // Gradient geometry relative to the layer's frame, independent of the render rect.
-        Fill::Gradient { .. } => Buffer { rect, px: gradient_fill::render_quantized(f, rect, canvas, quantum) },
-        // Laid out from the layer's frame when linked; transparent if the pattern is missing.
-        Fill::Pattern { name, scale, id, angle, link, phase } => match patterns.get(id, name) {
-            Some(tile) => Buffer { rect, px: pattern::render(&tile, &pattern::Placement::new(canvas, *link, *phase, *scale, *angle), rect) },
-            None => Buffer::transparent(rect),
-        },
+    match render_fill_with(f, rect, canvas, patterns, quantum, &InfallibleBufferAlloc) {
+        Ok(buffer) => buffer,
+        Err(never) => match never {},
     }
 }
 

@@ -137,7 +137,6 @@ pub fn render_quantized(f: &Fill, rect: Rect, frame: Rect, quantum: Option<f32>)
 
 /// Render into caller-owned pixels so compositor paths can use fallible pooled storage.
 pub(crate) fn render_quantized_into(f: &Fill, rect: Rect, frame: Rect, quantum: Option<f32>, px: &mut [[f32; 4]]) {
-    px.fill([0.0; 4]);
     render_ramp_into(f, rect, frame, Ramp::new(f), quantum, px);
 }
 
@@ -168,8 +167,10 @@ fn render_ramp<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<R
 }
 
 fn render_ramp_into<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<Ramp<N>>, quantum: Option<f32>, px: &mut [[f32; N]]) {
-    px.fill([0.0; N]);
-    let (Some(ramp), Fill::Gradient { angle, scale, style, reverse, offset, dither: dith, .. }) = (ramp, f) else { return };
+    let (Some(ramp), Fill::Gradient { angle, scale, style, reverse, offset, dither: dith, .. }) = (ramp, f) else {
+        px.fill([0.0; N]);
+        return;
+    };
     let w = rect.width() as usize;
     if w == 0 {
         return;

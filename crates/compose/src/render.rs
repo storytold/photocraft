@@ -1,6 +1,6 @@
 use super::composite::{composite_stack_at, composite_stack_at_with};
 use super::content::RENDER_TILE;
-use super::ctx::{Ctx, RenderVectorMasks, prepare_effects, prepare_tones};
+use super::ctx::{Ctx, RenderVectorMasks, prepare_effects_with, prepare_tones};
 use super::{
     Buffer, BufferAlloc, Document, FallibleBufferAlloc, InfallibleBufferAlloc, Layer, Rect, Surface, adjust, advanced, cmyk, multichannel, native,
     native_lab, pattern, psblend,
@@ -80,9 +80,9 @@ fn render_tiled_with_alloc<A: BufferAlloc + Sync>(doc: &Document, rect: Rect, ti
         });
     }
     // Effect maps are built once, here, before any tile needs them (#276).
-    prepare_effects(&doc.layers, rect, cx, |f| {
-        photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f));
-    });
+    prepare_effects_with(&doc.layers, rect, cx, alloc, |f| {
+        photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f))
+    })?;
     let run = |t: Rect| {
         photocraft_color::convert::with_cmyk_space(cmyk, || -> Result<_, A::Error> {
             let mut b = multichannel::backdrop_with(doc, t, alloc)?;
@@ -174,8 +174,9 @@ pub fn cmyk_space(doc: &Document) -> Option<std::sync::Arc<photocraft_color::con
 /// Pixels per band of [`render_bands`] (a 14000 px wide band is ~600 rows, ~130 MB of f32).
 pub const BAND_PIXELS: u64 = 8 << 20;
 
-/// Errors reported by [`try_render_bands`]. Allocation errors cover the compositor's RGBA
-/// `Buffer` storage; they do not promise that every temporary used by effects or masks is fallible.
+/// Errors reported by [`try_render_bands`]. Allocation errors cover RGBA `Buffer` storage used by
+/// compositing and effect-shape construction; non-Buffer temporaries such as masks and effect-map
+/// arrays remain infallible.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RenderBandsError<E> {
     /// The compositor could not reserve or size one of its RGBA buffers. Earlier complete bands
@@ -224,6 +225,21 @@ mod fallible_bands_tests {
         doc
     }
 
+    fn outlined_effect_document() -> Document {
+        let mut doc = Document::new("fallible outlined effect", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
+        let path = photocraft_doc::vector::Path {
+            subpaths: vec![photocraft_doc::vector::Subpath::polygon(&[(12.0, 12.0), (60.0, 12.0), (60.0, 60.0), (12.0, 60.0)])],
+            ..Default::default()
+        };
+        let mut cache = photocraft_doc::Surface::new(photocraft_color::PixelFormat::RGBA8);
+        cache.fill_rect(Rect::new(12, 12, 60, 60), &[0.0, 0.0, 0.0, 1.0]);
+        let shape = photocraft_doc::vector::ShapeLayer { path, fill: Some(Fill::Solid(Color::BLACK)), cache: Some(cache), ..Default::default() };
+        let mut layer = Layer::new("outlined shape", LayerContent::Shape(shape));
+        layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        doc.layers.push(layer);
+        doc
+    }
+
     #[test]
     fn fail_nth_buffer_constructor_propagates_through_nested_rendering() {
         let doc = nested_document();
@@ -252,13 +268,67 @@ mod fallible_bands_tests {
     }
 
     #[test]
-    fn tiled_renderer_returns_buffer_allocation_error_before_delivering_a_band() {
+    fn render_bands_with_alloc_reports_outer_and_tile_allocations_before_the_sink() {
         let doc = Document::new("fallible tile", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
         let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
         let ctx = Ctx::for_doc(&doc, &patterns);
+        for fail_at in [1, 2] {
+            let alloc = FailBufferAt { fail_at, attempts: AtomicUsize::new(0) };
+            let mut delivered = 0;
+            let result = render_bands_with_alloc(&doc, doc.bounds(), RENDER_TILE, &alloc, &mut |_| {
+                delivered += 1;
+                Ok::<(), ()>(())
+            });
+            assert!(matches!(result, Err(RenderBandsCoreError::Allocation(error)) if error == fail_at));
+            assert_eq!(delivered, 0, "failed output or tile allocation must not deliver a partial band");
+            if fail_at == 1 {
+                assert_eq!(alloc.attempts.load(Ordering::Relaxed), 1, "the output allocation is sequential");
+            } else {
+                assert!(alloc.attempts.load(Ordering::Relaxed) >= 2, "parallel tile allocation may have other in-flight attempts");
+            }
+        }
+    }
+
+    #[test]
+    fn effect_shape_buffer_failure_is_not_cached_and_retry_uses_the_successful_cache() {
+        let mut doc = Document::new("fallible effect shape", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
+        let fill = Layer::new("group fill", LayerContent::Fill(Fill::Solid(Color::BLACK)));
+        let mut layer = Layer::group("styled group", vec![fill]);
+        layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        doc.layers.push(layer);
+        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+        let cx = Ctx::for_doc(&doc, &patterns);
+
+        for _ in 0..2 {
+            let alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
+            let mut delivered = 0;
+            let result = render_bands_with_alloc(&doc, doc.bounds(), RENDER_TILE, &alloc, &mut |_| {
+                delivered += 1;
+                Ok::<(), ()>(())
+            });
+            assert!(matches!(result, Err(RenderBandsCoreError::Allocation(1))));
+            assert_eq!(delivered, 0, "failed effect-shape allocation must happen before the sink");
+            assert_eq!(alloc.attempts.load(Ordering::Relaxed), 1, "the cold effect shape requests an RGBA buffer before output");
+        }
+
+        let alloc = FallibleBufferAlloc;
+        render_tiled_with_alloc(&doc, doc.bounds(), RENDER_TILE, &cx, &alloc).unwrap();
+        let cached_cx = Ctx::for_doc(&doc, &patterns);
+        let cache_hit_alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
+        crate::fx_cache::effect_maps_with(&doc.layers[0], doc.bounds(), &cached_cx, &cache_hit_alloc).unwrap();
+        assert_eq!(cache_hit_alloc.attempts.load(Ordering::Relaxed), 0, "the successful cache avoids rebuilding its RGBA shape");
+
+        let outlined = outlined_effect_document();
+        let patterns = pattern::PreparedPatterns::new(&outlined.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(outlined.pixel_format().mode);
+        let cx = Ctx::for_doc(&outlined, &patterns);
         let alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
-        assert!(render_tiled_with_alloc(&doc, doc.bounds(), RENDER_TILE, &ctx, &alloc).is_err());
-        assert_eq!(alloc.attempts.load(Ordering::Relaxed), 1);
+        let mut delivered = 0;
+        let result = render_bands_with_alloc(&outlined, outlined.bounds(), RENDER_TILE, &alloc, &mut |_| {
+            delivered += 1;
+            Ok::<(), ()>(())
+        });
+        assert!(matches!(result, Err(RenderBandsCoreError::Allocation(1))));
+        assert_eq!(delivered, 0, "outline alpha extraction must use the fallible surface buffer path");
     }
 
     #[test]

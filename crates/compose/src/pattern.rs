@@ -456,8 +456,10 @@ pub fn render(tile: &Tile, place: &Placement, rect: Rect) -> Vec<[f32; 4]> {
 /// Render into caller-owned storage for fallible compositor allocations.
 pub(crate) fn render_into(tile: &Tile, place: &Placement, rect: Rect, out: &mut Vec<[f32; 4]>) {
     let len = rect.width() as usize * rect.height() as usize;
-    out.clear();
-    out.resize(len, [0.0; 4]);
+    if out.len() != len {
+        out.clear();
+        out.resize(len, [0.0; 4]);
+    }
     let mut i = 0;
     for y in rect.y0..rect.y1 {
         for x in rect.x0..rect.x1 {
