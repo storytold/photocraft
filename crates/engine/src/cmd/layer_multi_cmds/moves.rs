@@ -324,37 +324,19 @@ pub fn moved(doc: &Document, ids: &[LayerId], dx: i32, dy: i32) -> Result<Docume
 }
 
 /// #14960: a linked Pattern Overlay with no stored effects reference point tiles from the document
-/// origin, and moving the layer has to carry that grid with it: the compositors only read the
-/// layer's reference point, so the first move of a layer that has none records it, as the sum of the
-/// layer's moves (a stored one shifts in both move paths, and a layer moved back to where it was
-/// gets the document grid again). Only content that moves as a picture gets one: an adjustment or
-/// fill layer has no position, and a move of one changes nothing about it.
+/// origin, and moving the layer has to carry that grid with it. A layer that has no reference point
+/// adds each move to its own `effects.move_phase`, which only the overlay reads (a layer moved back
+/// to where it was gets the document grid again). The reference point itself is left alone: pattern
+/// strokes, glows and bevel textures keep anchoring at it, else at the layer's corner, also when
+/// they are added after the move, and the wrap checks of a Pattern Preview move keep reading it as
+/// before. A stored reference point shifts in both move paths, as it always did. Only content that
+/// moves as a picture gets a phase: an adjustment or fill layer has no position, and a move of one
+/// changes nothing about it.
 fn note_move_phase(l: &mut Layer, dx: i32, dy: i32) {
-    if l.effects.reference.is_none() && (dx != 0 || dy != 0) && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_)) && records_move_phase(l) {
-        l.effects.reference = Some((f64::from(dx), f64::from(dy)));
+    if l.effects.reference.is_none() && (dx != 0 || dy != 0) && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_)) {
+        let (x, y) = l.effects.move_phase.unwrap_or((0.0, 0.0));
+        l.effects.move_phase = Some((x + f64::from(dx), y + f64::from(dy)));
     }
-}
-
-/// Whether the layer's style has a linked pattern paint that is not a Pattern Overlay: a pattern
-/// stroke, a pattern glow or a bevel texture. Those are not measured by #14960 (#14839 covers the
-/// texture) and still anchor at the layer's corner, so recording a reference point would drag them
-/// off it.
-fn other_linked_pattern(l: &Layer) -> bool {
-    use photocraft_doc::{Effect, FxPaint};
-    l.effects.items.iter().filter(|e| e.enabled()).any(|e| match e {
-        Effect::Stroke(s) => matches!(s.paint, FxPaint::Pattern { .. }),
-        Effect::OuterGlow(g) | Effect::InnerGlow(g) => matches!(g.paint, FxPaint::Pattern { .. }),
-        Effect::BevelEmboss(b) => b.texture.as_ref().is_some_and(|t| t.link),
-        _ => false,
-    })
-}
-
-/// A linked Pattern Overlay needs the recorded phase, so it wins over another pattern paint sharing
-/// the layer (one reference point per layer); otherwise such a layer keeps `reference: None` and its
-/// stroke, glow or texture stays glued to the layer's corner across a move.
-fn records_move_phase(l: &Layer) -> bool {
-    let overlay = l.effects.items.iter().any(|e| matches!(e, photocraft_doc::Effect::PatternOverlay { link: true, .. } if e.enabled()));
-    overlay || !other_linked_pattern(l)
 }
 
 /// [`note_move_phase`] over a moved layer and the layers inside it: the commit path shifts the
@@ -459,11 +441,21 @@ fn targets_only_wrap(doc: &Document, roots: &[LayerId], mask_target: bool) -> bo
     if ids.is_empty() && alone.is_empty() {
         return false;
     }
-    ids.iter().all(|id| doc.layer(*id).is_some_and(|l| subtree_wraps_only(l, 0)))
+    ids.iter().all(|id| doc.layer(*id).is_some_and(|l| subtree_wraps(l, 0, true)))
 }
 
+/// Whether `l` and everything inside it wrap as raster samples. The geometry question, which
+/// linked masks and the carried selection ask: a layer's #14960 move phase is not geometry and
+/// does not change the answer.
 fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {
-    if depth > photocraft_doc::MAX_GROUP_DEPTH || l.effects.reference.is_some() || l.frame.is_some() {
+    subtree_wraps(l, depth, false)
+}
+
+/// [`subtree_wraps_only`]; with `phase`, a recorded move phase also counts as something a
+/// whole-canvas move changes, so [`targets_only_wrap`] does not skip that move (its overlay grid
+/// shifts by the raw delta, as the drag preview shows it).
+fn subtree_wraps(l: &Layer, depth: usize, phase: bool) -> bool {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH || l.effects.reference.is_some() || l.frame.is_some() || (phase && l.effects.move_phase.is_some()) {
         return false;
     }
     if l.vector_mask.as_ref().is_some_and(|m| m.linked) && !wraps_linked_masks(&l.content) {
@@ -471,7 +463,7 @@ fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {
     }
     match &l.content {
         LayerContent::Raster(_) | LayerContent::Adjustment(_) | LayerContent::Fill(_) => true,
-        LayerContent::Group(g) => g.artboard.is_none() && g.children.iter().all(|c| subtree_wraps_only(c, depth + 1)),
+        LayerContent::Group(g) => g.artboard.is_none() && g.children.iter().all(|c| subtree_wraps(c, depth + 1, phase)),
         LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => false,
     }
 }
@@ -1063,18 +1055,26 @@ mod style_phase_tests {
         doc.layer(id).expect("the layer is there").effects.reference
     }
 
-    /// Done when 2 and 3: a Move records the layer's moves as its effects reference point, which is
-    /// what the linked Pattern Overlay's grid anchors at (#14960), and the effect's own `phase`
-    /// stays 0 / 0 as measured. The commit and the drag preview record the same thing.
+    /// The move phase `id` carries in `doc` (`Effects::move_phase`).
+    fn phase(doc: &Document, id: LayerId) -> Option<(f64, f64)> {
+        doc.layer(id).expect("the layer is there").effects.move_phase
+    }
+
+    /// Done when 2 and 3: a Move records the layer's moves as its move phase, which is what the
+    /// linked Pattern Overlay's grid anchors at (#14960); the effects reference point stays unset and
+    /// the effect's own `phase` stays 0 / 0 as measured. The commit and the drag preview record the
+    /// same thing.
     #[test]
-    fn a_move_records_the_effects_reference_point_a_linked_overlay_grid_needs() {
+    fn a_move_records_the_move_phase_a_linked_overlay_grid_needs() {
         for (dx, dy) in [(7, 4), (5, 3), (-9, -2)] {
             let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay()]);
             let preview = moved(&before, &[id], dx, dy).expect("the layer moves");
-            assert_eq!(reference(&preview, id), Some((f64::from(dx), f64::from(dy))), "the Move preview of +{dx},+{dy}");
+            assert_eq!(phase(&preview, id), Some((f64::from(dx), f64::from(dy))), "the Move preview of +{dx},+{dy}");
+            assert_eq!(reference(&preview, id), None, "the preview leaves the reference point unset");
             let mut committed = before.clone();
             move_layers(&mut committed, &before, &[(id, dx, dy)]).expect("the command moves the layer");
-            assert_eq!(reference(&committed, id), Some((f64::from(dx), f64::from(dy))), "the committed move of +{dx},+{dy} matches the preview");
+            assert_eq!(phase(&committed, id), Some((f64::from(dx), f64::from(dy))), "the committed move of +{dx},+{dy} matches the preview");
+            assert_eq!(reference(&committed, id), None, "the commit leaves the reference point unset");
             match &committed.layer(id).expect("the layer").effects.items[0] {
                 Effect::PatternOverlay { phase, .. } => assert_eq!(*phase, (0.0, 0.0), "the stored phase stays 0 / 0"),
                 other => panic!("the overlay is still there, got {other:?}"),
@@ -1088,26 +1088,26 @@ mod style_phase_tests {
     fn a_move_records_the_phase_on_a_layer_that_has_no_effects_yet() {
         let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), Vec::new());
         let after = moved(&before, &[id], 7, 4).expect("the layer moves");
-        assert_eq!(reference(&after, id), Some((7.0, 4.0)), "the grid of an overlay added later starts from this phase");
+        assert_eq!(phase(&after, id), Some((7.0, 4.0)), "the grid of an overlay added later starts from this phase");
     }
 
     /// Done when 2: moving the layer back puts the grid on the document origin again. The phase is
     /// the sum of the layer's moves, not something read off its bounds, which came back too.
     #[test]
-    fn moving_the_layer_back_puts_the_reference_point_on_the_document_origin() {
+    fn moving_the_layer_back_puts_the_move_phase_on_the_document_origin() {
         let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay()]);
         let there = moved(&before, &[id], 7, 4).expect("the layer moves");
         let back = moved(&there, &[id], -7, -4).expect("the layer moves back");
         let l = back.layer(id).expect("the layer");
-        assert_eq!(l.effects.reference, Some((0.0, 0.0)), "the sum of the moves, with the layer back where it was");
+        assert_eq!(l.effects.move_phase, Some((0.0, 0.0)), "the sum of the moves, with the layer back where it was");
         assert_eq!(crate::layer_multi_cmds::layer_bounds(l), Some(Rect::new(10, 10, 20, 20)), "and its bounds came back with it");
     }
 
     /// Done when 4: with the overlay on the group, only the group's own moves carry its grid. A
-    /// child moving alone leaves the group without a reference point, so the group keeps tiling on
-    /// the document grid.
+    /// child moving alone leaves the group without a move phase, so the group keeps tiling on the
+    /// document grid.
     #[test]
-    fn a_group_carries_the_reference_point_for_its_own_moves_only() {
+    fn a_group_carries_the_move_phase_for_its_own_moves_only() {
         let child = Layer::new("Shape", shape(Rect::new(10, 10, 20, 20)));
         let child_id = child.id;
         let mut group = Layer::group("Group", vec![child]);
@@ -1116,11 +1116,11 @@ mod style_phase_tests {
         let mut d = Document::new("origin", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
         d.layers.push(group);
         let only_child = moved(&d, &[child_id], 7, 4).expect("the child moves");
-        assert_eq!(reference(&only_child, group_id), None, "a child's move leaves the group's own grid alone");
-        assert_eq!(reference(&only_child, child_id), Some((7.0, 4.0)), "the moved child records its own phase");
+        assert_eq!(phase(&only_child, group_id), None, "a child's move leaves the group's own grid alone");
+        assert_eq!(phase(&only_child, child_id), Some((7.0, 4.0)), "the moved child records its own phase");
         let group_moved = moved(&d, &[group_id], 7, 4).expect("the group moves");
-        assert_eq!(reference(&group_moved, group_id), Some((7.0, 4.0)), "the group's own move records its phase");
-        assert_eq!(reference(&group_moved, child_id), Some((7.0, 4.0)), "and the child moved with it");
+        assert_eq!(phase(&group_moved, group_id), Some((7.0, 4.0)), "the group's own move records its phase");
+        assert_eq!(phase(&group_moved, child_id), Some((7.0, 4.0)), "and the child moved with it");
     }
 
     /// The unmeasured content types keep today's behaviour: an adjustment or fill layer has no
@@ -1194,7 +1194,7 @@ mod style_phase_tests {
         let d = fixture(l);
         let before = letters(&d, Rect::new(14, 22, 46, 28));
         let after = moved(&d, &[id], 5, 3).expect("the layer moves");
-        assert_eq!(reference(&after, id), None, "a layer whose style carries a pattern stroke records no move phase");
+        assert_eq!(reference(&after, id), None, "the move leaves the reference point the stroke anchors at unset");
         // The same window of pixels, followed by the move: the stroke must read identically.
         assert_eq!(before, letters(&after, Rect::new(19, 25, 51, 31)), "the pattern stroke moved with the layer, unchanged");
     }
@@ -1214,5 +1214,103 @@ mod style_phase_tests {
         let after = moved(&d, &[id], 7, 4).expect("the shape layer moves");
         assert_eq!(reference(&after, id), None, "a shape layer records no move phase");
         assert_eq!(before, letters(&after, Rect::new(29, 26, 45, 42)), "the overlay moved with the shape layer, unchanged");
+    }
+
+    /// A 3 px outside stroke painted with the #14960 pattern (not measured by the issue: it keeps
+    /// today's anchor, the effects reference point, else the layer's corner).
+    fn pattern_stroke() -> Effect {
+        let pat = quad_pattern();
+        Effect::Stroke(photocraft_doc::StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            size: 3.0,
+            position: photocraft_doc::StrokePosition::Outside,
+            paint: photocraft_doc::FxPaint::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0 },
+            overprint: false,
+        })
+    }
+
+    /// Review (CodeRabbit, moves.rs:357): a layer with no effects is moved from (23, 21) by +5,+3,
+    /// and only then gets a pattern stroke. The stroke tiles from the layer's corner (28, 24), as it
+    /// does on `upstream/main`, so it reads exactly like the same stroke on a layer that was drawn
+    /// at (28, 24) and never moved. The move phase the overlay needs must not become its anchor.
+    #[test]
+    fn a_pattern_stroke_added_after_a_move_tiles_from_the_layer_corner() {
+        let window = Rect::new(20, 16, 56, 52);
+        let mut never = Layer::new("Shape", shape(Rect::new(28, 24, 48, 44)));
+        never.effects.items = vec![pattern_stroke()];
+        let expected = letters(&fixture(never), window);
+        let l = Layer::new("Shape", shape(Rect::new(23, 21, 43, 41)));
+        let id = l.id;
+        let d = fixture(l);
+        let preview = moved(&d, &[id], 5, 3).expect("the layer moves");
+        let mut committed = d.clone();
+        move_layers(&mut committed, &d, &[(id, 5, 3)]).expect("the command moves the layer");
+        for (what, mut after) in [("the drag preview", preview), ("the committed move", committed)] {
+            after.layer_mut(id).expect("the layer").effects.items = vec![pattern_stroke()];
+            assert_eq!(letters(&after, window), expected, "{what}: the stroke added after the move tiles from the layer corner (28, 24)");
+        }
+    }
+
+    /// Review (CodeRabbit, moves.rs:369): on an 80 px wide canvas, a group with a linked mask over
+    /// a raster child at x 70..75 with a linked overlay. The group moves +1 (no wrap), then a
+    /// View > Pattern Preview move of +10 wraps the child to x 1..6; its group's mask has to wrap
+    /// with it, as it did on `upstream/main`, whatever phase the first move recorded.
+    #[test]
+    fn a_group_mask_still_wraps_with_its_child_after_a_move_recorded_the_phase() {
+        let mut child = Layer::new("Shape", shape(Rect::new(70, 10, 75, 20)));
+        child.effects.items = vec![linked_overlay()];
+        let child_id = child.id;
+        let mut group = Layer::group("Group", vec![child]);
+        let mut mask = photocraft_doc::LayerMask::hide_all();
+        mask.surface.fill_rect(Rect::new(70, 10, 75, 20), &[1.0]);
+        group.mask = Some(mask);
+        let group_id = group.id;
+        let d = fixture(group);
+        let mut once = d.clone();
+        move_layers(&mut once, &d, &[(group_id, 1, 0)]).expect("the group moves");
+        let tile = Some(once.bounds());
+        let preview = moved_wrapping(&once, &[group_id], 10, 0, false, tile).expect("the wrapping preview");
+        let mut committed = once.clone();
+        move_layers_wrapped(&mut committed, &once, &[(group_id, 10, 0)], tile).expect("the wrapping move");
+        for (what, after) in [("the drag preview", preview), ("the committed move", committed)] {
+            let LayerContent::Raster(px) = &after.layer(child_id).expect("the child").content else { panic!("the child is a raster layer") };
+            assert_eq!(px.content_bounds(), Rect::new(1, 10, 6, 20), "{what}: the child wrapped to x 1..6");
+            let m = after.layer(group_id).and_then(|g| g.mask.as_ref()).expect("the group mask");
+            assert_eq!(m.surface.content_bounds(), Rect::new(1, 10, 6, 20), "{what}: the group mask wrapped with its child");
+        }
+    }
+
+    /// Not measured by #14960, kept as on `upstream/main`: a child with a stored effects reference
+    /// point (read from a file) still keeps its group's linked mask on the raw delta in a Pattern
+    /// Preview move, and a whole-canvas move of it is still not skipped.
+    #[test]
+    fn a_stored_reference_point_keeps_the_wrap_checks_as_they_were() {
+        let mut child = Layer::new("Shape", shape(Rect::new(70, 10, 75, 20)));
+        child.effects.items = vec![linked_overlay()];
+        child.effects.reference = Some((3.0, 0.0));
+        let mut group = Layer::group("Group", vec![child]);
+        let mut mask = photocraft_doc::LayerMask::hide_all();
+        mask.surface.fill_rect(Rect::new(70, 10, 75, 20), &[1.0]);
+        group.mask = Some(mask);
+        let group_id = group.id;
+        let d = fixture(group);
+        let after = moved_wrapping(&d, &[group_id], 10, 0, false, Some(d.bounds())).expect("the wrapping preview");
+        let m = after.layer(group_id).and_then(|g| g.mask.as_ref()).expect("the group mask");
+        assert_eq!(m.surface.content_bounds(), Rect::new(80, 10, 85, 20), "the group mask keeps the raw delta, as before");
+        assert!(!targets_only_wrap(&d, &[group_id], false), "a whole-canvas move still changes the reference point");
+    }
+
+    /// A whole-canvas Pattern Preview move of raster layers changes nothing and is skipped, as on
+    /// `upstream/main`, until a move records a phase: from then on it shifts the overlay grid by the
+    /// raw delta, as the drag preview shows, so it is not skipped. The wrap of a linked mask does not
+    /// depend on that phase.
+    #[test]
+    fn only_the_skip_check_reads_the_move_phase() {
+        let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay()]);
+        assert!(targets_only_wrap(&before, &[id], false), "never moved: a whole-canvas move is a no-op");
+        let after = moved(&before, &[id], 1, 0).expect("the layer moves");
+        let l = after.layer(id).expect("the layer");
+        assert!(!targets_only_wrap(&after, &[id], false), "with a move phase the whole-canvas move is not skipped");
+        assert!(subtree_wraps_only(l, 0), "but the layer still wraps as raster samples");
     }
 }

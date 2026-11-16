@@ -91,6 +91,7 @@ fn bake_one(s: &mut Session, id: LayerId, key: &str) -> Result<bool> {
         l.effects.items.clear();
         l.effects.psd_raw = None;
         l.effects.reference = None;
+        l.effects.move_phase = None;
         l.effects.enabled = true;
         l.advanced.blend_interior = false;
         l.advanced.layer_mask_hides_effects = false;

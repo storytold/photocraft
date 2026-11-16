@@ -197,6 +197,11 @@ pub(crate) fn transform_layer_geometry(l: &mut Layer, a: &Affine, content: bool,
         let p = map_pt(a, [x, y]);
         l.effects.reference = Some((p[0], p[1]));
     }
+    // The #14960 move phase is the overlay grid's origin point, so it maps like the reference point.
+    if let Some((x, y)) = l.effects.move_phase {
+        let p = map_pt(a, [x, y]);
+        l.effects.move_phase = Some((p[0], p[1]));
+    }
     if !content {
         // Free Transform doesn't warp fill caches: drop it, the fill re-renders from its model.
         l.fill_cache = None;

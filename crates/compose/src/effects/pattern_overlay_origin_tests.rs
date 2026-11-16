@@ -127,11 +127,18 @@ fn a_linked_overlay_without_a_reference_point_tiles_from_the_document_origin() {
     assert_eq!(row(&b, 150, 100, 125), "B×10 K×10 B×6", "row y 150 from x 100");
 }
 
-/// Done when 2 (the compositor half): the state a Move leaves behind, a reference point holding
-/// the layer's +5,+3 phase and the layer's rectangle moved with it. The grid follows the layer.
+/// The layer of `d` the test placed above the Background, with `phase` as the move phase its Move
+/// commands recorded (`Effects::move_phase`).
+fn with_move_phase(mut d: Document, phase: (f64, f64)) -> Document {
+    d.layers.last_mut().expect("the test layer").effects.move_phase = Some(phase);
+    d
+}
+
+/// Done when 2 (the compositor half): the state a Move leaves behind, a move phase holding the
+/// layer's +5,+3 and the layer's rectangle moved with it. The grid follows the layer.
 #[test]
-fn the_grid_anchors_at_the_reference_point_a_layer_move_records() {
-    let d = overlay_doc(shape(Rect::new(105, 78, 305, 228)), Some((5.0, 3.0)), true, (0.0, 0.0));
+fn the_grid_anchors_at_the_move_phase_a_layer_move_records() {
+    let d = with_move_phase(overlay_doc(shape(Rect::new(105, 78, 305, 228)), None, true, (0.0, 0.0)), (5.0, 3.0));
     let b = flat(&d);
     // x 100..104 are outside the moved layer and show the white backdrop.
     assert_eq!(row(&b, 150, 100, 130), "W×5 R×10 G×10 R×6", "row y 150 after a +5,+3 move");
@@ -142,8 +149,8 @@ fn the_grid_anchors_at_the_reference_point_a_layer_move_records() {
 /// Done when 3 (the compositor half): a layer moved +7,+4 before the overlay was added leaves the
 /// grid on that phase, so its tile edges fall on x 107, 127, ... and not on the layer's corner.
 #[test]
-fn a_reference_point_of_the_layer_moves_tiles_from_the_document_origin_plus_that_move() {
-    let d = overlay_doc(shape(Rect::new(107, 79, 307, 229)), Some((7.0, 4.0)), true, (0.0, 0.0));
+fn a_move_phase_of_the_layer_moves_tiles_from_the_document_origin_plus_that_move() {
+    let d = with_move_phase(overlay_doc(shape(Rect::new(107, 79, 307, 229)), None, true, (0.0, 0.0)), (7.0, 4.0));
     let b = flat(&d);
     assert_eq!(row(&b, 150, 107, 132), "R×10 G×10 R×6", "row y 150 from the moved layer's left edge");
     assert_eq!(letter(pixel(&b, 107, 144)), 'W', "tile marker at (107, 144): {:?}", pixel(&b, 107, 144));
@@ -208,4 +215,7 @@ fn a_pattern_stroke_without_a_reference_point_still_anchors_at_the_layer_corner(
     // starting at the layer's corner y 75, black on one starting at the document origin.
     assert_eq!(letter(pixel(&b, 99, 76)), 'G', "pattern stroke at (99, 76): {:?}", pixel(&b, 99, 76));
     assert_eq!(letter(pixel(&b, 99, 96)), 'G', "pattern stroke at (99, 96): {:?}", pixel(&b, 99, 96));
+    // A move phase is the overlay's alone: the stroke reads the same with one recorded.
+    let moved = flat(&with_move_phase(d, (5.0, 3.0)));
+    assert_eq!(moved.px, b.px, "a recorded move phase does not move the pattern stroke's grid");
 }

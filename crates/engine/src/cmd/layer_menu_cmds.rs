@@ -772,7 +772,7 @@ fn transfer_effects(s: &mut Session, p: &Value) -> Result<Value> {
     let payload = match index {
         Some(i) => {
             let e = src.effects.items.get(i).cloned().ok_or_else(|| bad(CMD, format!("the layer has no effect {i}")))?;
-            Effects { enabled: true, items: vec![e], psd_raw: None, reference: None }
+            Effects { enabled: true, items: vec![e], psd_raw: None, reference: None, move_phase: None }
         }
         None => Effects { psd_raw: None, ..src.effects.clone() },
     };

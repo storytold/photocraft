@@ -447,17 +447,19 @@ impl Placement {
 }
 
 /// Where a linked Pattern Overlay starts tiling (#14960): the layer's effects reference point
-/// (PSD `fxrp`) when it carries one; else the document origin, which is what the reference
-/// application uses for a new overlay on the content kinds the issue measured (a pixel layer or a
-/// group); else the layer's top-left as before, for the kinds it did not measure. A layer move
-/// carries the grid by recording that reference point (its Move command), so the origin never
-/// becomes the layer's corner. One rule for both compositors, so CPU and GPU place the overlay
-/// identically; the other linked pattern paints keep [`Placement::anchored`] with the anchor their
-/// caller has always passed.
+/// (PSD `fxrp`) when it carries one; else the document origin plus the layer's moves
+/// (`Effects::move_phase`, recorded by its Move command), which is what the reference application
+/// uses for a new overlay on the content kinds the issue measured (a pixel layer or a group); else
+/// the layer's top-left as before, for the kinds it did not measure. One rule for both
+/// compositors, so CPU and GPU place the overlay identically; the other linked pattern paints keep
+/// [`Placement::anchored`] with the anchor their caller has always passed, and never read the
+/// move phase.
 pub fn overlay_anchor(layer: &photocraft_doc::Layer, bounds: Rect) -> (f64, f64) {
     match layer.effects.reference {
         Some(r) => r,
-        None if matches!(layer.content, photocraft_doc::LayerContent::Raster(_) | photocraft_doc::LayerContent::Group(_)) => (0.0, 0.0),
+        None if matches!(layer.content, photocraft_doc::LayerContent::Raster(_) | photocraft_doc::LayerContent::Group(_)) => {
+            layer.effects.move_phase.unwrap_or((0.0, 0.0))
+        }
         None => (f64::from(bounds.x0), f64::from(bounds.y0)),
     }
 }
