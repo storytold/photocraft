@@ -540,11 +540,11 @@ fn type_shape_descriptor() -> Descriptor {
     desc("null").with("null", class_ref("contentLayer")).with("Usng", target_ref("textLayer"))
 }
 
-/// Make events another module maps: a type path, an artboard, a layer style or a frame,
-/// tried in that order.
+/// Make events another module maps: a user slice, a type path, an artboard, a layer style or a frame.
 fn delegated_make_from(d: &Descriptor) -> Option<Mapped> {
     let class = get_ref(d, "null").and_then(ref_class);
     match class.as_deref() {
+        Some("slice") => return Some(super::steps_slice::make_from(d)),
         Some("Path") => return Some(super::steps_type_path::from(d)),
         // Layer › New › Artboard and Artboard from Layers (#10723).
         Some("artboardSection") => return Some(super::steps_artboard_section::from(d)),
@@ -725,6 +725,9 @@ fn recorded_percent(opacity: f64) -> f64 {
 /// Write a creation step, refusing native options the target descriptor cannot carry; Type to
 /// Shape exports only without native options.
 pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
+    if id == "slice.new" {
+        return super::steps_slice::make_to(p);
+    }
     if id == "image.calculations" {
         return super::steps_calculations::to_descriptor(p);
     }

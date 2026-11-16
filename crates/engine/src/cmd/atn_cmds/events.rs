@@ -854,6 +854,7 @@ pub(super) const EVENTS: &[Event] = &[
         label: "Make",
         ids: &[
             "image.calculations",
+            "slice.new",
             "type.convertToShape",
             "type.createWorkPath",
             super::steps_frame_section::COMMAND,

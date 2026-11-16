@@ -4799,6 +4799,117 @@ fn select_channel_export_rejects_mode_specific_gray_objects() {
     assert!(rgb.execute("actions.play", json!({"action":"Pick"})).unwrap().get("failed").is_none());
 }
 
+fn user_slice_descriptor(edges: [f64; 4]) -> Descriptor {
+    let rect = ["Top ", "Left", "Btom", "Rght"].into_iter().zip(edges).fold(desc("Rctn"), |r, (key, value)| r.with(key, px(value)));
+    // Photoshop writes this four-byte enum value as a string ID, not a char ID.
+    let user = D::Enumerated { type_id: Id::Str(b"sliceType".to_vec()), value: Id::Str(b"user".to_vec()) };
+    desc("null").with("null", class_ref("slice")).with("Usng", D::Descriptor(desc("slice").with("Type", user).with("At  ", D::Descriptor(rect))))
+}
+
+#[test]
+fn mapped_make_user_slices_import_play_and_round_trip() {
+    for event in [AtnEvent::Code(*b"Mk  "), AtnEvent::name("make")] {
+        let descriptor = user_slice_descriptor([5.0, 3.0, 12.0, 14.0]);
+        let source = one_action(vec![AtnItem { event: event.clone(), ..item("Mk  ", "Make", Some(descriptor.clone())) }]);
+        let loaded = import(&atn::write(&source).unwrap()).unwrap();
+        assert!(loaded.unsupported.is_empty(), "{event:?}: {:?}", loaded.unsupported);
+        assert_eq!(loaded.actions[0].steps, vec![("slice.new".into(), json!({"rect": [3, 5, 11, 7]}))]);
+        let (saved, skipped) = export("Slices", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0].descriptor, Some(descriptor));
+        assert_eq!(import(&saved).unwrap().actions[0].steps, loaded.actions[0].steps);
+
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
+        session.execute("actions.load", json!({"data": b64(&saved)})).unwrap();
+        assert!(session.execute("actions.play", json!({"action": "A"})).unwrap().get("failed").is_none());
+        let slices = &session.active().unwrap().doc.slices.list;
+        assert_eq!(slices.len(), 1);
+        assert_eq!(slices[0].rect, photocraft_geom::Rect::new(3, 5, 14, 12));
+        assert_eq!(slices[0].origin, photocraft_doc::slices::SliceOrigin::User);
+    }
+}
+
+#[test]
+fn mapped_make_user_slices_preserve_unsupported_descriptors() {
+    let base = user_slice_descriptor([1.0, 2.0, 8.0, 10.0]);
+    let using = get_obj(&base, "Usng").unwrap();
+    let user = using.get("Type").unwrap().clone();
+    let replace_using = |u| desc("null").with("null", class_ref("slice")).with("Usng", D::Descriptor(u));
+    let mut unsupported = vec![
+        base.clone().with("futureOption", D::Boolean(true)),
+        base.clone().with("null", class_ref("slice")),
+        desc("null").with("null", target_ref("slice")).with("Usng", D::Descriptor(using.clone())),
+        replace_using(using.clone().with("futureOption", long(1.0))),
+        replace_using(
+            desc("slice")
+                .with("Type", D::Enumerated { type_id: Id::new("sliceType"), value: Id::Str(b"auto".to_vec()) })
+                .with("At  ", using.get("At  ").unwrap().clone()),
+        ),
+        replace_using(desc("slice").with("Type", enm("sliceType", "user")).with("At  ", using.get("At  ").unwrap().clone())),
+        replace_using(
+            desc("slice")
+                .with("Type", D::Enumerated { type_id: Id::new("otherType"), value: Id::Str(b"user".to_vec()) })
+                .with("At  ", using.get("At  ").unwrap().clone()),
+        ),
+        replace_using(desc("otherClass").with("Type", user.clone()).with("At  ", using.get("At  ").unwrap().clone())),
+        desc("null").with("null", class_ref("slice")),
+    ];
+    for edge in [f64::NAN, f64::INFINITY, 1.5, f64::from(i32::MIN) - 1.0, f64::from(i32::MAX) + 1.0] {
+        unsupported.push(user_slice_descriptor([edge, 2.0, 8.0, 10.0]));
+    }
+    for edges in [[1.0, 2.0, 1.0, 10.0], [8.0, 2.0, 1.0, 10.0], [1.0, 2.0, 8.0, 2.0], [1.0, -1.0, 8.0, f64::from(i32::MAX)]] {
+        unsupported.push(user_slice_descriptor(edges));
+    }
+    for rect in [
+        desc("Rctn").with("Top ", pct(1.0)).with("Left", px(2.0)).with("Btom", px(8.0)).with("Rght", px(10.0)),
+        desc("Rctn").with("Top ", long(1.0)).with("Left", px(2.0)).with("Btom", px(8.0)).with("Rght", px(10.0)),
+        desc("Rctn").with("Top ", px(1.0)).with("Left", px(2.0)).with("Btom", px(8.0)),
+        get_obj(using, "At  ").unwrap().clone().with("Left", px(4.0)),
+    ] {
+        unsupported.push(replace_using(desc("slice").with("Type", user.clone()).with("At  ", D::Descriptor(rect))));
+    }
+    for descriptor in unsupported {
+        let source = one_action(vec![AtnItem { event: AtnEvent::name("make"), ..item("Mk  ", "Make", Some(descriptor.clone())) }]);
+        let loaded = import(&atn::write(&source).unwrap()).unwrap();
+        assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP, "{descriptor:?}");
+        let (saved, skipped) = export("Slices", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let written = atn::parse(&saved).unwrap().actions[0].items[0].clone();
+        assert_eq!(written.event, source.actions[0].items[0].event);
+        assert_eq!(written.descriptor.unwrap().to_bytes(), descriptor.to_bytes());
+    }
+}
+
+#[test]
+fn mapped_make_user_slices_export_only_representable_native_params() {
+    for params in [json!({"rect": [2, 1, 8, 7]}), json!({"x": 2, "y": 1, "width": 8, "height": 7})] {
+        let (event, d) = event_and_descriptor("slice.new", &params).unwrap();
+        assert_eq!(event.name, "make");
+        assert_eq!(d, user_slice_descriptor([1.0, 2.0, 8.0, 10.0]));
+        let wire = d.to_bytes();
+        let user_enum = b"enum\0\0\0\tsliceType\0\0\0\x04user";
+        assert!(wire.windows(user_enum.len()).any(|bytes| bytes == user_enum), "user must be a length-4 string ID");
+    }
+    for params in [
+        json!({}),
+        json!({"rect": [2, 1, 8]}),
+        json!({"rect": [2, 1, 8, 0]}),
+        json!({"rect": [2, 1, -8, 7]}),
+        json!({"rect": [2.5, 1, 8, 7]}),
+        json!({"rect": [2, 1, 2147483647_i64, 7]}),
+        json!({"rect": [2, 1, 8, 7], "name": "Named slice"}),
+        json!({"rect": [2, 1, 8, 7], "kind": "noImage"}),
+        json!({"rect": [2, 1, 8, 7], "x": 3}),
+    ] {
+        let action = Action::new("Slice", vec![("slice.new".into(), params.clone())]);
+        assert!(export("Slices", &[&action], &[], false).is_err(), "{params}");
+        let (saved, skipped) = export("Slices", &[&action], &[], true).unwrap();
+        assert_eq!(skipped.len(), 1);
+        assert!(atn::parse(&saved).unwrap().actions[0].items.is_empty());
+    }
+}
+
 /// Newer Group from Layers recordings put the name outside Usng; existing nested names win.
 #[test]
 fn mapped_make_group_name_survives_load_and_save() {
