@@ -3,7 +3,7 @@ use photocraft_doc::{HistoricalXcfSampleOrder as Order, SmartObject, SmartSource
 use photocraft_geom::{Affine, Rect, Size};
 use std::sync::Arc;
 
-mod cancellation_review_tests;
+mod cancellation_tests;
 
 /// Original one-pixel v7 RGB16 wire data with a non-symmetric multibyte sample.
 fn xcf(little: bool) -> Vec<u8> {

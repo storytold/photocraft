@@ -34,9 +34,9 @@ fn scan(reader: &mut dyn Read, ctl: &Interrupt<'_>) -> Result<((f64, f64), f64)>
             return Err(invalid("too many properties"));
         }
         match kind {
-            // Match wire::props_version_with_interrupt's historical framing:
-            // colormaps, user units and links do not trust the length word.
-            1 => {
+            // Match image property framing: only an indexed image consumes
+            // the palette and needs its historical count-based length workaround.
+            1 if header.base_type == 2 => {
                 let colors = word(reader)? as usize;
                 let length = colors.checked_mul(3).and_then(|n| n.checked_add(4)).ok_or_else(|| invalid("colormap overflow"))?;
                 payload_limit(kind, length)?;

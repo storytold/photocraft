@@ -74,16 +74,12 @@ craft-crs = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a", features = ["egui"] }
-# XCF transport/text and exact SVG decoder validation.
+# Enhanced XCF transport and native text parsing.
 craft-raster-codecs = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
 crabz2 = { version = "=0.7.0", default-features = false, features = ["std"] }
 lzma-rust2 = { version = "=0.23.0", default-features = false, features = ["std", "xz"] }
 roxmltree = "0.21"
 tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"] }
-zune-jpeg = "=0.5.15"
-gif = "=0.14.2"
-image-webp = "=0.2.4"
-data-url = "=0.3.2"
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"

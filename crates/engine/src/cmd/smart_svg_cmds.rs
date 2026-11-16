@@ -386,7 +386,6 @@ fn update_contents_with_frame_budget(s: &mut Session, p: &Value, native: bool, f
         replacements.push(replacement);
     }
     // Finish every fallible render before committing any document state.
-    let mut sources = crate::smart_cmds::WarningRenderSources::new(doc);
     for replacement in &mut replacements {
         if let Some(preview) = vector_preview.as_ref() {
             // This exact SVG was fully validated above. Render only a disposable display
@@ -405,7 +404,7 @@ fn update_contents_with_frame_budget(s: &mut Session, p: &Value, native: bool, f
             sm.cache = rendered.cache;
         } else {
             let LayerContent::Smart(sm) = &mut replacement.content else { return Err(EngineError::NoLayer(replacement.id)) };
-            let (surface, omitted) = crate::smart_cmds::render_with_warnings_using(sm, &mut sources)?;
+            let (surface, omitted) = crate::smart_cmds::render_with_warnings(doc, sm)?;
             sm.cache = Some(surface.ok_or_else(|| bad(UPDATE, "SVG contents could not be rendered"))?);
             for warning in omitted {
                 if !warnings.contains(&warning) {
@@ -462,7 +461,5 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-#[cfg(test)]
-mod source_cache_tests;
 #[cfg(test)]
 mod tests;

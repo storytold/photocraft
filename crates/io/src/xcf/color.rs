@@ -12,13 +12,13 @@ use photocraft_color::ColorMode;
 use super::{Precision, Result, invalid};
 
 #[cfg(test)]
-mod fallback_review_tests;
+mod fallback_tests;
 #[cfg(test)]
-mod indexed_palette_review_tests;
+mod gray_pcs_tests;
 #[cfg(test)]
-mod review_tests;
+mod indexed_palette_tests;
 #[cfg(test)]
-mod untagged_review_tests;
+mod untagged_tests;
 
 pub(super) struct ProfileSelection {
     pub bytes: Arc<Vec<u8>>,

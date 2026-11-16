@@ -10,8 +10,12 @@ const XZ_MAX_DICTIONARY_BYTES: u32 = 64 * 1024 * 1024;
 // Include the BOM, 4096 UTF-16 code units, and a possible trailing surrogate.
 const SVG_PROBE_BYTES: usize = 2 + 2 * 4096 + 2;
 
+#[cfg(not(test))]
+use self::make_compressed_reader as compressed_reader;
 #[cfg(test)]
-thread_local! { pub(crate) static DECODER_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+mod decoder_test_support;
+#[cfg(test)]
+use decoder_test_support::{DECODER_STARTS, compressed_reader};
 
 pub(crate) struct DecodedImport {
     pub(crate) is_xcf: bool,
@@ -34,15 +38,15 @@ pub(crate) fn svg_prefix(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Resul
 mod bzip;
 
 #[cfg(test)]
+mod bzip_member_tests;
+#[cfg(test)]
 mod geometry_prefix_tests;
 #[cfg(test)]
 mod gzip_tests;
 #[cfg(test)]
-mod prefix_review_tests;
+mod prefix_tests;
 #[cfg(test)]
-mod review_tests;
-#[cfg(test)]
-mod routing_review_tests;
+mod routing_tests;
 
 /// Checks cancellation during headers, empty members and compressed input consumption,
 /// as well as between output chunks. A long header must not bypass cooperative cancellation.
@@ -174,13 +178,11 @@ fn decode_inner(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pre
 }
 
 /// Construct the same bounded decoder for prefix queries and complete imports.
-fn compressed_reader<'a, 'bytes: 'a, 'ctl: 'a>(
+fn make_compressed_reader<'a, 'bytes: 'a, 'ctl: 'a>(
     kind: crate::ImportCompression,
     input: &'a mut Input<'bytes, 'ctl>,
     policy: &'a GzipPolicy,
 ) -> Box<dyn Read + 'a> {
-    #[cfg(test)]
-    DECODER_STARTS.with(|starts| starts.set(starts.get() + 1));
     match kind {
         crate::ImportCompression::Gzip => Box::new(Gzip::new(input, policy)),
         crate::ImportCompression::Bzip2 => Box::new(bzip::Reader::new(input)),

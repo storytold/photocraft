@@ -5,7 +5,7 @@ use super::HashMap;
 use super::{MAX_PAYLOAD, MAX_STRING, Read, Result, invalid};
 
 #[cfg(test)]
-mod parasite_review_tests;
+mod parasite_retention_tests;
 #[cfg(test)]
 mod parasite_work_tests;
 
@@ -90,7 +90,13 @@ pub(super) fn props_version<'a>(c: &mut Cursor<'a>, version: Option<u32>) -> Res
 
 /// The same bounded property framing, with cancellation between records for header-only callers.
 pub(super) fn props_version_with_interrupt<'a>(c: &mut Cursor<'a>, version: Option<u32>, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<Prop<'a>>> {
-    props_charged(c, version, ctl, &mut |_| Ok(()))
+    props_charged(c, version, true, ctl, &mut |_| Ok(()))
+}
+
+/// Only indexed images consume a palette. Unused palette properties keep their
+/// declared framing, so corrupt palette counts cannot reinterpret following headers.
+pub(super) fn props_image_with_interrupt<'a>(c: &mut Cursor<'a>, version: u32, indexed: bool, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<Prop<'a>>> {
+    props_charged(c, Some(version), indexed, ctl, &mut |_| Ok(()))
 }
 
 /// Coverage inventory supplies a nonrefundable work debit before each framing step.
@@ -99,7 +105,7 @@ pub(super) fn props_with_work<'a>(
     ctl: &photocraft_raster::Interrupt<'_>,
     charge: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<Vec<Prop<'a>>> {
-    props_charged(c, None, ctl, charge)
+    props_charged(c, None, true, ctl, charge)
 }
 
 #[cfg(test)]
@@ -108,6 +114,7 @@ thread_local! { pub(super) static PROPERTY_READS: std::cell::Cell<usize> = const
 fn props_charged<'a>(
     c: &mut Cursor<'a>,
     version: Option<u32>,
+    palette_from_count: bool,
     ctl: &photocraft_raster::Interrupt<'_>,
     charge: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<Vec<Prop<'a>>> {
@@ -127,7 +134,7 @@ fn props_charged<'a>(
         // size follows from the count. Unit strings changed at XCF21.
         // PROP_LINK_LAYER's length can be four bytes short (#8857); read all its fields.
         let len = match kind {
-            1 => {
+            1 if palette_from_count => {
                 let n = c.at(c.pos).u32()? as usize;
                 4usize.checked_add(n.checked_mul(3).ok_or_else(|| invalid("colormap overflow"))?).ok_or_else(|| invalid("colormap overflow"))?
             }
@@ -213,16 +220,7 @@ impl Default for ParasiteWork {
 
 impl ParasiteWork {
     fn charge(&mut self, bytes: usize) -> bool {
-        match self.remaining.checked_sub(bytes) {
-            Some(remaining) => {
-                self.remaining = remaining;
-                true
-            }
-            None => {
-                self.remaining = 0;
-                false
-            }
-        }
+        super::work_budget::WorkBudget::new(&mut self.remaining).exhaust_on_reject(bytes)
     }
 
     #[cfg(test)]
@@ -432,4 +430,4 @@ pub(super) fn rle_decode(input: &[u8], bpp: usize, pixels: usize) -> Result<Vec<
 }
 
 #[cfg(test)]
-mod rle_review_tests;
+mod rle_tests;

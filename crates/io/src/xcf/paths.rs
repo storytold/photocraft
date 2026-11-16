@@ -16,9 +16,9 @@ const MAX_POINTS: usize = 262_144;
 const MAX_COORD: f64 = 10_000_000.0;
 
 #[cfg(test)]
-mod review_tests;
+mod decode_work_tests;
 #[cfg(test)]
-mod work_review_tests;
+mod encoding_diagnostics_tests;
 
 /// Nonrefundable source work shared by every saved-path record in one import.
 /// Successful native storage has a separate budget; malformed aliases still
@@ -36,8 +36,9 @@ impl Default for DecodeWork {
 impl DecodeWork {
     fn admit(&mut self, bytes: usize, ctl: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
-        let Some(remaining) = self.bytes_left.checked_sub(bytes) else { return Ok(false) };
-        self.bytes_left = remaining;
+        if !super::work_budget::WorkBudget::new(&mut self.bytes_left).keep_remaining(bytes) {
+            return Ok(false);
+        }
         #[cfg(test)]
         PATH_DECODES.with(|count| count.set(count.get().saturating_add(1)));
         Ok(true)

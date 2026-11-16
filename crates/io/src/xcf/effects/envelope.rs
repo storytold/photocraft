@@ -33,11 +33,9 @@ impl Default for DecodeWork {
 
 impl DecodeWork {
     pub(in crate::xcf) fn charge(&mut self, bytes: usize) -> Result<()> {
-        let Some(remaining) = self.remaining.checked_sub(bytes) else {
-            self.remaining = 0;
+        if !crate::xcf::work_budget::WorkBudget::new(&mut self.remaining).exhaust_on_reject(bytes) {
             return Err(crate::IoError::XcfMetadataLimit);
-        };
-        self.remaining = remaining;
+        }
         Ok(())
     }
 

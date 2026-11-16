@@ -11,6 +11,7 @@ use photocraft_doc::text::{
 use photocraft_geom::Affine;
 use std::collections::HashMap;
 
+use super::work_budget::{WorkBudget, charge_all};
 use super::{Result, invalid};
 
 const MAX_NODES: usize = 65_536;
@@ -66,10 +67,9 @@ impl Default for DecodeWork {
 
 impl DecodeWork {
     fn charge_config(&mut self, length: usize) -> Result<()> {
-        self.config_bytes_left = self
-            .config_bytes_left
-            .checked_sub(length)
-            .ok_or_else(|| crate::IoError::Unsupported("document text configuration source-work allowance exhausted".into()))?;
+        if !WorkBudget::new(&mut self.config_bytes_left).keep_remaining(length) {
+            return Err(crate::IoError::Unsupported("document text configuration source-work allowance exhausted".into()));
+        }
         #[cfg(test)]
         TEXT_CONFIG_PARSES.with(|count| count.set(count.get().saturating_add(1)));
         Ok(())
@@ -86,7 +86,7 @@ thread_local! {
 pub(super) const POINT_LAYOUT_WORK_UNITS: usize = 1 << 20;
 mod layout_admission;
 #[cfg(test)]
-mod point_layout_review_tests;
+mod point_layout_tests;
 #[cfg(test)]
 thread_local! {
     static ORIGIN_SHARED_ACCESSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -94,27 +94,29 @@ thread_local! {
 }
 
 #[cfg(test)]
-mod attribute_visit_review_tests;
+mod attribute_work_tests;
 #[cfg(test)]
-mod diagnostic_review_tests;
+mod counter_admission_tests;
 #[cfg(test)]
-mod feature_settings_review_tests;
+mod diagnostic_tests;
 #[cfg(test)]
-mod file_work_review_tests;
+mod feature_settings_tests;
 #[cfg(test)]
-mod literal_profile_review_tests;
+mod file_work_tests;
 #[cfg(test)]
-mod markup_work_review_tests;
+mod inherited_formatting_tests;
 #[cfg(test)]
-mod review_round2_tests;
+mod literal_profile_tests;
 #[cfg(test)]
-mod review_tests;
+mod native_typography_tests;
 #[cfg(test)]
-mod spacing_review_tests;
+mod pango_typography_tests;
 #[cfg(test)]
-mod style_copy_review_tests;
+mod spacing_tests;
 #[cfg(test)]
-mod xml_parse_work_review_tests;
+mod style_copy_tests;
+#[cfg(test)]
+mod xml_parse_work_tests;
 
 #[derive(Debug)]
 enum Value {
@@ -422,9 +424,13 @@ fn anchor_point_origin(layer: &mut TextLayer, dpi: f32, ctl: &photocraft_raster:
         return Ok(true);
     }
     let Some(cost) = layout_admission::cost(layer, dpi) else { return Ok(false) };
-    let Some(remaining) = work_left.checked_sub(cost) else { return Ok(false) };
+    if !WorkBudget::new(work_left).can_charge(cost) {
+        return Ok(false);
+    }
     ctl.check().map_err(|_| crate::IoError::Cancelled)?;
-    *work_left = remaining;
+    if !WorkBudget::new(work_left).keep_remaining(cost) {
+        return Ok(false);
+    }
     // The gate and document charge precede shared access, font lookup and layout.
     #[cfg(test)]
     ORIGIN_SHARED_ACCESSES.with(|count| count.set(count.get() + 1));
@@ -1207,18 +1213,21 @@ impl<'a> MarkupWork<'a> {
 /// Pay before cloning, independently of retained runs and attribute source bytes.
 /// A failed owner cannot refund prior copies for the next alias of its source.
 fn charge_style_copy(bytes: usize, allowance: &mut usize, shared: Option<&mut AttributeWork>) -> Result<()> {
-    let Some(local_left) = allowance.checked_sub(bytes) else {
-        *allowance = 0;
-        return Err(crate::IoError::Unsupported("native text style copies exceed the bounded formatting allowance".into()));
-    };
     if let Some(shared) = shared {
-        let Some(left) = shared.copies_left.checked_sub(bytes) else {
-            shared.copies_left = 0;
-            return Err(crate::IoError::Unsupported("document text style-copy work allowance exhausted".into()));
-        };
-        shared.copies_left = left;
+        match charge_all([(&mut *allowance, bytes), (&mut shared.copies_left, bytes)]) {
+            Ok(()) => {}
+            Err(0) => {
+                *allowance = 0;
+                return Err(crate::IoError::Unsupported("native text style copies exceed the bounded formatting allowance".into()));
+            }
+            Err(_) => {
+                shared.copies_left = 0;
+                return Err(crate::IoError::Unsupported("document text style-copy work allowance exhausted".into()));
+            }
+        }
+    } else if !WorkBudget::new(allowance).exhaust_on_reject(bytes) {
+        return Err(crate::IoError::Unsupported("native text style copies exceed the bounded formatting allowance".into()));
     }
-    *allowance = local_left;
     #[cfg(test)]
     MARKUP_STYLE_COPY_BYTES_DONE.with(|count| count.set(count.get().saturating_add(bytes)));
     Ok(())
@@ -1229,10 +1238,10 @@ fn font_resource_copy_bytes(font: &CharStyle) -> usize {
 }
 
 fn charge_markup_attribute(attribute: &roxmltree::Attribute<'_, '_>, work: &mut MarkupWork<'_>) -> Result<()> {
-    let visits_left = work
-        .visits_left
-        .checked_sub(1)
-        .ok_or_else(|| crate::IoError::Unsupported("source text markup exceeds the bounded attribute-visit allowance".into()))?;
+    // Preserve visit-before-byte-overflow rejection order, without spending it yet.
+    if !WorkBudget::new(&mut work.visits_left).can_charge(1) {
+        return Err(crate::IoError::Unsupported("source text markup exceeds the bounded attribute-visit allowance".into()));
+    }
     // Pay before font-map hashing, font parsing, style copies or diagnostics.
     // The second pass pays again for applying/formatting the same attribute.
     let bytes = attribute
@@ -1240,20 +1249,22 @@ fn charge_markup_attribute(attribute: &roxmltree::Attribute<'_, '_>, work: &mut 
         .len()
         .checked_add(attribute.value().len())
         .ok_or_else(|| crate::IoError::Unsupported("source text markup attribute byte-work overflows".into()))?;
-    let bytes_left = work
-        .bytes_left
-        .checked_sub(bytes)
-        .ok_or_else(|| crate::IoError::Unsupported("source text markup exceeds the bounded attribute-byte allowance".into()))?;
-    if let Some(shared) = work.shared.as_mut() {
-        let shared_visits =
-            shared.visits_left.checked_sub(1).ok_or_else(|| crate::IoError::Unsupported("document text attribute-visit work allowance exhausted".into()))?;
-        let shared_bytes =
-            shared.bytes_left.checked_sub(bytes).ok_or_else(|| crate::IoError::Unsupported("document text attribute-byte work allowance exhausted".into()))?;
-        shared.visits_left = shared_visits;
-        shared.bytes_left = shared_bytes;
-    }
-    work.visits_left = visits_left;
-    work.bytes_left = bytes_left;
+    let charged = if let Some(shared) = work.shared.as_mut() {
+        charge_all([(&mut work.visits_left, 1), (&mut work.bytes_left, bytes), (&mut shared.visits_left, 1), (&mut shared.bytes_left, bytes)])
+    } else {
+        charge_all([(&mut work.visits_left, 1), (&mut work.bytes_left, bytes)])
+    };
+    charged.map_err(|index| {
+        crate::IoError::Unsupported(
+            match index {
+                0 => "source text markup exceeds the bounded attribute-visit allowance",
+                1 => "source text markup exceeds the bounded attribute-byte allowance",
+                2 => "document text attribute-visit work allowance exhausted",
+                _ => "document text attribute-byte work allowance exhausted",
+            }
+            .into(),
+        )
+    })?;
     #[cfg(test)]
     {
         MARKUP_ATTRIBUTE_VISITS_DONE.with(|count| count.set(count.get().saturating_add(1)));
@@ -1362,9 +1373,9 @@ fn check_markup_namespace_work(markup: &str, mut work_left: usize) -> Result<()>
                 let inserted = declarations_seen.saturating_add(declarations);
                 let insertion = declarations.saturating_mul(inserted);
                 let cost = copying.saturating_add(scope.saturating_mul(attrs.len().saturating_add(1))).saturating_add(insertion);
-                work_left = work_left
-                    .checked_sub(cost)
-                    .ok_or_else(|| crate::IoError::Unsupported("source text markup exceeds the bounded XML namespace-parse allowance".into()))?;
+                if !WorkBudget::new(&mut work_left).keep_remaining(cost) {
+                    return Err(crate::IoError::Unsupported("source text markup exceeds the bounded XML namespace-parse allowance".into()));
+                }
                 declarations_seen = inserted;
                 scopes.push(scope);
             }

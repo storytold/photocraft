@@ -8,11 +8,15 @@ use super::{Prop, Result, be_f32, be_i32, be_u32, conversion};
 use crate::initial_view::{MAX_INITIAL_SAMPLERS, NativeInitialView};
 
 #[cfg(test)]
-mod guide_storage_review_tests;
+mod cancellation_tests;
 #[cfg(test)]
-mod resolution_review_tests;
+mod guide_storage_tests;
 #[cfg(test)]
-mod text_storage_review_tests;
+mod resolution_tests;
+#[cfg(test)]
+mod text_storage_tests;
+#[cfg(test)]
+mod unused_colormap_tests;
 
 /// Decode the last matching metadata property as an unsigned word; malformed payloads yield no value.
 fn word(props: &[Prop<'_>], kind: u32) -> Option<u32> {
@@ -129,6 +133,7 @@ fn metadata_parasites<'a>(
     Ok((selected, scan))
 }
 
+#[allow(clippy::too_many_arguments)] // One bounded guide conversion plus its caller's cancellation context.
 fn image_guides(
     doc: &mut Document,
     property: &Prop<'_>,
@@ -137,12 +142,14 @@ fn image_guides(
     owner: usize,
     budget: &mut usize,
     storage: &mut GuideStorage,
+    ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<()> {
     use photocraft_doc::import_conversion::ConversionReason as Reason;
     let (guides, tail) = property.data.as_chunks::<5>();
     let mut skipped = !tail.is_empty();
     let mut limited = false;
     for &[a, b, c, d, orientation] in guides {
+        ctl.check().map_err(|_| super::IoError::Cancelled)?;
         let position = i32::from_be_bytes([a, b, c, d]);
         let limit = match orientation {
             1 => doc.size.height,
@@ -255,6 +262,7 @@ pub(super) fn image_with_work<'a>(
     ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<()> {
     use photocraft_doc::import_conversion::ConversionReason as Reason;
+    ctl.check().map_err(|_| super::IoError::Cancelled)?;
     doc.resolution_dpi = image_resolution(props, doc.resolution_dpi);
     // Only the effective pair describes the admitted document's physical size.
     // This warning must survive optional report truncation and invalid trailing pairs.
@@ -268,8 +276,9 @@ pub(super) fn image_with_work<'a>(
     let mut metadata_incomplete = false;
     let mut retention_limited = false;
     for p in props {
+        ctl.check().map_err(|_| super::IoError::Cancelled)?;
         match p.kind {
-            18 => image_guides(doc, p, version, outcomes, owner, budget, &mut guide_storage)?,
+            18 => image_guides(doc, p, version, outcomes, owner, budget, &mut guide_storage, ctl)?,
             19 => {
                 if let Some((x, y)) = resolution_pair(p.data) {
                     if x != y {
@@ -413,6 +422,7 @@ pub(super) fn image_with_work<'a>(
     if let Some(p) = samples {
         let stride = if p.kind == 39 { 20 } else { 8 };
         for record in p.data.chunks_exact(stride) {
+            ctl.check().map_err(|_| super::IoError::Cancelled)?;
             if let Some((x, y)) = be_i32(record).zip(record.get(4..).and_then(be_i32))
                 && x >= 0
                 && y >= 0

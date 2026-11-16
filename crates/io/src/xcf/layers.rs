@@ -6,41 +6,6 @@ use super::{
     conversion, finish, invalid, label, metadata, paths, place, props, resources, text, write_pixels,
 };
 
-/// Both float buffers are live during expansion. Admit the complete destination before
-/// allocating it, then release the source's existing hierarchy charge after replacement.
-fn opaque_alpha(pixels: Pixels, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Pixels> {
-    ctl.check().map_err(|_| IoError::Cancelled)?;
-    if !matches!(pixels.channels, 1 | 3) || pixels.width == 0 || pixels.height == 0 {
-        return Err(invalid("opaque pixels have invalid dimensions or channels"));
-    }
-    let samples = usize::try_from(pixels.width)
-        .ok()
-        .and_then(|width| usize::try_from(pixels.height).ok().and_then(|height| width.checked_mul(height)))
-        .ok_or_else(|| invalid("opaque pixel count overflow"))?;
-    let original = samples.checked_mul(pixels.channels).ok_or_else(|| invalid("opaque pixel count overflow"))?;
-    if pixels.data.len() != original {
-        return Err(invalid("opaque pixel buffer does not match its dimensions and channels"));
-    }
-    let channels = pixels.channels + 1;
-    let count = samples.checked_mul(channels).ok_or_else(|| invalid("opaque alpha expansion overflow"))?;
-    let bytes = count.checked_mul(std::mem::size_of::<f32>()).ok_or_else(|| invalid("opaque alpha expansion overflow"))?;
-    let remaining = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the 1 GiB pixel limit"))?;
-    let original_bytes = original.checked_mul(std::mem::size_of::<f32>()).ok_or_else(|| invalid("opaque pixel byte count overflow"))?;
-    let released = remaining.checked_add(original_bytes).ok_or_else(|| invalid("opaque pixel budget overflow"))?;
-    let mut data = Vec::new();
-    data.try_reserve_exact(count).map_err(|_| invalid("opaque alpha expansion allocation is unavailable"))?;
-    for (index, pixel) in pixels.data.chunks_exact(pixels.channels).enumerate() {
-        if index.is_multiple_of(2048) {
-            ctl.check().map_err(|_| IoError::Cancelled)?;
-        }
-        data.extend_from_slice(pixel);
-        data.push(1.);
-    }
-    ctl.check().map_err(|_| IoError::Cancelled)?;
-    *budget = released;
-    Ok(Pixels { channels, data, ..pixels })
-}
-
 #[cfg(test)]
 mod alpha_budget_tests;
 
@@ -304,14 +269,9 @@ impl<'a> Image<'a> {
     /// Record source blend and coverage policies while leaving the already constructed native layer unchanged.
     pub(super) fn layer_compositing(&mut self, layer: &Layer, outcome: usize, layer_mode: u32, group: bool, composite_mode: i32) -> Result<()> {
         let (blend, note) = blend_mode(layer_mode);
-        // These describe the native translation, not a promise of GIMP formula equivalence.
+        // These describe the native translation, not a promise of reference-editor formula equivalence.
         if layer_mode != 0 && layer_mode != 28 && !(group && layer_mode == 61) {
-            let human = note.map(|note| {
-                format!(
-                    "uses GIMP's {note} mode, which opens as {}",
-                    if blend == BlendMode::Normal { "Normal".into() } else { format!("Photoshop's {blend:?}") }
-                )
-            });
+            let human = note.map(|note| format!("uses the reference editor's {note} mode, which opens as native {blend:?}"));
             self.outcomes.notice(
                 outcome,
                 "xcf.blend_mode",
@@ -390,9 +350,11 @@ impl<'a> Image<'a> {
                     &mut self.warnings,
                 )?;
             }
+            // Attach order is last-wins within each format, across all parasite
+            // properties; a native configuration always takes priority over legacy text.
             let candidate = native.map(|data| ("gimp-text-layer", data)).or_else(|| dynamic.map(|data| ("plug_in_gdyntext/data", data)));
             if let Some(candidate) = candidate
-                && config.is_none_or(|(name, _)| name != "gimp-text-layer" && candidate.0 == "gimp-text-layer")
+                && (candidate.0 == "gimp-text-layer" || config.is_none_or(|(name, _)| name != "gimp-text-layer"))
             {
                 config = Some(candidate);
             }
@@ -594,7 +556,7 @@ impl<'a> Image<'a> {
         self.base_type = source_base_type;
         // Gray samples remain color even for a floating selection attached to a
         // channel or mask. The hierarchy validates its alpha plane as coverage.
-        let decoded = self.hierarchy(hptr, source_channels, false, ctl);
+        let decoded = self.hierarchy_with_alpha(hptr, source_channels, false, !alpha, ctl);
         self.base_type = saved_base_type;
         decoded.map_err(|error| match error {
             IoError::Cancelled => IoError::Cancelled,
@@ -767,10 +729,6 @@ impl<'a> Image<'a> {
             if (px.width, px.height) != (lw, lh) {
                 return Err(invalid(format!("layer '{name}' pixels are {}x{} where {lw}x{lh} were declared", px.width, px.height)));
             }
-            if !alpha {
-                // An opaque layer: add the alpha channel the document's pixel format carries.
-                px = opaque_alpha(px, &mut self.budget, ctl)?;
-            }
             if gray_floating {
                 px = resources::gray_to_rgb(px, &mut self.budget, ctl)?;
             }
@@ -860,13 +818,42 @@ impl<'a> Image<'a> {
         if !effect_pointers.is_empty() {
             // Groups have no hierarchy dimension check. Their declared effect frame
             // must still fit native coordinates rather than wrap into an inverted rectangle.
-            let width = i32::try_from(lw).map_err(|_| invalid("layer effect width exceeds native coordinates"))?;
-            let height = i32::try_from(lh).map_err(|_| invalid("layer effect height exceeds native coordinates"))?;
-            let right = x.checked_add(width).ok_or_else(|| invalid("layer effect right edge exceeds native coordinates"))?;
-            let bottom = y.checked_add(height).ok_or_else(|| invalid("layer effect bottom edge exceeds native coordinates"))?;
-            let bounds = Rect::new(x, y, right, bottom);
-            self.pending_effects.push(PendingLayerEffects { layer: layer.id, owner: outcome, bounds, pointers: effect_pointers });
+            let frame = i32::try_from(lw)
+                .ok()
+                .zip(i32::try_from(lh).ok())
+                .and_then(|(width, height)| x.checked_add(width).zip(y.checked_add(height)).map(|(right, bottom)| Rect::new(x, y, right, bottom)));
+            if let Some(bounds) = frame {
+                self.pending_effects.push(PendingLayerEffects { layer: layer.id, owner: outcome, bounds, pointers: effect_pointers });
+            } else {
+                // This frame belongs only to optional stages, not to the already
+                // admitted owner pixels. Never discard a usable image for it.
+                self.outcomes.warning(
+                    outcome,
+                    "has an unrepresentable optional effect frame; stored effects were skipped and usable pixels preserved",
+                    &mut self.warnings,
+                )?;
+                let parent = self.outcomes.entry(outcome)?;
+                self.outcomes.push(ConversionEntry {
+                    feature_code: "xcf.layer_effect.frame".into(),
+                    source: parent.source.clone(),
+                    targets: parent.targets.clone(),
+                    disposition: ConversionDisposition::SkippedNonessential,
+                    reason: ConversionReason::InvalidOptionalData,
+                    source_description: format!("Optional effect frame at ({x}, {y}) with declared size {lw}x{lh} exceeds native coordinates"),
+                    native_description:
+                        "Native owner content and placement preserved; no optional effect records were followed and their referenced data is not retained"
+                            .into(),
+                    attachments: Vec::new(),
+                })?;
+            }
         }
         Ok(Some((Node { layer, path, group, children: Vec::new(), outcome }, linear)))
     }
 }
+
+#[cfg(test)]
+mod blend_warning_tests;
+#[cfg(test)]
+mod effect_frame_tests;
+#[cfg(test)]
+mod text_selection_tests;

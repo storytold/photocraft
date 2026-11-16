@@ -10,7 +10,7 @@ use photocraft_doc::import_conversion::{
 use super::{Result, invalid};
 
 #[cfg(test)]
-mod review_tests;
+mod report_limits_tests;
 
 pub(super) struct Outcomes<'a> {
     report: ConversionReport,

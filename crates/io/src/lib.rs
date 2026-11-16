@@ -554,24 +554,18 @@ pub fn import_compression(bytes: &[u8]) -> Option<ImportCompression> {
     }
 }
 
+#[cfg(not(test))]
+use photocraft_formats::detect as invoke_format_detector;
 #[cfg(test)]
-thread_local! { pub(crate) static COMPRESSED_DETECTOR_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+mod format_detection_test_support;
+#[cfg(test)]
+use format_detection_test_support::{COMPRESSED_DETECTOR_CALLS, invoke_format_detector};
 
 /// The shared detector may inflate SVGZ internally. Compressed candidates must be
 /// probed only by our bounded, cancellable transport; before that, use filename policy.
 fn central_format(name: &str, bytes: &[u8]) -> Option<photocraft_formats::Format> {
     let bytes = if import_compression(bytes).is_some() { &[] } else { bytes };
     invoke_format_detector(name, bytes)
-}
-
-// Keep instrumentation at the actual detector boundary, after routing sanitizes
-// its input, so removing that sanitization makes the regression counter fire.
-fn invoke_format_detector(name: &str, bytes: &[u8]) -> Option<photocraft_formats::Format> {
-    #[cfg(test)]
-    if import_compression(bytes).is_some() {
-        COMPRESSED_DETECTOR_CALLS.with(|calls| calls.set(calls.get() + 1));
-    }
-    photocraft_formats::detect(name, bytes)
 }
 
 // Query the central detector's precedence for verified SVG magic without ever

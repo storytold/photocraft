@@ -1,6 +1,5 @@
 use super::super::tests::{W, hierarchy};
 use super::super::*;
-use super::opaque_alpha;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn pixels(channels: usize, data: Vec<f32>) -> Pixels {
@@ -8,43 +7,65 @@ fn pixels(channels: usize, data: Vec<f32>) -> Pixels {
 }
 
 #[test]
-fn opaque_alpha_reserves_the_whole_destination_before_allocating_and_refunds_only_the_source() {
-    for channels in [1, 3] {
-        let output = (channels + 1) * 4;
-        let mut shortage = output - 1;
-        assert!(opaque_alpha(pixels(channels, vec![0.5; channels]), &mut shortage, &Interrupt::NONE).is_err());
-        assert_eq!(shortage, output - 1);
-        let mut exact = output;
-        let result = opaque_alpha(pixels(channels, vec![0.5; channels]), &mut exact, &Interrupt::NONE).unwrap();
-        assert_eq!(exact, channels * 4, "only the original, already-charged sample buffer is released");
-        assert_eq!(result.channels, channels + 1);
-        assert_eq!(result.data.last(), Some(&1.));
-        assert!(result.underflow && result.coverage_clamped && result.palette_fallback);
+fn hierarchy_emits_opaque_alpha_in_its_only_sample_allocation() {
+    for (base_type, source_channels, colormap, data, expected) in [
+        (0, 3, vec![], vec![17, 31, 57, 83, 127, 191], vec![17. / 255., 31. / 255., 57. / 255., 1., 83. / 255., 127. / 255., 191. / 255., 1.]),
+        (1, 1, vec![], vec![17, 83], vec![17. / 255., 1., 83. / 255., 1.]),
+        (2, 1, vec![[17, 31, 57]], vec![0, 9], vec![17. / 255., 31. / 255., 57. / 255., 1., 9. / 255., 9. / 255., 9. / 255., 1.]),
+    ] {
+        let mut writer = W { out: vec![0; 4], wide: true };
+        let pointer = hierarchy(&mut writer, 2, 1, source_channels, &data, Compression::None);
+        let bytes = writer.out;
+        let required = expected.len() * std::mem::size_of::<f32>();
+        let mut exact = image(&bytes, required, base_type, Precision::GAMMA8);
+        exact.colormap = colormap.clone();
+        let decoded = exact.hierarchy_with_alpha(pointer, source_channels, false, true, &Interrupt::NONE).unwrap();
+        assert_eq!(decoded.data, expected);
+        assert_eq!(decoded.channels, if base_type == 1 { 2 } else { 4 });
+        assert_eq!(exact.budget, 0, "no transient second color buffer is admitted");
+        assert_eq!(decoded.palette_fallback, base_type == 2);
+        let mut short = image(&bytes, required - 1, base_type, Precision::GAMMA8);
+        short.colormap = colormap;
+        assert!(short.hierarchy_with_alpha(pointer, source_channels, false, true, &Interrupt::NONE).is_err());
+        assert_eq!(short.budget, required - 1);
     }
 }
 
 #[test]
-fn opaque_alpha_checks_shapes_and_cancels_transactionally_without_clamping_hdr() {
-    for (channels, width, height, data) in
-        [(0, 1, 1, vec![]), (2, 1, 1, vec![0.; 2]), (3, 1, 1, vec![0.; 2]), (3, 0, 1, vec![]), (3, u32::MAX, u32::MAX, vec![])]
-    {
-        let mut budget = usize::MAX;
-        let source = Pixels { width, height, ..pixels(channels, data) };
-        assert!(opaque_alpha(source, &mut budget, &Interrupt::NONE).is_err());
-        assert_eq!(budget, usize::MAX);
+fn hierarchy_alpha_synthesis_checks_layout_and_cancellation_without_clamping_hdr() {
+    let values = [-0.25f32, 3.5, f32::MIN_POSITIVE, 0.75, -2., 7.];
+    let data: Vec<_> = values.into_iter().flat_map(f32::to_be_bytes).collect();
+    let mut writer = W { out: vec![0; 4], wide: true };
+    let pointer = hierarchy(&mut writer, 2, 1, 12, &data, Compression::None);
+    let bytes = writer.out;
+    let mut hdr = image(&bytes, 32, 0, Precision::from_header(11, 650).unwrap());
+    assert_eq!(hdr.hierarchy_with_alpha(pointer, 3, false, true, &Interrupt::NONE).unwrap().data, [-0.25, 3.5, f32::MIN_POSITIVE, 1., 0.75, -2., 7., 1.]);
+    assert_eq!(hdr.budget, 0);
+    for (base_type, channels, coverage) in [(0, 0, false), (0, 4, false), (1, 2, false), (2, 2, false), (0, 3, true)] {
+        let mut invalid = image(&bytes, 64, base_type, Precision::GAMMA8);
+        assert!(invalid.hierarchy_with_alpha(pointer, channels, coverage, true, &Interrupt::NONE).is_err());
+        assert_eq!(invalid.budget, 64);
     }
-    let mut budget = 16;
-    let result = opaque_alpha(pixels(3, vec![-0.25, 3.5, f32::MIN_POSITIVE]), &mut budget, &Interrupt::NONE).unwrap();
-    assert_eq!(result.data, [-0.25, 3.5, f32::MIN_POSITIVE, 1.]);
-    for threshold in [0, 2, 4] {
-        let checks = AtomicUsize::new(0);
-        let cancel = || checks.fetch_add(1, Ordering::Relaxed) >= threshold;
-        let source = Pixels { width: 4097, height: 1, ..pixels(3, vec![0.5; 4097 * 3]) };
-        let mut budget = 100_000;
-        assert!(matches!(opaque_alpha(source, &mut budget, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
-        assert_eq!(budget, 100_000);
-        assert_eq!(checks.load(Ordering::Relaxed), threshold + 1);
+    for (width, height, bpp) in [(0, 1, 12), (u32::MAX, u32::MAX, 12), (2, 1, 11)] {
+        let mut malformed = W { out: vec![0; 4], wide: true };
+        let at = malformed.out.len();
+        for value in [width, height, bpp] {
+            malformed.u32(value);
+        }
+        malformed.ptr(0);
+        let mut decoder = image(&malformed.out, 64, 0, Precision::from_header(11, 650).unwrap());
+        assert!(decoder.hierarchy_with_alpha(at, 3, false, true, &Interrupt::NONE).is_err());
+        assert_eq!(decoder.budget, 64, "invalid source dimensions or byte layout allocate no samples");
     }
+    let checks = AtomicUsize::new(0);
+    let cancel = || {
+        checks.fetch_add(1, Ordering::Relaxed);
+        true
+    };
+    let mut cancelled = image(&bytes, 32, 0, Precision::from_header(11, 650).unwrap());
+    assert!(matches!(cancelled.hierarchy_with_alpha(pointer, 3, false, true, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
+    assert_eq!(cancelled.budget, 32, "cancellation precedes sample admission");
+    assert_eq!(checks.load(Ordering::Relaxed), 1);
 }
 
 fn image(bytes: &[u8], budget: usize, base_type: u32, precision: Precision) -> Image<'_> {
@@ -151,4 +172,80 @@ fn gray_rgb_expansion_also_reserves_the_full_live_copy_before_releasing_source_s
         assert_eq!(result.channels, channels + 2);
         assert_eq!(exact, channels * 4);
     }
+}
+
+/// Test-only copy of the removed two-buffer expansion for a measured comparison.
+fn old_opaque_expansion(pixels: Pixels, budget: &mut usize) -> Result<Pixels> {
+    let channels = pixels.channels + 1;
+    let samples = pixels.data.len() / pixels.channels;
+    let count = samples.checked_mul(channels).ok_or_else(|| invalid("test baseline size overflow"))?;
+    let bytes = count.checked_mul(std::mem::size_of::<f32>()).ok_or_else(|| invalid("test baseline byte overflow"))?;
+    let remaining = budget.checked_sub(bytes).ok_or_else(|| invalid("test baseline needs both full buffers"))?;
+    let mut data = Vec::new();
+    data.try_reserve_exact(count).map_err(|_| invalid("test baseline allocation unavailable"))?;
+    for pixel in pixels.data.chunks_exact(pixels.channels) {
+        data.extend_from_slice(pixel);
+        data.push(1.);
+    }
+    *budget = remaining + pixels.data.len() * std::mem::size_of::<f32>();
+    Ok(Pixels { channels, data, ..pixels })
+}
+
+#[test]
+#[ignore = "24 MP F32 opaque RGB sample allocation comparison; run explicitly in release"]
+fn opaque_f32_24mp_alpha_emission_timing() {
+    let (width, height) = (6000u32, 4000u32);
+    let pixels = width as usize * height as usize;
+    let expected = [-0.25f32, 1.5, 0.375, 1.];
+    let source: Vec<u8> = expected[..3].iter().copied().cycle().take(pixels * 3).flat_map(f32::to_be_bytes).collect();
+    let mut writer = W { out: vec![0; 4], wide: true };
+    let pointer = hierarchy(&mut writer, width, height, 12, &source, Compression::None);
+    drop(source);
+    let bytes = writer.out;
+    let native_bytes = pixels * 4 * std::mem::size_of::<f32>();
+    let old_peak_bytes = pixels * 7 * std::mem::size_of::<f32>();
+    let precision = Precision::from_header(11, 650).unwrap();
+    let validate = |decoded: &Pixels| {
+        assert_eq!((decoded.width, decoded.height, decoded.channels), (width, height, 4));
+        assert_eq!(decoded.data.len(), pixels * 4);
+        assert!(decoded.data.chunks_exact(4).all(|pixel| pixel == expected));
+    };
+    {
+        let mut tight = image(&bytes, native_bytes, 0, precision);
+        let decoded = tight.hierarchy_with_alpha(pointer, 3, false, true, &Interrupt::NONE).unwrap();
+        assert_eq!(tight.budget, 0);
+        validate(&decoded);
+    }
+    {
+        let mut tight = image(&bytes, native_bytes, 0, precision);
+        let rgb = tight.hierarchy(pointer, 3, false, &Interrupt::NONE).unwrap();
+        assert!(old_opaque_expansion(rgb, &mut tight.budget).is_err(), "the old path requires two simultaneously live float buffers");
+    }
+    let mut new_times = Vec::new();
+    let mut old_times = Vec::new();
+    for round in 0..3 {
+        // Alternate order to avoid assigning every cold run to the same path.
+        for new in if round % 2 == 0 { [true, false] } else { [false, true] } {
+            let mut decoder = image(&bytes, old_peak_bytes, 0, precision);
+            let start = std::time::Instant::now();
+            let decoded = if new {
+                decoder.hierarchy_with_alpha(pointer, 3, false, true, &Interrupt::NONE).unwrap()
+            } else {
+                let rgb = decoder.hierarchy(pointer, 3, false, &Interrupt::NONE).unwrap();
+                old_opaque_expansion(rgb, &mut decoder.budget).unwrap()
+            };
+            let elapsed = start.elapsed().as_secs_f64() * 1000.;
+            validate(&decoded);
+            assert_eq!(decoder.budget, old_peak_bytes - native_bytes);
+            if new {
+                new_times.push(elapsed);
+            } else {
+                old_times.push(elapsed);
+            }
+        }
+    }
+    eprintln!(
+        "XCF opaque RGB32F hierarchy6000x4000 (24MP),3pairedruns; new_ms={new_times:?}; old_ms={old_times:?}; new_sample_peak_bytes={native_bytes}; old_sample_peak_bytes={old_peak_bytes}; exact_HDR_alpha=true; tight_native_budget_new=pass_old=refused; encoded_source_bytes={} (excludedfromsamplebudget); native_Surface_tiles_excluded=true",
+        bytes.len()
+    );
 }

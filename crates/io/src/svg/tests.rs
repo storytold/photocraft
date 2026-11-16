@@ -41,7 +41,6 @@ fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() 
         strict: false,
         error: None,
         resolver: Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS))),
-        integrity: Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS))),
     }));
     let invalid = image_svg(&embedded_image("image/svg+xml", b"<not-svg/>"));
     parse_image_bounded_with(invalid.as_bytes(), budget.clone(), MAX_XML_DEPTH, inter_only, false).unwrap();
@@ -1192,35 +1191,10 @@ fn fitting_latin1_retry_keeps_inflation_and_content_budgets_separate() {
     let decoded = craft_svg::svgz::decode(&latin1).unwrap();
     assert!(latin1.len() < budget / 2);
     assert!(decoded.len() > budget / 2 && decoded.len() < budget);
-    let state = Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS)));
-    let resolver = Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS)));
-    let options = options_with_isolation(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH, false, Arc::clone(&resolver), Arc::clone(&state));
-    let valid = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>");
-    let damaged = Arc::new(valid[..valid.len() / 2].to_vec());
-    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", damaged, &options).is_none());
-    assert_eq!(state.lock().unwrap().classification_bytes_left(), budget);
-
-    // Spend half the inflation allowance through an actual compressed retry.
-    // None of these retries may restore admission after the damaged source.
-    let mut primer = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><!--".to_vec();
-    let close = b"--></svg>";
-    primer.resize(budget / 2 - close.len(), b' ');
-    primer.extend_from_slice(close);
-    assert_eq!(primer.len(), budget / 2);
-    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(gzip(&primer)), &options).is_none());
-    {
-        let state = state.lock().unwrap();
-        assert_eq!(state.classification_bytes_left(), budget / 2);
-        assert_eq!(state.usage(resolver.usage()).unwrap().svg_resource_limit_images, 0);
-    }
-    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(gzip(&latin1)), &options).is_none());
-    let state = state.lock().unwrap();
-    let usage = state.usage(resolver.usage()).unwrap();
-    assert_eq!(usage.svg_resource_limit_images, 0, "decoded content fits its independent original allowance");
-    assert_eq!(usage.svg_limit_images, 2, "both fitting retries remain omitted");
-    assert_eq!(usage.invalid_svg_images, 1, "the original corrupt source stays classified as unreadable");
-    assert_eq!(usage.embedded_svg_bytes, budget, "retry classification never refunds failed admission work");
-    assert_eq!(state.classification_bytes_left(), budget / 2 - latin1.len(), "only inflated Latin-1 bytes consume retry inflation work");
+    let refusals = SvgRefusals { unread_charges: AtomicUsize::new(budget), rechecked: AtomicUsize::new(budget / 2), ..SvgRefusals::default() };
+    note_byte_refusal(&gzip(&latin1), budget, &refusals);
+    assert!(!refusals.over_budget.load(Ordering::Relaxed));
+    assert_eq!(refusals.rechecked.load(Ordering::Relaxed), budget / 2 + latin1.len());
 }
 /// After a damaged image spent the budget, images refused for bytes are unpacked again to tell
 /// whether they are too large themselves, but at most one budget's worth in all: past that the
@@ -1239,9 +1213,8 @@ fn images_after_a_damaged_svgz_are_unpacked_again_within_one_budget() {
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
 }
 
-/// Classification after damaged data has one separate allowance for the entire drawing.
-/// Exercise the real wrapped resolver: failed work stays charged and later references cannot
-/// acquire another classification allowance after the first oversized source exhausts it.
+/// Each image unpacked again is charged at least what was unpacked, refused ones included, so
+/// however many follow a damaged image the unpacking adds up to one budget, not one each.
 #[test]
 fn unpacking_images_again_adds_up_to_one_budget_however_many_there_are() {
     let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
@@ -1249,31 +1222,12 @@ fn unpacking_images_again_adds_up_to_one_budget_however_many_there_are() {
     huge.resize(budget * 2, b' ');
     huge.extend_from_slice(b"</svg>");
     let huge = gzip(&huge);
-    let state = Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS)));
-    let resolver = Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS)));
-    let options = options_with_isolation(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH, false, Arc::clone(&resolver), Arc::clone(&state));
-    let valid = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>");
-    let damaged = Arc::new(valid[..valid.len() / 2].to_vec());
-    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", damaged, &options).is_none());
-    {
-        let state = state.lock().unwrap();
-        let usage = state.usage(resolver.usage()).unwrap();
-        assert_eq!(usage.invalid_svg_images, 1, "the actual damaged stream is omitted");
-        assert_eq!(usage.embedded_svg_bytes, budget, "failed work retains its original charge");
-        assert_eq!(usage.svg_resource_limit_images, 0, "corruption alone is not a resource overrun");
-        assert_eq!(state.classification_bytes_left(), budget, "classification has its own single shared allowance");
-    }
-    for index in 0..64 {
-        // Distinct references must share one classification pool, not acquire one
-        // pool per source or retry. This tail is never reached before the size cap.
-        let mut source = huge.clone();
-        source.push(index);
-        assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(source), &options).is_none());
-        let state = state.lock().unwrap();
-        let usage = state.usage(resolver.usage()).unwrap();
-        assert!(usage.svg_resource_limit_images > 0, "the body is too large independently of the failed-work charge");
-        assert_eq!(state.classification_bytes_left(), 0, "all 64 references share exactly one exhausted allowance");
-        assert_eq!(usage.embedded_svg_bytes, budget, "classification must not refund or multiply the original allowance");
+    // A damaged image was charged the whole budget; every later image is refused for size.
+    let refusals = SvgRefusals { unread_charges: AtomicUsize::new(budget), ..SvgRefusals::default() };
+    for _ in 0..64 {
+        note_byte_refusal(&huge, budget, &refusals);
+        assert!(refusals.over_budget.load(Ordering::Relaxed), "too large without the charges");
+        assert_eq!(refusals.rechecked.load(Ordering::Relaxed), budget);
     }
 }
 
@@ -1654,4 +1608,18 @@ fn every_raster_refusal_reason_is_reported_once() {
     let dropped = |what: &str| result.warnings.iter().filter(|w| w.contains("was dropped because") && w.contains(what)).count();
     assert_eq!(dropped("rasterising limit"), 1, "{:?}", result.warnings);
     assert_eq!(dropped("too much memory"), 1, "{:?}", result.warnings);
+}
+
+#[test]
+fn plain_legacy_encoding_rechecks_have_a_separate_bounded_work_allowance() {
+    let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
+    let xml = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg><!--\xe9--></svg>";
+    let refusals = SvgRefusals { unread_charges: AtomicUsize::new(budget), text_rechecked: AtomicUsize::new(budget - xml.len()), ..SvgRefusals::default() };
+    note_byte_refusal(xml, budget, &refusals);
+    assert!(!refusals.over_budget.load(Ordering::Relaxed));
+    assert_eq!(refusals.text_rechecked.load(Ordering::Relaxed), budget);
+    assert_eq!(refusals.rechecked.load(Ordering::Relaxed), 0);
+    note_byte_refusal(xml, budget, &refusals);
+    assert!(refusals.over_budget.load(Ordering::Relaxed));
+    assert_eq!(refusals.text_rechecked.load(Ordering::Relaxed), budget);
 }

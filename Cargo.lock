@@ -5859,10 +5859,7 @@ dependencies = [
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=fe6b443acf3eccaf514064812e6e6bf24257652a)",
  "craft-xml",
  "crc32fast",
- "data-url",
  "flate2",
- "gif",
- "image-webp",
  "kurbo 0.13.1",
  "lopdf",
  "lzma-rust2",
@@ -5886,7 +5883,6 @@ dependencies = [
  "tiff",
  "ttf-parser",
  "zune-core",
- "zune-jpeg",
  "zune-jpegxl",
 ]
 

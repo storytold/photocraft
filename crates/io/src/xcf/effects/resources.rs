@@ -3,7 +3,7 @@ use super::ColorLiteral;
 use craft_cms::{Builtin, ColorSpace, Curve, Intent, Profile, Transform};
 
 #[cfg(test)]
-mod review_tests;
+mod gray_literal_tests;
 
 /// A transfer rewrite that cannot preserve its PCS must retain the saved raster,
 /// rather than taking callers' ordinary explicit color-approximation path.

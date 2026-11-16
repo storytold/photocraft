@@ -79,7 +79,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod rollback_review_tests;
+mod rollback_tests;
 
 #[cfg(test)]
 mod initial_view_tests {

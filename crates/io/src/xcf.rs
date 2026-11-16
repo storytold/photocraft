@@ -19,36 +19,39 @@
 mod color;
 mod conversion;
 #[cfg(test)]
-mod dpi_review_tests;
+mod dpi_tests;
 mod geometry;
 mod layers;
 mod samples;
 mod wire;
+mod work_budget;
 // Parsed fields stay inert until native mapping slices land.
 #[cfg(test)]
-mod coverage_review_tests;
+mod coverage_tests;
 #[cfg(test)]
-mod decoder_review_tests;
+mod effect_offset_tests;
 #[cfg(test)]
-mod effect_budget_review_tests;
+mod effect_retention_tests;
 #[cfg(test)]
-mod effect_offset_review_tests;
+mod effect_storage_tests;
 #[allow(dead_code)]
 mod effects;
 #[cfg(test)]
-mod floating_gray_review_tests;
+mod floating_gray_tests;
+#[cfg(test)]
+mod header_validation_tests;
 #[cfg(test)]
 mod historical_precision_tests;
 #[cfg(test)]
-mod import_notice_review_tests;
+mod import_notice_tests;
 mod metadata;
 #[cfg(test)]
-mod metadata_budget_review_tests;
+mod metadata_admission_tests;
 mod metadata_packets;
 #[cfg(test)]
 mod metadata_tests;
 #[cfg(test)]
-mod optional_effect_review_tests;
+mod native_conversion_tests;
 #[cfg(test)]
 mod optional_mask_budget_tests;
 #[cfg(test)]
@@ -56,11 +59,9 @@ mod optional_mask_header_refund_tests;
 #[cfg(test)]
 mod path_admission_tests;
 #[cfg(test)]
-mod path_geometry_review_tests;
+mod path_geometry_tests;
 mod paths;
 mod resources;
-#[cfg(test)]
-mod review_tests;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -285,6 +286,16 @@ impl<'a> Image<'a> {
     /// Reads a hierarchy (`hptr`): the first level's tiles into `channels` floats per pixel,
     /// `source_channels` as stored (indexed images expand to RGB here).
     fn hierarchy(&mut self, hptr: usize, source_channels: usize, coverage: bool, ctl: &Interrupt<'_>) -> Result<Pixels> {
+        self.hierarchy_with_alpha(hptr, source_channels, coverage, false, ctl)
+    }
+
+    /// Decode directly into the final native channel layout. Opaque source layers
+    /// synthesize alpha in this allocation, rather than retaining a second full buffer.
+    fn hierarchy_with_alpha(&mut self, hptr: usize, source_channels: usize, coverage: bool, synthesize_alpha: bool, ctl: &Interrupt<'_>) -> Result<Pixels> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        if synthesize_alpha && (coverage || !matches!((self.base_type, source_channels), (0, 3) | (1 | 2, 1))) {
+            return Err(invalid("opaque alpha synthesis does not match the drawable color layout"));
+        }
         if !(1..=4).contains(&source_channels) {
             return Err(invalid("drawable channel count is out of range"));
         }
@@ -298,7 +309,7 @@ impl<'a> Image<'a> {
             return Err(invalid(format!("{bpp} bytes per pixel where {expected_bpp} were expected")));
         }
         let indexed = self.base_type == 2;
-        let channels = if indexed { source_channels + 2 } else { source_channels };
+        let channels = (if indexed { source_channels + 2 } else { source_channels }) + usize::from(synthesize_alpha);
         let count = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(channels)).ok_or_else(|| invalid("drawable overflow"))?;
         let bytes = count.checked_mul(4).ok_or_else(|| invalid("drawable overflow"))?;
         self.budget = self.budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the 1 GiB pixel limit"))?;
@@ -339,7 +350,9 @@ impl<'a> Image<'a> {
                     let dst = (ty as usize * TILE as usize + py) * stride + tx as usize * TILE as usize * channels;
                     let input = raw.get(src..src + row_bytes).ok_or_else(|| invalid("tile row is cut short"))?;
                     let output = data.get_mut(dst..dst + samples).ok_or_else(|| invalid("tile row exceeds its drawable"))?;
-                    let changes = row_samples(input, output, self.precision, self.sample_order, source_channels, coverage).map_err(|error| {
+                    let decoded_samples = tw as usize * source_channels;
+                    let decoded = output.get_mut(..decoded_samples).ok_or_else(|| invalid("native row has no source sample prefix"))?;
+                    let changes = row_samples(input, decoded, self.precision, self.sample_order, source_channels, coverage).map_err(|error| {
                         let ch = error.sample % source_channels;
                         let px = error.sample / source_channels;
                         let is_coverage = coverage || (matches!(source_channels, 2 | 4) && ch + 1 == source_channels);
@@ -353,6 +366,17 @@ impl<'a> Image<'a> {
                     })?;
                     underflow |= changes.underflow;
                     coverage_clamped |= changes.coverage_clamped;
+                    if synthesize_alpha {
+                        // Expand backwards within this final row so each unread
+                        // source sample survives overlapping native destinations.
+                        for pixel in (0..tw as usize).rev() {
+                            for channel in (0..source_channels).rev() {
+                                let value = *output.get(pixel * source_channels + channel).ok_or_else(|| invalid("source row sample is missing"))?;
+                                *output.get_mut(pixel * channels + channel).ok_or_else(|| invalid("native row sample is missing"))? = value;
+                            }
+                            *output.get_mut(pixel * channels + source_channels).ok_or_else(|| invalid("native alpha sample is missing"))? = 1.0;
+                        }
+                    }
                 }
                 continue;
             }
@@ -372,7 +396,9 @@ impl<'a> Image<'a> {
                         });
                         let rgb = output.get_mut(..3).ok_or_else(|| invalid("indexed pixel has no RGB destination"))?;
                         rgb.copy_from_slice(&[f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0]);
-                        if source_channels == 2 {
+                        if synthesize_alpha {
+                            *output.get_mut(3).ok_or_else(|| invalid("indexed pixel has no native alpha destination"))? = 1.0;
+                        } else if source_channels == 2 {
                             let alpha = pixel.get(1).ok_or_else(|| invalid("indexed pixel has no alpha sample"))?;
                             *output.get_mut(3).ok_or_else(|| invalid("indexed pixel has no alpha destination"))? = f32::from(*alpha) / 255.0;
                         }
@@ -677,7 +703,7 @@ struct Node {
     outcome: usize,
 }
 
-/// GIMP's layer mode as Photoshop's, with a note when the two differ.
+/// Map source layer modes to native behavior, with a note when their results differ.
 fn blend_mode(mode: u32) -> (BlendMode, Option<&'static str>) {
     use BlendMode as B;
     match mode {
@@ -686,8 +712,8 @@ fn blend_mode(mode: u32) -> (BlendMode, Option<&'static str>) {
         2 | 29 => (B::Normal, Some("Behind")),
         3 | 30 => (B::Multiply, None),
         4 | 31 => (B::Screen, None),
-        5 | 19 => (B::SoftLight, Some("GIMP's legacy Soft light")),
-        45 => (B::SoftLight, Some("GIMP's Soft light")),
+        5 | 19 => (B::SoftLight, Some("legacy Soft light")),
+        45 => (B::SoftLight, Some("Soft light")),
         23 => (B::Overlay, None),
         6 | 32 => (B::Difference, None),
         7 | 33 => (B::LinearDodge, None),
@@ -853,35 +879,39 @@ struct ImageMetadata<'a> {
     parasites_limited: bool,
 }
 
+/// Indexed palette validity is essential; unused palette bytes remain optional source data.
+fn palette_colors(data: &[u8]) -> Result<&[[u8; 3]]> {
+    let n = be_u32(data).ok_or_else(|| invalid("the palette is missing its color count"))? as usize;
+    let size = n.checked_mul(3).and_then(|bytes| bytes.checked_add(4)).ok_or_else(|| invalid("palette size overflow"))?;
+    if n > 256 || data.len() != size {
+        return Err(invalid("the palette must contain its declared count of at most 256 RGB colors"));
+    }
+    Ok(data.get(4..).unwrap_or(&[]).as_chunks::<3>().0)
+}
+
 /// Decode only drawable prerequisites here; native metadata conversion consumes the retained properties later.
 #[cfg(test)]
 fn read_image_metadata<'a>(c: &mut Cursor<'a>, version: u32, ctl: &Interrupt<'_>) -> Result<ImageMetadata<'a>> {
-    read_image_metadata_with_work(c, version, wire::ParasiteWork::default(), ctl)
+    read_image_metadata_with_work(c, version, true, wire::ParasiteWork::default(), ctl)
 }
 
 /// An incomplete last-wins scan cannot certify a prefix profile as the final assignment.
 fn read_image_metadata_with_work<'a>(
     c: &mut Cursor<'a>,
     version: u32,
+    indexed: bool,
     mut parasite_work: wire::ParasiteWork,
     ctl: &Interrupt<'_>,
 ) -> Result<ImageMetadata<'a>> {
     // Image properties.
-    let image_props = wire::props_version_with_interrupt(c, Some(version), ctl)?;
+    let image_props = wire::props_image_with_interrupt(c, version, indexed, ctl)?;
     let mut compression = Compression::None;
     let mut colormap = Vec::new();
     let mut selected_icc = None;
     let mut parasites_limited = false;
     for p in &image_props {
         match p.kind {
-            1 => {
-                let n = be_u32(p.data).ok_or_else(|| invalid("the palette is missing its color count"))? as usize;
-                let size = n.checked_mul(3).and_then(|bytes| bytes.checked_add(4)).ok_or_else(|| invalid("palette size overflow"))?;
-                if n > 256 || p.data.len() != size {
-                    return Err(invalid("the palette must contain its declared count of at most 256 RGB colors"));
-                }
-                colormap = p.data.get(4..).unwrap_or(&[]).as_chunks::<3>().0.to_vec();
-            }
+            1 if indexed => colormap = palette_colors(p.data)?.to_vec(),
             17 => {
                 compression = match p.data.first() {
                     Some(0) => Compression::None,
@@ -974,7 +1004,7 @@ fn import_with_sample_order_and_parasite_work(
     }
 
     let ImageMetadata { properties: image_props, compression, colormap, icc, parasite_work, parasites_limited } =
-        read_image_metadata_with_work(&mut c, version, parasite_work, ctl)?;
+        read_image_metadata_with_work(&mut c, version, base_type == 2, parasite_work, ctl)?;
     let assigned_profile = icc.is_some();
     let color::ProfileSelection { bytes: native_profile, fallback_reason, tag_document } = select_image_profile(mode, precision, icc, parasites_limited)?;
     if let Some(reason) = &fallback_reason {
@@ -1103,8 +1133,10 @@ fn import_with_sample_order_and_parasite_work(
             if image.outcomes.parasites_with_work(image_outcome, property.offset, property.data, handled, &mut image.parasite_work, ctl)? {
                 image.warnings.note("Image parasite scan work exceeded its file allowance; optional source records were omitted; see the conversion report");
             }
-        } else if !matches!(property.kind, 1 | 17) {
+        } else if property.kind != 17 && (property.kind != 1 || base_type != 2) {
             let reason = match property.kind {
+                1 if palette_colors(property.data).is_ok() => ConversionReason::NativePolicy,
+                1 => ConversionReason::InvalidOptionalData,
                 18 | 19 => ConversionReason::NativePolicy,
                 // GIMP's nonzero item identifier and standard dialog units are
                 // editing bookkeeping, not unapplied native image content.
@@ -1199,20 +1231,22 @@ fn color_encoding_outcome(assigned_profile: bool, precision: Precision, fallback
 
 /// Report native compositing differences without changing imported content or its durable conversion report.
 fn add_document_warnings(image: &mut Image<'_>, document: &Document, precision: Precision, linear_compositing: bool) {
-    // GIMP clips a layer in any mode but Normal to the layers beneath it, so it shows nothing where
-    // they are transparent; PhotoCraft (like Photoshop) shows it there. Only tell when there is
+    // The reference editor clips non-Normal layers to underlying coverage, showing nothing
+    // where underlying layers are transparent; PhotoCraft shows them. Only tell when there is
     // transparency to show through: a bottom layer that is not opaque.
     if image.clipped_to_backdrop > 0 && document.layers.first().is_some_and(|l| !l.locks.transparency || l.is_group()) {
         image.warnings.note(&format!(
-            "{} layer(s) use a mode GIMP clips to the layers beneath; where those are transparent GIMP shows nothing and PhotoCraft shows the layer",
+            "{} layer(s) use a mode clipped to underlying coverage in the reference editor; PhotoCraft shows the layer where underlying layers are transparent",
             image.clipped_to_backdrop
         ));
     }
-    // GIMP blends and composites in linear light by default (since 2.10); PhotoCraft, like
-    // Photoshop, in the document's own encoding, so semi-transparent edges and most blend modes
-    // render a little differently. Layers set to a perceptual space in GIMP match.
+    // The reference editor defaults to linear-light blending/compositing; PhotoCraft uses
+    // the document's own encoding, so semi-transparent edges and blend modes differ.
+    // Source layers set to a perceptual space match the native behavior.
     if !precision.linear && linear_compositing {
-        image.warnings.note("GIMP composites this image in linear light; PhotoCraft composites in gamma-encoded RGB, so blends and soft edges differ slightly");
+        image
+            .warnings
+            .note("The source image composites in linear light; PhotoCraft composites in gamma-encoded RGB, so blends and soft edges differ slightly");
     }
     if document.layers.is_empty() {
         image.warnings.note("the XCF file has no layers");
