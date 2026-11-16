@@ -3564,7 +3564,8 @@ fn warp_on_type_takes_a_style_and_keeps_the_type_editable() {
     crate::menus::invoke(&mut app, &ctx, "edit.transform.warp", json!({})).unwrap();
     assert!(app.ui.dialogs.is_empty(), "no prompt");
     let w0 = app.ui.transform.as_ref().and_then(|t| t.warp.clone()).expect("Warp mode");
-    assert_eq!(w0.style, WarpStyle::None);
+    // Unwarped type opens as Arc at Bend 0 (#12499).
+    assert_eq!((w0.style, w0.bend), (WarpStyle::Arc, 0.0));
     // A drag on the grid changes nothing: type takes only the styles.
     let c = [(w0.bounds[0] + w0.bounds[2]) / 2.0, (w0.bounds[1] + w0.bounds[3]) / 2.0];
     warp_pointer(&mut app, ToolEvent::Down { x: w0.bounds[2], y: w0.bounds[3], pressure: 1.0 }, 4.0, egui::Modifiers::NONE);
@@ -3811,11 +3812,14 @@ fn cylinder_of(app: &PhotocraftApp) -> [f64; 7] {
 fn the_warp_menu_lists_cylinder_after_the_presets_except_on_type() {
     let all: Vec<WarpStyle> = warp_style_options(false).collect();
     assert_eq!(all.last(), Some(&WarpStyle::Cylinder));
-    assert_eq!(all.len(), WarpStyle::all().count() + 1);
+    // Custom, the presets and Cylinder: None is no longer listed off type (#12500).
+    assert_eq!(all.len(), WarpStyle::all().count());
+    assert!(!all.contains(&WarpStyle::None));
     assert!(all.contains(&WarpStyle::Custom) && all.contains(&WarpStyle::Twist));
+    // On type: Custom (greyed there) and the presets, no None, no Cylinder (#12499).
     let on_type: Vec<WarpStyle> = warp_style_options(true).collect();
-    assert!(!on_type.contains(&WarpStyle::Cylinder) && !on_type.contains(&WarpStyle::Custom));
-    assert!(on_type.contains(&WarpStyle::None) && on_type.contains(&WarpStyle::Arc));
+    assert!(!on_type.contains(&WarpStyle::Cylinder) && !on_type.contains(&WarpStyle::None));
+    assert!(on_type.contains(&WarpStyle::Custom) && on_type.contains(&WarpStyle::Arc));
 }
 
 /// The cylinder the menu starts with, as the reference starts it: its four corners on the box,

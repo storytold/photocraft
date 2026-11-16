@@ -475,15 +475,21 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
         anchor_grid_widget(ui, Some(4), true);
     });
     crate::widgets::vline(ui, 22.0);
-    // Split, Grid, then the warp style with its bend fields.
-    ui.add_enabled_ui(!on_type && !cylinder, |ui| warp_mesh_fields(app, ui, w));
+    // Split, Grid, then the warp style with its bend fields. On type the Split buttons are hidden
+    // and Grid is greyed (#12499).
+    ui.add_enabled_ui(!on_type && !cylinder, |ui| warp_mesh_fields(app, ui, w, !on_type));
     crate::widgets::vline(ui, 22.0);
     lbl(ui, tl!("Warp:"));
-    let mut style = w.style;
+    // Off type the list starts at Custom with no None (#12500), so a warp opened as None (a saved
+    // file, a command) shows as Custom, the untouched grid it is.
+    let mut style = if w.style == WarpStyle::None { WarpStyle::Custom } else { w.style };
     let opts: Vec<(WarpStyle, &str)> = warp_style_options(on_type).map(|s| (s, s.label())).collect();
-    if crate::widgets::dropdown(ui, "warp-style", tl!("Warp"), &mut style, &opts, 120.0)
-        && let Some(t) = app.ui.transform.as_mut()
-    {
+    // The reference's groups: Custom ― Arc… ― Arch… ― Flag… ― Fisheye… ― Cylinder, each with the
+    // icon of its own shape. On type Custom is listed greyed (#12499).
+    let groups = |s: &WarpStyle| matches!(s, WarpStyle::Arc | WarpStyle::Arch | WarpStyle::Flag | WarpStyle::Fisheye | WarpStyle::Cylinder);
+    let enabled = |s: &WarpStyle| !(on_type && *s == WarpStyle::Custom);
+    let picked = crate::widgets::dropdown_grouped_icons(ui, "warp-style", tl!("Warp"), &mut style, &opts, 120.0, groups, enabled, &warp_style_icon);
+    if picked && let Some(t) = app.ui.transform.as_mut() {
         let b = t.rect;
         t.warp = Some(match style {
             WarpStyle::Custom => Warp::custom(w.to_mesh(1, 1), b),
@@ -541,16 +547,65 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
 
 /// The Warp menu's styles in Photoshop's order: None, Custom and the presets, then Cylinder
 /// (#4112). Type takes only the styles its Warp Text has: no Custom, no Cylinder (#3004).
+/// The Warp menu's styles. Off type: Custom, the fifteen presets and Cylinder, with no None
+/// (#12500). On type the list is as before: None and the presets (#3004).
 pub(super) fn warp_style_options(on_type: bool) -> impl Iterator<Item = WarpStyle> {
-    WarpStyle::all().filter(move |s| !(on_type && *s == WarpStyle::Custom)).chain((!on_type).then_some(WarpStyle::Cylinder))
+    // On type too: Custom (greyed there, #12499) and the presets. Cylinder is measured only off
+    // type, so it stays out of the type list.
+    WarpStyle::all().filter(|s| *s != WarpStyle::None).chain((!on_type).then_some(WarpStyle::Cylinder))
+}
+
+/// A Warp style's icon in the menu (#12500): our own art, drawn from the style's own warp. A 3 × 3
+/// grid over a unit box, warped by the style at Bend 50 (Custom: the untouched grid; Cylinder:
+/// the default cylinder), fitted into `r`.
+pub(super) fn warp_style_icon(style: &WarpStyle, p: &egui::Painter, r: egui::Rect) {
+    let unit = [0.0, 0.0, 1.0, 1.0];
+    let w = match style {
+        WarpStyle::Cylinder => cylinder_default(unit).unwrap_or_else(|| Warp::none(unit)),
+        s if s.is_preset() => Warp::preset(*s, 50.0, unit),
+        _ => Warp::none(unit),
+    };
+    // The warped grid's points, then scaled to fit the icon's box with its aspect kept.
+    const N: usize = 3;
+    const STEPS: usize = 8;
+    let line = |fixed: f64, across: bool| -> Vec<(f64, f64)> {
+        (0..=STEPS)
+            .map(|k| {
+                let t = k as f64 / STEPS as f64;
+                if across { w.map(t, fixed) } else { w.map(fixed, t) }
+            })
+            .collect()
+    };
+    let lines: Vec<Vec<(f64, f64)>> = (0..=N).flat_map(|i| [line(i as f64 / N as f64, true), line(i as f64 / N as f64, false)]).collect();
+    let pts = lines.iter().flatten().filter(|(x, y)| x.is_finite() && y.is_finite());
+    let (x0, y0, x1, y1) = pts.fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, &(x, y)| (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y)));
+    if !(x1 > x0 && y1 > y0) {
+        return;
+    }
+    let s = (f64::from(r.width()) / (x1 - x0)).min(f64::from(r.height()) / (y1 - y0));
+    let (ox, oy) = (f64::from(r.center().x) - s * (x0 + x1) / 2.0, f64::from(r.center().y) - s * (y0 + y1) / 2.0);
+    let ink = egui::Stroke::new(1.0, crate::theme::Tokens::get(p.ctx()).text);
+    for l in &lines {
+        let pts: Vec<egui::Pos2> =
+            l.iter().filter(|(x, y)| x.is_finite() && y.is_finite()).map(|&(x, y)| egui::pos2((ox + s * x) as f32, (oy + s * y) as f32)).collect();
+        p.add(egui::Shape::line(pts, ink));
+    }
 }
 
 /// The Split icons and the Grid menu of the Warp options bar.
-fn warp_mesh_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
+fn warp_mesh_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp, split: bool) {
     let tk = crate::theme::Tokens::get(ui.ctx());
     let lbl = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
     };
+    if split {
+        split_fields(app, ui, &lbl);
+    }
+    grid_field(app, ui, w, &lbl);
+}
+
+/// The Split label and its three buttons.
+fn split_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, lbl: &dyn Fn(&mut egui::Ui, &str)) {
     lbl(ui, tl!("Split:"));
     let armed = app.transform_preview.as_ref().and_then(|p| p.split_tool);
     for (tool, tip) in [
@@ -569,6 +624,10 @@ fn warp_mesh_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
         }
     }
     crate::widgets::vline(ui, 22.0);
+}
+
+/// The Grid label and its dropdown.
+fn grid_field(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp, lbl: &dyn Fn(&mut egui::Ui, &str)) {
     lbl(ui, tl!("Grid:"));
     let mesh = w.mesh.clone().unwrap_or_else(|| BezierMesh::identity(w.bounds, 1, 1));
     let mut grid = warp_grid_id(&mesh).to_string();
@@ -732,3 +791,7 @@ pub(super) fn rotate_about_pivot(app: &mut PhotocraftApp, da: f64) {
 #[cfg(test)]
 #[path = "warp_options_bar_tests.rs"]
 mod warp_options_bar_tests;
+
+#[cfg(test)]
+#[path = "warp_style_menu_tests.rs"]
+mod warp_style_menu_tests;

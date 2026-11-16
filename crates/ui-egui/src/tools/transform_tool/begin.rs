@@ -968,15 +968,16 @@ fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
         pv.texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     }
-    let warp =
-        current.as_ref().and_then(|w| WarpStyle::parse(&w.style).filter(|s| s.is_preset()).map(|s| (w, s))).map_or(Warp::none(rect), |(w, style)| Warp {
-            style,
-            bend: f64::from(w.value),
-            h_distort: f64::from(w.horizontal_distortion),
-            v_distort: f64::from(w.vertical_distortion),
-            vertical: !w.horizontal,
-            ..Warp::none(rect)
-        });
+    // Unwarped type opens as Arc at Bend 0, H 0, V 0, as the reference does (#12499).
+    let unwarped = Warp { style: WarpStyle::Arc, ..Warp::none(rect) };
+    let warp = current.as_ref().and_then(|w| WarpStyle::parse(&w.style).filter(|s| s.is_preset()).map(|s| (w, s))).map_or(unwarped, |(w, style)| Warp {
+        style,
+        bend: f64::from(w.value),
+        h_distort: f64::from(w.horizontal_distortion),
+        v_distort: f64::from(w.vertical_distortion),
+        vertical: !w.horizontal,
+        ..Warp::none(rect)
+    });
     if let Some(t) = app.ui.transform.as_mut() {
         t.rect = rect;
         t.quad = corners(rect);

@@ -190,7 +190,8 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             });
             tool.map(|tool| (tool, p))
         });
-        draw_warp_overlay(painter, xf, w, pv, guide);
+        // No mesh over type (#12499).
+        draw_warp_overlay(painter, xf, w, pv, guide, !warps_type(app));
         return;
     }
     if pv.committing.is_some() {
@@ -550,7 +551,7 @@ fn draw_warp_content(
 }
 
 /// The warp grid, its control points and split guides ([`draw_overlay`] for a warp).
-fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &TransformPreview, guide: Option<(SplitTool, [f64; 2])>) {
+fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &TransformPreview, guide: Option<(SplitTool, [f64; 2])>, grid: bool) {
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let m = w.to_mesh(1, 1);
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
@@ -586,7 +587,8 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
     // Patch boundaries are the grid. Only Default (one patch) draws the rule-of-thirds guides;
     // a 3×3 preset is three even cells, not those guides repeated inside every cell.
     let thirds = single_patch(&m);
-    for (k, win) in m.us.windows(2).enumerate() {
+    let (us, vs): (&[f64], &[f64]) = if grid { (&m.us, &m.vs) } else { (&[], &[]) };
+    for (k, win) in us.windows(2).enumerate() {
         if thirds {
             for third in [1.0, 2.0] {
                 painter.add(egui::Shape::line(curve(Some(win[0] + (win[1] - win[0]) * third / 3.0), None), thin));
@@ -597,7 +599,7 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
         }
         painter.add(egui::Shape::line(curve(Some(win[1]), None), line));
     }
-    for (k, win) in m.vs.windows(2).enumerate() {
+    for (k, win) in vs.windows(2).enumerate() {
         if thirds {
             for third in [1.0, 2.0] {
                 painter.add(egui::Shape::line(curve(None, Some(win[0] + (win[1] - win[0]) * third / 3.0)), thin));
@@ -632,3 +634,7 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
 #[cfg(test)]
 #[path = "warp_handles_visible_tests.rs"]
 mod warp_handles_visible_tests;
+
+#[cfg(test)]
+#[path = "warp_type_defaults_tests.rs"]
+mod warp_type_defaults_tests;
