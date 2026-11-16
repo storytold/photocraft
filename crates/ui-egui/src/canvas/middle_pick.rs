@@ -1,12 +1,5 @@
-//! ⌥/Alt + middle-click on the canvas, with any tool: select the topmost visible layer with pixels
-//! under the pointer (`layer.pickAt`), as GIMP's Alt + middle-click does. It is a cross-platform
-//! companion to the macOS-only ⌘⌥⌃-click (`quick_pick.rs`): Alt + middle has no Photoshop
-//! meaning, and a plain middle drag still pans with the Hand.
-//!
-//! The pick runs on the press. The whole press, until the middle button comes up, is then the
-//! pick's own: it neither pans nor reaches the active tool, even if Alt is let go first. ⌥ latched
-//! in Window › Modifier Keys counts as held, for a desktop that takes Alt + middle for itself. A
-//! failed pick is shown as a status-bar error and never panics.
+//! Alt/Option key + middle-click on the canvas, with your pointer on any tool, it will cause you to select the topmost visible layer.
+//! The alt key press is tracked in its entirity, and remains active until the middle click is pressed or the alt is let go.
 
 use egui::{Context, Modifiers, PointerButton, Response};
 use serde_json::json;
@@ -14,15 +7,12 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 
-/// ⌥/Alt held without ⌘/Ctrl: those keep their own meanings (the ⌘ temporary Move, the ⌃⌥ brush
-/// resize). Shift is allowed and ignored.
+/// Disables it when you are also holding the ctrl key.
 pub fn is_gesture(mods: Modifiers) -> bool {
     mods.alt && !mods.command && !mods.ctrl && !mods.mac_cmd
 }
 
-/// Select the topmost layer with pixels at document point (x, y). False when nothing was picked:
-/// no document, a point that is not finite, no layer there (the selection stays), or a failed
-/// command (a status-bar error).
+/// Select the topmost layer that has pixels under your cursiour given x, y point.
 pub fn pick_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     if app.session.active().is_none() || !(x.is_finite() && y.is_finite()) {
         return false;
@@ -41,11 +31,10 @@ fn held_id(response: &Response) -> egui::Id {
     response.id.with("pc-alt-middle-pick")
 }
 
-/// One canvas frame. Picks on an Alt + middle press over the canvas, and reports whether the
-/// middle button belongs to a pick (this frame's press, or one still held), so the caller keeps it
-/// from panning. `free` is false while something else owns the press (a secondary window, a held
-/// temporary tool, a stroke being dismissed); a modal dialog over the canvas or a tool drag in
-/// progress owns it too. Then nothing is picked.
+/// Runs once per canvas frame. On an Alt + middle press, picks the layer under the pointer.
+/// Returns true while that press is held, so the caller doesn't pan.
+/// Nothing is picked when `free` is false (another window, a held temporary tool, a stroke being
+/// dismissed), when a dialog is open, or while a tool drag is in progress.
 pub fn frame(app: &mut PhotocraftApp, ctx: &Context, response: &Response, xf: &ViewXform, free: bool) -> bool {
     let free = free && app.ui.dialogs.is_empty() && app.drag.is_none();
     let id = held_id(response);
