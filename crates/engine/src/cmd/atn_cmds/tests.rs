@@ -1778,6 +1778,87 @@ fn colours_convert_both_ways() {
     assert_eq!(color_desc("#ééééé"), None);
 }
 
+fn conditional_descriptor(value: D) -> Descriptor {
+    desc("null")
+        .with("null", value)
+        .with(
+            "then",
+            D::Reference(vec![
+                ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("FS8-Layers") },
+                ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul("FS") },
+            ]),
+        )
+        .with("else", D::Reference(vec![ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("FS8-No-Layers") }]))
+}
+
+/// Extend the original Lyrs case using the same recorded branch references and ATN helpers.
+#[test]
+fn conditional_identifiers_import_and_export_in_their_photoshop_shapes() {
+    // Keep expected wire IDs independent of the production mapping, including padding.
+    for (code, condition) in [
+        ("Lyrs", "hasLayers"),
+        ("Ornt", "landscape"),
+        ("Sqr ", "square"),
+        ("RGB ", "modeIsRGB"),
+        ("CMYK", "modeIsCMYK"),
+        ("Gryc", "modeIsGrayscale"),
+        ("EghB", "depth8"),
+        ("16Bt", "depth16"),
+        ("32Bt", "depth32"),
+        ("Sved", "unsaved"),
+        ("fsel", "hasSelection"),
+        ("hasAlpha", "hasAlphaChannels"),
+        ("Opn ", "isOpen"),
+        ("Bckg", "isBackground"),
+        ("Pxel", "isPixelLayer"),
+        ("Adjs", "isAdjustmentLayer"),
+        ("Shp ", "isShapeLayer"),
+        ("Grup", "isLayerGroup"),
+        ("locked", "isLocked"),
+        ("Vsbl", "isVisible"),
+        ("hasUserMask", "hasPixelMask"),
+        ("hasVectorMask", "hasVectorMask"),
+        ("Effc", "hasEffects"),
+    ] {
+        for input in [code, condition] {
+            let recorded = conditional_descriptor(D::Enumerated { type_id: Id::new("Cndt"), value: Id::new(input) });
+            let loaded = mapped_recording("conditional", recorded);
+            assert!(loaded.unsupported.is_empty(), "{input}: {:?}", loaded.unsupported);
+            assert_eq!(
+                loaded.actions[0].steps,
+                [("actions.conditional".into(), json!({"if":condition,"then":"FS8-Layers","else":"FS8-No-Layers"}))],
+                "{input}"
+            );
+            let (bytes, skipped) = export("FS", &[&loaded.actions[0]], &[], false).unwrap();
+            assert!(skipped.is_empty(), "{input}");
+            let saved = atn::parse(&bytes).unwrap();
+            // Export qualifies both branches with the selected action set.
+            let mut expected = conditional_descriptor(D::Enumerated { type_id: Id::new("Cndt"), value: Id::new(code) });
+            expected.items.retain(|(key, _)| !key.is("else"));
+            let expected = expected.with(
+                "else",
+                D::Reference(vec![
+                    ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("FS8-No-Layers") },
+                    ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul("FS") },
+                ]),
+            );
+            assert_eq!(saved.actions[0].items[0].descriptor.as_ref(), Some(&expected), "{input}");
+            assert_eq!(import(&bytes).unwrap().actions[0].steps, loaded.actions[0].steps, "{input}");
+        }
+    }
+    // Unsupported and malformed conditions must keep their original branches and descriptor.
+    for value in [enm("Cndt", "SRGB"), enm("Cndt", "unknownCondition"), D::Integer(42), D::Boolean(true), text("Vsbl")] {
+        let recorded = conditional_descriptor(value);
+        let loaded = mapped_recording("conditional", recorded.clone());
+        assert_eq!(loaded.unsupported.len(), 1);
+        assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP);
+        assert!(!loaded.actions[0].disabled.contains(&0));
+        let (bytes, skipped) = export("FS", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor.as_ref(), Some(&recorded));
+    }
+}
+
 #[test]
 fn remaining_events_import_in_their_photoshop_shapes() {
     // Close with the Save answer becomes Save then Close.
@@ -1924,18 +2005,9 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     assert_eq!(steps[13].1, json!({"points": [[1, 2], [30, 2], [15, 40]]}));
     assert_eq!(imp.unsupported.len(), 2);
 
-    // The frequency-separation set's own conditional, a percent Image Size, a Paint Bucket
-    // click in pixels (percent stays unsupported) and a Place.
-    let cond = desc("null")
-        .with("null", enm("Cndt", "Lyrs"))
-        .with(
-            "then",
-            D::Reference(vec![
-                ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("FS8-Layers") },
-                ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul("FS") },
-            ]),
-        )
-        .with("else", D::Reference(vec![ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("FS8-No-Layers") }]));
+    // The original frequency-separation conditional remains part of the mixed-event regression.
+    let cond = conditional_descriptor(enm("Cndt", "Lyrs"));
+    // A percent Image Size, a Paint Bucket click in pixels (percent stays unsupported) and a Place.
     let size = desc("null")
         .with("Wdth", pct(200.0))
         .with("scaleStyles", D::Boolean(true))

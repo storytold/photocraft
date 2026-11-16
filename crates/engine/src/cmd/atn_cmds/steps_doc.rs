@@ -102,8 +102,31 @@ pub(super) fn save_to(id: &str, p: &Value) -> Option<Descriptor> {
     Some(if id == "file.saveACopy" { d.with("Cpy ", D::Boolean(true)) } else { d })
 }
 
-/// Photoshop's four-character condition codes that differ from the string ids.
-const CONDITION_CODES: &[(&str, &str)] = &[("Lyrs", "hasLayers")];
+/// Photoshop condition identifiers that differ from the native predicate names.
+const CONDITION_CODES: &[(&str, &str)] = &[
+    ("Ornt", "landscape"),
+    ("Sqr ", "square"),
+    ("RGB ", "modeIsRGB"),
+    ("CMYK", "modeIsCMYK"),
+    ("Gryc", "modeIsGrayscale"),
+    ("EghB", "depth8"),
+    ("16Bt", "depth16"),
+    ("32Bt", "depth32"),
+    ("Sved", "unsaved"),
+    ("fsel", "hasSelection"),
+    ("Lyrs", "hasLayers"),
+    ("hasAlpha", "hasAlphaChannels"),
+    ("Opn ", "isOpen"),
+    ("Bckg", "isBackground"),
+    ("Pxel", "isPixelLayer"),
+    ("Adjs", "isAdjustmentLayer"),
+    ("Shp ", "isShapeLayer"),
+    ("Grup", "isLayerGroup"),
+    ("locked", "isLocked"),
+    ("Vsbl", "isVisible"),
+    ("hasUserMask", "hasPixelMask"),
+    ("Effc", "hasEffects"),
+];
 
 /// `conditional`: Insert Conditional, with its Then and Else actions by name.
 pub(super) fn conditional_from(d: &Descriptor) -> Mapped {

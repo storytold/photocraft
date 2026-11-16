@@ -139,7 +139,7 @@ row; the action still adds only one Undo entry.
 | `HghP` | highPass | High Pass | `filter.other.highPass` |
 | `HsbP` | HsbP | HSB/HSL | `filter.other.hsbHsl` |
 | `HStr` | hueSaturation | Hue/Saturation | `image.adjustments.hueSaturation` |
-| (string ID only) | conditional | If | `actions.conditional` |
+| (string ID only) | conditional | [If](#conditional-identifiers) | `actions.conditional` |
 | `ImgS` | imageSize | Image Size | `image.imageSize` |
 | `Invs` | inverse | Inverse | `select.inverse` |
 | `Invr` | invert | Invert | `image.adjustments.invert` |
@@ -474,6 +474,41 @@ names. Unknown or duplicate keys, named sources, other source classes and other
 reference chains remain complete kept Photoshop steps. Native export supports
 the implicit active text layer only; explicit layer targets refuse export.
 This is another implemented subset of #10723, not support for its remaining events.
+
+### Conditional identifiers
+
+The `conditional` event stores its condition in the `null` field as a `Cndt` enumeration.
+These Photoshop IDs map to predicates already supported by `actions.conditional`:
+
+| Photoshop condition ID | Native predicate |
+|---|---|
+| `Ornt` | `landscape` |
+| `Sqr ` | `square` |
+| `RGB ` | `modeIsRGB` |
+| `CMYK` | `modeIsCMYK` |
+| `Gryc` | `modeIsGrayscale` |
+| `EghB` | `depth8` |
+| `16Bt` | `depth16` |
+| `32Bt` | `depth32` |
+| `Sved` | `unsaved` |
+| `fsel` | `hasSelection` |
+| `Lyrs` | `hasLayers` |
+| `hasAlpha` | `hasAlphaChannels` |
+| `Opn ` | `isOpen` |
+| `Bckg` | `isBackground` |
+| `Pxel` | `isPixelLayer` |
+| `Adjs` | `isAdjustmentLayer` |
+| `Shp ` | `isShapeLayer` |
+| `Grup` | `isLayerGroup` |
+| `locked` | `isLocked` |
+| `Vsbl` | `isVisible` |
+| `hasUserMask` | `hasPixelMask` |
+| `hasVectorMask` | `hasVectorMask` |
+| `Effc` | `hasEffects` |
+
+Import accepts the existing native predicate names too. Export writes the Photoshop IDs above,
+including their four-character space padding. `SRGB` (Document Profile Is sRGB) and unknown
+condition IDs remain kept Photoshop steps with their original descriptors.
 
 ### Settings retained by mapped events
 
