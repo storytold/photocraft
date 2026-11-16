@@ -23,6 +23,8 @@ use crate::{PhotocraftApp, widgets};
 
 #[cfg(test)]
 mod bevel_modes_tests;
+#[cfg(test)]
+mod color_overlay_picker_title_tests;
 pub(crate) mod color_picker;
 mod contour;
 mod gradient_field;

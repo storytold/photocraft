@@ -109,6 +109,15 @@ fn validate<'a>(app: &'a PhotocraftApp, t: &Target) -> Result<&'a Map<String, Va
     Ok(&parent.fields)
 }
 
+/// The picker's title for an effect kind's colour field. The reference application names the
+/// Color Overlay's colour (#14871); the other fields keep the shared title until measured.
+fn title(kind: &str, field: &str) -> &'static str {
+    match (kind, field) {
+        ("colorOverlay", "color") => "Color Picker (Overlay Color)",
+        _ => "Color Picker (Layer Style Color)",
+    }
+}
+
 /// Both swatch clicks and the control protocol use the same bound target.
 pub(crate) fn open(app: &mut PhotocraftApp, parent: u64, effect: &str, field: &str, stop: Option<usize>) -> Result<u64, String> {
     if app.ui.dialogs.last().map(|d| d.id) != Some(parent) || has_child(app, parent) {
@@ -121,7 +130,8 @@ pub(crate) fn open(app: &mut PhotocraftApp, parent: u64, effect: &str, field: &s
     let t = Target { parent, document: st.doc.id, layer, effect: effect.into(), field: field.into(), stop, color: color.clone(), source };
     validate(app, &t)?;
     let rgb = color_picker_ui::parse_hex(&color).ok_or("invalid effect color")?;
-    let mut fields = color_picker_ui::fields_with_web(app, "dialog", "Color Picker (Layer Style Color)", rgb);
+    let kind = super::entry(&d.fields, effect).and_then(|e| e.get("kind")).and_then(Value::as_str).unwrap_or_default();
+    let mut fields = color_picker_ui::fields_with_web(app, "dialog", title(kind, field), rgb);
     fields.insert(TARGET.into(), serde_json::to_value(t).map_err(|e| e.to_string())?);
     Ok(app.ui.open_dialog(DialogKind::Command, fields))
 }

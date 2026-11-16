@@ -36,7 +36,9 @@ fn every_exposed_color_field_uses_the_shared_picker_and_only_updates_its_target(
             let history = app.session.active().unwrap().history.past_len();
             let picker = open(&mut app, parent, &effect, field, None).unwrap();
             assert!(color_picker_ui::owns(&fields(&app, picker)));
-            assert_eq!(fields(&app, picker)["__label"], "Color Picker (Layer Style Color)");
+            if (*kind, *field) != ("colorOverlay", "color") {
+                assert_eq!(fields(&app, picker)["__label"], "Color Picker (Layer Style Color)");
+            }
             set_color(&mut app, picker, "#23a567");
             let shown = preview_fields(&app, parent, &original);
             assert_eq!(super::super::entry(&shown, &effect).unwrap()["params"][field], "#23a567");
