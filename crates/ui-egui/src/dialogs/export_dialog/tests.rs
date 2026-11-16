@@ -86,7 +86,7 @@ fn a_replayed_export_needs_a_path_and_a_known_format() {
     // A setting of the wrong type or out of the dialog's range is an error, not its default.
     for (key, v) in [
         ("scale", json!("50")),
-        ("scale", json!(5000)),
+        ("scale", json!(9000)),
         ("quality", json!(0)),
         ("transparency", json!("yes")),
         ("metadata", json!("some")),
@@ -174,13 +174,13 @@ fn a_remembered_pixel_size_keeps_this_images_proportions() {
     assert_eq!(*sizes.borrow(), [(20, 15)]);
 }
 
-/// A remembered linked width this image can't take within the Scale field's 1..=1000 %
-/// (2000 px from a 4000 px photo, on a 100 px image) falls back to the remembered percent.
+/// A remembered linked width this image can't take within the Scale field's 1..=7500 %
+/// (20000 px from a 40000 px scan, on a 100 px image) falls back to the remembered percent.
 #[test]
 fn a_remembered_pixel_size_out_of_scale_falls_back_to_the_percent() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
-    app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), json!({"sizing": "pixels", "width": 2000, "height": 1500, "scale": 50, "lockAspect": true})));
+    app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), json!({"sizing": "pixels", "width": 20000, "height": 15000, "scale": 50, "lockAspect": true})));
     let id = open(&mut app).unwrap();
     let f = &app.ui.dialog_mut(id).unwrap().fields;
     assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(50.0), Some(50.0)));

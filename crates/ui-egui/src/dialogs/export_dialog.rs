@@ -54,7 +54,7 @@ fn valid_setting(key: &str, v: &Value) -> bool {
     match key {
         "format" => v.as_str().is_some_and(|s| FORMATS.iter().any(|(k, _)| *k == s)),
         "quality" => num(1.0, 100.0),
-        "scale" => num(1.0, 1000.0),
+        "scale" => num(1.0, MAX_SCALE),
         "width" | "height" => num(1.0, MAX_PX),
         "lossless" | "transparency" | "lockAspect" | "embedProfile" => v.is_boolean(),
         "resample" => v.as_str().is_some_and(|s| export_resample(s).is_ok()),
@@ -238,7 +238,7 @@ fn open_sized(app: &mut PhotocraftApp, src_w: u32, src_h: u32) -> Result<u64, St
 /// Remembered exact pixels with Constrain proportions keep their width and take the height from
 /// this source, as ticking the checkbox does: the last export's proportions would stretch an
 /// image of another shape (#8738). Unlinked, the exact pixels are the size the user asked for.
-/// A linked width this source can't reach within the Scale field's 1..=1000 % falls back to the
+/// A linked width this source can't reach within the Scale field's 1..=7500 % falls back to the
 /// remembered percent.
 fn fit_size(f: &mut Map<String, Value>, src_w: f64, src_h: f64) {
     if s(f, "sizing") == "pixels" && f.contains_key("width") && f.contains_key("height") {
@@ -246,7 +246,7 @@ fn fit_size(f: &mut Map<String, Value>, src_w: f64, src_h: f64) {
             return;
         }
         if let Ok(size) = resize_from_side(src_w, src_h, n(f, "width", src_w.max(1.0)), n(f, "height", src_h.max(1.0)), true, true)
-            && (1.0..=1000.0).contains(&size.scale)
+            && (1.0..=MAX_SCALE).contains(&size.scale)
         {
             write_size(f, size, "pixels");
             return;
@@ -537,10 +537,10 @@ fn finite_px(v: f64) -> Result<f64, String> {
     Ok(v.round())
 }
 
-/// Percent scale applied to both sides. `scale` is a percent in 1..=1000.
+/// Percent scale applied to both sides. `scale` is a percent in 1..=7500, decimals allowed.
 pub(crate) fn resize_from_scale(src_w: f64, src_h: f64, scale: f64) -> Result<ExportSize, String> {
-    if !scale.is_finite() || !(1.0..=1000.0).contains(&scale) {
-        return Err("scale must be within 1..=1000 percent".into());
+    if !scale.is_finite() || !(1.0..=MAX_SCALE).contains(&scale) {
+        return Err(format!("scale must be within 1..={MAX_SCALE} percent"));
     }
     let (width, height) = scaled_size(src_w.max(1.0), src_h.max(1.0), scale / 100.0);
     if width > MAX_PX || height > MAX_PX {
@@ -871,48 +871,125 @@ fn write_size(f: &mut Map<String, Value>, size: ExportSize, sizing: &str) {
     f.insert("sizing".into(), json!(sizing));
 }
 
-/// Scale, width and height. A scale edit sets both sides; a side edit sets exact pixels and, when
-/// the link is on, the other side. The widget is compared with the value it was given so a field
-/// that only clamps an out-of-range scale does not overwrite an exact pixel size.
+/// Scale's preset list, as measured in the reference application.
+const SCALE_PRESETS: [f64; 12] = [10.0, 25.0, 33.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0, 300.0, 400.0, 500.0];
+/// Largest export scale, as measured: Width and Height stop at 7500 % of the source too. The
+/// pixel limit ([`MAX_PX`]) still applies on top for a large source.
+pub(crate) const MAX_SCALE: f64 = 7500.0;
+
+/// The largest side a source side `src` can be exported at: 7500 % of it, within [`MAX_PX`].
+fn max_side_px(src: f64) -> f64 {
+    (src.max(1.0) * MAX_SCALE / 100.0).floor().clamp(1.0, MAX_PX)
+}
+
+/// The largest Scale for a source: 7500 %, or less when the pixel limit ([`MAX_PX`]) is reached first
+/// (5000 % of a 10000 px side is 500000 px). A typed value above it clamps, with the warning, instead
+/// of being dropped.
+fn max_scale(src_w: f64, src_h: f64) -> f64 {
+    let by_pixels = (MAX_PX / src_w.max(src_h).max(1.0) * 100.0 * 1000.0).floor() / 1000.0;
+    by_pixels.clamp(1.0, MAX_SCALE)
+}
+
+/// The smallest side a source side `src` can be exported at: what Scale's own 1 % gives it, rounded
+/// the way `resize_from_scale` rounds (201 px at 1 % is 2 px, 150 px is 2), so a valid Scale result is
+/// never pushed up by the side bounds into another size.
+fn min_side_px(src: f64) -> f64 {
+    (src.max(1.0) / 100.0).round().max(1.0)
+}
+
+/// The range an edited side can take: its own 1 %..=7500 % of the source and pixel limit, and, with
+/// Constrain proportions on, the range that keeps the linked side (`other`, from its source) inside
+/// its own too (a 100 × 10000 source takes at most 3000 px wide, which is 300000 px tall).
+fn side_range(src: f64, other: f64, lock: bool) -> (f64, f64) {
+    let (min, mut max) = (min_side_px(src), max_side_px(src));
+    if lock {
+        let k = src.max(1.0) / other.max(1.0);
+        // Only the top: the linked side is never below 1 px, and a lower bound from it would push
+        // a valid Scale result (200 x 150 at 1 % is 2 x 2) up to 3 x 2.
+        max = max.min((max_side_px(other) * k).floor());
+    }
+    (min, max.max(min))
+}
+
+/// Whether `exact` pixels had to be rounded to a whole number.
+fn rounded(exact: f64) -> bool {
+    (exact - exact.round()).abs() > 1e-6
+}
+
+/// Scale, width and height. Scale is an editable list ([`SCALE_PRESETS`], or any value with
+/// decimals); all three stop at 1..=7500 % of the source. A scale edit sets both sides; a side
+/// edit sets exact pixels and, when the link is on, the other side. A size that was clamped or
+/// had to be rounded shows a warning beside Scale until the next exact edit. The widget is
+/// compared with the value it was given so a field that only clamps does not overwrite an exact
+/// pixel size.
 fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h: f64) {
     let t = Tokens::get(ui.ctx());
-    let stored = n(f, "scale", 100.0);
-    let passed = stored.clamp(1.0, 1000.0).round();
+    let max_sc = max_scale(src_w, src_h);
+    let passed = n(f, "scale", 100.0).clamp(1.0, max_sc);
     let mut sc = passed as f32;
+    let (mut clamped, mut preset) = (false, None);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Scale")).color(t.text_dim));
-        crate::widgets::value_field(ui, &mut sc, 1.0..=1000.0, "%", 70.0).accessible_name(tl!("Scale"));
+        clamped = crate::widgets::value_field_alerting(ui, tl!("Scale"), &mut sc, 1.0..=max_sc as f32, "%", 70.0).1;
+        ui.menu_button("▾", |ui| {
+            for p in SCALE_PRESETS {
+                if ui.button(format!("{p}%")).clicked() {
+                    preset = Some(p);
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text(tl!("Scale presets"));
+        if f.get("__sizeWarn").and_then(Value::as_bool).unwrap_or(false) {
+            ui.label(egui::RichText::new("⚠").color(t.warning)).on_hover_text(tl!(
+                "The size could not be met exactly as typed and was rounded or limited. For an exact size, use Canvas Size or scale the layer."
+            ));
+        }
     });
-    let sc_r = f64::from(sc).round().clamp(1.0, 1000.0);
-    if (sc_r - passed).abs() > 0.01
-        && let Ok(size) = resize_from_scale(src_w, src_h, sc_r)
-    {
+    let sc_r = preset.unwrap_or_else(|| (f64::from(sc) * 1000.0).round() / 1000.0).clamp(1.0, max_sc);
+    // An edit of the widget, a preset or a clamp: not the stored scale seen again. A remembered
+    // 200/3 % (from a linked width) is displayed rounded to 66.667 and must not be rewritten as a
+    // scale on an idle frame, which would turn an exact pixel size into a percentage.
+    let edited = preset.is_some() || clamped || (f64::from(sc) - f64::from(passed as f32)).abs() > 1e-9;
+    if edited && let Ok(size) = resize_from_scale(src_w, src_h, sc_r) {
+        let inexact = rounded(src_w.max(1.0) * sc_r / 100.0) || rounded(src_h.max(1.0) * sc_r / 100.0);
+        // A preset past the limit is applied clamped: say so, as for a typed value.
+        let preset_clamped = preset.is_some_and(|p| (p - sc_r).abs() > 1e-9);
         write_size(f, size, "scale");
+        f.insert("__sizeWarn".into(), json!(clamped || preset_clamped || inexact));
     }
     let lock = f.get("lockAspect").and_then(Value::as_bool).unwrap_or(true);
-    let stored_w = n(f, "width", src_w.max(1.0));
-    let mut width = stored_w.clamp(1.0, MAX_PX) as f32;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Width")).color(t.text_dim));
-        crate::widgets::value_field(ui, &mut width, 1.0..=MAX_PX as f32, "px", 70.0).accessible_name(tl!("Width"));
-    });
-    let width_r = f64::from(width).round();
-    if (width_r - stored_w.round()).abs() > 0.01
-        && let Ok(size) = resize_from_side(src_w, src_h, width_r, n(f, "height", src_h.max(1.0)), lock, true)
-    {
-        write_size(f, size, "pixels");
-    }
-    let stored_h = n(f, "height", src_h.max(1.0));
-    let mut height = stored_h.clamp(1.0, MAX_PX) as f32;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Height")).color(t.text_dim));
-        crate::widgets::value_field(ui, &mut height, 1.0..=MAX_PX as f32, "px", 70.0).accessible_name(tl!("Height"));
-    });
-    let height_r = f64::from(height).round();
-    if (height_r - stored_h.round()).abs() > 0.01
-        && let Ok(size) = resize_from_side(src_w, src_h, n(f, "width", src_w.max(1.0)), height_r, lock, false)
-    {
-        write_size(f, size, "pixels");
+    for edited_width in [true, false] {
+        let (key, label, src, other) = if edited_width { ("width", tl!("Width"), src_w, src_h) } else { ("height", tl!("Height"), src_h, src_w) };
+        let (min, max) = side_range(src, other, lock);
+        let stored = n(f, key, src.max(1.0));
+        // The value shown is the stored one within the side's own limits. The linked limit applies to what is
+        // typed, so a valid Scale result just above it (75 px on a 1 x 4001 source at 7498 %) is left alone
+        // until the side is edited: the range reaches up to the value already there.
+        let mut v = stored.clamp(min, max_side_px(src)) as f32;
+        let top = max.max(f64::from(v));
+        let mut clamped = false;
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(label).color(t.text_dim));
+            clamped = crate::widgets::value_field_whole_alerting(ui, label, &mut v, min as f32..=top as f32, "px", 70.0).1;
+        });
+        let mut typed = f64::from(v).round();
+        if (typed - stored.round()).abs() <= 0.01 && !clamped {
+            continue;
+        }
+        // The range reaches up to the stored value so an idle frame leaves it alone; an edit above the
+        // linked limit (a paste of 200 in one go) is clamped to the limit here, with the warning.
+        if typed > max && ((typed - stored.round()).abs() > 0.01 || clamped) {
+            typed = max;
+            clamped = true;
+        }
+        let (w, h) = if edited_width { (typed, n(f, "height", src_h.max(1.0))) } else { (n(f, "width", src_w.max(1.0)), typed) };
+        if let Ok(size) = resize_from_side(src_w, src_h, w, h, lock, edited_width) {
+            let inexact = lock && rounded(other.max(1.0) * typed / src.max(1.0));
+            write_size(f, size, "pixels");
+            f.insert("__sizeWarn".into(), json!(clamped || inexact));
+        }
     }
     let mut linked = lock;
     if crate::widgets::checkbox(ui, &mut linked, tl!("Constrain proportions")).changed() {
@@ -922,6 +999,9 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
         }
     }
 }
+
+#[cfg(test)]
+mod scale_range_tests;
 
 /// Export As › Image Size › Resample, with Photoshop's choices (only the exported copy is
 /// resampled; the document keeps its pixels).
