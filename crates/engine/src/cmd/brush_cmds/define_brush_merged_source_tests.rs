@@ -226,7 +226,7 @@ fn composite_storage_is_counted_with_density_and_mask_before_any_allocation() {
 }
 
 #[test]
-fn compositor_allocation_boundary_failure_preserves_source_and_preset_state() {
+fn selection_buffer_failure_preserves_source_and_preset_state() {
     for command in COMMANDS {
         let mut s = source(8);
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 150})).unwrap();
@@ -235,9 +235,9 @@ fn compositor_allocation_boundary_failure_preserves_source_and_preset_state() {
         let brush = s.tools.brush.clone();
         let presets = s.tools.presets.clone();
         let current = s.tools.current_preset.clone();
-        crate::allocation::fail_after_for_test(2);
-        let result = s.execute(command, json!({"name": "Compositor allocation failure"}));
-        let _ = crate::allocation::capacity::<u8>(0, "reset compositor failpoint");
+        crate::allocation::fail_after_for_test(1);
+        let result = s.execute(command, json!({"name": "Selection buffer failure"}));
+        let _ = crate::allocation::capacity::<u8>(0, "reset selection failpoint");
         let err = result.unwrap_err();
         assert!(err.to_string().contains("not enough memory"), "{err}");
         assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));

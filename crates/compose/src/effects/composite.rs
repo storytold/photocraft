@@ -3,7 +3,7 @@ use super::distance::{INSIDE_EPS, Metric, dist_inside_by, dist_outside_by, local
 use super::paint::{dissolves_in, glow_map, paint_color, paint_fx, paint_glow, paint_pattern, rgb, shadow_map};
 use super::{
     Bevel, BevelStyle, BlendMode, Buffer, Effect, FxMaps, FxPaint, GlobalLight, Layer, MAX_REACH, Map, PREPARED_PATTERN_BYTES, Pattern, Placement,
-    PreparedPatterns, Rect, StrokePosition, psblend,
+    BufferAlloc, InfallibleBufferAlloc, PreparedPatterns, Rect, StrokePosition, psblend,
 };
 
 /// Build every effect map for `layer` from its alpha `shape` over `rect`.
@@ -242,13 +242,29 @@ pub(crate) fn composite_with_effects_prepared(
     patterns: &PreparedPatterns<'_>,
     vstroke: Option<VectorStroke<'_>>,
 ) {
+    match composite_with_effects_prepared_with(layer, content, backdrop, maps, layer_bounds, patterns, vstroke, &InfallibleBufferAlloc) {
+        Ok(()) => {}
+        Err(never) => match never {},
+    }
+}
+
+pub(crate) fn composite_with_effects_prepared_with<A: BufferAlloc>(
+    layer: &Layer,
+    content: &Buffer,
+    backdrop: &mut Buffer,
+    maps: &FxMaps,
+    layer_bounds: Rect,
+    patterns: &PreparedPatterns<'_>,
+    vstroke: Option<VectorStroke<'_>>,
+    alloc: &A,
+) -> Result<(), A::Error> {
     let pass = EffectPass::new(layer, maps, content.rect, layer_bounds, patterns, vstroke.as_ref());
     let big = pass.big;
     let shape = pass.effect_shape(content);
     let rect = backdrop.rect;
-    let before = backdrop.clone();
+    let before = alloc.clone(backdrop)?;
     // Exterior effects are painted on a backdrop copy extended to `big`.
-    let mut work = Buffer::transparent(big);
+    let mut work = alloc.filled(big, [0.0; 4])?;
     for y in rect.y0.max(big.y0)..rect.y1.min(big.y1) {
         for x in rect.x0.max(big.x0)..rect.x1.min(big.x1) {
             work.px[((y - big.y0) as usize) * pass.w + (x - big.x0) as usize] = before.get(x, y);
@@ -262,7 +278,7 @@ pub(crate) fn composite_with_effects_prepared(
     // keeps its alpha, as in Photoshop.
     let gamma = crate::text_gamma(layer);
     let premerge = premerges_layer(layer);
-    let mut lay = pass.layer_pixels(content, &shape);
+    let mut lay = pass.layer_pixels_with(content, &shape, alloc)?;
     if premerge {
         for (lp, wp) in lay.px.iter_mut().zip(&work.px) {
             *lp = psblend::composite_gamma(layer.blend, *wp, *lp, 1.0, gamma);
@@ -272,13 +288,13 @@ pub(crate) fn composite_with_effects_prepared(
     let fields = pass.stroke_fields(!strokes.is_empty());
     pass.paint_interior(&mut lay, &shape);
     pass.paint_vector_stroke(&mut lay, &shape);
-    pass.paint_inside_strokes(&mut lay, &shape, &strokes, &fields);
+    pass.paint_inside_strokes_with(&mut lay, &shape, &strokes, &fields, alloc)?;
     pass.paint_bevel(&mut lay, BevelPaint::Inner, Some(&shape));
     // The shape's own alpha.
     for (p, a) in lay.px.iter_mut().zip(&shape.v) {
         p[3] *= a.min(1.0);
     }
-    pass.paint_outside_strokes(&mut work, &lay, &shape, &strokes, &fields);
+    pass.paint_outside_strokes_with(&mut work, &lay, &shape, &strokes, &fields, alloc)?;
     pass.paint_bevel(&mut work, BevelPaint::Outer, None);
 
     // Layer (with interior effects) onto the exterior result, in the layer's mode.
@@ -293,6 +309,7 @@ pub(crate) fn composite_with_effects_prepared(
     // to 6/255 dark (psd-tools layer_effects Emboss: 7.8 → 5.7/255).
     pass.paint_bevel(&mut work, BevelPaint::Both, None);
     pass.write_back(backdrop, &before, &work);
+    Ok(())
 }
 
 /// `true` where the effect shape covers a pixel enough for interior effects to paint.
@@ -435,7 +452,7 @@ impl<'a> EffectPass<'a> {
     }
 
     /// The layer's own pixels at fill opacity, with their alpha made relative to `shape`.
-    fn layer_pixels(&self, content: &Buffer, shape: &Map) -> Buffer {
+    fn layer_pixels_with<A: BufferAlloc>(&self, content: &Buffer, shape: &Map, alloc: &A) -> Result<Buffer, A::Error> {
         let content_fill = if self.interior_group() { 1.0 } else { self.layer.fill_opacity };
         let relative = self.relative();
         let lay_alpha = |i: usize, p: &[f32; 4], a: f32| {
@@ -447,7 +464,11 @@ impl<'a> EffectPass<'a> {
                 content_fill
             }
         };
-        Buffer { rect: self.big, px: content.px.iter().zip(&shape.v).enumerate().map(|(i, (p, a))| [p[0], p[1], p[2], lay_alpha(i, p, *a)]).collect() }
+        let mut lay = alloc.filled(self.big, [0.0; 4])?;
+        for (i, (out, (p, a))) in lay.px.iter_mut().zip(content.px.iter().zip(&shape.v)).enumerate() {
+            *out = [p[0], p[1], p[2], lay_alpha(i, p, *a)];
+        }
+        Ok(lay)
     }
 
     /// Paints the interior effects other than strokes and bevels: overlays, satin, inner glow
@@ -535,7 +556,14 @@ impl<'a> EffectPass<'a> {
 
     /// Strokes. Inside parts are painted over the layer (bottom instance first); outside parts
     /// are slid beneath it, so the first listed (top) instance is processed first.
-    fn paint_inside_strokes(&self, lay: &mut Buffer, shape: &Map, strokes: &[&photocraft_doc::StrokeFx], fields: &StrokeFields) {
+    fn paint_inside_strokes_with<A: BufferAlloc>(
+        &self,
+        lay: &mut Buffer,
+        shape: &Map,
+        strokes: &[&photocraft_doc::StrokeFx],
+        fields: &StrokeFields,
+        alloc: &A,
+    ) -> Result<(), A::Error> {
         for st in strokes.iter().rev().copied() {
             let (in_w, _) = stroke_widths(st);
             if in_w <= 0.0 {
@@ -549,7 +577,7 @@ impl<'a> EffectPass<'a> {
                 // A Normal stroke replaces the layer under it instead of blending with it
                 // (Photoshop): at 50 % opacity an opaque pixel under the stroke turns into the
                 // stroke colour at 50 % alpha, not a 50/50 mix.
-                let mut stroke_px = Buffer { rect: self.big, px: vec![[0.0; 4]; lay.px.len()] };
+                let mut stroke_px = alloc.filled(self.big, [0.0; 4])?;
                 paint_fx(&mut stroke_px, &m, &st.paint, self.stroke_frame(st), self.anchor, self.big, BlendMode::Normal, st.common.opacity, self.patterns);
                 for ((p, s), cov) in lay.px.iter_mut().zip(&stroke_px.px).zip(&m.v) {
                     if s[3] <= 0.0 {
@@ -565,6 +593,7 @@ impl<'a> EffectPass<'a> {
                 paint_fx(lay, &m, &st.paint, self.stroke_frame(st), self.anchor, self.big, st.common.blend, st.common.opacity, self.patterns);
             }
         }
+        Ok(())
     }
 
     /// Bevel and emboss effects whose paint is `kind`. Inner ones paint into the layer relative
@@ -589,12 +618,20 @@ impl<'a> EffectPass<'a> {
     /// above a wider Normal stroke multiplies the backdrop, not the lower stroke). Each stroke's
     /// share is its coverage × opacity not yet taken by strokes above; for Normal strokes this
     /// equals stacking them top over bottom.
-    fn paint_outside_strokes(&self, work: &mut Buffer, lay: &Buffer, shape: &Map, strokes: &[&photocraft_doc::StrokeFx], fields: &StrokeFields) {
+    fn paint_outside_strokes_with<A: BufferAlloc>(
+        &self,
+        work: &mut Buffer,
+        lay: &Buffer,
+        shape: &Map,
+        strokes: &[&photocraft_doc::StrokeFx],
+        fields: &StrokeFields,
+        alloc: &A,
+    ) -> Result<(), A::Error> {
         if !strokes.iter().any(|st| stroke_widths(st).1 > 0.0) {
-            return;
+            return Ok(());
         }
         let (w, h) = (self.w, self.h);
-        let base = work.clone();
+        let base = alloc.clone(work)?;
         let mut acc = vec![[0.0f32; 4]; w * h]; // premultiplied Σ share·blended
         let mut cover = vec![0.0f32; w * h];
         for st in strokes.iter().copied() {
@@ -604,7 +641,7 @@ impl<'a> EffectPass<'a> {
             }
             let share = self.outside_share(st, out_w, shape, lay, fields, &mut cover);
             // The stroke blended over the backdrop at full coverage.
-            let mut blended = base.clone();
+            let mut blended = alloc.clone(&base)?;
             let ones = Map { w, h, v: share.iter().map(|&s| if s > 0.0 { 1.0 } else { 0.0 }).collect() };
             // The share already carries the Dissolve choice, so the paint itself composites as Normal.
             let paint_blend = if st.common.blend == BlendMode::Dissolve { BlendMode::Normal } else { st.common.blend };
@@ -628,6 +665,7 @@ impl<'a> EffectPass<'a> {
                 *p = [(p[0] * p[3] * k + a[0]) / alpha, (p[1] * p[3] * k + a[1]) / alpha, (p[2] * p[3] * k + a[2]) / alpha, alpha.min(1.0)];
             }
         }
+        Ok(())
     }
 
     /// The share of each pixel an outside stroke `st` (outside width `out_w`) takes: its coverage

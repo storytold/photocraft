@@ -1080,6 +1080,18 @@ fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
 pub const MAX_TIP: u32 = 2500;
 
 fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
+    define_from_selection_with_renderer(s, p, |doc, area, sink| photocraft_compose::try_render_bands(doc, area, 0, sink))
+}
+
+fn define_from_selection_with_renderer(
+    s: &mut Session,
+    p: &Value,
+    render: impl FnOnce(
+        &photocraft_doc::Document,
+        photocraft_geom::Rect,
+        &mut dyn FnMut(photocraft_compose::Buffer) -> Result<()>,
+    ) -> std::result::Result<(), photocraft_compose::RenderBandsError<EngineError>>,
+) -> Result<Value> {
     let cmd = "brush.defineFromSelection";
     let name = name_param(p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -1116,10 +1128,7 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     // A selection mask, when present, is a second buffer of the same size; it must fail gracefully too
     // (review of #5469), so read it through the fallible allocator.
     let sv = crate::allocation::read_region(sel, area, "defining a brush from the selection")?;
-    // Keep a fault-injection checkpoint before entering compositor-owned scratch storage.
-    // The compositor's scratch allocation itself is not fallible through this call.
-    crate::allocation::checkpoint("defining a brush from the selection")?;
-    photocraft_compose::render_bands(&d.doc, area, 0, |band| -> Result<()> {
+    let rendered = render(&d.doc, area, &mut |band| -> Result<()> {
         for (row, pixels) in band.px.chunks_exact(w).enumerate() {
             let y = (band.rect.y0 - area.y0) as usize + row;
             for (x, c) in pixels.iter().enumerate() {
@@ -1136,7 +1145,14 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         Ok(())
-    })?;
+    });
+    match rendered {
+        Ok(()) => {}
+        Err(photocraft_compose::RenderBandsError::Sink(error)) => return Err(error),
+        Err(photocraft_compose::RenderBandsError::Allocation(error)) => {
+            return Err(crate::allocation::error("defining a brush from the selection", &error.to_string()));
+        }
+    }
     let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
     upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new(), captures: Default::default() });
     s.tools.brush = brush;
