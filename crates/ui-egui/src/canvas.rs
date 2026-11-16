@@ -1972,6 +1972,26 @@ fn pen_tool_cursor(app: &PhotocraftApp, ui: &egui::Ui, tool: Tool, doc: [f64; 2]
     pen_cursor(ui.ctx(), tool, p)
 }
 
+/// Convert Point's cursor at screen point `p` (document point `doc`): the crosshair for precise
+/// Other Cursors (#4639), else the tool's caret where a press converts an anchor or grabs a shown
+/// handle end and the black arrow elsewhere, that arrow with a "+" badge while ⌥ is held (#12746).
+/// Both bitmaps are the ones already cached per shape and scale, so a hover that flips caret and
+/// arrow back and forth rasterizes neither again.
+fn convert_point_tool_cursor(app: &PhotocraftApp, ui: &egui::Ui, painter: &egui::Painter, doc: [f64; 2], p: Pos2) -> egui::CursorIcon {
+    if precise_other_cursor(app) {
+        return egui::CursorIcon::Crosshair;
+    }
+    let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+    match cursors::convert_point_cursor(app, mods, doc) {
+        cursors::ConvertPointCursor::Caret => pen_cursor(ui.ctx(), Tool::ConvertPoint, p),
+        cursors::ConvertPointCursor::Arrow => crate::tool_cursor::arrow(ui.ctx(), p),
+        cursors::ConvertPointCursor::ArrowPlus => {
+            crate::tool_feedback::draw_badge(painter, p, crate::tool_feedback::Badge::Add, false);
+            crate::tool_cursor::arrow(ui.ctx(), p)
+        }
+    }
+}
+
 /// Path Selection's own arrow (#13295): white with a black outline, the solid black one with ⌥
 /// over a component. ⌘ keeps the white one, as measured; Precise keeps the crosshair.
 fn path_selection_cursor(app: &PhotocraftApp, ui: &egui::Ui, doc: [f64; 2], p: Pos2) -> egui::CursorIcon {
@@ -2126,13 +2146,15 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         {
             crate::tool_cursor::continue_path(painter, p)
         }
+        // Convert Point: the caret only over an anchor or a shown handle end of the targeted path,
+        // the black arrow elsewhere; with ⌥ that arrow carries "+", ⌘/Ctrl is the arrow everywhere
+        // (#12746). Precise Other Cursors keeps the crosshair, as for the other pen tools (#4639).
+        Tool::ConvertPoint => convert_point_tool_cursor(app, ui, painter, xf.to_doc(p), p),
         // Add Anchor Point: the pen with "+" only over a segment a click would split, else the
         // black arrow (#12729); ⌘ is Direct Selection's arrow. ⌥ and Precise stay as they were.
         // The pen tools: their own icon with its nib on the point, or the crosshair for
         // precise Other Cursors (#4639); Add Anchor Point the black arrow off a segment (#12729).
-        Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
-            pen_tool_cursor(app, ui, tool, xf.to_doc(p), p)
-        }
+        Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint => pen_tool_cursor(app, ui, tool, xf.to_doc(p), p),
         // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
         Tool::Move if crate::move_mods::copying(app, alt) => egui::CursorIcon::Copy,
         Tool::Move | Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask | Tool::Ruler

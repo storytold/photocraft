@@ -146,6 +146,38 @@ pub fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon 
     egui::CursorIcon::None
 }
 
+/// What Convert Point shows under the pointer: its caret (a press converts an anchor or grabs a
+/// shown handle end), the black arrow (a press converts nothing), or that arrow with a "+" badge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConvertPointCursor {
+    Caret,
+    Arrow,
+    ArrowPlus,
+}
+
+/// Convert Point's cursor for the pointer at document point `doc` with `mods` held (#12746): the
+/// caret only where a press works on an anchor or a shown handle end, the black arrow elsewhere.
+/// The decision comes from `direct_select::converts_at`, the hit test the tool's own press makes,
+/// so the caret promises exactly what the press does. ⌥ turns the arrow into the arrow with "+";
+/// ⌘/Ctrl is Direct Selection, whose arrow the reference shows everywhere; ⇧ changes nothing. While
+/// a drag is under way the decision stays the one its press made: the pointer leaves the anchor or
+/// segment it took, mid-drag cursors were not measured, and a caret flipping to an arrow would say
+/// the gesture changed when it did not (the same rule Path Selection's cursor follows).
+pub(crate) fn convert_point_cursor(app: &PhotocraftApp, mods: egui::Modifiers, doc: [f64; 2]) -> ConvertPointCursor {
+    if mods.command {
+        return ConvertPointCursor::Arrow;
+    }
+    let doc = match app.ui.direct_selection.drag.as_ref() {
+        Some(crate::direct_select::Drag::Edit { start, .. }) => *start,
+        _ => doc,
+    };
+    match (crate::direct_select::converts_at(app, doc), mods.alt) {
+        (true, _) => ConvertPointCursor::Caret,
+        (false, true) => ConvertPointCursor::ArrowPlus,
+        (false, false) => ConvertPointCursor::Arrow,
+    }
+}
+
 /// The Color Sampler's cursor over an existing sampler point: the arrow with the sampler target,
 /// or with Alt the arrow with scissors (#11744).
 pub(crate) fn sampler_hover_cursor(ctx: &egui::Context, p: Pos2, alt: bool) -> egui::CursorIcon {

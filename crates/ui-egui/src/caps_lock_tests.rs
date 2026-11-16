@@ -150,7 +150,7 @@ fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
         Tool::CurvaturePen,
         // Add Anchor Point shows the pen only over a segment (#12729): `add_anchor_cursor_tests`.
         Tool::DeleteAnchorPoint,
-        Tool::ConvertPoint,
+        // Convert Point shows its caret only over an anchor or shown handle (#12746): `convert_point_cursor_tests`.
         Tool::Eyedropper,
         Tool::ColorSampler,
         Tool::PaintBucket,

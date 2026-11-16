@@ -546,6 +546,14 @@ fn hit_converting(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hi
         .filter(|(_, path, h)| !matches!(h, Hit::Anchor(k) if beyond(path, *k)))
 }
 
+/// Does a Convert Point press at `p` work on an anchor or a shown handle end? Read-only for the
+/// cursor (#12746), and it is the tool's own hit test (`hit_converting`, the one `press` uses), so
+/// the caret promises exactly what the press does. A segment hit (the drag of #12741) does not ask
+/// for the caret.
+pub(crate) fn converts_at(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    matches!(hit_converting(app, p), Some((_, _, Hit::Anchor(_) | Hit::Handle(..))))
+}
+
 fn retracted(k: &photocraft_doc::Knot, h: Handle) -> bool {
     let c = if h == Handle::In { k.in_ctrl } else { k.out_ctrl };
     (c.x - k.anchor.x).abs() < 1e-9 && (c.y - k.anchor.y).abs() < 1e-9

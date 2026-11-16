@@ -989,3 +989,6 @@ mod count_tests;
 
 #[cfg(test)]
 mod add_anchor_cursor_tests;
+
+#[cfg(test)]
+mod convert_point_cursor_tests;
