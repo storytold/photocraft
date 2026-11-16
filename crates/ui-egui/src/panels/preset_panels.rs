@@ -58,9 +58,20 @@ pub struct PresetUi {
     /// a list follow it in library order. Saved with the UI state.
     #[serde(rename = "groupOrder", alias = "group_order", deserialize_with = "lenient_group_order", skip_serializing_if = "BTreeMap::is_empty")]
     pub group_order: BTreeMap<String, Vec<String>>,
-    /// In-place rename: (panel, preset or "group:<name>", text).
+    /// In-place rename: (panel, target, text).
     #[serde(skip)]
-    pub renaming: Option<(String, String, String)>,
+    pub renaming: Option<(String, RenameTarget, String)>,
+}
+
+/// What an in-place rename edits: a preset key, or a group name (#15279). A discriminator type,
+/// not the old `"group:<name>"` string prefix: a preset key may itself start with `group:` (for
+/// example a custom shape named `group:Icons`), and then the prefix would target the wrong thing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RenameTarget {
+    /// The preset with this key.
+    Preset(String),
+    /// The group with this name.
+    Group(String),
 }
 
 /// Read `groupOrder` keeping what makes sense: non-object values, non-list entries and non-string
@@ -404,7 +415,7 @@ fn draw_group_header(ui: &mut egui::Ui, group: &GroupView, context: GroupHeaderC
     }
     response.context_menu(|ui| {
         if ui.button(tl!("Rename Group…")).clicked() {
-            state.renaming = Some((panel.to_string(), format!("group:{}", group.name), group.name.clone()));
+            state.renaming = Some((panel.to_string(), RenameTarget::Group(group.name.clone()), group.name.clone()));
             ui.close();
         }
         if ui.button(tl!("Delete Group")).clicked() {
@@ -435,7 +446,7 @@ pub(crate) fn browser(
     let list = size <= MIN_THUMB + 0.5;
     let selected = st.selected.get(panel).cloned();
     // Rename field (Photoshop opens a small dialog; inline keeps the panel modeless).
-    if let Some((p, key, mut text)) = st.renaming.clone().filter(|r| r.0 == panel) {
+    if let Some((p, target, mut text)) = st.renaming.clone().filter(|r| r.0 == panel) {
         let mut done = None;
         ui.horizontal(|ui| {
             let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
@@ -447,13 +458,13 @@ pub(crate) fn browser(
                 done = Some(ui.input(|i| i.key_pressed(egui::Key::Enter)));
             }
         });
-        st.renaming = Some((p, key.clone(), text.clone()));
+        st.renaming = Some((p, target.clone(), text.clone()));
         if let Some(ok) = done {
             st.renaming = None;
             if ok && !text.trim().is_empty() {
-                match key.strip_prefix("group:") {
-                    Some(g) => ev.push(Ev::RenameGroup(g.to_string(), text.trim().to_string())),
-                    None => ev.push(Ev::Rename(key, text.trim().to_string())),
+                match target {
+                    RenameTarget::Group(g) => ev.push(Ev::RenameGroup(g, text.trim().to_string())),
+                    RenameTarget::Preset(key) => ev.push(Ev::Rename(key, text.trim().to_string())),
                 }
             }
         }
@@ -556,7 +567,7 @@ pub(crate) fn browser(
                     }
                     resp.context_menu(|ui| {
                         if ui.button(tl!("Rename…")).clicked() {
-                            st.renaming = Some((panel.to_string(), it.key.clone(), it.name.clone()));
+                            st.renaming = Some((panel.to_string(), RenameTarget::Preset(it.key.clone()), it.name.clone()));
                             ui.close();
                         }
                         if ui.button(tl!("Delete")).clicked() {
@@ -680,7 +691,7 @@ fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Ev, new_param
         Ev::NewGroup => {
             if let Some(r) = run(app, &edit, json!({"action": "newGroup", "name": "Group"})) {
                 let g = r["group"].as_str().unwrap_or_default().to_string();
-                app.ui.presets_ui.renaming = Some((panel.into(), format!("group:{g}"), g));
+                app.ui.presets_ui.renaming = Some((panel.into(), RenameTarget::Group(g.clone()), g));
             }
         }
         Ev::New => {
@@ -688,7 +699,7 @@ fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Ev, new_param
                 let name = r.get("name").or(r.get("pattern")).and_then(Value::as_str).unwrap_or_default().to_string();
                 app.ui.presets_ui.selected.insert(panel.into(), name.clone());
                 if prefix != "pattern.presets" {
-                    app.ui.presets_ui.renaming = Some((panel.into(), name.clone(), name));
+                    app.ui.presets_ui.renaming = Some((panel.into(), RenameTarget::Preset(name.clone()), name));
                 }
             }
         }
@@ -930,5 +941,70 @@ mod tests {
         app.drag = None;
         app.ui.tool = Tool::Brush;
         assert_eq!(crate::retouch_ui::source_marker_point(&app), None);
+    }
+
+    /// #15279: drive the shared browser's rename field in the Shapes panel to its end: the field
+    /// takes focus, Enter commits, and the field closes.
+    fn rename_in_shapes_panel(mut app: PhotocraftApp, target: RenameTarget, text: &str) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        app.ui.presets_ui.renaming = Some(("shapes".into(), target, text.into()));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 400.0)).build_ui_state(|ui, app| shapes_panel(app, ui), app);
+        h.run_steps(2);
+        h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+        assert!(h.state().ui.presets_ui.renaming.is_none(), "Enter closes the rename field");
+        h
+    }
+
+    /// #15279: a preset key that starts with `group:` renames the preset, not a group carrying the
+    /// rest of the name — whether or not such a group exists. The old `"group:<name>"` string
+    /// encoding read that key as a group rename.
+    #[test]
+    fn renaming_a_preset_key_that_starts_with_group_renames_the_preset() {
+        for group_exists in [true, false] {
+            let (mut app, _) = app();
+            if group_exists {
+                app.run("shape.presets.edit", json!({"action": "newGroup", "name": "Icons"})).unwrap();
+            }
+            app.run("shape.presets.new", json!({"name": "group:Icons", "path": "M 0 0 L 100 0 L 100 100 Z"})).unwrap();
+            let h = rename_in_shapes_panel(app, RenameTarget::Preset("group:Icons".into()), "Renamed Shape");
+            let groups = photocraft_engine::presets::shapes::all_groups(&h.state().session);
+            let shapes: Vec<String> = groups.iter().flat_map(|g| g.items.iter().map(|s| s.name.clone())).collect();
+            assert!(shapes.iter().any(|n| n == "Renamed Shape"), "{group_exists}: the shape was not renamed: {shapes:?}");
+            assert!(!shapes.iter().any(|n| n == "group:Icons"), "{group_exists}: the old name is gone");
+            let group_names: Vec<&str> = groups.iter().map(|g| g.name.as_str()).collect();
+            assert!(!group_names.contains(&"Renamed Shape"), "{group_exists}: no group took the new name: {group_names:?}");
+            assert_eq!(group_names.contains(&"Icons"), group_exists, "{group_exists}: the Icons group is left alone");
+        }
+    }
+
+    /// #15279: renaming a group still targets the group itself.
+    #[test]
+    fn renaming_a_group_still_targets_the_group() {
+        let (mut app, _) = app();
+        app.run("shape.presets.edit", json!({"action": "newGroup", "name": "Icons"})).unwrap();
+        let h = rename_in_shapes_panel(app, RenameTarget::Group("Icons".into()), "More Icons");
+        let groups = photocraft_engine::presets::shapes::all_groups(&h.state().session);
+        let names: Vec<&str> = groups.iter().map(|g| g.name.as_str()).collect();
+        assert!(names.contains(&"More Icons") && !names.contains(&"Icons"), "{names:?}");
+    }
+
+    /// #15279: the footer's New Group opens the rename field on the *group*, even when a preset
+    /// already carries the new group's name.
+    #[test]
+    fn a_new_group_renames_the_group_not_a_preset_of_the_same_key() {
+        let (mut app, _) = app();
+        app.run("shape.presets.new", json!({"name": "Group", "path": "M 0 0 L 100 0 L 100 100 Z"})).unwrap();
+        assert!(generic(&mut app, "shapes", "shape.presets", &Ev::NewGroup, json!({"name": "Shape"})), "New Group dispatched");
+        let (_, target, _) = app.ui.presets_ui.renaming.clone().expect("the new group is renamed in place");
+        let RenameTarget::Group(g) = target else { panic!("a new group targets the group, not {target:?}") };
+        assert!(g.starts_with("Group"), "the created group is {g}");
+        // And the field commits it back to the group: the preset of the same key keeps its name.
+        let had_preset = photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|grp| grp.items.iter().any(|s| s.name == g));
+        let h = rename_in_shapes_panel(app, RenameTarget::Group(g.clone()), "Kit");
+        let groups = photocraft_engine::presets::shapes::all_groups(&h.state().session);
+        assert!(groups.iter().any(|grp| grp.name == "Kit"), "the group took the new name");
+        if had_preset {
+            assert!(groups.iter().any(|grp| grp.items.iter().any(|s| s.name == g)), "the same-named preset is untouched");
+        }
     }
 }
