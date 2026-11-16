@@ -49,7 +49,7 @@ fn setup(h: &mut Harness, tool: &str) {
     {
         let app = h.state_mut();
         while app.session.active().is_some() {
-            app.run("file.close", json!({"discard": true})).expect("close");
+            app.run("file.close", json!({"save": "discard"})).expect("close");
         }
         app.run("file.new", json!({"width": 3000, "height": 2000, "background": "white"})).expect("new");
         app.sync_views();
@@ -152,7 +152,7 @@ fn rotated_marquee_scrolls_on_the_axis_that_is_visibly_clipped() {
     for overscroll in [true, false] {
         {
             let app = h.state_mut();
-            app.run("file.close", json!({"discard": true})).expect("close");
+            app.run("file.close", json!({"save": "discard"})).expect("close");
             app.run("file.new", json!({"width": width, "height": height, "background": "white"})).expect("new");
             app.run("prefs.set", json!({"path": "tools.overscroll", "value": overscroll})).expect("overscroll");
             app.sync_views();

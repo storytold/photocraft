@@ -43,7 +43,19 @@ pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
                 "a nonempty vector path".into(),
             ),
             (Some(p), _) => (p.accepts(value), p.expected()),
-            (None, "layer") => (value.as_u64().is_some() || value.is_string(), "an unsigned layer id or layer name".into()),
+            // The forms `explicit_layer` resolves: an id, a name, or a recorded reference
+            // (`{"name":…}`, `{"background":true}`, `{"index":…}` / `{"ordinal":…}`); an
+            // unresolvable one fails later with the layer listing.
+            (None, "layer") => (
+                value.as_u64().is_some()
+                    || value.is_string()
+                    || value.as_object().is_some_and(|o| {
+                        o.contains_key("index")
+                            || o.contains_key("ordinal")
+                            || (o.len() == 1 && (o.get("name").is_some_and(Value::is_string) || o.get("background") == Some(&Value::Bool(true))))
+                    }),
+                "an unsigned layer id, a layer name or a recorded layer reference".into(),
+            ),
             (None, "coalesce") => (value.is_string(), "a string".into()),
             (None, "target") if id.starts_with("filter.") => (
                 value.as_str().is_some_and(|s| matches!(s, "pixels" | "mask" | "filterMask" | "quickMask"))

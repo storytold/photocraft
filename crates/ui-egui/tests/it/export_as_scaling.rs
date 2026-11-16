@@ -77,7 +77,7 @@ fn export_as_scales_a_narrow_image_without_editing_the_source() {
         {
             let app = h.state_mut();
             while app.session.active().is_some() {
-                app.run("file.close", json!({"discard": true})).expect("close");
+                app.run("file.close", json!({"save": "discard"})).expect("close");
             }
             app.run("file.new", json!({"width": 1, "height": 100, "depth": depth, "background": "white"})).expect("new narrow document");
             app.sync_views();

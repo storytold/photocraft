@@ -119,7 +119,7 @@ fn frames(h: &mut Harness, c: Case) -> (Pixels, Pixels, Pixels, bool) {
         let app = h.state_mut();
         // Close what an earlier case left open.
         while app.session.active().is_some() {
-            app.run("file.close", json!({"discard": true})).expect("close");
+            app.run("file.close", json!({"save": "discard"})).expect("close");
         }
         app.run("file.new", json!({"width": 300, "height": 200, "depth": c.depth, "background": "white"})).expect("new");
         app.run("edit.fill", json!({"color": "#1a2550"})).expect("fill");

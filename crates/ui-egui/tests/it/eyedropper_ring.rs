@@ -49,7 +49,7 @@ fn setup(h: &mut Harness) -> Pos2 {
     {
         let app = h.state_mut();
         while app.session.active().is_some() {
-            app.run("file.close", json!({"discard": true})).expect("close");
+            app.run("file.close", json!({"save": "discard"})).expect("close");
         }
         app.run("file.new", json!({"width": 400, "height": 400, "background": "white"})).expect("new");
         app.run("edit.fill", json!({"color": format!("#{BG:02x}{BG:02x}{BG:02x}")})).expect("fill");

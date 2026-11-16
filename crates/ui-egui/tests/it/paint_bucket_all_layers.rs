@@ -37,7 +37,7 @@ fn setup(h: &mut Harness) -> LayerId {
     let background = {
         let app = h.state_mut();
         while app.session.active().is_some() {
-            app.run("file.close", json!({"discard": true})).expect("close");
+            app.run("file.close", json!({"save": "discard"})).expect("close");
         }
         app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).expect("new");
         let background = app.session.active().expect("document").active_layer.expect("background");
