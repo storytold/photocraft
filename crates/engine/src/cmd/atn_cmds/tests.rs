@@ -7116,8 +7116,14 @@ fn whole_library_conditional_scopes_roundtrip_without_borrowing_external_targets
     let saved = s.execute("actions.save", json!({})).unwrap();
     let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
     let imported = super::convert::import_sets(&bytes, None).unwrap().remove(0).0.imported;
-    assert_eq!(imported.actions[0].steps[0].1["thenSet"], DEFAULT_SET);
-    assert_eq!(imported.actions[0].steps[0].1["elseSet"], DEFAULT_SET);
+    let params = &imported.actions[0].steps[0].1;
+    assert_eq!(params["set"], DEFAULT_SET);
+    for branch in ["then", "else"] {
+        assert!(params.get(format!("{branch}Set")).is_none());
+        let target = crate::actions_cmds::conditional_branch(params, branch).unwrap().unwrap();
+        assert_eq!(target["set"], DEFAULT_SET);
+        assert_eq!(crate::actions_cmds::resolve_play_target(&imported.actions, &target, "actions.conditional").unwrap(), 1);
+    }
     s.execute("actions.replace", json!({"data":b64(&bytes),"confirm":true})).unwrap();
     let params = &s.actions.list[0].steps[0].1;
     assert!(params.get("thenActionId").is_none(), "included target must remain resolvable: {params}");
@@ -7155,7 +7161,12 @@ fn repeated_id_export_reuses_unique_targets_and_rejects_duplicate_ids() {
     assert_eq!(imported.actions[0].steps.len(), 64);
     for (_, params) in &imported.actions[0].steps {
         assert_eq!(params["then"], "Target");
-        assert_eq!(params["thenSet"], "New");
+        assert_eq!(params["set"], "New");
+        assert!(params.get("thenSet").is_none());
+        assert!(params.get("thenActionId").is_none());
+        let target = crate::actions_cmds::conditional_branch(params, "then").unwrap().unwrap();
+        assert_eq!(target["set"], "New");
+        assert_eq!(crate::actions_cmds::resolve_play_target(&imported.actions, &target, "actions.conditional").unwrap(), 1);
     }
     let mut duplicate = Action::new("Different", vec![]);
     duplicate.action_id = Some(id.into());

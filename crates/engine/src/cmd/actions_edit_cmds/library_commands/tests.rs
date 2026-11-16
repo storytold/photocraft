@@ -447,9 +447,14 @@ fn empty_pre_attachment_clear_replaces_the_saved_library() {
         }
         assert!(s.attach_preset_store(open(Box::new(store.clone()))).is_empty());
         assert_eq!(s.actions.list.first().map(|action| action.name.as_str()), undo.then_some("Disk"));
+        let saved = store.read(crate::preset_store::ACTIONS_FILE, crate::preset_store::MAX_ACTIONS_BYTES).unwrap();
         let mut reopened = Session::new();
-        assert!(reopened.attach_preset_store(open(Box::new(store))).is_empty());
-        assert_eq!(reopened.actions.list, s.actions.list);
+        assert!(reopened.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+        // Restart must preserve every persisted action field, not the opaque archive backing it.
+        assert_eq!(serde_json::to_value(&reopened.actions.list).unwrap(), serde_json::to_value(&s.actions.list).unwrap());
+        assert_eq!(reopened.actions.sets, s.actions.sets);
+        assert_eq!(reopened.actions.set_rows, s.actions.set_rows);
+        assert_eq!(store.read(crate::preset_store::ACTIONS_FILE, crate::preset_store::MAX_ACTIONS_BYTES).unwrap(), saved);
     }
 }
 

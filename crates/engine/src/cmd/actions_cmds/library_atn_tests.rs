@@ -1395,10 +1395,10 @@ fn portable_conditionals_use_the_exported_wire_set_name() {
             assert_eq!(params["if"], "hasLayers");
             assert_eq!(params["then"], "Child");
             assert_eq!(params["else"], "Child");
-            // Ordinary import retains the native common wire scope; normalized branch scopes win.
-            assert_eq!(params["set"], wire);
+            // Import normalizes the native wire scope to the shared logical scope.
+            assert_eq!(params["set"], logical);
             for branch in ["then", "else"] {
-                assert_eq!(params[format!("{branch}Set")], logical);
+                assert!(params.get(format!("{branch}Set")).is_none());
                 let target = super::conditional_branch(params, branch).unwrap().unwrap();
                 assert_eq!(target["set"], logical);
                 assert_eq!(super::resolve_play_target(&imported.actions, &target, "actions.conditional").unwrap(), 0);
