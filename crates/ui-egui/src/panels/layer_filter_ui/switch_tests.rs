@@ -512,7 +512,6 @@ fn control_patch_reports_a_refused_deselection_and_retries_the_same_filter() {
     assert_eq!(app.session.active().unwrap().selected_layers(), [blue], "after success an identical patch does not prune a later selection");
 }
 
-
 /// A filter-driven partial deselection uses the normal command and engine authorization gates,
 /// and a refused mixed patch leaves every other field untouched for retry.
 #[test]
