@@ -396,6 +396,26 @@ fn rasterize_from_the_menu_converts_every_selected_layer() {
     assert_eq!(h.state().session.active().unwrap().selected_layers().len(), 2, "the selection survives");
 }
 
+/// #15227, #15219: in the Layers panel's right-click menu ↑ and ↓ stop at the first and last
+/// entries instead of wrapping, and Home and End go to them, ahead of the page keys that scroll
+/// the canvas with Home and End. With several layers selected Blending Options… is greyed, so the
+/// first entry is Duplicate Layers…; the last is the Color submenu.
+#[test]
+fn the_layer_menu_keys_stop_at_its_ends_and_home_and_end_reach_them() {
+    use crate::menus::popup_keys::tests::{focused, press};
+    use egui::Key;
+    let (mut h, _) = open_multi_selection_menu();
+    let after = |h: &mut egui_kittest::Harness<'static, crate::PhotocraftApp>, key: Key| {
+        press(h, key);
+        focused(h).unwrap_or_default()
+    };
+    assert_eq!(after(&mut h, Key::End), "Color");
+    assert_eq!(after(&mut h, Key::ArrowDown), "Color", "↓ on the last entry stays there");
+    assert_eq!(after(&mut h, Key::Home), "Duplicate Layers…");
+    assert_eq!(after(&mut h, Key::ArrowUp), "Duplicate Layers…", "↑ on the first entry stays there");
+    assert_eq!(after(&mut h, Key::ArrowDown), "Delete Layers");
+}
+
 /// Group from Layers is offered for a multi-layer selection too (it used to be dropped from
 /// the menu then). As in Photoshop it asks in the New Group from Layers dialog first; OK puts
 /// every selected layer in one new group, leaving the rest alone.
