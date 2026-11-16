@@ -1062,6 +1062,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         }
         return result;
     }
+    if cmd == "file.automate.batch" {
+        params = crate::view_cmds::normalize_batch_destination(params);
+    }
     let (cmd, params) = match crate::smart_ui::confirm_command(app, &d.fields, cmd, params) {
         Ok(edit) => edit,
         Err(e) => {
@@ -1071,7 +1074,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         }
     };
     let revision = app.session.active().map(|st| st.revision);
-    let result = crate::actions::run_step_dialog(app, &d.fields, &cmd, params.clone());
+    let result = batch_run_result(&cmd, crate::actions::run_step_dialog(app, &d.fields, &cmd, params.clone()));
     if let Ok(r) = &result {
         report_file_errors(app, &d, r);
     }
@@ -1108,10 +1111,74 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         }
         // A step dialog of a playing action: the action continues after it.
         crate::actions::resume(app, &d.fields)?;
+        report_batch_run(app, &cmd, result.as_ref().ok());
+        // Success closes the dialog (already popped). Form dialogs other than Batch /
+        // Image Processor never re-open here.
+    } else if matches!(cmd.as_str(), "file.automate.batch" | "file.scripts.imageProcessor") {
+        // Keep Batch / Image Processor open so a bad folder or missing action is editable,
+        // instead of vanishing with only a status line. Other `__form` dialogs still close.
+        app.ui.dialogs.push(d);
     } else {
         crate::actions::abandoned(app, &d.fields);
     }
     result
+}
+
+fn batch_job_pending(v: &Value) -> bool {
+    v.get("pending").and_then(Value::as_bool) == Some(true) || (v.get("job").is_some() && v.get("files").is_none())
+}
+
+/// When nothing was written (empty folder or every input failed), treat the run as an error so
+/// the dialog stays open instead of closing as if nothing happened.
+fn batch_run_result(cmd: &str, result: Result<Value, String>) -> Result<Value, String> {
+    let Ok(v) = &result else { return result };
+    if !matches!(cmd, "file.automate.batch" | "file.scripts.imageProcessor") {
+        return result;
+    }
+    // Desktop Batch is a background job: `{job, pending}` is not a finished run.
+    if batch_job_pending(v) {
+        return result;
+    }
+    let files = v.get("files").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+    if files > 0 {
+        return result;
+    }
+    let empty = Vec::new();
+    let errors = v.get("errors").and_then(Value::as_array).unwrap_or(&empty);
+    let first = errors.first();
+    let msg = first.and_then(|e| e.get("error").and_then(Value::as_str)).unwrap_or("no input images");
+    let n = errors.len() as u64;
+    Err(match first.and_then(|e| e.get("file").and_then(Value::as_str)) {
+        Some(path) => {
+            let failed = crate::i18n::trn(crate::i18n::current(), n, "{n} failed", "{n} failed");
+            format!("{path}: {msg} ({failed})")
+        }
+        None => msg.to_string(),
+    })
+}
+
+/// Batch and Image Processor write into a destination folder and leave the open document
+/// alone, so a status line is the only sign they ran. The progress dialog covers the run itself.
+pub(crate) fn report_batch_run(app: &mut PhotocraftApp, cmd: &str, result: Option<&Value>) {
+    if !matches!(cmd, "file.automate.batch" | "file.scripts.imageProcessor") {
+        return;
+    }
+    let Some(v) = result else { return };
+    if batch_job_pending(v) {
+        app.ui.status.clear();
+        app.ui.status_error = false;
+        return;
+    }
+    let n = v.get("files").and_then(Value::as_array).map(|a| a.len() as u64).unwrap_or(0);
+    let e = v.get("errors").and_then(Value::as_array).map(|a| a.len() as u64).unwrap_or(0);
+    let processed = crate::i18n::trn(crate::i18n::current(), n, "Processed {n} file", "Processed {n} files");
+    app.ui.status = if e == 0 {
+        processed
+    } else {
+        let failed = crate::i18n::trn(crate::i18n::current(), e, "{n} failed", "{n} failed");
+        format!("{processed} ({failed})")
+    };
+    app.ui.status_error = n == 0 && e > 0;
 }
 
 /// Check child pickers, file access and dialog-specific inputs before removing the dialog.

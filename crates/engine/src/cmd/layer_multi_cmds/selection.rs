@@ -170,6 +170,9 @@ pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Optio
         }
         return p;
     }
+    // Leave a non-selected id as-is. `name` is a rename on `layer.setProps`, not a target, so
+    // converting the id would rename on playback. A missing id fails at playback (Photoshop:
+    // "not currently available"), including in Batch — no quiet retarget onto the active layer.
     p
 }
 

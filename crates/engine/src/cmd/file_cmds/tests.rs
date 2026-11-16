@@ -275,6 +275,73 @@ fn batch_save_and_close_preserves_caller_and_failed_sources() {
     assert_eq!(caller_state(&s), before);
 }
 
+/// A recorded step whose numeric layer is missing fails that file (Photoshop: not currently
+/// available). Batch must not quietly retarget onto the active layer and overwrite the source.
+#[test]
+fn batch_missing_layer_fails_without_overwriting() {
+    let dir = tmp("batch-missing-layer");
+    let path = png(&dir, "a.png", 4, 4, "#ff0000");
+    let before = std::fs::read(&path).unwrap();
+    let mut s = Session::new();
+    for steps in [
+        json!([["layer.setProps", {"layer": 9001, "blend": "Soft Light"}]]),
+        json!([["layer.delete", {"layer": 9001}]]),
+    ] {
+        let result = s
+            .execute("file.automate.batch", json!({"input":[&path],"destination":"saveAndClose","steps":steps}))
+            .unwrap();
+        assert!(result["files"].as_array().unwrap().is_empty(), "{result}");
+        assert!(!result["errors"].as_array().unwrap().is_empty(), "{result}");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "a missing layer must not overwrite the source");
+    }
+}
+
+/// Destination None runs the action without a Batch folder write or source overwrite; the
+/// action's own Save steps decide what is written.
+#[test]
+fn batch_destination_none_leaves_sources_untouched_without_a_save() {
+    let dir = tmp("batch-dest-none");
+    let path = png(&dir, "a.png", 4, 4, "#ff0000");
+    let before = std::fs::read(&path).unwrap();
+    let mut s = Session::new();
+    let result = s
+        .execute(
+            "file.automate.batch",
+            json!({"input":[&path],"destination":"none","steps":[["image.adjustments.invert",{}]]}),
+        )
+        .unwrap();
+    assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+    assert_eq!(result["files"].as_array().map(Vec::len), Some(1), "{result}");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "None must not overwrite without a Save step");
+    assert!(s.documents().is_empty(), "folder Batch still uses a scratch session");
+}
+
+#[test]
+fn batch_destination_none_runs_a_recorded_save() {
+    let dir = tmp("batch-dest-none-save");
+    let path = png(&dir, "a.png", 4, 4, "#ff0000");
+    let before = std::fs::read(&path).unwrap();
+    let out = join(&dir, "from-action.png");
+    let mut s = Session::new();
+    let result = s
+        .execute(
+            "file.automate.batch",
+            json!({
+                "input":[&path],"destination":"none",
+                "steps":[
+                    ["image.adjustments.invert",{}],
+                    ["file.saveAs",{"path":out}]
+                ]
+            }),
+        )
+        .unwrap();
+    assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "None must not overwrite the source");
+    let written = std::fs::read(&out).expect("action Save As wrote the result");
+    let data = photocraft_codecs::decode(&written).unwrap().data().to_vec();
+    assert!(data[2] > 200, "inverted red is cyan in the action's Save As output");
+}
+
 /// In-place TIFF keeps layers by default; explicit flattening is allowed only when it loses no layer data.
 #[test]
 fn batch_save_and_close_keeps_tiff_layers() {

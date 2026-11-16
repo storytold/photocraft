@@ -188,6 +188,15 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 continue;
             }
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
+            // Photoshop greys these out for Destination None and Save and Close; hide them so OK
+            // does not ask for a destination folder (None leaves files as the action left them;
+            // Save and Close overwrites each source).
+            if f.get("__command").and_then(Value::as_str) == Some("file.automate.batch")
+                && matches!(f.get("destination").and_then(Value::as_str), Some("none" | "saveAndClose"))
+                && matches!(k.as_str(), "output" | "naming" | "startingSerial" | "format" | "quality" | "namingComponents" | "flatOutput")
+            {
+                continue;
+            }
             if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
                 let label = ui.label(tl!("File Naming"));
                 let mut naming = v.as_str().unwrap_or_default().to_owned();
@@ -298,6 +307,24 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(key));
     }
     camera_data(ui, f);
+}
+
+/// Destination None and Save and Close drop Folder-only fields. Save and Close also forces
+/// `format` to `same` so a leftover JPEG choice cannot rewrite a sibling file.
+pub(crate) fn normalize_batch_destination(mut params: Value) -> Value {
+    let destination = params.get("destination").and_then(Value::as_str).map(str::to_owned);
+    if !matches!(destination.as_deref(), Some("none" | "saveAndClose")) {
+        return params;
+    }
+    if let Some(obj) = params.as_object_mut() {
+        if destination.as_deref() == Some("saveAndClose") {
+            obj.insert("format".into(), json!("same"));
+        }
+        for key in ["output", "naming", "startingSerial", "quality", "namingComponents", "flatOutput"] {
+            obj.remove(key);
+        }
+    }
+    params
 }
 
 /// Batch's inactive Custom quality (#3956): shell state, never a command parameter.
@@ -628,19 +655,26 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             let action = &app.session.actions.list[row];
             let (name, set) = (action.name.clone(), action.set.clone());
             let (names, sets) = crate::actions::action_form_choices(app);
+            let mut labels = subfolders_label().as_object().cloned().unwrap_or_default();
+            labels.insert("destination".into(), json!(tl!("Destination")));
+            labels.insert("none".into(), json!(tl!("None")));
+            labels.insert("saveAndClose".into(), json!(tl!("Save and Close")));
+            labels.insert("folder".into(), json!(tl!("Folder")));
             let mut fields = json!({
                 "action": name, "source": "folder", "input": dir,
-                "includeSubfolders": false, "__labels": subfolders_label(),
+                "includeSubfolders": false, "__labels": labels,
+                // Photoshop defaults to None: the action's own Saves decide; Folder and Save and Close are explicit.
+                "destination": "none",
                 "output": format!("{dir}/batch"), "format": "same", "quality": null,
                 "__batchQuality": 8, "naming": "", "startingSerial": 1,
                 "stopOnError": false, "errorLog": "",
-                "__order": ["set", "action", "source", "input", "includeSubfolders", "output", "format", "naming", "startingSerial", "quality", "stopOnError", "errorLog"]
+                "__order": ["set", "action", "source", "input", "includeSubfolders", "destination", "output", "format", "naming", "startingSerial", "quality", "stopOnError", "errorLog"]
             });
             // The Set dropdown picks between same-named actions; an action outside any set has none.
             if let Some(set) = set {
                 fields["set"] = json!(set);
             }
-            let choices = json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"]});
+            let choices = json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"], "destination": ["none", "folder", "saveAndClose"]});
             let dialog = form(app, id, label, fields, choices);
             crate::actions::bind_batch_dialog(app, dialog, row);
             Some(Ok(json!({"dialog": dialog})))

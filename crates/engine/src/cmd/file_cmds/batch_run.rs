@@ -664,6 +664,60 @@ pub(crate) fn batch_save_point(id: &str) -> bool {
     matches!(id, "file.save" | "file.saveAs" | "file.saveACopy")
 }
 
+/// `(destination_none, save_and_close)` from Batch's Destination menu.
+fn parse_batch_destination(p: &Value, cmd: &str) -> Result<(bool, bool)> {
+    match p.get("destination") {
+        None | Some(Value::Null) => Ok((false, false)),
+        Some(Value::String(value)) if value == "folder" => Ok((false, false)),
+        Some(Value::String(value)) if value == "none" => Ok((true, false)),
+        Some(Value::String(value)) if value == "saveAndClose" => Ok((false, true)),
+        _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: "destination must be none, folder or saveAndClose".into() }),
+    }
+}
+
+fn refuse_output_when(cmd: &str, p: &Value, refuse: bool, msg: &str) -> Result<()> {
+    if refuse && p.get("output").is_some_and(|v| !v.is_null()) {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: msg.into() });
+    }
+    Ok(())
+}
+
+/// Destination None: run the action's own Save / Save As / Save a Copy. `file.save` and
+/// `file.saveAs` are shell commands, so Batch writes through the engine save helpers using the
+/// recorded path (or the document's own path for a plain Save).
+fn run_destination_none_save(scratch: &mut Session, id: &str, params: &Value) -> std::result::Result<(), FileFailure> {
+    let params = crate::actions_cmds::playback_params(scratch, id, params)?;
+    if id == "file.saveACopy" {
+        let r = scratch.execute(id, params)?;
+        if let Some(limit) = crate::actions_cmds::limit_stop(&r) {
+            return Err(FileFailure { error: EngineError::BatchLimit(limit), result: Some(r) });
+        }
+        if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
+            return Err(FileFailure { error: EngineError::Other(error), result: Some(r) });
+        }
+        return Ok(());
+    }
+    let (doc, fallback_path) = {
+        let state = scratch.active().ok_or(EngineError::NoDocument)?;
+        (state.doc.clone(), state.path.clone())
+    };
+    let path = params
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(fallback_path)
+        .ok_or_else(|| EngineError::Other("Destination None Save needs a path (or a saved document)".into()))?;
+    let save = SaveOpts::from_params(scratch, &params, id)?;
+    let warnings = save_doc(&doc, &path, save)?;
+    record_export_warnings(scratch, &path, warnings);
+    if id == "file.save" || id == "file.saveAs" {
+        let state = scratch.active_mut().ok_or(EngineError::NoDocument)?;
+        state.path = Some(path);
+        state.saved_revision = state.revision;
+    }
+    Ok(())
+}
+
 /// Whether Batch and droplets keep a recorded step: save points mark the result, while other
 /// shell-only saves and view steps (zoom, fit) don't change the output (#2752).
 pub(crate) fn batch_keeps_step(id: &str) -> bool {
@@ -720,13 +774,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(value)) => *value,
         _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "overrideOpen must be a boolean".into() }),
     };
-    // Save and Close destination adapted from #10026 (@edaldridgePersonal, b96be5300cfa).
-    let save_and_close = match p.get("destination") {
-        None | Some(Value::Null) => false,
-        Some(Value::String(value)) if value == "folder" => false,
-        Some(Value::String(value)) if value == "saveAndClose" => true,
-        _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "destination must be folder or saveAndClose".into() }),
-    };
+    // Destination None / Save and Close adapted from #10026 (@edaldridgePersonal).
+    // None: run the action without a Batch folder write; the action's own Saves decide.
+    // Save and Close: overwrite each source. Folder: write named copies under output.
+    let (destination_none, save_and_close) = parse_batch_destination(p, cmd)?;
     let save_close_tiff_layers = if save_and_close {
         match p.get("tiffLayers") {
             None | Some(Value::Null) => true,
@@ -736,13 +787,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         false
     };
-    if save_and_close {
-        if p.get("output").is_some_and(|v| !v.is_null()) {
-            return Err(EngineError::BadParams { cmd: cmd.into(), msg: "Save and Close writes each source; omit output".into() });
-        }
-        if p.get("format").is_some_and(|v| !v.is_null() && v.as_str() != Some("same")) {
-            return Err(EngineError::BadParams { cmd: cmd.into(), msg: "Save and Close requires the source format (same)".into() });
-        }
+    refuse_output_when(cmd, p, destination_none, "Destination None has no output folder; omit output")?;
+    refuse_output_when(cmd, p, save_and_close, "Save and Close writes each source; omit output")?;
+    if save_and_close && p.get("format").is_some_and(|v| !v.is_null() && v.as_str() != Some("same")) {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "Save and Close requires the source format (same)".into() });
     }
     let include_non_images = match p.get("includeNonImages") {
         None | Some(Value::Null) => false,
@@ -756,7 +804,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "source must be folder or open".into() }),
     };
     if source == "open" && (save_and_close || override_open || quiet_raw || quiet_profiles || include_non_images) {
-        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "recorded folder-opening and Save and Close options require a folder source".into() });
+        return Err(EngineError::BadParams {
+            cmd: cmd.into(),
+            msg: "recorded folder-opening and Save and Close options require a folder source".into(),
+        });
     }
     // Steps that call another action play it from the caller's actions; the playback stack comes
     // along so an action that batches itself is caught as a recursive call.
@@ -799,10 +850,19 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(value) = p.get("overrideSaveAs").filter(|v| !v.is_null()) {
         let override_save = value.as_bool().ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "overrideSaveAs must be a boolean".into() })?;
         let has_save = steps.iter().any(|(id, _)| batch_save_point(id));
-        if save_and_close && override_save {
-            return Err(EngineError::BadParams { cmd: cmd.into(), msg: "Save and Close does not represent Override Save As".into() });
+        if (save_and_close || destination_none) && override_save {
+            return Err(EngineError::BadParams {
+                cmd: cmd.into(),
+                msg: if save_and_close {
+                    "Save and Close does not represent Override Save As".into()
+                } else {
+                    "Destination None does not represent Override Save As".into()
+                },
+            });
         }
-        if !save_and_close && override_save != has_save {
+        // Folder destination: Override Save As must match whether the action has a Save step.
+        // Destination None lets the action's own Saves run, so the flag is not required there.
+        if !save_and_close && !destination_none && override_save != has_save {
             return Err(EngineError::BadParams {
                 cmd: cmd.into(),
                 msg: if override_save {
@@ -816,7 +876,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some((id, _)) = steps.iter().find(|(id, _)| !batch_save_point(id) && crate::commands::find(id).is_none()) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unknown command `{id}` in the action") });
     }
-    let output = if save_and_close || source == "open" {
+    let output = if save_and_close || destination_none || source == "open" {
         match p.get("output") {
             None | Some(Value::Null) => String::new(),
             Some(Value::String(path)) => path.clone(),
@@ -910,7 +970,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         return result;
     }
     let check_duplicates = recorded_output_guard(p);
-    let names = if save_and_close { None } else { batch_naming::plan(&inputs, &output, &format, p)? };
+    let names = if save_and_close || destination_none { None } else { batch_naming::plan(&inputs, &output, &format, p)? };
     let mut save = SaveOpts::from_params(s, p, cmd)?;
     if save_and_close {
         save.tiff_layers = save_close_tiff_layers;
@@ -923,7 +983,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let color_settings = s.color.settings.clone();
     let raw_settings = s.batch_raw_open.as_ref().unwrap_or(&s.prefs().raw_defaults).clone();
     let script_count = s.actions.script_steps;
-    let outputs: Vec<(String, String)> = if save_and_close {
+    // None and Save and Close pair each input with itself as the write identity; None never writes
+    // that path from Batch (action Saves may), Save and Close overwrites it.
+    let outputs: Vec<(String, String)> = if save_and_close || destination_none {
         inputs.iter().map(|input| (input.path.clone(), input.path.clone())).collect()
     } else {
         match names {
@@ -1063,9 +1125,14 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         if ctx.batch_interrupt_requested() {
                             return Err(EngineError::Cancelled.into());
                         }
-                        // A recorded Save is a step too: Batch writes the output for it.
+                        // A recorded Save is a step too: Folder / Save and Close write the Batch
+                        // destination for it; Destination None runs the Save as the action recorded it.
                         charge_script_step(scratch)?;
                         if batch_save_point(id) {
+                            if destination_none {
+                                run_destination_none_save(scratch, id, params)?;
+                                continue;
+                            }
                             // The scratch session never executes a save point, so the gate would not see it.
                             if let Some(gate) = scratch.authorize {
                                 gate(id, params)?;
@@ -1094,6 +1161,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
                             return Err(FileFailure { error: EngineError::Other(error), result: Some(r) });
                         }
+                    }
+                    // Destination None: no Batch write; action Saves already ran if present.
+                    if destination_none {
+                        return Ok(true);
                     }
                     // While the saved document is still open the steps after the save reach the result too
                     // (#3058), so it is saved after the action as usual. Closed after its save, or with another
@@ -1169,6 +1240,7 @@ fn batch_open_documents(
     policy: &BatchPolicy,
     save: SaveOpts,
 ) -> Result<Value> {
+    let destination_none = p.get("destination").and_then(Value::as_str) == Some("none");
     let originals: Vec<(u64, String, String)> = s
         .documents()
         .iter()
@@ -1224,9 +1296,14 @@ fn batch_open_documents(
             s.set_active(position);
             let mut saved: Option<Arc<Document>> = None;
             for (command, params) in steps {
-                // A recorded Save is a step too: Batch writes the output for it.
+                // A recorded Save is a step too: Folder writes the Batch output for it;
+                // Destination None runs the Save as recorded.
                 charge_script_step(s)?;
                 if batch_save_point(command) {
+                    if destination_none {
+                        run_destination_none_save(s, command, params)?;
+                        continue;
+                    }
                     let state = s.active_mut().ok_or(EngineError::NoDocument)?;
                     saved = Some(state.doc.clone());
                     // With no destination nothing is written, so the document stays changed.
@@ -1243,6 +1320,11 @@ fn batch_open_documents(
                 if let Some(error) = crate::actions_cmds::nested_failure(command, &response) {
                     return Err(FileFailure { error: EngineError::Other(error), result: Some(response) });
                 }
+            }
+            if destination_none {
+                // Count as processed so the dialog status is not "no input images".
+                files.push(path.clone());
+                return Ok(());
             }
             let Some(paths) = &planned else { return Ok(()) };
             let out = paths.get(index).ok_or_else(|| EngineError::Other("batch output plan is incomplete".into()))?;
