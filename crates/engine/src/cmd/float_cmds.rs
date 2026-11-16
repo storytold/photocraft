@@ -379,6 +379,10 @@ fn keeps_floating(id: &str) -> bool {
 /// Before any command (`Session::dispatch`): Undo puts a floating piece back (and is used up:
 /// returns its result); every other command but the floating ones drops it first.
 pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>> {
+    // Copy Fill and Paste Fill act on a shape layer's fill, never on the floating pixels. When
+    // they are refused (the active layer isn't a shape layer, as from the shape tools' canvas menu
+    // over a pixel layer, #13705), the piece stays floating instead of dropping into its layer.
+    let refused_fill_row = matches!(id, "path.style.copyFill" | "path.style.pasteFill") && !s.is_enabled(id);
     let Some(st) = s.active_mut() else { return Ok(None) };
     if floating(st).is_none() {
         st.floating = None;
@@ -399,7 +403,7 @@ pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>>
             st.floating = None;
             Ok(None)
         }
-        _ if keeps_floating(id) => Ok(None),
+        _ if keeps_floating(id) || refused_fill_row => Ok(None),
         _ => drop_floating(s).map(|_| None),
     }
 }

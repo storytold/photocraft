@@ -110,6 +110,36 @@ fn over_a_pixel_layer_the_fill_rows_report_the_layer_and_change_nothing() {
     }
 }
 
+/// With a piece floating over the pixel layer, the fill rows are refused the same way, and the
+/// piece stays floating where it was: it isn't dropped into the layer (a History step) first.
+#[test]
+fn over_a_floating_piece_the_fill_rows_leave_it_floating() {
+    for tool in TOOLS {
+        let mut app = pixel_layer(app(), tool);
+        app.run("select.all", json!({})).unwrap();
+        app.run("select.float", json!({"dx": 3, "dy": 2})).unwrap();
+        let st = app.session.active().unwrap();
+        let layer = st.active_layer.unwrap();
+        let pixels = st.doc.layer(layer).unwrap().content.clone();
+        let piece = |app: &PhotocraftApp| photocraft_engine::float_cmds::floating(app.session.active().unwrap()).map(|f| (f.layer, f.offset));
+        assert_eq!(piece(&app), Some((layer, (3, 2))));
+        let mut h = harness(app);
+        for label in ["Copy Fill", "Paste Fill"] {
+            assert_eq!(greyed_style_rows(&mut h, tool), ["Copy Complete Stroke", "Paste Complete Stroke"], "{tool:?}");
+            let before = h.state().session.journal.len();
+            h.state_mut().ui.status.clear();
+            h.state_mut().ui.status_error = false;
+            pick(&mut h, label);
+            let app = h.state();
+            assert!(app.ui.status_error, "{tool:?}: {label}");
+            assert!(app.ui.status.contains("not a shape layer"), "{tool:?}: {label}: {}", app.ui.status);
+            assert_eq!(app.session.journal.len(), before, "{tool:?}: {label} records nothing");
+            assert_eq!(piece(app), Some((layer, (3, 2))), "{tool:?}: {label} leaves the piece floating");
+            assert!(app.session.active().unwrap().doc.layer(layer).unwrap().content == pixels, "{tool:?}: {label} leaves the layer's pixels");
+        }
+    }
+}
+
 /// Over a shape layer Copy Fill copies that layer's fill, and Paste Fill, live once a fill is
 /// copied, gives it to the shape layer the menu opens over.
 #[test]
