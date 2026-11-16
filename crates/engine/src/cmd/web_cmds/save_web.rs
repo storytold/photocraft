@@ -229,7 +229,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let pick = slice_pick(p, cmd, &s.active().ok_or(EngineError::NoDocument)?.doc)?;
     // Direct platform calls must export the moved selection as it appears on the canvas,
     // just as Session::execute does before dispatching the native command.
-    crate::float_cmds::before_command(s, cmd)?;
+    crate::float_cmds::before_command(s, cmd, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let (wdoc, sx, sy) = web_document(&doc, p, &st)?;

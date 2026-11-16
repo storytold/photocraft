@@ -1764,7 +1764,7 @@ impl Session {
         crate::param_check::check(spec, &params)?;
         crate::filters::validate_params(id, &params)?;
         // A floating selection drops before any other command (Undo puts it back instead).
-        if let Some(v) = crate::float_cmds::before_command(self, id)? {
+        if let Some(v) = crate::float_cmds::before_command(self, id, &params)? {
             return Ok(Started::Done(v));
         }
         // Pixel commands follow the Channels panel target unless the caller names one.

@@ -378,11 +378,14 @@ fn keeps_floating(id: &str) -> bool {
 
 /// Before any command (`Session::dispatch`): Undo puts a floating piece back (and is used up:
 /// returns its result); every other command but the floating ones drops it first.
-pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>> {
+pub(crate) fn before_command(s: &mut Session, id: &str, params: &Value) -> Result<Option<Value>> {
     // Copy Fill and Paste Fill act on a shape layer's fill, never on the floating pixels. When
-    // they are refused (the active layer isn't a shape layer, as from the shape tools' canvas menu
-    // over a pixel layer, #13705), the piece stays floating instead of dropping into its layer.
-    let refused_fill_row = matches!(id, "path.style.copyFill" | "path.style.pasteFill") && !s.is_enabled(id);
+    // admission refuses them (the layer they would act on, the active one or the one `params`
+    // names, isn't a shape layer, as from the shape tools' canvas menu over a pixel layer,
+    // #13705), the piece stays floating instead of dropping into its layer. When they go through,
+    // it drops first, as for any other command.
+    let refused_fill_row =
+        matches!(id, "path.style.copyFill" | "path.style.pasteFill") && crate::commands::find(id).is_some_and(|spec| s.admit(id, spec, params).is_err());
     let Some(st) = s.active_mut() else { return Ok(None) };
     if floating(st).is_none() {
         st.floating = None;
