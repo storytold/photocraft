@@ -454,6 +454,53 @@ fn duplicate_layer_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     Some(step("layer.duplicate", Value::Object(params)))
 }
 
+/// Whether a `Dcmn` reference names the document being played on: the target ordinal, or
+/// the document by its recorded title (the `Dplc` duplicate handler plays that on the
+/// active document too). References picking another open document (index, id, offset,
+/// another ordinal) have no equivalent and stay kept steps.
+fn current_document_reference(r: &[ReferenceItem]) -> bool {
+    match target(r) {
+        Target::Ordinal(o) => o == "Trgt",
+        Target::Name(_) => true,
+        _ => false,
+    }
+}
+
+/// The params of Image > Duplicate recorded as a Make (#15185): the new document's
+/// optional `Nm  ` name and the optional `Mrgd` merged-contents flag. Any other key, or
+/// a present value of the wrong type, keeps the whole step instead.
+fn document_duplicate_params(d: &Descriptor) -> Option<Map<String, Value>> {
+    let mut params = Map::new();
+    for (k, v) in &d.items {
+        if k.is("null") {
+            continue;
+        }
+        if k.is("Nm  ") {
+            let D::Text(name) = v else { return None };
+            params.insert("name".into(), name.to_string_lossy().into());
+        } else if k.is("Mrgd") {
+            let D::Boolean(merged) = v else { return None };
+            params.insert("mergedOnly".into(), (*merged).into());
+        } else {
+            return None;
+        }
+    }
+    Some(params)
+}
+
+/// Image > Duplicate (#15185): a Make of the current document, without the `Usng` layer
+/// reference that makes it the Duplicate Layer form mapped by
+/// [`duplicate_layer_from_descriptor`]. It binds to the existing duplicate command so
+/// the steps recorded after it keep playing; every other Make aimed at a document
+/// returns None here and stays a kept step.
+fn document_duplicate_from_descriptor(d: &Descriptor) -> Option<Mapped> {
+    let r = get_ref(d, "null")?;
+    if ref_class(r).as_deref() != Some("Dcmn") || r.len() != 1 || !current_document_reference(r) {
+        return None;
+    }
+    Some(step("image.duplicate", Value::Object(document_duplicate_params(d)?)))
+}
+
 fn mask_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     let Some(D::Class(c)) = d.get("Nw  ") else { return None };
     if trimmed(&c.class_id) != "Chnl" {
@@ -570,6 +617,9 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
         return none("type.convertToShape");
     }
     if let Some(mapped) = duplicate_layer_from_descriptor(d) {
+        return mapped;
+    }
+    if let Some(mapped) = document_duplicate_from_descriptor(d) {
         return mapped;
     }
     if let Some(mapped) = mask_from_descriptor(d) {
