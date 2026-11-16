@@ -4844,6 +4844,36 @@ fn make_document_duplicate_round_trips_through_save() {
     assert_eq!(import(&saved).unwrap().actions[0].steps, loaded.actions[0].steps);
 }
 
+/// A recorded `Nm  ` the mapping cannot carry without changing it - an unpaired surrogate
+/// would become U+FFFD, extra NULs would be dropped - keeps the Photoshop step, so the
+/// original name saves back byte for byte.
+#[test]
+fn make_document_duplicate_name_must_round_trip() {
+    for (name, mapped) in [
+        (UnicodeString::new_nul("Mattifier copy"), true),
+        (UnicodeString::new("Mattifier copy"), true),
+        (UnicodeString(vec![0xD800]), false),
+        (UnicodeString(vec![u16::from(b'C'), 0xD800, 0]), false),
+        (UnicodeString(vec![u16::from(b'C'), 0, 0]), false),
+    ] {
+        let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", D::Text(name.clone()));
+        let loaded = mapped_recording("Mk  ", d);
+        let step = &loaded.actions[0].steps[0];
+        if mapped {
+            assert!(loaded.unsupported.is_empty(), "{name:?}");
+            assert_eq!(step.0, "image.duplicate", "{name:?}");
+            assert_eq!(step.1["name"], "Mattifier copy", "{name:?}");
+        } else {
+            assert_eq!(step.0, PHOTOSHOP_STEP, "{name:?}");
+            let (saved, skipped) = export("Dup", &[&loaded.actions[0]], &[], false).unwrap();
+            assert!(skipped.is_empty(), "{name:?}: {skipped:?}");
+            let raw = atn::parse(&saved).unwrap();
+            let back = raw.actions[0].items[0].descriptor.as_ref().unwrap().get("Nm  ");
+            assert_eq!(back, Some(&D::Text(name.clone())), "{name:?}");
+        }
+    }
+}
+
 /// Every other Make aimed at a document keeps today's behaviour: a complete kept step; the
 /// `Usng` layer form keeps its existing Duplicate Layer mapping.
 #[test]

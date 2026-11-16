@@ -468,7 +468,8 @@ fn current_document_reference(r: &[ReferenceItem]) -> bool {
 
 /// The params of Image > Duplicate recorded as a Make (#15185): the new document's
 /// optional `Nm  ` name and the optional `Mrgd` merged-contents flag. Any other key, or
-/// a present value of the wrong type, keeps the whole step instead.
+/// a present value of the wrong type or one the conversion would change, keeps the whole
+/// step instead.
 fn document_duplicate_params(d: &Descriptor) -> Option<Map<String, Value>> {
     let mut params = Map::new();
     for (k, v) in &d.items {
@@ -476,8 +477,11 @@ fn document_duplicate_params(d: &Descriptor) -> Option<Map<String, Value>> {
             continue;
         }
         if k.is("Nm  ") {
-            let D::Text(name) = v else { return None };
-            params.insert("name".into(), name.to_string_lossy().into());
+            // A name the UTF-16 conversion would change (an unpaired surrogate becoming
+            // U+FFFD, extra NULs dropped) has no faithful param: keeping the Photoshop step
+            // saves the recorded name back byte for byte.
+            let Some(name) = exact_name(d) else { return None };
+            params.insert("name".into(), name.into());
         } else if k.is("Mrgd") {
             let D::Boolean(merged) = v else { return None };
             params.insert("mergedOnly".into(), (*merged).into());
