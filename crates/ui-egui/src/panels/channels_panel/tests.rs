@@ -72,6 +72,30 @@ fn channel_thumbs_skip_selection_steps_and_reuse_textures() {
     assert_eq!(after, first, "into the same textures");
 }
 
+/// The C and K thumbnails the Channels panel uploads for rich black 100/100/100/0 show its own
+/// inks: full cyan and no black, not the RGB thumbnail separated again (#8359).
+#[test]
+fn cmyk_channel_thumbs_upload_the_document_inks() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 120, "height": 60, "mode": "cmyk"})).unwrap();
+    app.run("tools.setColors", json!({"foregroundCmyk": [1.0, 1.0, 1.0, 0.0]})).unwrap();
+    app.run("edit.fillForeground", json!({})).unwrap();
+    let ctx = egui::Context::default();
+    ctx.begin_pass(Default::default());
+    let ids = app.channel_thumbs(&ctx);
+    let mut delta = ctx.end_pass().textures_delta;
+    // composite, then C, M, Y and K
+    assert_eq!(ids.len(), 5);
+    let centre = |id: egui::TextureId| {
+        let d = delta.set.get(&id).and_then(|d| d.last()).expect("uploaded");
+        let egui::ImageData::Color(img) = &d.image;
+        img[(img.size[0] / 2, img.size[1] / 2)]
+    };
+    assert_eq!(centre(ids[1]), egui::Color32::from_gray(0), "cyan is full ink");
+    assert_eq!(centre(ids[4]), egui::Color32::from_gray(255), "rich black has no K");
+    delta.clear();
+}
+
 /// The Channels tab (the Layers card's second tab) of a 64×48 white document with a layer
 /// mask on "Masked" and one alpha channel.
 fn channels_harness() -> (egui_kittest::Harness<'static, PhotocraftApp>, u64) {
@@ -129,6 +153,72 @@ fn drag_to(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, from: &str, to: &st
 
 fn alphas(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> Vec<String> {
     h.state().session.active().unwrap().doc.channels.iter().map(|c| c.name.clone()).collect()
+}
+
+/// Row selection sets the visible components; eye clicks subsequently override only the
+/// view. Exercise real Shift-clicks so panel event routing and later frames keep that split.
+#[test]
+fn channel_selection_sets_visibility_and_eye_overrides_do_not_retarget() {
+    use egui::{Event, Modifiers, PointerButton};
+    for (mode, first, second, third, selected) in
+        [("rgb", "Red", "Blue", "Green", vec![0, 2]), ("cmyk", "Cyan", "Magenta", "Yellow", vec![0, 1]), ("lab", "a", "b", "Lightness", vec![1, 2])]
+    {
+        let (mut h, _) = channels_harness();
+        if mode != "rgb" {
+            h.state_mut().run(&format!("image.mode.{mode}"), json!({})).unwrap();
+            h.run_steps(2);
+        }
+        let click = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, label: &str, modifiers| {
+            let pos = at(h, label);
+            h.event(Event::ModifiersChanged(modifiers));
+            h.hover_at(pos);
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers });
+                h.run_steps(1);
+            }
+            h.event(Event::ModifiersChanged(Modifiers::NONE));
+            h.run_steps(3);
+        };
+        let visible = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+            let st = h.state().session.active().unwrap();
+            (0..st.doc.pixel_format().mode.color_channels()).filter(|k| st.channel_view.color_visible(*k)).collect::<Vec<_>>()
+        };
+        let colors = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+            photocraft_engine::color_channels::selected(&h.state().session).unwrap().indices().collect::<Vec<_>>()
+        };
+
+        click(&mut h, first, Modifiers::NONE);
+        assert_eq!(visible(&h), vec![selected[0]], "{mode}: clicking one row shows it alone");
+        assert!(!h.state().session.active().unwrap().channel_view.alpha_shown(0));
+        click(&mut h, second, Modifiers::SHIFT);
+        assert_eq!(colors(&h), selected);
+        assert_eq!(visible(&h), selected, "{mode}: extending the selection shows just its components");
+
+        click(&mut h, &format!("Visibility {third}"), Modifiers::NONE);
+        assert_eq!(visible(&h).len(), 3, "{mode}: the eye adds a visible component");
+        assert_eq!(colors(&h), selected, "the eye does not extend the editing target");
+        click(&mut h, &format!("Visibility {first}"), Modifiers::NONE);
+        let manual = visible(&h);
+        assert!(!manual.contains(&selected[0]));
+        assert_eq!(colors(&h), selected, "a selected component can be hidden manually");
+        h.state_mut().run("image.adjustments.invert", json!({})).unwrap();
+        h.run_steps(3);
+        assert_eq!(visible(&h), manual, "editing and rendering preserve manual visibility");
+
+        click(&mut h, first, Modifiers::NONE);
+        assert_eq!(visible(&h), vec![selected[0]], "a new row selection resets its default view");
+        click(&mut h, second, Modifiers::SHIFT);
+        assert_eq!(visible(&h), selected);
+        click(&mut h, third, Modifiers::SHIFT);
+        assert_eq!(visible(&h).len(), 3);
+        if mode == "cmyk" {
+            click(&mut h, "Black", Modifiers::SHIFT);
+        }
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.channel_view.target, ChannelTarget::Composite);
+        assert_eq!(visible(&h).len(), st.doc.pixel_format().mode.color_channels());
+    }
 }
 
 /// #9163: alpha channels reorder by dragging, as in Photoshop: a drop in a row's upper half
@@ -311,4 +401,275 @@ fn the_layer_mask_row_on_the_trash_asks_first() {
     assert!(h.state().ui.dialogs.iter().any(|d| crate::mask_trash_prompt::owns(&d.fields)), "the prompt is open");
     let st = h.state().session.active().unwrap();
     assert!(st.doc.layer(photocraft_doc::LayerId(masked)).unwrap().mask.is_some(), "nothing deleted yet");
+}
+
+/// A colour channel click recorded into an action saves as Photoshop's component select and
+/// targets the same channel as the index did.
+#[test]
+fn recorded_colour_clicks_save_as_component_selects() {
+    use photocraft_doc::ColorMode;
+    for (mode, color_mode, count) in [("rgb", ColorMode::Rgb, 3), ("cmyk", ColorMode::Cmyk, 4), ("lab", ColorMode::Lab, 3)] {
+        for k in 0..count {
+            let mut s = photocraft_engine::Session::new();
+            s.execute("file.new", json!({"width": 2, "height": 1, "mode": mode})).unwrap();
+            let by_index = s.execute("channel.target", json!({"channel": Row::Color(k).reference(), "extend": false})).unwrap();
+            s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+            let params = json!({"channel": Row::Color(k).target_reference(color_mode), "extend": false});
+            assert_eq!(s.execute("channel.target", params.clone()).unwrap(), by_index, "{mode}/{k}");
+            s.actions.list.push(photocraft_engine::actions_cmds::Action::new("Click", vec![("channel.target".into(), params)]));
+            let saved = s.execute("actions.save", json!({"action": "Click"})).unwrap_or_else(|e| panic!("{mode}/{k}: {e}"));
+            assert_eq!(saved["skipped"], json!([]));
+            let loaded = s.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+            assert_eq!(loaded["unsupported"], json!([]), "{mode}/{k}");
+            let name = photocraft_engine::channel_cmds::color_names(color_mode)[k].to_ascii_lowercase();
+            assert_eq!(s.actions.list.last().unwrap().steps, vec![("channel.target".to_string(), json!({"channel": {"color": name}}))]);
+        }
+    }
+    // Rows the colour names can't express keep their reference.
+    assert_eq!(Row::Color(0).target_reference(ColorMode::Grayscale), Row::Color(0).reference());
+    assert_eq!(Row::Alpha(1).target_reference(ColorMode::Rgb), json!(1));
+    assert_eq!(Row::QuickMask.target_reference(ColorMode::Rgb), json!("composite"));
+}
+
+/// A real click on a colour row while recording records the colour by name, and the recorded
+/// action saves strictly and reloads as the same step.
+#[test]
+fn recording_a_colour_row_click_saves_as_photoshop_select() {
+    use egui::{Event, Modifiers, PointerButton};
+    for (mode, label, name) in [("rgb", "Red", "red"), ("cmyk", "Cyan", "cyan"), ("lab", "Lightness", "lightness")] {
+        let (mut h, _) = channels_harness();
+        if mode != "rgb" {
+            h.state_mut().run(&format!("image.mode.{mode}"), json!({})).unwrap();
+            h.run_steps(2);
+        }
+        h.state_mut().run("actions.record", json!({"name": "Click"})).unwrap();
+        let pos = at(&h, label);
+        h.hover_at(pos);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+        }
+        h.run_steps(3);
+        h.state_mut().run("actions.stop", json!({})).unwrap();
+        let s = &mut h.state_mut().session;
+        let recorded = s.actions.list.iter().find(|a| a.name == "Click").unwrap().steps.clone();
+        let step = ("channel.target".to_string(), json!({"channel": {"color": name}, "extend": false}));
+        assert_eq!(recorded, vec![step], "{mode}");
+        let saved = s.execute("actions.save", json!({"action": "Click"})).unwrap_or_else(|e| panic!("{mode}: {e}"));
+        assert_eq!(saved["skipped"], json!([]), "{mode}");
+        let loaded = s.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+        assert_eq!(loaded["unsupported"], json!([]), "{mode}");
+        let reloaded = &s.actions.list.last().unwrap().steps;
+        assert_eq!(reloaded, &vec![("channel.target".to_string(), json!({"channel": {"color": name}}))], "{mode}");
+    }
+}
+
+/// The panel menu's single-channel items act on the targeted channel (#11451): a targeted spot
+/// channel can be duplicated, given options, merged or deleted; a colour channel duplicated.
+#[test]
+fn panel_menu_items_act_on_the_targeted_channel() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+    app.run("channel.newSpot", json!({"name": "Ink", "fromSelection": false})).unwrap();
+    app.run("channel.target", json!({"channel": 0})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(260.0, 420.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_menu(app, ui), app);
+    h.run_steps(2);
+    for label in ["Duplicate Channel", "Delete Channel", "Merge Spot Channel", "Channel Options…"] {
+        assert!(!h.get_by_label(label).accesskit_node().is_disabled(), "{label} acts on the targeted spot channel");
+    }
+    h.get_by_label("Channel Options…").click();
+    h.run_steps(2);
+    assert!(h.state().ui.dialogs.iter().any(|d| crate::channel_options_ui::owns(&d.fields) && d.fields["channel"] == json!(0)));
+    h.get_by_label("Duplicate Channel").click();
+    h.run_steps(2);
+    assert_eq!(alpha_names(h.state()), ["Ink", "Ink copy"]);
+    h.get_by_label("Delete Channel").click();
+    h.run_steps(2);
+    assert_eq!(alpha_names(h.state()), ["Ink copy"], "the targeted channel is deleted");
+    h.state_mut().run("channel.target", json!({"channel": {"color": 1}})).unwrap();
+    h.run_steps(2);
+    assert!(h.get_by_label("Delete Channel").accesskit_node().is_disabled(), "colour channels aren't deleted here");
+    h.get_by_label("Duplicate Channel").click();
+    h.run_steps(2);
+    assert_eq!(alpha_names(h.state()), ["Ink copy", "Green copy"]);
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+}
+
+fn alpha_names(app: &PhotocraftApp) -> Vec<String> {
+    app.session.active().unwrap().doc.channels.iter().map(|c| c.name.clone()).collect()
+}
+
+fn menu_app(mode: &str) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 32, "height": 24, "mode": mode})).unwrap();
+    app
+}
+
+fn menu_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(260.0, 420.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_menu(app, ui), app);
+    h.run_steps(2);
+    h
+}
+
+fn menu_disabled(h: &egui_kittest::Harness<'static, PhotocraftApp>, label: &str) -> bool {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    h.get_by_label(label).accesskit_node().is_disabled()
+}
+
+fn menu_click(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, label: &str) {
+    use egui_kittest::kittest::Queryable;
+    h.get_by_label(label).click();
+    h.run_steps(2);
+    assert!(!h.state().ui.status_error, "{label}: {}", h.state().ui.status);
+}
+
+/// A grayscale image's composite is its one channel: Duplicate Channel copies it, as the row
+/// menu does; an RGB composite stays greyed.
+#[test]
+fn panel_menu_duplicates_the_gray_composite() {
+    assert!(menu_disabled(&menu_harness(menu_app("rgb")), "Duplicate Channel"), "nothing to duplicate on the RGB composite");
+    let mut h = menu_harness(menu_app("grayscale"));
+    assert!(!menu_disabled(&h, "Duplicate Channel"));
+    menu_click(&mut h, "Duplicate Channel");
+    assert_eq!(alpha_names(h.state()), ["Gray copy"]);
+}
+
+/// Duplicate Channel copies a targeted Quick Mask or layer mask, as dropping the row on New does
+/// (the mask's copy is "<layer> Mask copy").
+#[test]
+fn panel_menu_duplicates_quick_mask_and_layer_mask() {
+    let mut app = menu_app("rgb");
+    app.run("select.editInQuickMaskMode", json!({})).unwrap();
+    let mut h = menu_harness(app);
+    assert!(!menu_disabled(&h, "Duplicate Channel"), "the Quick Mask can be duplicated");
+    menu_click(&mut h, "Duplicate Channel");
+    assert_eq!(h.state().session.active().unwrap().doc.channels.len(), 1);
+
+    let mut app = menu_app("rgb");
+    app.run("layer.new.layer", json!({"name": "Masked"})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.run("channel.target", json!({"channel": "mask"})).unwrap();
+    let mut h = menu_harness(app);
+    assert!(!menu_disabled(&h, "Duplicate Channel"), "the layer mask can be duplicated");
+    menu_click(&mut h, "Duplicate Channel");
+    assert_eq!(alpha_names(h.state()), ["Masked Mask copy"]);
+}
+
+/// In Quick Mask mode, Channel Options… on a targeted alpha channel opens that channel's options,
+/// from the panel menu and the command palette (`menus::invoke`) alike; with the composite
+/// targeted it is Quick Mask's.
+#[test]
+fn channel_options_in_quick_mask_take_the_targeted_alpha() {
+    let mut app = menu_app("rgb");
+    app.run("channel.new", json!({"name": "Alpha 1"})).unwrap();
+    app.run("select.editInQuickMaskMode", json!({})).unwrap();
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "channel.options", json!({})).unwrap();
+    assert_eq!(app.ui.dialogs.last().unwrap().fields["channel"], json!("quickMask"), "the composite targeted: Quick Mask Options");
+    app.ui.dialogs.clear();
+    app.run("channel.target", json!({"channel": 0})).unwrap();
+    crate::menus::invoke(&mut app, &ctx, "channel.options", json!({})).unwrap();
+    assert_eq!(app.ui.dialogs.last().unwrap().fields["channel"], json!(0), "the dispatcher opens the alpha's options");
+    app.ui.dialogs.clear();
+    let mut h = menu_harness(app);
+    menu_click(&mut h, "Channel Options…");
+    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["channel"], json!(0), "so does the panel menu");
+}
+
+/// Duplicate Channel waits for one channel: not several colour channels at once. Without a
+/// document every item is greyed.
+#[test]
+fn panel_menu_greys_items_without_one_channel_or_a_document() {
+    let mut app = menu_app("rgb");
+    app.run("channel.target", json!({"channel": {"color": 0}})).unwrap();
+    app.run("channel.target", json!({"channel": {"color": 1}, "extend": true})).unwrap();
+    assert_eq!(app.session.active().unwrap().channel_view.selected_colors.len(), 2);
+    assert!(menu_disabled(&menu_harness(app), "Duplicate Channel"), "two colour channels are targeted");
+    let h = menu_harness(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()));
+    for label in [
+        "New Channel…",
+        "Duplicate Channel",
+        "Delete Channel",
+        "New Spot Channel…",
+        "Merge Spot Channel",
+        "Channel Options…",
+        "Split Channels",
+        "Merge Channels…",
+    ] {
+        assert!(menu_disabled(&h, label), "{label} waits for a document");
+    }
+}
+
+/// Merge Spot Channel prints the targeted spot channel into the image and removes it: a solid
+/// blue ink over the left half turns those pixels blue and leaves the rest white.
+#[test]
+fn panel_menu_merges_the_targeted_spot_channel() {
+    let mut app = menu_app("rgb");
+    app.run("channel.new", json!({"name": "Alpha 1"})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 24})).unwrap();
+    app.run("channel.newSpot", json!({"name": "Ink", "color": "#0000ff", "solidity": 100})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("channel.target", json!({"channel": 1})).unwrap();
+    let pixel = |app: &PhotocraftApp, x: usize, y: usize| {
+        let doc = &app.session.active().unwrap().doc;
+        let comp = photocraft_compose::render(doc, doc.bounds());
+        let p = comp.px[y * doc.size.width as usize + x];
+        [p[0], p[1], p[2]].map(|v| (v * 255.0).round() as u8)
+    };
+    assert_eq!((pixel(&app, 4, 4), pixel(&app, 24, 4)), ([255, 255, 255], [255, 255, 255]), "the ink is not in the image yet");
+    let mut h = menu_harness(app);
+    menu_click(&mut h, "Merge Spot Channel");
+    assert_eq!(alpha_names(h.state()), ["Alpha 1"], "the spot channel is merged, the alpha kept");
+    assert_eq!(pixel(h.state(), 4, 4), [0, 0, 255], "the ink is printed where the channel had it");
+    assert_eq!(pixel(h.state(), 24, 4), [255, 255, 255], "and nowhere else");
+}
+
+/// Merge Channels… asks first, as in Photoshop: the dialog picks the mode and the document for
+/// each channel; nothing merges until OK. With params the command runs directly.
+#[test]
+fn panel_menu_merge_channels_opens_its_dialog() {
+    let mut app = menu_app("grayscale");
+    for _ in 0..2 {
+        app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+    }
+    let mut h = menu_harness(app);
+    menu_click(&mut h, "Merge Channels…");
+    assert_eq!(h.state().session.documents().len(), 3, "nothing is merged before OK");
+    let d = h.state().ui.dialogs.last().expect("the Merge Channels dialog");
+    assert_eq!(d.fields["__label"], json!("Merge Channels…"));
+    let id = d.id;
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("mode".into(), json!("lab"));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let docs = h.state().session.documents();
+    assert_eq!(docs.len(), 1, "the sources close");
+    assert_eq!(docs[0].doc.mode, photocraft_doc::ColorMode::Lab, "in the mode picked");
+
+    let ctx = egui::Context::default();
+    let mut app = menu_app("grayscale");
+    for _ in 0..2 {
+        app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+    }
+    let r = crate::menus::invoke(&mut app, &ctx, "channel.merge", json!({})).unwrap();
+    assert!(r["dialog"].is_u64() && app.session.documents().len() == 3, "the dispatcher asks too");
+    app.ui.dialogs.clear();
+    crate::menus::invoke(&mut app, &ctx, "channel.merge", json!({"mode": "rgb"})).unwrap();
+    assert!(app.ui.dialogs.is_empty() && app.session.documents().len() == 1, "explicit params merge directly");
+}
+
+/// Two grayscale documents fill no mode: Merge Channels… is greyed in the panel menu, and the
+/// dispatcher says why instead of opening the dialog; a third one enables it.
+#[test]
+fn merge_channels_waits_for_three_grayscale_documents() {
+    let mut app = menu_app("grayscale");
+    app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+    let ctx = egui::Context::default();
+    let why = crate::menus::invoke(&mut app, &ctx, "channel.merge", json!({})).unwrap_err();
+    assert!(why.contains("three") && app.ui.dialogs.is_empty(), "{why}");
+    let mut h = menu_harness(app);
+    assert!(menu_disabled(&h, "Merge Channels…"), "two documents are not enough");
+    h.state_mut().run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+    h.run_steps(2);
+    assert!(!menu_disabled(&h, "Merge Channels…"), "three are");
 }

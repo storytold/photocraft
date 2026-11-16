@@ -72,6 +72,7 @@ pub struct GalleryDialog {
     layer_name: String,
     canvas: Rect,
     src: Surface,
+    target: Value,
     /// Apply order: index 0 runs first (shown at the bottom of the list).
     pub effects: Vec<EffectLayer>,
     pub selected: usize,
@@ -117,7 +118,9 @@ impl GalleryDialog {
 
     /// The command params for the current stack.
     pub fn params(&self) -> Value {
-        json!({"effects": self.effects.iter().map(EffectLayer::to_json).collect::<Vec<_>>(), "foreground": self.foreground, "background": self.background})
+        let p =
+            json!({"effects": self.effects.iter().map(EffectLayer::to_json).collect::<Vec<_>>(), "foreground": self.foreground, "background": self.background});
+        crate::distort_ui::with_filter_target(p, &self.target)
     }
 
     /// The progress (`0.0..=1.0`) of a preview still rendering.
@@ -197,7 +200,13 @@ fn render(src: &Surface, params: &Value) -> Surface {
     let effects = photocraft_engine::gallery_cmds::effects_from_json(params).unwrap_or_default();
     let b = src.content_bounds().union(&Rect::new(0, 0, 1, 1));
     let b = Rect::new(0, 0, b.x1, b.y1);
-    photocraft_algo::apply_in(src, &FilterParams::FilterGallery { effects }, b, b, None, b)
+    let mut out = photocraft_algo::apply_in(src, &FilterParams::FilterGallery { effects }, b, b, None, b);
+    if let Ok(Some(colors)) = photocraft_engine::color_channels::explicit(params, src.format().mode.color_channels())
+        && photocraft_engine::color_channels::restrict_surface(src, &mut out, colors).is_err()
+    {
+        return src.clone();
+    }
+    out
 }
 
 /// The preview of `vis` at 1/`k` (#2502): the stack runs at full resolution exactly as OK runs it
@@ -209,13 +218,16 @@ fn preview_pixels(src: &Surface, canvas: Rect, params: &Value, vis: Rect, k: u32
     let fp = FilterParams::FilterGallery { effects };
     let content = src.content_bounds();
     let area = photocraft_algo::output_area(&fp, content, canvas, None).intersect(&vis);
-    let full = if area.is_empty() { src.clone() } else { photocraft_algo::apply_in_with(src, &fp, area, canvas, None, canvas.union(&content), ctl)? };
+    let mut full = if area.is_empty() { src.clone() } else { photocraft_algo::apply_in_with(src, &fp, area, canvas, None, canvas.union(&content), ctl)? };
+    if let Some(colors) = photocraft_engine::color_channels::explicit(params, src.format().mode.color_channels()).ok()? {
+        photocraft_engine::color_channels::restrict_region(src, &mut full, colors, area).ok()?;
+    }
     Some(reduce(&full, vis, k))
 }
 
 /// `r` of `surf` scaled down by `k`, each pixel the average of a `k`×`k` block (colour weighted by
 /// alpha), placed at the origin.
-fn reduce(surf: &Surface, r: Rect, k: u32) -> Surface {
+pub(crate) fn reduce(surf: &Surface, r: Rect, k: u32) -> Surface {
     let k = k.clamp(1, 1 << 16) as usize;
     let (bw, bh) = (r.width() as usize, r.height() as usize);
     let (w, h) = (bw.div_ceil(k), bh.div_ceil(k));
@@ -304,7 +316,7 @@ fn colour_param(p: &Value, key: &str) -> Option<[f32; 4]> {
 
 /// Opens the dialog on the active layer, starting from the last gallery stack used.
 pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
-    let (layer, src, _) = crate::distort_ui::active_pixels(app)?;
+    let (layer, src, _) = crate::distort_ui::active_filter_target(app)?;
     let last = app.session.journal.iter().rev().find(|(id, _)| id == "filter.filterGallery").map(|(_, p)| p.clone());
     let effects = last.as_ref().map(effects_from).unwrap_or_default();
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
@@ -355,12 +367,14 @@ fn open_on(
     let sel = effects.len() - 1;
     let open_cats = std::array::from_fn(|i| effects[sel].filter.category() == GALLERY_CATEGORIES[i]);
     let history = EditHistory::new(&effects);
+    let target = if smart_filter.is_some() { json!("pixels") } else { crate::distort_ui::colour_set_target(app) };
     app.distort.gallery = Some(GalleryDialog {
         document: st.doc.id,
         layer,
         layer_name,
         canvas,
         src,
+        target,
         effects,
         selected: sel,
         open: open_cats,
@@ -623,7 +637,8 @@ fn update_thumbs(d: &mut GalleryDialog, ctx: &egui::Context, budget: usize) {
             ctx.request_repaint();
             return;
         }
-        let p = json!({"effects": [{"filter": f.key()}], "foreground": d.foreground, "background": d.background});
+        let p =
+            crate::distort_ui::with_filter_target(json!({"effects": [{"filter": f.key()}], "foreground": d.foreground, "background": d.background}), &d.target);
         let out = render(&d.thumb_src, &p);
         let b = d.thumb_src.content_bounds();
         let img = image(&out, b.x1.max(1) as usize, b.y1.max(1) as usize);
@@ -777,8 +792,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             d.set_filter(cur);
         }
         widgets::hairline(&mut ru);
-        let list_h = 190.0;
-        let params_h = (inner.height() - 110.0 - list_h).max(80.0);
+        let (params_h, list_h) = column_heights(inner.height());
         egui::ScrollArea::vertical().id_salt("gallery-params").max_height(params_h).show(&mut ru, |ui| {
             let sel = d.selected;
             let e = &mut d.effects[sel];
@@ -817,7 +831,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         let mut rgb = c.map_or([neon[0], neon[1], neon[2]], |v| [v[0], v[1], v[2]]);
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(tl!("Glow Color")).color(t.text_dim));
-                            crate::widgets::color_edit_button_rgb(ui, &mut rgb);
+                            crate::widgets::color_edit_button_rgb(ui, &mut rgb, &crate::color_picker_ui::title_for(tl!("Glow Color")));
                         });
                         e.params.insert("glowColor".into(), json!([rgb[0], rgb[1], rgb[2], 1.0]));
                     }
@@ -825,7 +839,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             }
             if e.filter.uses_colours() {
-                ui.label(egui::RichText::new(tl!("Uses the foreground and background colours.")).color(t.text_faint).size(11.0));
+                ui.label(egui::RichText::new(tl!("Uses the foreground and background colors.")).color(t.text_faint).size(11.0));
             }
         });
         // Effect layers (top of the list = applied last).
@@ -833,7 +847,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let lr = ERect::from_min_max(pos2(inner.left(), list_top), inner.max);
         let mut lu = ui.new_child(egui::UiBuilder::new().max_rect(lr));
         widgets::hairline(&mut lu);
-        egui::ScrollArea::vertical().id_salt("gallery-layers").max_height(list_h - 44.0).show(&mut lu, |ui| {
+        egui::ScrollArea::vertical().id_salt("gallery-layers").auto_shrink([false, false]).max_height(list_h - 44.0).show(&mut lu, |ui| {
             let mut toggle = None;
             for i in (0..d.effects.len()).rev() {
                 let sel = i == d.selected;
@@ -888,6 +902,20 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         Some("cancel") => app.distort.gallery = None,
         _ => {}
     }
+}
+
+/// Heights of the settings area and the effect-layer list in the right column, given the column's
+/// height. The list keeps at least `MIN_LIST_H` and takes the space the settings (at most
+/// `PARAMS_SHARE` of what is left under the buttons and the filter menu) don't, so a tall dialog
+/// shows more effect layers instead of scrolling a short list.
+fn column_heights(column_h: f32) -> (f32, f32) {
+    const MIN_LIST_H: f32 = 190.0;
+    const CHROME_H: f32 = 110.0;
+    const PARAMS_SHARE: f32 = 0.45;
+    let room = (column_h - CHROME_H).max(0.0);
+    let list_h = (room * (1.0 - PARAMS_SHARE)).max(MIN_LIST_H);
+    let params_h = (column_h - CHROME_H - list_h).max(80.0);
+    (params_h, list_h)
 }
 
 #[cfg(test)]

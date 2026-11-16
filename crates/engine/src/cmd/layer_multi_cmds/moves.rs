@@ -1,5 +1,5 @@
 use super::selection::{reselect, same_named_targets, selected, top_level};
-use super::structure::check_group_depth;
+use super::structure::{check_group_depth, relink_copies};
 use super::{Document, EngineError, Layer, LayerContent, LayerId, Result, Session, Value, bad, int_i32, json};
 
 /// A Layers-panel drag of the selected layer records its drop target by name (and which of
@@ -89,6 +89,12 @@ pub(crate) fn with_links(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
 /// vector content (shapes, linked vector masks) all move together. `before` is `doc` as it was
 /// before any of the moves (the edit's starting document), read when type and shapes re-render.
 pub(crate) fn move_layers(doc: &mut Document, before: &Document, moves: &[(LayerId, i32, i32)]) -> Result<()> {
+    move_layers_wrapped(doc, before, moves, None)
+}
+
+/// [`move_layers`]. `wrap` is the canvas when View › Pattern Preview is on: raster pixels and
+/// linked masks on those layers that leave it come back on the opposite edge. `dx`/`dy` stay raw.
+pub(crate) fn move_layers_wrapped(doc: &mut Document, before: &Document, moves: &[(LayerId, i32, i32)], wrap: Option<photocraft_geom::Rect>) -> Result<()> {
     for &(id, dx, dy) in moves {
         if dx == 0 && dy == 0 {
             continue;
@@ -98,8 +104,8 @@ pub(crate) fn move_layers(doc: &mut Document, before: &Document, moves: &[(Layer
         if locks.position || locks.all {
             return Err(EngineError::Other(format!("layer \"{}\" is position-locked", l.name)));
         }
-        crate::commands::translate_layer(before, l, dx, dy);
-        crate::vector_cmds::translate_vectors(before, l, dx as f64, dy as f64);
+        crate::commands::translate_layer_wrapped(before, l, dx, dy, wrap);
+        crate::vector_cmds::translate_vectors_wrapped(before, l, dx as f64, dy as f64, wrap);
     }
     Ok(())
 }
@@ -134,10 +140,13 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Some(other) => return Err(bad("layer.translate", format!("unknown units `{other}` (px|pt)"))),
     };
-    let carry = match p.get("selection") {
-        None | Some(Value::Null) => false,
-        Some(v) => v.as_bool().ok_or_else(|| bad("layer.translate", "`selection` must be a boolean"))?,
+    let flag = |key: &str| match p.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(v) => v.as_bool().ok_or_else(|| bad("layer.translate", format!("`{key}` must be a boolean"))),
     };
+    let carry = flag("selection")?;
+    let nest = flag("nest")?;
+    let wrap = flag("wrap")?;
     if dx == 0 && dy == 0 {
         return Ok(Value::Null);
     }
@@ -150,14 +159,23 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mask_target = p.get("target").and_then(Value::as_str) == Some("mask");
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    s.edit("Move", |doc, _| {
+    let tile = wrap.then(|| before.bounds());
+    // A whole number of canvases changes nothing only when every target is raster samples.
+    // Text, shapes and the rest keep the raw delta, so they still move.
+    if tile.is_some_and(|tile| wrapped_delta(dx, dy, tile) == (0, 0) && targets_only_wrap(&before, &roots, mask_target)) {
+        return Ok(Value::Null);
+    }
+    let mut shift = (0, 0);
+    let nested = s.edit("Move", |doc, _| {
         let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().partition(|id| mask_target && doc.layer(**id).is_some_and(moves_mask_alone));
         let mut ids = move_targets(doc, &rest);
         if ids.is_empty() && alone.is_empty() {
             return Err(EngineError::NoLayer(roots[0]));
         }
         let moves: Vec<_> = ids.iter().map(|&id| (id, dx, dy)).collect();
-        move_layers(doc, &before, &moves)?;
+        move_layers_wrapped(doc, &before, &moves, tile)?;
+        // In the same step, so Undo takes the move and the change of board back together.
+        let nested = if nest { auto_nest(doc, &ids) } else { Vec::new() };
         for id in alone {
             let locks = doc.effective_locks(id);
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -165,22 +183,129 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(EngineError::Other(format!("layer \"{}\" is position-locked", l.name)));
             }
             if let Some(m) = &mut l.mask {
-                m.surface = shift_surface(&m.surface, dx, dy);
+                m.surface = move_surface(&m.surface, dx, dy, tile);
             }
             ids.push(id);
         }
         // A board moved past any canvas edge grows the canvas, as a new one does (#1531, #3070).
         if ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some())) {
-            crate::artboard_cmds::fit_canvas(doc);
+            shift = crate::artboard_cmds::fit_canvas(doc);
         }
         // The Move tool carries the selection along when it moves several layers whole, as
-        // Photoshop does (#7538): one step, so Undo takes both back.
+        // Photoshop does (#7538): one step, so Undo takes both back. Wrap it only when a
+        // wrapping target moves; a selection of shapes would jump a canvas if it folded.
         if carry {
-            doc.selection = doc.selection.as_ref().map(|sel| shift_surface(sel, dx, dy));
+            let sel_wrap = tile.filter(|_| ids.iter().any(|id| doc.layer(*id).is_some_and(|l| subtree_wraps_only(l, 0))));
+            doc.selection = doc.selection.as_ref().map(|sel| move_surface(sel, dx, dy, sel_wrap));
         }
-        Ok(ids)
+        Ok(nested)
     })?;
-    Ok(Value::Null)
+    crate::artboard_cmds::follow_shift(s, shift);
+    if nested.is_empty() {
+        return Ok(Value::Null);
+    }
+    Ok(json!({"nested": nested.iter().map(|id| id.0).collect::<Vec<_>>()}))
+}
+
+/// The artboard a layer at `bounds` is on: the topmost board holding the centre of its bounds
+/// ([`crate::layer_place::centre`]), the rule a new layer is placed by. `boards` are top to bottom.
+fn board_under(boards: &[(LayerId, photocraft_geom::Rect)], bounds: photocraft_geom::Rect) -> Option<LayerId> {
+    let (cx, cy) = crate::layer_place::centre(bounds);
+    boards.iter().find(|(_, r)| r.contains(cx, cy)).map(|(id, _)| *id)
+}
+
+/// One planned auto-nest move: its order (walk order, then its place above a clip base), the
+/// layer, and the boards it leaves and joins.
+type Nest = ((usize, usize), LayerId, Option<LayerId>, Option<LayerId>);
+
+/// Move-tool auto-nesting, as in Photoshop: after a Move drag, a layer now on another artboard
+/// joins that board, on top of its stack, and a layer moved off every board leaves its board for
+/// the top level, directly above the board it left. Artboards share one canvas, so without this a
+/// layer dragged onto another board stayed in its old board and was clipped away by it.
+///
+/// A clipping group moves as one: a base that changes board takes the layers clipped to it along,
+/// directly above it and still clipped. Left behind, they were released (their base gone) and
+/// covered their old board. A clipped layer never changes board by itself, moved or not: it shows
+/// only over its base, so it goes where its base goes (with it, or nowhere). The group stays
+/// whole where it is when any of it can't go.
+///
+/// `ids` are the moved layers ([`move_targets`]), already at their new positions. Left where they
+/// are: artboards themselves, the Background, empty layers, layers whose board doesn't change, a
+/// group that would nest past [`photocraft_doc::MAX_GROUP_DEPTH`], and layers locked against it
+/// with Lock › Prevent Auto-Nesting (on the layer, a group around it, or the board it would join).
+/// Returns the layers that changed board, bottom to top.
+fn auto_nest(doc: &mut Document, ids: &[LayerId]) -> Vec<LayerId> {
+    let boards: Vec<(LayerId, photocraft_geom::Rect)> = doc.artboards().into_iter().rev().map(|(id, _, board)| (id, board.rect)).collect();
+    if boards.is_empty() {
+        return Vec::new();
+    }
+    let locked_board = |doc: &Document, id: LayerId| doc.layer(id).is_some_and(|l| l.locks.artboard || l.locks.all);
+    // Bottom to top, so layers moving together keep their order in their new parent: by walk
+    // order, and a carried clipped layer by its base's and then its place above the base.
+    let mut plan: Vec<Nest> = Vec::new();
+    // The paths of the layers planned so far: a layer inside one of them goes with it.
+    let mut carried: Vec<Vec<usize>> = Vec::new();
+    for (order, (path, _, l)) in doc.walk().into_iter().enumerate() {
+        if !ids.contains(&l.id) || l.artboard().is_some() || doc.is_background(l.id) || carried.iter().any(|c| path.starts_with(c)) {
+            continue;
+        }
+        if l.clipped && crate::clip_group::base_of(doc, l.id).is_some() {
+            continue;
+        }
+        let bounds = crate::layer_multi_cmds::layer_bounds(l);
+        let Some(bounds) = bounds.filter(|b| !b.is_empty()) else { continue };
+        let (from, to) = (doc.artboard_of(l.id), board_under(&boards, bounds));
+        let clipped = if l.clipped { Vec::new() } else { crate::clip_group::clipped_above(doc, l.id) };
+        let group: Vec<&Layer> = std::iter::once(l).chain(clipped.iter().filter_map(|id| doc.layer(*id))).collect();
+        if from == to || to.is_some_and(|b| locked_board(doc, b)) || group.iter().any(|m| doc.effective_locks(m.id).artboard) {
+            continue;
+        }
+        if to.is_some() && group.iter().any(|m| 1 + crate::layer_place::subtree_depth(m) > photocraft_doc::MAX_GROUP_DEPTH) {
+            continue;
+        }
+        for (k, m) in group.into_iter().enumerate() {
+            plan.push(((order, k), m.id, from, to));
+            carried.extend(doc.path_of(m.id));
+        }
+    }
+    if plan.is_empty() {
+        return Vec::new();
+    }
+    plan.sort_by_key(|p| p.0);
+    let moving: Vec<LayerId> = plan.iter().map(|p| p.1).collect();
+    let before = crate::clip_group::Before::read(doc, &moving);
+    let mut nested = Vec::with_capacity(plan.len());
+    // How many layers have left each board so far: each goes above the last one.
+    let mut left: Vec<(LayerId, usize)> = Vec::new();
+    for (_, id, from, to) in plan {
+        let Some(layer) = doc.remove(id) else { continue };
+        match to {
+            Some(board) => match doc.layer_mut(board).and_then(Layer::children_mut) {
+                Some(children) => children.push(layer),
+                None => doc.layers.push(layer),
+            },
+            None => {
+                let above = from.and_then(|b| doc.layers.iter().position(|t| t.id == b)).map_or(doc.layers.len(), |i| i + 1);
+                let count = left.iter_mut().find(|(b, _)| Some(*b) == from);
+                let n = match count {
+                    Some((_, n)) => {
+                        *n += 1;
+                        *n - 1
+                    }
+                    None => {
+                        if let Some(b) = from {
+                            left.push((b, 1));
+                        }
+                        0
+                    }
+                };
+                doc.layers.insert((above + n).min(doc.layers.len()), layer);
+            }
+        }
+        nested.push(id);
+    }
+    crate::clip_group::settle(doc, &nested, &before, false);
+    nested
 }
 
 /// The layers a move of `roots` takes along: their linked layers, without layers whose group
@@ -199,6 +324,12 @@ pub fn moved(doc: &Document, ids: &[LayerId], dx: i32, dy: i32) -> Result<Docume
 
 /// [`moved`] for a drag aimed at the layer mask (`mask_target`): unlinked masks move alone.
 pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_target: bool) -> Result<Document> {
+    moved_wrapping(doc, ids, dx, dy, mask_target, None)
+}
+
+/// [`moved_target`] that wraps raster pixels inside `tile` (View › Pattern Preview). `None`
+/// is a straight move. `dx` and `dy` stay raw: only [`wrap_surface`] folds them into the tile.
+pub fn moved_wrapping(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_target: bool, wrap: Option<photocraft_geom::Rect>) -> Result<Document> {
     let mut out = doc.clone();
     for &id in ids {
         let locks = doc.effective_locks(id);
@@ -208,13 +339,20 @@ pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_targ
         }
         if mask_target && moves_mask_alone(l) {
             if let Some(m) = &mut l.mask {
-                m.surface = shift_surface(&m.surface, dx, dy);
+                m.surface = move_surface(&m.surface, dx, dy, wrap);
             }
             continue;
         }
-        shift_shown(doc, l, dx, dy);
+        shift_shown(doc, l, dx, dy, wrap);
     }
     Ok(out)
+}
+
+/// `dx` and `dy` folded into one `tile`. A tile with no extent leaves the delta unchanged.
+/// Raster wrapping uses this; text, shapes and other geometry keep the raw delta.
+pub fn wrapped_delta(dx: i32, dy: i32, tile: photocraft_geom::Rect) -> (i32, i32) {
+    let Some((w, h)) = tile_period(tile) else { return (dx, dy) };
+    (wrap_axis(dx, w), wrap_axis(dy, h))
 }
 
 /// `photocraft_algo::resample::translate_surface` with the content scan cached per tile (a Move
@@ -224,20 +362,25 @@ pub(crate) fn shift_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32) ->
 }
 
 /// [`crate::commands::translate_layer`] plus the vector side, without re-rendering anything.
-fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
+/// `wrap` matches the commit: raster pixels fold back into the canvas.
+fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<photocraft_geom::Rect>) {
     use self::shift_surface as translate_surface;
     let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
     if let Some(r) = &mut l.effects.reference {
         *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
     }
+    let mask_wrap = wrap.filter(|_| wraps_linked_masks(&l.content));
     if let Some(m) = l.mask.as_mut().filter(|m| m.linked) {
-        m.surface = translate_surface(&m.surface, dx, dy);
+        m.surface = move_surface(&m.surface, dx, dy, mask_wrap);
     }
     if let Some(vm) = l.vector_mask.as_mut().filter(|v| v.linked) {
-        vm.path = vm.path.transform(&a);
+        vm.path = match mask_wrap {
+            Some(tile) => wrap_path(&vm.path, dx, dy, tile),
+            None => vm.path.transform(&a),
+        };
     }
     match &mut l.content {
-        LayerContent::Raster(s) => *s = translate_surface(s, dx, dy),
+        LayerContent::Raster(s) => *s = move_surface(s, dx, dy, wrap),
         LayerContent::Text(t) => {
             t.transform = a.mul(&t.transform);
             if let Some(c) = &mut t.cache {
@@ -250,10 +393,286 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
             if let Some(ab) = &mut g.artboard {
                 ab.rect = ab.rect.translate(dx, dy);
             }
-            g.children.iter_mut().for_each(|c| shift_shown(doc, c, dx, dy));
+            g.children.iter_mut().for_each(|c| shift_shown(doc, c, dx, dy, wrap));
         }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
+}
+
+/// True when a whole-canvas `dx`/`dy` would leave every targeted layer unchanged: each move is
+/// raster samples (or a mask moved alone) folding back onto themselves. A group counts only when
+/// every descendant does. Text, shapes, smart objects, artboards and effect reference points do
+/// not. A linked vector mask on a wrapping layer folds with it.
+fn targets_only_wrap(doc: &Document, roots: &[LayerId], mask_target: bool) -> bool {
+    let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().copied().partition(|id| mask_target && doc.layer(*id).is_some_and(moves_mask_alone));
+    let ids = move_targets(doc, &rest);
+    if ids.is_empty() && alone.is_empty() {
+        return false;
+    }
+    ids.iter().all(|id| doc.layer(*id).is_some_and(|l| subtree_wraps_only(l, 0)))
+}
+
+fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH || l.effects.reference.is_some() || l.frame.is_some() {
+        return false;
+    }
+    if l.vector_mask.as_ref().is_some_and(|m| m.linked) && !wraps_linked_masks(&l.content) {
+        return false;
+    }
+    match &l.content {
+        LayerContent::Raster(_) | LayerContent::Adjustment(_) | LayerContent::Fill(_) => true,
+        LayerContent::Group(g) => g.artboard.is_none() && g.children.iter().all(|c| subtree_wraps_only(c, depth + 1)),
+        LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => false,
+    }
+}
+
+fn move_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32, wrap: Option<photocraft_geom::Rect>) -> photocraft_raster::Surface {
+    match wrap {
+        Some(tile) => wrap_surface(s, dx, dy, tile),
+        None => shift_surface(s, dx, dy),
+    }
+}
+
+/// Linked raster and vector masks wrap with the layer when its pixels wrap. A group's mask wraps
+/// only when every descendant does; otherwise the mask would slide off a shape that kept the raw
+/// delta. Type, shapes and smart objects keep the raw delta, so their masks do too.
+pub(crate) fn wraps_linked_masks(content: &LayerContent) -> bool {
+    match content {
+        LayerContent::Raster(_) | LayerContent::Adjustment(_) | LayerContent::Fill(_) => true,
+        LayerContent::Group(g) => g.artboard.is_none() && g.children.iter().all(|c| subtree_wraps_only(c, 0)),
+        _ => false,
+    }
+}
+
+fn tile_period(tile: photocraft_geom::Rect) -> Option<(i32, i32)> {
+    let w = i32::try_from(tile.width()).ok()?;
+    let h = i32::try_from(tile.height()).ok()?;
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+fn wrap_axis(delta: i32, period: i32) -> i32 {
+    i64::from(delta).rem_euclid(i64::from(period)) as i32
+}
+
+/// Move `s` by whole pixels, folding samples that start inside `tile` back into it. Samples
+/// already outside the tile stay where they are. A shift that never leaves the tile is an
+/// ordinary move. Each wrap piece is a [`shift_surface`]-style tile copy of its source rect, so a
+/// live drag never materializes the in-canvas bounding rectangle as one buffer.
+pub(crate) fn wrap_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32, tile: photocraft_geom::Rect) -> photocraft_raster::Surface {
+    let Some((w, h)) = tile_period(tile) else { return shift_surface(s, dx, dy) };
+    let dx = wrap_axis(dx, w);
+    let dy = wrap_axis(dy, h);
+    if dx == 0 && dy == 0 {
+        return s.clone();
+    }
+    let content = photocraft_compose::bounds::content_bounds(s);
+    let inside = content.intersect(&tile);
+    if inside.is_empty() {
+        return s.clone();
+    }
+    let moved = inside.translate(dx, dy);
+    if tile.contains_rect(&moved) && tile.contains_rect(&content) {
+        return shift_surface(s, dx, dy);
+    }
+    let mut pieces = wrap_pieces(inside, dx, dy, tile, w, h).into_iter();
+    let Some((dest, from)) = pieces.next() else { return s.clone() };
+    let Some(mut out) = shifted_piece(s, dest, from) else { return shift_surface(s, dx, dy) };
+    for (dest, from) in pieces {
+        let Some(piece) = shifted_piece(s, dest, from) else { return shift_surface(s, dx, dy) };
+        copy_rect(&mut out, &piece, dest);
+    }
+    if !tile.contains_rect(&content) {
+        for (coord, _) in s.tiles() {
+            for r in rect_minus(coord.rect(), tile) {
+                if r.is_empty() {
+                    continue;
+                }
+                let bytes = s.to_interleaved(r);
+                out.write_interleaved(r, &bytes);
+            }
+        }
+    }
+    out.prune();
+    out
+}
+
+fn shifted_piece(s: &photocraft_raster::Surface, dest: photocraft_geom::Rect, from: photocraft_geom::Rect) -> Option<photocraft_raster::Surface> {
+    let ox = dest.x0.checked_sub(from.x0)?;
+    let oy = dest.y0.checked_sub(from.y0)?;
+    let mut piece = s.translated(ox, oy, from);
+    clip_to_rect(&mut piece, dest);
+    Some(piece)
+}
+
+/// Drop samples `translated` kept because a tile-aligned shift clones whole 256×256 tiles.
+/// Only stored tiles are visited, so a sparse layer on a large canvas does not allocate the
+/// empty space between them.
+fn clip_to_rect(s: &mut photocraft_raster::Surface, dest: photocraft_geom::Rect) {
+    let coords: Vec<_> = s.tiles().map(|(c, _)| *c).collect();
+    if coords.is_empty() {
+        return;
+    }
+    let px = s.default_pixel();
+    for c in coords {
+        let tr = c.rect();
+        let hit = tr.intersect(&dest);
+        if hit.is_empty() {
+            s.fill_rect(tr, &px);
+        } else if hit != tr {
+            for r in rect_minus(tr, dest) {
+                s.fill_rect(r, &px);
+            }
+        }
+    }
+    s.prune();
+}
+
+/// Copy `r` from stored source tiles (at most one 256×256 buffer at a time). Empty source tiles stay default.
+fn copy_rect(dst: &mut photocraft_raster::Surface, src: &photocraft_raster::Surface, r: photocraft_geom::Rect) {
+    if r.is_empty() {
+        return;
+    }
+    for (tc, _) in src.tiles() {
+        let tr = tc.rect().intersect(&r);
+        if tr.is_empty() {
+            continue;
+        }
+        let bytes = src.to_interleaved(tr);
+        dst.write_interleaved(tr, &bytes);
+    }
+}
+
+/// Fold a linked vector mask the way [`wrap_surface`] folds samples. Subpaths that start outside
+/// the canvas stay put. Intersect/subtract masks keep the raw delta: flattening those copies
+/// would change the Boolean. Simple combine masks wrap as at most four zone copies of the
+/// in-canvas subpaths.
+pub(crate) fn wrap_path(path: &photocraft_doc::Path, dx: i32, dy: i32, tile: photocraft_geom::Rect) -> photocraft_doc::Path {
+    let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
+    let Some((w, h)) = tile_period(tile) else { return path.transform(&a) };
+    let dx = wrap_axis(dx, w);
+    let dy = wrap_axis(dy, h);
+    if dx == 0 && dy == 0 {
+        return path.clone();
+    }
+    // Intersect/subtract/exclude copies would flatten into one Boolean and hide a seam. Keep
+    // the raw delta; only Combine/Join can be unioned as wrap-zone copies.
+    let simple = !path.inverted && path.subpaths.iter().all(|s| matches!(s.op, photocraft_doc::PathOp::Combine | photocraft_doc::PathOp::Join));
+    if !simple {
+        return path.transform(&a);
+    }
+    let mut outside = Vec::new();
+    let mut inside = Vec::new();
+    for sub in &path.subpaths {
+        let one = photocraft_doc::Path { subpaths: vec![sub.clone()], fill_rule: path.fill_rule, inverted: false };
+        if path_overlaps_tile(&one, tile) {
+            inside.push(sub.clone());
+        } else {
+            outside.push(sub.clone());
+        }
+    }
+    if inside.is_empty() {
+        return path.clone();
+    }
+    let inside_path = photocraft_doc::Path { subpaths: inside, fill_rule: path.fill_rule, inverted: false };
+    let mut wrapped = wrap_simple_inside(&inside_path, dx, dy, tile, w, h);
+    wrapped.subpaths.extend(outside);
+    wrapped
+}
+
+fn wrap_simple_inside(path: &photocraft_doc::Path, dx: i32, dy: i32, tile: photocraft_geom::Rect, w: i32, h: i32) -> photocraft_doc::Path {
+    let moved = path.transform(&photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
+    if path_inside_tile(&moved, tile) {
+        return moved;
+    }
+    // Already a handful of wrap copies: another pass would duplicate them. Keep the raw in-canvas
+    // shift; the next wrap that still fits will fold again.
+    if path.subpaths.len() > 4 {
+        return moved;
+    }
+    let mut out = photocraft_doc::Path { subpaths: Vec::new(), fill_rule: moved.fill_rule, inverted: moved.inverted };
+    for (sx, sy) in [(0, 0), (-w, 0), (0, -h), (-w, -h)] {
+        let copy = moved.transform(&photocraft_geom::Affine::translate(f64::from(sx), f64::from(sy)));
+        if !path_overlaps_tile(&copy, tile) {
+            continue;
+        }
+        for (i, mut sub) in copy.subpaths.into_iter().enumerate() {
+            if !out.subpaths.is_empty() && i == 0 {
+                sub.op = photocraft_doc::PathOp::Combine;
+            }
+            out.subpaths.push(sub);
+        }
+    }
+    if out.subpaths.is_empty() { moved } else { out }
+}
+
+fn path_inside_tile(path: &photocraft_doc::Path, tile: photocraft_geom::Rect) -> bool {
+    path.control_bounds()
+        .is_some_and(|(x0, y0, x1, y1)| x0 >= f64::from(tile.x0) && y0 >= f64::from(tile.y0) && x1 <= f64::from(tile.x1) && y1 <= f64::from(tile.y1))
+}
+
+fn path_overlaps_tile(path: &photocraft_doc::Path, tile: photocraft_geom::Rect) -> bool {
+    path.control_bounds()
+        .is_some_and(|(x0, y0, x1, y1)| x1 > f64::from(tile.x0) && x0 < f64::from(tile.x1) && y1 > f64::from(tile.y0) && y0 < f64::from(tile.y1))
+}
+
+/// `area` minus `hole`, as at most four rectangles.
+fn rect_minus(area: photocraft_geom::Rect, hole: photocraft_geom::Rect) -> Vec<photocraft_geom::Rect> {
+    let hit = area.intersect(&hole);
+    if hit.is_empty() {
+        return vec![area];
+    }
+    if hole.contains_rect(&area) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if area.x0 < hit.x0 {
+        out.push(photocraft_geom::Rect::new(area.x0, area.y0, hit.x0, area.y1));
+    }
+    if hit.x1 < area.x1 {
+        out.push(photocraft_geom::Rect::new(hit.x1, area.y0, area.x1, area.y1));
+    }
+    if area.y0 < hit.y0 {
+        out.push(photocraft_geom::Rect::new(hit.x0, area.y0, hit.x1, hit.y0));
+    }
+    if hit.y1 < area.y1 {
+        out.push(photocraft_geom::Rect::new(hit.x0, hit.y1, hit.x1, area.y1));
+    }
+    out.retain(|r| !r.is_empty());
+    out
+}
+
+/// `(destination inside the tile, source rect inside `src`)` for a non-negative `dx`/`dy`
+/// smaller than the tile.
+fn wrap_pieces(
+    src: photocraft_geom::Rect,
+    dx: i32,
+    dy: i32,
+    tile: photocraft_geom::Rect,
+    w: i32,
+    h: i32,
+) -> Vec<(photocraft_geom::Rect, photocraft_geom::Rect)> {
+    use photocraft_geom::Rect;
+    let moved = src.translate(dx, dy);
+    let zones = [
+        (tile, 0, 0),
+        (Rect::new(tile.x1, tile.y0, tile.x1.saturating_add(w), tile.y1), -w, 0),
+        (Rect::new(tile.x0, tile.y1, tile.x1, tile.y1.saturating_add(h)), 0, -h),
+        (Rect::new(tile.x1, tile.y1, tile.x1.saturating_add(w), tile.y1.saturating_add(h)), -w, -h),
+    ];
+    let mut out = Vec::new();
+    for (zone, sx, sy) in zones {
+        let part = moved.intersect(&zone);
+        if part.is_empty() {
+            continue;
+        }
+        let from = part.translate(-dx, -dy);
+        let dest = part.translate(sx, sy);
+        if from.is_empty() || dest.is_empty() {
+            continue;
+        }
+        out.push((dest, from));
+    }
+    out
 }
 
 /// Reorder one or multiple layers to a single destination in one undoable edit.
@@ -301,16 +720,77 @@ pub fn preview_move(doc: &Document, p: &Value, add_copy: bool) -> Option<Documen
     Some(preview)
 }
 
+/// The rect of the artboard layer `id` sits in, or `None` when it sits in none (or is itself a
+/// board: boards are never nested, and moving one beside another carries its own rect).
+fn board_rect_of(doc: &Document, id: LayerId) -> Option<photocraft_geom::Rect> {
+    if doc.layer(id)?.artboard().is_some() {
+        return None;
+    }
+    doc.layer(doc.artboard_of(id)?)?.artboard().map(|board| board.rect)
+}
+
+/// Where a dropped layer came from: the rect of the board it sat on, and whether its position was
+/// locked there (by its own lock or one on a group or board around it).
+#[derive(Clone, Copy)]
+struct Origin {
+    board: Option<photocraft_geom::Rect>,
+    pinned: bool,
+}
+
+/// The moves that keep each of `ids` where it sat on its board after a drop into another board.
+/// Boards share one canvas, so a layer re-parented without moving keeps its canvas position and
+/// lands outside (and is clipped by) the board it was dropped on. `from[i]` is where `ids[i]` was
+/// before the drop; the layer shifts by the offset between the two boards' origins. A layer that
+/// stays on its board, joins one from outside any board, leaves for the top level, or has its
+/// position locked stays where it is. The lock is read on both sides: a lock the layer had from a
+/// group or board it left no longer shows on it once it has left (#10489 review).
+fn board_offsets(doc: &Document, ids: &[LayerId], from: &[Origin]) -> Result<Vec<(LayerId, i32, i32)>> {
+    let mut shifts = Vec::new();
+    for (&id, src) in ids.iter().zip(from) {
+        let (Some(board), Some(dst)) = (src.board.as_ref(), board_rect_of(doc, id)) else { continue };
+        let locks = doc.effective_locks(id);
+        if src.pinned || locks.position || locks.all || (board.x0, board.y0) == (dst.x0, dst.y0) {
+            continue;
+        }
+        let (Some(dx), Some(dy)) = (dst.x0.checked_sub(board.x0), dst.y0.checked_sub(board.y0)) else {
+            let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+            // Plain adjustment/fill content has no position; only its linked masks or effects
+            // reference would move. Keep accepting those no-shift reparentings at any distance.
+            if matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_))
+                && layer.effects.reference.is_none()
+                && layer.mask.as_ref().is_none_or(|mask| !mask.linked)
+                && layer.vector_mask.as_ref().is_none_or(|mask| !mask.linked)
+            {
+                continue;
+            }
+            return Err(bad("layer.moveTo", "these artboards are too far apart to preserve the layer's position"));
+        };
+        shifts.push((id, dx, dy));
+    }
+    Ok(shifts)
+}
+
 /// The document-only part of `move_to`, shared with [`preview_move`] so the Layers panel's hover
 /// preview cannot drift from what the drop commits. Moves (or, with `copy`, duplicates) the
 /// top-level `moved_ids` to `pos` (`above`, `below` or `into`) `target`, then applies the
 /// group-depth cap, the Background-stays-at-the-bottom rule and the clip-group rules
-/// (`clip_group::settle`). Returns the ids of the new copies (empty for a move). On `Err` `doc` is
-/// half edited: run it inside `Session::edit` or on a scratch copy.
+/// (`clip_group::settle`). A layer dropped on a different artboard keeps its place on its board
+/// (see [`board_offsets`]). Returns the ids of the new copies (empty for a move). On `Err` `doc`
+/// is half edited: run it inside `Session::edit` or on a scratch copy.
 fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &str, copy: bool, add_copy: bool) -> Result<Vec<LayerId>> {
     const CMD: &str = "layer.moveTo";
     let background = crate::background_cmds::background_id(doc);
     let before = if copy { Default::default() } else { crate::clip_group::Before::read(doc, moved_ids) };
+    // Read before the layers are lifted out: afterwards the source board, and any lock the layer
+    // had from the groups around it, are out of reach. A copy is a new layer, so only its own
+    // locks (which it keeps) can pin it.
+    let from: Vec<Origin> = moved_ids
+        .iter()
+        .map(|&id| {
+            let locks = doc.effective_locks(id);
+            Origin { board: board_rect_of(doc, id), pinned: !copy && (locks.position || locks.all) }
+        })
+        .collect();
     let mut moved = Vec::with_capacity(moved_ids.len());
     for &id in moved_ids {
         moved.push(if copy { crate::commands::layer_copy(doc, id, add_copy)? } else { doc.remove(id).ok_or(EngineError::NoLayer(id))? });
@@ -332,8 +812,21 @@ fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &
         siblings.splice(at..at, moved);
     }
     check_group_depth(doc, "Reorder Layer")?;
+    // A copy is a new layer: it starts unlinked from its original, as a Duplicate does
+    // (#11217); copies of a whole linked set stay linked to each other under a fresh group.
+    if copy {
+        relink_copies(doc, &copies)?;
+    }
+    // The layers now sit in their new parents; carry each across to its new board. Copies keep the
+    // order of `moved_ids`, so `from` lines up with either list.
+    let landed: &[LayerId] = if copy { &copies } else { moved_ids };
+    let shifts = board_offsets(doc, landed, &from)?;
+    if !shifts.is_empty() {
+        let snapshot = doc.clone();
+        move_layers(doc, &snapshot, &shifts)?;
+    }
     crate::background_cmds::keep_background_at_bottom(background, doc)?;
-    crate::clip_group::settle(doc, if copy { &copies } else { moved_ids }, &before, false);
+    crate::clip_group::settle(doc, landed, &before, false);
     Ok(copies)
 }
 
@@ -341,6 +834,38 @@ fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &
 /// selected nodes are detached, and every reference is validated before editing.
 pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.moveTo";
+    let indexed = p.get("target").is_some_and(Value::is_object);
+    let resolved;
+    let p = if let Some(Value::Object(selector)) = p.get("target") {
+        let index = selector
+            .get("index")
+            .filter(|_| selector.len() == 1)
+            .and_then(Value::as_u64)
+            .ok_or_else(|| bad(CMD, "target reference needs one non-negative index"))?;
+        if p.get("position").is_some_and(|value| !value.is_null()) {
+            return Err(bad(CMD, "an indexed target already defines its drop position"));
+        }
+        let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+        let (target, position) = crate::commands::recorded_drop(doc, index)?;
+        let mut fields = p.as_object().cloned().ok_or_else(|| bad(CMD, "params must be an object"))?;
+        fields.insert("target".into(), json!(target.0));
+        fields.insert("position".into(), json!(position));
+        if !fields.contains_key("layer") && !fields.contains_key("layers") {
+            match selected(s).as_slice() {
+                [layer] => {
+                    fields.insert("layer".into(), json!(layer.0));
+                }
+                layers if !layers.is_empty() => {
+                    fields.insert("layers".into(), json!(layers.iter().map(|layer| layer.0).collect::<Vec<_>>()));
+                }
+                _ => {}
+            }
+        }
+        resolved = Value::Object(fields);
+        &resolved
+    } else {
+        p
+    };
     let pos = p.get("position").and_then(Value::as_str).unwrap_or("above");
     if !matches!(pos, "above" | "below" | "into") {
         return Err(bad(CMD, "position must be above, below, or into"));
@@ -377,7 +902,7 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let moved_ids = top_level(doc, &requested);
-    if moved_ids.len() == 1 && moved_ids[0] == target && batch.is_none() && !copy {
+    if moved_ids.len() == 1 && moved_ids[0] == target && (batch.is_none() || indexed) && !copy {
         // Preserve single-layer drag-to-self semantics.
         return Ok(Value::Null);
     }
@@ -392,6 +917,26 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if pos == "into" && doc.layer(target).is_none_or(|l| !l.is_group()) {
         return Err(bad(CMD, "target is not a group"));
+    }
+
+    if indexed
+        && !copy
+        && let [source] = moved_ids.as_slice()
+    {
+        let source_path = doc.path_of(*source).ok_or(EngineError::NoLayer(*source))?;
+        if let Some((&at, parent)) = source_path.split_last() {
+            let unchanged = match pos {
+                "below" => target_path.split_last().is_some_and(|(&to, target_parent)| parent == target_parent && at.checked_add(1) == Some(to)),
+                "into" => {
+                    parent == target_path.as_slice()
+                        && doc.layer(target).and_then(Layer::children).is_some_and(|children| at.checked_add(1) == Some(children.len()))
+                }
+                _ => false,
+            };
+            if unchanged {
+                return Ok(Value::Null);
+            }
+        }
     }
 
     let original_active = st.active_layer;
