@@ -86,7 +86,7 @@ fn alt_reset_restores_photoshop_defaults_not_last_used() {
     app.ui.dialog_mut(id).unwrap().fields = fields;
     let f = &app.ui.dialog_mut(id).unwrap().fields;
     assert_eq!(f["opacity"].as_f64(), Some(100.0));
-    assert_eq!(f["contents"], json!("foreground"));
+    assert_eq!(f["contents"], json!("contentAware"));
     assert!(app.ui.dialogs.iter().any(|d| d.id == id));
 }
 
@@ -95,7 +95,7 @@ fn choices_persist_across_restarts() {
     let mut app = app();
     // Photoshop's defaults the first time.
     let f = fields(&app);
-    assert_eq!((f["contents"].as_str(), f["mode"].as_str(), f["opacity"].as_f64()), (Some("foreground"), Some("normal"), Some(100.0)));
+    assert_eq!((f["contents"].as_str(), f["mode"].as_str(), f["opacity"].as_f64()), (Some("contentAware"), Some("normal"), Some(100.0)));
     fill(&mut app, json!({"contents": "gray", "mode": "multiply", "opacity": 40, "preserveTransparency": true})).unwrap();
     // A fresh app with the saved preferences opens the dialog with the same choices.
     let saved = app.session.prefs_to_json();
@@ -111,9 +111,9 @@ fn choices_persist_across_restarts() {
     // A corrupt remembered value falls back to the default.
     again.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), json!({"contents": "plaid", "opacity": "lots", "mode": 7})));
     let f = fields(&again);
-    assert_eq!((f["contents"].as_str(), f["mode"].as_str(), f["opacity"].as_f64()), (Some("foreground"), Some("normal"), Some(100.0)));
+    assert_eq!((f["contents"].as_str(), f["mode"].as_str(), f["opacity"].as_f64()), (Some("contentAware"), Some("normal"), Some(100.0)));
     again.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), json!("not an object")));
-    assert_eq!(fields(&again)["contents"], json!("foreground"));
+    assert_eq!(fields(&again)["contents"], json!("contentAware"));
 }
 
 #[test]

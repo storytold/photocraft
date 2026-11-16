@@ -58,7 +58,7 @@ pub fn default_fields(app: &PhotocraftApp) -> Map<String, Value> {
     f.insert(MARK.into(), json!(true));
     f.insert("__command".into(), json!(COMMAND));
     f.insert("__label".into(), json!("Fill"));
-    f.insert("contents".into(), json!("foreground"));
+    f.insert("contents".into(), json!("contentAware"));
     f.insert("color".into(), json!(hex(app.session.tools.foreground)));
     if let Some(p) = app.session.patterns.items.first() {
         f.insert("pattern".into(), json!(p.id));
@@ -225,5 +225,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
     crate::dialog_blend_ui::body(ui, f, "fill", label_w);
 }
 
+#[cfg(test)]
+mod reset_contents_tests;
 #[cfg(test)]
 mod tests;
