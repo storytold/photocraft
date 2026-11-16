@@ -12,7 +12,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui::TextureId>
     app.perf.last_refresh_px = 0;
     ctx.begin_pass(Default::default());
     let texture = ensure_texture(app, ctx, 0, None).map(|(texture, _scale)| texture);
-    let _ = ctx.end_pass();
+    // A bare `Context` has no backend to apply the frame's texture uploads, and dropping them unapplied
+    // panics (epaint's `TexturesDelta` drop guard): clear them as a backend does after applying.
+    let mut output = ctx.end_pass();
+    output.textures_delta.clear();
     texture
 }
 
