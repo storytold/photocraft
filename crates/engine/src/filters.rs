@@ -184,7 +184,23 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
 /// `None` for ids that aren't pixel filters. `Err` when the requesting session's authority denies
 /// the filter's params (an ambient path the session may not read): the caller must surface the
 /// error rather than render unfiltered pixels.
+///
+/// [`apply_filter_to_surface_cancelled`] additionally takes an independent cancellation check,
+/// asked by Palette Map's kernels between rows (the job path routes its context through here).
 pub fn apply_filter_to_surface(
+    id: &str,
+    params: &Value,
+    surf: &photocraft_raster::Surface,
+    bounds: photocraft_geom::Rect,
+    selection: Option<&photocraft_raster::Surface>,
+    canvas: photocraft_geom::Rect,
+) -> Result<Option<photocraft_raster::Surface>> {
+    apply_filter_to_surface_cancelled(id, params, surf, bounds, selection, canvas, &|| false)
+}
+
+/// [`apply_filter_to_surface`] additionally takes an independent cancellation check, asked by
+/// Palette Map's kernels between rows (the job path routes its context through here).
+pub fn apply_filter_to_surface_cancelled(
     id: &str,
     params: &Value,
     surf: &photocraft_raster::Surface,

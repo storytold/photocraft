@@ -701,7 +701,7 @@ mod tests {
         let params = json!({"paletteSnapshot": {"name": "two", "colors": [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]}});
         for mode in [photocraft_color::ColorMode::Indexed, photocraft_color::ColorMode::Bitmap] {
             let surface = Surface::new(photocraft_color::PixelFormat::new(mode, photocraft_color::SampleType::U8, true));
-            let error = crate::filters::apply_filter_to_surface(FILTER_ID, &params, &surface, Rect::new(0, 0, 8, 8), None, Rect::new(0, 0, 8, 8), &|| false)
+            let error = crate::filters::apply_filter_to_surface_cancelled(FILTER_ID, &params, &surface, Rect::new(0, 0, 8, 8), None, Rect::new(0, 0, 8, 8), &|| false)
                 .unwrap_err()
                 .to_string();
             assert!(error.contains("Indexed Color or Bitmap"), "{mode:?}: {error}");
