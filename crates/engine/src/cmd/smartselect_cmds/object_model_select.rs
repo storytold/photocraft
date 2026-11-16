@@ -10,7 +10,7 @@ use std::sync::Arc;
 use photocraft_algo::matting;
 use photocraft_algo::segment::RgbImage;
 
-use super::{EngineError, Rect, Region, Result, Sampler, Session, Value, apply, b, bad, json, mode, object_edge, trimmed, with_doc_sampler};
+use super::{EngineError, Rect, Region, Result, Session, Value, apply, b, bad, json, mode, object_edge, trimmed, with_doc_sampler};
 use crate::jobs::JobCtx;
 use crate::object_model::{ObjectModel, SegmentRequest};
 
