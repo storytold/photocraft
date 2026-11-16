@@ -56,6 +56,8 @@ mod external_svg;
 mod linux_libs;
 mod logging;
 mod monitor_profile;
+#[cfg(not(target_arch = "wasm32"))]
+mod object_ai;
 mod photoshop_settings;
 // Save As through the desktop portal, which reports the file type picked (#6121).
 #[cfg(target_os = "linux")]
@@ -587,10 +589,19 @@ fn main() -> eframe::Result {
             let session = {
                 let mut session = Session::new();
                 session.print_spooler = print_portal::spooler();
+                session.object_model = object_ai::model();
                 session
             };
             #[cfg(not(target_os = "linux"))]
-            let session = Session::new();
+            let session = {
+                #[allow(unused_mut)]
+                let mut session = Session::new();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    session.object_model = object_ai::model();
+                }
+                session
+            };
             PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
             let mut app = PhotocraftApp::new(session, services);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);

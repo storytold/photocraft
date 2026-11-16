@@ -49,6 +49,12 @@ arboard = { version = "3.7", features = ["wayland-data-control"] }
 open = "5"
 # Reads the saved window layout (eframe persistence) to drop values that would abort startup.
 ron = "0.12"
+# Object Selection runs the shared `select-subject` tool (storytold/craft-ai-integrations): SAM 2.1
+# on the built-in rten engine. The model, its files and their setup live there. Desktop only.
+craft-ai-client = { workspace = true }
+craft-ai-core = { workspace = true }
+# The model's picture and mask cross the tool as PNG (`object_ai.rs`). Already in Cargo.lock.
+png = "0.18"
 # Background release checks; HTTPS with Rust TLS, no async runtime.
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -74,7 +80,7 @@ muda = { version = "=0.21.2", default-features = false }
 dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "=1.1.5", features = ["fs"] }
+rustix = { version = "=1.1.6", features = ["fs"] }
 # Reads CFBundleExecutable from a chosen macOS application bundle's Info.plist (XML or binary) for
 # external vector editing. Already in Cargo.lock (craft-update); built on every Unix so Linux CI
 # compiles and tests the bundle checks. The event-stream reader (behind plist's "unstable"

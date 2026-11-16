@@ -407,22 +407,81 @@ pub fn object_mode_refusal(mode: photocraft_color::ColorMode) -> Option<&'static
     }
 }
 
+/// `select.object`'s `"method"`: which engine finds the object.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ObjectMethod {
+    Auto,
+    Model,
+    Classic,
+}
+
+fn object_method(p: &Value) -> Result<ObjectMethod> {
+    match p.get("method") {
+        None | Some(Value::Null) => Ok(ObjectMethod::Auto),
+        Some(Value::String(m)) => match m.as_str() {
+            "auto" => Ok(ObjectMethod::Auto),
+            "model" => Ok(ObjectMethod::Model),
+            "classic" => Ok(ObjectMethod::Classic),
+            other => Err(bad("select.object", &format!("unknown method \"{other}\"; use \"auto\", \"model\" or \"classic\""))),
+        },
+        Some(_) => Err(bad("select.object", "\"method\" must be \"auto\", \"model\" or \"classic\"")),
+    }
+}
+
+/// The model Object Selection runs on, if `method` and the session allow one; with the reason a
+/// model that exists was passed over (auto only; an explicit `"model"` errors instead).
+type ModelChoice = (Option<std::sync::Arc<dyn crate::object_model::ObjectModel>>, Option<String>);
+
+fn choose_model(s: &Session, method: ObjectMethod) -> Result<ModelChoice> {
+    if method == ObjectMethod::Classic {
+        return Ok((None, None));
+    }
+    match s.object_model.as_ref() {
+        None if method == ObjectMethod::Model => Err(bad("select.object", "no object selection model is available in this app; use \"method\": \"classic\"")),
+        None => Ok((None, None)),
+        Some(m) => match m.unavailable() {
+            None => Ok((Some(std::sync::Arc::clone(m)), None)),
+            Some(why) if method == ObjectMethod::Model => Err(bad("select.object", &why)),
+            Some(why) => Ok((None, Some(why))),
+        },
+    }
+}
+
 fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(why) = s.active().and_then(|d| object_mode_refusal(d.doc.mode)) {
         return Err(EngineError::Other(why.into()));
     }
+    let method = object_method(p)?;
+    let (model, passed_over) = choose_model(s, method)?;
     if p.get("rect").is_none()
         && let Some(pt) = point_param(p)
     {
-        return object_at_point(s, p, pt);
+        // The Object Finder click stays on the classical finder unless the model is asked for by
+        // name: the hover preview is classical, and the click should select what it showed.
+        if method == ObjectMethod::Model
+            && let Some(model) = model
+        {
+            let all_layers = b(p, "sampleAllLayers", false);
+            let d = s.active().ok_or(EngineError::NoDocument)?;
+            check_sampled_pixels(&d.doc, d.active_layer, all_layers, Rect::from_xywh(pt.0.floor() as i32, pt.1.floor() as i32, 1, 1))?;
+            return object_model_select::select(s, p, object_model_select::Prompt::Click(pt.0, pt.1), all_layers, model, "model");
+        }
+        let mut out = object_at_point(s, p, pt)?;
+        object_model_select::tag(&mut out, "classic", passed_over.as_deref());
+        return Ok(out);
     }
     let rect = rect_param(p).ok_or_else(|| bad("select.object", "needs \"rect\": [x, y, w, h] or \"point\": [x, y]"))?;
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     check_sampled_pixels(&d.doc, d.active_layer, all_layers, rect)?;
+    if let Some(model) = model {
+        return object_model_select::select(s, p, object_model_select::Prompt::Box(rect), all_layers, model, "model");
+    }
     let canvas = d.doc.bounds();
     let found = with_sampler(s, all_layers, |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
-    apply(s, "Object Selection", object_edge(canvas, p, found.as_ref()).as_deref(), mode(p, "replace"))
+    let mut out = apply(s, "Object Selection", object_edge(canvas, p, found.as_ref()).as_deref(), mode(p, "replace"))?;
+    object_model_select::tag(&mut out, "classic", passed_over.as_deref());
+    Ok(out)
 }
 
 /// Select Subject's last result (#2865), so running it again on unchanged pixels answers at
@@ -673,7 +732,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.object",
             "Object Selection",
             [],
-            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim, up to one pixel further out on the left and top and two on the right and bottom)"##,
+            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true,"method":"auto|model|classic"="auto"} (method: model runs SAM 2.1 through the shared Craft AI layer when it is set up, classic the GrabCut finder, auto the model when ready and classic otherwise; the result says which ran, and why the model was passed over; point: with auto, the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim, up to one pixel further out on the left and top and two on the right and bottom)"##,
             has_doc,
             object_selection
         ),
@@ -706,6 +765,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod object_hard_edge_tests;
+mod object_model_select;
+#[cfg(test)]
+mod object_model_tests;
 #[cfg(test)]
 mod object_transparent_layer_tests;
 #[cfg(test)]
