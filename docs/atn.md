@@ -573,7 +573,10 @@ condition IDs remain kept Photoshop steps with their original descriptors.
 - Save for Web's explicit All Slices (`SWsl.STsl.SLAl`), Images Only (`SImg` true, `SHTM` false)
   folder output maps to `dir` and `slices: "all"`, including auto slices. `ovSF`/`ovSN` keep images
   beside the destination or in a validated relative subfolder. Partial output blocks, other slice
-  choices, HTML, background and unrepresented naming settings remain kept steps.
+  choices, HTML output, nonempty background paths and unrepresented naming settings remain kept steps.
+- Images Only recordings retain supported inactive HTML/layout preferences when their background
+  path is explicitly empty. Unchanged settings save verbatim; edited and native exports clear
+  background copying. Partial background blocks, other recorded forms and unknown fields stay kept.
 - Duplicate Layer retains a named `T` document destination and resolves it against open documents
   at playback, refusing absent or ambiguous names. It copies the referenced layer, or the selected
   layers for `Trgt`, at their existing canvas positions and leaves the source active. Stack indexes

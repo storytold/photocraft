@@ -1983,6 +1983,106 @@ fn web_all_slice_images(mut d: Descriptor, images_folder: bool) -> Descriptor {
     d
 }
 
+fn web_images_only_metadata(mut d: Descriptor) -> Descriptor {
+    let Some(D::Descriptor(u)) = d.items.iter_mut().find(|(k, _)| k.is("Usng")).map(|(_, v)| v) else {
+        panic!("SaveForWeb");
+    };
+    for (key, value) in
+        [("ohXH", false), ("ohIC", true), ("ohAA", true), ("ohQA", true), ("ohCA", false), ("ohIZ", true), ("olCS", false), ("obIA", true), ("ovCB", true)]
+    {
+        u.items.push((Id::new(key), D::Boolean(value)));
+    }
+    for (key, ty, value) in [
+        ("ohTC", "SToc", "OC03"),
+        ("ohAC", "SToc", "OC03"),
+        ("ohLE", "STle", "LE03"),
+        ("ohEn", "STen", "EN00"),
+        ("olEC", "STst", "ST00"),
+        ("olWH", "STwh", "WH01"),
+        ("olSV", "STsp", "SP04"),
+        ("olSH", "STsp", "SP04"),
+        ("obCS", "STcs", "CS01"),
+    ] {
+        u.items.push((Id::new(key), enm(ty, value)));
+    }
+    u.items.push((Id::new("ohIn"), D::Integer(-1)));
+    u.items.push((Id::new("obIP"), D::Text(UnicodeString::new(""))));
+    let naming = ["NC00", "NC19", "NC28", "NC24", "NC24", "NC24"]
+        .into_iter()
+        .map(|code| D::Descriptor(Descriptor::new("SCnc").with("ncTp", enm("STnc", code))))
+        .collect();
+    u.items.push((Id::new("olNC"), D::List(naming)));
+    d
+}
+
+#[test]
+fn recorded_web_images_only_metadata_maps_and_preserves_inactive_settings() {
+    let d = web_images_only_metadata(web_all_slice_images(web_destination("/out/images", true, true), false));
+    let action = recorded(AtnEvent::name("export"), d.clone());
+    assert_eq!(action.steps[0].0, "file.export.saveForWebLegacy");
+    assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    let mut edited = action.clone();
+    edited.steps[0].1["dir"] = json!("/out/edited");
+    let back = saved(&edited).descriptor.unwrap();
+    let Some(D::Descriptor(u)) = back.get("Usng") else {
+        panic!("SaveForWeb");
+    };
+    assert_eq!(u.get("SHTM"), Some(&D::Boolean(false)));
+    assert_eq!(u.get("ovCB"), Some(&D::Boolean(false)), "native output must not copy a remembered background asset");
+    assert!(matches!(u.get("obIP"),Some(D::Text(t)) if t.to_string_lossy().is_empty()));
+}
+
+#[test]
+fn recorded_web_images_only_metadata_writes_only_the_image() {
+    let out = tempfile::tempdir().unwrap();
+    let d = web_images_only_metadata(web_all_slice_images(web_destination(out.path().to_str().unwrap(), true, true), false));
+    let action = recorded(AtnEvent::name("export"), d);
+    let mut s = sized_document(4, 4, 72);
+    s.edit("Name", |doc, _| {
+        doc.name = "Proof.psd".into();
+        Ok(())
+    })
+    .unwrap();
+    replay_saved(&mut s, &action);
+    let files: Vec<_> = std::fs::read_dir(out.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(files, [std::ffi::OsString::from("Proof.png")]);
+}
+
+#[test]
+fn recorded_web_images_only_metadata_keeps_active_backgrounds_partial_blocks_and_unknown_fields() {
+    let base = web_images_only_metadata(web_all_slice_images(web_destination("/out/images", true, true), false));
+    for (key, value) in [
+        ("obIP", D::Text(UnicodeString::new("background.png"))),
+        ("SHTM", D::Boolean(true)),
+        ("ohAA", D::Integer(1)),
+        ("ohIn", D::Integer(0)),
+        ("ohTC", enm("wrong", "OC03")),
+        ("olNC", D::List(vec![])),
+        ("olNC", D::List(vec![D::Descriptor(Descriptor::new("SCnc").with("ncTp", enm("STnc", "NC+1"))); 6])),
+        ("futureHtmlOption", D::Boolean(true)),
+    ] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(u)) = d.items.iter_mut().find(|(k, _)| k.is("Usng")).map(|(_, v)| v) else {
+            panic!("SaveForWeb");
+        };
+        u.items.retain(|(k, _)| !k.is(key));
+        u.items.push((Id::new(key), value));
+        let action = recorded(AtnEvent::name("export"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{key}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+    for key in ["obIP", "obIA", "obCS", "ovCB", "SHTM"] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(u)) = d.items.iter_mut().find(|(k, _)| k.is("Usng")).map(|(_, v)| v) else {
+            panic!("SaveForWeb");
+        };
+        u.items.retain(|(k, _)| !k.is(key));
+        let action = recorded(AtnEvent::name("export"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "missing {key}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+}
+
 #[test]
 fn recorded_web_slice_output_maps_all_images_to_a_directory() {
     for images in [false, true] {

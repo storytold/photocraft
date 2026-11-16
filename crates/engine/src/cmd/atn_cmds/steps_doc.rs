@@ -228,6 +228,87 @@ fn web_path(v: &D) -> Option<String> {
 const WEB_SLICE_OUTPUT_KEYS: &[&str] = &["SWsl", "SImg", "SHTM", "ovSF", "ovSN"];
 const WEB_NEUTRAL_JPEG_KEYS: &[&str] = &["blur", "QChS", "QCUI", "QChT", "QChV"];
 const WEB_SOURCE: &str = "_atnWebDescriptor";
+const WEB_INACTIVE_OUTPUT_KEYS: &[&str] = &[
+    "ohXH", "ohIC", "ohAA", "ohQA", "ohCA", "ohIZ", "ohTC", "ohAC", "ohIn", "ohLE", "ohEn", "olCS", "olEC", "olWH", "olSV", "olSH", "olNC", "obIA", "obCS",
+    "obIP", "ovCB",
+];
+
+/// HTML/layout preferences do not affect Images Only. A background filename, however, can
+/// request an extra copied asset: require an explicit, empty background block before mapping.
+fn web_inactive_output_supported(u: &Descriptor) -> bool {
+    if !WEB_INACTIVE_OUTPUT_KEYS.iter().any(|key| u.get(key).is_some()) {
+        return true;
+    }
+    if web_slice_images_folder(u).is_none()
+        || get_bool(u, "obIA").is_none()
+        || get_bool(u, "ovCB").is_none()
+        || !matches!(u.get("obIP"),Some(D::Text(s)) if s.0.iter().all(|v|*v==0))
+        || !matches!(u.get("obCS"),Some(D::Enumerated {type_id,value}) if type_id.is("STcs") && value.is("CS01"))
+    {
+        return false;
+    }
+    if ["ohXH", "ohIC", "ohAA", "ohQA", "ohCA", "ohIZ", "olCS"].iter().any(|key| !matches!(u.get(key), None | Some(D::Boolean(_))))
+        || !matches!(u.get("ohIn"), None | Some(D::Integer(-1)))
+    {
+        return false;
+    }
+    for (key, ty, code) in [
+        ("ohTC", "SToc", "OC03"),
+        ("ohAC", "SToc", "OC03"),
+        ("ohLE", "STle", "LE03"),
+        ("ohEn", "STen", "EN00"),
+        ("olEC", "STst", "ST00"),
+        ("olWH", "STwh", "WH01"),
+        ("olSV", "STsp", "SP04"),
+        ("olSH", "STsp", "SP04"),
+    ] {
+        if let Some(v) = u.get(key)
+            && !matches!(v,D::Enumerated {type_id,value} if type_id.is(ty)&&value.is(code))
+        {
+            return false;
+        }
+    }
+    if let Some(v) = u.get("olNC") {
+        let D::List(parts) = v else {
+            return false;
+        };
+        if parts.len() != 6 {
+            return false;
+        }
+        for part in parts {
+            let D::Descriptor(part) = part else {
+                return false;
+            };
+            if !part.class_id.is("SCnc") || !web_keys(part, &["ncTp", "ncSt"]) {
+                return false;
+            }
+            let Some(D::Enumerated { type_id, value }) = part.get("ncTp") else {
+                return false;
+            };
+            let code = value.as_bytes();
+            if !type_id.is("STnc")
+                || code.len() != 4
+                || code.get(..2) != Some(b"NC")
+                || !code
+                    .get(2..)
+                    .and_then(|v| std::str::from_utf8(v).ok())
+                    .filter(|v| v.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|v| v.parse::<u8>().ok())
+                    .is_some_and(|v| v <= 28)
+            {
+                return false;
+            }
+            if value.is("NC25") {
+                if !matches!(part.get("ncSt"), Some(D::Text(_))) {
+                    return false;
+                }
+            } else if part.get("ncSt").is_some() {
+                return false;
+            }
+        }
+    }
+    true
+}
 
 /// An explicit all-slices/images-only folder export, including its relative image subfolder.
 fn web_slice_images_folder(u: &Descriptor) -> Option<String> {
@@ -257,13 +338,17 @@ fn web_slice_images_folder(u: &Descriptor) -> Option<String> {
 fn web_settings_supported(u: &Descriptor) -> bool {
     const KEYS: &[&str] = &[
         "In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Pass", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB", "SWch", "SWmd", "SWsl",
-        "SImg", "SHTM", "ovSF", "ovSN", "blur", "QChS", "QCUI", "QChT", "QChV",
+        "SImg", "SHTM", "ovSF", "ovSN", "blur", "QChS", "QCUI", "QChT", "QChV", "ohXH", "ohIC", "ohAA", "ohQA", "ohCA", "ohIZ", "ohTC", "ohAC", "ohIn", "ohLE",
+        "ohEn", "olCS", "olEC", "olWH", "olSV", "olSH", "olNC", "obIA", "obCS", "obIP", "ovCB",
     ];
     if !u.class_id.is("SaveForWeb") || !web_keys(u, KEYS) {
         return false;
     }
     // A partial output block must not fall through to a whole-image save.
     if WEB_SLICE_OUTPUT_KEYS.iter().any(|key| u.get(key).is_some()) && web_slice_images_folder(u).is_none() {
+        return false;
+    }
+    if !web_inactive_output_supported(u) {
         return false;
     }
     if let Some(operation) = u.get("Op  ")
@@ -381,7 +466,7 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
         p["matte"] =
             json!(format!("#{:02x}{:02x}{:02x}", r.round().clamp(0.0, 255.0) as u8, g.round().clamp(0.0, 255.0) as u8, b.round().clamp(0.0, 255.0) as u8));
     }
-    if WEB_NEUTRAL_JPEG_KEYS.iter().any(|key| u.get(key).is_some()) && web_descriptor(&p).as_ref() != Some(d) {
+    if WEB_NEUTRAL_JPEG_KEYS.iter().chain(WEB_INACTIVE_OUTPUT_KEYS).any(|key| u.get(key).is_some()) && web_descriptor(&p).as_ref() != Some(d) {
         p[WEB_SOURCE] = photocraft_paint::tile::b64_encode(&d.to_bytes()).into();
     }
     step("file.export.saveForWebLegacy", p)
@@ -484,7 +569,12 @@ fn web_descriptor(p: &Value) -> Option<Descriptor> {
             .with("SImg", D::Boolean(true))
             .with("SHTM", D::Boolean(false))
             .with("ovSF", D::Boolean(!images.is_empty()))
-            .with("ovSN", text(if images.is_empty() { "images" } else { &images }));
+            .with("ovSN", text(if images.is_empty() { "images" } else { &images }))
+            // Images Only has no background asset. Clear remembered paths/copying explicitly.
+            .with("obIA", D::Boolean(true))
+            .with("obCS", enm("STcs", "CS01"))
+            .with("obIP", text(""))
+            .with("ovCB", D::Boolean(false));
     }
     if let Some(convert) = jbool(p, "convertToSrgb") {
         u = u.with("SWch", enm("STch", if convert { "CHsR" } else { "CHDc" }));
