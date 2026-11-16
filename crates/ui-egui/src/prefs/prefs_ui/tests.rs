@@ -729,7 +729,9 @@ fn desktop_shortcuts_wait_for_the_actions_definition_write() {
         saved_action.action_id = Some(old_id.into());
         seed.actions.list = vec![saved_action];
         seed.actions.rev = seed.actions.rev.saturating_add(1);
-        seed.edit_prefs(|prefs| { prefs.shortcuts.insert(old.clone(), "F4".into()); });
+        seed.edit_prefs(|prefs| {
+            prefs.shortcuts.insert(old.clone(), "F4".into());
+        });
         seed.sync_preset_store();
         assert!(seed.action_definitions_written());
         let original = definitions.read(ACTIONS_FILE, photocraft_engine::preset_store::MAX_ACTIONS_BYTES).unwrap();

@@ -602,7 +602,11 @@ fn canonical_ungrouped_category_keeps_classic_loose_rows_flat_and_order_stable()
     assert!(h.get_by_label("Legacy none").rect().top() < h.get_by_label("Explicit category").rect().top());
     assert!(h.get_by_label("Explicit category").rect().top() < h.get_by_label("Named action").rect().top(), "loose actions precede named folders");
     assert_eq!(h.state().session.actions.list, original, "presentation never rewrites legacy None or stored names");
-    assert_eq!(h.get_by_label("Legacy none").rect().left(), h.get_by_label("Explicit category").rect().left(), "both default-category spellings stay unindented");
+    assert_eq!(
+        h.get_by_label("Legacy none").rect().left(),
+        h.get_by_label("Explicit category").rect().left(),
+        "both default-category spellings stay unindented"
+    );
     h.state_mut().ui.actions.collapsed_sets.push("Named group".into());
     h.run_steps(3);
     assert!(h.query_by_label("Named action").is_none());

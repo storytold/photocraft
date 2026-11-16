@@ -583,9 +583,10 @@ impl Frame {
     fn library(session: &photocraft_engine::Session, params: &Value) -> Result<Self, String> {
         let (row, action, from) = actions_cmds::playback_plan_at(session, params).map_err(|e| e.to_string())?;
         let target = actions_cmds::playback_target(session, row).ok_or("The selected action no longer exists")?;
-        let legacy_occurrence = target.id.is_none().then(|| {
-            (session.actions.rev, session.actions.list.iter().filter(|candidate| candidate.name == action.name).take(2).count() == 1)
-        });
+        let legacy_occurrence = target
+            .id
+            .is_none()
+            .then(|| (session.actions.rev, session.actions.list.iter().filter(|candidate| candidate.name == action.name).take(2).count() == 1));
         Ok(Self {
             legacy_occurrence,
             action: std::sync::Arc::new(action),
@@ -656,7 +657,16 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
 pub fn preview_draft(app: &mut PhotocraftApp, draft: u64, from: usize) -> Result<Value, String> {
     let (action, record) = actions_cmds::playback::preview(&mut app.session, draft, from).map_err(|e| e.to_string())?;
     let target = actions_cmds::playback_snapshot_target(&app.session, &action);
-    let frame = Frame { action, target, legacy_occurrence: None, from, source: Source::Draft(draft), take: app.session.actions.take, admitted: false, pending_call: false };
+    let frame = Frame {
+        action,
+        target,
+        legacy_occurrence: None,
+        from,
+        source: Source::Draft(draft),
+        take: app.session.actions.take,
+        admitted: false,
+        pending_call: false,
+    };
     run_owned(app, frame, Vec::new(), Some(record), 0, 0, true)
 }
 

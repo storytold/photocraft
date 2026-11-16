@@ -3569,7 +3569,10 @@ fn a_bound_same_name_pause_follows_stable_ids_after_reordering() {
     let mut child = Action::new("Same", vec![("filter.blur.gaussianBlur".into(), json!({"radius":1.5})), ("layer.new.layer".into(), json!({"name":"Suffix"}))]);
     child.action_id = Some(child_id.clone());
     child.dialogs.insert(0);
-    let mut caller = Action::new("Same", vec![("actions.play".into(), json!({"action":"Same","actionId":child_id})), ("layer.new.layer".into(), json!({"name":"caller tail"}))]);
+    let mut caller = Action::new(
+        "Same",
+        vec![("actions.play".into(), json!({"action":"Same","actionId":child_id})), ("layer.new.layer".into(), json!({"name":"caller tail"}))],
+    );
     caller.action_id = Some("b".repeat(32));
     app.session.actions.list.extend([caller, child]);
     let paused = play(&mut app, &json!({"action":0})).unwrap();
@@ -3587,7 +3590,8 @@ fn a_bound_same_name_pause_follows_stable_ids_after_reordering() {
 fn a_paused_legacy_unique_name_refuses_a_new_namesake() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":8,"height":6,"background":"#203040"})).unwrap();
-    let mut action = Action::new("Only", vec![("filter.blur.gaussianBlur".into(), json!({"radius":1.5})), ("layer.new.layer".into(), json!({"name":"original tail"}))]);
+    let mut action =
+        Action::new("Only", vec![("filter.blur.gaussianBlur".into(), json!({"radius":1.5})), ("layer.new.layer".into(), json!({"name":"original tail"}))]);
     action.dialogs.insert(0);
     assert!(action.action_id.is_none());
     app.session.actions.list.push(action);
@@ -3605,16 +3609,35 @@ fn a_paused_legacy_unique_name_refuses_a_new_namesake() {
 #[test]
 fn classic_default_category_keeps_declared_and_physical_folder_rows() {
     let default = photocraft_engine::atn_cmds::UNGROUPED_SET.to_string();
-    let row = |set, set_slot| Row { name:"Action".into(), steps:Vec::new(), disabled:BTreeSet::new(), dialogs:BTreeSet::new(), set, set_slot, color:String::new() };
+    let row = |set, set_slot| Row {
+        name: "Action".into(),
+        steps: Vec::new(),
+        disabled: BTreeSet::new(),
+        dialogs: BTreeSet::new(),
+        set,
+        set_slot,
+        color: String::new(),
+    };
     let loose = vec![row(None, None), row(Some(default.clone()), None)];
     assert_eq!(display_order(&loose, &[], &[]), [PanelRow::Action(0), PanelRow::Action(1)]);
     assert!(row_folder_parts(&loose[1], &[], &[]).is_none());
     let declared = vec![default.clone()];
-    assert_eq!(display_order(&loose, &declared, &[]), [PanelRow::Action(0), PanelRow::Set(Folder { name:default.clone(), slot:None }, 1), PanelRow::Action(1)]);
+    assert_eq!(
+        display_order(&loose, &declared, &[]),
+        [PanelRow::Action(0), PanelRow::Set(Folder { name: default.clone(), slot: None }, 1), PanelRow::Action(1)]
+    );
     assert!(row_folder_parts(&loose[1], &declared, &[]).is_some());
     let physical = vec![row(Some(default.clone()), Some(1)), row(Some(default.clone()), Some(0))];
     let slots = vec![default.clone(), default.clone()];
-    assert_eq!(display_order(&physical, &[], &slots), [PanelRow::Set(Folder { name:default.clone(), slot:Some(0) }, 1), PanelRow::Action(1), PanelRow::Set(Folder { name:default, slot:Some(1) }, 1), PanelRow::Action(0)]);
+    assert_eq!(
+        display_order(&physical, &[], &slots),
+        [
+            PanelRow::Set(Folder { name: default.clone(), slot: Some(0) }, 1),
+            PanelRow::Action(1),
+            PanelRow::Set(Folder { name: default, slot: Some(1) }, 1),
+            PanelRow::Action(0)
+        ]
+    );
     assert_eq!(row_folder_parts(&physical[0], &[], &slots).unwrap().1, Some(1));
     assert_eq!(row_folder_parts(&physical[1], &[], &slots).unwrap().1, Some(0));
 }

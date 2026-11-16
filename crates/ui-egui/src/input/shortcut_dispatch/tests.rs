@@ -867,8 +867,9 @@ fn seed_native_actions(store: &MemBackend, file: serde_json::Value, keys: &[(&st
     let bytes = store.read(ACTIONS_FILE, photocraft_engine::preset_store::MAX_ACTIONS_BYTES).unwrap();
     let mut reopened = photocraft_engine::Session::new();
     assert!(reopened.attach_preset_store(open(Box::new(store.clone()))).is_empty());
-    let identity = |session: &photocraft_engine::Session| session.actions.list.iter()
-        .map(|action| (action.name.clone(), action.action_id.clone(), action.set.clone(), action.set_slot)).collect::<Vec<_>>();
+    let identity = |session: &photocraft_engine::Session| {
+        session.actions.list.iter().map(|action| (action.name.clone(), action.action_id.clone(), action.set.clone(), action.set_slot)).collect::<Vec<_>>()
+    };
     assert_eq!(identity(&reopened), identity(&seed));
     assert_eq!(reopened.actions.set_rows, seed.actions.set_rows);
     bytes
