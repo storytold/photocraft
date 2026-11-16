@@ -1802,4 +1802,6 @@ mod selected_alpha_tests {
 }
 
 #[cfg(test)]
+mod paint_bucket_alpha_edge_tests;
+#[cfg(test)]
 mod paint_bucket_transparent_seed_tests;
