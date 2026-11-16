@@ -1484,6 +1484,32 @@ fn indexed_color_full_builtin_palette_keeps_clear_pixels_without_an_entry() {
 }
 
 #[test]
+fn web_palette_keeps_the_transparent_entry_and_a_full_exact_table_cannot() {
+    // Documented in docs/development.md (Indexed Color conversion): a table that fills all 256
+    // entries has no slot for the auto-appended transparent entry. Web has 216, so it keeps one.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    let r = s.execute("image.mode.indexedColor", json!({"palette": "web", "dither": "none"})).unwrap();
+    let web = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(web.colors.len(), 217, "216 web colours plus the appended transparent entry");
+    assert_eq!(web.transparent, Some(216));
+    assert_eq!(r["transparentIndex"], json!(216));
+
+    // Exact: 255 distinct reds plus one clear black pixel fill the table, so there is no room.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, y| {
+        let i = y * 16 + x;
+        if i < 255 { [(i + 1) as f32 / 255.0, 0.0, 0.0, 1.0] } else { [0.0; 4] }
+    });
+    let r = s.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none"})).unwrap();
+    assert_eq!(r["colors"], json!(256), "the image's 256 colours fill the table");
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, None, "a full table has no slot for the transparent entry");
+    assert_eq!(r["transparentIndex"], Value::Null);
+}
+
+#[test]
 fn color_table_clearing_transparency_leaves_empty_pixels_alone() {
     // A non-black transparent entry: fully-transparent black pixels (the surface default — an
     // empty layer or pruned tiles) must not take the transparent index, or clearing

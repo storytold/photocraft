@@ -735,6 +735,15 @@ colors, and changing those colors invalidates both cached frames and pending wor
 including when the preview proxy factor changes. A same-color frame at the old factor can
 remain visible during a drag until the new result arrives. This follows Adobe's documented
 [Indexed Color conversion options](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-modes/conversion-options-for-indexed-color-images.html).
+
+A palette that fills all 256 entries has no slot left for the transparent entry, so the automatic
+transparency handling cannot apply. **System (Mac)** and **System (Windows)** are fixed 256-entry
+tables, and **Exact** fills the table when the image already uses 256 colours: converting with
+Transparency on and one of those therefore produces an opaque Indexed document. The computed
+palettes (Adaptive, Selective, Perceptual, Uniform) are built one colour short when transparency is
+on, and **Web** uses 216 entries, so they keep the transparent entry. Naming an explicit
+`transparent` index still makes that entry transparent with any palette; the preset palettes have
+no grid in the dialog to pick one, so there the conversion flattens.
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).

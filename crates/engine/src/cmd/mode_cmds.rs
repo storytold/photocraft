@@ -482,6 +482,10 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
                 pal
             }
         };
+        // The auto-appended transparent entry needs a free slot. System (Mac) and System (Windows)
+        // are fixed 256-entry tables, and Exact fills the table when the image already uses 256
+        // colours, so those palettes keep no transparency; Adaptive, Selective, Perceptual, Web
+        // and Uniform reserve a slot or have room (docs/development.md, Indexed Color conversion).
         let transparent = if let Some(t) = explicit_transparent {
             let t = (t < pal.len() as u64)
                 .then_some(t as usize)
@@ -952,7 +956,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.indexedColor",
             "Indexed Color…",
             ["Image", "Mode"],
-            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform|custom"="selective","colors":2..256=256,"paletteColors":json,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"transparent":json,"matte":color,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; transparent: index of the transparent entry, no white appended; matte: none|foreground|background|white|black|gray|netscapeGray|#rrggbb; gray=50% Gray (#808080), netscapeGray=Netscape Gray (#c0c0c0))"##,
+            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform|custom"="selective","colors":2..256=256,"paletteColors":json,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"transparent":json,"matte":color,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; transparent: index of the transparent entry, no white appended; a table that fills all 256 entries has no slot for the auto transparent entry, so systemMac/systemWindows, and exact when the image already has 256 colours, drop transparency unless transparent names an index; matte: none|foreground|background|white|black|gray|netscapeGray|#rrggbb; gray=50% Gray (#808080), netscapeGray=Netscape Gray (#c0c0c0))"##,
             |s| mode_is(
                 s,
                 &[ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Indexed, ColorMode::Duotone, ColorMode::Cmyk, ColorMode::Lab],
