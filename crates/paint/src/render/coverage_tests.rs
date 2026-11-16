@@ -3,6 +3,23 @@ use super::*;
 use std::collections::{HashMap, HashSet};
 
 #[test]
+fn coverage_tile_rect_saturates_signed_upper_endpoints() {
+    let right = i32::MAX.div_euclid(COV_TILE);
+    let bottom = i32::MAX.div_euclid(COV_TILE);
+    let rect = coverage_tile_rect((right, bottom));
+    assert_eq!(rect.x1, i32::MAX);
+    assert_eq!(rect.y1, i32::MAX);
+    assert!(rect.x0 < rect.x1 && rect.y0 < rect.y1);
+
+    let left = i32::MIN.div_euclid(COV_TILE);
+    let top = i32::MIN.div_euclid(COV_TILE);
+    let rect = coverage_tile_rect((left, top));
+    assert_eq!(rect.x0, i32::MIN);
+    assert_eq!(rect.y0, i32::MIN);
+    assert!(rect.x0 < rect.x1 && rect.y0 < rect.y1);
+}
+
+#[test]
 fn packed_tile_coordinates_round_trip_without_collisions() {
     let values = [i32::MIN, i32::MIN + 1, -1_000_003, -1, 0, 1, 1_000_003, i32::MAX - 1, i32::MAX];
     let coords: Vec<_> = values.iter().flat_map(|&x| values.iter().map(move |&y| (x, y))).collect();
@@ -32,7 +49,7 @@ fn serial(map: &mut CoverageMap, dab: &DabInput) {
     let values = DabValues { vals: &dab.vals, rect: dab.rect, w, ceil: dab.ceil, color: dab.color.as_deref(), depth: dab.depth.as_deref(), nc: map.nc };
     let keys = (y0..=y1).flat_map(|ty| {
         (x0..=x1).map(move |tx| {
-            let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&dab.rect);
+            let tr = coverage_tile_rect((tx, ty)).intersect(&dab.rect);
             ((tx, ty), tr)
         })
     });

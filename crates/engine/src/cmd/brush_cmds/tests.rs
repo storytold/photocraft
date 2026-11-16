@@ -276,7 +276,7 @@ fn cadence_mask_preview_tracks_blur_expanded_commit_damage_on_cpu_route() {
     })
     .unwrap();
     let params = json!({"target":"mask","points":[[8.5,8.5,1.0]],"size":8,"color":"#ffffff","brush":{"hardness":0.5,"opacity":1.0,"flow":1.0}});
-    let mut live = LiveStroke::begin_with(&s, "paint.stroke", &params).unwrap();
+    let live = LiveStroke::begin_with(&s, "paint.stroke", &params).unwrap();
     live.mask_preview_cadence = Some(std::time::Duration::from_secs(10));
     let changed = live.push(&[StrokePoint::new(32.5, 32.5, 1.0)]).unwrap();
     let expected = changed.inflate(4).intersect(&Rect::new(0, 0, 64, 64));
@@ -293,6 +293,33 @@ fn live_cpu_path_break_reapplies_the_paintable_clip() {
     live.break_path().unwrap();
     live.push(&[StrokePoint::new(200.5, 200.5, 1.0)]).unwrap();
     assert!(live.bounds().x1 <= 16 && live.bounds().y1 <= 16, "rebuilt preview renderer must retain the canvas clip: {:?}", live.bounds());
+}
+
+#[test]
+fn initial_path_break_preserves_unselected_color_channels() {
+    let mut s = session(24, 12);
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("initialize color channels", |doc, _| {
+        doc.layer_mut(id)
+            .ok_or(EngineError::NoLayer(id))?
+            .surface_mut()
+            .ok_or(EngineError::NoLayer(id))?
+            .fill_rect(Rect::new(0, 0, 24, 12), &[0.2, 0.4, 0.6, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let params = json!({
+        "target":{"colors":[0]},
+        "points":[[4.5,5.5,1.0],[18.5,5.5,1.0]],
+        "breaks":[1],
+        "size":6,
+        "color":"#ffffff",
+        "brush":{"hardness":1.0,"opacity":1.0,"flow":1.0}
+    });
+    let mut live = LiveStroke::begin_with(&s, "paint.stroke", &params).unwrap();
+    let first_segment_pixel = live.doc.layer(id).unwrap().surface().unwrap().rgba(4, 5);
+    assert!(first_segment_pixel[0] > 0.2, "the selected channel is painted");
+    assert_eq!(&first_segment_pixel[1..3], &[0.4, 0.6], "disabled channels stay at their pre-stroke values");
 }
 
 fn surface(s: &Session) -> Surface {

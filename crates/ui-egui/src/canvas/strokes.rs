@@ -271,11 +271,15 @@ impl EngineStroke {
         }
     }
 
-    pub(super) fn break_path(&mut self) -> Option<DRect> {
+    pub(super) fn break_path(&mut self) -> photocraft_engine::Result<DRect> {
         match self {
-            Self::Brush(stroke) => stroke.break_path().ok(),
-            _ => None,
+            Self::Brush(stroke) => stroke.break_path(),
+            _ => Ok(DRect::EMPTY),
         }
+    }
+
+    pub(super) fn can_break_path(&self) -> bool {
+        matches!(self, Self::Brush(_))
     }
 
     /// The jitter seed the commit must reuse (the Clone Stamp's comes from the session brush).
@@ -1138,11 +1142,7 @@ pub(crate) fn break_live_stroke_path(app: &mut PhotocraftApp) -> bool {
         }
         return true;
     }
-    let Some(damage) = app.live_stroke.as_mut().and_then(|live| live.paint.break_path()) else { return false };
-    if let Some(live) = app.live_stroke.as_mut() {
-        live.damage.push(damage);
-    }
-    true
+    app.live_stroke.as_mut().is_some_and(|live| live.paint.break_path())
 }
 
 #[cfg(feature = "uv-workbench")]

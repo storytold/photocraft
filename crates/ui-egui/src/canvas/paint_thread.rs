@@ -6,6 +6,7 @@
 //! Each step is the stroke's own copy of the document, as when it painted on the UI thread, so the
 //! canvas shows and refreshes it the same way (`LiveStroke::since`).
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -40,10 +41,13 @@ impl Shown {
 }
 
 struct State {
-    /// Points handed over that the stroke hasn't painted yet.
-    pending: Vec<StrokePoint>,
+    /// Ordered work handed over that the stroke hasn't painted yet.
+    pending: VecDeque<Work>,
     /// The stroke, while nothing is painting with it.
     stroke: Option<EngineStroke>,
+    can_break_path: bool,
+    /// The last submitted work was already a boundary, including if the worker took it.
+    path_boundary_queued: bool,
     /// Steps painted since the canvas last took them, and what the last one shows.
     steps: Vec<Step>,
     shown: Shown,
@@ -58,6 +62,11 @@ struct State {
     /// Tests: the next step panics (see `PaintThread::panic_next_step`).
     #[cfg(test)]
     panic_next: bool,
+}
+
+enum Work {
+    Points(Vec<StrokePoint>),
+    BreakPath,
 }
 
 impl State {
@@ -76,20 +85,36 @@ impl Shared {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Paint the pending points, if the stroke is free.
+    /// Paint the next ordered work item, if the stroke is free.
     fn paint_pending(&self) {
-        let (pts, stroke) = {
+        let (work, stroke) = {
             let mut st = self.lock();
-            if st.pending.is_empty() {
-                return;
-            }
             let Some(stroke) = st.stroke.take() else { return };
-            (std::mem::take(&mut st.pending), stroke)
+            let Some(work) = st.pending.pop_front() else {
+                st.stroke = Some(stroke);
+                return;
+            };
+            match work {
+                Work::Points(mut pts) => {
+                    while matches!(st.pending.front(), Some(Work::Points(_))) {
+                        if let Some(Work::Points(next)) = st.pending.pop_front() {
+                            pts.extend(next);
+                        }
+                    }
+                    (Work::Points(pts), stroke)
+                }
+                Work::BreakPath => (Work::BreakPath, stroke),
+            }
         };
         #[cfg(test)]
         self.test_hooks();
         let mut stroke = stroke;
-        let step = stroke.push(&pts);
+        let step = match work {
+            Work::Points(pts) => stroke.push(&pts),
+            // A break is ordered with point batches, and its damage or error is collected as a
+            // normal step so commit sees every worker result.
+            Work::BreakPath => stroke.break_path(),
+        };
         let mut st = self.lock();
         if step.is_ok() {
             st.shown = Shown::of(&stroke);
@@ -101,6 +126,13 @@ impl Shared {
         st.stroke = Some(stroke);
         drop(st);
         self.changed.notify_all();
+    }
+
+    /// Without a worker, drain all ordered work synchronously (the wasm fallback).
+    fn paint_all_pending(&self) {
+        while !self.lock().pending.is_empty() {
+            self.paint_pending();
+        }
     }
 
     /// Tests: wait while the step is held (the stroke is busy with it), then panic if asked to.
@@ -142,9 +174,12 @@ pub(super) struct PaintThread {
 impl PaintThread {
     pub(super) fn start(stroke: EngineStroke) -> Self {
         let shown = Shown::of(&stroke);
+        let can_break_path = stroke.can_break_path();
         let state = State {
-            pending: Vec::new(),
+            pending: VecDeque::new(),
             stroke: Some(stroke),
+            can_break_path,
+            path_boundary_queued: false,
             steps: Vec::new(),
             shown: shown.clone(),
             failed: false,
@@ -175,23 +210,39 @@ impl PaintThread {
             if st.failed {
                 return;
             }
-            st.pending.extend(pts);
+            st.path_boundary_queued = false;
+            if let Some(Work::Points(pending)) = st.pending.back_mut() {
+                pending.extend(pts);
+            } else {
+                st.pending.push_back(Work::Points(pts));
+            }
         }
         if self.thread.is_some() {
             self.shared.changed.notify_all();
         } else {
-            self.shared.paint_pending();
+            self.shared.paint_all_pending();
         }
     }
 
-    /// Finish the queued path before the next disconnected UV segment is submitted.
-    pub(super) fn break_path(&mut self) -> Option<Rect> {
-        let mut st = self.wait_idle(Duration::MAX);
-        let stroke = st.stroke.as_mut()?;
-        let damage = stroke.break_path()?;
-        st.shown = Shown::of(stroke);
-        st.steps.push(Ok(damage));
-        Some(damage)
+    /// Queue a path boundary before the next disconnected UV segment, without waiting for paint.
+    pub(super) fn break_path(&mut self) -> bool {
+        {
+            let mut st = self.shared.lock();
+            if !st.can_break_path || st.failed || st.closed || (st.stroke.is_none() && self.thread.as_ref().is_some_and(|t| t.is_finished())) {
+                return false;
+            }
+            if !st.path_boundary_queued {
+                st.pending.push_back(Work::BreakPath);
+                st.path_boundary_queued = true;
+            }
+        }
+        if self.thread.is_some() {
+            self.shared.changed.notify_all();
+        } else {
+            self.shared.paint_all_pending();
+        }
+        // The real damage is returned as a Step when the worker reaches this boundary.
+        true
     }
 
     /// Wait up to `wait` for everything handed over to be painted; returns the steps painted since
@@ -333,6 +384,54 @@ mod tests {
         assert!(thread.busy(), "a painted step nobody took yet");
         assert_eq!(thread.catch_up(Duration::ZERO).len(), 1);
         assert!(!thread.busy());
+    }
+
+    #[test]
+    fn queued_path_break_stays_between_point_batches_without_waiting() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 220, "height": 100, "background": "white"})).unwrap();
+        let p = json!({"points": [[20, 50, 1.0]], "brush": {"size": 22, "hardness": 1.0}, "seed": 7});
+        let begin = || EngineStroke::Brush(Box::new(LiveStroke::begin(&s, &p).unwrap()));
+        let first = vec![StrokePoint::new(70.0, 50.0, 1.0)];
+        let second = vec![StrokePoint::new(150.0, 50.0, 1.0)];
+
+        let mut queued = PaintThread::start(begin());
+        let release = queued.hold();
+        queued.push(first.clone());
+        // The worker is held in the first batch; both operations must return without waiting for it.
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+        let enqueue = std::thread::spawn(move || {
+            let result = queued.break_path();
+            let _ = done_tx.send((queued, result));
+        });
+        let (mut queued, enqueued) = match done_rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(result) => result,
+            Err(error) => {
+                release();
+                let _ = enqueue.join();
+                panic!("boundary enqueue blocked while the worker was held: {error}");
+            }
+        };
+        assert!(enqueued, "boundary queued");
+        enqueue.join().unwrap();
+        queued.push(second.clone());
+        release();
+        let (steps, painted) = queued.finish();
+        assert_eq!(steps.len(), 3, "point batch, boundary, point batch");
+        assert!(steps.iter().all(Result::is_ok));
+
+        let mut inline = begin();
+        inline.push(&first).unwrap();
+        inline.break_path().unwrap();
+        inline.push(&second).unwrap();
+        let layer = s.active().unwrap().active_layer.unwrap();
+        let surface = |stroke: &EngineStroke| stroke.doc().layer(layer).unwrap().surface().unwrap().clone();
+        let (actual, expected) = (surface(&painted.unwrap()), surface(&inline));
+        for y in 0..100 {
+            for x in 0..220 {
+                assert_eq!(actual.rgba(x, y), expected.rgba(x, y), "pixel {x},{y}");
+            }
+        }
     }
 
     #[test]

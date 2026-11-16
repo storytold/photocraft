@@ -515,6 +515,17 @@ fn tile_coords(key: u64) -> (i32, i32) {
     ((key >> 32) as i32, key as i32)
 }
 
+/// A coverage tile's half-open pixel bounds, saturated at the representable signed-coordinate edge.
+#[inline]
+fn coverage_tile_rect((tx, ty): (i32, i32)) -> Rect {
+    Rect::new(
+        tx.saturating_mul(COV_TILE),
+        ty.saturating_mul(COV_TILE),
+        tx.saturating_add(1).saturating_mul(COV_TILE),
+        ty.saturating_add(1).saturating_mul(COV_TILE),
+    )
+}
+
 /// A sparse tiled coverage (+ optional colour) buffer.
 #[derive(Clone, Debug, Default)]
 pub struct CoverageMap {
@@ -926,7 +937,7 @@ impl StrokeRenderer {
         let mut dmg = Rect::EMPTY;
         let mut region = Vec::new();
         for &(tx, ty) in &keys {
-            let tile = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE);
+            let tile = coverage_tile_rect((tx, ty));
             let old = tile.intersect(&before);
             if !old.is_empty() {
                 pre.read_region_into(old, &mut region);
@@ -1260,7 +1271,7 @@ impl StrokeRenderer {
             let mut region = Vec::new();
             for ty in old.y0.div_euclid(COV_TILE)..=(old.y1 - 1).div_euclid(COV_TILE) {
                 for tx in old.x0.div_euclid(COV_TILE)..=(old.x1 - 1).div_euclid(COV_TILE) {
-                    let tile = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE);
+                    let tile = coverage_tile_rect((tx, ty));
                     let part = tile.intersect(&old);
                     let written = if redrawn_by_tail.contains(&tile_key((tx, ty))) {
                         tile.intersect(&tail_bounds)
@@ -1302,11 +1313,7 @@ impl StrokeRenderer {
     /// the stroke bounds, and forget them: what a live preview that composites its own paint has
     /// to redraw.
     pub fn take_dirty_rect(&mut self) -> Rect {
-        let r = self
-            .cov
-            .take_dirty()
-            .into_iter()
-            .fold(Rect::EMPTY, |acc, (tx, ty)| acc.union(&Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE)));
+        let r = self.cov.take_dirty().into_iter().fold(Rect::EMPTY, |acc, key| acc.union(&coverage_tile_rect(key)));
         if let Some(d) = self.dual.as_mut() {
             d.dirty.clear();
         }
@@ -1350,7 +1357,7 @@ impl StrokeRenderer {
         let mut out = vec![0.0f32; w * b.height() as usize];
         for (&key, t) in &self.cov.tiles {
             let (tx, ty) = tile_coords(key);
-            let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&b);
+            let tr = coverage_tile_rect((tx, ty)).intersect(&b);
             for y in tr.y0..tr.y1 {
                 for x in tr.x0..tr.x1 {
                     let ti = ((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize;
@@ -1419,7 +1426,7 @@ impl StrokeRenderer {
             let composite_tile = |(key, done, region): &mut ((i32, i32), Rect, Vec<f32>)| {
                 let (tx, ty) = *key;
                 let Some(tile) = self.cov.tiles.get(&tile_key((tx, ty))) else { return };
-                let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&bounds);
+                let tr = coverage_tile_rect((tx, ty)).intersect(&bounds);
                 if tr.is_empty() {
                     return;
                 }

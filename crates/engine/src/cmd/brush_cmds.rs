@@ -1527,6 +1527,9 @@ impl LiveStroke {
                 } else {
                     self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, true)
                 };
+                if let Some(colors) = self.colors {
+                    crate::color_channels::restrict_region(&self.pre, surf, colors, damage)?;
+                }
                 self.pre = surf.clone();
                 self.renderer = StrokeRenderer::new(&self.brush, Some(surf.format()), self.zoom).with_clip(self.clip);
                 self.mirrors = (0..self.symmetry.as_ref().map_or(0, |s| s.mirror_count()))
