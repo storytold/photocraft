@@ -1046,6 +1046,11 @@ pub(crate) fn copy_legacy_rows(state: &mut ActionState, source: &str, name: &str
                 .map(|(_, row)| row.clone()),
         )
         .collect();
+    // Duplicating a set declares a folder, even after its last copied action is deleted.
+    // This proposed definition still passes the caller's normal size and capacity checks.
+    if !state.sets.iter().any(|caption| caption == name) {
+        state.sets.push(name.into());
+    }
     for (serial, row) in rows.into_iter().enumerate() {
         let key = GroupKey::Legacy(name.into(), serial);
         state.library.other_rows.push((key.clone(), row));

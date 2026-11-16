@@ -385,8 +385,9 @@ pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
         if selection.raw.as_ref().map(crate::actions_cmds::library::RowOrigin::has_empty_wire_name).transpose()?.unwrap_or(false) {
             empty_wire.push(index);
         }
+        // A fresh action may inherit the category's source metadata without owning a row.
+        // Ownership is established by the action's carriers, not that inherited source.
         if selection.raw.is_none()
-            && selection.source.is_none()
             && !selection.actions.is_empty()
             && selection.actions.iter().all(|action| {
                 action.set_slot.is_none() && action.library_origin.is_none() && action.atn_metadata.is_none() && action.set.as_deref().is_none_or(str::is_empty)

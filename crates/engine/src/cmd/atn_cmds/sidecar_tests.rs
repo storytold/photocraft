@@ -566,6 +566,10 @@ fn empty_wire_category_and_legacy_none_share_one_group_and_export_empty_name() {
     session.actions.list.push(Action::new("Legacy", vec![]));
     assert_eq!(crate::actions_edit_cmds::set_names(&session), [super::super::UNGROUPED_SET]);
     assert_eq!(groups(&session.actions, None).unwrap().len(), 1);
+    let before_assignment = saved(&mut session, json!({"set": super::super::UNGROUPED_SET}));
+    assert_eq!(before_assignment[0].name.to_string_lossy(), "");
+    assert_eq!(before_assignment[0].actions.len(), 2);
+    assert_eq!(integer(&set_metadata(&before_assignment, ""), "setColorIndex"), 11);
     let old = session.actions.list[0].atn_metadata.clone();
     session.execute("actions.assignSet", json!({"action":0,"set":null})).unwrap();
     assert_eq!(session.actions.list[0].atn_metadata, old);
@@ -582,6 +586,16 @@ fn empty_wire_category_and_legacy_none_share_one_group_and_export_empty_name() {
     assert_eq!(portable.len(), 3, "do not choose arbitrarily between two physical empty-name rows");
     assert_eq!(portable.iter().filter(|(_, selection)| selection.raw.is_some()).count(), 2);
     assert_eq!(portable.iter().filter(|(_, selection)| selection.raw.is_none()).count(), 1);
+
+    // A copied physical row can share raw provenance with its source without sharing identity.
+    let mut copied = loaded(&fixture(&[""], false, "Copied empty row\0").bytes);
+    copied.execute("actions.duplicate", json!({"set":super::super::UNGROUPED_SET,"setSlot":0})).unwrap();
+    copied.actions.list.push(Action::new("Loose", vec![]));
+    let copied_groups = groups(&copied.actions, None).unwrap();
+    assert_eq!(copied_groups.len(), 3, "keep both physical occurrences and the fresh loose group");
+    let origins: Vec<_> = copied_groups.iter().filter_map(|(_, selection)| selection.raw.as_ref().map(crate::actions_cmds::library::RowOrigin::key)).collect();
+    assert_eq!(origins.len(), 2);
+    assert_eq!(origins[0], origins[1], "the ambiguous copies deliberately share raw provenance");
 
     // Assigned actions from two physical empty-name rows stay unbound as a separate portable
     // group; the first row's provenance cannot claim the other row's action.
@@ -710,6 +724,12 @@ fn native_group_operations_keep_row_carriers_through_copy_move_delete_and_name_r
     assert_eq!(panel_groups(&trusted), expected);
     session.execute("actions.delete", json!({"set":"A"})).unwrap();
     session.execute("actions.delete", json!({"action":"Same copy"})).unwrap();
+    assert!(session.actions.sets.iter().any(|name| name == "A copy"), "the declared copy survives its last action");
+    let empty_group = ("A copy".into(), None, vec![]);
+    assert!(panel_groups(&session.actions).contains(&empty_group), "the empty copy remains visible to the panel");
+    let empty_bytes = crate::actions_cmds::library::encode(&session.actions, &[]).unwrap();
+    let empty_restored = crate::actions_cmds::library::decode(&empty_bytes).unwrap();
+    assert!(panel_groups(&empty_restored).contains(&empty_group), "a local restart keeps the declared empty copy");
     let live_empty = saved(&mut session, json!({"set":"A copy"}));
     assert!(live_empty[0].actions.is_empty());
     assert_eq!(integer(&set_metadata(&live_empty, "A copy"), "setColorIndex"), 11);
