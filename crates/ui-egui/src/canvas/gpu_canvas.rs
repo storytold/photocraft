@@ -656,6 +656,8 @@ impl GpuCanvas {
         if size[0] == 0 || size[1] == 0 {
             return true;
         }
+        #[cfg(test)]
+        test_hooks::panic_like_a_removed_device();
         d.write(queue, origin, size, size[0], texels);
         d.regenerate_mips(device, queue, res, [origin[0], origin[1], origin[0] + size[0], origin[1] + size[1]]);
         true
@@ -1156,6 +1158,27 @@ mod sharp_tests;
 
 #[cfg(test)]
 mod tests;
+
+/// Test-only fault injection: makes the next rectangle upload panic the way wgpu does when the
+/// driver removed the device between two polls (#13529).
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::cell::Cell;
+
+    thread_local! {
+        static PANIC_NEXT_UPLOAD: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) fn arm_upload_panic() {
+        PANIC_NEXT_UPLOAD.with(|c| c.set(true));
+    }
+
+    pub(super) fn panic_like_a_removed_device() {
+        if PANIC_NEXT_UPLOAD.with(|c| c.replace(false)) {
+            std::panic::panic_any("Error in Queue::write_texture: Parent device is lost".to_string());
+        }
+    }
+}
 
 #[cfg(test)]
 mod lost_device_tests;

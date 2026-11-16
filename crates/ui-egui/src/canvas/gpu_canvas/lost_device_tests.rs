@@ -17,9 +17,10 @@ fn queue_writes_on_a_lost_device_record_the_loss_instead_of_panicking() {
     gpu.upload_full(1, [8, 8], &rgba);
     assert!(gpu.health.is_ok());
     // wgpu's `Device::destroy` leaves later queue writes quiet (they are accepted), so the panic of a
-    // device removed by the driver is injected: a write that panics like wgpu does.
-    let panicked = gpu.health.guard(|| -> () { std::panic::panic_any("Error in Queue::write_texture: Parent device is lost".to_string()) });
-    assert_eq!(panicked, None);
+    // device removed by the driver is injected inside the upload implementation, where wgpu would
+    // raise it. The public `upload_rect` must catch it (remove its `health.guard` and this test
+    // fails with the panic escaping).
+    super::test_hooks::arm_upload_panic();
     let wrote = gpu.upload_rect(1, [0, 0], [8, 8], &rgba);
     assert!(!wrote, "a write on a lost device must not report success");
     assert!(!gpu.health.is_ok(), "the lost device must be recorded");
