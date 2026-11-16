@@ -403,7 +403,8 @@ fn a_pending_key_equal_to_the_saved_override_still_takes_the_key_on_ok() {
 #[test]
 fn ok_at_capacity_says_the_pending_key_was_not_taken() {
     let (mut h, id) = dialog("edit.cut");
-    let full: Vec<String> = (0..photocraft_engine::prefs::MAX_ALTERNATES).map(|k| format!("Cmd+Alt+Shift+F{}", k + 1)).collect();
+    // Plain letters under ⌘⌥⇧, valid on every platform (the F keys under ⌘⌥ are reserved on some).
+    let full: Vec<String> = ('A'..='Z').filter(|c| *c != 'Y').take(photocraft_engine::prefs::MAX_ALTERNATES).map(|c| format!("Cmd+Alt+Shift+{c}")).collect();
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("alternates".into(), json!({ "edit.cut": full }));
     h.run_steps(3);
     click(&mut h, "Add Shortcut");
