@@ -1,7 +1,7 @@
 use photocraft_color::SampleType;
 
 use super::manage::gray_document;
-use super::planes::{channel_format, edit_mode, next_alpha_name, plane_surface, read_plane, tone};
+use super::planes::{channel_format, next_alpha_name, plane_surface, read_plane, tone};
 use super::refs::{Blending, bad, doc_index, mask_plane, source, source_spec};
 use super::targeting::{Target, is_channel_target, is_spot_target, target_of, target_surface};
 use super::{AlphaChannel, ColorMode, EngineError, Result, SelectionMode, Session, Value, json, sel};
@@ -16,7 +16,8 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
     let preserve = p.get("preserveTransparency").and_then(Value::as_bool).unwrap_or(false);
     let src_spec = source_spec(p, "source", "source").unwrap_or_else(|| json!({}));
     // A composite's planes are in its own document's mode, which may not be the target's.
-    let src_mode = s.documents().get(doc_index(s, &src_spec, "document")?).map(|d| edit_mode(&d.doc)).ok_or(EngineError::NoDocument)?;
+    let src_fmt = s.documents().get(doc_index(s, &src_spec, "document")?).map(|d| d.doc.pixel_format()).ok_or(EngineError::NoDocument)?;
+    let src_mode = src_fmt.mode;
     // A CMYK composite reaches a channel or a layer mask as its luminosity, as Calculations reads
     // it: its planes are ink, and an average of their tones would leave Black alone light gray.
     let src = source(s, &src_spec, cmd, src_mode == ColorMode::Cmyk && (is_channel_target(p) || target_of(p) == Target::Mask))?;
@@ -66,16 +67,19 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         let n = sf.channels();
         let colors = sf.mode.color_channels();
         // #14490: at 8 bit Apply Image truncates the Add/Subtract quotient instead of rounding it
-        // to the nearest level. Nothing else is measured, so only this depth, only these two
-        // blends, only with Offset 0, and only a run that carries neither a mask nor a selection
-        // take that path (even a full-weight mask or selection keeps today's rounding);
-        // Calculations, 16 and 32 bit, the other colour modes (only RGB is measured), the blend
-        // modes and Scale with an Offset stay as they are.
+        // to the nearest level. Nothing else is measured, so only that exact configuration takes
+        // the new path: an RGB8 target and an RGB8 source (a deeper source carries fractional
+        // samples that truncating would drop), Add or Subtract with Offset 0, and neither a mask
+        // nor a selection (even a full-weight one keeps today's rounding). Calculations, 16 and
+        // 32 bit, the other colour modes (only RGB is measured), the blend modes and Scale with
+        // an Offset stay as they are.
         let truncates = match blending {
             Blending::Add { offset, .. } | Blending::Subtract { offset, .. } => offset == 0.0,
             Blending::Mode(_) => false,
         } && sf.sample == SampleType::U8
             && sf.mode == ColorMode::Rgb
+            && src_fmt.sample == SampleType::U8
+            && src_fmt.mode == ColorMode::Rgb
             && mask.is_none()
             && selection.is_none();
         let mut v = surf.read_region(area);

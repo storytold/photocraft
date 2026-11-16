@@ -215,6 +215,24 @@ fn an_all_one_mask_keeps_todays_rounding() {
 }
 
 #[test]
+fn a_thirty_two_bit_source_keeps_todays_rounding() {
+    // Review #14634 (calc.rs:99): the gate only looked at the target format, but a 16 or 32-bit
+    // source keeps fractional samples, and the truncation assumes whole 8-bit levels. The
+    // review's exact input: an opaque 8-bit RGB target at red 0, Add, Scale 1, Offset 0, and a
+    // 32-bit source whose red is 100.75/255. Today's path writes 101/255; truncating the
+    // fractional quotient drops it to 100/255. #14490 measured 8-bit sources only, so this
+    // keeps Blending::apply.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 6, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+    s.execute("file.new", json!({"width": 6, "height": 4, "depth": 32})).unwrap();
+    s.execute("edit.fill", json!({"color": [100.75 / 255.0, 0.4, 0.4]})).unwrap();
+    s.set_active(0);
+    apply(&mut s, json!({"source": {"document": 1}, "blending": "add", "scale": 1, "offset": 0}));
+    assert_eq!(lv8(px(&s, RIGHT, 1)[0]), 101, "32-bit source at red 100.75/255 keeps today's rounding");
+}
+
+#[test]
 fn an_eight_bit_grayscale_target_keeps_todays_rounding() {
     // Only RGB is measured (#14490), so another colour mode keeps rounding to the nearest level:
     // (50 + 255) / 2 = 152.5 lands on 153 in a Grayscale target.
