@@ -607,14 +607,13 @@ impl Frame {
     }
 
     fn target(&self, session: &photocraft_engine::Session) -> Result<actions_cmds::PlaybackTarget, String> {
-        let target = actions_cmds::refresh_playback_target(session, &self.action, &self.target).map_err(|error| error.to_string())?;
         if let Some((rev, unique_name)) = self.legacy_occurrence
             && rev != session.actions.rev
             && (!unique_name || session.actions.list.iter().filter(|action| action.name == self.action.name).take(2).count() != 1)
         {
             return Err("the action changed while it was paused".into());
         }
-        Ok(target)
+        actions_cmds::refresh_playback_target(session, &self.action, &self.target).map_err(|error| error.to_string())
     }
 
     fn validate(&self, session: &photocraft_engine::Session) -> Result<(), String> {
@@ -2510,13 +2509,13 @@ enum PanelRow {
 }
 
 /// Ordinary logical default-category rows stay loose; declared and physical folders retain headers.
-fn row_folder(row: &Row, declared: &[String], explicit: &[String]) -> Option<Folder> {
+fn row_folder_parts<'a>(row: &'a Row, declared: &[String], explicit: &[String]) -> Option<(&'a str, Option<usize>)> {
     let name = row.set.as_ref()?;
     let slot = row.set_slot.filter(|&slot| explicit.get(slot) == Some(name));
     if slot.is_none() && name == photocraft_engine::atn_cmds::UNGROUPED_SET && !declared.contains(name) {
         return None;
     }
-    Some(Folder { name: name.clone(), slot })
+    Some((name.as_str(), slot))
 }
 
 /// Keep implicit folders in their established order and explicit occurrences in archive order.
@@ -2525,11 +2524,11 @@ fn display_order(rows: &[Row], empty: &[String], explicit: &[String]) -> Vec<Pan
     let mut folders = std::collections::HashMap::<Folder, Vec<usize>>::new();
     let mut implicit = Vec::new();
     for (index, row) in rows.iter().enumerate() {
-        let Some(folder) = row_folder(row, empty, explicit) else {
+        let Some((name, slot)) = row_folder_parts(row, empty, explicit) else {
             order.push(PanelRow::Action(index));
             continue;
         };
-        let slot = folder.slot;
+        let folder = Folder { name: name.into(), slot };
         let entries = folders.entry(folder.clone()).or_insert_with(|| {
             if slot.is_none() {
                 implicit.push(folder);
@@ -2729,7 +2728,7 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             };
             let Row { name, steps, disabled, dialogs, color: swatch, .. } = &rows[i];
-            let in_folder = row_folder(&rows[i], &app.session.actions.sets, &app.session.actions.set_rows).is_some();
+            let in_folder = row_folder_parts(&rows[i], &app.session.actions.sets, &app.session.actions.set_rows).is_some();
             if in_folder && collapsed {
                 continue;
             }

@@ -3608,13 +3608,13 @@ fn classic_default_category_keeps_declared_and_physical_folder_rows() {
     let row = |set, set_slot| Row { name:"Action".into(), steps:Vec::new(), disabled:BTreeSet::new(), dialogs:BTreeSet::new(), set, set_slot, color:String::new() };
     let loose = vec![row(None, None), row(Some(default.clone()), None)];
     assert_eq!(display_order(&loose, &[], &[]), [PanelRow::Action(0), PanelRow::Action(1)]);
-    assert!(row_folder(&loose[1], &[], &[]).is_none());
+    assert!(row_folder_parts(&loose[1], &[], &[]).is_none());
     let declared = vec![default.clone()];
     assert_eq!(display_order(&loose, &declared, &[]), [PanelRow::Action(0), PanelRow::Set(Folder { name:default.clone(), slot:None }, 1), PanelRow::Action(1)]);
-    assert!(row_folder(&loose[1], &declared, &[]).is_some());
+    assert!(row_folder_parts(&loose[1], &declared, &[]).is_some());
     let physical = vec![row(Some(default.clone()), Some(1)), row(Some(default.clone()), Some(0))];
     let slots = vec![default.clone(), default.clone()];
     assert_eq!(display_order(&physical, &[], &slots), [PanelRow::Set(Folder { name:default.clone(), slot:Some(0) }, 1), PanelRow::Action(1), PanelRow::Set(Folder { name:default, slot:Some(1) }, 1), PanelRow::Action(0)]);
-    assert_eq!(row_folder(&physical[0], &[], &slots).unwrap().slot, Some(1));
-    assert_eq!(row_folder(&physical[1], &[], &slots).unwrap().slot, Some(0));
+    assert_eq!(row_folder_parts(&physical[0], &[], &slots).unwrap().1, Some(1));
+    assert_eq!(row_folder_parts(&physical[1], &[], &slots).unwrap().1, Some(0));
 }
