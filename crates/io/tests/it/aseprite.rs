@@ -4,6 +4,16 @@ use photocraft_doc::LayerContent;
 
 const LAYERS: &[u8] = include_bytes!("../fixtures/aseprite/layers.aseprite");
 
+/// Aseprite and Adobe Swatch Exchange share the short extension. Prefer the actual signature.
+#[test]
+fn aseprite_signature_routes_short_names_and_misleading_extensions() {
+    for name in ["layers.aseprite", "layers.ase", "layers.pdf", "layers.png"] {
+        assert!(photocraft_io::import(name, LAYERS).unwrap().document.sprite.is_some(), "{name}");
+    }
+    let png = include_bytes!("../fixtures/aseprite/application-indexed.png");
+    assert!(photocraft_io::import("oracle.aseprite", png).unwrap().document.sprite.is_none());
+}
+
 /// Compare every imported/native/re-exported frame with original application-rendered PNG oracles.
 #[test]
 fn aseprite_application_authored_frames_and_tilemaps_match_application_rendered_oracles() {
