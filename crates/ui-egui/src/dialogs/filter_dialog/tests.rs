@@ -2129,7 +2129,9 @@ fn replace_color_result_swatch_sets_the_sliders() {
     let mut h = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     let id = open(h.state_mut(), REPLACE_COLOR).unwrap();
-    h.run_steps(3);
+    // The window grows to its full height over a few frames (the Selection / Image thumbnail,
+    // #6281, makes it taller): let it settle before clicking.
+    h.run_steps(10);
     // No shift yet: the Result is the sampled colour.
     assert_eq!(h.get_all_by_label("#cc3333").count(), 2, "the sampled colour and the Result both read #cc3333");
     h.get_by_role_and_label(egui::accesskit::Role::ColorWell, "Result").click();
