@@ -545,4 +545,31 @@ mod tests {
         assert!(!c_after.faux_bold);
         assert_eq!(c_after.font_style, "Light");
     }
+
+    /// `inspect` reports the Type task bar rectangle when eligible.
+    #[test]
+    fn inspect_reports_type_task_bar_when_eligible() {
+        let mut app = app_with_doc();
+        app.ui.tool = crate::state::Tool::Type;
+        app.ui.panels.context_task_bar = true;
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: 0,
+            caret: 0,
+            anchor: 0,
+            session: String::new(),
+            created: false,
+            dragging: false,
+            mask: false,
+            document: None,
+            resize: None,
+            preedit: None,
+        });
+        app.ui.task_bar_shown = Some([10.0, 20.0, 110.0, 50.0]);
+
+        let ctx = egui::Context::default();
+        let val = crate::control::inspect(&app, &ctx);
+        assert_eq!(val["taskBar"]["enabled"], true);
+        assert_eq!(val["taskBar"]["visible"], true);
+        assert_eq!(val["taskBar"]["rect"], json!([10.0, 20.0, 110.0, 50.0]));
+    }
 }
