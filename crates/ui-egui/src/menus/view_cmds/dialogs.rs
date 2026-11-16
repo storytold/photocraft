@@ -358,6 +358,70 @@ fn default_dir(app: &PhotocraftApp) -> String {
     app.session.active().and_then(|d| d.path.as_deref()).and_then(|p| p.rfind(['/', '\\']).map(|i| p[..i].to_string())).unwrap_or_else(|| ".".into())
 }
 
+/// The title of the alerts Batch's OK shows for a missing choice (#13669).
+pub(crate) const BATCH_ALERT_TITLE: &str = "Batch";
+/// Batch's OK with Source: Folder and no source folder chosen (#13669).
+pub(crate) const NO_SOURCE_FOLDER: &str = "You must choose a source folder.";
+/// Batch's OK with a folder destination and no destination folder chosen (#13669).
+pub(crate) const NO_DESTINATION_FOLDER: &str = "You must choose a destination folder.";
+
+/// Does a Batch path field name a folder (or files)? No value, an empty or blank path and an
+/// empty file list count as nothing chosen.
+fn batch_path_chosen(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => false,
+        Some(Value::String(path)) => !path.trim().is_empty(),
+        Some(Value::Array(files)) => !files.is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// The first of the reference's OK checks the Batch dialog's fields fail, in its order: the
+/// source folder, then the destination folder. Only a folder source has either: Opened Files
+/// reads no folder, and without an output it leaves the documents open (Destination None). A
+/// Save and Close destination writes each source in place and has no folder to choose.
+fn batch_missing_choice(f: &Map<String, Value>) -> Option<&'static str> {
+    let folder_source = matches!(f.get("source"), None | Some(Value::Null)) || f.get("source").and_then(Value::as_str) == Some("folder");
+    if !folder_source {
+        return None;
+    }
+    // The source as the command reads it: `input`, else `files`.
+    if !batch_path_chosen(f.get("input").or_else(|| f.get("files"))) {
+        return Some(NO_SOURCE_FOLDER);
+    }
+    let folder_destination = matches!(f.get("destination"), None | Some(Value::Null)) || f.get("destination").and_then(Value::as_str) == Some("folder");
+    (folder_destination && !batch_path_chosen(f.get("output"))).then_some(NO_DESTINATION_FOLDER)
+}
+
+/// Checked before the Batch dialog closes (`dialogs::confirm_preflight`), for OK and for a
+/// confirm through the control channel alike: a missing source or destination folder shows the
+/// reference's alert titled "Batch" over the dialog, which stays open with its values, and
+/// nothing runs (#13669).
+pub(crate) fn batch_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
+    let Some(missing) = app
+        .ui
+        .dialogs
+        .iter()
+        .find(|d| d.id == id)
+        .map(|d| &d.fields)
+        .filter(|f| f.contains_key("__form") && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch"))
+        .and_then(batch_missing_choice)
+    else {
+        return Ok(());
+    };
+    let message = tl!(missing).to_owned();
+    // A confirm repeated from automation keeps one alert.
+    let shown = app.ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields.get("message").and_then(Value::as_str) == Some(message.as_str()));
+    if !shown {
+        app.ui.open_dialog(DialogKind::Error, json!({"message": message, "__title": BATCH_ALERT_TITLE}).as_object().cloned().unwrap_or_default());
+    }
+    Err(message)
+}
+
+#[cfg(test)]
+#[path = "batch_ok_validation_tests.rs"]
+mod batch_ok_validation_tests;
+
 /// Handle menu commands that need a shell action or a parameter dialog before execution.
 pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "file.closeAll" || id == "file.closeOthers" {
