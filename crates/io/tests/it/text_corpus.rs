@@ -310,7 +310,12 @@ fn created_text_layer_roundtrips_through_psd() {
     };
     assert_eq!(bt.text, t.text);
     assert_eq!(strip(bt.char_runs()), strip(t.char_runs()));
-    assert_eq!(bt.paragraph_runs(), t.paragraph_runs());
+    // Paragraph runs come back one per paragraph (#12420): the `\n` the second run started on
+    // stays with the first paragraph, whose style it had.
+    let mut paras = t.paragraph_runs();
+    paras[0].len = "Größe\n".len();
+    paras[1].len = "zwei".len();
+    assert_eq!(bt.paragraph_runs(), paras);
     assert_eq!(bt.shape, t.shape);
     assert_eq!(bt.transform, t.transform);
     assert!(bt.cache.as_ref().is_some_and(|c| c.content_bounds().width() > 10));
