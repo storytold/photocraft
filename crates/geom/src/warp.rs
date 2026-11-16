@@ -405,6 +405,11 @@ fn preset_grid(style: WarpStyle, b: f64, hd: f64, vd: f64, vertical: bool, aspec
     g
 }
 
+/// One-patch pull: the share a border line takes of a grab in its outer third (measured: 0.455).
+const ONE_PATCH_BORDER: f64 = 0.455;
+/// One-patch pull: the share of its neighbour's pull the next line inward takes (measured: 0.024).
+const ONE_PATCH_SPILL: f64 = 0.024;
+
 fn bernstein(t: f64) -> [f64; 4] {
     let s = 1.0 - t;
     [s * s * s, 3.0 * s * s * t, 3.0 * s * t * t, t * t * t]
@@ -884,10 +889,45 @@ impl BezierMesh {
         (s, t)
     }
 
+    /// The pull on a one-patch grid (the Default grid), as measured in the reference application
+    /// (154 drags of its default warp grid, read back from the saved mesh): each axis on its own.
+    /// The grid's thirds are its handle lines; a grab in a third moves the two lines that bound it,
+    /// shared by where the grab is between them (`1 - x` and `x`). The border line takes
+    /// [`ONE_PATCH_BORDER`] of its share, and the next line inward a [`ONE_PATCH_SPILL`] of its
+    /// neighbour's. A point moves by its column's share times its row's, all scaled so that the
+    /// grabbed surface point lands exactly at its start + `d`. So a grab in the middle bends the
+    /// inside of the picture and leaves its frame alone, and one near an edge or corner bows that
+    /// edge or moves that corner too.
+    fn pull_one_patch(&mut self, s: f64, t: f64, d: [f64; 2]) {
+        let share = |s: f64| -> [f64; 4] {
+            let s = s.clamp(0.0, 1.0);
+            let third = ((s * 3.0) as usize).min(2);
+            let x = s * 3.0 - third as f64;
+            match third {
+                0 => [ONE_PATCH_BORDER * (1.0 - x), x, ONE_PATCH_SPILL * x, 0.0],
+                1 => [0.0, 1.0 - x, x, 0.0],
+                _ => [0.0, ONE_PATCH_SPILL * (1.0 - x), 1.0 - x, ONE_PATCH_BORDER * x],
+            }
+        };
+        let (ws, wt, bs, bt) = (share(s), share(t), bernstein(s), bernstein(t));
+        // The grabbed point's move per unit of pull: the axes are independent, so it factors.
+        let dot = |w: [f64; 4], b: [f64; 4]| w.iter().zip(b).map(|(w, b)| w * b).sum::<f64>();
+        let at_grab = dot(ws, bs) * dot(wt, bt);
+        if at_grab <= 1e-12 || self.points.len() != 16 {
+            return;
+        }
+        for (k, p) in self.points.iter_mut().enumerate() {
+            let f = ws[k % 4] * wt[k / 4] / at_grab;
+            p[0] += f * d[0];
+            p[1] += f * d[1];
+        }
+    }
+
     /// Pulls the surface point at normalised `(s, t)` by `d`, as dragging the grid anywhere inside
     /// a patch does in other editors. `base` is the control grid at the start of the drag.
     ///
-    /// Two parts. The surrounding grid follows loosely: every interior anchor within about two cells
+    /// The one-patch Default grid pulls as the reference application does (`pull_one_patch`).
+    /// On a split grid, two parts. The surrounding grid follows loosely: every interior anchor within about two cells
     /// moves by a share of `d` that fades with distance. The picture's outer border stays pinned
     /// (the picture keeps filling its frame) unless the grab is within a
     /// few percent of it, and then it follows more and more. Each anchor
@@ -906,6 +946,10 @@ impl BezierMesh {
         }
         self.points.copy_from_slice(base);
         let (cols, rows) = (self.us.len() - 1, self.vs.len() - 1);
+        if cols == 1 && rows == 1 {
+            self.pull_one_patch(s, t, d);
+            return;
+        }
         let (pi, a) = Self::locate(&self.us, s);
         let (pj, b) = Self::locate(&self.vs, t);
         let (ba, bb) = (bernstein(a), bernstein(b));

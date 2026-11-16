@@ -104,9 +104,13 @@ fn a_pull_anywhere_away_from_the_border_never_moves_the_border() {
     let one = BezierMesh::identity([0.0, 0.0, 600.0, 800.0], 1, 1);
     let mut cut = one.clone();
     assert!(cut.split_u(0.4) && cut.split_u(0.7) && cut.split_v(0.35) && cut.split_v(0.8));
-    for base in [one, cut] {
+    // On the one-patch grid only a grab in its middle third (both ways) leaves the frame alone:
+    // in an outer third the reference application bows that edge too.
+    let grabs_one: &[(f64, f64)] = &[(0.5, 0.5), (0.4, 0.6), (0.62, 0.36)];
+    let grabs_cut: &[(f64, f64)] = &[(0.5, 0.5), (0.2, 0.5), (0.8, 0.3), (0.3, 0.85), (0.14, 0.14), (0.86, 0.5)];
+    for (base, grabs) in [(one, grabs_one), (cut, grabs_cut)] {
         let (nx, ny) = (base.nx(), base.ny());
-        for (s, t) in [(0.5, 0.5), (0.2, 0.5), (0.8, 0.3), (0.3, 0.85), (0.14, 0.14), (0.86, 0.5)] {
+        for &(s, t) in grabs {
             for d in [[-400.0, 0.0], [250.0, -90.0], [0.0, 300.0]] {
                 let mut m = base.clone();
                 m.pull(&base.points, s, t, d);
@@ -483,4 +487,117 @@ fn mesh_inverse_matches_param_at() {
     }
     let bad = BezierMesh { points: vec![[f64::NAN, f64::INFINITY]; m.points.len()], ..m };
     let _ = MeshInverse::new(bad).param_at([1.0, 2.0]);
+}
+
+/// The reference application's own meshes after a 60 px drag of its Default warp grid on a
+/// 302 x 202 picture (read back from the saved file): each control point's move. The grab is
+/// where the reference took it (its pointer lands about half a pixel up and left).
+#[test]
+fn a_one_patch_pull_moves_the_grid_as_the_reference_application_does() {
+    let base = BezierMesh::identity([0.0, 0.0, 302.0, 202.0], 1, 1);
+    type Case = ((f64, f64), [f64; 2], [[f64; 2]; 16]);
+    let cases: [Case; 4] = [
+        // Centre, 60 px up: the four inner points only.
+        (
+            (0.49834, 0.49629),
+            [0.0, -60.0],
+            [
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.2, -109.7],
+                [0.2, -107.3],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.2, -104.9],
+                [0.2, -102.6],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+            ],
+        ),
+        // A quarter across: the left edge bows too.
+        (
+            (0.25, 0.49629),
+            [0.0, -60.0],
+            [
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, -25.0],
+                [0.0, -166.5],
+                [0.0, -4.2],
+                [0.0, 0.0],
+                [0.0, -23.9],
+                [0.0, -159.3],
+                [0.0, -4.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+            ],
+        ),
+        // Near the top-left corner, diagonally: the corner moves.
+        (
+            (0.09768, 0.09530),
+            [42.426, -42.426],
+            [
+                [47.6, -45.9],
+                [43.9, -42.3],
+                [1.1, -1.1],
+                [0.0, 0.0],
+                [41.4, -39.9],
+                [38.1, -36.7],
+                [1.0, -0.9],
+                [0.0, 0.0],
+                [1.0, -1.0],
+                [1.0, -0.9],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+            ],
+        ),
+        // Three quarters across, a quarter down, 60 px right.
+        (
+            (0.74669, 0.24876),
+            [60.0, 0.0],
+            [
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [38.0, 0.0],
+                [5.3, 0.0],
+                [0.0, 0.0],
+                [6.3, 0.0],
+                [253.3, 0.0],
+                [35.7, 0.0],
+                [0.0, 0.0],
+                [0.2, 0.0],
+                [6.3, 0.0],
+                [0.9, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 0.0],
+            ],
+        ),
+    ];
+    for ((s, t), d, want) in cases {
+        let mut m = base.clone();
+        m.pull(&base.points, s, t, d);
+        for (k, w) in want.iter().enumerate() {
+            let got = [m.points[k][0] - base.points[k][0], m.points[k][1] - base.points[k][1]];
+            assert!((got[0] - w[0]).hypot(got[1] - w[1]) < 3.0, "grab ({s}, {t}) by {d:?}: point {k} moved {got:?}, the reference {w:?}");
+        }
+        let (before, after) = (base.eval(s, t), m.eval(s, t));
+        assert!((after[0] - before[0] - d[0]).abs() < 1e-6 && (after[1] - before[1] - d[1]).abs() < 1e-6, "the grabbed point follows");
+    }
 }
