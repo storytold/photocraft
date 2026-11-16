@@ -1313,3 +1313,16 @@ fn style_click_does_not_mutate_document_until_confirm() {
     confirm(&mut app, &f).unwrap();
     assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().effects.items.len(), 1);
 }
+
+/// #14977: the Satin page shows its rows under one titled group, Structure, above the row that
+/// starts the block (Blend Mode), and it gains no second group: the reference application's page
+/// has no Quality group. `page` draws `group_title` above exactly these rows.
+#[test]
+fn the_satin_page_shows_one_structure_group_and_no_quality_group() {
+    let titled: Vec<(&'static str, &'static str)> =
+        spec("satin").iter().filter_map(|&(key, _, _)| group_title("satin", key).map(|title| (title, key))).collect();
+    assert_eq!(titled, [("Structure", "blend")], "one title, above the page's first row");
+    for key in ["color", "opacity", "angle", "distance", "size", "contour", "invert"] {
+        assert_eq!(group_title("satin", key), None, "the Satin row {key} starts no new group");
+    }
+}
