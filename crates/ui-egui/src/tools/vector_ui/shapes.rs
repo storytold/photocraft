@@ -152,6 +152,10 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             Tool::Triangle => json!({"kind": "triangle", "rect": rect}),
             // PhotoCraft's star defaults; the Star Tool's own options are not measured yet (#11377).
             Tool::Star => json!({"kind": "star", "rect": rect, "sides": 5, "starRatio": 0.5}),
+            // The Polygon tool's own corner radius rounds every vertex of the next polygon (#13302).
+            Tool::Polygon if o.polygon_corner_radius > 0.0 => {
+                json!({"kind": "polygon", "rect": rect, "sides": o.polygon_sides.max(3), "cornerRadius": o.polygon_corner_radius})
+            }
             _ => json!({"kind": "polygon", "rect": rect, "sides": o.polygon_sides.max(3)}),
         }
     })
