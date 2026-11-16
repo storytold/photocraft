@@ -2186,6 +2186,33 @@ mod checkbox_drag {
         assert_eq!(*h.state(), [true, false, true], "the covered box on the way keeps its state");
     }
 
+    /// #3333: a jump over a box that another layer covers only in part still sets it, because the
+    /// pointer crossed the exposed part (the middle of the crossing is under the cover).
+    #[test]
+    fn drag_sweep_jumping_over_a_partly_covered_checkbox_still_sets_it() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 3]| {
+                let mut rects = Vec::new();
+                ui.vertical(|ui| {
+                    for b in s.iter_mut() {
+                        rects.push(crate::widgets::checkbox(ui, b, "Box").rect);
+                    }
+                });
+                // A floating panel over the upper two thirds of the middle box.
+                let mut size = rects[1].size();
+                size.y *= 0.67;
+                egui::Area::new(egui::Id::unique("cover")).fixed_pos(rects[1].min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+                    ui.allocate_exact_size(size, egui::Sense::click());
+                });
+            },
+            [false; 3],
+        );
+        h.run();
+        let b = box_points(&h);
+        sweep(&mut h, &[b[0], b[2]], 1);
+        assert_eq!(*h.state(), [true, true, true], "the exposed part of the middle box was crossed");
+    }
+
     /// #3333: the first move of a drag upwards jumps over boxes drawn before the pressed one, which
     /// see the drag only on the next frame (the release frame here); they are still set.
     #[test]

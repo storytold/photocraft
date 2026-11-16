@@ -256,10 +256,10 @@ struct DragPaint {
     first: (egui::Pos2, egui::Pos2),
 }
 
-/// The middle of the part of the segment `a`..`b` that lies inside `rect` (the point itself for a
-/// segment of no length), or `None` if it never touches it. Liang-Barsky clipping. The middle,
-/// not the entry, so rounding can't put the point just outside the rect.
-fn segment_crossing(a: egui::Pos2, b: egui::Pos2, rect: Rect) -> Option<egui::Pos2> {
+/// The part of the segment `a`..`b` that lies inside `rect` (a point for a segment of no length),
+/// or `None` if it never touches it. Liang-Barsky clipping. The ends are pulled in by a pixel so
+/// they are surely inside the rect.
+fn segment_crossing(a: egui::Pos2, b: egui::Pos2, rect: Rect) -> Option<(egui::Pos2, egui::Pos2)> {
     if !rect.is_positive() {
         return None;
     }
@@ -276,7 +276,21 @@ fn segment_crossing(a: egui::Pos2, b: egui::Pos2, rect: Rect) -> Option<egui::Po
             t1 = t1.min(ta.max(tb));
         }
     }
-    (t0 <= t1).then(|| a + d * ((t0 + t1) / 2.0))
+    if t0 > t1 {
+        return None;
+    }
+    // Pulled in by a pixel (at most to the middle): at the very edge another layer's grab margin
+    // or rounding would decide, not the box.
+    let len = d.length();
+    let inset = if len > 0.0 { ((t1 - t0) * 0.5).min(1.0 / len) } else { 0.0 };
+    Some((a + d * (t0 + inset), a + d * (t1 - inset)))
+}
+
+/// Whether `ui`'s layer is the topmost one at some point of `a`..`b`, looked at every point of a
+/// pixel along it: another layer may cover only part of the crossed stretch.
+fn layer_exposed_on(ctx: &egui::Context, ui: &Ui, (a, b): (egui::Pos2, egui::Pos2)) -> bool {
+    let steps = (b - a).length().ceil().max(1.0) as u32;
+    (0..=steps).any(|k| ctx.layer_id_at(a + (b - a) * (k as f32 / steps as f32)) == Some(ui.layer_id()))
 }
 
 /// Click or drag-paint a checkbox (#3333). A click flips `on`. Pressing and dragging flips it and
@@ -335,11 +349,8 @@ pub fn drag_toggle(ui: &Ui, resp: &Response, hit: Rect, on: &mut bool) -> bool {
     // This frame's segment, and in the frame after the drag began the first one too, which the
     // boxes drawn before the pressed one could not see in its own frame.
     let first = (st.born.saturating_add(1) == frame).then_some(st.first);
-    let crossed = [Some((st.from, st.to)), first]
-        .into_iter()
-        .flatten()
-        .filter_map(|(a, b)| segment_crossing(a, b, visible))
-        .any(|p| ctx.layer_id_at(p) == Some(ui.layer_id()));
+    let crossed =
+        [Some((st.from, st.to)), first].into_iter().flatten().filter_map(|(a, b)| segment_crossing(a, b, visible)).any(|seg| layer_exposed_on(ctx, ui, seg));
     if !crossed {
         return false;
     }
