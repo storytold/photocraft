@@ -68,8 +68,9 @@ const TANG_TOL: f64 = 0.5;
 /// its chord (one ahead of its even spacing, the other behind) before a new point on that row
 /// keeps its place on the surface instead of dropping onto the chord. The reference application's
 /// lumpy edges keep the point from a difference of about 0.5 px and drop it at 0.33 px or less,
-/// whatever the segment's sideways bow below [`PERP_TOL`].
-const UNEVEN_TOL: f64 = 0.4;
+/// whatever the segment's sideways bow below [`PERP_TOL`]. The same holds for a point on a side
+/// tested by the row rule turned on its side, except in a quilt's patch with a seam left or right.
+const UNEVEN_TOL: f64 = 0.42;
 /// Distance (document px) of an inner control point before its chord's start that splits a
 /// segment, as the reference application's creases show (rows pulled back over themselves split
 /// later there than past the chord's end).
@@ -639,6 +640,7 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             flat_columns: None,
             surface_sides: [false; 2],
             uneven_quilt: false,
+            side_seam: false,
         }
     } else {
         Rules {
@@ -655,6 +657,7 @@ fn one_patch_rules(net: &Net, full: bool) -> Rules {
             flat_columns: (!tall).then_some(FLAT_COLUMN_TOL),
             surface_sides: [false; 2],
             uneven_quilt: false,
+            side_seam: false,
         }
     }
 }
@@ -703,6 +706,7 @@ fn patch_rules(seams: Seams) -> Rules {
         flat_columns: None,
         surface_sides: if seams.top || seams.bottom { [false; 2] } else { [seams.left, seams.right] },
         uneven_quilt: seams.uneven,
+        side_seam: seams.left || seams.right,
     }
 }
 
@@ -752,6 +756,9 @@ struct Rules {
     /// cell as tall as its patch for the twist along its rows past
     /// [`UNEVEN_FULL_HEIGHT_TWIST_TOL`].
     uneven_quilt: bool,
+    /// The patch belongs to a quilt and has a seam on its left or right: its side points drop onto
+    /// the side's chord however unevenly the side drifts (see [`UNEVEN_TOL`]).
+    side_seam: bool,
 }
 
 impl Rules {
@@ -1163,7 +1170,8 @@ fn own_points(
         } else if lv <= fixed_level || !on_side {
             continue;
         }
-        if need(&segment(net.col(u), a, b)) < 1.0 - EPS {
+        let seg = segment(net.col(u), a, b);
+        if need(&seg) < 1.0 - EPS && (rules.side_seam || uneven_drift(&seg) < UNEVEN_TOL) {
             let m = onto_chord(place(&own, u, a), place(&own, u, b), surf(u, v));
             own.insert(key(u, v), m);
         }
@@ -1614,6 +1622,7 @@ mod tests {
             flat_columns: None,
             surface_sides: [false; 2],
             uneven_quilt: false,
+            side_seam: false,
         };
         assert!(tallest(&quilt) <= 0.25 + 1e-9, "bottom cells {}", tallest(&quilt));
         let alone = Rules { twist_spreads: false, ..quilt };
@@ -1657,6 +1666,7 @@ mod tests {
             flat_columns: None,
             surface_sides: [false; 2],
             uneven_quilt: false,
+            side_seam: false,
         }
     }
 
