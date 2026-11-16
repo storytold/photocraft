@@ -976,11 +976,7 @@ fn import_with_sample_order_and_parasite_work(
     let ImageMetadata { properties: image_props, compression, colormap, icc, parasite_work, parasites_limited } =
         read_image_metadata_with_work(&mut c, version, parasite_work, ctl)?;
     let assigned_profile = icc.is_some();
-    let color::ProfileSelection { bytes: native_profile, mut fallback_reason, mut tag_document } = color::select_profile(mode, precision, icc)?;
-    if parasites_limited {
-        fallback_reason = Some("Image parasite scan work was exhausted before the final ICC assignment could be established".into());
-        tag_document = true;
-    }
+    let color::ProfileSelection { bytes: native_profile, fallback_reason, tag_document } = select_image_profile(mode, precision, icc, parasites_limited)?;
     if let Some(reason) = &fallback_reason {
         warnings.note(&format!(
             "The assigned ICC profile could not be used: {reason}. Original samples use the implicit {} profile for their encoding; assigned colorants could not be preserved",
@@ -1159,6 +1155,16 @@ fn import_with_sample_order_and_parasite_work(
     document.metadata.import_conversion = Some(Arc::new(image.outcomes.finish()?));
     ctl.progress(1.0);
     Ok(ImportResult { initial_view, document, warnings: image.warnings.finish(), source_read_only: true, preview_only: false })
+}
+
+/// Preserve the existing implicit-profile fallback when final ICC selection is unknown.
+fn select_image_profile(mode: ColorMode, precision: Precision, icc: Option<Vec<u8>>, parasites_limited: bool) -> Result<color::ProfileSelection> {
+    let mut selection = color::select_profile(mode, precision, icc)?;
+    if parasites_limited {
+        selection.fallback_reason = Some("Image parasite scan work was exhausted before the final ICC assignment could be established".into());
+        selection.tag_document = true;
+    }
+    Ok(selection)
 }
 
 /// Describe the effective color interpretation without claiming unusable assigned colorants.
