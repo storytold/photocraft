@@ -4,16 +4,43 @@
 //! `PEN_FLAG_ERASER`) on Windows and turns pen inputs into `WindowEvent::Touch`, mapping them to
 //! `PointerButton::Primary`. Windows Ink also does not update `GetAsyncKeyState(VK_RBUTTON)` for
 //! stylus barrel buttons. Thread-local hooks inspect `WM_POINTER*` messages on the UI thread to
-//! track the physical barrel button state and which end of the pen is in use: `WH_GETMESSAGE` for
-//! the posted ones (`WM_POINTERDOWN`, `WM_POINTERUPDATE`, `WM_POINTERUP`) and `WH_CALLWNDPROC` for
+//! track which end of the pen is in use and the physical barrel button state
+//! ([`crate::pen_buttons::Tracker`]): held, pressed since the UI last looked, and a quick click,
+//! which a driver sends for a side switch set to Right Click. `WH_GETMESSAGE` sees the posted
+//! messages (`WM_POINTERDOWN`, `WM_POINTERUPDATE`, `WM_POINTERUP`) and `WH_CALLWNDPROC`
 //! `WM_POINTERENTER` and `WM_POINTERLEAVE`, which Windows documents as sent to the window, so the
 //! queue hook alone may never see the pen arrive or leave.
 
 #![allow(unsafe_code, clippy::upper_case_acronyms)]
 
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
-static BARREL_DOWN: AtomicBool = AtomicBool::new(false);
+use crate::pen_buttons::{Buttons, Tracker};
+
+static BARREL: Mutex<Tracker> = Mutex::new(Tracker::DEFAULT);
+
+fn barrel() -> std::sync::MutexGuard<'static, Tracker> {
+    BARREL.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+type Wake = Box<dyn Fn() + Send + Sync>;
+
+/// Called when the tracker records a press or a click ([`set_wake`]).
+static WAKE: Mutex<Option<Wake>> = Mutex::new(None);
+
+/// Wake the UI when the barrel button is pressed or clicked: the driver's Right Click in the air
+/// can come with no window input at all, and [`take_buttons`] is read once a frame, so without a
+/// wake the click would wait for the next unrelated input. The app passes its repaint request.
+pub fn set_wake(wake: impl Fn() + Send + Sync + 'static) {
+    *WAKE.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(wake));
+}
+
+fn wake() {
+    if let Some(wake) = WAKE.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        wake();
+    }
+}
 
 /// The pointer id of the pen last seen, or [`NO_PEN`]. Ids come from a 16-bit field, so
 /// `u32::MAX` is never one.
@@ -127,6 +154,8 @@ pub const WM_POINTERDOWN: u32 = 0x0246;
 pub const WM_POINTERUP: u32 = 0x0247;
 /// `WM_POINTERLEAVE` (winuser.h).
 pub const WM_POINTERLEAVE: u32 = 0x024A;
+/// `WM_POINTERCAPTURECHANGED` (winuser.h): the window lost the pointer's capture.
+pub const WM_POINTERCAPTURECHANGED: u32 = 0x024C;
 
 /// `PEN_FLAG_BARREL` (winuser.h): the barrel button of the pen is pressed.
 pub const PEN_FLAG_BARREL: u32 = 0x00000001;
@@ -137,8 +166,15 @@ pub const PEN_FLAG_INVERTED: u32 = 0x00000002;
 /// `PEN_FLAG_ERASER` (winuser.h): the eraser button of the pen is pressed.
 pub const PEN_FLAG_ERASER: u32 = 0x00000004;
 
+/// `POINTER_FLAG_INCONTACT` (winuser.h): the pointer is in contact with the digitizer.
+pub const POINTER_FLAG_INCONTACT: u32 = 0x00000004;
+
 /// `POINTER_MESSAGE_FLAG_SECONDBUTTON` (winuser.h): the secondary action button is pressed.
 pub const POINTER_FLAG_SECONDBUTTON: u32 = 0x00000020;
+
+/// `POINTER_BUTTON_CHANGE_TYPE::POINTER_CHANGE_SECONDBUTTON_DOWN`: the secondary button went down
+/// with this message (Wacom's Right Click with Windows Ink, not always with the barrel flag).
+pub const POINTER_CHANGE_SECONDBUTTON_DOWN: i32 = 3;
 
 /// Pure decode of which end of the pen is in use: `Some(true)` for the eraser end, `Some(false)`
 /// for the tip, `None` when the pointer is not a pen (`GetPointerPenInfo` failed: mouse, touch).
@@ -162,11 +198,10 @@ pub fn is_barrel_pressed(pen_flags: Option<u32>, pointer_message_flags: u32) -> 
     }
 }
 
-/// What the hooks track between pointer messages.
+/// Which end of the pen the hooks track between pointer messages. The barrel button has its own
+/// [`Tracker`] ([`handle_barrel_message`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PenState {
-    /// The barrel button is pressed.
-    pub barrel: bool,
     /// Which end of the pen is in use (`Some(true)` = eraser), `None` = no pen in range.
     pub end: Option<bool>,
     /// The pointer id of the pen last seen, so another pointer leaving does not forget it.
@@ -184,18 +219,15 @@ pub fn next_state(prev: PenState, message: u32, w_param: usize, pen_flags: impl 
     match message {
         // A pen entering range while hovering may stay still: its first update can come late.
         WM_POINTERDOWN | WM_POINTERUPDATE | WM_POINTERENTER => {
-            let pointer_message_flags = ((w_param >> 16) & 0xFFFF) as u32;
             let pen_flags = pen_flags(pointer_id);
             let end = is_eraser_end(pen_flags);
             // A mouse or a finger in between leaves the pen's end as it was.
             PenState {
-                barrel: is_barrel_pressed(pen_flags, pointer_message_flags),
                 end: end.or(prev.end),
                 pen_id: if pen_flags.is_some() { Some(pointer_id) } else { prev.pen_id },
                 contact: if message == WM_POINTERDOWN { end.or(prev.contact) } else { prev.contact },
             }
         }
-        WM_POINTERUP => PenState { barrel: false, ..prev },
         // A finger or a palm leaving while the pen stays in range (pen and touch screens).
         WM_POINTERLEAVE if prev.pen_id.is_some_and(|id| id != pointer_id) => prev,
         WM_POINTERLEAVE => PenState { contact: prev.contact, ..PenState::default() },
@@ -203,17 +235,19 @@ pub fn next_state(prev: PenState, message: u32, w_param: usize, pen_flags: impl 
     }
 }
 
-/// Apply one pointer message to the state [`is_barrel_button_down`], [`pen_end`] and
-/// [`take_pen_end`] read. The hooks call this; tests call it with a fake `pen_flags` reader.
+/// Apply one pointer message to the state [`pen_end`] and [`take_pen_end`] read; the pen itself
+/// leaving (not a finger or a palm) also lets go of its barrel button. The hooks call this; tests
+/// call it with a fake `pen_flags` reader.
 pub fn handle_pointer_message(message: u32, w_param: usize, pen_flags: impl FnOnce(u32) -> Option<u32>) {
     let prev = PenState {
-        barrel: BARREL_DOWN.load(Ordering::Relaxed),
         end: decode_end(PEN_END.load(Ordering::Relaxed)),
         pen_id: Some(PEN_ID.load(Ordering::Relaxed)).filter(|&id| id != NO_PEN),
         contact: decode_end(CONTACT_END.load(Ordering::Relaxed)),
     };
     let next = next_state(prev, message, w_param, pen_flags);
-    BARREL_DOWN.store(next.barrel, Ordering::Relaxed);
+    if message == WM_POINTERLEAVE && next.pen_id.is_none() {
+        barrel().leave();
+    }
     PEN_END.store(encode_end(next.end), Ordering::Relaxed);
     PEN_ID.store(next.pen_id.unwrap_or(NO_PEN), Ordering::Relaxed);
     CONTACT_END.store(encode_end(next.contact), Ordering::Relaxed);
@@ -222,9 +256,51 @@ pub fn handle_pointer_message(message: u32, w_param: usize, pen_flags: impl FnOn
     }
 }
 
-/// `GetPointerPenInfo`'s pen flags for a pointer (`None`: not a pen). It also keeps where the pen
-/// is on the screen ([`pen_screen_px`]).
-fn read_pen_flags(pointer_id: u32) -> Option<u32> {
+/// What a pen message tells the barrel button's [`Tracker`], from `GetPointerPenInfo`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PenSample {
+    /// `penFlags` ([`PEN_FLAG_BARREL`], [`PEN_FLAG_INVERTED`]…).
+    pub pen_flags: u32,
+    /// The pen's `pointerFlags` ([`POINTER_FLAG_INCONTACT`], [`POINTER_FLAG_SECONDBUTTON`]…).
+    pub pointer_flags: u32,
+    /// `ButtonChangeType` ([`POINTER_CHANGE_SECONDBUTTON_DOWN`]…).
+    pub button_change_type: i32,
+    /// `penMask`: whether `pressure` is valid ([`crate::pen_buttons::PEN_MASK_PRESSURE`]).
+    pub pen_mask: u32,
+    /// `pressure`, 0..=1024.
+    pub pressure: u32,
+}
+
+/// Apply one pointer message to the barrel button's [`Tracker`] that [`take_buttons`] and
+/// [`is_barrel_button_down`] read: `time` is the message's, `pen` its pen info (`None`: not a pen;
+/// a mouse or a finger leaves the button as it is). The pen leaving is [`handle_pointer_message`]'s.
+/// Returns true when the tracker recorded a press or a click: the UI has news to take.
+pub fn handle_barrel_message(message: u32, w_param: usize, time: u32, pen: Option<PenSample>) -> bool {
+    match (message, pen) {
+        // The button's state after each pen message, the lift included: a tap with the button
+        // held keeps it held, while the driver's emulated Right Click releases it with the
+        // contact (a click).
+        (WM_POINTERDOWN | WM_POINTERUPDATE | WM_POINTERUP, Some(pen)) => {
+            let flags = ((w_param >> 16) & 0xFFFF) as u32 | pen.pointer_flags;
+            let is_barrel = is_barrel_pressed(Some(pen.pen_flags), flags) || pen.button_change_type == POINTER_CHANGE_SECONDBUTTON_DOWN;
+            let in_contact = message != WM_POINTERUP && (flags & POINTER_FLAG_INCONTACT) != 0;
+            let mut b = barrel();
+            let news = b.update(is_barrel, time);
+            // A pen without pressure reports zero: only a valid zero is a tipless contact.
+            b.contact(in_contact, crate::pen_buttons::tip_pressed(in_contact, pen.pen_mask, pen.pressure));
+            news
+        }
+        (WM_POINTERCAPTURECHANGED, _) => {
+            barrel().leave();
+            false
+        }
+        _ => false,
+    }
+}
+
+/// `GetPointerPenInfo` for a pointer (`None`: not a pen). It also keeps where the pen is on the
+/// screen ([`pen_screen_px`]).
+fn read_pen(pointer_id: u32) -> Option<PenSample> {
     // SAFETY: `info` is a stack-allocated buffer initialized to zero that outlives the call, and
     // `pointer_id` comes from a WM_POINTER message; an unknown id makes the call fail, not crash.
     let info = unsafe {
@@ -233,7 +309,13 @@ fn read_pen_flags(pointer_id: u32) -> Option<u32> {
     }?;
     let at = &info.pointer_info.pt_pixel_location;
     PEN_PX.store(pack_px(at.x, at.y), Ordering::Relaxed);
-    Some(info.pen_flags)
+    Some(PenSample {
+        pen_flags: info.pen_flags,
+        pointer_flags: info.pointer_info.pointer_flags,
+        button_change_type: info.pointer_info.button_change_type,
+        pen_mask: info.pen_mask,
+        pressure: info.pressure,
+    })
 }
 
 fn pack_px(x: i32, y: i32) -> u64 {
@@ -261,7 +343,14 @@ unsafe extern "system" fn get_msg_proc(code: i32, w_param: usize, l_param: isize
         // The WinTab backend shares this thread hook: it decodes the driver's proximity
         // messages (and ignores everything else) to clear a pen that left the tablet.
         crate::wintab::on_message(msg.message, msg.w_param, msg.l_param);
-        handle_pointer_message(msg.message, msg.w_param, read_pen_flags);
+        // One read of the pen's info serves both its end and its barrel button.
+        let reads = matches!(msg.message, WM_POINTERENTER | WM_POINTERDOWN | WM_POINTERUPDATE | WM_POINTERUP);
+        let pen = if reads { read_pen((msg.w_param & 0xFFFF) as u32) } else { None };
+        handle_pointer_message(msg.message, msg.w_param, |_| pen.map(|p| p.pen_flags));
+        // After the tracker's lock is released: the wake may run the UI's repaint request.
+        if handle_barrel_message(msg.message, msg.w_param, msg.time, pen) {
+            wake();
+        }
     }
     // SAFETY: CallNextHookEx passes the parameters down the hook chain. MSDN notes the first
     // parameter is ignored and can be null.
@@ -276,7 +365,7 @@ unsafe extern "system" fn call_wnd_proc(code: i32, w_param: usize, l_param: isiz
         // CWPSTRUCT describing the message being sent.
         let msg = unsafe { &*(l_param as *const CWPSTRUCT) };
         match msg.message {
-            WM_POINTERENTER => handle_pointer_message(msg.message, msg.w_param, read_pen_flags),
+            WM_POINTERENTER => handle_pointer_message(msg.message, msg.w_param, |id| read_pen(id).map(|p| p.pen_flags)),
             WM_POINTERLEAVE => handle_pointer_message(msg.message, msg.w_param, |_| None),
             _ => {}
         }
@@ -335,7 +424,7 @@ impl Drop for Monitor {
                 }
             }
         }
-        BARREL_DOWN.store(false, Ordering::Relaxed);
+        barrel().leave();
         PEN_END.store(encode_end(None), Ordering::Relaxed);
         PEN_ID.store(NO_PEN, Ordering::Relaxed);
         CONTACT_END.store(encode_end(None), Ordering::Relaxed);
@@ -345,7 +434,12 @@ impl Drop for Monitor {
 
 /// Returns true if the stylus barrel button is physically pressed.
 pub fn is_barrel_button_down() -> bool {
-    BARREL_DOWN.load(Ordering::Relaxed)
+    barrel().held()
+}
+
+/// What the barrel button did since the last call: held, pressed, clicked (UI thread, once a frame).
+pub fn take_buttons() -> Buttons {
+    barrel().take()
 }
 
 /// Which end of the pen is in use: `Some(true)` for the eraser end, `Some(false)` for the tip,
@@ -365,7 +459,6 @@ pub fn take_pen_end() -> Option<bool> {
 mod tests {
     use super::*;
 
-    const POINTER_FLAG_INCONTACT: u32 = 0x0004;
     const POINTER_FLAG_FIRSTBUTTON: u32 = 0x0010;
 
     #[test]
@@ -416,17 +509,17 @@ mod tests {
     fn pen_state_follows_pointer_messages() {
         let pen = |flags: u32| move |id: u32| (id == 7).then_some(flags);
         let s = next_state(PenState::default(), WM_POINTERUPDATE, wp(0), pen(0));
-        assert_eq!(s, PenState { barrel: false, end: Some(false), pen_id: Some(7), contact: None }, "the tip hovers");
+        assert_eq!(s, PenState { end: Some(false), pen_id: Some(7), contact: None }, "the tip hovers");
         let s = next_state(s, WM_POINTERUPDATE, wp(0), pen(PEN_FLAG_INVERTED));
         assert_eq!(s.end, Some(true), "the eraser end hovers");
         let s = next_state(s, WM_POINTERDOWN, wp(POINTER_FLAG_INCONTACT), pen(PEN_FLAG_INVERTED | PEN_FLAG_ERASER));
-        assert_eq!(s, PenState { barrel: false, end: Some(true), pen_id: Some(7), contact: Some(true) });
+        assert_eq!(s, PenState { end: Some(true), pen_id: Some(7), contact: Some(true) });
         let s = next_state(s, WM_POINTERUPDATE, wp(0), |_| None);
         assert_eq!((s.end, s.pen_id), (Some(true), Some(7)), "a mouse in between keeps the pen");
         let s = next_state(s, WM_POINTERUPDATE, wp(0), pen(PEN_FLAG_BARREL));
-        assert_eq!(s, PenState { barrel: true, end: Some(false), pen_id: Some(7), contact: Some(true) }, "only a contact sets it");
+        assert_eq!(s, PenState { end: Some(false), pen_id: Some(7), contact: Some(true) }, "only a contact sets it");
         let s = next_state(s, WM_POINTERUP, wp(0), |_| panic!("up does not read the pen"));
-        assert_eq!(s, PenState { barrel: false, end: Some(false), pen_id: Some(7), contact: Some(true) }, "lifting keeps the end");
+        assert_eq!(s, PenState { end: Some(false), pen_id: Some(7), contact: Some(true) }, "lifting keeps the end");
         let s = next_state(s, WM_POINTERLEAVE, wp(0), |_| panic!("leave does not read the pen"));
         assert_eq!(s, PenState { contact: Some(true), ..PenState::default() }, "leaving range forgets the pen, not its contact");
         let mouse_move = 0x0200;
@@ -435,11 +528,11 @@ mod tests {
 
     #[test]
     fn another_pointer_leaving_keeps_the_pen() {
-        let held = PenState { barrel: true, end: Some(true), pen_id: Some(7), contact: None };
+        let held = PenState { end: Some(true), pen_id: Some(7), contact: None };
         let finger_leaves = 2 | ((POINTER_FLAG_INCONTACT as usize) << 16);
         assert_eq!(next_state(held, WM_POINTERLEAVE, finger_leaves, |_| panic!("leave does not read the pen")), held);
         assert_eq!(next_state(held, WM_POINTERLEAVE, wp(0), |_| None), PenState::default(), "the pen itself leaving");
-        let unknown = PenState { barrel: true, end: None, pen_id: None, contact: None };
+        let unknown = PenState { end: None, pen_id: None, contact: None };
         assert_eq!(next_state(unknown, WM_POINTERLEAVE, finger_leaves, |_| None), PenState::default(), "no pen seen yet");
     }
 
@@ -448,7 +541,7 @@ mod tests {
     #[test]
     fn entering_range_reads_the_pen_end() {
         let s = next_state(PenState::default(), WM_POINTERENTER, wp(0), |id| (id == 7).then_some(PEN_FLAG_INVERTED));
-        assert_eq!(s, PenState { barrel: false, end: Some(true), pen_id: Some(7), contact: None });
+        assert_eq!(s, PenState { end: Some(true), pen_id: Some(7), contact: None });
         let s = next_state(s, WM_POINTERENTER, 9, |_| None);
         assert_eq!((s.end, s.pen_id), (Some(true), Some(7)), "a mouse or finger entering keeps the pen");
     }
@@ -460,16 +553,55 @@ mod tests {
     fn handled_messages_reach_the_readers() {
         let _globals = GLOBALS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         handle_pointer_message(WM_POINTERUPDATE, wp(0), |_| Some(PEN_FLAG_INVERTED | PEN_FLAG_BARREL));
-        assert_eq!((pen_end(), is_barrel_button_down()), (Some(true), true));
+        assert_eq!(pen_end(), Some(true));
         handle_pointer_message(WM_POINTERUP, wp(0), |_| None);
-        assert_eq!((pen_end(), is_barrel_button_down()), (Some(true), false));
+        assert_eq!(pen_end(), Some(true));
         handle_pointer_message(WM_POINTERUPDATE, wp(0), |_| Some(0));
         assert_eq!(pen_end(), Some(false));
         handle_pointer_message(WM_POINTERLEAVE, 2, |_| None);
         assert_eq!(pen_end(), Some(false), "a finger leaving keeps the pen");
         handle_pointer_message(WM_POINTERLEAVE, wp(0), |_| None);
-        assert_eq!((pen_end(), is_barrel_button_down()), (None, false));
+        assert_eq!(pen_end(), None);
         assert_eq!(take_pen_end(), None, "no contact to report");
+    }
+
+    /// The barrel button through the hooks' path: a press and a quick release is a click, a finger
+    /// leaving keeps a held button held, and the pen leaving range or the window losing the
+    /// pointer's capture lets go of it (no click).
+    #[test]
+    fn barrel_messages_reach_the_tracker_and_leaving_lets_go() {
+        let _globals = GLOBALS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let barrel = PenSample { pen_flags: PEN_FLAG_BARREL, ..PenSample::default() };
+        let tip = PenSample { pointer_flags: POINTER_FLAG_INCONTACT, pen_mask: crate::pen_buttons::PEN_MASK_PRESSURE, pressure: 300, ..PenSample::default() };
+        let pen_in_range = |flags: u32| handle_pointer_message(WM_POINTERUPDATE, wp(0), move |_| Some(flags));
+        handle_pointer_message(WM_POINTERLEAVE, wp(0), |_| None);
+        let _ = take_buttons();
+
+        pen_in_range(PEN_FLAG_BARREL);
+        assert!(handle_barrel_message(WM_POINTERUPDATE, wp(0), 1000, Some(barrel)), "a press is news");
+        assert!(!handle_barrel_message(WM_POINTERUPDATE, wp(0), 1010, None), "a mouse in between changes nothing");
+        assert!(is_barrel_button_down());
+        assert!(handle_barrel_message(WM_POINTERUPDATE, wp(0), 1100, Some(PenSample::default())), "a quick release is a click");
+        let b = take_buttons();
+        assert_eq!((b.held, b.pressed, b.clicked), (false, true, true));
+
+        // Held, then a finger leaves: still held. The pen leaving lets go.
+        assert!(handle_barrel_message(WM_POINTERDOWN, wp(0), 2000, Some(PenSample { pointer_flags: POINTER_FLAG_INCONTACT, ..barrel })));
+        handle_pointer_message(WM_POINTERLEAVE, 2, |_| None);
+        assert!(is_barrel_button_down(), "a finger leaving keeps the pen's button");
+        handle_pointer_message(WM_POINTERLEAVE, wp(0), |_| None);
+        assert!(!is_barrel_button_down(), "the pen left range");
+        assert!(!take_buttons().clicked, "letting go on leave is no click");
+
+        // The tip pressing is no tipless contact; losing the capture lets go of a held button.
+        pen_in_range(0);
+        assert!(!handle_barrel_message(WM_POINTERDOWN, wp(0), 3000, Some(tip)));
+        assert!(handle_barrel_message(WM_POINTERUPDATE, wp(0), 3010, Some(PenSample { pen_flags: PEN_FLAG_BARREL, ..tip })));
+        assert!(!take_buttons().tipless);
+        assert!(!handle_barrel_message(WM_POINTERCAPTURECHANGED, wp(0), 3020, None));
+        assert!(!is_barrel_button_down(), "the window lost the pointer");
+        handle_pointer_message(WM_POINTERLEAVE, wp(0), |_| None);
+        let _ = take_buttons();
     }
 
     /// An eraser-end tap and the pen leaving range, all handled before the UI's next frame: the
