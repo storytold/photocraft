@@ -236,6 +236,10 @@ pub(super) fn check_value(path: &str, v: &Value) -> std::result::Result<(), Stri
     if matches!(path, "performance.renderingMode" | "performance.memoryUsagePercent") && v.is_null() {
         return Ok(()); // Legacy policy, resolved from useGpu and gpuBackend.
     }
+    // Earlier versions' `all` is still read, as Copyright and Contact Info (#13788): `export_metadata_compat` maps it.
+    if path == "export.metadata" && v.as_str() == Some("all") {
+        return Ok(());
+    }
     if let Some(c) = choices(path) {
         let s = v.as_str().ok_or_else(|| format!("`{path}` must be one of {}", c.join("|")))?;
         if !c.contains(&s) {

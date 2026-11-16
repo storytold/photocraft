@@ -1,4 +1,4 @@
-use super::optimizer::{optimize, web_document, web_exif, web_warnings, web_xmp};
+use super::optimizer::{optimize, quick_export_xmp, web_document, web_exif, web_warnings};
 use super::settings::WebSettings;
 use super::{EngineError, Result, Session, Value, bad, join, json, other, stem, write_file};
 
@@ -17,9 +17,13 @@ pub(super) fn export_preferences(s: &mut Session, p: &Value) -> Result<Value> {
         ("webpQuality", "export.webpQuality"),
         ("metadata", "export.metadata"),
         ("convertToSrgb", "export.convertToSrgb"),
+        ("pngSmallerFile", "export.pngSmallerFile"),
+        ("exportAsLocation", "export.exportAsLocation"),
     ] {
         if let Some(v) = p.get(k) {
-            values.insert(key.into(), v.clone());
+            // Scripts written for the earlier Metadata › All get Copyright and Contact Info (#13788).
+            let v = if k == "metadata" && v == "all" { json!("copyright") } else { v.clone() };
+            values.insert(key.into(), v);
         }
     }
     if !values.is_empty() {
@@ -87,18 +91,11 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
         crate::automate_cmds::fire_event(s, "export");
         return Ok(json!({"path": path, "format": fmt, "bytes": out.bytes.len(), "warnings": out.warnings}));
     }
-    let metadata = serde_json::to_value(prefs.metadata).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+    // None writes no XMP and no EXIF; Copyright and Contact Info writes its own packet (#13788)
+    // and, as Copyright did, no EXIF.
+    let contact = prefs.metadata == crate::prefs::ExportMetadata::Copyright;
     let mut o = serde_json::Map::new();
-    o.insert(
-        "metadata".into(),
-        json!(if metadata == "all" {
-            "all"
-        } else if metadata == "none" {
-            "none"
-        } else {
-            "copyright"
-        }),
-    );
+    o.insert("metadata".into(), json!(if contact { "copyright" } else { "none" }));
     o.insert("convertToSrgb".into(), json!(prefs.convert_to_srgb));
     o.insert("transparency".into(), json!(true));
     o.insert("matte".into(), json!("#ffffff"));
@@ -121,12 +118,19 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
             let (mut wdoc, _, _) = web_document(&doc, &json!({}), &st)?;
             // The regular exporter embeds the document's XMP and EXIF as they are: give it only
             // what the metadata choice keeps, as the Save for Web formats get.
-            wdoc.metadata.xmp = web_xmp(&doc, st.metadata).map(std::sync::Arc::from);
+            wdoc.metadata.xmp = quick_export_xmp(&doc, contact).map(std::sync::Arc::from);
             wdoc.metadata.exif = web_exif(&doc, st.metadata).map(|e| std::sync::Arc::new(e.to_vec()));
             let quality = if prefs.webp_lossless { None } else { Some((f64::from(prefs.webp_quality.clamp(1, 100)) - 1.0) * 12.0 / 99.0) };
             let warnings = crate::file_cmds::save_doc(&wdoc, &path, quality)?;
             crate::automate_cmds::fire_event(s, "export");
             return Ok(json!({"path": path, "format": fmt, "warnings": warnings}));
+        }
+        // Smaller File (8-bit): a palette PNG with binary transparency: clear stays clear and a
+        // partly transparent pixel is opaque in its own colour, no matte (#13785). The palette,
+        // its size and the dither keep the web exporter's PNG-8 defaults.
+        _ if prefs.png_smaller_file => {
+            o.insert("format".into(), json!("png8"));
+            o.insert("matte".into(), json!("none"));
         }
         _ => {
             o.insert("format".into(), json!("png24"));
@@ -136,7 +140,7 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
     let st = WebSettings::from_params(&q, cmd)?;
     let (wdoc, _, _) = web_document(&doc, &json!({}), &st)?;
     let buf = photocraft_compose::flatten(&wdoc);
-    let xmp = web_xmp(&doc, st.metadata);
+    let xmp = quick_export_xmp(&doc, contact);
     let exif = web_exif(&doc, st.metadata);
     let opt = optimize(
         &buf.px,
@@ -157,3 +161,11 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "quick_jpg_progressive_tests.rs"]
 mod quick_jpg_progressive_tests;
+
+#[cfg(test)]
+#[path = "quick_png8_tests.rs"]
+mod quick_png8_tests;
+
+#[cfg(test)]
+#[path = "quick_metadata_choice_tests.rs"]
+mod quick_metadata_choice_tests;

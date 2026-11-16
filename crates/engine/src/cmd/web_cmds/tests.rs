@@ -1311,8 +1311,10 @@ fn quick_export_all_writes_the_photos_exif() {
         let r = s.execute("file.export.quickExport", json!({"path": path})).unwrap();
         (std::fs::read(&path).unwrap(), r)
     };
+    // Quick Export has no All any more (#13788): an earlier `all` is Copyright and Contact Info,
+    // which writes no EXIF. Save for Web keeps its All (`web_exif_that_does_not_fit…`).
     let (all, r) = export(&mut s, "all");
-    assert_eq!(photocraft_algo::exif::read(&exif_app1(&all).expect("EXIF")).make.as_deref(), Some("TestMake"));
+    assert_eq!(exif_app1(&all), None);
     assert_eq!(r["warnings"], json!([]));
     assert_eq!(exif_app1(&export(&mut s, "copyright").0), None);
     assert_eq!(exif_app1(&export(&mut s, "none").0), None);
@@ -1330,9 +1332,10 @@ fn web_exif_that_does_not_fit_is_reported_and_bad_exif_is_harmless() {
     let r = s.execute("file.export.saveForWebLegacy", json!({"format": "jpeg", "metadata": "all", "path": path})).unwrap();
     assert_eq!(exif_app1(&std::fs::read(&path).unwrap()), None);
     assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains("EXIF (70000 bytes)")), "{r}");
+    // Quick Export writes no EXIF since #13788 (an earlier `all` is Copyright and Contact Info).
     s.execute("file.export.exportPreferences", json!({"quickExportFormat": "jpg", "metadata": "all"})).unwrap();
     let r = s.execute("file.export.quickExport", json!({"path": format!("{dir}/quick.jpg")})).unwrap();
-    assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains("EXIF")), "{r}");
+    assert_eq!(r["warnings"], json!([]), "{r}");
     s.execute("prefs.reset", json!({"path": "export"})).unwrap();
 
     for cut in [3, 9, 40, 100] {
