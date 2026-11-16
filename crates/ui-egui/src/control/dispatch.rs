@@ -1535,6 +1535,17 @@ fn secondary_canvas_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &
         }
         return true;
     }
+    // A pending Perspective Crop quad: its Crop / Cancel menu, as on the canvas (#11805). A quad
+    // left from another document (switched to in this pass) is dropped first and gets no menu.
+    if held == crate::state::Tool::PerspectiveCrop {
+        crate::perspective_crop_ui::cancel_stale(app);
+    }
+    if held == crate::state::Tool::PerspectiveCrop && app.ui.perspective_crop.is_some() && app.pcrop.drag.is_none() {
+        if down {
+            crate::canvas_tool_menu::open_perspective_crop(app, ctx, held, screen_point(app, x, y));
+        }
+        return true;
+    }
     if crate::canvas_tool_menu::is_view_tool(held) {
         // The selected Zoom or Hand, or the Hand Space holds: the held Zoom has no menu.
         if down && (held == app.ui.tool || held == Tool::Hand) {
