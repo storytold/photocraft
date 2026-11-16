@@ -174,9 +174,17 @@ impl Session {
         }
         // Exposure on an explicit alpha channel or Quick Mask is a gray plane in any mode: the document-mode
         // refusal is for pixel targets (`exposure_enabled` reads only the Channels panel, not `params`).
-        if spec.id == "image.adjustments.exposure" && channel_cmds::is_channel_target(params) {
+        // Only the modes that refusal covers are bypassed; RGB and Grayscale fall through to the usual
+        // checks, so an explicit target on a non-pixel layer is still refused there.
+        if spec.id == "image.adjustments.exposure"
+            && channel_cmds::is_channel_target(params)
+            && self.active().is_some_and(|d| {
+                use photocraft_color::ColorMode::{Cmyk, Indexed, Lab, Multichannel};
+                matches!(d.doc.mode, Cmyk | Lab | Indexed | Multichannel)
+            })
+        {
             // The plane is named by the params, so no active layer is needed (a multichannel document has none).
-            return self.active().map(|_| ()).ok_or_else(|| "no document open".to_string());
+            return Ok(());
         }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }

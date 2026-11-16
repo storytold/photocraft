@@ -92,8 +92,8 @@ fn the_refusal_names_the_documents_mode() {
     assert!(why.contains("CMYK Color"), "{why}");
 }
 
-/// A targeted Quick Mask is a gray plane in any mode: not measured, so it keeps today's behaviour
-/// and Exposure still edits it in a CMYK document.
+/// A Quick Mask targeted in the Channels panel is a gray plane in any mode: not measured, so it keeps
+/// working: Exposure still edits it in a CMYK document.
 #[test]
 fn a_quick_mask_in_a_cmyk_document_keeps_todays_behaviour() {
     let mut s = new_doc("cmyk", 8);
@@ -133,13 +133,26 @@ fn an_explicit_quick_mask_target_is_not_refused_in_other_modes() {
     for (mode, mut s) in docs() {
         s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
         // The panel shows a colour channel (not the Quick Mask), so only the params name the plane.
-        let shown = s.execute("channel.target", json!({"colors": [0]}));
-        if shown.is_err() {
-            continue;
-        }
+        s.execute("channel.target", json!({"colors": [0]})).unwrap_or_else(|e| panic!("{mode}: showing a colour channel failed: {e:?}"));
         let steps = s.active().unwrap().history.past_len();
         let r = s.execute(EXPOSURE, json!({"exposure": -1, "target": "quickMask"}));
         assert!(r.is_ok(), "{mode} quick mask: {r:?}");
         assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{mode}: one history state");
+    }
+}
+
+/// The explicit-target bypass covers only the modes the refusal covers: in RGB an explicit channel
+/// target on a shape layer is still refused by the pixel-layer check.
+#[test]
+fn an_explicit_channel_target_on_a_shape_layer_is_still_refused_in_rgb() {
+    for mode in ["rgb", "grayscale"] {
+        let mut s = new_doc(mode, 8);
+        s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+        s.execute("shape.create", json!({"kind": "rect", "rect": [1, 1, 4, 4], "fill": "#ff0000"})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        let r = s.execute(EXPOSURE, json!({"exposure": -1, "target": {"channel": 0}}));
+        assert!(r.is_err(), "{mode}: a shape layer is not a pixel layer: {r:?}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "{mode}: no history state");
     }
 }
