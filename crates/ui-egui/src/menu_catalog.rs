@@ -189,6 +189,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Image", "Adjustments"], "Levels…", Some("Cmd+L"), "image.adjustments.levels"),
     (&["Image", "Adjustments"], "Curves…", Some("Cmd+M"), "image.adjustments.curves"),
     (&["Image", "Adjustments"], "Exposure…", None, "image.adjustments.exposure"),
+    (&["Image", "Adjustments"], "---", None, "---"),
     (&["Image", "Adjustments"], "Vibrance…", None, "image.adjustments.vibrance"),
     (&["Image", "Adjustments"], "Hue/Saturation…", Some("Cmd+U"), "image.adjustments.hueSaturation"),
     (&["Image", "Adjustments"], "Color Balance…", Some("Cmd+B"), "image.adjustments.colorBalance"),
