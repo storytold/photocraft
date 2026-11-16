@@ -73,5 +73,5 @@ fn canvas_size_dialog_shows_the_flat_size() {
     h.run_steps(3);
     // Current Size and New Size both read 351.6K on an unchanged dialog.
     assert_eq!(h.get_all_by_label_contains("351.6K").count(), 2, "the dialog shows the flat 400x300 RGB 8 size");
-    assert_eq!(h.get_all_by_label_contains("469K").count(), 0, "the layer-backed size is gone");
+    assert_eq!(h.query_all_by_label_contains("469K").count(), 0, "the layer-backed size is gone");
 }
