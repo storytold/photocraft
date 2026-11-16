@@ -1,5 +1,6 @@
 //! #13898: Image Processor's TIFF results are `.tif` files that keep their layers, with the
 //! composite on white and no alpha channel; explicit TIFF options and other formats keep today's.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use serde_json::json;
 
 use crate::Session;
@@ -94,4 +95,45 @@ fn explicit_tiff_options_and_other_formats_keep_todays_behaviour() {
     s.execute("file.scripts.imageProcessor", json!({"input": src.path().to_string_lossy(), "output": out.path().to_string_lossy(), "format": "png"})).unwrap();
     assert_eq!(names(out.path()), ["a-rgb8.png", "t-alpha.png"]);
     assert!(alpha_and_right_pixel(&out.path().join("t-alpha.png")).0, "a PNG keeps its transparency");
+}
+
+/// CodeRabbit on #15231: a TIFF option sent as `null` is "not given", like an absent key: the defaults
+/// (layers kept, composite on white without alpha) apply, not the writer's own when the option is unset.
+#[test]
+fn null_tiff_options_get_the_defaults_too() {
+    let src = sources();
+    let out = dir("null");
+    let mut s = Session::new();
+    s.execute(
+        "file.scripts.imageProcessor",
+        json!({"input": src.path().to_string_lossy(), "output": out.path().to_string_lossy(), "format": "tiff", "tiffLayers": null, "tiffTransparency": null}),
+    )
+    .unwrap();
+    let l = layers(&out.path().join("a-rgb8.tif"));
+    assert!(l.contains(&"Red".to_string()), "layers kept: {l:?}");
+    let (alpha, right) = alpha_and_right_pixel(&out.path().join("t-alpha.tif"));
+    assert!(!alpha, "no alpha channel");
+    assert_eq!(right, [255, 255, 255, 255], "the transparent half composited on white");
+}
+
+/// CodeRabbit on #15238: a TIFF result is `.tif`, so a `.tif` source in the output folder would be written over
+/// by its own resized result. It is refused per file, as the multi-format path refuses it, and the source stays.
+#[test]
+fn a_tif_source_is_not_overwritten_by_its_own_result() {
+    let dir = dir("same");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 30, "background": "#336699"})).unwrap();
+    let path = dir.path().join("a.tif");
+    s.execute("file.saveACopy", json!({"path": path.to_string_lossy()})).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let r = s
+        .execute(
+            "file.scripts.imageProcessor",
+            json!({"input": dir.path().to_string_lossy(), "output": dir.path().to_string_lossy(), "format": "tiff", "width": 20}),
+        )
+        .unwrap();
+    let errors = r["errors"].as_array().expect("errors");
+    assert_eq!(errors.len(), 1, "{r}");
+    assert!(errors[0]["error"].as_str().is_some_and(|e| e.contains("would replace a source file")), "{r}");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the source is untouched");
 }

@@ -545,6 +545,6 @@ mod aces_exr_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "file_cmds/image_processor_tiff_tests.rs"]
 mod image_processor_tiff_tests;
