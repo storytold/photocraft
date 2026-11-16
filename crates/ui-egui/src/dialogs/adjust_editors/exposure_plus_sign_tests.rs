@@ -63,9 +63,7 @@ fn stepping_a_plus_prefixed_field_selects_the_whole_shown_value() {
     );
     crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
-    let gamma = |h: &Harness<'static, serde_json::Value>| {
-        h.query_all_by_role(Role::SpinButton).nth(2).unwrap().value().unwrap_or_default()
-    };
+    let gamma = |h: &Harness<'static, serde_json::Value>| h.query_all_by_role(Role::SpinButton).nth(2).unwrap().value().unwrap_or_default();
     assert_eq!(gamma(&h), "+1", "the dialog opens Gamma at one, shown with its plus");
     h.query_all_by_role(Role::SpinButton).nth(2).unwrap().click();
     h.run_steps(2);
