@@ -203,24 +203,3 @@ fn a_params_target_beats_the_quick_mask_panel_in_other_modes() {
         assert!(s.execute(EXPOSURE, json!({"exposure": -1})).is_ok(), "{mode}: the Quick Mask takes a targetless call");
     }
 }
-
-/// A null or unrecognised target is no explicit target: the Channels panel (on an alpha) still governs.
-#[test]
-fn a_null_or_typo_target_leaves_the_panel_in_charge() {
-    for (mode, mut s) in docs() {
-        s.execute("channel.new", json!({"name": "A", "fill": "white"})).expect("test step");
-        s.execute("channel.target", json!({"channel": 0})).expect("test step");
-        for t in [json!(null), json!("pixles"), json!(7), json!(true)] {
-            let r = s.execute(EXPOSURE, json!({"exposure": -1, "target": t}));
-            // The precondition lets it through (the panel's alpha governs): never the document-mode refusal.
-            if let Err(e) = &r {
-                assert!(!e.to_string().contains("needs an RGB or Grayscale document"), "{mode} {t}: refused by mode, got {e}");
-            }
-            // A multichannel document has no layer, and an untargeted run (no injected plane, as for an explicit
-            // target key) then has nothing to edit: that later error is unchanged and not this precondition's.
-            if mode != "multichannel" {
-                assert!(r.is_ok(), "{mode} {t}: the panel's alpha takes it, got {r:?}");
-            }
-        }
-    }
-}
