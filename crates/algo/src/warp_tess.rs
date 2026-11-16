@@ -8,23 +8,31 @@
 //! * a cell splits across (`u`) while one of its two rows, restricted to the cell and taken at its
 //!   stored degree, has an inner control point at least [`PERP_TOL`] off the chord sideways, or its
 //!   inner control points lie on average at least [`TANG_TOL`] along the chord from their even
-//!   spacing; the same test on its two columns splits it down (`v`);
+//!   spacing; the same test on its two columns splits it down (`v`). An inner point turned back
+//!   before the chord's start or past its end counts by its distance from that end (see [`need`]);
 //! * for a mesh that is cubic in one direction, a cell whose control net twists by more than
 //!   [`TWIST_TOL`] splits along its longer side (a square cell: down the document). A full mesh's
-//!   twist is the largest `P00 − P10 − P01 + P11` of the cell's net. An envelope's is how unevenly
-//!   a quad of the cell's stored-degree net is stretched (the larger difference in length between
-//!   two opposite sides of it): for a split across, over the net's left column of quads only (the
-//!   reference splits Arc Lower's top-left corner cell, not its mirror image on the right), for a
-//!   split down over its top row;
+//!   twist is the largest `P00 − P10 − P01 + P11` of the cell's net, for a split down of its net's
+//!   top row of quads only (the reference cuts a cell twisted along its top edge, not its mirror
+//!   image twisted along its bottom). An envelope's is how unevenly a quad of the cell's
+//!   stored-degree net is stretched (the larger difference in length between two opposite sides
+//!   of it): for a split across, over the net's left column of quads only (the reference splits
+//!   Arc Lower's top-left corner cell, not its mirror image on the right), for a split down over
+//!   its top row;
 //! * a 3 × 3 envelope's wide cell splits across (never down) where the legs of the left column of
 //!   its control points are more than [`TWIST_TOL`] longer than the next column's, in the cell or
 //!   in the other half of the cell it was cut from;
 //! * a square cell of a tall envelope (stored with more control points down than across: the
 //!   presets bent sideways) whose whole net twists by more than [`TALL_SQUARE_TWIST_TOL`] splits
 //!   across too;
-//! * a first-level cell of a full mesh that splits across also splits down; a split down on the
-//!   first level splits the other first-level cells of the same quarter of the surface down too
-//!   (a full mesh's four cells are one such block);
+//! * a full mesh measures each cell also by every row and column of the cell's own control net,
+//!   with the drift of its rows' first inner point weighed in ([`FIRST_POINT_ROW_WEIGHT`]); a
+//!   cell twisted past [`BOTH_WAYS_TWIST_TOL`] splits both ways, and one split down for its twist
+//!   splits the cells beside it in its row down too;
+//! * a full mesh's first-level cell split across twice splits down too; a split down on its first
+//!   level carries to the cell beside it, and to all four where its columns ask for
+//!   [`FIRST_LEVEL_SPREAD_FV`]. An envelope's split down on the first level splits the other
+//!   first-level cells of the same quarter of the surface down too;
 //! * for a mesh that is cubic in one direction, a square cell split down for its columns'
 //!   curvature splits its sibling beside it (the other cell of its parent's row) down.
 //!
@@ -47,7 +55,7 @@
 //! (a neighbour's vertex sits on the cell's side), and the chord rule for rows holds for all its
 //! columns too, from [`TALL_COLUMN_LEVEL`] halvings on.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A point in document pixels or normalised source coordinates.
 type P = [f64; 2];
@@ -173,17 +181,35 @@ impl Net {
     fn at(&self, i: usize, j: usize) -> P {
         self.p.get(j * self.nu + i).copied().unwrap_or([f64::NAN, f64::NAN])
     }
+    /// The net's `j`th row of control points.
+    fn ctrl_row(&self, j: usize) -> Vec<P> {
+        (0..self.nu).map(|i| self.at(i, j)).collect()
+    }
+    /// The net's `i`th column of control points.
+    fn ctrl_col(&self, i: usize) -> Vec<P> {
+        (0..self.nv).map(|j| self.at(i, j)).collect()
+    }
     /// The row curve at `v` (control points across).
     fn row(&self, v: f64) -> Vec<P> {
-        (0..self.nu).map(|i| blend((0..self.nv).map(|j| self.at(i, j)).collect(), v)).collect()
+        (0..self.nu).map(|i| blend(self.ctrl_col(i), v)).collect()
     }
     /// The column curve at `u` (control points down).
     fn col(&self, u: f64) -> Vec<P> {
-        (0..self.nv).map(|j| blend((0..self.nu).map(|i| self.at(i, j)).collect(), u)).collect()
+        (0..self.nv).map(|j| blend(self.ctrl_row(j), u)).collect()
+    }
+    /// The net's sides from its first corner: along its first row (u) and down its first column (v).
+    fn sides(&self) -> (P, P) {
+        let (p00, p10, p01) = (self.at(0, 0), self.at(self.nu.saturating_sub(1), 0), self.at(0, self.nv.saturating_sub(1)));
+        ([p10[0] - p00[0], p10[1] - p00[1]], [p01[0] - p00[0], p01[1] - p00[1]])
+    }
+    /// The twist `P00 − P10 − P01 + P11` of the control quad with its top-left point at `(i, j)`.
+    fn quad_twist(&self, i: usize, j: usize) -> P {
+        let (a, b, c, d) = (self.at(i, j), self.at(i + 1, j), self.at(i, j + 1), self.at(i + 1, j + 1));
+        [a[0] - b[0] - c[0] + d[0], a[1] - b[1] - c[1] + d[1]]
     }
     /// The net of the part `[u0, u1] × [v0, v1]`.
     fn sub(&self, c: Cell) -> Net {
-        let rows: Vec<Vec<P>> = (0..self.nv).map(|j| segment((0..self.nu).map(|i| self.at(i, j)).collect(), c[0], c[1])).collect();
+        let rows: Vec<Vec<P>> = (0..self.nv).map(|j| segment(self.ctrl_row(j), c[0], c[1])).collect();
         let cols: Vec<Vec<P>> = (0..self.nu).map(|i| segment(rows.iter().map(|r| r.get(i).copied().unwrap_or([f64::NAN; 2])).collect(), c[2], c[3])).collect();
         let mut p = Vec::with_capacity(self.p.len());
         for j in 0..self.nv {
@@ -232,8 +258,8 @@ impl Net {
         let mut m = 0.0f64;
         for j in 0..self.nv.saturating_sub(1) {
             for i in 0..self.nu.saturating_sub(1) {
-                let (a, b, c, e) = (self.at(i, j), self.at(i + 1, j), self.at(i, j + 1), self.at(i + 1, j + 1));
-                let t = ((a[0] - b[0] - c[0] + e[0]) * d[0] + (a[1] - b[1] - c[1] + e[1]) * d[1]).abs() / n;
+                let q = self.quad_twist(i, j);
+                let t = (q[0] * d[0] + q[1] * d[1]).abs() / n;
                 if t.is_finite() {
                     m = m.max(t);
                 }
@@ -253,8 +279,7 @@ impl Net {
         let mut m = 0.0f64;
         for j in 0..self.nv.saturating_sub(1).min(rows) {
             for i in 0..self.nu.saturating_sub(1) {
-                let (a, b, c, e) = (self.at(i, j), self.at(i + 1, j), self.at(i, j + 1), self.at(i + 1, j + 1));
-                let t = [a[0] - b[0] - c[0] + e[0], a[1] - b[1] - c[1] + e[1]];
+                let t = self.quad_twist(i, j);
                 let (along, across) = (t[0] * ux + t[1] * uy, -t[0] * uy + t[1] * ux);
                 let v = (across * across + (along / k) * (along / k)).sqrt();
                 if v.is_finite() {
@@ -266,7 +291,7 @@ impl Net {
     }
     /// The largest of the net's columns' [`need`]s, its inner control columns included.
     fn cols_need(&self) -> f64 {
-        (0..self.nu).map(|i| need(&(0..self.nv).map(|j| self.at(i, j)).collect::<Vec<_>>())).fold(0.0, f64::max)
+        (0..self.nu).map(|i| need(&self.ctrl_col(i))).fold(0.0, f64::max)
     }
     /// The largest of the net's rows' [`need`]s, its inner control rows included and counted
     /// [`INNER_ROW_WEIGHT`] times.
@@ -278,30 +303,26 @@ impl Net {
         let last = self.nv.saturating_sub(1);
         (0..self.nv)
             .map(|j| {
-                let n = need(&(0..self.nu).map(|i| self.at(i, j)).collect::<Vec<_>>());
+                let n = need(&self.ctrl_row(j));
                 if j == 0 || j == last { n } else { inner * n }
             })
             .fold(0.0, f64::max)
     }
-    /// The largest `P00 − P10 − P01 + P11` (euclidean) of the net's first row of quads.
+    /// The largest [`Net::quad_twist`] (euclidean) of the net's first row of quads.
     fn top_row_twist(&self) -> f64 {
-        let mut m = 0.0f64;
-        for i in 0..self.nu.saturating_sub(1) {
-            let (a, b, c, d) = (self.at(i, 0), self.at(i + 1, 0), self.at(i, 1), self.at(i + 1, 1));
-            let t = (a[0] - b[0] - c[0] + d[0]).hypot(a[1] - b[1] - c[1] + d[1]);
-            if t.is_finite() {
-                m = m.max(t);
-            }
-        }
-        m
+        self.twist_of_rows(1)
     }
-    /// The largest `P00 − P10 − P01 + P11` (euclidean) of the net.
+    /// The largest [`Net::quad_twist`] (euclidean) of the net.
     fn twist(&self) -> f64 {
+        self.twist_of_rows(usize::MAX)
+    }
+    /// The largest [`Net::quad_twist`] (euclidean) of the net's first `rows` rows of quads.
+    fn twist_of_rows(&self, rows: usize) -> f64 {
         let mut m = 0.0f64;
-        for j in 0..self.nv.saturating_sub(1) {
+        for j in 0..self.nv.saturating_sub(1).min(rows) {
             for i in 0..self.nu.saturating_sub(1) {
-                let (a, b, c, d) = (self.at(i, j), self.at(i + 1, j), self.at(i, j + 1), self.at(i + 1, j + 1));
-                let t = (a[0] - b[0] - c[0] + d[0]).hypot(a[1] - b[1] - c[1] + d[1]);
+                let t = self.quad_twist(i, j);
+                let t = t[0].hypot(t[1]);
                 if t.is_finite() {
                     m = m.max(t);
                 }
@@ -372,33 +393,32 @@ fn need(c: &[P]) -> f64 {
 }
 
 /// [`need`], with the first inner control point's own drift along the chord, counted
-/// `first_weight` times, standing for the mean drift where it is larger (the rows of a one-patch full mesh, see
-/// [`FIRST_POINT_ROW_WEIGHT`]).
+/// `first_weight` times, standing for the mean drift where it is larger (the rows of a one-patch
+/// full mesh, see [`FIRST_POINT_ROW_WEIGHT`]).
 fn need_weighing_first(c: &[P], first_weight: f64) -> f64 {
     let n = c.len().saturating_sub(1);
     let (Some(&a), Some(&b)) = (c.first(), c.last()) else { return 0.0 };
     if n < 2 {
         return 0.0;
     }
+    let inner = c.get(1..n).unwrap_or_default();
     let ch = [b[0] - a[0], b[1] - a[1]];
-    let d: Vec<P> = (1..n)
-        .filter_map(|k| c.get(k))
-        .enumerate()
-        .map(|(k, p)| {
-            let s = (k + 1) as f64 / n as f64;
-            [p[0] - (a[0] + ch[0] * s), p[1] - (a[1] + ch[1] * s)]
-        })
-        .collect();
     let len = ch[0].hypot(ch[1]);
     let v = if len > 0.0 {
         let (tx, ty) = (ch[0] / len, ch[1] / len);
-        let mut far = 0.0f64;
-        let (mut sum, mut inside, mut first_drift) = (0.0f64, 0usize, 0.0f64);
-        // How far the inner control points reach before the chord's start and past its end.
-        let along_of = |p: &P| ((p[0] - a[0]) * tx + (p[1] - a[1]) * ty) / len;
-        let first = (1..n).filter_map(|k| c.get(k)).map(along_of).fold(f64::INFINITY, f64::min);
-        let last = (1..n).filter_map(|k| c.get(k)).map(along_of).fold(f64::NEG_INFINITY, f64::max);
-        let fold_tip = len < FOLD_TIP_CHORD && first >= 0.0 && (1..n).filter_map(|k| c.get(k)).filter(|p| along_of(p) > 1.0).count() == 1;
+        // Where each inner control point lies along the chord (0 at its start, 1 at its end) and
+        // how far off it.
+        let at: Vec<(f64, f64)> = inner
+            .iter()
+            .map(|p| {
+                let r = [p[0] - a[0], p[1] - a[1]];
+                ((r[0] * tx + r[1] * ty) / len, (r[0] * ty - r[1] * tx).abs())
+            })
+            .collect();
+        // How far they reach before the chord's start and past its end.
+        let first = at.iter().map(|q| q.0).fold(f64::INFINITY, f64::min);
+        let last = at.iter().map(|q| q.0).fold(f64::NEG_INFINITY, f64::max);
+        let fold_tip = len < FOLD_TIP_CHORD && first >= 0.0 && at.iter().filter(|q| q.0 > 1.0).count() == 1;
         let before_tol = if first > -SHALLOW_BEFORE_REACH { SHALLOW_BEFORE_TOL } else { BEFORE_TOL };
         let after_tol = if last >= 1.0 && last - first < SHARP_FOLD_SPAN {
             (SHARP_FOLD_TOL * last).min(SHARP_FOLD_MAX)
@@ -407,22 +427,20 @@ fn need_weighing_first(c: &[P], first_weight: f64) -> f64 {
         } else {
             AFTER_TOL
         };
-        for (k, p) in (1..n).filter_map(|k| c.get(k).map(|p| (k, p))) {
-            let r = [p[0] - a[0], p[1] - a[1]];
-            // Where the point lies along the chord (0 at its start, 1 at its end) and how far off it.
-            let along = (r[0] * tx + r[1] * ty) / len;
-            let side = (r[0] * ty - r[1] * tx).abs();
+        let (mut far, mut sum, mut inside, mut first_drift) = (0.0f64, 0.0f64, 0usize, 0.0f64);
+        for (k, &(along, side)) in (1..).zip(&at) {
+            let even = f64::from(k) / n as f64;
             far = far.max(side / PERP_TOL);
             if along < 0.0 {
                 far = far.max(side.hypot(-along * len) / before_tol);
             } else if along > 1.0 {
                 far = far.max(side.hypot((along - 1.0) * len) / after_tol);
                 if fold_tip {
-                    sum += (1.0 - k as f64 / n as f64) * len;
+                    sum += (1.0 - even) * len;
                     inside += 1;
                 }
             } else if along >= 0.0 {
-                let drift = (along - k as f64 / n as f64) * len;
+                let drift = (along - even) * len;
                 if k == 1 {
                     first_drift = drift.abs();
                 }
@@ -434,7 +452,16 @@ fn need_weighing_first(c: &[P], first_weight: f64) -> f64 {
         let tang = tang.max(first_weight * first_drift);
         far.max(tang / TANG_TOL)
     } else {
-        d.iter().map(|x| x[0].hypot(x[1])).fold(0.0, f64::max) / PERP_TOL
+        // A closed chord: how far the inner points lie from its ends.
+        inner
+            .iter()
+            .enumerate()
+            .map(|(k, p)| {
+                let s = (k + 1) as f64 / n as f64;
+                (p[0] - (a[0] + ch[0] * s)).hypot(p[1] - (a[1] + ch[1] * s))
+            })
+            .fold(0.0, f64::max)
+            / PERP_TOL
     };
     if v.is_finite() { v } else { 0.0 }
 }
@@ -470,11 +497,7 @@ fn stored_net(cubic: &Net) -> Net {
     let tol = 1e-7 * scale;
     let small = |p: P| p[0].abs().max(p[1].abs()) <= tol;
     let lines = |net: &Net, across: bool| -> Vec<Vec<P>> {
-        if across {
-            (0..net.nv).map(|j| (0..net.nu).map(|i| net.at(i, j)).collect()).collect()
-        } else {
-            (0..net.nu).map(|i| (0..net.nv).map(|j| net.at(i, j)).collect()).collect()
-        }
+        if across { (0..net.nv).map(|j| net.ctrl_row(j)).collect() } else { (0..net.nu).map(|i| net.ctrl_col(i)).collect() }
     };
     let degree = |ls: &[Vec<P>]| -> usize {
         let d2 = |c: &[P], k: usize| match (c.get(k), c.get(k + 1), c.get(k + 2)) {
@@ -708,6 +731,15 @@ struct Rules {
     uneven_quilt: bool,
 }
 
+impl Rules {
+    /// A one-patch full mesh (the one cut forced down): measured by its cells' whole control nets,
+    /// with the first inner point of their rows weighed, twisted cells split both ways, and its
+    /// first-level splits down spread by column need.
+    fn full_mesh(&self) -> bool {
+        self.force_down && !self.twist_spreads
+    }
+}
+
 /// The parent cell of `c` (one halving up both ways), as a comparable key.
 fn parent_of(c: &Cell) -> (i64, i64, i64, i64) {
     let (w, h) = (2.0 * (c[1] - c[0]), 2.0 * (c[3] - c[2]));
@@ -748,7 +780,7 @@ fn strip_down_cuts(net: &Net, level_cells: &[Cell], decisions: &mut [(bool, bool
 
 /// Splits down every cell whose parent has a cell marked in `from`.
 fn spread_down(level_cells: &[Cell], decisions: &mut [(bool, bool)], from: &[bool]) {
-    let parents: Vec<_> = level_cells.iter().zip(from).filter(|(_, t)| **t).map(|(c, _)| parent_of(c)).collect();
+    let parents: HashSet<_> = level_cells.iter().zip(from).filter(|(_, t)| **t).map(|(c, _)| parent_of(c)).collect();
     if parents.is_empty() {
         return;
     }
@@ -761,9 +793,13 @@ fn spread_down(level_cells: &[Cell], decisions: &mut [(bool, bool)], from: &[boo
 
 /// Splits down every cell beside a cell marked in `from`: cut from the same parent, in the same row.
 fn spread_down_in_row(level_cells: &[Cell], decisions: &mut [(bool, bool)], from: &[bool]) {
-    let marked: Vec<Cell> = level_cells.iter().zip(from).filter(|(_, t)| **t).map(|(c, _)| *c).collect();
+    // Cell bounds are exact halvings of the whole, so a row's top is one value.
+    let rows: HashSet<_> = level_cells.iter().zip(from).filter(|(_, t)| **t).map(|(c, _)| (parent_of(c), c[2].to_bits())).collect();
+    if rows.is_empty() {
+        return;
+    }
     for (c, d) in level_cells.iter().zip(decisions) {
-        if marked.iter().any(|m| parent_of(m) == parent_of(c) && (m[2] - c[2]).abs() < EPS) {
+        if rows.contains(&(parent_of(c), c[2].to_bits())) {
             d.1 = true;
         }
     }
@@ -773,7 +809,7 @@ fn spread_down_in_row(level_cells: &[Cell], decisions: &mut [(bool, bool)], from
 /// control net when a rule needs it.
 fn cell_needs<'a>(net: &Net, c: Cell, rules: &Rules, sub: impl Fn() -> &'a Net) -> (f64, f64) {
     let [u0, u1, v0, v1] = c;
-    let full_one = rules.force_down && !rules.twist_spreads;
+    let full_one = rules.full_mesh();
     // A quilt's patch measures its cells' rows by all the rows of their control nets.
     let fu = if rules.twist_spreads {
         sub().rows_need()
@@ -827,8 +863,7 @@ fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
 /// A cell's twist as `rules` measure it, with the tolerance it must pass to split:
 /// `(twist, tolerance)`.
 fn twist_test(sub: &Net, rules: &Rules, whole: bool, full_height: bool, goes_across: bool) -> (f64, f64) {
-    let (p00, p10, p01) = (sub.at(0, 0), sub.at(sub.nu.saturating_sub(1), 0), sub.at(0, sub.nv.saturating_sub(1)));
-    let (du, dv) = ([p10[0] - p00[0], p10[1] - p00[1]], [p01[0] - p00[0], p01[1] - p00[1]]);
+    let (du, dv) = sub.sides();
     let first_row = rules.uneven_quilt && rules.twist_spreads && whole && !goes_across;
     let tw = match (rules.twist_by_side, goes_across) {
         (true, true) => sub.twist_left(),
@@ -848,7 +883,7 @@ fn twist_test(sub: &Net, rules: &Rules, whole: bool, full_height: bool, goes_acr
         // all, less along their top edges) not; with an inner control point moved 18 px across,
         // the quarter cell whose top edge twists 1.125 px is cut into eighths down, its mirror
         // twisted as much along its bottom edge stays whole, and at 14 px (0.875) neither is.
-        (false, false) if rules.force_down && !rules.twist_spreads => sub.twist_top(),
+        (false, false) if rules.full_mesh() => sub.twist_top(),
         (false, _) => sub.twist(),
     };
     // A whole quilt patch splits for its twist only past WHOLE_PATCH_TWIST_TOL (FIRST_ROW_TWIST_TOL
@@ -880,12 +915,13 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
         let mut decisions = Vec::with_capacity(level_cells.len());
         // Cells split down for their twist alone.
         let mut twisted = Vec::with_capacity(level_cells.len());
-        // Rows of sibling cells (by their top and bottom and their parent) with a square cell
-        // split down for its curvature.
-        let mut curved_rows: Vec<(f64, f64, i64, f64)> = Vec::new();
+        // Rows of sibling cells (by their top and bottom, their width and their parent's column)
+        // with a square cell split down for its curvature. Cell bounds are exact halvings of the
+        // whole, so each is one value.
+        let mut curved_rows: HashSet<(u64, u64, i64, u64)> = HashSet::new();
         let column = |c: &Cell| (c[0] / (2.0 * (c[1] - c[0])) + EPS).floor() as i64;
         // A one-patch full mesh: each cell's column need and twist, for the rules after the cells' own decisions.
-        let full_one = rules.force_down && !rules.twist_spreads;
+        let full_one = rules.full_mesh();
         let mut measured: Vec<(f64, f64)> = Vec::with_capacity(level_cells.len());
         for &c in &level_cells {
             let [u0, u1, v0, v1] = c;
@@ -898,7 +934,7 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             let (lu, lv) = (u1 - u0, v1 - v0);
             let square = (lu - lv).abs() < EPS;
             if twisty && down && square {
-                curved_rows.push((v0, v1, column(&c), lu));
+                curved_rows.insert((v0.to_bits(), v1.to_bits(), column(&c), lu.to_bits()));
             }
             let goes_across = lu > lv + EPS;
             if twisty {
@@ -929,8 +965,7 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             // ROW_TWIST_ACROSS_TOL splits across, as twist across its rows splits it down.
             if rules.twist_spreads && twisty && lu > 1.0 - EPS && lv > 1.0 - EPS {
                 let sub = sub();
-                let (p00, p10) = (sub.at(0, 0), sub.at(sub.nu - 1, 0));
-                if sub.twist_along([p10[0] - p00[0], p10[1] - p00[1]]) > ROW_TWIST_ACROSS_TOL + EPS {
+                if sub.twist_along(sub.sides().0) > ROW_TWIST_ACROSS_TOL + EPS {
                     across = true;
                 }
             }
@@ -971,9 +1006,11 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             let down: Vec<bool> = decisions.iter().map(|d| d.1).collect();
             spread_down(&level_cells, &mut decisions, &down);
         }
-        for (c, d) in level_cells.iter().zip(&mut decisions) {
-            if curved_rows.iter().any(|&(a, b, k, cw)| (a - c[2]).abs() < EPS && (b - c[3]).abs() < EPS && (cw - (c[1] - c[0])).abs() < EPS && k == column(c)) {
-                d.1 = true;
+        if !curved_rows.is_empty() {
+            for (c, d) in level_cells.iter().zip(&mut decisions) {
+                if curved_rows.contains(&(c[2].to_bits(), c[3].to_bits(), column(c), (c[1] - c[0]).to_bits())) {
+                    d.1 = true;
+                }
             }
         }
         let mut next = Vec::new();
@@ -998,9 +1035,11 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
 /// The corners along each row (keyed by v's bits) or each column (by u's bits), sorted.
 type Lines = HashMap<u64, Vec<f64>>;
 
-/// The values of `line` strictly between `lo` and `hi`.
-fn inside(line: Option<&Vec<f64>>, lo: f64, hi: f64) -> Vec<f64> {
-    line.map(|l| l.iter().copied().filter(|&t| t > lo + 1e-12 && t < hi - 1e-12).collect()).unwrap_or_default()
+/// The values of the sorted `line` strictly between `lo` and `hi`.
+fn inside(line: Option<&Vec<f64>>, lo: f64, hi: f64) -> &[f64] {
+    let Some(l) = line else { return &[] };
+    let (from, to) = (l.partition_point(|&t| t <= lo + 1e-12), l.partition_point(|&t| t < hi - 1e-12));
+    l.get(from..to.max(from)).unwrap_or_default()
 }
 
 fn lerp(a: P, b: P, s: f64) -> P {
@@ -1108,12 +1147,12 @@ fn own_points(
     // it (the chord rules above are for points that are corners on both sides).
     for &[u0, u1, v0, v1] in leaves {
         for v in [v0, v1] {
-            for u in inside(on_v.get(&v.to_bits()), u0, u1) {
+            for &u in inside(on_v.get(&v.to_bits()), u0, u1) {
                 own.insert(key(u, v), surf(u, v));
             }
         }
         for u in [u0, u1] {
-            for v in inside(on_u.get(&u.to_bits()), v0, v1) {
+            for &v in inside(on_u.get(&u.to_bits()), v0, v1) {
                 own.insert(key(u, v), surf(u, v));
             }
         }
@@ -1203,7 +1242,7 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
         let (c00, c10, c01, c11) = (corner(u0, v0), corner(u1, v0), corner(u0, v1), corner(u1, v1));
         // On a line kept on the surface, a corner of a leaf as big as this one keeps its own place.
         for (v, a, b) in [(v0, c00, c10), (v1, c01, c11)] {
-            for u in inside(on_v.get(&v.to_bits()), u0, u1) {
+            for &u in inside(on_v.get(&v.to_bits()), u0, u1) {
                 if fixed_row(v) && corner_of_equal(u, v, me) {
                     continue;
                 }
@@ -1212,7 +1251,7 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
             }
         }
         for (u, a, b) in [(u0, c00, c01), (u1, c10, c11)] {
-            for v in inside(on_u.get(&u.to_bits()), v0, v1) {
+            for &v in inside(on_u.get(&u.to_bits()), v0, v1) {
                 if fixed_col(u) && corner_of_equal(u, v, me) {
                     continue;
                 }
@@ -1233,7 +1272,7 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
         for &&[u0, u1, v0, v1] in &big {
             for u in [u0, u1] {
                 let (a, b) = (place(&pos, u, v0), place(&pos, u, v1));
-                for v in inside(on_u.get(&u.to_bits()), v0, v1) {
+                for &v in inside(on_u.get(&u.to_bits()), v0, v1) {
                     let o = place(&own, u, v);
                     pos.insert(key(u, v), onto(a, b, o));
                 }
@@ -1288,6 +1327,22 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
 mod tests {
     use super::*;
 
+    /// The bicubic Bezier patch with the 4 × 4 control points `p` (row-major).
+    fn bicubic(p: [P; 16]) -> impl Fn(f64, f64) -> P {
+        let b = |t: f64| [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
+        move |u: f64, v: f64| {
+            let (bu, bv) = (b(u), b(v));
+            let mut o = [0.0; 2];
+            for (j, wv) in bv.iter().enumerate() {
+                for (i, wu) in bu.iter().enumerate() {
+                    o[0] += wu * wv * p[j * 4 + i][0];
+                    o[1] += wu * wv * p[j * 4 + i][1];
+                }
+            }
+            o
+        }
+    }
+
     /// A bilinear (flat) map: the four first-level cells per side stay whole.
     #[test]
     fn a_flat_map_stays_at_sixteen_cells() {
@@ -1318,37 +1373,9 @@ mod tests {
             *q = [128.0 * (k % 4) as f64 / 3.0, 128.0 * (k / 4) as f64 / 3.0];
         }
         p[0] = [-48.0, -48.0];
-        let b = |t: f64| [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
-        let at = |u: f64, v: f64| {
-            let (bu, bv) = (b(u), b(v));
-            let mut o = [0.0; 2];
-            for (j, wv) in bv.iter().enumerate() {
-                for (i, wu) in bu.iter().enumerate() {
-                    o[0] += wu * wv * p[j * 4 + i][0];
-                    o[1] += wu * wv * p[j * 4 + i][1];
-                }
-            }
-            o
-        };
-        let (leaves, log) = cells(
-            &net_of(&at, true),
-            true,
-            &Rules {
-                start: START_FULL,
-                force_down: true,
-                twist_spreads: false,
-                twist_spreads_in_row: true,
-                fixed_level: 1,
-                mid_row_level: 1,
-                cut_sides: false,
-                twist_by_side: false,
-                square_twist: None,
-                column_chords: None,
-                flat_columns: None,
-                surface_sides: [false; 2],
-                uneven_quilt: false,
-            },
-        );
+        let at = bicubic(p);
+        let net = net_of(&at, true);
+        let (leaves, log) = cells(&net, true, &one_patch_rules(&net, true));
         assert!(log.iter().any(|s| s.cell == [0.0, 0.25, 0.0, 0.25]), "the corner cell splits");
         assert!(leaves.contains(&[0.75, 1.0, 0.0, 0.25]), "{leaves:?}");
     }
@@ -1372,18 +1399,7 @@ mod tests {
             *q = [128.0 * (k % 4) as f64 / 3.0, 128.0 * (k / 4) as f64 / 3.0];
         }
         p[1][1] = 40.0;
-        let b = |t: f64| [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
-        let at = |u: f64, v: f64| {
-            let (bu, bv) = (b(u), b(v));
-            let mut o = [0.0; 2];
-            for (j, wv) in bv.iter().enumerate() {
-                for (i, wu) in bu.iter().enumerate() {
-                    o[0] += wu * wv * p[j * 4 + i][0];
-                    o[1] += wu * wv * p[j * 4 + i][1];
-                }
-            }
-            o
-        };
+        let at = bicubic(p);
         let m = envelope_mesh(&at, true).expect("finite");
         let mut far: Vec<[f64; 4]> = m
             .quads
@@ -1542,18 +1558,7 @@ mod tests {
             let (x, y) = (0.5 * (k % 4) as f64 / 3.0, 0.5 * (k / 4) as f64 / 3.0);
             *q = [128.0 * x, 128.0 * y + 12.0 * (2.0 * pi * x).sin() * (pi * y).sin()];
         }
-        let b = |t: f64| [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
-        let wave = |u: f64, v: f64| {
-            let (bu, bv) = (b(u), b(v));
-            let mut o = [0.0; 2];
-            for (j, wv) in bv.iter().enumerate() {
-                for (i, wu) in bu.iter().enumerate() {
-                    o[0] += wu * wv * p[j * 4 + i][0];
-                    o[1] += wu * wv * p[j * 4 + i][1];
-                }
-            }
-            o
-        };
+        let wave = bicubic(p);
         let tallest = |rules: &Rules| {
             let (leaves, _) = cells(&cubic_net(&wave), true, rules);
             leaves.iter().filter(|c| c[2] >= 0.5 - 1e-9).map(|c| c[3] - c[2]).fold(0.0, f64::max)
@@ -1974,18 +1979,7 @@ mod tests {
             let (u, v) = ((k % 4) as f64 / 3.0, (k / 4) as f64 / 3.0);
             *q = [128.0 * u + 6.0 * (3.0 * pi * v).sin(), 128.0 * v + 5.0 * (2.0 * pi * (u + v)).sin()];
         }
-        let b = |t: f64| [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
-        let at = |u: f64, v: f64| {
-            let (bu, bv) = (b(u), b(v));
-            let mut o = [0.0; 2];
-            for (j, wv) in bv.iter().enumerate() {
-                for (i, wu) in bu.iter().enumerate() {
-                    o[0] += wu * wv * p[j * 4 + i][0];
-                    o[1] += wu * wv * p[j * 4 + i][1];
-                }
-            }
-            o
-        };
+        let at = bicubic(p);
         let m = envelope_mesh(&at, true).expect("finite");
         let find = |u: f64, v: f64| m.uv.iter().position(|q| (q[0] - u).abs() < 1e-12 && (q[1] - v).abs() < 1e-12).map(|k| m.pos[k]);
         let (a, c, mid) = (find(0.0, 0.5).expect("left"), find(0.5, 0.5).expect("middle"), find(0.25, 0.5).expect("quarter"));
@@ -2224,18 +2218,7 @@ mod tests {
             *q = [96.0 + 128.0 * (k % 4) as f64 / 3.0, 96.0 + 128.0 * (k / 4) as f64 / 3.0];
         }
         p[0] = [96.0 - d, 96.0 - d];
-        let b = |t: f64| [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
-        move |u: f64, v: f64| {
-            let (bu, bv) = (b(u), b(v));
-            let mut o = [0.0; 2];
-            for (j, wv) in bv.iter().enumerate() {
-                for (i, wu) in bu.iter().enumerate() {
-                    o[0] += wu * wv * p[j * 4 + i][0];
-                    o[1] += wu * wv * p[j * 4 + i][1];
-                }
-            }
-            o
-        }
+        bicubic(p)
     }
 
     /// In a full mesh, a cell that splits across for its rows splits down for its twist only where
@@ -2245,21 +2228,7 @@ mod tests {
     fn a_full_mesh_cell_split_across_ignores_its_twist() {
         let at = corner_out();
         let net = net_of(&at, true);
-        let full = Rules {
-            start: START_FULL,
-            force_down: true,
-            twist_spreads: false,
-            twist_spreads_in_row: true,
-            fixed_level: 1,
-            mid_row_level: 1,
-            cut_sides: false,
-            twist_by_side: false,
-            square_twist: None,
-            column_chords: None,
-            flat_columns: None,
-            surface_sides: [false; 2],
-            uneven_quilt: false,
-        };
+        let full = one_patch_rules(&net, true);
         let (leaves, _) = cells(&net, true, &full);
         let tall = |ls: &[Cell]| ls.iter().any(|c| c[0] >= 0.5 - 1e-9 && c[1] <= 0.75 + 1e-9 && c[2].abs() < 1e-9 && (c[3] - 0.25).abs() < 1e-9);
         assert!(tall(&leaves), "a quarter-tall cell stays at the top, right of the middle");
@@ -2276,21 +2245,7 @@ mod tests {
         let at = corner_out();
         let m = envelope_mesh(&at, true).expect("finite");
         let net = net_of(&at, true);
-        let full = Rules {
-            start: START_FULL,
-            force_down: true,
-            twist_spreads: false,
-            twist_spreads_in_row: true,
-            fixed_level: 1,
-            mid_row_level: 1,
-            cut_sides: false,
-            twist_by_side: false,
-            square_twist: None,
-            column_chords: None,
-            flat_columns: None,
-            surface_sides: [false; 2],
-            uneven_quilt: false,
-        };
+        let full = one_patch_rules(&net, true);
         let (leaves, _) = cells(&net, true, &full);
         assert_eq!(m.quads.len(), leaves.len(), "no leaf is cut across");
         // Some point lies inside a leaf's side; it is on the chord between that side's ends.
@@ -2608,7 +2563,7 @@ mod tests {
     #[test]
     fn a_full_meshs_first_split_down_carries_along_its_row() {
         let rules = one_patch_rules(&moved_point_net(1, 1, [0.0, 0.0]), true);
-        assert!(rules.force_down && !rules.twist_spreads);
+        assert!(rules.full_mesh());
         let halved = |leaves: &[Cell]| leaves.iter().filter(|c| c[0] > 0.5 - EPS && c[2] > 0.5 - EPS).all(|c| (c[3] - c[2] - 0.5).abs() < EPS);
         let (across, _) = cells(&moved_point_net(1, 1, [8.0, 0.0]), true, &rules);
         assert!(halved(&across), "moved across: the bottom right cell stays whole down");
