@@ -6,10 +6,16 @@ fn empty_fonts() -> Arc<svg::usvg::fontdb::Database> {
     Arc::new(svg::usvg::fontdb::Database::new())
 }
 
-fn parse_count<T>(run: impl FnOnce() -> T) -> (T, usize) {
-    XML_PARSES.with(|count| count.set(0));
-    let result = run();
-    (result, XML_PARSES.with(|count| count.get()))
+fn parse_count<T: Send>(run: impl FnOnce() -> T + Send) -> (T, usize) {
+    // The public parsers dispatch onto this worker on native targets. Reset and
+    // read its TLS there too; nested parser entry then reuses the same worker.
+    // on_svg_stack executes this closure directly on wasm.
+    svg::on_svg_stack(move || {
+        XML_PARSES.with(|count| count.set(0));
+        let result = run();
+        Ok((result, XML_PARSES.with(|count| count.get())))
+    })
+    .unwrap()
 }
 
 #[test]
