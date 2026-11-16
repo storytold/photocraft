@@ -26,7 +26,9 @@ use crate::file_open::display_name;
 pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
     /// scripts, notes, presets). Starts in `initial_dir` (the last-used folder, UI-217-3).
-    Open { multiple: bool, initial_dir: Option<String>, extensions: Option<Vec<String>> },
+    /// `title` names the picker (`None`: the system's own "Open") and `filter_name` names the
+    /// `extensions` filter (`None`: "Supported Files"), as File › Scripts › Browse… does (#13846).
+    Open { multiple: bool, initial_dir: Option<String>, extensions: Option<Vec<String>>, title: Option<String>, filter_name: Option<String> },
     /// Which folder to read from. Starts in `initial_dir` when available.
     Folder { initial_dir: Option<String> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
@@ -212,6 +214,26 @@ impl PhotocraftApp {
         Ok(asked)
     }
 
+    /// Where File › Scripts › Browse… starts (#13848): the folder of the script picked last, while
+    /// it exists, else where the other pickers start (the most recent document's folder, or none).
+    pub(crate) fn scripts_start_dir(&self) -> Option<String> {
+        let remembered = &self.session.prefs().file_handling.scripts_folder;
+        if !remembered.is_empty() && folder_exists(Path::new(remembered)) {
+            return Some(remembered.clone());
+        }
+        last_used_dir(&self.ui.recent_files)
+    }
+
+    /// Remember the folder of a script picked through Browse… (#13848), kept in the preferences.
+    /// The web answers a file name, which has no folder, and leaves it alone.
+    pub(crate) fn remember_scripts_folder(&mut self, path: &str) {
+        let Some(dir) = Path::new(path).parent().filter(|p| !p.as_os_str().is_empty()) else { return };
+        let dir = dir.to_string_lossy().into_owned();
+        if self.session.prefs().file_handling.scripts_folder != dir {
+            self.session.prefs.edit(|p| p.file_handling.scripts_folder = dir);
+        }
+    }
+
     /// Remember the folder of an export that succeeded as where the next export dialog starts.
     /// The web answers a download name, which has no folder, and leaves it alone.
     fn remember_export_folder(&mut self, path: &str) {
@@ -271,8 +293,30 @@ impl PhotocraftApp {
         then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.pick_file_bytes_titled(extensions, initial_dir, None, None, None, then)
+    }
+
+    /// [`Self::pick_file_bytes_filtered`] starting in `initial_dir`, with the picker's `title` and
+    /// the filter's name (#13846). `picked`, when given, is told the chosen path before the file is read,
+    /// so a file that then cannot be read still counts as where the user went (a cancelled picker never
+    /// reaches it).
+    pub(crate) fn pick_file_bytes_titled(
+        &mut self,
+        extensions: &[&str],
+        initial_dir: Option<String>,
+        title: Option<&str>,
+        filter_name: Option<&str>,
+        picked: Option<fn(&mut Self, &str)>,
+        then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
         let extensions = (!extensions.is_empty()).then(|| extensions.iter().map(|s| (*s).to_string()).collect());
-        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions }, move |app, answer| {
+        let (title, filter_name) = (title.map(str::to_owned), filter_name.map(str::to_owned));
+        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions, title, filter_name }, move |app, answer| {
+            if let (Some(picked), FileDialogAnswer::Paths(paths)) = (picked, &answer)
+                && let Some(first) = paths.first()
+            {
+                picked(app, first);
+            }
             let (name, bytes) = read_picked(answer)?;
             then(app, name, bytes)
         })
@@ -282,7 +326,7 @@ impl PhotocraftApp {
     /// failure (see [`Self::open_paths_in_order`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, title: None, filter_name: None }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     // The order the dialog returns, not name order; the last is active.
@@ -302,7 +346,7 @@ impl PhotocraftApp {
     /// reporting each failure as File › Open does.
     pub fn open_dialog_as_smart_object(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, title: None, filter_name: None }, |app, answer| {
             let FileDialogAnswer::Paths(paths) = answer else { return Err(UNEXPECTED.into()) };
             // Each file is a tracked open job like File › Open's, in name order. No `show_if_open`:
             // the file opens as another document even when it is already open.
@@ -494,3 +538,11 @@ pub(crate) fn fake(answers: Vec<Option<FileDialogAnswer>>) -> (FileDialogFn, std
 #[cfg(test)]
 #[path = "file_dialog/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "file_dialog/scripts_browse_title_tests.rs"]
+mod scripts_browse_title_tests;
+
+#[cfg(test)]
+#[path = "file_dialog/scripts_browse_folder_tests.rs"]
+mod scripts_browse_folder_tests;
