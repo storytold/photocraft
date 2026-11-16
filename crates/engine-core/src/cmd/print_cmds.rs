@@ -1296,7 +1296,11 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     // The worker returns its result before repeat settings and hooks are applied once.
     let handling = p.get("colorHandling").and_then(Value::as_str).unwrap_or("printerManages");
     let native = native_route(p, spooler);
-    if native && native_rgb_compatible(&page, handling) {
+    let duplex = requested_duplex(p);
+    // craft-print's RGB/GDI route does not accept a per-job duplex choice. Keep it for the
+    // printer default, but route explicit simplex/duplex requests through the PDF transport that
+    // validates and applies them instead of silently ignoring the caller.
+    if native && duplex.is_none() && native_rgb_compatible(&page, handling) {
         require_printing_enabled()?;
         let printed = print_windows(&page, p, &doc.name, copies)?;
         return Ok(json!({
@@ -1304,7 +1308,7 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
             "copies": copies, "command": Value::Null, "sent": true, "spooler": printed, "color": color,
         }));
     }
-    if native && printer_settings(p)?.is_some() {
+    if native && !native_rgb_compatible(&page, handling) && printer_settings(p)?.is_some() {
         return Err(other("the selected color profile or page text requires PDF printing. Save as PDF, or clear Print Settings to use PDF printing."));
     }
     let pdf = print_pdf(&page);
@@ -1354,7 +1358,6 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
         printer: selected_printer,
         copies,
         collate: p.get("collate").and_then(Value::as_bool).unwrap_or(true),
-        duplex,
         title: doc.name.clone(),
         // PhotoCraft already placed and scaled the image on its physical sheet. Scaling again
         // in the driver would change the preview, print resolution and crop-mark positions.
@@ -1547,6 +1550,16 @@ fn native_rgb_compatible(page: &PrintPage, handling: &str) -> bool {
         && (page.image.icc.is_none() || matches!(handling, "photocraftManages" | "photoshopManages" | "noColorManagement"))
         && page.description.as_deref().is_none_or(str::is_empty)
         && page.label.as_deref().is_none_or(str::is_empty)
+}
+
+/// An explicit simplex/duplex request; `None` preserves the printer's default.
+fn requested_duplex(p: &Value) -> Option<craft_print::Duplex> {
+    match p.get("duplex").and_then(Value::as_str) {
+        Some("simplex") => Some(craft_print::Duplex::Off),
+        Some("longEdge") => Some(craft_print::Duplex::LongEdge),
+        Some("shortEdge") => Some(craft_print::Duplex::ShortEdge),
+        _ => None,
+    }
 }
 
 /// Where the settings of the last print are kept in Preferences' remembered dialog settings.

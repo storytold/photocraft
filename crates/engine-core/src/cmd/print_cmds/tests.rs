@@ -351,6 +351,15 @@ fn native_rgb_route_preserves_pdf_only_color_and_page_content() {
 }
 
 #[test]
+fn explicit_duplex_choices_are_not_treated_as_the_printer_default() {
+    assert_eq!(requested_duplex(&json!({})), None);
+    assert_eq!(requested_duplex(&json!({"duplex": "printerDefault"})), None);
+    assert_eq!(requested_duplex(&json!({"duplex": "simplex"})), Some(craft_print::Duplex::Off));
+    assert_eq!(requested_duplex(&json!({"duplex": "longEdge"})), Some(craft_print::Duplex::LongEdge));
+    assert_eq!(requested_duplex(&json!({"duplex": "shortEdge"})), Some(craft_print::Duplex::ShortEdge));
+}
+
+#[test]
 fn printer_commands_answer_without_a_document_and_reject_bad_settings() {
     let mut s = crate::session();
     *s.printer_source_mut() = Some(test_printers());
