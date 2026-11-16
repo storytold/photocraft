@@ -9,6 +9,14 @@ use super::{AlphaChannel, ColorMode, EngineError, Result, SelectionMode, Session
 // ---------------------------------------------------------------------------------------------
 // Apply Image / Calculations
 
+/// Whether `v` sits on a whole 8-bit level, within the 1e-3-of-a-level tolerance of
+/// [`Blending::apply_truncated_at_8bit`]: the measured case (#14490) divides whole levels, while
+/// a merged composite or a vector-mask plane can carry fractions through an 8-bit document.
+fn whole_level_at_8bit(v: f32) -> bool {
+    let level = f64::from(v) * 255.0;
+    (level - level.round()).abs() <= 1e-3
+}
+
 pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "image.applyImage";
     let blending = Blending::parse(p).map_err(|e| bad(cmd, e))?;
@@ -16,7 +24,8 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
     let preserve = p.get("preserveTransparency").and_then(Value::as_bool).unwrap_or(false);
     let src_spec = source_spec(p, "source", "source").unwrap_or_else(|| json!({}));
     // A composite's planes are in its own document's mode, which may not be the target's.
-    let src_fmt = s.documents().get(doc_index(s, &src_spec, "document")?).map(|d| d.doc.pixel_format()).ok_or(EngineError::NoDocument)?;
+    let (src_fmt, src_doc_mode) =
+        s.documents().get(doc_index(s, &src_spec, "document")?).map(|d| (d.doc.pixel_format(), d.doc.mode)).ok_or(EngineError::NoDocument)?;
     let src_mode = src_fmt.mode;
     // A CMYK composite reaches a channel or a layer mask as its luminosity, as Calculations reads
     // it: its planes are ink, and an average of their tones would leave Black alone light gray.
@@ -59,6 +68,9 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
         let fmt = doc.pixel_format();
+        // The document's own mode, read before `paint_surface` borrows the doc: the pixel format
+        // folds Indexed and Multichannel to Rgb, and only plain RGB was measured (#14490).
+        let doc_mode = doc.mode;
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         let sf = surf.format();
         if sf != fmt {
@@ -68,18 +80,21 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         let colors = sf.mode.color_channels();
         // #14490: at 8 bit Apply Image truncates the Add/Subtract quotient instead of rounding it
         // to the nearest level. Nothing else is measured, so only that exact configuration takes
-        // the new path: an RGB8 target and an RGB8 source (a deeper source carries fractional
-        // samples that truncating would drop), Add or Subtract with Offset 0, and neither a mask
-        // nor a selection (even a full-weight one keeps today's rounding). Calculations, 16 and
-        // 32 bit, the other colour modes (only RGB is measured), the blend modes and Scale with
-        // an Offset stay as they are.
+        // the new path: an RGB8 target and an RGB8 source DOCUMENT (the document's own mode, so
+        // Indexed and Multichannel, whose pixels fold to Rgb, stay on the old path), Add or
+        // Subtract with Offset 0, neither a mask nor a selection (even a full-weight one keeps
+        // today's rounding), and only where the values actually blended are whole 8-bit levels:
+        // inside an 8-bit document a merged composite still mixes layers in f32 (a layer at 50 %
+        // opacity reaches the loop as 127.5/255) and a vector mask reads as coverage floats.
+        // Calculations, 16 and 32 bit, the other colour modes, the blend modes and Scale with an
+        // Offset stay as they are.
         let truncates = match blending {
             Blending::Add { offset, .. } | Blending::Subtract { offset, .. } => offset == 0.0,
             Blending::Mode(_) => false,
         } && sf.sample == SampleType::U8
-            && sf.mode == ColorMode::Rgb
+            && doc_mode == ColorMode::Rgb
             && src_fmt.sample == SampleType::U8
-            && src_fmt.mode == ColorMode::Rgb
+            && src_doc_mode == ColorMode::Rgb
             && mask.is_none()
             && selection.is_none();
         let mut v = surf.read_region(area);
@@ -96,17 +111,21 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             // pixels (where it is transparent the source shows as is), and the alpha grows by
             // source-over, so applying to an empty layer copies the source in any mode.
             let out_a = if preserve { base_a } else { w + base_a * (1.0 - w) };
+            // Blended as tone, as Photoshop does: a CMYK layer's ink turns into tone and back
+            // (Multiply darkens, so it adds ink). One plane (a channel, a mask) is a tone already.
+            // A CMYK composite onto another mode darkens each tone by its Black, so Black
+            // alone stays black.
+            let k = if src_mode == ColorMode::Cmyk && sf.mode != ColorMode::Cmyk { src.get(3).map_or(1.0, |pl| tone(src_mode, pl[i])) } else { 1.0 };
+            let top_at = |c: usize| if src.len() > 1 { tone(src_mode, src.get(c).unwrap_or(&src[0])[i]) * k } else { src[0][i] };
             // The truncation only replaces today's rounding where the blend is what lands on the
-            // pixel: at full weight (opacity 100 %, no mask, no selection) and on an opaque pixel.
-            // Attenuated blends are not measured (#14490), so they keep the old rounding.
-            let lands_whole = truncates && w >= 1.0 && base_a >= 1.0;
+            // pixel: at full weight (opacity 100 %, no mask, no selection) and on an opaque
+            // pixel, and only when every source sample blended here is a whole 8-bit level --
+            // the measured reference divides whole levels, composites and mask planes can carry
+            // fractions through an 8-bit document, and those cases are not measured (#14490).
+            // Attenuated blends keep the old rounding as well.
+            let lands_whole = truncates && w >= 1.0 && base_a >= 1.0 && (0..colors).all(|c| whole_level_at_8bit(top_at(c)));
             for (c, b) in px[..colors].iter_mut().enumerate() {
-                // Blended as tone, as Photoshop does: a CMYK layer's ink turns into tone and back
-                // (Multiply darkens, so it adds ink). One plane (a channel, a mask) is a tone already.
-                // A CMYK composite onto another mode darkens each tone by its Black, so Black
-                // alone stays black.
-                let k = if src_mode == ColorMode::Cmyk && sf.mode != ColorMode::Cmyk { src.get(3).map_or(1.0, |pl| tone(src_mode, pl[i])) } else { 1.0 };
-                let top = if src.len() > 1 { tone(src_mode, src.get(c).unwrap_or(&src[0])[i]) * k } else { src[0][i] };
+                let top = top_at(c);
                 let base = tone(sf.mode, *b);
                 let applied = if lands_whole { blending.apply_truncated_at_8bit(base, top) } else { blending.apply(base, top) };
                 let blended = top + (applied - top) * base_a;

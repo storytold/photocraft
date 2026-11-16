@@ -117,12 +117,19 @@ fn subtract_scale_two_keeps_its_values() {
 
 #[test]
 fn a_blend_mode_is_not_truncated() {
-    // Only Add and Subtract divide by Scale, so a separable mode is untouched: Multiply of the
-    // source's left half (128) onto the target's left half stays 200 * 128/255 and so on.
-    let mut s = pair(8, "#c86432", "#3296fa");
+    // Only Add and Subtract divide by Scale, so a separable mode is untouched. The fixture must
+    // DISCRIMINATE (review #14634 finding 4): the old one (source 128 onto 200/100/50) rounds
+    // and truncates to the same levels. Multiply a source of 200 onto a target of 200/100/50:
+    // red is 200 * 200 / 255 = 156.86, which today rounds to 157 while a truncation would store
+    // 156. Green (100 * 200 / 255 = 78.43) and blue (50 * 200 / 255 = 39.22) pin the values too.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 6, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#c86432"})).unwrap();
+    s.execute("file.new", json!({"width": 6, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#c8c8c8"})).unwrap();
+    s.set_active(0);
     apply(&mut s, json!({"source": {"document": 1}, "blending": "multiply"}));
-    let want = [lv8(200.0 / 255.0 * (128.0 / 255.0)), lv8(100.0 / 255.0 * (128.0 / 255.0)), lv8(50.0 / 255.0 * (128.0 / 255.0))];
-    assert_eq!(levels(&s, LEFT, 1), want, "multiply at the left half");
+    assert_eq!(levels(&s, LEFT, 1), [157, 78, 39], "multiply at the left half: rounded, never truncated");
 }
 
 #[test]
@@ -230,6 +237,76 @@ fn a_thirty_two_bit_source_keeps_todays_rounding() {
     s.set_active(0);
     apply(&mut s, json!({"source": {"document": 1}, "blending": "add", "scale": 1, "offset": 0}));
     assert_eq!(lv8(px(&s, RIGHT, 1)[0]), 101, "32-bit source at red 100.75/255 keeps today's rounding");
+}
+
+#[test]
+fn a_half_transparent_source_layer_keeps_todays_rounding() {
+    // Independent review of #14634 (finding 1): the source DOCUMENT's pixel format says 8-bit,
+    // but a merged composite blends its layers in f32 before anyone quantises again: a black
+    // layer at 50 % over white reaches the loop as top = 127.5/255 inside a perfectly 8-bit RGB
+    // document. #14490 measured the reference dividing whole levels, so this fractional sample
+    // keeps Blending::apply: 0 + 127.5 -> 128 today, not 127.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 6, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+    s.execute("file.new", json!({"width": 6, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "half black", "opacity": 0.5})).unwrap();
+    s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+    s.set_active(0);
+    apply(&mut s, json!({"source": {"document": 1}, "blending": "add", "scale": 1, "offset": 0}));
+    assert_eq!(levels(&s, RIGHT, 1), [128, 128, 128], "composite sample 127.5/255 keeps today's rounding");
+}
+
+#[test]
+fn a_vector_mask_coverage_float_keeps_todays_rounding() {
+    // Independent review of #14634 (finding 1), the other raw-float source: a vector mask reads
+    // as coverage values of the shape, not as whole 8-bit levels (`ChanRef::VectorMask`). A path
+    // edge at x=1.5 puts 0.5 coverage on pixel column 1; Apply Image of that channel onto a
+    // black 8-bit RGB target must keep today's rounding: 0.5 * 255 = 127.5 -> 128, not 127.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 6, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+    s.execute("file.new", json!({"width": 6, "height": 4})).unwrap();
+    let masked = s.execute("layer.new.layer", json!({"name": "masked"})).unwrap()["layer"].as_u64().unwrap();
+    let path = json!({"subpaths": [{"closed": true, "knots": [[0.0, 0.0], [1.5, 0.0], [1.5, 4.0], [0.0, 4.0]]}]});
+    s.execute("layer.vectorMask.add", json!({"layer": masked, "path": path})).unwrap();
+    s.set_active(0);
+    apply(&mut s, json!({"source": {"document": 1, "channel": "vectorMask"}, "blending": "add", "scale": 1, "offset": 0}));
+    assert_eq!(levels(&s, 1, 1), [128, 128, 128], "half coverage 127.5/255 keeps today's rounding");
+    assert_eq!(levels(&s, 0, 1), [255, 255, 255], "full coverage is a whole level and lands on 255 either way");
+    assert_eq!(levels(&s, 2, 1), [0, 0, 0], "outside the path stays black");
+}
+
+#[test]
+fn an_indexed_color_target_keeps_todays_rounding() {
+    // Independent review of #14634 (finding 2): an Indexed Color document keeps its pixels
+    // RGB-expanded, so its PIXEL FORMAT is Rgb and a gate on the format alone takes the new path
+    // for a mode #14490 never measured. The gate is on the document's own mode, so Indexed stays
+    // on the old path: (50 + 255) / 2 = 152.5 stays 153.
+    let mut s = pair(8, "#c86432", "#3296fa");
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+    apply(&mut s, json!({"source": {"document": 1}, "blending": "add", "scale": 2, "offset": 0}));
+    assert_eq!(levels(&s, RIGHT, 1), [153, 203, 253], "Indexed target keeps rounding");
+    assert_eq!(levels(&s, LEFT, 1), [164, 114, 89], "the whole left half stays as measured for RGB");
+}
+
+#[test]
+fn add_scale_one_point_six_also_truncates() {
+    // Independent review of #14634 (finding 3): the truncation is a rule continuous in Scale, not
+    // keyed to the two measured values. At Scale 1.6 the same rule truncates (100 + 255) / 1.6 =
+    // 221.875 to 221 where main rounds to 222 -- the Calculations twin of this exact number is
+    // pinned at 222 by `calculations_keeps_todays_rounding`. This test PASSES on 7e69ac000: it
+    // pins the deliberate generalisation "every Scale in 1..=2 truncates at 8 bit" rather than a
+    // measured value (the issue measured Scale 1 and 2 only).
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 6, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#646464"})).unwrap();
+    s.execute("file.new", json!({"width": 6, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
+    s.set_active(0);
+    apply(&mut s, json!({"source": {"document": 1}, "blending": "add", "scale": 1.6, "offset": 0}));
+    assert_eq!(levels(&s, RIGHT, 1), [221, 221, 221], "Apply Image at 8 bit truncates at Scale 1.6 too");
 }
 
 #[test]
