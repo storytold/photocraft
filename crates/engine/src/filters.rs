@@ -249,7 +249,7 @@ fn apply_filter_to_surface_with(
     // A map that can no longer be read (moved or deleted since) leaves the pixels alone, like an
     // unknown filter; the command itself already refused an unreadable map when it was added.
     // The stack owns progress across filters; this operation only inherits cancellation.
-    let ctl = photocraft_raster::Interrupt::cancel_only(&cancelled);
+    let ctl = photocraft_raster::Interrupt::cancel_only(cancelled);
     match crate::filters_ext::resolve_map_path(&mut fp, params, &ctl) {
         Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
         Err(e) if matches!(fp, FilterParams::CustomShapeBlur { .. }) => return Err(e),
