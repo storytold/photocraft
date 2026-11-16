@@ -85,6 +85,11 @@ labels translate. Import warning counts use parentheses in Czech. New dynamic te
 back to English in catalogs without entries. This is additional UI coverage, not a claim that
 engine localization or native review is complete.
 
+Mongolian Cyrillic (`mn`, **Монгол**) registration is prepared on 2026-11-11. Its catalogs
+are a separate craft-i18n contribution; the release pin must reach their merge before the
+language ships. `complete_menus` remains false and native review is pending. This does not
+close engine localization or change readiness estimates ([notes](localization-mn.md)).
+
 ## Cross-language gaps
 
 - Engine error, status and parameter-help messages are English in every language.
@@ -100,6 +105,7 @@ engine localization or native review is complete.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Mongolian Cyrillic registration prepared; shared catalog merge/pin and native review pending; estimates unchanged |
 | 2026-11-08 | trivial | Catalogs moved to storytold/craft-i18n (`locales/<code>/photocraft.tsv`), looked up through the `craft-i18n` crate; Serbian is `sr-latn`; `cargo xtask i18n-report` replaces `i18n-coverage`; coverage unchanged |
 | 2026-11-06 | minor | Azerbaijani/Turkish UI search, dropdown prefixes and access keys use locale-aware I casing; 4,606 Azerbaijani entries and current menu coverage; native review requested and pending |
 | 2026-11-05 | minor | Preserved Bosnian while merging current main; 29 registered languages, 17 outside the table; Azerbaijani has 4,606 entries, including 29 current OpenType menu keys and checks for all eight command-ID overrides; native review pending |

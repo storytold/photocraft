@@ -523,3 +523,28 @@ fn raw_develop_labels_are_translated_in_every_shipped_catalog() {
         }
     }
 }
+
+#[test]
+fn mongolian_is_registered_and_resolves_embedded_locales() {
+    assert!(LANGUAGES.iter().any(|l| l.code == "mn"));
+    let Some(mn) = Lang::from_code("mn") else {
+        eprintln!("skipped: Mongolian catalog not embedded");
+        return;
+    };
+    for tag in ["mn", "MN", "mn-MN", "mn-Cyrl-MN", "mn_MN.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(mn), "{tag}");
+        assert_eq!(Lang::from_pref(tag), mn, "{tag}");
+    }
+    assert_eq!(mn.name(), "Монгол");
+    assert_eq!(dir_for_code("mn-MN"), Dir::Ltr);
+    assert_eq!(tr(mn, "untranslated test label"), "untranslated test label");
+    super::system::with_system_tags(&["mn-MN"], || assert_eq!(system_lang(), mn));
+}
+
+#[test]
+fn mongolian_counted_nouns_use_the_same_wording_in_both_cldr_forms() {
+    let mn = fixture_lang("mn", "@id\tlanguage.name\tМонгол\n@plural\t{n} layer|{n} layers\t{n} давхарга|{n} давхарга\n");
+    for n in [0, 1, 2, 21, 100, u64::MAX] {
+        assert_eq!(trn(mn, n, "{n} layer", "{n} layers"), format!("{n} давхарга"));
+    }
+}

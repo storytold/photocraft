@@ -652,3 +652,48 @@ fn arabic_names_are_laid_out_right_to_left() {
         assert!(x_in(&galley, 'P') > x_in(&galley, 'ل'), "{title}: PhotoCraft stays at the right");
     });
 }
+
+/// Language selection survives restart; the default fonts cover Mongolian Cyrillic,
+/// including Ө/Ү, without relying on an optional font checkout.
+#[test]
+fn mongolian_switch_restart_and_glyphs() {
+    if Lang::from_code("mn").is_none() {
+        eprintln!("skipped: Mongolian catalog not embedded");
+        return;
+    }
+    use std::{cell::RefCell, rc::Rc};
+    with_language(Lang::EN, || {
+        let saved = Rc::new(RefCell::new(None::<String>));
+        let store = saved.clone();
+        let services = Services {
+            save_prefs: Some(Box::new(move |text| {
+                *store.borrow_mut() = Some(text.to_owned());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut h = harness_with_services(services);
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "mn"})).expect("choose Mongolian");
+        h.run_steps(4);
+        let mn = lang("mn");
+        assert_eq!(current(), mn);
+        assert!(drawn_text(&h).contains(&file_title(mn)));
+        h.ctx.fonts_mut(|fonts| {
+            for c in "АБВГДЕЁЖЗИЙКЛМНОӨПРСТУҮФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмноөпрстуүфхцчшщъыьэюя".chars()
+            {
+                assert!(fonts.has_glyph(&egui::FontId::proportional(12.0), c), "missing Mongolian glyph {c}");
+            }
+        });
+        let persisted = saved.borrow().clone().expect("saved preferences");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&persisted).expect("valid JSON")["interface"]["language"], "mn");
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "en"})).expect("switch to English");
+        h.run_steps(4);
+        assert_eq!(current(), Lang::EN);
+        drop(h);
+        let mut restarted = harness_with_services(Services { load_prefs: Some(Box::new(move || Some(persisted.clone()))), ..Default::default() });
+        restarted.run_steps(4);
+        assert_eq!(current(), mn);
+        assert_eq!(restarted.state().session.prefs().interface.language, "mn");
+        assert!(drawn_text(&restarted).contains(&file_title(mn)));
+    });
+}
