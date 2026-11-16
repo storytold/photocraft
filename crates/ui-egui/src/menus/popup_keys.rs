@@ -27,14 +27,19 @@ fn entries(ctx: &Context, layer: LayerId) -> Vec<Id> {
 
 /// The menu the keys act in: the one the focused entry is in, else the one open menu that has no
 /// open submenu (a menu just opened with the pointer, nothing focused in it yet). `None` when no
-/// menu was drawn in the last pass, or several were with none of them focused.
+/// menu was drawn in the last pass, or several were with none of them focused. egui keeps the
+/// layer of a menu closed since, with no widgets in it, and its menu state: only layers that
+/// drew widgets in the last pass count.
 fn current_menu(ctx: &Context, focused: Option<Id>) -> Option<LayerId> {
     let layer = focused.and_then(|id| ctx.viewport(|v| v.prev_pass.widgets.get(id).map(|w| w.layer_id)));
     if let Some(layer) = layer.filter(|l| menu_state(ctx, *l).is_some()) {
         return Some(layer);
     }
-    let menus: Vec<(LayerId, MenuState)> =
-        ctx.viewport(|v| v.prev_pass.widgets.layer_ids().collect::<Vec<_>>()).into_iter().filter_map(|l| Some((l, menu_state(ctx, l)?))).collect();
+    let menus: Vec<(LayerId, MenuState)> = ctx
+        .viewport(|v| v.prev_pass.widgets.layer_ids().filter(|l| v.prev_pass.widgets.get_layer(*l).next().is_some()).collect::<Vec<_>>())
+        .into_iter()
+        .filter_map(|l| Some((l, menu_state(ctx, l)?)))
+        .collect();
     let mut deepest = menus.iter().filter(|(_, state)| state.open_item.is_none_or(|sub| !menus.iter().any(|(l, _)| l.id == sub))).map(|(l, _)| *l);
     let menu = deepest.next()?;
     deepest.next().is_none().then_some(menu)
@@ -70,8 +75,10 @@ fn take_bare(ctx: &Context, key: Key) -> bool {
 /// are drawn (egui moves the focus while drawing them) and before the page keys, which would take
 /// Home and End to scroll the canvas.
 pub fn handle(ctx: &Context) {
-    // A text field in a menu keeps Home and End for its caret.
-    if crate::menu_nav::is_open(ctx) || ctx.text_edit_focused() {
+    // A text field in a menu keeps Home and End for its caret. An open dropdown list keeps its
+    // own keys: there the arrows step the dropdown's value and letters pick one, and its focus
+    // isn't its value, so Home and End moving the focus would only part the two.
+    if crate::menu_nav::is_open(ctx) || ctx.text_edit_focused() || crate::widgets::dropdown_list_open(ctx) {
         return;
     }
     let focused = ctx.memory(|m| m.focused());
