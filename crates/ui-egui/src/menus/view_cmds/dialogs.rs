@@ -185,6 +185,8 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // Data-driven labels (a per-part checkbox shows the part's name, not a catalogue entry)
     // come from `__labels` verbatim; everything else goes through the catalogue.
     let labels = f.get("__labels").cloned().unwrap_or(Value::Null);
+    // Option labels a dialog scopes to one dropdown, by its field key (`__choiceLabels`).
+    let choice_labels = f.get("__choiceLabels").cloned().unwrap_or(Value::Null);
     let command = f.get("__command").and_then(Value::as_str);
     let file_info = command == Some("file.fileInfo");
     let image_processor = command == Some("file.scripts.imageProcessor");
@@ -265,11 +267,20 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                             let is_grouped =
                                 f.get("__groupedChoices").and_then(Value::as_array).is_some_and(|a| a.iter().any(|g| g.as_str() == Some(k.as_str())));
                             let grouped = if is_grouped { group_lines(options) } else { Vec::new() };
+                            // Names a dialog scopes to ONE dropdown (`__choiceLabels`): the shared `__labels`
+                            // map is the same for every field of a form, so a document layer named after a
+                            // blend key ("colorBurn") would otherwise overwrite that mode's label in the
+                            // Blending list too (#14479 review). A field the dialog does not name renders
+                            // exactly as before.
+                            let scoped = choice_labels.get(&k);
                             let opts: Vec<(String, String)> = options
                                 .iter()
                                 .filter_map(Value::as_str)
                                 .filter(|o| !is_grouped || *o != CHOICE_SEPARATOR)
-                                .map(|o| (o.to_string(), if action_names { o.to_string() } else { label(o) }))
+                                .map(|o| {
+                                    let shown = scoped.and_then(|m| m.get(o)).and_then(Value::as_str).map_or_else(|| label(o), str::to_string);
+                                    (o.to_string(), if action_names { o.to_string() } else { shown })
+                                })
                                 .collect();
                             let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
                             if action_names {
@@ -786,18 +797,22 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                             layers.push(l.name.clone());
                         }
                     }
-                    let mut names: Map<String, Value> = layers.iter().skip(1).map(|n| (n.clone(), json!(n))).collect();
+                    let names: Map<String, Value> = layers.iter().skip(1).map(|n| (n.clone(), json!(n))).collect();
                     // The Blending list shows the reference application's names for the modes
                     // ("Color Burn", "Linear Dodge (Add)"), from the engine's label table and
                     // through the catalogue so other languages keep their translations (#14479).
-                    // A layer that is itself named one of the keys keeps its own name.
-                    for key in APPLY_IMAGE_BLEND_GROUPS.into_iter().flatten() {
-                        names.entry(key.to_string()).or_insert_with(|| json!(crate::i18n::t(apply_image_blend_label(key))));
-                    }
+                    // These names belong to the Blending dropdown alone: a document layer that is
+                    // itself named one of the keys keeps its own name in Source layer, and the mode
+                    // row keeps its label, because the two no longer share one map (#14479 review).
+                    let blend_names: Map<String, Value> = APPLY_IMAGE_BLEND_GROUPS
+                        .into_iter()
+                        .flatten()
+                        .map(|key| (key.to_string(), json!(crate::i18n::t(apply_image_blend_label(key)))))
+                        .collect();
                     // Scale and Offset only affect Add and Subtract.
                     dialog(
                         app,
-                        json!({"sourceLayer": "merged", "sourceChannel": chans[0], "sourceInvert": false, "blending": "multiply", "opacity": 100.0, "scale": 1.0, "offset": 0, "preserveTransparency": false, "maskChannel": "none", "__labels": names, "__groupedChoices": ["blending"]}),
+                        json!({"sourceLayer": "merged", "sourceChannel": chans[0], "sourceInvert": false, "blending": "multiply", "opacity": 100.0, "scale": 1.0, "offset": 0, "preserveTransparency": false, "maskChannel": "none", "__labels": names, "__choiceLabels": {"blending": blend_names}, "__groupedChoices": ["blending"]}),
                         json!({"sourceLayer": layers, "sourceChannel": load, "blending": apply_image_blend_choices(), "maskChannel": masks}),
                     )
                 }

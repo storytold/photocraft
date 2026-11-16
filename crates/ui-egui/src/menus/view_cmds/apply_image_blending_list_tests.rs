@@ -75,22 +75,101 @@ fn reference_choices() -> Vec<String> {
 
 /// The dialog `command` opens on a fresh RGB document, with its fields.
 fn open(command: &str) -> Map<String, Value> {
+    open_on(command, &json!({"width": 8, "height": 8}), &[])
+}
+
+/// The dialog `command` opens on a fresh document made by `new`, with `steps` run on it first.
+fn open_on(command: &str, new: &Value, steps: &[(&str, Value)]) -> Map<String, Value> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.run("file.new", new.clone()).unwrap();
+    for (id, params) in steps {
+        app.run(id, params.clone()).unwrap();
+    }
     app.sync_views();
     let ctx = egui::Context::default();
     let dialog = front(&mut app, &ctx, command, &json!({})).unwrap().unwrap()["dialog"].as_u64().unwrap();
     app.ui.dialog_mut(dialog).unwrap().fields.clone()
 }
 
+/// The fields of `command` on a document whose top pixel layer is named `layer_name`.
+fn open_with_layer(command: &str, layer_name: &str) -> Map<String, Value> {
+    open_on(
+        command,
+        &json!({"width": 8, "height": 8}),
+        &[("edit.fill", json!({"color": "#c08040"})), ("layer.new.layer", json!({"name": layer_name})), ("edit.fill", json!({"color": "#406080"}))],
+    )
+}
+
+/// The number of nodes labelled `text` that `form_body` draws for these fields, with the dropdown
+/// of `combo` open (`open_list`) or shut. A fresh harness per call, so only one list is ever open.
+fn label_nodes(fields: &Map<String, Value>, combo: &str, text: &str, open_list: bool) -> usize {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let f = fields.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 1600.0)).build_ui_state(|ui, f: &mut Map<String, Value>| super::form_body(ui, f), f);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let mut found = 0;
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        h.run_steps(3);
+        if open_list {
+            h.get_by_role_and_label(Role::ComboBox, combo).click();
+            h.run_steps(2);
+        }
+        found = h.query_all_by_label(text).count();
+    });
+    found
+}
+
+/// The text the button of the dropdown `combo` shows while its list is shut.
+fn combo_value(fields: &Map<String, Value>, combo: &str) -> Option<String> {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let f = fields.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 1600.0)).build_ui_state(|ui, f: &mut Map<String, Value>| super::form_body(ui, f), f);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let mut shown = None;
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        h.run_steps(3);
+        shown = h.get_by_role_and_label(Role::ComboBox, combo).value().map(|v| v.to_string());
+    });
+    shown
+}
+
+/// The value the field `field` holds after the row `row` of the dropdown `combo` is clicked.
+fn pick_row(fields: &Map<String, Value>, field: &str, combo: &str, row: &str) -> Value {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let f = fields.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 1600.0)).build_ui_state(|ui, f: &mut Map<String, Value>| super::form_body(ui, f), f);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let mut picked = Value::Null;
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::ComboBox, combo).click();
+        h.run_steps(2);
+        h.get_all_by_label(row).last().unwrap_or_else(|| panic!("{row} is a row of the {combo} list")).click();
+        h.run_steps(2);
+        picked = h.state()[field].clone();
+    });
+    picked
+}
+
 fn choices(f: &Map<String, Value>) -> Vec<String> {
     f["__choices"]["blending"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
 }
 
-/// The label the dropdown draws for an option: the dialog's own name for it, else the form's
-/// sentence-case label.
-fn shown(f: &Map<String, Value>, key: &str) -> String {
-    f.get("__labels").and_then(|l| l.get(key)).and_then(Value::as_str).map_or_else(|| label_of(key), str::to_string)
+/// The label the dropdown of `field` draws for an option: the name the dialog scoped to that one
+/// field, else the dialog's label for it, else the form's sentence-case label.
+fn shown(f: &Map<String, Value>, field: &str, key: &str) -> String {
+    f.get("__choiceLabels")
+        .and_then(|m| m.get(field))
+        .and_then(|m| m.get(key))
+        .and_then(Value::as_str)
+        .or_else(|| f.get("__labels").and_then(|l| l.get(key)).and_then(Value::as_str))
+        .map_or_else(|| label_of(key), str::to_string)
 }
 
 #[test]
@@ -110,7 +189,7 @@ fn the_apply_image_list_names_the_modes_as_the_reference_application_does() {
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
         let keys: Vec<String> = choices(&f).into_iter().filter(|k| k != SEPARATOR).collect();
         assert_eq!(keys.len(), flat(&GROUP_LABELS).len(), "one label per entry");
-        let labels: Vec<String> = keys.iter().map(|k| shown(&f, k)).collect();
+        let labels: Vec<String> = keys.iter().map(|k| shown(&f, "blending", k)).collect();
         assert_eq!(labels, flat(&GROUP_LABELS));
     });
 }
@@ -214,4 +293,68 @@ fn a_literal_triple_dash_is_kept_in_every_ungrouped_list() {
             assert_eq!(h.state()[key], json!("---"), "{command} {key}: it can be selected");
         });
     }
+}
+
+/// A document layer named after one of the blending keys must not steal that mode's label: the
+/// Blending list shows "Color Burn" and the Source layer list shows the layer's own name. The two
+/// dropdowns shared one label map, so the layer's name won in both (#14479 review).
+#[test]
+fn a_layer_named_after_a_blend_key_leaves_both_lists_right() {
+    let f = open_with_layer("image.applyImage", "colorBurn");
+    let layers: Vec<&str> = f["__choices"]["sourceLayer"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(layers.contains(&"colorBurn"), "the layer is offered by its own name: {layers:?}");
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        assert_eq!(label_nodes(&f, "Blending", "Color Burn", true), 1, "the Blending row shows the mode's reference name");
+        assert_eq!(label_nodes(&f, "Blending", "colorBurn", true), 0, "and not the key the layer happens to be named");
+        assert_eq!(label_nodes(&f, "Source layer", "colorBurn", true), 1, "the Source layer row shows the layer's own name");
+        assert_eq!(label_nodes(&f, "Source layer", "Color Burn", true), 0, "and no blend-mode label leaks into it");
+    });
+}
+
+/// A mode stored under the key an older dialog or a recorded action wrote ("colorBurn") still
+/// selects its mode, and the dropdown shows the reference name for it (#14479 review).
+#[test]
+fn an_older_mode_key_still_selects_and_shows_its_name() {
+    let mut f = open_with_layer("image.applyImage", "colorBurn");
+    f.insert("blending".into(), json!("colorBurn"));
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        assert_eq!(pick_row(&f, "blending", "Blending", "Color Burn"), json!("colorBurn"), "the row is a label, the value stays the command key");
+        assert_eq!(combo_value(&f, "Blending").as_deref(), Some("Color Burn"), "the shut box names the key it holds as the reference application does");
+    });
+}
+
+/// The per-field option labels (`__choiceLabels`) change only the dropdown they name: another
+/// field with the same option key keeps the shared `__labels` entry (#14479 review).
+#[test]
+fn a_scoped_option_label_reaches_only_the_field_it_names() {
+    let mut f = Map::new();
+    f.insert("__command".into(), json!("image.applyImage"));
+    f.insert("__form".into(), json!(true));
+    f.insert("__choices".into(), json!({"blending": ["multiply", "colorBurn"], "sourceLayer": ["merged", "colorBurn"]}));
+    f.insert("blending".into(), json!("multiply"));
+    f.insert("sourceLayer".into(), json!("merged"));
+    f.insert("__labels".into(), json!({"colorBurn": "colorBurn"}));
+    f.insert("__choiceLabels".into(), json!({"blending": {"colorBurn": "Color Burn"}}));
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        assert_eq!(label_nodes(&f, "Blending", "Color Burn", true), 1, "the field the dialog names uses its own label");
+        assert_eq!(label_nodes(&f, "Source layer", "colorBurn", true), 1, "the other field keeps the shared label");
+    });
+}
+
+/// The issue marks "entries greyed for other colour modes or bit depths" *not measured*: the list,
+/// its lines and its names are the same on a Grayscale 16-bit document as on the RGB one.
+#[test]
+fn the_list_and_its_names_are_the_same_in_grayscale_16_bit() {
+    let rgb = open("image.applyImage");
+    let gray = open_on("image.applyImage", &json!({"width": 8, "height": 8, "mode": "grayscale", "depth": 16}), &[("edit.fill", json!({"color": "#808080"}))]);
+    assert_eq!(choices(&gray), choices(&rgb), "no entry appears or disappears with the mode or the depth");
+    assert_eq!(gray["__groupedChoices"], rgb["__groupedChoices"], "and the lines stay in the same list");
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        let keys: Vec<String> = choices(&gray).into_iter().filter(|k| k != SEPARATOR).collect();
+        assert_eq!(
+            keys.iter().map(|k| shown(&gray, "blending", k)).collect::<Vec<String>>(),
+            keys.iter().map(|k| shown(&rgb, "blending", k)).collect::<Vec<String>>(),
+            "and every mode is named the same way"
+        );
+    });
 }
