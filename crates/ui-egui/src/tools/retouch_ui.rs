@@ -1105,21 +1105,22 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if r.changed() {
                 o.strength = s;
             }
-            if tool == Tool::Smudge {
-                fn angle_control(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-                    let before = app.session.tools.brush.clone();
-                    let mut brush = before.clone();
-                    let alert = crate::eraser_ui::angle_field(ui, &mut brush);
-                    crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
-                    if alert {
-                        app.ui.open_dialog(
-                            crate::state::DialogKind::Error,
-                            json!({"message": tl!(crate::eraser_ui::ANGLE_RANGE_MESSAGE)}).as_object().cloned().unwrap_or_default(),
-                        );
-                    }
+            fn smudge_angle_control(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
+                if tool != Tool::Smudge {
+                    return;
                 }
-                angle_control(app, ui);
+                let before = app.session.tools.brush.clone();
+                let mut brush = before.clone();
+                let alert = crate::eraser_ui::angle_field(ui, &mut brush);
+                crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
+                if alert {
+                    app.ui.open_dialog(
+                        crate::state::DialogKind::Error,
+                        json!({"message": tl!(crate::eraser_ui::ANGLE_RANGE_MESSAGE)}).as_object().cloned().unwrap_or_default(),
+                    );
+                }
             }
+            smudge_angle_control(app, ui, tool);
             let o = &mut app.ui.tool_options;
             if let Some(all) = o.sample_all.slot(tool) {
                 crate::widgets::checkbox(ui, all, tl!("Sample All Layers"));
