@@ -2,7 +2,7 @@
 //! reference application names them and giving the result it gives.
 //!
 //! The points are measured from observed output only (#9234 review): each preset was applied to a
-//! 0..255 grey ramp (one pixel per level, 8-bit RGB) in Photoshop 2025, the output levels were
+//! 0..255 grey ramp (one pixel per level, 8-bit RGB) in the reference application, the output levels were
 //! read back from the saved pixels, and the fewest points whose natural spline
 //! ([`photocraft_compose::adjust::curve_lut`]) comes within one level of all 256 outputs were
 //! chosen (Color Negative and Cross Process per channel; the tone presets on the composite curve).
