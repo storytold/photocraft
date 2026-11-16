@@ -5,18 +5,28 @@
 //! `ui.dialog.set`) and shown in the ruler unit, or each in one picked from its right-click menu
 //! (`widthUnit`, `heightUnit`; not remembered, as in Photoshop).
 
-use egui::{Align2, Sense, pos2, vec2};
 use serde_json::{Map, Value, json};
 
 use photocraft_engine::prefs::Unit;
 
 use crate::PhotocraftApp;
 use crate::state::{DialogKind, Tool};
-use crate::theme::Tokens;
 
 const MARK: &str = "__createShape";
 /// Largest side the dialog accepts, in pixels (Photoshop's document limit).
 const MAX_PX: f64 = 300_000.0;
+/// The reference's alert for a Width or Height typed past `1..=MAX_PX` px (#13358): Perspective
+/// Crop's text, with the limits in two decimals and the system's decimal separator ("1,00" there).
+fn size_range_alert() -> String {
+    let number = |v: f64| {
+        let text = format!("{v:.2}");
+        if crate::i18n::decimal_separator() == Some(',') { text.replace('.', ",") } else { text }
+    };
+    let (lo, hi) = (number(1.0), number(MAX_PX));
+    crate::i18n::fmt(tl!(crate::tools::crop_size::LENGTH_RANGE_ALERT), &[("min", &lo), ("max", &hi), ("unit", tl!("Pixels"))])
+}
+/// Set in the dialog's fields by [`body`] when a typed size was out of range; [`open_owed_alert`] takes it.
+const ALERT_OWED: &str = "__sizeRangeAlert";
 /// Remembered values (document pixels; sides and radii come from the options bar).
 const KEYS: [&str; 4] = ["width", "height", "fromCenter", "starRatio"];
 
@@ -49,8 +59,39 @@ fn valid(key: &str, v: &Value) -> bool {
 
 /// True for a press and release that never left `start` by more than a few screen pixels.
 pub fn is_click(start: [f64; 2], points: &[[f64; 3]], zoom: f32) -> bool {
-    let slop = 3.0 / f64::from(zoom.max(0.01));
+    within_click_slop(start, points, zoom, 3.0)
+}
+
+pub(crate) fn is_tool_click(tool: Tool, options: &crate::state::ToolOptions, start: [f64; 2], points: &[[f64; 3]], zoom: f32) -> bool {
+    if tool == Tool::Rectangle && options.shape_mode == "shape" { within_click_slop(start, points, zoom, 1.0) } else { is_click(start, points, zoom) }
+}
+
+fn within_click_slop(start: [f64; 2], points: &[[f64; 3]], zoom: f32, pixels: f64) -> bool {
+    let slop = pixels / f64::from(zoom.max(0.01));
     points.iter().all(|p| (p[0] - start[0]).hypot(p[1] - start[1]) <= slop)
+}
+
+/// A Shape-mode Rectangle click inside the active live rectangle leaves the shape alone (#13340).
+pub(crate) fn click_inside_active_rectangle(app: &PhotocraftApp, tool: Tool, at: [f64; 2]) -> bool {
+    use photocraft_doc::{LayerContent, LiveShape};
+
+    if tool != Tool::Rectangle || app.ui.tool_options.shape_mode != "shape" {
+        return false;
+    }
+    let Some(layer) = app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))) else { return false };
+    let LayerContent::Shape(shape) = &layer.content else { return false };
+    let Some(LiveShape::Rect { rect: [x, y, w, h], radii }) = shape.live else { return false };
+    let (left, top) = (x.min(x + w), y.min(y + h));
+    let (right, bottom) = (x.max(x + w), y.max(y + h));
+    let [px, py] = at;
+    if !((left..=right).contains(&px) && (top..=bottom).contains(&py)) {
+        return false;
+    }
+    let (l, r, t, b) = (px - left, right - px, py - top, bottom - py);
+    [(l, t), (r, t), (r, b), (l, b)]
+        .into_iter()
+        .zip(photocraft_vector::shapes::clamp_radii(w.abs(), h.abs(), radii))
+        .all(|((dx, dy), radius)| dx >= radius || dy >= radius || (radius - dx).hypot(radius - dy) <= radius)
 }
 
 /// Open the creation dialog of `tool` for a click at `at` (document px). `None` for a tool without
@@ -126,7 +167,7 @@ pub fn geometry(f: &Map<String, Value>) -> Result<Value, String> {
             if radii.iter().any(|r| *r > 0.0) { json!({"kind": "roundedRect", "rect": rect, "radii": radii}) } else { json!({"kind": "rect", "rect": rect}) }
         }
         "ellipse" => json!({"kind": "ellipse", "rect": rect}),
-        "triangle" => json!({"kind": "polygon", "rect": rect, "sides": 3}),
+        "triangle" => json!({"kind": "triangle", "rect": rect, "historyName": "Triangle Tool"}),
         "polygon" => {
             let sides = num(f, "sides").map_or(5.0, |s| s.round().clamp(3.0, 100.0));
             let ratio = num(f, "starRatio").map_or(100.0, |r| r.clamp(1.0, 100.0));
@@ -154,15 +195,35 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     result
 }
 
-fn label(ui: &mut egui::Ui, text: &str) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(96.0, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
+/// Returns whether a size warning is owed, blocking creation until it has been acknowledged.
+pub fn open_owed_alert(app: &mut PhotocraftApp, ctx: &egui::Context, f: &mut Map<String, Value>) -> bool {
+    if !f.contains_key(ALERT_OWED) {
+        return false;
+    }
+    // A mouse press leaves the field before its button answers on release. Keep the warning
+    // pending until then, so Cancel can discard it instead of opening an orphaned alert.
+    if !ctx.input(|i| i.pointer.any_down()) {
+        f.remove(ALERT_OWED);
+        crate::panels::options_bar::range_alert(&mut app.ui, &size_range_alert());
+    }
+    true
 }
 
+/// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and a cap.
+const LABEL_MIN_W: f32 = 96.0;
+const LABEL_MAX_W: f32 = 200.0;
+/// Every label in the column, measured in the current language.
+const LABELS: [&str; 5] = ["Width:", "Height:", "Radius:", "Sides:", "Star Ratio:"];
+
+/// The dialog's rows (Width and Height, then Radius, or Sides and Star Ratio for a polygon),
+/// their labels in one column measured over [`LABELS`] so a longer translation never overruns.
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     let kind = f.get(MARK).and_then(Value::as_str).unwrap_or("").to_string();
+    let label_w = crate::widgets::label_column_width(ui, &LABELS.map(crate::i18n::t), LABEL_MIN_W, LABEL_MAX_W);
+    let label = |ui: &mut egui::Ui, text: &str| {
+        crate::widgets::column_label(ui, text, label_w);
+    };
     // Width and height each in its own unit (percent of the document's side): the ruler unit, or
     // the one picked from that field's right-click menu, as in Photoshop (#7786).
     let ur = &app.session.prefs().units_and_rulers;
@@ -179,7 +240,18 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             let to_unit = |px: f64| unit.from_px(px, dpi, extent, ppi) as f32;
             let mut v = to_unit(px);
             let places = unit.decimals() as u32;
-            let resp = crate::widgets::value_field_prec(ui, &mut v, to_unit(1.0)..=to_unit(MAX_PX), unit.suffix(), 110.0, places).accessible_name(text);
+            let range = to_unit(1.0)..=to_unit(MAX_PX);
+            // Create Triangle's pixel fields say when a typed size was out of range (#13358); the other
+            // units and the other shapes' dialogs keep clamping silently.
+            let (resp, out_of_range) = if unit == Unit::Pixels && kind == "triangle" {
+                crate::widgets::value_field_alerting_prec(ui, text, &mut v, range, unit.suffix(), 110.0, places)
+            } else {
+                (crate::widgets::value_field_prec(ui, &mut v, range, unit.suffix(), 110.0, places), false)
+            };
+            let resp = resp.accessible_name(text);
+            if out_of_range {
+                f.insert(ALERT_OWED.into(), Value::Bool(true));
+            }
             if resp.changed() {
                 let px = unit.to_px(f64::from(v), dpi, extent, ppi).clamp(1.0, MAX_PX);
                 f.insert(key.into(), json!((px * 1000.0).round() / 1000.0));
@@ -263,3 +335,6 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod create_triangle_range_alert_tests;
