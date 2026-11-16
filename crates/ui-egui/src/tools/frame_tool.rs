@@ -28,6 +28,13 @@ pub struct FrameToolUi {
     pub ellipse: bool,
     pub shape: String,
     pub sides: u32,
+    /// The corner radius of Rectangle, Triangle and Polygon frames, in pixels (#13875).
+    pub radius: f32,
+    /// A Polygon frame's star ratio in whole percents, 100 for a plain polygon (#13876).
+    pub star_ratio: f32,
+    /// Smooth Star Indents (#13876). Shown and kept; it doesn't change the outline yet (not
+    /// measured for frames).
+    pub smooth_indents: bool,
     pub stroke: Option<photocraft_doc::ShapeStroke>,
     pub target: Target,
     pub selected: Option<u64>,
@@ -38,19 +45,43 @@ pub struct FrameToolUi {
     /// Space (the reposition key) is held: a frame being drawn moves instead of sizing (#13867).
     #[serde(skip)]
     pub space: bool,
+    /// The options bar's stroke width, alignment and colour, kept while the stroke is off (No
+    /// Color) for the next time a colour turns it on (#13873).
+    #[serde(default = "default_stroke_style")]
+    pub stroke_style: photocraft_doc::ShapeStroke,
 }
+
+/// A new frame's stroke as the reference application starts it (#13873): 1 px, Center, solid
+/// black; off until a colour is picked.
+pub fn default_stroke_style() -> photocraft_doc::ShapeStroke {
+    photocraft_doc::ShapeStroke { width: 1.0, ..photocraft_doc::ShapeStroke::default() }
+}
+
+#[cfg(test)]
+mod options_stroke_target_tests;
+#[cfg(test)]
+mod stroke_options_tests;
+/// The options bar's stroke width range (#13873).
+pub const STROKE_WIDTH: std::ops::RangeInclusive<f32> = 0.0..=288.0;
+
+/// The alert for a width typed past [`STROKE_WIDTH`], as the reference application words it.
+pub const STROKE_WIDTH_ALERT: &str = "A value between 0 pixel and 288 Pixels is required. Closest value inserted.";
 impl Default for FrameToolUi {
     fn default() -> Self {
         Self {
             ellipse: false,
             shape: "rectangle".into(),
             sides: 5,
+            radius: 0.0,
+            star_ratio: 100.0,
+            smooth_indents: false,
             stroke: None,
             target: Target::Frame,
             selected: None,
             drag: None,
             auto_transform: false,
             space: false,
+            stroke_style: default_stroke_style(),
         }
     }
 }
@@ -156,6 +187,12 @@ fn shape_params(app: &PhotocraftApp, r: [i64; 4]) -> Value {
         &app.ui.frame_tool.shape
     };
     let mut p = json!({"x":x,"y":y,"width":x1.saturating_sub(x),"height":y1.saturating_sub(y),"shape":shape,"sides":app.ui.frame_tool.sides.clamp(3,100)});
+    if rounds(shape) && app.ui.frame_tool.radius > 0.0 {
+        p["radius"] = json!(f64::from(app.ui.frame_tool.radius));
+    }
+    if shape == "polygon" && app.ui.frame_tool.star_ratio < 100.0 {
+        p["starRatio"] = json!(f64::from(app.ui.frame_tool.star_ratio.round().clamp(1.0, 100.0)));
+    }
     if shape == "custom" {
         let name = app.ui.presets_ui.shape();
         if let Some(sh) = photocraft_engine::presets::shapes::all_groups(&app.session).iter().flat_map(|g| &g.items).find(|s| s.name == name) {
@@ -170,6 +207,14 @@ fn shape_params(app: &PhotocraftApp, r: [i64; 4]) -> Value {
 fn outline(app: &PhotocraftApp, r: [i64; 4]) -> Option<photocraft_doc::Path> {
     let p = shape_params(app, r);
     let shape = p.get("shape").and_then(Value::as_str)?;
+    // A star previews as the frame will be: the engine's own outline over the drag's box (#13876).
+    if let Some(percent) = p.get("starRatio").and_then(Value::as_f64) {
+        let [x, y, xe, ye] = r;
+        let (w, h) = ((xe - x) as f64, (ye - y) as f64);
+        let radius = p.get("radius").and_then(Value::as_f64).unwrap_or(0.0);
+        let unit = photocraft_engine::frame_cmds::star_path(u64::from(app.ui.frame_tool.sides.clamp(3, 100)), percent, radius, w, h).ok()?;
+        return Some(unit.transform(&Affine { m: [w, 0.0, 0.0, h, x as f64, y as f64] }));
+    }
     if shape == "custom" {
         let sh = photocraft_engine::vector_cmds::parse_path(p.get("path")?).ok()?;
         let (x0, y0, x1, y1) = sh.control_bounds()?;
@@ -181,7 +226,41 @@ fn outline(app: &PhotocraftApp, r: [i64; 4]) -> Option<photocraft_doc::Path> {
         return Some(sh.transform(&Affine { m: [sx, 0.0, 0.0, sy, x as f64 - x0 * sx, y as f64 - y0 * sy] }));
     }
     let [x, y, xe, ye] = r;
-    photocraft_engine::vector_cmds::shape_path(&json!({"kind":match shape{"ellipse"=>"ellipse","triangle"|"polygon"=>"polygon",_=>"rect"},"rect":[x,y,xe-x,ye-y],"sides":if shape=="triangle"{3}else{app.ui.frame_tool.sides.clamp(3,100)}})).ok()
+    // The preview rounds as the frame will (#13875).
+    let radius = p.get("radius").and_then(Value::as_f64).unwrap_or(0.0);
+    photocraft_engine::vector_cmds::shape_path(&json!({"kind":match shape{"ellipse"=>"ellipse","triangle"|"polygon"=>"polygon",_=>"rect"},"rect":[x,y,xe-x,ye-y],"sides":if shape=="triangle"{3}else{app.ui.frame_tool.sides.clamp(3,100)},"radius":radius,"cornerRadius":radius})).ok()
+}
+
+/// The alert for a star ratio typed past 1–100 % (#13876), in the app's wording for whole percents.
+pub const STAR_RATIO_ALERT: &str = "An integer between 1% and 100% is required. Closest value inserted.";
+
+/// The frame shapes with corners to round (#13875): Rectangle, Triangle and Polygon.
+fn rounds(shape: &str) -> bool {
+    matches!(shape, "rectangle" | "triangle" | "polygon")
+}
+
+/// The alert for a corner radius typed past its range, as the reference application words it.
+pub const RADIUS_ALERT: &str = "A value between 0.000 pixel and 150000.000 Pixels is required. Closest value inserted.";
+
+/// The options bar's corner radius field (#13875): a rounded-corner icon and the value, 0–150000
+/// px with decimals, one value for the three shapes that round. Whether a value past the range
+/// was typed.
+fn radius_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (rect, icon) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+    let r = rect.shrink(2.0);
+    let corner: Vec<Pos2> = (0..=8)
+        .map(|i| {
+            let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+            egui::pos2(r.right() - r.width() * a.sin(), r.bottom() - r.height() * a.cos())
+        })
+        .collect();
+    ui.painter().add(egui::Shape::line(corner, Stroke::new(1.5, t.text_dim)));
+    icon.on_hover_text(tl!("Set radius of rounded corners"));
+    let (resp, alert) =
+        crate::widgets::value_field_alerting(ui, tl!("Set radius of rounded corners"), &mut app.ui.frame_tool.radius, 0.0..=150_000.0, "px", 70.0);
+    resp.on_hover_text(tl!("Set radius of rounded corners"));
+    alert
 }
 fn handles(f: &Frame) -> [(Point, i8, i8); 8] {
     [(0., 0., -1, -1), (0.5, 0., 0, -1), (1., 0., 1, -1), (1., 0.5, 1, 0), (1., 1., 1, 1), (0.5, 1., 0, 1), (0., 1., -1, 1), (0., 0.5, -1, 0)]
@@ -366,6 +445,54 @@ pub fn set_space(app: &mut PhotocraftApp, down: bool) -> bool {
 }
 #[cfg(test)]
 mod space_move_tests;
+/// The selected frame (its id, frame and target) and the handles a press at `p` hits on it: a
+/// frame control (resize or rotate) when the frame itself is targeted, and whether it hits its
+/// image's handles when its content is.
+#[allow(clippy::type_complexity)]
+fn press_controls(app: &PhotocraftApp, p: [f64; 2], zoom: f64) -> (Option<(LayerId, Option<Box<Frame>>, Target)>, Option<(LayerId, EditMode)>, bool) {
+    let active = selected(app).map(|l| (l.id, l.frame.clone(), target(app, l)));
+    let selected_control = active.as_ref().and_then(|(id, f, t)| (*t == Target::Frame).then(|| Some((*id, control_hit(f.as_ref()?, p, zoom)?))).flatten());
+    let content_control = active.as_ref().is_some_and(|(id, _, t)| {
+        if *t != Target::Content {
+            return false;
+        }
+        let Some(st) = app.session.active() else { return false };
+        let Some(child) = st.doc.layer(*id).and_then(|l| l.children()).and_then(|c| c.first()) else { return false };
+        let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, child);
+        let (x0, y0, x1, y1) = (f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
+        [(x0, y0), ((x0 + x1) / 2., y0), (x1, y0), (x1, (y0 + y1) / 2.), (x1, y1), ((x0 + x1) / 2., y1), (x0, y1), (x0, (y0 + y1) / 2.)]
+            .iter()
+            .any(|(x, y)| (x - p[0]).hypot(y - p[1]) * zoom <= HANDLE_PX)
+    });
+    (active, selected_control, content_control)
+}
+
+/// What a Frame tool press at `p` snaps (#13871), as the press is read in [`tool_event`]: a new
+/// frame snaps its corners (no bounds), and moving an empty frame snaps its edges (its bounds);
+/// with the layers that aren't targets: the frame itself, and the Background, whose edges are the
+/// document's (not measured, so not snapped to, as today). Handle drags, image moves and frames
+/// holding an image weren't measured and don't snap.
+pub(crate) fn snap_press(app: &PhotocraftApp, p: [f64; 2]) -> Option<(Option<[f64; 4]>, Vec<LayerId>)> {
+    let zoom = f64::from(app.point_zoom());
+    let (_, selected_control, content_control) = press_controls(app, p, zoom);
+    if selected_control.is_some() || content_control {
+        return None;
+    }
+    let st = app.session.active()?;
+    let mut exclude: Vec<LayerId> = st.doc.layers.iter().filter(|l| st.doc.is_background(l.id)).map(|l| l.id).collect();
+    let Some(id) = frame_at(app, p) else { return Some((None, exclude)) };
+    let l = st.doc.layer(id)?;
+    let f = l.frame.as_ref()?;
+    let locks = st.doc.effective_locks(id);
+    if locks.all || locks.position || !l.children().is_none_or(<[Layer]>::is_empty) {
+        return None;
+    }
+    let b = f.bounds();
+    exclude.push(id);
+    Some((Some([f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)]), exclude))
+}
+#[cfg(test)]
+mod snap_tests;
 
 /// Escape during a drag. A frame being drawn is made at the pointer, as the reference application
 /// does (#13866); the mouse movement and release after it change nothing. Moving, resizing or
@@ -435,21 +562,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             cancel(app);
             let p = [x, y];
             let zoom = f64::from(app.point_zoom());
-            let active = selected(app).map(|l| (l.id, l.frame.clone(), target(app, l)));
-            let selected_control =
-                active.as_ref().and_then(|(id, f, t)| (*t == Target::Frame).then(|| Some((*id, control_hit(f.as_ref()?, p, zoom)?))).flatten());
-            let content_control = active.as_ref().is_some_and(|(id, _, t)| {
-                if *t != Target::Content {
-                    return false;
-                }
-                let Some(st) = app.session.active() else { return false };
-                let Some(child) = st.doc.layer(*id).and_then(|l| l.children()).and_then(|c| c.first()) else { return false };
-                let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, child);
-                let (x0, y0, x1, y1) = (f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
-                [(x0, y0), ((x0 + x1) / 2., y0), (x1, y0), (x1, (y0 + y1) / 2.), (x1, y1), ((x0 + x1) / 2., y1), (x0, y1), (x0, (y0 + y1) / 2.)]
-                    .iter()
-                    .any(|(x, y)| (x - p[0]).hypot(y - p[1]) * zoom <= HANDLE_PX)
-            });
+            let (active, selected_control, content_control) = press_controls(app, p, zoom);
             let id = selected_control
                 .map(|(id, _)| id)
                 .or_else(|| content_control.then(|| active.as_ref().map(|(id, _, _)| *id)).flatten())
@@ -704,6 +817,78 @@ fn stroke_controls(ui: &mut egui::Ui, value: &mut Option<photocraft_doc::ShapeSt
     }
     *value != before
 }
+/// The stroke after the options bar's swatch answered `change` (#13873): a colour turns it on with
+/// that colour and `style`'s width and alignment, No Color turns it off. Gradients aren't a frame
+/// stroke yet (not measured), and the Color Picker button opens nothing here: both change nothing.
+pub(crate) fn stroke_after_swatch(
+    style: &photocraft_doc::ShapeStroke,
+    change: &crate::shape_paint_ui::PaintChange,
+) -> Option<Option<photocraft_doc::ShapeStroke>> {
+    use crate::shape_paint_ui::PaintChange;
+    match change {
+        PaintChange::Color([r, g, b, a]) => {
+            Some(Some(photocraft_doc::ShapeStroke { paint: photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(*r, *g, *b, *a)), ..style.clone() }))
+        }
+        PaintChange::None => Some(None),
+        PaintChange::Gradient(_) | PaintChange::OpenPicker => None,
+    }
+}
+
+/// The Frame tool's options-bar stroke (#13873): the stroke swatch (No Color by default), the
+/// width field (0–288 px, decimals kept) and the alignment, always shown. `stroke` is the stroke
+/// shown (`None`: off); `style` keeps the width, alignment and colour while it is off. Returns the
+/// new stroke when it changed, and whether a width past the range was typed.
+fn options_stroke_controls(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    stroke: &Option<photocraft_doc::ShapeStroke>,
+) -> (Option<Option<photocraft_doc::ShapeStroke>>, bool) {
+    let mut style = stroke.clone().unwrap_or_else(|| app.ui.frame_tool.stroke_style.clone());
+    let mut changed: Option<Option<photocraft_doc::ShapeStroke>> = None;
+    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let lib = crate::paint_picker::library(&app.session, ui.ctx());
+    let mut gradients = crate::shape_gradient_ui::GradientChoices {
+        presets: &app.session.presets.gradients,
+        current: &app.session.presets.gradient,
+        recent: &mut app.ui.recent_gradients,
+        fg,
+        bg,
+    };
+    if let Some(change) = crate::shape_paint_ui::swatch(ui, &lib, stroke.as_ref().map(|s| &s.paint), fg, tl!("Set Frame stroke type"), &mut gradients) {
+        changed = stroke_after_swatch(&style, &change);
+    }
+    let (r, alert) = crate::widgets::value_field_alerting(ui, tl!("Set Frame stroke width"), &mut style.width, STROKE_WIDTH, "px", 58.0);
+    let r = r.on_hover_text(tl!("Set Frame stroke width"));
+    let mut align = style.align;
+    craft_ui::ComboBox::from_id_salt("frame-stroke-align")
+        .selected_text(match style.align {
+            photocraft_doc::StrokeAlign::Inside => tl!("Inside"),
+            photocraft_doc::StrokeAlign::Outside => tl!("Outside"),
+            _ => tl!("Center"),
+        })
+        .show_ui(ui, |ui| {
+            for (a, label) in [
+                (photocraft_doc::StrokeAlign::Inside, tl!("Inside")),
+                (photocraft_doc::StrokeAlign::Center, tl!("Center")),
+                (photocraft_doc::StrokeAlign::Outside, tl!("Outside")),
+            ] {
+                ui.selectable_value(&mut align, a, label);
+            }
+        })
+        .response
+        .on_hover_text(tl!("Set align type for stroke"));
+    if changed.is_none() && (r.changed() || align != style.align) {
+        style.align = align;
+        // Width and alignment change the stroke when it is on, and are only kept for later (below)
+        // when it is off.
+        changed = stroke.as_ref().map(|_| Some(style.clone()));
+    }
+    // Whatever the stroke is now, its width, alignment and colour are the next ones to use.
+    let kept = changed.clone().flatten().unwrap_or_else(|| style.clone());
+    app.ui.frame_tool.stroke_style = photocraft_doc::ShapeStroke { align, ..kept };
+    (changed, alert)
+}
+
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if tool != Tool::Frame {
         return false;
@@ -728,26 +913,47 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             app.ui.frame_tool.ellipse = shape == "ellipse";
         }
     }
+    let shape = if app.ui.frame_tool.ellipse { "ellipse" } else { app.ui.frame_tool.shape.as_str() };
+    if rounds(if shape.is_empty() { "rectangle" } else { shape }) && radius_field(app, ui) {
+        crate::panels::options_bar::range_alert(&mut app.ui, RADIUS_ALERT);
+    }
     if app.ui.frame_tool.shape == "polygon" {
         ui.label(tl!("Sides:"));
         let mut n = app.ui.frame_tool.sides.clamp(3, 100) as f32;
         crate::widgets::value_field_named(ui, tl!("Sides:"), &mut n, 3.0..=100.0, "", 44.);
         app.ui.frame_tool.sides = n as u32;
+        // The star ratio (whole percents 1–100) and Smooth Star Indents (#13876).
+        let t = Tokens::get(ui.ctx());
+        let (rect, icon) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+        let (c, r) = (rect.center(), rect.width() * 0.45);
+        let star: Vec<Pos2> = (0..10)
+            .map(|i| {
+                let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * i as f32 / 10.0;
+                let k = if i % 2 == 0 { r } else { r * 0.45 };
+                c + egui::vec2(a.cos(), a.sin()) * k
+            })
+            .collect();
+        ui.painter().add(egui::Shape::closed_line(star, Stroke::new(1.0, t.text_dim)));
+        icon.on_hover_text(tl!("Star Ratio"));
+        let (_, alert) = crate::widgets::value_field_whole_alerting(ui, tl!("Star Ratio"), &mut app.ui.frame_tool.star_ratio, 1.0..=100.0, "%", 52.0);
+        if alert {
+            crate::panels::options_bar::range_alert(&mut app.ui, STAR_RATIO_ALERT);
+        }
+        crate::widgets::checkbox(ui, &mut app.ui.frame_tool.smooth_indents, tl!("Smooth Star Indents"));
     }
     if app.ui.frame_tool.shape == "custom" {
         crate::preset_panels::shape_picker(app, ui);
     }
     crate::widgets::vline(ui, 22.);
-    let gesture = crate::vector_ui::paint_gesture(ui, ui.scope_id().with("frame-options-gesture"));
-    let coalesce = format!("frame-stroke-{}-{gesture}", ui.scope_id().value());
-    let mut stroke = selected(app).and_then(|l| l.frame.as_ref()).map_or_else(|| app.ui.frame_tool.stroke.clone(), |f| f.stroke.clone());
-    if stroke_controls(ui, &mut stroke) {
-        app.ui.frame_tool.stroke = stroke.clone();
-        if let Some(id) = selected(app).map(|l| l.id) {
-            let params = stroke.as_ref().map(stroke_json).unwrap_or(Value::Null);
-            let r = app.run("layer.frame.set", json!({"layer":id.0,"stroke":params,"coalesce":coalesce}));
-            report(app, r);
-        }
+    // The tool's own stroke, the one the next frame gets (#13874): a selected frame keeps its own,
+    // which the Properties panel's frame section edits.
+    let stroke = app.ui.frame_tool.stroke.clone();
+    let (changed, alert) = options_stroke_controls(app, ui, &stroke);
+    if alert {
+        crate::panels::options_bar::range_alert(&mut app.ui, STROKE_WIDTH_ALERT);
+    }
+    if let Some(stroke) = changed {
+        app.ui.frame_tool.stroke = stroke;
     }
     true
 }
