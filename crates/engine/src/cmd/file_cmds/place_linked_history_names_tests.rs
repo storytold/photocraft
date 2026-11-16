@@ -5,21 +5,24 @@
 //! Objects" state, also when two layers show the file; Layer › Smart Objects › Update Modified
 //! Content keeps its own name.
 
-use super::place_history_names_tests::{added_by, entries, placed_kind, png_100x60, reference_document, tmp};
+use super::place_history_names_tests::{added_by, entries, placed_kind, png_100x60, reference_document, reference_png};
 use super::*;
 
-/// Write `bytes` to `path` so its modification time moves even on coarse file systems.
+/// Write `bytes` to `path` as another app saving it again would, and move its modification time
+/// two seconds past the old one, so the change is seen whatever the file system's time resolution.
 fn save_again(path: &std::path::Path, bytes: &[u8]) {
-    std::thread::sleep(std::time::Duration::from_millis(30));
+    let before = std::fs::metadata(path).unwrap().modified().unwrap();
     std::fs::write(path, bytes).unwrap();
+    let later = std::fs::FileTimes::new().set_modified(before + std::time::Duration::from_secs(2));
+    std::fs::File::options().write(true).open(path).unwrap().set_times(later).unwrap();
 }
 
-/// The reference PNG, red, in a folder of its own: (its path, the same as a string).
-fn linked_png(name: &str) -> (std::path::PathBuf, String) {
-    let path = tmp(name).join("art.png");
-    std::fs::write(&path, png_100x60([255, 0, 0])).unwrap();
+/// The reference PNG, red, in a temporary folder of its own: (the folder's guard, its path, the
+/// same as text).
+fn linked_png() -> (tempfile::TempDir, std::path::PathBuf, String) {
+    let (dir, path) = reference_png();
     let text = path.to_string_lossy().into_owned();
-    (path, text)
+    (dir, path, text)
 }
 
 /// Whether the canvas centre, inside the placed image, shows `rgb`.
@@ -30,7 +33,7 @@ fn centre_is(s: &Session, rgb: [f32; 3]) -> bool {
 
 #[test]
 fn a_linked_place_is_one_place_linked_smart_object_state() {
-    let (_, path) = linked_png("linked");
+    let (_dir, _, path) = linked_png();
     let mut s = reference_document();
     assert_eq!(added_by(&mut s, "file.placeLinked", json!({"path": path})), ["Place Linked Smart Object"]);
     assert_eq!(placed_kind(&s), "linked");
@@ -43,7 +46,7 @@ fn a_linked_place_is_one_place_linked_smart_object_state() {
 
 #[test]
 fn a_linked_place_keeps_its_name_without_always_create_smart_objects() {
-    let (_, path) = linked_png("not-smart");
+    let (_dir, _, path) = linked_png();
     let mut s = reference_document();
     s.execute("prefs.set", json!({"path": "general.alwaysCreateSmartObjectsWhenPlacing", "value": false})).unwrap();
     assert_eq!(added_by(&mut s, "file.placeLinked", json!({"path": path})), ["Place Linked Smart Object"]);
@@ -56,7 +59,7 @@ fn a_linked_place_keeps_its_name_without_always_create_smart_objects() {
 
 #[test]
 fn a_linked_file_saved_again_is_one_update_smart_objects_state_for_all_its_layers() {
-    let (file, path) = linked_png("update");
+    let (_dir, file, path) = linked_png();
     let mut s = reference_document();
     s.execute("file.placeLinked", json!({"path": path})).unwrap();
     let first = s.active().unwrap().active_layer.unwrap().0;
@@ -81,7 +84,7 @@ fn a_linked_file_saved_again_is_one_update_smart_objects_state_for_all_its_layer
 
 #[test]
 fn update_modified_content_from_the_menu_keeps_its_own_name() {
-    let (file, path) = linked_png("menu");
+    let (_dir, file, path) = linked_png();
     let mut s = reference_document();
     s.execute("file.placeLinked", json!({"path": path})).unwrap();
     save_again(&file, &png_100x60([0, 0, 255]));

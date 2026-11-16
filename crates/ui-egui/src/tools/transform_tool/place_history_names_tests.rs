@@ -13,32 +13,32 @@ fn reference_app() -> PhotocraftApp {
     app
 }
 
-/// The bytes of the reference app's 100 × 60 PNG, red, written to a folder of `name`'s own:
-/// (bytes, path).
-fn reference_png(name: &str) -> (Vec<u8>, String) {
+/// The bytes of the reference app's 100 × 60 PNG, red, written to a temporary folder of its own
+/// that is removed when the guard drops: (the guard, bytes, path).
+fn reference_png() -> (tempfile::TempDir, Vec<u8>, String) {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 100, "height": 60, "background": "#ff0000"})).unwrap();
     let bytes = photocraft_io::export(&s.active().unwrap().doc, "art.png", &Default::default()).unwrap().bytes;
-    let dir = std::env::temp_dir().join(format!("photocraft-place-box-history-{}-{name}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("art.png");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("art.png");
     std::fs::write(&path, &bytes).unwrap();
-    (bytes, path.to_string_lossy().into_owned())
+    (dir, bytes, path.to_string_lossy().into_owned())
 }
 
 /// Place the reference PNG as File › Place Embedded / Place Linked does (`linked`, with Always
 /// Create Smart Objects when Placing `smart`) and open its Free Transform box: (app, the placed
-/// layer, history steps before the place).
-fn placed_in_free_transform(linked: bool, smart: bool) -> (PhotocraftApp, LayerId, usize) {
+/// layer, history steps before the place, the guard of the file's folder, kept while the box is
+/// open so a linked file stays readable).
+fn placed_in_free_transform(linked: bool, smart: bool) -> (PhotocraftApp, LayerId, usize, tempfile::TempDir) {
     let mut app = reference_app();
     app.session.execute("prefs.set", json!({"path": "general.alwaysCreateSmartObjectsWhenPlacing", "value": smart})).unwrap();
-    let (bytes, path) = reference_png(&format!("{linked}-{smart}"));
+    let (dir, bytes, path) = reference_png();
     let steps = app.session.active().unwrap().history.past_len();
     app.place_bytes("art.png", bytes, linked.then_some(path)).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();
     begin_placed(&mut app, &egui::Context::default()).unwrap();
     assert!(app.ui.transform.is_some(), "the placed file is in Free Transform");
-    (app, layer, steps)
+    (app, layer, steps, dir)
 }
 
 /// The three kinds of place: (linked, Always Create Smart Objects, the History name).
@@ -52,7 +52,7 @@ const PLACES: [(bool, bool, &str); 4] = [
 #[test]
 fn a_moved_and_committed_place_is_one_state_named_as_the_place() {
     for (linked, smart, name) in PLACES {
-        let (mut app, layer, steps) = placed_in_free_transform(linked, smart);
+        let (mut app, layer, steps, _dir) = placed_in_free_transform(linked, smart);
         let t = app.ui.transform.as_mut().unwrap();
         t.quad = t.quad.map(|[x, y]| [x + 10.0, y]);
         commit(&mut app);
@@ -68,7 +68,7 @@ fn a_moved_and_committed_place_is_one_state_named_as_the_place() {
 #[test]
 fn a_place_committed_unchanged_keeps_its_name() {
     for (linked, smart, name) in PLACES {
-        let (mut app, _, steps) = placed_in_free_transform(linked, smart);
+        let (mut app, _, steps, _dir) = placed_in_free_transform(linked, smart);
         commit(&mut app);
         let st = app.session.active().unwrap();
         assert_eq!((st.history.past_len(), st.history.undo_label()), (steps + 1, Some(name)), "linked {linked}, smart objects {smart}");
@@ -78,7 +78,7 @@ fn a_place_committed_unchanged_keeps_its_name() {
 #[test]
 fn escape_takes_the_place_back_without_a_state() {
     for (linked, smart, name) in PLACES {
-        let (mut app, layer, steps) = placed_in_free_transform(linked, smart);
+        let (mut app, layer, steps, _dir) = placed_in_free_transform(linked, smart);
         let entries = app.session.active().unwrap().history.entries();
         cancel(&mut app);
         let st = app.session.active().unwrap();

@@ -6,14 +6,6 @@
 
 use super::*;
 
-/// A fresh folder for one test's files (tests run in parallel).
-pub(super) fn tmp(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("photocraft-place-history-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
-}
-
 /// The reference app's test document: 400 × 300, RGB, 8 bit, 72 ppi.
 pub(super) fn reference_document() -> Session {
     let mut s = Session::new();
@@ -51,16 +43,24 @@ pub(super) fn placed_kind(s: &Session) -> &'static str {
     }
 }
 
-/// Write the reference PNG to a folder of its own and return its path.
-fn reference_png(name: &str) -> String {
-    let path = tmp(name).join("art.png");
+/// Write the reference PNG, red, to a temporary folder of its own (removed when the guard drops):
+/// (the guard, the file's path).
+pub(super) fn reference_png() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("art.png");
     std::fs::write(&path, png_100x60([255, 0, 0])).unwrap();
-    path.to_string_lossy().into_owned()
+    (dir, path)
+}
+
+/// [`reference_png`] with the path as text, as the place commands take it.
+fn reference_png_path() -> (tempfile::TempDir, String) {
+    let (dir, path) = reference_png();
+    (dir, path.to_string_lossy().into_owned())
 }
 
 #[test]
 fn an_embedded_place_is_one_place_embedded_smart_object_state() {
-    let path = reference_png("embedded");
+    let (_dir, path) = reference_png_path();
     let mut s = reference_document();
     assert_eq!(added_by(&mut s, "file.placeEmbedded", json!({"path": path})), ["Place Embedded Smart Object"]);
     assert_eq!(placed_kind(&s), "embedded");
@@ -73,7 +73,7 @@ fn an_embedded_place_is_one_place_embedded_smart_object_state() {
 
 #[test]
 fn a_place_that_makes_a_pixel_layer_is_one_place_image_state() {
-    let path = reference_png("pixels");
+    let (_dir, path) = reference_png_path();
     // The preference off, with nothing in the params.
     let mut s = reference_document();
     s.execute("prefs.set", json!({"path": "general.alwaysCreateSmartObjectsWhenPlacing", "value": false})).unwrap();
@@ -91,7 +91,8 @@ fn a_place_that_makes_a_pixel_layer_is_one_place_image_state() {
 
 #[test]
 fn a_one_page_pdf_is_named_after_what_its_place_made() {
-    let pdf = tmp("pdf").join("page.pdf").to_string_lossy().into_owned();
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = dir.path().join("page.pdf").to_string_lossy().into_owned();
     let mut src = Session::new();
     src.execute("file.new", json!({"width": 100, "height": 60, "depth": 8, "resolution": 72, "background": "#ff0000"})).unwrap();
     src.execute("file.saveACopy", json!({"path": pdf})).unwrap();
@@ -105,7 +106,7 @@ fn a_one_page_pdf_is_named_after_what_its_place_made() {
 
 #[test]
 fn undo_and_redo_keep_the_place_name() {
-    let path = reference_png("undo");
+    let (_dir, path) = reference_png_path();
     for (smart, name) in [(true, "Place Embedded Smart Object"), (false, "Place Image")] {
         let mut s = reference_document();
         let before = entries(&s);
