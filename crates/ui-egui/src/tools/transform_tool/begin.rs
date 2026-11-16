@@ -862,7 +862,7 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // the box opened with have the warp in them, and the mesh would warp them again.
     if untouched
         && let Some(w) = existing
-        && preview_without_smart_warp(app, ctx, w.bounds)
+        && preview_without_smart_warp(app, ctx, &w)
         && let Some(t) = app.ui.transform.as_mut()
     {
         t.rect = w.bounds;
@@ -897,7 +897,7 @@ pub fn warps_active_layer(app: &PhotocraftApp) -> bool {
 /// picture well inside the grid (#9798). Those texels and the box are kept as the other mode's
 /// ([`OtherTexels`]), for leaving Warp mode. False when the source can't be re-rendered (a
 /// missing linked file): the texels keep the warp, so the caller must not adopt it.
-fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context, r: [f64; 4]) -> bool {
+fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context, warp: &Warp) -> bool {
     let (Some(t), Some(st)) = (app.ui.transform.as_ref(), app.session.active()) else { return false };
     let (id, session, box_rect, box_quad) = (LayerId(t.layer), t.session, t.rect, t.quad);
     let doc = st.doc.clone();
@@ -910,6 +910,7 @@ fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context, r: [
     if let Some(l) = plain.layer_mut(id) {
         l.content = LayerContent::Smart(flat);
     }
+    let r = warp.bounds;
     let b = photocraft_geom::Rect::new(r[0].round() as i32, r[1].round() as i32, r[2].round() as i32, r[3].round() as i32);
     if b.is_empty() {
         return false;
@@ -918,7 +919,7 @@ fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context, r: [
     let Some(pv) = app.transform_preview.as_mut() else { return false };
     let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
     let unwarped = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}-unwarped"), image, uv);
-    pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.texture, unwarped), rect: box_rect, quad: box_quad });
+    pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.texture, unwarped), rect: box_rect, quad: box_quad, stored_warp: warp.clone() });
     true
 }
 

@@ -76,6 +76,47 @@ fn keep(name: &str, bytes: &[u8]) {
 }
 
 #[test]
+fn rotated_text_and_shape_smart_object_survives_a_second_save() {
+    for extension in ["psd", "psb"] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": W, "height": H})).unwrap();
+        s.execute("shape.create", json!({"kind": "rect", "rect": [8, 6, 45, 30], "fill": "#ae6325"})).unwrap();
+        let shape = s.active().unwrap().active_layer.unwrap();
+        s.execute("type.create", json!({"text": "Hi", "size": 16, "x": 12, "y": 25})).unwrap();
+        s.execute("layer.select", json!({"layer": shape.0, "mode": "add"})).unwrap();
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 12, 8]})).unwrap();
+        let name = format!("smart.{extension}");
+        let reopen = |doc: &Document| {
+            let bytes = photocraft_io::export(doc, extension, &Default::default()).unwrap().bytes;
+            photocraft_io::import(&name, &bytes).unwrap().document
+        };
+        let back = reopen(&s.active().unwrap().doc);
+        let (id, before) = smart(&back);
+        let mut s = Session::new();
+        s.add_document(back, None);
+        s.execute("layer.select", json!({"layer": id})).unwrap();
+        let rect = before.cache.as_ref().unwrap().content_bounds();
+        let [x0, y0, x1, y1] = [rect.x0, rect.y0, rect.x1, rect.y1].map(f64::from);
+        let (sin, cos) = 0.31_f64.sin_cos();
+        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let quad = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| [cx + cos * (x - cx) - sin * (y - cy), cy + sin * (x - cx) + cos * (y - cy)]);
+        s.execute("edit.transform", json!({"layer": id, "rect": [x0, y0, x1, y1], "quad": quad})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let (_, rotated) = smart(doc);
+        assert!((rotated.transform.m[1] - sin).abs() < 1e-9, "{extension}: rotation committed");
+        assert_ne!(rotated.transform, before.transform);
+        let back = reopen(doc);
+        let (_, saved) = smart(&back);
+        assert!(saved.perspective.is_none(), "{extension}: the rotation stays affine");
+        for (a, b) in saved.transform.m.iter().zip(rotated.transform.m) {
+            assert!((a - b).abs() < 1e-9, "{extension}: saved {:?}, committed {:?}", saved.transform, rotated.transform);
+        }
+        assert!(max_diff(&photocraft_compose::flatten(&back).px, &photocraft_compose::flatten(doc).px) <= 1.0 / 255.0 + 1e-6);
+    }
+}
+
+#[test]
 fn smart_objects_and_filters_survive_psd() {
     for depth in [8, 16, 32] {
         let mut s = session(depth);

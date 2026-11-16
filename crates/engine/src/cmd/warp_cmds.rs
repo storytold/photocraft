@@ -409,7 +409,7 @@ fn target(s: &Session, cmd: &str, p: &Value) -> Result<(LayerId, Rect)> {
 
 /// The Warp Text settings a transform warp gives a type layer: a preset style (or none) keeps the
 /// type editable, as Photoshop's Edit › Transform › Warp on type does (#3004).
-fn type_warp(cmd: &str, w: &Warp) -> Result<Option<photocraft_doc::text::TextWarp>> {
+pub fn type_warp(cmd: &str, w: &Warp) -> Result<Option<photocraft_doc::text::TextWarp>> {
     let clamp = |v: f64| if v.is_finite() { v.clamp(-100.0, 100.0) as f32 } else { 0.0 };
     match w.style {
         WarpStyle::None => Ok(None),

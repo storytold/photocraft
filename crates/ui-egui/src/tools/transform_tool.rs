@@ -37,7 +37,7 @@ pub(crate) use begin::moving_layers;
 #[cfg(test)]
 pub(crate) use begin::moving_texel;
 pub use begin::{WARP_ONE_LAYER, begin, begin_copy, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_active_layer, warps_type};
-pub(crate) use commit::{SAVE_FOR_WEB, committing, nudge};
+pub(crate) use commit::{SAVE_FOR_WEB, before_save, commit_for_save, committing, nudge, unsaved_transform};
 pub use commit::{cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event, track_steps};
 use cylinder::CylinderHandle;
 #[cfg(test)]
@@ -296,6 +296,8 @@ struct OtherTexels {
     texture: crate::transform_tex::PreviewTextures,
     rect: [f64; 4],
     quad: [[f64; 2]; 4],
+    /// The stored Smart Object warp in document space, before any edits to the preview.
+    stored_warp: Warp,
 }
 
 /// Swaps the session's texels and box with the other mode's (`t` holds the box the texels
