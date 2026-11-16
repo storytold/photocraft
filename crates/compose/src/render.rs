@@ -184,175 +184,6 @@ pub enum RenderBandsError<E> {
     Sink(E),
 }
 
-#[cfg(test)]
-mod fallible_bands_tests {
-    use super::*;
-    use photocraft_color::{Color, ColorMode, SampleType};
-    use photocraft_doc::{Document, Fill, Knockout, Layer, LayerContent};
-    use photocraft_geom::Size;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    struct FailBufferAt {
-        fail_at: usize,
-        attempts: AtomicUsize,
-    }
-
-    impl FailBufferAt {
-        fn attempt(&self) -> Result<(), usize> {
-            let n = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
-            if n == self.fail_at { Err(n) } else { Ok(()) }
-        }
-    }
-
-    impl BufferAlloc for FailBufferAt {
-        type Error = usize;
-
-        fn filled(&self, rect: Rect, color: [f32; 4]) -> Result<Buffer, Self::Error> {
-            self.attempt()?;
-            Buffer::try_filled(rect, color).map_err(|_| usize::MAX)
-        }
-
-        fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error> {
-            self.attempt()?;
-            buffer.try_clone().map_err(|_| usize::MAX)
-        }
-    }
-
-    fn nested_document() -> Document {
-        let mut doc = Document::new("fallible bands", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
-        let mut fill = Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::BLACK)));
-        fill.advanced.knockout = Knockout::Shallow;
-        doc.layers.push(Layer::group("nested", vec![fill]));
-        doc
-    }
-
-    fn outlined_effect_document() -> Document {
-        let mut doc = Document::new("fallible outlined effect", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
-        let path = photocraft_doc::vector::Path {
-            subpaths: vec![photocraft_doc::vector::Subpath::polygon(&[(12.0, 12.0), (60.0, 12.0), (60.0, 60.0), (12.0, 60.0)])],
-            ..Default::default()
-        };
-        let mut cache = photocraft_doc::Surface::new(photocraft_color::PixelFormat::RGBA8);
-        cache.fill_rect(Rect::new(12, 12, 60, 60), &[0.0, 0.0, 0.0, 1.0]);
-        let shape = photocraft_doc::vector::ShapeLayer { path, fill: Some(Fill::Solid(Color::BLACK)), cache: Some(cache), ..Default::default() };
-        let mut layer = Layer::new("outlined shape", LayerContent::Shape(shape));
-        layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
-        doc.layers.push(layer);
-        doc
-    }
-
-    #[test]
-    fn fail_nth_buffer_constructor_propagates_through_nested_rendering() {
-        let doc = nested_document();
-        let rect = doc.bounds();
-        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
-        let ctx = Ctx::for_doc(&doc, &patterns);
-        let count = {
-            let mut backdrop = Buffer::filled(rect, [0.0; 4]);
-            let alloc = FailBufferAt { fail_at: usize::MAX, attempts: AtomicUsize::new(0) };
-            composite_stack_at_with(&doc.layers, &mut backdrop, &ctx, advanced::Scope::ROOT, &alloc).unwrap();
-            alloc.attempts.load(Ordering::Relaxed)
-        };
-        assert!(count >= 4, "nested shallow knockout exercises buffers and clones");
-        for fail_at in 1..=count {
-            let mut backdrop = Buffer::filled(rect, [0.0; 4]);
-            let alloc = FailBufferAt { fail_at, attempts: AtomicUsize::new(0) };
-            assert!(composite_stack_at_with(&doc.layers, &mut backdrop, &ctx, advanced::Scope::ROOT, &alloc).is_err());
-            assert_eq!(alloc.attempts.load(Ordering::Relaxed), fail_at);
-        }
-        let regular = render_tiled(&doc, rect, 8);
-        let mut composited = Buffer::filled(rect, [0.0; 4]);
-        composite_stack_at_with(&doc.layers, &mut composited, &ctx, advanced::Scope::ROOT, &InfallibleBufferAlloc).unwrap();
-        assert_eq!(composited, regular);
-        let alloc = FallibleBufferAlloc;
-        assert_eq!(render_tiled_with_alloc(&doc, rect, 8, &ctx, &alloc).unwrap(), regular);
-    }
-
-    #[test]
-    fn render_bands_with_alloc_reports_outer_and_tile_allocations_before_the_sink() {
-        let doc = Document::new("fallible tile", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
-        for fail_at in [1, 2] {
-            let alloc = FailBufferAt { fail_at, attempts: AtomicUsize::new(0) };
-            let mut delivered = 0;
-            let result = render_bands_with_alloc(&doc, doc.bounds(), RENDER_TILE, &alloc, &mut |_| {
-                delivered += 1;
-                Ok::<(), ()>(())
-            });
-            assert!(matches!(result, Err(RenderBandsCoreError::Allocation(error)) if error == fail_at));
-            assert_eq!(delivered, 0, "failed output or tile allocation must not deliver a partial band");
-            if fail_at == 1 {
-                assert_eq!(alloc.attempts.load(Ordering::Relaxed), 1, "the output allocation is sequential");
-            } else {
-                assert!(alloc.attempts.load(Ordering::Relaxed) >= 2, "parallel tile allocation may have other in-flight attempts");
-            }
-        }
-    }
-
-    #[test]
-    fn effect_shape_buffer_failure_is_not_cached_and_retry_uses_the_successful_cache() {
-        let mut doc = Document::new("fallible effect shape", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
-        let fill = Layer::new("group fill", LayerContent::Fill(Fill::Solid(Color::BLACK)));
-        let mut layer = Layer::group("styled group", vec![fill]);
-        layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
-        doc.layers.push(layer);
-        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
-        let cx = Ctx::for_doc(&doc, &patterns);
-
-        for _ in 0..2 {
-            let alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
-            let mut delivered = 0;
-            let result = render_bands_with_alloc(&doc, doc.bounds(), RENDER_TILE, &alloc, &mut |_| {
-                delivered += 1;
-                Ok::<(), ()>(())
-            });
-            assert!(matches!(result, Err(RenderBandsCoreError::Allocation(1))));
-            assert_eq!(delivered, 0, "failed effect-shape allocation must happen before the sink");
-            assert_eq!(alloc.attempts.load(Ordering::Relaxed), 1, "the cold effect shape requests an RGBA buffer before output");
-        }
-
-        let alloc = FallibleBufferAlloc;
-        render_tiled_with_alloc(&doc, doc.bounds(), RENDER_TILE, &cx, &alloc).unwrap();
-        let cache_hit_alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
-        crate::fx_cache::effect_maps_with(&doc.layers[0], doc.bounds(), &cx, &cache_hit_alloc).unwrap();
-        assert_eq!(cache_hit_alloc.attempts.load(Ordering::Relaxed), 0, "the successful render-context cache avoids rebuilding its RGBA shape");
-
-        let outlined = outlined_effect_document();
-        let alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
-        let mut delivered = 0;
-        let result = render_bands_with_alloc(&outlined, outlined.bounds(), RENDER_TILE, &alloc, &mut |_| {
-            delivered += 1;
-            Ok::<(), ()>(())
-        });
-        assert!(matches!(result, Err(RenderBandsCoreError::Allocation(1))));
-        assert_eq!(delivered, 0, "outline alpha extraction must use the fallible surface buffer path");
-    }
-
-    #[test]
-    fn fallible_bands_preserves_sink_errors_as_a_separate_variant() {
-        let doc = nested_document();
-        let result = try_render_bands(&doc, doc.bounds(), 4, |_| Err::<(), _>("sink stopped"));
-        assert_eq!(result, Err(RenderBandsError::Sink("sink stopped")));
-    }
-
-    #[test]
-    fn legacy_and_fallible_band_apis_deliver_the_same_pixels() {
-        let doc = nested_document();
-        let mut legacy = Vec::new();
-        render_bands(&doc, doc.bounds(), 8, |band| {
-            legacy.push(band);
-            Ok::<(), ()>(())
-        })
-        .unwrap();
-        let mut fallible = Vec::new();
-        try_render_bands(&doc, doc.bounds(), 8, |band| {
-            fallible.push(band);
-            Ok::<(), ()>(())
-        })
-        .unwrap();
-        assert_eq!(legacy, fallible);
-    }
-}
-
 enum RenderBandsCoreError<E, A> {
     Allocation(A),
     Sink(E),
@@ -605,4 +436,173 @@ pub fn composite_to_surface_with_interrupt(
     }
     out.prune();
     Ok(out)
+}
+
+#[cfg(test)]
+mod fallible_bands_tests {
+    use super::*;
+    use photocraft_color::{Color, ColorMode, SampleType};
+    use photocraft_doc::{Document, Fill, Knockout, Layer, LayerContent};
+    use photocraft_geom::Size;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct FailBufferAt {
+        fail_at: usize,
+        attempts: AtomicUsize,
+    }
+
+    impl FailBufferAt {
+        fn attempt(&self) -> Result<(), usize> {
+            let n = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == self.fail_at { Err(n) } else { Ok(()) }
+        }
+    }
+
+    impl BufferAlloc for FailBufferAt {
+        type Error = usize;
+
+        fn filled(&self, rect: Rect, color: [f32; 4]) -> Result<Buffer, Self::Error> {
+            self.attempt()?;
+            Buffer::try_filled(rect, color).map_err(|_| usize::MAX)
+        }
+
+        fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error> {
+            self.attempt()?;
+            buffer.try_clone().map_err(|_| usize::MAX)
+        }
+    }
+
+    fn nested_document() -> Document {
+        let mut doc = Document::new("fallible bands", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        let mut fill = Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::BLACK)));
+        fill.advanced.knockout = Knockout::Shallow;
+        doc.layers.push(Layer::group("nested", vec![fill]));
+        doc
+    }
+
+    fn outlined_effect_document() -> Document {
+        let mut doc = Document::new("fallible outlined effect", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
+        let path = photocraft_doc::vector::Path {
+            subpaths: vec![photocraft_doc::vector::Subpath::polygon(&[(12.0, 12.0), (60.0, 12.0), (60.0, 60.0), (12.0, 60.0)])],
+            ..Default::default()
+        };
+        let mut cache = photocraft_doc::Surface::new(photocraft_color::PixelFormat::RGBA8);
+        cache.fill_rect(Rect::new(12, 12, 60, 60), &[0.0, 0.0, 0.0, 1.0]);
+        let shape = photocraft_doc::vector::ShapeLayer { path, fill: Some(Fill::Solid(Color::BLACK)), cache: Some(cache), ..Default::default() };
+        let mut layer = Layer::new("outlined shape", LayerContent::Shape(shape));
+        layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        doc.layers.push(layer);
+        doc
+    }
+
+    #[test]
+    fn fail_nth_buffer_constructor_propagates_through_nested_rendering() {
+        let doc = nested_document();
+        let rect = doc.bounds();
+        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+        let ctx = Ctx::for_doc(&doc, &patterns);
+        let count = {
+            let mut backdrop = Buffer::filled(rect, [0.0; 4]);
+            let alloc = FailBufferAt { fail_at: usize::MAX, attempts: AtomicUsize::new(0) };
+            composite_stack_at_with(&doc.layers, &mut backdrop, &ctx, advanced::Scope::ROOT, &alloc).unwrap();
+            alloc.attempts.load(Ordering::Relaxed)
+        };
+        assert!(count >= 4, "nested shallow knockout exercises buffers and clones");
+        for fail_at in 1..=count {
+            let mut backdrop = Buffer::filled(rect, [0.0; 4]);
+            let alloc = FailBufferAt { fail_at, attempts: AtomicUsize::new(0) };
+            assert!(composite_stack_at_with(&doc.layers, &mut backdrop, &ctx, advanced::Scope::ROOT, &alloc).is_err());
+            assert_eq!(alloc.attempts.load(Ordering::Relaxed), fail_at);
+        }
+        let regular = render_tiled(&doc, rect, 8);
+        let mut composited = Buffer::filled(rect, [0.0; 4]);
+        composite_stack_at_with(&doc.layers, &mut composited, &ctx, advanced::Scope::ROOT, &InfallibleBufferAlloc).unwrap();
+        assert_eq!(composited, regular);
+        let alloc = FallibleBufferAlloc;
+        assert_eq!(render_tiled_with_alloc(&doc, rect, 8, &ctx, &alloc).unwrap(), regular);
+    }
+
+    #[test]
+    fn render_bands_with_alloc_reports_outer_and_tile_allocations_before_the_sink() {
+        let doc = Document::new("fallible tile", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
+        for fail_at in [1, 2] {
+            let alloc = FailBufferAt { fail_at, attempts: AtomicUsize::new(0) };
+            let mut delivered = 0;
+            let result = render_bands_with_alloc(&doc, doc.bounds(), RENDER_TILE, &alloc, &mut |_| {
+                delivered += 1;
+                Ok::<(), ()>(())
+            });
+            assert!(matches!(result, Err(RenderBandsCoreError::Allocation(error)) if error == fail_at));
+            assert_eq!(delivered, 0, "failed output or tile allocation must not deliver a partial band");
+            if fail_at == 1 {
+                assert_eq!(alloc.attempts.load(Ordering::Relaxed), 1, "the output allocation is sequential");
+            } else {
+                assert!(alloc.attempts.load(Ordering::Relaxed) >= 2, "parallel tile allocation may have other in-flight attempts");
+            }
+        }
+    }
+
+    #[test]
+    fn effect_shape_buffer_failure_is_not_cached_and_retry_uses_the_successful_cache() {
+        let mut doc = Document::new("fallible effect shape", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
+        let fill = Layer::new("group fill", LayerContent::Fill(Fill::Solid(Color::BLACK)));
+        let mut layer = Layer::group("styled group", vec![fill]);
+        layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        doc.layers.push(layer);
+        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+        let cx = Ctx::for_doc(&doc, &patterns);
+
+        for _ in 0..2 {
+            let alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
+            let mut delivered = 0;
+            let result = render_bands_with_alloc(&doc, doc.bounds(), RENDER_TILE, &alloc, &mut |_| {
+                delivered += 1;
+                Ok::<(), ()>(())
+            });
+            assert!(matches!(result, Err(RenderBandsCoreError::Allocation(1))));
+            assert_eq!(delivered, 0, "failed effect-shape allocation must happen before the sink");
+            assert_eq!(alloc.attempts.load(Ordering::Relaxed), 1, "the cold effect shape requests an RGBA buffer before output");
+        }
+
+        let alloc = FallibleBufferAlloc;
+        render_tiled_with_alloc(&doc, doc.bounds(), RENDER_TILE, &cx, &alloc).unwrap();
+        let cache_hit_alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
+        crate::fx_cache::effect_maps_with(&doc.layers[0], doc.bounds(), &cx, &cache_hit_alloc).unwrap();
+        assert_eq!(cache_hit_alloc.attempts.load(Ordering::Relaxed), 0, "the successful render-context cache avoids rebuilding its RGBA shape");
+
+        let outlined = outlined_effect_document();
+        let alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
+        let mut delivered = 0;
+        let result = render_bands_with_alloc(&outlined, outlined.bounds(), RENDER_TILE, &alloc, &mut |_| {
+            delivered += 1;
+            Ok::<(), ()>(())
+        });
+        assert!(matches!(result, Err(RenderBandsCoreError::Allocation(1))));
+        assert_eq!(delivered, 0, "outline alpha extraction must use the fallible surface buffer path");
+    }
+
+    #[test]
+    fn fallible_bands_preserves_sink_errors_as_a_separate_variant() {
+        let doc = nested_document();
+        let result = try_render_bands(&doc, doc.bounds(), 4, |_| Err::<(), _>("sink stopped"));
+        assert_eq!(result, Err(RenderBandsError::Sink("sink stopped")));
+    }
+
+    #[test]
+    fn legacy_and_fallible_band_apis_deliver_the_same_pixels() {
+        let doc = nested_document();
+        let mut legacy = Vec::new();
+        render_bands(&doc, doc.bounds(), 8, |band| {
+            legacy.push(band);
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+        let mut fallible = Vec::new();
+        try_render_bands(&doc, doc.bounds(), 8, |band| {
+            fallible.push(band);
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+        assert_eq!(legacy, fallible);
+    }
 }
