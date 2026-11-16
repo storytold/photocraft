@@ -348,6 +348,59 @@ fn a_nested_group_layer_png_whites_the_corner_its_leaves_never_painted() {
     }
 }
 
+/// #14968 review: the one case where an intermediate group does add its own (union) box to the
+/// reach is a group with an enabled layer style - a plain nested group adds nothing, pinned by
+/// `a_nested_group_layer_png_whites_the_corner_its_leaves_never_painted`. The reference
+/// application was not measured for a styled intermediate group, so that case keeps today's
+/// behaviour: the box grown by the style keeps its written colours, its empty corners included.
+#[test]
+fn an_intermediate_group_with_a_style_keeps_its_union_box_as_it_is() {
+    let (mut app, written, _open) = app(70, 60);
+    painted(&mut app, "Yellow", "#ffff00", Some((0, 0, 40, 40)));
+    painted(&mut app, "Cyan", "#00ffff", Some((30, 30, 40, 30)));
+    app.run("select.allLayers", json!({})).unwrap();
+    app.run("layer.new.groupFromLayers", json!({"name": "Pair"})).unwrap();
+    let inner = active(&app);
+    app.run("layer.layerStyle.stroke", json!({"layer": inner, "size": 5, "position": "outside", "color": "#000000"})).unwrap();
+    app.run("layer.new.groupFromLayers", json!({"layer": inner, "name": "Outer"})).unwrap();
+    let outer = active(&app);
+    let (w, h, layout, data) = png(&export_as(&mut app, &written, &fields(Some(outer))));
+    assert_eq!((w, h), (70, 60), "the children still touch the canvas corners, and the 5 px group stroke is clipped by it");
+    assert_eq!(layout, ChannelLayout::Rgba);
+    // No leaf painted (0,59), and the 5 px stroke of the styled inner group never reaches it
+    // either - but it lies inside that group's grown box, and stays as it was written.
+    assert_eq!(px(&data, w, 4, 0, 59), vec![0, 0, 0, 0], "unmeasured: a styled intermediate group's grown box keeps its colours");
+    assert_eq!(px(&data, w, 4, 50, 45), vec![0, 255, 255, 255], "where a leaf paints, its colour stays");
+}
+
+/// #14968 review: the whitened area must read the same however many child rectangles build the
+/// reach. A 100 x 100 group of 100 small children: the empty corner and the gaps between
+/// children are stored white exactly as for two children. (The finding's 4096 x 4096 with 1000
+/// rectangles is a cost scenario, not an output one, and too large to run in a unit test.)
+#[test]
+fn a_group_with_many_child_rectangles_still_whites_its_empty_area() {
+    let mut doc = photocraft_doc::Document::new("Many", photocraft_doc::Size::new(100, 100), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    let fmt = doc.pixel_format();
+    let mut kids = Vec::new();
+    for k in 0..100 {
+        let (x, y) = ((k % 10) * 9, (k / 10) * 9);
+        let mut s = photocraft_raster::Surface::new(fmt);
+        s.fill_rect(photocraft_doc::Rect::new(x, y, x + 3, y + 3), &[0.0, 1.0, 0.0, 1.0]);
+        kids.push(photocraft_doc::Layer::new("Dot", photocraft_doc::LayerContent::Raster(s)));
+    }
+    let group = photocraft_doc::Layer::group("Many", kids);
+    let id = group.id;
+    doc.layers = vec![group];
+    let alone = photocraft_engine::layer_menu_cmds::layer_document(&doc, id).unwrap();
+    let opts = photocraft_io::ExportOptions { layer_alpha: true, ..Default::default() };
+    let out = photocraft_io::export_flat(&alone, photocraft_codecs::Format::Png, &opts).unwrap();
+    let (w, h, layout, data) = png(&out.bytes);
+    assert_eq!((w, h, layout), (84, 84, ChannelLayout::Rgba), "the 100 children's union");
+    assert_eq!(px(&data, w, 4, 0, 79), vec![255, 255, 255, 0], "the gap along the left edge no child painted");
+    assert_eq!(px(&data, w, 4, 4, 4), vec![255, 255, 255, 0], "the gap between four neighbouring children");
+    assert_eq!(px(&data, w, 4, 1, 1), vec![0, 255, 0, 255], "where a child paints, its colour stays");
+}
+
 /// A 70 x 60 document holding one group of two offset children, so its bottom row is clear up to
 /// x=30; `paints` are the two children's pixel values in the document's own channel order.
 fn group_document(
