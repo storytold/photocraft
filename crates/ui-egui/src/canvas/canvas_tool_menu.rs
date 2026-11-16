@@ -1963,6 +1963,6 @@ mod convert_point_menu_tests;
 mod object_selection_menu_tests;
 
 #[cfg(test)]
-mod line_menu_tests;
-#[cfg(test)]
 mod document_switch_tests;
+#[cfg(test)]
+mod line_menu_tests;
