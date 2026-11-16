@@ -99,6 +99,47 @@ fn the_picked_file_type_gives_the_name_its_extension() {
     assert_eq!(with_chosen_type(Path::new("/pics/art.psd"), opened, &[]), PathBuf::from("/pics/art.psd"));
 }
 
+/// GTK's save dialog inserts the common prefix of the files the name starts when the folder
+/// loads, so the portal is given a trailing space that no file name starts with; GTK strips it
+/// from the file it saves, and a backend that hands it back, or appends the type after it, gets
+/// it trimmed before the extension is chosen.
+#[test]
+fn the_portal_dialog_opens_on_the_stem_with_a_trailing_space() {
+    for (suggested, want) in [
+        ("/pics/OS25.png", "OS25 "),
+        ("/pics/Untitled-1.psd", "Untitled-1 "),
+        ("/pics/003.2.png", "003.2 "),
+        ("/pics/scan.jpg.psd", "scan.jpg "),
+        ("/pics/photo.PNG", "photo "),
+        ("/pics/Untitled", "Untitled "),
+    ] {
+        assert_eq!(portal_dialog_name(suggested).as_deref(), Some(want), "{suggested}");
+    }
+    assert_eq!(portal_dialog_name(""), None);
+
+    let exts = |e: &[&str]| e.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let (png, jpeg, psd) = (exts(&["png"]), exts(&["jpg", "jpeg"]), exts(&["psd", "psb"]));
+    assert_eq!(with_chosen_type(Path::new("/pics/OS25 "), Some("OS25.png"), &jpeg), PathBuf::from("/pics/OS25.jpg"));
+    assert_eq!(with_chosen_type(Path::new("/pics/OS25 "), Some("OS25.png"), &png), PathBuf::from("/pics/OS25.png"));
+    // A backend that appends the type after the space: `OS25 .png` with JPEG picked.
+    assert_eq!(with_chosen_type(Path::new("/pics/OS25 .png"), Some("OS25.png"), &jpeg), PathBuf::from("/pics/OS25.jpg"));
+    // The type untouched keeps its extension, and the space still goes.
+    assert_eq!(with_chosen_type(Path::new("/pics/OS25 .png"), Some("OS25.png"), &png), PathBuf::from("/pics/OS25.png"));
+
+    // A name that comes back as the stem the dialog opened on is a stem, even with a dot, so the
+    // picked type is appended instead of being taken for the name's own extension.
+    let from = |path, opened, name, chosen: &[String]| with_chosen_type_from_dialog(Path::new(path), opened, name, chosen);
+    assert_eq!(from("/pics/OS25", Some("OS25.png"), Some("OS25 "), &jpeg), PathBuf::from("/pics/OS25.jpg"));
+    assert_eq!(from("/pics/003.2", Some("003.2.png"), Some("003.2 "), &jpeg), PathBuf::from("/pics/003.2.jpg"));
+    assert_eq!(from("/pics/003.2", Some("003.2.png"), Some("003.2 "), &png), PathBuf::from("/pics/003.2.png"));
+    assert_eq!(from("/pics/scan.jpg", Some("scan.jpg.psd"), Some("scan.jpg "), &psd), PathBuf::from("/pics/scan.jpg.psd"));
+    assert_eq!(from("/pics/scan.jpg", Some("scan.jpg.psd"), Some("scan.jpg "), &jpeg), PathBuf::from("/pics/scan.jpg.jpg"));
+    // A typed name is the user's, and the dialog's own rename (no trailing space) follows
+    // `with_chosen_type` instead.
+    assert_eq!(from("/pics/art.png", Some("art.psd"), Some("art "), &psd), PathBuf::from("/pics/art.png"));
+    assert_eq!(from("/pics/art.psd", Some("art.psd"), Some("art.psd"), &png), PathBuf::from("/pics/art.png"));
+}
+
 /// Regression using the real clipboard on an isolated Windows CI runner.
 #[cfg(target_os = "windows")]
 #[test]

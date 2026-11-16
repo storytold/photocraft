@@ -4,7 +4,9 @@
 //! type, and rfd 0.17 reads only the file name from the portal's answer, so `image.psd` with PNG
 //! picked came back as `image.psd` and was written as a PSD. The answer does say which type was
 //! picked (`current_filter`), so Save As asks the portal itself and gives a name the dialog left
-//! alone that type's extension ([`crate::services::with_chosen_type`]). rfd stays the fallback
+//! alone that type's extension ([`crate::services::with_chosen_type_from_dialog`]). The dialog
+//! opens on the stem with a trailing space, so GTK's filename completion cannot add the opened
+//! file's extension back to it (`crate::services::portal_dialog_name`). rfd stays the fallback
 //! (zenity, or no portal), and this can go once an rfd release reads the picked type
 //! (PolyMeilex/rfd#341).
 //!
@@ -12,7 +14,7 @@
 //! the portal needs an xdg-foreign handle, which takes `unsafe` code the workspace forbids.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
@@ -24,11 +26,12 @@ pub type Filter = (String, Vec<String>);
 pub struct SaveRequest {
     /// The portal's parent window identifier (`x11:<xid>`), or empty.
     pub parent: String,
-    /// The name the dialog shows: the stem of the suggested file (`test`), see
-    /// `services::dialog_file_name`.
+    /// The name the dialog shows: the suggested file's name without its last extension and a
+    /// trailing space, which keeps GTK's completion from appending an existing file's extension;
+    /// GTK strips the space from the name it saves (see `services::portal_dialog_name`).
     pub name: Option<String>,
     /// The suggested file's name (`test.psd`): a name that comes back with its extension still
-    /// takes the extension of the type picked ([`crate::services::with_chosen_type`]).
+    /// takes the extension of the type picked ([`crate::services::with_chosen_type_from_dialog`]).
     pub suggested: Option<String>,
     pub folder: Option<PathBuf>,
     pub filters: Vec<Filter>,
@@ -168,27 +171,35 @@ fn chosen_type(filters: &[Filter], picked: Option<usize>) -> Option<usize> {
     }
 }
 
+/// What Save As writes: the path, the name the dialog answered, and whether a file exists under
+/// the path that the dialog did not ask about (so the app asks before replacing it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SaveAs {
+    pub path: PathBuf,
+    /// The dialog's answer: the stem, when the picked type gave the extension.
+    pub answered: PathBuf,
+    pub replace: bool,
+}
+
 /// Save As on Linux: the portal's dialog, with the name given the extension of the file type
-/// picked. When that changes the name to one that already exists, the dialog opens again under
-/// the new name, so the portal asks before replacing it (it asked only about the typed name).
-pub fn save_as(conn: &zbus::blocking::Connection, mut req: SaveRequest) -> Result<Option<PathBuf>, String> {
-    loop {
-        let Some(saved) = save_file(conn, &req)? else { return Ok(None) };
-        let picked = saved.filter.as_deref().and_then(|label| req.filters.iter().position(|(l, _)| l == label));
-        // A typed extension is the user's own: `with_chosen_type` keeps one it recognises.
-        let exts: &[String] = match chosen_type(&req.filters, picked) {
-            Some(i) => &req.filters[i].1,
-            None => &[],
-        };
-        let path = crate::services::with_chosen_type(&saved.path, req.suggested.as_deref(), exts);
-        if path == saved.path || !path.exists() {
-            return Ok(Some(path));
-        }
-        req.name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-        req.suggested = req.name.clone();
-        req.folder = path.parent().map(Path::to_path_buf);
-        req.current = picked;
-    }
+/// picked. The dialog is asked once: the picked type's extension may name a file the dialog did
+/// not ask about (it asked about the stem), which the app asks about before replacing.
+pub fn save_as_answered(conn: &zbus::blocking::Connection, req: SaveRequest) -> Result<Option<SaveAs>, String> {
+    let Some(saved) = save_file(conn, &req)? else { return Ok(None) };
+    let picked = saved.filter.as_deref().and_then(|label| req.filters.iter().position(|(l, _)| l == label));
+    // A typed extension is the user's own: `with_chosen_type` keeps one it recognises.
+    let exts: &[String] = match chosen_type(&req.filters, picked) {
+        Some(i) => &req.filters[i].1,
+        None => &[],
+    };
+    let path = crate::services::with_chosen_type_from_dialog(&saved.path, req.suggested.as_deref(), req.name.as_deref(), exts);
+    let replace = path != saved.path && path.exists();
+    Ok(Some(SaveAs { path, answered: saved.path, replace }))
+}
+
+/// [`save_as_answered`]'s path: the file the save writes.
+pub fn save_as(conn: &zbus::blocking::Connection, req: SaveRequest) -> Result<Option<PathBuf>, String> {
+    Ok(save_as_answered(conn, req)?.map(|saved| saved.path))
 }
 
 #[cfg(test)]
