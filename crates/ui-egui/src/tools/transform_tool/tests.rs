@@ -3775,7 +3775,7 @@ fn mask_view_keeps_move_and_transform_available_behind_a_colour_set() {
 /// layer's own pixels take the link group's box without a copy.
 #[test]
 fn free_transform_a_copy_of_a_targeted_mask_on_a_linked_layer_still_copies() {
-    for shown in [false, true] {
+    for view in ["hidden", "composite", "overlay"] {
         let mut app = masked_app(false);
         let a = app.session.active().unwrap().active_layer.unwrap();
         app.session.execute("layer.new.layer", json!({})).unwrap();
@@ -3784,6 +3784,10 @@ fn free_transform_a_copy_of_a_targeted_mask_on_a_linked_layer_still_copies() {
         app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
         assert_eq!(app.session.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
         app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+        if view == "hidden" {
+            // An enabled mask is visible in the ordinary composite without a separate view.
+            app.run("layer.layerMask.enabled", json!({"enabled":false})).unwrap();
+        }
         // A refused hidden target must not create a duplicate or discard an existing redo branch.
         app.session
             .edit("redo marker", |doc, _| {
@@ -3793,7 +3797,7 @@ fn free_transform_a_copy_of_a_targeted_mask_on_a_linked_layer_still_copies() {
             .unwrap();
         assert!(app.session.undo());
         app.ui.mask_target = true;
-        if shown {
+        if view == "overlay" {
             app.run("view.layerMask", json!({"mode": "overlay"})).unwrap();
         }
         let before = app.session.active().unwrap().doc.clone();
@@ -3802,7 +3806,7 @@ fn free_transform_a_copy_of_a_targeted_mask_on_a_linked_layer_still_copies() {
         let eyes = app.session.active().unwrap().channel_view.clone();
         let layers = app.session.active().unwrap().doc.layers.len();
         let result = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransformCopy", json!({}));
-        if !shown {
+        if view == "hidden" {
             assert!(result.unwrap_err().contains(photocraft_engine::channel_transform::HIDDEN));
             let st = app.session.active().unwrap();
             assert!(Arc::ptr_eq(&before, &st.doc));

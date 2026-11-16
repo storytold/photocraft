@@ -370,14 +370,18 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
         let generation = photocraft_raster::spill::read_error_generation();
         let screen = if inks { crate::channel_view::Screen::of(&app.session.color, &preview.shown, output) } else { crate::channel_view::Screen::default() };
         let image = limit_image(preview.image(&view, look, display.as_deref(), &screen), ctx.input(|i| i.max_texture_side));
+        // Match the ordinary canvas at native resolution. A proxy, sparse display reduction
+        // or renderer-limited upload still needs filtered magnification of its reduced texels.
+        let full_resolution = image.size == [preview.native.size.width as usize, preview.native.size.height as usize];
+        let options = super::textures::canvas_texture_options(if full_resolution { 1 } else { 2 });
         let view = photocraft_engine::channel_transform::check_capture(&preview.shown, generation).is_ok().then_some(key);
         match preview.textures.get_mut(&output) {
             Some(entry) => {
-                entry.texture.set(image, TextureOptions::LINEAR);
+                entry.texture.set(image, options);
                 entry.view = view;
             }
             None => {
-                let texture = ctx.load_texture(format!("channel-transform-{}-{:?}", t.session, output), image, TextureOptions::LINEAR);
+                let texture = ctx.load_texture(format!("channel-transform-{}-{:?}", t.session, output), image, options);
                 preview.textures.insert(output, CpuTexture { view, texture });
             }
         }
@@ -1550,6 +1554,9 @@ mod tests {
             }
             if target == "mask" {
                 a.run("view.layerMask", json!({"mode":"off"})).unwrap();
+                // An enabled mask is already visible through the composite. Disable it too
+                // so this case still exercises a genuinely hidden mask target.
+                a.run("layer.layerMask.enabled", json!({"enabled":false})).unwrap();
             } else {
                 a.run("channel.setVisible", json!({"channel": if target=="composite" { json!("quickMask") } else { target.clone() },"visible":false})).unwrap();
             }
@@ -2011,6 +2018,9 @@ mod cylinder_tests;
 
 #[cfg(test)]
 mod limits_tests;
+
+#[cfg(test)]
+mod mask_view_tests;
 
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]

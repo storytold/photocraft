@@ -13,6 +13,7 @@ mod camera_raw_localization;
 mod camera_raw_scope;
 mod camera_raw_zoom;
 mod canvas_16f;
+mod channel_mask_preview;
 mod checker_canvas;
 mod clipboard_svg;
 mod color_managed_canvas;

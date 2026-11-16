@@ -341,7 +341,7 @@ pub fn color_index(p: &Value) -> Result<Option<usize>> {
     index.map(|v| v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("invalid colour channel index"))).transpose()
 }
 
-/// Whether the channel's Channels-panel eye is currently on.
+/// Whether the target is visible, including an enabled mask applied in the composite.
 pub fn visible(s: &Session, p: &Value) -> Result<bool> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     if let Some(colors) = crate::color_channels::explicit(p, crate::channel_cmds::color_count(&st.doc))? {
@@ -349,7 +349,22 @@ pub fn visible(s: &Session, p: &Value) -> Result<bool> {
             && crate::mask_view_cmds::current(st).is_none_or(|v| v.mode != crate::mask_view_cmds::MaskViewMode::Gray));
     }
     Ok(match crate::channel_cmds::target_of(p) {
-        crate::channel_cmds::Target::Mask => crate::mask_view_cmds::current(st).is_some_and(|v| !v.filter),
+        crate::channel_cmds::Target::Mask => {
+            let layer = crate::commands::explicit_layer(s, p)?.or(st.active_layer);
+            let view = st.channel_view.layer_mask.filter(|_| st.channel_view.shown_layer_mask(&st.doc).is_some());
+            if view.is_some_and(|v| !v.filter && Some(v.layer) == layer) {
+                true
+            } else {
+                // A normal thumbnail click targets the applied mask without enabling its
+                // separate gray/overlay view. Preserve those eyes rather than requiring it.
+                let applied = layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.as_ref().is_some_and(|m| m.enabled));
+                let shown = layer.and_then(|id| st.doc.path_of(id)).is_some_and(|path| st.doc.shown_at(&path));
+                applied
+                    && shown
+                    && st.channel_view.visible_colors(crate::channel_cmds::color_count(&st.doc)) > 0
+                    && view.is_none_or(|v| v.mode != crate::mask_view_cmds::MaskViewMode::Gray)
+            }
+        }
         crate::channel_cmds::Target::Alpha(i) => st.channel_view.alpha_shown(i),
         crate::channel_cmds::Target::QuickMask => !st.channel_view.quick_mask_hidden,
         _ => true,
@@ -554,3 +569,6 @@ mod set_tests;
 
 #[cfg(test)]
 mod move_review_tests;
+
+#[cfg(test)]
+mod visibility_tests;

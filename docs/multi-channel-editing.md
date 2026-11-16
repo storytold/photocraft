@@ -32,6 +32,8 @@ box applies the same geometry to every selected native component, including part
 and feathered selections; the selection outline moves once and the edit has one Undo
 step. Other encoded samples and layer transparency remain unchanged. Starting Free
 Transform preserves all eyes and requires every selected component to be visible.
+An enabled raster mask on a visible layer can start in the ordinary composite without
+opening a separate mask view. Disabled masks require their gray or overlay view.
 The complete target set stays locked until commit/cancel; every eye remains usable,
 including hiding and revealing the selected components. Eye changes survive commit,
 cancel and Undo. Eligible RGB previews cache one source and combine the selected
@@ -41,6 +43,8 @@ Their repaint bounds include the stationary transparency extent, so successive o
 refresh colour changes there as well as the translated area. Their marching ants follow
 the preview, snapping uses the selection frame without
 snapping back to its starting outline, and Shift constrains movement to axes or 45° diagonals.
+Full-resolution CPU transform previews use the canvas's crisp magnification; reduced
+sources and renderer-limited uploads retain filtered magnification.
 A shown Smart Filter mask keeps Move aimed at the whole object, even with colour rows
 retained behind it. Copying that object keeps its mask view on the copy. Set-copy refusal
 also applies to Cmd/Ctrl+Alt drags started with selection tools.
