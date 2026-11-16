@@ -25,23 +25,56 @@ type Script = Vec<(u32, Option<(&'static str, &'static str)>)>;
 /// current_filter.
 type Seen = Arc<Mutex<Vec<(Option<String>, Option<String>)>>>;
 
+/// A spawned helper process that is killed and reaped when dropped, so a failing test cannot
+/// leave a `dbus-daemon` behind. A surviving daemon inherits the test command's stderr and can
+/// keep a piped command (`cargo test ... | tail`) waiting forever.
+struct ChildGuard(std::process::Child);
+
+impl ChildGuard {
+    fn new(child: std::process::Child) -> Self {
+        Self(child)
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.0.kill()
+    }
+
+    fn stdout_mut(&mut self) -> Option<&mut std::process::ChildStdout> {
+        self.0.stdout.as_mut()
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// A private session bus (`dbus-daemon`) with a mock `org.freedesktop.portal.FileChooser` that
 /// answers `SaveFile` from `script`. `None` when there is no `dbus-daemon` to run.
-fn mock_portal(script: Script) -> Option<(zbus::blocking::Connection, Seen, std::process::Child)> {
+fn mock_portal(script: Script) -> Option<(zbus::blocking::Connection, Seen, ChildGuard)> {
     mock_portal_with(script, false)
 }
 
 /// [`mock_portal`]; with `own_paths` it is a portal older than 0.9, which ignores `handle_token`,
 /// answers on a request path of its own and returns that from `SaveFile`, as a real dialog does
 /// once the user is done with it (here after 300 ms).
-fn mock_portal_with(script: Script, own_paths: bool) -> Option<(zbus::blocking::Connection, Seen, std::process::Child)> {
+fn mock_portal_with(script: Script, own_paths: bool) -> Option<(zbus::blocking::Connection, Seen, ChildGuard)> {
     use std::io::BufRead;
     let spawns = crate::CHILD_SPAWNS.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut daemon =
-        std::process::Command::new("dbus-daemon").args(["--session", "--nofork", "--print-address=1"]).stdout(std::process::Stdio::piped()).spawn().ok()?;
+    let mut daemon = ChildGuard::new(
+        std::process::Command::new("dbus-daemon")
+            .args(["--session", "--nofork", "--print-address=1"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()?,
+    );
     drop(spawns);
     let mut address = String::new();
-    std::io::BufReader::new(daemon.stdout.take()?).read_line(&mut address).ok()?;
+    std::io::BufReader::new(daemon.stdout_mut()?).read_line(&mut address).ok()?;
     let address = address.trim().to_string();
     let server = zbus::blocking::connection::Builder::address(address.as_str()).unwrap().name("org.freedesktop.portal.Desktop").unwrap().build().unwrap();
     let seen: Seen = Arc::default();
@@ -90,6 +123,16 @@ fn mock_portal_with(script: Script, own_paths: bool) -> Option<(zbus::blocking::
     });
     let client = zbus::blocking::connection::Builder::address(address.as_str()).unwrap().build().unwrap();
     Some((client, seen, daemon))
+}
+
+/// A helper process is killed and reaped when its guard drops, so a test that unwinds before
+/// its explicit `kill` cannot leave the daemon (and its inherited stderr) behind.
+#[test]
+fn a_helper_process_is_killed_when_its_guard_drops() {
+    let child = std::process::Command::new("sleep").arg("60").spawn().expect("spawn sleep");
+    let pid = child.id();
+    drop(ChildGuard::new(child));
+    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists(), "the helper process survived its guard");
 }
 
 fn request(name: &str) -> SaveRequest {
