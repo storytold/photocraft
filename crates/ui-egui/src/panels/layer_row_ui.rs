@@ -16,6 +16,9 @@ use std::sync::Arc;
 use crate::icons;
 use crate::theme::{self, Tokens};
 
+/// Painted visibility eye size on layer and Effects rows.
+pub(super) const EYE_SIZE: f32 = 15.0;
+
 /// Space kept free at a row's right edge: the overlay scrollbar sits there.
 pub const RIGHT_PAD: f32 = 10.0;
 /// Gap between indicators, and between the name and the first indicator.
