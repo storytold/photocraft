@@ -42,6 +42,14 @@ pub(super) fn humanize(key: &str) -> String {
         "columnWidth" => return "Column width".into(),
         _ => {}
     }
+    // Export › Quick Export Color Space, as the reference application writes it (#13783).
+    if key == "convertToSrgb" {
+        return "Convert to sRGB".into();
+    }
+    // Export › PNG's option, as the reference application labels it (#13785).
+    if key == "pngSmallerFile" {
+        return "Smaller File (8-bit)".into();
+    }
     // These controls appear only for WebP, so reuse the existing translated labels.
     if key == "webpLossless" {
         return "Lossless".into();
@@ -121,6 +129,11 @@ pub(super) fn choice_label(v: &str) -> String {
         "windowsInk" => "Windows Ink (default)".into(),
         "winTab" => "WinTab".into(),
         "exr" => "EXR".into(),
+        // Export › Quick Export Format, as the reference application lists them (#13783).
+        "png" => "PNG".into(),
+        "jpg" => "JPG".into(),
+        "gif" => "GIF".into(),
+        "webp" => "WebP".into(),
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
         "75" | "80" | "85" | "90" | "95" | "100" | "105" | "110" | "115" | "120" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
@@ -334,8 +347,11 @@ pub(super) fn export_field_visible(obj: &Map<String, Value>, key: &str) -> bool 
     match key {
         "convertToSrgb" | "metadata" => format != "exr",
         "jpegQuality" => format == "jpg",
+        "pngSmallerFile" => format == "png",
         "webpLossless" => format == "webp",
         "webpQuality" => format == "webp" && obj.get("webpLossless").and_then(Value::as_bool) != Some(true),
+        // Remembered for the next export dialog, but not a control on the page (#13783).
+        "lastFolder" => false,
         _ => true,
     }
 }
@@ -401,6 +417,51 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
     }
 }
 
+/// Preferences › Export laid out like the reference application's (#13783): titled groups for the
+/// Quick Export format (with the chosen format's own options), location, metadata and colour
+/// space, in that order. Settings added later go below them. A search hides the rows that don't
+/// match and skips a group left empty.
+fn export_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[String], lang: crate::i18n::Lang, query: &str) {
+    const GROUPS: [(&str, &[&str]); 4] = [
+        ("Quick Export Format", &["quickExportFormat", "pngSmallerFile", "jpegQuality", "webpLossless", "webpQuality"]),
+        ("Quick Export Location", &["quickExportLocation"]),
+        ("Quick Export Metadata", &["metadata"]),
+        ("Quick Export Color Space", &["convertToSrgb"]),
+    ];
+    let shown = |obj: &Map<String, Value>, k: &str| keys.iter().any(|key| key == k) && field_visible("export", obj, k, query);
+    for (title, names) in GROUPS {
+        let rows: Vec<String> = names.iter().filter(|n| shown(obj, n)).map(|n| n.to_string()).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        pref_group(ui, title, |ui| {
+            if title == "Quick Export Location" {
+                export_location_radios(ui, obj);
+            } else {
+                egui::Grid::new(("prefs-grid-export", title)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, "export", obj, rows, lang));
+            }
+        });
+    }
+    let grouped: Vec<&str> = GROUPS.iter().flat_map(|(_, names)| names.iter().copied()).collect();
+    let rest: Vec<String> = keys.iter().filter(|k| !grouped.contains(&k.as_str()) && shown(obj, k)).cloned().collect();
+    if !rest.is_empty() {
+        egui::Grid::new("prefs-grid-export-rest").num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, "export", obj, rest, lang));
+    }
+}
+
+#[cfg(test)]
+#[path = "export_page_tests.rs"]
+mod export_page_tests;
+
+/// Export › Quick Export Location as the reference application's two radio buttons. The stored
+/// values stay `ask` and `sameFolder`.
+fn export_location_radios(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
+    let mut v = obj.get("quickExportLocation").and_then(Value::as_str).unwrap_or("ask").to_string();
+    ui.radio_value(&mut v, "ask".to_string(), tl!("Ask where to export each time"));
+    ui.radio_value(&mut v, "sameFolder".to_string(), tl!("Export files to an assets folder next to the current document"));
+    obj.insert("quickExportLocation".into(), json!(v));
+}
+
 /// Where a clicked colour swatch leaves its preference path and label for the dialog body, which
 /// holds the fields the Color Picker request goes in.
 /// Preferences › AI Integrations without the AI-MCP feature flag: the settings PhotoCraft had
@@ -449,6 +510,10 @@ pub(super) fn section_fields(
     keys.extend(obj.keys().filter(|k| !order.contains(k)).cloned());
     if section == "interface" {
         interface_groups(ui, obj, &keys, lang, system, query);
+        return;
+    }
+    if section == "export" {
+        export_groups(ui, obj, &keys, lang, query);
         return;
     }
     if section == "performance" && (query.is_empty() || preference_matches(section, "renderingMode", query)) {

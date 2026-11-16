@@ -120,18 +120,8 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     // On the web it intentionally downloads PNG until the quick-export service supports
     // the other formats; the Layer quick-export command also always produces PNG.
     if let Some(item) = items.iter_mut().find(|i| i.id == "file.export.quickExportAsPng") {
-        use photocraft_engine::prefs::QuickExportFormat;
-        let format = if cfg!(target_arch = "wasm32") {
-            "PNG"
-        } else {
-            match app.session.prefs().export.quick_export_format {
-                QuickExportFormat::Png => "PNG",
-                QuickExportFormat::Jpg => "JPG",
-                QuickExportFormat::Gif => "GIF",
-                QuickExportFormat::Webp => "WebP",
-                QuickExportFormat::Exr => "EXR",
-            }
-        };
+        let prefs = app.session.prefs();
+        let format = quick_export_format_name(cfg!(target_arch = "wasm32"), prefs.export.quick_export_format, prefs.export.png_smaller_file);
         item.label = format!("Quick Export as {format}");
     }
     // Smart Objects › Reveal in Finder names this platform's file manager (UI-217-19).
@@ -278,5 +268,21 @@ impl ItemCache {
     /// them, which covers state the hash doesn't list.
     pub(super) fn reuse(self, state: u64, input: bool) -> Option<Vec<MenuItem>> {
         (!input && self.state == state).then_some(self.items)
+    }
+}
+
+/// The format Quick Export's menu item names. The web downloads a PNG whatever the format preference is
+/// and, through the Export As path it takes, never a palette PNG, so its label is always PNG; desktop
+/// names the chosen format, PNG-8 for a PNG with Smaller File on (#13785).
+pub(crate) fn quick_export_format_name(browser: bool, format: photocraft_engine::prefs::QuickExportFormat, smaller_file: bool) -> &'static str {
+    use photocraft_engine::prefs::QuickExportFormat;
+    match format {
+        _ if browser => "PNG",
+        QuickExportFormat::Png if smaller_file => "PNG-8",
+        QuickExportFormat::Png => "PNG",
+        QuickExportFormat::Jpg => "JPG",
+        QuickExportFormat::Gif => "GIF",
+        QuickExportFormat::Webp => "WebP",
+        QuickExportFormat::Exr => "EXR",
     }
 }

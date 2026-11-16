@@ -17,6 +17,7 @@ pub(super) fn export_preferences(s: &mut Session, p: &Value) -> Result<Value> {
         ("webpQuality", "export.webpQuality"),
         ("metadata", "export.metadata"),
         ("convertToSrgb", "export.convertToSrgb"),
+        ("pngSmallerFile", "export.pngSmallerFile"),
     ] {
         if let Some(v) = p.get(k) {
             values.insert(key.into(), v.clone());
@@ -128,6 +129,13 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
             crate::automate_cmds::fire_event(s, "export");
             return Ok(json!({"path": path, "format": fmt, "warnings": warnings}));
         }
+        // Smaller File (8-bit): a palette PNG with binary transparency: clear stays clear and a
+        // partly transparent pixel is opaque in its own colour, no matte (#13785). The palette,
+        // its size and the dither keep the web exporter's PNG-8 defaults.
+        _ if prefs.png_smaller_file => {
+            o.insert("format".into(), json!("png8"));
+            o.insert("matte".into(), json!("none"));
+        }
         _ => {
             o.insert("format".into(), json!("png24"));
         }
@@ -157,3 +165,7 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "quick_jpg_progressive_tests.rs"]
 mod quick_jpg_progressive_tests;
+
+#[cfg(test)]
+#[path = "quick_png8_tests.rs"]
+mod quick_png8_tests;
