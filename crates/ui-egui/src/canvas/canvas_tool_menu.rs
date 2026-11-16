@@ -1938,7 +1938,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         key => tl!(key),
                     };
                     let item = egui::Button::selectable(mode_checked(app, &menu, command), text).min_size(egui::vec2(200.0, 20.0));
-                    if ui.add_enabled(entry_enabled(app, &menu, command), item).clicked() {
+                    if ui.add_enabled(available(app, &menu, command), item).clicked() {
                         selected = Some((*command).to_string());
                     }
                 }
