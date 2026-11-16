@@ -366,6 +366,54 @@ pub fn set_space(app: &mut PhotocraftApp, down: bool) -> bool {
 }
 #[cfg(test)]
 mod space_move_tests;
+/// The selected frame (its id, frame and target) and the handles a press at `p` hits on it: a
+/// frame control (resize or rotate) when the frame itself is targeted, and whether it hits its
+/// image's handles when its content is.
+#[allow(clippy::type_complexity)]
+fn press_controls(app: &PhotocraftApp, p: [f64; 2], zoom: f64) -> (Option<(LayerId, Option<Box<Frame>>, Target)>, Option<(LayerId, EditMode)>, bool) {
+    let active = selected(app).map(|l| (l.id, l.frame.clone(), target(app, l)));
+    let selected_control = active.as_ref().and_then(|(id, f, t)| (*t == Target::Frame).then(|| Some((*id, control_hit(f.as_ref()?, p, zoom)?))).flatten());
+    let content_control = active.as_ref().is_some_and(|(id, _, t)| {
+        if *t != Target::Content {
+            return false;
+        }
+        let Some(st) = app.session.active() else { return false };
+        let Some(child) = st.doc.layer(*id).and_then(|l| l.children()).and_then(|c| c.first()) else { return false };
+        let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, child);
+        let (x0, y0, x1, y1) = (f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
+        [(x0, y0), ((x0 + x1) / 2., y0), (x1, y0), (x1, (y0 + y1) / 2.), (x1, y1), ((x0 + x1) / 2., y1), (x0, y1), (x0, (y0 + y1) / 2.)]
+            .iter()
+            .any(|(x, y)| (x - p[0]).hypot(y - p[1]) * zoom <= HANDLE_PX)
+    });
+    (active, selected_control, content_control)
+}
+
+/// What a Frame tool press at `p` snaps (#13871), as the press is read in [`tool_event`]: a new
+/// frame snaps its corners (no bounds), and moving an empty frame snaps its edges (its bounds);
+/// with the layers that aren't targets: the frame itself, and the Background, whose edges are the
+/// document's (not measured, so not snapped to, as today). Handle drags, image moves and frames
+/// holding an image weren't measured and don't snap.
+pub(crate) fn snap_press(app: &PhotocraftApp, p: [f64; 2]) -> Option<(Option<[f64; 4]>, Vec<LayerId>)> {
+    let zoom = f64::from(app.point_zoom());
+    let (_, selected_control, content_control) = press_controls(app, p, zoom);
+    if selected_control.is_some() || content_control {
+        return None;
+    }
+    let st = app.session.active()?;
+    let mut exclude: Vec<LayerId> = st.doc.layers.iter().filter(|l| st.doc.is_background(l.id)).map(|l| l.id).collect();
+    let Some(id) = frame_at(app, p) else { return Some((None, exclude)) };
+    let l = st.doc.layer(id)?;
+    let f = l.frame.as_ref()?;
+    let locks = st.doc.effective_locks(id);
+    if locks.all || locks.position || !l.children().is_none_or(<[Layer]>::is_empty) {
+        return None;
+    }
+    let b = f.bounds();
+    exclude.push(id);
+    Some((Some([f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)]), exclude))
+}
+#[cfg(test)]
+mod snap_tests;
 
 /// Escape during a drag. A frame being drawn is made at the pointer, as the reference application
 /// does (#13866); the mouse movement and release after it change nothing. Moving, resizing or
@@ -434,26 +482,15 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         ToolEvent::Down { x, y, .. } => {
             cancel(app);
             let p = [x, y];
+            // What was pressed is decided where the pointer was, not where Snap moved the corner of a new
+            // frame to: a press just off an existing frame must not become an edit of it.
+            let raw = app.prefs_rt.snap.as_ref().map_or(p, |s| s.start);
             let zoom = f64::from(app.point_zoom());
-            let active = selected(app).map(|l| (l.id, l.frame.clone(), target(app, l)));
-            let selected_control =
-                active.as_ref().and_then(|(id, f, t)| (*t == Target::Frame).then(|| Some((*id, control_hit(f.as_ref()?, p, zoom)?))).flatten());
-            let content_control = active.as_ref().is_some_and(|(id, _, t)| {
-                if *t != Target::Content {
-                    return false;
-                }
-                let Some(st) = app.session.active() else { return false };
-                let Some(child) = st.doc.layer(*id).and_then(|l| l.children()).and_then(|c| c.first()) else { return false };
-                let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, child);
-                let (x0, y0, x1, y1) = (f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
-                [(x0, y0), ((x0 + x1) / 2., y0), (x1, y0), (x1, (y0 + y1) / 2.), (x1, y1), ((x0 + x1) / 2., y1), (x0, y1), (x0, (y0 + y1) / 2.)]
-                    .iter()
-                    .any(|(x, y)| (x - p[0]).hypot(y - p[1]) * zoom <= HANDLE_PX)
-            });
+            let (active, selected_control, content_control) = press_controls(app, raw, zoom);
             let id = selected_control
                 .map(|(id, _)| id)
                 .or_else(|| content_control.then(|| active.as_ref().map(|(id, _, _)| *id)).flatten())
-                .or_else(|| frame_at(app, p));
+                .or_else(|| frame_at(app, raw));
             if let Some(id) = id {
                 let Some(st) = app.session.active() else { return true };
                 let Some(l) = st.doc.layer(id) else { return true };
@@ -466,7 +503,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 }
                 let t = if content_control {
                     Target::Content
-                } else if selected_control.is_some() || on_border(&f, p, zoom) || l.children().is_none_or(|c| c.is_empty()) {
+                } else if selected_control.is_some() || on_border(&f, raw, zoom) || l.children().is_none_or(|c| c.is_empty()) {
                     Target::Frame
                 } else if active.as_ref().is_some_and(|(prev, _, t)| *prev == id && *t == Target::Content) {
                     Target::Content
