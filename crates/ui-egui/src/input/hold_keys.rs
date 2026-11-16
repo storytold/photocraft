@@ -117,7 +117,31 @@ pub fn cmd_nudges(app: &PhotocraftApp) -> bool {
 
 /// Is ⌘ alone (no other temporary key) making the Move tool now?
 fn cmd_move_held(app: &PhotocraftApp, i: &InputState) -> bool {
-    i.modifiers.command && cmd_moves(app.ui.tool) && app.ui.transform.is_none() && app.ui.text_edit.is_none()
+    i.modifiers.command && cmd_moves(app.ui.tool) && app.ui.transform.is_none() && app.ui.text_edit.is_none() && !sampler_keeps_command(app, i)
+}
+
+/// With the Color Sampler, a plain ⌘ over one of its points (or while one is dragged) stays the
+/// Color Sampler, so a ⌘-drag there moves the point and the cursor is the sampler's; off a point
+/// ⌘ is the Move tool (#11731). ⌘⌥ and ⌘⇧ were not measured: they stay the Move tool, as before.
+fn sampler_keeps_command(app: &PhotocraftApp, i: &InputState) -> bool {
+    app.ui.tool == Tool::ColorSampler
+        && !i.modifiers.alt
+        && !i.modifiers.shift
+        && (matches!(app.ui.analysis.drag, Some(crate::analysis_ui::Drag::Sampler(..)))
+            || pointer_doc(app, i).is_some_and(|p| crate::analysis_ui::sampler_at(app, p).is_some()))
+}
+
+/// The document point under the pointer in this frame's input, else the last frame's hover:
+/// `hover_doc` is written after the temporary tool is chosen, so a pointer that moves onto
+/// something and presses in one frame would be judged where it was.
+fn pointer_doc(app: &PhotocraftApp, i: &InputState) -> Option<[f64; 2]> {
+    // A press in this frame is routed at its origin even when the pointer has moved on before the
+    // frame ends, so the Command decision uses that point.
+    let at = if i.pointer.primary_pressed() { i.pointer.press_origin().or(i.pointer.latest_pos()) } else { i.pointer.latest_pos() };
+    match (at, crate::canvas::ViewXform::active(app)) {
+        (Some(at), Some(xf)) => Some(xf.to_doc(at)),
+        _ => app.hover_doc,
+    }
 }
 
 /// The Hand tool's own modifiers (#6434): ⌘ (Ctrl off the Mac) held is Zoom In, ⌥ (with or
