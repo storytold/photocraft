@@ -411,6 +411,10 @@ pub struct UiState {
     /// Direct Selection tool: selected anchors and the drag in progress (#790).
     #[serde(default)]
     pub direct_selection: crate::direct_select::DirectSelection,
+    /// Scale Effects (#14994): its Preview was off when the dialog last closed. Session only, so a
+    /// new run opens with Preview on. Saved by `close_dialog`, which every close path goes through.
+    #[serde(skip)]
+    pub scale_effects_preview_off: bool,
     /// A live rectangle's corner radius widget being dragged (TOOL-214-12).
     #[serde(skip)]
     pub corner_radius: Option<crate::corner_radius::Drag>,
@@ -685,6 +689,7 @@ impl Default for UiState {
             pen_doc: None,
             stroke_editor: None,
             direct_selection: Default::default(),
+            scale_effects_preview_off: false,
             corner_radius: None,
             type_path_drag: None,
             type_path_geometry_cache: Default::default(),
@@ -769,7 +774,15 @@ impl UiState {
 
     pub fn close_dialog(&mut self, id: u64) -> Option<Dialog> {
         let i = self.dialogs.iter().position(|d| d.id == id)?;
-        Some(self.dialogs.remove(i))
+        let closed = self.dialogs.remove(i);
+        // What Scale Effects showed when it closed (OK, Cancel, Escape or a control-channel close)
+        // is what it reopens with.
+        if closed.fields.get("__command").and_then(serde_json::Value::as_str) == Some(crate::filter_dialog::SCALE_EFFECTS)
+            && let Some(preview) = closed.fields.get("__preview").and_then(serde_json::Value::as_bool)
+        {
+            self.scale_effects_preview_off = !preview;
+        }
+        Some(closed)
     }
 
     pub fn new_document_fields() -> serde_json::Map<String, serde_json::Value> {

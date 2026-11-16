@@ -20,6 +20,9 @@ mod zoom_center;
 
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
 pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
+/// Layer Style › Scale Effects: Scale opens at 100 every time, not the last value used, and its
+/// Preview is kept per session in `UiState::scale_effects_preview_off` (#14994).
+pub(crate) const SCALE_EFFECTS: &str = "layer.layerStyle.scaleEffects";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
@@ -322,7 +325,7 @@ pub const PREVIEWED: &[&str] = &[
     "image.mode.duotone",
     "layer.matting.defringe",
     "layer.matting.colorDecontaminate",
-    "layer.layerStyle.scaleEffects",
+    SCALE_EFFECTS,
     "type.warpText",
     // The preview shows the image through the chosen profile, as Photoshop's Preview does.
     "edit.assignProfile",
@@ -366,6 +369,9 @@ fn rememberable(kind: &Kind, value: &Value) -> bool {
 }
 
 fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &mut Map<String, Value>) {
+    if command == SCALE_EFFECTS {
+        return;
+    }
     let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(command) else { return };
     // Select and Mask starts from its defaults unless Remember Settings was on, as in Photoshop
     // (#9423).
@@ -385,7 +391,7 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
 
 /// Remember successful built-in schema dialogs; failed or cancelled dialogs do not persist.
 pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<String, Value>) {
-    if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") {
+    if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") || command == SCALE_EFFECTS {
         return;
     }
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
@@ -580,7 +586,8 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     fields.insert("__filter".into(), json!(true));
     // Select and Mask previews in its view modes (`select_mask_view`), not as the command's result.
     if command.starts_with("filter.") || PREVIEWED.contains(&command) || command == crate::select_mask_view::COMMAND {
-        fields.insert("__preview".into(), json!(true));
+        let on = command != SCALE_EFFECTS || !app.ui.scale_effects_preview_off;
+        fields.insert("__preview".into(), json!(on));
     }
     for p in parse_spec(spec.params) {
         if let Some(v) = default_value(app, command, &p) {
@@ -1942,3 +1949,7 @@ mod multi_channel_dialog_tests {
         assert_eq!(preview.layer(layer).unwrap().surface(), app.session.active().unwrap().doc.layer(layer).unwrap().surface());
     }
 }
+
+#[cfg(test)]
+#[path = "scale_effects_opening_tests.rs"]
+mod scale_effects_opening_tests;
