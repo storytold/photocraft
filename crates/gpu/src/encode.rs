@@ -10,6 +10,11 @@ use super::{Compositor, DocId, Document, LayerId, Plan, Rect, Surface, TILE_SIZE
 
 type PatternCacheLruItem = (u64, Option<String>, Option<(DocId, LayerId, u16)>, u64);
 
+fn source_area(tile_bounds: Rect, canvas_grid: Rect, halo: u32) -> Rect {
+    let source_halo = halo.div_ceil(TILE_SIZE as u32).saturating_mul(TILE_SIZE as u32) as i32;
+    tile_bounds.intersect(&canvas_grid.inflate(source_halo))
+}
+
 fn mask_halo_page_chunk(max_dim: u32, current_page: u32, current_chunk: u32, halo: u32) -> Result<(u32, u32), Unsupported> {
     let tile = TILE_SIZE as u32;
     let source_halo = halo.div_ceil(tile).saturating_mul(tile);
@@ -467,7 +472,7 @@ impl Compositor {
     /// Per-frame resources of `plan`: the tile area of each pass's surfaces, its LUT and pattern.
     fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>, stats: &mut Stats) -> Result<FrameRes, Unsupported> {
         let grid = tile_grid(canvas);
-        let area = |s: &Surface| s.tile_bounds().intersect(&grid);
+        let area = |s: &Surface| source_area(s.tile_bounds(), grid, plan.mask_halo);
         let areas = plan
             .passes
             .iter()
@@ -565,5 +570,15 @@ mod tests {
         assert_eq!(larger_blur, (512, 512), "a larger halo further reduces both dimensions");
 
         assert!(mask_halo_page_chunk(2048, blur.0, blur.1, 1024).is_err(), "insufficient padded space remains rejected");
+    }
+
+    #[test]
+    fn blur_source_area_keeps_off_canvas_tiles_inside_the_source_halo() {
+        let canvas = Rect::new(0, 0, 512, 512);
+        let grid = tile_grid(canvas);
+        let off_canvas_tile = Rect::new(-256, 256, 0, 512);
+        let source = source_area(off_canvas_tile, grid, 4);
+        assert!(source.contains_rect(&off_canvas_tile), "the input halo includes a tile just outside the canvas");
+        assert_eq!(grid, canvas, "the output region remains clipped to the canvas");
     }
 }

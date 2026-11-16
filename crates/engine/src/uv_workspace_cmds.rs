@@ -57,13 +57,27 @@ fn switch(s: &mut Session, p: &Value) -> Result<Value> {
 }
 fn close(s: &mut Session, params: &Value) -> Result<Value> {
     let restore_ordinary_workspace = !s.uv_workspace.active;
-    switch(s, &json!({"active":true}))?;
-    if params.get("discard").and_then(Value::as_bool) != Some(true) && s.uv_documents().iter().any(DocState::is_dirty) {
-        if restore_ordinary_workspace {
-            switch(s, &json!({"active":false}))?;
+    let discard = params.get("discard").and_then(Value::as_bool) == Some(true);
+    // Check before switching banks so a rejected close leaves the caller's
+    // active document and workspace intact. Headless imports may have UV-bound
+    // documents mixed into the ordinary bank before the workspace is initialized.
+    if !discard {
+        let dirty = if s.uv_workspace.active {
+            s.docs.iter().any(DocState::is_dirty)
+        } else if s.uv_workspace.initialized {
+            s.uv_workspace.parked.iter().any(DocState::is_dirty)
+        } else if s.uv.scene.is_some() {
+            let uv_ids: std::collections::HashSet<_> =
+                s.uv.all_bindings().flatten().copied().chain(s.uv.saved_revisions.keys().copied()).chain(s.uv.replaced_document_ids.iter().copied()).collect();
+            s.docs.iter().any(|state| uv_ids.contains(&state.doc.id) && state.is_dirty())
+        } else {
+            false
+        };
+        if dirty {
+            return Err(EngineError::Other("Unsaved 3D texture changes must be saved or explicitly discarded".into()));
         }
-        return Err(EngineError::Other("Unsaved 3D texture changes must be saved or explicitly discarded".into()));
     }
+    switch(s, &json!({"active":true}))?;
     while !s.docs.is_empty() {
         s.close(s.docs.len() - 1);
     }

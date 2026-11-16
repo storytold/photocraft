@@ -40,9 +40,18 @@ fn project_resave_retains_view_paths_and_refuses_bad_metadata_without_replacing_
     let mut restored = Session::new();
     let result = restored.execute("uv.project.load", json!({"path":path})).unwrap();
     assert_eq!(result["view"], view);
-    assert_eq!(restored.active().unwrap().path, source);
+    assert!(source.is_some(), "fixture begins with an external source path");
+    assert_eq!(restored.active().unwrap().path, None, "project loads do not trust external texture destinations");
     let pixel = photocraft_compose::render(&restored.active().unwrap().doc, photocraft_geom::Rect::from_xywh(2, 2, 1, 1)).px[0];
     assert!(pixel[0] > 0.9 && pixel[1] < 0.1);
+    let export = restored.execute("file.uv.saveAllTextures", json!({})).unwrap();
+    assert!(
+        export["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|error| { error.as_str().is_some_and(|message| message.contains("explicitly rebind the texture before exporting")) })
+    );
     restored.execute("uv.project.save", json!({"path":path})).unwrap();
     assert_eq!(restored.execute("uv.project.load", json!({"path":path})).unwrap()["view"], view);
 }

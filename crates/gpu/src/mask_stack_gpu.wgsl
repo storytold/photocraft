@@ -113,7 +113,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         return vec4<f32>(value, value, value, 1.0);
     }
     if (params.stage == 2u) {
-        let normalized = clamp((below - params.input_black) / max(params.input_white - params.input_black, 0.0000001), 0.0, 1.0);
+        let normalized = clamp((below - params.input_black) / max(params.input_white - params.input_black, 1.1920928955078125e-7), 0.0, 1.0);
         let adjusted = params.output_black + pow(normalized, 1.0 / params.gamma) * (params.output_white - params.output_black);
         let value = blend_value(below, adjusted, params.opacity);
         return vec4<f32>(value, value, value, 1.0);
