@@ -568,6 +568,8 @@ enum Source {
 struct Frame {
     action: std::sync::Arc<Action>,
     target: actions_cmds::PlaybackTarget,
+    /// Legacy pauses use the same revision/caption identity rule as ActionOccurrence.
+    legacy_occurrence: Option<(u64, bool)>,
     source: Source,
     from: usize,
     take: u64,
@@ -581,7 +583,11 @@ impl Frame {
     fn library(session: &photocraft_engine::Session, params: &Value) -> Result<Self, String> {
         let (row, action, from) = actions_cmds::playback_plan_at(session, params).map_err(|e| e.to_string())?;
         let target = actions_cmds::playback_target(session, row).ok_or("The selected action no longer exists")?;
+        let legacy_occurrence = target.id.is_none().then(|| {
+            (session.actions.rev, session.actions.list.iter().filter(|candidate| candidate.name == action.name).take(2).count() == 1)
+        });
         Ok(Self {
+            legacy_occurrence,
             action: std::sync::Arc::new(action),
             target,
             source: Source::Library,
@@ -601,7 +607,14 @@ impl Frame {
     }
 
     fn target(&self, session: &photocraft_engine::Session) -> Result<actions_cmds::PlaybackTarget, String> {
-        actions_cmds::refresh_playback_target(session, &self.action, &self.target).map_err(|error| error.to_string())
+        let target = actions_cmds::refresh_playback_target(session, &self.action, &self.target).map_err(|error| error.to_string())?;
+        if let Some((rev, unique_name)) = self.legacy_occurrence
+            && rev != session.actions.rev
+            && (!unique_name || session.actions.list.iter().filter(|action| action.name == self.action.name).take(2).count() != 1)
+        {
+            return Err("the action changed while it was paused".into());
+        }
+        Ok(target)
     }
 
     fn validate(&self, session: &photocraft_engine::Session) -> Result<(), String> {
@@ -644,7 +657,7 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
 pub fn preview_draft(app: &mut PhotocraftApp, draft: u64, from: usize) -> Result<Value, String> {
     let (action, record) = actions_cmds::playback::preview(&mut app.session, draft, from).map_err(|e| e.to_string())?;
     let target = actions_cmds::playback_snapshot_target(&app.session, &action);
-    let frame = Frame { action, target, from, source: Source::Draft(draft), take: app.session.actions.take, admitted: false, pending_call: false };
+    let frame = Frame { action, target, legacy_occurrence: None, from, source: Source::Draft(draft), take: app.session.actions.take, admitted: false, pending_call: false };
     run_owned(app, frame, Vec::new(), Some(record), 0, 0, true)
 }
 
@@ -2496,18 +2509,27 @@ enum PanelRow {
     Set(Folder, usize),
 }
 
+/// Ordinary logical default-category rows stay loose; declared and physical folders retain headers.
+fn row_folder(row: &Row, declared: &[String], explicit: &[String]) -> Option<Folder> {
+    let name = row.set.as_ref()?;
+    let slot = row.set_slot.filter(|&slot| explicit.get(slot) == Some(name));
+    if slot.is_none() && name == photocraft_engine::atn_cmds::UNGROUPED_SET && !declared.contains(name) {
+        return None;
+    }
+    Some(Folder { name: name.clone(), slot })
+}
+
 /// Keep implicit folders in their established order and explicit occurrences in archive order.
 fn display_order(rows: &[Row], empty: &[String], explicit: &[String]) -> Vec<PanelRow> {
     let mut order = Vec::new();
     let mut folders = std::collections::HashMap::<Folder, Vec<usize>>::new();
     let mut implicit = Vec::new();
     for (index, row) in rows.iter().enumerate() {
-        let Some(name) = &row.set else {
+        let Some(folder) = row_folder(row, empty, explicit) else {
             order.push(PanelRow::Action(index));
             continue;
         };
-        let slot = row.set_slot.filter(|&slot| explicit.get(slot) == Some(name));
-        let folder = Folder { name: name.clone(), slot };
+        let slot = folder.slot;
         let entries = folders.entry(folder.clone()).or_insert_with(|| {
             if slot.is_none() {
                 implicit.push(folder);
@@ -2706,11 +2728,12 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     continue;
                 }
             };
-            let Row { name, steps, disabled, dialogs, set, color: swatch, .. } = &rows[i];
-            if set.is_some() && collapsed {
+            let Row { name, steps, disabled, dialogs, color: swatch, .. } = &rows[i];
+            let in_folder = row_folder(&rows[i], &app.session.actions.sets, &app.session.actions.set_rows).is_some();
+            if in_folder && collapsed {
                 continue;
             }
-            let indent = if set.is_some() { 14.0 } else { 0.0 };
+            let indent = if in_folder { 14.0 } else { 0.0 };
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click_and_drag());
             let x0 = rect.left() + indent;
             if reveal == Some((i, 0)) {

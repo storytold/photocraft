@@ -2598,7 +2598,14 @@ fn a_script_deleted_recording_owner_does_not_resume_into_its_namesake() {
     assert!(crate::menus::modal_allows(&app, "file.scripts.browse"));
 
     let deleted = app.run("file.scripts.browse", json!({"steps": [["actions.delete", {"action": 1}]]})).unwrap();
-    assert_eq!(deleted["ok"], true, "{deleted}");
+    assert_eq!(deleted["ok"], false, "{deleted}");
+    assert!(deleted.to_string().contains("open action step dialog"), "{deleted}");
+    assert_eq!(app.session.actions.list.len(), 3, "the nested script cannot delete the suspended owner");
+    assert!(app.session.execute("actions.delete", json!({"action":1})).is_err(), "the Engine held-playback guard also refuses deletion");
+    assert!(app.session.actions.recording.is_none());
+    // Simulate external model loss only after proving both public command guards refuse it.
+    app.session.actions.list.remove(1);
+    app.session.actions.rev = app.session.actions.rev.saturating_add(1);
     assert_eq!(app.session.actions.list[1], namesake);
     let journal = app.session.journal.len();
     crate::type_panels_ui::close_spelling(&mut app);
@@ -3552,4 +3559,62 @@ fn dragging_uses_the_displayed_folder_occurrence() {
     move_row(&mut app, DragRow { action: 0, step: None }, 1, 2);
     assert_eq!(app.session.actions.list[1].name, "A");
     assert_eq!(app.session.actions.list[1].set_slot, Some(0));
+}
+
+#[test]
+fn a_bound_same_name_pause_follows_stable_ids_after_reordering() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":8,"height":6,"background":"#203040"})).unwrap();
+    let child_id = "a".repeat(32);
+    let mut child = Action::new("Same", vec![("filter.blur.gaussianBlur".into(), json!({"radius":1.5})), ("layer.new.layer".into(), json!({"name":"Suffix"}))]);
+    child.action_id = Some(child_id.clone());
+    child.dialogs.insert(0);
+    let mut caller = Action::new("Same", vec![("actions.play".into(), json!({"action":"Same","actionId":child_id})), ("layer.new.layer".into(), json!({"name":"caller tail"}))]);
+    caller.action_id = Some("b".repeat(32));
+    app.session.actions.list.extend([caller, child]);
+    let paused = play(&mut app, &json!({"action":0})).unwrap();
+    let dialog = paused["paused"]["dialog"].as_u64().unwrap();
+    app.run("actions.move", json!({"action":1,"to":0})).unwrap();
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(layer_names(&app), ["Suffix", "caller tail"]);
+    assert!(app.session.actions.playback_stack.is_empty());
+    assert!(app.paused_playbacks.paused.is_empty());
+    assert!(app.session.actions.held_playback.is_none());
+    assert!(!app.automation_input);
+}
+
+#[test]
+fn a_paused_legacy_unique_name_refuses_a_new_namesake() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":8,"height":6,"background":"#203040"})).unwrap();
+    let mut action = Action::new("Only", vec![("filter.blur.gaussianBlur".into(), json!({"radius":1.5})), ("layer.new.layer".into(), json!({"name":"original tail"}))]);
+    action.dialogs.insert(0);
+    assert!(action.action_id.is_none());
+    app.session.actions.list.push(action);
+    let paused = play(&mut app, &json!({"action":0})).unwrap();
+    let dialog = paused["paused"]["dialog"].as_u64().unwrap();
+    app.session.actions.list.push(Action::new("Only", vec![("layer.new.layer".into(), json!({"name":"wrong tail"}))]));
+    app.session.actions.rev = app.session.actions.rev.saturating_add(1);
+    assert!(crate::dialogs::confirm(&mut app, dialog).unwrap_err().contains("the action changed"));
+    assert!(layer_names(&app).is_empty(), "neither the captured nor the new namesake's tail runs");
+    assert!(app.session.actions.playback_stack.is_empty());
+    assert!(app.paused_playbacks.paused.is_empty());
+    assert!(app.session.actions.held_playback.is_none());
+}
+
+#[test]
+fn classic_default_category_keeps_declared_and_physical_folder_rows() {
+    let default = photocraft_engine::atn_cmds::UNGROUPED_SET.to_string();
+    let row = |set, set_slot| Row { name:"Action".into(), steps:Vec::new(), disabled:BTreeSet::new(), dialogs:BTreeSet::new(), set, set_slot, color:String::new() };
+    let loose = vec![row(None, None), row(Some(default.clone()), None)];
+    assert_eq!(display_order(&loose, &[], &[]), [PanelRow::Action(0), PanelRow::Action(1)]);
+    assert!(row_folder(&loose[1], &[], &[]).is_none());
+    let declared = vec![default.clone()];
+    assert_eq!(display_order(&loose, &declared, &[]), [PanelRow::Action(0), PanelRow::Set(Folder { name:default.clone(), slot:None }, 1), PanelRow::Action(1)]);
+    assert!(row_folder(&loose[1], &declared, &[]).is_some());
+    let physical = vec![row(Some(default.clone()), Some(1)), row(Some(default.clone()), Some(0))];
+    let slots = vec![default.clone(), default.clone()];
+    assert_eq!(display_order(&physical, &[], &slots), [PanelRow::Set(Folder { name:default.clone(), slot:Some(0) }, 1), PanelRow::Action(1), PanelRow::Set(Folder { name:default, slot:Some(1) }, 1), PanelRow::Action(0)]);
+    assert_eq!(row_folder(&physical[0], &[], &slots).unwrap().slot, Some(1));
+    assert_eq!(row_folder(&physical[1], &[], &slots).unwrap().slot, Some(0));
 }

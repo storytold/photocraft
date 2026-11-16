@@ -845,9 +845,38 @@ fn f3_dispatches_only_the_second_same_named_action_after_reorder_and_reopen() {
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), count + 1);
 }
 
+/// Seed the native ATN through the public persistence path, then verify the reopened definitions.
+fn seed_native_actions(store: &MemBackend, file: serde_json::Value, keys: &[(&str, &str)]) -> Vec<u8> {
+    use photocraft_engine::preset_store::open;
+
+    let file: actions_cmds::ActionsFile = serde_json::from_value(file).unwrap();
+    assert_eq!(file.version, 1);
+    let mut seed = photocraft_engine::Session::new();
+    assert!(seed.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+    seed.actions.list = file.actions;
+    seed.actions.sets = file.sets;
+    seed.actions.set_rows = file.set_rows;
+    seed.actions.rev = seed.actions.rev.saturating_add(1);
+    seed.edit_prefs(|prefs| {
+        for &(key, chord) in keys {
+            prefs.shortcuts.insert(key.into(), chord.into());
+        }
+    });
+    seed.sync_preset_store();
+    assert!(seed.action_definitions_written());
+    let bytes = store.read(ACTIONS_FILE, photocraft_engine::preset_store::MAX_ACTIONS_BYTES).unwrap();
+    let mut reopened = photocraft_engine::Session::new();
+    assert!(reopened.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+    let identity = |session: &photocraft_engine::Session| session.actions.list.iter()
+        .map(|action| (action.name.clone(), action.action_id.clone(), action.set.clone(), action.set_slot)).collect::<Vec<_>>();
+    assert_eq!(identity(&reopened), identity(&seed));
+    assert_eq!(reopened.actions.set_rows, seed.actions.set_rows);
+    bytes
+}
+
 #[test]
 fn attachment_preserves_disk_keys_and_calls_without_changing_name_lookup() {
-    use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
+    use photocraft_engine::preset_store::{MemBackend, open};
 
     let store = MemBackend::default();
     let file = json!({"version":1,"set_rows":["Saved"],"actions":[
@@ -855,7 +884,7 @@ fn attachment_preserves_disk_keys_and_calls_without_changing_name_lookup() {
         {"name":"Disk caller","steps":[["actions.play",{"action":"Target"}]]},
         {"name":"Disk conditional","steps":[["actions.conditional",{"if":"always","then":"Target"}]]}
     ]});
-    store.write(ACTIONS_FILE, file.to_string().as_bytes()).unwrap();
+    seed_native_actions(&store, file, &[("actions.play:Target", "F2")]);
 
     let mut h = harness();
     h.state_mut().session.load_prefs_json(r#"{"shortcuts":{"actions.play:Target":"F2"},"alternateShortcuts":{"actions.play:Target":["F3"]}}"#).unwrap();
@@ -928,8 +957,7 @@ fn failed_action_id_write_keeps_the_legacy_shortcut_after_reopen() {
 
     let store = MemBackend::default();
     let file = json!({"version":1,"actions":[{"name":"Target","steps":[["layer.new.layer",{"name":"legacy target"}]]}]});
-    let original = file.to_string().into_bytes();
-    store.write(ACTIONS_FILE, &original).unwrap();
+    let original = seed_native_actions(&store, file, &[("actions.play:Target", "F2")]);
 
     let mut h = harness();
     h.state_mut().session.load_prefs_json(r#"{"shortcuts":{"actions.play:Target":"F2"},"alternateShortcuts":{"actions.play:Target":["F3"]}}"#).unwrap();
@@ -960,8 +988,7 @@ fn deferred_action_shortcut_conflicts_clear_only_after_matching_native_write() {
     let orphan = "actions.play:Missing";
     for (reject, winner_drift) in [(false, false), (true, false), (false, true)] {
         let store = MemBackend::default();
-        let original = br#"{"version":1,"actions":[{"name":"Disk"},{"name":"Edited"}]}"#;
-        store.write(ACTIONS_FILE, original).unwrap();
+        let original = seed_native_actions(&store, json!({"version":1,"actions":[{"name":"Disk"},{"name":"Edited"}]}), &[(loser, "F4"), (edited, "F6")]);
         let (tx, rx) = std::sync::mpsc::channel();
         let mut h = harness();
         let app = h.state_mut();
