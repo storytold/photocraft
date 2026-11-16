@@ -43,9 +43,10 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // The Art History Brush also starts at full opacity (#10263), and the Pattern Stamp at full
         // opacity and flow (#12616): those fields are their own.
         // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
-        // Stamp and the Smudge tool start with their own measured tips instead, as the whole brush
-        // Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601, #12964).
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge) => {
+        // Stamp, the Smudge tool and the Sharpen tool start with their own measured tips instead, as
+        // the whole brush Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601,
+        // #12964, #12950).
+        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge | Tool::Sharpen) => {
             fresh_brush(tool, &current)
         }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
@@ -105,6 +106,8 @@ const PENCIL_TOOL_TIP: (f32, f32, f32) = (1.0, 1.0, 0.25);
 const TONING_TOOL_TIP: (f32, f32, f32) = (65.0, 0.0, 0.25);
 /// The Clone Stamp's tip after Reset Tool (#12601): a 21 px soft round at 25 % spacing.
 const CLONE_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
+/// The Sharpen tool's tip after Reset Tool (#12950): a 13 px soft round at 25 % spacing.
+const SHARPEN_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 /// The Remove tool's size after Reset Tool (#12548): 19 px. Its hardness and spacing are not
 /// measured, so they stay the default brush's.
 const REMOVE_TOOL_SIZE: f32 = 19.0;
@@ -116,8 +119,8 @@ const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 /// [`BRUSH_TOOL_TIP`], the Eraser's [`ERASER_TOOL_TIP`] with no smoothing, the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
 /// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
 /// [`CLONE_STAMP_TIP`] with no smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
-/// tool's [`SMUDGE_TOOL_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools keep the
-/// default tip.
+/// tool's [`SMUDGE_TOOL_TIP`], the Sharpen tool's [`SHARPEN_TOOL_TIP`] and the Pencil's
+/// [`PENCIL_TOOL_TIP`]; the other tools keep the default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
@@ -131,6 +134,7 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
         Tool::Pencil => (brush.size, brush.hardness, brush.spacing) = PENCIL_TOOL_TIP,
         Tool::Burn | Tool::Dodge | Tool::Sponge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
         Tool::Smudge => (brush.size, brush.hardness, brush.spacing) = SMUDGE_TOOL_TIP,
+        Tool::Sharpen => (brush.size, brush.hardness, brush.spacing) = SHARPEN_TOOL_TIP,
         Tool::CloneStamp => {
             (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_TIP;
             brush.smoothing.amount = 0.0;
