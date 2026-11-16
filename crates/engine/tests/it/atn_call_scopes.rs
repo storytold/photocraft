@@ -81,8 +81,12 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                     let caller = session.actions.list.iter().find(|action| action.name == "Caller").unwrap();
                     assert_eq!(caller.steps[0].1[if conditional { "then" } else { "action" }], "Finish");
                     assert_eq!(caller.steps[0].1["set"], "Missing", "deferred external reference stays unrewritten");
+                    assert!(caller.steps[0].1.get(if conditional { "thenActionId" } else { "actionId" }).is_none(), "an unresolved scope must not bind a local namesake");
                     let played = session.execute("actions.play", json!({"action":"Caller"})).unwrap();
-                    assert!(played["failed"]["error"].as_str().unwrap().contains("set `Missing`"), "{played}");
+                    assert!(played["failed"]["error"].as_str().unwrap().contains("no action in the named set"), "{played}");
+                    assert_eq!(played["failed"]["id"], command);
+                    assert_eq!(played["failed"]["step"], 0);
+                    assert_eq!(played["ran"], 0);
                     assert!(!session.active().unwrap().doc.layers.iter().any(|layer| layer.name.starts_with("From ")));
                     let later = atn::write(&row("Missing", vec![finish("From later-loaded set")])).unwrap();
                     let store = MemBackend::default();
