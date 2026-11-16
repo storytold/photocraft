@@ -53,8 +53,8 @@ fn enormous_header_is_not_a_whole_image_allocation() {
     let mut bytes = fixture(ChannelLayout::Rgb, SampleType::F16, ExrCompression::Zip16);
     change_window(&mut bytes, 65536, 32768);
     assert!(matches!(decode(&bytes), Err(CodecError::LimitExceeded(ref message)) if message.contains("2147483648 pixels")));
-    // Streaming gets as far as the now-truncated offset table, without a pixel allocation.
-    assert!(matches!(Decoder::new(Cursor::new(bytes), &|| false), Err(CodecError::Malformed { .. })));
+    // Streaming rejects the oversized data window before reading/allocating its chunks.
+    assert!(matches!(Decoder::new(Cursor::new(bytes), &|| false), Err(CodecError::LimitExceeded(_))));
 }
 
 #[test]
@@ -203,4 +203,33 @@ fn the_stream_route_stages_the_display_window_like_the_whole_file_decoder() {
     assert_eq!((info.canvas_width, info.canvas_height), (2, 2));
     assert_eq!((info.offset_x, info.offset_y), (0, 0));
     assert_eq!(decode(&bytes).unwrap().dimensions(), (2, 2));
+}
+
+#[test]
+fn oversized_display_window_is_rejected_by_streaming_and_whole_file_decoders() {
+    use exr::prelude::{
+        AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, ImageAttributes, IntegerBounds, Layer, LayerAttributes, LineOrder, WritableImage,
+    };
+    // A 1x1 payload must not make a 65536x32768 display allocation admissible.
+    let layer = Layer::new(
+        (1, 1),
+        LayerAttributes::default(),
+        Encoding { compression: Compression::ZIP1, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing },
+        AnyChannels::sort(
+            vec![
+                AnyChannel::new("R", FlatSamples::F32(vec![1.0])),
+                AnyChannel::new("G", FlatSamples::F32(vec![1.0])),
+                AnyChannel::new("B", FlatSamples::F32(vec![1.0])),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+    );
+    let image = exr::image::Image::from_layers(ImageAttributes::new(IntegerBounds::new((0, 0), (65536, 32768))), vec![layer]);
+    let mut bytes = Cursor::new(Vec::new());
+    image.write().to_buffered(&mut bytes).unwrap();
+    let bytes = bytes.into_inner();
+
+    assert!(matches!(decode(&bytes), Err(CodecError::LimitExceeded(_))), "whole-file decoder must reject the canvas");
+    assert!(matches!(Decoder::new(Cursor::new(bytes), &|| false), Err(CodecError::LimitExceeded(_))), "stream decoder must reject the canvas");
 }

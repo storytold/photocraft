@@ -190,6 +190,12 @@ impl<R: Read + Seek> Decoder<R> {
         } else {
             (w as u32, h as u32, 0, 0)
         };
+        // The whole-file decoder admits both its source and display-window allocations
+        // against the default codec limits. Streaming avoids a full source buffer, but the
+        // owning document still allocates the canvas, so don't let a tiny data window hide
+        // an enormous display canvas (especially in scratch-disk mode).
+        let limits = crate::Limits::default();
+        limits.check_bytes(canvas_width, canvas_height, 16)?;
         let info = Info {
             width: w as u32,
             height: h as u32,
