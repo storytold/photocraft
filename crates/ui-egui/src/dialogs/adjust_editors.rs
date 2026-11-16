@@ -154,7 +154,7 @@ pub fn editor(ui: &mut egui::Ui, kind: &str, v: &mut Value, cx: &EditorCx) -> Ed
         *v = json!({});
     }
     match kind {
-        "brightnessContrast" => brightness_contrast(ui, v),
+        "brightnessContrast" => brightness_contrast(ui, v, cx),
         "levels" => levels(ui, v, cx),
         "curves" => curves(ui, v, cx),
         "exposure" => sliders(
@@ -388,3 +388,6 @@ mod tests {
 
 #[cfg(test)]
 mod ui_tests;
+
+#[cfg(test)]
+mod brightness_contrast_legacy_toggle_tests;
