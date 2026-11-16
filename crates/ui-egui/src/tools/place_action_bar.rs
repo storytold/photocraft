@@ -7,7 +7,9 @@
 //! 3. Remove background (scissors / mask cutout);
 //! 4. Adjust colors (Hue/Saturation adjustment layer);
 //! 5. Free Transform (vector-shape / quad with handles);
-//! 6. the ⋯ menu (widgets::task_bar::MoreMenu).
+//! 6. Create new fill or adjustment layer (adjustment-layer popup menu);
+//! 7. Place Embedded… / Add image (image);
+//! 8. the ⋯ menu (widgets::task_bar::MoreMenu).
 
 use serde_json::json;
 
@@ -195,7 +197,62 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::Mor
         }
     }
 
-    // 5. More options (⋯: Hide bar, Reset bar position, Pin bar position)
+    // 5. Create new fill or adjustment layer
+    let adj = crate::icons::button_with_icon_size_tip(
+        ui,
+        "adjustment-layer",
+        task_bar::BUTTON,
+        14.0,
+        false,
+        tl!("Create new fill or adjustment layer"),
+        false,
+    );
+    let mut actions: Vec<(&str, serde_json::Value)> = Vec::new();
+    crate::press_menu::show(&adj, |ui, menu| {
+        ui.set_min_width(190.0);
+        for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
+            if menu.item(ui, tl!(c.label).trim_end_matches('…')) {
+                actions.push((c.id, json!({})));
+            }
+        }
+        ui.separator();
+        if menu.item(ui, tl!("Solid Color…")) {
+            actions.push(("layer.newFillLayer.solidColor", json!({})));
+        }
+        if menu.item(ui, tl!("Gradient…")) {
+            actions.push(("layer.newFillLayer.gradient", json!({})));
+        }
+        if menu.item(ui, tl!("Pattern…")) {
+            actions.push(("layer.newFillLayer.pattern", json!({})));
+        }
+    });
+    for (cmd, params) in actions {
+        set_active(app);
+        if let Err(e) = app.run(cmd, params) {
+            crate::notices::error(app, e);
+        }
+    }
+
+    // 6. Place Embedded…
+    if crate::icons::button_with_icon_size_tip(
+        ui,
+        "image",
+        task_bar::BUTTON,
+        14.0,
+        false,
+        tl!("Place Embedded…"),
+        false,
+    )
+    .clicked()
+    {
+        set_active(app);
+        let ctx = ui.ctx().clone();
+        if let Err(e) = crate::menus::invoke(app, &ctx, "file.placeEmbedded", json!({})) {
+            crate::notices::error(app, e);
+        }
+    }
+
+    // 7. More options (⋯: Hide bar, Reset bar position, Pin bar position)
     more.show(ui);
 }
 
@@ -247,5 +304,25 @@ mod tests {
             layers: Vec::new(),
         });
         assert!(!eligible(&app));
+    }
+
+    #[test]
+    fn free_transform_transitions_to_transform_task_bar() {
+        let mut app = app_with_doc();
+        app.ui.panels.context_task_bar = true;
+        assert!(eligible(&app));
+        assert!(!crate::tools::transform_task_bar::eligible(&app));
+
+        // Invoke Free Transform as the button does
+        crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
+        assert!(app.ui.transform.is_some());
+        assert!(!eligible(&app));
+        assert!(crate::tools::transform_task_bar::eligible(&app));
+
+        // Commit Free Transform returns to place action bar
+        crate::transform_tool::commit(&mut app);
+        assert!(app.ui.transform.is_none());
+        assert!(eligible(&app));
+        assert!(!crate::tools::transform_task_bar::eligible(&app));
     }
 }
