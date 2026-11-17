@@ -248,7 +248,11 @@ pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
 /// changed ([`photocraft_engine::link_watch`]).
 #[cfg(not(target_arch = "wasm32"))]
 fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    match app.session.poll_link_scan() {
+    // An editor or file picker owns its document snapshot. Keep finished scans queued until
+    // it closes: a background refresh would invalidate a paused action before it can save.
+    let modal = app.file_dialog_open() || !app.ui.dialogs.is_empty();
+    let scan = if modal { None } else { app.session.poll_link_scan() };
+    match scan {
         Some(Ok(r)) => {
             if let Some(n) = r["updated"].as_array().map(Vec::len).filter(|n| *n > 0) {
                 app.ui.status = crate::i18n::trn(
@@ -272,7 +276,7 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     let last: f64 = ctx.data(|d| d.get_temp(last_key)).unwrap_or(f64::NEG_INFINITY);
-    if now - last >= 2.0 || (focused && !was_focused) {
+    if !modal && (now - last >= 2.0 || (focused && !was_focused)) {
         ctx.data_mut(|d| d.insert_temp(last_key, now));
         app.session.start_link_scan();
     }

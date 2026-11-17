@@ -129,6 +129,95 @@ fn recorded_web_dialog_cancel_stops_at_settings_or_the_filename_picker() {
 }
 
 #[test]
+fn recorded_web_dialog_waits_while_the_filename_picker_is_open() {
+    for update_at in [None, Some("settings"), Some("picker")] {
+        web_filename_picker_wait(update_at);
+    }
+}
+
+fn web_filename_picker_wait(update_at: Option<&str>) {
+    let link_update = update_at.is_some();
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("Renamed.jpg");
+    let source = dir.path().join("Source.png");
+    let reply = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let answer = reply.clone();
+    let mut app = web_action_app(dir.path());
+    let mut replacement = Vec::new();
+    if link_update {
+        app.run("file.export.saveForWebLegacy", json!({"path":source,"format":"png24"})).unwrap();
+        app.run("file.placeLinked", json!({"path":source})).unwrap();
+        app.run("layer.smartObjects.updateChanged", json!({})).unwrap();
+        let mut other = photocraft_engine::Session::new();
+        other.execute("file.new", json!({"width":8,"height":6,"background":"#123456"})).unwrap();
+        let path = dir.path().join("Replacement.png");
+        other.execute("file.export.saveForWebLegacy", json!({"path":path,"format":"png24"})).unwrap();
+        replacement = std::fs::read(path).unwrap();
+    }
+    app.services.file_dialog = Some(Box::new(move |_, _, pending| *answer.borrow_mut() = Some(pending)));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let played = h.state_mut().run("actions.play", json!({"action":"Parent"})).unwrap();
+    let id = played["paused"]["dialog"].as_u64().unwrap();
+    let before = h.state().session.active().unwrap().doc.clone();
+    let queue_update = |app: &mut PhotocraftApp| {
+        std::fs::write(&source, &replacement).unwrap();
+        let st = app.session.active().unwrap();
+        let doc = st.doc.id.0;
+        let layer = st.active_layer.unwrap().0;
+        // A worker finishes after the export paused, as when an earlier action rewrote a link.
+        app.session.link_scan = Some(std::sync::Arc::new(std::sync::Mutex::new(Some((
+            doc,
+            vec![(source.to_string_lossy().into_owned(), vec![layer], Some((replacement.len() as u64 + 1, 1)))],
+        )))));
+    };
+    if update_at == Some("settings") {
+        queue_update(h.state_mut());
+    }
+    h.run_steps(4);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    if update_at == Some("picker") {
+        queue_update(h.state_mut());
+    }
+    h.event(egui::Event::WindowFocused(false));
+    h.run_steps(16);
+    assert!(!output.exists());
+    assert_eq!(names(h.state()).len(), usize::from(link_update));
+    assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc));
+    reply.borrow_mut().take().unwrap().send(Some(crate::file_dialog::FileDialogAnswer::SaveTo(output.to_string_lossy().into_owned())));
+    h.event(egui::Event::WindowFocused(true));
+    h.run_steps(4);
+    assert!(output.exists(), "{}", h.state().ui.status);
+    assert!(names(h.state()).ends_with(&["Child".into(), "Parent".into()]));
+    assert_idle(h.state());
+    if link_update {
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.history.undo_label(), Some("Update Modified Content"), "apply the queued refresh after playback finishes");
+    }
+}
+
+#[test]
+fn recorded_web_dialog_rejects_an_edit_while_the_filename_picker_is_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("Renamed.jpg");
+    let mut app = web_action_app(dir.path());
+    let (picker, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(output.to_string_lossy().into_owned()))]);
+    app.services.file_dialog = Some(picker);
+    let played = app.run("actions.play", json!({"action":"Parent"})).unwrap();
+    let id = played["paused"]["dialog"].as_u64().unwrap();
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    app.run("layer.new.layer", json!({"name":"Independent edit"})).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert!(!output.exists());
+    assert!(app.ui.status.contains("the paused action's document or history changed"));
+    assert_eq!(names(&app), ["Independent edit"]);
+    assert_idle(&app);
+}
+
+#[test]
 fn recorded_web_dialog_off_and_programmatic_playback_keep_the_recorded_destination() {
     for programmatic in [false, true] {
         let dir = tempfile::tempdir().unwrap();
