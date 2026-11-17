@@ -3266,7 +3266,6 @@ mod blend_viewport_regression;
 #[cfg(test)]
 #[path = "canvas/perspective_crop_cursor_tests.rs"]
 mod perspective_crop_cursor_tests;
-
 #[cfg(test)]
 #[path = "canvas/pixel_alignment_tests.rs"]
 mod pixel_alignment_tests;

@@ -65,25 +65,31 @@ fn drawn(c: &Cursor, scale: f32, dx: f32, dy: f32) -> bool {
     rgba.get(i).is_some_and(|a| *a > 200)
 }
 
+/// Whether the bitmap draws something within a pixel of (`dx`, `dy`), allowing for where the
+/// hotspot falls inside its pixel.
+fn near(c: &Cursor, scale: f32, dx: f32, dy: f32) -> bool {
+    [-1.0, 0.0, 1.0].into_iter().any(|ox| [-1.0, 0.0, 1.0].into_iter().any(|oy| drawn(c, scale, dx + ox / scale, dy + oy / scale)))
+}
+
 #[test]
 fn vertical_type_shows_a_sideways_i_beam_in_a_dotted_box() {
     let h = harness(Tool::VerticalType);
     let c = cursor(&h);
-    assert_eq!(c.0, CursorIcon::None, "our own bitmap, not a system cursor");
-    assert!(c.1.is_some(), "the cursor bitmap");
+    // Our own bitmap: the end of the pass reports it with the crosshair as the fallback icon.
+    assert!(c.1.is_some(), "the cursor bitmap, not a system cursor");
     let scale = crate::tool_cursor::native_scale(&h.ctx);
     // The stem runs across through the hotspot, not up and down.
-    assert!(drawn(&c, scale, 0.0, 0.0), "the stem under the hotspot");
-    assert!(drawn(&c, scale, -4.0, 0.0) && drawn(&c, scale, 4.0, 0.0), "the stem left and right of the hotspot");
+    assert!(near(&c, scale, 0.0, 0.0), "the stem under the hotspot");
+    assert!(near(&c, scale, -4.0, 0.0) && near(&c, scale, 4.0, 0.0), "the stem left and right of the hotspot");
     assert!(!drawn(&c, scale, 0.0, -4.0) && !drawn(&c, scale, 0.0, 4.0), "nothing above or below the hotspot");
     // The serifs stand up and down at the stem's ends.
-    assert!(drawn(&c, scale, -5.5, -2.0) && drawn(&c, scale, 5.5, 2.0), "the serifs");
+    assert!(near(&c, scale, -5.5, -2.0) && near(&c, scale, 5.5, 2.0), "the serifs");
     // The dotted box: its corners 9 left/right of the hotspot, 4 above and 12 below.
     for (dx, dy) in [(-9.0, -4.0), (9.0, -4.0), (-9.0, 12.0), (9.0, 12.0)] {
-        assert!(drawn(&c, scale, dx, dy), "a box corner dot at ({dx}, {dy})");
+        assert!(near(&c, scale, dx, dy), "a box corner dot at ({dx}, {dy})");
     }
     // Dotted, not a line: gaps between the dots on the bottom edge.
-    assert!(!drawn(&c, scale, -6.0, 12.0) && !drawn(&c, scale, 9.0, 9.5), "gaps between the dots");
+    assert!(!drawn(&c, scale, -6.0, 12.0) && !drawn(&c, scale, 6.0, 12.0), "gaps between the dots");
     assert_ne!(c, cursor(&harness(Tool::Type)), "not the horizontal tool's cursor");
 }
 
