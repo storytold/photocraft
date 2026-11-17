@@ -486,10 +486,11 @@ pub fn act_table(bytes: &[u8]) -> std::result::Result<(Vec<String>, Option<u64>)
 ///
 /// As Photoshop saves a Color Table: the count/transparent trailer follows the 256 colors only
 /// when the table is shorter than 256 colors or has a transparent index, so a full table without
-/// one is the bare 768-byte palette (#14375).
+/// one is the bare 768-byte palette (#14375). A full table's count is left out here; with a
+/// transparent index `craft_psd::act::write` still writes the trailer, with the count 256.
 pub fn act_bytes(colors: &[[u8; 3]], transparent: Option<u16>) -> std::result::Result<Vec<u8>, String> {
     let used = colors.len().min(ACT_COLORS);
-    let count = (used < ACT_COLORS || transparent.is_some()).then_some(used as u16);
+    let count = (used < ACT_COLORS).then_some(used as u16);
     craft_psd::act::write(colors, count, transparent).map_err(|e| e.to_string())
 }
 
