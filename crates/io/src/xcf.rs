@@ -1506,6 +1506,9 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 Err(error) => {
                     // Failed decoding retains no effect allocation; preserve only the caller's traversal charges.
                     image.meta_budget = before_effect;
+                    // A fixed general note deduplicates hostile offsets without
+                    // copying owner names, and survives optional report truncation.
+                    image.warnings.note("Optional stored effect data could not be decoded; usable pixels were preserved. See the conversion report");
                     image.outcomes.push(ConversionEntry {
                         feature_code: "xcf.layer_effect".into(),
                         source,

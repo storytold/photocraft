@@ -18,10 +18,14 @@ fn fixture(owner: usize, raw: u64) -> (Vec<u8>, u64) {
     let channel_slot = w.slot();
     w.ptr(0);
     w.ptr(0); // No standalone paths.
-    let mut invalid_slot = None;
+    let mut invalid_slots = Vec::new();
     let mut effect_list = |w: &mut W, current| {
-        if current == owner && raw != 0 {
-            invalid_slot = Some(w.slot());
+        if (current == owner || (owner == 3 && current == 0)) && raw != 0 {
+            // Owner 3 exercises several distinct malformed records on one layer.
+            let count = if owner == 3 { 3 } else { 1 };
+            for _ in 0..count {
+                invalid_slots.push(w.slot());
+            }
         }
         w.ptr(0);
     };
@@ -62,8 +66,8 @@ fn fixture(owner: usize, raw: u64) -> (Vec<u8>, u64) {
         2 => w.out.len() as u64,
         value => value,
     };
-    if let Some(slot) = invalid_slot {
-        w.out[slot..slot + 8].copy_from_slice(&pointer.to_be_bytes());
+    for (index, slot) in invalid_slots.into_iter().enumerate() {
+        w.out[slot..slot + 8].copy_from_slice(&pointer.saturating_add(index as u64).to_be_bytes());
     }
     (w.out, pointer)
 }
@@ -100,6 +104,21 @@ fn invalid_layer_mask_and_channel_effect_offsets_preserve_pixels_and_native_repo
             assert_eq!(reopened.metadata.import_conversion, imported.document.metadata.import_conversion);
         }
     }
+}
+
+#[test]
+fn malformed_layer_effect_records_emit_one_bounded_general_warning() {
+    let (bytes, _) = fixture(3, 1);
+    let imported = crate::import("malformed-effects.xcf", &bytes).unwrap();
+    assert_pixels(&imported.document);
+    let message = "Optional stored effect data could not be decoded; usable pixels were preserved. See the conversion report";
+    assert_eq!(imported.warnings.iter().filter(|warning| warning.as_str() == message).count(), 1);
+    assert!(message.len() < 128);
+    let Some(ImportConversion::Report(report)) = imported.document.metadata.import_conversion.as_deref() else { panic!("report") };
+    assert_eq!(
+        report.entries.iter().filter(|entry| entry.feature_code == "xcf.layer_effect" && entry.reason == ConversionReason::InvalidOptionalData).count(),
+        3
+    );
 }
 
 #[test]
