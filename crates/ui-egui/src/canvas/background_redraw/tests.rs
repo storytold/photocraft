@@ -166,22 +166,24 @@ fn cpu_only_document(app: &mut PhotocraftApp, w: u32, h: u32) -> DocId {
 }
 
 /// The thresholds a small-document test sets on its own canvas (#15370). `SMALL_DEFER_PX` sits
-/// under the 120 k px of a 400 × 300 document, so a full refresh of it still reaches the deferred
-/// branch, and `SMALL_BLOCK` cuts that document into the same 4 × 3 = 12 blocks the 4096 × 3072
-/// ones had at [`BLOCK`]: still more than [`BATCH`], so the held worker really does have blocks
-/// left to draw when an edit lands, and a 90 × 70 corner edit is still small enough to draw at
+/// under the 786 k px of the document below, so a full refresh of it still reaches the deferred
+/// branch, and `SMALL_BLOCK` cuts it into the same 4 × 3 = 12 blocks the 4096 × 3072 ones had at
+/// [`BLOCK`]: still more than [`BATCH`], so the held worker really does have blocks left to draw
+/// when an edit lands. 256 px is a whole render tile and a power of two, as [`BLOCK`] is, so the
+/// blocks here have the shape production draws rather than sub-tile rects. And the 230 × 170 corner
+/// edit damages one 256 px tile (65 k px), under `SMALL_DEFER_PX`, so it is still an edit drawn at
 /// once. Production canvases keep [`DEFER_PX`] and [`BLOCK`] - see
 /// [`redraw_thresholds_belong_to_one_canvas`] and the tests that keep their megabyte documents.
 const SMALL_DEFER_PX: u64 = 100_000;
-const SMALL_BLOCK: i32 = 100;
+const SMALL_BLOCK: i32 = 256;
 
-/// The document the tests below use: 400 × 300 = 120 k px, a twentieth of the 2600 × 1700 the
+/// The document the tests below use: 1024 × 768 = 786 k px, a fifth of the 4.19 MP that the
 /// production [`DEFER_PX`] forces, with [`SMALL_DEFER_PX`] and [`SMALL_BLOCK`] on their canvas.
-const SMALL_W: u32 = 400;
-const SMALL_H: u32 = 300;
+const SMALL_W: u32 = 1024;
+const SMALL_H: u32 = 768;
 
 /// [`gpu_app`] with the deferred-redraw thresholds lowered on the app's own canvas, so its
-/// documents can be a few hundred pixels across (#15370).
+/// documents can be a megabyte across instead of four (#15370).
 fn small_gpu_app() -> Option<Gpu> {
     let g = gpu_app()?;
     let gpu = g.harness.state().gpu.clone().expect("the app's GPU canvas");
@@ -204,8 +206,10 @@ fn redraw_thresholds_belong_to_one_canvas() {
     assert_eq!(g.observer.redraw_block(), BLOCK, "and the production block side");
     assert_eq!(crate::gpu_canvas::DEFER_PX, 4 * 1024 * 1024, "the production threshold itself: 4.19 MP, unchanged by these hooks");
     assert_eq!(BLOCK, 1024, "and the production block side");
-    assert_eq!(blocks(Rect::new(0, 0, 400, 300), SMALL_BLOCK).len(), 12, "the small document keeps a 4x3 grid of blocks");
+    assert_eq!(blocks(Rect::new(0, 0, SMALL_W as i32, SMALL_H as i32), SMALL_BLOCK).len(), 12, "the small document keeps a 4x3 grid of blocks");
     assert_eq!(blocks(Rect::new(0, 0, 4096, 3072), BLOCK).len(), 12, "like the 4096x3072 documents had at BLOCK");
+    assert_eq!(SMALL_BLOCK, photocraft_geom::TILE_SIZE, "the test block is a whole render tile");
+    assert!((SMALL_BLOCK as u32).is_power_of_two() && BLOCK % SMALL_BLOCK == 0, "and divides the production block, as BLOCK's own docs ask");
 }
 
 /// Frames until no redraw is running.
@@ -289,7 +293,7 @@ fn an_edit_during_a_redraw_is_not_overwritten_by_blocks_drawn_before_it() {
     // the redraw runs: a small edit, drawn at once.
     g.harness.state_mut().run("layer.new.layer", json!({})).expect("layer");
     g.harness.step();
-    g.harness.state_mut().run("select.rect", json!({"x": 300, "y": 220, "width": 90, "height": 70})).expect("select");
+    g.harness.state_mut().run("select.rect", json!({"x": 780, "y": 580, "width": 230, "height": 170})).expect("select");
     g.harness.step();
     g.harness.state_mut().run("edit.fill", json!({"color": "#22ee22"})).expect("fill");
     g.harness.step();
@@ -312,7 +316,7 @@ fn an_edit_damaging_most_of_a_large_document_is_drawn_in_the_background_too() {
     settle(&mut g);
     // Filling most of the Blend If layer touches tiles all over it: the whole canvas (a fill of a
     // small part damages only its own tiles, #9329).
-    g.harness.state_mut().run("select.rect", json!({"x": 10, "y": 10, "width": 385, "height": 285})).expect("select");
+    g.harness.state_mut().run("select.rect", json!({"x": 10, "y": 10, "width": 1000, "height": 740})).expect("select");
     g.harness.step();
     g.harness.state_mut().run("edit.fill", json!({"color": "#22ee22"})).expect("fill");
     assert_eq!(g.harness.state().session.active().expect("document").last_damage, Some(Rect::new(0, 0, SMALL_W as i32, SMALL_H as i32)));
@@ -357,8 +361,8 @@ fn a_redraw_finishing_after_memory_usage_drops_keeps_nothing_over_it() {
     let Some(mut g) = small_gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     let held = start_held_redraw(&mut g, doc);
-    // Less than the document's memory_bytes (layers plus history, over 1 MB even for 400x300):
-    // nothing is left for kept composites.
+    // Less than the document's memory_bytes (layers plus history: 6 MB for this 1024x768
+    // document): nothing is left for kept composites.
     g.harness.state_mut().session.edit_prefs(|p| p.performance.memory_usage_mb = 1);
     drop(held);
     settle(&mut g);
