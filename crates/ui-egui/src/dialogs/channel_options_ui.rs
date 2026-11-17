@@ -8,45 +8,77 @@
 //!
 //! The Channels panel's New Channel… is the same dialog for a channel still to be made (name,
 //! Masked / Selected Areas, colour, opacity); OK runs `channel.new` (#11451).
+//!
+//! New Spot Channel… asks for Name and Ink Characteristics (Color, Solidity); OK runs
+//! `channel.newSpot` (from the selection, as Photoshop does) and remembers the ink.
+//!
+//! The channel a dialog edits (an alpha/spot channel index, `"quickMask"` or `"mask"`) is captured
+//! at open, not a row.
 
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use photocraft_doc::ColorIndicates;
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
+use crate::dialogs::params;
 
 pub const COMMAND: &str = "channel.options";
-const MARK: &str = "__channelOptions";
 pub const NEW_CHANNEL: &str = "channel.new";
-const NEW_CHANNEL_MARK: &str = "__newChannel";
+pub const NEW_SPOT: &str = "channel.newSpot";
 
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(MARK)
+/// Which of the five dialogs a key and captured channel name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    Channel,
+    QuickMask,
+    LayerMask,
+    New,
+    Spot,
+}
+
+fn kind_of(key: &str, channel: &Value) -> Kind {
+    match key {
+        NEW_CHANNEL => Kind::New,
+        NEW_SPOT => Kind::Spot,
+        _ => match channel.as_str() {
+            Some("mask") => Kind::LayerMask,
+            Some("quickMask") => Kind::QuickMask,
+            _ => Kind::Channel,
+        },
+    }
+}
+
+/// Whether `key` is one of these dialogs'.
+pub fn owns(key: &str) -> bool {
+    matches!(key, COMMAND | NEW_CHANNEL | NEW_SPOT)
 }
 
 fn hex(rgb: [f32; 3]) -> String {
     crate::color_picker_ui::hex(rgb)
 }
 
-/// Whether `f` is Layer Mask Display Options rather than a channel's options.
-fn layer_mask(f: &Map<String, Value>) -> bool {
-    f.get("channel").and_then(Value::as_str) == Some("mask")
+fn open_fields(name: Option<String>, indicates: Option<&str>, color: [f32; 3], percent: f64, percent_key: &str) -> DialogFields {
+    let mut f = DialogFields::new();
+    if let Some(n) = name {
+        f.set("name", FieldValue::Text(n));
+    }
+    if let Some(i) = indicates {
+        f.set("indicates", FieldValue::Text(i.to_string()));
+    }
+    f.set("color", FieldValue::Color(color));
+    f.set(percent_key, FieldValue::Number(percent));
+    f
 }
 
-/// The dialog's fields for `channel` (an alpha/spot channel index, `"quickMask"`, or `"mask"` for
+/// The open values for `channel` (an alpha/spot channel index, `"quickMask"`, or `"mask"` for
 /// Layer Mask Display Options), or `None` when there's no document or no such channel.
-pub fn fields(app: &PhotocraftApp, channel: &Value) -> Option<Map<String, Value>> {
+pub fn fields(app: &PhotocraftApp, channel: &Value) -> Option<DialogFields> {
     let doc = &app.session.active()?.doc;
     let kind = |i: ColorIndicates| if i == ColorIndicates::SelectedAreas { "selected" } else { "masked" };
     if channel.as_str() == Some("mask") {
         let o = &app.session.prefs().layer_mask_overlay;
-        let mut f = Map::new();
-        f.insert(MARK.into(), json!(true));
-        f.insert("__command".into(), json!(COMMAND));
-        f.insert("__label".into(), json!("Layer Mask Display Options…"));
-        f.insert("channel".into(), json!("mask"));
-        f.insert("color".into(), json!(hex(o.rgb())));
-        f.insert("opacity".into(), json!((o.alpha() * 100.0).round()));
-        return Some(f);
+        return Some(open_fields(None, None, o.rgb(), f64::from((o.alpha() * 100.0).round()), "opacity"));
     }
     let (name, indicates, color, percent) = if channel.as_str() == Some("quickMask") {
         let o = app.session.quick_mask_options;
@@ -58,230 +90,152 @@ pub fn fields(app: &PhotocraftApp, channel: &Value) -> Option<Map<String, Value>
             None => (Some(ch.name.clone()), kind(ch.indicates), ch.color, ch.opacity),
         }
     };
-    let mut f = Map::new();
-    f.insert(MARK.into(), json!(true));
-    f.insert("__command".into(), json!(COMMAND));
-    f.insert("__label".into(), json!(if name.is_some() { "Channel Options…" } else { "Quick Mask Options…" }));
-    f.insert("channel".into(), channel.clone());
-    if let Some(n) = name {
-        f.insert("name".into(), json!(n));
+    Some(open_fields(name, Some(indicates), color.to_rgb(), f64::from((percent.clamp(0.0, 1.0) * 100.0).round()), "opacity"))
+}
+
+/// The New Channel values: Channel Options' for a channel still to be made (the next "Alpha N"
+/// name, Masked Areas, red at 50%), or `None` without a document. OK runs `channel.new`.
+pub fn new_channel_fields(app: &PhotocraftApp) -> Option<DialogFields> {
+    let doc = &app.session.active()?.doc;
+    let name = photocraft_engine::channel_cmds::next_alpha_name(doc, "Alpha");
+    Some(open_fields(Some(name), Some("masked"), [1.0, 0.0, 0.0], 50.0, "opacity"))
+}
+
+/// The New Spot Channel values: the next "Spot Color N" name, red and 0% solidity (the framework
+/// opens the last remembered ink over them), or `None` without a document.
+pub fn new_spot_fields(app: &PhotocraftApp) -> Option<DialogFields> {
+    let doc = &app.session.active()?.doc;
+    let name = photocraft_engine::channel_cmds::next_alpha_name(doc, "Spot Color");
+    Some(open_fields(Some(name), None, [1.0, 0.0, 0.0], 0.0, "solidity"))
+}
+
+fn title(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Channel => tl!("Channel Options"),
+        Kind::QuickMask => tl!("Quick Mask Options"),
+        Kind::LayerMask => tl!("Layer Mask Display Options"),
+        Kind::New => tl!("New Channel"),
+        Kind::Spot => tl!("New Spot Channel"),
     }
-    f.insert("indicates".into(), json!(indicates));
-    f.insert("color".into(), json!(hex(color.to_rgb())));
-    f.insert("opacity".into(), json!((percent.clamp(0.0, 1.0) * 100.0).round()));
-    Some(f)
+}
+
+/// The rows of a dialog of `kind`; `spot` is whether Color Indicates is Spot Color, which turns
+/// Opacity into Solidity.
+fn rows(kind: Kind, spot: bool) -> Vec<Param> {
+    let mut rows = Vec::new();
+    if matches!(kind, Kind::Channel | Kind::New | Kind::Spot) {
+        rows.push(Param::new("name", tl!("Name:"), ParamKind::text("")));
+    }
+    if !matches!(kind, Kind::LayerMask | Kind::Spot) {
+        let mut options = vec![("masked".to_string(), tl!("Masked Areas").into()), ("selected".to_string(), tl!("Selected Areas").into())];
+        // Quick Mask can't be a spot channel; New Spot Channel… makes spot channels.
+        if kind == Kind::Channel {
+            options.push(("spot".to_string(), tl!("Spot Color").into()));
+        }
+        rows.push(Param::new("indicates", tl!("Color Indicates:"), ParamKind::radio(options, Some("masked".to_string()))));
+    }
+    let ink = kind == Kind::Spot;
+    let mut color = Param::new("color", tl!("Color:"), ParamKind::color(Some([1.0, 0.0, 0.0])));
+    // New Spot keeps its ink; the others' default follows the document.
+    if !ink {
+        color = color.not_remembered();
+    }
+    rows.push(color);
+    let solid = ink || spot;
+    let (key, label) = if ink {
+        ("solidity", tl!("Solidity:"))
+    } else if spot {
+        ("opacity", tl!("Solidity:"))
+    } else {
+        ("opacity", tl!("Opacity:"))
+    };
+    rows.push(Param::new(key, label, ParamKind::number(Some(0.0), Some(100.0), if solid { 0.0 } else { 50.0 }, 1.0, 0)));
+    rows
+}
+
+fn build(key: &'static str, channel: Value) -> impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static {
+    move |f: &mut DialogFields| {
+        let kind = kind_of(key, &channel);
+        ParamDialog::new(key, title(kind), rows(kind, f.text("indicates") == Some("spot")))
+    }
+}
+
+fn open_with(app: &mut PhotocraftApp, key: &'static str, fields: DialogFields, channel: Value) -> DialogId {
+    let captured = json!({ "channel": channel });
+
+    params::open_param(app, key, fields, captured, build(key, channel))
 }
 
 /// Opens Channel Options on `channel`, or `None` if it doesn't exist.
-pub fn open(app: &mut PhotocraftApp, channel: &Value) -> Option<u64> {
+pub fn open(app: &mut PhotocraftApp, channel: &Value) -> Option<DialogId> {
     let f = fields(app, channel)?;
-    Some(app.ui.open_dialog(crate::state::DialogKind::Command, f))
-}
-
-/// The New Channel fields: Channel Options' for a channel still to be made (the next "Alpha N"
-/// name, Masked Areas, red at 50%), or `None` without a document. OK runs `channel.new`.
-pub fn new_channel_fields(app: &PhotocraftApp) -> Option<Map<String, Value>> {
-    let doc = &app.session.active()?.doc;
-    let mut f = Map::new();
-    f.insert(MARK.into(), json!(true));
-    f.insert(NEW_CHANNEL_MARK.into(), json!(true));
-    f.insert("__command".into(), json!(NEW_CHANNEL));
-    f.insert("__label".into(), json!("New Channel…"));
-    f.insert("name".into(), json!(photocraft_engine::channel_cmds::next_alpha_name(doc, "Alpha")));
-    f.insert("indicates".into(), json!("masked"));
-    f.insert("color".into(), json!("#ff0000"));
-    f.insert("opacity".into(), json!(50.0));
-    Some(f)
+    Some(open_with(app, COMMAND, f, channel.clone()))
 }
 
 /// Opens New Channel, or `None` without a document.
-pub fn open_new_channel(app: &mut PhotocraftApp) -> Option<u64> {
+pub fn open_new_channel(app: &mut PhotocraftApp) -> Option<DialogId> {
     let f = new_channel_fields(app)?;
-    Some(app.ui.open_dialog(crate::state::DialogKind::Command, f))
-}
-
-/// The `channel.options` params for the dialog's fields: spot channels take `solidity`, the
-/// others `opacity`.
-pub fn params(f: &Map<String, Value>) -> Value {
-    let spot = f.get("indicates").and_then(Value::as_str) == Some("spot");
-    let mut p = Map::new();
-    for key in ["channel", "name", "indicates", "color"] {
-        if let Some(v) = f.get(key) {
-            p.insert(key.into(), v.clone());
-        }
-    }
-    if let Some(v) = f.get("opacity") {
-        p.insert(if spot { "solidity" } else { "opacity" }.into(), v.clone());
-    }
-    Value::Object(p)
-}
-
-/// OK: runs `channel.options` with the dialog's settings ([`params`]).
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    app.run(if f.contains_key(NEW_CHANNEL_MARK) { NEW_CHANNEL } else { COMMAND }, params(f))
-}
-
-/// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and what the 200 pt name field leaves of the dialog.
-const LABEL_MIN_W: f32 = 84.0;
-const LABEL_MAX_W: f32 = 200.0;
-/// Every label these dialogs put in the column, so Channel Options, Layer Mask Display Options
-/// and New Spot Channel share one width in a language.
-const LABELS: [&str; 2] = ["Name:", "Color:"];
-
-/// A row's label in the shared column, sized for every one of [`LABELS`] in the current language.
-fn label(ui: &mut egui::Ui, text: &str) {
-    let w = crate::widgets::label_column_width(ui, &LABELS.map(crate::i18n::t), LABEL_MIN_W, LABEL_MAX_W);
-    crate::widgets::column_label(ui, text, w);
-}
-
-pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    ui.spacing_mut().item_spacing.y = 6.0;
-    if layer_mask(f) {
-        return mask_body(ui, f);
-    }
-    let quick = f.get("channel").and_then(Value::as_str) == Some("quickMask");
-    if let Some(mut name) = f.get("name").and_then(Value::as_str).map(str::to_string) {
-        ui.horizontal(|ui| {
-            label(ui, tl!("Name:"));
-            if ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0)).accessible_name(tl!("Name")).changed() {
-                f.insert("name".into(), json!(name));
-            }
-        });
-    }
-    crate::widgets::section_label(ui, tl!("Color Indicates:"));
-    crate::widgets::hairline(ui);
-    let mut indicates = f.get("indicates").and_then(Value::as_str).unwrap_or("masked").to_string();
-    let before = indicates.clone();
-    ui.indent("channel-options-indicates", |ui| {
-        ui.radio_value(&mut indicates, "masked".to_string(), tl!("Masked Areas"));
-        ui.radio_value(&mut indicates, "selected".to_string(), tl!("Selected Areas"));
-        // Quick Mask can't be a spot channel; New Spot Channel… makes spot channels.
-        if !quick && !f.contains_key(NEW_CHANNEL_MARK) {
-            ui.radio_value(&mut indicates, "spot".to_string(), tl!("Spot Color"));
-        }
-    });
-    if indicates != before {
-        f.insert("indicates".into(), json!(indicates));
-    }
-    let spot = indicates == "spot";
-    ui.add_space(4.0);
-    crate::widgets::section_label(ui, tl!("Color"));
-    crate::widgets::hairline(ui);
-    ui.horizontal(|ui| {
-        label(ui, "");
-        let current = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([1.0, 0.0, 0.0]);
-        let c = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-        let what = if spot { tl!("Spot Color") } else { tl!("Channel Color") };
-        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(c[0], c[1], c[2]), what).clicked() {
-            crate::color_picker_ui::request(f, &crate::color_picker_ui::title_for(what));
-        }
-        ui.add_space(12.0);
-        let caption = if spot { tl!("Solidity:") } else { tl!("Opacity:") };
-        ui.label(caption);
-        let mut pct = f.get("opacity").and_then(Value::as_f64).unwrap_or(50.0) as f32;
-        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).accessible_name(caption).changed() {
-            f.insert("opacity".into(), json!(pct.round()));
-        }
-    });
-}
-
-/// Layer Mask Display Options: Color and Opacity, as Photoshop's dialog has them.
-fn mask_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    ui.horizontal(|ui| {
-        label(ui, tl!("Color:"));
-        let current = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([1.0, 0.0, 0.0]);
-        let c = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(c[0], c[1], c[2]), tl!("Overlay Color")).clicked() {
-            crate::color_picker_ui::request(f, &crate::color_picker_ui::title_for(tl!("Overlay Color")));
-        }
-        ui.add_space(12.0);
-        ui.label(tl!("Opacity:"));
-        let mut pct = f.get("opacity").and_then(Value::as_f64).unwrap_or(50.0) as f32;
-        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).accessible_name(tl!("Opacity:")).changed() {
-            f.insert("opacity".into(), json!(pct.round()));
-        }
-    });
-}
-
-// ---------------------------------------------------------------------------------------------
-// New Spot Channel…: Name and Ink Characteristics (Color, Solidity). OK runs `channel.newSpot`
-// (from the selection, as Photoshop does) and remembers the ink and solidity for next time.
-
-pub const NEW_SPOT: &str = "channel.newSpot";
-const NEW_SPOT_MARK: &str = "__newSpot";
-
-pub fn owns_new_spot(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(NEW_SPOT_MARK)
-}
-
-/// The New Spot Channel fields: the next "Spot Color N" name and the last ink and solidity
-/// (red and 0% at first), or `None` without a document.
-pub fn new_spot_fields(app: &PhotocraftApp) -> Option<Map<String, Value>> {
-    let doc = &app.session.active()?.doc;
-    let saved = app.session.prefs().dialogs.get(NEW_SPOT).cloned().unwrap_or_default();
-    let color = saved.get("color").and_then(Value::as_str).filter(|h| crate::color_picker_ui::parse_hex(h).is_some()).unwrap_or("#ff0000");
-    let solidity = saved.get("solidity").and_then(Value::as_f64).filter(|v| (0.0..=100.0).contains(v)).unwrap_or(0.0);
-    let mut f = Map::new();
-    f.insert(NEW_SPOT_MARK.into(), json!(true));
-    f.insert("__command".into(), json!(NEW_SPOT));
-    f.insert("__label".into(), json!("New Spot Channel…"));
-    f.insert("name".into(), json!(photocraft_engine::channel_cmds::next_alpha_name(doc, "Spot Color")));
-    f.insert("color".into(), json!(color));
-    f.insert("solidity".into(), json!(solidity));
-    Some(f)
+    Some(open_with(app, NEW_CHANNEL, f, Value::Null))
 }
 
 /// Opens New Spot Channel, or `None` without a document.
-pub fn open_new_spot(app: &mut PhotocraftApp) -> Option<u64> {
+pub fn open_new_spot(app: &mut PhotocraftApp) -> Option<DialogId> {
     let f = new_spot_fields(app)?;
-    Some(app.ui.open_dialog(crate::state::DialogKind::Command, f))
+    Some(open_with(app, NEW_SPOT, f, Value::Null))
 }
 
-pub fn new_spot_params(f: &Map<String, Value>) -> Value {
+/// The `channel.options` / `channel.new` params for the dialog's values: spot channels take
+/// `solidity`, the others `opacity`. `channel` is the captured channel, `null` for a new one.
+pub fn params(f: &DialogFields, channel: &Value) -> Value {
+    let spot = f.text("indicates") == Some("spot");
     let mut p = Map::new();
-    for key in ["name", "color", "solidity"] {
-        if let Some(v) = f.get(key) {
-            p.insert(key.into(), v.clone());
+    if !channel.is_null() {
+        p.insert("channel".into(), channel.clone());
+    }
+    for key in ["name", "indicates"] {
+        if let Some(v) = f.text(key) {
+            p.insert(key.into(), json!(v));
         }
+    }
+    if let Some(c) = f.color("color") {
+        p.insert("color".into(), json!(hex(c)));
+    }
+    if let Some(v) = f.number("opacity") {
+        p.insert(if spot { "solidity" } else { "opacity" }.into(), json!(v));
     }
     Value::Object(p)
 }
 
-pub fn confirm_new_spot(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let p = new_spot_params(f);
-    let result = app.run(NEW_SPOT, p.clone());
-    if result.is_ok() {
-        let remembered = json!({ "color": p.get("color"), "solidity": p.get("solidity") });
-        app.session.prefs.edit(|prefs| prefs.dialogs.insert(NEW_SPOT.into(), remembered));
+/// The `channel.newSpot` params for the dialog's values.
+pub fn new_spot_params(f: &DialogFields) -> Value {
+    let mut p = Map::new();
+    if let Some(v) = f.text("name") {
+        p.insert("name".into(), json!(v));
     }
-    result
+    if let Some(c) = f.color("color") {
+        p.insert("color".into(), json!(hex(c)));
+    }
+    if let Some(v) = f.number("solidity") {
+        p.insert("solidity".into(), json!(v));
+    }
+    Value::Object(p)
 }
 
-pub fn new_spot_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    ui.spacing_mut().item_spacing.y = 6.0;
-    let mut name = f.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-    ui.horizontal(|ui| {
-        label(ui, tl!("Name:"));
-        if ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0)).accessible_name(tl!("Name")).changed() {
-            f.insert("name".into(), json!(name));
+/// OK: runs the dialog's command; New Spot Channel remembers its ink once the channel is made.
+pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
+    let channel = params::captured(app, &result.key).get("channel").cloned().unwrap_or(Value::Null);
+    let outcome = if result.key == NEW_SPOT {
+        let made = app.run(NEW_SPOT, new_spot_params(&result.fields));
+        if made.is_ok() {
+            result.remember(ctx);
         }
-    });
-    crate::widgets::section_label(ui, tl!("Ink Characteristics"));
-    crate::widgets::hairline(ui);
-    ui.horizontal(|ui| {
-        label(ui, tl!("Color:"));
-        let current = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([1.0, 0.0, 0.0]);
-        let c = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(c[0], c[1], c[2]), tl!("Spot Color")).clicked() {
-            crate::color_picker_ui::request(f, &crate::color_picker_ui::title_for(tl!("Spot Color")));
-        }
-        ui.add_space(12.0);
-        ui.label(tl!("Solidity:"));
-        let mut pct = f.get("solidity").and_then(Value::as_f64).unwrap_or(0.0) as f32;
-        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).accessible_name(tl!("Solidity:")).changed() {
-            f.insert("solidity".into(), json!(pct.round()));
-        }
-    });
+        made
+    } else {
+        app.run(&result.key, params(&result.fields, &channel))
+    };
+    if let Err(e) = outcome {
+        crate::dialogs::alerts::report_error(app, e);
+    }
 }
 
 #[cfg(test)]
