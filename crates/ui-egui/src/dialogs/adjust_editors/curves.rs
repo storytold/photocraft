@@ -373,13 +373,22 @@ fn input_slider_value(pts: &[[f32; 2]], which: u8, level: f32) -> Option<f32> {
 
 /// Drags the black (first) or white (last) end point's input with the strip's pointer; outputs
 /// stay. The moved point becomes the selected one. Returns whether a value changed.
+///
+/// The drag belongs to the channel it started on: switching channels while the button is held
+/// ends it, so the new channel's end points move only after a new press.
 fn drag_input_sliders(ui: &egui::Ui, cx: &EditorCx, sresp: &egui::Response, graph: Rect, pts: &mut [[f32; 2]], st: &mut CurveUi, e: &mut Edit) -> bool {
     let strip = sresp.rect;
     let track = Rect::from_min_max(pos2(graph.left(), strip.top()), pos2(graph.right(), strip.bottom()));
     ui.data_mut(|d| d.insert_temp(cx.mem.with("curves-input-slider"), track));
     let drag_id = cx.mem.with("curves-input-drag");
     let xpos = |val: f32| graph.left() + val / 255.0 * graph.width();
-    let mut which: Option<u8> = ui.data(|d| d.get_temp(drag_id)).flatten();
+    // (channel, 0 black / 1 white) of the drag in progress.
+    let held: Option<(usize, u8)> = ui.data(|d| d.get_temp(drag_id)).flatten();
+    let mut which = held.filter(|(c, _)| *c == st.channel).map(|(_, k)| k);
+    if held.is_some() && which.is_none() {
+        // The channel changed under the drag: end the gesture on the old channel's values.
+        e.commit = true;
+    }
     let mut changed = false;
     if sresp.is_pointer_button_down_on()
         && ui.input(|i| i.pointer.primary_pressed())
@@ -390,7 +399,9 @@ fn drag_input_sliders(ui: &egui::Ui, cx: &EditorCx, sresp: &egui::Response, grap
         // Nearest triangle; at the same spot the pointer's side picks.
         which = Some(if (pos.x - bx).abs() < (pos.x - wx).abs() || ((bx - wx).abs() < f32::EPSILON && pos.x <= bx) { 0 } else { 1 });
     }
-    if sresp.is_pointer_button_down_on()
+    // The release frame still moves the slider to where the button came up.
+    let down = sresp.is_pointer_button_down_on();
+    if (down || ui.input(|i| i.pointer.primary_released()))
         && let (Some(k), Some(pos)) = (which, ui.input(|i| i.pointer.interact_pos()))
     {
         let level = (pos.x - graph.left()) / graph.width().max(1.0) * 255.0;
@@ -404,11 +415,11 @@ fn drag_input_sliders(ui: &egui::Ui, cx: &EditorCx, sresp: &egui::Response, grap
             st.gesture.drag = None;
         }
     }
-    if which.is_some() && !sresp.is_pointer_button_down_on() {
+    if which.is_some() && !down {
         which = None;
         e.commit = true;
     }
-    ui.data_mut(|d| d.insert_temp(drag_id, which));
+    ui.data_mut(|d| d.insert_temp(drag_id, which.map(|k| (st.channel, k))));
     changed
 }
 

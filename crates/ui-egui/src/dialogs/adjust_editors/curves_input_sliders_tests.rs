@@ -177,3 +177,37 @@ fn neighbour_closer_than_the_gap_does_not_panic() {
     assert_eq!(input_slider_value(&[[0.0, 0.0]], 0, 5.0), None);
     assert_eq!(input_slider_value(&[[0.0, 0.0], [254.0, 255.0], [255.0, 255.0]], 1, 0.0), Some(255.0));
 }
+
+#[test]
+fn a_release_in_the_same_frame_as_the_last_move_commits_where_the_button_came_up() {
+    let mut rig = Rig::new(true, json!({"points": [[0, 0], [255, 255]]}));
+    rig.drag_to(0.0, 40.0);
+    assert_eq!(rig.points()[0], [40.0, 0.0]);
+    let p = rig.pos(80.0);
+    let edit = rig.step(vec![moved(p), button(p, false)]);
+    assert!(edit.commit, "release commits");
+    assert_eq!(rig.points(), vec![[80.0, 0.0], [255.0, 255.0]]);
+}
+
+#[test]
+fn switching_channels_during_a_held_drag_leaves_the_new_channel_alone() {
+    let mut rig = Rig::new(true, json!({"points": [[0, 0], [255, 255]]}));
+    rig.drag_to(0.0, 40.0);
+    assert_eq!(rig.points()[0], [40.0, 0.0]);
+    // Alt+3 selects Red while the button is still down.
+    let alt3 = Event::Key { key: egui::Key::Num3, physical_key: Some(egui::Key::Num3), pressed: true, repeat: false, modifiers: Modifiers::ALT };
+    let edit = rig.step(vec![alt3]);
+    assert!(edit.commit, "the composite drag ends when the channel changes");
+    assert_eq!(rig.ctx.data(|d| d.get_temp::<usize>(rig.cx.mem.with("curves-ch"))), Some(1));
+    for level in [60.0, 90.0] {
+        let p = rig.pos(level);
+        rig.step(vec![moved(p)]);
+        rig.step(vec![]);
+    }
+    let p = rig.pos(90.0);
+    rig.step(vec![button(p, false)]);
+    rig.step(vec![]);
+    let red = read_curve(&rig.v, "red");
+    assert_eq!(red.first().map(|q| q[0]), Some(0.0), "Red's black input moves only after a new press");
+    assert_eq!(rig.points()[0], [40.0, 0.0], "the composite keeps where its drag ended");
+}
