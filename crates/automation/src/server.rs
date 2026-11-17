@@ -1565,14 +1565,26 @@ mod tests {
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
         let Backend::Headless(session) = &*mcp.backend else { panic!("headless") };
         let session = session.clone();
+        // A call holds clones of the session until it returns. A waited start holds three while
+        // its blocking closure waits for the lock: `step`'s, `headless_wait`'s target, and
+        // `headless_op`'s, taken last, right before the closure is queued.
+        let idle = Arc::strong_count(&session);
+        let held = session.clone();
         let (locked, acquired) = std::sync::mpsc::channel();
         let (release, released) = std::sync::mpsc::channel();
         let holder = std::thread::spawn(move || {
-            let _held = session.lock().unwrap();
+            let _held = held.lock().unwrap();
             locked.send(()).unwrap();
             released.recv().unwrap();
         });
         acquired.recv().unwrap();
+        async fn until(what: &str, done: impl Fn() -> bool) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !done() {
+                assert!(std::time::Instant::now() < deadline, "timed out waiting until {what}");
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
 
         let (mut input, server_in) = tokio::io::duplex(65536);
         let (server_out, output) = tokio::io::duplex(65536);
@@ -1591,7 +1603,8 @@ mod tests {
             )
             .await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // The holder's clone, and three for each start.
+        until("both starts wait for the lock", || Arc::strong_count(&session) >= idle + 1 + 2 * 3).await;
         for id in [2, 3] {
             send(&mut input, json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":id}})).await;
         }
@@ -1604,8 +1617,9 @@ mod tests {
         }
         release.send(()).unwrap();
         holder.join().unwrap();
-        // Let both blocked starts acquire the mutex before inspecting their effects.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Both blocked starts took the lock and returned (their replies are dropped, as cancelled)
+        // before their effects are inspected.
+        until("both starts returned", || Arc::strong_count(&session) == idle).await;
         let (after, jobs) = mcp.headless_op(|h| Ok((h.inspect(None)?, h.session.jobs_with_recent()))).await.unwrap().unwrap();
         assert_eq!(after, before);
         assert!(jobs.is_empty(), "cancelled queued job started: {jobs:?}");

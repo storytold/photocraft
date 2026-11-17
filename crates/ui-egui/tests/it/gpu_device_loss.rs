@@ -335,12 +335,14 @@ fn a_lost_window_device_closes_only_once_unsaved_work_is_saved() {
     };
     h.run_steps(4);
     assert!(h.state_mut().destroy_window_device());
-    for _ in 0..120 {
+    // wgpu reports the loss from its own thread: poll for it, often, for up to 30 s.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
         h.run_steps(1);
-        if h.state().window_lost() {
+        if h.state().window_lost() || std::time::Instant::now() >= deadline {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(h.state().window_lost(), "the loss was noticed");
     let tries = || attempts.load(std::sync::atomic::Ordering::SeqCst);
