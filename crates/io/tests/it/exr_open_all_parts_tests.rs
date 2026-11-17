@@ -10,6 +10,10 @@ use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_io::{ImportOptions, ImportResult, IoError, import, import_file};
 use photocraft_raster::Interrupt;
 
+/// ZIP16 scan lines: the layout File › Open takes into a layer tree (`Encoding::FAST_LOSSLESS`
+/// writes tiles, which keep today's open).
+const SCAN_LINES: Encoding = Encoding { compression: Compression::ZIP16, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
+
 /// A part's channel: its name and its samples (one value for every pixel, or one per pixel).
 type Chan<'a> = (&'a str, Vec<f32>);
 
@@ -38,7 +42,7 @@ fn part_as(
     attrs.layer_position = exr::math::Vec2(origin.0, origin.1);
     let samples = |v: Vec<f32>| if half { FlatSamples::F16(v.into_iter().map(f16::from_f32).collect()) } else { FlatSamples::F32(v) };
     let list = channels.into_iter().map(|(n, v)| AnyChannel::new(n, samples(v))).collect();
-    ExrLayer::new((w, h), attrs, Encoding::FAST_LOSSLESS, AnyChannels::sort(list))
+    ExrLayer::new((w, h), attrs, SCAN_LINES, AnyChannels::sort(list))
 }
 
 /// The file of these parts, its display window `w × h`.

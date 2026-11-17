@@ -437,16 +437,20 @@ fn set_nodes(part: usize, channels: &[(usize, String)]) -> Vec<Node> {
     out
 }
 
+/// One view's channels of a part: the view (`None` outside any view) and its `(index into the
+/// part's channels, name with the view taken out)`.
+type ViewSet = (Option<String>, Vec<(usize, String)>);
+
 /// A part's channels by view, in view order: a single-part stereo file lists its views in
 /// `multiView`, the default view first. As the OpenEXR multi-view convention names them, a channel
 /// without a period is the default view's, `right.R` and `diffuse.right.R` are the `right` view's
 /// `R` and `diffuse.R`, and any other dotted channel (`background.data`) is in no view: those
 /// come last, outside the view folders. Any other part is one set, of its `view` attribute's
 /// view when it has one.
-fn views_of(part: &craft_exr::decode::PartInfo) -> Vec<(Option<String>, Vec<(usize, String)>)> {
+fn views_of(part: &craft_exr::decode::PartInfo) -> Vec<ViewSet> {
     let all = || part.channels.iter().enumerate().map(|(i, c)| (i, c.name.clone())).collect::<Vec<_>>();
     let Some(default) = part.multi_view.first() else { return vec![(part.view.clone(), all())] };
-    let mut out: Vec<(Option<String>, Vec<(usize, String)>)> = part.multi_view.iter().map(|v| (Some(v.clone()), Vec::new())).collect();
+    let mut out: Vec<ViewSet> = part.multi_view.iter().map(|v| (Some(v.clone()), Vec::new())).collect();
     let mut no_view = Vec::new();
     for (i, name) in all() {
         let pieces: Vec<&str> = name.split('.').collect();
@@ -589,11 +593,11 @@ fn leaf_layer(part: &craft_exr::decode::Part, leaf: &Leaf, rect: photocraft_geom
         .try_write_rows_with_interrupt(rect, ctl, |y, x0, dst| {
             let start = (y - ry) as usize * width + (x0 - rx) as usize;
             let sample = |p: Option<&craft_exr::decode::Samples>, at: usize, missing: f32| p.map_or(missing, |p| p.get_f32(at));
-            for (j, px) in dst.chunks_exact_mut(16).enumerate() {
+            for (j, px) in dst.as_chunks_mut::<16>().0.iter_mut().enumerate() {
                 let at = start + j;
                 let values = [sample(color[0], at, 0.0), sample(color[1], at, 0.0), sample(color[2], at, 0.0), sample(alpha, at, 1.0)];
-                for (out, v) in px.chunks_exact_mut(4).zip(values) {
-                    out.copy_from_slice(&v.to_ne_bytes());
+                for (out, v) in px.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+                    *out = v.to_ne_bytes();
                 }
             }
         })
