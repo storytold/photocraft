@@ -1542,9 +1542,18 @@ mod tests {
         mcp.headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8}))).await.unwrap().unwrap();
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
         let document = mcp.headless_op(|h| Ok(h.session.active().unwrap().doc.clone())).await.unwrap().unwrap();
+        let (started, is_started) = tokio::sync::oneshot::channel();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), waited).await.is_err(), "the blur ended before it was dropped");
+        // Observe a real running worker before dropping the production waiter;
+        // a small blur may finish before a wall-clock timeout on a faster machine.
+        let mut waited = Box::pin(mcp.headless_wait_with_start(true, move |h| cancellation_test_job(h, Some(started)), &mut waiter, (0, 1)));
+        tokio::select! {
+            _ = &mut waited => panic!("the cancellation worker ended before its request was dropped"),
+            started = tokio::time::timeout(std::time::Duration::from_secs(30), is_started) => {
+                started.expect("the worker starts").expect("the worker reports startup");
+            }
+        }
+        drop(waited);
         let t = std::time::Instant::now();
         loop {
             let (running, cancelled) =
