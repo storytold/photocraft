@@ -140,9 +140,13 @@ fn imports_every_page_as_an_artboard_with_its_print_size() {
                 let mut pixel = [[0u8; 4]; 1];
                 surface.read_rgba8_into(Rect::from_xywh(x, y, 1, 1), &mut pixel);
                 assert!(pixel[0][2] > 120 && pixel[0][0] < 120, "page 1 should be blue inside the rectangle, got {:?}", pixel[0]);
+                // #15407: where the page paints nothing it stays transparent, on a clear board.
                 let mut background = [[0u8; 4]; 1];
                 surface.read_rgba8_into(Rect::from_xywh(artboard.x0 + 2, 2, 1, 1), &mut background);
-                assert!(background[0][0] > 240 && background[0][1] > 240 && background[0][2] > 240, "page background should be white, got {:?}", background[0]);
+                assert_eq!(background[0][3], 0, "the unpainted page should be transparent, got {:?}", background[0]);
+                assert_eq!(pixel[0][3], 255, "the painted rectangle stays opaque");
+                let board = group.artboard.as_ref().expect("page artboard");
+                assert_eq!(board.background, photocraft_doc::ArtboardBackground::Transparent, "no white board under the page");
             }
         }
     }
