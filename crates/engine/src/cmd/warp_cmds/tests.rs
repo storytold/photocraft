@@ -754,3 +754,46 @@ fn a_flat_split_grid_is_kept_on_a_smart_object() {
         assert_eq!(sm.warp.is_some(), split, "split {split}: {:?}", sm.warp);
     }
 }
+
+/// Under a Perspective placement a warp may reach far towards the vanishing point (the reference
+/// application stores points 1e9 px out there): the placed size is what counts. The same reach
+/// under an affine placement, or past the horizon, is refused.
+#[test]
+fn a_warp_reaching_towards_the_vanishing_point_is_kept_under_a_perspective() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 450})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 150, "y": 125, "width": 302, "height": 202})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let quad = [[270.0, 125.0], [332.0, 125.0], [452.0, 327.0], [150.0, 327.0]];
+    s.execute("edit.transform", json!({"rect": [150, 125, 452, 327], "quad": quad})).unwrap();
+    let st = s.active().unwrap();
+    let id = st.active_layer.unwrap();
+    let (w, place) = smart_warp_source(&st.doc, st.doc.layer(id).unwrap()).unwrap();
+    // The interior points pulled 8e8 along the way the placement's w grows.
+    let m = place.0;
+    let c = [(w.bounds[0] + w.bounds[2]) / 2.0, (w.bounds[1] + w.bounds[3]) / 2.0];
+    let side = (m[6] * c[0] + m[7] * c[1] + m[8]).signum();
+    let n = m[6].hypot(m[7]);
+    let pulled = |k: f64| {
+        let mut mesh = w.to_mesh(1, 1);
+        for i in [5, 6, 9, 10] {
+            mesh.points[i][0] += k * m[6] * side / n;
+            mesh.points[i][1] += k * m[7] * side / n;
+        }
+        Warp::custom(mesh, w.bounds)
+    };
+    let far = pulled(8e8);
+    s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": far})).unwrap();
+    let st = s.active().unwrap();
+    let LayerContent::Smart(sm) = &st.doc.layer(id).unwrap().content else { panic!("smart object") };
+    assert!(sm.warp.is_some() && sm.perspective.is_some());
+    // Past the horizon: refused, nothing changes.
+    let steps = st.history.past_len();
+    assert!(s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": pulled(-8e8)})).is_err());
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    // Under an affine placement the same reach is too far.
+    assert!(s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": far, "placement": [1, 0, 0, 0, 1, 0, 0, 0, 1]})).is_err());
+}

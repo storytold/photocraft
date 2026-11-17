@@ -4982,12 +4982,16 @@ fn a_warp_pulled_past_the_vanishing_point_is_applied() {
         t.quad = [[270.0, 125.0], [332.0, 125.0], [452.0, 327.0], [150.0, 327.0]];
     }
     enter_warp(&mut app, &ctx);
-    // Past the horizon (y 73 here) the pointer stays on the picture's side, far out towards the
-    // vanishing point, never behind the picture.
+    // Past the horizon (y 73 here) the pointer goes to the vanishing point, far out on the
+    // picture's side, never behind the picture: straight up the warp's space, and across it where
+    // the inverse mirrors the pointer, as the reference application's files hold it (a pull up
+    // and to the left: 6e8 up, some 1.7e3 to the right).
     {
         let t = app.ui.transform.as_ref().unwrap();
-        let (near, past) = (t.doc_to_warp([301.0, 80.0]), t.doc_to_warp([301.0, -24.0]));
-        assert!(near[1] < -1000.0 && past[1] <= near[1] && past[1] > -20_000.0, "{near:?} {past:?}");
+        let (near, past, left) = (t.doc_to_warp([301.0, 80.0]), t.doc_to_warp([301.0, -24.0]), t.doc_to_warp([121.0, 46.0]));
+        assert!(near[1] < -1000.0 && near[1] > -1e6 && past[1] < -1e8, "{near:?} {past:?}");
+        assert!((past[0] - near[0]).abs() < 1.0, "straight up: {past:?}");
+        assert!(left[0] - past[0] > 1000.0 && left[0] - past[0] < 3000.0 && (left[1] - past[1]).abs() < 1.0, "{past:?} {left:?}");
     }
     let none = egui::Modifiers::NONE;
     crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 301.0, y: 226.0, pressure: 1.0 }, none);

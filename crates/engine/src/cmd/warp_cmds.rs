@@ -498,6 +498,10 @@ fn content_frame_warp(mesh: &BezierMesh, c: [f64; 4], b: [f64; 4]) -> Option<War
 
 /// Largest warp frame side: far above any real layer, far below what would exhaust memory.
 const MAX_WARP_SIDE: u32 = 100_000;
+/// The farthest a smart object's warp may reach in its own space under a Perspective or Distort
+/// placement whose horizon it stays clear of: its points near the vanishing point. Within `i32`,
+/// which the reach's pixel box is held in.
+const MAX_PROJECTIVE_REACH: f64 = 2e9;
 
 fn target(s: &Session, cmd: &str, p: &Value) -> Result<(LayerId, Rect)> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -634,9 +638,17 @@ fn contents_warp(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let corners = [[bounds[0], bounds[1]], [bounds[2], bounds[3]]];
     let b =
         corners.iter().chain(&reach).fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
-    let side = f64::from(MAX_WARP_SIDE);
+    // Under a Perspective or Distort placement the reach may run far towards the vanishing point
+    // (the reference application stores 1e9 px there), and the placed size, priced below, is what
+    // counts: its box must stay on the picture's side of the horizon.
+    let place = placement.unwrap_or(old);
+    let w_at = |x: f64, y: f64| place.0[6] * x + place.0[7] * y + place.0[8];
+    let corners_w = [w_at(b[0], b[1]), w_at(b[2], b[1]), w_at(b[2], b[3]), w_at(b[0], b[3])];
+    let projective = place.0[6] != 0.0 || place.0[7] != 0.0;
+    let on_picture_side = corners_w.iter().all(|w| w.is_finite() && *w * corners_w[0].signum() > 0.0);
+    let side = if projective && on_picture_side { MAX_PROJECTIVE_REACH } else { f64::from(MAX_WARP_SIDE) };
     if !b.iter().all(|v| v.is_finite()) || b[2] - b[0] > side || b[3] - b[1] > side || b.iter().any(|v| v.abs() > side) {
-        return Err(bad(cmd, format!("the warp reaches too far (max {MAX_WARP_SIDE} px per side)")));
+        return Err(bad(cmd, format!("the warp reaches too far (max {side} px per side)")));
     }
     let src = Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32);
     crate::transform_cmds::check_budget(src, &placement.unwrap_or(old), "Warp", st.doc.pixel_format())?;

@@ -126,10 +126,12 @@ pub struct WarpBox {
 /// How close to a Perspective or Distort placement's horizon a warp drag may go, as a share of
 /// the homogeneous weight at the warp's centre ([`TransformSession::doc_to_warp`]).
 const HORIZON_MARGIN: f64 = 1e-3;
-/// How far from its centre (in the warp's own space) a drag near the horizon may reach: a pull
-/// moves a control point up to about five times as far, which keeps the grid within the 100 000 px
-/// a warp may store.
-const HORIZON_REACH: f64 = 15_000.0;
+/// How far from its centre (in the warp's own space) a drag at or past the horizon reaches, as far
+/// as the reference application's (its files hold 6e8 to 1.3e9); its picture no longer changes from
+/// about 1e7 on, through the capped perspective it shows through. A pull moves a control point up
+/// to about five times as far, within what a warp under a perspective may store
+/// (`photocraft_engine::warp_cmds`).
+const HORIZON_REACH: f64 = 4e8;
 
 impl TransformSession {
     /// A point of the warp being edited, where it shows in the document ([`Self::warp_place`]).
@@ -158,8 +160,8 @@ impl TransformSession {
     ///
     /// Past the horizon of a Perspective or Distort placement there is no such point: the inverse
     /// would put it on the far side, behind the picture, and a drag there tore the warp apart.
-    /// A pointer that far is held just short of the horizon, along the line from the warp's centre,
-    /// so the grid reaches out towards the vanishing point instead, as in the reference application.
+    /// A pointer that far goes to the vanishing point instead, far out in the warp's space, as in
+    /// the reference application.
     pub fn doc_to_warp(&self, p: [f64; 2]) -> [f64; 2] {
         let Some(h) = self.warp_place.and_then(|m| photocraft_algo::transform::Homography(m).inverse()) else { return p };
         let w_at = |q: [f64; 2]| h.0[6] * q[0] + h.0[7] * q[1] + h.0[8];
@@ -175,12 +177,28 @@ impl TransformSession {
         let projective = h.0[6] != 0.0 || h.0[7] != 0.0;
         let Some(c) = centre.filter(|&c| projective && w_at(c).abs() > 1e-300) else { return map(p) };
         let (wc, wp) = (w_at(c), w_at(p));
-        let p = if wp / wc < HORIZON_MARGIN {
-            let k = (HORIZON_MARGIN * wc - wc) / (wp - wc);
-            [c[0] + k * (p[0] - c[0]), c[1] + k * (p[1] - c[1])]
-        } else {
-            p
-        };
+        if wp / wc < HORIZON_MARGIN {
+            // Past the vanishing line the reference application sends the point towards the
+            // vanishing point: in the warp's space [`HORIZON_REACH`] out along the way its
+            // placement's w grows (where the picture recedes), while across that way it keeps where
+            // the placement's inverse puts the pointer, mirrored through the horizon (measured on
+            // its files: a pull up and to the left past it moved the grid 6.4e8 up and 3.8e3 to the
+            // right, a pull straight up only up).
+            let (Some(m), wc_space) = (self.warp_place, map(c)) else { return map(p) };
+            let side = (m[6] * wc_space[0] + m[7] * wc_space[1] + m[8]).signum();
+            let (dx, dy) = (m[6] * side, m[7] * side);
+            let n = dx.hypot(dy);
+            if !(n > 0.0 && n.is_finite()) {
+                return wc_space;
+            }
+            let (ux, uy) = (dx / n, dy / n);
+            let q = map(p);
+            let (vx, vy) = (q[0] - wc_space[0], q[1] - wc_space[1]);
+            let along = vx * ux + vy * uy;
+            let (px, py) = if along.is_finite() { (vx - along * ux, vy - along * uy) } else { (0.0, 0.0) };
+            let (px, py) = if px.is_finite() && py.is_finite() { (px, py) } else { (0.0, 0.0) };
+            return [wc_space[0] + px + ux * HORIZON_REACH, wc_space[1] + py + uy * HORIZON_REACH];
+        }
         // Near the horizon the warp's own space runs out to enormous distances: no farther than
         // [`HORIZON_REACH`] from the centre there (still at the vanishing point on screen), so the
         // grid stays within what a warp may store.
