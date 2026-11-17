@@ -11,8 +11,10 @@
 //!   ⌥-drag on a segment drags a copy of its subpath, appended to the path (⌥-click selects it).
 //! * Convert Point (the tool, or Pen + ⌥): click an anchor to make it a corner, drag from it to
 //!   pull out smooth handles, drag a handle to move it alone. The tool selects the anchor it
-//!   converts, so its handles show; a press on empty canvas does nothing, and ⌘/Ctrl is Direct
-//!   Selection, as with the Pen. The tool drags a straight segment with nothing selected, or the
+//!   converts, so its handles show, and ⌘/Ctrl is Direct Selection, as with the Pen. While the
+//!   tool is active, a click on empty canvas hides the targeted path's anchors and a drag from
+//!   an anchor that is not drawn moves it, as Direct Selection would, showing them again
+//!   (#12743). The tool drags a straight segment with nothing selected, or the
 //!   whole path when all of it is selected, as Direct Selection would (#12741).
 //! * While a Pen path is being drawn, ⌘/Ctrl edits it in place (its anchors, handles and
 //!   segments) and the Pen carries on drawing from its last anchor once ⌘/Ctrl is let go; a
@@ -280,6 +282,9 @@ pub enum Edit {
     Path(Vec<[usize; 2]>),
     /// Pen + ⌥ on an anchor: a click makes a corner, a drag pulls out smooth handles.
     Convert([usize; 2]),
+    /// The Convert Point tool on an anchor whose path's anchors are not drawn (#12743): a drag
+    /// moves it, as `Anchors` does, and a click without movement converts, as `Convert` does.
+    ConvertHidden([usize; 2]),
     /// ⌥-drag on a segment: a moved copy of the subpath of these anchors (all of them) goes last.
     Duplicate(Vec<[usize; 2]>),
 }
@@ -306,6 +311,8 @@ impl Edit {
             Edit::Segment([s, k], t) => ("path.bendSegment", json!({"subpath": s, "knot": k, "t": t, "move": d})),
             Edit::Path(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "stepName": "Drag Path"})),
             Edit::Convert([s, k]) => ("path.convertPoint", json!({"subpath": s, "knot": k, "out": end})),
+            // A moved hidden anchor is one anchor, and the single-anchor step name follows #13205.
+            Edit::ConvertHidden([s, k]) => ("path.moveAnchors", json!({"anchors": [[s, k]], "move": d, "stepName": "Drag Anchor Point"})),
             Edit::Duplicate(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "duplicate": true, "stepName": "Drag Path"})),
         }
     }
@@ -320,6 +327,7 @@ impl Edit {
             Edit::Handle(k, h, from, independent) => edit::move_handle(&mut p, *k, *h, Point::new(from.x + d[0], from.y + d[1]), *independent),
             Edit::Segment(k, t) => edit::bend_segment(&mut p, *k, *t, d),
             Edit::Convert(k) => edit::convert_point(&mut p, *k, Some(Point::new(end[0], end[1]))),
+            Edit::ConvertHidden(k) => edit::move_anchors(&mut p, &[*k], d),
             Edit::Duplicate(a) => {
                 p.subpaths.push(p.subpaths.get(a.first()?[0])?.clone());
                 let last = p.subpaths.len() - 1;
@@ -389,6 +397,37 @@ pub(crate) fn anchors_shown(app: &PhotocraftApp, r: PathRef, s: usize) -> bool {
         return true;
     }
     ds.shown.as_ref().is_none_or(|shown| shown.contains(&s))
+}
+
+/// Are the anchors of subpath `s` of `r` drawn for the Convert Point tool now (#12743)? The
+/// state rides on the targeted path's `shown`, as with Delete Anchor Point (#12769): working on
+/// an anchor shows the anchors again, and a click on empty canvas hides them. With no state for
+/// `r` yet, the targeted vector mask starts with its anchors hidden — only its outline is drawn,
+/// as the reference has it — while every other path keeps today's drawn anchors.
+pub(crate) fn convert_anchors_shown(app: &PhotocraftApp, r: PathRef, s: usize) -> bool {
+    let ds = &app.ui.direct_selection;
+    if ds.target == Some(r) && still_valid(app, ds) {
+        return ds.shown.as_ref().is_none_or(|shown| shown.contains(&s));
+    }
+    !crate::vector_ui::targeted_vector_mask(app).is_some_and(|(id, _)| r == PathRef::Layer(id))
+}
+
+/// A press on empty canvas with the Convert Point tool hides the anchors of the path it targets:
+/// the path selected in the Paths panel, or the active layer's targeted vector mask. The outline
+/// stays drawn, the path stays targeted, and nothing is committed (#12743, following #12769).
+/// The Work Path, a shape layer's own path and a Type Path were not measured and keep today's
+/// no-op press.
+fn hide_converting_anchors(app: &mut PhotocraftApp) {
+    let r = match crate::vector_ui::selected_saved_path_index(app) {
+        Some((i, _)) => PathRef::Saved(i),
+        None => match crate::vector_ui::targeted_vector_mask(app) {
+            Some((id, _)) => PathRef::Layer(id),
+            None => return,
+        },
+    };
+    let owner = Owner::current(app);
+    let ds = &mut app.ui.direct_selection;
+    *ds = DirectSelection { target: Some(r), shown: Some(Vec::new()), owner, ..Default::default() };
 }
 
 /// The active paths, front first: the targeted vector mask, the active shape layer's path or the
@@ -655,6 +694,11 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
     let hit = if own_tool && convert { hit_converting(app, p) } else { hit_target(app, p, true) };
     let Some((target, base, hit)) = hit else {
         if convert {
+            // #12743: a click on empty canvas hides the targeted path's anchors. Only the tool
+            // itself with no modifier does it; a modifier press keeps today's no-op.
+            if own_tool && mods.is_none() {
+                hide_converting_anchors(app);
+            }
             return own_tool;
         }
         let owner = Owner::current(app);
@@ -674,6 +718,12 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
     // path or a Type Path, the reference was not measured: it moves the subpath, as before.
     let alt_duplicates =
         app.ui.tool == Tool::DirectSelection && !mods.command && !mods.ctrl && !mods.shift && !matches!(target, PathRef::Pen | PathRef::TypePath(_));
+    // Is a pressed anchor drawn now (#12743)? Asked before the target switch below, which would
+    // reset the state; the Pen path being drawn is never in the hidden state.
+    let hidden_anchor = match hit {
+        Hit::Anchor([s, _]) if target != PathRef::Pen => !convert_anchors_shown(app, target, s),
+        _ => false,
+    };
     let ds = &mut app.ui.direct_selection;
     if ds.target.as_ref() != Some(&target) {
         *ds = DirectSelection { target: Some(target), ..Default::default() };
@@ -687,12 +737,23 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
             Edit::Handle(k, h, from, mods.alt || convert)
         }
         Hit::Anchor(k) if convert => {
-            if own_tool {
-                // The tool selects the anchor it works on, so the anchor's handles show.
+            if own_tool && mods.is_none() && hidden_anchor {
+                // #12743: the anchor is not drawn, so a drag moves it, as Direct Selection would,
+                // and the anchors are drawn again; a click without movement still converts.
                 ds.segment = None;
-                ds.anchors = vec![k];
+                if !ds.anchors.contains(&k) {
+                    ds.anchors = vec![k];
+                }
+                ds.shown = None;
+                Edit::ConvertHidden(k)
+            } else {
+                if own_tool {
+                    // The tool selects the anchor it works on, so the anchor's handles show.
+                    ds.segment = None;
+                    ds.anchors = vec![k];
+                }
+                Edit::Convert(k)
             }
-            Edit::Convert(k)
         }
         // Pen + ⌥ on a segment does nothing; so does the tool where the reference was not
         // measured: with ⇧ or ⌥, on a curve, or with part of the path selected.
@@ -863,7 +924,7 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
         return;
     }
     let (id, mut params) = match edit {
-        Edit::Convert([s, k]) if !moved => ("path.convertPoint", json!({"subpath": s, "knot": k})),
+        Edit::Convert([s, k]) | Edit::ConvertHidden([s, k]) if !moved => ("path.convertPoint", json!({"subpath": s, "knot": k})),
         _ if !moved => return,
         e => e.command(start, end),
     };
@@ -872,6 +933,9 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
     let convert_tool = app.ui.tool == Tool::ConvertPoint && !direct(app.ui.tool, mods);
     let step_name = match edit {
         Edit::Convert(_) if convert_tool => Some("Change Anchor Point"),
+        // The moved hidden-anchor drag already names its step "Drag Anchor Point" through the
+        // command; only the click form takes the tool's convert step name (#12743).
+        Edit::ConvertHidden(_) if convert_tool && !moved => Some("Change Anchor Point"),
         Edit::Handle(.., true) if convert_tool => Some("Corner Drag"),
         _ => None,
     };
@@ -984,14 +1048,17 @@ pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 /// the marquee.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32, paths: bool) {
     let ds = &app.ui.direct_selection;
+    let mods = painter.ctx().input(|i| i.modifiers);
     // The idle Curvature Pen shows the anchors of the path it edits, not every shape's.
     let shown = if !paths {
         Vec::new()
-    } else if curvature_idle(app, painter.ctx().input(|i| i.modifiers)) {
+    } else if curvature_idle(app, mods) {
         active_paths(app)
     } else {
         candidates(app)
     };
+    // While Convert Point works (⌘/Ctrl is Direct Selection), its own drawn state gates the anchors (#12743).
+    let converting_tool = app.ui.tool == Tool::ConvertPoint && !direct(app.ui.tool, mods);
     for (r, path) in shown {
         let path = match &ds.drag {
             Some(Drag::Edit { target, preview: Some(p), .. }) if *target == r => p.clone(),
@@ -1005,7 +1072,12 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn F
                 crate::vector_ui::draw_handle(painter, to_scr([kn.anchor.x, kn.anchor.y]), to_scr([c.x, c.y]), accent);
             }
         }
-        for (s, sp) in path.subpaths.iter().enumerate().filter(|(s, _)| !ours || anchors_shown(app, r, *s)) {
+        for (s, sp) in path
+            .subpaths
+            .iter()
+            .enumerate()
+            .filter(|(s, _)| if converting_tool { convert_anchors_shown(app, r, *s) } else { !ours || anchors_shown(app, r, *s) })
+        {
             for (k, kn) in sp.knots.iter().enumerate() {
                 crate::vector_ui::draw_anchor(painter, to_scr([kn.anchor.x, kn.anchor.y]), ours && ds.anchors.contains(&[s, k]), accent);
             }
@@ -1031,6 +1103,9 @@ mod convert_point_tolerance_tests;
 
 #[cfg(test)]
 mod convert_point_drag_segment_tests;
+
+#[cfg(test)]
+mod convert_point_hidden_anchor_tests;
 
 #[cfg(test)]
 mod delete_key_tests;

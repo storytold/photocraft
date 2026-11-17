@@ -7,9 +7,9 @@
 use egui::Modifiers;
 use serde_json::json;
 
+use super::PathRef;
 use super::anchors_shown;
 use super::convert_point_history_tests::{click, drag};
-use super::PathRef;
 use crate::PhotocraftApp;
 use crate::anchor_tools::delete_anchor_targeted_path_tests::steps;
 use crate::state::Tool;
@@ -124,10 +124,10 @@ fn a_click_on_a_hidden_anchor_still_converts_it_to_a_corner() {
     click(&mut app, [300.0, 500.0], Modifiers::NONE);
     assert_eq!(steps(&app), n + 1);
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Change Anchor Point"));
-    let knot = saved_knot(&app, 3);
+    let knot = saved_knot(&app, 2);
     assert_eq!((knot.anchor.x, knot.anchor.y), (300.0, 500.0), "the click did not move it");
     assert!(corner(&knot), "the point is a corner");
-    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 3]], "the tool selected the anchor it converted");
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 2]], "the tool selected the anchor it converted");
 }
 
 #[test]

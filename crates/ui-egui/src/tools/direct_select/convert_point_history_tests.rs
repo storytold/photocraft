@@ -104,11 +104,13 @@ fn convert_point_names_steps_on_a_live_rectangle_and_on_vector_masks() {
     assert!(!live(&app), "the rectangle became a regular path shape");
     assert_eq!(added(&mut app, |a| drag(a, [20.0, 20.0], [30.0, 10.0], Modifiers::NONE)), vec!["Change Anchor Point".to_string()]);
 
-    // A pixel layer's vector mask, targeted.
+    // A pixel layer's vector mask, targeted. While the tool is active its anchors start not
+    // drawn, so the first drag moves the corner and the next one converts (#12743).
     let mut masked = app_with_mask();
     let before = mask_corner(&masked);
-    assert_eq!(added(&mut masked, |a| drag(a, [20.0, 20.0], [40.0, 30.0], Modifiers::NONE)), vec!["Change Anchor Point".to_string()]);
+    assert_eq!(added(&mut masked, |a| drag(a, [20.0, 20.0], [40.0, 30.0], Modifiers::NONE)), vec!["Drag Anchor Point".to_string()]);
     assert_ne!(mask_corner(&masked), before, "the mask was edited");
+    assert_eq!(added(&mut masked, |a| drag(a, [40.0, 30.0], [60.0, 10.0], Modifiers::NONE)), vec!["Change Anchor Point".to_string()]);
 }
 
 fn app_with_mask() -> PhotocraftApp {
