@@ -86,12 +86,13 @@ pub fn web_exif(doc: &Document, m: WebMetadata) -> Option<&[u8]> {
     doc.metadata.exif.as_deref().map(Vec::as_slice).filter(|_| m == WebMetadata::All)
 }
 
-/// The response's warnings: EXIF that a JPEG couldn't hold (one segment, about 64 KB).
-pub(super) fn web_warnings(st: &WebSettings, exif: Option<&[u8]>, dpi: f32) -> Vec<String> {
-    exif.filter(|x| st.format == WebFormat::Jpeg && !photocraft_codecs::web::jpeg_exif_fits(x, Some(dpi)))
-        .map(|x| photocraft_codecs::FidelityWarning::MetadataTooLarge { what: "EXIF", bytes: x.len() }.to_string())
-        .into_iter()
-        .collect()
+/// The response's warnings: EXIF or XMP that a JPEG couldn't hold (one segment, about 64 KB). XMP
+/// first loses its layered-document properties (#645); only a packet still too large is left out.
+pub(super) fn web_warnings(st: &WebSettings, exif: Option<&[u8]>, xmp: Option<&str>, dpi: f32) -> Vec<String> {
+    let jpeg = st.format == WebFormat::Jpeg;
+    let exif = exif.filter(|x| jpeg && !photocraft_codecs::web::jpeg_exif_fits(x, Some(dpi))).map(|x| ("EXIF", x.len()));
+    let xmp = xmp.filter(|x| jpeg && !photocraft_codecs::web::jpeg_xmp_fits(x, Some(dpi))).map(|x| ("XMP", x.len()));
+    exif.into_iter().chain(xmp).map(|(what, bytes)| photocraft_codecs::FidelityWarning::MetadataTooLarge { what, bytes }.to_string()).collect()
 }
 
 /// Optimises `rect` of `px` (straight RGBA, `bw` wide) with `st`. `preview` also returns what
