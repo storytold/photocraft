@@ -492,6 +492,26 @@ fn direct_text_bytes(text: &photocraft_doc::TextLayer, ctl: &Interrupt<'_>) -> R
 /// Accounts direct replacement-layer data recursively so compressed bundles cannot conceal oversized native
 /// allocations.
 fn direct_layer_bytes(layer: &Layer, depth: usize, remaining_nodes: &mut usize, ctl: &Interrupt<'_>) -> Result<usize> {
+    layer_clone_bytes(layer, depth, remaining_nodes, None, ctl)
+}
+
+/// Existing owners can already contain self-contained native Smart contents.
+/// This is deliberately separate from direct replacement admission: only the
+/// owner route permits Smart, after the existing depth/authorization walk.
+fn owner_clone_bytes(layer: &Layer, remaining_nodes: &mut usize, work: &super::native_work::Work, ctl: &Interrupt<'_>) -> Result<usize> {
+    layer_clone_bytes(layer, 0, remaining_nodes, Some(work), ctl)
+}
+
+fn layer_clone_bytes(
+    layer: &Layer,
+    depth: usize,
+    remaining_nodes: &mut usize,
+    owner_work: Option<&super::native_work::Work>,
+    ctl: &Interrupt<'_>,
+) -> Result<usize> {
+    if let Some(work) = owner_work {
+        work.charge_bytes(256, ctl)?;
+    }
     ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     if depth > super::MAX_DEPTH {
         return Err(invalid("native replacement exceeds group depth"));
@@ -514,10 +534,64 @@ fn direct_layer_bytes(layer: &Layer, depth: usize, remaining_nodes: &mut usize, 
         LayerContent::Fill(fill) => serialized_bytes!(fill)?,
         LayerContent::Text(text) => direct_text_bytes(text, ctl)?,
         LayerContent::Group(group) => group.children.iter().try_fold(0usize, |sum, child| {
-            sum.checked_add(direct_layer_bytes(child, depth + 1, remaining_nodes, ctl)?).ok_or_else(|| invalid("native replacement group size overflows"))
+            sum.checked_add(layer_clone_bytes(child, depth + 1, remaining_nodes, owner_work, ctl)?)
+                .ok_or_else(|| invalid("native replacement group size overflows"))
         })?,
+        LayerContent::Smart(smart) if owner_work.is_some() => {
+            let SmartSource::Embedded { file_name, bytes } = &smart.source else {
+                return Err(invalid("effect owner requires self-contained native smart contents"));
+            };
+            // The same Work already paid the bounded native loader/depth walk.
+            // Count the source conservatively even though Arc clones share it;
+            // filters, warp meshes and surface tree nodes allocate on clone.
+            let mut allocation = std::mem::size_of::<SmartObject>()
+                .checked_add(file_name.len())
+                .and_then(|n| n.checked_add(bytes.len()))
+                .ok_or_else(|| invalid("native owner Smart source size overflows"))?;
+            let warp_bytes = serialized_bytes!(&smart.warp)?;
+            allocation = allocation
+                .checked_add(parameter_bytes(&smart.smart_filters)?)
+                .and_then(|n| n.checked_add(smart.smart_filters.len().checked_mul(std::mem::size_of::<photocraft_doc::SmartFilter>())?))
+                .and_then(|n| n.checked_add(warp_bytes))
+                .ok_or_else(|| invalid("native owner Smart parameters overflow"))?;
+            if let Some(cache) = &smart.cache {
+                allocation = allocation.checked_add(surface_bytes(cache)?).ok_or_else(|| invalid("native owner Smart cache overflows"))?;
+            }
+            if let Some(mask) = &smart.filter_mask {
+                allocation = allocation.checked_add(surface_bytes(&mask.surface)?).ok_or_else(|| invalid("native owner Smart mask overflows"))?;
+            }
+            if let Some(raw) = &smart.psd_raw {
+                allocation = allocation.checked_add(raw.len()).ok_or_else(|| invalid("native owner Smart PSD data overflows"))?;
+            }
+            if let Some(preview) = &smart.vector_preview {
+                allocation = allocation.checked_add(preview.svg.len()).ok_or_else(|| invalid("native owner Smart preview overflows"))?;
+            }
+            allocation
+        }
         _ => return Err(invalid("native replacement requires direct raster, shape, fill, text, or grouped data")),
     };
+    if owner_work.is_some() {
+        if layer.video.is_some() {
+            return Err(invalid("private native effect owner does not admit video data"));
+        }
+        if let Some(raw) = &layer.effects.psd_raw {
+            bytes = bytes.checked_add(raw.len()).ok_or_else(|| invalid("native owner effect metadata overflows"))?;
+        }
+        if let Some(cache) = &layer.fill_cache {
+            let cache_bytes = surface_bytes(&cache.surface)?;
+            bytes = bytes
+                .checked_add(serialized_bytes!(&cache.fill)?)
+                .and_then(|n| n.checked_add(cache_bytes))
+                .ok_or_else(|| invalid("native owner fill cache overflows"))?;
+        }
+        let metadata = serialized_bytes!(&(&layer.xmp, &layer.blend_if, &layer.advanced, &layer.psd_blocks))?;
+        bytes = bytes.checked_add(metadata).ok_or_else(|| invalid("native owner clone metadata overflows"))?;
+        if let LayerContent::Group(group) = &layer.content {
+            bytes = bytes
+                .checked_add(serialized_bytes!(&(&group.artboard, &group.frame_stroke))?)
+                .ok_or_else(|| invalid("native owner group metadata overflows"))?;
+        }
+    }
     let style_bytes = serialized_bytes!(&layer.effects.items)?;
     bytes = bytes.checked_add(allocation).and_then(|v| v.checked_add(style_bytes)).ok_or_else(|| invalid("native replacement allocation overflows"))?;
     if let Some(mask) = &layer.mask {
@@ -860,7 +934,7 @@ impl NativeOwner {
         if existing_depth >= 64 {
             return Err(invalid("native effect owner cannot add a wrapper beyond the native content depth"));
         }
-        work.charge_bytes(direct_layer_bytes(layer, 0, &mut 65536, ctl)?, ctl)?;
+        work.charge_bytes(owner_clone_bytes(layer, &mut 65536, work, ctl)?, ctl)?;
         let mut input = Layer::new(layer.name.clone(), layer.content.clone());
         // The original owner's mask/blend/opacity/locks stay on its admitted outer layer.
         // Child native state remains part of an editable embedded group.
@@ -2263,6 +2337,87 @@ mod tests {
         assert_eq!(builder.source, before);
         assert_eq!(budget, before_budget);
     }
+    #[test]
+    fn existing_native_smart_owner_and_group_clone_admission_keep_direct_replacements_strict() {
+        let doc = document();
+        let source = owner(&doc);
+        let bounds = Rect::new(-5, 7, -2, 9);
+        let mut storage = 1 << 30;
+        let initial = NativeOwner::new(&doc, &source, bounds, &mut storage, &Interrupt::NONE).unwrap();
+        let smart = Layer::new("Already native Smart", initial.content());
+        let nested = Layer::group("Outer", vec![Layer::group("Inner", vec![smart.clone()])]);
+        for layer in [&smart, &nested] {
+            assert!(direct_layer_bytes(layer, 0, &mut 65536, &Interrupt::NONE).is_err(), "direct replacement admission must not accept embedded contents");
+            let work = super::super::native_work::Work::default();
+            let before = work.remaining_units();
+            let mut memory = 1 << 30;
+            let builder = NativeOwner::new_with_work(&doc, layer, bounds, &mut memory, &work, &Interrupt::NONE).unwrap();
+            assert_eq!(builder.existing_depth, 1);
+            assert!(work.remaining_units() < before);
+            assert!(memory < 1 << 30);
+            let contents = embedded(&builder.content());
+            assert_eq!(contents.layers[0].name, layer.name);
+            let restored = photocraft_format::save_to_bytes(&contents, &Default::default()).unwrap();
+            let restored = photocraft_format::load_from_bytes(&restored).unwrap();
+            assert_eq!(restored.layers[0].name, layer.name);
+            let mut inner = &restored.layers[0];
+            while let LayerContent::Group(group) = &inner.content {
+                assert_eq!(group.children.len(), 1);
+                inner = &group.children[0];
+            }
+            let original = embedded(&inner.content);
+            assert_eq!(original.layers[0].surface().unwrap().pixel(0, 0), [0.2, 0.4, 0.7, 1.0]);
+
+            // Isolate the preclone boundary from freshly generated document IDs
+            // and their variable serialized digit widths in the later writer.
+            let measured = super::super::native_work::Work::default();
+            let before = measured.remaining_units();
+            let allocation = owner_clone_bytes(layer, &mut 65536, &measured, &Interrupt::NONE).unwrap();
+            measured.charge_bytes(allocation, &Interrupt::NONE).unwrap();
+            let spent = before - measured.remaining_units();
+            let exact = super::super::native_work::Work::with_units(spent);
+            let allocation = owner_clone_bytes(layer, &mut 65536, &exact, &Interrupt::NONE).unwrap();
+            exact.charge_bytes(allocation, &Interrupt::NONE).unwrap();
+            assert_eq!(exact.remaining_units(), 0);
+            let short = super::super::native_work::Work::with_units(spent - 1);
+            let allocation = owner_clone_bytes(layer, &mut 65536, &short, &Interrupt::NONE).unwrap();
+            assert!(short.charge_bytes(allocation, &Interrupt::NONE).is_err());
+            assert_eq!(short.remaining_units(), 0);
+        }
+    }
+
+    #[test]
+    fn existing_native_owner_clone_refuses_external_non_native_and_cancelled_sources() {
+        let doc = document();
+        let bounds = Rect::new(-5, 7, -2, 9);
+        for source in [
+            SmartSource::Linked { path: "not-authorized.pcraft".into() },
+            SmartSource::Embedded { file_name: "not-native.bin".into(), bytes: Arc::new(vec![1, 2, 3]) },
+        ] {
+            let layer = Layer::group("Grouped source", vec![Layer::new("Smart", LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, None)))]);
+            let work = super::super::native_work::Work::default();
+            let mut memory = 1 << 30;
+            assert!(NativeOwner::new_with_work(&doc, &layer, bounds, &mut memory, &work, &Interrupt::NONE).is_err());
+            assert_eq!(memory, 1 << 30);
+        }
+        let mut memory = 1 << 30;
+        let initial = NativeOwner::new(&doc, &owner(&doc), bounds, &mut memory, &Interrupt::NONE).unwrap();
+        let layer = Layer::group("Native grouped source", vec![Layer::new("Smart", initial.content())]);
+        let work = super::super::native_work::Work::with_units(1);
+        let mut memory = 1 << 30;
+        assert!(NativeOwner::new_with_work(&doc, &layer, bounds, &mut memory, &work, &Interrupt::NONE).is_err());
+        assert_eq!(work.remaining_units(), 0);
+        assert_eq!(memory, 1 << 30);
+        let work = super::super::native_work::Work::with_units(1);
+        let cancel = || true;
+        assert!(matches!(
+            NativeOwner::new_with_work(&doc, &layer, bounds, &mut memory, &work, &Interrupt::cancel_only(&cancel)),
+            Err(crate::IoError::Cancelled)
+        ));
+        assert_eq!(work.remaining_units(), 1);
+        assert_eq!(memory, 1 << 30);
+    }
+
     #[test]
     /// Verifies exact quarter-turn masks and inverse placement without changing native default coverage.
     fn exact_native_quarter_turns_preserve_mask_defaults_coordinates_and_inverse_placement() {
