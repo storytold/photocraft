@@ -99,3 +99,19 @@ fn a_view_cut_on_one_axis_or_rotated_keeps_the_canvas_centre() {
     app.ui.views[0].rotation = 15.0;
     assert_eq!(place(&mut app, "file.placeEmbedded"), [150, 120, 250, 180], "rotated");
 }
+
+/// Into a selected frame the image fills the frame wherever the view is: the view's centre is
+/// not passed, since a frame place's `center` is in the frame's own space.
+#[test]
+fn a_place_into_a_frame_ignores_the_view() {
+    let mut app = placing_app(ZOOMED.0, ZOOMED.1, "src.png", (100, 100));
+    let frame = app.run("layer.new.frame", json!({"x": 10, "y": 10, "width": 80, "height": 80})).unwrap()["layer"].as_u64().unwrap();
+    menus::invoke(&mut app, &egui::Context::default(), "file.placeEmbedded", json!({})).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    let doc = &app.session.active().unwrap().doc;
+    let image = &doc.layer(photocraft_doc::LayerId(frame)).unwrap().children().unwrap()[0];
+    let photocraft_doc::LayerContent::Smart(so) = &image.content else { panic!("the frame holds the placed image") };
+    let [a, _, _, d, e, f] = so.transform.m;
+    let placed = [e, f, e + 100.0 * a, f + 100.0 * d].map(|v| (v * 1000.0).round() / 1000.0);
+    assert_eq!(placed, [10.0, 10.0, 90.0, 90.0], "the image fills the frame");
+}

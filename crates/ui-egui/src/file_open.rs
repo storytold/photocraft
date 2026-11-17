@@ -647,13 +647,18 @@ impl PhotocraftApp {
 /// Where a place lands when only part of the canvas is in view (#14103): the centre of the part
 /// of the canvas the active view shows, in document pixels. `None` (the canvas centre) when the
 /// whole canvas is in view, and in the cases not measured in the reference application: a
-/// rotated view, or one that shows the canvas whole on one axis.
+/// rotated view, or one that shows the canvas whole on one axis. `None` too when the place fills
+/// the active layer's frame, whose `center` is in the frame's own space.
 fn visible_canvas_centre(app: &PhotocraftApp) -> Option<[f64; 2]> {
     let xf = crate::canvas::ViewXform::active(app)?;
     if xf.rotation.abs() > 1e-6 {
         return None;
     }
-    let size = app.session.active()?.doc.size;
+    let st = app.session.active()?;
+    if st.active_layer.is_some_and(|id| photocraft_engine::frame_cmds::frame_of(&st.doc, id).is_some()) {
+        return None;
+    }
+    let size = st.doc.size;
     let (a, b) = (xf.to_doc(xf.rect.min), xf.to_doc(xf.rect.max));
     // The shown span of the canvas on one axis, if the view cuts it there.
     let cut = |axis: usize, len: u32| {
