@@ -82,6 +82,9 @@ impl PhotocraftApp {
         prefs_ui::tick(self, ctx);
         updates_ui::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);
+        // Before the dock draws: floating panels' windows go back to the monitor they were on.
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::panel_docking::monitors::refresh(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
         type_tool::sync_font_names(ctx, self.session.prefs().type_.show_font_names_in_english);
