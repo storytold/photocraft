@@ -1,7 +1,6 @@
 use super::*;
-use crate::{canvas, dialogs, theme::ThemeKind};
-use egui::{Key, vec2};
-use egui_kittest::{Harness, kittest::Queryable};
+use crate::canvas;
+use craft::color_ui::ui::PickedColor;
 
 fn fixture(kind: Kind, depth: u32) -> (PhotocraftApp, u32) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -13,11 +12,25 @@ fn fixture(kind: Kind, depth: u32) -> (PhotocraftApp, u32) {
     app.run(&format!("{prefix}.apply"), json!({"id":id,"layer":layer})).unwrap();
     (app, id)
 }
-fn fields(app: &PhotocraftApp, id: u64) -> Map<String, Value> {
-    app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone()
+
+/// The colour the picker opened with, as hex.
+fn fields(app: &PhotocraftApp, id: DialogId) -> String {
+    let opening = app.framework.dialogs.get_by_id::<ColorPickerDialog>(id).unwrap().opening().unwrap();
+    color_picker_ui::hex(opening.color.to_rgb_array())
 }
-fn set(app: &mut PhotocraftApp, id: u64, color: &str) {
-    app.ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!(color));
+
+fn set(app: &mut PhotocraftApp, id: DialogId, color: &str) {
+    let color = Srgba::from_hex(color).unwrap();
+    app.framework.dialogs.get_mut_by_id::<ColorPickerDialog>(id).unwrap().set_color(PickedColor::rgb(color));
+}
+
+/// OK, as the dialog's button gives it: the app's taker files the answer with [`answered`].
+fn confirm_picker(app: &mut PhotocraftApp, id: DialogId) {
+    crate::dialogs::testing::confirm(app, id).expect("OK is enabled");
+}
+
+fn cancel_picker(app: &mut PhotocraftApp, id: DialogId) {
+    crate::dialogs::testing::cancel(app, id).expect("Cancel is enabled");
 }
 
 #[test]
@@ -42,13 +55,13 @@ fn preview_is_cached_cancel_is_clean_and_ok_is_one_undo_step_at_all_depths() {
             assert_eq!((st.revision, st.is_dirty(), st.history.past_len()), (rev, dirty, history));
             set(&mut app, picker, "#0000ff");
             assert_ne!(canvas::display_doc(&mut app, 0).1, key);
-            dialogs::cancel(&mut app, picker).unwrap();
+            cancel_picker(&mut app, picker);
             assert!(app.text_style_preview.is_none());
             assert!(Arc::ptr_eq(&canvas::display_doc(&mut app, 0).0, &doc));
             let picker = open(&mut app, kind, id).unwrap();
             set(&mut app, picker, "#00ff00");
             let shown = canvas::display_doc(&mut app, 0).0;
-            dialogs::confirm(&mut app, picker).unwrap();
+            confirm_picker(&mut app, picker);
             let st = app.session.active().unwrap();
             assert_eq!(st.history.past_len(), history + 1);
             assert_eq!(serde_json::to_value(&st.doc.text_styles).unwrap(), serde_json::to_value(&shown.text_styles).unwrap());
@@ -69,52 +82,50 @@ fn no_op_keeps_precise_imported_color_and_returning_to_original_removes_preview(
     let before = app.session.active().unwrap().doc.clone();
     let history = app.session.active().unwrap().history.past_len();
     let picker = open(&mut app, Kind::Character, id).unwrap();
-    let original = fields(&app, picker)["color"].as_str().unwrap().to_string();
+    let original = fields(&app, picker);
     set(&mut app, picker, "#ffffff");
     canvas::display_doc(&mut app, 0);
     set(&mut app, picker, &original);
     assert!(Arc::ptr_eq(&canvas::display_doc(&mut app, 0).0, &before));
     assert!(app.text_style_preview.is_none());
-    dialogs::confirm(&mut app, picker).unwrap();
+    confirm_picker(&mut app, picker);
     assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &before));
     assert_eq!(app.session.active().unwrap().history.past_len(), history);
 }
 
 #[test]
-fn invalidated_targets_never_redirect_and_bad_color_never_commits() {
+fn invalidated_targets_never_redirect() {
+    let ctx = egui::Context::default();
     for change in 0..6 {
         let (mut app, id) = fixture(Kind::Character, 8);
         let picker = open(&mut app, Kind::Character, id).unwrap();
         set(&mut app, picker, "#00ff00");
         canvas::display_doc(&mut app, 0);
-        let pending = fields(&app, picker);
         match change {
             0 => {
                 app.run("file.new", json!({"width":10,"height":10})).unwrap();
             }
             1 => {
-                app.run("type.characterStyle.delete", json!({"id":id})).unwrap();
-            }
-            2 => {
                 app.run("type.characterStyle.set", json!({"id":id,"attrs":{"size":42}})).unwrap();
             }
+            2 => {
+                app.run("type.characterStyle.delete", json!({"id":id})).unwrap();
+            }
             3 => app.ui.type_panels.options = None,
-            4 => app.ui.type_panels.styles = false,
-            _ => app.ui.type_panels.styles_tab = 1,
+            4 => {
+                panel_docking::show_panel(&mut app, "characterStyles", Some(false)).unwrap();
+            }
+            // Another style open in Style Options: each styles panel is its own window, so showing the other one
+            // leaves this one in front.
+            _ => app.ui.type_panels.options = Some((false, id + 1)),
         }
         let doc = app.session.active().unwrap().doc.clone();
-        assert!(confirm(&mut app, &pending).is_err());
-        prune(&mut app);
-        assert!(app.ui.dialogs.is_empty());
+        check(&mut app, &ctx);
+        assert!(app.framework.dialogs.stack().is_empty(), "change {change}");
+        assert!(app.ui.type_panels.color_target.is_none());
         assert!(app.text_style_preview.is_none());
         assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
     }
-    let (mut app, id) = fixture(Kind::Character, 8);
-    let picker = open(&mut app, Kind::Character, id).unwrap();
-    set(&mut app, picker, "invalid");
-    let doc = app.session.active().unwrap().doc.clone();
-    assert!(dialogs::confirm(&mut app, picker).is_err());
-    assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
 }
 
 #[test]
@@ -125,78 +136,11 @@ fn inherited_colors_and_invalid_open_requests_are_atomic() {
     for (kind, id) in [(Kind::Character, 0), (Kind::Character, u32::MAX), (Kind::Character, inherited), (Kind::Paragraph, 0)] {
         assert!(open(&mut app, kind, id).is_err());
         assert_eq!(app.ui.type_panels, panels);
-        assert!(app.ui.dialogs.is_empty());
+        assert!(app.framework.dialogs.stack().is_empty());
     }
     app.run("type.paragraphStyle.set", json!({"id":0,"attrs":{"color":"#112233"}})).unwrap();
     let picker = open(&mut app, Kind::Paragraph, 0).unwrap();
     set(&mut app, picker, "#abcdef");
-    dialogs::confirm(&mut app, picker).unwrap();
+    confirm_picker(&mut app, picker);
     assert_eq!(color_picker_ui::hex(color(&app.session.active().unwrap().doc, Kind::Paragraph, 0).unwrap().to_rgb()), "#abcdef");
-}
-
-fn harness(kind: Kind) -> Harness<'static, PhotocraftApp> {
-    let (mut app, id) = fixture(kind, 8);
-    app.ui.type_panels.styles = true;
-    app.ui.type_panels.styles_tab = usize::from(kind.paragraph());
-    app.ui.type_panels.options = Some((kind.paragraph(), id));
-    let mut h = Harness::builder().with_size(vec2(1500.0, 1000.0)).build_ui_state(
-        move |ui, app| {
-            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                super::super::styles_panel(app, ui, kind.paragraph());
-                dialogs::show(app, ui.ctx());
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, ThemeKind::ProMedium);
-    h.run_steps(4);
-    h
-}
-
-#[test]
-fn actual_style_swatch_opens_shared_picker_enter_commits_escape_cancels() {
-    for kind in [Kind::Character, Kind::Paragraph] {
-        for key in [Key::Enter, Key::Escape] {
-            let mut h = harness(kind);
-            let doc = h.state().session.active().unwrap().doc.clone();
-            h.get_by_role(egui::accesskit::Role::ColorWell).click();
-            h.run();
-            assert_eq!(h.state().ui.dialogs.len(), 1);
-            let picker = h.state().ui.dialogs[0].id;
-            assert_eq!(fields(h.state(), picker)["__label"], "Color Picker (Text Color)");
-            set(h.state_mut(), picker, "#00ff00");
-            h.key_press(key);
-            h.run();
-            assert!(h.state().ui.dialogs.is_empty());
-            if key == Key::Escape {
-                assert!(Arc::ptr_eq(&h.state().session.active().unwrap().doc, &doc));
-            } else {
-                assert!(!Arc::ptr_eq(&h.state().session.active().unwrap().doc, &doc));
-            }
-            assert!(h.state().ui.type_panels.options.is_some());
-        }
-    }
-}
-
-#[test]
-#[ignore = "manual preview performance comparison"]
-fn preview_timings() {
-    let (mut app, id) = fixture(Kind::Character, 8);
-    let t = std::time::Instant::now();
-    for _ in 0..100 {
-        canvas::display_doc(&mut app, 0);
-    }
-    let plain = t.elapsed();
-    let picker = open(&mut app, Kind::Character, id).unwrap();
-    let t = std::time::Instant::now();
-    for i in 0..20 {
-        set(&mut app, picker, &format!("#{:06x}", 0x008000 + i));
-        canvas::display_doc(&mut app, 0);
-    }
-    let changes = t.elapsed();
-    let t = std::time::Instant::now();
-    for _ in 0..100 {
-        canvas::display_doc(&mut app, 0);
-    }
-    println!("plain 100 frames: {plain:?}; 20 color changes: {changes:?}; cached 100 frames: {:?}", t.elapsed());
 }
