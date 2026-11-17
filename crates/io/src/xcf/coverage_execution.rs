@@ -168,9 +168,6 @@ impl<'a> Image<'a> {
                     if let Some((_, own_charge)) = mask {
                         self.budget = self.budget.saturating_add(own_charge);
                     }
-                    if result.is_err() {
-                        state.discard_since(child_start, &self.native_work, ctl)?;
-                    }
                     match result {
                         Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                         Err(error) => Err(effects::MappingFailure {
@@ -200,6 +197,10 @@ impl<'a> Image<'a> {
                     state.applied.insert(pointer, Ok(notes));
                 }
                 Err(failure) => {
+                    // Child pixels are temporary until the complete parent stage commits.
+                    // Both preparation errors and native mapping refusals discard them;
+                    // generation work remains spent even though storage is released.
+                    state.discard_since(child_start, &self.native_work, ctl)?;
                     state.applied.insert(pointer, Err(failure));
                     omitted = true;
                 }
@@ -333,6 +334,61 @@ mod tests {
         let stage = report.entries.iter().find(|entry| entry.feature_code == "xcf.coverage_effect").unwrap();
         assert_eq!(stage.reason, ConversionReason::MissingMapping);
         assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.coverage_effect_mask" && entry.reason == ConversionReason::NativePolicy));
+    }
+    #[test]
+    fn rejected_parent_blend_discards_temporary_child_coverage_and_preserves_native_pixels() {
+        let (bytes, parent) = source();
+        let mut w = W { out: bytes, wide: true };
+        // Insert the parent's unsupported Behind blend before its end marker.
+        let mut property = W { out: Vec::new(), wide: true };
+        property.prop_u32(7, 2);
+        let end = w.out.len() - 16;
+        w.out.splice(end..end, property.out);
+        let parent_mask = w.out.len() - 8;
+        let mask = w.out.len();
+        w.patch(parent_mask, mask);
+        w.u32(1);
+        w.u32(1);
+        w.string("Temporary auxiliary");
+        w.end();
+        let hierarchy_slot = w.slot();
+        let child_slot = w.slot();
+        w.ptr(0);
+        let hierarchy = super::super::tests::hierarchy(&mut w, 1, 1, 1, &[64], Compression::None);
+        w.patch(hierarchy_slot, hierarchy);
+        let child = w.out.len();
+        w.patch(child_slot, child);
+        let (child_bytes, child_start) = source();
+        w.out.extend_from_slice(&child_bytes[child_start..]);
+
+        let mut image = super::super::optional_mask_budget_tests::image(&w.out, MAX_PIXEL_BYTES);
+        let owner = owner(&mut image);
+        let bounds = Rect::new(0, 0, 1, 1);
+        let format = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+        let mut surface = Surface::new(format);
+        surface.fill_rect(bounds, &[0.25]);
+        let original = surface.clone();
+        let work_before = image.native_work.remaining_bytes();
+        let state = image.run_coverage(&[parent], &mut surface, bounds, 1, &Interrupt::NONE).unwrap();
+        assert_eq!(surface.read_region(bounds), original.read_region(bounds));
+        assert!(state.applied[&parent].as_ref().unwrap_err().message.contains("blend mode"));
+        assert!(state.applied[&child].as_ref().unwrap_err().message.contains("discarded"));
+        assert!(image.native_work.remaining_bytes() < work_before, "discarded child generation is not refunded");
+        assert_eq!(image.budget, MAX_PIXEL_BYTES, "temporary auxiliary pixels are released");
+        image.report_coverage_effects(owner, &[parent], Some(&state), &Interrupt::NONE).unwrap();
+        let photocraft_doc::import_conversion::ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("report") };
+        for pointer in [parent, child] {
+            let entry =
+                report.entries.iter().find(|entry| entry.feature_code == "xcf.coverage_effect" && entry.source.record_offset == Some(pointer as u64)).unwrap();
+            assert_eq!(entry.disposition, ConversionDisposition::RetainedUnapplied);
+        }
+        let mut document = Document::new("Rejected coverage", Size::new(1, 1), ColorMode::Grayscale, SampleType::U8);
+        document.layers.push(Layer::new("Preserved pixels", LayerContent::Raster(surface)));
+        document.metadata.import_conversion = Some(Arc::new(photocraft_doc::import_conversion::ImportConversion::Report(report)));
+        let bytes = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+        let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+        assert_eq!(reopened, document);
+        assert_eq!(reopened.layers[0].surface().unwrap().read_region(bounds), original.read_region(bounds));
     }
     #[test]
     fn coverage_work_refusal_preserves_pixels_and_cancellation_precedes_all_work() {
