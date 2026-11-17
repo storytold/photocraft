@@ -32,7 +32,7 @@ fn raw_pointer_brush_and_mixer_pixels_appear_in_the_input_frame() {
             app.sync_views();
             h.run_steps(4);
             let at = h.state().last_canvas_rect.center();
-            let before = h.render().unwrap().get_pixel(at.x as u32, at.y as u32).0;
+            let before = (0..3).find_map(|_| h.render().ok()).expect("render").get_pixel(at.x as u32, at.y as u32).0;
             h.input_mut().events.push(egui::Event::PointerMoved(at));
             h.input_mut().events.push(egui::Event::PointerButton {
                 pos: at,
@@ -41,12 +41,12 @@ fn raw_pointer_brush_and_mixer_pixels_appear_in_the_input_frame() {
                 modifiers: egui::Modifiers::NONE,
             });
             h.step();
-            let image = h.render().unwrap();
+            let image = (0..3).find_map(|_| h.render().ok()).expect("render");
             assert_ne!(image.get_pixel(at.x as u32, at.y as u32).0, before, "{tool:?} flip={flip}: press visible in its own frame");
             let next = at + egui::vec2(40.0, 0.0);
             h.input_mut().events.push(egui::Event::PointerMoved(next));
             h.step();
-            let image = h.render().unwrap();
+            let image = (0..3).find_map(|_| h.render().ok()).expect("render");
             assert_ne!(image.get_pixel(next.x as u32, next.y as u32).0, before, "{tool:?} flip={flip}: move visible in its own frame");
             if tool == Tool::MixerBrush
                 && !flip
@@ -136,7 +136,10 @@ fn frames(h: &mut Harness, c: Case) -> (Pixels, Pixels, Pixels, bool) {
     let canvas = |h: &mut Harness| {
         h.run_steps(3);
         let r = h.state().last_canvas_rect.shrink(4.0);
-        let img = h.render().expect("render");
+        // egui_kittest waits 10 s for the GPU. Windows CI renders on WARP, a software rasterizer,
+        // where a frame can take longer while other GPU tests run; the submitted work still
+        // finishes, so wait for it again instead of failing (as `full_res_preview.rs` does).
+        let img = (0..3).find_map(|_| h.render().ok()).expect("render");
         let mut px = Vec::new();
         for y in r.top() as u32..(r.bottom() as u32).min(img.height()) {
             for x in r.left() as u32..(r.right() as u32).min(img.width()) {
@@ -271,7 +274,7 @@ fn refine_edge_brush_stays_visible_above_the_canvas_with_live_tools() {
             let at = egui::pos2(canvas.left() + 32.0, canvas.top() + 80.0);
             h.input_mut().events.push(egui::Event::PointerMoved(at));
             h.step();
-            let image = h.render().unwrap();
+            let image = (0..3).find_map(|_| h.render().ok()).expect("render");
             let cross = image.get_pixel(at.x as u32 + 2, at.y as u32).0;
             assert!(cross[0] > 100 && cross[1] > 100 && cross[2] > 100, "{tool:?} flip={flip}: Refine Edge cross is hidden: {cross:?}");
             if tool == Tool::MixerBrush
@@ -320,10 +323,10 @@ fn live_tool_camera_navigation_is_visible_in_the_input_frame() {
                 h.step();
                 let moved = h.state().ui.views[0].clone();
                 assert!(if zoom { moved.zoom != before.zoom } else { moved.center != before.center }, "navigation was applied");
-                let immediate = h.render().unwrap();
+                let immediate = (0..3).find_map(|_| h.render().ok()).expect("render");
                 let rect = h.state().last_canvas_rect.shrink(8.0);
                 h.step();
-                let settled = h.render().unwrap();
+                let settled = (0..3).find_map(|_| h.render().ok()).expect("render");
                 if tool == Tool::MixerBrush
                     && flip
                     && zoom
