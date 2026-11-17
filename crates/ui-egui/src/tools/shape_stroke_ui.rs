@@ -1,4 +1,5 @@
-//! Shape stroke geometry controls shared by the tool defaults and Properties.
+//! Shape stroke geometry shared by the tool defaults and Properties.
+use craft::draw::stroke::{DashAlign, DashUnit, LineCap as FwCap, LineJoin as FwJoin, StrokeAlign as FwAlign, StrokeStyle};
 use egui::vec2;
 use photocraft_doc::{LineCap, LineJoin, ShapeStroke, StrokeAlign};
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,64 @@ impl From<&ShapeStroke> for StrokeOptions {
     }
 }
 
+/// The framework's stroke style for the options: dash lengths count in stroke widths and sit exactly
+/// along the path, as the document stores them. The width is the caller's.
+impl From<&StrokeOptions> for StrokeStyle {
+    fn from(o: &StrokeOptions) -> Self {
+        StrokeStyle {
+            align: match o.align {
+                StrokeAlign::Inside => FwAlign::Inside,
+                StrokeAlign::Center => FwAlign::Center,
+                StrokeAlign::Outside => FwAlign::Outside,
+            },
+            cap: match o.cap {
+                LineCap::Butt => FwCap::Butt,
+                LineCap::Round => FwCap::Round,
+                LineCap::Square => FwCap::Square,
+            },
+            join: match o.join {
+                LineJoin::Miter => FwJoin::Miter,
+                LineJoin::Round => FwJoin::Round,
+                LineJoin::Bevel => FwJoin::Bevel,
+            },
+            miter_limit: o.miter_limit,
+            dashes: o.dashes.clone(),
+            dash_offset: o.dash_offset,
+            dash_unit: DashUnit::Widths,
+            dash_align: DashAlign::Exact,
+            opacity: o.opacity,
+            ..StrokeStyle::default()
+        }
+    }
+}
+
 impl StrokeOptions {
+    /// The options of a framework stroke style; its width, dash unit and dash alignment have no
+    /// place here.
+    pub fn from_style(style: &StrokeStyle) -> Self {
+        Self {
+            align: match style.align {
+                FwAlign::Inside => StrokeAlign::Inside,
+                FwAlign::Outside => StrokeAlign::Outside,
+                _ => StrokeAlign::Center,
+            },
+            cap: match style.cap {
+                FwCap::Round => LineCap::Round,
+                FwCap::Square => LineCap::Square,
+                _ => LineCap::Butt,
+            },
+            join: match style.join {
+                FwJoin::Round => LineJoin::Round,
+                FwJoin::Bevel => LineJoin::Bevel,
+                _ => LineJoin::Miter,
+            },
+            miter_limit: style.miter_limit,
+            dashes: style.dashes.clone(),
+            dash_offset: style.dash_offset,
+            opacity: style.opacity,
+        }
+    }
+
     pub fn params(&self) -> Value {
         json!({"align": format!("{:?}", self.align).to_ascii_lowercase(),
             "cap": format!("{:?}", self.cap).to_ascii_lowercase(), "join": format!("{:?}", self.join).to_ascii_lowercase(),
@@ -48,34 +106,6 @@ impl StrokeOptions {
             dash_offset: self.dash_offset,
             opacity: self.opacity,
         }
-    }
-
-    fn label(&self) -> &'static str {
-        if self.dashes.is_empty() {
-            "Solid"
-        } else if self.dashes == [4.0, 2.0] {
-            "Dashed"
-        } else if self.dashes == [0.0, 2.0] && self.cap == LineCap::Round {
-            "Dotted"
-        } else {
-            "Custom"
-        }
-    }
-
-    fn preset(&mut self, name: &str) {
-        self.dash_offset = 0.0;
-        self.dashes = match name {
-            "Dashed" => vec![4.0, 2.0],
-            "Dotted" => {
-                self.cap = LineCap::Round;
-                vec![0.0, 2.0]
-            }
-            _ => Vec::new(),
-        };
-    }
-
-    pub(crate) fn valid(&self) -> bool {
-        self.stroke(3.0, photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)).validate().is_ok()
     }
 }
 
@@ -131,94 +161,5 @@ pub fn paint_shape_preview(painter: &egui::Painter, shape: &photocraft_doc::Shap
     }
 }
 
-mod editor;
-
-pub use editor::{StrokeEditor, button};
-
-fn open_frame_id() -> egui::Id {
-    egui::Id::unique("shape-stroke-open-frame")
-}
-
-pub(super) fn mark_rendered(ctx: &egui::Context, key: &str) {
-    let pass = ctx.cumulative_pass_nr();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("shape-stroke-rendered", key)), pass));
-}
-
-/// A hidden options row or collapsed Appearance section no longer owns input.
-/// Called after all options bars and Properties windows have had a chance to draw.
-pub(crate) fn finish_frame(app: &mut crate::PhotocraftApp, ctx: &egui::Context) {
-    let Some(e) = &app.ui.stroke_editor else { return };
-    let shown = ctx.data(|d| d.get_temp::<u64>(egui::Id::unique(("shape-stroke-rendered", e.key.as_str()))));
-    if shown != Some(ctx.cumulative_pass_nr()) {
-        editor::close_children(ctx, &e.key);
-        app.ui.stroke_editor = None;
-    }
-}
-
-#[derive(Clone, Default)]
-struct CanvasDismissal {
-    held: bool,
-    consumed_frame: Option<u64>,
-}
-
-/// Pressing the canvas dismisses this popup and consumes that entire gesture. In particular,
-/// its release must not open a shape-size dialog or commit a shape dragged behind the popup.
-pub(crate) fn dismiss_from_canvas(app: &mut crate::PhotocraftApp, response: &egui::Response) -> bool {
-    let ctx = &response.ctx;
-    let frame = ctx.cumulative_frame_nr();
-    let was_open = app.ui.stroke_editor.is_some() || ctx.data(|d| d.get_temp::<u64>(open_frame_id())) == Some(frame);
-    let (pressed, down) = ctx.input(|i| (i.pointer.any_pressed(), i.pointer.any_down()));
-    let dismiss = was_open && pressed && response.contains_pointer();
-    if dismiss && let Some(e) = app.ui.stroke_editor.take() {
-        editor::close_children(ctx, &e.key);
-        ctx.request_repaint();
-    }
-    ctx.data_mut(|d| {
-        let state = d.get_temp_mut_or_default::<CanvasDismissal>(egui::Id::unique("shape-stroke-canvas-dismissal"));
-        state.held |= dismiss;
-        let consumed = state.held || state.consumed_frame == Some(frame);
-        if consumed {
-            state.held = down;
-            state.consumed_frame = Some(frame);
-        }
-        consumed
-    })
-}
-
-/// Drop a popup whose source disappeared or changed outside this editor (including Undo).
-pub(crate) fn sync_editor(app: &mut crate::PhotocraftApp, ctx: &egui::Context) {
-    let Some(e) = &app.ui.stroke_editor else { return };
-    let valid = if let Some((doc, layer)) = e.target {
-        app.session.active().is_some_and(|st| {
-            let locks = st.doc.effective_locks(layer);
-            st.doc.id == doc
-                && st.active_layer == Some(layer)
-                && !locks.all
-                && !locks.pixels
-                && st.doc.layer(layer).is_some_and(|l| match &l.content {
-                    photocraft_doc::LayerContent::Shape(shape) => shape.stroke.as_ref().map(StrokeOptions::from).unwrap_or_default() == e.original,
-                    _ => false,
-                })
-        })
-    } else {
-        let tool = app.ui.tool;
-        ((e.key == "tool-stroke" && crate::vector_ui::is_shape_tool(tool))
-            || (e.key == "pen-stroke" && tool == crate::state::Tool::Pen && app.ui.tool_options.vector_mode == "shape"))
-            && app.ui.tool_options.shape_stroke == e.original
-    };
-    if !valid {
-        editor::close_children(ctx, &e.key);
-        app.ui.stroke_editor = None;
-    } else {
-        // The options row can process a batched press+release before the canvas is drawn.
-        // Keep the opening state for this frame so that click is still dismissal-only.
-        let frame = ctx.cumulative_frame_nr();
-        ctx.data_mut(|d| d.insert_temp(open_frame_id(), frame));
-    }
-}
-
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod shortcut_tests;
