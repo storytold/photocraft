@@ -243,6 +243,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let exif = web_exif(&doc, st.metadata);
     let dpi = wdoc.resolution_dpi;
     let mut warnings = web_warnings(&st, exif, dpi);
+    warnings.extend(slices::overflow_warning(&doc));
     let all = slices::resolve(&doc);
     let picked = |r: &ResolvedSlice| match &pick {
         SlicePick::Numbers(n) => n.contains(&(r.number as u64)),
@@ -272,7 +273,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
             bytes = bytes.saturating_mul(frames);
         }
         return Ok(
-            json!({"format": o.ext, "bytes": bytes, "width": o.width, "height": o.height, "colors": o.colors, "colorTable": o.color_table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>(), "transparentIndex": o.transparent_index}),
+            json!({"format": o.ext, "bytes": bytes, "width": o.width, "height": o.height, "colors": o.colors, "colorTable": o.color_table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>(), "transparentIndex": o.transparent_index, "warnings": warnings}),
         );
     }
     if let Some(folder) = folder {

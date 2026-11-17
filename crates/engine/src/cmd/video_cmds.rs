@@ -677,13 +677,14 @@ pub fn render_video_with(
         let stem = base.name.rsplit_once('.').map_or(base.name.as_str(), |(a, _)| a).to_string();
         // Progress and cancellation reach the export between frames, so Esc stops a long render; the last
         // frame is reported once the file is written.
-        let (bytes, warnings) =
-            photocraft_io::gif_anim::export_stepped(&base, &photocraft_raster::Interrupt::NONE, &mut |done, total| progress(done.min(total.saturating_sub(1)), total))
-                .map_err(|e| match e {
-                    photocraft_io::IoError::Cancelled => EngineError::Other("render cancelled".into()),
-                    e => EngineError::Other(e.to_string()),
-                })?
-                .ok_or_else(|| EngineError::Other("the document has no frame animation".into()))?;
+        let (bytes, warnings) = photocraft_io::gif_anim::export_stepped(&base, &photocraft_raster::Interrupt::NONE, &mut |done, total| {
+            progress(done.min(total.saturating_sub(1)), total)
+        })
+        .map_err(|e| match e {
+            photocraft_io::IoError::Cancelled => EngineError::Other("render cancelled".into()),
+            e => EngineError::Other(e.to_string()),
+        })?
+        .ok_or_else(|| EngineError::Other("the document has no frame animation".into()))?;
         let name = format!("{stem}.gif");
         write(&name, &bytes)?;
         // The final report follows encoding and writing, so `n` of `n` means the file exists.
