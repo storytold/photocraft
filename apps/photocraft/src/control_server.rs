@@ -183,6 +183,22 @@ mod tests {
     use super::*;
     use std::io::BufRead;
 
+    /// Authenticate a test client with the challenge handshake, never sending the token.
+    fn authenticate(stream: &mut TcpStream, reader: &mut impl BufRead, token: &str) -> Value {
+        use photocraft_automation::security::{AUTH_METHOD, CHALLENGE_METHOD, ProofRole, generate_nonce, handshake_proof};
+        let client_nonce = generate_nonce().unwrap();
+        writeln!(stream, "{}", json!({"id": 1, "method": CHALLENGE_METHOD, "params": {"clientNonce": client_nonce}})).unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let challenge: Value = serde_json::from_str(&line).unwrap();
+        let server_nonce = challenge["result"]["serverNonce"].as_str().unwrap();
+        let proof = handshake_proof(token, ProofRole::Client, &client_nonce, server_nonce).unwrap();
+        writeln!(stream, "{}", json!({"id": 2, "method": AUTH_METHOD, "params": {"proof": proof}})).unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+
     /// #6427: with port 0 the log names the port the OS bound, which a client can connect to.
 
     #[test]
@@ -200,9 +216,8 @@ mod tests {
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut line = String::new();
-        writeln!(stream, "{}", json!({"id": 1, "method": "auth", "params": {"token": TOKEN}})).unwrap();
-        reader.read_line(&mut line).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["ok"], true);
+        let auth = authenticate(&mut stream, &mut reader, TOKEN);
+        assert_eq!(auth["ok"], true);
         writeln!(stream, "{}", json!({"id": 2, "method": "test.ping"})).unwrap();
         line.clear();
         reader.read_line(&mut line).unwrap();
@@ -231,10 +246,9 @@ mod tests {
         let mut stream = TcpStream::connect(address).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut replies = BufReader::new(stream.try_clone().unwrap());
-        writeln!(stream, "{}", json!({"id": 1, "method": "auth", "params": {"token": TOKEN}})).unwrap();
+        let auth = authenticate(&mut stream, &mut replies, TOKEN);
+        assert_eq!(auth["result"]["authenticated"], true);
         let mut line = String::new();
-        replies.read_line(&mut line).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["result"]["authenticated"], true);
         writeln!(stream, "{}", json!({"id": 2, "method": "test.bound"})).unwrap();
         let request = requests.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(request.method, "test.bound");
@@ -297,10 +311,9 @@ mod tests {
         let mut stream = TcpStream::connect(addr).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
-        writeln!(stream, "{}", json!({"id": 1, "method": "auth", "params": {"token": TOKEN}})).unwrap();
+        let auth = authenticate(&mut stream, &mut reader, TOKEN);
+        assert_eq!(auth["ok"], true);
         let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["ok"], true);
         writeln!(stream, "{}", json!({"id": 2, "method": "test.large"})).unwrap();
         line.clear();
         reader.read_line(&mut line).unwrap();
@@ -338,10 +351,9 @@ mod tests {
         let mut stream = TcpStream::connect(addr).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
-        writeln!(stream, "{}", json!({"id": "auth", "method": "auth", "params": {"token": TOKEN}})).unwrap();
+        let auth = authenticate(&mut stream, &mut reader, TOKEN);
+        assert_eq!(auth["ok"], true);
         let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["ok"], true);
         writeln!(stream, "{{not json}}").unwrap();
         line.clear();
         reader.read_line(&mut line).unwrap();
@@ -380,12 +392,11 @@ mod tests {
         let mut stream = TcpStream::connect(addr).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let auth = authenticate(&mut stream, &mut reader, TOKEN);
+        assert_eq!(auth["result"]["authenticated"], true);
         let mut line = String::new();
-        for id in ["auth", "again"] {
-            writeln!(stream, "{}", json!({"id": id, "method": "auth", "params": {"token": TOKEN}})).unwrap();
-            line.clear();
-            reader.read_line(&mut line).unwrap();
-        }
+        writeln!(stream, "{}", json!({"id": "again", "method": "auth"})).unwrap();
+        reader.read_line(&mut line).unwrap();
         let again: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(again["id"], "again");
         assert_eq!(again["ok"], false);
