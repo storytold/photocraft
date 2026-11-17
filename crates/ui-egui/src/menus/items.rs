@@ -58,7 +58,14 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             path: path.iter().map(|s| s.to_string()).collect(),
             // A live item shows the shortcut that runs it ([`crate::shortcut_dispatch::bindings`]
             // prefers the command's own over the catalogue's): Undo ⌘Z, Copy ⌘C, Hide Layers ⌘,.
-            shortcut: if known(id) { crate::shortcuts::default_shortcut(id) } else { sc.map(Into::into) },
+            // Window › Workspace › Keyboard Shortcuts & Menus… shows no key (#14332).
+            shortcut: if path == ["Window", "Workspace"] && id == "edit.keyboardShortcuts" {
+                None
+            } else if known(id) {
+                crate::shortcuts::default_shortcut(id)
+            } else {
+                sc.map(Into::into)
+            },
             enabled: known(id) && is_enabled(app, id),
             checked: checked(app, id),
             color: None,
@@ -219,7 +226,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     let prefs = app.session.prefs();
     if !prefs.shortcuts.is_empty() {
         for it in &mut items {
-            if prefs.shortcuts.contains_key(&it.id) {
+            if !(it.path == ["Window", "Workspace"] && it.id == "edit.keyboardShortcuts") && prefs.shortcuts.contains_key(&it.id) {
                 it.shortcut = prefs.shortcut(&it.id, None).map(str::to_string);
             }
         }
