@@ -278,6 +278,7 @@ fn mask_pixel(pixel: vec4<f32>, weight: f32) -> vec4<f32> {
 }
 
 fn composite_emission(b: vec4<f32>, s: vec4<f32>, opacity: f32) -> vec4<f32> {
+    if (opacity <= 0.0 || (s.a <= 0.0 && !emits(s.a))) { return b; }
     let ab = max(b.a, 0.0);
     let over = max(s.a, 0.0) * opacity;
     let alpha = over + ab * (1.0 - over);
@@ -969,7 +970,8 @@ fn fs_layerbatch_normal(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     let d = doc_px(p);
     let s = mask_pixel(layer_texel(d), mask_value(d));
-    var b = composite_normal_fill(textureLoad(tex_a, p, 0), s, op.opacity, op.fill);
+    var b = textureLoad(tex_a, p, 0);
+    if (s.a > 0.0 || emits(s.a)) { b = composite_normal_fill(b, s, op.opacity, op.fill); }
     if (op.kind >= 1) { b = batch_layer_normal(0, d, b, op.p0, op.p1, op.p2); }
     if (op.kind >= 2) { b = batch_layer_normal(1, d, b, op.p3, op.q0, op.q1); }
     if (op.kind >= 3) { b = batch_layer_normal(2, d, b, op.q2, op.q3, op.q4); }

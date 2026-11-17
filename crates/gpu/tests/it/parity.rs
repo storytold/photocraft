@@ -109,6 +109,31 @@ fn hdr_low_coverage_preserves_associated_colour() {
     assert!(error.to_string().contains("requires a full-float GPU target"), "{error}");
 }
 
+#[test]
+fn hdr_zero_coverage_emission_does_not_obscure_the_backdrop() {
+    let Some(mut g) = gpu() else { return };
+    let red = f32::MAX / 2.0;
+    let mut doc = Document::new("Zero coverage emission", Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
+    let mut emitter = Layer::raster("emission", PixelFormat::RGBA32F);
+    let bounds = doc.bounds();
+    emitter.surface_mut().unwrap().fill_rect(bounds, &[red, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA]);
+    doc.layers.push(emitter);
+
+    let transparent = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, bounds).unwrap();
+    assert_eq!(transparent[0][0], red);
+    assert!(photocraft_color::is_emissive_alpha(transparent[0][3]));
+
+    let mut background = Layer::raster("white", PixelFormat::RGBA32F);
+    background.surface_mut().unwrap().fill_rect(bounds, &[1.0; 4]);
+    doc.layers.insert(0, background);
+    let expected = photocraft_compose::flatten(&doc);
+    assert_eq!(expected.px[0], [red, 1.0, 1.0, 1.0]);
+    for comp in [&mut g.comp, &mut g.paged] {
+        let actual = render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap();
+        assert_eq!(actual, expected.px);
+    }
+}
+
 /// Phase timings for diagnosing expensive parity checks; nextest shows them only for the
 /// selected slow Windows tests, without changing their timeout or pass criteria.
 fn timed<T>(what: &str, run: impl FnOnce() -> T) -> T {

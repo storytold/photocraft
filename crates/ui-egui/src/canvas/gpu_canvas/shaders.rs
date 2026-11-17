@@ -183,7 +183,8 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         // Linear composite: store its sRGB encoding (8-bit precision where it matters).
         rgb = srgb_encode(rgb);
     }
-    return vec4(min(rgb * select(a, 1.0, emission), vec3(65504.0)), a);
+    if (emission) { return vec4(min(rgb, vec3(65504.0)), a); }
+    return vec4(rgb * a, a);
 }
 "#;
 

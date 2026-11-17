@@ -247,6 +247,9 @@ pub(crate) fn composite_emission(backdrop: [f32; 4], source: [f32; 4], opacity: 
     if !be && !se {
         return None;
     }
+    if opacity <= 0.0 || (!se && source[3] <= 0.0) {
+        return Some(backdrop);
+    }
     let ab = backdrop[3].max(0.0);
     let as_ = source[3].max(0.0) * opacity;
     let ao = as_ + ab * (1.0 - as_);
