@@ -1225,9 +1225,10 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         doc.variables = photocraft_doc::Variables::default();
     }
     // A full copy starts on the copy of the source's active layer, also inside a group, as the
-    // reference application does (#14596); a merged copy keeps its single layer active.
+    // reference application does (#14596); a merged copy keeps its single layer active. Several
+    // selected layers were not measured, so that copy keeps today's target, its top layer.
     let merged_only = p.get("mergedOnly").and_then(Value::as_bool).unwrap_or(false);
-    let source_active = d.active_layer.filter(|_| !merged_only);
+    let source_active = d.active_layer.filter(|_| !merged_only && d.selected_layers().len() <= 1);
     let ids = reidentify_copied_layers(&mut doc);
     let name = doc.name.clone();
     let index = s.add_document(doc, None);
