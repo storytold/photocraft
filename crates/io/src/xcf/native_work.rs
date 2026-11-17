@@ -23,7 +23,7 @@ impl Work {
     }
     pub(super) fn charge_bytes(&self, bytes: usize, ctl: &Interrupt<'_>) -> Result<()> {
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        let units = bytes / 4 + usize::from(bytes % 4 != 0);
+        let units = bytes / 4 + usize::from(!bytes.is_multiple_of(4));
         let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !WorkBudget::new(&mut state.remaining).exhaust_on_reject(units) {
             state.rejections = state.rejections.saturating_add(1);

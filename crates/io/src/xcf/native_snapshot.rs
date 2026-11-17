@@ -200,17 +200,17 @@ fn object_references(value: &serde_json::Value, work: &Work, ctl: &Interrupt<'_>
             serde_json::Value::Object(values) => {
                 // SurfaceM carries the exact per-tile byte length enforced by
                 // LoadFetch::tile. This also prices legacy unsized tile frames.
-                if let (Some(format), Some(tiles)) = (values.get("format"), values.get("tiles").and_then(serde_json::Value::as_array)) {
-                    if let Ok(format) = serde_json::from_value::<PixelFormat>(format.clone()) {
-                        let bytes = (photocraft_geom::TILE_SIZE as usize)
-                            .checked_mul(photocraft_geom::TILE_SIZE as usize)
-                            .and_then(|n| n.checked_mul(format.bytes_per_pixel()))
-                            .ok_or(IoError::XcfNativeWorkLimit)?;
-                        for tile in tiles {
-                            if let Some(hash) = tile.get("hash").and_then(serde_json::Value::as_str) {
-                                let entry = found.entry(hash.to_owned()).or_default();
-                                entry.tile_bytes = entry.tile_bytes.max(bytes);
-                            }
+                if let (Some(format), Some(tiles)) = (values.get("format"), values.get("tiles").and_then(serde_json::Value::as_array))
+                    && let Ok(format) = serde_json::from_value::<PixelFormat>(format.clone())
+                {
+                    let bytes = (photocraft_geom::TILE_SIZE as usize)
+                        .checked_mul(photocraft_geom::TILE_SIZE as usize)
+                        .and_then(|n| n.checked_mul(format.bytes_per_pixel()))
+                        .ok_or(IoError::XcfNativeWorkLimit)?;
+                    for tile in tiles {
+                        if let Some(hash) = tile.get("hash").and_then(serde_json::Value::as_str) {
+                            let entry = found.entry(hash.to_owned()).or_default();
+                            entry.tile_bytes = entry.tile_bytes.max(bytes);
                         }
                     }
                 }
@@ -279,10 +279,10 @@ fn load_priced(bytes: &[u8], options: &photocraft_format::LoadOptions, work: &Wo
             .map_err(|e| invalid(format!("native snapshot object header: {e}")))?
             .ok_or_else(|| invalid("native snapshot object header is missing"))?;
         let info = frame_header(&head);
-        if let Ok(info) = &info {
-            if info.window > options.max_total_bytes || info.window > work.remaining_bytes() {
-                return work.refuse_unpriced("native snapshot zstd window exceeds available capture/work admission", ctl);
-            }
+        if let Ok(info) = &info
+            && (info.window > options.max_total_bytes || info.window > work.remaining_bytes())
+        {
+            return work.refuse_unpriced("native snapshot zstd window exceeds available capture/work admission", ctl);
         }
         let encoded_limit = usize::try_from(options.max_total_bytes.min(super::MAX_PIXEL_BYTES as u64)).unwrap_or(usize::MAX);
         if outer > encoded_limit as u64 {
