@@ -500,7 +500,7 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(if old == canonical { source } else { canonical })
 }
 
-fn web_descriptor(p: &Value) -> Option<Descriptor> {
+fn web_descriptor_params(p: &Value) -> Option<()> {
     const KEYS: &[&str] = &[
         "path",
         "folder",
@@ -541,6 +541,11 @@ fn web_descriptor(p: &Value) -> Option<Descriptor> {
             return None;
         }
     }
+    Some(())
+}
+
+fn web_descriptor(p: &Value) -> Option<Descriptor> {
+    web_descriptor_params(p)?;
     let dir = jstr(p, "dir").filter(|v| !v.is_empty());
     let images = if dir.is_some() {
         if ["path", "folder"].iter().any(|key| p.get(key).is_some_and(|v| !v.is_null()))
@@ -587,9 +592,7 @@ fn web_descriptor(p: &Value) -> Option<Descriptor> {
             .with("ovCB", D::Boolean(false));
     }
     if let Some(naming) = p.get("fileNaming").filter(|v| !v.is_null()) {
-        if dir.is_none() {
-            return None;
-        }
+        dir?;
         u.items.extend(super::steps_web_naming::to(naming, jstr(p, "format").unwrap_or("png24"))?.items);
     }
     if let Some(convert) = jbool(p, "convertToSrgb") {

@@ -72,7 +72,7 @@ pub(super) fn plan(p: &Value, doc: &Document, ext: &str) -> Result<Option<Vec<St
     }
     // These preserved ImageReady resources can refer to output states/rollovers that the
     // static slice model cannot reproduce. Never silently export just one of their images.
-    if doc.metadata.psd_resources.iter().any(|(id, _, _)| matches!(*id, 7002 | 7003 | 7004)) {
+    if doc.metadata.psd_resources.iter().any(|(id, _, _)| matches!(*id, 7002..=7004)) {
         return Err(invalid("ImageReady rollover documents are not supported"));
     }
     // The resolver copies stored names into visible pieces. Reject oversized names before
