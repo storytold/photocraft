@@ -530,6 +530,7 @@ fn right_clicking_w_or_h_picks_their_unit_and_remembers_it() {
 #[test]
 fn editing_the_contents_of_a_dropped_file_keeps_the_layer() {
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": false})).unwrap();
 
     app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     app.sync_views();
@@ -541,6 +542,7 @@ fn editing_the_contents_of_a_dropped_file_keeps_the_layer() {
     let placed_layer = app.session.active().unwrap().active_layer.unwrap();
 
     begin_placed(&mut app, &egui::Context::default()).unwrap();
+    assert!(app.ui.transform.is_some(), "Free Transform should be open on the placed layer");
 
     app.session.execute("layer.smartObjects.editContents", json!({})).unwrap();
 
