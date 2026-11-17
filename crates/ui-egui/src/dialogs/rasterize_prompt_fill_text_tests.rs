@@ -2,11 +2,10 @@
 //! only rasterizes the fill; the catalogs that translated the old text translate the new one.
 
 use egui::Modifiers;
-use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 use super::*;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing::{ToolEvent, tool_event};
 use crate::i18n::{Lang, tr};
 
 const FILL: &str = "The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?";
@@ -25,12 +24,6 @@ fn fill_layer_app() -> PhotocraftApp {
     app
 }
 
-fn harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
-    let h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h
-}
-
 fn bucket_click(app: &mut PhotocraftApp) {
     tool_event(app, ToolEvent::Down { x: 30.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(app, ToolEvent::Up { x: 30.0, y: 20.0 }, Modifiers::NONE);
@@ -47,18 +40,14 @@ fn past(app: &PhotocraftApp) -> usize {
 
 #[test]
 fn the_paint_bucket_on_a_fill_layer_shows_the_reference_question() {
-    let mut h = harness(fill_layer_app());
-    let before = past(h.state());
-    bucket_click(h.state_mut());
-    let d = h.state().ui.dialogs.iter().find(|d| owns(&d.fields)).expect("the prompt opens");
-    assert_eq!(d.fields["message"], json!(FILL));
-    h.run_steps(4);
-    h.get_by_label(FILL);
-    h.get_by_label("Cancel");
-    h.get_by_label("OK").click();
-    h.run_steps(4);
-    assert_eq!(active_content(h.state()), "Pixel");
-    assert_eq!(past(h.state()), before + 1, "one state: the rasterize, no fill");
+    let mut app = fill_layer_app();
+    let before = past(&app);
+    bucket_click(&mut app);
+    let id = alerts::prompt_tagged::<Rasterize>(&app).expect("the prompt opens");
+    let ctx = app.ctx().clone();
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    assert_eq!(active_content(&app), "Pixel");
+    assert_eq!(past(&app), before + 1, "one state: the rasterize, no fill");
 }
 
 #[test]

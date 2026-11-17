@@ -16,32 +16,17 @@ fn harness() -> Harness<'static, PhotocraftApp> {
         s.execute("animation.makeFramesFromLayers", json!({"seconds": 0.2})).unwrap();
         PhotocraftApp::new(s, Default::default())
     });
-    h.state_mut().ui.timeline.open = true;
+    crate::panel_docking::show_panel(h.state_mut(), "timeline", Some(true)).unwrap();
     h.run_steps(6);
     h
 }
 
 #[test]
-fn the_timeline_docks_along_the_bottom_by_default() {
+fn the_timeline_panel_shows_the_frame_strip() {
     let h = harness();
-    assert!(!h.state().ui.timeline.floating);
-    // Docked, the header offers to float it; the strip shows each frame's delay.
-    assert!(h.query_by_label("Float Panel").is_some());
-    assert!(h.query_by_label("Dock Panel").is_none());
+    assert!(crate::panel_docking::is_shown(h.state(), "timeline"));
+    // Each frame's delay is on the strip.
     assert_eq!(h.query_all_by_label_contains("0.2 sec.").count(), 3);
-}
-
-#[test]
-fn the_dock_button_floats_the_panel_and_back() {
-    let mut h = harness();
-    h.get_by_label("Float Panel").click();
-    h.run_steps(6);
-    assert!(h.state().ui.timeline.floating);
-    assert!(h.query_by_label("Dock Panel").is_some(), "a floating panel offers to dock");
-    assert_eq!(h.query_all_by_label_contains("0.2 sec.").count(), 3, "the strip is the same floating");
-    h.get_by_label("Dock Panel").click();
-    h.run_steps(6);
-    assert!(!h.state().ui.timeline.floating);
 }
 
 #[test]
@@ -56,16 +41,17 @@ fn clicking_a_frame_selects_it_when_docked() {
 }
 
 #[test]
-fn the_window_menu_hides_and_shows_the_docked_timeline() {
+fn the_window_menu_hides_and_shows_the_timeline() {
     let mut h = harness();
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "window.panel.timeline", json!({})).unwrap();
     h.run_steps(4);
-    assert!(!h.state().ui.timeline.open);
-    assert!(h.query_by_label("Float Panel").is_none());
+    assert!(!crate::panel_docking::is_shown(h.state(), "timeline"));
+    assert_eq!(h.query_all_by_label_contains("0.2 sec.").count(), 0, "a closed panel draws no strip");
     crate::menus::invoke(h.state_mut(), &ctx, "window.panel.timeline", json!({})).unwrap();
     h.run_steps(6);
-    assert!(h.query_by_label("Float Panel").is_some(), "it comes back docked");
+    assert!(crate::panel_docking::is_shown(h.state(), "timeline"));
+    assert_eq!(h.query_all_by_label_contains("0.2 sec.").count(), 3, "it comes back with its strip");
 }
 
 fn current_frame(h: &Harness<'static, PhotocraftApp>) -> usize {
@@ -80,7 +66,7 @@ fn play_at_the_last_frame_of_a_finite_animation_starts_over() {
     h.run_steps(3);
     h.get_by_label("Play").click();
     h.run_steps(1);
-    assert!(h.state().ui.timeline.playing);
+    assert!(h.state().ui.timeline.playing());
     assert_eq!(current_frame(&h), 0, "pressing Play on the last frame goes back to the first");
 }
 
@@ -91,7 +77,7 @@ fn play_on_a_looping_animation_carries_on_from_where_it_is() {
     h.run_steps(3);
     h.get_by_label("Play").click();
     h.run_steps(1);
-    assert!(h.state().ui.timeline.playing);
+    assert!(h.state().ui.timeline.playing());
     assert_eq!(current_frame(&h), 2, "a looping animation doesn't need to rewind");
 }
 
@@ -124,9 +110,12 @@ fn playback_does_not_count_a_pass_while_a_background_job_blocks_the_frame_change
     if !matches!(started.unwrap(), photocraft_engine::jobs::Started::Job(_)) {
         return; // ran inline: nothing to block
     }
-    h.state_mut().ui.timeline.playing = true;
+    h.state_mut().ui.timeline.frame_playing = true;
     h.state_mut().ui.timeline.last_time = -100.0;
     h.state_mut().ui.timeline.plays_done = 0;
+    // The shell runs a retained panel again when the app's data changes (as pressing Play does); from then on
+    // playback asks for its own repaints.
+    h.state_mut().commands_run = h.state().commands_run.wrapping_add(1);
     h.run_steps(1);
     assert_eq!(h.state().ui.timeline.plays_done, 0, "the refused frame change isn't a pass");
     assert_eq!(current_frame(&h), 2);
@@ -137,6 +126,13 @@ fn playback_does_not_count_a_pass_while_a_background_job_blocks_the_frame_change
         assert!(t.elapsed() < std::time::Duration::from_secs(60), "the job did not finish");
         h.run_steps(1);
         std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    // The panel isn't drawn while the job runs, so playback waits; the first passes after it ends tick again.
+    for _ in 0..30 {
+        if current_frame(&h) != 2 {
+            break;
+        }
+        h.run_steps(1);
     }
     assert_eq!(current_frame(&h), 0, "wrapped round to the first frame");
     assert_eq!(h.state().ui.timeline.plays_done, 1);

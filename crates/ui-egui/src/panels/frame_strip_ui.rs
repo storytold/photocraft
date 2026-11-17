@@ -8,7 +8,21 @@ use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, StrokeKind, T
 use photocraft_doc::{Document, FrameAnimation, LayerId, LoopCount};
 use serde_json::{Value, json};
 
+use craft::behavior::IconId;
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::contract::{Props as _, Show as _, TooltipSpec};
+
 use crate::theme::Tokens;
+
+/// A square icon button named (and with a tooltip) `tip`; `selected` shows it as on. True when it was clicked.
+fn icon_button(ui: &mut egui::Ui, icon: &'static str, selected: bool, tip: &str) -> bool {
+    IconButton::new(IconId::new(icon)).label(tip.to_owned()).tooltip(TooltipSpec::new(tip.to_owned())).selected(selected).show(ui).clicked()
+}
+
+/// A labelled button. True when it was clicked.
+fn text_button(ui: &mut egui::Ui, label: &str) -> bool {
+    Button::new(label.to_owned()).show(ui).clicked()
+}
 
 /// Longest side of a frame thumbnail, in pixels.
 const THUMB_SIDE: u32 = 96;
@@ -239,17 +253,17 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
     ui.horizontal(|ui| {
         loop_menu(ui, a.loops, acts);
         ui.separator();
-        if crate::icons::button(ui, "chevrons-left", 22.0, false, tl!("First frame")).clicked() {
+        if icon_button(ui, "chevrons_left", false, tl!("First frame")) {
             acts.push(("animation.selectFrame", json!({ "frame": 0 })));
         }
-        if crate::icons::button(ui, "chevron-left", 22.0, false, tl!("Previous frame")).clicked() {
+        if icon_button(ui, "chevron_left", false, tl!("Previous frame")) {
             acts.push(("animation.previousFrame", json!({})));
         }
         let play_icon = if playing { "pause" } else { "play" };
-        if crate::icons::button(ui, play_icon, 22.0, playing, if playing { tl!("Pause") } else { tl!("Play") }).clicked() {
+        if icon_button(ui, play_icon, playing, if playing { tl!("Pause") } else { tl!("Play") }) {
             *toggle_play = true;
         }
-        if crate::icons::button(ui, "chevron-right", 22.0, false, tl!("Next frame")).clicked() {
+        if icon_button(ui, "chevron_right", false, tl!("Next frame")) {
             acts.push(("animation.nextFrame", json!({})));
         }
         ui.separator();
@@ -262,12 +276,12 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
             .monospace(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "trash", 22.0, false, tl!("Delete Selected Frame")).clicked() {
+            if icon_button(ui, "trash", false, tl!("Delete Selected Frame")) {
                 // The last frame can't go: deleting it removes the animation, as Photoshop's does.
                 let cmd = if a.frames.len() > 1 { "animation.deleteFrame" } else { "animation.delete" };
                 acts.push((cmd, json!({})));
             }
-            if crate::icons::button(ui, "copy", 22.0, false, tl!("Duplicate Selected Frame")).clicked() {
+            if icon_button(ui, "copy", false, tl!("Duplicate Selected Frame")) {
                 acts.push(("animation.newFrame", json!({})));
             }
         });
@@ -349,15 +363,15 @@ fn other_field(ui: &mut egui::Ui, label: &str, initial: &str, apply: impl FnOnce
 pub fn empty(ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     ui.add_space(8.0);
     ui.vertical_centered(|ui| {
-        if crate::widgets::primary_button(ui, tl!("Create Frame Animation"), 220.0).clicked() {
+        if text_button(ui, tl!("Create Frame Animation")) {
             acts.push(("animation.create", json!({})));
         }
         ui.add_space(4.0);
-        if crate::widgets::secondary_button(ui, tl!("Make Frames From Layers"), 220.0).clicked() {
+        if text_button(ui, tl!("Make Frames From Layers")) {
             acts.push(("animation.makeFramesFromLayers", json!({})));
         }
         ui.add_space(4.0);
-        if crate::widgets::secondary_button(ui, tl!("Create Video Timeline"), 220.0).clicked() {
+        if text_button(ui, tl!("Create Video Timeline")) {
             acts.push(("timeline.create", json!({ "duration": 30, "fps": 30.0 })));
         }
     });

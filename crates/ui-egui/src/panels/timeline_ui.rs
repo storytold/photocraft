@@ -1,189 +1,49 @@
-//! Window › Timeline: a panel that creates and drives the document timeline. It docks along the
-//! bottom of the window, under the canvas, or floats over it. All actions run the engine
-//! `timeline.*` and `animation.*` commands, so the control channel drives it the same way.
+//! Window › Timeline: the panel that creates and drives the document timeline. The registry shows `body` in the
+//! dock. All actions run the engine `timeline.*` commands, so the control channel drives it the same way.
 
-use egui::{RichText, pos2, vec2};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use craft::behavior::IconId;
+use craft::theme::variant::Tone;
+use craft::timeline::PlaybackClock;
+use craft::timeline::time::{FrameRate, Tick, TimeRange};
 
-use crate::PhotocraftApp;
-use crate::theme::Tokens;
-
-/// Timeline panel view state.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct TimelineUi {
-    pub open: bool,
-    /// Floats over the canvas instead of docking along the bottom of the window.
-    #[serde(default)]
-    pub floating: bool,
-    /// Playing back (auto-advancing the playhead at the frame rate).
-    #[serde(default)]
-    pub playing: bool,
-    /// egui time (seconds) of the last auto-advance.
-    #[serde(default, skip)]
-    pub last_time: f64,
-    /// Frame animation: passes through the frames played so far, for a finite loop count.
-    #[serde(default, skip)]
-    pub plays_done: u32,
-}
-
-/// Menu checkmark for Window › Timeline.
-pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
-    (id == "window.panel.timeline").then_some(app.ui.timeline.open)
-}
-
-/// Ids this module owns (for parity / enablement).
-pub fn handles(id: &str) -> bool {
-    id == "window.panel.timeline"
-}
-
-/// Toggle the Timeline panel.
-pub fn menu(app: &mut PhotocraftApp, id: &str, _params: &Value) -> Option<Result<Value, String>> {
-    if id == "window.panel.timeline" {
-        app.ui.timeline.open = !app.ui.timeline.open;
-        return Some(Ok(json!({ "open": app.ui.timeline.open })));
-    }
-    None
-}
-
-/// Docked height of the panel, in points: room for the frame strip and its bar.
-const DOCK_HEIGHT: f32 = 168.0;
-
-/// What the panel's contents asked for this frame.
-#[derive(Default)]
-struct Out {
-    acts: Vec<crate::frame_strip_ui::Act>,
-    act: Option<(&'static str, Value)>,
-    close: bool,
-    toggle_play: bool,
-    /// Stepping, scrubbing and Stop pause playback of a video timeline.
-    stop_play: bool,
-    toggle_float: bool,
-}
-
-/// The panel's contents, the same whether it is docked or floating.
-fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &mut Out) {
-    let t = Tokens::get(ctx);
-    let playing = app.ui.timeline.playing;
-    let floating = app.ui.timeline.floating;
-    // Borrowed from the document's Arc: this runs on every UI frame, and a long animation is big.
-    let doc = app.session.active().map(|d| (d.doc.clone(), d.revision, d.last_damage.is_some_and(|r| r.is_empty())));
-    let tl = doc.as_ref().and_then(|(d, ..)| d.timeline.as_ref());
-    let anim = doc.as_ref().and_then(|(d, ..)| d.frame_animation.as_ref());
-
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(tl!("Timeline")).strong().color(t.text));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
-                out.close = true;
-            }
-            let (icon, tip) = if floating { ("panels-top-left", tl!("Dock Panel")) } else { ("app-window", tl!("Float Panel")) };
-            if crate::icons::button(ui, icon, 20.0, false, tip).clicked() {
-                out.toggle_float = true;
-            }
-        });
-    });
-    ui.separator();
-
-    if doc.is_none() {
-        ui.weak(tl!("Open a document to use the timeline."));
+/// The `timeline` panel body of a document with a frame animation: the strip of its frames, with its bar.
+fn frame_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    let Some((doc, revision, no_damage)) = app.session.active().map(|d| (d.doc.clone(), d.revision, d.last_damage.is_some_and(|r| r.is_empty()))) else {
         return;
-    }
-    if let (Some(a), Some((d, revision, unchanged))) = (anim, &doc) {
-        crate::frame_strip_ui::body(
-            ui,
-            ctx,
-            crate::frame_strip_ui::Strip {
-                doc: d,
-                revision: *revision,
-                no_damage: *unchanged,
-                animation: a,
-                playing,
-                acts: &mut out.acts,
-                toggle_play: &mut out.toggle_play,
-            },
-        );
-        return;
-    }
-    match tl {
-        None => crate::frame_strip_ui::empty(ui, &mut out.acts),
-        Some(tl) => {
-            ui.horizontal(|ui| {
-                let play_icon = if playing { "pause" } else { "play" };
-                if crate::icons::button(ui, play_icon, 22.0, playing, if playing { tl!("Pause") } else { tl!("Play") }).clicked() {
-                    out.toggle_play = true;
-                }
-                if crate::icons::button(ui, "square", 22.0, false, tl!("Stop")).clicked() {
-                    // The first Stop pauses where it is; a Stop while paused rewinds.
-                    if !playing {
-                        out.act = Some(("timeline.setFrame", json!({ "frame": 0 })));
-                    }
-                    out.stop_play = true;
-                }
-                if crate::icons::button(ui, "chevron-left", 22.0, false, tl!("Previous frame")).clicked() {
-                    out.stop_play = true;
-                    out.act = Some(("timeline.previousFrame", json!({})));
-                }
-                ui.label(
-                    RichText::new(crate::i18n::fmt(
-                        crate::i18n::t("Frame {current} / {total}"),
-                        &[("current", &(tl.current + 1).to_string()), ("total", &tl.duration.to_string())],
-                    ))
-                    .color(t.text)
-                    .monospace(),
-                );
-                if crate::icons::button(ui, "chevron-right", 22.0, false, tl!("Next frame")).clicked() {
-                    out.stop_play = true;
-                    out.act = Some(("timeline.nextFrame", json!({})));
-                }
-                ui.separator();
-                ui.label(RichText::new(format!("{:.2}s", tl.time())).color(t.text_dim).monospace());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::icons::button(ui, "trash", 20.0, false, tl!("Delete Timeline")).clicked() {
-                        out.stop_play = true;
-                        out.act = Some(("timeline.delete", json!({})));
-                    }
-                    ui.label(RichText::new(format!("{:.0} fps", tl.fps)).color(t.text_dim));
-                });
-            });
-            ui.add_space(6.0);
-            // Scrubber: frame playhead across the duration.
-            if tl.duration > 1 {
-                let mut frame = tl.current as f64;
-                let resp = ui.add(egui::Slider::new(&mut frame, 0.0..=(tl.duration - 1) as f64).integer().show_value(false).text("playhead"));
-                if resp.changed() {
-                    out.stop_play = true;
-                    out.act = Some(("timeline.setFrame", json!({ "frame": frame as u64 })));
-                }
-            }
-        }
-    }
+    };
+    let Some(animation) = doc.frame_animation.as_ref() else { return };
+    let mut acts = Vec::new();
+    let mut toggle_play = false;
+    crate::frame_strip_ui::body(
+        ui,
+        &ctx,
+        crate::frame_strip_ui::Strip {
+            doc: &doc,
+            revision,
+            no_damage,
+            animation,
+            playing: app.ui.timeline.frame_playing,
+            acts: &mut acts,
+            toggle_play: &mut toggle_play,
+        },
+    );
+    apply(app, &ctx, acts, toggle_play);
+    playback(app, &ctx);
 }
 
-/// Carries out what the contents asked for.
-fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: Out) {
-    if out.close {
-        app.ui.timeline.open = false;
-        app.ui.timeline.playing = false;
-    }
-    if out.toggle_float {
-        app.ui.timeline.floating = !app.ui.timeline.floating;
-    }
-    if out.stop_play {
-        app.ui.timeline.playing = false;
-    } else if out.toggle_play {
-        let starting = !app.ui.timeline.playing;
-        app.ui.timeline.playing = starting;
+/// Carries out what the strip (or the empty panel) asked for.
+fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, acts: Vec<crate::frame_strip_ui::Act>, toggle_play: bool) {
+    if toggle_play {
+        let starting = !app.ui.timeline.frame_playing;
+        app.ui.timeline.frame_playing = starting;
         app.ui.timeline.last_time = ctx.input(|i| i.time);
         app.ui.timeline.plays_done = 0;
         if starting {
             restart_if_finished(app, ctx);
         }
     }
-    if let Some((cmd, p)) = out.act {
-        let _ = app.run(cmd, p);
-    }
-    for (cmd, p) in out.acts {
+    for (cmd, p) in acts {
         let _ = app.run(cmd, p);
         crate::frame_strip_ui::ran(app, ctx, cmd);
     }
@@ -203,145 +63,271 @@ fn restart_if_finished(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The docked panel, along the bottom of the window under the canvas. Add it after the side
-/// panels so it spans only the canvas column, and before the central panel.
-pub fn dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if !app.ui.timeline.open || app.ui.timeline.floating {
-        return;
-    }
-    let ctx = ui.ctx().clone();
-    let t = Tokens::get(&ctx);
-    let mut out = Out::default();
-    egui::Panel::bottom("timeline_dock")
-        .resizable(true)
-        .default_size(DOCK_HEIGHT)
-        .size_range(110.0..=420.0)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 6)))
-        .show(ui, |ui| {
-            // The separator is on the canvas side.
-            let r = ui.max_rect();
-            ui.painter().line_segment([pos2(r.left() - 10.0, r.top() - 6.0), pos2(r.right() + 10.0, r.top() - 6.0)], egui::Stroke::new(1.0, t.separator));
-            contents(app, ui, &ctx, &mut out);
-        });
-    apply(app, &ctx, out);
-}
-
-/// The floating panel, when the Timeline is set to float, and playback in either mode.
-pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if !app.ui.timeline.open {
-        return;
-    }
-    if app.ui.timeline.floating {
-        let mut out = Out::default();
-        crate::analysis_ui::panel_window(app, ctx, "timeline", tl!("Timeline"), vec2(0.0, 520.0), 660.0, |ui| contents(app, ui, ctx, &mut out));
-        apply(app, ctx, out);
-    }
-    playback(app, ctx);
-}
-
-/// Playback: a frame animation shows each frame for its own delay, then the loop count decides;
-/// a video timeline advances at its frame rate and loops.
+/// Frame animation playback: each frame shows for its own delay, then the loop count decides.
 fn playback(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    // Frame animation playback: read only what it needs, not a copy of the whole animation.
-    if app.ui.timeline.playing
-        && let Some((current, len, loops, delay)) = app
-            .session
-            .active()
-            .and_then(|d| d.doc.frame_animation.as_ref())
-            .map(|a| (a.current, a.frames.len(), a.loops, a.frames.get(a.current).map_or(0, |f| f.delay_ms)))
-    {
-        let now = ctx.input(|i| i.time);
-        let period = crate::frame_strip_ui::playback_period(delay);
-        if now - app.ui.timeline.last_time >= period {
-            app.ui.timeline.last_time = now;
-            match crate::frame_strip_ui::next_playback_frame(current, len, loops, app.ui.timeline.plays_done) {
-                // Counted only once the frame has changed: while a background job runs the engine refuses to
-                // select one, and the same tick must not be counted again and again.
-                Some((next, plays)) => {
-                    if app.run("animation.selectFrame", json!({ "frame": next })).is_ok() {
-                        app.ui.timeline.plays_done = plays;
-                        crate::frame_strip_ui::ran(app, ctx, "animation.selectFrame");
-                    }
-                }
-                None => app.ui.timeline.playing = false,
-            }
-        }
-        // Wake up when the shown frame's time is up, not on every UI frame: a long delay needs no redraws.
-        let shown = app.session.active().and_then(|d| d.doc.frame_animation.as_ref()).map_or(0, |a| a.frames.get(a.current).map_or(0, |f| f.delay_ms));
-        let left = (app.ui.timeline.last_time + crate::frame_strip_ui::playback_period(shown) - now).max(0.0);
-        ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
+    if !app.ui.timeline.frame_playing {
         return;
     }
-    // Playback: auto-advance the playhead at the frame rate (loops).
-    if app.ui.timeline.playing {
-        if let Some(t) = app.session.active().and_then(|d| d.doc.timeline.clone()) {
-            let now = ctx.input(|i| i.time);
-            let period = 1.0 / f64::from(t.fps.max(1.0));
-            if now - app.ui.timeline.last_time >= period {
-                app.ui.timeline.last_time = now;
-                let next = (t.current + 1) % t.duration.max(1);
-                let _ = app.run("timeline.setFrame", json!({ "frame": next as u64 }));
+    // Reads only what it needs, not a copy of the whole animation.
+    let Some((current, len, loops, delay)) = app
+        .session
+        .active()
+        .and_then(|d| d.doc.frame_animation.as_ref())
+        .map(|a| (a.current, a.frames.len(), a.loops, a.frames.get(a.current).map_or(0, |f| f.delay_ms)))
+    else {
+        app.ui.timeline.frame_playing = false;
+        return;
+    };
+    let now = ctx.input(|i| i.time);
+    let period = crate::frame_strip_ui::playback_period(delay);
+    if now - app.ui.timeline.last_time >= period {
+        app.ui.timeline.last_time = now;
+        match crate::frame_strip_ui::next_playback_frame(current, len, loops, app.ui.timeline.plays_done) {
+            // Counted only once the frame has changed: while a background job runs the engine refuses to
+            // select one, and the same tick must not be counted again and again.
+            Some((next, plays)) => {
+                if app.run("animation.selectFrame", json!({ "frame": next })).is_ok() {
+                    app.ui.timeline.plays_done = plays;
+                    crate::frame_strip_ui::ran(app, ctx, "animation.selectFrame");
+                }
             }
-            ctx.request_repaint();
-        } else {
-            app.ui.timeline.playing = false;
+            None => app.ui.timeline.frame_playing = false,
         }
+    }
+    // Wake up when the shown frame's time is up, not on every UI frame: a long delay needs no redraws.
+    let shown = app.session.active().and_then(|d| d.doc.frame_animation.as_ref()).map_or(0, |a| a.frames.get(a.current).map_or(0, |f| f.delay_ms));
+    let left = (app.ui.timeline.last_time + crate::frame_strip_ui::playback_period(shown) - now).max(0.0);
+    // The shell's own request: it also runs this body again, which a plain egui repaint of a retained panel doesn't.
+    request_repaint_after(ctx, left);
+}
+
+#[cfg(test)]
+use craft::timeline::ui::TransportWords;
+use craft::timeline::ui::{TransportBar, TransportButton};
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::display::{Shade, Text};
+use craft::ui::layout::RowAlign;
+use craft::ui::layout_components::Row;
+use craft::ui::notices::{Notice, NoticeLayout};
+use craft::ui::runtime::frame::request_repaint_after;
+use craft::ui::style::TypeRole;
+use craft::ui::value_drag::Slider;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::PhotocraftApp;
+
+/// Timeline panel view state: the playback clock. Whether the panel is open is the workspace's.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TimelineUi {
+    /// Drives playback; the playhead follows its position while it runs.
+    #[serde(skip)]
+    clock: PlaybackClock,
+    /// Frame animation: playing back, each frame for its own delay.
+    #[serde(skip)]
+    pub(crate) frame_playing: bool,
+    /// egui time (seconds) of the last frame change of a frame animation's playback.
+    #[serde(skip)]
+    pub(crate) last_time: f64,
+    /// Frame animation: passes through the frames played so far, for a finite loop count.
+    #[serde(skip)]
+    pub(crate) plays_done: u32,
+}
+
+/// `PlaybackClock` has no equality; two states are equal when both play or both are stopped.
+impl PartialEq for TimelineUi {
+    fn eq(&self, other: &Self) -> bool {
+        self.playing() == other.playing()
+    }
+}
+
+impl TimelineUi {
+    /// Whether playback runs, of a video timeline or of a frame animation.
+    pub fn playing(&self) -> bool {
+        self.clock.is_playing() || self.frame_playing
+    }
+}
+
+/// Stops playback with the playhead at the frame the active document shows. For a stop that comes from outside
+/// the body (the panel closing), where no frame time is at hand.
+pub(crate) fn stop(app: &mut PhotocraftApp) {
+    let at = app.session.active().and_then(|d| d.doc.timeline.as_ref()).map_or(Tick(0), |tl| FrameRate::from_f64(f64::from(tl.fps)).tick_of(tl.current as i64));
+    app.ui.timeline.clock.halt(at);
+    app.ui.timeline.frame_playing = false;
+}
+
+/// The transport row: Play/Pause, Stop, then the frame steps.
+fn buttons() -> [TransportButton; 4] {
+    [TransportButton::PlayStop, TransportButton::custom("stop", IconId::new("square"), "Stop"), TransportButton::StepBack, TransportButton::StepForward]
+}
+
+/// The `timeline` panel body.
+pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let now = ui.ctx().input(|i| i.time);
+    if app.session.active().is_none() {
+        app.ui.timeline.clock.stop(now);
+        app.ui.timeline.frame_playing = false;
+        let _ = Notice::new(Tone::Neutral, tl!("Open a document to use the timeline.")).layout(NoticeLayout::Centred).show(ui);
+        return;
+    }
+    // A document with a frame animation shows its strip of frames, not a video timeline's transport.
+    if app.session.active().is_some_and(|d| d.doc.frame_animation.is_some()) {
+        app.ui.timeline.clock.stop(now);
+        frame_body(app, ui);
+        return;
+    }
+    app.ui.timeline.frame_playing = false;
+    let tl = app.session.active().and_then(|d| d.doc.timeline.clone());
+    let mut act: Option<(&'static str, Value)> = None;
+    let Some(tl) = tl else {
+        app.ui.timeline.clock.stop(now);
+        // Nothing yet: make a frame animation (of nothing, or of the layers) or a video timeline.
+        let ctx = ui.ctx().clone();
+        let mut acts = Vec::new();
+        crate::frame_strip_ui::empty(ui, &mut acts);
+        apply(app, &ctx, acts, false);
+        return;
+    };
+
+    let rate = FrameRate::from_f64(f64::from(tl.fps));
+    let duration = tl.duration as i64;
+    let current = tl.current as i64;
+    let clock = &mut app.ui.timeline.clock;
+    clock.set_loop(Some(TimeRange::new(Tick(0), rate.tick_of(duration.max(1)))));
+
+    // Playback: the playhead follows the clock; the next pass is asked for at the next frame boundary.
+    let mut frame_from_clock = None;
+    if clock.is_playing() {
+        let at = clock.position(now);
+        let frame = rate.frame_at(at);
+        if frame != current {
+            frame_from_clock = Some(frame);
+        }
+        request_repaint_after(ui.ctx(), rate.tick_of(frame + 1).saturating_sub(at).seconds());
+    }
+    if let Some(frame) = frame_from_clock {
+        let _ = app.run("timeline.setFrame", json!({ "frame": frame as u64 }));
+    }
+    let current = frame_from_clock.unwrap_or(current);
+
+    let playing = app.ui.timeline.playing();
+    let mut stop = false;
+    let mut toggle = false;
+    let buttons = buttons();
+    Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+        Row::new().show(ui, |ui, _| {
+            let bar = TransportBar::new(tl!("Transport"), &buttons).playing(playing).editable(false).show(ui);
+            match bar.pressed {
+                Some(TransportButton::PlayStop) => toggle = true,
+                Some(TransportButton::Custom { id, .. }) if id == "stop" => {
+                    if !playing {
+                        act = Some(("timeline.setFrame", json!({ "frame": 0 })));
+                    }
+                    stop = true;
+                }
+                Some(TransportButton::StepBack) => {
+                    stop = true;
+                    act = Some(("timeline.previousFrame", json!({})));
+                }
+                Some(TransportButton::StepForward) => {
+                    stop = true;
+                    act = Some(("timeline.nextFrame", json!({})));
+                }
+                _ => {}
+            }
+            let shown =
+                crate::i18n::fmt(crate::i18n::t("Frame {current} / {total}"), &[("current", &(current + 1).to_string()), ("total", &tl.duration.to_string())]);
+            Text::new(shown).role(TypeRole::Mono).show(ui);
+            Text::new(format!("{:.2}s", tl.time())).role(TypeRole::Mono).shade(Shade::Muted).show(ui);
+        });
+        Row::new().show(ui, |ui, _| {
+            if clicked(&IconButton::new(IconId::new("trash")).label(tl!("Delete Timeline")).tooltip(tl!("Delete Timeline")).show(ui)) {
+                stop = true;
+                act = Some(("timeline.delete", json!({})));
+            }
+            Text::new(format!("{:.0} fps", tl.fps)).shade(Shade::Muted).show(ui);
+        });
+    });
+
+    // Scrubber: the playhead across the duration.
+    if duration > 1 {
+        let slid = Slider::new(Bind::given(current as f64), 0.0..=(duration - 1) as f64).step(1.0).label(tl!("Playhead")).show(ui);
+        if slid.events.began() {
+            stop = true;
+        }
+        if let Some(value) = slid.value().copied() {
+            stop = true;
+            act = Some(("timeline.setFrame", json!({ "frame": value.round() as u64 })));
+        }
+    }
+
+    if stop {
+        app.ui.timeline.clock.stop(now);
+    } else if toggle {
+        app.ui.timeline.clock.toggle(now, rate.tick_of(current));
+    }
+    if let Some((cmd, p)) = act {
+        let _ = app.run(cmd, p);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::vec2;
     use egui_kittest::{Harness, kittest::Queryable};
+
+    fn frame(h: &Harness<'static, PhotocraftApp>) -> u64 {
+        h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current as u64
+    }
+
+    /// Starts playback with the Play button, so the clock starts from the playhead's frame.
+    fn play(h: &mut Harness<'static, PhotocraftApp>) {
+        h.get_by_label(TransportWords::default().play_stop.as_str()).click();
+        h.run_steps(2);
+        assert!(h.state().ui.timeline.playing());
+    }
 
     #[test]
     fn stop_step_and_scrub_pause_playback_and_second_stop_rewinds() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 100, "height": 80})).unwrap();
         app.run("timeline.create", json!({"duration": 10, "fps": 30.0})).unwrap();
-        app.ui.timeline.open = true;
-        app.ui.timeline.floating = true;
-        app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1000.0, 700.0));
-
-        let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(0.001).build_ui_state(|ui, app| windows(app, ui.ctx()), app);
+        let mut h =
+            Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1000.0, 700.0)).with_step_dt(0.001).build_ui_state(|ui, app| body(app, ui), app);
         h.run_steps(2);
 
-        // Start playback via Play button.
-        h.get_by_label("Play").click();
-        h.run_steps(2);
-        assert!(h.state().ui.timeline.playing);
+        // The Play button starts playback.
+        play(&mut h);
 
-        // Move to frame 5 while playing; first Stop pauses at the current frame without rewinding.
+        // The first Stop pauses; a second one rewinds to frame 0.
+        h.get_by_label("Stop").click();
+        h.run_steps(2);
+        assert!(!h.state().ui.timeline.playing(), "first Stop pauses playback");
         h.state_mut().run("timeline.setFrame", json!({"frame": 5})).unwrap();
+        h.run_steps(1);
+        assert_eq!(frame(&h), 5, "a stopped clock leaves the playhead alone");
         h.get_by_label("Stop").click();
         h.run_steps(2);
-        assert!(!h.state().ui.timeline.playing, "first Stop pauses playback");
-        assert_eq!(h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current, 5);
+        assert!(!h.state().ui.timeline.playing());
+        assert_eq!(frame(&h), 0);
 
-        // Second Stop while already paused rewinds to frame 0.
-        h.get_by_label("Stop").click();
+        // The frame steps pause playback.
+        let words = TransportWords::default();
+        play(&mut h);
+        h.get_by_label(words.step_forward.as_str()).click();
         h.run_steps(2);
-        assert!(!h.state().ui.timeline.playing);
-        assert_eq!(h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current, 0);
-
-        // Next frame and Previous frame pause playback.
-        h.state_mut().ui.timeline.playing = true;
-        h.run_steps(1);
-        h.get_by_label("Next frame").click();
+        assert!(!h.state().ui.timeline.playing(), "Next frame pauses playback");
+        assert_eq!(frame(&h), 1);
+        play(&mut h);
+        h.get_by_label(words.step_back.as_str()).click();
         h.run_steps(2);
-        assert!(!h.state().ui.timeline.playing, "Next frame pauses playback");
-        assert_eq!(h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current, 1);
+        assert!(!h.state().ui.timeline.playing(), "Previous frame pauses playback");
+        assert_eq!(frame(&h), 0);
 
-        h.state_mut().ui.timeline.playing = true;
-        h.run_steps(1);
-        h.get_by_label("Previous frame").click();
-        h.run_steps(2);
-        assert!(!h.state().ui.timeline.playing, "Previous frame pauses playback");
-        assert_eq!(h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current, 0);
-
-        // Scrubbing the playhead slider pauses playback and updates the current frame.
-        h.state_mut().ui.timeline.playing = true;
-        h.run_steps(1);
+        // Scrubbing the playhead pauses playback and moves the frame.
+        play(&mut h);
         let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
         let target = egui::pos2(slider.right() - 8.0, slider.center().y);
         h.event(egui::Event::PointerMoved(target));
@@ -349,7 +335,7 @@ mod tests {
         h.step();
         h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
         h.run_steps(2);
-        assert!(!h.state().ui.timeline.playing, "scrubbing pauses playback");
-        assert!(h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current > 0);
+        assert!(!h.state().ui.timeline.playing(), "scrubbing pauses playback");
+        assert!(frame(&h) > 0);
     }
 }
