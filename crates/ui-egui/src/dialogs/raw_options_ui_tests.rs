@@ -3,7 +3,7 @@
 
 use super::*;
 use egui::Key;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// The measured file: 16 bytes, read as 4 rows of 4 gray pixels.
 const NOTES: &[u8] = b"hello world 1234";
