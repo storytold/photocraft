@@ -205,9 +205,8 @@ pub fn untitled_document_name(s: &Session) -> String {
 
 /// Default name with additional reservations owned by the frontend (decoding files and dialogs).
 pub fn untitled_document_name_with<'a>(s: &'a Session, reserved: impl Iterator<Item = &'a str>) -> String {
-    let base = s.untitled_name_base.map(|translate| translate(&s.prefs().interface.language)).unwrap_or_else(|| "Untitled".into());
-    let base = if base.is_empty() { "Untitled" } else { &base };
-    next_untitled_name(base, s.reserved_document_names().chain(reserved))
+    let base = s.translated_name_base("Untitled");
+    next_untitled_name(&base, s.reserved_document_names().chain(reserved))
 }
 
 /// The default name for a template opened as a new document without its original path.

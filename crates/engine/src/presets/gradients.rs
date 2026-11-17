@@ -648,9 +648,10 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let scale = crate::gradient_fill_cmds::clamp_scale(p.get("scale").and_then(Value::as_f64).unwrap_or(100.0) as f32 / 100.0);
     let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
     let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
+    let name_base = s.translated_name_base("Gradient Fill");
     let id = s.edit("New Gradient Fill Layer", |doc, active| {
         let fill = Fill::gradient(stops, angle, scale, style, reverse).in_mode(doc.mode);
-        let layer = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
+        let layer = Layer::new(doc.next_layer_name(&name_base), LayerContent::Fill(fill));
         let id = crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::Auto);
         *active = Some(id);
         Ok(id)

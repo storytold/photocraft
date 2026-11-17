@@ -125,7 +125,7 @@ pub fn preview(s: &Session, cmd: &str, p: &Value) -> Result<Document> {
             let pat = crate::pattern_cmds::resolve_param(s, CREATE, p)?;
             let mut active = st.active_layer;
             let default_mask = crate::commands::layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
-            crate::pattern_cmds::insert_fill_layer(&mut doc, &mut active, &pat, p, default_mask)?;
+            crate::pattern_cmds::insert_fill_layer(&mut doc, &mut active, &pat, p, default_mask, &s.translated_name_base("Pattern Fill"))?;
         }
         other => return Err(EngineError::BadParams { cmd: other.into(), msg: "no Pattern Fill preview for this command".into() }),
     }

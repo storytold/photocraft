@@ -20,6 +20,14 @@ impl Session {
         Self::default()
     }
 
+    /// Resolve a generated name before storing it: later action steps use exact names.
+    pub fn translated_name_base(&self, english: &str) -> String {
+        self.default_name_base
+            .map(|translate| translate(&self.prefs().interface.language, english))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| english.into())
+    }
+
     pub fn documents(&self) -> &[DocState] {
         &self.docs
     }

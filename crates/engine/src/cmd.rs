@@ -926,12 +926,13 @@ fn build() -> Vec<CommandSpec> {
                     None => s.tools.picked_cmyk([c[0], c[1], c[2]]),
                 };
                 let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
+                let name_base = s.translated_name_base("Color Fill");
                 let id = s.edit("New Color Fill Layer", |doc, active| {
                     let fill = match inks {
                         Some(k) if doc.mode == ColorMode::Cmyk => Fill::Solid(Color { mode: ColorMode::Cmyk, c: k, alpha: c[3] }),
                         _ => Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3])).in_mode(doc.mode),
                     };
-                    let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(fill));
+                    let mut l = Layer::new(doc.next_layer_name(&name_base), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor", default_mask)?;
                     let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
                     *active = Some(id);
@@ -961,6 +962,7 @@ fn build() -> Vec<CommandSpec> {
                     .filter_map(|k| p.get(*k).map(|v| ((*k).to_string(), v.clone())))
                     .collect();
                 let (fg, bg) = (s.tools.foreground, s.tools.background);
+                let name_base = s.translated_name_base("Gradient Fill");
                 let id = s.edit("New Gradient Fill Layer", |doc, active| {
                     let mut fill = Fill::gradient(
                         vec![(0.0, Color::rgba(a[0], a[1], a[2], a[3])), (1.0, Color::rgba(b[0], b[1], b[2], b[3]))],
@@ -974,7 +976,7 @@ fn build() -> Vec<CommandSpec> {
                         fill = crate::gradient_fill_cmds::apply_set(&l, &fill, doc.bounds(), &Value::Object(rest.clone()), fg, bg)?;
                     }
                     let fill = fill.in_mode(doc.mode);
-                    let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
+                    let mut l = Layer::new(doc.next_layer_name(&name_base), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient", default_mask)?;
                     let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
                     *active = Some(id);

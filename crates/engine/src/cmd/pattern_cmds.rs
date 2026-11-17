@@ -455,11 +455,12 @@ pub(crate) fn insert_fill_layer(
     pat: &Pattern,
     p: &Value,
     default_mask: bool,
+    name_base: &str,
 ) -> Result<photocraft_doc::LayerId> {
     let (scale, angle, link, phase) = placement("layer.newFillLayer.pattern", p)?;
     ensure_in_doc(doc, pat);
     let fill = Fill::Pattern { name: pat.name.clone(), scale, id: pat.id.clone(), angle, link, phase };
-    let mut l = Layer::new(doc.next_layer_name("Pattern Fill"), LayerContent::Fill(fill));
+    let mut l = Layer::new(doc.next_layer_name(name_base), LayerContent::Fill(fill));
     crate::commands::mask_new_layer(doc, &mut l, p, "layer.newFillLayer.pattern", default_mask)?;
     // Like Photoshop, an empty pixel layer selected becomes the fill layer instead of getting one
     // above it; it keeps its place, opacity and blending, and a name the user gave it.
@@ -489,7 +490,8 @@ fn is_default_layer_name(name: &str) -> bool {
 fn new_fill_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let pat = resolve_param(s, "layer.newFillLayer.pattern", p)?;
     let default_mask = crate::commands::layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
-    let id = s.edit("New Pattern Fill Layer", |doc, active| insert_fill_layer(doc, active, &pat, p, default_mask))?;
+    let name_base = s.translated_name_base("Pattern Fill");
+    let id = s.edit("New Pattern Fill Layer", |doc, active| insert_fill_layer(doc, active, &pat, p, default_mask, &name_base))?;
     Ok(json!({"layer": id.0, "pattern": pat.id}))
 }
 
