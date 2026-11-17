@@ -205,6 +205,29 @@ pub fn display_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| path.to_string())
 }
 
+// Named PSD/PSB/templates deliberately keep the PSD parser's errors for direct callers. Only
+// its missing file-header signature means unrecognized content; damaged internal signatures
+// (8BIM, etc.) and a recognized 8BPS file's other parse errors must retain their reasons.
+fn unrecognized_open_reason(reason: &str) -> bool {
+    if reason == "codec: unrecognized image format" {
+        return true;
+    }
+    let Some(signature) = reason.strip_prefix("PSD: invalid signature [").and_then(|s| s.strip_suffix("], expected 8BPS")) else {
+        return false;
+    };
+    let mut values = signature.split(", ");
+    let mut found = [0u8; 4];
+    for byte in &mut found {
+        let Some(text) = values.next() else { return false };
+        let Ok(value) = text.parse::<u8>() else { return false };
+        if text != value.to_string() {
+            return false;
+        }
+        *byte = value;
+    }
+    values.next().is_none() && &found != b"8BPS"
+}
+
 impl PhotocraftApp {
     /// Open `bytes` read from the file at `path`: the document is named after the file, keeps
     /// `path` for File › Save unless it is a derivative preview, and `path` goes to the top of Open Recent. Returns the import
@@ -327,7 +350,7 @@ impl PhotocraftApp {
             // prompt that is answered later all place the file at its place in the set.
             match self.open_path_placed(abs, None, Some(order)) {
                 Ok(_) => opened += 1,
-                Err(e) => self.open_failed(&display_name(abs), &e),
+                Err(e) => self.open_failed(abs, &e),
             }
         }
         crate::jobs_ui::end_batch(self);
@@ -361,12 +384,30 @@ impl PhotocraftApp {
         true
     }
 
-    /// Show "Couldn't open <name>: <error>" as an error (status bar + notice).
-    pub fn open_failed(&mut self, name: &str, err: &str) {
-        self.failed({
+    /// Report one failed open in an OK alert, naming its source file once. Pass the source path
+    /// when available so its exact prefix can be removed from filesystem read errors too.
+    pub fn open_failed(&mut self, source: &str, err: &str) {
+        let name = display_name(source);
+        let source_prefix = format!("{source}: ");
+        let name_prefix = format!("{name}: ");
+        // The native background importer wraps its path-prefixed read error in the file name.
+        let wrapped_source_prefix = format!("{name}: {source}: ");
+        let reason = (source != name)
+            .then(|| err.strip_prefix(&wrapped_source_prefix))
+            .flatten()
+            .or_else(|| err.strip_prefix(&source_prefix))
+            .or_else(|| err.strip_prefix(&name_prefix))
+            .unwrap_or(err);
+        let msg = if unrecognized_open_reason(reason) {
+            crate::i18n::fmt(tl!("Could not open \"{name}\" because PhotoCraft does not recognize this type of file."), &[("name", &name)])
+        } else {
             let template = "Couldn't open {name}: {error}";
-            crate::i18n::fmt(tl!(template), &[("name", name), ("error", err)])
-        });
+            crate::i18n::fmt(tl!(template), &[("name", &name), ("error", reason)])
+        };
+        log::warn!("{msg}");
+        self.ui.status = msg.clone();
+        self.ui.status_error = true;
+        self.ui.open_dialog(crate::state::DialogKind::Error, serde_json::json!({"message": msg}).as_object().cloned().unwrap_or_default());
     }
 
     /// Show "Couldn't place <name>: <error>" as an error (status bar + notice).
@@ -418,7 +459,10 @@ impl PhotocraftApp {
             match self.open_dropped_file(&f, &name, slot) {
                 Ok(true) => slot = slot.map(|s| s + 1),
                 Ok(false) => {}
-                Err(e) => self.open_failed(&name, &e),
+                Err(e) => {
+                    let source = if f.path().is_absolute() { f.path().to_string_lossy().into_owned() } else { name.clone() };
+                    self.open_failed(&source, &e);
+                }
             }
         }
     }
@@ -712,3 +756,6 @@ fn same_file(p: &str, path: &str, canon: Option<&std::path::Path>) -> bool {
 mod dialog_order_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod unreadable_alert_tests;

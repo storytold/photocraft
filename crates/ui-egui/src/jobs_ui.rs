@@ -42,6 +42,8 @@ pub struct OpenTab {
     pub name: String,
     /// Where it was read from (File › Save writes back there; added to Open Recent).
     pub path: Option<String>,
+    /// Actual read source when it differs from the save/recent path (an untitled Smart Object or byte-backed template).
+    pub error_source: Option<String>,
     /// The tab position it goes to when it opens (a file dropped on the tabs); `None`: the end.
     pub slot: Option<usize>,
     /// Its place in a set of files opened together, when it is one of several (see [`OpenOrder`]).
@@ -281,13 +283,15 @@ pub fn start_open(
     slot: Option<usize>,
     order: Option<OpenOrder>,
 ) -> Result<(), String> {
-    let name = &app.open_name(name);
+    let source_name = name;
+    let name = &app.open_name(source_name);
+    let error_source = (path.is_none() && name.as_str() != source_name).then(|| source_name.to_string());
     match app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())? {
         // Inline (wasm, or background jobs off): finish now, like a background open that ended at
         // once. A preflight keeps the slot and set order in its memory prompt.
-        Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
+        Started::Done(v) => finish_open(app, name, path.as_deref(), error_source.as_deref(), &v, slot, order),
         Started::Job(job) => {
-            track_open(app, OpenTab { job, name: name.to_string(), path, slot, order });
+            track_open(app, OpenTab { job, name: name.to_string(), path, error_source, slot, order });
             Ok(())
         }
     }
@@ -316,9 +320,9 @@ pub(crate) fn start_open_as_smart_object(app: &mut PhotocraftApp, path: &str, or
         Started::Done(app.session.execute("file.openAsSmartObject", params).map_err(|e| e.to_string())?)
     };
     match started {
-        Started::Done(v) => finish_open(app, &name, None, &v, None, order),
+        Started::Done(v) => finish_open(app, &name, None, Some(path), &v, None, order),
         Started::Job(job) => {
-            track_open(app, OpenTab { job, name, path: None, slot: None, order });
+            track_open(app, OpenTab { job, name, path: None, error_source: Some(path.to_string()), slot: None, order });
             Ok(())
         }
     }
@@ -372,7 +376,7 @@ pub(crate) fn tab_slot(app: &mut PhotocraftApp, slot: Option<usize>, order: Opti
 /// [`JobsUi::opens`]: the document goes to the tab's slot, or to its place in its set. A memory
 /// preflight keeps both in its prompt.
 pub(crate) fn finish_open_tab(app: &mut PhotocraftApp, tab: &OpenTab, v: &Value) -> Result<(), String> {
-    let r = finish_open(app, &tab.name, tab.path.as_deref(), v, tab.slot, tab.order);
+    let r = finish_open(app, &tab.name, tab.path.as_deref(), tab.error_source.as_deref(), v, tab.slot, tab.order);
     end_batch(app);
     r
 }
@@ -640,13 +644,19 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     if e.command == OPEN_JOB || app.jobs.opens.iter().any(|o| o.job == e.id) {
         let Some(i) = app.jobs.opens.iter().position(|o| o.job == e.id) else { return };
         let tab = app.jobs.opens.remove(i);
+        let source = tab.error_source.as_deref().or(tab.path.as_deref()).unwrap_or(&tab.name);
         match e.outcome {
             JobOutcome::Done(v) => {
                 if let Err(err) = finish_open_tab(app, &tab, &v) {
-                    app.open_failed(&tab.name, &err);
+                    app.open_failed(source, &err);
                 }
             }
-            JobOutcome::Failed(err) => app.open_failed(&tab.name, &err),
+            JobOutcome::Failed(err) => {
+                // A template's worker name is Untitled-N, while its alert names the read source.
+                let reason =
+                    if tab.name != crate::file_open::display_name(source) { err.strip_prefix(&format!("{}: ", tab.name)).unwrap_or(&err) } else { &err };
+                app.open_failed(source, reason);
+            }
             JobOutcome::Cancelled => {
                 app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &tab.name)]);
                 app.ui.status_error = false;
@@ -698,7 +708,15 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 /// (`{document, docId, warnings, color}` or `{held, …}`). `slot` and `order` are the tab position
 /// and set place the file keeps: through a memory prompt, a profile/damage prompt and the final
 /// document, so an inline completion lands where a background tab would.
-fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>, order: Option<OpenOrder>) -> Result<(), String> {
+fn finish_open(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<&str>,
+    error_source: Option<&str>,
+    v: &Value,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+) -> Result<(), String> {
     if let Some(preflight_id) = v.get("pendingPreflight").and_then(Value::as_u64) {
         let estimated = v.get("estimated").and_then(Value::as_u64).unwrap_or(0);
         let available = v.get("availableRam").and_then(Value::as_u64);
@@ -709,6 +727,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
             preflight_id,
             name.to_string(),
             path.map(str::to_string),
+            error_source.map(str::to_string),
             slot,
             order,
             estimated,
