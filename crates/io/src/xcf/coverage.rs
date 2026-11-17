@@ -1573,7 +1573,10 @@ fn native_plan(
     results.try_reserve_exact(count).map_err(|_| invalid("native coverage plan result allocation failed"))?;
     results.push(surface.clone());
     for step in steps {
-        charged_reservation(Some(work), &mut usize::MAX, ctl, |budget| reserve_native_frame(bounds, surface.format(), budget))?;
+        // This local prices transient frame work only. The actual shared Work
+        // never resets, and retained storage uses its separate transactional budget.
+        let mut work_only_capacity = usize::MAX;
+        charged_reservation(Some(work), &mut work_only_capacity, ctl, |budget| reserve_native_frame(bounds, surface.format(), budget))?;
         work.charge_bytes(256, ctl)?;
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let result = match step {
@@ -2066,7 +2069,10 @@ pub(super) fn apply_prepared(
             Ok(value) => value,
             Err(failure) => return Ok(Err(failure)),
         };
-        charged_reservation(Some(work), &mut usize::MAX, ctl, |budget| reserve_native_frame(bounds, surface.format(), budget))?;
+        // This local prices transient frame work only. The actual shared Work
+        // never resets, and retained storage uses its separate transactional budget.
+        let mut work_only_capacity = usize::MAX;
+        charged_reservation(Some(work), &mut work_only_capacity, ctl, |budget| reserve_native_frame(bounds, surface.format(), budget))?;
         let output = native_mix(
             surface,
             &processed,

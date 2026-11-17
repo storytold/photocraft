@@ -804,7 +804,7 @@ impl<'a> Image<'a> {
                 self.metadata_limit(mask_outcome, "xcf.coverage_effect", "Mask effect pointers omitted after the shared metadata allowance was exhausted")?;
             }
             self.precision_underflow(mask_outcome, &px)?;
-            self.execute_coverage(mask_outcome, &coverage_effects, &mut surface, Rect::from_xywh(x, y, px.width as i32, px.height as i32), mptr, ctl)?;
+            self.execute_coverage(mask_outcome, &coverage_effects, &mut surface, Rect::from_xywh(x, y, px.width, px.height), mptr, ctl)?;
             layer.mask = Some(LayerMask { surface, enabled: apply_mask, linked: true, density: 1.0, feather: 0.0 });
             for property in &mprops {
                 let reason = match property.kind {
