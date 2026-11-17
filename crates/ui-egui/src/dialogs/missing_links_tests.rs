@@ -231,7 +231,7 @@ fn relink_links_every_layer_of_the_file_to_the_one_picked_and_the_row_leaves() {
     assert_eq!(centre(&app), [0, 0, 255]);
     let st = app.session.active().unwrap();
     assert_eq!(st.history.past_len(), history + 2);
-    assert_eq!(st.history.entries()[history..], ["Relink to File", "Relink to File"].map(String::from)[..], "{:?}", st.history.entries());
+    assert_eq!(st.history.entries()[history + 1..], ["Relink to File", "Relink to File"].map(String::from)[..], "{:?}", st.history.entries());
     assert_eq!(dialogs(&app)[0].fields["files"], json!([]), "the row left the list");
 }
 
@@ -280,8 +280,11 @@ fn the_dialog_draws_the_rows_and_relinks_from_its_button() {
     std::fs::write(&found, png("#0000ff")).unwrap();
     let (mut app, open) = app();
     open_file(&mut app, &s.doc);
+    // The first frame draws no dialog: the fonts are installed after it.
+    let shown = std::mem::take(&mut app.ui.dialogs);
     let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.state_mut().ui.dialogs = shown;
     h.run_steps(3);
     let heading = h.get_by_label("Cannot locate linked assets:").rect();
     let button = h.get_by_label("Relink…").rect();
