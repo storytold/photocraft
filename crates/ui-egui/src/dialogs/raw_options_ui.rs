@@ -128,7 +128,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = &mut app.raw_options else { return };
     let (mut ok, mut cancel) = (false, false);
     let describe = p.describe();
-    let modal = egui::Modal::new(egui::Id::new("raw-options")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("raw-options")).show(ctx, |ui| {
         ui.set_max_width(360.0);
         ui.label(egui::RichText::new(tl!("Raw Options")).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);
