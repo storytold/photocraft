@@ -3,7 +3,7 @@ use super::filter_preview::filter_channel_preview;
 use super::navigator::navigator_waits_for_drag;
 use super::strokes::live_stroke;
 use super::view_xform::ViewXform;
-use super::{CanvasCache, CpuTextures, DRect, DetailTexture, Document, InView, LayerContent, PhotocraftApp, TextureOptions, pos2};
+use super::{CanvasCache, CpuTextures, DRect, DetailTexture, Document, InView, LayerContent, PhotocraftApp, SamplingVariant, TextureOptions, pos2};
 
 /// Largest texture side we upload; bigger documents are uploaded downsampled, with the part in
 /// view added at the screen's resolution when zoomed in (`detail_plan`).
@@ -75,12 +75,19 @@ pub(crate) fn detail_plan(size: [u32; 2], side: u32, zoom: f32, visible: DRect) 
     None
 }
 
-/// The CPU canvas texture's sampling (#4810). Zoomed in, a full-resolution texture shows each
-/// document pixel as a crisp square, as the GPU canvas's sharp nearest filter and Photoshop do;
-/// zoomed out it is still filtered. A reduced texture (`factor` > 1) stays bilinear: its texels
-/// are averages of several pixels, and squares of them would be blocks the image doesn't have.
-pub(super) fn canvas_texture_options(factor: u32) -> TextureOptions {
-    if factor > 1 { TextureOptions::LINEAR } else { TextureOptions { magnification: egui::TextureFilter::Nearest, ..TextureOptions::LINEAR } }
+/// Crisp sampling: magnified, each texel a square; reduced, filtered.
+pub(super) const CRISP: TextureOptions = TextureOptions { magnification: egui::TextureFilter::Nearest, ..TextureOptions::LINEAR };
+
+/// The CPU canvas texture's sampling for a view at `zoom` device pixels per document pixel, as
+/// the GPU canvas samples ([`crate::gpu_canvas::sampling`]). Zoomed in to a whole-number zoom or
+/// from 200 %, a full-resolution texture shows each document pixel as a crisp square (#4810), as
+/// the GPU canvas's sharp filter and Photoshop do. Between 100 % and 200 % it is bilinear like the
+/// GPU canvas: nearest sampling there drew some rows and columns twice, so a flipped view (always
+/// drawn here) showed every diagonal stroke edge in steps that the unflipped view didn't (#13505).
+/// Zoomed out it is filtered. A reduced texture (`factor` > 1) stays bilinear: its texels are
+/// averages of several pixels, and squares of them would be blocks the image doesn't have.
+pub(super) fn canvas_texture_options(factor: u32, zoom: f32) -> TextureOptions {
+    if factor > 1 || crate::gpu_canvas::sampling(zoom) == crate::gpu_canvas::Sampling::Bilinear { TextureOptions::LINEAR } else { CRISP }
 }
 
 /// Make sure the canvas texture for document `idx` on `display` is current; returns (texture
@@ -141,6 +148,8 @@ pub(crate) fn ensure_texture_in_view(
     }
     // Detail textures and partial redraws work in the document's own pixels.
     let reduced = reduced || bounds != committed;
+    // The view asking (its key and zoom), even when its detail texture is left out below.
+    let asking = view.map(|v| (v.key, v.zoom));
     let view = view.filter(|_| !reduced);
     // A flipped view draws a GPU machine's canvas through here: an adjustment dialog's preview of
     // a large document (taken by the GPU path) would cost a full-size CPU composite per change.
@@ -163,6 +172,9 @@ pub(crate) fn ensure_texture_in_view(
         Some(s) => damage_since(app, idx, s, (revision, preview_key), display_key, last_damage),
         None => None,
     };
+    // The second texture's own damage, as the detail texture's (see `SamplingVariant`).
+    let variant_seen = app.canvases.get(&cache_key(id, output)).and_then(|c| c.variant.as_ref()).map(|v| (v.revision, v.preview_key));
+    let variant_damage = variant_seen.and_then(|s| damage_since(app, idx, s, (revision, preview_key), display_key, last_damage)).filter(|_| !reduced);
     let preview_key = preview_key ^ display_key;
     let cache = app.canvases.entry(cache_key(id, output)).or_insert(CanvasCache {
         revision: 0,
@@ -175,58 +187,80 @@ pub(crate) fn ensure_texture_in_view(
         texture_opaque: false,
         grid: None,
         detail: Vec::new(),
+        options: CRISP,
+        owner: None,
+        variant: None,
     });
-    if cache.tex_revision != revision || cache.texture.is_none() || cache.tex_preview_key != preview_key {
+    let factor = texture_factor([doc.size.width, doc.size.height], texture_side(ctx));
+    // Views in every window count their passes on the root viewport's clock.
+    let pass = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
+    let want = asking.map(|(_, z)| canvas_texture_options(factor, z));
+    // The sampling travels with the texture's uploads, not with each draw. While another view
+    // shows this texture (this pass or the last) at other sampling, this view gets its own
+    // texture at its sampling rather than switching the one the other view shows.
+    let shared = cache.owner.is_some_and(|(key, at)| Some(key) != asking.map(|a| a.0) && at.saturating_add(1) >= pass);
+    let own = want.filter(|w| *w != cache.options && shared && cache.texture.is_some());
+    // Without a view (the Navigator's call) the texture keeps its views' sampling.
+    let options = match want {
+        Some(w) if own.is_none() => w,
+        _ if factor > 1 => TextureOptions::LINEAR,
+        _ => cache.options,
+    };
+    if let (Some((key, _)), None) = (asking, own) {
+        cache.owner = Some((key, pass));
+    }
+    // The second texture goes once no view has asked for it for two passes.
+    if cache.variant.as_ref().is_some_and(|v| v.used.saturating_add(1) < pass) {
+        cache.variant = None;
+    }
+    let stale = cache.tex_revision != revision || cache.texture.is_none() || cache.tex_preview_key != preview_key;
+    if stale || cache.options != options {
         let t0 = crate::gpu_canvas::now_ms();
-        let factor = texture_factor([doc.size.width, doc.size.height], texture_side(ctx));
-        let (w, h) = ((doc.size.width / factor).max(1), (doc.size.height / factor).max(1));
-        let current = cache.texture.as_mut().filter(|t| t.size() == [w as usize, h as usize]);
-        if let (Some(d), Some(t)) = (damage, current) {
-            // Only what the edit or stroke touched: the reduced texture's pixels over it, with the
-            // values the whole reduction gives them (factor 1 is the plain composite of `d`).
-            let buf = photocraft_compose::render_reduced_damage(&doc, w, h, d);
-            let r = buf.rect;
-            if !r.is_empty() {
-                let t1 = crate::gpu_canvas::now_ms();
-                let image = display_image(display.as_deref(), &buf);
-                // Partial uploads can disprove opacity. Once transparent, conservatively keep
-                // the checker until a full upload proves the whole texture opaque again.
-                cache.texture_opaque &= image.pixels.iter().all(|p| p.is_opaque());
-                t.set_partial([r.x0 as usize, r.y0 as usize], image, canvas_texture_options(factor));
-                let px = (r.width() as u64 * r.height() as u64).saturating_mul(u64::from(factor).pow(2));
-                app.perf.record("rect", px, t1 - t0, crate::gpu_canvas::now_ms() - t1);
+        // Only the sampling changed (the view zoomed past 100 % or 200 %): the renderer takes it
+        // from each upload, so one texel sent again with it is enough, not the whole document.
+        let damage = if stale { damage } else { Some(DRect::new(0, 0, 1, 1)) };
+        let name = || format!("canvas-{}-{}", id.0, cache_key(id, output).1);
+        // An empty damage rect sends nothing, so the sampling is tried again next time.
+        if let Some((kind, px, t1)) = upload(ctx, name, (&mut cache.texture, &mut cache.texture_opaque), &doc, display.as_deref(), factor, damage, options) {
+            cache.options = options;
+            if kind == "full" {
+                cache.scale = 1.0 / factor as f32;
             }
-        } else {
-            // Reduced in bands straight from the compositor: no full-size composite in memory.
-            let full = photocraft_compose::render_reduced(&doc, w, h);
-            let t1 = crate::gpu_canvas::now_ms();
-            let (img, scale) = (display_image(display.as_deref(), &full), 1.0 / factor as f32);
-            cache.texture_opaque = img.pixels.iter().all(|p| p.is_opaque());
-            match cache.texture.as_mut() {
-                Some(t) if t.size() == img.size => t.set(img, canvas_texture_options(factor)),
-                _ => cache.texture = Some(ctx.load_texture(format!("canvas-{}-{}", id.0, cache_key(id, output).1), img, canvas_texture_options(factor))),
-            }
-            cache.scale = scale;
-            app.perf.record("full", doc.size.width as u64 * doc.size.height as u64, t1 - t0, crate::gpu_canvas::now_ms() - t1);
+            app.perf.record(kind, px, t1 - t0, crate::gpu_canvas::now_ms() - t1);
         }
         cache.tex_revision = revision;
         cache.tex_preview_key = preview_key;
     }
-    let texture = cache.texture.as_ref()?.id();
-    let scale = cache.scale;
-    // Without a view (the Navigator's call) the views' detail textures stay as they are.
-    let Some(view) = view else { return Some(CpuTextures { texture, scale, bounds, detail: None }) };
+    let (mut texture, scale, mut opaque) = (cache.texture.as_ref()?.id(), cache.scale, cache.texture_opaque);
+    if let Some(w) = own {
+        let v = cache.variant.get_or_insert(SamplingVariant { texture: None, opaque: false, options: w, revision: 0, preview_key: 0, used: pass });
+        v.used = pass;
+        let stale = v.revision != revision || v.preview_key != preview_key || v.texture.is_none();
+        if stale || v.options != w {
+            let damage = if stale { variant_damage } else { Some(DRect::new(0, 0, 1, 1)) };
+            let name = || format!("canvas-variant-{}-{}", id.0, cache_key(id, output).1);
+            if upload(ctx, name, (&mut v.texture, &mut v.opaque), &doc, display.as_deref(), factor, damage, w).is_some() {
+                v.options = w;
+            }
+            (v.revision, v.preview_key) = (revision, preview_key);
+        }
+        if let Some(t) = &v.texture {
+            (texture, opaque) = (t.id(), v.opaque);
+        }
+    }
+    let Some(view) = view else { return Some(CpuTextures { texture, scale, bounds, detail: None, opaque }) };
     let old = cache.detail.iter().position(|(k, _)| *k == view.key).map(|i| cache.detail.remove(i).1);
     let Some(plan) = detail_plan([doc.size.width, doc.size.height], texture_side(ctx), view.zoom, view.visible) else {
-        return Some(CpuTextures { texture, scale, bounds, detail: None });
+        return Some(CpuTextures { texture, scale, bounds, detail: None, opaque });
     };
     let t0 = crate::gpu_canvas::now_ms();
     let name = format!("canvas-detail-{}-{}", id.0, cache_key(id, output).1);
-    let detail = update_detail(ctx, &doc, display.as_deref(), name, plan, old, detail_damage, (revision, preview_key));
+    let options = canvas_texture_options(plan.factor, view.zoom);
+    let detail = update_detail(ctx, &doc, display.as_deref(), name, (plan, options), old, detail_damage, (revision, preview_key));
     if detail.as_ref().is_some_and(|d| d.rendered) {
         app.perf.span("canvas detail", crate::gpu_canvas::now_ms() - t0);
     }
-    let Some(mut detail) = detail else { return Some(CpuTextures { texture, scale, bounds, detail: None }) };
+    let Some(mut detail) = detail else { return Some(CpuTextures { texture, scale, bounds, detail: None, opaque }) };
     detail.rendered = false;
     // Where its texels lie in the document: reduced texel t covers [t·W/w, (t+1)·W/w).
     let (w, h) = ((doc.size.width / plan.factor).max(1), (doc.size.height / plan.factor).max(1));
@@ -238,36 +272,88 @@ pub(crate) fn ensure_texture_in_view(
     if cache.detail.len() > MAX_DETAIL_VIEWS {
         cache.detail.remove(0);
     }
-    Some(CpuTextures { texture, scale, bounds, detail: Some(shown) })
+    Some(CpuTextures { texture, scale, bounds, detail: Some(shown), opaque })
 }
 
 /// Most CPU canvas views of one document on one display that keep a detail texture.
 const MAX_DETAIL_VIEWS: usize = 4;
 
+/// Brings a CPU canvas texture (`texture` and whether all its texels are opaque) up to date with
+/// `doc` at one texel per `factor` pixels, sampled with `options`: only `damage` when given and
+/// the texture already has that size, else all of it (created with `name` when missing). Returns
+/// what was sent for the perf record (kind, document pixels, when compositing ended), or `None`
+/// when nothing was (an empty damage rect).
+#[allow(clippy::too_many_arguments)]
+fn upload(
+    ctx: &egui::Context,
+    name: impl FnOnce() -> String,
+    (texture, opaque): (&mut Option<egui::TextureHandle>, &mut bool),
+    doc: &Document,
+    display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+    factor: u32,
+    damage: Option<DRect>,
+    options: TextureOptions,
+) -> Option<(&'static str, u64, f64)> {
+    let (w, h) = ((doc.size.width / factor).max(1), (doc.size.height / factor).max(1));
+    let current = texture.as_mut().filter(|t| t.size() == [w as usize, h as usize]);
+    if let (Some(d), Some(t)) = (damage, current) {
+        // Only what the edit or stroke touched: the reduced texture's pixels over it, with the
+        // values the whole reduction gives them (factor 1 is the plain composite of `d`).
+        let buf = photocraft_compose::render_reduced_damage(doc, w, h, d);
+        let r = buf.rect;
+        if r.is_empty() {
+            return None;
+        }
+        let t1 = crate::gpu_canvas::now_ms();
+        let image = display_image(display, &buf);
+        // Partial uploads can disprove opacity. Once transparent, conservatively keep
+        // the checker until a full upload proves the whole texture opaque again.
+        *opaque &= image.pixels.iter().all(|p| p.is_opaque());
+        t.set_partial([r.x0 as usize, r.y0 as usize], image, options);
+        let px = (r.width() as u64 * r.height() as u64).saturating_mul(u64::from(factor).pow(2));
+        return Some(("rect", px, t1));
+    }
+    // Reduced in bands straight from the compositor: no full-size composite in memory.
+    let full = photocraft_compose::render_reduced(doc, w, h);
+    let t1 = crate::gpu_canvas::now_ms();
+    let img = display_image(display, &full);
+    *opaque = img.pixels.iter().all(|p| p.is_opaque());
+    match texture.as_mut() {
+        Some(t) if t.size() == img.size => t.set(img, options),
+        _ => *texture = Some(ctx.load_texture(name(), img, options)),
+    }
+    Some(("full", doc.size.width as u64 * doc.size.height as u64, t1))
+}
+
 /// The detail texture for `plan` at document state `now` (revision, preview key with the display
-/// key folded in): `old` as it is when current, updated over `damage` when only that changed
-/// within the same region, or rendered again. `None` when the region holds no texels.
+/// key folded in), sampled with `options`: `old` as it is when current, updated over `damage`
+/// when only that changed within the same region, or rendered again. `None` when the region holds
+/// no texels.
 #[allow(clippy::too_many_arguments)]
 fn update_detail(
     ctx: &egui::Context,
     doc: &Document,
     display: Option<&photocraft_engine::display_color::CanvasDisplay>,
     name: String,
-    plan: DetailPlan,
+    (plan, options): (DetailPlan, TextureOptions),
     old: Option<DetailTexture>,
     damage: Option<DRect>,
     now: (u64, u64),
 ) -> Option<DetailTexture> {
     let (w, h) = ((doc.size.width / plan.factor).max(1), (doc.size.height / plan.factor).max(1));
-    let options = canvas_texture_options(plan.factor);
     let (kept, spare) = match old {
         Some(d) if d.plan == plan => (Some(d), None),
         d => (None, d.map(|d| d.texture)),
     };
     if let Some(mut d) = kept {
-        if (d.revision, d.preview_key) == now {
+        let current = (d.revision, d.preview_key) == now;
+        if current && d.options == options {
             return Some(d);
         }
+        // Only the sampling changed: one texel sent again with it, as `ensure_texture_in_view`
+        // does for the whole-document texture.
+        let r = plan.region;
+        let damage = if current { Some(DRect::new(r.x0, r.y0, r.x0.saturating_add(1), r.y0.saturating_add(1))) } else { damage };
         // An edit or a stroke step in view: only the texels it touched.
         if let Some(dmg) = damage {
             let dmg = dmg.intersect(&plan.region);
@@ -278,14 +364,15 @@ fn update_detail(
                     let at = [b.rect.x0.abs_diff(d.out.x0) as usize, b.rect.y0.abs_diff(d.out.y0) as usize];
                     d.texture.set_partial(at, display_image(display, &b), options);
                     d.rendered = true;
+                    d.options = options;
                 }
                 (d.revision, d.preview_key) = now;
                 return Some(d);
             }
         }
-        return render_detail(ctx, doc, display, name, plan, Some(d.texture), now);
+        return render_detail(ctx, doc, display, name, (plan, options), Some(d.texture), now);
     }
-    render_detail(ctx, doc, display, name, plan, spare, now)
+    render_detail(ctx, doc, display, name, (plan, options), spare, now)
 }
 
 /// [`update_detail`]'s whole render of `plan`'s region, into `texture` when it is the same size.
@@ -294,12 +381,11 @@ fn render_detail(
     doc: &Document,
     display: Option<&photocraft_engine::display_color::CanvasDisplay>,
     name: String,
-    plan: DetailPlan,
+    (plan, options): (DetailPlan, TextureOptions),
     texture: Option<egui::TextureHandle>,
     now: (u64, u64),
 ) -> Option<DetailTexture> {
     let (w, h) = ((doc.size.width / plan.factor).max(1), (doc.size.height / plan.factor).max(1));
-    let options = canvas_texture_options(plan.factor);
     let buf = photocraft_compose::render_reduced_damage(doc, w, h, plan.region);
     let out = buf.rect;
     if out.is_empty() {
@@ -313,7 +399,7 @@ fn render_detail(
         }
         _ => ctx.load_texture(name, img, options),
     };
-    Some(DetailTexture { texture, plan, out, revision: now.0, preview_key: now.1, rendered: true })
+    Some(DetailTexture { texture, plan, out, revision: now.0, preview_key: now.1, rendered: true, options })
 }
 
 /// What changed since a canvas cache showed (`revision`, `preview key`) `seen`, when only a
@@ -538,6 +624,9 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         texture_opaque: false,
         grid: None,
         detail: Vec::new(),
+        options: CRISP,
+        owner: None,
+        variant: None,
     });
     let present = cache.on_gpu && gpu.has(id.0, size);
     let current = cache.revision == revision && cache.preview_key == preview_key;
