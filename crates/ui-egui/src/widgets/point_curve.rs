@@ -162,18 +162,29 @@ pub fn interact(ui: &mut Ui, resp: &Response, graph: Rect, pts: &mut Vec<[f32; 2
     }
     // Arrows edit this graph rather than navigating to another widget on the next frame.
     ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() }));
-    // Keys while the graph has focus: Delete/Backspace removes, arrows nudge (Shift: ×10).
+    // Keys while the graph has focus: Delete/Backspace removes (an end point is deselected
+    // instead), arrows nudge (Shift: ×10), Ctrl+Tab / Ctrl+Shift+Tab select the next / previous
+    // point, wrapping around; while a point is selected they don't switch documents.
     if resp.has_focus() {
         crate::shortcut_dispatch::claim_delete_keys(ui.ctx(), resp.id);
+        crate::shortcut_dispatch::claim_ctrl_tab(ui.ctx(), state.selected.is_some().then_some(resp.id));
     }
     if resp.has_focus()
         && let Some(i) = state.selected.filter(|i| *i < pts.len())
     {
+        // Ctrl+Shift+Tab first: the Ctrl+Tab pattern also matches it.
+        let back = ui.input_mut(|inp| inp.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab));
+        let next = !back && ui.input_mut(|inp| inp.consume_key(Modifiers::CTRL, Key::Tab));
         let del = ui.input_mut(|inp| inp.consume_key(Modifiers::NONE, Key::Delete) || inp.consume_key(Modifiers::NONE, Key::Backspace));
-        if del && delete(pts, i) {
+        if back || next {
+            let n = pts.len();
+            state.selected = Some(if next { (i + 1) % n } else { (i + n - 1) % n });
+        } else if del {
+            if delete(pts, i) {
+                e.changed = true;
+                e.commit = true;
+            }
             state.selected = None;
-            e.changed = true;
-            e.commit = true;
         } else {
             let step = if ui.input(|inp| inp.modifiers.shift) { 10.0 } else { 1.0 };
             let mut d = [0.0f32; 2];
@@ -293,3 +304,7 @@ mod tests {
         assert_eq!(p, line());
     }
 }
+
+#[cfg(test)]
+#[path = "point_curve_keys_tests.rs"]
+mod keys_tests;

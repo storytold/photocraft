@@ -153,6 +153,32 @@ pub fn claim_delete_keys(ctx: &egui::Context, id: egui::Id) {
     ctx.data_mut(|d| d.insert_temp(delete_owner_id(), id));
 }
 
+/// Where [`claim_ctrl_tab`] keeps the id of the widget that steps through its items with Ctrl+Tab.
+fn ctrl_tab_owner_id() -> egui::Id {
+    egui::Id::unique("shortcut_dispatch::ctrl_tab_owner")
+}
+
+/// Called each frame by a focused widget that uses Ctrl+Tab and Ctrl+Shift+Tab itself while
+/// `owner` is set: the Curves graph steps through its points while one is selected (#14438), so
+/// those keys don't switch documents then. `None` gives them back to Next / Previous Document.
+pub fn claim_ctrl_tab(ctx: &egui::Context, owner: Option<egui::Id>) {
+    ctx.data_mut(|d| match owner {
+        Some(id) => {
+            d.insert_temp(ctrl_tab_owner_id(), id);
+        }
+        None => d.remove::<egui::Id>(ctrl_tab_owner_id()),
+    });
+}
+
+/// Ctrl+Tab or Ctrl+Shift+Tab while the widget that claimed them still has focus.
+fn ctrl_tab_claimed(ctx: &egui::Context, sc: &KeyboardShortcut) -> bool {
+    if sc.logical_key != Key::Tab || !sc.modifiers.ctrl {
+        return false;
+    }
+    let owner = ctx.data(|d| d.get_temp::<egui::Id>(ctrl_tab_owner_id()));
+    owner.is_some() && ctx.memory(|m| m.focused()) == owner
+}
+
 impl Focus {
     pub fn of(ctx: &egui::Context) -> Focus {
         // A layer rename and a zoom field keep their keys even in the frame egui drops their
@@ -170,7 +196,9 @@ impl Focus {
     /// May `sc` fire with this focus? A focused widget keeps its navigation keys (arrows, ↩,
     /// Space, Esc…, plus ⌫ / Delete when it claimed them); a text field keeps everything but ⌘ shortcuts (minus its own editing
     /// ones: select all, clipboard, undo) and the function keys. Ctrl+Tab and Ctrl+Shift+Tab switch
-    /// documents whatever has focus, as in Photoshop: no widget or text field edits with them (#2340).
+    /// documents whatever has focus, as in Photoshop: no widget or text field edits with them (#2340),
+    /// except a Curves graph with a point selected, which steps through its points (see
+    /// [`claim_ctrl_tab`], applied in [`dispatch_pressed`]).
     pub fn allows(self, sc: &KeyboardShortcut) -> bool {
         let k = sc.logical_key;
         if k == Key::Tab && sc.modifiers.ctrl {
@@ -256,8 +284,10 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         return false;
     }
     const TEXT_OWNED: [&str; 6] = ["edit.copy", "edit.cut", "edit.paste", "edit.copyMerged", "select.all", "edit.pasteSpecial.pasteInPlace"];
-    let table: Vec<(String, KeyboardShortcut)> =
-        bindings(app).into_iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).collect();
+    let table: Vec<(String, KeyboardShortcut)> = bindings(app)
+        .into_iter()
+        .filter(|(id, sc)| focus.allows(sc) && !ctrl_tab_claimed(ctx, sc) && !(editing && TEXT_OWNED.contains(&id.as_str())))
+        .collect();
     let command = |e: &egui::Event| match e {
         egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
             let by_position = physical_key
