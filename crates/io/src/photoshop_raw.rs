@@ -115,7 +115,10 @@ pub fn import(name: &str, bytes: &[u8], layout: &RawLayout) -> Result<ImportResu
     layout.check(bytes.len() as u64)?;
     // `check` proved the header fits and the rest is exactly the pixels.
     let pixels = &bytes[layout.header as usize..];
-    let img = Image::from_u8(layout.width, layout.height, ChannelLayout::Gray, pixels.to_vec())?;
+    // The copy is as large as the file: a machine without that much memory gets an error, not an abort.
+    let mut owned = crate::flat::try_buffer(pixels.len(), 1)?;
+    owned.extend_from_slice(pixels);
+    let img = Image::from_u8(layout.width, layout.height, ChannelLayout::Gray, owned)?;
     let mut r = crate::flat::image_to_document(name, &img)?;
     photocraft_raster::spill::check_since(scratch_generation).map_err(IoError::Unsupported)?;
     r.document.scratch_health().map_err(IoError::Unsupported)?;
