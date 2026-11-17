@@ -63,7 +63,7 @@ fn runtime_delivery_reaches_all_ui_families_and_survives_reinstalls() {
     let ctx = egui::Context::default();
     // A real attributed font posing as the host's script fallback, independent of optional
     // platform Arabic/Japanese font installations.
-    photocraft_text::served::add_fonts(&super::super::parse_manifest("Inter | Regular | fonts/Inter.ttf | Zzzz").0);
+    photocraft_text::served::add_fonts(&super::super::parse_manifest("Inter | Regular | fonts/Inter.ttf | Arab").0);
     let mut app = crate::PhotocraftApp::with_context(ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
     super::super::install(&mut app, &ctx, vec![("Inter".into(), inter().to_vec())]);
     for _ in 0..2 {
