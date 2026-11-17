@@ -3,7 +3,11 @@ use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 
 use super::{CameraRaw, Image, Panel, measure_shadow_noise, suggest, suggest_full};
-use crate::camera_raw::develop;
+use crate::camera_raw::DevelopInputs;
+
+fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
+    crate::camera_raw::develop(px, w, h, p, &DevelopInputs::default(), float);
+}
 
 const SIDE: usize = 192;
 
@@ -35,7 +39,8 @@ fn full_auto_fits_a_monotone_curve_and_respects_a_manual_curve() {
     render(&mut output, SIDE, SIDE, &fitted);
     assert!(output[middle][0] > px[middle][0]);
 
-    let manual = CameraRaw { point_curve: vec![[0.0, 0.0], [128.0, 96.0], [255.0, 255.0]], ..base.clone() };
+    let mut manual = base.clone();
+    manual.point_curve = vec![[0.0, 0.0], [128.0, 96.0], [255.0, 255.0]];
     assert_eq!(suggest_full(&image, &Panel::ALL, &manual, false, render).point_curve, manual.point_curve);
     assert_eq!(suggest_full(&image, &[], &base, true, |_, _, _, _| panic!("HDR used SDR feedback")), base);
 }
@@ -97,7 +102,8 @@ fn white_balance_reduces_the_cast_on_neutral_samples_and_defers_in_a_colored_sce
         let v = 0.28 + 0.40 * (x + y) as f32 / (2 * SIDE) as f32;
         [v * 1.10, v, v * 0.92, 1.0]
     });
-    let base = CameraRaw { vibrance: 9.0, ..Default::default() };
+    let mut base = CameraRaw::default();
+    base.vibrance = 9.0;
     let auto_wb = auto(&px, &[Panel::WhiteBalance], &base);
     assert!(auto_wb.temperature < 0.0);
     assert_eq!(auto_wb.vibrance, base.vibrance);
@@ -106,7 +112,8 @@ fn white_balance_reduces_the_cast_on_neutral_samples_and_defers_in_a_colored_sce
     develop(&mut corrected, SIDE, SIDE, &auto_wb, false);
     assert!(mst(&corrected) < mst(&px) * 0.57);
     let sunset = frame(|x, _| [0.75 + x as f32 / (4 * SIDE) as f32, 0.42, 0.21, 1.0]);
-    let original = CameraRaw { temperature: 15.0, tint: -3.0, ..Default::default() };
+    let mut original = CameraRaw::default();
+    (original.temperature, original.tint) = (15.0, -3.0);
     assert_eq!(auto(&sunset, &[Panel::WhiteBalance], &original), original);
 }
 
@@ -190,9 +197,9 @@ fn native_shadow_noise_dampens_light_and_detail_when_the_averaged_preview_is_ide
 
     // The smoothed proxy cannot tell these two source surfaces apart.
     let pixels = frame(|x, y| gray(0.24 + 0.053 * (x as f32 * std::f32::consts::TAU / 12.0).sin() + 0.029 * (y as f32 * std::f32::consts::TAU / 15.0).cos()));
-    let base = CameraRaw { encoding_gamma: 1.8, ..Default::default() };
+    let base = CameraRaw::default();
     let settings = |noise| {
-        let image = Image::new(&pixels, SIDE, SIDE, None).unwrap().with_shadow_noise(noise);
+        let image = Image::new(&pixels, SIDE, SIDE, None).unwrap().with_encoding_gamma(1.8).with_shadow_noise(noise);
         suggest(&image, &[Panel::Light, Panel::Effects], &base)
     };
     let plain = settings(clean_noise);
@@ -257,7 +264,9 @@ fn dehaze_opens_a_veiled_scene_without_dehazing_the_clear_reference() {
     assert_eq!(auto(&clean, &[Panel::Effects], &base).dehaze, 0.0);
     let error = |pixels: &[[f32; 4]]| pixels.iter().zip(&clean).map(|(a, b)| (a[0] - b[0]).abs()).sum::<f32>();
     let before = error(&veiled);
-    develop(&mut veiled, SIDE, SIDE, &CameraRaw { dehaze: p.dehaze, ..base }, false);
+    let mut dehaze = base;
+    dehaze.dehaze = p.dehaze;
+    develop(&mut veiled, SIDE, SIDE, &dehaze, false);
     assert!(error(&veiled) < before);
 }
 

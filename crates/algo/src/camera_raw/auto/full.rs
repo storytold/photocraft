@@ -20,7 +20,7 @@ pub fn suggest_full(
         return seed;
     }
     let sample = Sample::new(image);
-    let enc = Encoding::of(base.encoding_gamma);
+    let enc = image.encoding;
     let source = sample.measure(&sample.pixels, enc);
     if source.count < 32 {
         return seed;
@@ -58,7 +58,7 @@ pub fn suggest_full(
         protected.highlights = protected.highlights.min(-10.0);
         best.keep(evaluate(&protected, best.strength));
     }
-    if base.point_curve.is_empty() && base.curves_neutral() && source.span() > 0.08 {
+    if base.point_curve.is_empty() && super::super::curves_neutral(base) && source.span() > 0.08 {
         let start = best.params.clone();
         let observed = best.rendered;
         let strength = best.strength;

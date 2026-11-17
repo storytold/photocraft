@@ -5,8 +5,8 @@ mod full;
 mod noise;
 
 use super::{CameraRaw, Encoding, auto_tone, luma, white_balance_gains};
-pub use noise::measure_shadow_noise;
 pub use full::suggest_full;
+pub use noise::measure_shadow_noise;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Panel {
@@ -32,44 +32,6 @@ impl Panel {
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|panel| panel.id() == id)
     }
-
-    pub const fn index(self) -> usize {
-        match self {
-            Self::WhiteBalance => 0,
-            Self::Light => 1,
-            Self::Color => 2,
-            Self::Effects => 3,
-        }
-    }
-
-    /// Copy just the values owned by this panel. Snapshotting these values also works
-    /// when a sidecar or an earlier edit supplied non-default settings.
-    pub fn copy_settings(self, from: &CameraRaw, to: &mut CameraRaw) {
-        macro_rules! copy {
-            ($($field:ident),+) => {{ $(to.$field = from.$field;)+ }};
-        }
-        match self {
-            Self::WhiteBalance => copy!(temperature, tint),
-            Self::Light => copy!(exposure, contrast, highlights, shadows, whites, blacks),
-            Self::Color => copy!(vibrance, saturation),
-            Self::Effects => {
-                copy!(
-                    texture,
-                    clarity,
-                    dehaze,
-                    grain_amount,
-                    grain_size,
-                    grain_roughness,
-                    vignette_amount,
-                    vignette_midpoint,
-                    vignette_roundness,
-                    vignette_feather,
-                    vignette_highlights
-                );
-                to.vignette_style.clone_from(&from.vignette_style);
-            }
-        }
-    }
 }
 
 /// A bounded sampling domain. Samples outside the filter mask, transparent pixels and
@@ -80,6 +42,7 @@ pub struct Image<'a> {
     w: usize,
     h: usize,
     shadow_noise: f32,
+    encoding: Encoding,
 }
 
 impl<'a> Image<'a> {
@@ -87,7 +50,13 @@ impl<'a> Image<'a> {
         if w == 0 || h == 0 || w.checked_mul(h) != Some(px.len()) || coverage.is_some_and(|c| c.len() != px.len()) {
             return None;
         }
-        Some(Self { px, coverage, w, h, shadow_noise: 0.0 })
+        Some(Self { px, coverage, w, h, shadow_noise: 0.0, encoding: Encoding::of(0.0) })
+    }
+
+    /// The source document's working transfer curve.
+    pub fn with_encoding_gamma(mut self, gamma: f32) -> Self {
+        self.encoding = Encoding::of(gamma);
+        self
     }
 
     /// Use the noise level measured before reducing the image to preview size.
@@ -122,7 +91,7 @@ pub fn suggest(image: &Image<'_>, panels: &[Panel], base: &CameraRaw) -> CameraR
     for panel in Panel::ALL.into_iter().filter(|p| panels.contains(p)) {
         match panel {
             Panel::WhiteBalance => {
-                if let Some([temperature, tint]) = white_balance(image, Encoding::of(out.encoding_gamma)) {
+                if let Some([temperature, tint]) = white_balance(image, image.encoding) {
                     out.temperature = temperature;
                     out.tint = tint;
                 }
@@ -142,7 +111,7 @@ fn percentile(values: &mut [f32], fraction: f32) -> f32 {
 }
 
 fn light(image: &Image<'_>, out: &mut CameraRaw) {
-    let enc = Encoding::of(out.encoding_gamma);
+    let enc = image.encoding;
     let gains = white_balance_gains(out.temperature, out.tint);
     let norm = luma(gains);
     let mut luminance = Vec::new();
@@ -227,7 +196,7 @@ fn white_balance(image: &Image<'_>, enc: Encoding) -> Option<[f32; 2]> {
 }
 
 fn color(image: &Image<'_>, p: &mut CameraRaw) {
-    let enc = Encoding::of(p.encoding_gamma);
+    let enc = image.encoding;
     let gains = white_balance_gains(p.temperature, p.tint);
     let exposure = p.exposure.exp2() / luma(gains);
     let mut chroma = Vec::new();

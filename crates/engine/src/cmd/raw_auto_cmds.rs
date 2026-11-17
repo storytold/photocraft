@@ -1,8 +1,9 @@
 //! Compute RAW Develop adjustments from the same proxy used by the interactive preview.
 
 use photocraft_algo::camera_raw::{
-    CameraRaw,
+    CameraRaw, DevelopInputs,
     auto::{Image, measure_shadow_noise},
+    develop,
 };
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -118,23 +119,23 @@ fn run(session: &mut Session, params: &Value) -> Result<Value> {
     let layer = state.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let surface = layer.surface().filter(|_| matches!(layer.content, photocraft_doc::LayerContent::Raster(_) | photocraft_doc::LayerContent::Smart(_)));
     let surface = surface.ok_or_else(|| invalid("RAW Develop needs a pixel layer or smart object"))?;
-    let mut settings = match fields.get("settings") {
+    let settings = match fields.get("settings") {
         Some(value) => lens_cmds::raw_params(ID, value)?,
         None => CameraRaw::default(),
     };
     settings.validate().map_err(invalid)?;
-    settings.encoding_gamma = lens_cmds::encoding_gamma(&state.doc);
+    let encoding_gamma = lens_cmds::encoding_gamma(&state.doc);
     let proxy = Proxy::new(surface, state.doc.bounds()).map_err(EngineError::Other)?;
     let coverage = state.doc.selection.as_ref().map(|mask| proxy.sample_coverage(|x, y| mask.sample_channel(x, y, 0)));
     let image = Image::new(&proxy.pixels, proxy.width, proxy.height, coverage.as_deref())
         .ok_or_else(|| invalid("invalid RAW Develop preview"))?
-        .with_shadow_noise(proxy.shadow_noise(surface, settings.encoding_gamma, coverage.as_deref()));
+        .with_encoding_gamma(encoding_gamma)
+        .with_shadow_noise(proxy.shadow_noise(surface, encoding_gamma, coverage.as_deref()));
     let result = if panels.len() == Panel::ALL.len() {
         let float = surface.format().sample == photocraft_color::SampleType::F32;
         suggest_full(&image, &panels, &settings, float, |pixels, w, h, parameters| {
-            let mut p = parameters.clone();
-            p.pixel_scale = w as f32 / proxy.full_width as f32;
-            photocraft_algo::camera_raw::develop(pixels, w, h, &p, float);
+            let inputs = DevelopInputs { pixel_scale: w as f32 / proxy.full_width as f32, encoding_gamma, ..DevelopInputs::default() };
+            develop(pixels, w, h, parameters, &inputs, float);
         })
     } else {
         suggest(&image, &panels, &settings)

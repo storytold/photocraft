@@ -181,7 +181,7 @@ fn rgba_region(surf: &Surface, area: Rect, len: usize) -> Vec<[f32; 4]> {
 ///
 /// An area above [`MAX_RAW_PIXELS`] is returned unchanged: the command rejects it with an
 /// error first, and this keeps the preview and Smart Filter paths from overflowing.
-pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface {
+pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw, inputs: &camera_raw::DevelopInputs) -> Surface {
     let area = area.intersect(&surf.content_bounds().union(&area));
     if area.is_empty() || p.is_identity() {
         return surf.clone();
@@ -190,7 +190,7 @@ pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface 
     let fmt = surf.format();
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut px = rgba_region(surf, area, len);
-    camera_raw::develop(&mut px, w, h, p, fmt.sample == SampleType::F32);
+    camera_raw::develop(&mut px, w, h, p, inputs, fmt.sample == SampleType::F32);
     let n = fmt.channels();
     let orig = surf.read_region(area);
     let mut data = vec![0.0f32; w * h * n];
@@ -246,7 +246,7 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
     match id {
         LENS => Some(lens::correct(surf, canvas, &lens_params(id, params, canvas, None).ok()?)),
         WIDE => Some(wideangle::apply(surf, canvas, &wide_params(id, params, None).ok()?, Interp::Bicubic)),
-        RAW => Some(camera_raw_surface(surf, canvas, &raw_params(id, params).ok()?)),
+        RAW => Some(camera_raw_surface(surf, canvas, &raw_params(id, params).ok()?, &raw_inputs(params))),
         _ => None,
     }
 }
@@ -361,7 +361,8 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
         wideangle::WideModel::Fisheye => "fisheye",
         wideangle::WideModel::Perspective => "perspective",
         wideangle::WideModel::FullSpherical => "fullSpherical",
-        wideangle::WideModel::Auto => "auto",
+        // The framework's lens model is `non_exhaustive`: a model it adds later reads as `auto`.
+        _ => "auto",
     };
     if let Some(m) = stored.as_object_mut() {
         m.remove("layer");
@@ -378,7 +379,7 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// The transfer curve Camera Raw decodes `doc`'s values with ([`CameraRaw::encoding_gamma`]):
+/// The transfer curve Camera Raw decodes `doc`'s values with ([`camera_raw::DevelopInputs::encoding_gamma`]):
 /// ProPhoto's gamma 1.8 (raws open in it), Adobe RGB's 563/256, 1 for linear sRGB, else 0 for
 /// the sRGB curve.
 pub fn encoding_gamma(doc: &Document) -> f32 {
@@ -417,9 +418,16 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let t0 = Stopwatch::start();
-    let id =
-        run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
+    let inputs = raw_inputs(p);
+    let id = run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| {
+        camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr, &inputs)
+    })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
+}
+
+fn raw_inputs(params: &Value) -> camera_raw::DevelopInputs {
+    let encoding_gamma = params.get("encodingGamma").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    camera_raw::DevelopInputs { encoding_gamma, ..camera_raw::DevelopInputs::default() }
 }
 
 fn lens_batch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -700,6 +708,12 @@ mod tests {
             _ => panic!("smart object expected"),
         };
         assert_eq!(filters[0].params["encodingGamma"], json!(1.8));
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        let settings = raw_params(RAW, &filters[0].params).unwrap();
+        let inputs = camera_raw::DevelopInputs { encoding_gamma: 1.8, ..camera_raw::DevelopInputs::default() };
+        let expected = camera_raw_surface(surf, d.doc.bounds(), &settings, &inputs);
+        let replayed = apply_to_surface(RAW, &filters[0].params, surf, d.doc.bounds()).unwrap();
+        assert_eq!(replayed.sample_channel(60, 40, 1), expected.sample_channel(60, 40, 1));
         // sRGB documents use the sRGB curve, the default, and store nothing.
         let mut s = session(8);
         assert_eq!(encoding_gamma(&s.active().unwrap().doc), 0.0);
@@ -725,7 +739,7 @@ mod tests {
         let d = s.active().unwrap();
         let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
         let cr = raw_params(RAW, &json!({"exposure": 1})).unwrap();
-        let out = camera_raw_surface(surf, Rect::from_xywh(0, 0, 65536, 65536), &cr);
+        let out = camera_raw_surface(surf, Rect::from_xywh(0, 0, 65536, 65536), &cr, &camera_raw::DevelopInputs::default());
         assert_eq!(out.content_bounds(), surf.content_bounds());
         // A normal document still develops.
         let mut s = session(8);

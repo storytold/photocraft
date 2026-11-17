@@ -211,6 +211,6 @@ impl Radial {
         out.vignette_feather = if amount > 0.0 { 72.0 } else { 50.0 };
         out.vignette_roundness = 0.0;
         out.vignette_highlights = 0.0;
-        out.vignette_style = "highlightPriority".into();
+        out.vignette_style = super::super::StoredVignetteStyle::HighlightPriority;
     }
 }
