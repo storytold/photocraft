@@ -3,7 +3,7 @@
 //! widths that make field rows fill the panel, and the Quick Actions each layer kind offers.
 
 use egui::{Rect, Sense, pos2, vec2};
-use photocraft_doc::{Layer, LayerContent};
+use photocraft_doc::{Layer, LayerContent, SmartSource};
 
 use crate::theme::{self, Tokens};
 use crate::{PhotocraftApp, widgets};
@@ -49,7 +49,24 @@ pub fn kind_label(layer: &Layer) -> String {
     match &layer.content {
         LayerContent::Adjustment(a) => a.label().to_string(),
         LayerContent::Group(g) if g.artboard.is_some() => "Artboard".to_string(),
+        // Photoshop tells a linked smart object apart in the header (#14121).
+        content if linked_file(content).is_some() => "Linked Smart Object".to_string(),
         other => format!("{} Layer", other.kind_name()),
+    }
+}
+
+/// The file a linked smart object follows (File › Place Linked, Relink to File, Convert to
+/// Linked), as stored in the document; `None` for any other layer. A placed layer read from a PSD
+/// is not one: its path is the uuid of an entry in the PSD's own file table, which PhotoCraft
+/// reads its source from, until a relink or Convert to Linked gives it a file (and drops the PSD
+/// placed-layer data, `psd_raw`).
+pub fn linked_file(content: &LayerContent) -> Option<&str> {
+    match content {
+        LayerContent::Smart(sm) if sm.psd_raw.is_none() => match &sm.source {
+            SmartSource::Linked { path } => Some(path),
+            SmartSource::Embedded { .. } => None,
+        },
+        _ => None,
     }
 }
 
@@ -136,8 +153,12 @@ pub fn field_width(avail: f32, cols: usize, label_w: f32) -> f32 {
 }
 
 /// The Quick Actions a layer kind offers, as (label, command id), Photoshop-style: pixel layers get
-/// subject selection, type layers its conversions, shapes and smart objects their own.
+/// subject selection, type layers its conversions, shapes and smart objects their own. A linked
+/// smart object offers Edit Contents, Embed and Convert to Layers, in that order (#14121).
 pub fn quick_actions(content: &LayerContent) -> &'static [(&'static str, &'static str)] {
+    if linked_file(content).is_some() {
+        return &[("Edit Contents", "layer.smartObjects.editContents"), (EMBED.0, EMBED.1), ("Convert to Layers", "layer.smartObjects.convertToLayers")];
+    }
     match content {
         LayerContent::Raster(_) => &[("Remove Background", "layer.removeBackground"), ("Select Subject", "select.subject")],
         LayerContent::Text(_) => &[
@@ -157,6 +178,16 @@ pub fn quick_actions(content: &LayerContent) -> &'static [(&'static str, &'stati
         LayerContent::Fill(_) => &[("Rasterize Fill Content", "layer.rasterize.fillContent")],
         LayerContent::Adjustment(_) => &[],
     }
+}
+
+/// A linked smart object's Embed Quick Action: Layer › Smart Objects › Embed Linked.
+pub const EMBED: (&str, &str) = ("Embed", "layer.smartObjects.convertToEmbedded");
+
+/// Whether the Quick Action `id` can't run on `content` right now though its command is enabled:
+/// Embed while the linked file is missing (the last look at it found nothing), as Photoshop greys
+/// it, so the button stays, greyed, until the file is back.
+fn greyed(app: &PhotocraftApp, content: &LayerContent, id: &str) -> bool {
+    id == EMBED.1 && linked_file(content).is_some_and(|path| app.session.missing_links().contains(path))
 }
 
 /// The Quick Actions shown right now: the kind's list, limited to commands that exist and are
@@ -181,9 +212,10 @@ pub fn quick_actions_ui(app: &PhotocraftApp, ui: &mut egui::Ui, content: &LayerC
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = COL_GAP;
             for (label, id) in row {
-                let resp = widgets::secondary_button(ui, label, w);
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, *label));
-                if resp.clicked() {
+                let on = !greyed(app, content, id);
+                let resp = ui.add_enabled_ui(on, |ui| widgets::secondary_button(ui, label, w)).inner;
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, *label));
+                if on && resp.clicked() {
                     out = Some(*id);
                 }
             }
