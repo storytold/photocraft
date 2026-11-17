@@ -38,6 +38,24 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
     }
 }
 
+/// The version of the toolbar's rail (#15493): what every region holds (the tool, the colours of its chips, the
+/// commands run), the tools each slot remembers, the stored toolbar layout, the Edit Toolbar drawer, the side its
+/// flyouts open on, the screen mode its footer button shows, and the resolved tokens it was drawn with (they change
+/// with the theme, the UI font size and the UI scale), so a theme change redraws it even without a command.
+pub(crate) fn toolbar(app: &PhotocraftApp, ui: &egui::Ui) -> u64 {
+    toolbar_with(app, std::sync::Arc::as_ptr(&craft::ui::runtime::env::Env::of(ui).tokens) as usize)
+}
+
+/// [`toolbar`] with the tokens it was drawn with named by `tokens`.
+fn toolbar_with(app: &PhotocraftApp, tokens: usize) -> u64 {
+    let layout = &app.session.prefs().toolbar;
+    let mode = format!("{:?}", app.ui.view.screen_mode);
+    version(
+        app,
+        (&app.ui.group_tools, (&layout.hidden, &layout.toolbar, &layout.extras), app.ui.toolbar_drawer, crate::panel_docking::toolbar_opens(app), mode, tokens),
+    )
+}
+
 /// What every region may show, joined with `extra`: the commands run (any of them may change anything), the active
 /// document, its revision and its active layers, the tool, the colours and the brush.
 fn version(app: &PhotocraftApp, extra: impl Hash) -> u64 {
@@ -60,4 +78,31 @@ fn version(app: &PhotocraftApp, extra: impl Hash) -> u64 {
 fn view(app: &PhotocraftApp) -> Option<[u64; 5]> {
     crate::canvas::active_view(app)
         .map(|view| [view.zoom.to_bits(), view.center.x.to_bits(), view.center.y.to_bits(), view.rotation.to_bits(), u64::from(view.flip_x)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Tool;
+
+    /// Everything the settled toolbar shows moves its version (#15493): a version that missed one would replay a stale
+    /// rail. The same state gives the same version, so the rail settles.
+    #[test]
+    fn the_toolbar_version_moves_with_what_the_rail_shows() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let base = toolbar_with(&app, 1);
+        assert_eq!(toolbar_with(&app, 1), base, "the same state settles");
+        assert_ne!(toolbar_with(&app, 2), base, "other tokens (theme, UI font size or scale)");
+
+        let changed = |name: &str, change: &dyn Fn(&mut PhotocraftApp), app: &mut PhotocraftApp| {
+            let before = toolbar_with(app, 1);
+            change(app);
+            assert_ne!(toolbar_with(app, 1), before, "{name} moves the version");
+        };
+        changed("the tool", &|app| app.ui.tool = Tool::Brush, &mut app);
+        changed("a slot's remembered tool", &|app| app.ui.group_tools.insert(0, Tool::EllipseMarquee), &mut app);
+        changed("the Edit Toolbar drawer", &|app| app.ui.toolbar_drawer = !app.ui.toolbar_drawer, &mut app);
+        changed("the toolbar layout", &|app| app.session.prefs.edit(|prefs| prefs.toolbar.hidden.push("Brush".to_string())), &mut app);
+        changed("the colours", &|app| app.session.tools.foreground[0] = 0.25, &mut app);
+    }
 }
