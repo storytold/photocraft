@@ -1034,7 +1034,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         crate::actions::abandoned(app, &d.fields);
         return Err("dialog has no command".into());
     };
-    let mut params = crate::filter_dialog::params_of(&d.fields);
+    let mut params = crate::sizing::command_params(&d.fields, crate::filter_dialog::params_of(&d.fields));
     let exact = if cmd == "file.automate.batch" {
         crate::actions::batch_dialog_params(app, d.id, d.fields.get(crate::actions::BATCH_OCCURRENCE), &mut params)
     } else {

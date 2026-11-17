@@ -525,3 +525,96 @@ fn sizing_dialogs_open_on_width_selected() {
         assert_eq!(h.state().session.active().unwrap().doc.size.width, 50, "{command}");
     }
 }
+
+/// #11722, #15451: an Image Size step recorded with Constrain Proportions on keeps each image's
+/// own proportions when played: it records the side typed (in pixels) or the percentage, not the
+/// other side the dialog computed for the image it was recorded on. With the link off, both sides
+/// are what was asked for.
+#[test]
+fn a_recorded_resize_keeps_each_images_proportions() {
+    // (unit, field typed into: Width, Height or Resolution, text, constrain, recorded keys, size on
+    // 400 x 200 px, size on 100 x 300 px; both 72 ppi)
+    type Case = (&'static str, usize, &'static str, bool, &'static [&'static str], (u32, u32), (u32, u32));
+    let cases: [Case; 6] = [
+        ("px", 0, "200", true, &["width"], (200, 100), (200, 600)),
+        ("px", 1, "50", true, &["height"], (100, 50), (17, 50)),
+        ("percent", 0, "50", true, &["percent"], (200, 100), (50, 150)),
+        ("px", 0, "200", false, &["width", "height"], (200, 200), (200, 200)),
+        // #11721: only the resolution, in pixels: each image keeps its size.
+        ("px", 2, "96", true, &[], (400, 200), (100, 300)),
+        // The resolution in inches with Resample: the pixels follow it on each image.
+        ("in", 2, "144", true, &["keepPrintSize"], (800, 400), (200, 600)),
+    ];
+    for (unit, field, typed, constrain, keys, landscape, portrait) in cases {
+        let what = format!("{unit}, field {field}, {typed}, constrain {constrain}");
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
+        app.run("actions.record", json!({"name": "Resize"})).unwrap();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), "image.imageSize").unwrap();
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.insert("__unit".into(), json!(unit));
+        d.fields.insert("__constrain".into(), json!(constrain));
+        h.run_steps(3);
+        type_into(&mut h, field, typed);
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let app = h.state_mut();
+        app.run("actions.stop", json!({})).unwrap();
+        let size = |app: &PhotocraftApp| {
+            let s = app.session.active().unwrap().doc.size;
+            (s.width, s.height)
+        };
+        assert_eq!(size(app), landscape, "{what}: the image it was recorded on");
+        let step = &app.session.actions.list[0].steps[0];
+        assert_eq!(step.0, "image.imageSize", "{what}");
+        let sides: Vec<&str> = ["width", "height", "percent", "keepPrintSize"].into_iter().filter(|k| step.1.get(*k).is_some()).collect();
+        assert_eq!(sides, keys, "{what}: {}", step.1);
+        app.run("file.new", json!({"width": 100, "height": 300})).unwrap();
+        app.run("actions.play", json!({"action": "Resize"})).unwrap();
+        assert_eq!(size(app), portrait, "{what}: played on a portrait image");
+        if field == 2 {
+            let ppi: f64 = typed.parse().unwrap();
+            assert_eq!(f64::from(app.session.active().unwrap().doc.resolution_dpi), ppi, "{what}: the new resolution");
+        }
+    }
+}
+
+/// Record Again and a step played with its dialog: a one-sided or percent step shows the sizes it
+/// gives this image, with that side typed, so OK records it the same way; a step with both sides
+/// is shown as it is.
+#[test]
+fn a_recorded_one_sided_step_reopens_one_sided() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 100, "height": 300})).unwrap();
+    for (recorded, width, height, unit) in [
+        (json!({"percent": 50, "resample": "bicubic", "resolution": 72}), 50.0, 150.0, "percent"),
+        (json!({"width": 200, "resample": "bicubic", "resolution": 72}), 200.0, 600.0, "px"),
+        (json!({"height": 60, "resample": "bicubic", "resolution": 72}), 20.0, 60.0, "px"),
+        (json!({"width": 40, "height": 50, "resample": "bicubic", "resolution": 72}), 40.0, 50.0, "px"),
+        (json!({"resample": "bicubic", "resolution": 96}), 100.0, 300.0, "in"),
+        (json!({"keepPrintSize": true, "resample": "bicubic", "resolution": 144}), 200.0, 600.0, "in"),
+    ] {
+        let id = open(&mut app, "image.imageSize").unwrap();
+        let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+        f.insert("__unit".into(), json!("in"));
+        let object = recorded.as_object().unwrap();
+        f.extend(object.clone());
+        load_recorded(f, object);
+        assert_eq!((num(f, "width"), num(f, "height")), (width, height), "{recorded}");
+        if object.contains_key("width") == object.contains_key("height") && !object.contains_key("percent") {
+            assert_eq!(f.get("__unit"), Some(&json!("in")), "{recorded}: the dialog's unit stays");
+        } else {
+            assert_eq!(f.get("__unit"), Some(&json!(unit)), "{recorded}");
+        }
+        // As numbers: a percentage worked out again is a float where the step had an integer.
+        let numbers = |v: &Value| -> Vec<(String, Value)> {
+            v.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_f64().map_or(v.clone(), |n| json!(n)))).collect()
+        };
+        assert_eq!(numbers(&command_params(f, crate::filter_dialog::params_of(f))), numbers(&recorded), "OK records the step as it was");
+        app.ui.close_dialog(id);
+    }
+}

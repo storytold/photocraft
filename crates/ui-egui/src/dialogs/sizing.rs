@@ -167,6 +167,7 @@ pub fn reset(f: &mut Map<String, Value>) {
     if f.get("__command").and_then(Value::as_str) == Some("image.imageSize") {
         f.insert("resolution".into(), json!(num(f, "__origRes")));
         f.insert("__constrain".into(), json!(true));
+        f.remove("__edited");
         if let Some(r) = f.get("__resample").cloned() {
             f.insert("resample".into(), r);
         }
@@ -267,6 +268,124 @@ fn from_unit(v: f64, unit: &str, orig: f64, res: f64, ppi: f64) -> f64 {
         "pica" => v / ppi * 12.0 * res,
         _ => v,
     }
+}
+
+/// The parameters Image Size's OK runs, and an action records, from the dialog's (`params`, its
+/// fields without the private ones). A step records what the user asked for, not the sizes the
+/// dialog worked out for the image it was recorded on, so played on an image of another size or
+/// shape it does to that image what Photoshop's step does:
+/// - with Resample and Constrain Proportions on, a side typed in pixels or percent goes alone
+///   (`width` or `height`: the command keeps the image's proportions), or as `percent` (both
+///   sides) in percent (#11722, #15451);
+/// - with no side typed in pixels or percent and the size unchanged, no size at all: only the
+///   resolution changes (#11721);
+/// - with no side typed in pixels or percent, Resample on, and the size following a new
+///   resolution in a physical unit (inches, cm…), `keepPrintSize`: the pixels follow the
+///   resolution on each image.
+///
+/// Otherwise both sides go as shown.
+pub fn command_params(f: &Map<String, Value>, mut params: Value) -> Value {
+    if f.get("__command").and_then(Value::as_str) != Some("image.imageSize") {
+        return params;
+    }
+    let resampling = f.get("resample").and_then(Value::as_str) != Some("none");
+    let constrain = f.get("__constrain").and_then(Value::as_bool).unwrap_or(true);
+    let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
+    let (w, h) = (num(f, "width"), num(f, "height"));
+    let Some(p) = params.as_object_mut() else { return params };
+    // A side typed in a physical unit (or re-set as its field rounds it) is recorded as both,
+    // or as the resolution it follows.
+    let edited =
+        f.get("__edited").and_then(Value::as_str).filter(|k| matches!(*k, "width" | "height") && matches!(field_unit(f, k).as_str(), "px" | "percent"));
+    let Some(edited) = edited else {
+        let physical = |key: &str| !matches!(field_unit(f, key).as_str(), "px" | "percent");
+        let res = num(f, "resolution");
+        let k = res / num(f, "__origRes");
+        if (w - ow).abs() < 0.5 && (h - oh).abs() < 0.5 {
+            p.remove("width");
+            p.remove("height");
+        } else if resampling
+            && constrain
+            && physical("width")
+            && physical("height")
+            && k.is_finite()
+            && k > 0.0
+            && (w - ow * k).abs() <= 1.0
+            && (h - oh * k).abs() <= 1.0
+        {
+            p.remove("width");
+            p.remove("height");
+            p.insert("keepPrintSize".into(), json!(true));
+        }
+        return params;
+    };
+    let (other, o_edited, o_other, v) = if edited == "width" { ("height", ow, oh, w) } else { ("width", oh, ow, h) };
+    let unit = field_unit(f, edited);
+    if !resampling || !constrain || !matches!(unit.as_str(), "px" | "percent") || field_unit(f, other) != unit || o_edited < 1.0 {
+        return params;
+    }
+    // The other side must be the one Constrain Proportions computed (not one typed before the
+    // link was turned on).
+    if (num(f, other) - (v * o_other / o_edited).round().max(1.0)).abs() > 1.0 {
+        return params;
+    }
+    p.remove(other);
+    p.remove("percent");
+    if unit == "percent" {
+        p.remove(edited);
+        p.insert("percent".into(), json!(v / o_edited * 100.0));
+    }
+    params
+}
+
+/// Seeds the Image Size dialog's fields from a recorded step's `params` (Record Again, a step
+/// played with its dialog): a step with one side, or `percent`, shows the sizes it gives this
+/// image, with that side typed (and Percent the unit), so OK records it the same way.
+pub fn load_recorded(f: &mut Map<String, Value>, params: &Map<String, Value>) {
+    if f.get("__command").and_then(Value::as_str) != Some("image.imageSize") || params.get("units").is_some() {
+        return;
+    }
+    let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
+    let has = |k: &str| params.get(k).and_then(Value::as_f64).is_some_and(|v| v.is_finite() && v > 0.0);
+    let percent = params.get("percent").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0);
+    // Only a new resolution, the pixels following it: the sizes it gives this image, in a
+    // physical unit so OK records it the same way.
+    let res = params.get("resolution").and_then(Value::as_f64).filter(|r| r.is_finite() && *r > 0.0);
+    if let (false, false, None, Some(r), Some(true)) = (has("width"), has("height"), percent, res, params.get("keepPrintSize").and_then(Value::as_bool)) {
+        let k = r / num(f, "__origRes").max(f64::MIN_POSITIVE);
+        f.insert("width".into(), json!(ow * k));
+        f.insert("height".into(), json!(oh * k));
+        f.remove("keepPrintSize");
+        f.remove("__unitW");
+        if matches!(field_unit(f, "width").as_str(), "px" | "percent") {
+            f.insert("__unit".into(), json!("in"));
+        }
+        f.insert("__constrain".into(), json!(true));
+        return;
+    }
+    let edited = match (has("width"), has("height"), percent) {
+        (false, false, Some(pc)) => {
+            f.insert("width".into(), json!(ow * pc / 100.0));
+            f.insert("height".into(), json!((oh * pc / 100.0).round().max(1.0)));
+            f.remove("percent");
+            f.insert("__unit".into(), json!("percent"));
+            "width"
+        }
+        (true, false, None) => {
+            f.insert("height".into(), json!((num(f, "width") * oh / ow.max(1.0)).round().max(1.0)));
+            f.insert("__unit".into(), json!("px"));
+            "width"
+        }
+        (false, true, None) => {
+            f.insert("width".into(), json!((num(f, "height") * ow / oh.max(1.0)).round().max(1.0)));
+            f.insert("__unit".into(), json!("px"));
+            "height"
+        }
+        _ => return,
+    };
+    f.remove("__unitW");
+    f.insert("__constrain".into(), json!(true));
+    f.insert("__edited".into(), json!(edited));
 }
 
 pub fn human_bytes(b: f64) -> String {
@@ -504,6 +623,11 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         } else if h_changed {
             f.insert("width".into(), json!((num(f, "height") * ow / oh.max(1.0)).round().max(1.0)));
         }
+    }
+    // The side typed last: with Constrain Proportions on, the other follows it, and OK runs (and
+    // an action records) only this one (see `command_params`).
+    if resampling && (w_changed || h_changed) {
+        f.insert("__edited".into(), json!(if w_changed { "width" } else { "height" }));
     }
     ui.horizontal(|ui| {
         label(ui, tl!("Resolution:"), 90.0);
