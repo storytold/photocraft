@@ -308,3 +308,22 @@ fn the_dialog_draws_the_rows_and_relinks_from_its_button() {
     h.run_steps(2);
     assert!(h.state().ui.dialogs.is_empty());
 }
+
+/// A document that keeps no path (a directory `.pcraft`, a template, a read-only source) still has
+/// its relative links taken from the file it was opened from.
+#[test]
+fn automation_warnings_take_relative_links_from_the_opened_file() {
+    let s = saved(false, Some("art.png"));
+    let (mut app, _) = app();
+    let (req, _rx) = control::ControlRequest::new("app.open", json!({"path": abs(&s.doc)}));
+    let control::Outcome::Done(r) = control::handle(&mut app, &egui::Context::default(), &req) else { panic!("app.open answers at once") };
+    let warning = format!("Cannot locate linked asset: {}", abs(&s.art));
+    assert_eq!(r["result"]["warnings"], json!([warning]), "{r}");
+    app.session.active_mut().unwrap().path = None;
+    assert_eq!(app.missing_link_warnings(&abs(&s.doc)), [warning]);
+    let doc = &app.session.active().unwrap().doc;
+    assert!(photocraft_engine::link_watch::missing_file_warnings(doc, None).is_empty(), "nothing to take a relative link from");
+    // The interactive look answers the same files.
+    let looked = photocraft_engine::link_watch::missing_files_within(doc, Some(&s.doc), std::time::Duration::from_secs(10));
+    assert_eq!(looked, Some(vec![(s.art.clone(), vec!["art.png".to_string()])]));
+}

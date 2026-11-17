@@ -1636,7 +1636,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
                 state.path = save_path;
             }
             // No Cannot Locate Linked Assets dialog for automation: the files are listed here.
-            warnings.extend(app.missing_link_warnings());
+            warnings.extend(app.missing_link_warnings(path));
         }
         Ok(json!({"path": path, "name": name, "warnings": warnings}))
     }))
@@ -1659,7 +1659,7 @@ fn open_pcraft_directory(app: &mut PhotocraftApp, path: &str) -> Option<Outcome>
             app.sync_views();
             app.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", &name)]);
             app.ui.status_error = false;
-            Some(ok(json!({"path": path, "name": name, "warnings": app.missing_link_warnings()})))
+            Some(ok(json!({"path": path, "name": name, "warnings": app.missing_link_warnings(path)})))
         }
         Ok(None) => None, // a regular file: the bytes path reads the zip form
         Err(e) => Some(err(e)),

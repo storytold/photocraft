@@ -21,6 +21,7 @@
 //! ends catches up.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use photocraft_doc::{Document, LayerContent, LayerId, SmartSource};
@@ -76,9 +77,13 @@ pub(crate) fn update_changed(s: &mut Session, _: &Value) -> Result<Value> {
 
 /// [`linked_files`] of `st`'s document with the file each path resolves to, or `None` for a path
 /// that is not followed ([`crate::doc_path`]).
-fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<std::path::PathBuf>, Vec<u64>)> {
-    let document = st.path.as_deref().map(std::path::Path::new);
-    linked_files(&st.doc)
+fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<PathBuf>, Vec<u64>)> {
+    resolved_files_of(&st.doc, st.path.as_deref().map(Path::new))
+}
+
+/// [`resolved_files`] for `doc` read from the file `document`.
+fn resolved_files_of(doc: &Document, document: Option<&Path>) -> Vec<(String, Option<PathBuf>, Vec<u64>)> {
+    linked_files(doc)
         .into_iter()
         .map(|(p, ids)| {
             let file = crate::doc_path::resolve_in(&p, document).ok();
@@ -87,25 +92,47 @@ fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<std::path::PathBu
         .collect()
 }
 
-/// The linked files of `st`'s document that are not there right now, each once: the file a stored
-/// path resolves to, with the stored paths that name it (sorted, so one file named two ways is
-/// listed once). Looked at on the spot, for a document that has just opened (the watcher's first
-/// look is still to come). A path that is not followed ([`crate::doc_path`]) is not listed, as in
-/// [`Session::missing_links`]; the web app has no files to look at and lists none.
-pub fn missing_files(st: &crate::DocState) -> Vec<(std::path::PathBuf, Vec<String>)> {
-    let mut by_file: BTreeMap<std::path::PathBuf, Vec<String>> = BTreeMap::new();
-    for (stored, file, _) in resolved_files(st) {
-        if let Some(file) = file.filter(|f| stamp(Some(f)).is_none() && !cfg!(target_arch = "wasm32")) {
+/// A missing linked file, by the absolute path its links resolve to, with the stored paths that
+/// name it (sorted).
+pub type MissingFile = (PathBuf, Vec<String>);
+
+/// Groups the followed paths among `resolved` whose file is not there by that file: each file once,
+/// in path order, however many layers or spellings name it.
+fn missing_among(resolved: Vec<(String, Option<PathBuf>, Vec<u64>)>) -> Vec<MissingFile> {
+    let mut by_file: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+    for (stored, file, _) in resolved {
+        if let Some(file) = file.filter(|f| !cfg!(target_arch = "wasm32") && stamp(Some(f)).is_none()) {
             by_file.entry(file).or_default().push(stored);
         }
     }
     by_file.into_iter().collect()
 }
 
+/// The linked files of `doc`, read from the file `document` (relative links are taken from its
+/// folder), that are not there right now. Looked at on the spot, for a document that has just opened
+/// (the watcher's first look is still to come). A path that is not followed ([`crate::doc_path`]) is
+/// not listed, as in [`Session::missing_links`]; the web app has no files to look at and lists none.
+pub fn missing_files(doc: &Document, document: Option<&Path>) -> Vec<MissingFile> {
+    missing_among(resolved_files_of(doc, document))
+}
+
+/// [`missing_files`] looked at on a worker thread and waited for at most `wait`, for a caller that
+/// must not be held up (the interface after an open): `None` when the look takes longer, as a file
+/// on a share that doesn't answer can make it.
+pub fn missing_files_within(doc: &Document, document: Option<&Path>, wait: std::time::Duration) -> Option<Vec<MissingFile>> {
+    let resolved = resolved_files_of(doc, document);
+    if cfg!(target_arch = "wasm32") || resolved.iter().all(|(_, file, _)| file.is_none()) {
+        return Some(Vec::new());
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new().name("link-check".into()).spawn(move || tx.send(missing_among(resolved))).ok()?;
+    rx.recv_timeout(wait).ok()
+}
+
 /// The warnings an open without a dialog (automation, the CLI) reports for [`missing_files`]: one
 /// per file, naming its absolute path.
-pub fn missing_file_warnings(st: &crate::DocState) -> Vec<String> {
-    missing_files(st).into_iter().map(|(file, _)| format!("Cannot locate linked asset: {}", file.display())).collect()
+pub fn missing_file_warnings(doc: &Document, document: Option<&Path>) -> Vec<String> {
+    missing_files(doc, document).into_iter().map(|(file, _)| format!("Cannot locate linked asset: {}", file.display())).collect()
 }
 
 impl Session {

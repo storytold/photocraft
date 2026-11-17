@@ -173,10 +173,11 @@ impl PhotocraftApp {
 
     /// The active document's linked files that are not there, as an automation open reports them
     /// in its `warnings` instead of asking in the Cannot Locate Linked Assets dialog: one line per
-    /// file, with its absolute path. Called once the opened document has its path, which relative
-    /// links are taken from.
-    pub(crate) fn missing_link_warnings(&self) -> Vec<String> {
-        self.session.active().map(photocraft_engine::link_watch::missing_file_warnings).unwrap_or_default()
+    /// file, with its absolute path. Relative links are taken from `opened`, the path the document
+    /// was read from, which a template, a read-only source or a directory `.pcraft` doesn't keep.
+    pub(crate) fn missing_link_warnings(&self, opened: &str) -> Vec<String> {
+        let opened = Some(std::path::Path::new(opened));
+        self.session.active().map(|st| photocraft_engine::link_watch::missing_file_warnings(&st.doc, opened)).unwrap_or_default()
     }
 
     /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script

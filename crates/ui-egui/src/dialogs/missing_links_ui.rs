@@ -10,7 +10,8 @@
 //!   smart object), then the row leaves the list.
 //! - Cancel is not measured in the reference yet: it does what OK does.
 //!
-//! Only an interactive open asks ([`crate::jobs_ui::after_open`]). An automation open never shows
+//! Only an interactive open asks ([`crate::jobs_ui::after_open`]), and it waits at most half a
+//! second for the files to be looked at, on a worker thread. An automation open never shows
 //! the dialog and lists the files in its `warnings` instead
 //! ([`photocraft_engine::link_watch::missing_file_warnings`]).
 //!
@@ -32,12 +33,22 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
 }
 
-/// After document `document` opened interactively: shows the dialog when any of its linked files
-/// is not there. A document whose links are all there, or that has none, opens without it.
-pub(crate) fn ask(app: &mut PhotocraftApp, document: DocId) {
+/// How long an open waits for its linked files to be looked at. Local files answer at once; a
+/// share that doesn't answer in time doesn't hold the interface up, and the document opens without
+/// the dialog (the link watcher keeps looking, and the Layers panel's Missing filter lists them).
+const LOOK_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// After document `document` opened interactively from `path`: shows the dialog when any of its
+/// linked files is not there. A document whose links are all there, or that has none, opens without
+/// it. Relative links are taken from `path` (else the document's own file).
+pub(crate) fn ask(app: &mut PhotocraftApp, document: DocId, path: Option<&str>) {
     let Some(st) = app.session.documents().iter().find(|st| st.doc.id == document) else { return };
-    let files: Vec<Value> =
-        photocraft_engine::link_watch::missing_files(st).into_iter().map(|(file, paths)| json!({"file": file.to_string_lossy(), "paths": paths})).collect();
+    let opened = path.or(st.path.as_deref()).map(std::path::Path::new);
+    let Some(missing) = photocraft_engine::link_watch::missing_files_within(&st.doc, opened, LOOK_WAIT) else {
+        log::warn!("{}: its linked files did not answer in time; opened without Cannot Locate Linked Assets", st.doc.name);
+        return;
+    };
+    let files: Vec<Value> = missing.into_iter().map(|(file, paths)| json!({"file": file.to_string_lossy(), "paths": paths})).collect();
     if files.is_empty() {
         return;
     }
