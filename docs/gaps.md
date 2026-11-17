@@ -73,9 +73,11 @@ what an agent can't finish alone.
   `type.createSelection`); Perspective Crop landed (#1043, `image.perspectiveCrop`); Frame landed
   (#2914).
 - **Evidence:** `Tool` enum (`crates/ui-egui/src/state.rs`) against the 67 `<tool>` entries of
-  Photoshop's `Default Keyboard Shortcuts.kys` plus Remove, Triangle and Curvature Pen.
+  Photoshop's `Default Keyboard Shortcuts.kys` plus Remove, Triangle and Curvature Pen, minus
+  legacy Rounded Rectangle and Targeted Adjustment.
 - **Impact:** users look for them by name and shortcut; several are daily tools for designers.
-- **Estimate:** 60–100 h (2–9 h each, per the calibration).
+- **Estimate:** 60–100 h (2–9 h each, per the calibration); the hours are now depth work on the
+  one partial tool (Art History Brush), not missing-tool builds.
 
 ### G7. Workspaces shown as parameter dialogs
 - **Missing:** Select and Mask's Refine Hair (#2671), Object Aware refine mode (#2788) and Presets
@@ -257,7 +259,7 @@ what an agent can't finish alone.
   ~150 UI/panels/menus/shortcuts, 94 file/format, 87 layers, 54 painting, 54 selection,
   46 type, 41 performance, 34 transform/move, 25 Linux/Wayland, 24 Windows, 20 macOS.
 - **Impact:** each is a place where a Photoshop user hits something different from what they
-  expect; together they are why ready-for-real-work is ~45% while breadth is ~76%.
+  expect; together they are why ready-for-real-work is ~45% while breadth is ~78%.
 - **Estimate:** 250–400 h (many overlap with other gaps; count each fix once).
 
 ### G4. Brush feel
