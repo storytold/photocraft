@@ -66,7 +66,7 @@ pub use pen::{
 };
 #[cfg(test)]
 use pen::{closing, pen_path_op};
-pub use shapes::{create_shape, draw_shape_preview, finish_shape, is_shape_tool, shape_bounds};
+pub use shapes::{create_shape, draw_shape_preview, finish_shape, finish_shape_pressed, is_shape_tool, shape_bounds};
 #[cfg(test)]
 use shapes::{shape_geometry, shape_preview};
 
@@ -233,6 +233,9 @@ mod pen_rubber_band_tests;
 
 #[cfg(test)]
 mod paint_tests;
+
+#[cfg(test)]
+mod polygon_press_path_ops_tests;
 
 #[cfg(test)]
 mod triangle_box_geometry_tests;
