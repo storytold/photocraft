@@ -9,8 +9,9 @@
 //! passes of `camera_raw_tone.rs`, which then also measure the image's points for Whites and
 //! Blacks; this pass applies their change. Dehaze runs before them (its filters on the copy of
 //! [`Dehaze::cells`], then `fs_dehaze`, which the later passes read instead of the source),
-//! Clarity and Texture after them (`fs_luma`, then their filters, applied in `tonal`). Settings with Detail have no
-//! [`PerPixel`] and stay on the CPU.
+//! Clarity and Texture after them (`fs_luma`, then their filters, applied in `tonal`). With
+//! Detail, the pass stops after Color Grading (`fs_colour`), Detail's filters run on that, and
+//! the last pass combines them before the vignette and grain.
 //!
 //! The pipelines are built on demand ([`CameraRawDevelop::new`]), not with the compositor
 //! (#6419). They render into `Rgba32Float`, `R32Float` and `Rgba32Uint`;
@@ -22,13 +23,15 @@ use photocraft_algo::camera_raw::{CURVE_LUT, Dehaze, PerPixel, VignetteStyle, WB
 
 use crate::Unsupported;
 use crate::camera_raw_tone::{Segment, ToneFrame, TonePipelines, WB_ROW};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::camera_raw_view::{CameraRawDisplay, CameraRawFrame, ViewPasses};
 
 /// The pass's WGSL source.
 pub const CAMERA_RAW_SHADER: &str = include_str!("camera_raw.wgsl");
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
-/// `Params` in the shader: 23 rows of 16 bytes.
-const PARAMS_SIZE: u64 = 23 * 16;
+/// `Params` in the shader: 25 rows of 16 bytes.
+const PARAMS_SIZE: u64 = 25 * 16;
 /// Rows of the table texture: parametric, master, red, green, blue curves; Whites, Blacks.
 const LUT_ROWS: u32 = 7;
 const LUT_WIDTH: u32 = CURVE_LUT as u32;
@@ -67,6 +70,8 @@ pub struct CameraRawDevelop {
     /// `fs_dehaze` and `fs_luma`: Dehaze's result, Clarity and Texture's input.
     dehaze: wgpu::RenderPipeline,
     luma: wgpu::RenderPipeline,
+    /// `fs_colour`: stages 1 to 7, Detail's input.
+    colour: wgpu::RenderPipeline,
     tone: TonePipelines,
     tone_frame: Option<ToneFrame>,
     layout: wgpu::BindGroupLayout,
@@ -77,9 +82,18 @@ pub struct CameraRawDevelop {
     target: Option<Image>,
     #[cfg(not(target_arch = "wasm32"))]
     readback: Option<wgpu::Buffer>,
+    /// The preview's display and histogram passes ([`Self::develop_view`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    view: ViewPasses,
 }
 
 impl CameraRawDevelop {
+    /// Spatial plans cached, for tests: at most 64 however many settings a session tries.
+    #[doc(hidden)]
+    pub fn cached_plans(&self) -> usize {
+        self.tone_frame.as_ref().map_or(0, ToneFrame::plans)
+    }
+
     /// Whether `adapter` can render the passes' `Rgba32Float`, `R32Float` and `Rgba32Uint` targets.
     pub fn supported(adapter: &wgpu::Adapter) -> bool {
         [FORMAT, wgpu::TextureFormat::R32Float, wgpu::TextureFormat::Rgba32Uint]
@@ -123,6 +137,11 @@ impl CameraRawDevelop {
                 crate::tex_entry(8),
                 crate::tex_entry(9),
                 crate::tex_entry(10),
+                crate::tex_entry(11),
+                crate::tex_entry(12),
+                crate::tex_entry(13),
+                crate::tex_entry(14),
+                crate::tex_entry(15),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -153,6 +172,7 @@ impl CameraRawDevelop {
         let points = pipeline_for("fs_points", FORMAT);
         let dehaze = pipeline_for("fs_dehaze", FORMAT);
         let luma = pipeline_for("fs_luma", wgpu::TextureFormat::R32Float);
+        let colour = pipeline_for("fs_colour", FORMAT);
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pc_camera_raw_params"),
             size: PARAMS_SIZE,
@@ -177,6 +197,7 @@ impl CameraRawDevelop {
             points,
             dehaze,
             luma,
+            colour,
             tone: TonePipelines::build(device),
             tone_frame: None,
             layout,
@@ -187,6 +208,8 @@ impl CameraRawDevelop {
             target: None,
             #[cfg(not(target_arch = "wasm32"))]
             readback: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            view: ViewPasses::build(device),
         }
     }
 
@@ -223,7 +246,8 @@ impl CameraRawDevelop {
         }
         let clarity = stages.clarity.is_some();
         let texture = stages.texture.as_ref().is_some_and(|t| t.radii.iter().any(|r| *r > 0));
-        let filtered = stages.local_tone.is_some() || stages.dehaze.is_some() || clarity || texture || stages.measure_whites_blacks.is_some();
+        let filtered =
+            stages.local_tone.is_some() || stages.dehaze.is_some() || clarity || texture || stages.measure_whites_blacks.is_some() || stages.detail.is_some();
         let frame = if filtered {
             let frame = match self.tone_frame.take() {
                 Some(f) if f.size() == size => f,
@@ -253,11 +277,30 @@ impl CameraRawDevelop {
         );
         let target = match self.target.take() {
             Some(t) if t.size == size => t,
-            _ => Image::new(device, "pc_camera_raw_target", size, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC),
+            _ => Image::new(
+                device,
+                "pc_camera_raw_target",
+                size,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+            ),
         };
         let target = self.target.insert(target);
         let (dummy, dummy_uint) = (self.tone.dummy(), self.tone.dummy_uint());
-        let mut all = Bound { log_in: dummy, log_out: dummy, stats: dummy_uint, base: dummy, haze: dummy, air: dummy, clarity: dummy, texture: dummy };
+        let mut all = Bound {
+            log_in: dummy,
+            log_out: dummy,
+            stats: dummy_uint,
+            base: dummy,
+            haze: dummy,
+            air: dummy,
+            clarity: dummy,
+            texture: dummy,
+            colored: dummy,
+            noise: dummy,
+            chroma: dummy,
+            sharpen: dummy,
+            mask: dummy,
+        };
         if let Some(f) = frame {
             all.stats = f.stats();
             if let Some((log_in, log_out)) = f.log() {
@@ -266,9 +309,16 @@ impl CameraRawDevelop {
             if let Some([t, air, dehazed]) = f.haze() {
                 (all.haze, all.air, all.base) = (t, air, dehazed);
             }
-            if let Some((_, c, t)) = f.detail() {
+            if let Some((_, c, t)) = f.local() {
                 all.clarity = c.unwrap_or(dummy);
                 all.texture = t.unwrap_or(dummy);
+            }
+            if let Some(d) = f.detail() {
+                all.colored = d.colored;
+                all.noise = d.noise.unwrap_or(dummy);
+                all.chroma = d.chroma.unwrap_or(dummy);
+                all.sharpen = d.sharpen.unwrap_or(dummy);
+                all.mask = d.mask.unwrap_or(dummy);
             }
         }
         let group = |b: &Bound| {
@@ -284,6 +334,11 @@ impl CameraRawDevelop {
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(b.air) },
                 wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(b.clarity) },
                 wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(b.texture) },
+                wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::TextureView(b.colored) },
+                wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::TextureView(b.noise) },
+                wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(b.chroma) },
+                wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::TextureView(b.sharpen) },
+                wgpu::BindGroupEntry { binding: 15, resource: wgpu::BindingResource::TextureView(b.mask) },
             ];
             device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("pc_camera_raw"), layout: &self.layout, entries: &entries })
         };
@@ -303,13 +358,18 @@ impl CameraRawDevelop {
                 f.record(encoder, &self.tone, Segment::Tone);
             }
             if clarity || texture {
-                let (lc, _, _) = f.detail().ok_or_else(missing)?;
+                let (lc, _, _) = f.local().ok_or_else(missing)?;
                 pass(encoder, &self.luma, &main, lc);
-                f.record(encoder, &self.tone, Segment::Detail);
+                f.record(encoder, &self.tone, Segment::Local);
             }
             if stages.measure_whites_blacks.is_some() {
                 pass(encoder, &self.points, &main, f.points().0);
                 f.record(encoder, &self.tone, Segment::WhitesBlacks);
+            }
+            if stages.detail.is_some() {
+                let colored = f.detail().ok_or_else(missing)?.colored;
+                pass(encoder, &self.colour, &group(&Bound { colored: dummy, ..all }), colored);
+                f.record(encoder, &self.tone, Segment::Detail);
             }
         }
         pass(encoder, &self.pipeline, &main, &target.view);
@@ -361,52 +421,166 @@ impl CameraRawDevelop {
         stages: &PerPixel,
     ) -> Result<Vec<[f32; 4]>, Unsupported> {
         check_size(device, source, size)?;
-        let [w, h] = size;
-        let row = (w * BYTES_PER_PIXEL).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let bytes = u64::from(row) * u64::from(h);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_camera_raw") });
         self.encode(device, queue, &mut encoder, source, key, size, stages)?;
         let Some(target) = self.target.as_ref().map(|t| &t.texture) else { return Err(Unsupported("no RAW Develop target".into())) };
         let buffer = match self.readback.take() {
-            Some(b) if b.size() == bytes => b,
-            _ => device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("pc_camera_raw_readback"),
-                size: bytes,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            }),
+            Some(b) if b.size() == readback_bytes(size) => b,
+            _ => readback_buffer(device, size),
         };
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
+        copy_out(&mut encoder, target, &buffer, size);
         let index = queue.submit([encoder.finish()]);
-        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        match health {
-            Some(hl) => {
-                if !hl.wait(device, Some(index)) {
-                    return Err(Unsupported(hl.fault().map_or_else(|| "GPU device lost".into(), |f| f.to_string())));
-                }
-            }
-            None => {
-                device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).map_err(|e| Unsupported(format!("GPU wait failed: {e}")))?;
-            }
-        }
-        let mut out = Vec::with_capacity(source.len());
-        {
-            let data = buffer.slice(..).get_mapped_range().map_err(|e| Unsupported(format!("GPU readback failed: {e:?}")))?;
-            let width = w as usize * BYTES_PER_PIXEL as usize;
-            for y in 0..h as usize {
-                let start = y * row as usize;
-                let line = data.get(start..start + width).ok_or_else(|| Unsupported("short GPU readback".into()))?;
-                out.extend(bytemuck::pod_collect_to_vec::<u8, [f32; 4]>(line));
-            }
-        }
-        buffer.unmap();
+        let out = read_out(device, health, &buffer, index, size)?;
         self.readback = Some(buffer);
         Ok(out)
     }
+
+    /// Develops `source` like [`Self::develop`], but keeps the result on the GPU: converted for
+    /// the dialog's preview and counted into a histogram, in slot `1 - avoid` (the slot on screen
+    /// is `avoid`; 0 when `None`). Only the histogram is read back (blocking; native only), and
+    /// with `read` the pixels too, in the same submission ([`CameraRawFrame::read_back`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn develop_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        health: Option<&crate::DeviceHealth>,
+        source: &[[f32; 4]],
+        key: Option<u64>,
+        size: [u32; 2],
+        stages: &PerPixel,
+        display: &CameraRawDisplay,
+        avoid: Option<usize>,
+        read: bool,
+    ) -> Result<CameraRawFrame, Unsupported> {
+        if let Some(f) = health.and_then(crate::DeviceHealth::fault) {
+            return Err(Unsupported(f.to_string()));
+        }
+        let slot = avoid.map_or(0, |s| usize::from(s == 0));
+        let (result, error) = crate::first_error(device, || {
+            check_size(device, source, size)?;
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_camera_raw_view") });
+            self.encode(device, queue, &mut encoder, source, key, size, stages)?;
+            let Some(target) = self.target.as_ref().map(|t| t.texture.clone()) else { return Err(Unsupported("no RAW Develop target".into())) };
+            let view = &mut self.view;
+            view.record(device, queue, &mut encoder, &target, size, display, slot)?;
+            let pixels = read.then(|| match self.readback.take() {
+                Some(b) if b.size() == readback_bytes(size) => b,
+                _ => readback_buffer(device, size),
+            });
+            if let Some(b) = &pixels {
+                copy_out(&mut encoder, &target, b, size);
+            }
+            let index = queue.submit([encoder.finish()]);
+            view.sums_buffer().slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            if let Some(b) = &pixels {
+                b.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            }
+            wait(device, health, index)?;
+            let mut frame = view.frame(slot)?;
+            if let Some(b) = pixels {
+                frame.read_back = Some(mapped(&b, size)?);
+                self.readback = Some(b);
+            }
+            Ok(frame)
+        });
+        match error {
+            Some(e) => {
+                self.source = None;
+                if let Some(f) = &mut self.tone_frame {
+                    f.forget_cells();
+                }
+                self.view.forget();
+                Err(Unsupported(format!("GPU RAW Develop failed: {e}")))
+            }
+            None => result,
+        }
+    }
+}
+
+/// Bytes of a `size` readback, its rows aligned for the copy.
+#[cfg(not(target_arch = "wasm32"))]
+fn readback_row(size: [u32; 2]) -> u32 {
+    (size[0] * BYTES_PER_PIXEL).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn readback_bytes(size: [u32; 2]) -> u64 {
+    u64::from(readback_row(size)) * u64::from(size[1])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn readback_buffer(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("pc_camera_raw_readback"),
+        size: readback_bytes(size),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    })
+}
+
+/// Records the copy of `texture` (`size`, `Rgba32Float`) into `buffer`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn copy_out(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, buffer: &wgpu::Buffer, size: [u32; 2]) {
+    let [w, h] = size;
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyBufferInfo {
+            buffer,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(readback_row(size)), rows_per_image: Some(h) },
+        },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+}
+
+/// Waits for submission `index`; a lost device or failed wait is `Err`.
+#[cfg(not(target_arch = "wasm32"))]
+fn wait(device: &wgpu::Device, health: Option<&crate::DeviceHealth>, index: wgpu::SubmissionIndex) -> Result<(), Unsupported> {
+    match health {
+        Some(hl) => {
+            if !hl.wait(device, Some(index)) {
+                return Err(Unsupported(hl.fault().map_or_else(|| "GPU device lost".into(), |f| f.to_string())));
+            }
+        }
+        None => {
+            device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).map_err(|e| Unsupported(format!("GPU wait failed: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
+/// Maps `buffer` once submission `index` is done and returns its `size` pixels.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_out(
+    device: &wgpu::Device,
+    health: Option<&crate::DeviceHealth>,
+    buffer: &wgpu::Buffer,
+    index: wgpu::SubmissionIndex,
+    size: [u32; 2],
+) -> Result<Vec<[f32; 4]>, Unsupported> {
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    wait(device, health, index)?;
+    mapped(buffer, size)
+}
+
+/// The `size` pixels of `buffer`, mapped, then unmapped.
+#[cfg(not(target_arch = "wasm32"))]
+fn mapped(buffer: &wgpu::Buffer, size: [u32; 2]) -> Result<Vec<[f32; 4]>, Unsupported> {
+    let (w, h) = (size[0] as usize, size[1] as usize);
+    let row = readback_row(size) as usize;
+    let mut out = Vec::with_capacity(w.saturating_mul(h));
+    {
+        let data = buffer.slice(..).get_mapped_range().map_err(|e| Unsupported(format!("GPU readback failed: {e:?}")))?;
+        let width = w * BYTES_PER_PIXEL as usize;
+        for y in 0..h {
+            let start = y * row;
+            let line = data.get(start..start + width).ok_or_else(|| Unsupported("short GPU readback".into()))?;
+            out.extend(bytemuck::pod_collect_to_vec::<u8, [f32; 4]>(line));
+        }
+    }
+    buffer.unmap();
+    Ok(out)
 }
 
 /// The textures a pass of `camera_raw.wgsl` reads besides the source and tables (dummies where
@@ -424,6 +598,13 @@ struct Bound<'a> {
     /// Clarity's coefficients and Texture's blur.
     clarity: &'a wgpu::TextureView,
     texture: &'a wgpu::TextureView,
+    /// Detail: stages 1 to 7, the reduced luminance, the chroma's blur, sharpening's blur and its
+    /// mask's.
+    colored: &'a wgpu::TextureView,
+    noise: &'a wgpu::TextureView,
+    chroma: &'a wgpu::TextureView,
+    sharpen: &'a wgpu::TextureView,
+    mask: &'a wgpu::TextureView,
 }
 
 /// One full-frame pass of `pipeline` into `target`.
@@ -460,6 +641,8 @@ fn check_size(device: &wgpu::Device, source: &[[f32; 4]], [w, h]: [u32; 2]) -> R
 /// Flags of `Params.flags`, in the shader's bit order; `texture` is whether Texture's blur ran.
 fn flags(s: &PerPixel, texture: bool) -> u32 {
     let wb = s.whites_blacks.as_ref();
+    let detail = s.detail.as_ref();
+    let sharpen = detail.and_then(|d| d.sharpen.as_ref());
     // Measured after Shadows and Highlights, the amounts keep the sliders' signs.
     let measured = s.measure_whites_blacks;
     let on = [
@@ -484,6 +667,11 @@ fn flags(s: &PerPixel, texture: bool) -> u32 {
         s.dehaze.is_some(),
         s.clarity.is_some(),
         texture,
+        detail.is_some(),
+        detail.is_some_and(|d| d.luminance.is_some()),
+        detail.is_some_and(|d| d.color.is_some()),
+        sharpen.is_some(),
+        sharpen.is_some_and(|s| s.mask.is_some()),
     ];
     on.iter().enumerate().fold(0, |f, (bit, on)| if *on { f | 1 << bit } else { f })
 }
@@ -537,6 +725,20 @@ fn params(size: [u32; 2], s: &PerPixel, tone: [u32; 4], texture: bool) -> Vec<u8
         s.dehaze.as_ref().map_or(1.0, |d| d.factor as f32),
         s.clarity.as_ref().map_or(1.0, |c| c.subsample as f32),
         DEHAZE_T_FLOOR,
+        0.0,
+    ];
+    out.extend(rows.iter().flat_map(|v| v.to_le_bytes()));
+    let detail = s.detail.as_ref();
+    let sharpen = detail.and_then(|d| d.sharpen.as_ref());
+    let edges = sharpen.and_then(|s| s.mask.as_ref()).map_or([0.0, 1.0], |(_, e)| *e);
+    let rows = [
+        detail.and_then(|d| d.color.as_ref()).map_or(1.0, |c| c.keep),
+        sharpen.map_or(0.0, |s| s.amount),
+        sharpen.map_or(0.0, |s| s.limit),
+        sharpen.map_or(0.0, |s| s.scale),
+        edges[0],
+        edges[1],
+        0.0,
         0.0,
     ];
     out.extend(rows.iter().flat_map(|v| v.to_le_bytes()));

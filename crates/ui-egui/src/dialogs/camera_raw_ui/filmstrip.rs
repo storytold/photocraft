@@ -114,8 +114,12 @@ pub(super) fn keep_settings(app: &mut PhotocraftApp) {
     held.kept = Some((d.params.clone(), d.original.clone()));
     held.raw.demosaic = raw.demosaic;
     // The preview may not have caught up with the last edit: the thumbnail shows what was kept.
-    let frame = (d.dirty || d.render_pending()).then(|| d.proxy_job().run().px);
-    let developed = frame.as_deref().unwrap_or(&d.processed);
+    let frame = (d.dirty || d.render_pending()).then(|| {
+        // Read at once: a frame kept on the GPU could share its slot with the worker's.
+        let job = super::proxy::ProxyJob { view: false, ..d.proxy_job() };
+        job.run().px
+    });
+    let developed = frame.as_ref().unwrap_or(&d.processed).pixels();
     if !developed.is_empty() {
         let (px, w, h) = shrink(developed, d.pw, d.ph);
         held.thumb = Some(CameraRawDialog::image(&px, w, h, &d.display));

@@ -343,11 +343,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         preview.painter().rect_filled(view, 0.0, t.canvas);
         let (r, response, panning, zoom_box) =
             crate::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut scope.sampler_tool, animated_zoom);
-        let tex = if d.show_before { d.before_tex.as_ref() } else { d.tex.as_ref() };
-        if let Some(tex) = tex {
+        if let Some(tex) = d.shown_texture() {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
             widgets::checker(preview.painter(), r.intersect(view), 8.0);
-            preview.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            preview.painter().image(tex, r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             let raw_tone = d.raw_curve.is_some() && !raw_stage(&d.params).is_neutral();
             let detail_needed = !raw_tone && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32);
             d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed, &d.display);

@@ -1,6 +1,6 @@
-// Dehaze, Clarity and Texture for Camera Raw's GPU preview: develop's `box_mean`, `guided`,
-// `guided_fast` and `dehaze` (constants from `photocraft_algo::camera_raw::spatial`) as fragment
-// passes. Appended to `camera_raw_tone.wgsl`, whose bindings and helpers it uses;
+// Dehaze, Clarity, Texture and Detail for Camera Raw's GPU preview: develop's `box_mean`,
+// `guided`, `guided_fast`, `dehaze` and `detail` (constants from
+// `photocraft_algo::camera_raw::spatial`) as fragment passes. Appended to `camera_raw_tone.wgsl`, whose bindings and helpers it uses;
 // `camera_raw_tone.rs` orders the passes and `camera_raw.wgsl` applies their results.
 
 fn luma(c: vec3<f32>) -> f32 {
@@ -10,7 +10,8 @@ fn luma(c: vec3<f32>) -> f32 {
 // `box_mean` along one axis (misc.x: 0 rows, 1 columns) at radius misc.y, edges clamped. Mode
 // misc.z: 0 the means; 1 then the guided filter's coefficients (a, b) from the means of
 // (I, p, I·p, I·I), regularised by misc.w's bits; 2 then the guided filter's output a·I + b, I
-// the red channel of `plane_b`.
+// the red channel of `plane_b`; 3 that output s moved back toward I by misc.w's bits k,
+// s + (I − s)·k (Detail's luminance noise reduction).
 @fragment
 fn fs_box(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let p = pixel(pos);
@@ -34,7 +35,25 @@ fn fs_box(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     if S.misc.z == 2u {
         return vec4(m.x * textureLoad(plane_b, p, 0).r + m.y, 0.0, 0.0, 1.0);
     }
+    if S.misc.z == 3u {
+        let i = textureLoad(plane_b, p, 0).r;
+        let s = m.x * i + m.y;
+        return vec4(s + (i - s) * bitcast<f32>(S.misc.w), 0.0, 0.0, 1.0);
+    }
     return m;
+}
+
+// Detail's planes from stages 1 to 7 (`plane_a`, which `camera_raw.wgsl`'s `fs_colour` renders).
+// Mode misc.x 0: the luminance Y as the guided filter's (I, p, I·p, I·I) with I = p = Y; 1: the
+// chroma (B − Y, R − Y).
+@fragment
+fn fs_detail_in(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let c = textureLoad(plane_a, pixel(pos), 0).rgb;
+    let y = luma(c);
+    if S.misc.x == 1u {
+        return vec4(c.b - y, c.r - y, 0.0, 1.0);
+    }
+    return vec4(y, y, y * y, y * y);
 }
 
 // `guided_fast`'s subsampled copy of `plane_a`'s red channel (`edge × edge` block means), as the

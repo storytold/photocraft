@@ -1,4 +1,4 @@
-//! Dehaze, Clarity and Texture resolved for one frame: the sizes, radii and constants their
+//! Dehaze, Clarity, Texture and Detail resolved for one frame: the sizes, radii and constants their
 //! filters use, so another implementation of them (the GPU preview,
 //! `photocraft_gpu::CameraRawDevelop`) runs the same filters. [`develop`](super::develop) builds
 //! its own from the same constructors.
@@ -11,6 +11,9 @@
 //!   J. Sun, *Fast Guided Filter*, arXiv 2015), weighted toward the midtones.
 //! - **Texture** raises its difference from a Gaussian blur (three box passes), limited to
 //!   ±[`TEXTURE_LIMIT`].
+//! - **Detail** works on BT.709 luminance and two chroma planes: a guided filter of the luminance
+//!   by itself for luminance noise, a Gaussian of the chroma for colour noise, then an unsharp
+//!   mask of the luminance, optionally weighted by its smoothed gradient.
 
 use super::CameraRaw;
 
@@ -135,6 +138,80 @@ impl Texture {
     }
 }
 
+/// Detail (noise reduction, then sharpening) on BT.709 luminance Y and the chroma B − Y, R − Y,
+/// resolved for one frame. Each part is `None` when it is off.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Detail {
+    pub luminance: Option<LuminanceNoise>,
+    pub color: Option<ColorNoise>,
+    pub sharpen: Option<Sharpen>,
+}
+
+/// Luminance noise reduction: a guided filter of Y by itself, with some of the detail kept.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LuminanceNoise {
+    /// The guided filter's radius.
+    pub radius: usize,
+    /// Its regularisation.
+    pub eps: f32,
+    /// The share of Y's difference from the filter that stays.
+    pub keep: f32,
+}
+
+/// Colour noise reduction: a Gaussian of both chroma planes, with some of the detail kept.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColorNoise {
+    /// The Gaussian's box radii, in order.
+    pub radii: Vec<usize>,
+    /// The share of the chroma's difference from the blur that stays.
+    pub keep: f32,
+}
+
+/// Sharpening: Y plus `amount` times its difference from a Gaussian (after noise reduction),
+/// clamped to ±`limit` and scaled by `scale`, optionally weighted by an edge mask.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sharpen {
+    /// The Gaussian's box radii, in order.
+    pub radii: Vec<usize>,
+    pub amount: f32,
+    pub limit: f32,
+    pub scale: f32,
+    /// Masking: the box radii of another Gaussian of Y, and the smoothstep edges its gradient's
+    /// length is weighed between.
+    pub mask: Option<(Vec<usize>, [f32; 2])>,
+}
+
+impl Detail {
+    /// Detail for `p`; `None` when sharpening and both noise reductions are off.
+    pub fn new(p: &CameraRaw) -> Option<Self> {
+        let ps = p.pixel_scale.clamp(0.01, 1.0);
+        // The controls' documented 0..=100 range: raw values drive the filter radii below.
+        let [nl, nld, nc, ncd] = [p.noise_luminance, p.noise_luminance_detail, p.noise_color, p.noise_color_detail].map(|v| v.clamp(0.0, 100.0));
+        let luminance = (nl > 0.0).then(|| {
+            let n = nl / 100.0;
+            LuminanceNoise { radius: ((1.0 + 3.0 * n) * ps).round().max(1.0) as usize, eps: (n * 0.06).powi(2) + 1e-6, keep: nld / 100.0 * 0.5 }
+        });
+        let color = (nc > 0.0).then(|| ColorNoise { radii: gauss_radii((nc / 100.0 * 6.0 * ps).max(0.3)), keep: ncd / 100.0 * 0.3 });
+        let sharpen = (p.sharpen_amount > 0.0).then(|| {
+            let det = p.sharpen_detail / 100.0;
+            // Masking: an edge mask from the gradient of a smoothed luminance.
+            let mask = (p.sharpen_masking > 0.0).then(|| {
+                let t = p.sharpen_masking / 100.0 * 0.08;
+                (gauss_radii(1.0 * ps.max(0.5)), [t * 0.5, t + 1e-4])
+            });
+            Sharpen {
+                radii: gauss_radii((p.sharpen_radius.clamp(0.5, 3.0) * ps).max(0.3)),
+                amount: p.sharpen_amount / 100.0 * 1.2,
+                // Low Detail damps large (halo-producing) differences.
+                limit: 0.03 + det * 0.3,
+                scale: 0.5 + 0.5 * det,
+                mask,
+            }
+        });
+        (luminance.is_some() || color.is_some() || sharpen.is_some()).then_some(Detail { luminance, color, sharpen })
+    }
+}
+
 /// The box radii of develop's Gaussian of `sigma`: none below 0.3.
 pub(crate) fn gauss_radii(sigma: f32) -> Vec<usize> {
     if sigma < 0.3 {
@@ -161,6 +238,27 @@ mod tests {
         assert!(Texture::new(&CameraRaw { texture: 10.0, pixel_scale: 0.1, ..Default::default() }, 64, 48).unwrap().radii.is_empty());
         let off = CameraRaw::default();
         assert!(Dehaze::new(&off, 858, 572).is_none() && Clarity::new(&off, 858, 572).is_none() && Texture::new(&off, 858, 572).is_none());
+    }
+
+    #[test]
+    fn detail_resolves_each_part_and_is_off_at_zero() {
+        assert!(Detail::new(&CameraRaw::default()).is_none());
+        let p = CameraRaw { noise_luminance: 50.0, noise_color: 50.0, sharpen_amount: 100.0, sharpen_masking: 50.0, sharpen_detail: 0.0, ..Default::default() };
+        let d = Detail::new(&p).unwrap();
+        let l = d.luminance.unwrap();
+        assert_eq!(l.radius, 3);
+        assert!((l.keep - 0.25).abs() < 1e-6 && (l.eps - (0.03f32 * 0.03 + 1e-6)).abs() < 1e-9);
+        let c = d.color.unwrap();
+        assert_eq!(c.radii, gauss_radii(3.0));
+        assert!((c.keep - 0.15).abs() < 1e-6);
+        let s = d.sharpen.unwrap();
+        assert!((s.amount - 1.2).abs() < 1e-6 && (s.limit - 0.03).abs() < 1e-6 && (s.scale - 0.5).abs() < 1e-6);
+        assert_eq!(s.mask.as_ref().map(|(r, _)| r.clone()), Some(gauss_radii(1.0)));
+        // On the dialog's proxy the radii are at their floors; out-of-range sliders clamp.
+        let proxy = Detail::new(&CameraRaw { noise_luminance: 1e30, sharpen_amount: 40.0, pixel_scale: 0.143, ..Default::default() }).unwrap();
+        assert_eq!(proxy.luminance.map(|l| l.radius), Some(1));
+        assert_eq!(proxy.sharpen.map(|s| (s.radii, s.mask.is_none())), Some((vec![1, 0, 0], true)));
+        assert!(proxy.color.is_none());
     }
 
     #[test]

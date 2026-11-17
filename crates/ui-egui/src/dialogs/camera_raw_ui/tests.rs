@@ -236,9 +236,9 @@ fn worker_preview_matches_the_synchronous_render_and_ends_on_the_latest_settings
     d.request_render(&ctx);
     finish_worker(d, &ctx);
     assert_eq!(d.preview_revision, revision + 2);
-    let (from_worker, histogram) = (d.processed.clone(), d.after_histogram.channels);
+    let (from_worker, histogram) = (d.processed.pixels().to_vec(), d.after_histogram.channels);
     d.render(&ctx);
-    assert_eq!(d.processed, from_worker, "the worker develops exactly what the UI thread does");
+    assert_eq!(d.processed.pixels(), &from_worker[..], "the worker develops exactly what the UI thread does");
     assert_eq!(d.after_histogram.channels, histogram);
     assert!(d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)["previewPending"] == false);
 }
@@ -256,12 +256,12 @@ fn a_stale_worker_never_replaces_a_newer_synchronous_render() {
     let reply = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": 0, "exposure": -1.0}}})).unwrap().unwrap();
     assert_eq!(reply["previewPending"], false);
     let d = app.camera_raw.as_mut().unwrap();
-    let (revision, shown) = (d.preview_revision, d.processed.clone());
+    let (revision, shown) = (d.preview_revision, d.processed.pixels().to_vec());
     std::thread::sleep(std::time::Duration::from_millis(200));
     d.poll_render(&ctx).unwrap();
-    assert_eq!((d.preview_revision, &d.processed), (revision, &shown));
+    assert_eq!((d.preview_revision, d.processed.pixels()), (revision, &shown[..]));
     d.render(&ctx);
-    assert_eq!(d.processed, shown, "the frame shown is the one for the control channel's settings");
+    assert_eq!(d.processed.pixels(), &shown[..], "the frame shown is the one for the control channel's settings");
 }
 
 /// Dragging a slider in the dialog itself never develops on the UI thread: the frame that
@@ -593,12 +593,12 @@ fn shadows_of_a_raw_open_act_on_the_raw_data_and_the_preview_shows_it() {
     open_raw(&mut app, &ctx, raw).unwrap();
     assert!(app.camera_raw.as_ref().unwrap().raw_curve.is_some(), "the preview knows how the raw was developed");
     let mean = |px: &[[f32; 4]]| px.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / px.len() as f32;
-    let preview_before = mean(&app.camera_raw.as_ref().unwrap().processed);
+    let preview_before = mean(app.camera_raw.as_ref().unwrap().processed.pixels());
     let before = mean_red(&app);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"shadows": 100}}})).unwrap().unwrap();
     let d = app.camera_raw.as_mut().unwrap();
     d.render(&ctx);
-    assert!(mean(&d.processed) > preview_before + 0.01, "{preview_before} → {}", mean(&d.processed));
+    assert!(mean(d.processed.pixels()) > preview_before + 0.01, "{preview_before} → {}", mean(d.processed.pixels()));
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], true, "{r}");
     assert!(r.get("filter").is_none(), "Shadows acts while developing, not as a later filter step: {r}");
@@ -613,11 +613,11 @@ fn clarity_texture_and_dehaze_of_a_raw_open_act_on_the_raw_data() {
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     let before = mean_red(&app);
-    let preview_before = app.camera_raw.as_ref().unwrap().processed.clone();
+    let preview_before = app.camera_raw.as_ref().unwrap().processed.pixels().to_vec();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"clarity": 60, "texture": 40, "dehaze": 50}}})).unwrap().unwrap();
     let d = app.camera_raw.as_mut().unwrap();
     d.render(&ctx);
-    assert_ne!(d.processed, preview_before, "the preview shows the raw-stage change");
+    assert_ne!(d.processed.pixels(), &preview_before[..], "the preview shows the raw-stage change");
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], true, "{r}");
     assert!(r.get("filter").is_none(), "they act while developing, not as a later filter step: {r}");
@@ -912,14 +912,14 @@ fn calibration_changes_the_preview_and_round_trips_through_xmp() {
     app.open_bytes("IMG_0005.dng", &dng).unwrap();
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
-    let before = app.camera_raw.as_ref().unwrap().processed.clone();
+    let before = app.camera_raw.as_ref().unwrap().processed.pixels().to_vec();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"shadowTint": 100, "calibrationHue": [100, 0, 0], "calibrationSat": [0, 0, -100]}}}))
         .unwrap()
         .unwrap();
     let d = app.camera_raw.as_mut().unwrap();
     d.render(&ctx);
     assert!(
-        d.processed.iter().zip(&before).any(|(a, b)| (a[0] - b[0]).abs() > 0.01 || (a[1] - b[1]).abs() > 0.01),
+        d.processed.pixels().iter().zip(&before).any(|(a, b)| (a[0] - b[0]).abs() > 0.01 || (a[1] - b[1]).abs() > 0.01),
         "the Calibration panel changes the preview"
     );
     let xmp = photocraft_io::camera_raw_xmp::save(&d.params);
@@ -1486,4 +1486,84 @@ fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     assert_eq!((r["done"].clone(), r["saved"].clone()), (json!(true), json!([])), "{r}");
     assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A worker job overtaken by a newer frame (here the control channel's synchronous render) never
+/// develops into a GPU slot: it reads its frame back instead, and the frame on screen keeps its
+/// pixels. Only a job that is still the newest when it holds the pass picks a slot.
+#[test]
+fn an_overtaken_job_never_writes_a_gpu_slot() {
+    use serde_json::json;
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+        return;
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.set_wgpu(rs);
+    let Some(canvas) = app.gpu.clone() else { return };
+    app.run("file.new", json!({"width": 300, "height": 200, "depth": 8})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("filter.render.clouds", json!({"seed": 5})).unwrap();
+    canvas.force_camera_raw_pass();
+    let ctx = egui::Context::default();
+    crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    let Some(gpu) = d.gpu.clone() else { return };
+    d.params = CameraRaw { exposure: -0.6, ..Default::default() };
+    let overtaken = d.proxy_job();
+    d.params = CameraRaw { exposure: 0.6, ..Default::default() };
+    d.render(&ctx);
+    let shown = d.processed.gpu_frame().expect("the newer frame on the GPU").clone();
+    let before = gpu.read(&shown).expect("its pixels");
+    let late = overtaken.run();
+    assert!(matches!(late.shown, proxy::Shown::Image(_)), "the overtaken job read its frame back");
+    assert_eq!(gpu.read(&shown).expect("its pixels"), before, "the frame on screen kept its pixels");
+    // The next job is the newest again and develops beside the frame on screen.
+    let next = d.proxy_job().run();
+    assert!(matches!(next.shown, proxy::Shown::Gpu(_)));
+    assert_eq!(gpu.read(&shown).expect("its pixels"), before);
+}
+
+/// A job still running after its dialog closed is overtaken by the next dialog's first frame:
+/// the slots and their tickets belong to the device's pass, not to one dialog, so the old job
+/// reads its frame back and the new dialog's frame on screen keeps its pixels.
+#[test]
+fn a_closed_dialogs_job_never_writes_the_next_dialogs_slot() {
+    use serde_json::json;
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+        return;
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.set_wgpu(rs);
+    let Some(canvas) = app.gpu.clone() else { return };
+    app.run("file.new", json!({"width": 300, "height": 200, "depth": 8})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("filter.render.clouds", json!({"seed": 5})).unwrap();
+    canvas.force_camera_raw_pass();
+    let ctx = egui::Context::default();
+    crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    if d.gpu.is_none() {
+        return;
+    }
+    // Two frames, so the first dialog shows slot 1, then a job it never gets to publish.
+    for exposure in [0.3, 0.5] {
+        d.params = CameraRaw { exposure, ..Default::default() };
+        d.render(&ctx);
+    }
+    assert_eq!(d.processed.gpu_frame().map(crate::camera_raw_gpu::slot), Some(1));
+    d.params = CameraRaw { exposure: -0.7, ..Default::default() };
+    let orphan = d.proxy_job();
+    app.camera_raw = None;
+    crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    let gpu = d.gpu.clone().expect("GPU");
+    d.params = CameraRaw { exposure: 0.8, ..Default::default() };
+    d.render(&ctx);
+    let shown = d.processed.gpu_frame().expect("the new dialog's frame on the GPU").clone();
+    let before = gpu.read(&shown).expect("its pixels");
+    let late = orphan.run();
+    assert!(matches!(late.shown, proxy::Shown::Image(_)), "the closed dialog's job read its frame back");
+    assert_eq!(gpu.read(&shown).expect("its pixels"), before, "the new dialog's frame kept its pixels");
 }
