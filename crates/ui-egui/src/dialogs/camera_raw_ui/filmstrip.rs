@@ -2,6 +2,9 @@
 //! dialog, as in Photoshop's. Each keeps its own settings and demosaic choice when another is
 //! shown, Open develops every one and Cancel closes every one.
 
+use photocraft_engine::commands::raw_auto_cmds::Proxy;
+
+use super::auto::AutoState;
 use super::open::{Target, commit_open_raw, open_raw_with, return_on_failure};
 use super::sidecar::read_sidecar;
 use super::{
@@ -20,7 +23,7 @@ pub struct HeldRaw {
     /// Its settings and the settings it started from (its sidecar's, or the defaults) once it
     /// has been shown and left for another (`None`: not edited yet).
     pub(super) kept: Option<(CameraRaw, CameraRaw)>,
-    pub(super) clarity_before_auto: Option<f32>,
+    pub(super) auto: AutoState,
     /// The filmstrip thumbnail until it is first drawn, then its texture.
     pub(super) thumb: Option<egui::ColorImage>,
     tex: Option<egui::TextureHandle>,
@@ -29,7 +32,7 @@ pub struct HeldRaw {
 impl HeldRaw {
     pub(super) fn new(app: &PhotocraftApp, raw: RawOpen) -> Self {
         let thumb = super::open::document_index(app, raw.document).and_then(|i| thumbnail(app, i));
-        HeldRaw { raw, kept: None, clarity_before_auto: None, thumb, tex: None }
+        HeldRaw { raw, kept: None, auto: AutoState::default(), thumb, tex: None }
     }
 }
 
@@ -81,10 +84,10 @@ fn shrink(px: &[[f32; 4]], w: usize, h: usize) -> (Vec<[f32; 4]>, usize, usize) 
 /// Camera Raw Defaults' Auto, or the defaults the first time).
 pub(super) fn open_held(app: &mut PhotocraftApp, ctx: &egui::Context, i: usize) -> Result<(), String> {
     let held = app.raw_shelf.get(i).ok_or("no raw file at that place in the filmstrip")?;
-    let (raw, kept, clarity_before_auto) = (held.raw.clone(), held.kept.clone(), held.clarity_before_auto);
+    let (raw, kept, auto) = (held.raw.clone(), held.kept.clone(), held.auto.clone());
     open_raw_with(app, ctx, raw, kept)?;
     if let Some(d) = app.camera_raw.as_mut() {
-        d.clarity_before_auto = clarity_before_auto;
+        d.auto = auto;
     }
     Ok(())
 }
@@ -117,7 +120,7 @@ pub(super) fn keep_settings(app: &mut PhotocraftApp) {
     let Some(raw) = &d.raw_open else { return };
     let Some(held) = app.raw_shelf.iter_mut().find(|h| h.raw.document == raw.document) else { return };
     held.kept = Some((d.params.clone(), d.original.clone()));
-    held.clarity_before_auto = d.clarity_before_auto;
+    held.auto.clone_from(&d.auto);
     held.raw.demosaic = raw.demosaic;
     // The preview may not have caught up with the last edit: the thumbnail shows what was kept.
     let frame = (d.dirty || d.render_pending()).then(|| d.proxy_job().run().px);
@@ -140,10 +143,9 @@ pub(super) fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, 
     if app.session.prefs().raw_defaults.apply_auto_tone
         && let Some(st) = super::open::document_index(app, raw.document).and_then(|i| app.session.documents().get(i))
         && let Some(surf) = st.doc.layers.iter().find_map(|l| l.surface())
-        && let Ok((area, w, h)) = super::convert::preview_area(st.doc.bounds(), surf)
+        && let Ok(proxy) = Proxy::new(surf, st.doc.bounds())
     {
-        let (proxy, ..) = super::convert::box_proxy(surf, area, w, h);
-        photocraft_algo::camera_raw::auto_tone(&proxy, &mut p);
+        photocraft_algo::camera_raw::auto_tone(&proxy.pixels, &mut p);
     }
     (p, None)
 }
@@ -154,11 +156,11 @@ pub(super) fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, 
 /// comes back there with its settings, so the dialog returns for it (or Cancel still closes it).
 pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
     keep_settings(app);
-    let clarity_before_auto = app.camera_raw.as_ref().and_then(|d| d.clarity_before_auto);
+    let auto = app.camera_raw.as_ref().map(|d| d.auto.clone()).unwrap_or_default();
     let others: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).filter(|id| *id != raw.document).collect();
     let first = commit_open_raw(app, params, raw, Some(original));
     if let Ok(v) = &first {
-        return_on_failure(app, v, original, clarity_before_auto);
+        return_on_failure(app, v, original, auto);
         app.raw_shelf.retain(|h| h.raw.document != raw.document);
     }
     if others.is_empty() {
@@ -173,14 +175,14 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
     for id in others {
         let Some(held) = app.raw_shelf.iter().find(|h| h.raw.document == id) else { continue };
         let (held_raw, kept) = (held.raw.clone(), held.kept.clone());
-        let clarity_before_auto = held.clarity_before_auto;
+        let auto = held.auto.clone();
         let (p, loaded) = match kept {
             Some((p, original)) => (p, Some(original)),
             None => first_settings(app, &held_raw),
         };
         match commit_open_raw(app, &p, &held_raw, loaded.as_ref()) {
             Ok(v) => {
-                return_on_failure(app, &v, loaded.as_ref().unwrap_or(&CameraRaw::default()), clarity_before_auto);
+                return_on_failure(app, &v, loaded.as_ref().unwrap_or(&CameraRaw::default()), auto);
                 opened.push(v);
                 app.raw_shelf.retain(|h| h.raw.document != id);
             }

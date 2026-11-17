@@ -14,8 +14,8 @@
 //! "commit":true | "cancel":true}}}`; the reply describes the dialog. `{"ui":{"saveSettings":true}}`
 //! and `{"ui":{"loadSettings":true}}` run Save Settings… / Load Settings… (Camera Raw `.xmp`
 //! settings files, see [`photocraft_io::camera_raw_xmp`]) through the file dialog.
-//! `{"ui":{"autoEffects":true}}` applies Auto Clarity when the image has suitable detail.
-//! Send `false` to restore the prior Clarity value.
+//! Toggle the automatic settings through `autoLight`, `autoWhiteBalance`, `autoColor`,
+//! `autoEffects` or `fullAuto`. Send `true` to enable or `false` to restore the prior values.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::camera_raw::{CameraRaw, Wheel, curve_lut};
@@ -31,6 +31,7 @@ use crate::PhotocraftApp;
 use crate::theme::Tokens;
 use crate::widgets;
 
+mod auto;
 mod controls;
 mod convert;
 mod filmstrip;
@@ -56,7 +57,6 @@ pub use sidecar::sidecar_path;
 #[cfg(test)]
 use sidecar::{existing_sidecar_is_ours, read_bounded};
 
-const PROXY_SIDE: usize = 900;
 /// Smallest run of proxy pixels one rayon task takes in the per-pixel passes: below it the
 /// split costs more than the work.
 #[cfg(not(target_arch = "wasm32"))]
@@ -66,7 +66,7 @@ const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "P
 
 struct Edit {
     params: CameraRaw,
-    clarity_before_auto: Option<f32>,
+    auto: auto::AutoState,
 }
 
 pub struct CameraRawDialog {
@@ -128,21 +128,12 @@ pub struct CameraRawDialog {
     redo: Vec<Edit>,
     /// Params at pointer-down. One drag is one undo step.
     edit_origin: Option<CameraRaw>,
-    /// Also indicates that the Effects Auto button is selected.
-    clarity_before_auto: Option<f32>,
+    auto: auto::AutoState,
 }
 
 impl CameraRawDialog {
     fn edit(&self) -> Edit {
-        Edit { params: self.params.clone(), clarity_before_auto: self.clarity_before_auto }
-    }
-
-    fn effects_auto_edit(&self, enabled: bool, clarity: f32) -> Option<(f32, Option<f32>)> {
-        match (enabled, self.clarity_before_auto) {
-            (true, None) => photocraft_algo::camera_raw::auto_clarity(&self.proxy, self.pw, self.ph).map(|estimate| (estimate, Some(clarity))),
-            (false, Some(previous)) => Some((previous, None)),
-            _ => None,
-        }
+        Edit { params: self.params.clone(), auto: self.auto.clone() }
     }
 
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
@@ -152,7 +143,9 @@ impl CameraRawDialog {
             "histogram": {"source": if self.show_before { "before" } else { "after" }, "approximate": true, "size": [self.pw, self.ph],
                 "sampleDomain": "preview-rgb", "range": [0, 1], "red": h.channels[0].as_slice(), "green": h.channels[1].as_slice(), "blue": h.channels[2].as_slice(),
                 "samples": h.samples, "transparent": h.transparent, "invalid": h.invalid, "underflow": h.underflow, "overflow": h.overflow, "shadows": h.shadows, "highlights": h.highlights}});
-        result["autoEffects"] = json!(self.clarity_before_auto.is_some());
+        for (key, control) in auto::Control::KEYS {
+            result[key] = json!(self.auto.active(control));
+        }
         result["smartFilter"] = json!(match self.target {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter | Target::OpenRaw => None,

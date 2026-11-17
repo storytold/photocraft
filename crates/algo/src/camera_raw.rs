@@ -55,13 +55,12 @@ pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
 
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
-mod auto_clarity;
+pub mod auto;
 pub mod local_tone;
 mod per_pixel;
 pub mod spatial;
 mod whites_blacks;
 
-pub use auto_clarity::auto_clarity;
 pub use local_tone::{LocalTone, ToneKind, TonePass};
 pub use per_pixel::{
     CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, WhitesBlacksModel, per_pixel, white_black_points, whites_blacks_model,

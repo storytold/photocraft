@@ -952,6 +952,7 @@ fn auto_sets_the_light_sliders_from_the_image() {
 
 #[test]
 fn effects_auto_is_reversible_and_preserves_other_settings() {
+    use photocraft_engine::commands::raw_auto_cmds::Panel;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let ctx = egui::Context::default();
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
@@ -963,7 +964,7 @@ fn effects_auto_is_reversible_and_preserves_other_settings() {
     };
     let format = surf.format();
     for x in 0..64 {
-        let v = 0.5 + 0.05 * (x as f32 * std::f32::consts::TAU / 32.0).sin();
+        let v = 0.5 + 0.08 * (x as f32 * std::f32::consts::TAU / 12.0).sin();
         let pixel = photocraft_raster::from_rgba(&format, [v, v, v, 1.0]);
         for y in 0..64 {
             surf.write_pixel(x, y, &pixel);
@@ -976,9 +977,11 @@ fn effects_auto_is_reversible_and_preserves_other_settings() {
     let auto = update(json!({"autoEffects": true})).unwrap();
     assert_eq!(auto["autoEffects"], true);
     assert!(auto["params"]["clarity"].as_f64().unwrap() > 0.0);
-    let mut expected = initial["params"].clone();
-    expected["clarity"] = auto["params"]["clarity"].clone();
-    assert_eq!(auto["params"], expected);
+    let original: CameraRaw = serde_json::from_value(initial["params"].clone()).unwrap();
+    let mut after: CameraRaw = serde_json::from_value(auto["params"].clone()).unwrap();
+    assert_ne!(after.grain_amount, original.grain_amount);
+    Panel::Effects.copy_settings(&original, &mut after);
+    assert_eq!(after, original);
     assert_eq!(update(json!({"autoEffects": true})).unwrap()["previewRevision"], auto["previewRevision"]);
 
     let off = update(json!({"autoEffects": false})).unwrap();
@@ -1005,10 +1008,51 @@ fn effects_auto_stays_with_its_raw_in_the_filmstrip() {
     let auto = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"clarity": -12}, "autoEffects": true}})).unwrap().unwrap();
     assert_eq!(auto["autoEffects"], true);
     filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
-    assert_eq!(app.camera_raw.as_ref().unwrap().clarity_before_auto, None);
+    assert_eq!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {}})).unwrap().unwrap()["autoEffects"], false);
     filmstrip::show_raw(&mut app, &ctx, 0).unwrap();
     let off = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"autoEffects": false}})).unwrap().unwrap();
     assert_eq!(off["params"]["clarity"].as_f64(), Some(-12.0));
+}
+
+#[test]
+fn full_auto_keeps_previously_enabled_panels_and_restores_a_single_edit() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#80766f"})).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+    let mut update = |ui| menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": ui})).unwrap().unwrap();
+    let manual = update(json!({"set": {"temperature": 15, "tint": -3, "exposure": 0.5, "saturation": 8, "grainAmount": 9, "vignetteAmount": -10}}));
+    let white = update(json!({"autoWhiteBalance": true}));
+    assert_eq!(white["autoWhiteBalance"], true);
+    for key in ["exposure", "saturation", "grainAmount", "vignetteAmount"] {
+        assert_eq!(white["params"][key], manual["params"][key]);
+    }
+    let full = update(json!({"fullAuto": true}));
+    for key in ["autoWhiteBalance", "autoLight", "autoColor", "autoEffects", "fullAuto"] {
+        assert_eq!(full[key], true);
+    }
+    assert_eq!(full["params"]["temperature"], white["params"]["temperature"]);
+    let undo = update(json!({"undo": true}));
+    assert_eq!(undo["fullAuto"], false);
+    assert_eq!(undo["autoWhiteBalance"], true);
+    assert_eq!(undo["params"], white["params"]);
+    let redo = update(json!({"redo": true}));
+    assert_eq!(redo["params"], full["params"]);
+    assert_eq!(redo["fullAuto"], true);
+
+    let off = update(json!({"fullAuto": false, "set": {"curveLights": 17}}));
+    assert_eq!(off["fullAuto"], false);
+    assert_eq!(off["autoWhiteBalance"], true);
+    assert_eq!(off["autoLight"], false);
+    assert_eq!(off["autoColor"], false);
+    assert_eq!(off["autoEffects"], false);
+    let wb_off = update(json!({"autoWhiteBalance": false}));
+    let mut expected = manual["params"].clone();
+    expected["curveLights"] = json!(17.0);
+    assert_eq!(wb_off["params"], expected);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 }
 
 #[test]

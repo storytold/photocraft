@@ -1,3 +1,6 @@
+use photocraft_engine::commands::raw_auto_cmds::Panel;
+
+use super::auto::Control;
 use super::open::{Target, cancel, raw_stage};
 use super::sidecar::{load_settings, report_file_error, save_settings};
 use super::{
@@ -38,7 +41,7 @@ fn restore_edit(d: &mut CameraRawDialog, edit: Edit) {
         d.curve_state = Default::default();
     }
     d.params = edit.params;
-    d.clarity_before_auto = edit.clarity_before_auto;
+    d.auto = edit.auto;
     d.dirty = true;
     d.edit_origin = None;
 }
@@ -50,6 +53,11 @@ fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
     } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
         undo_edit(d);
     }
+}
+
+fn auto_button(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
+    let help = if active { tl!("Restore the settings before Auto") } else { tl!("Suggest settings for this image") };
+    ui.add(egui::Button::new(label).selected(active)).on_hover_text(help).clicked()
 }
 
 pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
@@ -384,21 +392,20 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         crate::camera_raw_scope_ui::header(&mut props, d, scope);
         d.scope.alt_tone = None;
         let mut dirty = false;
-        let mut toggle_effects = false;
-        let auto_effects = d.clarity_before_auto.is_some();
+        let mut toggle_auto = None;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
+            let mut draw_auto = |ui: &mut egui::Ui, label: &str, control| {
+                if auto_button(ui, label, d.auto.active(control)) {
+                    toggle_auto = Some(control);
+                }
+            };
+            draw_auto(ui, tl!("Full Auto"), Control::Full);
             let p = &mut d.params;
-            let proxy = &d.proxy;
             let alt = &mut d.scope.alt_tone;
             let (ts, tn) = (temp_stops(), tint_stops());
             section(ui, "Light", true, |ui| {
-                // Auto: Camera Raw's one-click tone from the histogram; the sliders show what it
-                // chose, so each can be adjusted afterwards.
-                if ui.button(tl!("Auto")).on_hover_text(tl!("Set the tone sliders from the image")).clicked() {
-                    photocraft_algo::camera_raw::auto_tone(proxy, p);
-                    dirty = true;
-                }
+                draw_auto(ui, tl!("Auto"), Control::Panel(Panel::Light));
                 tone_row(ui, &mut dirty, alt, ToneZone::Exposure, &mut p.exposure);
                 row(ui, &mut dirty, "Contrast", &mut p.contrast, -100.0..=100.0, None);
                 tone_row(ui, &mut dirty, alt, ToneZone::Highlights, &mut p.highlights);
@@ -407,16 +414,24 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 tone_row(ui, &mut dirty, alt, ToneZone::Blacks, &mut p.blacks);
             });
             section(ui, "Color", false, |ui| {
-                widgets::section_label(ui, tl!("White Balance: As Shot"));
+                let control = Control::Panel(Panel::WhiteBalance);
+                let balance = if d.auto.active(control) {
+                    tl!("White Balance: Auto")
+                } else if p.temperature == 0.0 && p.tint == 0.0 {
+                    tl!("White Balance: As Shot")
+                } else {
+                    tl!("White Balance: Custom")
+                };
+                widgets::section_label(ui, balance);
+                draw_auto(ui, tl!("Auto White Balance"), control);
                 row(ui, &mut dirty, "Temperature", &mut p.temperature, -100.0..=100.0, Some(&ts));
                 row(ui, &mut dirty, "Tint", &mut p.tint, -100.0..=100.0, Some(&tn));
+                draw_auto(ui, tl!("Auto"), Control::Panel(Panel::Color));
                 row(ui, &mut dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, None);
                 row(ui, &mut dirty, "Saturation", &mut p.saturation, -100.0..=100.0, None);
             });
             section(ui, "Effects", false, |ui| {
-                let hint =
-                    if auto_effects { tl!("Restore Clarity to its value before Auto") } else { tl!("Suggest a Clarity adjustment for low-contrast detail") };
-                toggle_effects = ui.add(egui::Button::new(tl!("Auto")).selected(auto_effects)).on_hover_text(hint).clicked();
+                draw_auto(ui, tl!("Auto"), Control::Panel(Panel::Effects));
                 row(ui, &mut dirty, "Texture", &mut p.texture, -100.0..=100.0, None);
                 row(ui, &mut dirty, "Clarity", &mut p.clarity, -100.0..=100.0, None);
                 row(ui, &mut dirty, "Dehaze", &mut p.dehaze, -100.0..=100.0, None);
@@ -559,14 +574,16 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             && let Some(origin) = d.edit_origin.take()
             && origin != d.params
         {
-            push_edit(d, Edit { params: origin, clarity_before_auto: d.clarity_before_auto });
+            push_edit(d, Edit { params: origin, auto: d.auto.clone() });
         }
-        if toggle_effects && let Some((clarity, before)) = d.effects_auto_edit(!auto_effects, d.params.clarity) {
-            remember_edit(d);
-            d.params.clarity = clarity;
-            d.clarity_before_auto = before;
-            d.dirty = true;
-            ctx.request_repaint();
+        if let (Some(control), Some(image)) = (toggle_auto, d.auto_image()) {
+            let mut next = d.edit();
+            next.auto.set(control, !d.auto.active(control), &image, &mut next.params);
+            if next.auto != d.auto || next.params != d.params {
+                remember_edit(d);
+                restore_edit(d, next);
+                ctx.request_repaint();
+            }
         }
     });
     crate::camera_raw_scope_ui::persist(app, ctx);

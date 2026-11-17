@@ -1,3 +1,6 @@
+use photocraft_engine::commands::raw_auto_cmds::Panel;
+
+use super::auto::AutoState;
 use super::convert::{apply_raw_conversions, open_pixels, output_sharpening, raw_conversions};
 use super::sidecar::{read_sidecar, write_sidecar};
 use super::{CameraRaw, LayerId, PhotocraftApp, Rect, Value, json};
@@ -131,6 +134,7 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut ra
         && app.session.prefs().raw_defaults.apply_auto_tone
         && let Some(d) = app.camera_raw.as_mut()
     {
+        d.auto.remember_panel(Panel::Light, &d.params);
         photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut d.params);
         d.dirty = true;
     }
@@ -200,7 +204,7 @@ pub struct Redevelop {
     defaults: photocraft_engine::prefs::RawDefaults,
     /// The dialog's Open started this, from these settings: if the re-develop fails, the raw goes
     /// back to the filmstrip to be tried again or cancelled.
-    back_to_filmstrip: Option<(CameraRaw, Option<f32>)>,
+    back_to_filmstrip: Option<(CameraRaw, AutoState)>,
 }
 
 /// The sliders a raw open applies while developing, before the tone curve (as Camera Raw does).
@@ -290,10 +294,10 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
 
 /// `reply` is [`commit_open_raw`]'s from the dialog's Open: if it started a background re-develop
 /// and that fails, the raw comes back to the filmstrip, its settings having started from `original`.
-pub(super) fn return_on_failure(app: &mut PhotocraftApp, reply: &Value, original: &CameraRaw, clarity_before_auto: Option<f32>) {
+pub(super) fn return_on_failure(app: &mut PhotocraftApp, reply: &Value, original: &CameraRaw, auto: AutoState) {
     let job = reply.get("job").and_then(Value::as_u64);
     if let Some(pending) = app.raw_redevelop.iter_mut().find(|r| Some(r.job.0) == job && !r.filter_step) {
-        pending.back_to_filmstrip = Some((original.clone(), clarity_before_auto));
+        pending.back_to_filmstrip = Some((original.clone(), auto));
     }
 }
 
@@ -513,12 +517,12 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
         photocraft_engine::jobs::JobOutcome::Failed(err) => {
             // The document stays open, developed with the defaults; from the dialog, it goes back
             // to the filmstrip with its settings, which may have no sidecar to keep them.
-            if let Some((original, clarity_before_auto)) = pending.back_to_filmstrip
+            if let Some((original, auto)) = pending.back_to_filmstrip
                 && document_index(app, pending.raw.document).is_some()
             {
                 let mut held = super::filmstrip::HeldRaw::new(app, pending.raw);
                 held.kept = Some((pending.params, original));
-                held.clarity_before_auto = clarity_before_auto;
+                held.auto = auto;
                 app.raw_shelf.push(held);
             }
             app.sync_views();

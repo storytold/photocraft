@@ -1,3 +1,4 @@
+use super::auto::Control;
 use super::controls::{commit, redo_edit, remember_edit, undo_edit};
 use super::open::{cancel, open, open_smart_filter};
 use super::sidecar::{load_settings, save_settings};
@@ -33,10 +34,16 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         return Some(Err("RAW Develop ui must be an object".into()));
     };
     for (key, value) in fields {
+        if Control::KEYS.iter().any(|(name, _)| key == name) {
+            if !value.is_boolean() {
+                return Some(Err(format!("RAW Develop {key} must be a boolean")));
+            }
+            continue;
+        }
         match key.as_str() {
             "set" | "scope" | "view" | "demosaic" => {}
-            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "autoEffects" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "autoEffects" => {
+            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" if value.is_boolean() => {}
+            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" => {
                 return Some(Err(format!("RAW Develop {key} must be a boolean")));
             }
             _ => return Some(Err(format!("unknown RAW Develop ui property {key}"))),
@@ -102,12 +109,13 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
             return Some(Err(format!("bad RAW Develop settings: {e}")));
         }
     }
-    let mut clarity_before_auto = d.clarity_before_auto;
-    if let Some(enabled) = ui.get("autoEffects").and_then(Value::as_bool)
-        && let Some((clarity, before)) = d.effects_auto_edit(enabled, next_params.clarity)
-    {
-        next_params.clarity = clarity;
-        clarity_before_auto = before;
+    let mut auto = d.auto.clone();
+    if let Some(image) = d.auto_image() {
+        for (key, control) in Control::KEYS {
+            if let Some(enabled) = ui.get(key).and_then(Value::as_bool) {
+                auto.set(control, enabled, &image, &mut next_params);
+            }
+        }
     }
     let scope_update = match ui.get("scope") {
         Some(scope) => match crate::camera_raw_scope_ui::prepare_control(&next_params, d.selection.is_some(), &app.ui.camera_raw_scope, scope) {
@@ -141,11 +149,11 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if d.params.point_curve != next_params.point_curve {
         d.curve_state = Default::default();
     }
-    if d.params != next_params || d.clarity_before_auto != clarity_before_auto {
+    if d.params != next_params || d.auto != auto {
         remember_edit(d);
         d.dirty = true;
         d.params = next_params;
-        d.clarity_before_auto = clarity_before_auto;
+        d.auto = auto;
     }
     if let Some(b) = ui.get("before").and_then(Value::as_bool) {
         d.show_before = b;

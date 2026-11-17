@@ -271,7 +271,7 @@ fn filterable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
-fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
+pub(super) fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
     filterable(s)?;
     let d = s.active().ok_or("no document open")?;
     match d.doc.mode {
